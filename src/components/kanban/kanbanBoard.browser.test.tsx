@@ -34818,9 +34818,10 @@ describe("finished work leaves In progress", () => {
  * Team workspaces, slice (a) (docs/design/workspaces.md §13.5 D1–D7, §13.9):
  * the rail's chip and its menu as owner and member, the All view with Move to…,
  * the Team page's Workspaces tab and New workspace, and one workspace's page,
- * at 1440, 820 and 390, in en and uk, light and dark. The rail frames are
- * desktop only (at 390 the board is the phone's, framed by the phone driver);
- * the Team and workspace pages are framed at all three widths. Every state is
+ * at 1440×900, 1000×700, 820×900 and 390×844, in en and uk, light and dark.
+ * The rail frames are desktop only (at 390 the board is the phone's, framed by
+ * the phone driver); the Team and workspace pages are framed at every width.
+ * Every state is
  * reached through the real controls, its defining words are measured from
  * text ranges on the first screen, and every menu and dialog stays inside the
  * window. Frames go to `.artifacts/team-workspaces/`; the readings are
@@ -34910,12 +34911,13 @@ describe("team workspaces slice (a)", () => {
     }
 
     try {
-      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 820, 390]) {
+      /* 1000×700 is the short desktop window, where a dialog's body scrolls. */
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const [width, height] of [[1440, 900], [1000, 700], [820, 900], [390, 844]] as const) {
         const tag = `${lang}-${theme}-${width}`;
         const phone = width === 390;
         let chipRight: number | null = null;
         const open = async (query: string) => {
-          const opened = await openFixture(browser, `${server.base}?${query}`, { width, height: phone ? 844 : 900 }, theme, lang, "reduce", phone);
+          const opened = await openFixture(browser, `${server.base}?${query}`, { width, height }, theme, lang, "reduce", phone);
           return opened;
         };
         if (!phone) {
@@ -35101,7 +35103,12 @@ describe("team workspaces slice (a)", () => {
             ], "[data-team-dialog='workspace-create']");
             /* The refusal of an empty name says why, in the dialog. */
             await page.locator("[data-workspace-create-submit]").click();
-            await frame(page, tag, "D5-refused", [["[data-workspace-create-error]", words(lang, "workspaces.error.nameRequired")]], "[data-team-dialog='workspace-create']");
+            /* The reason stands under Name, and Cancel and Create stay whole inside the dialog and the window. */
+            await frame(page, tag, "D5-refused", [
+              ["[data-workspace-create-error]", words(lang, "workspaces.error.nameRequired")],
+              ["[data-team-dialog-footer]", words(lang, "common.cancel")],
+              ["[data-workspace-create-submit]", words(lang, "workspaces.create.submit")],
+            ], "[data-team-dialog='workspace-create']");
             await page.locator("[data-workspace-create-name]").fill(lang === "uk" ? "Дизайн" : "Design");
             await page.locator("[data-workspace-check='atlas'] input").check();
             await page.locator("[data-workspace-create-submit]").click();
@@ -35138,17 +35145,28 @@ describe("team workspaces slice (a)", () => {
             const before = await headingTop();
             await page.locator("[data-workspace-rename]").click();
             await page.locator("[data-workspace-rename-field]").waitFor();
-            await frame(page, tag, "D6-rename", [["[data-workspace-page]", words(lang, "team.member.save")]]);
-            /* The inline field moves nothing: Save, Cancel and Delete share a centre, and Projects keeps its place. */
+            await frame(page, tag, "D6-rename", [["[data-workspace-page]", words(lang, "team.member.save")], ["[data-workspace-page]", words(lang, "common.cancel")]]);
+            /* The field shows the whole name being edited. */
+            const field = await page.locator("[data-workspace-rename-field]").evaluate((input: HTMLInputElement) => ({
+              value: input.value, width: Math.round(input.getBoundingClientRect().width), scrollWidth: input.scrollWidth, clientWidth: input.clientWidth,
+            }));
+            readings.push({ tag, state: "D6-rename-field", ...field });
+            if (field.value !== names[lang].client) failures.push(`${tag} D6: the rename field holds ${JSON.stringify(field.value)}`);
+            if (field.width < 200 || field.scrollWidth > field.clientWidth) failures.push(`${tag} D6: the rename field cuts the name ${JSON.stringify(field)}`);
+            /* On the phone the field takes the content width (390 less the page's 12 px sides and the dot), with Save and Cancel under it. */
+            if (phone && field.width < 340) failures.push(`${tag} P6: the rename field does not take its own line ${JSON.stringify(field)}`);
+            /* On the desktop the inline field moves nothing: Save, Cancel and Delete share a centre, and Projects keeps its place. */
             const renameLine = await page.evaluate(() => {
               const form = document.querySelector("[data-workspace-rename-field]")!.closest("form")!;
               const centre = (element: Element) => { const box = element.getBoundingClientRect(); return Math.round((box.top + box.bottom) / 2); };
               const [save, cancel] = [...form.querySelectorAll("button")];
-              return { save: centre(save!), cancel: centre(cancel!), remove: centre(document.querySelector("[data-workspace-delete]")!), dot: Boolean(form.querySelector("[data-workspace-dot]")) };
+              return { field: centre(form.querySelector("input")!), save: centre(save!), cancel: centre(cancel!), remove: centre(document.querySelector("[data-workspace-delete]")!), dot: Boolean(form.querySelector("[data-workspace-dot]")) };
             });
             const after = await headingTop();
             readings.push({ tag, state: "D6-rename-line", ...renameLine, headingBefore: before, headingAfter: after });
-            if (Math.abs(after - before) > 0.5) failures.push(`${tag} D6: Rename moves the Projects heading from ${before} to ${after}`);
+            /* On the phone the field takes its own line and Save and Cancel the one under it, so Projects moves down. */
+            if (!phone && Math.abs(after - before) > 0.5) failures.push(`${tag} D6: Rename moves the Projects heading from ${before} to ${after}`);
+            if (phone && renameLine.save <= renameLine.field) failures.push(`${tag} P6: Save stands beside the rename field ${JSON.stringify(renameLine)}`);
             if (renameLine.save !== renameLine.cancel || (!phone && renameLine.save !== renameLine.remove)) failures.push(`${tag} D6: Save, Cancel and Delete stand on different lines ${JSON.stringify(renameLine)}`);
             if (!renameLine.dot) failures.push(`${tag} D6: the title's colour dot leaves while renaming`);
             await page.keyboard.press("Escape");

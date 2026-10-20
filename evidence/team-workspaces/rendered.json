@@ -1,7 +1,7 @@
 {
   "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
   "block": "team workspaces slice (a)",
-  "frames": 256,
+  "frames": 368,
   "failures": [],
   "readings": [
     {
@@ -194,9 +194,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         480,
-        150,
+        146,
         480,
-        599
+        608
       ],
       "file": "en-light-1440-D5.png"
     },
@@ -217,9 +217,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         480,
-        150,
+        146,
         480,
-        599
+        608
       ],
       "file": "en-light-1440-D5-submit.png"
     },
@@ -227,14 +227,16 @@
       "tag": "en-light-1440",
       "state": "D5-refused",
       "defining": [
-        "Give the workspace a name."
+        "Give the workspace a name.",
+        "Cancel",
+        "Create workspace"
       ],
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         480,
-        125,
+        136,
         480,
-        649
+        628
       ],
       "file": "en-light-1440-D5-refused.png"
     },
@@ -263,7 +265,8 @@
       "tag": "en-light-1440",
       "state": "D6-rename",
       "defining": [
-        "Save"
+        "Save",
+        "Cancel"
       ],
       "popover": null,
       "box": null,
@@ -271,7 +274,16 @@
     },
     {
       "tag": "en-light-1440",
+      "state": "D6-rename-field",
+      "value": "Client work",
+      "width": 320,
+      "scrollWidth": 318,
+      "clientWidth": 318
+    },
+    {
+      "tag": "en-light-1440",
       "state": "D6-rename-line",
+      "field": 36,
       "save": 36,
       "cancel": 36,
       "remove": 36,
@@ -305,6 +317,320 @@
       "popover": null,
       "box": null,
       "file": "en-light-1440-D7-empty.png"
+    },
+    {
+      "tag": "en-light-1000",
+      "state": "D1-client",
+      "defining": [
+        "Client work"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-1000-D1-client.png"
+    },
+    {
+      "tag": "en-light-1000",
+      "state": "D2-owner",
+      "defining": [
+        "Workspaces",
+        "All workspaces",
+        "Workspace settings",
+        "New workspace",
+        "Manage workspaces"
+      ],
+      "popover": "[data-workspace-menu]",
+      "box": [
+        36,
+        40,
+        272,
+        270
+      ],
+      "file": "en-light-1000-D2-owner.png"
+    },
+    {
+      "tag": "en-light-1000",
+      "state": "D2-member",
+      "defining": [
+        "Manage workspaces"
+      ],
+      "popover": "[data-workspace-menu]",
+      "box": [
+        36,
+        40,
+        272,
+        206
+      ],
+      "file": "en-light-1000-D2-member.png"
+    },
+    {
+      "tag": "en-light-1000",
+      "state": "chip-long",
+      "truncated": true,
+      "labelRight": 154,
+      "chipRight": 179,
+      "hideLeft": 183,
+      "clientChipRight": 179
+    },
+    {
+      "tag": "en-light-1000",
+      "state": "D1-long",
+      "defining": [
+        "Northwin"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-1000-D1-long.png"
+    },
+    {
+      "tag": "en-light-1000",
+      "state": "D3-counts",
+      "headed": {
+        "w_c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1": 2,
+        "w_e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3": 1,
+        "w_d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2": 1
+      },
+      "menuCounts": {
+        "w_c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1": 2,
+        "w_e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3": 1,
+        "w_d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2": 1
+      }
+    },
+    {
+      "tag": "en-light-1000",
+      "state": "D3-all",
+      "defining": [
+        "Unassigned",
+        "All workspaces",
+        "Move",
+        "Paper Kite"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-1000-D3-all.png"
+    },
+    {
+      "tag": "en-light-1000",
+      "state": "D3-move",
+      "defining": [
+        "Move to…",
+        "Client work"
+      ],
+      "popover": "[data-workspace-popover='move']",
+      "box": [
+        243,
+        423,
+        285,
+        133
+      ],
+      "file": "en-light-1000-D3-move.png"
+    },
+    {
+      "tag": "en-light-1000",
+      "state": "D4-owner",
+      "defining": [
+        "Workspaces",
+        "Each workspace is a named set of projects.",
+        "Client work",
+        "New workspace"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-1000-D4-owner.png"
+    },
+    {
+      "tag": "en-light-1000",
+      "state": "D4-owner-unassigned",
+      "defining": [
+        "Unassigned projects · 2",
+        "Move to…"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-1000-D4-owner-unassigned.png"
+    },
+    {
+      "tag": "en-light-1000",
+      "state": "D4-row-menu",
+      "defining": [
+        "Move its projects out first."
+      ],
+      "popover": "[data-workspace-popover='row']",
+      "box": [
+        691,
+        228,
+        248,
+        129
+      ],
+      "file": "en-light-1000-D4-row-menu.png"
+    },
+    {
+      "tag": "en-light-1000",
+      "state": "D4-row-menu-place",
+      "menuLeft": 691,
+      "menuRight": 939,
+      "menuTop": 227.75,
+      "triggerRight": 939,
+      "triggerBottom": 223.75,
+      "listLeft": 44,
+      "listRight": 956
+    },
+    {
+      "tag": "en-light-1000",
+      "state": "D4-member",
+      "defining": [
+        "Workspaces",
+        "Each workspace is a named set of projects.",
+        "Client work"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-1000-D4-member.png"
+    },
+    {
+      "tag": "en-light-1000",
+      "state": "D4-member-unassigned",
+      "defining": [
+        "Unassigned projects · 2"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-1000-D4-member-unassigned.png"
+    },
+    {
+      "tag": "en-light-1000",
+      "state": "D5",
+      "defining": [
+        "New workspace",
+        "Name",
+        "Colour",
+        "Projects"
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        260,
+        46,
+        480,
+        608
+      ],
+      "file": "en-light-1000-D5.png"
+    },
+    {
+      "tag": "en-light-1000",
+      "state": "D5-swatch-rows",
+      "swatchRows": [
+        8
+      ]
+    },
+    {
+      "tag": "en-light-1000",
+      "state": "D5-submit",
+      "defining": [
+        "A project belongs to one workspace.",
+        "Create workspace"
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        260,
+        46,
+        480,
+        608
+      ],
+      "file": "en-light-1000-D5-submit.png"
+    },
+    {
+      "tag": "en-light-1000",
+      "state": "D5-refused",
+      "defining": [
+        "Give the workspace a name.",
+        "Cancel",
+        "Create workspace"
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        260,
+        42,
+        480,
+        616
+      ],
+      "file": "en-light-1000-D5-refused.png"
+    },
+    {
+      "tag": "en-light-1000",
+      "state": "D6",
+      "defining": [
+        "Board",
+        "Client work",
+        "Workspace · 2 projects",
+        "Remove from workspace",
+        "Move its projects out first."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-1000-D6.png"
+    },
+    {
+      "tag": "en-light-1000",
+      "state": "D6-remove",
+      "removeLeft": 770.9375,
+      "nameLeft": 89,
+      "border": "1px"
+    },
+    {
+      "tag": "en-light-1000",
+      "state": "D6-rename",
+      "defining": [
+        "Save",
+        "Cancel"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-1000-D6-rename.png"
+    },
+    {
+      "tag": "en-light-1000",
+      "state": "D6-rename-field",
+      "value": "Client work",
+      "width": 320,
+      "scrollWidth": 318,
+      "clientWidth": 318
+    },
+    {
+      "tag": "en-light-1000",
+      "state": "D6-rename-line",
+      "field": 36,
+      "save": 36,
+      "cancel": 36,
+      "remove": 36,
+      "dot": true,
+      "headingBefore": 97,
+      "headingAfter": 97
+    },
+    {
+      "tag": "en-light-1000",
+      "state": "D6-add",
+      "defining": [
+        "Add project",
+        "Paper Kite"
+      ],
+      "popover": "[data-workspace-popover='add']",
+      "box": [
+        632,
+        125,
+        320,
+        217
+      ],
+      "file": "en-light-1000-D6-add.png"
+    },
+    {
+      "tag": "en-light-1000",
+      "state": "D7-empty",
+      "defining": [
+        "No projects yet.",
+        "Delete workspace"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-1000-D7-empty.png"
     },
     {
       "tag": "en-light-820",
@@ -496,9 +822,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         170,
-        150,
+        146,
         480,
-        599
+        608
       ],
       "file": "en-light-820-D5.png"
     },
@@ -519,9 +845,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         170,
-        150,
+        146,
         480,
-        599
+        608
       ],
       "file": "en-light-820-D5-submit.png"
     },
@@ -529,14 +855,16 @@
       "tag": "en-light-820",
       "state": "D5-refused",
       "defining": [
-        "Give the workspace a name."
+        "Give the workspace a name.",
+        "Cancel",
+        "Create workspace"
       ],
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         170,
-        125,
+        136,
         480,
-        649
+        628
       ],
       "file": "en-light-820-D5-refused.png"
     },
@@ -565,7 +893,8 @@
       "tag": "en-light-820",
       "state": "D6-rename",
       "defining": [
-        "Save"
+        "Save",
+        "Cancel"
       ],
       "popover": null,
       "box": null,
@@ -573,7 +902,16 @@
     },
     {
       "tag": "en-light-820",
+      "state": "D6-rename-field",
+      "value": "Client work",
+      "width": 320,
+      "scrollWidth": 318,
+      "clientWidth": 318
+    },
+    {
+      "tag": "en-light-820",
       "state": "D6-rename-line",
+      "field": 36,
       "save": 36,
       "cancel": 36,
       "remove": 36,
@@ -692,9 +1030,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         0,
-        152,
+        143,
         390,
-        692
+        701
       ],
       "file": "en-light-390-D5.png"
     },
@@ -716,9 +1054,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         0,
-        152,
+        143,
         390,
-        692
+        701
       ],
       "file": "en-light-390-D5-submit.png"
     },
@@ -726,14 +1064,16 @@
       "tag": "en-light-390",
       "state": "D5-refused",
       "defining": [
-        "Give the workspace a name."
+        "Give the workspace a name.",
+        "Cancel",
+        "Create workspace"
       ],
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         0,
-        102,
+        123,
         390,
-        742
+        721
       ],
       "file": "en-light-390-D5-refused.png"
     },
@@ -762,7 +1102,8 @@
       "tag": "en-light-390",
       "state": "D6-rename",
       "defining": [
-        "Save"
+        "Save",
+        "Cancel"
       ],
       "popover": null,
       "box": null,
@@ -770,13 +1111,22 @@
     },
     {
       "tag": "en-light-390",
+      "state": "D6-rename-field",
+      "value": "Client work",
+      "width": 348,
+      "scrollWidth": 346,
+      "clientWidth": 346
+    },
+    {
+      "tag": "en-light-390",
       "state": "D6-rename-line",
-      "save": 36,
-      "cancel": 36,
-      "remove": 111,
+      "field": 92,
+      "save": 146,
+      "cancel": 146,
+      "remove": 219,
       "dot": true,
       "headingBefore": 184.25,
-      "headingAfter": 184.25
+      "headingAfter": 292.25
     },
     {
       "tag": "en-light-390",
@@ -995,9 +1345,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         480,
-        150,
+        146,
         480,
-        599
+        608
       ],
       "file": "en-dark-1440-D5.png"
     },
@@ -1018,9 +1368,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         480,
-        150,
+        146,
         480,
-        599
+        608
       ],
       "file": "en-dark-1440-D5-submit.png"
     },
@@ -1028,14 +1378,16 @@
       "tag": "en-dark-1440",
       "state": "D5-refused",
       "defining": [
-        "Give the workspace a name."
+        "Give the workspace a name.",
+        "Cancel",
+        "Create workspace"
       ],
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         480,
-        125,
+        136,
         480,
-        649
+        628
       ],
       "file": "en-dark-1440-D5-refused.png"
     },
@@ -1064,7 +1416,8 @@
       "tag": "en-dark-1440",
       "state": "D6-rename",
       "defining": [
-        "Save"
+        "Save",
+        "Cancel"
       ],
       "popover": null,
       "box": null,
@@ -1072,7 +1425,16 @@
     },
     {
       "tag": "en-dark-1440",
+      "state": "D6-rename-field",
+      "value": "Client work",
+      "width": 320,
+      "scrollWidth": 318,
+      "clientWidth": 318
+    },
+    {
+      "tag": "en-dark-1440",
       "state": "D6-rename-line",
+      "field": 36,
       "save": 36,
       "cancel": 36,
       "remove": 36,
@@ -1106,6 +1468,320 @@
       "popover": null,
       "box": null,
       "file": "en-dark-1440-D7-empty.png"
+    },
+    {
+      "tag": "en-dark-1000",
+      "state": "D1-client",
+      "defining": [
+        "Client work"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-1000-D1-client.png"
+    },
+    {
+      "tag": "en-dark-1000",
+      "state": "D2-owner",
+      "defining": [
+        "Workspaces",
+        "All workspaces",
+        "Workspace settings",
+        "New workspace",
+        "Manage workspaces"
+      ],
+      "popover": "[data-workspace-menu]",
+      "box": [
+        36,
+        40,
+        272,
+        270
+      ],
+      "file": "en-dark-1000-D2-owner.png"
+    },
+    {
+      "tag": "en-dark-1000",
+      "state": "D2-member",
+      "defining": [
+        "Manage workspaces"
+      ],
+      "popover": "[data-workspace-menu]",
+      "box": [
+        36,
+        40,
+        272,
+        206
+      ],
+      "file": "en-dark-1000-D2-member.png"
+    },
+    {
+      "tag": "en-dark-1000",
+      "state": "chip-long",
+      "truncated": true,
+      "labelRight": 154,
+      "chipRight": 179,
+      "hideLeft": 183,
+      "clientChipRight": 179
+    },
+    {
+      "tag": "en-dark-1000",
+      "state": "D1-long",
+      "defining": [
+        "Northwin"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-1000-D1-long.png"
+    },
+    {
+      "tag": "en-dark-1000",
+      "state": "D3-counts",
+      "headed": {
+        "w_c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1": 2,
+        "w_e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3": 1,
+        "w_d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2": 1
+      },
+      "menuCounts": {
+        "w_c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1": 2,
+        "w_e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3": 1,
+        "w_d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2": 1
+      }
+    },
+    {
+      "tag": "en-dark-1000",
+      "state": "D3-all",
+      "defining": [
+        "Unassigned",
+        "All workspaces",
+        "Move",
+        "Paper Kite"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-1000-D3-all.png"
+    },
+    {
+      "tag": "en-dark-1000",
+      "state": "D3-move",
+      "defining": [
+        "Move to…",
+        "Client work"
+      ],
+      "popover": "[data-workspace-popover='move']",
+      "box": [
+        243,
+        423,
+        285,
+        133
+      ],
+      "file": "en-dark-1000-D3-move.png"
+    },
+    {
+      "tag": "en-dark-1000",
+      "state": "D4-owner",
+      "defining": [
+        "Workspaces",
+        "Each workspace is a named set of projects.",
+        "Client work",
+        "New workspace"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-1000-D4-owner.png"
+    },
+    {
+      "tag": "en-dark-1000",
+      "state": "D4-owner-unassigned",
+      "defining": [
+        "Unassigned projects · 2",
+        "Move to…"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-1000-D4-owner-unassigned.png"
+    },
+    {
+      "tag": "en-dark-1000",
+      "state": "D4-row-menu",
+      "defining": [
+        "Move its projects out first."
+      ],
+      "popover": "[data-workspace-popover='row']",
+      "box": [
+        691,
+        228,
+        248,
+        129
+      ],
+      "file": "en-dark-1000-D4-row-menu.png"
+    },
+    {
+      "tag": "en-dark-1000",
+      "state": "D4-row-menu-place",
+      "menuLeft": 691,
+      "menuRight": 939,
+      "menuTop": 227.75,
+      "triggerRight": 939,
+      "triggerBottom": 223.75,
+      "listLeft": 44,
+      "listRight": 956
+    },
+    {
+      "tag": "en-dark-1000",
+      "state": "D4-member",
+      "defining": [
+        "Workspaces",
+        "Each workspace is a named set of projects.",
+        "Client work"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-1000-D4-member.png"
+    },
+    {
+      "tag": "en-dark-1000",
+      "state": "D4-member-unassigned",
+      "defining": [
+        "Unassigned projects · 2"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-1000-D4-member-unassigned.png"
+    },
+    {
+      "tag": "en-dark-1000",
+      "state": "D5",
+      "defining": [
+        "New workspace",
+        "Name",
+        "Colour",
+        "Projects"
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        260,
+        46,
+        480,
+        608
+      ],
+      "file": "en-dark-1000-D5.png"
+    },
+    {
+      "tag": "en-dark-1000",
+      "state": "D5-swatch-rows",
+      "swatchRows": [
+        8
+      ]
+    },
+    {
+      "tag": "en-dark-1000",
+      "state": "D5-submit",
+      "defining": [
+        "A project belongs to one workspace.",
+        "Create workspace"
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        260,
+        46,
+        480,
+        608
+      ],
+      "file": "en-dark-1000-D5-submit.png"
+    },
+    {
+      "tag": "en-dark-1000",
+      "state": "D5-refused",
+      "defining": [
+        "Give the workspace a name.",
+        "Cancel",
+        "Create workspace"
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        260,
+        42,
+        480,
+        616
+      ],
+      "file": "en-dark-1000-D5-refused.png"
+    },
+    {
+      "tag": "en-dark-1000",
+      "state": "D6",
+      "defining": [
+        "Board",
+        "Client work",
+        "Workspace · 2 projects",
+        "Remove from workspace",
+        "Move its projects out first."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-1000-D6.png"
+    },
+    {
+      "tag": "en-dark-1000",
+      "state": "D6-remove",
+      "removeLeft": 770.9375,
+      "nameLeft": 89,
+      "border": "1px"
+    },
+    {
+      "tag": "en-dark-1000",
+      "state": "D6-rename",
+      "defining": [
+        "Save",
+        "Cancel"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-1000-D6-rename.png"
+    },
+    {
+      "tag": "en-dark-1000",
+      "state": "D6-rename-field",
+      "value": "Client work",
+      "width": 320,
+      "scrollWidth": 318,
+      "clientWidth": 318
+    },
+    {
+      "tag": "en-dark-1000",
+      "state": "D6-rename-line",
+      "field": 36,
+      "save": 36,
+      "cancel": 36,
+      "remove": 36,
+      "dot": true,
+      "headingBefore": 97,
+      "headingAfter": 97
+    },
+    {
+      "tag": "en-dark-1000",
+      "state": "D6-add",
+      "defining": [
+        "Add project",
+        "Paper Kite"
+      ],
+      "popover": "[data-workspace-popover='add']",
+      "box": [
+        632,
+        125,
+        320,
+        217
+      ],
+      "file": "en-dark-1000-D6-add.png"
+    },
+    {
+      "tag": "en-dark-1000",
+      "state": "D7-empty",
+      "defining": [
+        "No projects yet.",
+        "Delete workspace"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-1000-D7-empty.png"
     },
     {
       "tag": "en-dark-820",
@@ -1297,9 +1973,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         170,
-        150,
+        146,
         480,
-        599
+        608
       ],
       "file": "en-dark-820-D5.png"
     },
@@ -1320,9 +1996,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         170,
-        150,
+        146,
         480,
-        599
+        608
       ],
       "file": "en-dark-820-D5-submit.png"
     },
@@ -1330,14 +2006,16 @@
       "tag": "en-dark-820",
       "state": "D5-refused",
       "defining": [
-        "Give the workspace a name."
+        "Give the workspace a name.",
+        "Cancel",
+        "Create workspace"
       ],
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         170,
-        125,
+        136,
         480,
-        649
+        628
       ],
       "file": "en-dark-820-D5-refused.png"
     },
@@ -1366,7 +2044,8 @@
       "tag": "en-dark-820",
       "state": "D6-rename",
       "defining": [
-        "Save"
+        "Save",
+        "Cancel"
       ],
       "popover": null,
       "box": null,
@@ -1374,7 +2053,16 @@
     },
     {
       "tag": "en-dark-820",
+      "state": "D6-rename-field",
+      "value": "Client work",
+      "width": 320,
+      "scrollWidth": 318,
+      "clientWidth": 318
+    },
+    {
+      "tag": "en-dark-820",
       "state": "D6-rename-line",
+      "field": 36,
       "save": 36,
       "cancel": 36,
       "remove": 36,
@@ -1493,9 +2181,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         0,
-        152,
+        143,
         390,
-        692
+        701
       ],
       "file": "en-dark-390-D5.png"
     },
@@ -1517,9 +2205,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         0,
-        152,
+        143,
         390,
-        692
+        701
       ],
       "file": "en-dark-390-D5-submit.png"
     },
@@ -1527,14 +2215,16 @@
       "tag": "en-dark-390",
       "state": "D5-refused",
       "defining": [
-        "Give the workspace a name."
+        "Give the workspace a name.",
+        "Cancel",
+        "Create workspace"
       ],
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         0,
-        102,
+        123,
         390,
-        742
+        721
       ],
       "file": "en-dark-390-D5-refused.png"
     },
@@ -1563,7 +2253,8 @@
       "tag": "en-dark-390",
       "state": "D6-rename",
       "defining": [
-        "Save"
+        "Save",
+        "Cancel"
       ],
       "popover": null,
       "box": null,
@@ -1571,13 +2262,22 @@
     },
     {
       "tag": "en-dark-390",
+      "state": "D6-rename-field",
+      "value": "Client work",
+      "width": 348,
+      "scrollWidth": 346,
+      "clientWidth": 346
+    },
+    {
+      "tag": "en-dark-390",
       "state": "D6-rename-line",
-      "save": 36,
-      "cancel": 36,
-      "remove": 111,
+      "field": 92,
+      "save": 146,
+      "cancel": 146,
+      "remove": 219,
       "dot": true,
       "headingBefore": 184.25,
-      "headingAfter": 184.25
+      "headingAfter": 292.25
     },
     {
       "tag": "en-dark-390",
@@ -1796,9 +2496,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         480,
-        150,
+        146,
         480,
-        599
+        608
       ],
       "file": "uk-light-1440-D5.png"
     },
@@ -1819,9 +2519,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         480,
-        150,
+        146,
         480,
-        599
+        608
       ],
       "file": "uk-light-1440-D5-submit.png"
     },
@@ -1829,14 +2529,16 @@
       "tag": "uk-light-1440",
       "state": "D5-refused",
       "defining": [
-        "Дайте простору назву."
+        "Дайте простору назву.",
+        "Скасувати",
+        "Створити простір"
       ],
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         480,
-        125,
+        136,
         480,
-        649
+        628
       ],
       "file": "uk-light-1440-D5-refused.png"
     },
@@ -1865,7 +2567,8 @@
       "tag": "uk-light-1440",
       "state": "D6-rename",
       "defining": [
-        "Зберегти"
+        "Зберегти",
+        "Скасувати"
       ],
       "popover": null,
       "box": null,
@@ -1873,7 +2576,16 @@
     },
     {
       "tag": "uk-light-1440",
+      "state": "D6-rename-field",
+      "value": "Клієнтська робота",
+      "width": 320,
+      "scrollWidth": 318,
+      "clientWidth": 318
+    },
+    {
+      "tag": "uk-light-1440",
       "state": "D6-rename-line",
+      "field": 36,
       "save": 36,
       "cancel": 36,
       "remove": 36,
@@ -1907,6 +2619,320 @@
       "popover": null,
       "box": null,
       "file": "uk-light-1440-D7-empty.png"
+    },
+    {
+      "tag": "uk-light-1000",
+      "state": "D1-client",
+      "defining": [
+        "Клієнтська робота"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-1000-D1-client.png"
+    },
+    {
+      "tag": "uk-light-1000",
+      "state": "D2-owner",
+      "defining": [
+        "Простори",
+        "Усі простори",
+        "Налаштування простору",
+        "Новий простір",
+        "Керувати просторами"
+      ],
+      "popover": "[data-workspace-menu]",
+      "box": [
+        36,
+        40,
+        272,
+        270
+      ],
+      "file": "uk-light-1000-D2-owner.png"
+    },
+    {
+      "tag": "uk-light-1000",
+      "state": "D2-member",
+      "defining": [
+        "Керувати просторами"
+      ],
+      "popover": "[data-workspace-menu]",
+      "box": [
+        36,
+        40,
+        272,
+        206
+      ],
+      "file": "uk-light-1000-D2-member.png"
+    },
+    {
+      "tag": "uk-light-1000",
+      "state": "chip-long",
+      "truncated": true,
+      "labelRight": 154,
+      "chipRight": 179,
+      "hideLeft": 183,
+      "clientChipRight": 179
+    },
+    {
+      "tag": "uk-light-1000",
+      "state": "D1-long",
+      "defining": [
+        "Впровадж"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-1000-D1-long.png"
+    },
+    {
+      "tag": "uk-light-1000",
+      "state": "D3-counts",
+      "headed": {
+        "w_e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3": 1,
+        "w_d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2": 1,
+        "w_c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1": 2
+      },
+      "menuCounts": {
+        "w_e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3": 1,
+        "w_d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2": 1,
+        "w_c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1": 2
+      }
+    },
+    {
+      "tag": "uk-light-1000",
+      "state": "D3-all",
+      "defining": [
+        "Без простору",
+        "Усі простори",
+        "Перенести",
+        "Paper Kite"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-1000-D3-all.png"
+    },
+    {
+      "tag": "uk-light-1000",
+      "state": "D3-move",
+      "defining": [
+        "Перенести в…",
+        "Клієнтська робота"
+      ],
+      "popover": "[data-workspace-popover='move']",
+      "box": [
+        243,
+        423,
+        310,
+        133
+      ],
+      "file": "uk-light-1000-D3-move.png"
+    },
+    {
+      "tag": "uk-light-1000",
+      "state": "D4-owner",
+      "defining": [
+        "Простори",
+        "Простір — це іменований набір проєктів.",
+        "Клієнтська робота",
+        "Новий простір"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-1000-D4-owner.png"
+    },
+    {
+      "tag": "uk-light-1000",
+      "state": "D4-owner-unassigned",
+      "defining": [
+        "Проєкти без простору · 2",
+        "Перенести в…"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-1000-D4-owner-unassigned.png"
+    },
+    {
+      "tag": "uk-light-1000",
+      "state": "D4-row-menu",
+      "defining": [
+        "Спершу перенесіть його проєкти."
+      ],
+      "popover": "[data-workspace-popover='row']",
+      "box": [
+        691,
+        354,
+        248,
+        129
+      ],
+      "file": "uk-light-1000-D4-row-menu.png"
+    },
+    {
+      "tag": "uk-light-1000",
+      "state": "D4-row-menu-place",
+      "menuLeft": 691,
+      "menuRight": 939,
+      "menuTop": 353.75,
+      "triggerRight": 939,
+      "triggerBottom": 349.75,
+      "listLeft": 44,
+      "listRight": 956
+    },
+    {
+      "tag": "uk-light-1000",
+      "state": "D4-member",
+      "defining": [
+        "Простори",
+        "Простір — це іменований набір проєктів.",
+        "Клієнтська робота"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-1000-D4-member.png"
+    },
+    {
+      "tag": "uk-light-1000",
+      "state": "D4-member-unassigned",
+      "defining": [
+        "Проєкти без простору · 2"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-1000-D4-member-unassigned.png"
+    },
+    {
+      "tag": "uk-light-1000",
+      "state": "D5",
+      "defining": [
+        "Новий простір",
+        "Назва",
+        "Колір",
+        "Проєкти"
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        260,
+        46,
+        480,
+        608
+      ],
+      "file": "uk-light-1000-D5.png"
+    },
+    {
+      "tag": "uk-light-1000",
+      "state": "D5-swatch-rows",
+      "swatchRows": [
+        8
+      ]
+    },
+    {
+      "tag": "uk-light-1000",
+      "state": "D5-submit",
+      "defining": [
+        "Проєкт належить одному простору.",
+        "Створити простір"
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        260,
+        46,
+        480,
+        608
+      ],
+      "file": "uk-light-1000-D5-submit.png"
+    },
+    {
+      "tag": "uk-light-1000",
+      "state": "D5-refused",
+      "defining": [
+        "Дайте простору назву.",
+        "Скасувати",
+        "Створити простір"
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        260,
+        42,
+        480,
+        616
+      ],
+      "file": "uk-light-1000-D5-refused.png"
+    },
+    {
+      "tag": "uk-light-1000",
+      "state": "D6",
+      "defining": [
+        "Дошка",
+        "Клієнтська робота",
+        "Простір · 2 проєкти",
+        "Прибрати з простору",
+        "Спершу перенесіть його проєкти."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-1000-D6.png"
+    },
+    {
+      "tag": "uk-light-1000",
+      "state": "D6-remove",
+      "removeLeft": 787.046875,
+      "nameLeft": 89,
+      "border": "1px"
+    },
+    {
+      "tag": "uk-light-1000",
+      "state": "D6-rename",
+      "defining": [
+        "Зберегти",
+        "Скасувати"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-1000-D6-rename.png"
+    },
+    {
+      "tag": "uk-light-1000",
+      "state": "D6-rename-field",
+      "value": "Клієнтська робота",
+      "width": 320,
+      "scrollWidth": 318,
+      "clientWidth": 318
+    },
+    {
+      "tag": "uk-light-1000",
+      "state": "D6-rename-line",
+      "field": 36,
+      "save": 36,
+      "cancel": 36,
+      "remove": 36,
+      "dot": true,
+      "headingBefore": 97,
+      "headingAfter": 97
+    },
+    {
+      "tag": "uk-light-1000",
+      "state": "D6-add",
+      "defining": [
+        "Додати проєкт",
+        "Paper Kite"
+      ],
+      "popover": "[data-workspace-popover='add']",
+      "box": [
+        632,
+        125,
+        320,
+        235
+      ],
+      "file": "uk-light-1000-D6-add.png"
+    },
+    {
+      "tag": "uk-light-1000",
+      "state": "D7-empty",
+      "defining": [
+        "Проєктів ще немає.",
+        "Видалити простір"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-1000-D7-empty.png"
     },
     {
       "tag": "uk-light-820",
@@ -2098,9 +3124,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         170,
-        150,
+        146,
         480,
-        599
+        608
       ],
       "file": "uk-light-820-D5.png"
     },
@@ -2121,9 +3147,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         170,
-        150,
+        146,
         480,
-        599
+        608
       ],
       "file": "uk-light-820-D5-submit.png"
     },
@@ -2131,14 +3157,16 @@
       "tag": "uk-light-820",
       "state": "D5-refused",
       "defining": [
-        "Дайте простору назву."
+        "Дайте простору назву.",
+        "Скасувати",
+        "Створити простір"
       ],
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         170,
-        125,
+        136,
         480,
-        649
+        628
       ],
       "file": "uk-light-820-D5-refused.png"
     },
@@ -2167,7 +3195,8 @@
       "tag": "uk-light-820",
       "state": "D6-rename",
       "defining": [
-        "Зберегти"
+        "Зберегти",
+        "Скасувати"
       ],
       "popover": null,
       "box": null,
@@ -2175,7 +3204,16 @@
     },
     {
       "tag": "uk-light-820",
+      "state": "D6-rename-field",
+      "value": "Клієнтська робота",
+      "width": 290,
+      "scrollWidth": 288,
+      "clientWidth": 288
+    },
+    {
+      "tag": "uk-light-820",
       "state": "D6-rename-line",
+      "field": 36,
       "save": 36,
       "cancel": 36,
       "remove": 36,
@@ -2294,9 +3332,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         0,
-        152,
+        143,
         390,
-        692
+        701
       ],
       "file": "uk-light-390-D5.png"
     },
@@ -2318,9 +3356,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         0,
-        152,
+        143,
         390,
-        692
+        701
       ],
       "file": "uk-light-390-D5-submit.png"
     },
@@ -2328,14 +3366,16 @@
       "tag": "uk-light-390",
       "state": "D5-refused",
       "defining": [
-        "Дайте простору назву."
+        "Дайте простору назву.",
+        "Скасувати",
+        "Створити простір"
       ],
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         0,
-        102,
+        123,
         390,
-        742
+        721
       ],
       "file": "uk-light-390-D5-refused.png"
     },
@@ -2364,7 +3404,8 @@
       "tag": "uk-light-390",
       "state": "D6-rename",
       "defining": [
-        "Зберегти"
+        "Зберегти",
+        "Скасувати"
       ],
       "popover": null,
       "box": null,
@@ -2372,13 +3413,22 @@
     },
     {
       "tag": "uk-light-390",
+      "state": "D6-rename-field",
+      "value": "Клієнтська робота",
+      "width": 348,
+      "scrollWidth": 346,
+      "clientWidth": 346
+    },
+    {
+      "tag": "uk-light-390",
       "state": "D6-rename-line",
-      "save": 36,
-      "cancel": 36,
-      "remove": 111,
+      "field": 92,
+      "save": 146,
+      "cancel": 146,
+      "remove": 219,
       "dot": true,
       "headingBefore": 184.25,
-      "headingAfter": 184.25
+      "headingAfter": 292.25
     },
     {
       "tag": "uk-light-390",
@@ -2597,9 +3647,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         480,
-        150,
+        146,
         480,
-        599
+        608
       ],
       "file": "uk-dark-1440-D5.png"
     },
@@ -2620,9 +3670,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         480,
-        150,
+        146,
         480,
-        599
+        608
       ],
       "file": "uk-dark-1440-D5-submit.png"
     },
@@ -2630,14 +3680,16 @@
       "tag": "uk-dark-1440",
       "state": "D5-refused",
       "defining": [
-        "Дайте простору назву."
+        "Дайте простору назву.",
+        "Скасувати",
+        "Створити простір"
       ],
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         480,
-        125,
+        136,
         480,
-        649
+        628
       ],
       "file": "uk-dark-1440-D5-refused.png"
     },
@@ -2666,7 +3718,8 @@
       "tag": "uk-dark-1440",
       "state": "D6-rename",
       "defining": [
-        "Зберегти"
+        "Зберегти",
+        "Скасувати"
       ],
       "popover": null,
       "box": null,
@@ -2674,7 +3727,16 @@
     },
     {
       "tag": "uk-dark-1440",
+      "state": "D6-rename-field",
+      "value": "Клієнтська робота",
+      "width": 320,
+      "scrollWidth": 318,
+      "clientWidth": 318
+    },
+    {
+      "tag": "uk-dark-1440",
       "state": "D6-rename-line",
+      "field": 36,
       "save": 36,
       "cancel": 36,
       "remove": 36,
@@ -2708,6 +3770,320 @@
       "popover": null,
       "box": null,
       "file": "uk-dark-1440-D7-empty.png"
+    },
+    {
+      "tag": "uk-dark-1000",
+      "state": "D1-client",
+      "defining": [
+        "Клієнтська робота"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-1000-D1-client.png"
+    },
+    {
+      "tag": "uk-dark-1000",
+      "state": "D2-owner",
+      "defining": [
+        "Простори",
+        "Усі простори",
+        "Налаштування простору",
+        "Новий простір",
+        "Керувати просторами"
+      ],
+      "popover": "[data-workspace-menu]",
+      "box": [
+        36,
+        40,
+        272,
+        270
+      ],
+      "file": "uk-dark-1000-D2-owner.png"
+    },
+    {
+      "tag": "uk-dark-1000",
+      "state": "D2-member",
+      "defining": [
+        "Керувати просторами"
+      ],
+      "popover": "[data-workspace-menu]",
+      "box": [
+        36,
+        40,
+        272,
+        206
+      ],
+      "file": "uk-dark-1000-D2-member.png"
+    },
+    {
+      "tag": "uk-dark-1000",
+      "state": "chip-long",
+      "truncated": true,
+      "labelRight": 154,
+      "chipRight": 179,
+      "hideLeft": 183,
+      "clientChipRight": 179
+    },
+    {
+      "tag": "uk-dark-1000",
+      "state": "D1-long",
+      "defining": [
+        "Впровадж"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-1000-D1-long.png"
+    },
+    {
+      "tag": "uk-dark-1000",
+      "state": "D3-counts",
+      "headed": {
+        "w_e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3": 1,
+        "w_d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2": 1,
+        "w_c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1": 2
+      },
+      "menuCounts": {
+        "w_e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3e3": 1,
+        "w_d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2d2": 1,
+        "w_c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1": 2
+      }
+    },
+    {
+      "tag": "uk-dark-1000",
+      "state": "D3-all",
+      "defining": [
+        "Без простору",
+        "Усі простори",
+        "Перенести",
+        "Paper Kite"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-1000-D3-all.png"
+    },
+    {
+      "tag": "uk-dark-1000",
+      "state": "D3-move",
+      "defining": [
+        "Перенести в…",
+        "Клієнтська робота"
+      ],
+      "popover": "[data-workspace-popover='move']",
+      "box": [
+        243,
+        423,
+        310,
+        133
+      ],
+      "file": "uk-dark-1000-D3-move.png"
+    },
+    {
+      "tag": "uk-dark-1000",
+      "state": "D4-owner",
+      "defining": [
+        "Простори",
+        "Простір — це іменований набір проєктів.",
+        "Клієнтська робота",
+        "Новий простір"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-1000-D4-owner.png"
+    },
+    {
+      "tag": "uk-dark-1000",
+      "state": "D4-owner-unassigned",
+      "defining": [
+        "Проєкти без простору · 2",
+        "Перенести в…"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-1000-D4-owner-unassigned.png"
+    },
+    {
+      "tag": "uk-dark-1000",
+      "state": "D4-row-menu",
+      "defining": [
+        "Спершу перенесіть його проєкти."
+      ],
+      "popover": "[data-workspace-popover='row']",
+      "box": [
+        691,
+        354,
+        248,
+        129
+      ],
+      "file": "uk-dark-1000-D4-row-menu.png"
+    },
+    {
+      "tag": "uk-dark-1000",
+      "state": "D4-row-menu-place",
+      "menuLeft": 691,
+      "menuRight": 939,
+      "menuTop": 353.75,
+      "triggerRight": 939,
+      "triggerBottom": 349.75,
+      "listLeft": 44,
+      "listRight": 956
+    },
+    {
+      "tag": "uk-dark-1000",
+      "state": "D4-member",
+      "defining": [
+        "Простори",
+        "Простір — це іменований набір проєктів.",
+        "Клієнтська робота"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-1000-D4-member.png"
+    },
+    {
+      "tag": "uk-dark-1000",
+      "state": "D4-member-unassigned",
+      "defining": [
+        "Проєкти без простору · 2"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-1000-D4-member-unassigned.png"
+    },
+    {
+      "tag": "uk-dark-1000",
+      "state": "D5",
+      "defining": [
+        "Новий простір",
+        "Назва",
+        "Колір",
+        "Проєкти"
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        260,
+        46,
+        480,
+        608
+      ],
+      "file": "uk-dark-1000-D5.png"
+    },
+    {
+      "tag": "uk-dark-1000",
+      "state": "D5-swatch-rows",
+      "swatchRows": [
+        8
+      ]
+    },
+    {
+      "tag": "uk-dark-1000",
+      "state": "D5-submit",
+      "defining": [
+        "Проєкт належить одному простору.",
+        "Створити простір"
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        260,
+        46,
+        480,
+        608
+      ],
+      "file": "uk-dark-1000-D5-submit.png"
+    },
+    {
+      "tag": "uk-dark-1000",
+      "state": "D5-refused",
+      "defining": [
+        "Дайте простору назву.",
+        "Скасувати",
+        "Створити простір"
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        260,
+        42,
+        480,
+        616
+      ],
+      "file": "uk-dark-1000-D5-refused.png"
+    },
+    {
+      "tag": "uk-dark-1000",
+      "state": "D6",
+      "defining": [
+        "Дошка",
+        "Клієнтська робота",
+        "Простір · 2 проєкти",
+        "Прибрати з простору",
+        "Спершу перенесіть його проєкти."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-1000-D6.png"
+    },
+    {
+      "tag": "uk-dark-1000",
+      "state": "D6-remove",
+      "removeLeft": 787.046875,
+      "nameLeft": 89,
+      "border": "1px"
+    },
+    {
+      "tag": "uk-dark-1000",
+      "state": "D6-rename",
+      "defining": [
+        "Зберегти",
+        "Скасувати"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-1000-D6-rename.png"
+    },
+    {
+      "tag": "uk-dark-1000",
+      "state": "D6-rename-field",
+      "value": "Клієнтська робота",
+      "width": 320,
+      "scrollWidth": 318,
+      "clientWidth": 318
+    },
+    {
+      "tag": "uk-dark-1000",
+      "state": "D6-rename-line",
+      "field": 36,
+      "save": 36,
+      "cancel": 36,
+      "remove": 36,
+      "dot": true,
+      "headingBefore": 97,
+      "headingAfter": 97
+    },
+    {
+      "tag": "uk-dark-1000",
+      "state": "D6-add",
+      "defining": [
+        "Додати проєкт",
+        "Paper Kite"
+      ],
+      "popover": "[data-workspace-popover='add']",
+      "box": [
+        632,
+        125,
+        320,
+        235
+      ],
+      "file": "uk-dark-1000-D6-add.png"
+    },
+    {
+      "tag": "uk-dark-1000",
+      "state": "D7-empty",
+      "defining": [
+        "Проєктів ще немає.",
+        "Видалити простір"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-1000-D7-empty.png"
     },
     {
       "tag": "uk-dark-820",
@@ -2899,9 +4275,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         170,
-        150,
+        146,
         480,
-        599
+        608
       ],
       "file": "uk-dark-820-D5.png"
     },
@@ -2922,9 +4298,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         170,
-        150,
+        146,
         480,
-        599
+        608
       ],
       "file": "uk-dark-820-D5-submit.png"
     },
@@ -2932,14 +4308,16 @@
       "tag": "uk-dark-820",
       "state": "D5-refused",
       "defining": [
-        "Дайте простору назву."
+        "Дайте простору назву.",
+        "Скасувати",
+        "Створити простір"
       ],
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         170,
-        125,
+        136,
         480,
-        649
+        628
       ],
       "file": "uk-dark-820-D5-refused.png"
     },
@@ -2968,7 +4346,8 @@
       "tag": "uk-dark-820",
       "state": "D6-rename",
       "defining": [
-        "Зберегти"
+        "Зберегти",
+        "Скасувати"
       ],
       "popover": null,
       "box": null,
@@ -2976,7 +4355,16 @@
     },
     {
       "tag": "uk-dark-820",
+      "state": "D6-rename-field",
+      "value": "Клієнтська робота",
+      "width": 290,
+      "scrollWidth": 288,
+      "clientWidth": 288
+    },
+    {
+      "tag": "uk-dark-820",
       "state": "D6-rename-line",
+      "field": 36,
       "save": 36,
       "cancel": 36,
       "remove": 36,
@@ -3095,9 +4483,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         0,
-        152,
+        143,
         390,
-        692
+        701
       ],
       "file": "uk-dark-390-D5.png"
     },
@@ -3119,9 +4507,9 @@
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         0,
-        152,
+        143,
         390,
-        692
+        701
       ],
       "file": "uk-dark-390-D5-submit.png"
     },
@@ -3129,14 +4517,16 @@
       "tag": "uk-dark-390",
       "state": "D5-refused",
       "defining": [
-        "Дайте простору назву."
+        "Дайте простору назву.",
+        "Скасувати",
+        "Створити простір"
       ],
       "popover": "[data-team-dialog='workspace-create']",
       "box": [
         0,
-        102,
+        123,
         390,
-        742
+        721
       ],
       "file": "uk-dark-390-D5-refused.png"
     },
@@ -3165,7 +4555,8 @@
       "tag": "uk-dark-390",
       "state": "D6-rename",
       "defining": [
-        "Зберегти"
+        "Зберегти",
+        "Скасувати"
       ],
       "popover": null,
       "box": null,
@@ -3173,13 +4564,22 @@
     },
     {
       "tag": "uk-dark-390",
+      "state": "D6-rename-field",
+      "value": "Клієнтська робота",
+      "width": 348,
+      "scrollWidth": 346,
+      "clientWidth": 346
+    },
+    {
+      "tag": "uk-dark-390",
       "state": "D6-rename-line",
-      "save": 36,
-      "cancel": 36,
-      "remove": 111,
+      "field": 92,
+      "save": 146,
+      "cancel": 146,
+      "remove": 219,
       "dot": true,
       "headingBefore": 184.25,
-      "headingAfter": 184.25
+      "headingAfter": 292.25
     },
     {
       "tag": "uk-dark-390",

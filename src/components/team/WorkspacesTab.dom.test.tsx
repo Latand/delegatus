@@ -131,6 +131,12 @@ test("New workspace refuses an empty name in the dialog, then creates at once wi
   expect(dialog.querySelector("[data-workspace-color][aria-checked='true']")?.getAttribute("data-workspace-color")).toBe("coral");
   await click(dialog.querySelector("[data-workspace-create-submit]"));
   expect(dialog.querySelector("[data-workspace-create-error]")?.textContent).toBe(t("workspaces.error.nameRequired"));
+  /* The reason stands under Name; Cancel and Create stand in the footer, outside the scrolling body. */
+  expect(dialog.querySelector("[data-workspace-create-error]")?.closest("label")?.querySelector("[data-workspace-create-name]")).not.toBeNull();
+  const footer = dialog.querySelector("[data-team-dialog-footer]")!;
+  expect(footer.querySelector("[data-workspace-create-submit]")?.getAttribute("form")).toBe(dialog.querySelector("form")?.id);
+  expect(footer.closest(".overflow-y-auto")).toBeNull();
+  expect(footer.textContent).toBe(`${t("common.cancel")}${t("workspaces.create.submit")}`);
   expect(posts).toEqual([]);
 
   /* Typed through React's own onChange, as the rail's tests type: a bare value write is invisible to a controlled input. */

@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowRightLeft, Folder, MoreHorizontal, Plus } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { useId, useMemo, useRef, useState } from "react";
 
 import { BAR_MENU_ROW } from "@/components/ProjectBar";
 import { projectDisplayName } from "@/lib/displayNames";
@@ -351,16 +351,29 @@ function CreateWorkspaceDialog({ view, rows, initial, error, onClose, onCreate }
   const [color, setColor] = useState<MemberColor>(initial?.color ?? nextWorkspaceColor(view.workspaces));
   const [checked, setChecked] = useState<ReadonlySet<string>>(() => new Set(initial?.projects ?? []));
   const [problem, setProblem] = useState<string | null>(error);
+  const formId = useId();
   const submit = () => {
     const refused = workspaceNameProblem(view, name);
     if (refused) return setProblem(workspaceErrorText(t, refused));
     onCreate({ id, name, color, projects: [...checked] });
   };
   return (
-    <TeamDialog title={t("workspaces.new")} onClose={onClose} closeLabel={t("common.close")} testId="workspace-create">
-      <form className="flex flex-col gap-4" onSubmit={(event) => { event.preventDefault(); submit(); }}>
-        <Field label={t("workspaces.create.name")}>
-          <input className={INPUT} value={name} autoFocus maxLength={80} onChange={(event) => { setName(event.target.value); setProblem(null); }} data-workspace-create-name="" />
+    <TeamDialog
+      title={t("workspaces.new")}
+      onClose={onClose}
+      closeLabel={t("common.close")}
+      testId="workspace-create"
+      footer={(
+        <>
+          <button type="button" className={BUTTON.secondary} onClick={onClose}>{t("common.cancel")}</button>
+          <button type="submit" form={formId} className={BUTTON.primary} data-workspace-create-submit="">{t("workspaces.create.submit")}</button>
+        </>
+      )}
+    >
+      <form id={formId} className="flex flex-col gap-4" onSubmit={(event) => { event.preventDefault(); submit(); }}>
+        {/* The reason stands under the name it concerns. */}
+        <Field label={t("workspaces.create.name")} hint={problem ? <span role="alert" className="font-semibold text-danger" data-workspace-create-error="">{problem}</span> : undefined}>
+          <input className={INPUT} value={name} autoFocus maxLength={80} aria-invalid={problem ? true : undefined} onChange={(event) => { setName(event.target.value); setProblem(null); }} data-workspace-create-name="" />
         </Field>
         <div className="flex flex-col gap-1.5">
           <span className="text-label font-semibold text-secondary">{t("workspaces.create.colour")}</span>
@@ -381,11 +394,6 @@ function CreateWorkspaceDialog({ view, rows, initial, error, onClose, onCreate }
           />
           <span className="text-caption leading-snug text-muted">{t("workspaces.create.projectsHint")}</span>
         </div>
-        {problem ? <p role="alert" className="rounded-control bg-danger-soft px-3 py-2 text-ui text-danger" data-workspace-create-error="">{problem}</p> : null}
-        <div className="flex justify-end gap-2 max-sm:grid max-sm:grid-cols-2">
-          <button type="button" className={BUTTON.secondary} onClick={onClose}>{t("common.cancel")}</button>
-          <button type="submit" className={BUTTON.primary} data-workspace-create-submit="">{t("workspaces.create.submit")}</button>
-        </div>
       </form>
     </TeamDialog>
   );
@@ -402,22 +410,29 @@ function RenameWorkspaceDialog({ view, workspace, initial, error, onClose, onRen
   const { t } = useLocale();
   const [name, setName] = useState(initial);
   const [problem, setProblem] = useState<string | null>(error);
+  const formId = useId();
   const submit = () => {
     const refused = workspaceNameProblem(view, name, workspace.id);
     if (refused) return setProblem(workspaceErrorText(t, refused));
     onRename(name);
   };
   return (
-    <TeamDialog title={t("workspaces.rename")} onClose={onClose} closeLabel={t("common.close")} testId="workspace-rename">
-      <form className="flex flex-col gap-4" onSubmit={(event) => { event.preventDefault(); submit(); }}>
-        <Field label={t("workspaces.create.name")}>
-          <input className={INPUT} value={name} autoFocus maxLength={80} onChange={(event) => { setName(event.target.value); setProblem(null); }} data-workspace-rename-name="" />
-        </Field>
-        {problem ? <p role="alert" className="rounded-control bg-danger-soft px-3 py-2 text-ui text-danger">{problem}</p> : null}
-        <div className="flex justify-end gap-2 max-sm:grid max-sm:grid-cols-2">
+    <TeamDialog
+      title={t("workspaces.rename")}
+      onClose={onClose}
+      closeLabel={t("common.close")}
+      testId="workspace-rename"
+      footer={(
+        <>
           <button type="button" className={BUTTON.secondary} onClick={onClose}>{t("common.cancel")}</button>
-          <button type="submit" className={BUTTON.primary}>{t("team.member.save")}</button>
-        </div>
+          <button type="submit" form={formId} className={BUTTON.primary}>{t("team.member.save")}</button>
+        </>
+      )}
+    >
+      <form id={formId} className="flex flex-col gap-4" onSubmit={(event) => { event.preventDefault(); submit(); }}>
+        <Field label={t("workspaces.create.name")} hint={problem ? <span role="alert" className="font-semibold text-danger">{problem}</span> : undefined}>
+          <input className={INPUT} value={name} autoFocus maxLength={80} aria-invalid={problem ? true : undefined} onChange={(event) => { setName(event.target.value); setProblem(null); }} data-workspace-rename-name="" />
+        </Field>
       </form>
     </TeamDialog>
   );

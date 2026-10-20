@@ -123,12 +123,15 @@ function WorkspaceBody({ view, workspace }: { view: TeamWorkspaces; workspace: W
           sections below it. */}
       <header className="flex flex-wrap items-start gap-x-4 gap-y-3">
         <BackLink />
-        <div className="min-w-0 flex-1 basis-[240px]">
+        {/* While renaming, the phone gives the field the whole content width under the back link. */}
+        <div className={`min-w-0 flex-1 basis-[240px] ${renaming !== null ? "max-sm:basis-full" : ""}`}>
           {renaming !== null ? (
             <form className="flex min-h-8 flex-wrap items-center gap-2" onSubmit={(event) => { event.preventDefault(); rename(); }}>
               <WorkspaceDot color={workspace.color} size={10} />
+              {/* The field keeps room for a whole name; Save and Cancel wrap under it together,
+                  and on the phone the field fills the line beside the dot (10 px and an 8 px gap). */}
               <input
-                className={`${RENAME_INPUT} min-w-0 max-w-[320px] flex-1`}
+                className={`${RENAME_INPUT} min-w-[200px] max-w-[320px] flex-1 max-sm:max-w-none max-sm:basis-[calc(100%-18px)]`}
                 value={renaming}
                 autoFocus
                 maxLength={80}
@@ -137,8 +140,10 @@ function WorkspaceBody({ view, workspace }: { view: TeamWorkspaces; workspace: W
                 onKeyDown={(event) => { if (event.key === "Escape") { setRenaming(null); setError(null); } }}
                 data-workspace-rename-field=""
               />
-              <button type="submit" className={BUTTON.small}>{t("team.member.save")}</button>
-              <button type="button" className={BUTTON.text} onClick={() => { setRenaming(null); setError(null); }}>{t("common.cancel")}</button>
+              <span className="flex items-center gap-2">
+                <button type="submit" className={BUTTON.small}>{t("team.member.save")}</button>
+                <button type="button" className={BUTTON.text} onClick={() => { setRenaming(null); setError(null); }}>{t("common.cancel")}</button>
+              </span>
             </form>
           ) : (
             <h1 className="flex min-h-8 min-w-0 items-center gap-2 text-title font-bold text-primary max-sm:min-h-12" data-workspace-title="">
