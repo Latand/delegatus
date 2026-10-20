@@ -52,6 +52,7 @@ enabled = false
 [features]
 apps = false
 plugins = false
+${scenario === "dropped-after" ? "instant_interrupt = false" : ""}
 `);
     const requests: Array<{method: string; params: Record<string, unknown>}> = [];
     const errors: string[] = [];
@@ -180,6 +181,10 @@ plugins = false
         expect((await host.health()).activeTurnRef).toBe(originalTurn);
       }
       if (scenario === "dropped-after") {
+        // Newer CLIs preempt sampling on steer by default. This case disables
+        // that feature so the explicit interrupt drops genuinely pending input.
+        // The sampling case above continues to exercise the CLI's defaults.
+        expect(provider).toHaveLength(1);
         expect(journal.operationResult("supplement")!.receipt.status).toBe("delivering");
         await publish();
         journal.executeOperation(parseRuntimeCommand("interrupt", { conversationId, operationId: "interrupt-fixture", idempotencyKey: "interrupt-fixture", turnId: originalTurn }));

@@ -371,8 +371,8 @@ stage, a branch that only trails `origin/main`) runs privacy with
 `.txt` files skips types. Any other changed file keeps every scoped check.
 The native Codex phase runs the files that start the Codex executable once per
 supported version (`verify-native-codex-runtime.ts --engine-only`) and the rest
-once (`--shared-only`), all three at the same time. Local publication gives the
-shared selection its merge base through `LLV_GATE_COMPARE_BASE`; it uses the
+once (`--shared-only`), with those checks running concurrently. Local publication
+gives the shared selection its merge base through `LLV_GATE_COMPARE_BASE`; it uses the
 same isolated comparator and bounded retries as touched tests. Hosted shared
 verification keeps its absolute verdict. Both modes isolate every file's
 roots and preserve nested service CPU placement and admission accounting.

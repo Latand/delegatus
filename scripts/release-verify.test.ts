@@ -135,3 +135,95 @@ test("verification requires three successful workflows, exact npm latest and one
   expect(releasePublished({ ...valid, runs: ["success", "failure", "success"] }).length).toBeGreaterThan(0);
   expect(releasePublished({ ...valid, images: [{ digest: "one", platforms: ["linux/amd64"] }] }).length).toBeGreaterThan(0);
 });
+
+function imagePorts(docker: (args: string[]) => string, calls: string[]): VerifyPorts {
+  const sha = "b".repeat(40); let now = 0;
+  return {
+    now: () => now, wait: async () => { now += 60 * 60_000; }, provenance: () => true,
+    registry: async url => url.endsWith("/1.2.0") ? { version: "1.2.0", dist: { integrity: "sha512-synthetic" } } : { "dist-tags": { latest: "1.2.0" } },
+    command: async (file, args) => {
+      calls.push(`${file} ${args.join(" ")}`);
+      if (file === "git" && args[0] === "show") return JSON.stringify({ name: "package-example", version: "1.2.0" });
+      if (file === "git" && args[0] === "rev-parse") return sha;
+      if (file === "git" && args[0] === "cat-file") return args[1] === "-p"
+        ? `object ${sha}\ntype commit\ntag v1.2.0\ntagger Tester <test@example.invalid> 0 +0000\n\nDelegatus 1.2.0` : "tag";
+      if (file === "git" && args[0] === "ls-remote") return `${sha}\trefs/tags/v1.2.0\n${sha}\trefs/tags/v1.2.0^{}`;
+      if (file === "gh" && args[0] === "repo") return "Example/Project";
+      if (file === "gh" && args[0] === "run" && args[1] === "list") {
+        const mac = args.includes("macos-newcomer.yml");
+        return JSON.stringify([{ databaseId: mac ? 3 : 1, headSha: mac ? "main" : sha, displayTitle: mac ? "macOS install after npm run 1" : "Publish v1.2.0", status: "completed", conclusion: "success" }]);
+      }
+      if (file === "docker") return docker(args);
+      throw new Error("unexpected or mutating command");
+    },
+  };
+}
+const platform = (architecture: string) => ({ platform: { os: "linux", architecture } });
+const pretty = (architectures: string[]) => JSON.stringify({ manifests: architectures.map(platform) }, null, 3);
+
+test("without buildx imagetools the verifier checks the same three tags with docker manifest inspect", async () => {
+  const calls: string[] = [];
+  const ports = imagePorts(args => {
+    if (args[0] === "buildx") throw new Error("docker: 'buildx' is not a docker command.\nSee 'docker --help'");
+    if (args[0] === "manifest" && args[1] === "inspect") return pretty(["amd64", "arm64"]);
+    throw new Error("unexpected docker command");
+  }, calls);
+  expect(await verifyRelease("v1.2.0", null, ports)).toEqual({ errors: [] });
+  expect(calls.filter(c => c.startsWith("docker manifest inspect ")))
+    .toEqual(["1.2.0", "1.2", "latest"].map(t => `docker manifest inspect ghcr.io/example/project:${t}`));
+  expect(calls.filter(c => c.startsWith("docker buildx")).length).toBe(1);
+});
+
+test("once a later buildx tag fails, all tags use manifest inspect output for digest comparison", async () => {
+  const calls: string[] = []; let buildxReads = 0;
+  const ports = imagePorts(args => {
+    if (args[0] === "buildx") {
+      buildxReads++;
+      if (buildxReads === 1) return JSON.stringify({ manifests: [platform("amd64"), platform("arm64")] });
+      throw new Error("buildx failed for a later tag");
+    }
+    if (args[0] === "manifest" && args[1] === "inspect") return pretty(["amd64", "arm64"]);
+    throw new Error("unexpected docker command");
+  }, calls);
+
+  expect(await verifyRelease("v1.2.0", null, ports)).toEqual({ errors: [] });
+  expect(calls.filter(c => c.startsWith("docker manifest inspect "))).toEqual(
+    ["1.2", "1.2.0", "latest"].map(t => `docker manifest inspect ghcr.io/example/project:${t}`),
+  );
+});
+
+test("the manifest inspect fallback still refuses a missing platform and differing tag digests", async () => {
+  const missing = await verifyRelease("v1.2.0", null, imagePorts(args => {
+    if (args[0] === "buildx") throw new Error("buildx missing");
+    return pretty(["amd64"]);
+  }, []));
+  expect(missing.errors).toContain("Docker tags/digest/platforms not verified");
+  const differing = await verifyRelease("v1.2.0", null, imagePorts(args => {
+    if (args[0] === "buildx") throw new Error("buildx missing");
+    return pretty(args[2].endsWith(":latest") ? ["amd64", "arm64", "s390x"] : ["amd64", "arm64"]);
+  }, []));
+  expect(differing.errors).toContain("Docker tags/digest/platforms not verified");
+  const digestMismatch = await verifyRelease("v1.2.0", null, imagePorts(args => {
+    if (args[0] === "buildx") throw new Error("buildx missing");
+    return args[2].endsWith(":latest")
+      ? JSON.stringify({ manifests: [platform("amd64"), platform("arm64")], annotations: { version: "different" } }, null, 3)
+      : pretty(["amd64", "arm64"]);
+  }, []));
+  expect(digestMismatch.errors).toContain("Docker tags/digest/platforms not verified");
+});
+
+test("a tag that neither inspector can read fails with both causes", async () => {
+  await expect(verifyRelease("v1.2.0", null, imagePorts(args => {
+    throw new Error(args[0] === "buildx" ? "buildx missing" : "manifest unknown");
+  }, []))).rejects.toThrow(/buildx imagetools: buildx missing; manifest inspect: manifest unknown/);
+});
+
+test("buildx imagetools stays the first choice and manifest inspect is not called when it works", async () => {
+  const calls: string[] = [];
+  const ports = imagePorts(args => {
+    if (args[0] === "buildx") return JSON.stringify({ manifests: [platform("amd64"), platform("arm64")] });
+    throw new Error("manifest inspect must not run");
+  }, calls);
+  expect(await verifyRelease("v1.2.0", null, ports)).toEqual({ errors: [] });
+  expect(calls.filter(c => c.startsWith("docker ")).length).toBe(3);
+});
