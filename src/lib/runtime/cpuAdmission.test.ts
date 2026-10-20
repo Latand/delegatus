@@ -110,7 +110,8 @@ test("a real checker restart and pending-stage recovery preserve priority, seque
 
 test("the gate helper inherits a publication's task binding through wait and fresh claim processes", async () => {
   const f = fixture(), tasks = priorityTasks(f.file), directory = path.dirname(f.file);
-  const q = new CpuAdmissionQueue(path.join(directory, "admission.sqlite")); queues.push(q);
+  let observerTime = 0;
+  const q = new CpuAdmissionQueue(path.join(directory, "admission.sqlite"), () => observerTime); queues.push(q);
   const owner = captureProcessIdentity(process.pid);
   const env = { ...process.env, ...cpuPriorityEnv(tasks.source(["first"])), LLV_GATE_LOCK_DIR: directory,
     LLV_GATE_SLOTS: "1", LLV_GATE_SLOT_LEASE: "", DELEGATUS_CPU_PRESSURE: "off" };
@@ -123,12 +124,15 @@ test("the gate helper inherits a publication's task binding through wait and fre
     q.check("command:normal", false, owner);
     tasks.set("first", "high");
     expect(await run("--wait")).toBe(0);
-    expect(q.check("command:normal", true, owner)?.position).toBe(2);
+    observerTime = CPU_QUEUE_SPACING_MS + 1;
+    // Read the durable wait state without attempting admission: that check
+    // would legitimately admit this entry after the spacing window elapsed.
+    expect(q.check("command:normal", false, owner)?.position).toBe(2);
     tasks.set("first", "low");
     expect(await run("--claim")).toBe(75);
     tasks.set("first", "high");
     expect(await run("--claim")).toBe(0);
-    expect(q.check("command:normal", true, owner)?.position).toBe(1);
+    expect(q.check("command:normal", false, owner)?.position).toBe(1);
   } finally { tasks.close(); }
 });
 
