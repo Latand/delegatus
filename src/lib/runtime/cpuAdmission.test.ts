@@ -79,29 +79,36 @@ test("a pre-upgrade gate cannot admit normal work ahead of an observed high-prio
   tasks.close();
 });
 
-test("legacy insertions keep the shared seq order aligned with priority across restart", () => {
+test("legacy inserts restore priority and FIFO seq order even when the new normal rank is unchanged", () => {
   const m = mixed(), older = m.older(), q = m.open(), tasks = priorityTasks(m.file);
   try {
     tasks.set("first", "low");
-    expect(q.check("stage:low-first", false, undefined, true, tasks.source(["first"]))).toMatchObject({ position: 1 });
-    // The older helper inserts a normal command without knowing about the
-    // priority columns. Its own fixed seq query must still see it at the head.
-    expect(older.check("command:normal", true, captureProcessIdentity(process.pid))).toBeNull();
-    expect(q.check("stage:low-first", false, undefined, false)).toMatchObject({ position: 1 });
+    q.check("stage:low-first", false, undefined, true, tasks.source(["first"]));
+    // The older helper inserts normal rows without knowing about priority or
+    // fifo_seq. That insertion must still repair the fixed seq view.
+    expect(older.check("command:normal-first", false, captureProcessIdentity(process.pid))).toMatchObject({ position: 1 });
+    expect(older.check("command:normal-second", false, captureProcessIdentity(process.pid))).toMatchObject({ position: 2 });
+    expect(m.read<{ key: string; seq: number; priority: number }>("SELECT key, seq, priority FROM tickets ORDER BY seq")).toEqual([
+      { key: "command:normal-first", seq: 1, priority: 1 },
+      { key: "command:normal-second", seq: 2, priority: 1 },
+      { key: "stage:low-first", seq: 3, priority: 2 },
+    ]);
+    expect(older.check("command:normal-first", true, captureProcessIdentity(process.pid))).toBeNull();
 
     m.at(CPU_QUEUE_SPACING_MS);
     tasks.set("raised", "normal");
-    expect(q.check("stage:normal-first", false, undefined, true, tasks.source(["raised"]))).toMatchObject({ position: 1 });
+    expect(q.check("stage:normal-first", false, undefined, true, tasks.source(["raised"]))).toMatchObject({ position: 2 });
     m.at(CPU_QUEUE_SPACING_MS + 1);
-    expect(older.check("command:normal-second", false, captureProcessIdentity(process.pid))).toMatchObject({ position: 2 });
+    expect(older.check("command:normal-second", false, captureProcessIdentity(process.pid))).toMatchObject({ position: 1 });
 
     q.close(); queues.splice(queues.indexOf(q), 1);
-    older.close(); queues.splice(queues.indexOf(older), 1);
     const reopened = m.open();
-    expect(reopened.check("command:normal-second", false, captureProcessIdentity(process.pid))).toMatchObject({ position: 2 });
+    expect(reopened.check("command:normal-second", false, captureProcessIdentity(process.pid))).toMatchObject({ position: 1 });
     tasks.set("first", "high");
     expect(reopened.check("stage:low-first", false, undefined, false, tasks.source(["first"]))).toMatchObject({ position: 1, priority: "high" });
-    expect(reopened.check("stage:normal-first", false, undefined, false, tasks.source(["raised"]))).toMatchObject({ position: 2 });
+    expect(reopened.check("command:normal-second", false, captureProcessIdentity(process.pid))).toMatchObject({ position: 2 });
+    expect(reopened.check("stage:normal-first", false, undefined, false, tasks.source(["raised"]))).toMatchObject({ position: 3 });
+    expect(older.check("command:normal-second", false, captureProcessIdentity(process.pid))).toMatchObject({ position: 2 });
   } finally { tasks.close(); }
 });
 

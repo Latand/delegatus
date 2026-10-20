@@ -15,7 +15,7 @@ import { UNKNOWN_RESET_RECHECK_MS } from "./accountPark";
 import type { RuntimeHostClient } from "./client";
 import { reconcileDeadStructuredRegistryHost } from "./registry";
 import { recoverDeadStructuredConversation, StructuredResumeUnpublishedError } from "./structuredRecovery";
-import { structuredResumeSessionId } from "./structuredSpawn";
+import { materializeStructuredHostAccess, structuredResumeSessionId } from "./structuredSpawn";
 import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { statePath } from "@/lib/configDir";
@@ -717,9 +717,16 @@ test("dead Codex structured recovery retains ownership and starts a pane-less re
       const prioritySource = cpuPriorityFromEnv(input.account.env);
       expect(prioritySource.taskIds).toEqual([taskId]);
       expect(readCpuPriority(prioritySource)).toBe("high");
+      const access = materializeStructuredHostAccess(
+        { readOnly: true, sandbox: "restricted" }, input.account.env, "recovery-capability", path.join(cwd, "scratch"),
+      );
+      try {
+        expect(cpuPriorityFromEnv(access.env)).toEqual(prioritySource);
+      } finally { access.cleanup(); }
       taskDb.query("UPDATE state_rows SET value_json = ? WHERE collection = 'tasks' AND row_key = ?")
         .run(JSON.stringify({ priority: "low" }), `t:${taskId}`);
       expect(readCpuPriority(prioritySource)).toBe("low");
+      expect(readCpuPriority(cpuPriorityFromEnv(input.account.env))).toBe("low");
       expect(input.prompt).toBe("");
       expect(structuredResumeSessionId(input)).toBe(sessionId);
       expect(input.receipt).toMatchObject({

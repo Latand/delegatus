@@ -162,12 +162,13 @@ export class CpuAdmissionQueue {
         this.db.query("INSERT INTO ticket_order VALUES (1, ?)").run(next);
       }
       this.db.exec("DROP TRIGGER IF EXISTS tickets_fifo");
-      this.db.exec(`CREATE TRIGGER tickets_fifo AFTER INSERT ON tickets WHEN NEW.fifo_seq IS NULL BEGIN
-        UPDATE tickets SET fifo_seq = (SELECT next FROM ticket_order WHERE id = 1) WHERE key = NEW.key;
-        UPDATE ticket_order SET next = next + 1 WHERE id = 1;
-        -- Rebuild the seq view in the same transaction as every insert. Older
-        -- helpers write only seq/since/owner, so this trigger is their ordering
-        -- boundary too. Offset first to avoid collisions in the primary key.
+      this.db.exec(`CREATE TRIGGER tickets_fifo AFTER INSERT ON tickets BEGIN
+        UPDATE tickets SET fifo_seq = COALESCE(fifo_seq, (SELECT next FROM ticket_order WHERE id = 1)) WHERE key = NEW.key;
+        UPDATE ticket_order SET next = MAX(next, (SELECT COALESCE(MAX(fifo_seq), 0) + 1 FROM tickets)) WHERE id = 1;
+        -- Rebuild the seq view for every membership change. Older helpers
+        -- write only seq/since/owner, so this trigger is their ordering
+        -- boundary even when the new row's default priority is unchanged.
+        -- Offset first to avoid collisions in the primary key.
         UPDATE tickets SET seq = seq + (SELECT COALESCE(MAX(seq), 0) + COUNT(*) + 1 FROM tickets);
         UPDATE tickets SET seq = (
           SELECT COUNT(*) FROM tickets AS earlier
