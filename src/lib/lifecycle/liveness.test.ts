@@ -244,7 +244,7 @@ test.each(["none", "held"] as const)("issue 1999: exact transcript proof without
   const pipeline = zombiePipeline(conversationId, transcript);
   pipeline.runs[0]!.attempts[0]!.state = "passed";
   const snapshot = await agentLivenessSnapshot({}, sources({
-    listFiles: async () => [fileEntry({ path: transcript, conversationId: null })],
+    listFiles: async () => [fileEntry({ path: transcript, conversationId: undefined })],
     registrySnapshot: () => ({ entries: { reviewer: structuredEntry(transcript, 2222) }, conversations: {},
       heldDeliveries: pending ? { held: { conversationId, state: "held" } } as never : {} }),
     pipelines: () => [pipeline],
