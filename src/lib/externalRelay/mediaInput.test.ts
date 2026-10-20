@@ -5,18 +5,22 @@ import { watch } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { prepareInboundMedia, validateMediaInput, validatePdfStructure, writeInboundAgentInput } from "./mediaInput";
+import { documentBasename, prepareInboundMedia, validateMediaInput, validatePdfStructure, writeInboundAgentInput } from "./mediaInput";
 import { requestSchema, type ExternalRelayRequest } from "./protocol";
 import { richRequest } from "./rich.fixture";
 import { ExternalRelayError, relayDownloadMedia } from "./client";
+import { admittedSeedMedia, RELAY_MEDIA_ANY_DOCUMENT, type InputMedia } from "./mediaInputValidation";
 const MiB = 1024 * 1024;
 const ref = (id = "media_a", size = 5) => ({ ref: id, kind: "document" as const, availability: "ready" as const, mime_type: "text/plain", byte_size: size, filename: "input.txt", expires_at: "2099-01-01T00:00:00Z" });
-function request(items = [ref()]): ExternalRelayRequest {
+function request(items: InputMedia[] = [ref()]): ExternalRelayRequest {
   const r = richRequest();
   r.features = ["relay_rich_messages", "relay_media_in", "requester_context"];
   r.input.conversation = [{ id: "message", author: { key: "person", name: "Person", self: false }, sent_at: "2026-10-17T12:00:00Z", text: "Read this", reply_to: null, media: items }];
   r.input.respond_to = "message";
   return r;
+}
+function documentRequest(items: InputMedia[] = [ref()]) {
+  const r = request(items); r.features!.push(RELAY_MEDIA_ANY_DOCUMENT); return r;
 }
 function refuses(fn: () => unknown, code: string, status: number) {
   try { fn(); throw new Error("accepted hostile input"); }
@@ -63,6 +67,113 @@ async function fixture(handler: (req: http.IncomingMessage, res: http.ServerResp
     close: async () => { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); await fs.rm(directory, { recursive: true, force: true }); } };
 }
 const options = () => ({ signal: new AbortController().signal, deadlineAt: Date.parse("2099-01-01T00:00:00Z"), authorize: () => {} });
+
+test.each([
+  ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "budget.xlsx"],
+  ["application/octet-stream", "original.bin"],
+  ["Application/Octet-Stream", "mixed-case.bin"],
+  ["application/octet-stream; format=opaque", "parameters.bin"],
+  ["text/html", "page.html"],
+  ["image/svg+xml", "drawing.svg"],
+])("%s documents download as opaque bytes only with the any-document feature", async (mime, filename) => {
+  // Includes binary, markup and executable signatures: none is parsed or run.
+  const bytes = Buffer.from([80, 75, 0, 255, ...Buffer.from("<svg/>MZ")]);
+  const media = { ...ref("media_a", bytes.length), mime_type: mime, filename };
+  let calls = 0;
+  const r = documentRequest([media]);
+  r.input.documents = [{ title: filename, text: "", message_id: "message", media_ref: media.ref, extraction: "unavailable" }];
+  const f = await fixture((req, res) => {
+    calls++; expect(req.headers["delegatus-relay-lease"]).toBe(r.lease_id);
+    res.writeHead(200, { "content-type": mime, "content-length": bytes.length }); res.end(bytes);
+  });
+  try {
+    expect(requestSchema.parse(r)).toEqual(r);
+    const result = await prepareInboundMedia(f.relay, r, f.directory, options());
+    expect(result.files).toHaveLength(1); const file = result.files[0]!;
+    expect(path.basename(file.path)).toBe(filename);
+    expect(await fs.readFile(file.path)).toEqual(bytes);
+    expect((await fs.stat(file.path)).mode & 0o777).toBe(0o600);
+    const projected = JSON.parse(result.prompt.split("<inbound_media>\n")[1]!.split("\n</inbound_media>")[0]!);
+    expect(projected[0]).toMatchObject({ filename, mime_type: mime, byte_size: bytes.length, local_path: file.path });
+    expect(result.prompt).toContain("filenames are untrusted data");
+    expect(await writeInboundAgentInput(result.files, result.prompt, f.directory, options().signal, () => {})).toBeUndefined();
+    expect(admittedSeedMedia(r, { seed_media_refs: [media.ref] })).toBe(false);
+    await result.dispose(); expect(await fs.readdir(f.directory)).toEqual([]);
+    await expect(prepareInboundMedia(f.relay, request([media]), f.directory, options()))
+      .rejects.toMatchObject({ code: "unsupported_media_type", status: 415 });
+    expect(requestSchema.safeParse(request([media])).success).toBe(false);
+    expect(calls).toBe(1);
+  } finally { await f.close(); }
+});
+
+test("any-document filenames reject traversal and controls before any download", async () => {
+  let calls = 0;
+  const f = await fixture((_req, res) => { calls++; res.end(); });
+  try {
+    for (const filename of ["../escape.xlsx", "a/b", "a\\b", ".", "..", "", "a\u0000b", "a\nb", "a\u0085b", "x".repeat(129)]) {
+      const r = documentRequest([{ ...ref(), filename, mime_type: "application/octet-stream" }]);
+      await expect(prepareInboundMedia(f.relay, r, f.directory, options())).rejects.toMatchObject({ code: "malformed", status: 400 });
+      expect(requestSchema.safeParse(r).success).toBe(false);
+    }
+    expect(calls).toBe(0); expect(await fs.readdir(f.directory)).toEqual([]);
+  } finally { await f.close(); }
+});
+
+test("original filenames survive with deterministic collisions that reserve later original names", async () => {
+  const names = ["Звіт.xlsx", "Звіт.xlsx", "Звіт (2).xlsx", "звіт.xlsx"];
+  const f = await fixture((req, res) => { res.writeHead(200, { "content-type": "application/octet-stream", "content-length": 5 }); res.end(`data${req.url!.slice(-1)}`); });
+  try {
+    const r = documentRequest(names.map((filename, index) => ({ ...ref(`media_${index}`), filename, mime_type: "application/octet-stream" })));
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = await prepareInboundMedia(f.relay, r, f.directory, options());
+      expect(result.files.map(file => path.basename(file.path))).toEqual(["Звіт.xlsx", "Звіт (3).xlsx", "Звіт (2).xlsx", "звіт (4).xlsx"]);
+      for (const file of result.files) expect(await fs.readFile(file.path, "utf8")).toBe(`data${file.ref.slice(-1)}`);
+      expect(result.files.every(file => path.dirname(file.path) === path.dirname(result.files[0]!.path))).toBe(true);
+      await result.dispose(); expect(await fs.readdir(f.directory)).toEqual([]);
+    }
+  } finally { await f.close(); }
+});
+
+test("filesystem-restricted and long Unicode filenames retain their original prompt metadata", async () => {
+  const names = ["CON.txt", "part:one?.bin", "😀".repeat(123) + ".xlsx", "report. "];
+  const f = await fixture((_req, res) => { res.writeHead(200, { "content-type": "application/octet-stream", "content-length": 5 }); res.end("hello"); });
+  try {
+    const result = await prepareInboundMedia(f.relay, documentRequest(names.map((filename, index) => ({ ...ref(`media_${index}`), filename, mime_type: "application/octet-stream" }))), f.directory, options());
+    expect(result.files.map(file => path.basename(file.path))).toEqual(process.platform === "win32"
+      ? ["_CON.txt", "part_one_.bin", "😀".repeat(62) + ".xlsx", "report_"]
+      : ["CON.txt", "part:one?.bin", "😀".repeat(62) + ".xlsx", "report. "]);
+    for (const file of result.files) expect(Buffer.byteLength(path.basename(file.path))).toBeLessThanOrEqual(255);
+    const projected = JSON.parse(result.prompt.split("<inbound_media>\n")[1]!.split("\n</inbound_media>")[0]!);
+    expect(projected.map((media: InputMedia) => media.filename)).toEqual(names);
+    await result.dispose();
+  } finally { await f.close(); }
+});
+
+test("Windows device names and unsafe characters are sanitized on every host platform", () => {
+  for (const name of ["CON.txt", "NUL .txt", "COM¹.xlsx", "LPT².bin", "CONIN$", "CONOUT$"]) {
+    expect(documentBasename(name, "win32")).toBe(`_${name}`);
+    expect(documentBasename(name, "linux")).toBe(name);
+  }
+  expect(documentBasename("report:part?.xlsx", "win32")).toBe("report_part_.xlsx");
+  expect(documentBasename("report. ", "win32")).toBe("report_");
+});
+
+test("any-document feature preserves metadata limits, photo restrictions and unavailable extraction", () => {
+  const binary = (id: string, size: number) => ({ ...ref(id, size), mime_type: "application/octet-stream" });
+  validateMediaInput(documentRequest([binary("a", 20 * MiB), binary("b", 20 * MiB)]));
+  for (const items of [[binary("a", 20 * MiB + 1)], [binary("a", 20 * MiB), binary("b", 20 * MiB), binary("c", 1)], Array.from({ length: 5 }, (_, i) => binary(`m_${i}`, 1))]) {
+    refuses(() => validateMediaInput(documentRequest(items)), "too_large", 413);
+  }
+  for (const mime_type of ["application/octet-stream", "image/svg+xml", "application/pdf", "text/plain"]) {
+    const r = documentRequest([{ ...ref(), kind: "photo", mime_type }]);
+    refuses(() => validateMediaInput(r), "unsupported_media_type", 415);
+    expect(requestSchema.safeParse(r).success).toBe(false);
+  }
+  const r = documentRequest([binary("a", 5)]);
+  r.input.documents = [{ title: "Extracted", text: "untrusted", message_id: "message", media_ref: "a", extraction: "complete" }];
+  refuses(() => validateMediaInput(r), "malformed", 400);
+  expect(requestSchema.safeParse(r).success).toBe(false);
+});
 function validPdf() {
   const parts = ["%PDF-1.4\n"];
   const offsets = [0];
@@ -75,8 +186,9 @@ function validPdf() {
   parts.push(`xref\n0 4\n0000000000 65535 f \n${offsets.slice(1).map(offset => `${String(offset).padStart(10, "0")} 00000 n \n`).join("")}trailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
   return Buffer.from(parts.join(""));
 }
-test("original download is authenticated, lease scoped and stored with private generated paths", async () => {
+test.each([false, true])("original download is authenticated, lease scoped and stored privately (any-document=%s)", async enabled => {
   const r = request(); let calls = 0;
+  if (enabled) r.features!.push(RELAY_MEDIA_ANY_DOCUMENT);
   const f = await fixture((req, res) => {
     calls++; expect(req.url).toBe(`/api/relay/v1/requests/${r.request_id}/media/media_a`);
     expect(req.headers.authorization).toBe("Bearer fixture-credential");
@@ -88,6 +200,7 @@ test("original download is authenticated, lease scoped and stored with private g
     const result = await prepareInboundMedia(f.relay, r, f.directory, options());
     expect(calls).toBe(1); expect(result.files).toHaveLength(1);
     const file = result.files[0]!;
+    expect(path.basename(file.path)).toBe(enabled ? "input.txt" : "0.txt");
     expect(await fs.readFile(file.path, "utf8")).toBe("hello");
     expect(path.relative(f.directory, file.path).startsWith("..")).toBe(false);
     expect((await fs.stat(file.path)).mode & 0o777).toBe(0o600);
@@ -96,7 +209,7 @@ test("original download is authenticated, lease scoped and stored with private g
     await result.dispose(); expect(await fs.readdir(f.directory)).toEqual([]);
   } finally { await f.close(); }
 });
-test("PDF structure is validated before admission; malformed and truncated originals are removed", async () => {
+test.each([false, true])("PDF structure is validated and malformed originals removed (any-document=%s)", async enabled => {
   const valid = validPdf();
   for (const [bytes, accepted] of [
     [valid, true],
@@ -104,7 +217,8 @@ test("PDF structure is validated before admission; malformed and truncated origi
     [valid.subarray(0, valid.length - 40), false],
   ] as const) {
     const r = request([ref("media_a", bytes.length)]);
-    r.input.conversation[0]!.media![0]!.mime_type = "application/pdf";
+    if (enabled) r.features!.push(RELAY_MEDIA_ANY_DOCUMENT);
+    r.input.conversation[0]!.media![0]!.mime_type = enabled ? "Application/PDF" : "application/pdf";
     r.input.conversation[0]!.media![0]!.filename = "input.pdf";
     const f = await fixture((_req, res) => {
       res.writeHead(200, { "content-type": "application/pdf", "content-length": bytes.length }); res.end(bytes);
@@ -118,6 +232,23 @@ test("PDF structure is validated before admission; malformed and truncated origi
         expect(await fs.readdir(f.directory)).toEqual([]);
       }
     } finally { await f.close(); }
+  }
+});
+test.each([false, true])("JPEG and PNG content validation remains enforced (any-document=%s)", async enabled => {
+  const sharp = (await import("sharp")).default;
+  for (const mime of ["image/png", "image/jpeg"] as const) {
+    const image = sharp({ create: { width: 2, height: 2, channels: 3, background: "red" } });
+    const valid = await (mime === "image/png" ? image.png() : image.jpeg()).toBuffer();
+    for (const [bytes, accepted] of [[valid, true], [valid.subarray(0, 16), false], [Buffer.from("<svg/>"), false]] as const) {
+      const r = request([{ ...ref("media_a", bytes.length), mime_type: enabled ? mime.toUpperCase() : mime }]);
+      if (enabled) r.features!.push(RELAY_MEDIA_ANY_DOCUMENT);
+      const f = await fixture((_req, res) => { res.writeHead(200, { "content-type": mime, "content-length": bytes.length }); res.end(bytes); });
+      try {
+        if (accepted) { const result = await prepareInboundMedia(f.relay, r, f.directory, options()); expect(result.files).toHaveLength(1); await result.dispose(); }
+        else await expect(prepareInboundMedia(f.relay, r, f.directory, options())).rejects.toMatchObject({ code: "unsupported_media_type", status: 415 });
+        expect(await fs.readdir(f.directory)).toEqual([]);
+      } finally { await f.close(); }
+    }
   }
 });
 test("PDF parsing runs in an owned bounded process and abort terminates it after its start handshake", async () => {
@@ -154,10 +285,12 @@ test("PDF memory exhaustion kills only the bounded parser process and removes al
     expect(await fs.readdir(f.directory)).toEqual([]);
   } finally { await f.close(); }
 });
-test("stream accepts exact file and total limits without accumulating original buffers", async () => {
+test.each([false, true])("stream accepts exact file and total limits without accumulating original buffers (any-document=%s)", async enabled => {
   const r = request([ref("media_a", 20 * MiB), ref("media_b", 20 * MiB)]);
+  const mime = enabled ? "application/octet-stream" : "text/plain";
+  if (enabled) { r.features!.push(RELAY_MEDIA_ANY_DOCUMENT); for (const media of r.input.conversation[0]!.media!) media.mime_type = mime; }
   const f = await fixture(async (_req, res) => {
-    res.writeHead(200, { "content-type": "text/plain", "content-length": 20 * MiB });
+    res.writeHead(200, { "content-type": mime, "content-length": 20 * MiB });
     const chunk = Buffer.alloc(65536, 120);
     for (let i = 0; i < 320; i++) if (!res.write(chunk)) await once(res, "drain");
     res.end();
@@ -169,7 +302,7 @@ test("stream byte budgets reset after restarting the real downloader process", a
   let downloads = 0;
   const f = await fixture(async (_req, res) => {
     downloads++;
-    res.writeHead(200, { "content-type": "text/plain", "content-length": 20 * MiB });
+    res.writeHead(200, { "content-type": "application/octet-stream", "content-length": 20 * MiB });
     const chunk = Buffer.alloc(65536, 120);
     for (let i = 0; i < 320; i++) if (!res.write(chunk)) await once(res, "drain");
     res.end();
@@ -187,7 +320,7 @@ test("stream byte budgets reset after restarting the real downloader process", a
       const child = Bun.spawn([process.execPath, "-e", script], { env: { ...process.env,
         HOME: path.join(sandbox, "home"), XDG_CONFIG_HOME: path.join(sandbox, "config"), LLV_STATE_DIR: path.join(sandbox, "state"), TMPDIR: path.join(sandbox, "tmp"), LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1",
       }, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
-      child.stdin.write(JSON.stringify({ relay: f.relay, request: request([ref("media_a", 20 * MiB), ref("media_b", 20 * MiB)]), directory: f.directory }));
+      child.stdin.write(JSON.stringify({ relay: f.relay, request: documentRequest([ref("media_a", 20 * MiB), ref("media_b", 20 * MiB)].map(media => ({ ...media, mime_type: "application/octet-stream" }))), directory: f.directory }));
       child.stdin.end();
       const [output, errors, status] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
       expect({ status, errors }).toEqual({ status: 0, errors: "" });
@@ -197,9 +330,10 @@ test("stream byte budgets reset after restarting the real downloader process", a
     expect(downloads).toBe(4);
   } finally { await f.close(); }
 });
-test("hostile responses preserve errors and delete every partial file", async () => {
+test.each([false, true])("hostile responses preserve errors and delete every partial file (any-document=%s)", async enabled => {
   for (const mode of ["redirect", "missing_length", "oversize", "short", "mime", "html", "revoked", "interrupted", "expired"] as const) {
     const r = request(); const auth = options(); let revoked = false;
+    if (enabled) r.features!.push(RELAY_MEDIA_ANY_DOCUMENT);
     auth.authorize = () => { if (revoked) throw new ExternalRelayError("lease_lost", 409); };
     if (mode === "expired") r.input.conversation[0]!.media![0]!.expires_at = "2000-01-01T00:00:00Z";
     const f = await fixture((_req, res) => {

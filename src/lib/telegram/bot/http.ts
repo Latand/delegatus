@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { UnsafeTelegramSessionError } from "../sessionStore";
 
 import type { TelegramBotErrorCode } from "./contracts";
-import { TelegramBotError } from "./service";
+import type { TelegramBotError } from "./service";
 
 /**
  * How a bot refusal leaves a route: its code, its sentence, whether a retry
@@ -46,8 +46,18 @@ const STATUS: Record<TelegramBotErrorCode, number> = {
   storage_unsafe: 500,
 };
 
+/** The global service may belong to another compiled route's module graph. */
+function isTelegramBotError(error: unknown): error is TelegramBotError {
+  if (!error || typeof error !== "object") return false;
+  const refusal = error as Partial<TelegramBotError>;
+  return refusal.name === "TelegramBotError"
+    && typeof refusal.code === "string" && Object.hasOwn(STATUS, refusal.code)
+    && typeof refusal.message === "string" && typeof refusal.retryable === "boolean"
+    && refusal.extra !== null && typeof refusal.extra === "object";
+}
+
 export function telegramBotFailure(error: unknown): NextResponse {
-  if (error instanceof TelegramBotError) {
+  if (isTelegramBotError(error)) {
     return NextResponse.json({
       error: error.message,
       code: error.code,
