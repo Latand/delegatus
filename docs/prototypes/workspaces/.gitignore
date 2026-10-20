@@ -1,0 +1,2 @@
+# render.mjs writes its frames here; rendered images are not committed.
+*.png

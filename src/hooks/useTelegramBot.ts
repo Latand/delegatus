@@ -32,6 +32,9 @@ export type TelegramBotState = {
   /** The folders `telegram_bot_send_document` may read from; an empty list
       returns to the default. True once the server stored them. */
   setDocumentRoots(roots: string[]): Promise<boolean>;
+  addBot?(token: string): Promise<void>;
+  removeBot?(bot: string): Promise<void>;
+  assignBot?(chatId: string, bot: string | null): Promise<void>;
   remove(): Promise<void>;
 };
 
@@ -142,6 +145,9 @@ export function useTelegramBot(enabled: boolean): TelegramBotState {
     },
     testPost: async (chat) => (await act({ action: "test", chat })) !== null,
     setDocumentRoots,
+    addBot: async (token) => { await act({ action: "add_bot", token }); },
+    removeBot: async (bot) => { await act({ action: "remove_bot", bot }); },
+    assignBot: async (chatId, bot) => { await act({ action: "chat_bot", chatId, bot }); },
     remove: async () => { await act({ action: "remove" }); },
   };
 }

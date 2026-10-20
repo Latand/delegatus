@@ -1,3 +1,5 @@
+import { captureProcessIdentity, processIdentityProvenDead, type ProcessIdentity } from "@/lib/processIdentity";
+import { trackMcpClaim, installMcpLifecycle, logMcpLifecycle, drainMcpClaims } from "../../../bin/mcp-lifecycle.mjs";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { blockingWaitRole } from "@/lib/blockingWaits";
 import { shortIdsInAnswer, shortenHashesInText } from "@/lib/shortIds";
@@ -663,7 +665,10 @@ export interface McpRequestBinding extends McpRequestBindingInput {
   clientRequestId: string;
   /** The process that holds the claim, so a `claimed` row whose owner is gone
       can be closed as never dispatched instead of waiting forever. */
-  owner: { pid: number; startIdentity: string | null };
+  owner: ProcessIdentity;
+  /** Local bindings use only process custody; this grants no caller authority. */
+  localDispatch?: true;
+  claimGeneration?: string;
   claimedAt: string;
 }
 
@@ -739,6 +744,14 @@ function dispatchedReceipt(receipt: Receipt): boolean {
   return receipt.stage === "dispatching";
 }
 
+/** Reclaim only affirmative zero-dispatch evidence, under the claim lock.
+    A legacy row, a living/unverifiable owner or a dispatch marker is uncertain. */
+function reclaimLocalClaim(receipt: Pick<McpReceiptRecord, "binding" | "stage" | "result"> | Receipt, binding?: McpRequestBinding): boolean {
+  return binding?.localDispatch === true && receipt.binding?.localDispatch === true
+    && receipt.stage === "claimed" && !receipt.result
+    && processIdentityProvenDead(receipt.binding.owner);
+}
+
 function recordOf(receipt: Receipt): McpReceiptRecord {
   return {
     digest: receipt.digest,
@@ -779,7 +792,7 @@ export class MemoryMcpReceiptStore implements McpRecoveryReceiptStore {
   claim(key: string, digest: string, _retention?: ReceiptRetention, binding?: McpRequestBinding, beforeClaim?: () => void): ReceiptClaim {
     beforeClaim?.();
     const receipt = this.receipts.get(key);
-    if (!receipt) {
+    if (!receipt || receipt.digest === digest && reclaimLocalClaim(receipt, binding)) {
       this.receipts.set(key, { digest, ...(binding ? { binding, stage: "claimed" } : {}) });
       return { kind: "fresh" };
     }
@@ -796,7 +809,9 @@ export class MemoryMcpReceiptStore implements McpRecoveryReceiptStore {
 
   release(key: string, digest: string, unadmittedBinding?: McpRequestBinding): boolean {
     const receipt = this.receipts.get(key);
-    if (!receipt || receipt.digest !== digest || receipt.result || (dispatchedReceipt(receipt)
+    if (!receipt || receipt.digest !== digest || receipt.result
+      || (unadmittedBinding?.localDispatch === true && JSON.stringify(receipt.binding) !== JSON.stringify(unadmittedBinding))
+      || (dispatchedReceipt(receipt)
       && (!unadmittedBinding || JSON.stringify(receipt.binding) !== JSON.stringify(unadmittedBinding)))) return false;
     this.receipts.delete(key);
     return true;
@@ -963,7 +978,10 @@ export function validRequestBinding(value: unknown, toolName?: McpToolName, requ
         || caller.predecessors.length > 32
         || caller.predecessors.some((predecessor) => typeof predecessor !== "string" || !/^conversation_[A-Za-z0-9_-]{1,128}$/.test(predecessor))))) return false;
   if (!isRecord(target) || !nullableString(target.project) || !nullableString(target.identity)) return false;
-  if (!isRecord(owner) || typeof owner.pid !== "number" || !nullableString(owner.startIdentity)) return false;
+  if (!isRecord(owner) || typeof owner.pid !== "number" || !nullableString(owner.startIdentity)
+    || (owner.bootEpoch !== undefined && !nullableString(owner.bootEpoch))) return false;
+  if (value.localDispatch !== undefined && value.localDispatch !== true) return false;
+  if (value.claimGeneration !== undefined && (typeof value.claimGeneration !== "string" || !value.claimGeneration)) return false;
   return true;
 }
 
@@ -1639,7 +1657,7 @@ export class FileMcpReceiptStore implements McpRecoveryReceiptStore {
       beforeClaim?.();
       const state = readReceiptFile(this.filePath);
       const receipt = state.mutationReceipts[key] ?? state.readReceipts[key];
-      if (receipt) {
+      if (receipt && !(receipt.digest === digest && reclaimLocalClaim(receipt, binding))) {
         const record = recordOf(receipt);
         if (receipt.digest !== digest) return { kind: "conflict", record };
         return receipt.result ? { kind: "replay", result: receipt.result, record } : { kind: "pending", record };
@@ -1675,7 +1693,9 @@ export class FileMcpReceiptStore implements McpRecoveryReceiptStore {
     return withFileLock(this.filePath, () => {
       const state = readReceiptFile(this.filePath);
       const receipt = state.mutationReceipts[key] ?? state.readReceipts[key];
-      if (!receipt || receipt.digest !== digest || receipt.result || (dispatchedReceipt(receipt)
+      if (!receipt || receipt.digest !== digest || receipt.result
+        || (unadmittedBinding?.localDispatch === true && JSON.stringify(receipt.binding) !== JSON.stringify(unadmittedBinding))
+        || (dispatchedReceipt(receipt)
         && (!unadmittedBinding || JSON.stringify(receipt.binding) !== JSON.stringify(unadmittedBinding)))) return false;
       delete state.mutationReceipts[key];
       delete state.readReceipts[key];
@@ -1839,6 +1859,15 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
       const now = this.now();
       this.pruneBoundedReceipts(now);
       const receipt = this.selectRow(key);
+      if (receipt && binding?.localDispatch === true && receipt.digest === digest
+        && receipt.stage === "claimed" && receipt.result_json === null
+        && reclaimLocalClaim(this.recordOfRow(key, receipt), binding)) {
+        const bindingJson = JSON.stringify(binding);
+        this.db.query("UPDATE mcp_receipts SET binding_json = ?, claimed_at = ?, storage_bytes = ? WHERE receipt_key = ?")
+          .run(bindingJson, now, this.storageBytes(key, digest, null, bindingJson), key);
+        this.db.exec("COMMIT");
+        return { kind: "fresh" };
+      }
       if (receipt) {
         this.db.exec("COMMIT");
         const record = this.recordOfRow(key, receipt);
@@ -1898,6 +1927,7 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
       `).get(key);
       const releasable = Boolean(receipt) && receipt!.digest === digest
         && receipt!.result_json === null && receipt!.recovery_result_json === null
+        && (unadmittedBinding?.localDispatch !== true || receipt!.binding_json === JSON.stringify(unadmittedBinding))
         && (receipt!.stage !== "dispatching" || (!!unadmittedBinding && receipt!.binding_json === JSON.stringify(unadmittedBinding)));
       if (releasable) this.db.query<unknown, [string]>("DELETE FROM mcp_receipts WHERE receipt_key = ?").run(key);
       this.db.exec("COMMIT");
@@ -2615,6 +2645,10 @@ export function createMcpToolService(
   options: McpToolServiceOptions = {},
 ): McpToolService {
   const inFlight = new Map<string, { digest: string; result: Promise<McpToolResult> }>();
+  // A failed local dispatch marker proves this invocation never called the
+  // binding. Retain that proof if its owner-bound claim release is temporarily
+  // unavailable, so a same-process retry can finish cleanup before claiming.
+  const pendingLocalReleases = new Map<string, { digest: string; binding: McpRequestBinding; store: McpRecoveryReceiptStore }>();
   const service: McpToolService = {
     callTool: async function callTool(toolName: string, args: McpToolArgs, context: McpToolCallContext = {}): Promise<McpToolResult> {
       if (!(MCP_TOOL_NAMES as readonly string[]).includes(toolName)) {
@@ -2770,6 +2804,8 @@ export function createMcpToolService(
       const canonicalArgs = bindings[typedTool].canonicalizeReceiptArgs?.(digestArgs) ?? digestArgs;
       const digest = requestDigest(typedTool, canonicalArgs);
       const key = receiptKey(typedTool, requestId, scope);
+      const finishReceipt = trackMcpClaim(key, digest);
+      try {
       /* A recoverable mutation never joins an in-process duplicate: who is
          calling is decided first, and every later call under the key — in
          this process or another — is answered from the durable record. */
@@ -3255,7 +3291,8 @@ export function createMcpToolService(
               }, false);
             }
           }
-          if (!existing) {
+          if (!existing || existing.digest === digest && existing.stage === "claimed"
+            && existing.binding?.localDispatch === true && processIdentityProvenDead(existing.binding.owner)) {
             try {
               await measure("caller", () => prepare(effectiveArgs));
             } catch (error) {
@@ -3267,15 +3304,69 @@ export function createMcpToolService(
             }
           }
         }
-        const claim = await measure("claim", () => receipts.claim(key, digest, retention));
+        const localStore = retention === "durable" && supportsMcpRecovery(receipts) && !interruptedCallIsRecoverable(typedTool, effectiveArgs) ? receipts : null;
+        const localBinding: McpRequestBinding | undefined = localStore ? {
+          version: 1, toolName: typedTool, clientRequestId: requestId, localDispatch: true,
+          claimGeneration: crypto.randomUUID(),
+          caller: { kind: "unidentified", conversationId: null, project: null },
+          target: { project: null, identity: null }, downstreamKey: key,
+          owner: captureProcessIdentity(process.pid), claimedAt: new Date().toISOString(),
+        } : undefined;
+        const pendingRelease = localStore ? pendingLocalReleases.get(key) : undefined;
+        if (pendingRelease && pendingRelease.digest === digest && pendingRelease.store === localStore) {
+          try {
+            if (await localStore.release?.(key, digest, pendingRelease.binding)) {
+              pendingLocalReleases.delete(key);
+            } else {
+              const current = await localStore.lookup(key);
+              if (!current) pendingLocalReleases.delete(key);
+              else if (current.digest !== pendingRelease.digest) {
+                pendingLocalReleases.delete(key);
+                return failure(typedTool, requestId, "idempotency_conflict", "clientRequestId was already used with different arguments", false, true);
+              } else if (current.result) {
+                pendingLocalReleases.delete(key);
+                return { ...current.result, replayed: true };
+              } else if (current.digest === digest && current.binding
+                && JSON.stringify(current.binding) === JSON.stringify(pendingRelease.binding)
+                && (current.stage === "claimed" || current.stage === "dispatching")) {
+                return recoveryAnswer(typedTool, requestId, {
+                  outcome: "unknown", evidence: "mcp-receipt",
+                  reason: "The original invocation proved it never dispatched, but its receipt claim could not yet be released. Retry the same clientRequestId when storage is available.",
+                  ids: {},
+                }, false);
+              } else {
+                pendingLocalReleases.delete(key);
+              }
+            }
+          } catch {
+            return recoveryAnswer(typedTool, requestId, {
+              outcome: "unknown", evidence: "mcp-receipt",
+              reason: "The original invocation proved it never dispatched, but receipt cleanup is temporarily unavailable. Retry the same clientRequestId when storage is available.",
+              ids: {},
+            }, false);
+          }
+        }
+        const claim = await measure("claim", () => receipts.claim(key, digest, retention, localBinding));
         if (claim.kind === "conflict") {
           outcome = "conflict";
           return failure(toolName, requestId, "idempotency_conflict", "clientRequestId was already used with different arguments", false, true);
         }
+        const interruptedAnswer = () => {
+          const read = typedTool === "update_task" ? "get_task" : typedTool === "create_task" ? "list_tasks" : "original-key-lookup";
+          return failure(toolName, requestId, "outcome_unknown",
+            `The previous call has no committed operation receipt; execution is uncertain. Read ${read} to resolve its outcome and retain the original clientRequestId.`,
+            false, true, { outcome: "unknown", nextAction: read, evidence: "mcp-receipt" });
+        };
         if (claim.kind === "pending" && !interruptedCallIsRecoverable(typedTool, effectiveArgs)) {
           outcome = "pending";
           unfinishedAgeMs = claim.unfinishedAgeMs;
-          return failure(toolName, requestId, "call_interrupted", "The previous MCP process ended before this call completed", true, true);
+          return interruptedAnswer();
+        }
+        // Historical interruption answers establish no execution outcome, even
+        // when an older adapter persisted the answer itself.
+        if (claim.kind === "replay" && !claim.result.ok && claim.result.code === "call_interrupted") {
+          outcome = "pending";
+          return interruptedAnswer();
         }
         // Earlier clients settled transport timeouts as retryable failures.
         // The Viewer publication lock and payload digest make recovery safe.
@@ -3293,6 +3384,63 @@ export function createMcpToolService(
           phaseDurations.replay = performance.now() - replayStartedAt;
           outcome = "replay";
           return replayed;
+        }
+        if (localStore) {
+          let dispatchMarked: boolean;
+          try {
+            dispatchMarked = await localStore.markDispatching(key, digest);
+          } catch {
+            /* The binding is below this await, so even a lost acknowledgement
+               after the marker commit proves this invocation sent nothing.
+               Release only its owner-bound claim; an unreadable or retained
+               row remains uncertain and cannot invite a retry. */
+            let released = false;
+            try { released = await localStore.release?.(key, digest, localBinding) ?? false; }
+            catch { /* Confirm below before offering a retry. */ }
+            if (!released && localBinding) pendingLocalReleases.set(key, { digest, binding: localBinding, store: localStore });
+            if (released) {
+              return failure(typedTool, requestId, "not_executed",
+                "The local dispatch marker could not be recorded; no binding ran. Retry with the same clientRequestId.",
+                true, false, { outcome: "not-executed", evidence: "dispatch-refused", nextAction: "retry-same-key" });
+            }
+            try {
+              const current = await localStore.lookup(key);
+              if (!current) {
+                pendingLocalReleases.delete(key);
+                return failure(typedTool, requestId, "not_executed",
+                  "The dispatch marker was not committed and no binding ran. Retry with the same clientRequestId.",
+                  true, false, { outcome: "not-executed", evidence: "dispatch-refused", nextAction: "retry-same-key" });
+              }
+              if (current.digest !== digest) {
+                pendingLocalReleases.delete(key);
+                return failure(typedTool, requestId, "idempotency_conflict", "clientRequestId was already used with different arguments", false, true);
+              }
+              if (current.result) {
+                pendingLocalReleases.delete(key);
+                return { ...current.result, replayed: true };
+              }
+            } catch { /* Unavailable evidence stays unknown. */ }
+            return recoveryAnswer(typedTool, requestId, {
+              outcome: "unknown", evidence: "mcp-receipt",
+              reason: "The local dispatch marker failed and the claim could not be released or confirmed. Read the original request receipt before retrying.",
+              ids: {},
+            }, false);
+          }
+          if (!dispatchMarked) {
+            const current = await localStore.lookup(key);
+            if (current && current.digest !== digest) {
+              pendingLocalReleases.delete(key);
+              return failure(typedTool, requestId, "idempotency_conflict", "clientRequestId was already used with different arguments", false, true);
+            }
+            if (current?.result) {
+              pendingLocalReleases.delete(key);
+              return { ...current.result, replayed: true };
+            }
+            if (!current) pendingLocalReleases.delete(key);
+            return recoveryAnswer(typedTool, requestId, {
+              outcome: "unknown", evidence: "mcp-receipt", reason: "the claim changed before local dispatch", ids: {},
+            }, true);
+          }
         }
         let settled: McpToolResult;
         let unadmitted = false;
@@ -3377,14 +3525,14 @@ export function createMcpToolService(
            would burn the clientRequestId on an answer nobody received, so the
            obvious retry would replay a stale timeout forever. The claim is left
            unsettled instead, which is what "the previous call did not finish"
-           already means: a retry gets `call_interrupted`, retryable, and the
+           already means: a retry reports an uncertain outcome until the
            bounded lease sweeps the row so the id comes back.
 
            Bounded reads only. `pruneBoundedReceipts` deletes an unsettled claim
            exclusively for `retention = 'bounded'` — durable mutation claims never
            enter that expiry path by design — so skipping the write for a
            mutating tool would strand a permanent `result_json IS NULL` row and
-           make its clientRequestId answer `call_interrupted` forever. A mutation
+           make its clientRequestId remain uncertain forever. A mutation
            that was abandoned still settles, as it did before.
 
            Every outcome that produced a real answer still writes, so idempotent
@@ -3400,7 +3548,7 @@ export function createMcpToolService(
            nothing and this answer still stands for the caller. */
         if (unadmitted && receipts.release) {
           const releaseStartedAt = performance.now();
-          await receipts.release(key, digest);
+          await receipts.release(key, digest, localBinding);
           phaseDurations.completion = performance.now() - releaseStartedAt;
           return settled;
         }
@@ -3415,6 +3563,7 @@ export function createMcpToolService(
       } finally {
         if (inFlight.get(key)?.result === result) inFlight.delete(key);
       }
+      } finally { finishReceipt(); }
       } finally {
         const totalMs = performance.now() - callStartedAt;
         if (totalMs >= 2_000) {
@@ -3428,7 +3577,12 @@ export function createMcpToolService(
       }
     },
   };
-  return withMcpPageCursors({ callTool: (tool, args, context) => runWithMcpCallerResolution(() => service.callTool(tool, args, context)) });
+  return withMcpPageCursors({ callTool: async (tool, args, context) => {
+    const finish = (MCP_TOOL_NAMES as readonly string[]).includes(tool)
+      ? trackMcpClaim(`${tool}:${clientRequestId(args) ?? "unkeyed"}`) : () => {};
+    try { return await runWithMcpCallerResolution(() => service.callTool(tool, args, context)); }
+    finally { finish(); }
+  } });
 }
 
 /**
@@ -3625,26 +3779,26 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "In a repository this installation declared as an App repository the issue is filed as the Delegatus GitHub App and is refused when that credential is unavailable; no person's credentials are used instead. Idempotent by clientRequestId, and a preview that was published answers its issue again instead of filing a second.",
   ].join(" "),
   telegram_bot_chats: [
-    "List the chats the operator's connected Telegram bot knows: per chat `chat` (the alias, else the chat id — the value the other telegram_bot_* tools take), `title`, `type`, `isForum`, `member`, `postAllowed` with `postRefusal` in words when false, `seesAllMessages` with `visibilityNote`, `lastMessageAt` and `storedMessages`; plus the bot's `receiving` state and note.",
+    "List the chats the connected Telegram bots know: per chat `chat` (the alias, else the chat id — the value the other telegram_bot_* tools take), `title`, `type`, `isForum`, `member`, `postAllowed` with `postRefusal` in words when false, `seesAllMessages` with `visibilityNote`, `lastMessageAt` and `storedMessages`; plus the receiving bot's `receiving` state and note. Top-level `bots` lists connected bots; each chat carries `bots` with per-bot membership, posting and topic rights, reason and checkedAt. Membership is checked directly with Telegram, cached and refreshed after refusals.",
     "A chat appears once the bot has been added to it or has received a message there. Only chats the operator allowlisted with an alias accept posts. Left or removed chats are hidden unless includeInactive is true.",
     "With no bot connected the answer is still ok, with `connected: false` and a note. Every answer carries `limits`: " + TELEGRAM_BOT_LIMITS.join(" "),
   ].join(" "),
   telegram_bot_send: [
     "Post a message through the operator's Telegram bot into a chat the operator allowlisted — for example a report into a team group. `chat` accepts its alias, chat id, @username or t.me chat/topic link. A topic link supplies `topicId` unless one is given explicitly.",
     "`format` is plain (default) or html (Telegram's HTML subset: b, i, u, s, code, pre, a, blockquote, tg-spoiler). Plain text over 4096 characters is split into up to 4 messages; html over 4096 characters after entity parsing is refused. `replyToMessageId` replies to a message in that chat, `topicId` posts into a forum topic, `silent` sends without a notification.",
-    "The post is attributed in Delegatus to your conversation, resolved server-side. A chat outside the allowlist is refused before anything is sent (chat_not_allowed, bot_not_in_chat, chat_unknown, bot_not_connected); Telegram's own refusals come back as forbidden (blocked, removed, or a user who never wrote to the bot), format_invalid, or rate_limited with retryAfterSeconds.",
+    "The post is attributed in Delegatus to your conversation, resolved server-side. A chat outside the allowlist is refused before anything is sent (chat_not_allowed, bot_not_in_chat, chat_unknown, bot_not_connected). The chat's assigned bot is tried first, then the receiving bot and sending bots that may post. Private chats use the receiving bot alone. Explicit membership or rights refusals allow fallback; ambiguous failures never resend through another bot. Success carries sentBy and refusals; failures carry per-bot refusals with codes including not_enough_rights. Telegram's own refusals come back as forbidden (blocked, removed, or a user who never wrote to the bot), format_invalid, or rate_limited with retryAfterSeconds.",
     "A refusal answers ok:false with the bot's code as `code` and `retryable` saying whether a retry under a NEW clientRequestId may help (true only for rate_limited, network_failed, timed_out, telegram_failed); send_partial adds `details.sentMessageIds`.",
     "Idempotent by clientRequestId: a repeat answers the first post's message ids; a repeat of a send that never finished, or one whose connection was cut or timed out, answers send_uncertain (not retryable) instead of posting twice.",
   ].join(" "),
   telegram_bot_send_media: [
     "Send a JPEG or PNG photo, or an album of 2–10 photos, through the operator's Telegram bot into an allowlisted chat. `images` is an array of {path, caption}; each path is absolute on the Viewer host and must resolve, symlinks followed, under the same document roots as telegram_bot_send_document (by default `handoff/` in the Viewer host's home), never through a dot-directory or the Delegatus state directory. Every file is checked and loaded before Telegram is called; photos are limited to 10 MB and captions to 1024 characters. Refusals: photo_invalid, document_outside_roots, document_forbidden_path.",
-    "`format` is plain (default) or html for captions. `replyToMessageId`, `topicId`, `silent`, chat links, attribution and clientRequestId work like telegram_bot_send. The answer returns messageIds in image order. A completed send replays its receipt; an unfinished or unconfirmed send answers send_uncertain instead of sending twice. Sent images appear in telegram_bot_messages with direction out and kind photo.",
+    "`format` is plain (default) or html for captions. `replyToMessageId`, `topicId`, `silent`, chat links, attribution and clientRequestId work like telegram_bot_send. The answer returns messageIds in image order, sentBy and per-bot refusals as for telegram_bot_send. A completed send replays its receipt; an unfinished or unconfirmed send answers send_uncertain instead of sending twice. Sent images appear in telegram_bot_messages with direction out and kind photo.",
   ].join(" "),
   telegram_bot_send_document: [
     "Post one file as a Telegram document (sendDocument) through the operator's Telegram bot into an allowlisted chat — the way to share a report: markdown and long text read badly as messages. The chat must be allowlisted by the operator, as for telegram_bot_send.",
     "`document.path` is absolute on the Viewer host and must resolve, symlinks followed, under a document root the operator set in the Telegram panel (by default `handoff/` in the Viewer host's home), so write reports there first. Paths through a dot-directory or the Delegatus state directory are refused even inside a root.",
     "Types: .md .markdown .txt .log .json .csv .pdf .png .jpg .jpeg .html, non-empty, at most 20 MB; text files are scanned, as UTF-8 and UTF-16, for private keys, tokens and credentials (including `password: word` assignments) and refused with document_secret naming the class (`details.secretClass`). Other refusals: document_invalid, document_outside_roots, document_forbidden_path, document_type, document_too_large.",
-    "`document.filename` is the shown name (default the file's own name) and must keep the file's type class (text, PDF or image: a .md may be shown as .txt, never as .pdf); `document.caption` up to 1024 characters, plain or html by `format`. `replyToMessageId`, `topicId`, `silent`, chat links, attribution and clientRequestId work like telegram_bot_send: a completed send replays its receipt, an unconfirmed one answers send_uncertain instead of sending twice. The post appears in telegram_bot_messages with kind document and its filename.",
+    "`document.filename` is the shown name (default the file's own name) and must keep the file's type class (text, PDF or image: a .md may be shown as .txt, never as .pdf); `document.caption` up to 1024 characters, plain or html by `format`. `replyToMessageId`, `topicId`, `silent`, chat links, attribution and clientRequestId work like telegram_bot_send: a completed send replays its receipt, an unconfirmed one answers send_uncertain instead of sending twice. Success includes sentBy; per-bot refusals and selection follow telegram_bot_send. The post appears in telegram_bot_messages with kind document and its filename.",
   ].join(" "),
   relay_answer: "Only while you answer a relay message as its owner: choose how your last message is delivered. format rich_markdown renders the Markdown subset and length in your prompt; buttons are https links; mentions annotates person labels at original Unicode-scalar offsets; attachments are files under your document roots. Photo references use stable attachment_id values from the receipt; several photos form one carousel with your message. Each call replaces the previous one. Refused in every other conversation and after the answer.",
   relay_service_tools: "Only while you answer a relay message as its owner: the chat service tools for that message. op list searches the compact index; op describe (names) returns parameters and guidance; op call (calls: up to four {tool, arguments, cursor}) runs direct tools under the relay call, output and confirmation limits. in_progress means repeat unchanged. Refused in any other conversation and once answered.",
@@ -4768,6 +4922,7 @@ export function createViewerMcpServer(service: McpToolService, tools: readonly M
         })(),
         reason: "MCP tool deadline exceeded",
       });
+      const finishClaim = trackMcpClaim(`${toolName}:${clientRequestId(args as McpToolArgs) ?? "unkeyed"}`);
       try {
         const call = () => service.callTool(toolName, args as McpToolArgs, {
           signal: deadline.signal,
@@ -4783,6 +4938,7 @@ export function createViewerMcpServer(service: McpToolService, tools: readonly M
         const result = await (httpCaller ? runAsMcpHttpCaller(httpCaller, call) : call());
         return response(result);
       } finally {
+        finishClaim();
         deadline.release();
       }
     });
@@ -4940,24 +5096,52 @@ export function withMcpDispatchTurns(service: McpToolService): McpToolService {
 }
 
 export async function startViewerMcpServer(): Promise<void> {
+  installMcpLifecycle("mcp-stdio");
   const { admittedMcpHealthProbe, MCP_HEALTH_PROBE_CAPABILITY_ENV } = await import("./healthProbeAdmission");
   const healthProbeCapability = process.env[MCP_HEALTH_PROBE_CAPABILITY_ENV];
   delete process.env[MCP_HEALTH_PROBE_CAPABILITY_ENV];
   const hostHealthProbe = await admittedMcpHealthProbe(healthProbeCapability);
   const service = await createProductionViewerMcpService(hostHealthProbe, true);
-  const server = hostHealthProbe
-    ? createViewerMcpHealthProbeServer(service)
-    : createViewerMcpServer(service);
+  await serveViewerMcpStdio(service, hostHealthProbe);
+}
+
+/** Dedicated stdio entry lifetime, also used by process-level rehearsals. */
+export async function serveViewerMcpStdio(service: McpToolService, healthProbe = false): Promise<void> {
+  installMcpLifecycle("mcp-stdio");
+  let shuttingDown = false;
+  const admittedService: McpToolService = { callTool: (tool, args, context) => shuttingDown
+    ? Promise.resolve(failure(tool, clientRequestId(args), "not_executed", "MCP is draining; retry the original clientRequestId", true, false,
+      { outcome: "not-executed", nextAction: "retry-same-key" }))
+    : service.callTool(tool, args, context) };
+  const server = healthProbe
+    ? createViewerMcpHealthProbeServer(admittedService)
+    : createViewerMcpServer(admittedService);
   const transport = new StdioServerTransport();
   // The SDK does not close its transport on EOF. A dead client (including a
   // killed launcher) must not leave domain timers or in-flight reads resident.
   // This entry point owns a dedicated stdio process, never the Viewer server.
-  process.stdin.once("end", () => {
-    setTimeout(() => process.exit(0), 1_000);
-    void server.close().then(
-      () => process.exit(0),
-      (error: unknown) => { console.error("MCP shutdown failed", error); process.exit(1); },
-    );
-  });
+  const shutdown = async (reason: string, signal?: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logMcpLifecycle(reason, { signal });
+    const timer = setTimeout(() => { logMcpLifecycle("drain-deadline"); process.exit(1); }, 35_000);
+    // Closing the SDK first cancels requests that may still be committing.
+    // Drain receipt writes before transport teardown and process exit.
+    await drainMcpClaims();
+    // Let the SDK enqueue the answer returned by the last completed handler,
+    // then flush stdout before exit (including backpressured large receipts).
+    await new Promise<void>(resolve => setImmediate(resolve));
+    await server.close();
+    await new Promise<void>(resolve => process.stdout.end(resolve));
+    clearTimeout(timer);
+    process.exit(0);
+  };
+  const end = (reason: string, signal?: string) => {
+    void shutdown(reason, signal).catch(() => { logMcpLifecycle("shutdown-failed"); process.exit(1); });
+  };
+  process.stdin.once("end", () => end("stdio-eof"));
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.on(signal, () => end("signal", signal));
+  }
   await server.connect(transport);
 }

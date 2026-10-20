@@ -1,4 +1,5 @@
 import { projectStoreSignature } from "@/lib/projects/persistence";
+import { isPublicationRecovery, mergePublicationRecovery, publicationInterrupted, PUBLICATION_RETRY_DELAYS_MS, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
 import { deepFreeze } from "@/lib/deepFreeze";
 import { pipelinePauseInputSchema } from "./pauseMetadata";
 import { forEachCooperatively } from "@/lib/cooperative";
@@ -368,6 +369,8 @@ function isAttempt(value: unknown, index: number): boolean {
     isSpawnActivation(attempt.activation) &&
     isStageReport(attempt.report) &&
     isRetiredLaunches(attempt.retiredLaunches) &&
+    (attempt.fencedMessageRetries === undefined || typeof attempt.fencedMessageRetries === "number"
+      && Number.isSafeInteger(attempt.fencedMessageRetries) && attempt.fencedMessageRetries >= 0) &&
     isUnresolvedTermination(attempt.unresolvedTermination) &&
     isPermissionDenials(attempt.permissionDenials)
   );
@@ -903,6 +906,7 @@ function isPipelineShape(value: unknown): value is Pipeline {
     isCloseCustody(pipeline) &&
     (pipeline.activationCloseRequested === undefined || typeof pipeline.activationCloseRequested === "boolean") &&
     (pipeline.delivery === undefined || (isDelivery(pipeline.delivery) && (!pipeline.delivery.active || pipeline.delivery.ownerId === pipeline.id))) &&
+    isPublicationRecovery(pipeline.publicationRecovery) &&
     (pipeline.creationRequest === undefined || (typeof pipeline.creationRequest.key === "string" && !!pipeline.creationRequest.key && typeof pipeline.creationRequest.digest === "string")) &&
     (pipeline.refreshOf === undefined || isRefreshOf(pipeline.refreshOf)) &&
     typeof pipeline.task === "string" &&
@@ -1995,6 +1999,16 @@ export async function takeoverPipelineDelivery(id: string, expectedOwner: string
     const old = tx.get(expectedOwner);
     if (old?.delivery?.operation?.state === "running") return { error: `publisher ${expectedOwner} at epoch ${expectedEpoch} is in flight or its outcome is uncertain; reconcile it before takeover`, status: 409 };
     if (pipeline.state === "closed" || pipeline.state === "completed") return { error: "a terminal lane cannot take ownership", status: 409 };
+    const refused = old?.delivery?.operation;
+    if (old && refused?.state === "settled" && refused.result?.ok === false) {
+      const attempt = old.runs.find(run => run.stageId === old.cursor?.stageId)?.attempts.at(-1);
+      recordPublicationFailure(old, attempt, { operationId: refused.id, epoch: refused.epoch, at: new Date().toISOString(),
+        cause: refused.result.failure?.retryableDeadline ? "infrastructure-deadline"
+          : publicationInterrupted(refused.result) ? "interrupted" : "check-failure",
+        detail: refused.result.error.slice(0, 400), recoverable: recoverablePublication(refused.result) },
+      publicationInterrupted(refused.result) && !refused.result.failure ? [0, ...PUBLICATION_RETRY_DELAYS_MS.slice(1)] : PUBLICATION_RETRY_DELAYS_MS);
+    }
+    pipeline.publicationRecovery = mergePublicationRecovery(old?.publicationRecovery, pipeline.publicationRecovery);
     if (old?.delivery) {
       old.delivery.active = false;
       old.delivery.publish = "disabled";

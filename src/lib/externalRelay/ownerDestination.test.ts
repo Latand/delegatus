@@ -21,14 +21,24 @@ test("one enabled target uses the confirmed Telegram owner and several targets p
 test("missing pairing, missing enabled target and paused pairing stay off without a fallback destination", () => {
   expect(selectOwnerDestination([])).toEqual({ reason: "no_relay" });
   expect(selectOwnerDestination([{ ...destinationRelay(), origin: "https://other.example" }])).toEqual({ reason: "no_relay" });
-  expect(selectOwnerDestination([destinationRelay([])])).toEqual({ reason: "no_target" });
-  expect(selectOwnerDestination([destinationRelay([{ ...destinationTarget("disabled"), enabled: false }])])).toEqual({ reason: "no_target" });
+  expect(selectOwnerDestination([destinationRelay([])])).toEqual({ reason: "no_target", detail: "no_destination" });
+  expect(selectOwnerDestination([destinationRelay([{ ...destinationTarget("disabled"), enabled: false }])])).toEqual({ reason: "no_target", detail: "destination_disabled" });
   expect(selectOwnerDestination([{ ...destinationRelay(), paused: true }])).toEqual({ reason: "paused" });
   expect(selectOwnerDestination([destinationRelay([
     { ...destinationTarget("unconfigured"), engine: null }, destinationTarget("configured")])])).toEqual({ reason: "not_configured" });
   expect(selectOwnerDestination([destinationRelay([{ ...destinationTarget("missing-model"), model: null }])])).toEqual({ reason: "not_configured" });
   for (const owner of [{ namespace: "internal", id: "41" }, { namespace: "telegram", id: "owner" }, { namespace: "telegram", id: "-41" }])
     expect(selectOwnerDestination([{ ...destinationRelay(), owner: { ...destinationRelay().owner, ...owner } }])).toEqual({ reason: "invalid_owner" });
+});
+
+test("no_target details distinguish service-only and mixed targets without retaining identities", () => {
+  const service = { ...destinationTarget("hosted"), answered_by: "service" as const };
+  expect(selectOwnerDestination([destinationRelay([service])])).toEqual({ reason: "no_target", detail: "service_only" });
+  const disabled = { ...destinationTarget("owner"), enabled: false };
+  expect(selectOwnerDestination([destinationRelay([disabled, service])])).toEqual({ reason: "no_target", detail: "not_answered_by_owner" });
+  expect(selectOwnerDestination([destinationRelay([disabled]), destinationRelay([service])])).toEqual({ reason: "no_target", detail: "not_answered_by_owner" });
+  expect(selectOwnerDestination([{ ...destinationRelay(), paused: true }, destinationRelay([service])])).toEqual({ reason: "no_target", detail: "service_only" });
+  expect(selectOwnerDestination([destinationRelay([{ ...service, enabled: false }])])).toEqual({ reason: "no_target", detail: "destination_disabled" });
 });
 
 test("production publisher selection follows the first target and stops after pause, removal or bot replacement", async () => {

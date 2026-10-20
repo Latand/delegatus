@@ -39,6 +39,15 @@ async function defaultRoots(): Promise<MemoryRoots> {
 export async function refreshMemoryIndex(roots?: MemoryRoots) {
   if (!roots && guardedContext()) return;
   void (await import("./importController")).scheduleMemoryImport();
+  if (!guardedContext()) {
+    return (await import("./refreshJob")).refreshMemoryInHelper(roots);
+  }
+  return refreshMemoryIndexLocally(roots);
+}
+
+/** The leased memory helper owns discovery, parsing, redaction and indexing.
+ * Only counts return to the Viewer; searches keep their own read connection. */
+export async function refreshMemoryIndexLocally(roots?: MemoryRoots) {
   const inventory = await withViewerOperation("memory.discovery", () =>
     performanceSpans.wait("memory.discovery", async () => discoverMemorySources(roots ?? await defaultRoots())));
   return withViewerOperation("memory.refresh", () =>

@@ -178,7 +178,7 @@ test.each(["card", "task"] as const)("CPU waiting preserves %s work links and st
     const host = mount(<PipelineBlock summary={summarizePipeline(pipeline)} density={density} nowMs={NOW_MS} onOpenStage={(_pipeline, stage) => opened.push(stage.id)} />, {
       "p-search": { links: [link(41)], noPr: false } as ResolvedWorkLinks,
     });
-    expect(host.querySelector("[data-cpu-queue]")?.textContent).toBe(translate(lang, "kanban.progress.cpuQueue", { ordinal: "2nd", position: 2, minutes: 7 }));
+    expect(host.querySelector("[data-cpu-queue]")?.textContent).toBe(translate(lang, "kanban.progress.cpuQueue", { ordinal: "2nd", position: 2, minutes: 7, priority: translate(lang, "kanban.priority.normal") }));
     expect(host.textContent).toContain("#41");
     if (density === "task") {
       click(host.querySelector('button.pb-pill[data-stage="implement"]'));

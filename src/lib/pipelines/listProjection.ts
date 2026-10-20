@@ -94,6 +94,7 @@ export type PipelineListStage = {
 };
 
 export type PipelineListRow = {
+  publicationRecovery?: NonNullable<Pipeline["publicationRecovery"]>[string];
   delivery?: Pick<NonNullable<Pipeline["delivery"]>, "target" | "disposition" | "publish" | "ownerId" | "epoch" | "active">;
   id: string;
   /** Clamped title. */
@@ -146,6 +147,11 @@ function deliveryProjection(pipeline: Pipeline): NonNullable<PipelineListRow["de
 function clampText(value: string | null | undefined): string | null {
   if (typeof value !== "string") return null;
   return value.length <= MAX_ROW_TEXT ? value : `${value.slice(0, MAX_ROW_TEXT)}…`;
+}
+
+function publicationRecoveryFields(pipeline: Pipeline): Pick<PipelineListRow, "publicationRecovery"> {
+  const recovery = pipeline.publicationRecovery?.[pipeline.lastPassedCommit];
+  return recovery ? { publicationRecovery: { ...recovery, history: structuredClone(recovery.history.slice(-4)) } } : {};
 }
 
 function boundedLimit(limit: number | null | undefined): number {
@@ -250,6 +256,7 @@ export function pipelineListRow(record: Pipeline): PipelineListRow {
     ...(pipeline.delivery ? { delivery: deliveryProjection(pipeline) } : {}),
     id: pipeline.id,
     task: clampText(pipeline.task) ?? "",
+    ...publicationRecoveryFields(pipeline),
     taskIds: [...(pipeline.taskIds ?? [])],
     project: pipeline.project,
     repoDir: pipeline.repoDir,
@@ -276,6 +283,7 @@ export function pipelineListRow(record: Pipeline): PipelineListRow {
     where it stands, and how each stage's latest attempt ended. Everything else
     on the card is one `get_pipeline` away. */
 export type PipelineCompactRow = {
+  publicationRecovery?: PipelineListRow["publicationRecovery"];
   delivery?: PipelineListRow["delivery"];
   id: string;
   /** First line of the title, clamped. */
@@ -309,6 +317,7 @@ export function clampChars(value: string | null | undefined, limit: number): str
 export function pipelineCompactRow(record: Pipeline): PipelineCompactRow {
   const pipeline: Pipeline = record.runs ? record : { ...record, runs: [] };
   return {
+    ...publicationRecoveryFields(pipeline),
     ...(pipeline.delivery ? { delivery: deliveryProjection(pipeline) } : {}),
     id: pipeline.id,
     task: clampLine(pipeline.task, COMPACT_TASK_CHARS) ?? "",

@@ -6,7 +6,10 @@ export type MediaRequest = { request_id: string; lease_id: string; features?: st
   respond_to: string | null; conversation: { id: string; reply_to: string | null; media?: InputMedia[] }[];
   documents: { text: string; message_id?: string; media_ref?: string; extraction?: "complete" | "truncated" | "unavailable" }[] } };
 const MiB = 1024 * 1024;
+/** Shared by claim negotiation and the final claimed-request validator. */
+export const RELAY_MEDIA_ANY_DOCUMENT = "relay_media_any_document";
 export const inputMediaExtensions: Record<string, string> = { "image/jpeg": ".jpg", "image/png": ".png", "application/pdf": ".pdf", "text/plain": ".txt", "text/markdown": ".md", "text/csv": ".csv", "application/json": ".json" };
+export const isInboundImage = (mime: string | undefined) => mime === "image/jpeg" || mime === "image/png";
 const fail = (code: string, status: number): never => { throw new ExternalRelayError(code, status); };
 const validId = (id: unknown): id is string => typeof id === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(id);
 export const hasInboundMedia = (request: Pick<MediaRequest, "features">) => request.features?.includes("relay_media_in") === true;
@@ -26,7 +29,8 @@ export function validateMediaInput(request: MediaRequest): InputMedia[] {
     if ((media.byte_size ?? 0) > 20 * MiB) fail("too_large", 413);
     if (media.availability === "ready") {
       if (!media.byte_size || !media.mime_type || !media.expires_at || !Number.isFinite(Date.parse(media.expires_at))) return fail("malformed", 400);
-      if (!(Object.hasOwn(inputMediaExtensions, media.mime_type)) || media.kind === "photo" && !media.mime_type.startsWith("image/")) fail("unsupported_media_type", 415);
+      if (media.kind === "photo" ? !isInboundImage(media.mime_type)
+        : !Object.hasOwn(inputMediaExtensions, media.mime_type) && !request.features?.includes(RELAY_MEDIA_ANY_DOCUMENT)) fail("unsupported_media_type", 415);
     }
     const previous = refs.get(media.ref);
     if (previous && JSON.stringify(previous) !== JSON.stringify(media)) fail("malformed", 400);
@@ -39,6 +43,10 @@ export function validateMediaInput(request: MediaRequest): InputMedia[] {
       || !request.input.conversation.some(message => message.id === doc.message_id && message.media?.some(media => media.ref === doc.media_ref && media.kind === "document"))
       || !["complete", "truncated", "unavailable"].includes(doc.extraction ?? "") || Array.from(doc.text).length > 16000
       || doc.extraction === "unavailable" && doc.text !== "") fail("malformed", 400);
+    const media = refs.get(doc.media_ref!)!;
+    if (request.features?.includes(RELAY_MEDIA_ANY_DOCUMENT) && media.mime_type
+      && !Object.hasOwn(inputMediaExtensions, media.mime_type) && !media.mime_type.startsWith("text/")
+      && doc.extraction !== "unavailable") fail("malformed", 400);
     extracted += Array.from(doc.text).length;
   }
   if (extracted > 32000) fail("too_large", 413);
@@ -55,5 +63,5 @@ export function admittedSeedMedia(request: MediaRequest, args: Record<string, un
   const refs = args.seed_media_refs;
   if (!hasInboundMedia(request) || !request.features?.includes("requester_context") || !Array.isArray(refs) || refs.length < 1 || refs.length > 4 || new Set(refs).size !== refs.length) return false;
   const media = validateMediaInput(request);
-  return refs.every(ref => validId(ref) && media.some(item => item.ref === ref && item.availability === "ready" && item.mime_type?.startsWith("image/")));
+  return refs.every(ref => validId(ref) && media.some(item => item.ref === ref && item.availability === "ready" && isInboundImage(item.mime_type)));
 }
