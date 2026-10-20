@@ -2,7 +2,7 @@ import { createInterface } from "node:readline";
 import type { ChildProcess } from "node:child_process";
 import { spawnLeasedHelper, leasedHelperInput, endLeasedHelper } from "@/lib/helperLease";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
-import { retentionWorkerLaunch } from "./retentionWorker";
+import { retentionWorkerLaunch, type RetentionInspection } from "./retentionWorker";
 import type { LauncherRecord } from "./launcher";
 import type { RetentionInputs, RetentionReport } from "./retention";
 
@@ -78,7 +78,7 @@ export async function runRetentionPass(record: LauncherRecord, inputs: Retention
 }
 
 /** Only the leased retention entry calls this. No root observer reaches it. */
-export async function serveRetentionPass(): Promise<void> {
+export async function serveRetentionPass(inspection?: RetentionInspection): Promise<void> {
   const lines = createInterface({ input: process.stdin });
   const pending = new Map<number, { resolve: (value: Current) => void; reject: (error: Error) => void }>();
   let sequence = 0; let started = false;
@@ -93,7 +93,7 @@ export async function serveRetentionPass(): Promise<void> {
           // Retention's completion log belongs on stderr beside helper logs.
           console.log = console.error;
           void import("./retention").then(({ retainReleases }) => retainReleases(message.record, message.inputs, {
-            reportFile: message.reportFile, env: message.env, now: message.now === undefined ? Date.now : () => message.now,
+            reportFile: message.reportFile, env: message.env, inspection, now: message.now === undefined ? Date.now : () => message.now,
             current: () => new Promise<Current>((resolve, reject) => {
               const id = ++sequence; pending.set(id, { resolve, reject }); send({ kind: "current", id });
             }),

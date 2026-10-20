@@ -8,6 +8,14 @@ if (["malformed", "invalid-report"].includes(process.argv[3]!)) {
     : JSON.stringify({ kind: "report", report: { kept: [], errors: [] } }) + "\n"));
   await new Promise(() => {});
 }
-const entry = path.join(import.meta.dir, "../retention.worker.ts");
-process.argv.splice(1, 2, entry);
-await import("../retention.worker");
+const proc = path.join(directory, "proc");
+fs.mkdirSync(path.join(proc, "self/ns"), { recursive: true });
+if (!fs.lstatSync(path.join(proc, "self/ns/mnt"), { throwIfNoEntry: false })) fs.symlinkSync("mnt:[fixture]", path.join(proc, "self/ns/mnt"));
+const { serveRetentionPass } = await import("./retentionPass");
+const { retentionBytes, retentionProcessScan } = await import("./retentionInspection");
+await serveRetentionPass({
+  scan: async root => retentionProcessScan(root, proc),
+  bytes: async root => retentionBytes(root),
+  close: async () => {},
+});
+process.exit(0);
