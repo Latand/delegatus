@@ -141,7 +141,7 @@ for (const engine of ["claude", "codex"] as const) {
     const prompt = engine === "claude" ? { type: "user", timestamp: new Date(firstAt + 1_000).toISOString(),
       ...(automatic ? { origin: { kind: "task-notification" }, promptSource: "system" } : { promptSource: "sdk" }), message: { content: "Continue the same stage" } }
       : { type: "event_msg", timestamp: new Date(firstAt + 1_000).toISOString(), payload: { type: "user_message", message: automatic
-        ? (await import("@/lib/runtime/codexStructuredUserText.server")).encodeCodexStructuredUserText("Continue the same stage", undefined, null, { kind: "agent", role: "pipeline" })
+        ? await (await import("@/lib/runtime/codexStructuredUserText.server")).encodeCodexStructuredUserText("Continue the same stage", undefined, null, { kind: "agent", role: "pipeline" })
         : "Continue the same stage" } };
     const file = stageTranscript(`successor-first-cut-${engine}-${author}`, [first, prompt, latest]);
     readFixtures(f.h, { "/codex/stage-2.jsonl": file });
@@ -228,7 +228,7 @@ for (const engine of ["claude", "codex"] as const) {
     f.advance(1000);
     const text = "Continue the same stage";
     const prompt = engine === "claude" ? { type: "user", uuid: "continued-stage", timestamp: f.h.ports.now(), message: { content: text } }
-      : { type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "user_message", message: (await import("@/lib/runtime/codexStructuredUserText.server")).encodeCodexStructuredUserText(text, undefined, null, { kind: "agent", role: "pipeline" }) } };
+      : { type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "user_message", message: await (await import("@/lib/runtime/codexStructuredUserText.server")).encodeCodexStructuredUserText(text, undefined, null, { kind: "agent", role: "pipeline" }) } };
     records.push(prompt, engine === "claude" ? { type: "assistant", timestamp: f.h.ports.now(), message: { stop_reason: null, content: [{ type: "text", text: "Working on the stage" }] } }
       : { type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "agent_message", message: "Working on the stage" } });
     fs.writeFileSync(file, records.map(record => JSON.stringify(record)).join("\n") + "\n");

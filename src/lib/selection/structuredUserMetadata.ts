@@ -1,11 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { closeSync, fsyncSync, linkSync, openSync, readFileSync, statSync, unlinkSync } from "node:fs";
+import { link, mkdir, open, unlink, utimes } from "node:fs/promises";
+import { dirname, join } from "node:path";
 
 import { statePath } from "@/lib/configDir";
 import { structuredUserReference, structuredUserReferenceKey } from "@/lib/runtime/codexStructuredUserText";
 import { parseMessageOrigin, type MessageOrigin, type DeliveredMessageProvenance } from "@/lib/runtime/messageOrigin";
 import { parseSelectedContextRef, type SelectedContextRef } from "./selectedContext";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 
 export interface StructuredUserMetadata {
   version: 1;
@@ -22,23 +25,74 @@ function directory(): string {
   return statePath("structured-user-metadata");
 }
 
-export function readStructuredUserProvenance(refs: string[]): Record<string, DeliveredMessageProvenance | null> {
+function validateReferences(refs: string[]): void {
   if (!Array.isArray(refs) || refs.length > 100 || refs.some((ref) => typeof ref !== "string" || !structuredUserReferenceKey(ref))) {
     throw new Error("invalid structured-user reference batch");
   }
+}
+
+function provenance(metadata: StructuredUserMetadata): DeliveredMessageProvenance {
+  return {
+    origin: metadata.origin?.kind ?? "operator",
+    ...(metadata.origin?.kind === "operator" && metadata.origin.channel ? { channel: metadata.origin.channel } : {}),
+    ...(metadata.origin?.role ? { senderRole: metadata.origin.role } : {}),
+    ...(metadata.origin?.project ? { senderProject: metadata.origin.project } : {}),
+    ...(metadata.origin?.conversationId ? { senderConversationId: metadata.origin.conversationId } : {}),
+    ...(metadata.selectedContext ? { selectedContext: metadata.selectedContext } : {}),
+  };
+}
+
+export function readStructuredUserProvenance(refs: string[]): Record<string, DeliveredMessageProvenance | null> {
+  validateReferences(refs);
   return Object.fromEntries(refs.map((ref) => {
     try {
-      const metadata = readStructuredUserMetadata(ref);
-      return [ref, {
-        origin: metadata.origin?.kind ?? "operator",
-        ...(metadata.origin?.kind === "operator" && metadata.origin.channel ? { channel: metadata.origin.channel } : {}),
-        ...(metadata.origin?.role ? { senderRole: metadata.origin.role } : {}),
-        ...(metadata.origin?.project ? { senderProject: metadata.origin.project } : {}),
-        ...(metadata.origin?.conversationId ? { senderConversationId: metadata.origin.conversationId } : {}),
-        ...(metadata.selectedContext ? { selectedContext: metadata.selectedContext } : {}),
-      }];
+      return [ref, provenance(readStructuredUserMetadata(ref))];
     } catch { return [ref, null]; }
   }));
+}
+
+/** Sequential, bounded reads keep disk work off the request loop. */
+export async function readStructuredUserProvenanceAsync(refs: string[]): Promise<Record<string, DeliveredMessageProvenance | null>> {
+  validateReferences(refs);
+  const result: Record<string, DeliveredMessageProvenance | null> = {};
+  for (const ref of refs) {
+    try { result[ref] = provenance(validateRecord(ref, await readRecordBodyWithRecovery(ref))); }
+    catch { result[ref] = null; }
+  }
+  return result;
+}
+
+async function readRecordBody(path: string): Promise<string> {
+  const file = await open(path, "r");
+  try {
+    const buffer = Buffer.alloc(MAX_RECORD_BYTES + 1);
+    let bytes = 0;
+    while (bytes < buffer.length) {
+      const read = await file.read(buffer, bytes, buffer.length - bytes, null);
+      if (!read.bytesRead) break;
+      bytes += read.bytesRead;
+    }
+    if (bytes > MAX_RECORD_BYTES) throw new Error("oversized record");
+    return buffer.toString("utf8", 0, bytes);
+  } finally { await file.close(); }
+}
+
+async function readRecordBodyWithRecovery(ref: string): Promise<string> {
+  const path = filename(ref);
+  try { return await readRecordBody(path); }
+  catch {
+    const body = await readRecordBody(`${path}.retention-recovery`);
+    validateRecord(ref, body);
+    try {
+      await link(`${path}.retention-recovery`, path);
+      await syncDirectory(dirname(path));
+      await unlink(`${path}.retention-recovery`);
+      await syncDirectory(dirname(path));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+    return body;
+  }
 }
 
 function filename(ref: string): string {
@@ -51,23 +105,55 @@ function filename(ref: string): string {
 export function readStructuredUserMetadata(ref: string): StructuredUserMetadata {
   try {
     const path = filename(ref);
-    if (statSync(path).size > MAX_RECORD_BYTES) throw new Error("oversized record");
-    const value = JSON.parse(readFileSync(path, "utf8"));
-    const selectedContext = value.selectedContext === null ? null : parseSelectedContextRef(value.selectedContext);
-    const origin = value.origin === null ? null : parseMessageOrigin(value.origin);
-    if (value.version !== 1 || (value.selectedContext !== null && !selectedContext)
-      || (value.origin !== null && !origin)
-      || (value.contentDigest !== null && (typeof value.contentDigest !== "string" || !SHA256.test(value.contentDigest)))
-      || (!ref.startsWith("h.") ? value.deliveryDedup !== structuredUserReferenceKey(ref) : value.deliveryDedup !== undefined)) {
-      throw new Error("invalid record");
-    }
-    const record: StructuredUserMetadata = { version: 1, contentDigest: value.contentDigest, selectedContext, origin,
-      ...(value.deliveryDedup ? { deliveryDedup: value.deliveryDedup } : {}) };
-    if ((ref.startsWith("h.") || ref.split(".").length === 3) && metadataReference(record) !== ref) throw new Error("record mismatch");
-    return record;
+    const primary = readMetadataPathSync(path);
+    return validateRecord(ref, primary);
   } catch {
-    throw new Error("structured-user metadata reference is unavailable; the delivery context cannot be recovered");
+    try {
+      const path = `${filename(ref)}.retention-recovery`;
+      const body = readMetadataPathSync(path);
+      const record = validateRecord(ref, body);
+      try {
+        linkSync(path, filename(ref));
+        syncDirectorySync(directory());
+        unlinkSync(path);
+        syncDirectorySync(directory());
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+      return record;
+    } catch {
+      throw new Error("structured-user metadata reference is unavailable; the delivery context cannot be recovered");
+    }
   }
+}
+
+async function syncDirectory(path: string): Promise<void> {
+  const handle = await open(path, "r");
+  try { await handle.sync(); } finally { await handle.close(); }
+}
+
+function syncDirectorySync(path: string): void {
+  const descriptor = openSync(path, "r");
+  try { fsyncSync(descriptor); } finally { closeSync(descriptor); }
+}
+
+function readMetadataPathSync(path: string): string {
+  if (statSync(path).size > MAX_RECORD_BYTES) throw new Error("oversized record");
+  return readFileSync(path, "utf8");
+}
+
+function validateRecord(ref: string, body: string): StructuredUserMetadata {
+  const value = JSON.parse(body);
+  const selectedContext = value.selectedContext === null ? null : parseSelectedContextRef(value.selectedContext);
+  const origin = value.origin === null ? null : parseMessageOrigin(value.origin);
+  if (value.version !== 1 || (value.selectedContext !== null && !selectedContext)
+    || (value.origin !== null && !origin)
+    || (value.contentDigest !== null && (typeof value.contentDigest !== "string" || !SHA256.test(value.contentDigest)))
+    || (!ref.startsWith("h.") ? value.deliveryDedup !== structuredUserReferenceKey(ref) : value.deliveryDedup !== undefined)) {
+    throw new Error("invalid record");
+  }
+  const record: StructuredUserMetadata = { version: 1, contentDigest: value.contentDigest, selectedContext, origin,
+    ...(value.deliveryDedup ? { deliveryDedup: value.deliveryDedup } : {}) };
+  if ((ref.startsWith("h.") || ref.split(".").length === 3) && metadataReference(record) !== ref) throw new Error("record mismatch");
+  return record;
 }
 
 function metadataReference(record: StructuredUserMetadata): string {
@@ -84,28 +170,38 @@ function metadataReference(record: StructuredUserMetadata): string {
 /** Immutable, durable-before-send publication. A retry may reuse identical
  * metadata, but cannot replace the selected card or image digest of a handle.
  * Files live in the shared state volume, independent of checkout and process. */
-export function persistStructuredUserMetadata(record: StructuredUserMetadata): string {
+export async function persistStructuredUserMetadata(record: StructuredUserMetadata): Promise<string> {
+  // Snapshot before the first await: caller mutation cannot change the bytes
+  // associated with this immutable delivery identity.
   const ref = metadataReference(record);
   const path = filename(ref);
   const body = JSON.stringify(record);
   if (Buffer.byteLength(body) > MAX_RECORD_BYTES) throw new Error("structured-user metadata is too large");
-  mkdirSync(directory(), { recursive: true, mode: 0o700 });
-  if (!existsSync(path)) {
-    const temporary = `${path}.${randomUUID()}.tmp`;
-    const fd = openSync(temporary, "wx", 0o600);
-    try {
+  const parentPath = directory();
+  return withViewerOperation("structured-user.publish", async () => {
+    await mkdir(parentPath, { recursive: true, mode: 0o700 });
+    return withFileTransactionAsync(join(parentPath, "..", "structured-user-metadata-publication"), "structured-user publication is busy", async () => {
+      const temporary = `${path}.${randomUUID()}.tmp`;
+      const fd = await open(temporary, "wx", 0o600);
       try {
-        writeFileSync(fd, body);
-        fsyncSync(fd);
-      } finally { closeSync(fd); }
-      try { linkSync(temporary, path); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
-      const parent = openSync(directory(), "r");
-      try { fsyncSync(parent); } finally { closeSync(parent); }
-    } finally { unlinkSync(temporary); }
-  }
-  if (JSON.stringify(readStructuredUserMetadata(ref)) !== body) {
-    throw new Error("structured-user delivery identity belongs to different metadata");
-  }
-  return ref;
+        try {
+          await fd.writeFile(body);
+          await fd.sync();
+        } finally { await fd.close(); }
+        try { await link(temporary, path); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+      } finally { await unlink(temporary); }
+      if (await readRecordBody(path) !== body) {
+        throw new Error("structured-user delivery identity belongs to different metadata");
+      }
+      // Reuse renews the collection grace period, including retries after restart.
+      const now = new Date();
+      await utimes(path, now, now);
+      const published = await open(path, "r");
+      try { await published.sync(); } finally { await published.close(); }
+      const parent = await open(parentPath, "r");
+      try { await parent.sync(); } finally { await parent.close(); }
+      return ref;
+    });
+  });
 }

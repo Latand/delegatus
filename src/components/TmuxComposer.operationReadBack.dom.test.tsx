@@ -864,7 +864,7 @@ for (const locale of ["uk", "en"] as const) {
     seedStaleTab(delivery, admittedAt);
     const { encodeCodexStructuredUserText } = await import("@/lib/runtime/codexStructuredUserText.server");
     const { deliveryDedupToken } = await import("@/lib/runtime/deliveryDedup");
-    const wire = encodeCodexStructuredUserText(delivery.text, undefined, null, { kind: "operator" }, deliveryDedupToken(delivery.operationId));
+    const wire = await encodeCodexStructuredUserText(delivery.text, undefined, null, { kind: "operator" }, deliveryDedupToken(delivery.operationId));
     const transcript = delivery.registry.conversation(delivery.conversationId as `conversation_${string}`)!.generations[0]!.path;
     fs.writeFileSync(transcript, JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: wire } }) + "\n");
     const requests = serveOperations(id => handleRuntimeOperationQuery(id, {

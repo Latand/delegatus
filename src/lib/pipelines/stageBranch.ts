@@ -120,18 +120,34 @@ export async function commitAndAdoptStageBranch(
     ? other.branch === name || other.delivery.target.branch === `refs/heads/${name}`
     : other.branch === name && !pipelineTerminal(other));
   if (ownedByOther(source)) return refused("another pipeline owns the stage branch");
+  let custodyHead: string | null = null;
   if (!adoption && attempt && now && (source === pipeline.branch || source === deliveryBranch)) {
-    const pushed = await performanceSpans.wait("pipeline.attempt-push-proof", () => settleStageAttemptPush(pipeline, attempt, exec, now));
+    const pushed = await performanceSpans.wait("pipeline.attempt-push-proof", async () => {
+      const head = await exec("git", ["rev-parse", "HEAD"], cwd);
+      if (head.code !== 0 || !/^[0-9a-f]{40}$/.test(head.stdout.trim())) return { ok: false as const,
+        error: "settling the stage push: the lane head cannot be read; both tips are preserved" };
+      custodyHead = head.stdout.trim();
+      return settleStageAttemptPush(pipeline, attempt, exec, now);
+    });
     if (pushed) {
       if (!pushed.ok && pushed.deferred) pipeline.stateDetail = pushed.error;
       if (pushed.ok && attempt.report) attempt.report.provenance = { ...attempt.report.provenance, head: pushed.sha };
       return pushed;
     }
   }
-  if (!adoption && source === pipeline.branch) return (await commitPipelineStage(pipeline, stageId, true, exec, undefined, undefined, receiptFile, control));
+  // The proof and ordinary committer share one parent. Its existing head guard
+  // also applies to clean worktrees, which otherwise accept a late foreign tip.
+  const commitOwned = async (): Promise<PipelineGitResult> => {
+    const result = await commitPipelineStage(pipeline, stageId, true, exec, undefined, custodyHead, receiptFile, control);
+    if (!result.ok && custodyHead !== null && result.error === `read-only stage ${stageId} created a commit`) {
+      return { ...result, error: "settling the stage push: the lane head raced the attempt proof; both tips are preserved" };
+    }
+    return result;
+  };
+  if (!adoption && source === pipeline.branch) return commitOwned();
   if (!adoption && source === deliveryBranch) {
     if (!pipeline.delivery?.active || pipeline.delivery.publish !== "enabled" || pipeline.delivery.ownerId !== pipeline.id) return refused("the delivery branch claim was released");
-    return (await commitPipelineStage(pipeline, stageId, true, exec, undefined, undefined, receiptFile, control));
+    return commitOwned();
   }
   if (!source) return refused("the stage left a detached head");
   if (adoption && checkedOut !== source && checkedOut !== adoption.target) return refused("the checkout moved away from its recorded adoption");
