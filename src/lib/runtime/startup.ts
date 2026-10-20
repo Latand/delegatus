@@ -22,6 +22,7 @@ import { activeOrchestratorSeats, type OrchestratorSeat } from "@/lib/orchestrat
 import { captureProcessIdentity, processIdentityMayOwn, processIdentityStatus, sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { assertDarwinStructuredRuntime } from "@/lib/proc/darwinIdentity";
 import { readStableTailRecords, type StableTailRead } from "@/lib/scanner/activity";
+import { stateLockProcessKind } from "@/lib/state/lockWait";
 import { loadPipelineOwnershipForStartupAsync, pipelineRegistryHealthAsync, withPipelineStartupAdmission } from "@/lib/pipelines/store";
 
 import {
@@ -1802,29 +1803,37 @@ export function pipelineStartupMemberships(registry: AgentRegistry) {
   return { memberships, resolve, byPipeline, selectedIds: new Set(canonicalIds.keys()) };
 }
 
+function deferredPipelineStartupEvidence(registry: AgentRegistry): PipelineStartupEvidence {
+  const deferred = new Set<string>();
+  const { memberships, resolve } = pipelineStartupMemberships(registry);
+  for (const [id, entries] of Object.entries(memberships)) {
+    if (entries.some((membership) => membership.kind === "pipeline")) deferred.add(resolve(id));
+  }
+  return { settled: new Set(), deferred };
+}
+
+function reportPipelineStartupRefusal(error: unknown): void {
+  console.error("[structured hosts] pipeline registry unreadable; deferring pipeline adoption", {
+    pid: process.pid, role: process.env.LLV_STATE_OWNER ?? stateLockProcessKind(),
+    error: error instanceof Error ? error.message : String(error),
+  });
+}
+
 /** Pipeline attempts and frozen close hosts determine whether startup may create another writer.
     A failed read retains pipeline members without launch or demotion; a
     captured survivor blocks even pending work until its identity is dead. */
 async function pipelineStartupEvidence(registry: AgentRegistry, available = true): Promise<PipelineStartupEvidence> {
+  if (!available) return deferredPipelineStartupEvidence(registry);
   const settled = new Set<string>();
   const deferred = new Set<string>();
   let pipelines;
   let preservedIds: Set<string>;
   try {
-    if (!available) throw new Error("pipeline admission authority is unavailable");
     pipelines = await loadPipelineOwnershipForStartupAsync();
     preservedIds = new Set((await pipelineRegistryHealthAsync()).map((issue) => issue.id));
   } catch (error) {
-    console.error("[structured hosts] pipeline registry unreadable; deferring pipeline adoption", {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    const { memberships, resolve } = pipelineStartupMemberships(registry);
-    for (const [id, entries] of Object.entries(memberships)) {
-      if (entries.some((membership) => membership.kind === "pipeline")) {
-        deferred.add(resolve(id));
-      }
-    }
-    return { settled, deferred };
+    reportPipelineStartupRefusal(error);
+    return deferredPipelineStartupEvidence(registry);
   }
   const { memberships, resolve, byPipeline, selectedIds } = pipelineStartupMemberships(registry);
   for (const [id, entries] of Object.entries(memberships)) {
@@ -2022,8 +2031,21 @@ async function adoptStructuredHostsPass(
   retryDependencies = dependencies,
 ): Promise<AdoptedStructuredHost[]> {
   const assertActive = dependencies.assertActive ?? (() => {});
-  const admitState = <T>(admit: (available: boolean) => Promise<T>, phase = "startup evidence") =>
-    withPipelineStartupAdmission(admit, phase, dependencies.observeLeaseHold, true);
+  let authorityUnavailable = false;
+  const admitState = <T>(admit: (available: boolean) => Promise<T>, phase = "startup evidence") => {
+    const checked = (available: boolean, refusal?: unknown) => {
+      assertActive();
+      if (!available && !authorityUnavailable) {
+        authorityUnavailable = true;
+        reportPipelineStartupRefusal(refusal);
+      }
+      return admit(available);
+    };
+    // A refused deadline belongs to the pass, rather than to every host row.
+    // Preserve all pipeline members until the deferred-evidence probe recovers.
+    return authorityUnavailable ? checked(false) : withPipelineStartupAdmission(
+      checked, phase, dependencies.observeLeaseHold, true, { signal: dependencies.signal });
+  };
   assertActive();
   assertDarwinStructuredRuntime();
   const registry = dependencies.registry ?? agentRegistry();

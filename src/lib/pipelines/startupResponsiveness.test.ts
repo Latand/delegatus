@@ -1,12 +1,13 @@
-import { stateLeaseHoldsInFlight } from "@/lib/state/sqliteStateStore";
-import { afterEach, expect, test } from "bun:test";
+import { SqliteStateCollection, stateLeaseHoldsInFlight } from "@/lib/state/sqliteStateStore";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import { buildPipeline, loadPipelinesForStartup, loadPipelinesForStartupAsync, loadPipelineOwnershipForStartupAsync, pipelineRegistryHealth, pipelineRegistryHealthAsync, savePipelines, withPipelineMutation, withPipelineStartupAdmission } from "./store";
-import { createViewerLoopMonitor, withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { StateLockDeferredError, stateLockWaitsInFlight, waitForStateLock } from "@/lib/state/lockWait";
+import { createViewerLoopMonitor } from "@/lib/viewerLoopMonitor";
 
 const original = process.env.LLV_STATE_DIR;
 const roots: string[] = [];
@@ -84,20 +85,21 @@ test("durable hold measurement includes time before the first await continuation
   const lines: unknown[][] = [];
   const warn = console.warn;
   console.warn = (...args) => { lines.push(args); };
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const pending = withPipelineStartupAdmission(async () => { entered.resolve(); await release.promise; return true; }, "reconciling structured hosts", held => { heldMs = held; });
   try {
-    const pending = withViewerOperation("pipelines.startup-admission", () => withPipelineMutation(() => true, held => { heldMs = held; }));
-    // Store opening may itself yield. Observe durable acquisition independently
-    // before blocking the continuation that will release it.
-    for (let turn = 0; turn < 20 && !stateLeaseHoldsInFlight().some(held => held.collection === "pipelines"); turn++) await Promise.resolve();
+    await entered.promise;
     expect(stateLeaseHoldsInFlight().some(held => held.collection === "pipelines")).toBe(true);
     Bun.sleepSync(1100);
+    release.resolve();
     expect(await pending).toBeTrue();
     expect(heldMs).toBeGreaterThan(1000);
-    expect(lines).toContainEqual(["[state lease-hold]", expect.objectContaining({ collection: "pipelines", operation: "pipelines.mutation", heldMs: expect.any(Number) })]);
-  } finally { console.warn = warn; }
+    expect(lines).toContainEqual(["[state lease-hold]", expect.objectContaining({ collection: "pipelines", operation: "pipelines.startup-admission", heldMs: expect.any(Number) })]);
+    expect(lines).toContainEqual(["[structured hosts] state lease exceeded budget", expect.objectContaining({ pid: process.pid, role: expect.any(String), phase: "reconciling structured hosts" })]);
+  } finally { release.resolve(); await pending; console.warn = warn; }
 });
 
-test.each([false, true])("a foreign commit and a new owner invalidate prepared evidence before admission (compact=%s)", async compact => {
+test.each([false, true])("a foreign commit refreshes prepared evidence within the original admission (compact=%s)", async compact => {
   const { row } = fixture();
   let release!: () => void, entered!: () => void;
   const ready = new Promise<void>(resolve => { entered = resolve; });
@@ -108,11 +110,18 @@ test.each([false, true])("a foreign commit and a new owner invalidate prepared e
     await persist([...records, newOwner]);
   });
   await ready;
-  const reader = withPipelineStartupAdmission(async available => available, undefined, undefined, compact);
-  try { await new Promise(resolve => setTimeout(resolve, 40)); }
+  let calls = 0;
+  const reader = withPipelineStartupAdmission(async available => {
+    calls++;
+    expect(available).toBeTrue();
+    expect((compact ? await loadPipelineOwnershipForStartupAsync() : loadPipelinesForStartup()).map(record => record.id)).toContain("new-owner");
+    return available;
+  }, undefined, undefined, compact);
+  try { await waitingAdmission(); }
   finally { release(); }
   await writer;
-  expect(await reader).toBeFalse();
+  expect(await reader).toBeTrue();
+  expect(calls).toBe(1);
   expect(await withPipelineStartupAdmission(async available => {
     expect(available).toBeTrue();
     expect((compact ? await loadPipelineOwnershipForStartupAsync() : loadPipelinesForStartup()).map(record => record.id)).toContain("new-owner");
@@ -271,4 +280,106 @@ test("compact ownership preserves unknown owners, duplicate detection and indepe
     expect(await withPipelineStartupAdmission(async available => available, undefined, undefined, true)).toBe(false);
     await expect(pipelineRegistryHealthAsync()).rejects.toThrow("contradictory identities");
   } finally { db.close(); }
+});
+
+async function waitingAdmission() {
+  const deadline = performance.now() + 5000;
+  while (!stateLockWaitsInFlight().some(wait => ["pipelines.startup-admission", "state.lease"].includes(wait.callSite) && wait.attempts > 1)) {
+    if (performance.now() >= deadline) throw new Error("reader never reached contended admission");
+    await new Promise<void>(resolve => setImmediate(resolve));
+  }
+}
+
+test("an admitted typed refusal is not replayed or converted to unavailable", async () => {
+  fixture();
+  let calls = 0;
+  const refusal = new StateLockDeferredError("synthetic.callback");
+  await expect(withPipelineStartupAdmission(async () => { calls++; throw refusal; })).rejects.toBe(refusal);
+  expect(calls).toBe(1);
+});
+
+test("a typed lease observer failure cannot replay an admitted callback", async () => {
+  fixture();
+  let effects = 0;
+  const refusal = new StateLockDeferredError("synthetic.observer");
+  await expect(withPipelineStartupAdmission(async () => { effects++; }, "startup evidence", () => { throw refusal; })).rejects.toBe(refusal);
+  expect(effects).toBe(1);
+});
+
+test("an admitted callback's other resource wait gets its own admission", async () => {
+  fixture();
+  let effects = 0, attempts = 0;
+  await withPipelineStartupAdmission(async available => {
+    expect(available).toBeTrue(); effects++;
+    expect(stateLockWaitsInFlight().some(wait => wait.callSite === "pipelines.startup-admission")).toBeFalse();
+    await waitForStateLock("synthetic.registry", () => {
+      if (++attempts === 1) throw new StateLockDeferredError("synthetic.registry");
+    });
+  });
+  expect(effects).toBe(1);
+  expect(attempts).toBe(2);
+});
+
+test.each([["deadline", "mutation"], ["cancel", "mutation"], ["deadline", "admission"], ["cancel", "admission"]] as const)("startup admission stops at its %s behind a held %s without invoking a writer", async (mode, holder) => {
+  fixture();
+  const saved = process.env.LLV_PIPELINE_LOCK_WAIT_MS;
+  process.env.LLV_PIPELINE_LOCK_WAIT_MS = mode === "deadline" ? "200" : "5000";
+  const held = Promise.withResolvers<void>();
+  const ready = Promise.withResolvers<void>();
+  const hold = async () => { ready.resolve(); await held.promise; };
+  const owner = holder === "mutation" ? withPipelineMutation(hold) : withPipelineStartupAdmission(hold);
+  await ready.promise;
+  const abort = new AbortController();
+  let admitted = 0, refused = 0;
+  const reader = withPipelineStartupAdmission(async available => {
+    if (available) admitted++; else refused++;
+    return available;
+  }, "reconciling structured hosts", undefined, true, { signal: abort.signal });
+  // Observe rejections immediately while the handshake is pending.
+  const result = reader.then(value => ({ value, error: null }), error => ({ value: null, error }));
+  try {
+    await waitingAdmission();
+    if (mode === "cancel") abort.abort(new Error("retired during admission"));
+    const outcome = await result;
+    expect(admitted).toBe(0);
+    expect(refused).toBe(mode === "deadline" ? 1 : 0);
+    if (mode === "cancel") expect(outcome.error?.message).toBe("retired during admission");
+    else expect(outcome.value).toBeFalse();
+  } finally {
+    held.resolve(); await owner; await result;
+    if (saved === undefined) delete process.env.LLV_PIPELINE_LOCK_WAIT_MS; else process.env.LLV_PIPELINE_LOCK_WAIT_MS = saved;
+  }
+  expect(await withPipelineStartupAdmission(async available => available)).toBeTrue();
+});
+
+
+test("repeated evidence invalidation spends one deadline and recovers after churn ends", async () => {
+  const { root } = fixture();
+  const saved = process.env.LLV_PIPELINE_LOCK_WAIT_MS;
+  process.env.LLV_PIPELINE_LOCK_WAIT_MS = "500";
+  const db = new Database(path.join(root, "state.sqlite"));
+  const originalAdmit = SqliteStateCollection.prototype.admit;
+  let invalidations = 0, admitted = 0, refused = 0;
+  const admission = spyOn(SqliteStateCollection.prototype, "admit").mockImplementation(function<R>(this: SqliteStateCollection<unknown>, operation: () => R | Promise<R>, waitMs?: number, observe?: (ms: number) => void): Promise<R> {
+    return originalAdmit.call(this, () => {
+      db.query("UPDATE state_collections SET revision=revision+1 WHERE collection='pipelines'").run();
+      invalidations++;
+      return operation();
+    }, waitMs, observe) as Promise<R>;
+  });
+  try {
+    const start = performance.now();
+    expect(await withPipelineStartupAdmission(async available => {
+      if (available) admitted++; else refused++;
+      return available;
+    }, "reconciling structured hosts", undefined, true)).toBeFalse();
+    expect(performance.now() - start).toBeLessThan(5000);
+    expect(invalidations).toBeGreaterThan(1);
+    expect(admitted).toBe(0);
+    expect(refused).toBe(1);
+  } finally {
+    admission.mockRestore(); db.close();
+    if (saved === undefined) delete process.env.LLV_PIPELINE_LOCK_WAIT_MS; else process.env.LLV_PIPELINE_LOCK_WAIT_MS = saved;
+  }
+  expect(await withPipelineStartupAdmission(async available => available)).toBeTrue();
 });

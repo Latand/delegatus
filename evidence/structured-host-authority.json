@@ -1,0 +1,84 @@
+{
+  "recordedAtUtc": "2026-10-20T04:43:10.789262Z",
+  "runtime": "bun 1.4.0",
+  "command": "bash \"$GATE_SLOT\" bun scripts/startup-retry-benchmark.ts --authority-restarts",
+  "conditions": {
+    "pipelines": 1024,
+    "completedStructuredRows": 64,
+    "generations": 2,
+    "windowMs": 70000,
+    "writerMs": 8000,
+    "writerIntervalMs": 5,
+    "runtimeSocket": "unset",
+    "port": "ephemeral",
+    "retainedStateAcrossRestart": true
+  },
+  "baseline": {
+    "revision": "720aa48c5537cba0a25c00b65b59504437378886",
+    "rows": [
+      {
+        "generation": 1,
+        "unreadable": 70,
+        "syntheticUnavailable": 70,
+        "leaseBudget": 0,
+        "loopGap": 2,
+        "performanceSummary": 1,
+        "writer": {
+          "writes": 1336,
+          "busy": 241
+        },
+        "attributedRefusals": 0
+      },
+      {
+        "generation": 2,
+        "unreadable": 3,
+        "syntheticUnavailable": 3,
+        "leaseBudget": 0,
+        "loopGap": 0,
+        "performanceSummary": 1,
+        "writer": {
+          "writes": 1528,
+          "busy": 48
+        },
+        "attributedRefusals": 0
+      }
+    ]
+  },
+  "candidate": {
+    "sourceSha256": {
+      "src/lib/pipelines/store.ts": "ea39099ab3f043ec119650d7dd019146c910adceb80ef9a5fa63e526907949b8",
+      "src/lib/runtime/startup.ts": "98f14404289d1bcaea2cf64d9806a71d1e584019ecad8d74558bd2725d8bdef8",
+      "src/lib/state/lockWait.ts": "5cd2b382256777595d09d1aa5eb679bd78c1c3e4ddef9daa1445170aaa20912d"
+    },
+    "rows": [
+      {
+        "generation": 1,
+        "unreadable": 0,
+        "syntheticUnavailable": 0,
+        "leaseBudget": 0,
+        "loopGap": 2,
+        "performanceSummary": 1,
+        "writer": {
+          "writes": 1325,
+          "busy": 253
+        },
+        "attributedRefusals": 0
+      },
+      {
+        "generation": 2,
+        "unreadable": 0,
+        "syntheticUnavailable": 0,
+        "leaseBudget": 0,
+        "loopGap": 0,
+        "performanceSummary": 1,
+        "writer": {
+          "writes": 1503,
+          "busy": 76
+        },
+        "attributedRefusals": 0
+      }
+    ]
+  },
+  "driverSha256": "36dd1721d649f23af6f4870c5ffcc53122524f60b62ce287d4574dbf6f2233ca",
+  "scope": "Reconciliation warning counts from isolated production Next builds."
+}

@@ -2,7 +2,8 @@ import { deepFreeze } from "@/lib/deepFreeze";
 import { pipelinePauseInputSchema } from "./pauseMetadata";
 import { forEachCooperatively } from "@/lib/cooperative";
 import { controllerPipelineKeys, controllerReferences, inheritControllerGuards } from "./controllerScope";
-import { stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
+import { StateLockDeferredError, outsideStateLockWait, stateLockAttempt, stateLockProcessKind, waitForStateLock } from "@/lib/state/lockWait";
+import { withWaitCorrelation } from "@/lib/blockingWaits";
 import crypto from "node:crypto";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -19,7 +20,7 @@ import { canonicalProjectKeys, replaceProjectKeySource } from "@/lib/projects/pr
 import { effortScale } from "@/lib/agent/efforts";
 import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
 import { MAX_SCAFFOLD_LENGTH } from "@/lib/roles/store";
-import { refuseBusyBeforeAdmission } from "@/lib/state/fileTransaction";
+import { FileTransactionBusyError, refuseBusyBeforeAdmission } from "@/lib/state/fileTransaction";
 import { jsonArrayRecordBytes, preservedRecordJson, rememberRecordBytes, registryRecordKey, reportRegistryRecord, stringifyRegistryDocument, type RegistryRecordIssue } from "@/lib/state/registryRecords";
 import { initializeStateCollections, readStateCollectionRevisions, stateEvidenceVersion, pipelineEvidenceRevision, readCompactPipelineEvidence, type CompactEvidenceCache, visitStateCollectionsRows, readStateCollectionsRows, SqliteStateCollection, type StateBoundedTransaction, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -1187,6 +1188,8 @@ function evidenceFileIdentity(filename: string): string {
   try { const stat = fs.statSync(filename, { bigint: true }); return `${stat.dev}:${stat.ino}`; }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing"; throw error; }
 }
+class PipelineEvidenceChangedError extends PipelineStoreError {}
+
 function evidenceSignature(): string {
   return performanceSpans.sync("pipeline.identity", readEvidenceSignature);
 }
@@ -1228,7 +1231,7 @@ async function preparePipelineEvidence(mode: "startup" | "health" | "ownership" 
           if (value.ownership) ownership.push(value.ownership);
           if (value.issue) issues.push(value.issue);
         }
-        if (signature !== evidenceSignature()) throw new PipelineStoreError("pipeline evidence changed during preparation");
+        if (signature !== evidenceSignature()) throw new PipelineEvidenceChangedError("pipeline evidence changed during preparation");
         compactEvidence = prepared;
         return { pipelines, ownership, issues, signature };
       }
@@ -1258,7 +1261,7 @@ async function preparePipelineEvidence(mode: "startup" | "health" | "ownership" 
         }
       }
     }
-    if (signature !== evidenceSignature()) throw new PipelineStoreError("pipeline evidence changed during preparation");
+    if (signature !== evidenceSignature()) throw new PipelineEvidenceChangedError("pipeline evidence changed during preparation");
     return { pipelines, ...(mode === "startup" ? {} : { ownership }), issues, signature };
   });
   pendingEvidence.set(pendingKey, pending);
@@ -1787,39 +1790,71 @@ export async function withPipelineControllerMutation<T>(
  * Never reinterpret a failure inside admission as permission to run it again.
  */
 export async function withPipelineStartupAdmission<T>(
-  admit: (available: boolean) => Promise<T>,
+  admit: (available: boolean, refusal?: unknown) => Promise<T>,
   phase = "startup evidence",
   observeHold?: (heldMs: number) => void,
   compact = false,
+  options: { signal?: AbortSignal } = {},
 ): Promise<T> {
-  return withViewerOperation("pipelines.startup-admission", async () => {
+  return withViewerOperation("pipelines.startup-admission", () => withWaitCorrelation({ label: `pipelines.startup-admission:${phase}` }, async () => {
     let entered = false;
+    let prepared: PreparedPipelineEvidence | undefined;
+    const waitMs = pipelineLockWaitMs();
+    const deadline = performance.now() + waitMs;
     try {
-      let evidence = await preparePipelineEvidence(compact ? "ownership" : "startup");
-      const store = await waitForStateLock("pipelines.open", pipelineStore, { waitMs: pipelineLockWaitMs() });
-      // A first migration changes authority. Reread its result before taking
-      // the lease; a corrupt legacy source has already refused preparation.
-      if (evidence.signature !== evidenceSignature()) evidence = await preparePipelineEvidence(compact ? "ownership" : "startup");
-      return await store.admit(() => {
-        if (evidence.signature !== evidenceSignature()) throw new PipelineStoreError("pipeline evidence changed before admission");
-        entered = true;
-        const scope = { current: evidence as PreparedPipelineEvidence | null };
-        return admittedEvidence.run(scope, async () => {
-          try { return await admit(true); }
-          finally { scope.current = null; }
-        });
-      }, pipelineLockWaitMs(), heldMs => {
-        if (heldMs > 100) console.warn("[structured hosts] state lease exceeded budget", {
-          phase, collection: "pipelines", heldMs: Math.round(heldMs), budgetMs: 100,
-        });
-        observeHold?.(heldMs);
-      });
+      const outcome = await waitForStateLock("pipelines.startup-admission", async () => {
+        try {
+          let evidence = prepared;
+          if (!evidence) evidence = await preparePipelineEvidence(compact ? "ownership" : "startup");
+          options.signal?.throwIfAborted();
+          const store = pipelineStore();
+          // First migration changes authority. Refresh before taking the lease.
+          if (!prepared && evidence.signature !== evidenceSignature()) evidence = await preparePipelineEvidence(compact ? "ownership" : "startup");
+          prepared = evidence;
+          options.signal?.throwIfAborted();
+          const admitted = evidence;
+          // Retain unchanged preparation while yielding to a local lease holder.
+          // Never enqueue behind its callback: that could outlive this deadline
+          // or cancellation. The outer async wait owns every acquisition retry.
+          return await store.admit(async () => {
+            options.signal?.throwIfAborted();
+            if (waitMs > 0 && performance.now() >= deadline) throw new FileTransactionBusyError("pipeline startup admission deadline exceeded");
+            if (admitted.signature !== evidenceSignature()) throw new PipelineEvidenceChangedError("pipeline evidence changed before admission");
+            entered = true;
+            const scope = { current: admitted as PreparedPipelineEvidence | null };
+            return outsideStateLockWait(() => admittedEvidence.run(scope, async () => {
+              // Return a callback error as data across the retry boundary: even
+              // a typed admission error here may follow an external effect.
+              try { return { ok: true as const, value: await admit(true) }; }
+              catch (error) { return { ok: false as const, error }; }
+              finally { scope.current = null; }
+            }));
+          }, 0, heldMs => {
+            if (heldMs > 100) console.warn("[structured hosts] state lease exceeded budget", {
+              pid: process.pid, role: process.env.LLV_STATE_OWNER ?? stateLockProcessKind(),
+              phase, collection: "pipelines", heldMs: Math.round(heldMs), budgetMs: 100,
+            });
+            observeHold?.(heldMs);
+          });
+        } catch (error) {
+          // Lease observers and teardown also run after callback effects.
+          if (entered) return { ok: false as const, error };
+          if (error instanceof PipelineEvidenceChangedError) prepared = undefined;
+          if (error instanceof PipelineEvidenceChangedError || error instanceof FileTransactionBusyError) {
+            throw new StateLockDeferredError("pipelines.startup-admission", error instanceof PipelineEvidenceChangedError ? "sqlite" : "lease");
+          }
+          throw error;
+        }
+      }, { waitMs, signal: options.signal, subject: "pipelines" });
+      if (!outcome.ok) throw outcome.error;
+      return outcome.value;
     } catch (error) {
+      options.signal?.throwIfAborted();
       if (entered) throw error;
       performanceSpans.event("pipeline.refused", undefined, 0, true);
-      return admit(false);
+      return admit(false, error);
     }
-  });
+  }));
 }
 
 export function deliveryJournal(pipeline: Pipeline, kind: NonNullable<Pipeline["delivery"]>["journal"][number]["kind"], reason: string, conversationId: string | null = null): void {

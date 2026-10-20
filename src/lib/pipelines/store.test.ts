@@ -1034,9 +1034,10 @@ test("startup admission warns with its phase when one hold exceeds 100 ms", asyn
       await Bun.sleep(125);
     }, "fixture startup phase");
     expect(warn).toHaveBeenCalledWith("[structured hosts] state lease exceeded budget", {
+      pid: process.pid, role: expect.any(String),
       phase: "fixture startup phase", collection: "pipelines", budgetMs: 100, heldMs: expect.any(Number),
     });
-    const fields = warn.mock.calls[0]![1] as { heldMs: number };
+    const fields = warn.mock.calls.find(call => call[0] === "[structured hosts] state lease exceeded budget")![1] as { heldMs: number };
     expect(fields.heldMs).toBeGreaterThanOrEqual(100);
   } finally { warn.mockRestore(); }
 }));

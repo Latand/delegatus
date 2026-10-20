@@ -18,7 +18,7 @@ import {
   type OrchestratorSeat,
 } from "@/lib/orchestrator/seats";
 import { procBackend } from "@/lib/proc";
-import { buildPipeline, loadPipelinesForStartup, PIPELINES_SCHEMA_VERSION } from "@/lib/pipelines/store";
+import { buildPipeline, loadPipelinesForStartup, savePipelines, withPipelineMutation, PIPELINES_SCHEMA_VERSION } from "@/lib/pipelines/store";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 import { turnStateFromRecords } from "@/lib/scanner/activity";
 import { RuntimeJournal } from "@/runtime-host/journal";
@@ -6208,5 +6208,141 @@ test.each(["codex", "claude"] as const)("%s boot adoption rechecks ownership aft
       });
       expect(opened).toBe(superseded ? 0 : 1);
     } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+  }
+});
+
+
+test.each(["codex", "claude"] as const)("a contended pipeline authority adopts its %s member in the same startup pass", async engine => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-authority-"));
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = directory;
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const sessionId = engine === "codex" ? "aaaaaaaa-1111-0111-0111-aaaaaaaaaaaa" : "bbbbbbbb-2222-0222-0222-bbbbbbbbbbbb";
+  const { conversation } = addStructuredRestartConversation(registry, directory, { engine, sessionId, status: "unhosted", turn: "busy" });
+  registry.upsert({ ...registry.readOnlySnapshot().entries[`${engine}:${sessionId}`]!, pendingAction: "handoff" });
+  const role = { roleId: null, engine, model: null, effort: null, access: "read-write" as const, promptScaffold: null };
+  const pipeline = buildPipeline({ id: "authority-owner", task: "Pipeline authority", project: "fixture", repoDir: directory,
+    stages: [{ id: "build", kind: "run", prompt: "build", next: null, effectiveRole: role }],
+    srcPath: null, srcConversationId: null, now: "2026-10-19T00:00:00.000Z" });
+  registry.rememberMembership(conversation.id, { kind: "pipeline", containerId: pipeline.id, role: "builder",
+    slot: "build:1", stageId: "build", stageOrder: 0, round: 1, parentConversationId: null });
+  savePipelines([pipeline]);
+  const ready = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const writer = withPipelineMutation(async (records, persist) => {
+    ready.resolve(); await release.promise;
+    await persist(records.map(row => ({ ...row, spec: "Current pipeline authority" })));
+  });
+  await ready.promise;
+  const { stateLockWaitsInFlight } = await import("@/lib/state/lockWait");
+  const errors: unknown[][] = [];
+  const originalError = console.error;
+  console.error = (...args) => { errors.push(args); };
+  const created: string[] = [];
+  const identity = captureProcessIdentity(process.pid);
+  const ledger = createFakeDeliveryLedger();
+  const makeHost = async (id: string) => {
+    created.push(id);
+    const host = new FakeEngineHost(ledger), state = await host.health();
+    return Object.assign(host, {
+      health: async () => ({ ...state, pid: identity.pid, processStartIdentity: identity.startIdentity, sessionKey: id }),
+      setWriterFence: () => {}, onStateChange: () => () => {},
+    }) as never;
+  };
+  const dependencies: StructuredStartupDependencies = {
+    registry, client: runtimeJournalClient(journal), orchestratorSeats: () => [], refreshTranscriptState: async () => {},
+    resolveCodexOwner: () => null, resolveClaudeOwner: () => null, schedule: () => ({ unref() {} }),
+    adopt: engine === "codex"
+      ? (store, options, env, filter, processed, hooks) => adoptCodexRegistryHosts(store, options, { ...process.env, ...env, LLV_STRUCTURED_HOSTS: "1" }, filter, processed, { ...hooks, adoptHost: makeHost })
+      : async () => [],
+    adoptClaude: engine === "claude"
+      ? (store, options, env, filter, processed, hooks) => adoptClaudeRegistryHosts(store, options, { ...process.env, ...env, LLV_STRUCTURED_HOSTS: "1" }, filter, processed, { ...hooks, adoptHost: makeHost })
+      : async () => [],
+  };
+  const adoption = adoptStructuredHostsAtStartup(dependencies);
+  const result = adoption.then(value => ({ value, error: null }), error => ({ value: null, error }));
+  try {
+    const deadline = performance.now() + 5000;
+    while (!stateLockWaitsInFlight().some(wait => ["pipelines.startup-admission", "state.lease"].includes(wait.callSite) && wait.attempts > 1)) {
+      if (performance.now() >= deadline) throw new Error("startup never reached pipeline contention");
+      await new Promise<void>(resolve => setImmediate(resolve));
+    }
+    expect(created).toEqual([]);
+    release.resolve(); await writer;
+    const outcome = await result;
+    if (outcome.error) throw outcome.error;
+    expect(outcome.value?.map(item => item.key)).toEqual([{ engine, sessionId }]);
+    expect(created).toEqual([sessionId]);
+    expect(hasStructuredDeliveryHost({ engine, sessionId })).toBeTrue();
+    expect(errors.filter(args => String(args[0]).includes("pipeline registry unreadable"))).toEqual([]);
+    expect(structuredStartupDeferral()).toBeNull();
+  } finally {
+    release.resolve(); await Promise.allSettled([writer, result]);
+    console.error = originalError;
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    journal.close(); registry.close();
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
+test("a refused pass logs its process once, preserves pipeline members and adopts them after repair", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-authority-repair-"));
+  const previousState = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = directory;
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true });
+  const pipeline = buildPipeline({ id: "repair-owner", task: "Repair pipeline evidence", project: "fixture", repoDir: directory,
+    stages: [{ id: "build", kind: "run", prompt: "build", next: null, effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } }],
+    srcPath: null, srcConversationId: null, now: "2026-10-19T00:00:00.000Z" });
+  const pipelineKeys: string[] = [];
+  for (const [index, engine] of ["codex", "claude", "codex", "claude"].entries()) {
+    const sessionId = `00000000-1111-0111-0111-00000000000${index + 1}`;
+    const { conversation } = addStructuredRestartConversation(registry, directory, { engine: engine as "codex" | "claude", sessionId, status: "unhosted", turn: "busy" });
+    registry.upsert({ ...registry.readOnlySnapshot().entries[`${engine}:${sessionId}`]!, pendingAction: "handoff" });
+    if (index < 2) {
+      pipelineKeys.push(`${engine}:${sessionId}`);
+      registry.rememberMembership(conversation.id, { kind: "pipeline", containerId: pipeline.id, role: "builder",
+        slot: "build:1", stageId: "build", stageOrder: 0, round: 1, parentConversationId: null });
+    }
+  }
+  savePipelines([pipeline]);
+  const { Database } = await import("bun:sqlite");
+  const db = new Database(path.join(directory, "state.sqlite"));
+  const original = db.query("SELECT value_json FROM state_rows WHERE collection='pipelines'").get() as { value_json: string };
+  db.query("UPDATE state_rows SET value_json='{broken' WHERE collection='pipelines'").run();
+  const selected: string[] = [], scheduled: Array<() => void> = [], errors: unknown[][] = [];
+  const originalError = console.error;
+  console.error = (...args) => { errors.push(args); };
+  const select = (engine: "codex" | "claude") => async (store: AgentRegistry, _options: unknown, _env?: NodeJS.ProcessEnv, filter: StructuredHostAdoptionFilter = () => true): Promise<[]> => {
+    for (const entry of store.structuredHostEntries()) if (entry.key.engine === engine && filter(entry)) selected.push(`${entry.key.engine}:${entry.key.sessionId}`);
+    return [];
+  };
+  const dependencies = { registry, client: runtimeJournalClient(journal), orchestratorSeats: () => [], refreshTranscriptState: async () => {},
+    adopt: select("codex"), adoptClaude: select("claude"),
+    schedule: (callback: () => void) => { scheduled.push(callback); return { unref() {} }; } };
+  try {
+    await adoptStructuredHostsAtStartup(dependencies);
+    const warnings = errors.filter(args => String(args[0]).includes("pipeline registry unreadable"));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]![1]).toMatchObject({ pid: process.pid, role: expect.any(String), error: expect.stringContaining("corrupt pipelines") });
+    expect(selected.some(key => pipelineKeys.includes(key))).toBeFalse();
+    expect(new Set(structuredStartupDeferral()?.hostKeys)).toEqual(new Set(pipelineKeys));
+    db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines'").run(original.value_json);
+    expect(scheduled).toHaveLength(1);
+    scheduled.shift()!();
+    const deadline = performance.now() + 5000;
+    while (structuredStartupDeferral() !== null) {
+      if (performance.now() >= deadline) throw new Error("repaired pipeline adoption did not finish");
+      await new Promise<void>(resolve => setImmediate(resolve));
+    }
+    for (const key of pipelineKeys) expect(selected.filter(item => item === key)).toHaveLength(1);
+  } finally {
+    console.error = originalError;
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    db.close(); journal.close(); registry.close();
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+    fs.rmSync(directory, { recursive: true, force: true });
   }
 });
