@@ -102,6 +102,7 @@ export type LegacyReviewRefusalCode =
   | "implementer-read-only"
   | "unlimited-limit"
   | "limit-out-of-range"
+  | "limit-increase"
   | "stage-count"
   | "fixer-id"
   | "fixer-role"
@@ -200,7 +201,10 @@ export function previewLegacyReviewConversion(
 ): LegacyReviewPreview {
   const refusals: LegacyReviewRefusal[] = [];
   const refuse = (stageId: string | null, reviewLimit: number | null = null, implementerCandidates: string[] = []): LegacyReviewPreview => ({
-    ok: false, stageId, refusals, reviewLimit, recommendedReviewLimit: RECOMMENDED_REVIEW_LIMIT, implementerCandidates,
+    ok: false, stageId, refusals, reviewLimit,
+    recommendedReviewLimit: reviewLimit !== null && refusals.some(item => item.code === "limit-increase")
+      ? Math.min(RECOMMENDED_REVIEW_LIMIT, reviewLimit) : RECOMMENDED_REVIEW_LIMIT,
+    implementerCandidates,
   });
   const legacy = pipeline.stages.filter(isLegacyReviewLoopStage);
   let review: PipelineStage | undefined;
@@ -247,7 +251,16 @@ export function previewLegacyReviewConversion(
     refusals.push({ code: "implementer-read-only", message: `implementer ${implementer.id} is read-only and cannot fix findings` });
   }
 
-  const limit = resolveLimit(options, context);
+  const recorded = resolveLimit({}, context);
+  const requested = resolveLimit(options, context);
+  // A started gate keeps its traversed budget. Drafts and unlimited legacy
+  // gates still accept an explicitly chosen finite limit; invalid requests
+  // retain their ordinary refusal below.
+  const increase = own.length > 0 && Number.isInteger(requested.value)
+    && requested.value <= MAX_FAIL_EDGE_ROUNDS && Number.isInteger(recorded.value)
+    && recorded.value > 0 && requested.value > recorded.value;
+  const limit = increase ? recorded : requested;
+  if (increase) refusals.push({ code: "limit-increase", message: `stage ${stageId} already started with review limit ${recorded.value}; choose that limit or a lower one` });
   let reviewLimit: number | null = limit.value;
   if (limit.value === 0) {
     reviewLimit = null;

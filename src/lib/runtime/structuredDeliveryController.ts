@@ -68,7 +68,7 @@ import {
 import { structuredHostKillRefFromRegistry, terminateStructuredHostTree } from "./structuredHostControl";
 import { publishFilesRevision } from "./filesRevision";
 import { setStructuredDeliveryKick } from "./structuredDeliverySignal";
-import { deliveryRouteOf, journalVerdict, mirrorSettledReceipts, sendIsSettled, settleDueSends } from "./sendSettlement";
+import { confirmJournalDelivery, deliveryRouteOf, journalVerdict, mirrorSettledReceipts, SEND_DISCARDED_REASON, sendIsSettled, settleDueSends } from "./sendSettlement";
 import { runtimeImageCapability } from "./runtimeImageStore";
 import { noteVoiceWorkBoundary } from "./voiceViewBinding";
 import { STRUCTURED_IMAGE_CAPABILITY } from "./structuredContent";
@@ -490,13 +490,15 @@ async function reconcileTerminalDeliveries(
       try {
         if (delivery.error !== "delivery-discarded"
           && await confirmedSend(snapshot, delivery.command.operationId, true)) {
+          const confirmed = await confirmJournalDelivery(client, delivery.command.operationId);
+          if (!confirmed) return null;
           return {
             conversationId: delivery.conversationId,
             operationId: delivery.command.operationId,
-            state: "delivered" as const,
-            error: null,
-            disposition: "delivered" as const,
-            receiptOperationId: delivery.command.operationId,
+            state: confirmed.verdict.state,
+            error: confirmed.verdict.reason,
+            disposition: confirmed.verdict.disposition,
+            receiptOperationId: confirmed.operationId,
             route: null,
           };
         }
@@ -507,7 +509,7 @@ async function reconcileTerminalDeliveries(
           operationId: delivery.command.operationId,
         });
         if (!outcome) return null;
-        if (delivery.state === "failed" && outcome.state === "failed") return null;
+        if (delivery.state === "failed" && outcome.state === "failed" && outcome.error !== SEND_DISCARDED_REASON) return null;
         return outcome;
       } catch (error) {
         /* Scoped to this one delivery on purpose (#1131): a status that could

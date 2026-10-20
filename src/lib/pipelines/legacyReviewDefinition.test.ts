@@ -224,6 +224,34 @@ describe("preview", () => {
     expect(ok(previewLegacyReviewConversion(pipeline, { reviewLimit: unlimited.recommendedReviewLimit }, { flowRoundLimit: 0 })).reviewLimit).toBe(3);
   });
 
+  test.each([1, 3])("a started review with requested limit %i keeps or lowers its recorded budget", (requested) => {
+    const pipeline = definition([run("build", "review"), review("review", null)], { review: [attempt(1)] });
+    const preview = ok(previewLegacyReviewConversion(pipeline, { reviewLimit: requested }, { flowRoundLimit: 3 }));
+    expect(preview.reviewLimit).toBe(requested);
+    expect(preview.reviewLimitSource).toBe("request");
+    expect(preview.stages.find((stage) => stage.id === "review")!.onFail!.maxRounds).toBe(requested);
+  });
+
+  test("a higher limit for a started review is refused with its recorded budget", () => {
+    const pipeline = definition([run("build", "review"), review("review", null)], { review: [attempt(1)] });
+    const before = JSON.stringify(pipeline);
+    const preview = refused(previewLegacyReviewConversion(pipeline, { reviewLimit: 7 }, { flowRoundLimit: 3 }));
+    expect(preview.reviewLimit).toBe(3);
+    expect(preview.refusals.map(item => item.code)).toEqual(["limit-increase"]);
+    expect(JSON.stringify(pipeline)).toBe(before);
+    expect(refused(previewLegacyReviewConversion(pipeline, { reviewLimit: 7 }, { flowRoundLimit: 2 })).recommendedReviewLimit).toBe(2);
+  });
+
+  test("a started review without a recorded limit keeps the legacy default; unlimited reviews still accept a finite limit", () => {
+    const pipeline = definition([run("build", "review"), review("review", null)], { review: [attempt(1)] });
+    expect(refused(previewLegacyReviewConversion(pipeline, { reviewLimit: 7 })).reviewLimit).toBe(3);
+    expect(ok(previewLegacyReviewConversion(pipeline, { reviewLimit: 7 }, { flowRoundLimit: 0 })).reviewLimit).toBe(7);
+    expect(ok(previewLegacyReviewConversion(pipeline, { reviewLimit: 3 }, { flowRoundLimit: 2.5 })).reviewLimit).toBe(3);
+    for (const requested of [0, 2.5, 12]) {
+      expect(previewLegacyReviewConversion(pipeline, { reviewLimit: requested }, { flowRoundLimit: 3 }).ok).toBe(false);
+    }
+  });
+
   test("a stage with an unsettled legacy attempt is live and refused", () => {
     const pipeline = definition([run("build", "review"), review("review", null)], { review: [attempt(1, { state: "reviewing", completedAt: null, verdict: null })] }, { state: "running" });
     expect(refused(previewLegacyReviewConversion(pipeline, {})).refusals.map((refusal) => refusal.code)).toEqual(["stage-live"]);
