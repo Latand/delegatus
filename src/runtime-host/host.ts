@@ -332,7 +332,8 @@ export class RuntimeHost {
         if (!Array.isArray(operationIds) || operationIds.some((operationId) => typeof operationId !== "string" || !operationId)) {
           throw new Error("runtime projection acknowledgement ids are invalid");
         }
-        result = this.journal.acknowledgeTerminalProjection(operationIds as string[]);
+        result = await withViewerOperation("runtime.rpc", () =>
+          this.journal.acknowledgeTerminalProjectionAsync(operationIds as string[], options.signal));
       } else if (request.method === "viewer-deployment-request") {
         if (!this.deployments) throw new Error("viewer deployments are disabled");
         result = await this.deployments.requestViewerDeployment({

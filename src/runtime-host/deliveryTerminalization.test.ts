@@ -145,7 +145,7 @@ test("canonical confirmation cannot reopen a cancelled migration or acknowledge 
   }
 });
 
-for (const method of ["operation-delivery-action", "operation-transition"] as const) {
+for (const method of ["operation-delivery-action", "operation-transition", "operation-projection-ack"] as const) {
   test(`${method} yields under a real SQLite writer lock and commits after release`, async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-writer-"));
     const filename = path.join(directory, "runtime.sqlite");
@@ -166,16 +166,19 @@ for (const method of ["operation-delivery-action", "operation-transition"] as co
     const client = new UnixRuntimeHostClient(endpoint);
     const pending = method === "operation-delivery-action"
       ? client.claimDeliveryAction(operationId, "discard")
-      : client.transitionOperation(operationId, "failed", { reason: "delivery-discarded" }, { fromStatuses: ["queued"] });
+      : method === "operation-transition"
+        ? client.transitionOperation(operationId, "failed", { reason: "delivery-discarded" }, { fromStatuses: ["queued"] })
+        : client.acknowledgeTerminalProjection([operationId]);
     try {
       await entered.promise;
       expect(stateLockWaitsInFlight().some(wait => wait.callSite === (method === "operation-delivery-action"
-        ? "runtime.delivery-action" : "runtime.delivery-transition"))).toBe(true);
+        ? "runtime.delivery-action" : method === "operation-transition" ? "runtime.delivery-transition" : "runtime.delivery-projection"))).toBe(true);
       expect(journal.operationResult(operationId)?.receipt.status).toBe("queued");
       peer.exec("COMMIT");
       locked = false;
       await pending;
-      expect(journal.operationResult(operationId)?.receipt).toMatchObject({ status: "failed", reason: "delivery-discarded" });
+      expect(journal.operationResult(operationId)?.receipt).toMatchObject(method === "operation-projection-ack"
+        ? { status: "queued" } : { status: "failed", reason: "delivery-discarded" });
     } finally {
       if (locked) peer.exec("ROLLBACK");
       await pending.catch(() => {});
@@ -195,7 +198,7 @@ for (const method of ["operation-delivery-action", "operation-transition"] as co
       seed(journal);
       peer.exec("BEGIN IMMEDIATE");
       pending = new RuntimeHost(journal).handle({ id: "cancel-writer", method, params: {
-        operationId, action: "discard", status: "failed", details: { reason: "delivery-discarded" }, fromStatuses: ["queued"],
+        operationId, operationIds: [operationId], action: "discard", status: "failed", details: { reason: "delivery-discarded" }, fromStatuses: ["queued"],
       } }, { signal: abort.signal });
       expect(stateLockWaitsInFlight().some(wait => wait.callSite.startsWith("runtime.delivery-"))).toBe(true);
       abort.abort(new Error("fixture admission cancelled"));
@@ -211,6 +214,62 @@ for (const method of ["operation-delivery-action", "operation-transition"] as co
     }
   }, 15_000);
 }
+
+test("a queued discard retains its terminal receipt until projection is acknowledged after restart", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-discard-retention-"));
+  const filename = path.join(directory, "runtime.sqlite");
+  const journal = new RuntimeJournal(filename, { structuredHosts: true, now: () => now });
+  let reopened: RuntimeJournal | undefined;
+  try {
+    seed(journal);
+    journal.transitionOperation(operationId, "failed", { reason: "delivery-discarded" }, { fromStatuses: ["queued"] });
+    expect(journal.unprojectedTerminalOperationIds()).toEqual([operationId]);
+    journal.close();
+    reopened = new RuntimeJournal(filename, { structuredHosts: true, now: () => now });
+    expect(reopened.unprojectedTerminalOperationIds()).toEqual([operationId]);
+    expect(reopened.acknowledgeTerminalProjection([operationId])).toBe(1);
+    expect(reopened.unprojectedTerminalOperationIds()).toEqual([]);
+  } finally { reopened?.close(); journal.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+for (const initial of ["queued", "uncertain"] as const) test(`HTTP discard releases ${initial} receipt retention after its registry projection`, async () => {
+  const { handleRuntimeDiscard } = await import("@/lib/runtime/http");
+  const { NextRequest } = await import("next/server");
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-http-projection-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off", now: () => now });
+  const conversation = registry.ensureConversation("codex", path.join(directory, "recipient.jsonl"), null);
+  const held = registry.holdDelivery(conversation.id, "deliver once", "terminalization-key", "text", [], null,
+    { operationId, kind: "send", policy: "queue" });
+  registry.beginDeliveryAttempt(held.id, held.generationId!);
+  const journal = new RuntimeJournal(path.join(directory, "runtime.sqlite"), { structuredHosts: true, now: () => now });
+  seed(journal, conversation.id);
+  if (initial === "uncertain") {
+    journal.transitionOperation(operationId, "delivering");
+    journal.transitionOperation(operationId, "uncertain");
+  }
+  const host = new RuntimeHost(journal);
+  let reasonAtAcknowledgement: string | null = null;
+  const endpoint = testEndpoint(directory, "projected");
+  const server = serveRuntimeHost(endpoint, { handle: (request, options) => {
+    if (request.method === "operation-projection-ack") {
+      reasonAtAcknowledgement = registry.readOnlySnapshot().heldDeliveries[held.id]?.error ?? null;
+    }
+    return host.handle(request, options);
+  } });
+  await new Promise<void>((resolve, reject) => { server.once("listening", resolve); server.once("error", reject); });
+  const client = new UnixRuntimeHostClient(endpoint);
+  try {
+    const response = await handleRuntimeDiscard(new NextRequest("http://127.0.0.1/api/runtime/operations/terminalization-send", {
+      method: "DELETE", headers: { host: "127.0.0.1" },
+    }), operationId, { enabled: () => true, registry: () => registry, client: () => client, kick: () => {} });
+    expect(response.status).toBe(200);
+    expect(reasonAtAcknowledgement).toBe("delivery-discarded");
+    expect(journal.unprojectedTerminalOperationIds()).toEqual([]);
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    registry.close(); journal.close(); fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test("discard wins after a queue read and fences dispatch and late acknowledgement", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-cancel-"));

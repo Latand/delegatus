@@ -1253,7 +1253,7 @@ export class RuntimeJournal {
          COALESCE, so a later transition can never silently release an
          obligation an earlier one took. */
       this.db.query("UPDATE operations SET receipt_json = ?, event_seq = ?, projection_pending = COALESCE(?, projection_pending) WHERE operation_id = ?")
-        .run(stableJson(committed), event.seq, completing && options.awaitProjection === true ? this.now() : null, operationId);
+        .run(stableJson(committed), event.seq, completing && (options.awaitProjection === true || discarding) ? this.now() : null, operationId);
       if (completing || nativeTransition?.phase === "acknowledged" || nativeTransition?.phase === "observed-queued" || nativeTransition?.phase === "proven") this.db.query("UPDATE outbox SET state = 'completed', payload_json = '{}' WHERE id = ?").run(`effect:${operationId}`);
       if (killBoundary) {
         this.retainStopBoundary(command, committed, killBoundary.event_seq);
@@ -2238,6 +2238,22 @@ export class RuntimeJournal {
       `UPDATE operations SET projection_pending = NULL
        WHERE projection_pending IS NOT NULL AND operation_id IN (${operationIds.map(() => "?").join(", ")})`,
     ).run(...operationIds).changes;
+  }
+
+  async acknowledgeTerminalProjectionAsync(operationIds: readonly string[], signal?: AbortSignal): Promise<number> {
+    this.assertHealthy();
+    const ids = [...operationIds];
+    if (ids.length === 0) return 0;
+    return this.deliveryTransaction("runtime.delivery-projection", () => {
+      try {
+        const acknowledged = this.acknowledgeTerminalProjection(ids);
+        this.db.exec("COMMIT");
+        return acknowledged;
+      } catch (error) {
+        try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+        throw error;
+      }
+    }, signal);
   }
 
   /** The receipts compaction is holding for an unacknowledged projection, newest

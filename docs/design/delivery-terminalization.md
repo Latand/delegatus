@@ -3,17 +3,19 @@
 `RuntimeJournal.claimDeliveryAction` arbitrates retry and discard inside one
 `BEGIN IMMEDIATE` transaction. A discard winner commits the failed receipt
 with `delivery-discarded`, completes its effect, and retains the receipt until
-the Viewer acknowledges its reservation projection. A repeated claim returns
+the Viewer acknowledges its reservation projection. Queued discards retain that
+obligation even when their caller did not request it. The discard route
+acknowledges only after its registry projection is durable. A repeated claim returns
 the same winner and repairs a claim-only discard left by an older release.
 An operation already handing input to the engine refuses discard. The original
 operation remains the delivery identity throughout recovery.
 
-The socket's action and receipt-transition handlers acquire the SQLite writer
+The socket's action, receipt-transition and projection-acknowledgement handlers acquire the SQLite writer
 through `waitForStateLock`, with a single five-second deadline and the request's
 abort signal. `stateLockAttempt` covers only `BEGIN IMMEDIATE`; the admitted
 transaction commits or rolls back without yielding and its body is never
 retried. The loop monitor names the RPC and the admission origins
-`runtime.delivery-action` and `runtime.delivery-transition`.
+`runtime.delivery-action`, `runtime.delivery-transition` and `runtime.delivery-projection`.
 
 The action's producers are `handleRuntimeDiscard`, `handleRuntimeRetry`, and
 the journal's retry path. `RuntimeHost` and `UnixRuntimeHostClient` carry that
