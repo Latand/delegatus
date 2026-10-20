@@ -665,6 +665,9 @@ export type PipelineStageAttempt = {
       without this count left behind starts it past every id that engine
       could have spent (#1678 review 3). */
   spawnCalls?: number;
+  /** Proven fenced first messages replaced in this attempt. Retained across
+      successful spawn handshakes and controller restarts; at most three. */
+  fencedMessageRetries?: number;
   /** After a privacy revision conflict, require two stable revision
       observations across persisted ticks before composing again. */
   roleMemoryWait?: { revision: string; observations: number; retryAfter: string; ready?: boolean };

@@ -141,6 +141,20 @@ A terminal parser miss starts up to three durable evaluations. Identical evidenc
 
 A stage spawn that fails after it reserved a launch consults the launch receipt before anything else. When the runtime host was unreachable or the account mutation lock was busy and the receipt has settled `failed` (the spawn layer's own retry-safe verdict), the engine claims that receipt for retry, retires the launch onto the attempt's `retiredLaunches`, and re-activates the same attempt on a bounded wall-clock wait with backoff: 30 seconds for a busy account, 10 minutes for an unreachable runtime host. While it waits the pipeline reads `stage spawn deferred: … ; retry at <time>`; exhaustion parks with the rounds, the seconds spent and the last failure. One wait keeps the largest budget any of its rounds asked for, so a busy-lock sighting a minute into a runtime-host outage does not end the host's ten minutes early, and every spawn call of the attempt, immediate handshake retries and retired launches included, consumes its own launch identity, counted before the call is made so that a call a restart interrupts keeps its identity away from the retry that follows. An attempt the engine before this count left waiting or mid-spawn resumes past every identity that engine could have spent: its booked rounds plus one activation's three calls. A receipt in any other state is a launch whose fate the engine cannot vouch for: nothing is re-dispatched, the attempt parks, and a receipt that completes after all is adopted by the next tick. A failed receipt that had staged a session identity for a read-write stage is not re-dispatched either, because the engine host may have edited the worktree before it was killed: the attempt parks naming `retry-stage`, whose reset runs first. A spawn a restart interrupted takes the same rule, with the budget starting at the recovering process's first sighting; a wait persisted from before the restart keeps its own start and its exhaustion still counts every round.
 
+A first message fenced by the delivery journal as never executed gets up to
+three automatic replacement launches in the same stage attempt, after 1, 5 and
+15 seconds. Delegatus verifies the original message's operation, conversation,
+key and terminal non-execution reason before claiming its launch and after
+stopping its recorded host. A retry leaf, uncertain result, missing journal or
+changed generation authorizes no resend. The attempt's `fencedMessageRetries`
+counter survives controller restarts and successful spawn handshakes;
+`retiredLaunches` records each replacement and `controllerWait.retryAfter`
+records its next wake. A dispatch interrupted by a controller restart retains
+the existing activation key and adopts its receipt. Exhaustion parks with the
+retry count and delivery reason. Manual `retry-stage` starts a new attempt.
+This recovery preserves the worktree and uses the ordinary stage admission
+queue. It adds no timeout to an active stage turn.
+
 A staged launch with no native turn gets a ten-minute recovery window, with at
 most 16 checks and persisted backoff. If controller downtime consumes the window
 before any check runs, the first real check opens a fresh window. At exhaustion,

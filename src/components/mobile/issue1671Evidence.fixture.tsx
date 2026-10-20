@@ -1287,6 +1287,25 @@ const telegramBot = BOT_SCENE === "typed"
   }
   : { connected: false, bot: null, receiving: "stopped", lastUpdateAt: null, lastCheckedAt: null, chats: [], limits: [] };
 
+/* Several connected bots, shown through the existing Telegram panel. */
+const multiBots = [
+  { name: "Atlas Reports", username: "atlas_reports_bot", receiving: true, tokenState: "ok" },
+  { name: "Release Helper", username: "release_fixture_bot", receiving: false, tokenState: "ok" },
+];
+if (BOT_SCENE?.startsWith("multi-")) {
+  const bots = BOT_SCENE === "multi-one" ? multiBots.slice(0, 1) : multiBots;
+  const refused = BOT_SCENE === "multi-refused";
+  const kicked = BOT_SCENE === "multi-kicked" || refused;
+  const chatBots = bots.map((b, index) => ({ name: b.name, username: b.username, assigned: false,
+    member: !(refused || (kicked && index === 0)), status: refused || (kicked && index === 0) ? "kicked" : "administrator",
+    canPost: !(refused || (kicked && index === 0)), canSendPhotos: true, canSendDocuments: true, canManageTopics: true,
+    reason: refused || (kicked && index === 0) ? "bot_not_in_chat" : null, checkedAt: "2026-10-20T12:00:00Z" }));
+  Object.assign(telegramBot, { connected: true, bot: { name: bots[0]!.name, username: bots[0]!.username, canReadAllGroupMessages: false, canJoinGroups: true }, bots,
+    receiving: "webhook_elsewhere", lastUpdateAt: null, lastCheckedAt: "2026-10-20T12:00:00Z",
+    chats: [botChat({ alias: "team-reports", postAllowed: true, postable: !refused, member: !refused, bots: chatBots, assignedBot: null,
+      lastDelivery: refused ? { state: "refused", at: "2026-10-20T12:00:00Z", refusals: bots.map(b => ({ bot: { name: b.name, username: b.username }, code: "forbidden", reason: "Removed from chat", source: "send", at: "2026-10-20T12:00:00Z" })) } : null })] });
+}
+
 /* Each project's report destination (orchestrator-reports §5.6.1), keyed by
    project: `atlas` never chose, and two invented projects with seats, one
    posting to the team group and one never chosen. */
@@ -1836,11 +1855,20 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   if (url.pathname === "/api/telegram/bot" && method === "POST") {
     const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
-    evidence.botPosts.push(body);
+    evidence.botPosts.push({ ...body, ...(body.token ? { token: "[redacted]" } : {}) });
     const row = (telegramBot.chats as Array<Record<string, unknown>>).find((entry) => entry.chatId === body.chatId);
     if (body.action === "chat" && row) {
       const alias = typeof body.alias === "string" && body.alias !== "" ? body.alias : null;
       Object.assign(row, { alias, postAllowed: alias !== null && body.postAllowed === true, postable: alias !== null && body.postAllowed === true });
+    }
+    if (["add_bot", "remove_bot", "chat_bot"].includes(String(body.action))) {
+      const state = telegramBot as unknown as { bots: typeof multiBots; chats: Array<Record<string, unknown>> };
+      if (body.action === "add_bot") state.bots = [...multiBots];
+      if (body.action === "remove_bot") state.bots = state.bots.filter(b => b.username !== body.bot);
+      for (const chat of state.chats) {
+        if (body.action === "chat_bot" && row === chat) chat.assignedBot = body.bot;
+        chat.bots = state.bots.map(b => ({ ...b, member: true, status: "administrator", canPost: true, canSendPhotos: true, canSendDocuments: true, canManageTopics: true, assigned: chat.assignedBot === b.username, reason: null, checkedAt: "2026-10-20T12:00:00Z" }));
+      }
     }
     /* A chat added by id: Telegram's getChat named it, with no update read. */
     if (body.action === "add") {
