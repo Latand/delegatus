@@ -174,6 +174,24 @@ test("without buildx imagetools the verifier checks the same three tags with doc
   expect(calls.filter(c => c.startsWith("docker buildx")).length).toBe(1);
 });
 
+test("once a later buildx tag fails, all tags use manifest inspect output for digest comparison", async () => {
+  const calls: string[] = []; let buildxReads = 0;
+  const ports = imagePorts(args => {
+    if (args[0] === "buildx") {
+      buildxReads++;
+      if (buildxReads === 1) return JSON.stringify({ manifests: [platform("amd64"), platform("arm64")] });
+      throw new Error("buildx failed for a later tag");
+    }
+    if (args[0] === "manifest" && args[1] === "inspect") return pretty(["amd64", "arm64"]);
+    throw new Error("unexpected docker command");
+  }, calls);
+
+  expect(await verifyRelease("v1.2.0", null, ports)).toEqual({ errors: [] });
+  expect(calls.filter(c => c.startsWith("docker manifest inspect "))).toEqual(
+    ["1.2", "1.2.0", "latest"].map(t => `docker manifest inspect ghcr.io/example/project:${t}`),
+  );
+});
+
 test("the manifest inspect fallback still refuses a missing platform and differing tag digests", async () => {
   const missing = await verifyRelease("v1.2.0", null, imagePorts(args => {
     if (args[0] === "buildx") throw new Error("buildx missing");
@@ -185,6 +203,13 @@ test("the manifest inspect fallback still refuses a missing platform and differi
     return pretty(args[2].endsWith(":latest") ? ["amd64", "arm64", "s390x"] : ["amd64", "arm64"]);
   }, []));
   expect(differing.errors).toContain("Docker tags/digest/platforms not verified");
+  const digestMismatch = await verifyRelease("v1.2.0", null, imagePorts(args => {
+    if (args[0] === "buildx") throw new Error("buildx missing");
+    return args[2].endsWith(":latest")
+      ? JSON.stringify({ manifests: [platform("amd64"), platform("arm64")], annotations: { version: "different" } }, null, 3)
+      : pretty(["amd64", "arm64"]);
+  }, []));
+  expect(digestMismatch.errors).toContain("Docker tags/digest/platforms not verified");
 });
 
 test("a tag that neither inspector can read fails with both causes", async () => {
