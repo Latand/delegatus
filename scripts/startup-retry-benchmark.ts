@@ -91,6 +91,18 @@ export async function measureStartupRetries(source?: string) {
   }
 }
 
+export function countAttributedWarningRecords(output: string, prefix: string, pid: number, role: string): { total: number; attributed: number } {
+  const records = output.split(/\r?\n/).filter(line => line.startsWith(`${prefix} `));
+  let attributed = 0;
+  for (const line of records) {
+    try {
+      const payload = JSON.parse(line.slice(prefix.length + 1)) as { pid?: unknown; role?: unknown };
+      if (payload.pid === pid && payload.role === role) attributed++;
+    } catch { /* A split or malformed warning is an unattributed record. */ }
+  }
+  return { total: records.length, attributed };
+}
+
 /** Rehearse a built Next server's boot and restart with identical synthetic
  * history and a short revision writer. Run from the build's scratch export.
  * No runtime socket or account home is inherited by the server or writer. */
@@ -106,7 +118,7 @@ export async function measurePipelineAuthorityRestarts() {
   }
   process.env.LLV_STATE_DIR = env.LLV_STATE_DIR;
   const rows: Array<{ generation: number; unreadable: number; syntheticUnavailable: number; leaseBudget: number;
-    loopGap: number; performanceSummary: number; writer: { writes: number; busy: number }; attributedRefusals: number }> = [];
+    loopGap: number; performanceSummary: number; writer: { writes: number; busy: number }; attributedRefusals: number; attributedLeaseBudget: number }> = [];
   try {
     const [{ AgentRegistry }, { emptyLaunchProfile }, { buildPipeline, savePipelines }] = await Promise.all([
       import("@/lib/agent/registry"), import("@/lib/accounts/migration/contracts"), import("@/lib/pipelines/store"),
@@ -187,13 +199,17 @@ export async function measurePipelineAuthorityRestarts() {
           await writerDone;
         } finally { clearTimeout(timer); }
         const count = (text: string) => output.split(text).length - 1;
-        const refusals = output.split("[structured hosts] pipeline registry unreadable").slice(1);
+        const refusalRecords = countAttributedWarningRecords(output, "[structured hosts] pipeline registry unreadable; deferring pipeline adoption", server!.pid!, "viewer");
+        const leaseRecords = countAttributedWarningRecords(output, "[structured hosts] state lease exceeded budget", server!.pid!, "viewer");
         const writerCounts = JSON.parse(writerOutput.trim().split("\n").at(-1)!) as { writes: number; busy: number };
         if (!(writerCounts.writes > 0) || !output.includes('phase: "ready"')) throw new Error("startup or concurrent writes did not complete");
-        rows.push({ generation, unreadable: refusals.length, syntheticUnavailable: count("pipeline admission authority is unavailable"),
+        if (refusalRecords.attributed !== refusalRecords.total || leaseRecords.attributed !== leaseRecords.total) {
+          throw new Error(`warning attribution mismatch in generation ${generation}: refusal ${refusalRecords.attributed}/${refusalRecords.total}, lease ${leaseRecords.attributed}/${leaseRecords.total}`);
+        }
+        rows.push({ generation, unreadable: refusalRecords.total, syntheticUnavailable: count("pipeline admission authority is unavailable"),
           leaseBudget: count("[structured hosts] state lease exceeded budget"), loopGap: count("[viewer loop-gap]"), performanceSummary: count("[performance summary]"),
           writer: writerCounts,
-          attributedRefusals: refusals.filter(line => /pid: \d+/.test(line.slice(0, 300)) && /role: ["']viewer["']/.test(line.slice(0, 300))).length });
+          attributedRefusals: refusalRecords.attributed, attributedLeaseBudget: leaseRecords.attributed });
       } finally {
         clearTimeout(writerDeadline);
         if (server) await stopFixtureProcess(server);

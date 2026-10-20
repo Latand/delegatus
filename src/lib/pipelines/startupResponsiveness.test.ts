@@ -9,7 +9,7 @@ import { once } from "node:events";
 import { spawn } from "node:child_process";
 
 import { buildPipeline, loadPipelinesForStartup, loadPipelinesForStartupAsync, loadPipelineOwnershipForStartupAsync, pipelineRegistryHealth, pipelineRegistryHealthAsync, savePipelines, withPipelineMutation, withPipelineStartupAdmission } from "./store";
-import { StateLockDeferredError, stateLockWaitsInFlight, waitForStateLock } from "@/lib/state/lockWait";
+import { StateLockDeferredError, stateLockProcessKind, stateLockWaitsInFlight, waitForStateLock } from "@/lib/state/lockWait";
 import { createViewerLoopMonitor } from "@/lib/viewerLoopMonitor";
 
 const original = process.env.LLV_STATE_DIR;
@@ -98,7 +98,12 @@ test("durable hold measurement includes time before the first await continuation
     expect(await pending).toBeTrue();
     expect(heldMs).toBeGreaterThan(1000);
     expect(lines).toContainEqual(["[state lease-hold]", expect.objectContaining({ collection: "pipelines", operation: "pipelines.startup-admission", heldMs: expect.any(Number) })]);
-    expect(lines).toContainEqual(["[structured hosts] state lease exceeded budget", expect.objectContaining({ pid: process.pid, role: expect.any(String), phase: "reconciling structured hosts" })]);
+    const warning = lines.map(([message]) => String(message))
+      .find(message => message.startsWith("[structured hosts] state lease exceeded budget "))!;
+    expect(warning).toBeDefined();
+    expect(warning).not.toMatch(/[\r\n]/);
+    expect(JSON.parse(warning.slice("[structured hosts] state lease exceeded budget ".length)))
+      .toMatchObject({ pid: process.pid, role: process.env.LLV_STATE_OWNER ?? stateLockProcessKind(), phase: "reconciling structured hosts" });
   } finally { release.resolve(); await pending; console.warn = warn; }
 });
 

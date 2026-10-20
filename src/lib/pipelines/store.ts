@@ -1830,10 +1830,10 @@ export async function withPipelineStartupAdmission<T>(
               finally { scope.current = null; }
             }));
           }, 0, heldMs => {
-            if (heldMs > 100) console.warn("[structured hosts] state lease exceeded budget", {
+            if (heldMs > 100) console.warn(`[structured hosts] state lease exceeded budget ${JSON.stringify({
               pid: process.pid, role: process.env.LLV_STATE_OWNER ?? stateLockProcessKind(),
               phase, collection: "pipelines", heldMs: Math.round(heldMs), budgetMs: 100,
-            });
+            })}`);
             observeHold?.(heldMs);
           });
         } catch (error) {

@@ -21,6 +21,7 @@ import { procBackend } from "@/lib/proc";
 import { buildPipeline, loadPipelinesForStartup, savePipelines, withPipelineMutation, PIPELINES_SCHEMA_VERSION } from "@/lib/pipelines/store";
 import { captureProcessIdentity } from "@/lib/processIdentity";
 import { turnStateFromRecords } from "@/lib/scanner/activity";
+import { stateLockProcessKind } from "@/lib/state/lockWait";
 import { RuntimeJournal } from "@/runtime-host/journal";
 import { activateViewerRuntimeWhenCurrent, runStructuredHostStartup } from "@/lib/viewerInstrumentation";
 
@@ -6326,7 +6327,12 @@ test("a refused pass logs its process once, preserves pipeline members and adopt
     await adoptStructuredHostsAtStartup(dependencies);
     const warnings = errors.filter(args => String(args[0]).includes("pipeline registry unreadable"));
     expect(warnings).toHaveLength(1);
-    expect(warnings[0]![1]).toMatchObject({ pid: process.pid, role: expect.any(String), error: expect.stringContaining("corrupt pipelines") });
+    expect(warnings[0]).toHaveLength(1);
+    const warning = String(warnings[0]![0]);
+    expect(warning).not.toMatch(/[\r\n]/);
+    expect(warning.startsWith("[structured hosts] pipeline registry unreadable; deferring pipeline adoption ")).toBeTrue();
+    expect(JSON.parse(warning.slice("[structured hosts] pipeline registry unreadable; deferring pipeline adoption ".length)))
+      .toMatchObject({ pid: process.pid, role: process.env.LLV_STATE_OWNER ?? stateLockProcessKind(), error: expect.stringContaining("corrupt pipelines") });
     expect(selected.some(key => pipelineKeys.includes(key))).toBeFalse();
     expect(new Set(structuredStartupDeferral()?.hostKeys)).toEqual(new Set(pipelineKeys));
     db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines'").run(original.value_json);

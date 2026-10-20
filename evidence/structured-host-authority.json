@@ -1,5 +1,5 @@
 {
-  "recordedAtUtc": "2026-10-20T04:43:10.789262Z",
+  "recordedAtUtc": "2026-10-20T06:04:05Z",
   "runtime": "bun 1.4.0",
   "command": "bash \"$GATE_SLOT\" bun scripts/startup-retry-benchmark.ts --authority-restarts",
   "conditions": {
@@ -46,9 +46,10 @@
   },
   "candidate": {
     "sourceSha256": {
-      "src/lib/pipelines/store.ts": "ea39099ab3f043ec119650d7dd019146c910adceb80ef9a5fa63e526907949b8",
-      "src/lib/runtime/startup.ts": "98f14404289d1bcaea2cf64d9806a71d1e584019ecad8d74558bd2725d8bdef8",
-      "src/lib/state/lockWait.ts": "5cd2b382256777595d09d1aa5eb679bd78c1c3e4ddef9daa1445170aaa20912d"
+      "src/lib/pipelines/store.ts": "24142d6078b5409e73ba1eee40bf4604b774d56d479a73539bf29d8f6138159b",
+      "src/lib/runtime/startup.ts": "5d565933f071894e3925abb0df42c1e3af9d4fa861405b93f17071b46fe03d1b",
+      "src/lib/state/lockWait.ts": "5cd2b382256777595d09d1aa5eb679bd78c1c3e4ddef9daa1445170aaa20912d",
+      "scripts/startup-retry-benchmark.ts": "0ab0645169ae443b655cd2cc7a705ea599e0499ff47bd8e096e7e252bcac50db"
     },
     "rows": [
       {
@@ -59,10 +60,11 @@
         "loopGap": 2,
         "performanceSummary": 1,
         "writer": {
-          "writes": 1325,
-          "busy": 253
+          "writes": 1384,
+          "busy": 192
         },
-        "attributedRefusals": 0
+        "attributedRefusals": 0,
+        "attributedLeaseBudget": 0
       },
       {
         "generation": 2,
@@ -72,13 +74,14 @@
         "loopGap": 0,
         "performanceSummary": 1,
         "writer": {
-          "writes": 1503,
-          "busy": 76
+          "writes": 1478,
+          "busy": 90
         },
-        "attributedRefusals": 0
+        "attributedRefusals": 0,
+        "attributedLeaseBudget": 0
       }
     ]
   },
-  "driverSha256": "36dd1721d649f23af6f4870c5ffcc53122524f60b62ce287d4574dbf6f2233ca",
-  "scope": "Reconciliation warning counts from isolated production Next builds."
+  "driverSha256": "0ab0645169ae443b655cd2cc7a705ea599e0499ff47bd8e096e7e252bcac50db",
+  "scope": "Reconciliation warning counts from isolated production Next builds; every emitted warning record must carry its generation's PID and role on the same line."
 }

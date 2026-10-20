@@ -1813,10 +1813,10 @@ function deferredPipelineStartupEvidence(registry: AgentRegistry): PipelineStart
 }
 
 function reportPipelineStartupRefusal(error: unknown): void {
-  console.error("[structured hosts] pipeline registry unreadable; deferring pipeline adoption", {
+  console.error(`[structured hosts] pipeline registry unreadable; deferring pipeline adoption ${JSON.stringify({
     pid: process.pid, role: process.env.LLV_STATE_OWNER ?? stateLockProcessKind(),
     error: error instanceof Error ? error.message : String(error),
-  });
+  })}`);
 }
 
 /** Pipeline attempts and frozen close hosts determine whether startup may create another writer.

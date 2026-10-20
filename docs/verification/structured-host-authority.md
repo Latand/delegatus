@@ -70,7 +70,10 @@ five milliseconds for eight seconds at each boot. No runtime socket, account
 home or engine process is inherited. Writer commits and busy refusals are
 reported separately; these measurements make no latency or CPU claim.
 
-The driver counts complete warning prefixes, synthetic unavailable messages,
+The driver parses each warning's own physical line as JSON and requires the
+payload PID to equal the writing server generation's PID and its role to be
+`viewer`. A missing, split or malformed attribution refuses the measurement.
+It also counts complete warning prefixes, synthetic unavailable messages,
 lease-budget warnings, loop-gap records and performance summaries. It refuses
 missing startup completion, a failed writer, zero committed writes or truncated
 output. The adjacent tests drive both production adopters through host claim
@@ -113,8 +116,12 @@ source hashes and the shared driver's hash identify the measured inputs.
 
 The old synthetic unavailable-message counts are also 70 and 3 before, and
 zero in both candidate generations. Committed writer updates were 1,336 and
-1,528 before, and 1,325 and 1,503 after. Busy writer attempts were 241 and 48
-before, and 253 and 76 after. The writer schedule and input data were identical;
+1,528 before, and 1,384 and 1,478 after. Busy writer attempts were 241 and 48
+before, and 192 and 90 after. The writer schedule and input data were identical;
 the record retains actual commits and refusals for each generation. Both
 builds reached structured-startup ready on both boots. These are controlled
 reconciliation counts; they establish no production latency or CPU gain.
+The candidate run rechecked the one-line attribution gate; it emitted no
+refusal or lease-budget warnings, so the corresponding attributed counts were
+0/0 in both generations. The direct logger tests exercise emitted warning
+records and require the current process PID and role in each line.
