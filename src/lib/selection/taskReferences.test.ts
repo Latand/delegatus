@@ -134,10 +134,10 @@ test("the seat reads one plain line per task, and the history row can take them 
   expect(stripTaskReferencePrelude("plain", undefined)).toBe("plain");
 });
 
-test("the task reference survives delivery: the durable record the seat's turn names returns it", () => {
+test("the task reference survives delivery: the durable record the seat's turn names returns it", async () => {
   const ref = withSelectedTasks(selected(), [{ id: TASK_A, title: "Fix the mobile board" }]);
   const text = `${taskReferencePrelude(ref.tasks)}\nStart this one.`;
-  const wire = encodeCodexStructuredUserText(text, undefined, ref, { kind: "operator" }, "a".repeat(64));
+  const wire = await encodeCodexStructuredUserText(text, undefined, ref, { kind: "operator" }, "a".repeat(64));
   expect(wire.split("\n")[0]).toMatch(/^<!-- llv:structured-user ctx=\S+ -->$/);
   /* The marker is a handle; the typed reference lives on the record behind it. */
   expect(wire.split("\n")[0]).not.toContain(TASK_A);
@@ -147,15 +147,15 @@ test("the task reference survives delivery: the durable record the seat's turn n
   expect(decoded.text).toContain(TASK_A);
 });
 
-test("a conversation-only reference still delivers and decodes as before", () => {
+test("a conversation-only reference still delivers and decodes as before", async () => {
   const ref = selected();
-  const wire = encodeCodexStructuredUserText("Look at that one.", undefined, ref, { kind: "operator" }, "b".repeat(64));
+  const wire = await encodeCodexStructuredUserText("Look at that one.", undefined, ref, { kind: "operator" }, "b".repeat(64));
   expect(decodeCodexStructuredUserText(wire).selectedContext).toEqual(ref);
 });
 
 const IDENTIFIER_TITLE = "request_attention: the target blinks, intent open opens the conversation (#1696) in __init__.py";
 
-test("a chip's title keeps identifiers: `_` and `#` reach the reference line, the record and the history", () => {
+test("a chip's title keeps identifiers: `_` and `#` reach the reference line, the record and the history", async () => {
   const title = taskChipTitle(IDENTIFIER_TITLE);
   expect(title).toBe(IDENTIFIER_TITLE.slice(0, MAX_TASK_TITLE_CHARS).trim());
   expect(title).toContain("request_attention");
@@ -164,7 +164,7 @@ test("a chip's title keeps identifiers: `_` and `#` reach the reference line, th
   expect(ref.tasks).toEqual([{ id: TASK_A, title }]);
   const prelude = taskReferencePrelude(ref.tasks);
   expect(prelude).toContain("request_attention");
-  const wire = encodeCodexStructuredUserText(`${prelude}\nstart`, undefined, ref, { kind: "operator" }, "c".repeat(64));
+  const wire = await encodeCodexStructuredUserText(`${prelude}\nstart`, undefined, ref, { kind: "operator" }, "c".repeat(64));
   expect(decodeCodexStructuredUserText(wire).selectedContext?.tasks).toEqual([{ id: TASK_A, title }]);
   expect(taskChipTitle("Fix __init__.py and my_var")).toBe("Fix __init__.py and my_var");
 });
