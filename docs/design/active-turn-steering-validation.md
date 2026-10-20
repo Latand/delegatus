@@ -123,3 +123,88 @@ That retry passed the compaction-cap case in 79 seconds and all runtime cases, t
 - `src/lib/spawnNotice/sweep.ts`
 - `src/runtime-host/journal.test.ts`
 - `src/runtime-host/journal.ts`
+
+## Interrupted steering regression, 2026-10-20
+
+CI run 39359752101 failed `dropped-after` on Codex 0.163.0 at
+02:51:51Z (job 118426922381) and 0.162.1 at 02:52:12Z
+(job 118426922774). Both logs show the supplement becoming `delivered`
+before the interrupt receipt becomes `interrupted`. The fixture then waits
+30 seconds for `queued / steer-dropped`, an outcome that cannot follow that
+confirmed delivery.
+
+The baseline at `6be3a78b7` was measured with Bun 1.4.0, real npm-installed
+Codex executables, and the CI fixture's local Responses provider. The provider
+uses no account credentials. Every run has fresh HOME, XDG_CONFIG_HOME,
+XDG_CACHE_HOME, XDG_DATA_HOME, CODEX_HOME, CLAUDE_CONFIG_DIR, LLV_STATE_DIR and
+TMPDIR, and a closed Viewer control URL. Runs execute sequentially through
+`scripts/gate-slot.sh`, with the repeated batch holding one CPU admission.
+
+| Codex | Original dropped-after alone | Original six-case file | Controlled consumed-input ordering |
+|---|---:|---:|---:|
+| 0.162.1 | 20/20 pass (100%) | 20/20 pass (100%) | 0/1 pass; expected timeout |
+| 0.163.0 | 20/20 pass (100%) | 20/20 pass (100%) | 0/1 pass; expected timeout |
+| 0.159.0 control | 20/20 pass (100%) | Not sampled | 0/1 pass; expected timeout |
+
+The controlled probe exports the baseline and completes the first provider
+response after steer acceptance. It waits for the next provider request and
+the supplement's delivered receipt before issuing the interrupt, then retains
+the original dropped-only assertion. It reproduces that assertion's timeout
+on all three versions. Captured protocol frames contain both
+`item/completed` for the supplement and `turn/completed` with `interrupted`
+status. No required protocol event is missing; the absent transition is
+`queued / steer-dropped`. Natural intermittency was observed in CI; the local
+unforced samples stayed green.
+
+`src/lib/runtime/codexSteerDelivery.integration.test.ts` now brackets both
+outcomes. `dropped-after` waits for a real tool's `tool-running` handshake,
+holds that tool through steer acceptance, verifies the supplement has no
+completed user item, and interrupts before the tool can finish. The separate
+`landed-before-interrupt` case waits for the supplement's `item/completed`
+and durable delivered receipt before issuing the interrupt. Both wait for
+the original turn's `turn/completed` and the interrupt receipt, then require
+their respective queued or delivered outcome. Both reopen the journal, compare
+the retained receipt, replay the original operation key, and require exactly
+one recorded supplement with its original agent origin. The 30-second wait
+and 90-second test limits retain their original values.
+
+The measured defect is in the fixture's ordering assumption. Host settlement
+continues to use its existing canonical-item and rollout evidence. The Claude
+reap and delivery-terminalization lanes retain their own source changes.
+
+The focused repetition command is:
+
+```sh
+npm install --prefix "$CLI_ROOT" --no-save --ignore-scripts "@openai/codex@$VERSION"
+export NATIVE_CODEX_QUEUE_TEST_BINARY="$CLI_ROOT/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"
+bash scripts/gate-slot.sh bun test ./src/lib/runtime/codexSteerDelivery.integration.test.ts \
+  --test-name-pattern 'real Codex steer delivery: (dropped-after|landed-before-interrupt)$'
+```
+
+Repeat the test command 20 times per version with the fresh roots described
+above. The baseline-only command selects `real Codex steer delivery:
+dropped-after$`; the baseline file campaign omits the name filter. The complete
+CI command is `bun scripts/verify-native-codex-runtime.ts "$NATIVE_CODEX_QUEUE_TEST_BINARY"`.
+
+Final focused campaign (same Bun, provider and isolation):
+
+| Codex | Dropped input | Input consumed before interrupt |
+|---|---:|---:|
+| 0.154.0 | 20/20 consecutive pass (100%) | 20/20 consecutive pass (100%) |
+| 0.159.0 | 20/20 consecutive pass (100%) | 20/20 consecutive pass (100%) |
+| 0.162.1 | 20/20 consecutive pass (100%) | 20/20 consecutive pass (100%) |
+| 0.163.0 | 20/20 consecutive pass (100%) | 20/20 consecutive pass (100%) |
+
+Each of the 80 independent test processes completed both cases: 160 passed,
+0 failed. The tested integration file's SHA-256 is
+`7d48d0c098c9d57beca5ccf78bd0856995aead7a06aa83c8ea51b3338c60a260`.
+
+The complete CI native runner also passed locally against the tested source:
+
+| Codex | Named files completed | Passed | Skipped | Failed |
+|---|---:|---:|---:|---:|
+| 0.162.1 | 59 | 1472 | 0 | 0 |
+| 0.163.0 | 59 | 1472 | 0 | 0 |
+
+Hosted CI follows pipeline publication. The stage does not push or create a
+remote branch.
