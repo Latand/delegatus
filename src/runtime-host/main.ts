@@ -165,7 +165,7 @@ await acquireRuntimeHostFence({
   report: (line) => console.error(line),
 });
 startup.record("fence-acquired");
-// The predecessor publishes the successor record before releasing the fence.
+// Capture this container's identity independently of the shared release target.
 const bootGeneration = currentRuntimeHostGeneration();
 const { performanceProcess } = await import("@/lib/performanceSpans");
 performanceProcess.revision = bootGeneration.revision && /^[a-f0-9]{7,40}$/.test(bootGeneration.revision) ? bootGeneration.revision : null;

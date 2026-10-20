@@ -77,7 +77,8 @@ test("large active and archived history preserves counts, last-wins lineage and 
     rows.forEach((row,n) => f.put(row,n<64 ? "pipelines" : "pipelines_archive",n));
     expect(await f.read(db => historyAttemptCounts(db,"fixture",NOW))).toEqual(oldCounts(rows));
     const ref = await f.read(db => historyPipelineRef(db,"conversation_fixture","fixture-transcript"));
-    expect(ref).toEqual({pipelineId:"pipeline_63",stageId:"build",attempt:1,reportedState:"running",reportedPipelineState:"running",paneId:null});
+    expect(ref).toEqual({pipelineId:"pipeline_63",stageId:"build",attempt:1,reportedState:"running",reportedPipelineState:"running",paneId:null,
+      conversationId:"conversation_fixture",agentPath:"fixture-transcript"});
     expect(await f.read(db => historyFleetLimitWaits(db,["conversation_fixture"]))).toEqual(fleetLimitWaits(rows.slice(0,64) as unknown as Pipeline[]));
     const result = await f.read(db => historyAttemptCounts(db,"fixture",NOW)); result.builder=999;
     expect(await f.read(db => historyAttemptCounts(db,"fixture",NOW))).toEqual(oldCounts(rows));
@@ -103,7 +104,8 @@ test("raw peer updates, reorder, archive moves, deletions and retained timestamp
     expect(await f.read(db => historyPipelineRef(db,"conversation_fixture","fixture-transcript"))).toBeNull();
     f.put(row,"pipelines_archive");
     expect(await f.read(db => historyAttemptCounts(db,"successor",NOW+WINDOW+1))).toEqual({builder:0,reviewer:0});
-    expect(await f.read(db => historyPipelineRef(db,"conversation_fixture","fixture-transcript"))).toBeNull();
+    expect(await f.read(db => historyPipelineRef(db,"conversation_fixture","fixture-transcript"))).toMatchObject({pipelineId:row.id,
+      conversationId:"conversation_fixture",agentPath:"fixture-transcript"});
   } finally { f.db.close(); }
 });
 
@@ -614,8 +616,9 @@ test("identity and fleet selectors use scoped indexes with singleton and duplica
         const values:(string|number)[]=sql.includes("a.startedMs BETWEEN") ? ["fixture",NOW-WINDOW,NOW] : sql.includes("a.startedMs>") ? ["fixture",NOW] : sql.includes("p.project IN") ? ["fixture"] : sql.includes("a.agentPath=?") ? ["fixture-transcript"] : Array.from({length:(sql.match(/\?/g) ?? []).length},()=>"conversation_fixture");
         const plan=db.query<{detail:string},SQLQueryBindings[]>(`EXPLAIN QUERY PLAN ${sql}`).all(...values).map(row=>row.detail).join("\n");
         expect(plan).not.toContain("SCAN a");
-        if (sql.includes("a.conversationId")) expect(plan).toContain("history_conversation");
-        else if (sql.includes("a.agentPath")) expect(plan).toContain("history_path");
+        if (sql.includes("WHERE a.conversationId=?")) expect(plan).toContain("history_conversation");
+        else if (sql.includes("WHERE a.agentPath=?")) expect(plan).toContain("history_path");
+        else if (sql.includes("a.conversationId")) expect(plan).toContain("history_conversation");
         else if (sql.includes("a.startedMs BETWEEN")) expect(plan).toContain("history_started");
         else expect(plan).toContain("history_project");
       }
