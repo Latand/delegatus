@@ -8,8 +8,8 @@ import { readRelayStore, type PairedRelay } from "./store";
 
 export const ownerReviewDestination = () => selectOwnerDestination(readRelayStore().relays);
 
-/** There is one connected bot in the Telegram store. The operator authorized
- * using it with the first target of their pairing, without a bot-id binding. */
+/** The receiving bot owns the first target of the operator's pairing.
+ * Additional sending bots retain local receipts without a publication target. */
 export function createTelegramPublisher(readRelays: () => PairedRelay[], storedBotId: () => string | null) {
   return createRelayPublisher(botId => {
     if (storedBotId() !== botId) return null;

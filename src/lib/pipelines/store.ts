@@ -369,6 +369,8 @@ function isAttempt(value: unknown, index: number): boolean {
     isSpawnActivation(attempt.activation) &&
     isStageReport(attempt.report) &&
     isRetiredLaunches(attempt.retiredLaunches) &&
+    (attempt.fencedMessageRetries === undefined || typeof attempt.fencedMessageRetries === "number"
+      && Number.isSafeInteger(attempt.fencedMessageRetries) && attempt.fencedMessageRetries >= 0) &&
     isUnresolvedTermination(attempt.unresolvedTermination) &&
     isPermissionDenials(attempt.permissionDenials)
   );

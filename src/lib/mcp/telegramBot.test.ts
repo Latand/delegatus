@@ -295,3 +295,36 @@ test("the bot failure mapper withholds unrelated and malformed errors", async ()
     expect(await response.json()).toEqual({ error: "Telegram bot request failed", code: "action_failed", retryable: false });
   }
 });
+
+for (const [tool, payload] of [
+  ["telegram_bot_send",{text:"Report"}],
+  ["telegram_bot_send_media",{images:[{path:"/sandbox/frame.png",caption:"Frame"}]}],
+  ["telegram_bot_send_document",{document:{path:"/sandbox/report.md"}}],
+] as const) {
+  test(`${tool} preserves per-bot refusal reasons and delivering identity`,async()=>{
+    const refusals = [{bot:{name:"First bot",username:"first_fixture_bot"},code:"not_enough_rights",reason:"Posting denied",source:"send",at:"2026-10-20T12:00:00Z"}];
+    dispatchAnswer=async()=>{throw new McpDispatchVerdictError("No connected bot can post",{status:403,code:"not_enough_rights",refusals});};
+    const service=createMcpToolService(bindings(),new MemoryMcpReceiptStore());
+    expect(await service.callTool(tool,{clientRequestId:"refused",chat:"reports",...payload})).toMatchObject({ok:false,code:"not_enough_rights",details:{refusals}});
+    dispatchAnswer=async()=>({messageIds:[9],sentBy:{name:"Second bot",username:"second_fixture_bot"},refusals});
+    expect(await service.callTool(tool,{clientRequestId:"sent",chat:"reports",...payload})).toMatchObject({ok:true,sentBy:{name:"Second bot"},refusals});
+  });
+}
+
+test.each((["telegram_bot_send","telegram_bot_send_media","telegram_bot_send_document"] as const).flatMap(tool => [undefined, "operation_fixture"].map(operationId => [tool, operationId] as const)))("%s carries bounded per-bot refusals across real HTTP (%s)",async(tool,operationId)=>{
+  const unsafe=fakeRefusal();
+  const viewer=Bun.serve({port:0,hostname:"127.0.0.1",fetch:()=>Response.json({error:"No connected bot can post",code:"forbidden",retryable:false,...(operationId ? {operationId} : {}),refusals:[unsafe,{bot:{name:42}}]},{status:403})});
+  process.env.LLV_VIEWER_CONTROL_URL=`http://127.0.0.1:${viewer.port}`;
+  try {
+    const service=createMcpToolService(viewerMcpBindings(undefined,productionViewerControlDependencies(true)),new MemoryMcpReceiptStore());
+    const answer=await service.callTool(tool,{clientRequestId:"http-bots",chat:"reports",text:"Report",images:[{path:"/sandbox/frame.png",caption:"Frame"}],document:{path:"/sandbox/report.md"}});
+    expect(answer).toMatchObject({ok:false,code:"forbidden",details:{refusals:[{bot:{name:"First bot",username:"first_fixture_bot"},code:"forbidden"}]}});
+    const details=(answer as {details?:{refusals?:unknown[]}}).details;
+    expect(details?.refusals).toHaveLength(1);
+    expect(JSON.stringify(details)).not.toContain("private-extra");
+  } finally {await viewer.stop(true);}
+});
+function fakeRefusal() {
+  const extra = ["private", "extra"].join("-");
+  return {bot:{name:"First bot",username:"first_fixture_bot",botId:extra},code:"forbidden",reason:"Removed from chat",source:"send",at:"2026-10-20T12:00:00Z",token:extra};
+}

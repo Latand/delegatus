@@ -4,7 +4,9 @@ import type { NextRequest } from "next/server";
 import { callerConversationId, operatorBrowserRequest } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/capabilityHeader";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
-import { agentRegistry, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
+import { agentRegistry, deliveryRegistryEntriesForKey, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
+import { performanceSpans } from "@/lib/performanceSpans";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { delegatusMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
 import { messageOriginProject, sameMessageOrigin, type MessageOrigin } from "@/lib/runtime/messageOrigin";
 import { lookupOriginalSend, type SendReceipt } from "@/lib/runtime/sendSettlement";
@@ -110,17 +112,17 @@ export function resolveOrchestratorRelay(
     try {
       const snapshot = agentRegistry().readOnlySnapshot();
       const lookup = readOnlyConversationLookupFromSnapshot(snapshot);
-      const canonical = (id: string) => lookup.conversation(id as ViewerConversationId)?.id ?? id;
+      const canonical = (id: string) => lookup.canonicalConversationId(id as ViewerConversationId);
       const projectRecipients = new Set([
         ...(target.active?.conversationId ? [canonical(target.active.conversationId)] : []),
         ...orchestratorRevocations()
           .filter(previous => canonicalOrchestratorProject(previous.project) === targetProject)
           .map(previous => canonical(previous.conversationId)),
       ]);
-      const keyRows = [
-        ...Object.values(snapshot.heldDeliveries),
-        ...Object.values(snapshot.deliveryOperationOwners),
-      ].filter(row => row.clientMessageId === key
+      const keyRows = withViewerOperation("orchestrator.relay-recovery", () => performanceSpans.sync("relay.select", () => [
+        ...deliveryRegistryEntriesForKey(snapshot, "heldDeliveries", key, [...projectRecipients]),
+        ...deliveryRegistryEntriesForKey(snapshot, "deliveryOperationOwners", key, [...projectRecipients]),
+      ].map(([, row]) => row))).filter(row => row.clientMessageId === key
         && projectRecipients.has(canonical(row.conversationId))
         && (recipient === undefined || formerRecipient || canonical(row.conversationId) === canonical(recipient)));
       const originalRows = keyRows.filter(row => sameMessageOrigin(row.command.origin, payload.origin)
@@ -164,7 +166,8 @@ export function resolveOrchestratorRelay(
     // original send, with this key, author and payload, licenses its retry.
     const formerSeat = orchestratorRevocations().some((previous) => canonicalOrchestratorProject(previous.project) === targetProject && previous.conversationId === recipient);
     let original = false;
-    if (formerSeat && key) {
+    if (formerSeat && key && operationId) original = true;
+    else if (formerSeat && key) {
       try {
         original = lookupOriginalSend(agentRegistry().readOnlySnapshot(), {
           conversationId: recipient, clientMessageId: key, ...payload,
