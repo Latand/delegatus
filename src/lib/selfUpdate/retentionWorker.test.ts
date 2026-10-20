@@ -57,7 +57,7 @@ test("a foreign mount namespace translates bind-mounted cwd, descriptors and map
   const h = procFixture();
   fs.unlinkSync(path.join(h.base, "ns/mnt")); fs.symlinkSync("mnt:[container]", path.join(h.base, "ns/mnt"));
   fs.writeFileSync(path.join(h.proc, "self/mountinfo"), "1 0 8:1 / / rw - ext4 /dev/fixture rw\n2 1 0:4 net:[456] /run/netns/fixture rw - nsfs nsfs rw\n");
-  fs.writeFileSync(path.join(h.base, "mountinfo"), `1 0 8:1 ${h.release} /app rw - ext4 /dev/fixture rw\n`);
+  fs.writeFileSync(path.join(h.base, "mountinfo"), `1 0 8:1 /unrelated /app rw - ext4 /dev/fixture rw\n2 0 8:1 ${h.release} /app rw - ext4 /dev/fixture rw\n`);
   for (const link of ["cwd", "root", "exe"]) { fs.unlinkSync(path.join(h.base, link)); fs.symlinkSync("/app", path.join(h.base, link)); }
   fs.symlinkSync("/app/open", path.join(h.base, "fd/1"));
   fs.symlinkSync("socket:[456]", path.join(h.base, "fd/2"));

@@ -90,13 +90,16 @@ export function retentionProcessScan(root: string, procRoot = "/proc"): Retentio
         // Bind mounts can name a release /app, with no release prefix in argv.
         for (const entry of paths.filter(value => value.startsWith("/"))) {
           const target = entry.replace(/ \(deleted\)$/, "");
-          const mount = mounts.find(row => inside(target, row.point));
-          if (!mount) throw new Error("path missing from mount inventory");
-          // nsfs bind mounts name a namespace handle, never a release file.
-          if (!mount.root.startsWith("/")) continue;
-          const relative = path.join(mount.root, path.relative(mount.point, target));
-          for (const host of ownMounts.filter(row => row.device === mount.device && inside(relative, row.root)))
-            paths.push(path.join(host.point, path.relative(host.root, relative)));
+          const visible = mounts.find(row => inside(target, row.point));
+          if (!visible) throw new Error("path missing from mount inventory");
+          // Stacked mounts at one point retain every plausible file origin.
+          for (const mount of mounts.filter(row => row.point === visible.point)) {
+            // nsfs bind mounts name a namespace handle, never a release file.
+            if (!mount.root.startsWith("/")) continue;
+            const relative = path.join(mount.root, path.relative(mount.point, target));
+            for (const host of ownMounts.filter(row => row.device === mount.device && inside(relative, row.root)))
+              paths.push(path.join(host.point, path.relative(host.root, relative)));
+          }
         }
       }
       const after = read("stat");
