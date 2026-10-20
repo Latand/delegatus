@@ -218,6 +218,39 @@ test("a competing lane's explicit takeover fences the parked owner", async () =>
   expect((await takeoverPipelineDelivery(owner.id, owner.id, 1, "stale retry", null)).status).toBe(409);
 }));
 
+test("takeover retains per-head publication recovery in a new process", async () => isolatedDelivery(async root => {
+  const owner = await createPipelineWithDelivery(deliveryFixture("history-owner"), deliveryTarget);
+  const sha = "a".repeat(40);
+  owner.publicationRecovery = { [sha]: { sha, failures: 2, totalAttempts: 2, history: [{ operationId: "deadline-operation",
+    epoch: 1, at: "2026-10-16T10:00:00.000Z", cause: "infrastructure-deadline", detail: "check execution deadline",
+    retryAt: "2026-10-16T10:05:00.000Z" }] } };
+  savePipelines([owner]);
+  const comparison = await createPipelineWithDelivery(deliveryFixture("history-successor"), deliveryTarget);
+  const taken = await takeoverPipelineDelivery(comparison.id, owner.id, 1, "continue publication", null);
+  expect(taken.pipeline?.publicationRecovery).toEqual(owner.publicationRecovery);
+  const { realExec } = await import("@/lib/workflows/provision");
+  const script = `const { findPipelineRecord } = await import(${JSON.stringify(path.join(import.meta.dir, "store.ts"))});`;
+  const result = await realExec(process.execPath, ["-e", script
+    + `console.log(JSON.stringify(findPipelineRecord(${JSON.stringify(comparison.id)})?.publicationRecovery));`], process.cwd(),
+  { ...process.env, LLV_STATE_DIR: root, LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" }, { timeoutMs: 30_000 });
+  expect(result.code, result.stderr).toBe(0);
+  expect(JSON.parse(result.stdout)).toEqual(owner.publicationRecovery);
+}));
+
+test("takeover records a settled failure before the old controller observes it", async () => isolatedDelivery(async () => {
+  const owner = await createPipelineWithDelivery(deliveryFixture("unobserved-owner"), deliveryTarget);
+  const sha = "a".repeat(40);
+  owner.delivery!.operation = { id: "unobserved-deadline", sha, epoch: 1, state: "settled", result: { ok: false,
+    error: "a check reached its execution deadline", failure: { step: "publishing the pipeline branch", code: 124,
+      signal: null, durationMs: 1, outputTail: "owned runner: deadline expired", retryableDeadline: true } } };
+  savePipelines([owner]);
+  const comparison = await createPipelineWithDelivery(deliveryFixture("unobserved-successor"), deliveryTarget);
+  const taken = await takeoverPipelineDelivery(comparison.id, owner.id, 1, "continue publication", null);
+  expect(taken.pipeline?.publicationRecovery?.[sha]).toMatchObject({ failures: 1, totalAttempts: 1,
+    history: [{ operationId: "unobserved-deadline", cause: "infrastructure-deadline", retryAt: expect.any(String) }] });
+  expect(findPipelineRecord(owner.id)!.publicationRecovery).toEqual(taken.pipeline?.publicationRecovery);
+}));
+
 test("terminal release retains receipts through archive and takeover fences epochs and in-flight writes", async () => isolatedDelivery(async () => {
   const owner = await createPipelineWithDelivery(deliveryFixture("owner"), deliveryTarget);
   const comparison = await createPipelineWithDelivery(deliveryFixture("comparison"), deliveryTarget);
