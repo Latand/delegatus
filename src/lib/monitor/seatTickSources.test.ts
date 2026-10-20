@@ -284,6 +284,24 @@ function gather(over: Parameters<typeof sources>[0], state: SeatTickProjectState
   return gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, sources(over));
 }
 
+test("lane hashing yields and refuses a frozen source replaced while hashing", async () => {
+  let rows = Object.freeze(Array.from({ length: 24 }, (_, index) => Object.freeze(lane({ id: `hash-${index}`, state: "closed", cursor: null }))));
+  const ports = sources({ pipelines: rows as never, noSeat: true });
+  ports.pipelines = () => rows as never;
+  const { performanceSpans, performanceSites } = await import("@/lib/performanceSpans");
+  let scheduled = false;
+  performanceSpans.observeSite(site => {
+    if (performanceSites[site] !== "seat-tick.hash" || scheduled) return;
+    scheduled = true;
+    setImmediate(() => { rows = Object.freeze([...rows]); });
+  });
+  try {
+    await expect(gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports)).rejects.toThrow("sources changed");
+  } finally { performanceSpans.observeSite(); }
+  expect(scheduled).toBe(true);
+  expect((await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports)).project).toBe(PROJECT);
+}, 30_000);
+
 test("gather and refresh retain explicit work and its blocker for the reminder composer", async () => {
   const hold = { kind: "external", note: "waiting for the upstream release", since: new Date(NOW - DAY_MS).toISOString(), by: "agent" };
   const task = boardCard({ chosen: true, status: "inbox", hold });
@@ -2268,6 +2286,28 @@ test("a lane the seat created reads as provisioned while its first stage is its 
   expect((await gather({ pipelines: [waiting] })).ownLanes).toEqual([]);
 });
 
+test("own settled lanes select the newest twenty before projecting review details", async () => {
+  let reviewReads = 0;
+  const rows = Array.from({ length: 804 }, (_, index) => {
+    const pipeline = lane({
+      id: `own-settled-${String(index).padStart(4, "0")}`,
+      srcConversationId: CONVERSATION,
+      state: "needs_review",
+      pausedState: "needs_review",
+      cursor: null,
+      runs: [{ stageId: "build", attempts: [] }],
+      createdAt: new Date(NOW - index * 1_000).toISOString(),
+    });
+    Object.defineProperty(pipeline, "reviewPending", { get: () => { reviewReads++; return NEEDS_REVIEW; } });
+    return pipeline;
+  });
+  const input = await gather({ pipelines: rows });
+  expect(input.ownLanes).toHaveLength(20);
+  expect(input.ownLanes.map(item => item.id)).toEqual(Array.from({ length: 20 }, (_, index) =>
+    `own-settled-${String(index).padStart(4, "0")}`));
+  expect(reviewReads).toBe(40);
+});
+
 test("an announced lane is not offered as provisioned a second time (#1799)", async () => {
   const provisioned = lane({ srcConversationId: CONVERSATION, state: "running" });
   /* The same lane, against a row that has announced nothing, is offered. */
@@ -2919,8 +2959,74 @@ test("seat check keeps wake ordering and zero decoded or copied rows with tenfol
   expect(counts).toEqual([{ decoded: 0, copied: 0 }, { decoded: 0, copied: 0 }]);
 });
 
+test("seat projection yields through a large immutable specification and attempt history, then reuses warm evidence", async () => {
+  const { refreshSeatTickEvidence } = await import("./seatTickSources");
+  const { deepFreeze } = await import("@/lib/deepFreeze");
+  const { performanceSpans, performanceSites } = await import("@/lib/performanceSpans");
+  const attempts = Array.from({ length: 6000 }, (_, index) => ({
+    n: index + 1, state: "running", startedAt: new Date(NOW - index * 1000).toISOString(), completedAt: null,
+  }));
+  const largeSpec = `${"work ".repeat(21_000)}#123456`;
+  const largeRows = deepFreeze(Array.from({ length: 804 }, (_, index) => lane({
+    id: `large-spec-${index}`,
+    spec: largeSpec,
+    runs: index === 0 ? [{ stageId: "build", attempts }] : [{ stageId: "build", attempts: attempts.slice(0, 8) }],
+  }))) as never;
+  const ports = sources({ pipelines: largeRows });
+  const frozenTasks = deepFreeze([]);
+  ports.tasks = () => frozenTasks;
+  let yielded = false;
+  const turn = new Promise<boolean>(resolve => setImmediate(() => { yielded = true; resolve(true); }));
+  const gathering = gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  expect(await Promise.race([gathering.then(() => false), turn])).toBe(true);
+  const input = await gathering;
+  expect(input.pipelines).toHaveLength(804);
+  for (let pass = 0; pass < 3; pass++) {
+    const refreshed = refreshSeatTickInput(input, ports);
+    expect(refreshed.pipelines).toEqual(input.pipelines);
+  }
+  let refreshed = input;
+  for (let pass = 0; pass < 3; pass++) {
+    let warmYielded = false;
+    const warmTurn = new Promise<void>(resolve => setImmediate(() => { warmYielded = true; resolve(); }));
+    const warmStarted = performance.now();
+    const warming = refreshSeatTickEvidence(refreshed, ports);
+    expect(await Promise.race([warming.then(() => false), warmTurn.then(() => true)])).toBe(true);
+    refreshed = await warming;
+    expect(warmYielded).toBe(true);
+    expect(refreshed.pipelines).toEqual(input.pipelines);
+    expect(performanceSpans.snapshot(warmStarted).records.filter(record =>
+      record.kind === "sync" && performanceSites[record.site] === "seat-tick.project" && record.rows >= 100)).toHaveLength(0);
+  }
+  expect(refreshed.pipelines).toEqual(input.pipelines);
+  expect(yielded).toBe(true);
+});
 
-test("unchanged frozen lane evidence serializes no retained body and replacement invalidates the key", async () => {
+
+test("seat refresh retries preparation when its pipeline source is replaced during an await", async () => {
+  const { refreshSeatTickEvidence } = await import("./seatTickSources");
+  const { deepFreeze } = await import("@/lib/deepFreeze");
+  const largeSpec = "old source evidence ".repeat(1800);
+  const oldRows = deepFreeze(Array.from({ length: 16 }, (_, index) => lane({
+    id: `source-race-${index}`, spec: largeSpec,
+    ...(index === 15 ? { state: "needs_review", pausedState: "needs_review", cursor: null,
+      runs: [{ stageId: "build", attempts: [] }], srcConversationId: CONVERSATION } : {}),
+  })));
+  const replacementRows = deepFreeze(oldRows.map((row, index) => ({
+    ...row, task: index === 0 ? "replacement source evidence" : row.task,
+  }))) as never;
+  let currentRows = oldRows;
+  const ports = sources({});
+  ports.pipelines = () => currentRows as never;
+  const input = await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  setImmediate(() => { currentRows = replacementRows; });
+  const refreshed = await refreshSeatTickEvidence(input, ports);
+  expect(refreshed.pipelines[0]?.title).toBe("replacement source evidence");
+  expect(refreshed.pipelines.map(pipeline => pipeline.id)).toContain("source-race-0");
+  expect(refreshed.ownLanes.map(lane => lane.id)).toContain("source-race-15");
+});
+
+test("frozen lane evidence avoids whole-row serialization and replacement invalidates the key", async () => {
   const { refreshSeatTickEvidence } = await import("./seatTickSources");
   const { spyOn } = await import("bun:test");
   const { deepFreeze } = await import("@/lib/deepFreeze");
@@ -2939,7 +3045,7 @@ test("unchanged frozen lane evidence serializes no retained body and replacement
     current = deepFreeze(lane({ spec: "replacement evidence" }));
     const replaced = await refreshSeatTickEvidence(first, ports);
     expect(replaced.pullRequestEvidenceKey).not.toBe(first.pullRequestEvidenceKey);
-    expect(bodies).toBe(1);
+    expect(bodies).toBe(0);
   } finally { serializing.mockRestore(); }
 });
 
