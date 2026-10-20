@@ -626,7 +626,7 @@ Each attempt runs the real pre-push entry point in a scratch clone with its own 
 | Side | Qualifying runs | Current sample P90 (s) | File expirations | Refusals | NEW lines |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | before | 1 | 1166.6 | 5 | 1 | 0 |
-| after | 4 | 508.2 | 0 | 0 | 0 |
+| after | 5 | 508.2 | 0 | 0 | 0 |
 
 The sample P90 is provisional until all runs complete. An incomplete baseline or runner error is a refusal even when it emits no NEW assertion line.
 
@@ -642,7 +642,18 @@ The sample P90 is provisional until all runs complete. An incomplete baseline or
 | after-104 | after | 1 | 20.02 / 36.03 / 41.26 | 1.4 | 518.6 | outlier | 0 | 0 |
 | after-204 | after | 1 | 23.54 / 29.75 / 34.75 | 29.6 | 461.2 | yes | 0 | 0 |
 | after-05 | after | 2 | 20.72 / 35.44 / 46.92 | 183.7 | 594.9 | outlier | 0 | 0 |
+| after-105 | after | 2 | 15.22 / 32.88 / 40.30 | 1.2 | 518.3 | outlier | 0 | 0 |
+| after-205 | after | 2 | 19.51 / 25.41 / 34.94 | 45.6 | 476.4 | yes | 0 | 0 |
+| after-06 | after | 3 | 24.21 / 35.52 / 45.57 | 76.3 | 521.6 | outlier | 0 | 0 |
+| after-106 | after | 3 | 18.91 / 30.17 / 36.57 | 107.6 | 487.0 | outlier | 0 | 0 |
 
 The ten split families retain all 1,078 registered cases, including their names, arguments and assertion bodies. The preserved calibration and JUnit inventory established that partition before the campaign. The measured timeout exceptions are described in `docs/design/pre-push-gate-under-load.md#2-fix`.
 
-Batch 1 resumed the previous ledger at three qualifying after-runs and one before-run. It added one qualifying after-run and two high-load outliers; all three passed with zero file expirations and zero NEW lines. The last outlier captured two existing 15-second explicit test timeouts in `engine.providerReset.part3.test.ts`; filtered retries passed and the comparator classified the occurrences as flaky. No test or verdict rule changed during the resumed campaign.
+The resumed campaign began with three qualifying after-runs and one before-run. No test or verdict rule changed during resumption. Batches retain every attempted load condition and stop between attempts. Complete-gate time includes the driver’s owned cleanup after hook exit.
+
+| Resumed batch | Attempts | Qualifying after | Qualifying before |
+| --- | ---: | ---: | ---: |
+| batch-01 | 3 | 1 | 0 |
+| batch-02 | 4 | 1 | 0 |
+
+The high-load `after-05` outlier captured two existing 15-second explicit test timeouts in `engine.providerReset.part3.test.ts`; filtered retries passed and the comparator classified the occurrences as flaky. The 30/10 sample and the two controls remain incomplete.
