@@ -528,6 +528,8 @@ export class RuntimeJournal {
       this.migrateOperationIdempotencyScope();
       this.migrateOperationOrphanedSince();
       this.migrateOperationProjectionPending();
+      this.db.exec(`CREATE INDEX IF NOT EXISTS operations_retry_parent
+        ON operations(json_extract(receipt_json, '$.retryOfOperationId'), event_seq DESC)`);
       this.migrateLegacyEvents();
       this.migrateEntityUpdatedAt();
       this.retainLegacyStopAdmissions();
@@ -983,26 +985,23 @@ export class RuntimeJournal {
 
   currentRetryResult(operationId: string): RuntimeOperationResult | null {
     this.assertHealthy();
-    const rows = this.db.query<{ operation_id: string; receipt_json: string }, []>(
-      "SELECT operation_id, receipt_json FROM operations ORDER BY event_seq",
-    ).all();
-    const byOperationId = new Map<string, RuntimeOperationReceipt>();
-    const byParent = new Map<string, string>();
-    for (const row of rows) {
-      const receipt = JSON.parse(row.receipt_json) as RuntimeOperationReceipt;
-      byOperationId.set(row.operation_id, receipt);
-      if (receipt.retryOfOperationId) byParent.set(receipt.retryOfOperationId, row.operation_id);
-    }
     let currentOperationId = operationId;
-    let receipt = byOperationId.get(currentOperationId);
-    if (!receipt) return null;
+    const original = this.db.query<{ operation_id: string; receipt_json: string }, [string]>(
+      "SELECT operation_id, receipt_json FROM operations WHERE operation_id = ?",
+    ).get(currentOperationId);
+    if (!original) return null;
+    let receipt = JSON.parse(original.receipt_json) as RuntimeOperationReceipt;
     const seen = new Set<string>();
     while (!seen.has(currentOperationId)) {
       seen.add(currentOperationId);
-      const child = byParent.get(currentOperationId);
+      const child = this.db.query<{ operation_id: string; receipt_json: string }, [string]>(
+        `SELECT operation_id, receipt_json FROM operations
+          WHERE json_extract(receipt_json, '$.retryOfOperationId') = ?
+          ORDER BY event_seq DESC LIMIT 1`,
+      ).get(currentOperationId);
       if (!child) break;
-      currentOperationId = child;
-      receipt = byOperationId.get(child)!;
+      currentOperationId = child.operation_id;
+      receipt = JSON.parse(child.receipt_json) as RuntimeOperationReceipt;
     }
     return { operationId: currentOperationId, receipt, replayed: currentOperationId !== operationId };
   }

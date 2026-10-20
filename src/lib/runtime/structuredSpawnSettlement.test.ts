@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Database } from "bun:sqlite";
 import { afterEach, expect, setSystemTime, spyOn, test } from "bun:test";
 import { AgentRegistry } from "@/lib/agent/registry";
 import { beginLegacySpawnFixture } from "@/lib/agent/registryTestFixtures";
@@ -31,7 +32,9 @@ function fixture(disposition: "lost" | "unverified", live = false) {
     readSession: async identity => journal.readSession(identity),
     snapshot: async () => journal.snapshot(),
     effectBatch: async (kinds, after) => journal.effectBatch(100, kinds, after),
-    operationStatus: async id => journal.operationResult(id),
+    operationStatus: async (id, options) => options?.currentRetryLeaf
+      ? journal.currentRetryResult(id)
+      : journal.operationResult(id),
     transitionOperation: async (id, status, details, options) => journal.transitionOperation(id, status, details, options),
     command: async command => { commands++; return journal.executeOperation(command); },
   } as RuntimeHostClient;
@@ -279,6 +282,39 @@ test("the periodic cursor reaches a failed launch beyond one active outbox page"
   expect(read.mock.calls[0]?.[1]).toBe(0);
   expect(read.mock.calls[1]?.[1]).toBeGreaterThan(0);
   read.mockRestore();
+  expect(f.commands()).toBe(1);
+});
+
+test("periodic failed-launch repair reads only the launch retry lineage as history grows", async () => {
+  const f = fixture("lost");
+  await f.admitAndFail();
+  f.registry.reportFailedLaunch(f.registry.spawnRecoverySnapshot([f.receipt.launchId]).receipts[f.receipt.launchId]!);
+  const db = (f.journal() as unknown as { db: Database }).db;
+  db.exec("BEGIN");
+  const insert = db.query(`INSERT INTO operations
+    (operation_id, conversation_id, idempotency_key, request_hash, request_json, receipt_json, event_seq)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`);
+  for (let index = 0; index < 25_000; index++) {
+    const id = `unrelated-terminal-${String(index).padStart(5, "0")}`;
+    insert.run(id, `conversation-${id}`, id, "hash", "{}",
+      JSON.stringify({ operationId: id, conversationId: `conversation-${id}`, kind: "spawn", status: "failed" }), index + 10);
+  }
+  db.exec("COMMIT");
+
+  const plan = db.query<{ detail: string }, [string]>(`EXPLAIN QUERY PLAN
+    SELECT operation_id, receipt_json FROM operations
+    WHERE json_extract(receipt_json, '$.retryOfOperationId') = ?
+    ORDER BY event_seq DESC LIMIT 1`).all(f.receipt.launchId).map(row => row.detail).join("\n");
+  expect(plan).toContain("operations_retry_parent");
+  const retryLeafRead = spyOn(f.journal(), "currentRetryResult");
+
+  await terminalizeStaleStructuredSpawns(f.registry, f.client, { now: () => now });
+
+  expect(retryLeafRead).toHaveBeenCalledTimes(2);
+  expect(retryLeafRead.mock.calls.map(call => call[0]).sort()).toEqual([
+    `spawn_message_${f.receipt.launchId}`, f.receipt.launchId,
+  ].sort());
+  expect(f.journal().operationResult(f.receipt.launchId)?.receipt.status).toBe("failed");
   expect(f.commands()).toBe(1);
 });
 
