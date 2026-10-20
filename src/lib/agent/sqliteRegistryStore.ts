@@ -669,6 +669,9 @@ export interface SqliteRegistryStoreOptions {
       no file-mode changes. A preview uses it to see the registry without
       performing any of a writer's startup work. */
   readOnly?: boolean;
+  /** The serving session route opens under async admission and prepares its
+      first cold-key projection cooperatively before reading. */
+  deferColdKeyInitialization?: boolean;
   /** Row mode applies structural bounds while deferring the grant decision
       until SQLite has assembled the receipt, edge and parent attestations. */
   normalize(value: unknown, mode?: { deferStoredGrantDecision: true }): RegistryFile;
@@ -1031,7 +1034,7 @@ export class SqliteAgentRegistryStore {
     this.db = openCurrentDatabase(filename, () => {
       const db = observeSqlite(new Database(filename, { create: true, strict: true }), "registry");
       try {
-        db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA journal_size_limit = 67108864; PRAGMA foreign_keys = ON; PRAGMA auto_vacuum = INCREMENTAL;");
+        db.exec(`PRAGMA busy_timeout = ${options.deferColdKeyInitialization ? 0 : 5000}; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA journal_size_limit = 67108864; PRAGMA foreign_keys = ON; PRAGMA auto_vacuum = INCREMENTAL;`);
         db.exec(`
         CREATE TABLE IF NOT EXISTS registry_meta (
           key TEXT PRIMARY KEY,
@@ -1260,7 +1263,7 @@ export class SqliteAgentRegistryStore {
       registryCallerIndexes.install(this.db, path.dirname(filename));
     }
     registryFailureRepairIndexes.install(this.db, path.dirname(filename));
-    if (this.changesReady) this.refreshColdKeys();
+    if (this.changesReady && !options.deferColdKeyInitialization) this.refreshColdKeys();
     } catch (error) {
       try { this.db.close(); } catch { /* preserve the initialization failure */ }
       throw error;
@@ -1572,7 +1575,15 @@ export class SqliteAgentRegistryStore {
 
   private prepareReadOnlySnapshotWork(signal?: AbortSignal): Promise<SqliteRegistrySnapshot> {
     if (signal?.aborted) return Promise.reject(signal.reason);
-    if (this.preparedReader) return Promise.resolve(this.preparedReader.readOnlySnapshot());
+    if (this.preparedReader) {
+      const cached = this.preparedReader.readOnlyCache;
+      /* A warm archive/write invalidation must enter the cooperative reader
+         preparation below. Calling readOnlySnapshot here drains its header and
+         projection generators synchronously on the serving loop. */
+      if (cached && cached.stamp === this.preparedReader.storeStamp()) {
+        return Promise.resolve(cached);
+      }
+    }
     if (this.preparingReader) return this.preparingReader;
     const run = (async () => {
       await this.prepareRecoveryIndexes(signal);
@@ -1630,7 +1641,9 @@ export class SqliteAgentRegistryStore {
             this.readerViews.clear();
             this.resetHotGrants();
             this.collectionOrders.clear();
+            const previousReader = this.preparedReader;
             this.preparedReader = reader;
+            if (previousReader && previousReader !== reader) previousReader.close();
             return current;
           }
           reader.onDatabaseReopened(reader.db);

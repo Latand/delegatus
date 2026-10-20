@@ -1,5 +1,5 @@
 import { liveRootSession } from "@/lib/root/adopt";
-import { StateLockDeferredError, stateLockDeferral, waitForStateLock } from "@/lib/state/lockWait";
+import { StateLockDeferredError, stateLockAttempt, stateLockDeferral, waitForStateLock } from "@/lib/state/lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { normalizeHostMemory, type HostMemoryState } from "@/lib/runtime/agentMemoryState";
@@ -4437,6 +4437,9 @@ export interface AgentRegistryStorageOptions {
       sets it: a reader that guesses wrong opens a store the writer does not
       own. See {@link resolveRegistryBackend}. */
   resolveBackendIdentity?: boolean;
+  /** First session lookup opens under async admission and prepares the SQLite
+      cold-key projection cooperatively. */
+  deferColdKeyInitialization?: boolean;
   /** Grant bound for the MCP origin rebound (issue #739). Production omits it;
       a test supplies a policy that HAS a grantable connector, since the shipped
       bound has none and an empty bound proves nothing about the origin rule. */
@@ -4715,6 +4718,7 @@ export class AgentRegistry {
     const mayRunStartupMaintenance = mayRunStateStartupMutation(path.dirname(this.filename));
     const openStore = () => new SqliteAgentRegistryStore(sqliteFilename, {
       allowArchiveMigration: mayRunStartupMaintenance,
+      deferColdKeyInitialization: storage.deferColdKeyInitialization,
       /* Lazy: an initialised store never reads the JSON (#1870). */
       initialSnapshot: () => readFile(filename, storage.mcpGrantPolicy),
       verifyImport: (source, imported) => verifyRegistryImport(source, imported, storage.onRegistryImportVerify),
@@ -11474,9 +11478,25 @@ const registryProcessState = process as typeof process & {
 };
 
 export function agentRegistry(): AgentRegistry {
-  registryProcessState.__llvAgentRegistry ??= withViewerOperation("registry.prepare", () => performanceSpans.sync("registry.prepare.index", () =>
-    new AgentRegistry(undefined, undefined, undefined, { resolveBackendIdentity: true })));
+  registryProcessState.__llvAgentRegistry ??= withViewerOperation("registry.prepare", () => performanceSpans.sync("registry.prepare.open", () =>
+    new AgentRegistry(undefined, undefined, undefined, { resolveBackendIdentity: true, deferColdKeyInitialization: true })));
   return registryProcessState.__llvAgentRegistry;
+}
+
+/** The session endpoint is the first reader on a cold Viewer. Admit its
+    construction asynchronously, then prepare archived keys before selecting
+    a session so no full-history constructor drain or lock sleep precedes it. */
+export async function prepareAgentRegistryForSession(signal?: AbortSignal): Promise<AgentRegistry> {
+  let registry = registryProcessState.__llvAgentRegistry;
+  if (!registry) {
+    registry = await waitForStateLock("registry.session.open", () => stateLockAttempt("registry.session.open", () => {
+      registryProcessState.__llvAgentRegistry ??= withViewerOperation("registry.prepare", () => performanceSpans.sync("registry.prepare.open", () =>
+        new AgentRegistry(undefined, undefined, undefined, { resolveBackendIdentity: true, deferColdKeyInitialization: true })));
+      return registryProcessState.__llvAgentRegistry!;
+    }), { signal });
+  }
+  await registry.prepareReadOnlySnapshot(signal);
+  return registry;
 }
 
 export function setAgentRegistryForTests(value: AgentRegistry | null): void {

@@ -726,7 +726,7 @@ function notAdmitted(ports: AutoMergePorts, id: string, reason: string): void {
 }
 
 /** A sweep may visit retained lanes, but never drains them in one loop turn. */
-async function* mergeRows(rows: readonly Pipeline[]) {
+async function* mergeRows<T>(rows: Iterable<T>) {
   let started = performance.now(), count = 0;
   for (const row of rows) {
     if (++count > 8 || performance.now() - started >= 8) {
@@ -747,11 +747,21 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
   await ports.prepareRead?.();
   const now = ports.now();
   const pipelines = performanceSpans.sync("forge.auto-merge.read", ports.loadPipelines);
-  const pending = new Set(pipelines.filter(pipeline => pipeline.state === "completed" && !pipeline.merge).map(pipeline => pipeline.id));
-  for (const id of admissionReasons.keys()) if (!pending.has(id)) admissionReasons.delete(id);
+  const pending = new Set<string>();
   for await (const pipeline of mergeRows(pipelines)) {
-    if (pipeline.state !== "completed") continue;
-    if (pipeline.hiddenAt) {
+    performanceSpans.sync("forge.auto-merge.prune", () => {
+      if (pipeline.state === "completed" && !pipeline.merge) pending.add(pipeline.id);
+    });
+  }
+  for await (const id of mergeRows(admissionReasons.keys())) {
+    performanceSpans.sync("forge.auto-merge.prune", () => { if (!pending.has(id)) admissionReasons.delete(id); });
+  }
+  for await (const pipeline of mergeRows(pipelines)) {
+    const { completed, hidden } = performanceSpans.sync("forge.auto-merge.admit", () => ({
+      completed: pipeline.state === "completed", hidden: Boolean(pipeline.hiddenAt),
+    }), 1);
+    if (!completed) continue;
+    if (hidden) {
       if (!pipeline.merge) notAdmitted(ports, pipeline.id, "lane is hidden");
       continue;
     }
@@ -856,21 +866,20 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
     }
   }
   /* One lane at a time per repository, in completion order (§4.4 rule 5). */
-  const queues = new Map<string, Pipeline[]>();
+  const queueHeads = new Map<string, Pipeline>();
   for await (const pipeline of mergeRows(performanceSpans.sync("forge.auto-merge.read", ports.loadPipelines))) {
-    const merge = pipeline.merge;
-    if (pipeline.state !== "completed" || !merge || !PIPELINE_MERGE_LIVE_STATES.has(merge.state)) continue;
-    // A delegated record reflects the successor; only that successor can act
-    // on the head its resolution review judged.
-    if (merge.refresh?.pipelineId) continue;
-    const queue = queues.get(merge.repository) ?? [];
-    queue.push(pipeline);
-    queues.set(merge.repository, queue);
+    performanceSpans.sync("forge.auto-merge.queue", () => {
+      const merge = pipeline.merge;
+      if (pipeline.state !== "completed" || !merge || !PIPELINE_MERGE_LIVE_STATES.has(merge.state) || merge.refresh?.pipelineId) return;
+      const held = queueHeads.get(merge.repository);
+      if (!held || merge.requestedAt.localeCompare(held.merge!.requestedAt) < 0
+        || (merge.requestedAt === held.merge!.requestedAt && pipeline.id.localeCompare(held.id) < 0)) {
+        queueHeads.set(merge.repository, pipeline);
+      }
+    }, 1);
   }
-  for (const queue of queues.values()) {
-    queue.sort((a, b) => a.merge!.requestedAt.localeCompare(b.merge!.requestedAt) || a.id.localeCompare(b.id));
-    const head = queue[0]!;
-    const due = Date.parse(head.merge!.nextReadAt ?? "");
+  for await (const head of mergeRows(queueHeads.values())) {
+    const due = performanceSpans.sync("forge.auto-merge.queue", () => Date.parse(head.merge!.nextReadAt ?? ""), 1);
     if (Number.isFinite(due) && due > now) continue;
     try {
       await stepLane(head, ports);

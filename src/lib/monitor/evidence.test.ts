@@ -11,7 +11,7 @@ process.env.XDG_CONFIG_HOME = path.join(SANDBOX, "config");
 process.env.TMPDIR = path.join(SANDBOX, "tmp");
 fs.mkdirSync(process.env.TMPDIR, { recursive: true });
 
-const { evidenceFromFlows, evidenceFromGithub, evidenceFromPipelines, evidenceFromTasks } = await import("./evidence");
+const { evidenceFromFlows, evidenceFromGithub, evidenceFromPipelineCooperatively, evidenceFromPipelines, evidenceFromTasks } = await import("./evidence");
 import type { FlowSummary, PipelineSummary, TaskSummary } from "./viewerApi";
 
 afterAll(() => {
@@ -35,6 +35,17 @@ function flow(overrides: Partial<FlowSummary>): FlowSummary {
 }
 
 describe("evidence projection", () => {
+  test("cooperative pipeline evidence matches the regular projection across chunk boundaries", async () => {
+    const spec = `${"x".repeat(8 * 1024 * 1024 - 4)} #123456 ${"y".repeat(8 * 1024 * 1024)} #987`;
+    const source = pipeline({ task: "Pipeline title", spec, activityAt: ["2026-07-27T10:00:00Z", "bad"] });
+    let yielded = false;
+    const turn = new Promise<void>(resolve => setImmediate(() => { yielded = true; resolve(); }));
+    const projection = evidenceFromPipelineCooperatively(source);
+    expect(await Promise.race([projection.then(() => false), turn.then(() => true)])).toBe(true);
+    expect(await projection).toEqual(evidenceFromPipelines([source])[0]);
+    expect(yielded).toBe(true);
+  });
+
   test("a task's first line is its title and its status becomes a lifecycle position", () => {
     const [inbox, done, blocked] = evidenceFromTasks([
       task({ id: "a" }),

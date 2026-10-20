@@ -73,6 +73,68 @@ test("cooperative preparation publishes one complete frozen view and follows pee
   } finally { db.close(); }
 });
 
+test("a prepared reader cooperatively rebuilds its view after a peer archives a row", async () => {
+  const { open, kept } = fixture();
+  const reader = open();
+  const writer = open();
+  const initial = await reader.prepareReadOnlySnapshot();
+  const template = initial.file.receipts[kept]!;
+  writer.mutate(file => {
+    for (let index = 0; index < 4096; index++) {
+      const id = `archived-receipt-${index}`;
+      file.receipts[id] = { ...template, launchId: id, state: "failed", error: "archived history", createdAt: "2020-01-01T00:00:00Z" };
+    }
+  }, false);
+  expect(writer.archiveInactive(1)).toBe(1);
+  const controller = new AbortController();
+  const canceled = reader.prepareReadOnlySnapshot(controller.signal);
+  setImmediate(() => controller.abort(new Error("retired warm refresh")));
+  await expect(canceled).rejects.toThrow("retired warm refresh");
+  for (let pass = 0; pass < 3; pass++) {
+    expect(writer.archiveInactive(1)).toBe(1);
+    let yielded = false;
+    const turn = new Promise<boolean>(resolve => setImmediate(() => { yielded = true; resolve(true); }));
+    const refreshed = reader.prepareReadOnlySnapshot();
+    expect(await Promise.race([refreshed.then(() => false), turn])).toBe(true);
+    expect(yielded).toBe(true);
+    const snapshot = await refreshed;
+    expect(Object.keys(snapshot.file.receipts).filter(id => id.startsWith("archived-receipt-"))).toHaveLength(4096);
+    expect(Object.keys(snapshot.file.receipts).filter(id => id.startsWith("archived-receipt-")))
+      .toEqual(Array.from({ length: 4096 }, (_, index) => `archived-receipt-${index}`));
+  }
+  const snapshot = await reader.prepareReadOnlySnapshot();
+  expect(Object.keys(snapshot.file.receipts)).toContain("archived-receipt-0");
+  expect(snapshot.file.receipts["archived-receipt-0"]?.state).toBe("failed");
+});
+
+test("deferred cold-key initialization moves the first session view onto cooperative preparation", async () => {
+  const { open, filename, kept } = fixture();
+  const seed = open();
+  const template = seed.readOnlySnapshot().file.receipts[kept]!;
+  seed.mutate(file => {
+    for (let index = 0; index < 640; index++) {
+      const id = `cold-session-receipt-${index}`;
+      file.receipts[id] = { ...template, launchId: id, state: "failed", error: "cold session history", createdAt: "2020-01-01T00:00:00Z" };
+    }
+  }, false);
+  expect(seed.archiveInactive(1)).toBe(1);
+  seed.close();
+  stores.splice(stores.indexOf(seed), 1);
+  const deferred = new SqliteAgentRegistryStore(filename, {
+    deferColdKeyInitialization: true, normalize: normalizeRegistry,
+    initialSnapshot: normalizeRegistry({ version: 2, entries: {}, receipts: {} }),
+  });
+  stores.push(deferred);
+  expect((deferred as unknown as { db: Database }).db.query<{ timeout: number }, []>("PRAGMA busy_timeout").get()?.timeout).toBe(0);
+  let yielded = false;
+  const turn = new Promise<boolean>(resolve => setImmediate(() => { yielded = true; resolve(true); }));
+  const preparation = deferred.prepareReadOnlySnapshot();
+  expect(await Promise.race([preparation.then(() => false), turn])).toBe(true);
+  const snapshot = await preparation;
+  expect(snapshot.file.receipts["cold-session-receipt-0"]?.state).toBe("failed");
+  expect(yielded).toBe(true);
+});
+
 test("cooperative cold headers use an iterator and retain ordered rows after restart", async () => {
   const { open, filename, kept } = fixture();
   const store = open();

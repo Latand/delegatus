@@ -2,6 +2,7 @@ import { monitorRefIn } from "./cards";
 import { redactBounded } from "./redact";
 import type { EvidenceItem, EvidenceState } from "./types";
 import type { FlowSummary, PipelineSummary, TaskSummary } from "./viewerApi";
+import { yieldToRuntime } from "@/lib/cooperative";
 
 /**
  * Projecting tracked work into correlation evidence (issue #741).
@@ -91,6 +92,40 @@ export function evidenceFromPipelines(pipelines: readonly PipelineSummary[]): Ev
     references: referencesIn(`${pipeline.task} ${pipeline.spec ?? ""}`),
     monitorRef: null,
   }));
+}
+
+/** Project a single pipeline without scanning a very large specification in
+    one event-loop turn. The overlap preserves references split across chunks. */
+export async function evidenceFromPipelineCooperatively(pipeline: PipelineSummary): Promise<EvidenceItem> {
+  const references = new Set<number>();
+  const texts = [pipeline.task, pipeline.spec ?? ""];
+  for (const text of texts) {
+    let offset = 0, sliceStarted = performance.now();
+    while (offset < text.length) {
+      const end = Math.min(text.length, offset + 256 * 1024);
+      const start = Math.max(0, offset - 8);
+      const chunk = text.slice(start, Math.min(text.length, end + 8));
+      for (const match of chunk.matchAll(/(?<![\w#])#(\d{1,6})\b/g)) {
+        const matchStart = start + match.index!;
+        if (matchStart < offset || (end < text.length && matchStart >= end)) continue;
+        const value = Number(match[1]);
+        if (Number.isSafeInteger(value) && value > 0) references.add(value);
+      }
+      offset = end;
+      if (offset < text.length && performance.now() - sliceStarted >= 8) {
+        await yieldToRuntime();
+        sliceStarted = performance.now();
+      }
+    }
+  }
+  const taskTitle = firstLine(pipeline.task);
+  const title = taskTitle || firstLine((pipeline.spec ?? "").slice(0, 8192));
+  return {
+    kind: "pipeline", id: pipeline.id, title, project: pipeline.project || null,
+    state: pipelineState(pipeline.state), owner: `pipeline ${pipeline.id}`,
+    updatedAt: lastMovement(pipeline.activityAt, pipeline.closedAt),
+    references: [...references], monitorRef: null,
+  };
 }
 
 function flowState(state: string): EvidenceState {

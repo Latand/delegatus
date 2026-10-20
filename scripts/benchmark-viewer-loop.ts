@@ -16,9 +16,10 @@ import { DEFAULT_SEAT_TICK_POLICY } from "../src/lib/monitor/seatTick";
 import { defaultSeatTickSettings } from "../src/lib/monitor/seatTickSettings";
 import { sweepAutoMerge, sweepTaskFinishes, productionAutoMergePorts } from "../src/lib/forge/autoMerge";
 import { buildPipeline, savePipelines, loadPipelinesForList, loadPipelinesForListAsync } from "../src/lib/pipelines/store";
+import type { Pipeline } from "../src/lib/pipelines/types";
 import { buildRegistryPerformanceDataset } from "../src/lib/agent/registryPerformanceDataset";
 import { SqliteAgentRegistryStore } from "../src/lib/agent/sqliteRegistryStore";
-import { AgentRegistry, normalizeRegistry, setAgentRegistryForTests } from "../src/lib/agent/registry";
+import { closeAgentRegistryForTests, normalizeRegistry, setAgentRegistryForTests } from "../src/lib/agent/registry";
 
 const root = process.env.LLV_STATE_DIR;
 if (!root || process.env.LLV_VIEWER_CONTROL_URL !== "http://127.0.0.1:1" || process.env.LLV_LOOP_BENCHMARK !== "1"
@@ -33,10 +34,17 @@ const seed = buildPipeline({
     effectiveRole: { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } }],
   srcPath: null, srcConversationId: null, now: new Date(NOW).toISOString(), state: "draft",
 });
-const pipelines = Array.from({ length: 804 }, (_, i) => {
+const reviewedHead = "a".repeat(40);
+const pipelines: Pipeline[] = Array.from({ length: 804 }, (_, i) => {
   const id = `lane${String(i).padStart(4, "0")}`;
   return { ...seed, id, worktreeDir: `/repo-pipeline-${id}`, branch: `pipeline/synthetic-work-${id}`,
-    taskIds: [`task-${i}`], padding: "Synthetic context. ".repeat(5500) };
+    taskIds: [`task-${i}`], spec: "Synthetic context. ".repeat(5500),
+    state: "completed", lastPassedCommit: reviewedHead,
+    merge: { state: "queued", by: null, repository: "fixture/project", prNumber: null,
+      policyChangedAt: new Date(NOW).toISOString(), reviewedHead, chain: [reviewedHead], updates: [], seenChecks: [],
+      head: null, headSeenAt: null, lastChecks: null, readAt: null, nextReadAt: new Date(NOW + 60_000).toISOString(),
+      readFailures: 0, requestedAt: new Date(NOW + i).toISOString(), mergedHead: null, mergeCommit: null, method: null,
+      mergedAt: null, attempts: 0, reason: null, blockedAt: null, updatedAt: new Date(NOW).toISOString() } };
 });
 savePipelines(pipelines);
 const tasks = Array.from({ length: 1200 }, (_, i) => ({
@@ -62,7 +70,7 @@ const sources = {
   openPullRequests: async () => ({ ok: true, pullRequests: [] }), wakeState: async () => "retained", withdrawWake: async () => "withdrawn",
 } as unknown as SeatTickSources;
 const ports = productionAutoMergePorts({
-  loadPipelines: loadPipelinesForList, setting: () => ({ enabled: false, changedAt: null, changedBy: null }), pullRequestOf: () => null,
+  loadPipelines: loadPipelinesForList, setting: () => ({ enabled: true, changedAt: new Date(NOW).toISOString(), changedBy: "operator" }), pullRequestOf: () => null,
   hasPublishedPrototype: () => false, finishTask: () => "missing", run: async () => { throw Error("No network"); }, log: () => {},
 });
 const date = Date;
@@ -77,7 +85,7 @@ try {
   });
   crypto.randomUUID = () => `00000000-0000-4000-8000-${String(++seedId).padStart(12, "0")}`;
   crypto.randomBytes = ((size: number) => Buffer.alloc(size, 17)) as typeof crypto.randomBytes;
-  registryDataset = buildRegistryPerformanceDataset(path.join(root, "registry"), undefined, { sessionsRoot: path.join(root, "codex", "sessions") });
+  registryDataset = buildRegistryPerformanceDataset(root, undefined, { sessionsRoot: path.join(root, "codex", "sessions") });
 }
 finally { globalThis.Date = date; crypto.randomUUID = uuid; crypto.randomBytes = bytes; }
 const corpusHash = crypto.createHash("sha256");
@@ -90,7 +98,13 @@ try {
 } finally { census.close(); }
 const registrySha256 = corpusHash.digest("hex");
 let registry: SqliteAgentRegistryStore | undefined;
-let sessionRegistry: AgentRegistry | undefined;
+const warmRegistryWriter = new SqliteAgentRegistryStore(registryDataset.filename, {
+  normalize: normalizeRegistry, initialSnapshot: normalizeRegistry({ version: 2, entries: {}, receipts: {} }),
+});
+const warmRegistryReader = new SqliteAgentRegistryStore(registryDataset.filename, {
+  readOnly: true, normalize: normalizeRegistry, initialSnapshot: normalizeRegistry({ version: 2, entries: {}, receipts: {} }),
+});
+await warmRegistryReader.prepareReadOnlySnapshot();
 const cases = {
   memory: async () => {
     fs.writeFileSync(memoryFile, memoryText + `\n- Revision ${++iteration}.`);
@@ -108,10 +122,14 @@ const cases = {
     registry = new SqliteAgentRegistryStore(registryDataset.filename, { normalize: normalizeRegistry, initialSnapshot: normalizeRegistry({ version: 2, entries: {}, receipts: {} }), readOnly: true });
     return Object.keys((await registry.prepareReadOnlySnapshot()).file.entries).length;
   }),
+  "registry-warm": () => withViewerOperation("http.render", async () => {
+    const archived = warmRegistryWriter.archiveInactive(1);
+    if (archived !== 1) throw Error("warm registry fixture has no eligible archive row");
+    return Object.keys((await warmRegistryReader.prepareReadOnlySnapshot()).file.entries).length;
+  }),
   session: async () => {
-    sessionRegistry?.close();
-    sessionRegistry = new AgentRegistry(path.join(root, "registry", "agent-registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
-    setAgentRegistryForTests(sessionRegistry);
+    closeAgentRegistryForTests();
+    setAgentRegistryForTests(null);
     const response = await sessionGet(new NextRequest(`http://127.0.0.1/api/session?conversationId=${registryDataset.conversations[0]!.conversationId}`));
     if (response.status !== 200) throw Error("synthetic session must be readable");
     return response.status;
@@ -120,8 +138,9 @@ const cases = {
 
 const conditions = {
   runtime: Bun.version, utc: new Date().toISOString(), synthetic: { agents: 0, mutatingLanes: 6, mutationPosition: "tail", pipelines: pipelines.length,
-    pipelineBytes: Buffer.byteLength(JSON.stringify(pipelines)), tasks: tasks.length, memoryBytes: Buffer.byteLength(memoryText), memoryEntries: 3500,
-    registryRows: registryDataset.rows, registryBytes: registryDataset.payloadBytes, registrySha256 },
+    pipelinePayloadField: "spec", pipelineBytes: Buffer.byteLength(JSON.stringify(pipelines)), mergeQueueRows: pipelines.length,
+    tasks: tasks.length, memoryBytes: Buffer.byteLength(memoryText), memoryEntries: 3500,
+    registryRows: registryDataset.rows, registryBytes: registryDataset.payloadBytes, warmArchiveInvalidations: 3, registrySha256 },
 };
 type StackTrace = { traces: Array<{ frames: Array<{ name: string }> }> };
 const server = Bun.serve({
@@ -167,7 +186,7 @@ const server = Bun.serve({
   },
 });
 console.log(JSON.stringify({ ready: server.url.origin, conditions }));
-const stop = () => { server.stop(true); registry?.close(); sessionRegistry?.close(); setAgentRegistryForTests(null); };
+const stop = () => { server.stop(true); registry?.close(); warmRegistryReader.close(); warmRegistryWriter.close(); closeAgentRegistryForTests(); setAgentRegistryForTests(null); };
 process.on("SIGTERM", () => { stop(); process.exit(0); });
 if (!process.argv.includes("--serve")) {
   const output = process.argv[2];

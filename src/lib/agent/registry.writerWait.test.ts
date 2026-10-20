@@ -8,7 +8,7 @@ import { Database } from "bun:sqlite";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { blockingWaitDiagnostics, resetBlockingWaitsForTests, withWaitCorrelation } from "@/lib/blockingWaits";
 
-import { AgentRegistry, normalizeRegistry, setAgentRegistryForTests } from "./registry";
+import { AgentRegistry, closeAgentRegistryForTests, normalizeRegistry, prepareAgentRegistryForSession, setAgentRegistryForTests } from "./registry";
 import { SqliteAgentRegistryStore } from "./sqliteRegistryStore";
 
 /*
@@ -470,6 +470,35 @@ test("Viewer policy write lets a 10 ms timer run within 50 ms while a child hold
     else process.env.LLV_STATE_OWNER = previousOwner;
     setAgentRegistryForTests(null);
     registry.close();
+  }
+});
+
+test("cold session facade opening yields while the SQLite writer is contended", async () => {
+  const directory = fs.mkdtempSync(path.join(root, "session-open-wait-"));
+  const previousStateDir = process.env.LLV_STATE_DIR;
+  const previousOwner = process.env.LLV_STATE_OWNER;
+  process.env.LLV_STATE_DIR = directory;
+  process.env.LLV_STATE_OWNER = "viewer";
+  const seed = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  seed.close();
+  const holder = registryLockHolder(path.join(directory, "agent-registry.sqlite"));
+  closeAgentRegistryForTests();
+  try {
+    await holder.hold(120);
+    let settled = false;
+    const started = performance.now();
+    const opening = prepareAgentRegistryForSession().finally(() => { settled = true; });
+    const progress = await new Promise<number>(resolve => setTimeout(() => resolve(performance.now() - started), 10));
+    expect(progress).toBeLessThan(50);
+    expect(settled).toBe(false);
+    const registry = await opening;
+    expect(registry.readOnlySnapshot().version).toBe(2);
+  } finally {
+    await holder.close();
+    closeAgentRegistryForTests();
+    setAgentRegistryForTests(null);
+    if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousStateDir;
+    if (previousOwner === undefined) delete process.env.LLV_STATE_OWNER; else process.env.LLV_STATE_OWNER = previousOwner;
   }
 });
 

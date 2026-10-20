@@ -2762,8 +2762,49 @@ test("seat check keeps wake ordering and zero decoded or copied rows with tenfol
   expect(counts).toEqual([{ decoded: 0, copied: 0 }, { decoded: 0, copied: 0 }]);
 });
 
+test("seat projection yields through a large immutable specification and attempt history, then reuses warm evidence", async () => {
+  const { refreshSeatTickEvidence } = await import("./seatTickSources");
+  const { deepFreeze } = await import("@/lib/deepFreeze");
+  const attempts = Array.from({ length: 6000 }, (_, index) => ({
+    n: index + 1, state: "running", startedAt: new Date(NOW - index * 1000).toISOString(), completedAt: null,
+  }));
+  const largeSpec = `${"work ".repeat(21_000)}#123456`;
+  const largeRows = deepFreeze(Array.from({ length: 804 }, (_, index) => lane({
+    id: `large-spec-${index}`,
+    spec: largeSpec,
+    runs: index === 0 ? [{ stageId: "build", attempts }] : [{ stageId: "build", attempts: attempts.slice(0, 8) }],
+  }))) as never;
+  const ports = sources({ pipelines: largeRows });
+  let yielded = false;
+  const turn = new Promise<boolean>(resolve => setImmediate(() => { yielded = true; resolve(true); }));
+  const gathering = gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  expect(await Promise.race([gathering.then(() => false), turn])).toBe(true);
+  const input = await gathering;
+  expect(input.pipelines).toHaveLength(804);
+  const refreshDurations: number[] = [];
+  for (let pass = 0; pass < 3; pass++) {
+    const started = performance.now();
+    const refreshed = refreshSeatTickInput(input, ports);
+    refreshDurations.push(performance.now() - started);
+    expect(refreshed.pipelines).toEqual(input.pipelines);
+  }
+  expect(Math.max(...refreshDurations)).toBeLessThan(50);
+  let refreshed = input;
+  for (let pass = 0; pass < 3; pass++) {
+    let warmYielded = false;
+    const warmTurn = new Promise<void>(resolve => setImmediate(() => { warmYielded = true; resolve(); }));
+    const warming = refreshSeatTickEvidence(refreshed, ports);
+    expect(await Promise.race([warming.then(() => false), warmTurn.then(() => true)])).toBe(true);
+    refreshed = await warming;
+    expect(warmYielded).toBe(true);
+    expect(refreshed.pipelines).toEqual(input.pipelines);
+  }
+  expect(refreshed.pipelines).toEqual(input.pipelines);
+  expect(yielded).toBe(true);
+});
 
-test("unchanged frozen lane evidence serializes no retained body and replacement invalidates the key", async () => {
+
+test("frozen lane evidence avoids whole-row serialization and replacement invalidates the key", async () => {
   const { refreshSeatTickEvidence } = await import("./seatTickSources");
   const { spyOn } = await import("bun:test");
   const { deepFreeze } = await import("@/lib/deepFreeze");
@@ -2782,7 +2823,7 @@ test("unchanged frozen lane evidence serializes no retained body and replacement
     current = deepFreeze(lane({ spec: "replacement evidence" }));
     const replaced = await refreshSeatTickEvidence(first, ports);
     expect(replaced.pullRequestEvidenceKey).not.toBe(first.pullRequestEvidenceKey);
-    expect(bodies).toBe(1);
+    expect(bodies).toBe(0);
   } finally { serializing.mockRestore(); }
 });
 

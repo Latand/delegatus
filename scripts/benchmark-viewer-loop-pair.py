@@ -92,7 +92,7 @@ try:
         output.write_text(json.dumps(result, indent=2) + "\n")
         raise RuntimeError("the paired synthetic corpora differ")
     for repeat in range(3):
-        for case in ("memory", "seat", "merge", "registry", "session"):
+        for case in ("memory", "seat", "merge", "registry", "registry-warm", "session"):
             for arm in (("before", "after") if repeat % 2 == 0 else ("after", "before")):
                 with urllib.request.urlopen(origins[arm] + "/" + case, timeout=180) as response:
                     row = json.load(response)

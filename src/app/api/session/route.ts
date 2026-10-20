@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { readSession } from "@/lib/session/reader";
-import { agentRegistry } from "@/lib/agent/registry";
+import { prepareAgentRegistryForSession } from "@/lib/agent/registry";
 import { claudeProjectRootFor, codexSessionRootFor, pathAllowed } from "@/lib/scanner/roots";
 import type { ApiError } from "@/lib/types";
 
@@ -16,7 +16,7 @@ function engineForPath(pathname: string): "claude" | "codex" | null {
 
 export async function GET(req: NextRequest): Promise<NextResponse<ReturnType<typeof readSession> | ApiError>> {
   const conversationId = req.nextUrl.searchParams.get("conversationId");
-  const registry = agentRegistry();
+  const registry = await prepareAgentRegistryForSession(req.signal);
   const target = registry.sessionTarget(conversationId, req.nextUrl.searchParams.get("path") ?? "");
   const pathname = target.path;
   if (target.unavailable) {
