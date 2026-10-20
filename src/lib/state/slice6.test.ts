@@ -5,11 +5,12 @@ import path from "node:path";
 import { Database } from "bun:sqlite";
 import { slice6Cases } from "./slice6.fixture";
 import { resetLegacyDocumentStoresForTests } from "./legacyDocumentStore";
-import { projectAliasStore, projectRemoteStore, worktreeMapStore, readProjectDocument, projectStoreSignature } from "@/lib/projects/persistence";
-import { canonicalProject, persistProjectAliases, recordedProjectRemote } from "@/lib/projects/aliases";
+import { projectAliasStore, projectCurationStore, projectRemoteStore, worktreeMapStore, readProjectDocument, projectStoreSignature } from "@/lib/projects/persistence";
+import { canonicalProject, persistProjectAliases, recordedProjectRemote, recordProjectRemote } from "@/lib/projects/aliases";
+import { setProjectCrown, createManualProject } from "@/lib/projects/curation";
 import { archiveProjects } from "@/lib/reviewHistory/reader";
 import { readStateImport } from "./sqliteStateStore";
-import { withFileTransactionAttempt } from "./fileTransaction";
+import { FileTransactionAdmissionError, withFileTransactionAttempt } from "./fileTransaction";
 const roots: string[] = [];
 const previous = process.env.LLV_STATE_DIR;
 function sandbox() { const root = fs.mkdtempSync(path.join(os.tmpdir(), "slice6-")); roots.push(root); process.env.LLV_STATE_DIR = root; return root; }
@@ -91,7 +92,7 @@ for (const [name, store, body] of slice6Cases) {
   });
   test(`${name}: a contended legacy writer refuses immediately`, () => {
     const root = sandbox(), file = seed(root, name, body);
-    withFileTransactionAttempt(file, "fixture busy", () => expect(() => store.importLegacy(file)).toThrow());
+    withFileTransactionAttempt(file, "fixture busy", () => expect(() => store.importLegacy(file)).toThrow(FileTransactionAdmissionError));
     expect(fs.readFileSync(file, "utf8")).toBe(JSON.stringify(body));
   });
 }
@@ -123,4 +124,32 @@ test("alias decoders read committed SQLite inside a peer transaction; guards fol
     db.exec("ROLLBACK");
   } finally { db.close(); }
   expect(readProjectDocument(worktreeMapStore, "worktree-map.json")).toEqual({});
+});
+
+
+test("SQLite contention preserves project state and each owner retries after release", () => {
+  const root = sandbox();
+  for (const [name, store, body] of slice6Cases) store.importLegacy(seed(root, name, body));
+  const database = new Database(path.join(root, "state.sqlite"));
+  const remote = { project: "repo-0123456789abcdef0123456789abcdef", canonicalRemote: "github.com/example/another" };
+  const registration = { source: "another", target: "fixture", displayName: "Fixture" };
+  const before = readProjectDocument(projectCurationStore, "project-curation.json");
+  const folder = path.join(root, "manual-root"); fs.mkdirSync(folder);
+  try {
+    database.exec("BEGIN IMMEDIATE");
+    expect(persistProjectAliases([registration])).toBe(false);
+    expect(setProjectCrown("another", true)).toBe(false);
+    expect(createManualProject("Another", folder)).toMatchObject({ ok: false, code: "STORE_ERROR" });
+    recordProjectRemote(remote);
+    expect(recordedProjectRemote(remote.project)).toBeNull();
+    expect(canonicalProject("another")).toBe("another");
+    expect(readProjectDocument(projectCurationStore, "project-curation.json")).toEqual(before);
+    database.exec("ROLLBACK");
+  } finally { database.close(); }
+  expect(persistProjectAliases([registration])).toBe(true);
+  expect(setProjectCrown("another", true)).toBe(true);
+  expect(createManualProject("Another", folder).ok).toBe(true);
+  recordProjectRemote(remote);
+  expect(canonicalProject("another")).toBe("fixture");
+  expect(recordedProjectRemote(remote.project)).toBe(remote.canonicalRemote);
 });

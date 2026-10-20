@@ -146,3 +146,45 @@ imports read through the owner; the direct JSON readers are listed above.
 - `src/lib/voiceCompanion/deliveryPaths.ts`
 - `src/lib/voiceCompanion/readPaths.ts`
 - `src/lib/workflows/store.ts`
+
+## Serving interfaces after migration
+
+`src/lib/projects/persistence.ts` defines `project_aliases`, `project_curation`,
+`worktree_map` and `project_remotes`. `session/titleStore.ts` defines
+`session_titles`. Activation and demotion register all five in
+`state/legacyCollections.ts`. Imports, kept copies, tombstones, count/digest
+verification, row-revision reconciliation and consumed archives use the same
+protocol as slice 5b. JSON imports and rollback mirrors remain until #1872.
+
+The scanner, recovery planner, review archive and cache guards now read these
+collections. Collection revisions and database identity invalidate project
+caches; decoder reads use existing committed state without starting an import
+inside another transaction. The shared bounded decoded cache owns document
+snapshots, and each store retains at most four database handles. Remotes,
+worktree observations, crown changes and manual project creation use keyed
+patches. Title updates retain the existing 2,000 valid-record cap and preserve
+rejected records separately.
+
+Legacy admission uses one nonblocking file-lock attempt. The title route
+retries through `waitForStateLock`; a synchronous owner that refuses contention
+keeps its committed state for the caller's next attempt. Document operations
+retain the existing `state.document` monitor label. No latency or throughput
+improvement is claimed.
+
+The import parser now optionally receives its source text, and a store can
+provide a rollback serializer. Existing import specifications ignore those
+optional additions and retain their original serialization. Titles use both to
+preserve rejected record bytes, including numeric spelling and whitespace.
+Recovery still commits board changes together with mapping, alias and
+lifecycle evidence. That evidence remains in `worktree_recovery`; demotion
+folds it into the migrated stores before projecting their rollback mirrors.
+
+`src/lib/state/slice6.test.ts` covers each store's import, idempotency, torn
+source, rollback mirror, old-writer reconciliation, build refusal and consumed
+archive recovery across real process restarts. It also checks interrupted
+commits, decoder reads inside a peer transaction, cache revision changes and
+real SQLite write contention. `src/lib/scanner/describe.test.ts` includes a
+deleted-checkout case after SQLite import. The title route tests cover torn
+source recovery and unsupported-schema refusal; concurrent title writers
+retain every key while admission yields. Recovery tests refuse conflicting
+mapping ownership.
