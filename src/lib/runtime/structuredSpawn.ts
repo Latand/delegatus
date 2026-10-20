@@ -60,6 +60,8 @@ import { parseStructuredImageRefs, structuredContent, type StructuredImageRef } 
 import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH, TELEGRAM_SEAT_INACTIVE_BEFORE_LAUNCH } from "./telegramConnectorEnv";
 import { STAGED_RECOVERY_PREFIX, stagedLaunchRecovery, type StagedLaunchRecovery } from "./stagedRecovery";
 import type { SeatTickSources } from "@/lib/monitor/seatTickSources";
+import { RoleMemoryChanged, withCurrentRoleMemory, withoutStoredLessonsAsync } from "@/lib/memory/privacy";
+import { roleMemoryRevisionToken, ROLE_MEMORY_CHANGED_MESSAGE } from "@/lib/memory/roleStore";
 
 export type SpawnedStructuredHost = EngineHost & {
   /** Effective MCP transport when account config constrained the preference. */
@@ -1337,6 +1339,12 @@ export interface StructuredSpawnInput {
   spec: ResumeSpec;
   account: AccountContext;
   "prompt": string;
+  /** Original stage input preparation, rerun after runtime admission and host
+      setup so first-message delivery uses the current privacy view. */
+  preparePrompt?: () => Promise<string>;
+  /** Opaque current privacy revision attached to the durable first-message
+      effect and checked again by the runtime delivery queue. */
+  roleMemoryRevision?: string;
   imageRefs?: StructuredImageRef[];
   registry: AgentRegistry;
   client: RuntimeHostClient;
@@ -1861,6 +1869,11 @@ async function recoverPendingStructuredSpawnPass(
       throw new Error(`structured spawn recovery is missing durable prompt admission for ${receipt.launchId}`);
     }
     if (imageRefs === null) throw new Error(`structured spawn recovery has invalid image refs for ${receipt.launchId}`);
+    const roleMemoryRevision = effect?.roleMemoryRevision;
+    if (roleMemoryRevision !== undefined
+      && (typeof roleMemoryRevision !== "string" || !/^[a-f0-9]{64}$/.test(roleMemoryRevision))) {
+      throw new Error(`structured spawn recovery has invalid role-memory revision for ${receipt.launchId}`);
+    }
     if (prompt.trim() || imageRefs.length) {
       const origin = spawnMessageOrigin(receipt, registry);
       const delivered = await enqueueStructuredMessage({
@@ -1871,6 +1884,7 @@ async function recoverPendingStructuredSpawnPass(
         launchId: receipt.launchId,
         text: prompt,
         imageRefs,
+        ...(typeof roleMemoryRevision === "string" ? { roleMemoryRevision } : {}),
         admissionGuard: assertActive,
         ...(origin ? { origin } : {}),
       }, {
@@ -2209,6 +2223,14 @@ function spawnMessageOrigin(receipt: SpawnReceipt, registry: AgentRegistry): Mes
 
 async function defaultDeliverFirst(input: StructuredSpawnInput, artifactPath: string): Promise<void | "held"> {
   if (!input.prompt.trim() && !input.imageRefs?.length) return;
+  if (input.roleMemoryRevision) {
+    const priorHold = Object.values(input.registry.readOnlySnapshot().heldDeliveries).find(delivery =>
+      delivery.clientMessageId === `spawn_${input.receipt.launchId}`
+      && delivery.state === "held"
+      && !!delivery.command.roleMemoryRevision
+      && delivery.command.roleMemoryRevision !== input.roleMemoryRevision);
+    if (priorHold) throw new RoleMemoryChanged();
+  }
   const origin = spawnMessageOrigin(input.receipt, input.registry);
   const delivered = await enqueueStructuredMessage({
     path: artifactPath,
@@ -2218,6 +2240,7 @@ async function defaultDeliverFirst(input: StructuredSpawnInput, artifactPath: st
     launchId: input.receipt.launchId,
     text: input.prompt,
     imageRefs: input.imageRefs,
+    ...(input.roleMemoryRevision ? { roleMemoryRevision: input.roleMemoryRevision } : {}),
     ...(origin ? { origin } : {}),
   }, {
     client: () => input.client,
@@ -2227,6 +2250,7 @@ async function defaultDeliverFirst(input: StructuredSpawnInput, artifactPath: st
   });
   if (!delivered?.ok) {
     const message = delivered?.error ?? "structured spawn first-message delivery was unavailable";
+    if (message === ROLE_MEMORY_CHANGED_MESSAGE) throw new RoleMemoryChanged();
     if (delivered?.transportUncertain) throw new StructuredInitialMessageTimeoutError(message);
     throw new Error(message);
   }
@@ -2541,6 +2565,12 @@ export async function recoverStagedStructuredLaunch(
       }
       if (launch && FAILED_SPAWN_OPERATION_STATUSES.has(launch.receipt.status)) return stop(launch.receipt.reason ?? `original launch ended as ${launch.receipt.status}`);
       const messageFailure = failedOperationReason(message, "original first message");
+      if (messageFailure === ROLE_MEMORY_CHANGED_MESSAGE) {
+        const failed = await failStagedResume(launchId, registry, client, messageFailure, {
+          ...options.reap, assertActive: options.assertActive,
+        });
+        return failed.receipt ?? read();
+      }
       if (messageFailure) return stop(messageFailure);
       if (!launch) throw new RuntimeHostUnavailableError("original launch operation is not visible", "HOST_BUSY");
       const delivered = recovery.phase === "delivered" || (message && INITIAL_MESSAGE_DELIVERED.has(message.receipt.status));
@@ -2602,6 +2632,11 @@ export async function recoverStagedStructuredLaunch(
         if (!effect || effect.conversationId !== receipt.conversationId || effect.cwd !== receipt.cwd) return stop("original launch payload could not be verified");
         const images = parseStructuredImageRefs(effect.images ?? [], 16);
         if (typeof effect.prompt !== "string" || images === null) return stop("original launch payload is invalid");
+        const roleMemoryRevision = effect.roleMemoryRevision;
+        if (roleMemoryRevision !== undefined
+          && (typeof roleMemoryRevision !== "string" || !/^[a-f0-9]{64}$/.test(roleMemoryRevision))) {
+          return stop("original launch role-memory revision is invalid");
+        }
         if (!current()) return read();
         curatorAuthorize();
         const origin = spawnMessageOrigin(receipt, registry);
@@ -2612,10 +2647,12 @@ export async function recoverStagedStructuredLaunch(
         curatorAuthorize();
         const result = await enqueueStructuredMessage({ path: receipt.artifactPath, conversationId: receipt.conversationId,
           clientMessageId: `spawn_${launchId}`, operationId: `spawn_message_${launchId}`, launchId, text: effect.prompt, imageRefs: images,
+          ...(typeof roleMemoryRevision === "string" ? { roleMemoryRevision } : {}),
           ...(origin ? { origin } : {}), admissionGuard: () => { options.assertActive?.(); curatorAuthorize(); },
         }, { client: () => client, registry: () => registry, enabled: () => true });
         if (!result?.ok) {
           const reason = result?.error ?? "original first-message admission failed";
+          if (reason === "Role-memory privacy changed; retrying before dispatch") throw new RoleMemoryChanged();
           if (result?.transportUncertain) throw new StructuredInitialMessageTimeoutError(reason);
           if (result?.status === 503) throw Object.assign(new Error(reason), { status: 503 });
           throw new Error(reason);
@@ -2627,6 +2664,12 @@ export async function recoverStagedStructuredLaunch(
       return read();
     } catch (error) {
       if (!current()) return read();
+      if (error instanceof RoleMemoryChanged) {
+        const failed = await failStagedResume(launchId, registry, client, error.message, {
+          ...options.reap, assertActive: options.assertActive,
+        });
+        return failed.receipt ?? read();
+      }
       if (!isTransientStagedLaunchFailure(error) && !(error instanceof StructuredInitialMessageTimeoutError)) return stop(stagedRecoveryFailureReason(error));
       await persist({ ...recovery, reason: stagedRecoveryFailureReason(error) });
       return read();
@@ -2738,6 +2781,7 @@ export async function spawnStructuredConversation(
       engine: input.engine,
       cwd: input.spec.cwd,
       "prompt": content?.content.text ?? "",
+      ...(input.roleMemoryRevision ? { roleMemoryRevision: input.roleMemoryRevision } : {}),
       ...(content?.content.images.length ? { images: content.content.images } : {}),
       ...(content ? { contentDigest: content.contentDigest } : {}),
       accountId: input.account.accountId,
@@ -2849,6 +2893,22 @@ export async function spawnStructuredConversation(
     };
     const recovery: StagedLaunchRecovery = { phase: "unpublished", startedAt: now(), checks: 0, nextTryAt: now(), reason: "host publication pending" };
     await writeStagedRecovery(input.registry, operationId, recovery);
+    const deliverCurrentFirst = async (deliver: typeof deliverFirst = deliverFirst): Promise<void | "held"> => {
+      await input.authorize?.();
+      let deliveryInput = input;
+      if (input.preparePrompt) {
+        deliveryInput = await withCurrentRoleMemory(async () => {
+          const prompt = await withoutStoredLessonsAsync(await input.preparePrompt!());
+          return { ...input, prompt, roleMemoryRevision: roleMemoryRevisionToken() };
+        });
+      }
+      const revision = deliveryInput.roleMemoryRevision;
+      const authorizeDispatch = async () => {
+        await input.authorize?.();
+        if (revision && roleMemoryRevisionToken() !== revision) throw new RoleMemoryChanged();
+      };
+      return await deliver({ ...deliveryInput, authorize: authorizeDispatch }, identity.path);
+    };
     const continuation: StagedContinuation = {
       host,
       owns: async () => await ownsLaunch() && input.registry.ownsStructuredHostClaim(key!, claimed.claimOwner!, claimed.claimEpoch),
@@ -2857,7 +2917,7 @@ export async function spawnStructuredConversation(
         binding.unregister = await publishAuthorized();
         forgetUnpublishedHost();
       },
-      deliver: async () => { await input.authorize?.(); return deliverFirst(input, identity.path); },
+      deliver: deliverCurrentFirst,
     };
     stagedContinuations.set(operationId, continuation);
     forgetUnpublishedHost = retainUnpublishedStructuredLaunchHost({ key, host, registry: input.registry,
@@ -2875,7 +2935,7 @@ export async function spawnStructuredConversation(
     let uncertainFirstMessage = false;
     try {
       await input.authorize?.();
-      initialMessage = await withinDurableSetup(deliverFirst(input, identity.path));
+      initialMessage = await withinDurableSetup(continuation.deliver());
     } catch (error) {
       /* Host identity and ownership are durable by this point. A caller
          timeout becomes reconciliation work and never enters host cleanup. */
@@ -2895,8 +2955,9 @@ export async function spawnStructuredConversation(
     if (initialMessage === "held") {
       if (!uncertainFirstMessage) {
         await writeStagedRecovery(input.registry, operationId, { ...recovery, reason: "first message held before dispatch" });
-        // Retry admission through the same durable payload and client ids.
-        continuation.deliver = () => defaultDeliverFirst(input, identity.path);
+        // The injected delivery seam reports the hold; recovery retries via
+        // the real durable queue while refreshing the prompt and revision.
+        continuation.deliver = () => deliverCurrentFirst(defaultDeliverFirst);
       }
       clearDurableSetupTimeout();
       (await input.registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredSpawnAdmissionOwner" }, input.registry.releaseStructuredSpawnAdmissionOwner.bind(input.registry, input.receipt.launchId, input.receipt.admissionOwner ?? processIdentity())));

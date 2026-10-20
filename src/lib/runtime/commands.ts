@@ -187,6 +187,11 @@ export function parseRuntimeCommand(kind: RuntimeOperationKind, value: unknown):
     const imageRefs = images === undefined ? [] : parseStructuredImageRefs(images, 16);
     if (!imageRefs) throw new Error("images are invalid");
     const content = structuredContent(text, imageRefs);
+    const roleMemoryRevision = body.roleMemoryRevision;
+    if (roleMemoryRevision !== undefined
+      && (!operationId?.startsWith("spawn_message_") || typeof roleMemoryRevision !== "string" || !/^[a-f0-9]{64}$/.test(roleMemoryRevision))) {
+      throw new Error("role-memory revision is invalid");
+    }
     const policy = body.policy === undefined ? undefined : body.policy;
     if (policy !== undefined && policy !== "queue" && policy !== "steer-if-active" && policy !== "steer-or-queue" && policy !== "interrupt-active") {
       throw new Error("policy is invalid");
@@ -217,6 +222,7 @@ export function parseRuntimeCommand(kind: RuntimeOperationKind, value: unknown):
       ...(runtime ? { runtime } : {}),
       ...(onlyIfIdle ? { onlyIfIdle } : {}),
       ...(selectedContext ? { selectedContext } : {}),
+      ...(typeof roleMemoryRevision === "string" ? { roleMemoryRevision } : {}),
     };
   }
 
@@ -315,6 +321,11 @@ export function parseRuntimeCommand(kind: RuntimeOperationKind, value: unknown):
   const images = body.images === undefined ? [] : parseStructuredImageRefs(body.images, 16);
   if (!images) throw new Error("images are invalid");
   const content = prompt || images.length ? structuredContent(prompt, images) : null;
+  const roleMemoryRevision = body.roleMemoryRevision;
+  if (roleMemoryRevision !== undefined
+    && (typeof roleMemoryRevision !== "string" || !/^[a-f0-9]{64}$/.test(roleMemoryRevision))) {
+    throw new Error("role-memory revision is invalid");
+  }
   const accountId = optionalNullableId(body.accountId, "accountId");
   const parentConversationId = optionalNullableId(body.parentConversationId, "parentConversationId");
   const sessionId = optionalNullableId(body.sessionId, "sessionId");
@@ -328,6 +339,7 @@ export function parseRuntimeCommand(kind: RuntimeOperationKind, value: unknown):
     prompt,
     ...(images.length ? { images } : {}),
     ...(content ? { contentDigest: content.contentDigest } : {}),
+    ...(typeof roleMemoryRevision === "string" ? { roleMemoryRevision } : {}),
     ...(accountId !== undefined ? { accountId } : {}),
     ...(parentConversationId !== undefined ? { parentConversationId } : {}),
     ...(sessionId !== undefined ? { sessionId } : {}),
