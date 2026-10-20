@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 
-import { beforeEach, afterEach, expect, test } from "bun:test";
+import { beforeEach, afterEach, expect, spyOn, test } from "bun:test";
+import * as io from "node:fs/promises";
 
 import {
   CodexAppServerHost,
@@ -770,6 +771,48 @@ test("writer ownership lost during the canonical read refuses before the injecti
   expect((failure as StructuredInjectError).phase).toBe("refused");
   await host.release();
 });
+
+for (const method of ["send", "steer", "inject"] as const) {
+  test(`${method} rechecks writer ownership after asynchronous metadata publication`, async () => {
+    const server = new InjectAppServer(scratchRoot());
+    const host = await startHost(server);
+    if (method === "steer") {
+      server.startTurn();
+      await new Promise<void>(resolve => setImmediate(resolve));
+    }
+    let ready!: () => void, release!: () => void;
+    const entered = new Promise<void>(resolve => { ready = resolve; });
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const original = io.open;
+    const open = spyOn(io, "open").mockImplementation(async (...args) => {
+      const handle = await original(...args);
+      if (String(args[0]).endsWith(".tmp")) {
+        const sync = handle.sync.bind(handle);
+        handle.sync = async () => { ready(); await held; await sync(); };
+      }
+      return handle;
+    });
+    const pending = method === "inject"
+      ? host.inject({ operationId: "publication-writer-loss", threadId: server.threadId, text: "input", contentDigest: digestOf("input") })
+      : host[method]({ id: "publication-writer-loss", text: "input" });
+    const outcome = pending.catch((error: unknown) => error);
+    try {
+      await Promise.race([entered, outcome.then(() => { throw new Error("delivery ended before reaching metadata publication"); })]);
+      expect(server.requests.filter(request => ["turn/start", "turn/steer", "thread/inject_items"].includes(request.method))).toHaveLength(0);
+      host.setWriterFence(() => false);
+      release();
+      const error = await outcome;
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain("stale-generation");
+      expect(server.requests.filter(request => ["turn/start", "turn/steer", "thread/inject_items"].includes(request.method))).toHaveLength(0);
+    } finally {
+      release();
+      await outcome;
+      open.mockRestore();
+      await host.release();
+    }
+  });
+}
 
 /** A relaunch of an existing thread that holds the Telegram tool: the thread is
     resumed, and the first message of the run is on its way to the engine. */

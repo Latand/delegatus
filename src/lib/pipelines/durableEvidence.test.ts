@@ -772,7 +772,7 @@ test.each([0, 9 * 1024 * 1024].flatMap(bytes => [false, true].map(operator => ({
     ...(bytes ? [{ type: "queue-operation", timestamp: new Date(cut).toISOString(), padding: "x".repeat(bytes) }] : []),
     { type: "event_msg", timestamp: new Date(cut).toISOString(), payload: { type: "task_complete", error: { message: "usage limit", codex_error_info: "usage_limit_exceeded" } } },
     { type: "event_msg", timestamp: new Date(cut + 1000).toISOString(), payload: { type: "user_message",
-      message: encodeCodexStructuredUserText("Review completed", undefined, null, { kind: "agent", role: "reviewer" }) } },
+      message: await encodeCodexStructuredUserText("Review completed", undefined, null, { kind: "agent", role: "reviewer" }) } },
     { type: "event_msg", timestamp: new Date(cut + 2000).toISOString(), payload: { type: "agent_message", message: "Working on the stage" } },
     { type: "event_msg", timestamp: new Date(cut + 3000).toISOString(), payload: { type: "turn_aborted" } },
     ...(operator ? [{ type: "event_msg", timestamp: new Date(cut).toISOString(), payload: { type: "user_message", message: "Wait for my review" } }] : []),
@@ -828,7 +828,7 @@ for (const engine of ["claude", "codex"] as const) {
     ]);
     if (engine === "codex") {
       const { encodeCodexStructuredUserText } = await import("@/lib/runtime/codexStructuredUserText.server");
-      fs.appendFileSync(file, JSON.stringify({ type: "response_item", timestamp, payload: { type: "message", role: "user", content: [{ type: "input_text", text: encodeCodexStructuredUserText(text, undefined, null, { kind: "agent", role }) }] } }) + "\n");
+      fs.appendFileSync(file, JSON.stringify({ type: "response_item", timestamp, payload: { type: "message", role: "user", content: [{ type: "input_text", text: await encodeCodexStructuredUserText(text, undefined, null, { kind: "agent", role }) }] } }) + "\n");
     } else {
       const { FileClaudeDeliveryLedger } = await import("@/lib/runtime/claudeStreamBrokerHost");
       const ledger = new FileClaudeDeliveryLedger();

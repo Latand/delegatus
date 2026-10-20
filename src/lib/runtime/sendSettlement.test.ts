@@ -2097,7 +2097,7 @@ test("a Codex canonical user turn settles started delivery even when the Viewer 
     const text = "check the release";
     const { operationId } = acceptSend(active, { text });
     active.journal.transitionOperation(operationId, "delivering");
-    const wire = encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken(operationId));
+    const wire = await encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken(operationId));
     fs.writeFileSync(active.transcriptPath, JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: wire } }) + "\n");
     expect(await resolveSendReceipt(operationId, { registry: active.registry, client: active.client })).toMatchObject({ state: "delivered", resend: "not-needed" });
   } finally { active.close(); }
@@ -2109,7 +2109,7 @@ test("equal text under another key and an assistant answer prove nothing about t
     const text = "check the release";
     const { operationId } = acceptSend(active, { text });
     active.journal.transitionOperation(operationId, "delivering");
-    const wire = encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken("different-operation"));
+    const wire = await encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken("different-operation"));
     fs.writeFileSync(active.transcriptPath, JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: wire } }) + "\n" + JSON.stringify({ type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "done" }] } }) + "\n");
     expect(await resolveSendReceipt(operationId, { registry: active.registry, client: active.client, now: AFTER_THE_WINDOW })).toMatchObject({ state: "failed", resend: "verify-first" });
   } finally { active.close(); }
@@ -2237,7 +2237,7 @@ test("a retry records and settles against the currently committed generation", a
     const retryId = "op_retry_successor";
     expect(reopened.recordDeliveryRetryAttempt(original.operationId, retryId)).toBeTrue();
     expect(reopened.readOnlySnapshot().deliveryOperationOwners[retryId]?.targetGenerationId).toBe(successorId);
-    const wire = encodeCodexStructuredUserText("recover into successor", undefined, null,
+    const wire = await encodeCodexStructuredUserText("recover into successor", undefined, null,
       { kind: "operator" }, deliveryDedupToken(retryId));
     fs.writeFileSync(successorPath, JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: wire } }) + "\n");
     expect(await resolveSendReceipt(retryId, { registry: reopened, client: null }))
@@ -2516,7 +2516,7 @@ test("a compacted Codex attempt settles from its canonical turn after registry r
     active.journal.transitionOperation(operationId, "delivering");
     active.journal.transitionOperation(operationId, "uncertain", { reason: SEND_UNVERIFIED_REASON });
     active.registry.recordDeliveryOutcome(deliveryId, "failed", SEND_UNVERIFIED_REASON, "unverified");
-    const wire = encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken(operationId));
+    const wire = await encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken(operationId));
     fs.writeFileSync(active.transcriptPath, JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: wire } }) + "\n");
     clock += 8 * 24 * 60 * 60 * 1000;
     const later = acceptSend(active, { clientMessageId: "codex-retention-trigger", operationId: "op_codex_retention_trigger" });
