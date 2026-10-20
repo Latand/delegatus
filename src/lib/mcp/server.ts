@@ -2638,6 +2638,10 @@ export function createMcpToolService(
   options: McpToolServiceOptions = {},
 ): McpToolService {
   const inFlight = new Map<string, { digest: string; result: Promise<McpToolResult> }>();
+  // A failed local dispatch marker proves this invocation never called the
+  // binding. Retain that proof if its owner-bound claim release is temporarily
+  // unavailable, so a same-process retry can finish cleanup before claiming.
+  const pendingLocalReleases = new Map<string, { digest: string; binding: McpRequestBinding; store: McpRecoveryReceiptStore }>();
   const service: McpToolService = {
     callTool: async function callTool(toolName: string, args: McpToolArgs, context: McpToolCallContext = {}): Promise<McpToolResult> {
       if (!(MCP_TOOL_NAMES as readonly string[]).includes(toolName)) {
@@ -3300,6 +3304,37 @@ export function createMcpToolService(
           target: { project: null, identity: null }, downstreamKey: key,
           owner: captureProcessIdentity(process.pid), claimedAt: new Date().toISOString(),
         } : undefined;
+        const pendingRelease = localStore ? pendingLocalReleases.get(key) : undefined;
+        if (pendingRelease && pendingRelease.digest === digest && pendingRelease.store === localStore) {
+          try {
+            if (await localStore.release?.(key, digest, pendingRelease.binding)) {
+              pendingLocalReleases.delete(key);
+            } else {
+              const current = await localStore.lookup(key);
+              if (!current) pendingLocalReleases.delete(key);
+              else if (current.result) {
+                pendingLocalReleases.delete(key);
+                return { ...current.result, replayed: true };
+              } else if (current.digest === digest && current.binding
+                && JSON.stringify(current.binding) === JSON.stringify(pendingRelease.binding)
+                && (current.stage === "claimed" || current.stage === "dispatching")) {
+                return recoveryAnswer(typedTool, requestId, {
+                  outcome: "unknown", evidence: "mcp-receipt",
+                  reason: "The original invocation proved it never dispatched, but its receipt claim could not yet be released. Retry the same clientRequestId when storage is available.",
+                  ids: {},
+                }, false);
+              } else {
+                pendingLocalReleases.delete(key);
+              }
+            }
+          } catch {
+            return recoveryAnswer(typedTool, requestId, {
+              outcome: "unknown", evidence: "mcp-receipt",
+              reason: "The original invocation proved it never dispatched, but receipt cleanup is temporarily unavailable. Retry the same clientRequestId when storage is available.",
+              ids: {},
+            }, false);
+          }
+        }
         const claim = await measure("claim", () => receipts.claim(key, digest, retention, localBinding));
         if (claim.kind === "conflict") {
           outcome = "conflict";
@@ -3351,6 +3386,7 @@ export function createMcpToolService(
             let released = false;
             try { released = await localStore.release?.(key, digest, localBinding) ?? false; }
             catch { /* Confirm below before offering a retry. */ }
+            if (!released && localBinding) pendingLocalReleases.set(key, { digest, binding: localBinding, store: localStore });
             if (released) {
               return failure(typedTool, requestId, "not_executed",
                 "The local dispatch marker could not be recorded; no binding ran. Retry with the same clientRequestId.",
