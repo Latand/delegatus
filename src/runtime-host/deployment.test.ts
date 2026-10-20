@@ -25,6 +25,7 @@ import { viewerCandidateDockerArgs, viewerComposeServiceFromConfig } from "./can
 import { RuntimeHost } from "./host";
 import { RuntimeJournal } from "./journal";
 import { serveRuntimeHost } from "./socket";
+import { currentRuntimeHostGeneration, writeRuntimeHostRelease } from "./hostRelease";
 
 const sandboxes: string[] = [];
 afterEach(() => {
@@ -507,6 +508,55 @@ test("issue 1268: the predecessor leaves success non-terminal until the staged r
     `verify-host-successor:${handedOff?.candidate?.image}:${handedOff?.candidate?.revision}`,
   );
   store.close();
+});
+
+test.each(["missing", "previous"] as const)("issue 1999: successor with a %s release record completes one handoff after process restart", async recordState => {
+  const filename = journalFile(`one-handoff-${recordState}`);
+  const store = new RuntimeJournal(filename, { now: () => 1_000 });
+  const adapter = new FakeDeploymentAdapter();
+  const handoffs: string[] = [];
+  const predecessor = new ViewerDeploymentCoordinator(store, adapter, { pid: 10, startIdentity: "10:1" }, {
+    hostGeneration: () => currentRuntimeHostGeneration({ NODE_ENV: "test" }),
+    onHostHandoff: context => { handoffs.push(context.deploymentId); },
+  });
+  const receipt = await predecessor.requestViewerDeployment({ idempotencyKey: "one-handoff", revision: "b".repeat(40) });
+  if (receipt.state !== "accepted") throw new Error("deployment was not accepted");
+  await predecessor.waitForDeployment(receipt.deploymentId);
+  const candidate = store.viewerDeployment(receipt.deploymentId)!.candidate!;
+  expect(handoffs).toEqual([receipt.deploymentId]);
+  expect(adapter.calls.filter(call => call.startsWith("stage-host-successor:"))).toHaveLength(1);
+  store.close();
+  const releaseFile = path.join(path.dirname(filename), "host-release.json");
+  if (recordState === "previous") writeRuntimeHostRelease({ ...candidate,
+    image: "viewer:previous", revision: "a".repeat(40), container: "host-previous", stagedAt: "2026-10-19T00:00:00Z" }, releaseFile);
+  const child = Bun.spawn([process.execPath, "--eval", `
+    import { RuntimeJournal } from "./src/runtime-host/journal";
+    import { ViewerDeploymentCoordinator } from "./src/runtime-host/deployment";
+    import { FakeDeploymentAdapter } from "./src/runtime-host/fixtures/fakeDeploymentAdapter";
+    import { currentRuntimeHostGeneration } from "./src/runtime-host/hostRelease";
+    const store = new RuntimeJournal(process.argv[1], { now: () => 2_000 });
+    const adapter = new FakeDeploymentAdapter();
+    const handoffs = [];
+    const generation = currentRuntimeHostGeneration();
+    try {
+      const coordinator = new ViewerDeploymentCoordinator(store, adapter, { pid: 11, startIdentity: "11:2" }, {
+        ownerAlive: () => false, hostGeneration: () => generation, log: () => {},
+        onHostHandoff: context => { handoffs.push(context.deploymentId); },
+      });
+      await coordinator.recover();
+      const status = await coordinator.waitForDeployment(process.argv[2]);
+      await coordinator.recover();
+      console.log(JSON.stringify({ generation, handoffs, calls: adapter.calls, phase: status?.phase }));
+    } finally { store.close(); }
+  `, filename, receipt.deploymentId], { cwd: process.cwd(), env: { ...process.env,
+    LLV_RUNTIME_HOST_RELEASE_TARGET: releaseFile, LLV_RUNTIME_HOST_IMAGE: candidate.image,
+    LLV_RUNTIME_HOST_REVISION: candidate.revision, LLV_RUNTIME_HOST_CONTAINER: "host-successor" }, stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect({ exit, stderr }).toEqual({ exit: 0, stderr: "" });
+  const recovered = JSON.parse(stdout);
+  expect(recovered).toMatchObject({ generation: { image: candidate.image, revision: candidate.revision }, handoffs: [], phase: "succeeded" });
+  expect(recovered.calls.filter((call: string) => call.startsWith("stage-host-successor:"))).toEqual([]);
+  expect(recovered.calls.filter((call: string) => call.startsWith("verify-host-successor:"))).toHaveLength(1);
 });
 
 test("issue 1412: a failed runtime-host handoff settles terminal and clears deployment admission", async () => {

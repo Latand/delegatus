@@ -23,7 +23,7 @@ const domain = {
 };
 
 describe.serial("deployment bindings", () => {
-test("admission survives a control timeout and the original MCP key resolves through a reopened receipt store", async () => {
+test("admission survives a control timeout with its id in the first reply and replays after restart", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "deploy-receipt-"));
   const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"), { now: () => 1_000 });
   const adapter = new FakeDeploymentAdapter();
@@ -58,8 +58,7 @@ test("admission survives a control timeout and the original MCP key resolves thr
     const original = await createMcpToolService(viewerMcpBindings(undefined, timed, domain as never), store)
       .callTool("deploy_exact_sha", args);
     expect(journal.viewerDeploymentByIdempotencyKey(args.clientRequestId)?.deploymentId).toBe(deploymentId);
-    expect(original).toMatchObject({ ok: false, code: "outcome_unknown", retryable: false });
-    expect(JSON.stringify(original)).toContain("deployment_status");
+    expect(original).toMatchObject({ ok: true, state: "accepted", deploymentId, wakeOnSettle: true });
     store.close();
     storeClosed = true;
     // A fresh process must reconcile the durable pending receipt; no in-memory
@@ -97,7 +96,7 @@ test("admission survives a control timeout and the original MCP key resolves thr
   }
 });
 
-test("a reconnect refusal after admission stays unknown and original-key replay resolves it", async () => {
+test("a reconnect refusal after admission returns the recovered id on the first reply", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "deploy-reconnect-refusal-"));
   const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"), { now: () => 2_000 });
   const adapter = new FakeDeploymentAdapter();
@@ -121,8 +120,8 @@ test("a reconnect refusal after admission stays unknown and original-key replay 
   const context = { deadlineAt: Date.now() + 5_000 };
   try {
     const first = await service.callTool("deploy_exact_sha", args, context);
-    expect(first).toMatchObject({ ok: false, code: "outcome_unknown", retryable: false });
-    expect(JSON.stringify(first)).toContain("deployment_status");
+    expect(first).toMatchObject({ ok: true, state: "accepted",
+      deploymentId: journal.viewerDeploymentByIdempotencyKey(args.clientRequestId)?.deploymentId, wakeOnSettle: true });
     expect(journal.viewerDeploymentByIdempotencyKey(args.clientRequestId)?.revision).toBe(SHA);
 
     const replay = await service.callTool("deploy_exact_sha", args, { deadlineAt: Date.now() + 5_000 });
@@ -141,7 +140,7 @@ test("a reconnect refusal after admission stays unknown and original-key replay 
   }
 });
 
-test("a truncated accepted body followed by refusal keeps its receipt pending until restart recovery", async () => {
+test("a truncated accepted body returns the recovered id and retains its receipt after reopen", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "deploy-truncated-body-"));
   const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"), { now: () => 2_500 });
   const adapter = new FakeDeploymentAdapter();
@@ -169,8 +168,8 @@ test("a truncated accepted body followed by refusal keeps its receipt pending un
   try {
     const first = await createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true), domainWithLookup as never), store)
       .callTool("deploy_exact_sha", args, { deadlineAt: Date.now() + 5_000 });
-    expect(first).toMatchObject({ ok: false, code: "outcome_unknown", retryable: false });
-    expect(JSON.stringify(first)).toContain("deployment_status");
+    expect(first).toMatchObject({ ok: true, state: "accepted",
+      deploymentId: journal.viewerDeploymentByIdempotencyKey(args.clientRequestId)?.deploymentId, wakeOnSettle: true });
     expect(journal.viewerDeploymentByIdempotencyKey(args.clientRequestId)?.deploymentId).toBeTruthy();
     store.close();
     store = new SqliteMcpReceiptStore(receiptPath);

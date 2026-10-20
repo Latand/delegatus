@@ -68,6 +68,8 @@ export type AgentLivenessReason =
   | "host_alive_turn_active"
   /** A live host with a settled turn — the agent is awaiting input. */
   | "host_alive_turn_idle"
+  /** A matching durable stage settled an otherwise unknown native turn. */
+  | "pipeline_stage_settled"
   /** A live host whose transcript has been silent past the stall threshold. */
   | "host_alive_transcript_silent"
   /** A live host reported that its engine is retrying a provider error inside
@@ -91,15 +93,17 @@ export interface AgentLivenessPipelineRef {
   pipelineId: string;
   stageId: string;
   attempt: number;
-  /** What the pipeline record currently claims. Reported for contrast, never
-      used as liveness evidence — a stale `running` here is the bug, not the
-      answer (see the pane-less structured attempt in `pipelines/engine.ts`). */
+  /** A running claim alone proves no work. A settled attempt can resolve an
+      unknown native turn only with matching ownership and no ongoing work. */
   reportedState: PipelineStageAttempt["state"];
   reportedPipelineState: Pipeline["state"];
   /** Pane-less attempts are structured-hosted; the reconciler treats their
       durable `busy` turn evidence as "wait forever", so they are the ones that
       strand. */
   paneId: string | null;
+  /** Ownership carried with the ref, including when lookup fell back to a path. */
+  conversationId?: string | null;
+  agentPath?: string | null;
 }
 
 export interface AgentLivenessRecord {
@@ -284,7 +288,7 @@ export function defaultEvidenceByteBudget(limit: number): number {
 /** What a liveness read takes from the registry. The aliases are optional so an
     injected snapshot that predates them still reads; production always has them. */
 export type LivenessRegistrySnapshot = Pick<RegistryFile, "entries" | "conversations">
-  & Partial<Pick<RegistryFile, "conversationAliases" | "receipts">>;
+  & Partial<Pick<RegistryFile, "conversationAliases" | "receipts" | "heldDeliveries">>;
 
 /** Only recorded headless ownership is read by the liveness projection. */
 export type LivenessFlow = Pick<Flow, "reviewerMode"> & {
@@ -363,7 +367,7 @@ export function productionLivenessSources(
     registrySnapshot: () => agentRegistry().readOnlySnapshot(),
     registrySnapshotForConversation: conversationId => agentRegistry().livenessConversationSnapshot(conversationId),
     pipelines: Object.assign(() => loadPipelines(), { forLiveness: (targets: { conversationId: string | null; path: string }[], options: LivenessProjectionOptions = {}) =>
-      readHistoryProjection(db => targets.map(target => historyPipelineRef(db, target.conversationId, target.path)), { ...options, collections: ["pipelines"] }) }),
+      readHistoryProjection(db => targets.map(target => historyPipelineRef(db, target.conversationId, target.path)), { ...options, collections: ["pipelines", "pipelines_archive"] }) }),
     flows: Object.assign(() => loadFlows(), {
       forLiveness: (options: LivenessProjectionOptions = {}) => {
         pipelineSelectionSource(); flowSelectionSource();
@@ -647,6 +651,7 @@ export function evaluateLiveness(input: {
   providerProgressAt?: number | null;
   /** The oldest permission request the live host holds open, if any. */
   pendingPermission?: PendingPermissionRequest | null;
+  settledStage?: boolean;
 }): { lifecycle: LifecycleState; reason: AgentLivenessReason; retryAt?: string; permission?: PendingPermissionRequest } {
   /* An unanswered permission request is the turn's whole explanation: the
      engine waits for an answer, so the silence is neither a stall nor the
@@ -685,6 +690,7 @@ export function evaluateLiveness(input: {
       : { lifecycle: "gone", reason: "launch_unproven_expired" };
   }
   if (input.turnState === "idle") return { lifecycle: "waiting", reason: "host_alive_turn_idle" };
+  if (input.turnState === "unknown" && input.settledStage) return { lifecycle: "waiting", reason: "pipeline_stage_settled" };
   if (silent) return { lifecycle: "stalled", reason: "host_alive_transcript_silent" };
   return { lifecycle: "running", reason: "host_alive_turn_active" };
 }
@@ -708,6 +714,7 @@ export function evaluateActivityLiveness(input: Parameters<typeof evaluateLivene
     && !((input.activityFacts?.turnBoundaryVerified === false || input.unresolvedActivityOwnership)
       && activity?.state !== "checking" && silent);
   const verdict = evaluateLiveness({ ...input, turnVerified: verified,
+    settledStage: input.settledStage && activity?.state !== "checking" && !input.activityFacts?.openCall,
     silentForMs: activity?.state === "checking" ? null : input.silentForMs });
   return { ...verdict, verified,
     activity: verified && (verdict.lifecycle === "running" || verdict.lifecycle === "stalled") ? activity : undefined };
@@ -790,6 +797,8 @@ function pipelineIndex(pipelines: Pipeline[]): {
           reportedState: attempt.state,
           reportedPipelineState: pipeline.state,
           paneId: attempt.paneId,
+          conversationId: attempt.conversationId,
+          agentPath: attempt.agentPath,
         };
         if (attempt.conversationId) byConversation.set(attempt.conversationId, ref);
         if (attempt.agentPath) byPath.set(attempt.agentPath, ref);
@@ -1449,6 +1458,17 @@ async function livenessSnapshotWithin(
     const pendingPermission = host.state === "alive" && host.kind === "structured"
       ? registryEntry?.structuredHost?.pendingPermissions?.[0] ?? null
       : null;
+    const pipeline = narrowRefs ? narrowRefs[index] : (conversationId ? pipelines.byConversation.get(conversationId) : undefined)
+      ?? pipelines.byPath.get(entry.path) ?? null;
+    const matchingStage = pipeline?.conversationId
+      ? conversationId !== null && canonicalConversationId(registry, pipeline.conversationId) === canonicalConversationId(registry, conversationId)
+      : pipeline?.agentPath === entry.path;
+    const settledStage = turnState === "unknown" && host.state === "alive" && evidence !== null && lastRecordMs !== null
+      && matchingStage && pipeline && ["passed", "failed", "needs_decision", "skipped"].includes(pipeline.reportedState)
+      && !registryEntry?.pendingAction && !registryEntry?.structuredHost?.activeTurnRef
+      && (!conversationId || !registry.heldDeliveries || !registryRowsMatching(registry as RegistryFile,
+        "heldDeliveries", "conversationId", conversationIdsResolvingTo(registry as RegistryFile,
+          canonicalConversationId(registry, conversationId) as `conversation_${string}`)).some(delivery => delivery.state !== "delivered"));
     const verdict = evaluateActivityLiveness({
       host,
       turnState,
@@ -1467,6 +1487,7 @@ async function livenessSnapshotWithin(
       providerThrottleAt: providerThrottle.throttledAt,
       providerProgressAt: evidence?.providerProgressAt ?? null,
       pendingPermission,
+      settledStage: Boolean(settledStage),
     });
     return {
       ...verdict,
@@ -1476,9 +1497,7 @@ async function livenessSnapshotWithin(
       lastRecordMs,
       silentForMs: verdict.verified ? silentForMs : null,
       host,
-      pipeline: narrowRefs ? narrowRefs[index] : (conversationId ? pipelines.byConversation.get(conversationId) : undefined)
-        ?? pipelines.byPath.get(entry.path)
-        ?? null,
+      pipeline,
       evidenceSource: (!attempted ? "projection" : evidence !== null ? "transcript" : "unreadable") as AgentLivenessRecord["evidenceSource"],
     };
   }));
