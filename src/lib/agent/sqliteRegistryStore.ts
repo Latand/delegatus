@@ -2951,16 +2951,19 @@ export class SqliteAgentRegistryStore {
         const values = typeof filter.value === "string" ? [filter.value] : filter.value;
         return values.includes(lookupValue(row, filter.field) as string);
       });
-      const current = this.matchingRowKeysBounded(collection, filters, limit);
+      // At most `limit` current matches can have changed since this snapshot
+      // while remaining inside the journal reconciliation budget. Inspect
+      // enough live keys to remove those changes before enforcing the
+      // snapshot's row limit.
+      const current = this.matchingRowKeysBounded(collection, filters, limit * 2 + 1);
       const last = this.changeId();
-      if (last === coldGrantChangeId && databaseFileIdentity(this.filename) === identity) return current;
+      if (last === coldGrantChangeId && databaseFileIdentity(this.filename) === identity) {
+        return current.slice(0, limit);
+      }
       const first = this.db.query<{ seq: number }, []>("SELECT COALESCE(MIN(seq),0) AS seq FROM registry_changes").get()!.seq;
       if (last < coldGrantChangeId || first > coldGrantChangeId + 1 || databaseFileIdentity(this.filename) !== identity) {
         throw new DatabaseReplacedError("registry view changed beyond its bounded selection journal; request a fresh snapshot");
       }
-      // A full capped current result already proves refusal, even if some
-      // current rows were changed after this immutable view was captured.
-      if (current.length >= limit) return current;
       const changed = this.db.query<{ row_key: string }, [number, string, number]>(
         "SELECT DISTINCT row_key FROM registry_changes WHERE seq>? AND collection=? ORDER BY row_key LIMIT ?",
       ).all(coldGrantChangeId, collection, limit + 1);

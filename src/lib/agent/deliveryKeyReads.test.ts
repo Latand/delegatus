@@ -81,6 +81,25 @@ test("a changed key, recipient and disposition are visible on the next view and 
   expect(deliveryRegistryEntriesForKey(held, "deliveryOperationOwners", "changed-key", ["conversation_changed"])).toEqual([]);
 });
 
+test("held original-send lookup ignores 256 matching rows added by a peer", async () => {
+  const f = fixture(DELIVERY_KEY_ROW_LIMIT + 1); const store = f.open(); const peer = f.open();
+  await store.prepareReadOnlySnapshot();
+  const held = store.readOnlySnapshot().file;
+
+  peer.mutate(file => {
+    for (let index = 1; index <= DELIVERY_KEY_ROW_LIMIT; index++) {
+      const owner = file.deliveryOperationOwners[`operation-${String(index).padStart(5, "0")}`]!;
+      owner.clientMessageId = "selected-key";
+      owner.conversationId = "conversation_target";
+    }
+  }, false);
+
+  expect(lookupOriginalSend(held, { conversationId: "conversation_target", clientMessageId: "selected-key" }).kind).toBe("found");
+  expect(() => lookupOriginalSend(store.readOnlySnapshot().file, {
+    conversationId: "conversation_target", clientMessageId: "selected-key",
+  })).toThrow("row budget");
+});
+
 test("recovery refuses an over-budget key before decoding and still refuses after reopen", async () => {
   const f = fixture(DELIVERY_KEY_ROW_LIMIT + 1); const store = f.open();
   store.mutate(file => {
