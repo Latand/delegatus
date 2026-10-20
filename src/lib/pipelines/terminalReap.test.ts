@@ -7,7 +7,10 @@ import path from "node:path";
    terminates agent processes. Every pipeline is constructed directly inside
    this sandboxed state directory. The integration cases use a private runtime
    socket and processes started here; no case reads or signals operator state. */
-const suiteState = fs.mkdtempSync(path.join(os.tmpdir(), "llv-terminal-reap-"));
+const restartChild = process.env.LLV_TERMINAL_REAP_RESTART_CHILD === "1";
+const suiteState = restartChild
+  ? process.env.LLV_TERMINAL_REAP_RESTART_STATE!
+  : fs.mkdtempSync(path.join(os.tmpdir(), "llv-terminal-reap-"));
 const ambientState = process.env.LLV_STATE_DIR;
 const ambientStructured = process.env.LLV_STRUCTURED_HOSTS;
 process.env.LLV_STATE_DIR = suiteState;
@@ -31,7 +34,7 @@ afterAll(() => {
   else process.env.LLV_STATE_DIR = ambientState;
   if (ambientStructured === undefined) delete process.env.LLV_STRUCTURED_HOSTS;
   else process.env.LLV_STRUCTURED_HOSTS = ambientStructured;
-  fs.rmSync(suiteState, { recursive: true, force: true });
+  if (!restartChild) fs.rmSync(suiteState, { recursive: true, force: true });
 });
 
 const ROLE = { roleId: null, engine: "codex", model: "gpt-5.6-sol", effort: null, access: "read-write", promptScaffold: null } as const;
@@ -395,6 +398,95 @@ test("a finished attempt that is still active is rechecked and reaped after its 
   expect(loadPipelines()[0]!.unconfirmedHosts).toBeUndefined();
   await tickPipelines([], h.ports);
   expect(h.stops).toHaveLength(1);
+});
+
+test.each(["completed", "closed"] as const)("a %s lane keeps missing idle evidence retryable beyond the reap limit", async state => {
+  const h = harness();
+  savePipelines([pipelineRecord({
+    id: `reap-idle-evidence-${state}`,
+    state,
+    attempts: [attempt(1, `conversation_idle_evidence_${state}`, false)],
+  })]);
+  const conversationId = `conversation_idle_evidence_${state}`;
+  h.resident.set(conversationId, true);
+  h.stopResults.set(conversationId, { outcome: "deferred" });
+
+  // These observations are durable ticks, all lacking the idle proof required
+  // for a mid-turn attempt. They must not consume the five-round teardown cap.
+  for (let observation = 0; observation < 7; observation++) await tickPipelines([], h.ports);
+
+  expect(h.stops).toHaveLength(7);
+  expect(h.idleEvidenceRequired).toEqual(Array(7).fill(true));
+  const waiting = loadPipelines()[0]!;
+  expect(waiting.terminalReap).toMatchObject({ rounds: 0, stopped: 0, settledAt: null, settledAttempts: [] });
+  expect(waiting.unconfirmedHosts).toBeUndefined();
+  expect(h.resident.get(conversationId)).toBe(true);
+
+  // Fresh positive evidence allows the same recorded host to retire.
+  h.stopResults.set(conversationId, { outcome: "stopped" });
+  await tickPipelines([], h.ports);
+  const settled = loadPipelines()[0]!;
+  expect(settled.terminalReap?.settledAttempts).toContain("implement:1");
+  expect(settled.terminalReap?.settledAt).not.toBeNull();
+  expect(settled.unconfirmedHosts).toBeUndefined();
+  expect(h.resident.get(conversationId)).toBe(false);
+});
+
+test("retryable idle evidence persists across process restart", async () => {
+  const childPhase = process.env.LLV_TERMINAL_REAP_RESTART_PHASE;
+  if (childPhase) {
+    const h = harness();
+    if (childPhase === "unavailable") {
+      const conversationId = "conversation_restart_idle_evidence";
+      savePipelines([pipelineRecord({ id: "reap-idle-evidence-restart", state: "completed",
+        attempts: [attempt(1, conversationId, false)] })]);
+      h.resident.set(conversationId, true);
+      h.stopResults.set(conversationId, { outcome: "deferred" });
+      for (let observation = 0; observation < 7; observation++) await tickPipelines([], h.ports);
+      expect(loadPipelines()[0]!.terminalReap).toMatchObject({ rounds: 0, stopped: 0, settledAt: null, settledAttempts: [] });
+      expect(loadPipelines()[0]!.unconfirmedHosts).toBeUndefined();
+      expect(h.resident.get(conversationId)).toBe(true);
+      return;
+    }
+    if (childPhase !== "recovered") throw new Error(`unknown restart phase: ${childPhase}`);
+    const conversationId = "conversation_restart_idle_evidence";
+    h.resident.set(conversationId, true);
+    h.stopResults.set(conversationId, { outcome: "stopped" });
+    await tickPipelines([], h.ports);
+    expect(loadPipelines()[0]!.terminalReap?.settledAttempts).toContain("implement:1");
+    expect(loadPipelines()[0]!.unconfirmedHosts).toBeUndefined();
+    expect(h.resident.get(conversationId)).toBe(false);
+    return;
+  }
+
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-terminal-reap-restart-"));
+  const childEnv = {
+    ...process.env,
+    HOME: path.join(stateDir, "home"),
+    XDG_CONFIG_HOME: path.join(stateDir, "config"),
+    TMPDIR: path.join(stateDir, "tmp"),
+    LLV_STATE_DIR: stateDir,
+    LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1",
+    LLV_TERMINAL_REAP_RESTART_CHILD: "1",
+    LLV_TERMINAL_REAP_RESTART_STATE: stateDir,
+  };
+  for (const directory of [childEnv.HOME, childEnv.XDG_CONFIG_HOME, childEnv.TMPDIR, stateDir]) {
+    fs.mkdirSync(directory, { recursive: true });
+  }
+  const runPhase = async (phase: "unavailable" | "recovered") => {
+    const child = Bun.spawn([process.execPath, "test", import.meta.path, "--test-name-pattern",
+      "^retryable idle evidence persists across process restart$"], {
+      cwd: process.cwd(), env: { ...childEnv, LLV_TERMINAL_REAP_RESTART_PHASE: phase }, stdout: "pipe", stderr: "pipe",
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    expect(exitCode, `restart phase ${phase} failed:\n${stdout}\n${stderr}`).toBe(0);
+  };
+  try {
+    await runPhase("unavailable");
+    await runPhase("recovered");
+  } finally {
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
 });
 
 test("an unconfirmed sibling cannot settle the reap while another attempt still owns live work", async () => {

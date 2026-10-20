@@ -1209,11 +1209,10 @@ export async function retirePipelineStageAgent(
   try {
     const probe = await stageHostProbe(target);
     if (!probe || !probe.resident()) return { outcome: "not-running" };
-    /* No idle evidence can come from a host whose stream is gone. Its stage is
-       settled, so the orphan behind the terminal row is ended by identity. */
+    /* A missing stream cannot prove the host is idle. Automatic retirement
+       leaves it retryable; callers without this fence may use its recorded identity. */
     if (probe.orphaned()) {
-      if (probes.requireIdleEvidence) return { outcome: "failed",
-        error: "automatic retirement cannot prove an idle turn for this recorded host without a stream; nothing was signalled" };
+      if (probes.requireIdleEvidence) return { outcome: "deferred" };
       return await stopStageHostByRecordedIdentity(target, probe, probes.termination ?? {});
     }
     const client = probes.client === undefined ? runtimeHostClient() : probes.client;

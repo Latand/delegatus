@@ -445,7 +445,7 @@ test("an unstamped attempt requires positive idle evidence before retiring a hos
         retireRegistryEntry: () => true },
     });
     expect(signals).toEqual([]);
-    expect(result).toMatchObject({ outcome: "failed", error: expect.stringContaining("cannot prove an idle turn") });
+    expect(result).toEqual({ outcome: "deferred" });
     expect(killed).toEqual([]);
   } finally { identitySpy.mockRestore(); aliveSpy.mockRestore(); }
 });
