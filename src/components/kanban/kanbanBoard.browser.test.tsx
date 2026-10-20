@@ -35194,3 +35194,22 @@ describe("team workspaces slice (a)", () => {
     } finally { await browser.close(); server.stop(); }
   }, 900_000);
 });
+
+// docs/design/telegram-multi-bot.md: keep multiple bots inside the Telegram panel.
+describe("Telegram multiple bots", () => {
+  browserTest("Telegram multiple bots settings and refused chats", async () => {
+    const { captureTelegramMultiBot, serveEvidenceFixture } = await import("@/components/kanban/issue1695BrowserHarness");
+    const out = path.resolve(".artifacts/telegram-multi-bot/desktop");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/mobile/issue1671Evidence.fixture.tsx");
+    const tempFd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, ignoreDefaultArgs: ["--hide-scrollbars"], args: ["--no-sandbox", "--disable-dev-shm-usage"],
+      ...(tempFd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${tempFd}` } }),
+    }).catch(error => { if (tempFd !== null) fs.closeSync(tempFd); server.stop(); throw error; });
+    try {
+      const readings = await captureTelegramMultiBot(browser, server.base, out, false);
+      fs.mkdirSync("evidence/telegram-multi-bot", { recursive: true });
+      fs.writeFileSync("evidence/telegram-multi-bot/desktop.json", JSON.stringify({ readings }, null, 2) + "\n");
+    } finally { await browser.close(); if (tempFd !== null) fs.closeSync(tempFd); server.stop(); }
+  }, 300_000);
+});
