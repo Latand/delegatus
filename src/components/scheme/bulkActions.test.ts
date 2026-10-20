@@ -8,8 +8,6 @@ import {
   canBulkFlow,
   canBulkInterrupt,
   canBulkKill,
-  canBulkMessage,
-  canBulkRemove,
   runBulk,
   withPresenceGuard,
   type BulkRunner,
@@ -174,12 +172,6 @@ describe("withPresenceGuard", () => {
 });
 
 describe("bulk eligibility", () => {
-  test("message and remove are available for every scheme node", () => {
-    const child = schemeNode({ path: "/child", isRoot: false });
-    expect(canBulkMessage(child)).toBe(true);
-    expect(canBulkRemove(child)).toBe(true);
-  });
-
   test("interrupt requires a live pane pid", () => {
     expect(canBulkInterrupt(schemeNode({ path: "/live", file: entry({ path: "/live", pid: 123 }) }))).toBe(true);
     expect(canBulkInterrupt(schemeNode({ path: "/quiet", file: entry({ path: "/quiet", pid: null }) }))).toBe(false);

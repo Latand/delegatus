@@ -3,15 +3,7 @@ import { describe, expect, test } from "bun:test";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask } from "@/lib/tasks/types";
 
-import { TASK_W } from "./taskGeometry";
-import {
-  PIPELINE_GROUP_COLLAPSED_H,
-  PIPELINE_GROUP_EXPANDED_H,
-  PIPELINE_GROUP_GAP,
-  PIPELINE_GROUP_W,
-  anchorFor,
-  layoutPipelineGroups,
-} from "./pipelineAnchor";
+import { linkedPipelineTasks } from "./pipelineAnchor";
 
 function pipeline(overrides: Record<string, unknown> = {}): Pipeline {
   return {
@@ -53,127 +45,100 @@ function task(id: string, pos?: { x: number; y: number }): BoardTask {
   };
 }
 
-describe("anchorFor", () => {
-  test("anchors beside the first placed task named by taskIds", () => {
-    const linked = task("task-2", { x: 420, y: 180 });
-    const result = anchorFor(
-      pipeline({ taskIds: ["task-2", "task-1"] }),
-      [task("task-1", { x: 20, y: 40 }), linked],
-      [],
-    );
+function source(path: string): NonNullable<BoardTask["source"]> {
+  return { path, ts: null, text: "Linked task", fingerprint: "synthetic", engine: "codex" };
+}
 
-    expect(result).toEqual({ x: linked.pos!.x + TASK_W + PIPELINE_GROUP_GAP, y: linked.pos!.y });
+describe("linkedPipelineTasks", () => {
+  test("includes explicit taskIds in board-task order and ignores missing ids", () => {
+    const first = task("task-1", { x: 20, y: 40 });
+    const second = task("task-2", { x: 420, y: 180 });
+
+    expect(linkedPipelineTasks(
+      pipeline({ taskIds: [second.id, "missing", first.id, second.id] }),
+      [first, task("unrelated"), second],
+    )).toEqual([first, second]);
   });
 
-  test("uses the first placed task whose assignment belongs to pipeline lineage", () => {
-    const linked = {
-      ...task("manual-link", { x: 760, y: 240 }),
+  test("includes assignments linked by a stage attempt path or conversation id", () => {
+    const byPath = {
+      ...task("path-link", { x: 760, y: 240 }),
       assignments: [{ path: "/stage.jsonl", panePid: 12, state: "handoff" as const, error: null, at: "2026-07-19T00:00:00.000Z" }],
     };
-    const result = anchorFor(
+    const byConversation = {
+      ...task("conversation-link"),
+      assignments: [{ ...byPath.assignments[0], path: "/moved.jsonl", conversationId: "conversation-stage" }],
+    };
+
+    expect(linkedPipelineTasks(
       pipeline({
-        stages: [{ id: "build", kind: "run", prompt: "", next: null }],
         runs: [{ stageId: "build", attempts: [{ n: 1, state: "running", agentPath: "/stage.jsonl", conversationId: "conversation-stage" }] }],
       }),
+      [byPath, task("unrelated"), byConversation],
+    )).toEqual([byPath, byConversation]);
+  });
+
+  test("keeps unplaced explicit tasks as members alongside placed tasks", () => {
+    const unplaced = task("unplaced");
+    const placed = task("placed", { x: 900, y: 100 });
+
+    expect(linkedPipelineTasks(
+      pipeline({ taskIds: [unplaced.id, placed.id] }),
+      [unplaced, placed],
+    )).toEqual([unplaced, placed]);
+  });
+
+  test("includes task sources from the pipeline origin and historical attempts", () => {
+    const origin = { ...task("origin"), source: source("/origin.jsonl") };
+    const earlier = { ...task("earlier"), source: source("/earlier.jsonl") };
+    const current = { ...task("current"), source: source("/current.jsonl") };
+    const unrelated = { ...task("unrelated"), source: source("/other.jsonl") };
+
+    expect(linkedPipelineTasks(
+      pipeline({
+        srcPath: "/origin.jsonl",
+        runs: [{ stageId: "build", attempts: [
+          { n: 1, state: "failed", agentPath: "/earlier.jsonl" },
+          { n: 2, state: "running", agentPath: "/current.jsonl" },
+        ] }],
+      }),
+      [origin, earlier, unrelated, current],
+    )).toEqual([origin, earlier, current]);
+  });
+
+  test("includes origin conversation assignments and emits multiply linked tasks once", () => {
+    const linked = {
+      ...task("origin-link"),
+      source: source("/origin.jsonl"),
+      assignments: [{ path: "/moved.jsonl", conversationId: "conversation-origin", panePid: 12, state: "handoff" as const, error: null, at: "2026-07-19T00:00:00.000Z" }],
+    };
+    const origin = pipeline({ srcConversationId: "conversation-origin" });
+
+    expect(linkedPipelineTasks(origin, [linked])).toEqual([linked]);
+    expect(linkedPipelineTasks(
+      pipeline({ taskIds: [linked.id], srcPath: linked.source.path, srcConversationId: "conversation-origin" }),
       [linked],
-      [],
-    );
-
-    expect(result).toEqual({ x: linked.pos!.x + TASK_W + PIPELINE_GROUP_GAP, y: linked.pos!.y });
+    )).toEqual([linked]);
   });
 
-  test("falls back to the centroid of placed stage conversation panes", () => {
-    const result = anchorFor(
-      pipeline({
-        stages: [{ id: "build", kind: "run", prompt: "", next: null }],
-        runs: [{ stageId: "build", attempts: [{ n: 1, state: "running", agentPath: "/stage.jsonl", conversationId: "conversation-stage" }] }],
-      }),
-      [task("unplaced-link")],
-      [
-        { x: 100, y: 120, w: 600, h: 420, path: "/stage.jsonl", conversationId: "conversation-stage" },
-        { x: 900, y: 120, w: 600, h: 420, path: "/unrelated.jsonl", conversationId: "other" },
-      ],
-    );
-
-    expect(result).toEqual({ x: 400, y: 330 });
+  test("allows multiple pipelines to share a linked task", () => {
+    const linked = task("shared", { x: 420, y: 180 });
+    for (const id of ["pipeline-a", "pipeline-b"]) {
+      expect(linkedPipelineTasks(pipeline({ id, taskIds: [linked.id] }), [linked])).toEqual([linked]);
+    }
   });
 
-  test("an unplaced first taskId falls through to the conversation centroid", () => {
-    const result = anchorFor(
-      pipeline({
-        taskIds: ["unplaced", "placed"],
-        runs: [{ stageId: "build", attempts: [{ agentPath: "/stage.jsonl" }] }],
-      }),
-      [task("unplaced"), task("placed", { x: 900, y: 100 })],
-      [{ x: 100, y: 120, w: 600, h: 420, path: "/stage.jsonl" }],
-    );
-
-    expect(result).toEqual({ x: 400, y: 330 });
-  });
-
-  test("uses a deterministic grid to the right of occupied board space", () => {
-    const panes = [{ x: 100, y: 120, w: 600, h: 420, path: "/other.jsonl" }];
-    const tasks = [task("placed", { x: 840, y: 90 })];
-
-    const first = anchorFor(pipeline({ id: "grid-pipeline" }), tasks, panes);
-    const repeated = anchorFor(pipeline({ id: "grid-pipeline" }), [...tasks].reverse(), [...panes].reverse());
-
-    expect(first).toEqual(repeated);
-    expect(first.x).toBeGreaterThan(840 + TASK_W);
-    expect(first.y).toBeGreaterThanOrEqual(120);
-  });
-});
-
-describe("layoutPipelineGroups", () => {
-  test("stacks pipelines linked to one task with obstacle clearance", () => {
-    const linked = task("task-1", { x: 420, y: 180 });
-    const rows = [
-      pipeline({ id: "pipeline-a", taskIds: [linked.id] }),
-      pipeline({ id: "pipeline-b", taskIds: [linked.id], createdAt: "2026-07-19T00:01:00.000Z" }),
-    ];
-    const taskRect = { x: linked.pos!.x, y: linked.pos!.y, w: TASK_W, h: 180 };
-
-    const layout = layoutPipelineGroups(rows, [linked], [], [taskRect]);
-    const a = layout.get("pipeline-a")!;
-    const b = layout.get("pipeline-b")!;
-
-    expect(a.x).toBeGreaterThanOrEqual(taskRect.x + taskRect.w + PIPELINE_GROUP_GAP);
-    expect(b.x).toBe(a.x);
-    expect(b.y).toBeGreaterThan(a.y);
-    expect(a.x + PIPELINE_GROUP_W <= b.x || b.x + PIPELINE_GROUP_W <= a.x || a.y + PIPELINE_GROUP_COLLAPSED_H <= b.y || b.y + PIPELINE_GROUP_COLLAPSED_H <= a.y).toBe(true);
-  });
-
-  test("keeps a durable pipeline position exact across obstacle changes", () => {
-    const pinned = pipeline({ id: "pinned", pos: { x: 1337, y: 512 } });
-    const first = layoutPipelineGroups([pinned], [], [], []).get(pinned.id);
-    const crowded = layoutPipelineGroups([pinned], [], [], [{ x: 1300, y: 480, w: 500, h: 300 }]).get(pinned.id);
-
-    expect(first).toMatchObject({ x: 1337, y: 512 });
-    expect(crowded).toMatchObject({ x: 1337, y: 512 });
-  });
-
-  test("a legal collapsed pin expands around a neighbouring task while its header origin stays exact", () => {
-    const pinned = pipeline({ id: "expanded", pos: { x: 420, y: 180 } });
-    const neighbour = { x: 420, y: 280, w: TASK_W, h: 180 };
-    const placement = layoutPipelineGroups(
-      [pinned],
-      [],
-      [],
-      [neighbour],
-      new Map([[pinned.id, PIPELINE_GROUP_EXPANDED_H]]),
-    ).get(pinned.id)!;
-
-    expect(placement.header).toEqual({ x: 420, y: 180, w: PIPELINE_GROUP_W, h: PIPELINE_GROUP_COLLAPSED_H });
-    expect(placement.body).not.toBeNull();
-    expect(
-      placement.body!.x < neighbour.x + neighbour.w
-      && placement.body!.x + placement.body!.w > neighbour.x
-      && placement.body!.y < neighbour.y + neighbour.h
-      && placement.body!.y + placement.body!.h > neighbour.y,
-    ).toBe(false);
-    expect(placement.bounds.x).toBeLessThanOrEqual(placement.header.x);
-    expect(placement.bounds.y).toBeLessThanOrEqual(placement.header.y);
-    expect(placement.bounds.x + placement.bounds.w).toBeGreaterThanOrEqual(placement.body!.x + placement.body!.w);
-    expect(placement.bounds.y + placement.bounds.h).toBeGreaterThanOrEqual(placement.body!.y + placement.body!.h);
+  test("excludes tasks when no explicit id, source or assignment matches", () => {
+    const unrelated = {
+      ...task("unrelated"),
+      source: source("/other.jsonl"),
+      assignments: [{ path: "/other.jsonl", conversationId: "other", panePid: 12, state: "handoff" as const, error: null, at: "2026-07-19T00:00:00.000Z" }],
+    };
+    expect(linkedPipelineTasks(pipeline(), [task("unlinked"), unrelated])).toEqual([]);
+    expect(linkedPipelineTasks(
+      pipeline({ srcPath: "/origin.jsonl", srcConversationId: "conversation-origin", taskIds: ["missing"] }),
+      [unrelated],
+    )).toEqual([]);
+    expect(linkedPipelineTasks(pipeline(), [])).toEqual([]);
   });
 });
