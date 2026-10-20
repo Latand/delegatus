@@ -1195,7 +1195,9 @@ export type OriginalSendEvidence =
 
 /**
  * The CURRENT answer for one found operation, without changing its reservation
- * or journal. Canonical recipient evidence is durably allocated before reporting.
+ * projection. Canonical recipient evidence is reported only after the journal
+ * arbitrates it against terminal actions; an unavailable arbitration is an
+ * unreadable current answer, never a delivered claim.
  *
  * A durable record that is already terminal is the answer. One still in flight
  * is checked against the journal's current retry leaf, and a terminal verdict
@@ -1213,9 +1215,29 @@ async function projectCurrentSend(
   if (projected.state !== "delivered" && projected.reason !== SEND_DISCARDED_REASON
     && (projected.state === "in-flight" || projected.duplicateRisk)
     && await confirmedSend(registry.readOnlySnapshot(), operationId)) {
+    const client = ports.client === undefined ? runtimeHostClient() : ports.client;
+    if (!client) return unreadableEvidence("runtime host socket is unavailable for canonical delivery arbitration");
+    const arbitration = await readEvidenceWithin(
+      () => confirmJournalDelivery(client, operationId),
+      ports.readMs ?? SEND_SETTLEMENT_READ_MS,
+      "canonical delivery arbitration is unavailable",
+    );
+    if (!arbitration.readable) return arbitration;
+    const verdict = arbitration.value?.verdict;
+    if (!verdict) return { readable: true, value: { ...projected, evidence: "delivery-journal" } };
+    if (verdict.state === "failed") {
+      return { readable: true, value: {
+        ...projected,
+        state: "failed",
+        reason: verdict.reason,
+        ...resendGuidance(verdict.disposition, verdict.reason),
+        evidence: "delivery-journal",
+      } };
+    }
+    const owner = registry.readOnlySnapshot().deliveryOperationOwners[operationId];
     return { readable: true, value: { ...projected, state: "delivered", reason: null,
-      ...(registry.readOnlySnapshot().deliveryOperationOwners[operationId]?.batchId ? { turnId: registry.readOnlySnapshot().deliveryOperationOwners[operationId]!.batchId } : {}),
-      duplicateRisk: false, resend: "not-needed", evidence: "delivery-record" } };
+      ...(owner?.batchId ? { turnId: owner.batchId } : {}),
+      duplicateRisk: false, resend: "not-needed", evidence: "delivery-journal" } };
   }
   if (projected.state !== "in-flight") return { readable: true, value: projected };
   const client = ports.client === undefined ? runtimeHostClient() : ports.client;
@@ -1240,8 +1262,8 @@ async function projectCurrentSend(
 
 /**
  * The lookup above, then the current answer for the one operation it found.
- * The registry snapshot and journal row stay unchanged; canonical recipient
- * evidence is allocated in its ledger before reporting delivery.
+ * The registry snapshot stays unchanged; canonical recipient evidence is
+ * accepted only through journal arbitration before reporting delivery.
  * A journal or registry that cannot be read keeps the
  * identity the durable record established and marks the current answer
  * unreadable; it never turns into an absence.
