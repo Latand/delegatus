@@ -33,6 +33,12 @@ when this installed pin is absent from the matrix or the matrix differs from
 the host pins under `src/lib/accounts/protocol/`. Update this line when the
 installed pin changes and update the shared matrix in the same change.
 
+The native steering fixture disables `instant_interrupt` only for its
+`dropped-after` case, keeping accepted input pending until its explicit
+interrupt. Codex 0.162.1 enables sampling preemption by default and can record
+that input before the interrupt arrives. The sampling and busy-tool cases keep
+the CLI defaults and verify delivery without a second submission.
+
 ## An executable without its own pin
 
 The Codex CLI updates itself. On 2026-10-16 an update to 0.163.0 made every
