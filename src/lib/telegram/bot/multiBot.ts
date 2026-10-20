@@ -203,6 +203,10 @@ export class BotSelector {
       if (error.code === "token_rejected") await this.rejectToken(bot);
       else if (chat.type !== "private") {
         const refreshed = await this.check(bot, chat, true);
+        /* A closed forum topic says nothing about this bot's chat-wide rights.
+           The forced check above owns that cache row, including when it found
+           that chat-wide posting itself is unavailable. */
+        if (/TOPIC_CLOSED/i.test(result.description ?? "")) return;
         if (!refreshed || refreshed[capability] !== false) {
           const at = this.now();
           await this.saveMembership(bot, chat, { source: "refusal", member: /kicked/i.test(result.description ?? "") ? false : refreshed?.member ?? (error.code === "not_enough_rights"),

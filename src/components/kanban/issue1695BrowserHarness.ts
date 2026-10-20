@@ -1399,6 +1399,18 @@ export async function captureTelegramMultiBot(browser: Browser, base: string, ou
           const row = panel.locator("li").filter({ hasText: "Team Reports" }).first();
           await row.waitFor();
           await row.scrollIntoViewIfNeeded();
+          if (scene === "multi-kicked") {
+            const states = await row.locator("[data-telegram-bot-posting-state]").allTextContents();
+            const removed = lang === "uk" ? "видалено з чату" : "removed from the chat";
+            const mayPost = lang === "uk" ? "Агентам можна писати" : "Agents may post";
+            const frame = `${phone ? "phone" : "desktop"}-${width}-${lang}-${scheme}`;
+            if (states.length !== 2 || !states[0]?.includes(removed) || !states[1]?.includes(mayPost)) {
+              throw new Error(`${frame}: bot posting states are not visible in words: ${JSON.stringify(states)}`);
+            }
+            const overflow = await row.evaluate(el => el.scrollWidth > el.clientWidth
+              || [...el.querySelectorAll<HTMLElement>("[data-telegram-bot-posting-state]")].some(state => state.getBoundingClientRect().right > el.getBoundingClientRect().right + 1));
+            if (overflow) throw new Error(`${frame}: bot posting states overflow the chat row`);
+          }
           if (scene === "multi-refused" && !await row.locator('[data-telegram-delivery="refused"]').isVisible()) throw new Error("refused chat is hidden");
           const key = `${phone ? "phone" : "desktop"}-${width}-${lang}-${scheme}-${scene}`;
           const frames: string[] = [];

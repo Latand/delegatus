@@ -168,9 +168,16 @@ export function ChatRow({ chat, botSeesAll, busy, onSave, onAssign }: { onAssign
       {showField && !posting && draft === "" ? <p className="pr-1.5 text-[10px] leading-snug text-muted">{t("telegram.bot.aliasHint")}</p> : null}
       {(chat.bots?.length ?? 0) > 1 ? (
         <div className="flex flex-wrap gap-x-2 gap-y-1 pr-1.5 text-[10px] text-secondary">
-          {chat.bots!.map(bot => <span key={bot.username ?? bot.name} title={`${bot.reason ? t(ERROR_KEYS[bot.reason] ?? "telegram.actionFailed") : bot.canPost === null ? t("telegram.bot.notChecked") : t("telegram.bot.mayPost")}${bot.checkedAt ? ` · ${formatTime(bot.checkedAt)}` : ""}`}>
-            <span aria-hidden style={{ color: bot.canPost === true ? "var(--color-success)" : bot.canPost === false ? "var(--color-danger)" : "var(--color-muted)" }}>{bot.canPost === null ? "○" : "●"}</span> {bot.name}
-          </span>)}
+          {chat.bots!.map(bot => {
+            const removed = bot.member === false || bot.status === "kicked" || bot.status === "left" || bot.reason === "bot_not_in_chat";
+            const state = bot.canPost === true ? t("telegram.bot.mayPost")
+              : bot.canPost === false ? removed ? t("telegram.bot.removedFromChat") : t("telegram.bot.mayNotPost")
+              : t("telegram.bot.notChecked");
+            return <span key={bot.username ?? bot.name} aria-label={`${bot.name}: ${state}`}
+              title={`${bot.reason ? t(ERROR_KEYS[bot.reason] ?? "telegram.actionFailed") : state}${bot.checkedAt ? ` · ${formatTime(bot.checkedAt)}` : ""}`}>
+              <span aria-hidden style={{ color: bot.canPost === true ? "var(--color-success)" : bot.canPost === false ? "var(--color-danger)" : "var(--color-muted)" }}>{bot.canPost === null ? "○" : "●"}</span> {bot.name} · <span data-telegram-bot-posting-state={bot.canPost === true ? "may-post" : removed ? "removed" : bot.canPost === false ? "cannot-post" : "not-checked"}>{state}</span>
+            </span>;
+          })}
         </div>
       ) : null}
       {chat.type !== "private" && (chat.bots?.filter(b => b.canPost === true).length ?? 0) >= 2 ? (

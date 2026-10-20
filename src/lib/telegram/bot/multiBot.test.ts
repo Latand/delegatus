@@ -36,6 +36,7 @@ function makeService(extra = new Map<string, InstanceType<typeof FakeBotTranspor
 }
 function sent(id = 101) { return ok({ message_id: id, date: Math.floor(clock / 1000) }); }
 const send = (key: string, text = "Report") => service.send({ conversationId: "conversation_writer", clientRequestId: key, chat: "reports", text, topicId: 12 });
+const sendTo = (key: string, topicId?: number) => service.send({ conversationId: "conversation_writer", clientRequestId: key, chat: "reports", text: "Report", ...(topicId === undefined ? {} : { topicId }) });
 const count = (index: number) => fakes[index]!.callsOf("sendMessage").length;
 async function failure(run: () => Promise<unknown>) {
   try { await run(); } catch (e) { if (e instanceof TelegramBotError) return e; throw e; }
@@ -210,6 +211,53 @@ test("membership positives expire at six hours; refusal refresh and negatives ex
   fakes[0]!.handlers.getChatMember = () => ok({ status: "administrator" });
   await send("negative-expired");
   expect(fakes[0]!.callsOf("getChatMember").length).toBe(checked + 1);
+});
+
+test("a closed topic refusal preserves chat-wide posting rights for other topics and the general chat", async () => {
+  for (const fake of fakes) {
+    fake.handlers.getChatMember = () => ok({ status: "member" });
+    fake.handlers.getChat = () => ok({ ...group, permissions: { can_send_messages: true, can_send_photos: true, can_send_documents: true } });
+    fake.handlers.sendMessage = params => params.message_thread_id === 12
+      ? refused(400, "TOPIC_CLOSED")
+      : sent(100 + fake.callsOf("sendMessage").length);
+  }
+
+  expect((await failure(() => sendTo("closed-topic", 12))).code).toBe("not_enough_rights");
+  expect([count(0), count(1)]).toEqual([1, 1]);
+  expect(service.listChats().chats[0]?.bots).toMatchObject([
+    { member: true, canPost: true },
+    { member: true, canPost: true },
+  ]);
+
+  expect((await sendTo("open-topic", 13)).sentBy?.name).toBe(names[0]);
+  expect((await sendTo("general-chat")).sentBy?.name).toBe(names[0]);
+  expect([count(0), count(1)]).toEqual([3, 1]);
+});
+
+test("a chat-wide rights refusal keeps its negative membership cache for ten minutes", async () => {
+  for (const fake of fakes) {
+    fake.handlers.getChatMember = () => ok({ status: "restricted", is_member: true, can_send_messages: false, can_send_photos: false, can_send_documents: false });
+    fake.handlers.sendMessage = () => refused(400, "CHAT_WRITE_FORBIDDEN");
+  }
+
+  expect((await failure(() => sendTo("chat-wide-rights", 12))).code).toBe("not_enough_rights");
+  const checked = fakes.map(fake => fake.callsOf("getChatMember").length);
+  expect(service.listChats().chats[0]?.bots).toMatchObject([
+    { member: true, canPost: false, reason: "not_enough_rights" },
+    { member: true, canPost: false, reason: "not_enough_rights" },
+  ]);
+  clock += 9 * 60_000;
+  expect((await failure(() => sendTo("chat-wide-warm", 13))).code).toBe("not_enough_rights");
+  expect(fakes.map(fake => fake.callsOf("getChatMember").length)).toEqual(checked);
+
+  clock += 2 * 60_000;
+  fakes.forEach(fake => {
+    fake.handlers.getChatMember = () => ok({ status: "administrator", can_manage_topics: true });
+    fake.handlers.getChat = () => ok({ ...group, permissions: { can_send_messages: true, can_send_photos: true, can_send_documents: true } });
+    fake.handlers.sendMessage = () => sent();
+  });
+  await sendTo("chat-wide-expired", 13);
+  expect(fakes.map(fake => fake.callsOf("getChatMember").length)).toEqual([checked[0]! + 1, checked[1]!]);
 });
 
 test("an ambiguous getChat rights check preserves the cached fact and tries a known member first", async () => {

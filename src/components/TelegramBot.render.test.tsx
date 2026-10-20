@@ -79,7 +79,7 @@ test("connected with mixed chats: name, receiving state, one compact row per cha
   const html = render(connected());
   expect(html).toContain("Report Bot");
   expect(html).toContain("@report_test_bot");
-  /* Polling is the green dot, and words only for a reader. */
+  /* Polling has a dot; posting rights also have visible words. */
   expect(html).toMatch(/<p role="status" class="sr-only">Receiving messages<\/p>/);
   expect(html).toContain("Team Reports");
   /* The alias field only where posting is on. */
@@ -105,6 +105,26 @@ test("connected with mixed chats: name, receiving state, one compact row per cha
   expect(html).toContain("Add another bot</summary>");
   expect(html.match(/type="password"/g)).toHaveLength(1);
   expect(html).not.toMatch(/<input[^>]*type="password"[^>]*value=/);
+});
+
+test("each connected bot has a visible and accessible posting state", () => {
+  const html = render(connected({ chats: [chat({
+    alias: "team-reports",
+    bots: [
+      { name: "Removed Bot", username: "removed_bot", assigned: false, member: false, status: "kicked", canPost: false, canSendPhotos: false, canSendDocuments: false, canManageTopics: false, reason: "bot_not_in_chat", checkedAt: "2026-10-20T12:00:00Z" },
+      { name: "Ready Bot", username: "ready_bot", assigned: false, member: true, status: "member", canPost: true, canSendPhotos: true, canSendDocuments: true, canManageTopics: false, reason: null, checkedAt: "2026-10-20T12:00:00Z" },
+      { name: "Restricted Bot", username: "restricted_bot", assigned: false, member: true, status: "restricted", canPost: false, canSendPhotos: false, canSendDocuments: false, canManageTopics: false, reason: "not_enough_rights", checkedAt: "2026-10-20T12:00:00Z" },
+      { name: "Unverified Bot", username: "unverified_bot", assigned: false, member: null, status: null, canPost: null, canSendPhotos: null, canSendDocuments: null, canManageTopics: null, reason: null, checkedAt: null },
+    ],
+  })] }));
+  expect(html).toContain('aria-label="Removed Bot: removed from the chat"');
+  expect(html).toContain('data-telegram-bot-posting-state="removed">removed from the chat</span>');
+  expect(html).toContain('aria-label="Ready Bot: Agents may post"');
+  expect(html).toContain('data-telegram-bot-posting-state="may-post">Agents may post</span>');
+  expect(html).toContain('aria-label="Restricted Bot: may not post here"');
+  expect(html).toContain('data-telegram-bot-posting-state="cannot-post">may not post here</span>');
+  expect(html).toContain('aria-label="Unverified Bot: Not checked yet"');
+  expect(html).toContain('data-telegram-bot-posting-state="not-checked">Not checked yet</span>');
 });
 
 test("a webhook elsewhere says reading is blocked and why", () => {
