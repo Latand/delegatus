@@ -86,7 +86,7 @@ test("legacy rows are distinguishable and malformed namespace authority refuses 
   }
 });
 
-function fallbackEnv(root: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+function fallbackEnv(root: string, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, HOME: root, TMPDIR: root, XDG_CONFIG_HOME: path.join(root, "config"), LLV_STATE_DIR: path.join(root, "state"), ...extra };
   for (const name of ["LLV_GATE_SLOT_LEASE", "LLV_SIGNAL_SANDBOX", "LLV_DOCKER_NSENTER_SHIMS"]) if (!(name in extra)) delete env[name];
   return env;

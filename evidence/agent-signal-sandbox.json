@@ -134,7 +134,7 @@
   ],
   "performanceInterpretation": [
     "Launch samples alternate baseline and protected mode, with the same engine, profile and resource limits; 30 samples per mode for every engine/profile.",
-    "Added launch medians of 59–132 ms exceed the proposed 50 ms investigation threshold. The shared launcher adds two Python startups, delegation, Bubblewrap setup and readiness checks before native execution.",
+    "Added launch medians of 59\u2013132 ms exceed the proposed 50 ms investigation threshold. The shared launcher adds two Python startups, delegation, Bubblewrap setup and readiness checks before native execution.",
     "The short gate workload shows 9.211% overhead. One full TypeScript pair showed no sustained slowdown; a single pair does not establish a speedup or a statistical performance bound.",
     "Protection remains enabled in every protected sample. Native model responses use loopback providers."
   ],
@@ -430,7 +430,7 @@
     "performanceNotes": [
       "Every profile alternates 30 retained baseline/protected pairs after two discarded warmup pairs, with matching 200% CPU and 2 GiB limits.",
       "Both Codex modes use the persistent socket transport. Claude uses the real checkout-local stdio MCP entry and a loopback Messages provider.",
-      "Added launch medians of 101–126 ms exceed the investigation threshold; the protected path includes two Python interpreter starts, scope/delegation setup, Bubblewrap and kernel readiness checks.",
+      "Added launch medians of 101\u2013126 ms exceed the investigation threshold; the protected path includes two Python interpreter starts, scope/delegation setup, Bubblewrap and kernel readiness checks.",
       "The short build/test workload showed 5.821% overhead. The sustained TypeScript pair is recorded separately."
     ],
     "finalValidationSource": {
@@ -705,5 +705,50 @@
       "fail": 0,
       "containerCasesNotEnabled": 2
     }
+  },
+  "boundaryAvailability": {
+    "date": "2026-10-20",
+    "decision": "Operator decision of 2026-10-20: a launch is never refused for a missing boundary; it starts unprotected and reports the boundary off.",
+    "headSources": "1b96b0cbd",
+    "baseSources": "90557a90a",
+    "procedure": "Explicit-path bun test through the installed gate-slot.sh with fresh HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR per run and LLV_VIEWER_CONTROL_URL on a closed port. Base runs used an export of the base sources with this round's test files.",
+    "head": {
+      "src/lib/runtime/agentSignalSandbox.test.ts + src/lib/pipelines/testGuidance.test.ts + src/lib/pipelines/prompts.test.ts": {
+        "pass": 40,
+        "fail": 0
+      },
+      "src/lib/runtime/agentSignalSandbox.integration.test.ts (LLV_SIGNAL_SANDBOX_KERNEL_TEST=1)": {
+        "pass": 15,
+        "skip": 2,
+        "fail": 0,
+        "skipped": "built-image cases"
+      }
+    },
+    "base": {
+      "unit": {
+        "pass": 9,
+        "fail": 13,
+        "failing": [
+          "non-Linux, gate lease, root and missing python3 launches",
+          "missing Bubblewrap fallback",
+          "structured host boundary status",
+          "registry round trip for three engines",
+          "boundary status normalization",
+          "three gate-guidance cases"
+        ]
+      },
+      "kernel": {
+        "pass": 11,
+        "skip": 2,
+        "fail": 4,
+        "failing": [
+          "scope without delegated controllers",
+          "nested launch with inherited context",
+          "nested launch reaching read-only cgroup",
+          "exec acknowledgement after 11 s"
+        ]
+      }
+    },
+    "pkillControl": "The proof matches a uniquely named foreign fixture with pkill -x and killall; the same commands run unconfined against separate disposable fixtures succeed and end them."
   }
 }
