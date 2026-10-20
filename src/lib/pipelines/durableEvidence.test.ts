@@ -935,7 +935,7 @@ for (const engine of ["claude", "codex"] as const) {
       message: { model: "<synthetic>", stop_reason: "end_turn", content: [{ type: "text", text: "You've hit your session limit" }] } }
       : { type: "event_msg", timestamp: new Date(cut).toISOString(), payload: { type: "task_complete", error: { message: "usage limit", codex_error_info: "usage_limit_exceeded" } } };
     const prompt = engine === "claude" ? { type: "user", uuid: "raced-pipeline-prompt", timestamp: new Date(cut + 1000).toISOString(), message: { content: text } }
-      : { type: "event_msg", timestamp: new Date(cut + 1000).toISOString(), payload: { type: "user_message", message: (await import("@/lib/runtime/codexStructuredUserText.server")).encodeCodexStructuredUserText(text, undefined, null, { kind: "agent", role: "pipeline" }) } };
+      : { type: "event_msg", timestamp: new Date(cut + 1000).toISOString(), payload: { type: "user_message", message: await (await import("@/lib/runtime/codexStructuredUserText.server")).encodeCodexStructuredUserText(text, undefined, null, { kind: "agent", role: "pipeline" }) } };
     const file = writeTranscript(`raced-authorship-${engine}.jsonl`, [notice]);
     fs.appendFileSync(file, JSON.stringify(prompt) + "\n");
     if (engine === "claude") {

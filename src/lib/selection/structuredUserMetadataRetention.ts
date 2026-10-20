@@ -153,7 +153,7 @@ export async function collectStructuredUserMetadata(feed: TranscriptIndexFeed, o
       const ref = `${match[1]}.${Buffer.from(match[2], "hex").toString("base64url")}${match[3] ? `.${match[3]}` : ""}`;
       if (refs.has(ref)) continue;
       const path = join(directory, entry.name);
-      await withFileTransaction(join(directory, ".publication"), "metadata collection is busy", async () => {
+      await withFileTransaction(join(directory, "..", "structured-user-metadata-publication"), "metadata collection is busy", async () => {
         if (options.current?.() === false) throw new Error("metadata reference inventory was superseded");
         const current = await stat(path);
         if (current.mtimeMs >= cutoff) return;

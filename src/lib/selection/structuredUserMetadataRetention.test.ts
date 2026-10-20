@@ -69,9 +69,14 @@ test("archived copies and split markers are roots; unchanged sources reuse their
   const archives = join(root, "archived_sessions");
   await mkdir(archives);
   const path = join(archives, "rollout.jsonl");
-  // Put ctx= across the stream's 64 KiB boundary.
-  const escaped = wire.replace(/[\x20-\x7e]/g, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
-  await writeFile(path, "x".repeat(65_512) + escaped);
+  const line = (padding: string) => JSON.stringify({ padding, type: "event_msg", payload: { type: "user_message", message: wire } });
+  // Put the first Unicode escape of ctx= across the 64 KiB boundary in
+  // an actual JSON rollout record, with a fully escaped reference.
+  const raw = line("x".repeat(65_535 - line("").indexOf("ctx=")));
+  const ref = decodeWire(wire).metadataRef!;
+  const escaped = raw.replace(`ctx=${ref}`, text => text.replace(/./g, char => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`));
+  expect(JSON.parse(escaped).payload.message).toBe(wire);
+  await writeFile(path, escaped);
   const feed = { complete: true, listedAt, sources: [] };
   expect((await collectStructuredUserMetadata(feed, { roots: [archives] })).removed).toBe(0);
   const cache = join(root, "structured-user-reference-index");

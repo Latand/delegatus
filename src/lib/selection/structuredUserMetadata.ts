@@ -134,7 +134,7 @@ export async function persistStructuredUserMetadata(record: StructuredUserMetada
   const parentPath = directory();
   return withViewerOperation("structured-user.publish", async () => {
     await mkdir(parentPath, { recursive: true, mode: 0o700 });
-    return withFileTransaction(join(parentPath, ".publication"), "structured-user publication is busy", async () => {
+    return withFileTransaction(join(parentPath, "..", "structured-user-metadata-publication"), "structured-user publication is busy", async () => {
       const temporary = `${path}.${randomUUID()}.tmp`;
       const fd = await open(temporary, "wx", 0o600);
       try {

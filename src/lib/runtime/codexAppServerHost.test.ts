@@ -603,6 +603,7 @@ class FakeAppServer extends EventEmitter {
 
   private accept(message: Record<string, unknown>): void {
     this.requests.push(message);
+    this.emit("client-request", message);
     if ((typeof message.id === "string" || typeof message.id === "number")
       && this.serverRequestIds.delete(message.id)) {
       if (this.autoResolveServerRequests) {
@@ -2898,25 +2899,33 @@ describe("CodexAppServerHost", () => {
     });
 
     let settled = false;
+    let started!: () => void;
+    const requestStarted = new Promise<void>(resolve => { started = resolve; });
+    const onRequest = (message: Record<string, unknown>) => { if (message.method === "turn/start") started(); };
+    server.on("client-request", onRequest);
     const delivery = host.send({ id: "operation-confirmed", text: "hello" })
       .finally(() => { settled = true; });
-    await Bun.sleep(0);
+    try {
+      await Promise.race([requestStarted, delivery.then(() => { throw new Error("delivery settled before its native request"); })]);
+      expect(server.requests.some((request) => request.method === "turn/start")).toBeTrue();
+      expect(settled).toBeFalse();
 
-    expect(server.requests.some((request) => request.method === "turn/start")).toBeTrue();
-    expect(settled).toBeFalse();
+      server.notify("item/completed", {
+        threadId: "confirm-after-rpc",
+        turnId: "turn-1",
+        item: {
+          type: "userMessage",
+          clientId: "operation-confirmed",
+          content: [{ type: "text", text: "hello" }],
+        },
+      });
 
-    server.notify("item/completed", {
-      threadId: "confirm-after-rpc",
-      turnId: "turn-1",
-      item: {
-        type: "userMessage",
-        clientId: "operation-confirmed",
-        content: [{ type: "text", text: "hello" }],
-      },
-    });
-
-    expect(await delivery).toEqual({ outcome: "turn-started", turnId: "turn-1" });
-    await host.release();
+      expect(await delivery).toEqual({ outcome: "turn-started", turnId: "turn-1" });
+    } finally {
+      server.off("client-request", onRequest);
+      await host.release();
+      await delivery.catch(() => undefined);
+    }
   });
 
   test("rejects a persisted client id whose user-message text differs", async () => {
