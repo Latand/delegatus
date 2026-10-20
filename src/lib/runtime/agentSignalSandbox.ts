@@ -100,17 +100,21 @@ function signalLauncher(env: NodeJS.ProcessEnv, bridged: boolean): { launcher: s
 
 /** The receipt and the namespace scratch beside it. Behind the Docker bridge
  * the launcher runs in the host mount namespace, which shares the mounted home
- * with the container and not its temporary root: a launch keeps a TMPDIR under
- * that home, such as a stage's scratch, and otherwise uses a cache there. A
- * Viewer-side setup failure is one more reason the boundary is off. */
+ * with the container and not its temporary root: a launch keeps a TMPDIR whose
+ * physical location is under that home, such as a stage's scratch, and
+ * otherwise uses a cache there. Both sides are compared after resolving links,
+ * because a link under the home can lead to a directory only the container
+ * sees. A Viewer-side setup failure is one more reason the boundary is off. */
 function prepareLaunch(capabilityEnv: NodeJS.ProcessEnv, env: NodeJS.ProcessEnv, bridged: boolean): { launcher: string; directory: string } | { off: string } {
   const decision = signalLauncher(capabilityEnv, bridged);
   if ("off" in decision) return decision;
   try {
     const temporary = env.TMPDIR || os.tmpdir(), home = os.homedir();
-    const relative = path.relative(home, path.resolve(temporary));
+    const physical = (file: string) => { try { return fs.realpathSync(file); } catch { return null; } };
+    const [realTemporary, realHome] = [physical(temporary), physical(home)];
+    const relative = realTemporary && realHome ? path.relative(realHome, realTemporary) : "..";
     const shared = !bridged || (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative));
-    const parent = shared ? temporary : path.join(home, ".cache/delegatus/signal-runs");
+    const parent = !bridged ? temporary : shared ? realTemporary! : path.join(home, ".cache/delegatus/signal-runs");
     if (!shared) fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
     return { launcher: decision.launcher, directory: fs.realpathSync(fs.mkdtempSync(path.join(parent, "delegatus-signal-"))) };
   } catch (error) {
@@ -242,6 +246,13 @@ export function spawnHeadlessSignalSandbox(command: string, args: string[], opti
   const bridged = process.env.LLV_DOCKER_NSENTER_SHIMS === "1" || options.env?.LLV_DOCKER_NSENTER_SHIMS === "1";
   const prepared = prepareLaunch(options.env ?? process.env, options.env ?? process.env, bridged);
   if ("off" in prepared) {
+    // No launcher runs to print the fallback, so a run's own stderr file gets
+    // the line here, before the engine's first byte.
+    const stderr = Array.isArray(options.stdio) ? options.stdio[2] : undefined;
+    if (typeof stderr === "number") {
+      try { fs.writeSync(stderr, `agent signal sandbox: boundary off, running unprotected: ${prepared.off}\n`); }
+      catch { /* The Viewer log below still names the launch. */ }
+    }
     const child = start(command, args, options);
     recordSignalBoundaryOff(child, prepared.off, "headless");
     return child;

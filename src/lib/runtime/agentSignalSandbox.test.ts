@@ -147,6 +147,32 @@ test.each([
   }
 }, 20_000);
 
+test.each([
+  ["a non-Linux platform", "darwin", {}, "Linux namespaces are unavailable on darwin"],
+  ["a missing python3", null, { PATH: "/nonexistent-signal-path" }, "required host dependency is missing: python3"],
+] as const)("%s writes the boundary-off cause into a headless run's own stderr file before the engine's output", async (_name, platform, extra, reason) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-headless-file-"));
+  const errors = path.join(root, "stderr.log");
+  const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  if (platform) Object.defineProperty(process, "platform", { ...descriptor, value: platform });
+  const fd = fs.openSync(errors, "w");
+  try {
+    // The production headless launcher hands the run's stderr file as a descriptor.
+    const child = spawnHeadlessSignalSandbox("/bin/sh", ["-c", "echo engine >&2"], { env: fallbackEnv(root, extra), detached: true, stdio: ["ignore", "ignore", fd] });
+    fs.closeSync(fd);
+    expect(await exited(child)).toBe(0);
+    expect(child.spawnargs[0]).toBe("/bin/sh");
+    expect(fs.readFileSync(errors, "utf8")).toBe(`agent signal sandbox: boundary off, running unprotected: ${reason}\nengine\n`);
+    expect(signalBoundaryOff(child)?.reason).toBe(reason);
+    expect(warn.mock.calls.map(call => String(call[0]))).toEqual([`[signal-sandbox] headless launch runs without the agent signal boundary: ${reason}`]);
+  } finally {
+    Object.defineProperty(process, "platform", descriptor);
+    try { fs.closeSync(fd); } catch { /* Closed after the launch. */ }
+    warn.mockRestore(); fs.rmSync(root, { recursive: true, force: true });
+  }
+}, 20_000);
+
 test.skipIf(process.platform !== "linux")("a host without Bubblewrap runs the engine through the launcher's unprotected fallback", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-no-bwrap-"));
   const marker = path.join(root, "engine");
@@ -331,6 +357,40 @@ test.skipIf(!userNamespaceMounts || !tempOutsideHome || !fs.existsSync("/usr/bin
     expect(runEntries()).toEqual(before);
   } finally { warn.mockRestore(); fs.rmSync(root, { recursive: true, force: true }); }
 }, 20_000);
+
+test.skipIf(!userNamespaceMounts || !tempOutsideHome || !fs.existsSync("/usr/bin/python3"))("a bridged TMPDIR linked from the shared home to the container's own temporary root uses the shared cache", async () => {
+  const root = fs.mkdtempSync(path.join(os.homedir(), "signal-bridge-link-"));
+  // The link lies under the home, its target only in the Viewer's temporary root.
+  const hidden = fs.mkdtempSync(path.join(os.tmpdir(), "signal-bridge-link-target-"));
+  const link = path.join(root, "tmp-link"); fs.symlinkSync(hidden, link);
+  const enter = path.join(root, "enter"), handed = path.join(root, "receipts");
+  fs.writeFileSync(enter, `#!/bin/sh\nprintf '%s\\n' "$LLV_SIGNAL_RECEIPT" >> '${handed}'\nexec unshare -r -m /bin/sh -c 'mount -t tmpfs fixture "$FIXTURE_HIDDEN" && exec "$@"' sh "$@"\n`, { mode: 0o700 });
+  const before = runEntries();
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const shim = bridgeShim(root);
+    const started = Date.now();
+    const launched = await launchBridged(shim, fallbackEnv(root, { LLV_DOCKER_NSENTER_SHIMS: "1", FIXTURE_ENTER: enter, FIXTURE_HIDDEN: hidden, TMPDIR: link }),
+      path.join(root, "engine"));
+    expect(launched.codes).toEqual([0, 0, 0]);
+    // Answered by the launcher's fallback receipt, never by the launch deadline.
+    expect(Date.now() - started).toBeLessThan(10_000);
+    for (const child of [launched.structured, launched.socket, launched.headless]) {
+      expect(signalBoundaryOff(child)?.reason).toBe("managed signal domains require a non-root user");
+      expect(signalDomain(child)).toBeUndefined();
+    }
+    expect(launched.output).toBe("visible\n");
+    expect(launched.headlessErrors).toContain("boundary off, running unprotected: managed signal domains require a non-root user");
+    const receipts = fs.readFileSync(handed, "utf8").trim().split("\n");
+    expect(receipts).toHaveLength(3);
+    for (const receipt of receipts) expect(receipt).toStartWith(fs.realpathSync(signalRuns) + path.sep);
+    expect(fs.readdirSync(hidden)).toEqual([]);
+    expect(runEntries()).toEqual(before);
+  } finally {
+    warn.mockRestore();
+    fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(hidden, { recursive: true, force: true });
+  }
+}, 40_000);
 
 test.skipIf(process.platform !== "linux")("a structured host records the boundary-off status beside its running engine", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-host-off-"));

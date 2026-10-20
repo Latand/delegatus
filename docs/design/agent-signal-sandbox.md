@@ -566,8 +566,10 @@ missing boundary. Each launch makes one capability decision.
 - Behind the Docker bridge the launcher runs in the host mount namespace,
   which shares the mounted home with the container and not its temporary root.
   The receipt and the namespace scratch beside it therefore stay under the
-  launch's `TMPDIR` only when that lies beneath the home, such as a stage's
-  scratch, and otherwise live under `$HOME/.cache/delegatus/signal-runs`.
+  launch's `TMPDIR` only when its physical location, after resolving links,
+  lies beneath the physical home, such as a stage's scratch, and otherwise
+  live under `$HOME/.cache/delegatus/signal-runs`. A `TMPDIR` link under the
+  home that leads to a directory only the container sees uses the cache.
   Without the bridge they stay under the launch's `TMPDIR`. A scratch the
   Viewer cannot create is one more reason the boundary is off.
 - A host shim that finds no `/usr/bin/python3` writes the off receipt itself
@@ -578,8 +580,16 @@ missing boundary. Each launch makes one capability decision.
 An unprotected launch records why. Structured hosts publish
 `signalBoundary: { state: "off", reason }` in their host state and registry
 row, and a reconnected Codex socket keeps it. Headless runs write the cause to
-their own stderr file, and terminal panes print it. The Viewer log names every
-unprotected launch.
+their own stderr file: the Viewer writes it there for its own decisions, and
+the launcher or host shim writes it for theirs. A terminal pane prints the
+cause only when the pane-side check falls back (no `python3`, an unreadable
+launcher, or the launcher's own fallback). When the Viewer decides before the
+pane command is built (a non-Linux platform, the root user, a missing
+`python3` on the Viewer's `PATH`, unresolvable tooling), the pane receives the
+command unchanged, as on main, and that launch is reported only in the Viewer
+log. The Viewer log names every unprotected structured and headless launch
+and every pane command it leaves unchanged; a pane-side fallback is reported
+in the pane only.
 
 The exec barrier derives both sides' waits from `SIGNAL_READINESS_MS` and
 `SIGNAL_ACK_MS` in `src/lib/runtime/agentSignalSandbox.ts`, passed to the
