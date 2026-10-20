@@ -20,6 +20,19 @@ also needs an explicit pin in `codexPinnedProtocol.ts` and a compatibility
 review; installing a different CLI cannot silently change the adapter's wire
 contract.
 
+## CI coverage
+
+Installed CLI pin: `0.162.1`.
+
+Verified with `codex --version` on 2026-10-20. The shared
+`native-codex-versions` YAML anchor in `.github/workflows/bun-runtime.yml`
+declares the versions for the native runtime job, the manual queue campaign
+and the local pre-push native phase. It includes the oldest supported CLI
+and every generated host pin. `scripts/bun-runtime-workflow.test.ts` fails
+when this installed pin is absent from the matrix or the matrix differs from
+the host pins under `src/lib/accounts/protocol/`. Update this line when the
+installed pin changes and update the shared matrix in the same change.
+
 ## An executable without its own pin
 
 The Codex CLI updates itself. On 2026-10-16 an update to 0.163.0 made every
