@@ -64,6 +64,21 @@ test("a waiting task raised by another writer moves ahead before its own next po
   } finally { tasks.close(); }
 });
 
+test("a pre-upgrade gate cannot admit normal work ahead of an observed high-priority stage", () => {
+  const m = mixed(), older = m.older(), q = m.open(), tasks = priorityTasks(m.file);
+  tasks.set("first", "high");
+  q.check("stage:high", false, undefined, true, tasks.source(["first"]));
+
+  // This is the pinned older helper: its SQL knows only seq and ignores the
+  // priority/source columns introduced by the upgraded release.
+  expect(older.check("command:normal", true, captureProcessIdentity(process.pid))).toMatchObject({ position: 2 });
+  expect(older.check("command:normal-second", true, captureProcessIdentity(process.pid))).toMatchObject({ position: 3 });
+  expect(q.check("stage:high", false)?.position).toBe(1);
+  expect(q.check("command:normal", false, captureProcessIdentity(process.pid))?.position).toBe(2);
+  expect(q.check("command:normal-second", false, captureProcessIdentity(process.pid))?.position).toBe(3);
+  tasks.close();
+});
+
 test("task priority reads only primary-key priorities, with normal defaults and the highest linked task", () => {
   const f = fixture(), tasks = priorityTasks(f.file);
   try {
@@ -508,7 +523,7 @@ test("releases racing to open an older queue describe it once and keep its live 
   // Every racer queued behind the command and the live stage, none in its place.
   expect(waits.sort()).toEqual([3, 4, 5, 6, 7, 8]);
   expect(m.row(LIVE)).toEqual(first);
-  expect(m.read<{ n: number }>("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'trigger'")).toEqual([{ n: 6 }]);
+  expect(m.read<{ n: number }>("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'trigger'")).toEqual([{ n: 7 }]);
   expect(older.check(LIVE, true)).toMatchObject({ since: 0, position: 2 });
 });
 
@@ -526,7 +541,7 @@ test("a queue the first cut of this change left half-described keeps its live ti
   expect(q.check("stage:later", true)).toMatchObject({ position: 2 });
   expect(m.row(LIVE)).toEqual(first);
   expect(m.read("SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name")).toEqual(
-    ["suspended_hold", "suspended_keep", "suspended_release", "tickets_gone", "tickets_poll", "tickets_queued"].map(name => ({ name })));
+    ["suspended_hold", "suspended_keep", "suspended_release", "tickets_fifo", "tickets_gone", "tickets_poll", "tickets_queued"].map(name => ({ name })));
   m.at(2 * CPU_QUEUE_ABANDONED_MS + CPU_QUEUE_UNPOLLED_MS + 1);
   expect(q.check("stage:later", true)).toBeNull();
 });

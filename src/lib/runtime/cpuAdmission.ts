@@ -21,7 +21,7 @@ export const CPU_QUEUE_ABANDONED_MS = 24 * 60 * 60_000;
 export const CPU_QUEUE_STALE_GRACE_MS = 60_000;
 /** `stalledMs` is set only while the head is past its bound and nothing is admitted. */
 export type CpuQueueWait = { since: number; position: number; remainingMs: number; priority?: TaskPriority; stalledMs?: number };
-type Ticket = { seq: number; key: string; since: number; owner: string | null; priority: number; source: string | null };
+type Ticket = { seq: number; fifo_seq: number; key: string; since: number; owner: string | null; priority: number; source: string | null };
 export type CpuSlotLease = { owner: ProcessIdentity; slot: string };
 
 /** A continuation retains its parent's admission only while the kernel
@@ -152,6 +152,16 @@ export class CpuAdmissionQueue {
       const columns = this.db.query<{ name: string }, []>("PRAGMA table_info(tickets)").all();
       if (!columns.some(column => column.name === "priority")) this.db.exec("ALTER TABLE tickets ADD COLUMN priority INTEGER NOT NULL DEFAULT 1");
       if (!columns.some(column => column.name === "source")) this.db.exec("ALTER TABLE tickets ADD COLUMN source TEXT");
+      if (!columns.some(column => column.name === "fifo_seq")) {
+        this.db.exec("ALTER TABLE tickets ADD COLUMN fifo_seq INTEGER");
+        this.db.exec("UPDATE tickets SET fifo_seq = seq");
+      }
+      this.db.exec("CREATE TABLE IF NOT EXISTS ticket_order (id INTEGER PRIMARY KEY CHECK (id = 1), next INTEGER NOT NULL)");
+      if (!this.db.query("SELECT 1 FROM ticket_order WHERE id = 1").get()) {
+        const next = this.db.query<{ next: number }, []>("SELECT COALESCE(MAX(fifo_seq), 0) + 1 AS next FROM tickets").get()!.next;
+        this.db.query("INSERT INTO ticket_order VALUES (1, ?)").run(next);
+      }
+      this.db.exec("CREATE TRIGGER IF NOT EXISTS tickets_fifo AFTER INSERT ON tickets WHEN NEW.fifo_seq IS NULL BEGIN UPDATE tickets SET fifo_seq = (SELECT next FROM ticket_order WHERE id = 1) WHERE key = NEW.key; UPDATE ticket_order SET next = next + 1 WHERE id = 1; END");
       this.db.exec("CREATE INDEX IF NOT EXISTS tickets_priority_seq ON tickets(priority, seq)");
     }).immediate();
   }
@@ -171,6 +181,19 @@ export class CpuAdmissionQueue {
    * check does: a released stage is ahead of later work before its next tick. */
   private touch(key: string): void {
     this.db.query("UPDATE tickets SET polled = ? WHERE key = ? AND owner IS NULL").run(this.now(), key);
+  }
+  /** Older gate helpers share this file and use fixed `seq`-ordered queries.
+   * Keep that durable view in priority order so they cannot admit ahead of a
+   * ticket whose priority an upgraded checker has observed. Equal priorities
+   * retain their prior sequence order. */
+  private orderLegacyTicketsByPriority(): void {
+    const rows = this.db.query<{ seq: number; priority: number }, []>("SELECT seq, priority FROM tickets ORDER BY priority, fifo_seq").all();
+    if (rows.every((row, index) => row.seq === index + 1)) return;
+    const offset = Math.max(0, ...rows.map(row => row.seq)) + rows.length + 1;
+    this.db.query("UPDATE tickets SET seq = seq + ?").run(offset);
+    const assign = this.db.query("UPDATE tickets SET seq = ? WHERE seq = ?");
+    rows.forEach((row, index) => assign.run(index + 1, row.seq + offset));
+    this.db.query("UPDATE sqlite_sequence SET seq = ? WHERE name = 'tickets'").run(rows.length);
   }
   /** Only the release owning this pipeline namespace reconciles stage tickets. */
   reconcile(prefix: string, active: ReadonlySet<string>, eligible = active): void {
@@ -221,11 +244,16 @@ export class CpuAdmissionQueue {
       }
       // Refresh every waiting binding before any caller can dispatch. Reads seek
       // task primary keys and extract only priority; no task store is decoded.
+      let priorityChanged = false;
       for (const row of this.db.query<Ticket, []>("SELECT * FROM tickets WHERE source IS NOT NULL AND key NOT IN (SELECT key FROM suspended) AND key NOT IN (SELECT key FROM stage_admissions)").all()) {
         const priority = readCpuPriority(parseSqliteJson(row.source!, this.db) as CpuPrioritySource);
         const rank = priority === "high" ? 0 : priority === "low" ? 2 : 1;
-        if (rank !== row.priority) this.db.query("UPDATE tickets SET priority = ? WHERE key = ?").run(rank, row.key);
+        if (rank !== row.priority) {
+          this.db.query("UPDATE tickets SET priority = ? WHERE key = ?").run(rank, row.key);
+          priorityChanged = true;
+        }
       }
+      if (priorityChanged) this.orderLegacyTicketsByPriority();
       const ticket = this.db.query<Ticket, [string]>("SELECT * FROM tickets WHERE key = ?").get(key)!;
       // Strict high → normal → low; the durable sequence is FIFO within a
       // level, including after reprioritization, restart and recovery.
