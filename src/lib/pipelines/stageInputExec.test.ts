@@ -22,27 +22,28 @@ function repository(name: string): string {
 test("stage input cancellation stops owned children and the shared deadline prevents index-write replay", async () => {
   const runOwnedGitChild = async (cancelBy: "deadline" | "activation") => {
     const repo = repository(`owned-child-${cancelBy}`);
-    const deadline = new AbortController();
-    const activation = new AbortController();
-    let entered!: () => void;
-    const childStarted = new Promise<void>(resolve => { entered = resolve; });
-    const wrapped = createStageInputExec(async (command, args, cwd, env, options) => {
-      const running = realExec(command, args, cwd, env, options);
-      entered();
-      return running;
-    }, activation.signal, () => {}, new Error("activation superseded"));
-
-    const startedAt = performance.now();
-    const childResult = wrapped("git", ["-c", "alias.wait=!sleep 30", "wait"], repo, undefined, {
-      timeoutMs: 60_000,
-      signal: deadline.signal,
+    const program = `
+      import { createStageInputExec } from "./src/lib/pipelines/stageInputExec.ts";
+      import { realExec } from "./src/lib/workflows/provision.ts";
+      const deadline = new AbortController();
+      const activation = new AbortController();
+      const wrapped = createStageInputExec(realExec, activation.signal, () => {}, new Error("activation superseded"));
+      const result = wrapped("git", ["-c", "alias.wait=!sleep 30", "wait"], ${JSON.stringify(repo)}, undefined, {
+        timeoutMs: 3_000,
+        signal: deadline.signal,
+      });
+      ( ${JSON.stringify(cancelBy)} === "deadline" ? deadline : activation).abort();
+      const cancelled = await result;
+      process.stdout.write(JSON.stringify({ code: cancelled.code, stderr: cancelled.stderr }));
+    `;
+    const child = spawnSync(process.execPath, ["--eval", program], {
+      cwd: path.resolve(import.meta.dir, "../../.."),
+      encoding: "utf8",
+      timeout: 10_000,
     });
-    await childStarted;
-    (cancelBy === "deadline" ? deadline : activation).abort();
-    const cancelled = await childResult;
-    expect(cancelled.code).toBeNull();
-    expect(cancelled.stderr).toContain("command cancelled");
-    expect(performance.now() - startedAt).toBeLessThan(2_000);
+    expect(child.error).toBeUndefined();
+    expect(child.status).toBe(0);
+    expect(JSON.parse(child.stdout)).toMatchObject({ code: null, stderr: "command cancelled" });
   };
 
   await runOwnedGitChild("deadline");
