@@ -1207,12 +1207,24 @@ function readEvidenceSignature(): string {
 
 /** Shared only while a fresh read is in flight. Complete historical payloads
     are released when the last admission using that read finishes. */
-async function preparePipelineEvidence(mode: "startup" | "health" | "ownership" = "startup"): Promise<PreparedPipelineEvidence> {
+type PipelineEvidenceBudget = { deadline?: number; signal?: AbortSignal };
+
+function assertPipelineEvidenceBudget(budget?: PipelineEvidenceBudget): void {
+  budget?.signal?.throwIfAborted();
+  if (budget?.deadline !== undefined && performance.now() >= budget.deadline) {
+    throw new FileTransactionBusyError("pipeline evidence preparation deadline exceeded");
+  }
+}
+
+async function preparePipelineEvidence(mode: "startup" | "health" | "ownership" = "startup", budget?: PipelineEvidenceBudget): Promise<PreparedPipelineEvidence> {
+  assertPipelineEvidenceBudget(budget);
   const signature = evidenceSignature();
+  assertPipelineEvidenceBudget(budget);
   const pendingKey = `${signature}:${mode}`;
-  const existing = pendingEvidence.get(`${signature}:startup`) ?? (mode !== "startup" ? pendingEvidence.get(`${signature}:ownership`) ?? pendingEvidence.get(`${signature}:health`) : undefined) ?? pendingEvidence.get(pendingKey);
+  const existing = budget ? undefined : pendingEvidence.get(`${signature}:startup`) ?? (mode !== "startup" ? pendingEvidence.get(`${signature}:ownership`) ?? pendingEvidence.get(`${signature}:health`) : undefined) ?? pendingEvidence.get(pendingKey);
   if (existing) { performanceSpans.event("pipeline.shared"); return existing; }
   const pending = withViewerOperation("pipelines.evidence", async () => {
+    assertPipelineEvidenceBudget(budget);
     const pipelines: Pipeline[] = [];
     const issues: RegistryRecordIssue[] = [];
     if (mode !== "startup") {
@@ -1221,7 +1233,8 @@ async function preparePipelineEvidence(mode: "startup" | "health" | "ownership" 
         return performanceSpans.sync("pipeline.validate", () => isPipeline(record))
           ? { key, ownership: startupOwnership(record as Pipeline) }
           : { key, issue: pipelineRecordIssue(record, collection) };
-      });
+      }, budget);
+      assertPipelineEvidenceBudget(budget);
       if (prepared) {
         const identities = new Set<string>();
         const ownership: PipelineStartupOwnership[] = [];
@@ -1241,6 +1254,7 @@ async function preparePipelineEvidence(mode: "startup" | "health" | "ownership" 
     const ownership: PipelineStartupOwnership[] = [];
     const resolveProject = projectAliasResolver();
     const visit = (record: unknown, collection: string) => {
+      assertPipelineEvidenceBudget(budget);
       const key = registryRecordKey(record);
       if (identities.has(key)) throw new PipelineStoreError("pipeline startup records have contradictory identities");
       identities.add(key);
@@ -1249,24 +1263,26 @@ async function preparePipelineEvidence(mode: "startup" | "health" | "ownership" 
         else ownership.push(startupOwnership(record as Pipeline));
       } else issues.push(pipelineRecordIssue(record, collection));
     };
-    const revisions = await visitStateCollectionsRows(stateDatabaseFile(), evidenceCollections, visit);
+    const revisions = await visitStateCollectionsRows(stateDatabaseFile(), evidenceCollections, visit, budget);
     if ((revisions.get("pipelines") === null) !== (revisions.get("pipelines_archive") === null)) {
       throw new PipelineStoreError("pipeline startup collections are incomplete");
     }
     if (revisions.get("pipelines") === null) {
       for (const collection of evidenceCollections) {
         for (const record of parsePipelinesFile(collection === "pipelines" ? pipelinesFile() : pipelinesArchiveFile(), true)) {
+          assertPipelineEvidenceBudget(budget);
           visit(record, collection);
           await new Promise<void>(resolve => setTimeout(resolve, 0));
         }
       }
     }
+    assertPipelineEvidenceBudget(budget);
     if (signature !== evidenceSignature()) throw new PipelineEvidenceChangedError("pipeline evidence changed during preparation");
     return { pipelines, ...(mode === "startup" ? {} : { ownership }), issues, signature };
   });
-  pendingEvidence.set(pendingKey, pending);
+  if (!budget) pendingEvidence.set(pendingKey, pending);
   try { return await pending; }
-  finally { if (pendingEvidence.get(pendingKey) === pending) pendingEvidence.delete(pendingKey); }
+  finally { if (!budget && pendingEvidence.get(pendingKey) === pending) pendingEvidence.delete(pendingKey); }
 }
 
 export async function loadPipelineOwnershipForStartupAsync(): Promise<PipelineStartupOwnership[]> {
@@ -1805,13 +1821,22 @@ export async function withPipelineStartupAdmission<T>(
       const outcome = await waitForStateLock("pipelines.startup-admission", async () => {
         try {
           let evidence = prepared;
-          if (!evidence) evidence = await preparePipelineEvidence(compact ? "ownership" : "startup");
-          options.signal?.throwIfAborted();
+          const evidenceBudget = { ...(waitMs > 0 ? { deadline } : {}), signal: options.signal };
+          if (!evidence) evidence = await preparePipelineEvidence(compact ? "ownership" : "startup", evidenceBudget);
+          assertPipelineEvidenceBudget(evidenceBudget);
           const store = pipelineStore();
+          assertPipelineEvidenceBudget(evidenceBudget);
           // First migration changes authority. Refresh before taking the lease.
-          if (!prepared && evidence.signature !== evidenceSignature()) evidence = await preparePipelineEvidence(compact ? "ownership" : "startup");
+          if (!prepared) {
+            assertPipelineEvidenceBudget(evidenceBudget);
+            const currentSignature = evidenceSignature();
+            assertPipelineEvidenceBudget(evidenceBudget);
+            if (evidence.signature !== currentSignature) {
+              evidence = await preparePipelineEvidence(compact ? "ownership" : "startup", evidenceBudget);
+            }
+          }
           prepared = evidence;
-          options.signal?.throwIfAborted();
+          assertPipelineEvidenceBudget(evidenceBudget);
           const admitted = evidence;
           // Retain unchanged preparation while yielding to a local lease holder.
           // Never enqueue behind its callback: that could outlive this deadline
@@ -1819,7 +1844,9 @@ export async function withPipelineStartupAdmission<T>(
           return await store.admit(async () => {
             options.signal?.throwIfAborted();
             if (waitMs > 0 && performance.now() >= deadline) throw new FileTransactionBusyError("pipeline startup admission deadline exceeded");
-            if (admitted.signature !== evidenceSignature()) throw new PipelineEvidenceChangedError("pipeline evidence changed before admission");
+            const currentSignature = evidenceSignature();
+            assertPipelineEvidenceBudget(evidenceBudget);
+            if (admitted.signature !== currentSignature) throw new PipelineEvidenceChangedError("pipeline evidence changed before admission");
             entered = true;
             const scope = { current: admitted as PreparedPipelineEvidence | null };
             return outsideStateLockWait(() => admittedEvidence.run(scope, async () => {

@@ -370,7 +370,7 @@ function assertAdmissionBudget(elapsedMs: number, budgetMs: number): void {
   }
 }
 
-async function runDeadlineFixture(mode: "deadline" | "sync-block", actualWaitMs: number, parentDeadlineMs: number) {
+async function runDeadlineFixture(mode: "deadline" | "sync-block" | "cold-legacy" | "cold-sqlite" | "cold-cancel", actualWaitMs: number, parentDeadlineMs: number) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-admission-child-"));
   const childHome = path.join(root, "home"), childConfig = path.join(root, "config"), childTmp = path.join(root, "tmp");
   for (const directory of [childHome, childConfig, childTmp]) fs.mkdirSync(directory, { recursive: true });
@@ -397,7 +397,7 @@ async function runDeadlineFixture(mode: "deadline" | "sync-block", actualWaitMs:
   let readyTimer: ReturnType<typeof setTimeout> | undefined;
   try {
     await Promise.race([ready.promise, once(child, "exit").then(([code]) => { throw new Error(`fixture exited ${code} before readiness: ${errors.join("")}`); }),
-      new Promise<never>((_, reject) => { readyTimer = setTimeout(() => reject(new Error("fixture readiness handshake timed out")), 8_000); })]);
+      new Promise<never>((_, reject) => { readyTimer = setTimeout(() => reject(new Error("fixture readiness handshake timed out")), 30_000); })]);
     if (readyTimer) clearTimeout(readyTimer);
     const start = performance.now();
     const result = await Promise.race([
@@ -430,6 +430,26 @@ test("repeated evidence invalidation spends the configured deadline across a pro
   expect(result.result.value.refused).toBe(true);
   expect(result.result.value.recovered).toBe(true);
 }, 10_000);
+
+test.each(["cold-legacy", "cold-sqlite"] as const)("cold %s evidence refuses within its admission budget and recovers", async mode => {
+  const result = await runDeadlineFixture(mode, 50, 15_000);
+  expect(result.result.kind).toBe("report");
+  if (result.result.kind !== "report") throw new Error(`cold preparation exceeded parent watchdog: ${result.errors.join("")}`);
+  expect(result.result.value.admitted).toBe(false);
+  expect(result.result.value.recovered).toMatchObject({ available: true });
+  expect(Number(result.result.value.elapsedMs)).toBeLessThanOrEqual(350);
+  if (mode === "cold-legacy") expect(result.result.value.storeInitialized).toBe(false);
+}, 30_000);
+
+test("cancellation interrupts cold evidence preparation and a later admission recovers", async () => {
+  const result = await runDeadlineFixture("cold-cancel", 5_000, 15_000);
+  expect(result.result.kind).toBe("report");
+  if (result.result.kind !== "report") throw new Error(`cancelled preparation exceeded parent watchdog: ${result.errors.join("")}`);
+  expect(result.result.value.cancelled).toBe(true);
+  expect(result.result.value.admitted).toBe(false);
+  expect(result.result.value.recovered).toMatchObject({ available: true });
+  expect(Number(result.result.value.elapsedMs)).toBeLessThan(1_000);
+}, 30_000);
 
 test("the parent rejects a fourfold admission overrun and remains responsive to a blocked child", async () => {
   const overrun = await runDeadlineFixture("deadline", 2_000, 3_000);
