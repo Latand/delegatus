@@ -17,7 +17,7 @@ export async function stageRepairDelivery(
     await registry.deliveryWriteOrBusy({ label: "pipeline.repair-delivery-expiry", operationId: admission.operationId }, () =>
       registry.withdrawHeldDelivery(admission.deliveryId, admission.operationId, "pipeline repair delivery did not start before its deadline"));
   }
-  const receipt = await resolveSendReceipt(admission.operationId, { ...ports, registry });
+  const receipt = await resolveSendReceipt(admission.operationId, { ...ports, registry, absoluteDeadline: deadline });
   return { operationId: admission.operationId, state: receipt?.state ?? "unavailable",
     safeToReplace: receipt?.state === "failed" && receipt.duplicateRisk === false };
 }

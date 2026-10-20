@@ -49,6 +49,31 @@ test("a publication repair whose admitted delivery never starts permits a decisi
   } finally { f.close(); }
 });
 
+test("a completed producer repair survives a lost delivery acknowledgement after controller restart", async () => {
+  const f = await fixture();
+  try {
+    let clock = Date.parse("2026-10-16T10:00:00.000Z");
+    const keys: string[] = [];
+    f.h.ports.now = () => new Date(clock).toISOString();
+    f.h.ports.resumeSeveredTurn = async input => { keys.push(input.clientMessageId); input.onUncertain?.(); return false; };
+    f.h.ports.conversationAgentActive = async () => null;
+    f.h.ports.conversationDeliveryOutstanding = () => false;
+    f.h.ports.stageRepairDelivery = async () => ({ operationId: "repair-delivery", state: "delivered", safeToReplace: false });
+    await f.commit("implementation"); f.refuse(); await f.finish();
+    const sendingAt = Date.parse(current().runs[0]!.attempts[0]!.publicationRepair!.sendingAt!);
+    f.h.ports.durableTurnEvidence = async () => ({ turn: "terminal", message: { text: "repair finished", ts: sendingAt + 1 }, lastRecordAt: sendingAt + 1 });
+    clock = sendingAt + 21 * 60_000;
+    await tickPipelines([], f.h.ports);
+    const parked = current();
+    const result = await rawPatchPipeline(parked.id, { action: "resolve-decision", clientRequestId: "completed-lost-ack",
+      answer: "Continue after the completed repair.", expectedStageId: "build", expectedAttempt: 1,
+      expectedRevision: pipelineRevision(parked) }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
+    expect(result.error).toBeUndefined();
+    expect(current().runs[0]!.attempts).toHaveLength(2);
+    expect(keys).toHaveLength(1);
+  } finally { f.close(); }
+});
+
 test("an expired undelivered publication repair remains recoverable in a new controller process", async () => {
   const f = await fixture();
   try {

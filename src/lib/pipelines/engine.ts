@@ -4243,7 +4243,7 @@ function stageHeadAccepted(attempt: PipelineStageAttempt | null): boolean {
   return attempt?.verdict?.status === "pass" || attempt?.acceptedForReview === true;
 }
 
-type RefusedPublication = { error: string; failure?: import("./types").PipelinePublicationFailure; outcome?: "not-landed" };
+type RefusedPublication = { ok?: false; error: string; failure?: import("./types").PipelinePublicationFailure; outcome?: "not-landed" };
 
 /** A quiescent publisher whose push never reached the remote: ended by a
     signal, by its time limit, or together with the Viewer that started it. */
@@ -4327,6 +4327,23 @@ async function retryRefusedPublication(
     : `${publicationFailureCause(failure!)}. The stage changed no files; ${schedule}`);
   ports.scheduleTick?.(Math.max(1_000, wait));
   return true;
+}
+
+/** Record a settled refusal before explicit recovery replaces its operation.
+ * The operation id makes this safe to repeat after a lost acknowledgement. */
+function recordSettledPublicationFailure(pipeline: Pipeline, attempt: PipelineStageAttempt | null | undefined, ports: PipelinePorts): void {
+  const operation = pipeline.delivery?.operation;
+  const result = operation?.result as RefusedPublication | undefined;
+  if (!operation || operation.state !== "settled" || !result || result.ok !== false) return;
+  const failure = result.failure;
+  const notLanded = publicationNotLanded(result);
+  const deadlineOnly = failure?.retryableDeadline === true;
+  recordPublicationFailure(pipeline, attempt ?? undefined, { operationId: operation.id, epoch: operation.epoch, at: ports.now(),
+    cause: deadlineOnly ? "infrastructure-deadline" : notLanded ? "interrupted" : "check-failure",
+    detail: (deadlineOnly ? "a check reached its execution deadline without a verdict"
+      : notLanded ? publicationInterruptionCause(failure) : failure ? publicationFailureCause(failure) : result.error).slice(0, 400),
+    recoverable: recoverablePublication(result) },
+    notLanded && !failure ? [0, ...PUBLICATION_RETRY_DELAYS_MS.slice(1)] : PUBLICATION_RETRY_DELAYS_MS);
 }
 
 const SUMMARY_REWRITE_LIMIT = 2;
@@ -4465,6 +4482,7 @@ async function retryTerminalStagePublication(
     if (repaired?.ok) {
       pipeline.lastPassedCommit = repaired.sha;
       pipeline.publishedCommit = null;
+      recordSettledPublicationFailure(pipeline, attempt, ports);
       delete pipeline.delivery!.operation;
       delete attempt.publicationRetry;
       await persist();
@@ -4812,9 +4830,10 @@ function publicationRepairProducerRefusal(pipeline: Pipeline, attempt: PipelineS
   const refusal = `the producer repair turn may still be running or queued${suffix}`;
   if (evidence?.conversationId !== worker.conversationId) return refusal;
   const { active, durable } = evidence;
-  const finished = !!repair?.requestedAt && durable?.turn === "terminal"
-    && (durable.message?.ts ?? 0) > (repair.messageTs ?? 0)
-    && (durable.lastRecordAt ?? durable.message?.ts ?? 0) >= unixMs(repair.requestedAt);
+  const repairStartedAt = repair?.requestedAt ?? repair?.sendingAt;
+  const finished = !!repairStartedAt && durable?.turn === "terminal"
+    && (durable.message?.ts ?? 0) > (repair?.messageTs ?? 0)
+    && (durable.lastRecordAt ?? durable.message?.ts ?? 0) >= unixMs(repairStartedAt);
   const noDispatch = delivery?.safeToReplace === true && (delivery.state === "failed"
     || delivery.state === "unreserved" && evidence.delivery === delivery && !!repair
       && unixMs(ports.now()) >= unixMs(repair.refusedAt) + COMMIT_REPAIR_WAIT_MS);
@@ -4937,6 +4956,7 @@ async function settlePublicationRepair(
   if (!repair.republishQueued) {
     pipeline.lastPassedCommit = repair.committedSha;
     pipeline.publishedCommit = null;
+    recordSettledPublicationFailure(pipeline, attempt, ports);
     delete pipeline.delivery!.operation;
     delete attempt.publicationRetry;
     repair.republishQueued = true;
@@ -10755,7 +10775,10 @@ export async function settlePendingRemoteActions(ports: PipelinePorts = defaultP
       if (!result.ok) { pipeline.stateDetail = result.error; await persist(); return; }
       if (action.action === "retry-stage") {
         const stage = currentStage(pipeline)!;
-        if (pipeline.delivery?.operation?.state === "settled") { delete pipeline.delivery.operation; pipeline.publishedCommit = null; }
+        if (pipeline.delivery?.operation?.state === "settled") {
+          recordSettledPublicationFailure(pipeline, currentAttempt(pipeline, stage.id), ports);
+          delete pipeline.delivery.operation; pipeline.publishedCommit = null;
+        }
         pipeline.lastPassedCommit = result.sha;
         pipeline.state = "running";
         pipeline.pausedState = null;
@@ -11233,6 +11256,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
           && (operation.result.outcome === "not-landed" || operation.result.error === "interrupted publication did not leave its accepted head on the remote")
           // A passed stage's own retry counts this failure and waits its turn.
           && pipeline.state === "running" && !(passed && awaitingPassedPublication(pipeline))) {
+          recordSettledPublicationFailure(pipeline, passed, lanePorts);
           delete pipeline.delivery!.operation;
           await persistPipeline();
         }
@@ -13076,7 +13100,10 @@ async function resolveDecision(
   recordHandLaunch(pipeline, actor, decision.at);
   const next = (await newAttempt(pipeline, stage))!;
   next.decisionAnswerId = decision.clientRequestId;
-  if (publicationDecision && pipeline.delivery?.operation?.state === "settled") delete pipeline.delivery.operation;
+  if (publicationDecision && pipeline.delivery?.operation?.state === "settled") {
+    recordSettledPublicationFailure(pipeline, attempt, ports);
+    delete pipeline.delivery.operation;
+  }
   pipeline.decisionAnswers = [...(pipeline.decisionAnswers ?? []), decision];
   pipeline.state = "running";
   pipeline.pausedState = null;
@@ -13427,6 +13454,7 @@ export async function patchPipeline(
       const history = tx.pipelineLookup(target);
       delivery.target = target;
       delivery.epoch = Math.max(delivery.epoch, history?.delivery?.epoch ?? 0) + 1;
+      recordSettledPublicationFailure(current, attempt, ports);
       delete delivery.operation;
       current.publishedCommit = null;
       deliveryJournal(current, "recovery", "delivery remote adopted from configured repository remote", actor?.kind === "agent" ? actor.conversationId : null);
@@ -13530,6 +13558,7 @@ export async function patchPipeline(
         // per-lane and cannot race a running writer (refused above).
         if (current.delivery.operation?.state === "pending") delete current.delivery.operation;
       }
+      recordSettledPublicationFailure(current, current.cursor ? currentAttempt(current, current.cursor.stageId) : null, ports);
       const reserved = queuePipelinePublication(current, ports.exec, { acceptedSha,
         ...(resumesPass ? { publishedSha: current.publishedCommit ?? null } : {}) }, true);
       if (!reserved.ok) return { error: reserved.error, status: 409 };
@@ -14170,6 +14199,7 @@ export async function patchPipeline(
           if (repairRefusal) return { error: repairRefusal, status: 409 };
         }
         if (pipeline.delivery?.operation?.state === "settled" && !pipeline.delivery.operation.result?.ok) {
+          recordSettledPublicationFailure(pipeline, attempt, ports);
           delete pipeline.delivery.operation;
           pipeline.publishedCommit = null;
         }
@@ -14264,6 +14294,7 @@ export async function patchPipeline(
       /* An internal review retries on the clean local head it holds; only a
          `remote-branch` pipeline takes a remote repair or republishes. */
       if (pipeline.delivery?.operation?.state === "settled") {
+        recordSettledPublicationFailure(pipeline, attempt, ports);
         delete pipeline.delivery.operation;
         pipeline.publishedCommit = null;
       }

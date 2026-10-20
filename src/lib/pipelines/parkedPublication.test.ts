@@ -972,16 +972,20 @@ for (const dirty of [false, true]) test(`publication refuses unsuccessful depend
   } finally { h.cleanup(); }
 });
 
-for (const action of ["publish", "retry-stage"] as const) test(`next explicit ${action} retries a settled failure without takeover`, async () => {
+for (const action of ["publish", "retry-stage"] as const) test(`next explicit ${action} retains a settled deadline failure before retry`, async () => {
   const h = fixture();
   try {
+    h.ports.now = () => "2026-10-16T10:00:00.000Z";
     h.lane.lastPassedCommit = h.head;
     h.lane.delivery!.operation = { id: "failed", state: "settled", epoch: 1, sha: h.head,
-      result: { ok: false, error: "hook failed" } };
+      result: { ok: false, error: "hook deadline", failure: { step: "publishing the pipeline branch", code: 124, signal: null,
+        durationMs: 60_000, outputTail: "owned runner: deadline expired", retryableDeadline: true } } };
     h.lane.stateDetail = "hook failed"; savePipelines([h.lane]);
     expect((await patchPipeline(h.lane.id, { action }, h.ports)).error).toBeUndefined(); await h.tick();
     expect(h.current()).toMatchObject({ state: "completed", publishedCommit: h.head, delivery: { epoch: 1, ownerId: h.lane.id } });
     expect(h.pushes()).toBe(1);
+    expect(h.current().publicationRecovery?.[h.head]).toMatchObject({ failures: 1, totalAttempts: 1,
+      history: [{ operationId: "failed", cause: "infrastructure-deadline", retryAt: "2026-10-16T10:01:00.000Z" }] });
   } finally { h.cleanup(); }
 });
 
