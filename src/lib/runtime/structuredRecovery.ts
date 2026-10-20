@@ -30,6 +30,9 @@ import {
 } from "./structuredSpawn";
 import { spawnTransport } from "./spawnTransport";
 import { runtimeSwitchRetirementReason } from "@/lib/pipelines/runtimeSwitchFence";
+import { findPipelineRecord } from "@/lib/pipelines/store";
+import { instanceCpuPrioritySource } from "./cpuAdmissionScope";
+import { cpuPriorityEnv } from "./cpuPriority";
 
 export interface StructuredRecoveryRequest {
   /** Fresh autonomous seat authority, re-read after recovery's lock waits. */
@@ -535,11 +538,18 @@ async function recoverCandidate(
     }
     let response: Awaited<ReturnType<typeof spawnStructuredConversation>>;
     try {
+      const pipelineTaskIds = registry.conversationMemberships(current.conversationId)
+        .filter(membership => membership.kind === "pipeline")
+        .flatMap(membership => findPipelineRecord(membership.containerId)?.taskIds ?? []);
+      const recoveredAccount = {
+        ...account,
+        env: { ...account.env, ...cpuPriorityEnv(instanceCpuPrioritySource(pipelineTaskIds)) },
+      };
       response = await (dependencies.spawn ?? spawnStructuredConversation)({
         engine: current.engine,
         receipt: begun.receipt,
         spec: current.spec,
-        account,
+        account: recoveredAccount,
         "prompt": "",
         registry,
         client,
