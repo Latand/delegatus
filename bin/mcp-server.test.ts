@@ -143,7 +143,7 @@ interface TestRpcResponse {
 }
 
 function stdioSession(command: string, launcher: string, root: string, env: Record<string, string>) {
-  const process = spawn(command, [launcher], { cwd: root, env: { ...globalThis.process.env, ...env, LLV_BUN_EXECUTABLE: globalThis.process.execPath }, stdio: ["pipe", "pipe", "pipe"] });
+  const process = spawn(command, [launcher], { cwd: root, env: { ...globalThis.process.env, ...env, LLV_BUN_EXECUTABLE: env.LLV_BUN_EXECUTABLE ?? globalThis.process.execPath }, stdio: ["pipe", "pipe", "pipe"] });
   let buffer = "";
   const messages: TestRpcResponse[] = [];
   const waiting = new Set<() => void>();
@@ -1034,7 +1034,9 @@ test("one stdio MCP session keeps its tools through endpoint loss and a newly pu
   }
 }, 20_000);
 
-for (const teardown of ["release", "eof", "timeout"]) test(`launcher drains an admitted call before ${teardown} teardown`, async () => {
+for (const teardown of ["release", "eof", "timeout"]) {
+const runDrainTest = teardown === "eof" ? test.skipIf(process.platform === "win32") : test;
+runDrainTest(`launcher drains an admitted call before ${teardown} teardown`, async () => {
   const fixture = selfUpdateFixture(`
     import fs from "node:fs";
     import { createInterface } from "node:readline";
@@ -1052,17 +1054,52 @@ for (const teardown of ["release", "eof", "timeout"]) test(`launcher drains an a
     });
   `);
   const started = path.join(fixture.root, "started"), release = path.join(fixture.root, "release");
-  const session = stdioSession(process.execPath, fixture.launcher, fixture.root, {
+  const runtime = teardown === "eof" ? Bun.which("node")! : process.execPath;
+  const timerArmed = path.join(fixture.root, "shutdown-timer-armed");
+  const timerAdvanced = path.join(fixture.root, "shutdown-timer-advanced");
+  const preload = path.join(fixture.root, "controlled-timers.mjs");
+  if (teardown === "eof") fs.writeFileSync(preload, `
+    import fs from "node:fs";
+    const originalSetTimeout = globalThis.setTimeout;
+    const originalClearTimeout = globalThis.clearTimeout;
+    const controlled = new Set();
+    let stdinEnded = false;
+    process.stdin.once("end", () => { stdinEnded = true; });
+    globalThis.setTimeout = (callback, delay, ...args) => {
+      if (process.argv[1] === ${JSON.stringify(fixture.launcher)} && stdinEnded && delay === 1000
+        && !fs.existsSync(${JSON.stringify(release)})) {
+        const timer = { callback, args, cancelled: false };
+        controlled.add(timer);
+        fs.writeFileSync(${JSON.stringify(timerArmed)}, "armed");
+        return timer;
+      }
+      return originalSetTimeout(callback, delay, ...args);
+    };
+    globalThis.clearTimeout = timer => {
+      if (controlled.has(timer)) { timer.cancelled = true; controlled.delete(timer); return; }
+      return originalClearTimeout(timer);
+    };
+    process.on("SIGUSR2", () => {
+      for (const timer of controlled) if (!timer.cancelled) timer.callback(...timer.args);
+      controlled.clear();
+      fs.writeFileSync(${JSON.stringify(timerAdvanced)}, "advanced");
+    });
+  `);
+  const session = stdioSession(runtime, fixture.launcher, fixture.root, {
     ...fixture.env, TMPDIR: fixture.root, LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1",
     LLV_TEST_STARTED: started, LLV_TEST_RELEASE: release,
+    ...(teardown === "eof" ? { NODE_OPTIONS: `--import=${preload}`, LLV_BUN_EXECUTABLE: process.execPath } : {}),
   });
+  let diagnostics = "";
+  session.process.stderr?.on("data", chunk => { diagnostics += String(chunk); });
   const until = async (ready: () => boolean) => {
     const deadline = Date.now() + 5000;
     while (!ready() && Date.now() < deadline) await Bun.sleep(10);
     expect(ready()).toBe(true);
   };
   try {
-    await session.call(1, "initialize");
+    try { await session.call(1, "initialize"); }
+    catch (error) { throw new Error(`${String(error)}\n${diagnostics}`); }
     session.process.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "hold", arguments: {} } }) + "\n");
     const admitted = session.responseFor(2, 40_000);
     await until(() => fs.existsSync(started));
@@ -1076,8 +1113,12 @@ for (const teardown of ["release", "eof", "timeout"]) test(`launcher drains an a
         expect((await admitted).result.content[0].text).toContain("did not drain before shutdown deadline");
         return;
       }
-      // Hold past the launcher's former one-second EOF kill grace.
-      await Bun.sleep(1200);
+      await until(() => diagnostics.includes('"reason":"stdio-eof"'));
+      if (fs.existsSync(timerArmed)) {
+        process.kill(session.process.pid!, "SIGUSR2");
+        await until(() => fs.existsSync(timerAdvanced));
+      }
+      expect(fs.existsSync(timerArmed)).toBe(false);
     }
     fs.writeFileSync(release, "go");
     expect((await admitted).result.content[0].text).toBe("committed");
@@ -1087,3 +1128,4 @@ for (const teardown of ["release", "eof", "timeout"]) test(`launcher drains an a
     if (session.process.exitCode === null) await new Promise<void>(resolve => session.process.once("close", () => resolve()));
   }
 }, 45_000);
+}

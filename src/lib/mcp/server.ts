@@ -3339,12 +3339,45 @@ export function createMcpToolService(
           outcome = "replay";
           return replayed;
         }
-        if (localStore && !await localStore.markDispatching(key, digest)) {
-          const current = await localStore.lookup(key);
-          if (current?.result) return { ...current.result, replayed: true };
-          return recoveryAnswer(typedTool, requestId, {
-            outcome: "unknown", evidence: "mcp-receipt", reason: "the claim changed before local dispatch", ids: {},
-          }, true);
+        if (localStore) {
+          let dispatchMarked: boolean;
+          try {
+            dispatchMarked = await localStore.markDispatching(key, digest);
+          } catch {
+            /* The binding is below this await, so even a lost acknowledgement
+               after the marker commit proves this invocation sent nothing.
+               Release only its owner-bound claim; an unreadable or retained
+               row remains uncertain and cannot invite a retry. */
+            let released = false;
+            try { released = await localStore.release?.(key, digest, localBinding) ?? false; }
+            catch { /* Confirm below before offering a retry. */ }
+            if (released) {
+              return failure(typedTool, requestId, "not_executed",
+                "The local dispatch marker could not be recorded; no binding ran. Retry with the same clientRequestId.",
+                true, false, { outcome: "not-executed", evidence: "dispatch-refused", nextAction: "retry-same-key" });
+            }
+            try {
+              const current = await localStore.lookup(key);
+              if (!current) {
+                return failure(typedTool, requestId, "not_executed",
+                  "The dispatch marker was not committed and no binding ran. Retry with the same clientRequestId.",
+                  true, false, { outcome: "not-executed", evidence: "dispatch-refused", nextAction: "retry-same-key" });
+              }
+              if (current.result) return { ...current.result, replayed: true };
+            } catch { /* Unavailable evidence stays unknown. */ }
+            return recoveryAnswer(typedTool, requestId, {
+              outcome: "unknown", evidence: "mcp-receipt",
+              reason: "The local dispatch marker failed and the claim could not be released or confirmed. Read the original request receipt before retrying.",
+              ids: {},
+            }, false);
+          }
+          if (!dispatchMarked) {
+            const current = await localStore.lookup(key);
+            if (current?.result) return { ...current.result, replayed: true };
+            return recoveryAnswer(typedTool, requestId, {
+              outcome: "unknown", evidence: "mcp-receipt", reason: "the claim changed before local dispatch", ids: {},
+            }, true);
+          }
         }
         let settled: McpToolResult;
         let unadmitted = false;

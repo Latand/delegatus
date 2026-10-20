@@ -141,11 +141,21 @@ export function taskExecutorLaunch(cwd = process.cwd()) {
 /** One task service per Viewer, shared across Next bundles. A timed-out caller
  * keeps its slot until the executor settles: cancellation cannot create an
  * unbounded queue of work whose replies nobody is waiting for. */
+type ExecutorRuntime = {
+  launch?: ReturnType<typeof taskExecutorLaunch>;
+  env?: Partial<NodeJS.ProcessEnv>;
+  idleMs?: number;
+  drainMs?: number;
+  schedule?: (callback: () => void, delayMs: number) => () => void;
+  now?: () => number;
+};
+
 export class McpTaskExecutor {
   private child: ChildProcess | null = null;
   private closing: Promise<void> = Promise.resolve();
   private draining?: Promise<void>;
   private pending = new Map<number, Pending>();
+  private endedInputs = new WeakSet<ChildProcess>();
   private inputBytes = 0;
   private nextId = 0;
   private idle?: ReturnType<typeof setTimeout>;
@@ -154,7 +164,15 @@ export class McpTaskExecutor {
   private workerManagesIdle = false;
   private replies?: TaskExecutorReplies;
 
-  constructor(private runtime: { launch?: ReturnType<typeof taskExecutorLaunch>; env?: Partial<NodeJS.ProcessEnv>; idleMs?: number; drainMs?: number } = {}) {}
+  constructor(private runtime: ExecutorRuntime = {}) {}
+
+  private schedule(callback: () => void, delayMs: number): () => void {
+    if (this.runtime.schedule) return this.runtime.schedule(callback, delayMs);
+    const timer = setTimeout(callback, delayMs);
+    return () => clearTimeout(timer);
+  }
+
+  private now(): number { return this.runtime.now?.() ?? Date.now(); }
 
   async identifyCapability(capability: string, context: McpToolCallContext = {}): Promise<string | null> {
     const result = await this.request("identifyCapability", {}, { capability }, context);
@@ -187,8 +205,9 @@ export class McpTaskExecutor {
 
   private request(name: string, args: McpToolArgs, caller: McpHttpCaller, context: McpToolCallContext): Promise<ExecutorResult> {
     return withViewerOperation("mcp.tasks.executor", async () => {
-      const deadlineAt = Math.min(context.deadlineAt ?? Infinity, Date.now() + 30_000);
-      if (this.draining || context.signal?.aborted || deadlineAt <= Date.now()) throw new Error("task executor call ended before dispatch");
+      const now = this.now();
+      const deadlineAt = Math.min(context.deadlineAt ?? Infinity, now + 30_000);
+      if (this.draining || context.signal?.aborted || deadlineAt <= now) throw new Error("task executor call ended before dispatch");
       const id = ++this.nextId;
       const frame = JSON.stringify({ id, name, args, caller, deadlineAt, nativeWork: context.nativeWork } satisfies TaskExecutorRequest) + "\n";
       const bytes = Buffer.byteLength(frame);
@@ -205,13 +224,14 @@ export class McpTaskExecutor {
         };
         const cancel = () => {
           finish(new Error("task executor reply was cancelled or timed out; look up the original request key"));
-          if (dispatched && this.child === dispatched) {
-            leasedHelperInput(dispatched).write(JSON.stringify({ cancel: id }) + "\n");
+          if (dispatched && this.child === dispatched && !this.endedInputs.has(dispatched)) {
+            const input = leasedHelperInput(dispatched);
+            if (!input.writableEnded && !input.destroyed) input.write(JSON.stringify({ cancel: id }) + "\n");
             // The slot stays owned until settlement. Killing the shared worker
             // here also killed unrelated mutations while they were committing.
           }
         };
-        const timer = setTimeout(cancel, Math.max(1, deadlineAt - Date.now()));
+        const cancelDeadline = this.schedule(cancel, Math.max(1, deadlineAt - this.now()));
         context.signal?.addEventListener("abort", cancel, { once: true });
         const httpBody = name === "httpTaskCall" ? args.body as { params?: { name?: string; arguments?: McpToolArgs } } | undefined : undefined;
         const tool = name === "httpTaskCall" && typeof args.toolName === "string" && TASK_EXECUTOR_TOOLS.has(args.toolName) ? args.toolName : name;
@@ -219,7 +239,7 @@ export class McpTaskExecutor {
         const claim = createHash("sha256").update(`${tool}:${typeof requestKey === "string" ? requestKey : "unkeyed"}`).digest("hex");
         const pending: Pending = { tool, claim, bytes, finish, dispose: () => {
           if (this.pending.get(id) !== pending) return;
-          clearTimeout(timer); context.signal?.removeEventListener("abort", cancel);
+          cancelDeadline(); context.signal?.removeEventListener("abort", cancel);
           this.pending.delete(id); this.inputBytes -= bytes;
         } };
         this.pending.set(id, pending); this.inputBytes += bytes;
@@ -307,9 +327,10 @@ export class McpTaskExecutor {
       if (child && child.exitCode === null && child.signalCode === null) {
         // Withdraw new private admissions, then let existing calls commit receipts.
         const closed = new Promise<void>(resolve => child.once("close", () => resolve()));
+        this.endedInputs.add(child);
         leasedHelperInput(child).end();
-        const timer = setTimeout(() => this.retire(child, "drain deadline exceeded"), this.runtime.drainMs ?? 35_000);
-        try { await closed; } finally { clearTimeout(timer); }
+        const cancelDrainDeadline = this.schedule(() => this.retire(child, "drain deadline exceeded"), this.runtime.drainMs ?? 35_000);
+        try { await closed; } finally { cancelDrainDeadline(); }
       } else if (child) this.retire(child);
       await this.closing;
     })();

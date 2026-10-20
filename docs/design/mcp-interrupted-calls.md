@@ -36,8 +36,10 @@ answer without claiming its key.
 Cancelling one task-executor request keeps its slot until the worker replies;
 it no longer starts a one-second timer that kills the shared worker. Graceful
 executor closure ends its input, withdraws private admission and waits for
-active work and output. The existing heartbeat watchdog and a 35-second close
-limit still contain a worker that cannot drain. Process-owner containment
+active work and output. Abort and deadline handlers during that drain cannot
+write to the ended input; their pending claims remain held until a reply or
+the drain limit. The existing heartbeat watchdog and a 35-second close limit
+still contain a worker that cannot drain. Process-owner containment
 continues to apply on parent death.
 
 `[mcp lifecycle]` records process PID and role, the reason for shutdown,
@@ -57,8 +59,9 @@ attributable exit cause; that historical cause remains unassigned.
 Isolated regressions reproduce release replacement interrupting an admitted
 launcher call and cancellation retirement killing an unrelated task request.
 `bin/mcp-server.test.ts` holds calls across release selection and EOF;
-`src/lib/mcp/taskExecutorLifetime.test.ts` holds a peer beyond the former
-cancellation kill deadline. `src/lib/mcp/interruptedCall.test.ts` restarts real
+`src/lib/mcp/taskExecutorLifetime.test.ts` holds a peer across executor EOF
+while advancing abort and deadline callbacks without elapsed-time waits.
+`src/lib/mcp/interruptedCall.test.ts` restarts real
 processes around claim insertion, binding effects and committed receipts for
 both persistent adapters, and exercises real stdio EOF and signal draining
 with lifecycle payload checks. These checks claim no performance improvement.
