@@ -531,13 +531,15 @@ export class SeatTickAccounting {
       — the tail once its ledger was read to the end, the head when the budget
       cut the read, so the next check resumes it first. A poll another
       controller already recorded is skipped. */
-  ingest(child: AccountingChild, source: AccountingSource | null, outcomes: LedgerOutcome[], failure = false, position: TicketPosition = "tail"): void {
+  ingest(child: AccountingChild, source: AccountingSource | null, outcomes: LedgerOutcome[], failure: boolean | "launch-unmaterialized" | "host-gone-no-transcript" = false, position: TicketPosition = "tail"): void {
     this.mutate((tx, row) => {
       if (!child.pollKey || !tx.get(child.pollKey)) return;
       if (source?.cursor.identity && source.legacyBoundary?.identity !== source.cursor.identity) {
         source.legacyBoundary = { identity: source.cursor.identity, bytes: source.cursor.initialSize };
       }
-      const tuples = failure ? [[child.launchId, "pre-execution-failure"]] : outcomes.map((event) => [source!.engine, source!.generation, event.turnId]);
+      // Resolution receipts use their own identity; a later recovered turn
+      // still becomes owed under its original engine/generation/turn tuple.
+      const tuples = failure ? [[child.launchId, failure === true ? "pre-execution-failure" : failure, ...(failure !== true && source ? [source.generation] : [])]] : outcomes.map((event) => [source!.engine, source!.generation, event.turnId]);
       tuples.forEach((tuple, index) => {
         const identity = outcomeIdentity(tuple);
         const id = key("outcome", this.project, identity);

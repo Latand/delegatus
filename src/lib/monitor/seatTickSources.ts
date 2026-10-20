@@ -1990,12 +1990,15 @@ function childHostEntries(file: RegistryFile, edge: SpawnLineageEdge, receipt: S
   return [...new Set(keys.map(sessionKeyId))].flatMap((key) => (file.entries[key] ? [file.entries[key]!] : []));
 }
 
-/** Whether anything is still running this child: a host entry in a live state,
-    or a launch receipt the spawn path has not finished with. A `starting`
-    receipt past its admission lease is a launch that never got anywhere, and
-    is no evidence of a host. */
+/** Whether anything may still run this child: live entries, retained process
+    custody, queued recovery, or a launch still inside its admission lease.
+    An expired reservation with no custody is no evidence of a host. */
 function childHosted(receipt: SpawnReceipt | null, entries: readonly AgentRegistryEntry[], now: number): boolean {
-  if (entries.some((entry) => LIVE_CHILD_HOST_STATES.has(entry.status))) return true;
+  // Retained custody is not proof of death. The registry's recovery owns
+  // clearing it; the tick does not probe processes or wait for them.
+  if (entries.some((entry) => LIVE_CHILD_HOST_STATES.has(entry.status) || entry.host || entry.structuredHost?.process
+    || entry.structuredTerminationSurvivors?.length)) return true;
+  if (receipt?.admissionOwner || receipt?.queuedPinnedSpawn || receipt?.retryClaim) return true;
   if (!receipt || !LIVE_CHILD_RECEIPT_STATES.has(receipt.state)) return false;
   if (receipt.state !== "starting") return true;
   const createdAt = Date.parse(receipt.createdAt);
@@ -2072,6 +2075,7 @@ function projectChild(
       ? { launcherNotice: true } : {}),
   };
   const createdAt = edge.createdAt;
+  if (hosted && turn !== "terminal") return { input: { ...base, status: "running", outcome: null, terminalAt: null }, turn, hosted, createdAt };
   /* A launch that failed or conflicted before it ran: terminal, outcome
      failed. The receipt is the whole record of it. */
   if (receipt && (receipt.rejection || receipt.state === "failed" || receipt.state === "conflicted")) {
@@ -2085,7 +2089,6 @@ function projectChild(
   if (turn === "terminal") {
     return { input: { ...base, status: "terminal", outcome: "finished", terminalAt: settledAt }, turn, hosted, createdAt };
   }
-  if (hosted) return { input: { ...base, status: "running", outcome: null, terminalAt: null }, turn, hosted, createdAt };
   /* No host anywhere. A settled turn with nothing running it is a worker that
      finished and whose host was released — the seat's to harvest. An OPEN turn
      with nothing running it is a stall the registry can see on its own, and
@@ -2234,6 +2237,15 @@ async function childWork(
       ticket re-queued. A settled child whose read the budget cut is an
       outcome owed and not yet known, and the check says so. */
   const poll = (child: AccountingChild, page: SeatChildrenPage, projected: ProjectedChild | null): void => {
+    // Discovery predates the loop's yield. A newly hosted child must not get
+    // a failure receipt or an unknown-turn completion from that old snapshot.
+    if (projected && !projected.hosted && (projected.input.status === "unknown" || projected.input.transcript === "unresolvable")) {
+      pages.delete(`${child.owner}/${child.rowKey}`);
+      const fresh = seatChildren(child.owner, null, 1, [child.rowKey]);
+      if (!fresh) { accounting.promote(child); return; }
+      page = fresh;
+      projected = classify(page, child.rowKey);
+    }
     const previousInput = child.input;
     const previousGeneration = child.generationIndex;
     const edge = page.file.lineageEdges[child.rowKey];
@@ -2243,33 +2255,49 @@ async function childWork(
       return;
     }
     child.input = projected.input;
-    if (child.input.status === "unknown") { children.push(child.input); gaps.add("child-unplaced"); }
+    const unplaced = () => {
+      if (child.input.status === "unknown") { children.push(child.input); gaps.add("child-unplaced"); }
+    };
     const lookup = readOnlyConversationLookupFromSnapshot(page.file);
     const conversation = lookup.conversation(edge.childConversationId);
     const generations = conversation?.generations ?? [];
     const generation = generations[child.generationIndex % Math.max(1, generations.length)];
     const receipt = page.file.receipts[child.launchId];
     // A failed receipt after materialization cannot establish pre-execution failure.
-    const failure = receipt?.state === "failed" && receipt.key === null && receipt.artifactPath === null && generations.length === 0;
-    if (!generation) { accounting.ingest(child, null, [], failure); return; }
+    const failure = !projected.hosted && receipt?.state === "failed" && receipt.key === null && receipt.artifactPath === null && generations.length === 0;
+    if (!generation) {
+      const abandoned = !projected.hosted && !!receipt;
+      if (abandoned) child.input = { ...child.input, status: "terminal", outcome: "failed", terminalAt: receipt.createdAt };
+      accounting.ingest(child, null, [], failure || (abandoned ? "launch-unmaterialized" : false));
+      unplaced();
+      return;
+    }
     const source = accounting.source(child, conversation!.engine, generation.id);
     const previousCursor = source.cursor;
     const budget = Math.min(bytesLeft, CHILD_LEDGER_BYTES);
     const read = readChildLedger(path.join(statePath("structured-host-events"), `${encodeURIComponent(generation.id)}.jsonl`), source.cursor, budget);
     source.cursor = read.cursor;
-    if (read.cursor.atEnd && read.cursor.activeTurn === null && read.cursor.settledThrough > 0
-      && (projected.turn === "idle" || projected.turn === "terminal")) {
-      child.input = { ...child.input, status: "terminal", outcome: "finished" };
+    if (read.cursor.gap === null && read.cursor.atEnd && read.cursor.activeTurn === null && read.cursor.settledThrough > 0
+      && generation === generations.at(-1)
+      && (projected.turn === "idle" || projected.turn === "terminal" || (!projected.hosted && projected.turn === "unknown"))) {
+      child.input = { ...child.input, status: "terminal", outcome: "finished", terminalAt: child.input.terminalAt ?? child.input.lastRecordAt ?? null };
     }
+    const lost = !projected.hosted && child.input.transcript === "unresolvable"
+      && generation === generations.at(-1)
+      && ((read.cursor.identity === null && read.cursor.gap === null) || read.cursor.gap === "ledger-missing");
+    if (lost) child.input = { ...child.input, status: "terminal", outcome: "failed", terminalAt: child.input.terminalAt ?? child.input.spawnedAt ?? null };
+    unplaced();
     bytesLeft -= read.bytes;
-    if (source.cursor.gap !== null) gaps.add("ledger-gap");
+    // A vanished host and both records gone have a named failure receipt.
+    // Keep the cursor and every earlier outcome for a later recovery.
+    if (source.cursor.gap !== null && !lost) gaps.add("ledger-gap");
     child.generationIndex = (child.generationIndex + 1) % generations.length;
     /* A read the budget stopped short of the end resumes first next check. */
     const cut = !read.cursor.atEnd && (read.bytes >= budget || read.outcomes.length >= OUTCOME_LIMIT);
     if (child.input.status === "terminal" && read.bytes === 0 && read.outcomes.length === 0 && read.cursor.atEnd
       && child.generationIndex === previousGeneration && JSON.stringify(previousCursor) === JSON.stringify(read.cursor)
       && JSON.stringify(previousInput) === JSON.stringify(child.input)) coldVisits.push(child);
-    else accounting.ingest(child, source, read.outcomes, false, cut ? "head" : "tail");
+    else accounting.ingest(child, source, read.outcomes, lost ? "host-gone-no-transcript" : false, cut ? "head" : "tail");
     if (cut && projected.turn !== "busy") gaps.add("ledger-pending");
   };
 
@@ -2418,7 +2446,7 @@ async function childWork(
       const { transcriptReason: _frozen, transcriptPath: _frozenPath, ...frozen } = outcome.input;
       children.push({
         ...frozen,
-        terminalAt,
+        terminalAt: terminalAt ?? outcome.input.terminalAt,
         lastRecordAt,
         transcript,
         ...(transcriptReason ? { transcriptReason } : {}),
