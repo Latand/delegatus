@@ -35,6 +35,7 @@ export type ViewerOperation = "state.index-repair" | "temp.sweep" | "resources.r
   | "memory.search" | "memory.open"
   | "codex.protocol-admission" | "mcp.page-cursors"
   | "pipelines.controller-job" | "pipelines.controller-lane" | "pipelines.controller-schedule"
+  | "pipelines.controller-artifacts"
   | "telegram.outbound-state" | "telegram.outbound-publication" | "links.telegram-publication" | "orchestrator.recipient-authority" | "orchestrator.seat-channel"
   | "seat-tick.pause-conditions";
 type Operation = { name: ViewerOperation; start: number; end?: number };
