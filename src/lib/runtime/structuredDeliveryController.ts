@@ -1982,7 +1982,10 @@ export async function bindStructuredDeliveryQueue(
   state.activeRegistry = registry;
   setStructuredDeliveryKick((freshAdmission = false) => {
     if (stopped) return;
-    if (freshAdmission) drainWake.cancel();
+    /* An explicit kick supersedes a delayed retry wake. Otherwise a route
+       control can settle every pending effect while the old one-second timer
+       still schedules a redundant pass after that settlement. */
+    drainWake.cancel();
     return drainWithRetry(true, freshAdmission);
   });
   state.stopActive = () => {

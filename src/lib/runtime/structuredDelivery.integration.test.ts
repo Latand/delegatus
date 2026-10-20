@@ -1479,19 +1479,12 @@ test("a kill cancels an automatic delivery retry and fails the send retryably", 
   const baseClient = runtimeJournalClient(journal);
   const sendOperationId = "operation-send-before-kill";
   const killOperationId = "operation-kill-during-auto-retry";
-  const observedKilledQueue = Promise.withResolvers<void>();
   let effectBatchCalls = 0;
   const client = {
     ...baseClient,
     effectBatch: async (...args: Parameters<RuntimeHostClient["effectBatch"]>) => {
       effectBatchCalls += 1;
-      const effects = await baseClient.effectBatch(...args);
-      if (effects.every(effect => effect.kind === "runtime.kill-boundary")
-        && journal.operationResult(killOperationId)?.receipt.status === "delivered"
-        && journal.operationResult(sendOperationId)?.receipt.status === "failed") {
-        observedKilledQueue.resolve();
-      }
-      return effects;
+      return await baseClient.effectBatch(...args);
     },
   } satisfies RuntimeHostClient;
   let released = false;
@@ -1591,12 +1584,12 @@ test("a kill cancels an automatic delivery retry and fails the send retryably", 
     });
 
     await kickStructuredDeliveryQueue();
-    /* A wake already scheduled before the kill still observes its retained
-       kill boundary, with no pending send or kill left to execute.
-       Wait for that read, then join its drain before checking that no further
-       automatic retry wakes the queue. Its arrival has no 100 ms guarantee. */
-    await observedKilledQueue.promise;
-    await kickStructuredDeliveryQueue();
+    /* The explicit kill kick observes its retained boundary, with no pending
+       send or kill left to execute.
+       Wait for the durable terminal transitions without issuing another kick:
+       another kick would cancel the retry wake this quietness window measures. */
+    await waitForCondition(() => journal.operationResult(killOperationId)?.receipt.status === "delivered"
+      && journal.operationResult(sendOperationId)?.receipt.status === "failed");
     const effectBatchCallsAfterKill = effectBatchCalls;
     await Bun.sleep(1_100);
 
