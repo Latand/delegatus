@@ -39,7 +39,7 @@ const pipelines: Pipeline[] = Array.from({ length: 804 }, (_, i) => {
   const id = `lane${String(i).padStart(4, "0")}`;
   return { ...seed, id, worktreeDir: `/repo-pipeline-${id}`, branch: `pipeline/synthetic-work-${id}`,
     taskIds: [`task-${i}`], spec: "Synthetic context. ".repeat(5500),
-    state: "completed", lastPassedCommit: reviewedHead,
+    state: "completed", lastPassedCommit: reviewedHead, cursor: null,
     merge: { state: "queued", by: null, repository: "fixture/project", prNumber: null,
       policyChangedAt: new Date(NOW).toISOString(), reviewedHead, chain: [reviewedHead], updates: [], seenChecks: [],
       head: null, headSeenAt: null, lastChecks: null, readAt: null, nextReadAt: new Date(NOW + 60_000).toISOString(),
