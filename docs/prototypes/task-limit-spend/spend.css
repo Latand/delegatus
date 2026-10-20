@@ -1,0 +1,136 @@
+/* Task limit spend: prototype rules (docs/design/task-limit-spend.md §7).
+   Static, no product code. product.css carries the board's own rules; this file
+   holds only what the three variants add to the card, and the storyboard frame
+   around them. Colours, type and radii resolve through the product's tokens. */
+
+/* ── Storyboard frame (not product UI) ───────────────────────────────────── */
+html, body { margin: 0; background: var(--surface-board); color: var(--color-primary); }
+body { font-family: var(--font-sans); }
+.story-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; padding: 14px 16px 12px; border-bottom: 1px solid var(--border-default); background: var(--surface-canvas); }
+.story-num { font-size: var(--text-title); font-weight: 700; color: var(--color-accent); white-space: nowrap; }
+.story-name { margin: 0; font-size: var(--text-title); font-weight: 600; }
+.story-what { flex-basis: 100%; margin: 0; font-size: var(--text-ui); line-height: 17px; color: var(--color-secondary); }
+.story-what b { color: var(--color-primary); font-weight: 600; }
+
+/* One screen per frame: the address names it (#board, #popover, #phone, #task).
+   With no name, every screen is drawn, one under the other. */
+.screen { display: none; }
+.screen:target, body:not(:has(.screen:target)) .screen { display: block; }
+.screen-caption { margin: 0; padding: 10px 16px 0; font-size: var(--text-label); font-weight: 600; letter-spacing: 0.02em; color: var(--color-muted); }
+
+/* The desktop board, as the wide grid lays it out: shelves either side of
+   Assigned. In the product the board fills the window and each column scrolls;
+   here the columns take their content's height so a frame shows every card. */
+.story .kb { height: auto; overflow: visible; }
+.story .kb .board { padding: 12px 16px 20px; }
+/* Below 1200 px the product's board scrolls sideways: 280 px shelves, a 480 px
+   Assigned (kanbanLayoutMode "scroll"). */
+@media (max-width: 1199.98px) {
+  .story .kb .board { display: flex; gap: 12px; overflow-x: auto; }
+  .story .kb .board .column { flex: 0 0 auto; width: 280px; }
+  .story .kb .board .column[data-status="assigned"] { width: 480px; }
+}
+.story .kb .column { align-self: start; }
+.story .kb .col-body { contain: layout style; overflow: visible; padding-bottom: 16px; }
+/* The product portals each popover to the document (TooltipBubble). A static
+   page draws it inside the card, so the card must not clip it. */
+.story .kb .card { content-visibility: visible; }
+.story .kb .card:has(.spend-pop[data-open]) { z-index: 5; }
+
+/* The phone, at its own 390 px. */
+.story-phone { max-width: 390px; background: var(--surface-canvas); }
+.story-phone + .story-phone { margin-top: 16px; }
+.story-phone-bar { display: flex; align-items: center; gap: 6px; height: 48px; padding: 0 8px; border-bottom: 1px solid var(--border-default); background: var(--surface-card); font-size: var(--text-body); font-weight: 600; }
+.story-phone-bar svg { width: 20px; height: 20px; color: var(--color-secondary); }
+
+/* ── The spend marks ─────────────────────────────────────────────────────── */
+/* One provider: its engine mark, then its figure (variants 1 and 3) or its
+   scale (variant 2). Tabular digits, 8 px between providers. */
+.spend { position: relative; display: inline-flex; flex: none; align-items: center; gap: 8px; white-space: nowrap; font-size: var(--text-label); line-height: 16px; font-variant-numeric: tabular-nums; color: var(--color-secondary); border-radius: 4px; }
+.spend[role="button"] { cursor: help; }
+/* The marks are small; their target is not (as the state dot's). */
+.spend[role="button"]::after { content: ""; position: absolute; inset: -6px -4px; }
+.spend[role="button"]:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.spend-p { display: inline-flex; align-items: center; gap: 3px; }
+.spend-n { font-weight: 600; }
+/* A lower bound is the one figure in amber: part of the work is uncounted. */
+.spend-p[data-kind="floor"] .spend-n { color: var(--color-warning); }
+/* Counting and no rate: the word is the mark, in muted ink. */
+.spend-p:is([data-kind="counting"], [data-kind="norate"]) .spend-n { font-weight: 400; color: var(--color-muted); }
+
+/* Variant 1: at the end of the fact line, under the state line. */
+.card-meta-line .spend { margin-left: auto; padding-left: 10px; }
+.card-meta-line:has(> .spend:only-child) { justify-content: flex-end; }
+
+/* Variant 2: the scale. A 10 px disc filled by quarters in the engine's
+   colour; its fill steps differ by shape, so they read without colour. */
+.card-state .spend { margin-top: 0; align-self: flex-start; gap: 6px; }
+.spend-p .scale { display: block; width: 10px; height: 10px; flex: none; }
+.spend-p .scale circle { fill: none; stroke: currentColor; stroke-width: 1.3; }
+.spend-p .scale path { fill: currentColor; }
+.spend-p[data-engine="claude"] .scale { color: var(--color-claude-mark); }
+.spend-p[data-engine="codex"] .scale { color: var(--color-codex-mark); }
+.spend-p[data-kind="floor"] .scale { color: var(--color-warning); }
+.spend-p .scale-floor { font-weight: 600; color: var(--color-warning); margin-right: -1px; }
+
+/* Variant 3: after the lane's PR on its chain row. A finished lane's row has
+   no fold; when the PR and the figures do not fit beside its words, they move
+   together to the line below, at its end. */
+.pblock .spend { margin-left: 2px; }
+.pblock .pb-line.ended:has(.spend-tail) { flex-wrap: wrap; row-gap: 2px; }
+.pblock .spend-tail { display: inline-flex; flex: none; align-items: center; gap: 6px; margin-left: auto; }
+.pblock .spend-sep { color: var(--color-muted); }
+
+/* Done cards sit on the quiet surface; Codex's cut-out follows it. */
+.kb .card.done .spend, [data-phone-card][class*="bg-quiet"] .spend { --engine-mark-cut: var(--surface-quiet); }
+
+/* ── The popover (the state dot's bubble, card-state-pop) ────────────────── */
+.spend-pop { position: absolute; z-index: 88; bottom: calc(100% + 6px); right: -4px; display: none; width: max-content; max-width: 260px; text-align: left; white-space: normal; font-weight: 400; cursor: auto; }
+.spend-pop[data-side="bottom"] { bottom: auto; top: calc(100% + 6px); }
+.spend-pop[data-align="left"] { right: auto; left: -4px; }
+.spend[role="button"]:is(:hover, :focus-visible) > .spend-pop, .spend-pop[data-open] { display: block; }
+.spend-pop .pop-title { display: block; font-weight: 600; margin-bottom: 4px; }
+.spend-pop .pop-row { display: flex; align-items: flex-start; gap: 5px; }
+.spend-pop .pop-row + .pop-row, .spend-pop .pop-block + .pop-block { margin-top: 4px; }
+.spend-pop .pop-row > [data-engine-mark] { margin-top: 2px; }
+.spend-pop .pop-main { min-width: 0; }
+.spend-pop .pop-main b { font-weight: 600; }
+.spend-pop .pop-sub { display: block; color: var(--color-secondary); }
+.spend-pop .pop-note { display: block; margin-top: 6px; padding-top: 5px; border-top: 1px solid var(--border-default); color: var(--color-muted); }
+.spend-pop .pop-warn { color: var(--color-warning); }
+
+/* Variant 2's account lines: the sidebar's limit line (WindowLine), with the
+   task's part drawn over the week the account has used so far. */
+.spend-pop .meter { display: flex; align-items: center; gap: 8px; height: 18px; margin-left: 17px; }
+.spend-pop .meter-label { flex: 1; min-width: 0; color: var(--color-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spend-pop .meter-value { flex: none; color: var(--color-muted); font-variant-numeric: tabular-nums; }
+.spend-pop .meter-value b { color: var(--color-primary); font-weight: 600; }
+.spend-pop .meter-bar { position: relative; display: block; flex: none; width: 56px; height: 4px; overflow: hidden; border-radius: 999px; background: var(--surface-sunken); }
+.spend-pop .meter-bar .week { position: absolute; inset: 0 auto 0 0; background: var(--border-strong); }
+.spend-pop .meter-bar .task { position: absolute; top: 0; bottom: 0; min-width: 2px; }
+.spend-pop .meter-bar .task[data-engine="claude"] { background: var(--color-claude-mark); }
+.spend-pop .meter-bar .task[data-engine="codex"] { background: var(--color-codex-mark); }
+
+/* ── The phone's task screen: one more section, the album row's form ──────── */
+.phone-spend { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 12px; background: var(--surface-card); box-shadow: var(--shadow-1); font-size: var(--text-ui); line-height: 17px; }
+.phone-spend .pop-row { display: flex; align-items: flex-start; gap: 6px; }
+.phone-spend .pop-row > [data-engine-mark] { margin-top: 2px; }
+.phone-spend .pop-main b { font-weight: 600; }
+.phone-spend .pop-sub { display: block; color: var(--color-secondary); }
+.phone-spend .pop-note { color: var(--color-muted); font-size: var(--text-label); line-height: 16px; padding-top: 6px; border-top: 1px solid var(--border-default); }
+.phone-spend .pop-warn { color: var(--color-warning); }
+.phone-spend .meter { display: flex; align-items: center; gap: 8px; min-height: 20px; margin-left: 18px; font-size: var(--text-label); }
+.phone-spend .meter-label { flex: 1; min-width: 0; color: var(--color-secondary); }
+.phone-spend .meter-value { flex: none; color: var(--color-muted); font-variant-numeric: tabular-nums; }
+.phone-spend .meter-value b { color: var(--color-primary); font-weight: 600; }
+.phone-spend .meter-bar { position: relative; display: block; flex: none; width: 64px; height: 4px; overflow: hidden; border-radius: 999px; background: var(--surface-sunken); }
+.phone-spend .meter-bar .week { position: absolute; inset: 0 auto 0 0; background: var(--border-strong); }
+.phone-spend .meter-bar .task { position: absolute; top: 0; bottom: 0; min-width: 2px; }
+.phone-spend .meter-bar .task[data-engine="claude"] { background: var(--color-claude-mark); }
+.phone-spend .meter-bar .task[data-engine="codex"] { background: var(--color-codex-mark); }
+
+/* ── The index page ──────────────────────────────────────────────────────── */
+.index-list { display: flex; flex-direction: column; gap: 16px; max-width: 720px; padding: 16px; font-size: var(--text-body); line-height: 19px; }
+.index-list h2 { margin: 0 0 4px; font-size: var(--text-body); font-weight: 600; }
+.index-list p { margin: 0 0 2px; color: var(--color-secondary); }
+.index-list a { color: var(--color-accent); }
