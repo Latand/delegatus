@@ -2465,14 +2465,16 @@ export class SqliteAgentRegistryStore {
 
   private mergedArchiveReader(
     archived: ReadonlyMap<string, PropertyDescriptor>, order: readonly string[], rows: Record<string, unknown>,
-  ): () => Record<string, unknown> {
+  ): (() => Record<string, unknown>) & { primeSteps: () => Generator<void> } {
     let merged: Record<string, unknown> | undefined;
-    return () => {
+    let primed = false;
+    const target = {} as Record<string, unknown>;
+    const reader = (() => {
       if (merged) return merged;
       /* A keyed read must stay keyed even when the collection has thousands
          of archived rows. Enumerate only when the caller explicitly requests
          keys or descriptors. */
-      return merged = new Proxy({} as Record<string, unknown>, {
+      return merged = new Proxy(target, {
         get: (target, property, receiver) => {
           if (typeof property !== "string") return Reflect.get(target,property,receiver);
           const descriptor = archived.get(property);
@@ -2481,18 +2483,33 @@ export class SqliteAgentRegistryStore {
         },
         has: (target, property) => (typeof property === "string" && (archived.has(property) || Object.hasOwn(rows,property))) || Reflect.has(target,property),
         ownKeys: () => order.filter(key => archived.has(key) || Object.hasOwn(rows,key)),
-        getOwnPropertyDescriptor: (_target, property) => {
-          if (typeof property !== "string") return undefined;
-          const descriptor = archived.get(property);
-          if (descriptor) return { configurable: true, enumerable: descriptor.enumerable ?? true, get: descriptor.get };
-          if (Object.hasOwn(rows,property)) return { configurable: true, enumerable: true, writable: false, value: rows[property] };
-          return undefined;
-        },
+        getOwnPropertyDescriptor: (_target, property) => typeof property === "string"
+          ? Reflect.getOwnPropertyDescriptor(target,property) : undefined,
         set: () => false,
         defineProperty: () => false,
         deleteProperty: () => false,
       });
+    }) as (() => Record<string, unknown>) & { primeSteps: () => Generator<void> };
+    reader.primeSteps = function* (): Generator<void> {
+      if (primed) return;
+      reader();
+      for (const key of order) {
+        if (!archived.has(key) && !Object.hasOwn(rows,key)) continue;
+        Object.defineProperty(target,key,{
+          enumerable: true,
+          configurable: false,
+          get: () => {
+            const descriptor = archived.get(key);
+            if (descriptor) return descriptor.get ? descriptor.get.call(merged) : descriptor.value;
+            return rows[key];
+          },
+        });
+        yield;
+      }
+      Object.preventExtensions(target);
+      primed = true;
     };
+    return reader;
   }
 
   /** Archive accessors survive many refreshes. Capture only the immutable
@@ -2813,6 +2830,7 @@ export class SqliteAgentRegistryStore {
       const order = yield* this.orderedKeysSteps(collection);
       const rows = file[collection] as Record<string, unknown>;
       const built = this.mergedArchiveReader(archived, order, rows);
+      yield* built.primeSteps();
       Object.defineProperty(file,collection,{ enumerable: true,configurable: false,get: built });
       coldReused.add(collection);
       nextCache.collections.set(collection,{ hot,synthetic,built,cold });
@@ -2875,6 +2893,7 @@ export class SqliteAgentRegistryStore {
         order = [...ordered];
       }
       const built = this.mergedArchiveReader(archived,order,file[collection] as Record<string, unknown>);
+      yield* built.primeSteps();
       Object.defineProperty(file,collection,{ enumerable: true,configurable: false,get: built });
       nextCache.collections.get(collection)!.built = built;
       nextCache.collections.get(collection)!.cold = archived;
