@@ -1,6 +1,6 @@
 /* An exact-tree, merged-PR check for unattended checkout updates. */
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
-import { rollupChecks } from "@/lib/forge/checkRollup";
+import { rollupLatestChecksByName } from "@/lib/forge/checkRollup";
 import { runGit } from "./git";
 
 export type GreenVerdict = { state: "green" | "red" | "pending" | "checks-timeout" | "no-checks" | "no-pull-request" | "untested-tree" | "unknown" | "unavailable"; detail?: string; done?: number; total?: number; nextAt?: string; firstReadAt?: string };
@@ -145,8 +145,8 @@ export class GreenReader {
         return [{ ...item, startedAt: item.created_at }];
       });
       const checks = [
-        ...[...runGroups].flatMap(([appId, entries]) => rollupChecks(entries).map((check) => ({ ...check, kind: "run" as const, appId }))),
-        ...rollupChecks(latestStatuses).map((check) => ({ ...check, kind: "status" as const, appId: null })),
+        ...[...runGroups].flatMap(([appId, entries]) => rollupLatestChecksByName(entries).map((check) => ({ ...check, kind: "run" as const, appId }))),
+        ...rollupLatestChecksByName(latestStatuses).map((check) => ({ ...check, kind: "status" as const, appId: null })),
       ];
       if (!checks.length) return finish({ state: "no-checks" });
       const red = checks.find((check) => check.verdict === "red");

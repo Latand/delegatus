@@ -551,6 +551,9 @@ test("continuation failures cannot starve later cancellation or host teardown ac
   expect(report.pending).toEqual([]);
   expect(report.pendingContinuations).toHaveLength(16);
   expect(report.pendingContinuations!.every(item => item.detail?.includes("temporary refusal"))).toBe(true);
+  // Ten controller passes and a real child restart must finish before the
+  // next fixture resets the shared store. The child alone has a ten-second
+  // deadline, beyond Bun's default five-second budget for this whole test.
 }, 30_000);
 
 test.each([0,1000])("resident terminal hosts and stale flow cleanup use indexed peer ownership with %s retained peers", async history => {
@@ -947,4 +950,23 @@ test("refused preparations retain their windows and advance the durable fair wal
   const db = new Database(path.join(process.env.LLV_STATE_DIR!,"state.sqlite"),{ readonly: true });
   try { expect(db.query("SELECT COUNT(*) AS n FROM pipeline_tick_work WHERE dirty=1 AND attempt_cursor=0").get()).toEqual({ n: 20 }); }
   finally { db.close(); }
+});
+
+
+test("a coalesced controller pass captures its deadline after already-ready runtime work", async () => {
+  await settlePipelineControllerJobs();
+  const h = harness();
+  let clock = "2026-10-16T00:00:00.000Z";
+  const captured: string[] = [];
+  h.ports.now = () => { captured.push(clock); return clock; };
+  const runtimeReady = new Promise<void>(resolve => setImmediate(() => {
+    clock = "2026-10-16T00:01:00.000Z";
+    resolve();
+  }));
+  const first = tickPipelinesController([], h.ports);
+  expect(tickPipelinesController([], h.ports)).toBe(first);
+  await first;
+  await runtimeReady;
+  expect(captured.length).toBeGreaterThan(0);
+  expect(captured[0]).toBe("2026-10-16T00:01:00.000Z");
 });

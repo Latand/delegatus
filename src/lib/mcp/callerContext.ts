@@ -22,6 +22,8 @@ export interface McpHttpCaller {
   capability?: string;
   /** Kernel-authenticated native stdio peer; checked again before each use. */
   nativePeer?: import("@/lib/processIdentity").ProcessIdentity;
+  /** Connection identity for authenticated compatibility adapters without agent identity. */
+  paginationIdentity?: string;
 }
 
 const STORE_KEY = Symbol.for("llv.mcp.httpCaller");

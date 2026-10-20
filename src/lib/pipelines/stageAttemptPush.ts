@@ -2,11 +2,126 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { stageGitReceiptDirectory } from "@/lib/git/stageAttemptGuard";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
+import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
+import { rollupChecksWithIdentity } from "@/lib/forge/checkRollup";
 import type { ExecPort } from "@/lib/workflows/provision";
-import { pipelineLiteralGitEnv, type PipelineGitResult } from "./git";
+import { pipelineLiteralGitEnv, verifyPassedHeadIntegration, type PipelineGitResult } from "./git";
 import type { Pipeline, PipelineStageAttempt } from "./types";
 
 class StagePushRemoteUnavailable extends Error {}
+class StageIntegrationChecksPending extends Error {}
+
+/** A missing creation receipt is excused only for a published, tested clean
+ * integration. Read the forge for this exact head and origin's default branch;
+ * an unverified tracking ref, a report or an old green PR cannot authorize it. */
+async function integrationOrigin(pipeline: Pipeline, main: string, deliveryUrl: string, exec: ExecPort): Promise<string | null> {
+  const origin = await exec("git", ["remote", "get-url", "origin"], pipeline.worktreeDir);
+  const repository = githubRepositoryOfRemote(origin.stdout.trim());
+  if (origin.code !== 0 || !repository || repository !== githubRepositoryOfRemote(deliveryUrl)) return null;
+  const defaultBranch = await exec("git", ["ls-remote", "--symref", "origin", "HEAD"], pipeline.worktreeDir, undefined, { timeoutMs: 5000 });
+  if (defaultBranch.code !== 0) throw new StagePushRemoteUnavailable();
+  const lines = defaultBranch.stdout.trim().split("\n");
+  if (lines.length !== 2 || lines[0] !== `ref: refs/heads/${pipeline.baseBranch}\tHEAD`
+    || lines[1] !== `${main}\tHEAD`) return null;
+  return repository;
+}
+
+async function publishedIntegrationGreen(pipeline: Pipeline, target: string, main: string, deliveryUrl: string, exec: ExecPort): Promise<boolean> {
+  const repository = await integrationOrigin(pipeline, main, deliveryUrl, exec);
+  if (!repository) return false;
+  const read = async (args: string[]): Promise<unknown> => {
+    const result = await exec("gh", args, pipeline.worktreeDir, undefined, { timeoutMs: 10000 });
+    if (result.code !== 0) throw new StageIntegrationChecksPending("the published integration's checks are unavailable");
+    return JSON.parse(result.stdout);
+  };
+  const view = await read(["pr", "view", String(pipeline.delivery!.target.pr ?? pipeline.delivery!.target.branch.replace(/^refs\/heads\//, "")),
+    "--repo", repository, "--json", "state,isDraft,headRefOid,baseRefName,statusCheckRollup"]) as Record<string, unknown>;
+  if (!view || view.state !== "OPEN" || view.isDraft !== false || view.headRefOid !== target || view.baseRefName !== pipeline.baseBranch) return false;
+  if (!Array.isArray(view.statusCheckRollup) || view.statusCheckRollup.some(entry => !entry || typeof entry !== "object"
+    || !(typeof entry.name === "string" || typeof entry.context === "string"))) return false;
+  const [owner, name] = repository.split("/");
+  const query = `query($owner: String!, $name: String!, $oid: GitObjectID!, $endCursor: String) {
+    repository(owner: $owner, name: $name) {
+      object(oid: $oid) {
+        ... on Commit {
+          statusCheckRollup {
+            contexts(first: 100, after: $endCursor) {
+              nodes {
+                __typename
+                ... on CheckRun {
+                  name status conclusion startedAt
+                  checkSuite { app { databaseId } workflowRun { workflow { name } } }
+                }
+                ... on StatusContext { context state createdAt }
+              }
+              pageInfo { hasNextPage endCursor }
+            }
+          }
+        }
+      }
+    }
+  }`;
+  // gh pr view exports workflowName but omits the CheckRun app. Query the
+  // exact head with GraphQL for both app and workflow provenance instead.
+  const entries: Record<string, unknown>[] = [];
+  const pageInfoQuery = "{nodes: .data.repository.object.statusCheckRollup.contexts.nodes, pageInfo: .data.repository.object.statusCheckRollup.contexts.pageInfo}";
+  const seenCursors = new Set<string>();
+  let cursor: string | null = null;
+  for (let pageNumber = 0; pageNumber < 50; pageNumber++) {
+    const args = ["api", "graphql", "--jq", pageInfoQuery,
+      "-F", `owner=${owner}`, "-F", `name=${name}`, "-F", `oid=${target}`];
+    if (cursor !== null) args.push("-F", `endCursor=${cursor}`);
+    args.push("-f", `query=${query}`);
+    const page = await read(args);
+    if (!page || typeof page !== "object" || Array.isArray(page)) throw new StageIntegrationChecksPending("the published integration's checks are malformed");
+    const body = page as { nodes?: unknown; pageInfo?: { hasNextPage?: unknown; endCursor?: unknown } };
+    if (!Array.isArray(body.nodes) || body.nodes.some(node => !node || typeof node !== "object" || Array.isArray(node))
+      || !body.pageInfo || typeof body.pageInfo.hasNextPage !== "boolean"
+      || (body.pageInfo.hasNextPage && (typeof body.pageInfo.endCursor !== "string" || !body.pageInfo.endCursor
+        || seenCursors.has(body.pageInfo.endCursor)))) {
+      throw new StageIntegrationChecksPending("the published integration's checks are malformed");
+    }
+    entries.push(...body.nodes as Record<string, unknown>[]);
+    if (!body.pageInfo.hasNextPage) break;
+    cursor = body.pageInfo.endCursor as string;
+    seenCursors.add(cursor);
+    if (pageNumber === 49) throw new StageIntegrationChecksPending("the published integration has too many check pages");
+  }
+  if (entries.some(entry => entry.__typename === "CheckRun"
+    ? typeof entry.name !== "string" || !entry.name || typeof entry.status !== "string"
+      || (entry.conclusion !== null && typeof entry.conclusion !== "string")
+    : entry.__typename === "StatusContext"
+      ? typeof entry.context !== "string" || !entry.context || typeof entry.state !== "string"
+      : true)) throw new StageIntegrationChecksPending("the published integration's checks are malformed");
+  const checks = rollupChecksWithIdentity(entries.map(entry => {
+    if (entry.__typename === "StatusContext") return { ...entry, startedAt: entry.createdAt };
+    const suite = entry.checkSuite && typeof entry.checkSuite === "object" ? entry.checkSuite as Record<string, unknown> : {};
+    const app = suite.app && typeof suite.app === "object" ? suite.app as Record<string, unknown> : null;
+    return { ...entry, app: app ? { ...app, id: app.databaseId } : undefined };
+  }));
+  if (!checks.length) throw new StageIntegrationChecksPending("the published integration is waiting for checks to register");
+  if (checks.some(check => check.verdict === "red")) return false;
+  const protection = await read(["api", `repos/${repository}/branches/${encodeURIComponent(pipeline.baseBranch)}`]) as {
+    protected?: unknown; protection?: { required_status_checks?: { contexts?: unknown; checks?: unknown } };
+  };
+  if (!protection || typeof protection.protected !== "boolean"
+    || (protection.protected && (!protection.protection || typeof protection.protection !== "object" || Array.isArray(protection.protection)))) return false;
+  const required = protection.protection?.required_status_checks;
+  if (required != null && (typeof required !== "object" || Array.isArray(required))) return false;
+  const contexts = required?.contexts === undefined ? [] : required.contexts;
+  const configured = required?.checks === undefined ? [] : required.checks;
+  if (!Array.isArray(contexts) || !contexts.every(name => typeof name === "string")
+    || !Array.isArray(configured) || !configured.every(check => check && typeof check === "object" && typeof check.context === "string"
+      && (check.app_id === null || (typeof check.app_id === "number" && Number.isSafeInteger(check.app_id))))) return false;
+  const requiredSatisfied = (name: string, appId?: number | null) => checks.some(check => check.name === name && check.verdict === "green"
+    && (appId == null || (check.source === "check" && check.appId === appId)));
+  if (checks.some(check => check.verdict !== "green")
+    || contexts.some(name => !requiredSatisfied(name))
+    || configured.some(check => !requiredSatisfied(check.context, check.app_id === -1 ? null : check.app_id as number | null))) {
+    throw new StageIntegrationChecksPending("the published integration is waiting for green checks");
+  }
+  return true;
+}
 
 async function smallFile(file: string): Promise<string | null> {
   try {
@@ -84,10 +199,26 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
     // A later start is a boundary to verify, never evidence of who made its prefix.
     const directories = directory ? [directory] : [];
     let anchor = start.head;
+    let lineageCursor = start.head;
+    const replacementStarts = new Set<string>();
     const run = pipeline.runs?.find(run => run.attempts.some(item => item.launchId === attempt.launchId));
     const attempts = new Map(run?.attempts.map(item => [item.n, item]));
     let child = attempt;
     let acceptedProofBoundary: string | null = null;
+    for (const prior of run?.attempts ?? []) {
+      if (prior.n >= attempt.n || !prior.launchId || !prior.startedAt) continue;
+      const priorDirectory = stageGitReceiptDirectory(prior.launchId);
+      if (directories.includes(priorDirectory) || await stageAttemptPushRefusal(prior.launchId) !== null) continue;
+      const priorRaw = await smallFile(path.join(priorDirectory, "start.json"));
+      if (priorRaw === null) continue;
+      const priorStart = JSON.parse(priorRaw);
+      if (priorStart.launchId !== prior.launchId || priorStart.worktree !== pipeline.worktreeDir
+        || !/^[0-9a-f]{40}$/.test(priorStart.head ?? "")
+        || !Number.isFinite(Date.parse(priorStart.startedAt)) || !Number.isFinite(Date.parse(prior.startedAt))
+        || Date.parse(priorStart.startedAt) < Date.parse(prior.startedAt) || Date.parse(priorStart.startedAt) > Date.parse(now)) continue;
+      directories.push(priorDirectory);
+      replacementStarts.add(priorStart.head);
+    }
     for (;;) {
       const decision = child.decisionAnswerId ? pipeline.decisionAnswers?.find(answer => answer.clientRequestId === child.decisionAnswerId
         && answer.stageId === run?.stageId && answer.nextAttempt === child.n
@@ -103,22 +234,30 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       const parentDirectory = stageGitReceiptDirectory(parent.launchId);
       const parentRaw = await smallFile(path.join(parentDirectory, "start.json"));
       const parentStart = parentRaw ? JSON.parse(parentRaw) : null;
+      const parentRefusal = await stageAttemptPushRefusal(parent.launchId);
       if (!parentStart || parentStart.launchId !== parent.launchId || parentStart.worktree !== pipeline.worktreeDir
         || !/^[0-9a-f]{40}$/.test(parentStart.head ?? "") || !parent.startedAt
         || !Number.isFinite(Date.parse(parentStart.startedAt)) || !Number.isFinite(Date.parse(parent.startedAt))
         || Date.parse(parentStart.startedAt) < Date.parse(parent.startedAt) || Date.parse(parentStart.startedAt) > Date.parse(now)
-        || await stageAttemptPushRefusal(parent.launchId) !== null) return refuse("the replaced attempt's creation receipts are unavailable or invalid");
-      if ((await exec("git", ["merge-base", "--is-ancestor", parentStart.head, anchor], pipeline.worktreeDir)).code !== 0)
+        || (parentRefusal !== null && !(decision && parent.verdict?.status === "pass"))) return refuse("the replaced attempt's creation receipts are unavailable or invalid");
+      if ((await exec("git", ["merge-base", "--is-ancestor", parentStart.head, lineageCursor], pipeline.worktreeDir)).code !== 0)
         return refuse("the replacement dropped its starting history");
+      lineageCursor = parentStart.head;
+      replacementStarts.add(parentStart.head);
       directories.push(parentDirectory);
-      const acceptedBoundary = pipeline.lastPassedCommit;
-      const boundaryIsValid = parent.verdict?.status === "pass" && /^[0-9a-f]{40}$/.test(acceptedBoundary)
-        && (await exec("git", ["merge-base", "--is-ancestor", acceptedBoundary, start.head], pipeline.worktreeDir)).code === 0;
-      if (decision && boundaryIsValid) acceptedProofBoundary = acceptedBoundary;
+      const acceptedBoundaries = [pipeline.lastPassedCommit, pipeline.publishedCommit]
+        .filter((sha): sha is string => typeof sha === "string" && /^[0-9a-f]{40}$/.test(sha));
+      for (const boundary of acceptedBoundaries) {
+        if ((await exec("git", ["merge-base", "--is-ancestor", boundary, parentStart.head], pipeline.worktreeDir)).code === 0) {
+          acceptedProofBoundary = boundary;
+          break;
+        }
+      }
       anchor = acceptedProofBoundary ?? parentStart.head;
       child = parent;
     }
     const remote = delivery.target.remote;
+    if (!remote) return null;
     const ref = delivery.target.branch;
     const remoteHead = async (): Promise<string | null> => {
       const r = await exec("git", ["ls-remote", "--refs", remote, ref], pipeline.worktreeDir, undefined, { timeoutMs: 5000 });
@@ -135,10 +274,19 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
     const candidates = directory ? await recordedPushesForRef(directory, ref) : [];
     // No agent commit or push exists to adopt. Let the ordinary stage
     // committer preserve dirty output even while publication is offline.
-    if (!repair && directories.length <= 1 && head === start.head && candidates.length === 0 && !await hasCreatedCommits(directory)) return null;
+    if (!repair && directories.length <= 1 && head === start.head && candidates.length === 0 && !await hasCreatedCommits(directory)) {
+      const status = await exec("git", ["status", "--porcelain"], pipeline.worktreeDir);
+      if (status.code !== 0 || status.stdout.trim()) return null;
+      // A scratch push can leave a clean checkout at the original head. Read
+      // its remote before deciding that this stage produced nothing.
+    }
     const tip = repair ? null : await remoteHead();
     const url = await exec("git", ["remote", "get-url", "--push", remote], pipeline.worktreeDir);
     const expectedUrl = url.code === 0 ? url.stdout.trim() : remote;
+    if (tip && tip !== start.head) {
+      const fetched = await exec("git", ["fetch", "--no-tags", remote, ref], pipeline.worktreeDir, undefined, { timeoutMs: 10000 });
+      if (fetched.code !== 0) throw new StagePushRemoteUnavailable();
+    }
     for (const candidate of repair ? [] : candidates) {
       const receipt = await smallFile(path.join(directory!, "pushes", candidate));
       if (receipt !== `${ref}\n${expectedUrl}\n`) return refuse("the push receipt names another delivery target");
@@ -146,6 +294,11 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
         return refuse("the recorded push candidate was not confirmed on the delivery remote");
       }
     }
+    // Only accepted or durably published history, or a delivery tip whose
+    // commits are independently verified, may bypass repeated receipt checks.
+    const publishedPrefix = tip && (await exec("git", ["merge-base", "--is-ancestor", tip, start.head], pipeline.worktreeDir)).code === 0 ? tip : null;
+    const historyPrefixes = new Set([pipeline.lastPassedCommit, pipeline.publishedCommit]
+      .filter((sha): sha is string => typeof sha === "string" && /^[0-9a-f]{40}$/.test(sha)));
     let nativeCreated: Set<string> | undefined;
     const nativeCreation = async (sha: string): Promise<boolean> => {
       // Every existing start receipt, including a versionless one, requires
@@ -186,6 +339,7 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       return nativeCreated.has(sha);
     };
     let baseTip: string | null | undefined;
+    let integrationBase: string | null = null;
     const verifiedBase = async (): Promise<string | null> => {
       if (baseTip !== undefined) return baseTip;
       const baseRef = `refs/heads/${pipeline.baseBranch}`;
@@ -198,12 +352,17 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       if (fetched.code !== 0) throw new StagePushRemoteUnavailable();
       return baseTip = sha;
     };
-    const verifiedSuffix = async (target: string): Promise<string | null> => {
-      const from = repair?.acceptedHead ?? anchor;
+    const verifiedSuffix = async (target: string, from = repair?.acceptedHead ?? anchor): Promise<string | null> => {
       if (target === from) return null;
+      if (target === tip && integrationBase !== null) return null;
       let suffixAnchor = from;
       if ((await exec("git", ["merge-base", "--is-ancestor", suffixAnchor, target], pipeline.worktreeDir)).code !== 0) {
-        if (repair || directories.length > 1) return `commit ${target} dropped accepted replacement history`;
+        if (repair || directories.length > 1) {
+          for (const prefix of historyPrefixes) {
+            if ((await exec("git", ["merge-base", "--is-ancestor", target, prefix], pipeline.worktreeDir)).code === 0) return null;
+          }
+          return `commit ${target} dropped accepted replacement history`;
+        }
         // Local history rewrites still pass through the existing accepted-
         // content reconciliation in the stage committer. Prove their native
         // creation here; pushed adoption below retains its stricter ancestry.
@@ -213,10 +372,16 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       }
       // Bound each read, not the number of commits a real stage may create.
       for (let offset = 0; ; offset += 128) {
-        const log = await exec("git", ["rev-list", "--topo-order", "--max-count=128", `--skip=${offset}`, `${suffixAnchor}..${target}`], pipeline.worktreeDir);
+        const log = await exec("git", ["rev-list", "--topo-order", "--max-count=128", `--skip=${offset}`, `${suffixAnchor}..${target}`,
+          ...[...historyPrefixes].map(sha => `^${sha}`)], pipeline.worktreeDir);
         if (log.code !== 0) return `commit ${target} has unreadable ancestry`;
         const commits = log.stdout.trim().split("\n").filter(Boolean);
-        if (offset === 0 && !commits.length) return `commit ${target} has no readable suffix evidence`;
+        if (offset === 0 && !commits.length) {
+          for (const prefix of historyPrefixes) {
+            if ((await exec("git", ["merge-base", "--is-ancestor", target, prefix], pipeline.worktreeDir)).code === 0) return null;
+          }
+          return `commit ${target} has no readable suffix evidence`;
+        }
         for (const sha of commits) {
           if (!/^[0-9a-f]{40}$/.test(sha)) return `commit ${target} has malformed ancestry evidence`;
           let created = false;
@@ -229,12 +394,33 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
           // ancestors belong to the base, so they need no stage receipt.
           const base = await verifiedBase();
           if (base && (await exec("git", ["merge-base", "--is-ancestor", sha, base], pipeline.worktreeDir)).code === 0) continue;
+          if (!repair && directories.length === 1 && target === tip && base) {
+            const integration = await verifyPassedHeadIntegration(pipeline, from, target, exec, base);
+            if (integration.ok && await publishedIntegrationGreen(pipeline, target, base, expectedUrl, exec)) {
+              integrationBase = base;
+              return null;
+            }
+          }
           return `commit ${sha} was not created in the attempt worktree during this attempt and is absent from the verified base branch`;
         }
         if (commits.length < 128) break;
       }
       return null;
     };
+    if (attempt.n > 1 || directories.length > 1) {
+      // A retry can inherit history without a restartContext edge. Prove the
+      // current start and each replacement start independently so a later
+      // merge cannot hide an unaccepted prefix.
+      for (const prefix of new Set([start.head, ...replacementStarts])) {
+        const error = await verifiedSuffix(prefix, pipeline.baseRef);
+        if (error) return refuse(error);
+      }
+    }
+    if (publishedPrefix) {
+      const error = await verifiedSuffix(publishedPrefix);
+      if (error) return refuse(error);
+      historyPrefixes.add(publishedPrefix);
+    }
     if (repair || directories.length > 1) {
       // Replacements retain the head they were launched on, even when a
       // rewritten commit has a new receipt under the replacement's identity.
@@ -262,17 +448,20 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       // A remote behind the attempt's start is normal before publication. The
       // lane's own ancestry cannot prove an imported remote commit belongs to
       // this attempt.
-      const known = await exec("git", ["merge-base", "--is-ancestor", tip, start.head], pipeline.worktreeDir);
-      if (known.code === 0) {
-        const error = await verifiedSuffix(head);
-        return error ? refuse(error) : null;
-      }
       // A push can bypass pre-push (and legacy launches had no hook). Matching
       // tips still need creation proof for every commit before adoption.
       const error = await verifiedSuffix(tip);
       if (error) return refuse(error);
     }
     if (pushed !== null && pushed !== `${ref}\n${expectedUrl}\n`) return refuse("the push receipt names another delivery target");
+    if (publishedPrefix) {
+      const error = await verifiedSuffix(head);
+      if (error) return refuse(error);
+      if (await remoteHead() !== tip) return refuse("the remote tip raced the attempt proof");
+      const current = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
+      if (current.code !== 0 || current.stdout.trim() !== head) return refuse("the lane head raced the attempt proof");
+      return null;
+    }
     if (head !== start.head && head !== tip) {
       if ((await exec("git", ["merge-base", "--is-ancestor", tip, head], pipeline.worktreeDir)).code !== 0)
         return refuse(`commit ${head} moved away from the proved remote tip ${tip}`);
@@ -283,8 +472,6 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       if (current.code !== 0 || current.stdout.trim() !== head) return refuse("the lane head raced the attempt proof");
       return null; // The ordinary committer publishes the proved local suffix.
     }
-    const fetched = await exec("git", ["fetch", "--no-tags", remote, ref], pipeline.worktreeDir, undefined, { timeoutMs: 10000 });
-    if (fetched.code !== 0) return refuse("the pushed commit could not be fetched");
     const ancestor = await exec("git", ["merge-base", "--is-ancestor", start.head, tip], pipeline.worktreeDir);
     if (ancestor.code !== 0) return refuse("the pushed head does not descend from the attempt's starting head");
     for (const accepted of new Set([pipeline.baseRef, pipeline.lastPassedCommit])) {
@@ -293,6 +480,7 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
     }
     const proofError = await verifiedSuffix(tip);
     if (proofError) return refuse(proofError);
+    if (integrationBase && !await integrationOrigin(pipeline, integrationBase, expectedUrl, exec)) return refuse("origin's default branch raced the integration proof");
     const status = await exec("git", ["status", "--porcelain"], pipeline.worktreeDir);
     const branch = await exec("git", ["branch", "--show-current"], pipeline.worktreeDir);
     if (status.code !== 0 || status.stdout.trim() || branch.code !== 0
@@ -304,12 +492,16 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       const merged = await exec("git", ["merge", "--ff-only", "--no-overwrite-ignore", tip], pipeline.worktreeDir);
       if (merged.code !== 0) return refuse("the proved push could not fast-forward the lane");
     }
+    if (await remoteHead() !== tip
+      || (integrationBase && !await integrationOrigin(pipeline, integrationBase, expectedUrl, exec))) return refuse("the adopted remote moved before acceptance");
     const final = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
     const clean = await exec("git", ["status", "--porcelain"], pipeline.worktreeDir);
+    const finalBranch = await exec("git", ["branch", "--show-current"], pipeline.worktreeDir);
     if (final.code !== 0 || final.stdout.trim() !== tip || clean.code !== 0 || clean.stdout.trim()
-      || await remoteHead() !== tip) return refuse("the adopted worktree or remote moved before acceptance");
+      || finalBranch.code !== 0 || finalBranch.stdout.trim() !== branch.stdout.trim()) return refuse("the adopted worktree moved before acceptance");
     return { ok: true, sha: tip };
   } catch (error) {
+    if (error instanceof StageIntegrationChecksPending) return { ok: false, deferred: true, error: error.message };
     if (error instanceof StagePushRemoteUnavailable) return { ok: false, deferred: true,
       error: "stage push verification is waiting for the delivery remote" };
     return refuse("the attempt's Git evidence could not be verified");

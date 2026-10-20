@@ -1,9 +1,7 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
-import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
-import { withFileTransactionSync } from "@/lib/state/fileTransaction";
+import { smallStore } from "@/lib/state/smallStore";
 
 import { adoptRootSession, mintRootId } from "./lineage";
 import { ROOT_LINEAGE_SCHEMA_VERSION, type RootAdoption, type RootLineageV1, type RootRolloverReason, type RootSessionV1 } from "./types";
@@ -23,23 +21,6 @@ export class RootLineageStoreError extends Error {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);
     this.name = "RootLineageStoreError";
-  }
-}
-
-function atomicWriteJson(filePath: string, value: unknown): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const temp = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${crypto.randomUUID()}.tmp`);
-  let descriptor: number | null = null;
-  try {
-    descriptor = fs.openSync(temp, "wx", 0o600);
-    fs.writeFileSync(descriptor, JSON.stringify(value, null, 2) + "\n", "utf8");
-    fs.fsyncSync(descriptor);
-    fs.closeSync(descriptor);
-    descriptor = null;
-    fs.renameSync(temp, filePath);
-  } finally {
-    if (descriptor !== null) fs.closeSync(descriptor);
-    fs.rmSync(temp, { force: true });
   }
 }
 
@@ -72,36 +53,47 @@ function isLineage(value: unknown): value is RootLineageV1 {
   );
 }
 
-/**
- * The persisted lineage, or null when no root session has ever been adopted.
- *
- * A malformed file throws rather than reading as absent: the root id is the
- * identity that in-flight attention requests were written against, so silently
- * minting a replacement would orphan them exactly the way keying on a session
- * path would.
- */
+/** Invalid structured records refuse replacement: attention references the
+    stable root identity. Torn legacy bytes follow the import helper's
+    preserved-gap protocol. */
+function parseLineage(raw: unknown): RootLineageV1 {
+  if (!isLineage(raw)) throw new RootLineageStoreError("root lineage is not a valid record");
+  return raw;
+}
+
+export const rootLineageStore = smallStore<RootLineageV1 | null>({
+  collection: "root_lineage", empty: () => null, parse: parseLineage,
+  toRows: document => document ? [
+    { key: "meta", value: { ...document, sessions: [], head: document.sessions.at(-1) ?? null } },
+    ...document.sessions.map((value, index) => ({ key: `session:${index}`, value })),
+  ] : [],
+  fromRows: rows => {
+    const meta = rows.find(row => row.key === "meta");
+    if (!meta) return null;
+    const { head: _head, ...lineage } = meta.value as RootLineageV1 & { head?: RootSessionV1 | null };
+    return parseLineage({ ...lineage, sessions: rows.filter(row => row.key !== "meta").map(row => row.value) });
+  },
+  // Older releases distinguish an empty lineage by ENOENT. Keep that wire
+  // representation when demoting rather than writing JSON null.
+  toFile: document => document ?? undefined,
+  error: (message, cause) => new RootLineageStoreError(message, { cause }),
+  readLegacy: file => {
+    try { return parseLineage(JSON.parse(fs.readFileSync(file, "utf8"))); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw new RootLineageStoreError("could not read the root lineage", { cause: error });
+    }
+  },
+});
+
 export function readRootLineage(filePath = rootLineageFile()): RootLineageV1 | null {
-  let text: string;
-  try {
-    text = fs.readFileSync(filePath, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw new RootLineageStoreError("could not read the root lineage", { cause: error });
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text) as unknown;
-  } catch (error) {
-    throw new RootLineageStoreError("root lineage contains malformed JSON", { cause: error });
-  }
-  if (!isLineage(parsed)) throw new RootLineageStoreError("root lineage is not a valid record");
-  return parsed;
+  return rootLineageStore.read(filePath);
 }
 
 /**
  * Record the live root session, creating the root identity on first sight and
  * appending a rollover link whenever the session id changes. Serialized through
- * the shared file transaction so two tabs reporting the same rollover cannot
+ * the SQLite transaction so two tabs reporting the same rollover cannot
  * both append a successor.
  */
 export function recordRootSession(
@@ -109,35 +101,39 @@ export function recordRootSession(
   options: { now?: Date; reason?: RootRolloverReason; filePath?: string } = {},
 ): RootAdoption {
   const filePath = options.filePath ?? rootLineageFile();
-  return withFileTransactionSync(filePath, "root lineage is busy", () => {
-    const current = readRootLineage(filePath);
+  return rootLineageStore.mutate(filePath, current => {
     const adoption = adoptRootSession(current, candidate, {
       now: options.now,
       reason: options.reason,
       rootId: current?.rootId ?? mintRootId(),
     });
-    if (adoption.outcome !== "current") atomicWriteJson(filePath, adoption.lineage);
-    return adoption;
+    return { next: adoption.outcome === "current" ? undefined : adoption.lineage, result: adoption };
   });
+}
+
+/** The current session, selected without materializing retained sessions. */
+export function readRootHead(filePath = rootLineageFile()): RootSessionV1 | null {
+  const meta = rootLineageStore.readRow(filePath, "meta")?.value as (RootLineageV1 & { head?: RootSessionV1 | null }) | undefined;
+  if (!meta) return null;
+  parseLineage(meta);
+  if (meta.head != null && !isSession(meta.head)) throw new RootLineageStoreError("root head is not a valid session");
+  return meta.head ?? null;
 }
 
 /** The stable root identity, minting one if the operator has never had a root
     session. Callers that must reference the root durably use this and nothing
     else — never a conversation id, never a transcript path (D5). */
 export function rootIdentity(filePath = rootLineageFile()): string {
-  const existing = readRootLineage(filePath);
-  if (existing) return existing.rootId;
-  return withFileTransactionSync(filePath, "root lineage is busy", () => {
-    const current = readRootLineage(filePath);
-    if (current) return current.rootId;
+  const existing = rootLineageStore.readRow(filePath, "meta")?.value as RootLineageV1 | undefined;
+  if (existing) return parseLineage(existing).rootId;
+  return rootLineageStore.patchRows(filePath, 2, tx => {
+    const current = tx.get("meta")?.value as RootLineageV1 | undefined;
+    if (current) return parseLineage(current).rootId;
     const lineage: RootLineageV1 = {
-      schemaVersion: ROOT_LINEAGE_SCHEMA_VERSION,
-      rootId: mintRootId(),
-      revision: 0,
-      updatedAt: new Date().toISOString(),
-      sessions: [],
+      schemaVersion: ROOT_LINEAGE_SCHEMA_VERSION, rootId: mintRootId(), revision: 0,
+      updatedAt: new Date().toISOString(), sessions: [],
     };
-    atomicWriteJson(filePath, lineage);
+    tx.put({ key: "meta", value: lineage });
     return lineage.rootId;
   });
 }

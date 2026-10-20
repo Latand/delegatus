@@ -380,6 +380,35 @@ test("project search never opens unrelated transcript bodies", async () => {
   expect((await result.json()).items.map((item: { path: string }) => item.path)).toEqual([selected]);
 });
 
+test("warm search beyond the old text-cache ceiling never reopens retained transcript heads", async () => {
+  const entries = Array.from({ length: 2051 }, (_, n) => {
+    const pathname = path.join(sandbox, `retained-${n}.jsonl`);
+    fs.writeFileSync(pathname, JSON.stringify({ type: "user", message: { content: "Retained orchard" } }) + "\n");
+    const stat = fs.statSync(pathname);
+    return { path: pathname, root: "claude-projects" as const, name: `${n}`, project: "retained-project", title: "Unhydrated", firstPrompt: "", engine: "claude" as const, kind: "session", fmt: "claude" as const, mtime: stat.mtimeMs / 1000, size: stat.size };
+  });
+  replaceConversationCatalog(entries);
+  const url = "http://localhost/api/conversations?project=retained-project&q=orchard&limit=5";
+  const first = await (await GET(new Request(url))).json();
+  expect(first.total).toBe(entries.length);
+  // A directory is safe to stat but would fail a transcript-head read. Keep
+  // the published snapshot unchanged, as it stays between discovery passes.
+  const last = entries.at(-1)!.path;
+  const saved = `${last}.saved`;
+  fs.renameSync(last, saved);
+  fs.mkdirSync(last);
+  try {
+    const second = await (await GET(new Request(url))).json();
+    expect(second.total).toBe(entries.length);
+    expect(second.items.map((item: { path: string }) => item.path)).toEqual(first.items.map((item: { path: string }) => item.path));
+    const next = await (await GET(new Request(`${url}&cursor=${second.nextCursor}`))).json();
+    expect(next.items).toHaveLength(5);
+  } finally {
+    fs.rmdirSync(last);
+    fs.renameSync(saved, last);
+  }
+});
+
 
 test("ordinary cursor pages still hydrate their own transcript titles", async () => {
   const entries = [1, 2].map(n => {

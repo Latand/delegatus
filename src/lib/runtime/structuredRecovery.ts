@@ -17,7 +17,7 @@ import type { MessageOrigin } from "./messageOrigin";
 
 import { accountPark, type AccountPark } from "./accountPark";
 import { runtimeHostClient, type RuntimeHostClient } from "./client";
-import { reconcileDeadStructuredRegistryHost } from "./registry";
+import { reconcileDeadStructuredRegistryHostOffLoop } from "./registry";
 import { restartCutEvidenceHolds } from "./restartCutHold";
 import { assertPipelineTurnAllowed } from "./accountCreditGuard";
 import { StructuredRecoveryContendedError } from "./structuredRecoveryContention";
@@ -416,7 +416,10 @@ async function recoverCandidate(
        check; a live or unverifiable host remains fenced. */
     if (!current.hostLive) {
       request.admissionGuard?.();
-      if (reconcileDeadStructuredRegistryHost(registry, current.conversationId, current.key)) {
+      if (await reconcileDeadStructuredRegistryHostOffLoop(registry, current.conversationId, current.key, () => {
+        request.admissionGuard?.();
+        assertRestartCutEvidenceDecided(candidate.key);
+      })) {
         request.admissionGuard?.(current.key);
       }
       current = candidateFor(registry, request, Boolean(ownership), park);

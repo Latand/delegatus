@@ -47,6 +47,7 @@ function bindings(options: {
   seats?: { conversationId: string; path: string | null; project: string }[];
   replayed?: boolean;
   receiptState?: "accepted" | "busy";
+  receiptRevision?: string;
 }) {
   posted = [];
   recorded = [];
@@ -55,7 +56,7 @@ function bindings(options: {
       posted.push({ pathname, body });
       return {
         deploymentId: "deploy-1",
-        revision: body.revision,
+        revision: options.receiptRevision ?? body.revision,
         state: options.receiptState ?? "accepted",
         ...(options.replayed === undefined ? {} : { replayed: options.replayed }),
       };
@@ -111,9 +112,8 @@ test("an accepted deploy records the seat that started it, so the tick can wake 
     requestedAt: expect.any(String),
   }]);
 
-  /* A busy receipt names the deployment already running, which is someone
-     else's: nothing is recorded, and the seat is told it will not be woken. */
-  const busy = bindings({ kind: "manager", callerProject: VIEWER_PROJECT, receiptState: "busy" });
+  /* A busy receipt for a different SHA keeps its refusal and wakes nobody. */
+  const busy = bindings({ kind: "manager", callerProject: VIEWER_PROJECT, receiptState: "busy", receiptRevision: "b".repeat(40) });
   await expect(busy.deploy_exact_sha({ clientRequestId: "d2", revision: SHA })).resolves.toMatchObject({ state: "busy", wakeOnSettle: false });
   expect(recorded).toEqual([]);
 });

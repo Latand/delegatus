@@ -3,17 +3,18 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { codexFixture, createGateSandbox, discover, endingOf, fetchMain, gateTemporaryRoot, isolatedEnvironment, NATIVE_GROUP, NoVerdict, pinnedBunVersion, plan, pushDeadline, requiresMediaTools, runPushPair, runSteps, type PlanEnvironment, type PushDeadline, type Step } from "./local-gate";
+import { codexFixture, createGateSandbox, createRuntimeCheckTree, discover, endingOf, fetchMain, gateTemporaryRoot, isolatedEnvironment, NATIVE_GROUP, NoVerdict, pinnedBunVersion, plan, pushDeadline, requiresMediaTools, runPushPair, runSteps, type PlanEnvironment, type PushDeadline, type Step } from "./local-gate";
 import { cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
 import { nativeBatches } from "./verify-native-codex-runtime";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
 import { stopFixtureIdentity } from "../src/lib/testing/fixtureProcess";
 import { changedSinceBase } from "./ci-platform-scope";
+import { publicationHookDeadline, publicationPushBudgetMs } from "../src/lib/pipelines/gateBudget";
 const root = path.resolve(import.meta.dir, "..");
 const roots: string[] = [];
 const owned: ProcessIdentity[] = [];
-async function recordFixtureIdentities(files: string[]): Promise<ProcessIdentity[]> {
-  const until = Date.now() + 2_000;
+async function recordFixtureIdentities(files: string[], timeoutMs = 2_000): Promise<ProcessIdentity[]> {
+  const until = Date.now() + timeoutMs;
   const identities: ProcessIdentity[] = [];
   for (const file of files) {
     while (!existsSync(file) && Date.now() < until) await Bun.sleep(10);
@@ -31,6 +32,50 @@ afterEach(async () => {
 function context(overrides: Partial<PlanEnvironment> = {}): PlanEnvironment {
   return { base: "base", existing: new Set(["src/example.ts", "src/example.test.ts", "src/example.integration.test.ts", "src/example.browser.test.tsx", "image.png", "package.json"]), tests: ["src/example.test.ts", "src/example.integration.test.ts", "src/example.browser.test.tsx"], skippedMedia: [], linux: false, runtime: false, native: false, linuxTests: ["src/platform.test.ts"], runtimeTests: ["scripts/runtime.test.ts"], codexVersions: ["0.154.0", "0.159.0"], ...overrides };
 }
+
+test("each runtime check tree preserves current source and owns its build output", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "gate-runtime-tree-")); roots.push(dir);
+  const source = path.join(dir, "source"); mkdirSync(source);
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: source, env: fixtureGitEnv(), stdio: "pipe" });
+  git("init", "-q");
+  writeFileSync(path.join(source, "tracked.ts"), "old");
+  writeFileSync(path.join(source, "deleted.ts"), "removed");
+  writeFileSync(path.join(source, ".gitignore"), "node_modules/\n.next/\ndist/\n");
+  git("add", ".");
+  writeFileSync(path.join(source, "tracked.ts"), "current");
+  rmSync(path.join(source, "deleted.ts"));
+  writeFileSync(path.join(source, "untracked.ts"), "new");
+  for (const leaf of ["node_modules", ".next", "dist"]) {
+    mkdirSync(path.join(source, leaf)); writeFileSync(path.join(source, leaf, "sentinel"), "untouched");
+  }
+  const first = createRuntimeCheckTree(source, dir), second = createRuntimeCheckTree(source, dir);
+  expect(first).not.toBe(second);
+  for (const tree of [first, second]) {
+    expect(readFileSync(path.join(tree, "tracked.ts"), "utf8")).toBe("current");
+    expect(readFileSync(path.join(tree, "untracked.ts"), "utf8")).toBe("new");
+    for (const leaf of ["deleted.ts", ".next", "dist"]) expect(existsSync(path.join(tree, leaf))).toBe(false);
+    expect(readFileSync(path.join(tree, "node_modules", "sentinel"), "utf8")).toBe("untouched");
+    mkdirSync(path.join(tree, ".next")); writeFileSync(path.join(tree, ".next", "lock"), "private lock");
+  }
+  expect(readFileSync(path.join(source, ".next", "sentinel"), "utf8")).toBe("untouched");
+  expect(existsSync(path.join(source, ".next", "lock"))).toBe(false);
+});
+
+test.each([false, true])("build consumers execute in the prepared tree (grouped=%s)", async grouped => {
+  const dir = mkdtempSync(path.join(tmpdir(), "gate-prepared-root-")); roots.push(dir);
+  const tree = path.join(dir, "private"); mkdirSync(tree);
+  writeFileSync(path.join(dir, "artifact"), "another build");
+  const steps: Step[] = ["build", "consumer"].map(name => ({ name, command: [], ...(grouped ? { group: "runtime", lane: "runtime" } : {}) }));
+  await runSteps("pre-push", steps, { root: dir, deadline: null, logDir: dir, say: () => {},
+    prepare: step => ({ root: tree, env: process.env, command: [process.execPath, "-e", `
+      import { readFileSync, realpathSync, writeFileSync } from "node:fs";
+      if (realpathSync(process.cwd()) !== realpathSync(${JSON.stringify(tree)})) throw new Error("wrong build root");
+      ${step.name === "build" ? 'writeFileSync("artifact", "this build");' : 'if (readFileSync("artifact", "utf8") !== "this build") throw new Error("foreign artifact");'}
+    `] }),
+  });
+  expect(readFileSync(path.join(dir, "artifact"), "utf8")).toBe("another build");
+  expect(readFileSync(path.join(tree, "artifact"), "utf8")).toBe("this build");
+}, 20_000);
 function fixtureGitEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const clean = { ...env };
   for (const key of ["GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_OBJECT_DIRECTORY", "GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE", "GIT_INDEX_FILE", "GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE", "GIT_PREFIX", "GIT_SHALLOW_FILE", "GIT_COMMON_DIR"]) delete clean[key];
@@ -52,6 +97,22 @@ test("push checks commits, types and all sibling test variants, excluding browse
   expect(tests.command).toEqual(["bun", "scripts/local-gate-tests.ts", "--base", "base", "./src/example.test.ts", "./src/example.integration.test.ts"]);
   expect(tests.isolated).toBeTrue();
   for (const step of steps.filter(step => step.command[1] === "test")) for (const file of step.command.slice(2)) expect(file).toMatch(/\.test\.[jt]sx?$/);
+});
+test("the measured pipeline file families reserve comparison time without changing selection", () => {
+  const now = 1_000;
+  for (const file of ["src/lib/pipelines/engine.ts", "src/lib/pipelines/engine.fixture.ts", "src/lib/pipelines/engine.providerBudget.test.ts", "src/lib/pipelines/git.ts", "src/lib/pipelines/parkedPublication.test.ts"]) {
+    expect(publicationPushBudgetMs([file]), file).toBe(1_500_000);
+    expect(publicationHookDeadline(publicationPushBudgetMs([file]), now)).toBe(1_441_000);
+  }
+  for (const files of [[], ["docs/pipelines.md"], ["src/engine.ts"], ["prefix/src/lib/pipelines/engine.ts"], ["src/lib/pipelines/engine.ts/other.ts"]]) {
+    expect(publicationPushBudgetMs(files)).toBe(900_000);
+    expect(publicationHookDeadline(publicationPushBudgetMs(files), now)).toBe(841_000);
+  }
+  expect(publicationPushBudgetMs(null)).toBe(1_500_000);
+  const tests = Array.from({ length: 27 }, (_, index) => `src/lib/pipelines/engine.variant${index}.test.ts`);
+  const file = "src/lib/pipelines/engine.ts";
+  const step = plan("pre-push", [file], context({ existing: new Set([file]), tests })).find(step => step.name === "touched tests")!;
+  expect(step.command.slice(4)).toEqual(tests.map(file => `./${file}`));
 });
 test("scoped heavy steps retain pin, host interpreter and both native fixture versions", () => {
   const steps = plan("pre-push", ["package.json"], context({ linux: true, runtime: true, native: true }));
@@ -94,9 +155,16 @@ test("the shared native runner needs no Codex fixture and exposes no executable 
     const target = path.join(dir, file);
     mkdirSync(path.dirname(target), { recursive: true });
     writeFileSync(target, `import { expect, test } from "bun:test";
+      import { existsSync, writeFileSync } from "node:fs";
+      import path from "node:path";
       test("shared contracts have no Codex executable", () => {
         for (const key of ["NATIVE_CODEX_QUEUE_TEST_BINARY", "LLV_CODEX_HISTORY_CLI", "LLV_CODEX_BINARY"])
           expect(process.env[key]).toBeUndefined();
+        for (const [key, value] of Object.entries(${JSON.stringify(Object.fromEntries(["LLV_OWNED_RUN_CPU_SLICE", "LLV_OWNED_RUN_CPU_QUOTA", "LLV_GATE_MEM", "LLV_CPU_WAIT_ROOTS", "LLV_GATE_SLOT_LEASE", "LLV_GATE_STEP"].filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]])))}))
+          expect(process.env[key]).toBe(value);
+        const marker = path.join(process.env.LLV_STATE_DIR!, "previous-file");
+        expect(existsSync(marker)).toBe(false);
+        writeFileSync(marker, "owned by this file");
       });`);
   }
   const result = spawnSync(process.execPath, [path.join(root, "scripts/verify-native-codex-runtime.ts"), "--shared-only"], {
@@ -118,7 +186,7 @@ test("native engine and hosted selections still require an executable fixture", 
   }
 });
 
-test("only a caller's deadline bounds the push, and it must be a Unix time in milliseconds", () => {
+test("a caller's deadline is authoritative and must be a Unix time in milliseconds", () => {
   expect(pushDeadline({}, 1_000)).toBeNull();
   expect(pushDeadline({ LLV_GATE_PUSH_DEADLINE: "" }, 1_000)).toBeNull();
   expect(pushDeadline({ LLV_GATE_PUSH_DEADLINE: "5000" }, 1_000)).toEqual({ at: 5_000, startedAt: 1_000 });
@@ -134,6 +202,45 @@ function stepRunner(deadline: PushDeadline | null, scripts: (dir: string) => Rec
 }
 const grouped = (name: string, deferrable = false): Step => ({ name, command: [], group: NATIVE_GROUP, ...(deferrable ? { deferrable } : {}) });
 const soon = (ms: number): PushDeadline => ({ at: Date.now() + ms, startedAt: Date.now() });
+
+test.each(["recovers", "repeats", "assertion", "runner", "cleanup", "incomplete", "cancel-retry"] as const)("a comparator-authorized phase retry is bounded across real hook processes: %s", mode => {
+  const dir = mkdtempSync(path.join(tmpdir(), "gate-flaky-phase-")); roots.push(dir);
+  const counter = path.join(dir, "attempts"), subject = path.join(dir, "check.ts"), harness = path.join(dir, "hook.ts");
+  writeFileSync(subject, `import { existsSync, readFileSync, writeFileSync } from "node:fs";
+    const counter = ${JSON.stringify(counter)};
+    const n = existsSync(counter) ? Number(readFileSync(counter, "utf8")) + 1 : 1;
+    writeFileSync(counter, String(n));
+    if (${JSON.stringify(mode)} === "recovers" && n > 1) process.exit(0);
+    if (${JSON.stringify(mode)} === "cancel-retry" && n > 1) { setInterval(() => {}, 1000); await new Promise(() => {}); }
+    console.log("FLAKY example.test.ts: <between-tests error> first diagnostic");
+    console.log(${JSON.stringify(mode)} === "assertion" ? "NEW example.test.ts: reproducible assertion" : ${JSON.stringify(mode)} === "runner" ? "NEW example.test.ts: <runner error> incomplete report" : "NEW example.test.ts: <between-tests error> second diagnostic");
+    if (${JSON.stringify(mode)} === "cleanup") console.log("owned runner: budget cleanup failed: fixture refusal");
+    if (${JSON.stringify(mode)} !== "incomplete") console.log("touched-tests: 1 new failures, 0 pre-existing failures, 0 fixed, 0 removed/skipped, 1 flaky");
+    process.exitCode = 1;`);
+  for (const grouped of [false, true]) {
+    writeFileSync(harness, `import { existsSync, readFileSync } from "node:fs";
+      import { runSteps } from ${JSON.stringify(path.join(root, "scripts/local-gate.ts"))};
+      const cancel = new AbortController(); let done = false;
+      const result = runSteps("pre-push", [{ name: "touched tests", command: [], ${grouped ? 'group: "tests", lane: "tests"' : ""} }], {
+        root: ${JSON.stringify(dir)}, deadline: null, logDir: ${JSON.stringify(dir)}, cancel: cancel.signal,
+        prepare: () => ({ command: [process.execPath, ${JSON.stringify(subject)}], env: process.env }),
+      }).then(() => true, () => false).finally(() => { done = true; });
+      if (${JSON.stringify(mode)} === "cancel-retry") {
+        while (!done && (!existsSync(${JSON.stringify(counter)}) || Number(readFileSync(${JSON.stringify(counter)}, "utf8")) < 2)) await Bun.sleep(10);
+        if (!done) cancel.abort();
+      }
+      if (!await result) process.exitCode = 1;`);
+    for (let restart = 0; restart < 2; restart++) {
+      writeFileSync(counter, "0");
+      const result = spawnSync(process.execPath, [harness], { cwd: dir, env: process.env, encoding: "utf8", timeout: 25_000, killSignal: "SIGKILL" });
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stdout + result.stderr).toBe(mode === "recovers" ? 0 : 1);
+      expect(readFileSync(counter, "utf8")).toBe(["recovers", "repeats", "cancel-retry"].includes(mode) ? "2" : "1");
+      if (mode === "cancel-retry") expect(result.stderr).toContain("retaining the comparator refusal");
+    }
+  }
+}, 60_000);
+
 function alive(pid: number): boolean {
   try { return !/^\d+ \(.*\) Z/.test(readFileSync(`/proc/${pid}/stat`, "utf8")); } catch { return false; }
 }
@@ -342,29 +449,41 @@ for (const budget of [null, 60_000]) test(`a group member that cannot be prepare
   const dir = mkdtempSync(path.join(tmpdir(), "gate-prepare-")); roots.push(dir);
   const harness = path.join(dir, "harness.ts"), output = path.join(dir, "stderr");
   const pidFile = (name: string) => path.join(dir, `${name}.pid`);
-  // 0.154.0 is running with a helper when the 0.159.0 fixture install fails.
+  const helper = path.join(dir, "helper.ts"), helperExit = path.join(dir, "allow-helper-exit"), naturalExit = path.join(dir, "natural-exit");
+  writeFileSync(helper, `import { existsSync, writeFileSync } from "node:fs";
+    import { checkFixtureParent } from ${JSON.stringify(path.join(root, "src/lib/testing/fixtureLifetime.ts"))};
+    while (!existsSync(${JSON.stringify(helperExit)})) { checkFixtureParent(); await Bun.sleep(20); }
+    checkFixtureParent(); writeFileSync(${JSON.stringify(naturalExit)}, "released");`);
+  const quote = (value: string) => "'" + value.replaceAll("'", "'\"'\"'") + "'";
+  const command = `echo $$ > ${quote(pidFile("root"))}; ${quote(process.execPath)} ${quote(helper)} & echo $! > ${quote(pidFile("helper"))}; wait`;
+  // The helper can end only through cancellation or our supervising watchdog.
   writeFileSync(harness, `import { existsSync } from "node:fs";
 import { NATIVE_GROUP, endHook, runSteps } from ${JSON.stringify(path.join(root, "scripts/local-gate.ts"))};
 const startedAt = Date.now(), budget = ${JSON.stringify(budget)};
 const members = ["native Codex 0.154.0", "native Codex 0.159.0"].map(name => ({ name, command: [], group: NATIVE_GROUP }));
 await runSteps("pre-push", members, { root: ${JSON.stringify(dir)}, deadline: budget === null ? null : { at: startedAt + budget, startedAt }, logDir: ${JSON.stringify(dir)},
   prepare: async step => {
-    if (step.name.endsWith("0.154.0")) return { command: ["bash", "-c", "echo $$ > ${pidFile("root")}; sleep 15 & echo $! > ${pidFile("helper")}; wait"], env: process.env };
+    if (step.name.endsWith("0.154.0")) return { command: ["bash", "-c", ${JSON.stringify(command)}], env: process.env };
     while (!existsSync(${JSON.stringify(path.join(dir, "release"))})) await Bun.sleep(10);
     throw new Error("installing @openai/codex@0.159.0 failed (1)");
   } }).catch((error: unknown) => endHook("pre-push", error));
 `);
-  const started = performance.now();
   const hook = Bun.spawn({ cmd: [process.execPath, harness], cwd: dir, stdio: ["ignore", "ignore", Bun.file(output)] });
-  let identities: ProcessIdentity[];
-  try { identities = await recordFixtureIdentities(["root", "helper"].map(pidFile)); }
-  finally { writeFileSync(path.join(dir, "release"), "ready"); await hook.exited; }
-  const code = await hook.exited;
-  const elapsed = performance.now() - started;
-  const pids = identities.map(identity => identity.pid);
+  const hookIdentity = captureProcessIdentity(hook.pid); owned.push(hookIdentity);
+  let watchdogExpired = false;
+  const watchdog = setTimeout(() => {
+    watchdogExpired = true;
+    writeFileSync(helperExit, "supervising deadline");
+    writeFileSync(path.join(dir, "release"), "ready");
+  }, 20_000);
+  let identities: ProcessIdentity[] = [];
   try {
-    // The cleanup allowance and Bun's start-up; never the helper's fifteen seconds or the deadline.
-    expect(elapsed).toBeLessThan(5_500);
+    identities = await recordFixtureIdentities(["root", "helper"].map(pidFile), 20_000);
+    writeFileSync(path.join(dir, "release"), "ready");
+    const code = await hook.exited;
+    const pids = identities.map(identity => identity.pid);
+    expect(watchdogExpired).toBe(false);
+    expect(existsSync(naturalExit), "cancellation ended the helper before its release").toBe(false);
     expect(code).toBe(1);
     // Nothing the running member started outlives the hook.
     for (const pid of pids) expect(alive(pid), String(pid)).toBeFalse();
@@ -377,6 +496,11 @@ await runSteps("pre-push", members, { root: ${JSON.stringify(dir)}, deadline: bu
     expect(publicationFailurePhase({ step: "publishing the pipeline branch", code: 1, signal: null, durationMs: 1_000, outputTail: said })).toBe("native Codex 0.159.0");
     expect(hookBudgetStop(said)).toBeNull();
   } finally {
+    clearTimeout(watchdog);
+    writeFileSync(helperExit, "cleanup");
+    writeFileSync(path.join(dir, "release"), "ready");
+    await stopFixtureIdentity(hookIdentity);
+    await hook.exited;
     for (const identity of identities) await stopFixtureIdentity(identity);
   }
 }, 30_000);
@@ -457,6 +581,11 @@ test("scope uses executed import closure and the workflow test lists", () => {
   expect([doc.linux, doc.runtime, doc.native]).toEqual([false, false, false]);
   const host = discover(root, "HEAD", ["src/runtime-host/main.ts"]);
   expect(host.runtime).toBeTrue();
+  const workflow = Bun.YAML.parse(readFileSync(path.join(root, ".github/workflows/bun-runtime.yml"), "utf8")) as { jobs: Record<string, { strategy: { matrix: { codex: string[] } } }> };
+  expect(host.codexVersions).toEqual(workflow.jobs["native-queue-campaign"]!.strategy.matrix.codex);
+  expect(host.codexVersions).toContain("0.162.1");
+  expect(plan("pre-push", ["src/runtime-host/main.ts"], host).filter(step => step.codex).map(step => step.codex))
+    .toEqual([...host.codexVersions]);
   const native = discover(root, "HEAD", ["src/lib/runtime/nativeCodexQueue.ts"]);
   expect(native.native).toBeFalse();
   const linux = discover(root, "HEAD", ["src/lib/proc/index.ts"]);
@@ -468,7 +597,7 @@ test("scope uses executed import closure and the workflow test lists", () => {
   expect(() => pinnedBunVersion("npm install -g bun@1.4.0\nnpm install -g bun@1.3.3")).toThrow();
 }, 20_000);
 
-function hookFixture(realLint = false) {
+function hookFixture(realLint = false, controlledClock = false) {
   const dir = mkdtempSync(path.join(tmpdir(), "hooks-e2e-")); roots.push(dir);
   for (const leaf of [".githooks", "scripts", "shims", ".github/workflows"]) mkdirSync(path.join(dir, leaf), { recursive: true });
   for (const hook of ["pre-commit", "pre-push"]) copyFileSync(path.join(root, ".githooks", hook), path.join(dir, ".githooks", hook));
@@ -479,24 +608,60 @@ function hookFixture(realLint = false) {
     symlinkSync(path.join(root, "node_modules"), path.join(dir, "node_modules"), "dir");
   }
   for (const file of ["gate-slot.sh", "verify-native-codex-runtime.ts"]) copyFileSync(path.join(root, "scripts", file), path.join(dir, "scripts", file));
+  const gateSlot = path.join(dir, "scripts/gate-slot.sh");
+  if (controlledClock) {
+    const gateSlotSource = readFileSync(gateSlot, "utf8").replace("run() {\n", "run() {\n  if [[ \"${2:-}\" == scripts/local-gate.ts ]]; then set -- \"$1\" --preload \"$HOOK_CLOCK\" \"${@:2}\"; fi\n");
+    writeFileSync(gateSlot, gateSlotSource);
+  }
   symlinkSync(path.join(root, "scripts/owned-runner.ts"), path.join(dir, "scripts/owned-runner.ts"));
   symlinkSync(path.join(root, "scripts/cpu-admission.ts"), path.join(dir, "scripts/cpu-admission.ts"));
   for (const file of ["platform-tests.yml", "bun-runtime.yml"]) copyFileSync(path.join(root, ".github/workflows", file), path.join(dir, ".github/workflows", file));
   const log = path.join(dir, "commands.jsonl");
-  writeFileSync(path.join(dir, "record.ts"), `import { appendFileSync, mkdtempSync, rmSync } from "node:fs"; import { execFileSync } from "node:child_process"; import { tmpdir } from "node:os"; import path from "node:path"; const fixture = mkdtempSync(path.join(tmpdir(), "hook-child-git-")); try { execFileSync("git", ["init", "--bare", fixture], { stdio: "pipe" }); } finally { rmSync(fixture, { recursive: true, force: true }); } appendFileSync(process.env.HOOK_LOG!, JSON.stringify({ args: process.argv.slice(2), state: process.env.LLV_STATE_DIR, home: process.env.HOME, config: process.env.XDG_CONFIG_HOME, tmp: process.env.TMPDIR, known: process.env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE, gitDir: process.env.GIT_DIR, index: process.env.GIT_INDEX_FILE, workTree: process.env.GIT_WORK_TREE, commonDir: process.env.GIT_COMMON_DIR, configCount: process.env.GIT_CONFIG_COUNT, configKey: process.env.GIT_CONFIG_KEY_0 }) + "\\n"); if (process.env.HOOK_FAIL && process.argv.includes(process.env.HOOK_FAIL)) process.exit(19);`);
+  const clock = path.join(dir, "controlled-clock.ts");
+  writeFileSync(clock, "Date.now = () => Number(process.env.HOOK_CLOCK_NOW);\n");
+  writeFileSync(path.join(dir, "record.ts"), `import { appendFileSync, mkdtempSync, rmSync } from "node:fs"; import { execFileSync } from "node:child_process"; import { tmpdir } from "node:os"; import path from "node:path"; const fixture = mkdtempSync(path.join(tmpdir(), "hook-child-git-")); try { execFileSync("git", ["init", "--bare", fixture], { stdio: "pipe" }); } finally { rmSync(fixture, { recursive: true, force: true }); } appendFileSync(process.env.HOOK_LOG!, JSON.stringify({ args: process.argv.slice(2), now: Date.now(), state: process.env.LLV_STATE_DIR, home: process.env.HOME, config: process.env.XDG_CONFIG_HOME, tmp: process.env.TMPDIR, known: process.env.LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE, gitDir: process.env.GIT_DIR, index: process.env.GIT_INDEX_FILE, workTree: process.env.GIT_WORK_TREE, commonDir: process.env.GIT_COMMON_DIR, configCount: process.env.GIT_CONFIG_COUNT, configKey: process.env.GIT_CONFIG_KEY_0, deadline: process.env.LLV_GATE_PUSH_DEADLINE, ownedBudget: process.env.LLV_OWNED_RUN_TIMEOUT_MS }) + "\\n"); if (process.env.HOOK_FAIL && process.argv.includes(process.env.HOOK_FAIL)) process.exit(19);`);
   for (const name of ["bun", "bunx"]) {
     const shim = path.join(dir, "shims", name);
-    writeFileSync(shim, '#!/bin/bash\nif [[ "$1" == scripts/local-gate.ts || ( "$1" == scripts/eslint-changes.ts && "$HOOK_REAL_LINT" == 1 ) ]]; then exec "$HOOK_BUN" "$@"; fi\nexec "$HOOK_BUN" "$HOOK_RECORD" "$@"\n'); chmodSync(shim, 0o755);
+    writeFileSync(shim, '#!/bin/bash\nif [[ "$1" == scripts/local-gate.ts ]]; then if [[ -n "${HOOK_CLOCK:-}" ]]; then exec "$HOOK_BUN" --preload "$HOOK_CLOCK" "$@"; fi; exec "$HOOK_BUN" "$@"; fi\nif [[ "$1" == scripts/eslint-changes.ts && "$HOOK_REAL_LINT" == 1 ]]; then exec "$HOOK_BUN" "$@"; fi\nif [[ -n "${HOOK_CLOCK:-}" ]]; then exec "$HOOK_BUN" --preload "$HOOK_CLOCK" "$HOOK_RECORD" "$@"; fi\nexec "$HOOK_BUN" "$HOOK_RECORD" "$@"\n'); chmodSync(shim, 0o755);
   }
-  const env = { ...fixtureGitEnv(), PATH: `${path.join(dir, "shims")}:${process.env.PATH}`, HOOK_LOG: log, HOOK_RECORD: path.join(dir, "record.ts"), HOOK_BUN: process.execPath, LLV_GATE_BUN: process.execPath, LLV_GATE_LOCK_DIR: dir, GIT_AUTHOR_NAME: "Test", GIT_AUTHOR_EMAIL: "noreply@example.invalid", GIT_COMMITTER_NAME: "Test", GIT_COMMITTER_EMAIL: "noreply@example.invalid", LLV_SKIP_HOOKS: "0" };
+  const env: NodeJS.ProcessEnv = { ...fixtureGitEnv(), PATH: `${path.join(dir, "shims")}:${process.env.PATH}`, HOOK_LOG: log, HOOK_RECORD: path.join(dir, "record.ts"), ...(controlledClock ? { HOOK_CLOCK: clock, HOOK_CLOCK_NOW: "1900000000000" } : {}), HOOK_BUN: process.execPath, LLV_GATE_BUN: process.execPath, LLV_GATE_LOCK_DIR: dir, GIT_AUTHOR_NAME: "Test", GIT_AUTHOR_EMAIL: "noreply@example.invalid", GIT_COMMITTER_NAME: "Test", GIT_COMMITTER_EMAIL: "noreply@example.invalid", LLV_SKIP_HOOKS: "0" };
+  delete env.LLV_GATE_PUSH_DEADLINE;
   const git = (...args: string[]) => execFileSync("git", args, { cwd: dir, env, stdio: "pipe" });
   git("init", "-b", "main"); git("config", "core.hooksPath", "/dev/null");
   writeFileSync(path.join(dir, "package.json"), "{}"); writeFileSync(path.join(dir, "example.ts"), "export const value = 1;\n");
   writeFileSync(path.join(dir, "example.test.ts"), "// hook fixture\n"); git("add", "."); git("commit", "-m", "base");
   git("update-ref", "refs/remotes/origin/main", "HEAD"); git("config", "core.hooksPath", ".githooks");
-  const calls = () => readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line) as { args: string[]; state?: string; home?: string; config?: string; tmp?: string; known?: string; gitDir?: string; index?: string; workTree?: string; commonDir?: string; configCount?: string; configKey?: string });
+  const calls = () => readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line) as { args: string[]; now?: number; state?: string; home?: string; config?: string; tmp?: string; known?: string; gitDir?: string; index?: string; workTree?: string; commonDir?: string; configCount?: string; configKey?: string; deadline?: string; ownedBudget?: string });
   return { dir, env: { ...env, HOOK_REAL_LINT: realLint ? "1" : "0" }, git, calls };
 }
+test("repository default budgets follow current changes across fresh hook processes and retain an explicit caller cap", () => {
+  const now = 1_900_000_000_000;
+  const f = hookFixture(false, true);
+  const directory = path.join(f.dir, "src/lib/pipelines"); mkdirSync(directory, { recursive: true });
+  const modulePath = path.join(directory, "engine.ts");
+  writeFileSync(modulePath, "export const value = 1;\n");
+  writeFileSync(path.join(f.dir, "example.ts"), "export const value = 2;\n");
+  f.git("add", "src/lib/pipelines/engine.ts", "example.ts"); f.git("commit", "-m", "engine change");
+  const run = (caller?: string) => {
+    const before = f.calls().length;
+    const result = spawnSync("bash", [".githooks/pre-push"], { cwd: f.dir,
+      env: { ...f.env, LLV_GATE_PUSH_DEADLINE: caller }, encoding: "utf8" });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const calls = f.calls().slice(before);
+    const types = calls.find(call => call.args[0] === "tsc")!;
+    expect(types).toBeDefined();
+    expect(types.now).toBe(now);
+    return { deadline: Number(types.deadline), ownedBudget: Number(types.ownedBudget) };
+  };
+  // Each call starts a new real hook and admitted process.
+  expect(run()).toEqual({ deadline: now + 1_440_000, ownedBudget: 1_440_000 });
+  f.git("rm", "src/lib/pipelines/engine.ts"); f.git("commit", "-m", "retain ordinary change");
+  expect(run()).toEqual({ deadline: now + 840_000, ownedBudget: 840_000 });
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(modulePath, "export const value = 1;\n"); f.git("add", "src/lib/pipelines/engine.ts"); f.git("commit", "-m", "restore engine change");
+  expect(run(String(now + 30_000))).toEqual({ deadline: now + 30_000, ownedBudget: 30_000 });
+}, 120_000);
+
 for (const mode of ["pre-commit", "pre-push"] as const) test(`${mode} allows KanbanBoard baseline errors and rejects one added error by file/line`, () => {
   const f = hookFixture(true);
   const file = "src/components/kanban/KanbanBoard.tsx";
@@ -561,6 +726,8 @@ test("pre-push hook resolves an explicit base and runs named touched tests in a 
   f.git("remote", "add", "origin", remote);
   const result = spawnSync("git", ["push", "origin", "HEAD:main"], { cwd: f.dir, env: f.env, encoding: "utf8" });
   expect(result.status).toBe(0);
+  expect(result.stderr).toContain("pre-push: CPU admission for publication checks");
+  expect(result.stderr).toMatch(/pre-push: publication checks CPU wait: \d+ ms \(excluded from execution budget\)/);
   const tests = f.calls().find(call => call.args[0] === "scripts/local-gate-tests.ts")!;
   expect(tests.args).toEqual(["scripts/local-gate-tests.ts", "--base", f.git("rev-parse", "HEAD^").toString().trim(), "./example.test.ts"]);
   expect(tests.gitDir).toBeUndefined(); expect(tests.index).toBeUndefined(); expect(tests.workTree).toBeUndefined(); expect(tests.commonDir).toBeUndefined();

@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, jest, test } from "bun:test";
 class FakeEventSource {
   static connects: Array<{ at: number; subs: Array<{ path: string; offset: number }> }> = [];
   static last: FakeEventSource | null = null;
-  private closed = false;
+  closed = false;
   private opens: Array<() => void> = [];
   constructor(url: string) {
     const subs = JSON.parse(new URL(url, "http://localhost").searchParams.get("subs") ?? "[]") as Array<{ path: string; offset: number }>;
@@ -24,6 +24,7 @@ class FakeEventSource {
 (globalThis as { EventSource?: unknown }).EventSource = FakeEventSource;
 
 const { subscribeLog } = await import("./logBus");
+const { streamsResumed } = await import("@/lib/streamMux/client");
 type LogBusResult = Parameters<Parameters<typeof subscribeLog>[0]["onChunk"]>[0];
 
 const subscriber = (path: string, offset = 0) => ({ path, getOffset: () => offset, onChunk: () => {} });
@@ -151,4 +152,33 @@ describe("a stream that fails", () => {
     FakeEventSource.last!.onerror!();
     expect(heard).toEqual([{ transportError: true }]);
   });
+});
+
+/* A page restored from the back/forward cache let its stream go while it was
+   away (src/lib/streamMux/client.ts): the bus opens it again at once, from the
+   offsets the panes have reached, and the panes hear no failure. */
+test("a page back from the cache reopens its stream from the live offsets, reporting nothing", () => {
+  const heard: LogBusResult[] = [];
+  let offset = 128;
+  unsubscribes.push(subscribeLog({ path: "/sessions/a.jsonl", getOffset: () => offset, onChunk: (result) => heard.push(result) }));
+  jest.advanceTimersByTime(40);
+  const before = FakeEventSource.last!;
+  before.open();
+  expect(FakeEventSource.connects.map((entry) => entry.subs)).toEqual([[{ id: "0", path: "/sessions/a.jsonl", offset: 128 } as never]]);
+
+  offset = 4096;
+  streamsResumed();
+  expect(before.closed).toBe(true);
+  /* The page's mux then tells the old stream it was cut; the bus no longer listens to it. */
+  before.onerror?.();
+  jest.advanceTimersByTime(0);
+  expect(FakeEventSource.connects).toHaveLength(2);
+  expect(FakeEventSource.connects[1]!.subs).toEqual([{ id: "0", path: "/sessions/a.jsonl", offset: 4096 } as never]);
+  expect(heard).toEqual([]);
+});
+
+test("a page back from the cache with no stream of the bus open starts none", () => {
+  streamsResumed();
+  jest.advanceTimersByTime(1_000);
+  expect(FakeEventSource.connects).toHaveLength(0);
 });

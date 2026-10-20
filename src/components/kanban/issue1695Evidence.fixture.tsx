@@ -3836,7 +3836,7 @@ const serverFetch = window.fetch.bind(window);
 window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), location.origin);
   // The driver supplies the real server projection for the liveness case.
-  if (new URLSearchParams(location.search).get("scenario") === "stale-working"
+  if (["stale-working", "finished-work"].includes(new URLSearchParams(location.search).get("scenario") ?? "")
     && ["/api/files", "/api/tasks"].includes(url.pathname)) return serverFetch(input, init);
 
   const method = (init?.method ?? "GET").toUpperCase();

@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, setSystemTime, test } from "bun:test";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -84,7 +84,7 @@ beforeEach(() => {
   process.env.LLV_SEAT_TICK_AUDIT_FILE = path.join(SANDBOX, "journal", `${id}.ndjson`);
   fs.rmSync(path.join(process.env.LLV_STATE_DIR!, "orchestrator-seats.json"), { force: true });
 });
-afterEach(() => setCallerConversationResolverForTests(null));
+afterEach(() => { setCallerConversationResolverForTests(null); setSystemTime(); });
 afterAll(() => {
   fs.rmSync(SANDBOX, { recursive: true, force: true });
   for (const [key, value] of Object.entries(RESTORE)) {
@@ -472,4 +472,174 @@ test("curation has its own bounded timer, HTTP/MCP parity and no maintenance cas
   const effective = effectiveSeatTickSettings(stored, Date.parse(stored.until!) + 1, 3600000);
   expect(effective.curation).toMatchObject({ enabled: true, intervalHours: 1 });
   expect(seatTickSettingsAfterLapse(project, effective).curation).toEqual(stored.curation);
+});
+
+
+test("UI, seat and verified gateway instruction writes retain each line's actual author", async () => {
+  setSystemTime(new Date("2026-10-01T12:00:00.000Z"));
+  seatFile({ project: PROJECT, conversationId: SEAT_CONVERSATION, seatEpoch: 12 });
+  const original = await (await put({ project: PROJECT, reason: "Preserve  operator wording.\nSecond line." })).json() as SeatTickSettingsAnswer;
+  const operatorLines = original.settings.instructionLines;
+  expect(operatorLines).toHaveLength(2);
+  expect(operatorLines?.every(line => line.author?.kind === "gateway" && line.at === original.settings.updatedAt)).toBe(true);
+  setCallerConversationResolverForTests(() => SEAT_CONVERSATION);
+  const noted = await (await put({ project: PROJECT, reason: "Seat note.", actor: { kind: "gateway" },
+    instructionLines: [{ text: "Forged instruction.", author: { kind: "gateway" }, at: "2026-01-01T00:00:00.000Z" }] },
+    { ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: CAPABILITY })).json() as SeatTickSettingsAnswer;
+  expect(noted.settings.instructionLines?.slice(0, 2)).toEqual(operatorLines);
+  expect(noted.settings.instructionLines?.at(-1)).toEqual({ text: "Seat note.", at: noted.settings.updatedAt,
+    author: { kind: "manager", conversationId: SEAT_CONVERSATION, project: PROJECT, seatEpoch: 12 } });
+  const gateway = viewerMcpBindings(undefined, undefined, {
+    callerAttribution: () => ({ kind: "gateway", conversationId: "conversation_gateway" }),
+    callerProject: () => PROJECT, authorizedSeats: () => [],
+  } as never);
+  await gateway.seat_tick_settings({ clientRequestId: "instruction-gateway", project: PROJECT, reason: "Gateway instruction.", actor: { kind: "manager" } });
+  const gatewayLines = readSeatTickSettings(PROJECT, settingsFile).instructionLines!;
+  expect(gatewayLines.map(line => line.text)).toEqual(["Gateway instruction.", "Seat note."]);
+  expect(gatewayLines[0]!.author?.kind).toBe("gateway");
+  expect(gatewayLines[1]).toEqual(noted.settings.instructionLines!.at(-1)!);
+  const rootSeat = viewerMcpBindings(undefined, undefined, {
+    callerAttribution: () => ({ kind: "gateway", conversationId: SEAT_CONVERSATION }),
+    callerProject: () => PROJECT, authorizedSeats: () => [{ project: PROJECT, conversationId: SEAT_CONVERSATION, path: null }],
+  } as never);
+  await rootSeat.seat_tick_settings({ clientRequestId: "instruction-root-seat", project: PROJECT, reason: "Revised seat note.", author: { kind: "gateway" } });
+  const stored = readSeatTickSettings(PROJECT, settingsFile);
+  expect(stored.instructionLines?.[0]).toEqual(gatewayLines[0]!);
+  expect(stored.instructionLines?.at(-1)?.author).toMatchObject({ kind: "manager", seatEpoch: 12 });
+  expect(stored.reason).toBe("Gateway instruction.\nRevised seat note.");
+});
+
+test("an unverified HTTP script cannot stamp its text as operator instructions", async () => {
+  for (const headers of [
+    { "content-type": "application/json", host: "127.0.0.1:8898" },
+    { ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: "unverified" },
+    { ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: CAPABILITY },
+  ]) {
+    const response = await put({ project: PROJECT, reason: "Claimed operator text.", actor: { kind: "gateway" } }, headers);
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toContain("identified author");
+    expectNothingStored();
+  }
+});
+
+
+test("a delayed seat request merges into the operator's latest lines at write admission", async () => {
+  seatFile({ project: PROJECT, conversationId: SEAT_CONVERSATION, seatEpoch: 12 });
+  await put({ project: PROJECT, reason: "Original operator instruction." });
+  setCallerConversationResolverForTests(() => SEAT_CONVERSATION);
+  let release!: (value: unknown) => void;
+  const body = new Promise<unknown>(resolve => { release = resolve; });
+  let started!: () => void;
+  const reading = new Promise<void>(resolve => { started = resolve; });
+  const request = new NextRequest(URL_BASE, { method: "PUT", headers: { ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: CAPABILITY }, body: "{}" });
+  request.json = async () => { started(); return body; };
+  const pending = PUT(request);
+  await reading;
+  await put({ project: PROJECT, reason: "Latest operator instruction." });
+  const protectedLine = readSeatTickSettings(PROJECT, settingsFile).instructionLines![0]!;
+  release({ project: PROJECT, reason: "Seat note after its wait." });
+  expect((await pending).status).toBe(200);
+  const stored = readSeatTickSettings(PROJECT, settingsFile);
+  expect(stored.instructionLines![0]).toEqual(protectedLine);
+  expect(stored.reason).toBe("Latest operator instruction.\nSeat note after its wait.");
+});
+
+
+test("a replacement seat epoch never stamps a predecessor's instruction", async () => {
+  setSystemTime(new Date("2026-10-01T12:00:00.000Z"));
+  seatFile({ project: PROJECT, conversationId: "conversation_replacement_seat", seatEpoch: 13 });
+  const predecessor = viewerMcpBindings(undefined, undefined, {
+    callerAttribution: () => ({ kind: "gateway", conversationId: SEAT_CONVERSATION }),
+    callerProject: () => PROJECT,
+    authorizedSeats: () => [{ project: PROJECT, conversationId: SEAT_CONVERSATION, path: null }],
+  } as never);
+  await predecessor.seat_tick_settings({ clientRequestId: "instruction-replaced-seat", reason: "A predecessor note." });
+  const line = readSeatTickSettings(PROJECT, settingsFile).instructionLines![0]!;
+  expect(line.author?.kind).not.toBe("gateway");
+  expect(line.author?.conversationId).toBe(SEAT_CONVERSATION);
+  expect(line.author?.seatEpoch).toBeNull();
+});
+
+
+test("instruction attribution keeps the existing authority of unrelated settings controls", async () => {
+  setSystemTime(new Date("2026-10-01T12:00:00.000Z"));
+  seatFile({ project: PROJECT, conversationId: SEAT_CONVERSATION, seatEpoch: 12 });
+  const rootSeat = viewerMcpBindings(undefined, undefined, {
+    callerAttribution: () => ({ kind: "gateway", conversationId: SEAT_CONVERSATION }),
+    callerProject: () => PROJECT,
+    authorizedSeats: () => [{ project: PROJECT, conversationId: SEAT_CONVERSATION, path: null }],
+  } as never);
+  await rootSeat.seat_tick_settings({ clientRequestId: "instruction-control-authority", reason: "Seat note.", autoRotate: { enabled: true, thresholdPercent: 60 } });
+  const stored = readSeatTickSettings(PROJECT, settingsFile);
+  expect(stored.autoRotate).toMatchObject({ enabled: true, thresholdPercent: 60, setBy: { kind: "gateway" } });
+  expect(stored.instructionLines![0]!.author).toMatchObject({ kind: "manager", seatEpoch: 12 });
+  const scriptControl = await put({ project: PROJECT, autoRotate: { enabled: false } }, { "content-type": "application/json", host: "127.0.0.1:8898" });
+  expect(scriptControl.status).toBe(200);
+  expect(readSeatTickSettings(PROJECT, settingsFile).autoRotate?.enabled).toBe(false);
+  expect(readSeatTickSettings(PROJECT, settingsFile).instructionLines).toEqual(stored.instructionLines!);
+});
+
+
+test("an active root seat remains the instruction author when manager authority is unavailable", async () => {
+  setSystemTime(new Date("2026-10-01T12:00:00.000Z"));
+  seatFile({ project: PROJECT, conversationId: SEAT_CONVERSATION, seatEpoch: 12 });
+  await put({ project: PROJECT, reason: "Preserve operator instruction." });
+  const operatorLine = readSeatTickSettings(PROJECT, settingsFile).instructionLines![0]!;
+  const rootSeat = viewerMcpBindings(undefined, undefined, {
+    callerAttribution: () => ({ kind: "gateway", conversationId: SEAT_CONVERSATION }),
+    callerProject: () => PROJECT,
+    authorizedSeats: () => [],
+  } as never);
+  await rootSeat.seat_tick_settings({ clientRequestId: "instruction-seat-without-authority", reason: "Seat note." });
+  const stored = readSeatTickSettings(PROJECT, settingsFile);
+  expect(stored.instructionLines![0]).toEqual(operatorLine);
+  expect(stored.instructionLines![1]!.author).toMatchObject({ kind: "manager", conversationId: SEAT_CONVERSATION, seatEpoch: 12 });
+  expect(stored.reason).toBe("Preserve operator instruction.\nSeat note.");
+});
+
+test("the operator browser can clear a full legacy field and save new instructions atomically", async () => {
+  const legacy = { ...readSeatTickSettings(PROJECT, settingsFile), reason: "u".repeat(500), updatedAt: "2026-10-01T12:00:00.000Z" };
+  writeSeatTickSettings(PROJECT, legacy, settingsFile);
+  expect(readSeatTickSettings(PROJECT, settingsFile).instructionLines).toEqual([
+    { text: "u".repeat(500), author: null, at: null },
+  ]);
+
+  const response = await put({ project: PROJECT, clearUnknownInstructions: true, reason: "New operator instruction." });
+  expect(response.status).toBe(200);
+  const stored = readSeatTickSettings(PROJECT, settingsFile);
+  expect(stored.reason).toBe("New operator instruction.");
+  expect(stored.instructionLines).toEqual([
+    { text: "New operator instruction.", author: { kind: "gateway", conversationId: null, project: null, seatEpoch: null }, at: stored.updatedAt },
+  ]);
+});
+
+test("a seat request cannot use the operator-only legacy instruction removal", async () => {
+  seatFile({ project: PROJECT, conversationId: SEAT_CONVERSATION, seatEpoch: 12 });
+  const legacy = { ...readSeatTickSettings(PROJECT, settingsFile), reason: "u".repeat(500) };
+  writeSeatTickSettings(PROJECT, legacy, settingsFile);
+  setCallerConversationResolverForTests(() => SEAT_CONVERSATION);
+  const response = await put({ project: PROJECT, clearUnknownInstructions: true }, {
+    ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: CAPABILITY,
+  });
+  expect(response.status).toBe(403);
+  expect(readSeatTickSettings(PROJECT, settingsFile).reason).toBe("u".repeat(500));
+});
+
+test("only the operator browser can replace seat instructions", async () => {
+  setSystemTime(new Date("2026-10-01T12:00:00.000Z"));
+  seatFile({ project: PROJECT, conversationId: SEAT_CONVERSATION, seatEpoch: 12 });
+  const settings = { ...readSeatTickSettings(PROJECT, settingsFile), reason: "Seat note.", instructionLines: [{ text: "Seat note.", author: { kind: "manager" as const, conversationId: SEAT_CONVERSATION, project: PROJECT, seatEpoch: 12 }, at: "2026-10-01T12:00:00.000Z" }] };
+  writeSeatTickSettings(PROJECT, settings, settingsFile);
+  setCallerConversationResolverForTests(() => SEAT_CONVERSATION);
+  const refused = await put({ project: PROJECT, replaceOtherInstructions: true, reason: "Attempted replacement." }, {
+    ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: CAPABILITY,
+  });
+  expect(refused.status).toBe(403);
+  expect(readSeatTickSettings(PROJECT, settingsFile).reason).toBe("Seat note.");
+
+  const accepted = await put({ project: PROJECT, replaceOtherInstructions: true, reason: "Operator replacement." });
+  expect(accepted.status).toBe(200);
+  expect(readSeatTickSettings(PROJECT, settingsFile).instructionLines).toEqual([
+    { text: "Operator replacement.", author: { kind: "gateway", conversationId: null, project: null, seatEpoch: null }, at: readSeatTickSettings(PROJECT, settingsFile).updatedAt },
+  ]);
 });

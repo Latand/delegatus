@@ -1,7 +1,10 @@
 import { assertCpuReadGuardSurvivesSpyRestoration, startAutoAndSettle } from "./engineEnvironment.fixture";
-import { expect, spyOn, test, crypto, spawn, fs, os, path, activeDrain, DRAIN_LEASE_MS, initialAuto, writeAuto, initialCheck, SelfUpdateService, idleCheck, accountManager, realExec, engineModule, defaultPipelinePorts, pipelineClaudePermissionMode, tickPipelines, AgentRegistry, setAgentRegistryForTests, newRound, tickFlow, saveFlows, createPipelineFromRequest, registerPipelineTick, loadPipelines, savePipelines, pipelineIdentity, patchPipeline, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, REMOTE_BRANCH, finishReported, realWorktreeLane, successorOnPullRequestBranch, create, publishHarness, PUBLISH_STAGES } from "./engine.fixture";
+import { expect, spyOn, test, crypto, spawn, fs, os, path, activeDrain, DRAIN_LEASE_MS, initialAuto, writeAuto, initialCheck, SelfUpdateService, idleCheck, accountManager, realExec, engineModule, defaultPipelinePorts, pipelineClaudePermissionMode, tickPipelines, AgentRegistry, setAgentRegistryForTests, newRound, tickFlow, saveFlows, createPipelineFromRequest, registerPipelineTick, loadPipelines, savePipelines, pipelineIdentity, pipelineRevision, patchPipeline, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, REMOTE_BRANCH, finishReported, realWorktreeLane, successorOnPullRequestBranch, create, publishHarness, PUBLISH_STAGES } from "./engine.fixture";
 import type { ServiceDeps, Snapshot, PipelinePorts } from "./engine.fixture";
+import { prepareStageGitGuard, stageGitReceiptDirectory } from "@/lib/git/stageAttemptGuard";
+import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { shortId } from "@/lib/shortIds";
+import { OPERATOR_PAUSE_RESUME_ACTOR } from "@/lib/pauseResumeActor";
 
 
 test("default pane liveness keeps failed or unreadable tmux observations alive", async () => {
@@ -2369,6 +2372,7 @@ test("attempt Git custody refuses an unproved detached push and fails the stage 
     const r = await realExec("git", ["commit", "--allow-empty", "-m", "foreign"], f.detached,
       { ...f.env, GIT_CONFIG_COUNT: "0" });
     expect(r.code).toBe(0);
+    const foreignHead = await f.run("rev-parse", "HEAD");
     const refused = await realExec("git", ["push", "origin", `HEAD:refs/heads/${f.lane.branch}`], f.detached, f.env);
     expect(refused.code).not.toBe(0);
     expect(refused.stderr).toContain("not created in the attempt worktree");
@@ -2378,6 +2382,46 @@ test("attempt Git custody refuses an unproved detached push and fails the stage 
     expect(failed.stateDetail).toContain("stage push refused");
     expect(failed.lastPassedCommit).toBe(f.base);
     expect(await f.git(f.worktree, "rev-parse", "HEAD")).toBe(f.base);
+    const parked = loadPipelines().find(pipeline => pipeline.id === f.id)!;
+    f.h.setConversationActive(true);
+    const active = await engineModule.patchPipeline(f.id, { action: "resolve-decision", clientRequestId: "native-custody-active-producer",
+      answer: "Repair the missing creation evidence and rerun the stage.", expectedStageId: "build", expectedAttempt: 1,
+      expectedRevision: pipelineRevision(parked) }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
+    expect(active.status).toBe(409);
+    expect(loadPipelines().find(pipeline => pipeline.id === f.id)!.runs[0]!.attempts).toHaveLength(1);
+    f.h.setConversationActive(false);
+    const resumed = await engineModule.patchPipeline(f.id, { action: "resolve-decision", clientRequestId: "native-custody-repair",
+      answer: "Repair the missing creation evidence and rerun the stage.", expectedStageId: "build", expectedAttempt: 1,
+      expectedRevision: pipelineRevision(parked) }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
+    expect(resumed.error).toBeUndefined();
+    expect(loadPipelines().find(pipeline => pipeline.id === f.id)!.runs[0]!.attempts).toHaveLength(2);
+    expect(loadPipelines().find(pipeline => pipeline.id === f.id)!.lastPassedCommit).toBe(f.base);
+    expect(loadPipelines().find(pipeline => pipeline.id === f.id)!.publishedCommit).toBeNull();
+
+    for (let n = 0; n < 4 && f.h.spawnInputs.length < 2; n += 1) await tickPipelines([], f.h.ports);
+    expect(f.h.spawnInputs).toHaveLength(2);
+    const repair = loadPipelines().find(pipeline => pipeline.id === f.id)!.runs[0]!.attempts[1]!;
+    expect(repair).toMatchObject({ n: 2, state: "running", decisionAnswerId: "native-custody-repair" });
+    const guard = await prepareStageGitGuard(repair.launchId!, f.worktree, realExec, repair.startedAt!);
+    Object.assign(f.env, guard, agentPublicationIdentityEnv({ ...f.env, ...guard }));
+    expect(await f.git(f.worktree, "rev-parse", "HEAD")).toBe(f.base);
+    fs.writeFileSync(path.join(f.worktree, "repair.txt"), "valid custody repair output\n");
+    await f.git(f.worktree, "add", "repair.txt");
+    await f.git(f.worktree, "commit", "-m", "valid custody repair output");
+    const repaired = await f.git(f.worktree, "rev-parse", "HEAD");
+    expect(fs.readFileSync(path.join(stageGitReceiptDirectory(repair.launchId!), "commits", repaired), "utf8")).toBe("");
+    const foreignImported = await realExec("git", ["merge-base", "--is-ancestor", foreignHead, repaired], f.worktree, f.env);
+    expect(foreignImported.code).not.toBe(0);
+    expect(await engineModule.reportStageCompletion({ verdict: "pass" },
+      { kind: "agent", role: "builder", conversationId: "conversation_stage_2" }, f.h.ports)).toMatchObject({ report: { verdict: { status: "pass" } } });
+    await tickPipelines([finishReported(f.h, "/codex/stage-2.jsonl", "pass", "Fresh repair is complete.")], f.h.ports);
+    await tickPipelines([], f.h.ports);
+    const accepted = loadPipelines().find(pipeline => pipeline.id === f.id)!;
+    expect(accepted.lastPassedCommit).toBe(repaired);
+    expect(accepted.cursor?.stageId).toBe("review");
+    expect(await f.git(f.worktree, "rev-parse", "HEAD")).toBe(repaired);
+    expect(await f.git(f.origin, "rev-parse", `refs/heads/${f.lane.branch}`)).toBe(repaired);
+    expect(await f.run("rev-parse", "HEAD")).toBe(foreignHead);
   } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 
@@ -2700,4 +2744,92 @@ test("attempt Git custody settles the later candidate after a rejected push is r
     expect(accepted.lastPassedCommit).toBe(second);
     expect(accepted.cursor?.stageId).toBe("review");
   } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
+
+for (const stallMs of [0, 27_000]) test(`refresh completion advances its parent through the controller after a ${stallMs}ms stall`, async () => {
+  let sequence = 0;
+  const ids = spyOn(crypto, "randomUUID").mockImplementation(() => `${stallMs === 0 ? "10000000" : "20000000"}-0000-4000-8000-${String(++sequence).padStart(12, "0")}`);
+  const fixture = await realWorktreeLane("refresh-controller", [
+    { id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Refresh", next: "review" },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review resolution", next: null, onFail: { to: "build", maxRounds: 1 } },
+  ]).finally(() => ids.mockRestore());
+  try {
+    const { h, id, worktree, git, base } = fixture;
+    fs.writeFileSync(path.join(worktree, "resolution.txt"), "both sides preserved\n");
+    await git(worktree, "add", "resolution.txt");
+    await git(worktree, "commit", "-m", "Preserve the refresh resolution");
+    const head = await git(worktree, "rev-parse", "HEAD");
+    h.setConversationActive(false);
+    await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
+    await tickPipelines([], h.ports);
+    const child = loadPipelines().find(lane => lane.id === id)!;
+    child.delivery = { target: { repository: child.project, remote: "https://github.com/acme/widgets.git", branch: `refs/heads/${child.branch}`, pr: 11 },
+      disposition: "owner", publish: "disabled", ownerId: id, epoch: 2, active: false, journal: [] };
+    child.refreshOf = { pipelineId: "original", base };
+    const parent = structuredClone(child);
+    Object.assign(parent, { id: "original", state: "completed", cursor: null, closedAt: h.ports.now(), lastPassedCommit: base });
+    Object.assign(parent, pipelineIdentity(parent.id, parent.task, parent.repoDir));
+    delete parent.refreshOf;
+    parent.runs.forEach(run => run.attempts.forEach(attempt => { attempt.state = "passed"; }));
+    parent.delivery!.active = false;
+    parent.delivery!.ownerId = parent.id;
+    const { mergeAdmission, productionAutoMergePorts, sweepAutoMerge, resetAutoMergeForTests, MERGE_POLL_MS } = await import("@/lib/forge/autoMerge");
+    const { FlowPipelineController } = await import("./controller");
+    resetAutoMergeForTests();
+    let clock = Date.parse(h.ports.now());
+    const setting = () => ({ enabled: true, changedAt: new Date(0).toISOString(), changedBy: "operator" as const });
+    const admitted = mergeAdmission(parent, clock, { setting, pullRequestOf: () => ({ repository: "acme/widgets", number: 11 }) });
+    if (!("merge" in admitted)) throw new Error(admitted.reason);
+    parent.merge = admitted.merge;
+    parent.merge.state = "refreshing";
+    parent.merge.refresh = { attempt: 0, base, head: base, key: "controller-refresh", digest: "c".repeat(64), requestedAt: new Date(clock).toISOString(), pipelineId: id };
+    const { isStoredPipeline } = await import("./store");
+    expect({ parent: isStoredPipeline(parent), child: isStoredPipeline(child) }).toEqual({ parent: true, child: true });
+    savePipelines([parent, child]);
+    let merged = false, pending = false;
+    const writes: string[][] = [];
+    const ports = productionAutoMergePorts({ now: () => clock, loadPipelines, setting, cachedState: () => null, log: () => undefined,
+      run: async args => {
+        if (args[0] === "pr" && args[1] === "view") return JSON.stringify({
+          state: merged ? "MERGED" : "OPEN", headRefOid: head, baseRefName: "main", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN",
+          statusCheckRollup: [{ __typename: "CheckRun", name: "ci", status: pending ? "IN_PROGRESS" : "COMPLETED", conclusion: pending ? "" : "SUCCESS" }],
+          mergeCommit: merged ? { oid: "f".repeat(40) } : null, mergedAt: merged ? new Date(clock).toISOString() : null,
+        });
+        if (args[0] === "api" && args[1]?.includes("/reviews")) return "";
+        if (args[0] === "api" && args[1]?.includes("/branches/")) return '["ci"]';
+        if (args[0] === "repo") return '{"squashMergeAllowed":true}';
+        throw new Error(`unexpected forge read ${args.join(" ")}`);
+      },
+      write: async args => { writes.push(args); merged = true; return ""; },
+    });
+    let events = [h.finish("/codex/stage-2.jsonl", "pass")];
+    let sweep = Promise.resolve();
+    const controller = new FlowPipelineController({ now: () => clock, monotonicNow: () => 0,
+      tickPipelines: async () => {
+        const entries = events; events = [];
+        const result = await tickPipelines(entries, h.ports);
+        // Model a Viewer stall after completion was persisted, before the global sweep.
+        if (entries.length) clock += stallMs;
+        return result;
+      },
+      tickFlows: async () => ({ changed: false }),
+      sweepAutoMerge: () => { sweep = sweepAutoMerge(ports); },
+    }, { maxPasses: 1 });
+    const tick = async () => { await controller.tick(); await sweep; };
+    pending = true;
+    await tick();
+    expect(loadPipelines().find(lane => lane.id === id)?.state).toBe("completed");
+    await tick();
+    expect(loadPipelines().find(lane => lane.id === "original")?.merge?.state).toBe("waiting-checks");
+    expect(writes).toHaveLength(0);
+    pending = false;
+    for (let poll = 0; poll < 7; poll++) { clock += MERGE_POLL_MS; await tick(); }
+    expect(loadPipelines().find(lane => lane.id === "original")?.merge).toMatchObject({ state: "merged", mergedHead: head });
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toContain(head);
+  } finally {
+    savePipelines([]);
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
 });

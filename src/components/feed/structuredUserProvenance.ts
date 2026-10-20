@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { DeliveredMessageProvenance } from "@/lib/runtime/messageOrigin";
-import { structuredUserProvenance } from "@/lib/selection/structuredUserMetadataAction";
+import { structuredUserProvenance } from "./structuredUserProvenanceClient";
 import type { FeedEntry, Item } from "./parse";
 
 const DEFAULT_RETRY_DELAYS_MS: readonly number[] = [1_500, 4_000, 10_000];

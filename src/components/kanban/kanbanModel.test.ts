@@ -1766,3 +1766,37 @@ test("a cleared prototype round raises no needs-you count while its choice stays
   expect(model([task("prototype", "inbox", [], { prototypeReview: review })], []).totals.needsYou).toBe(0);
   expect(review.waitingReviewId).toBe("round-a");
 });
+
+
+test("finished lanes leave In progress and dead asks stop counting on desktop and phone", () => {
+  const at = new Date((NOW - 7 * 86400) * 1000).toISOString();
+  const endedAt = new Date((NOW - 6 * 86400) * 1000).toISOString();
+  const dead = file(900, { proc: "killed", mtime: NOW - 7 * 86400, pendingPermission: { id: "old-permission", since: at, tool: "Bash", command: "make" } as FileEntry["pendingPermission"], lastTurn: { startedAt: Date.parse(at), endedAt: null } });
+  const owned = task("900", "assigned", [dead.path], { createdAt: at, updatedAt: at });
+  const lane = { id: "ended", project: "fixture", state: "completed", closedAt: endedAt, createdAt: at, task: "Finished lane", taskIds: [owned.id], stages: [], runs: [
+    { stageId: "review", attempts: [{ n: 1, state: "needs_decision", effectiveRole: { roleId: "reviewer", engine: "codex" }, conversationId: dead.conversationId, agentPath: dead.path, startedAt: at, completedAt: endedAt }] },
+  ] } as unknown as Pipeline;
+  const board = model([owned], [dead], { pipelines: [lane] });
+  expect(board.columns.assigned.cards).toHaveLength(0);
+  expect(board.columns.inbox.cards).toHaveLength(1);
+  expect(board.columns.inbox.cards[0]!.needsYou).toBe(false);
+  expect(board.columns.inbox.working).toBe(0);
+  const phone = buildPhoneKanban({ model: board, now: NOW });
+  expect(phone.columns.assigned.count).toBe(0);
+  expect(phone.columns.inbox.needsYou).toBe(0);
+  const done = model([{ ...owned, status: "done", doneAt: endedAt }], [dead], { pipelines: [lane] });
+  expect(done.columns.assigned.cards).toHaveLength(0);
+});
+
+
+test("a warm unchanged host-gone row loses its working count at the grace deadline", () => {
+  const dead = file(901, { proc: null, activity: "live", activityReason: "structured_spawn_host_gone_turn_open", mtime: NOW - 15, lastTurn: { startedAt: (NOW - 90) * 1000, endedAt: null } });
+  const owned = task("901", "assigned", [dead.path]);
+  const projection = projectTaskWorkflows([owned], [], [], [dead]);
+  const input = { files: [dead], tasks: [owned], pipelines: [], projection, bands: buildTaskBands(layout([dead]), { tasks: [owned], projection, untitled: "Work" }), now: NOW };
+  const build = createKanbanModel();
+  expect(build(input).columns.assigned.working).toBe(1);
+  const later = { ...input, now: NOW + 60 };
+  expect(build(later)).toEqual(buildKanbanModel(later));
+  expect(build(later).columns.assigned.working).toBe(0);
+});

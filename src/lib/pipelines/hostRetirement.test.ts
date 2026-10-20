@@ -3,15 +3,21 @@ import path from "node:path";
 import { afterEach, expect, test } from "bun:test";
 import { pipelineHostHasLiveWork } from "./hostRetirement";
 import * as retirement from "./hostRetirement";
+import { buildPipeline, savePipelines } from "./store";
+import { pipelineRetirementReader } from "./retirementEvidence";
 import { runtimeIdleKillMatches } from "@/lib/runtime/contracts";
+import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { sameRecordedProcessIdentity } from "@/lib/processIdentity";
 import { blockingHostActivityFlags } from "@/lib/runtime/hostActivityFlags";
 import { terminateStructuredHostTree } from "@/lib/runtime/structuredHostControl";
-import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import type { Pipeline, PipelineStageAttempt } from "./types";
 
 const roots: string[] = [];
-afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
+const priorState = process.env.LLV_STATE_DIR;
+afterEach(() => {
+  if (priorState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = priorState;
+  for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+});
 const cut = Date.parse("2026-10-01T10:00:02Z");
 const ref = { pipelineId: "pipeline-fixture", stageId: "builder", attempt: 1, turnTs: cut, controlGeneration: "control-fixture" };
 
@@ -44,10 +50,16 @@ function fixture(engine: "codex" | "claude" = "codex") {
   const processRef = { pid: 987001, startIdentity: "fake-root", bootEpoch: "fake-boot" };
   const attempt = { n: 1, state: "running", conversationId, sessionId: key.sessionId, agentPath: transcript,
     paneId: null, launchId: null, startedAt: new Date(cut - 2000).toISOString(), completedAt: null,
-    effectiveRole: { engine }, providerWait: { condition: { kind: "usage_limit" }, turnTs: cut } } as PipelineStageAttempt;
-  const pipeline = { id: ref.pipelineId, state: "running", controlGeneration: ref.controlGeneration,
+    effectiveRole: { engine }, providerWait: { condition: { kind: "usage_limit", scope: null, resetLabel: null, label: "Usage limit" }, turnTs: cut } } as PipelineStageAttempt;
+  const base = buildPipeline({ id: ref.pipelineId, task: "Fixture", project: "fixture", repoDir: "/fixture", srcPath: null, srcConversationId: null,
+    now: new Date(cut - 2000).toISOString(), stages: [{ id: "builder", kind: "run", prompt: "Build", next: null,
+      effectiveRole: { roleId: null, engine, model: null, effort: null, access: "read-only", promptScaffold: null } }] });
+  Object.assign(attempt, { effectiveRole: base.stages[0]!.effectiveRole, flowId: null, activatedBy: null, output: null, error: null, verdict: null });
+  Object.assign(attempt.providerWait!, { text: "Capacity exhausted", accountId: null, tries: 0, startedAt: base.createdAt, resumeAt: base.createdAt, resetsAt: null });
+  const pipeline = { ...base, id: ref.pipelineId, state: "running", controlGeneration: ref.controlGeneration,
     srcConversationId: null, srcPath: null, cursor: { stageId: "builder", state: "running" },
-    stages: [{ id: "builder", kind: "run" }], runs: [{ stageId: "builder", attempts: [attempt] }] } as Pipeline;
+    runs: [{ ...base.runs[0]!, stageId: "builder", attempts: [attempt] }] } as Pipeline;
+  const pipelines = [pipeline];
   const entry = { artifactPath: transcript, host: null, status: "idle", claimOwner: "fixture", claimEpoch: 1,
     structuredHost: { process: processRef, writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
     structuredTerminationSurvivors: [] as unknown[] };
@@ -73,7 +85,19 @@ function fixture(engine: "codex" | "claude" = "codex") {
       terminateInactiveStructuredHost: () => false,
       recordStructuredTerminationSurvivors: (_key: unknown, _ref: unknown, identities: unknown[]) => { entry.structuredTerminationSurvivors = identities; return true; },
       terminateStructuredHost: () => true },
-    loadPipelinesForRetirement: () => { pipelineReads++; return [pipeline]; },
+    findPipelineRecord: () => { pipelineReads++; return pipeline; },
+    conversationIdsResolvingTo: (_snapshot: unknown, id: string) => [id],
+    pipelineRetirementReader: async () => {
+      process.env.LLV_STATE_DIR = path.join(root, "state");
+      let saved = "";
+      const persist = () => {
+        const serialized = JSON.stringify(pipelines);
+        if (serialized !== saved) { savePipelines(pipelines); saved = serialized; }
+      };
+      persist();
+      const reader = await pipelineRetirementReader();
+      return (...args: Parameters<typeof reader>) => { persist(); return reader(...args); };
+    },
     handoffQueue: () => ({ rows: () => [] }),
     sessionKeyId: () => `${engine}:session-fixture`, resolveConversationAlias: (_snapshot: unknown, id: string) => id,
     readOrchestratorSeatRetirementEvidenceOrNull: () => ({ seats: {}, pending: {}, revocations: [] }),
@@ -91,7 +115,7 @@ function fixture(engine: "codex" | "claude" = "codex") {
   const terminate = (recovery = ref) => productionTermination(deps)(conversationId, key, idle, authority, recovery);
   const retire = () => productionTermination(deps)(conversationId, key, idle, authority);
   const append = (payload: Record<string, unknown>, time = cut + 1) => fs.appendFileSync(transcript, JSON.stringify(record(time, payload)) + "\n");
-  return { pipeline, attempt, entry, snapshot, conversation, session, signals, deps, terminate, retire, append, nativeCut,
+  return { pipeline, pipelines, attempt, entry, snapshot, conversation, session, signals, deps, terminate, retire, append, nativeCut,
     transcript, setBeforeSignal: (callback: () => void) => { beforeSignal = callback; }, reads: () => pipelineReads };
 }
 
@@ -99,7 +123,7 @@ test.each(["completed", "closed", "superseded"] as const)("the production idle c
   const f = fixture();
   if (outcome === "superseded") f.pipeline.runs[0]!.attempts.push({ ...f.attempt, n: 2, conversationId: "conversation_current",
     sessionId: "current-session", agentPath: "current-transcript" });
-  else f.pipeline.state = outcome;
+  else { f.pipeline.state = outcome; f.pipeline.cursor = null; }
   expect(await f.retire()).toBe(true);
   expect(f.signals).toEqual([987001, 987002]);
 });
@@ -117,6 +141,7 @@ test("a superseded operational attempt retires ahead of adopted historical work"
 test.each([false, true])("terminal adopted work requires an idle turn at production actuation: %s", async resumed => {
   const f = fixture();
   f.pipeline.state = "completed";
+  f.pipeline.cursor = null;
   f.attempt.historical = true;
   f.attempt.state = "passed";
   f.attempt.verdict = { status: "pass" };
@@ -133,14 +158,15 @@ test.each([false, true])("terminal adopted work requires an idle turn at product
 test.each(["turn", "writer", "replacement", "publication"] as const)("released attempts still refuse a changed %s after awaited admission", async change => {
   const f = fixture();
   f.pipeline.state = "completed";
-  const peer: Pipeline = { ...f.pipeline };
-  if (change === "replacement") f.deps.loadPipelinesForRetirement = () => [f.pipeline, peer];
+  f.pipeline.cursor = null;
+  const peer: Pipeline = { ...f.pipeline, id: "peer", worktreeDir: "/fixture-pipeline-peer", branch: "pipeline/fixture-peer" };
+  if (change === "replacement") f.pipelines.push(peer);
   const status = f.deps.client.operationStatus;
   f.deps.client.operationStatus = async () => {
     if (change === "turn") f.entry.structuredHost.activeTurnRef = "new-turn" as never;
     if (change === "writer") f.entry.claimOwner = "replacement";
     if (change === "replacement") peer.state = "running";
-    if (change === "publication") f.pipeline.publicationAdmission = { state: "pending" } as Pipeline["publicationAdmission"];
+    if (change === "publication") f.pipeline.publicationAdmission = { id: "publication", sha: "a".repeat(40), fence: "b".repeat(64), state: "pending" };
     return status();
   };
   expect(await f.retire()).toBe(false);
@@ -150,7 +176,7 @@ test.each(["turn", "writer", "replacement", "publication"] as const)("released a
 test.each([true, false])("adopted historical work retains custody alongside an operational attempt: %s", async historicalTail => {
   const f = fixture();
   const other = { ...f.attempt, n: 2, historical: true, conversationId: "conversation_adopted", sessionId: "adopted-session", agentPath: "adopted-transcript" };
-  f.pipeline.runs[0]!.attempts = historicalTail ? [f.attempt, other] : [other, f.attempt];
+  f.pipeline.runs[0]!.attempts = historicalTail ? [f.attempt, other] : [{ ...other, n: 1 }, { ...f.attempt, n: 2 }];
   expect(await f.retire()).toBe(false);
   expect(pipelineHostHasLiveWork([f.pipeline], { conversationId: other.conversationId, agentPath: other.agentPath, paneId: null })).toBe(true);
   expect(f.signals).toEqual([]);
@@ -159,10 +185,12 @@ test.each([true, false])("adopted historical work retains custody alongside an o
 test.each([false, true])("a finished parent releases successor-source custody except publication: %s", async publishing => {
   const f = fixture();
   f.pipeline.state = "completed";
-  const successor: Pipeline = { ...f.pipeline, id: "successor", state: "paused", runs: [],
+  f.pipeline.cursor = null;
+  const successor: Pipeline = { ...f.pipeline, id: "successor", worktreeDir: "/fixture-pipeline-successor", branch: "pipeline/fixture-successor", state: "paused",
+    runs: f.pipeline.runs.map(run => ({ ...run, attempts: [] })),
     srcConversationId: f.attempt.conversationId, srcPath: f.transcript };
-  if (publishing) successor.publicationAdmission = { state: "pending" } as Pipeline["publicationAdmission"];
-  f.deps.loadPipelinesForRetirement = () => [f.pipeline, successor];
+  if (publishing) successor.publicationAdmission = { id: "publication", sha: "a".repeat(40), fence: "b".repeat(64), state: "pending" };
+  f.pipelines.push(successor);
   expect(await f.retire()).toBe(!publishing);
   expect(f.signals).toEqual(publishing ? [] : [987001, 987002]);
 });
@@ -194,8 +222,9 @@ test.each(["human", "human-before-new-cut", "control", "report", "verdict", "new
   if (change === "verdict") f.attempt.verdict = { status: "pass" } as PipelineStageAttempt["verdict"];
   if (change === "retry-cancelled") f.attempt.providerWait!.retryCancelled = true;
   if (change === "other-attempt") f.pipeline.runs[0]!.attempts.push({ ...f.attempt, n: 2 });
-  if (change === "other-owner") f.pipeline.runs.push({ stageId: "other", attempts: [{ ...f.attempt, n: 2 }] } as Pipeline["runs"][number]);
-  if (change === "publication") f.pipeline.publicationAdmission = { state: "pending" } as Pipeline["publicationAdmission"];
+  if (change === "other-owner") f.pipeline.stages.push({ ...f.pipeline.stages[0]!, id: "other" });
+  if (change === "other-owner") f.pipeline.runs.push({ stageId: "other", attempts: [{ ...f.attempt, n: 1 }] } as Pipeline["runs"][number]);
+  if (change === "publication") f.pipeline.publicationAdmission = { id: "publication", sha: "a".repeat(40), fence: "b".repeat(64), state: "pending" };
   if (change === "source-owner") f.pipeline.srcConversationId = f.attempt.conversationId;
   if (change === "cursor") f.pipeline.cursor!.stageId = "other";
   if (change === "session") f.attempt.sessionId = "other-session";
@@ -211,7 +240,7 @@ test.each(["human", "human-before-new-cut", "control", "report", "verdict", "new
     payload: { type: "task_complete", error: { message: "connection failed", codex_error_info: "stream_disconnected" } } }) + "\n");
   if (change === "prose") fs.writeFileSync(f.transcript, JSON.stringify({ type: "response_item", timestamp: new Date(cut).toISOString(),
     payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: "usage limit" }] } }) + "\n");
-  if (change === "pipeline-read") f.deps.loadPipelinesForRetirement = () => { throw new Error("ownership unknown"); };
+  if (change === "pipeline-read") f.deps.pipelineRetirementReader = async () => { throw new Error("ownership unknown"); };
   if (change === "claim") f.deps.client.operationStatus = async () => ({ receipt: { status: "delivering", retirementClaim: { executorId: "replacement", process: { pid: 987001, startIdentity: "fake-root", bootEpoch: "fake-boot" } } } });
   if (change === "generation") f.conversation.generations.push({ id: "new-generation" });
   if (change === "rebind") f.deps.state.activeQueue = {};
@@ -226,8 +255,9 @@ test.each(["control", "report", "human", "new-cut", "other-owner", "publication"
     if (change === "report") f.attempt.report = { at: new Date(cut).toISOString() } as PipelineStageAttempt["report"];
     if (change === "human") f.append({ type: "user_message", message: "operator followup" });
     if (change === "new-cut") fs.appendFileSync(f.transcript, JSON.stringify(f.nativeCut(cut + 1)) + "\n");
-    if (change === "other-owner") f.pipeline.runs.push({ stageId: "other", attempts: [{ ...f.attempt, n: 2 }] } as Pipeline["runs"][number]);
-    if (change === "publication") f.pipeline.publicationAdmission = { state: "pending" } as Pipeline["publicationAdmission"];
+    if (change === "other-owner") f.pipeline.stages.push({ ...f.pipeline.stages[0]!, id: "other" });
+    if (change === "other-owner") f.pipeline.runs.push({ stageId: "other", attempts: [{ ...f.attempt, n: 1 }] } as Pipeline["runs"][number]);
+    if (change === "publication") f.pipeline.publicationAdmission = { id: "publication", sha: "a".repeat(40), fence: "b".repeat(64), state: "pending" };
     if (change === "writer") f.entry.claimOwner = "new-writer";
   });
   await expect(f.terminate()).rejects.toThrow("idle-retirement");
@@ -273,4 +303,17 @@ test.each([true, false])("provider recovery preserves live background work and p
   fs.writeFileSync(f.transcript, JSON.stringify(task) + "\n" + fs.readFileSync(f.transcript, "utf8"));
   expect(await f.terminate()).toBe(!persistent);
   expect(f.signals).toEqual(persistent ? [] : [987001, 987002]);
+});
+
+
+test("an executor replacement during asynchronous ownership preparation cannot admit a signal", async () => {
+  const f = fixture();
+  const prepare = f.deps.pipelineRetirementReader;
+  f.deps.pipelineRetirementReader = async () => {
+    await Promise.resolve();
+    f.deps.client.operationStatus = async () => ({ receipt: { status: "delivering", retirementClaim: { executorId: "replaced", process: { pid: 987001, startIdentity: "fake-root", bootEpoch: "fake-boot" } } } });
+    return prepare();
+  };
+  expect(await f.terminate()).toBe(false);
+  expect(f.signals).toEqual([]);
 });

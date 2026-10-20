@@ -19,6 +19,8 @@ import { maintenanceRuns } from "@/lib/boardMaintenance/store";
 import { memoryProblemSignals, prepareMemoryProblemRead } from "@/lib/memory/roleProblems";
 import { maintenanceRunIsLive, type MaintenanceRun } from "@/lib/boardMaintenance/types";
 import crypto from "node:crypto";
+import { liveFreshObservation } from "@/lib/accounts/accountProjection";
+import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 import fs from "node:fs";
 import path from "node:path";
 import { RUNNING_PAGE, RUNNING_ROTATE, SeatTickAccounting, type AccountingChild, type AccountingOwner, type TicketPosition } from "./seatTickAccounting";
@@ -1089,10 +1091,37 @@ async function settledSeatDeploys(
  */
 function pausedBy(pipeline: Pipeline, seat: SeatTickSeatInput | null): SeatTickPipelineInput["pausedBy"] {
   if (pipeline.state !== "paused") return undefined;
+  const author = pipeline.pause?.actor;
+  if (author?.kind === "operator") return "operator";
+  if (author?.kind === "agent") return seat && author.conversationId === seat.conversationId ? "seat" : "other";
   const detail = pipeline.stateDetail?.trim() ?? "";
   if (detail === "paused by operator") return "operator";
   const actor = /^paused by \S+ (\S+)$/.exec(detail)?.[1];
   return seat && actor === seat.conversationId ? "seat" : "other";
+}
+
+/** Only cached quota rows are read, once per engine with a paused condition. */
+function pauseInputs(pipelines: readonly Pipeline[], seat: SeatTickSeatInput | null, sources: SeatTickSources, now: number) {
+  return withViewerOperation("seat-tick.pause-conditions", () => {
+    const observations = new Map<string, readonly DurableQuotaObservation[]>();
+    return new Map(pipelines.filter(pipeline => pipeline.state === "paused").map(pipeline => {
+      const by = pausedBy(pipeline, seat);
+      const condition = pipeline.pause?.resumeCondition;
+      let pauseConditionMet = false;
+      if (by !== "operator" && condition?.kind === "account-usage") {
+        if (!observations.has(condition.engine)) {
+          try { observations.set(condition.engine, sources.registry().quotaObservations(condition.engine)); }
+          catch { observations.set(condition.engine, []); }
+        }
+        const observation = observations.get(condition.engine)?.find(row => row.engine === condition.engine && row.accountId === condition.accountId);
+        const window = observation?.limits?.[condition.window];
+        pauseConditionMet = liveFreshObservation(observation, now) && !!window
+          && Number.isFinite(window.usedPercent) && window.usedPercent >= 0 && window.usedPercent < condition.belowPercent;
+      }
+      return [pipeline.id, { pausedBy: by, pausedAt: pipeline.pausedAt ?? pipeline.createdAt,
+        pauseGeneration: pipeline.controlGeneration, pause: pipeline.pause, pauseConditionMet }] as const;
+    }));
+  });
 }
 
 function taskSummary(task: BoardTask & { pipelineIds: string[] }): TaskSummary {
@@ -1105,6 +1134,18 @@ function taskSummary(task: BoardTask & { pipelineIds: string[] }): TaskSummary {
     assignments: task.assignments?.map((assignment) => ({ state: assignment.state, path: assignment.path, conversationId: assignment.conversationId ?? null })) ?? [],
     pipelineIds: task.pipelineIds,
   };
+}
+
+function openTickLanes(pipelines: readonly Pipeline[], project: string, canonical: (project: string) => string) {
+  const tasks = new Set<string>();
+  const lanes: Pipeline[] = [];
+  for (const pipeline of pipelines) {
+    if (pipeline.closedAt || pipeline.state === "completed" || pipeline.state === "closed") continue;
+    if (canonical(pipeline.project) !== project) continue;
+    for (const id of pipeline.taskIds) tasks.add(id);
+    if (isOpen(pipeline)) lanes.push(pipeline);
+  }
+  return { lanes, tasks };
 }
 
 function activityOf(record: AgentLivenessRecord | undefined): SeatTickActivity | null {
@@ -1527,8 +1568,8 @@ function changeFingerprint(
      that could not be read contributes nothing here — the children list is
      empty then, and the gap beside it keeps the check from concluding quiet. */
   const board = [
-    ...pipelines.map((pipeline) => `p:${pipeline.id}:${pipeline.state}:${pipeline.updatedAt ?? ""}`),
-    ...tasks.map((task) => `t:${task.id}:${task.status}:${task.owned}:${task.updatedAt ?? ""}`),
+    ...pipelines.map((pipeline) => `p:${pipeline.id}:${pipeline.state}:${pipeline.updatedAt ?? ""}:${JSON.stringify([pipeline.pausedBy, pipeline.pausedAt, pipeline.pauseGeneration, pipeline.pause, pipeline.pauseConditionMet])}`),
+    ...tasks.map((task) => `t:${task.id}:${task.status}:${task.owned}:${task.updatedAt ?? ""}:${JSON.stringify([task.accepted, task.hold, task.waitingSince])}`),
     ...children.map((child) => `c:${child.conversationId}:${child.outcomeId ?? ""}:${child.status}:${child.terminalAt ?? ""}`),
     /* The seat's own settled lanes decide a wake reason of their own (#1749),
        so the guard has to see them move: closing the lane out is the discharge,
@@ -2371,9 +2412,10 @@ export function refreshSeatTickInput(input: SeatTickCheckInput, sources: SeatTic
   const canonicalProject = seatProjectResolver();
   const now = sources.now();
   const hotLanes = sources.pipelines();
-  const openLanes = hotLanes.filter((lane) => isOpen(lane) && canonicalProject(lane.project) === input.project);
+  const { lanes: openLanes, tasks: openTasks } = openTickLanes(hotLanes, input.project, canonicalProject);
   const evidence = evidenceFromPipelines(openLanes.map(pipelineSummary));
   const previous = new Map(input.pipelines.map((lane) => [lane.id, lane]));
+  const pauses = pauseInputs(openLanes, input.seat, sources, now);
   const pipelines = openLanes.map((lane, index): SeatTickPipelineInput => ({
     id: lane.id, title: evidence[index]!.title, state: evidence[index]!.state, updatedAt: evidence[index]!.updatedAt,
     stageId: lane.cursor?.stageId ?? null,
@@ -2382,14 +2424,15 @@ export function refreshSeatTickInput(input: SeatTickCheckInput, sources: SeatTic
       && previous.get(lane.id)?.stageAttempt === stageAttemptIdentity(lane)
       && previous.get(lane.id)?.updatedAt === evidence[index]!.updatedAt
       ? previous.get(lane.id)?.stageActivity ?? null : null,
-    ...(lane.state === "paused" ? { pausedBy: pausedBy(lane, input.seat) } : {}),
+    ...pauses.get(lane.id),
   }));
   const board = projectTaskPipelineIds(sources.tasks().filter(task => canonicalProject(task.project) === input.project), [...hotLanes]);
   const taskEvidence = evidenceFromTasks(board.map(taskSummary));
   const linked = board.some((task) => task.machine) ? linkedContext() : null;
   const tasks: SeatTickTaskInput[] = board.map((task, index) => ({
-    id: task.id, title: taskEvidence[index]!.title, status: task.status, owned: taskEvidence[index]!.owner !== null,
+    id: task.id, title: taskEvidence[index]!.title, status: task.status, owned: task.chosen === true ? openTasks.has(task.id) : taskEvidence[index]!.owner !== null,
     updatedAt: task.updatedAt ?? null,
+    accepted: task.chosen === true, hold: task.hold, waitingSince: task.statusBy?.at ?? task.createdAt ?? task.updatedAt,
     ...(linked && !runsHere(task, linked) ? { runsOn: machineLabel(task.machine!, linked).label } : {}),
   }));
   const ownLanes = ownSettledLanes(input.project, input.seat, input.state.announcedLanes ?? [], hotLanes, !!seatTickCatchUp(input));
@@ -2480,7 +2523,7 @@ export async function gatherSeatTickInput(
   const catchUp = !!seatTickCatchUp({ state, now, settings, seat });
   canonicalProject = seatProjectResolver();
   const hotLanes = sources.pipelines();
-  const openLanes = hotLanes.filter((pipeline) => isOpen(pipeline) && canonicalProject(pipeline.project) === canonical);
+  const { lanes: openLanes, tasks: openTasks } = openTickLanes(hotLanes, canonical, canonicalProject);
   const evidence = evidenceFromPipelines(openLanes.map(pipelineSummary));
   const observedStages = new Map(openLanes.map((lane) => {
     const attempt = stageAttempt(lane);
@@ -2488,6 +2531,7 @@ export async function gatherSeatTickInput(
       number: attempt?.n ?? null, conversationId: attempt?.conversationId ?? null }] as const;
   }));
   const activity = openLanes.length > 0 ? await laneActivity(canonical, policy, sources, observedStages) : new Map<string, SeatTickActivity>();
+  const pauses = pauseInputs(openLanes, seat, sources, now);
   const pipelines: SeatTickPipelineInput[] = openLanes.map((pipeline, index) => ({
     id: pipeline.id,
     title: evidence[index]!.title,
@@ -2496,7 +2540,7 @@ export async function gatherSeatTickInput(
     stageActivity: activity.get(pipeline.id) ?? null,
     stageId: observedStages.get(pipeline.id)!.stageId,
     stageAttempt: observedStages.get(pipeline.id)!.attempt,
-    ...(pipeline.state === "paused" ? { pausedBy: pausedBy(pipeline, seat) } : {}),
+    ...pauses.get(pipeline.id),
   }));
 
   /* Pipeline membership is the read model the board itself uses, so "owned"
@@ -2509,8 +2553,9 @@ export async function gatherSeatTickInput(
     id: task.id,
     title: taskEvidence[index]!.title,
     status: task.status,
-    owned: taskEvidence[index]!.owner !== null,
+    owned: task.chosen === true ? openTasks.has(task.id) : taskEvidence[index]!.owner !== null,
     updatedAt: task.updatedAt ?? null,
+    accepted: task.chosen === true, hold: task.hold, waitingSince: task.statusBy?.at ?? task.createdAt ?? task.updatedAt,
     /* The guard is the guarantee; this only saves wakes (M.4). */
     ...(linked && !runsHere(task, linked) ? { runsOn: machineLabel(task.machine!, linked).label } : {}),
   }));

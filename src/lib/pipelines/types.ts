@@ -1082,6 +1082,8 @@ export type Pipeline = {
       from them, and a key built on the timestamp is what lets a second pause
       after a resume be a genuinely new event instead of a replay of the first. */
   pausedAt?: string | null;
+  /** Last pause's reason, condition and server-attributed author. Legacy pauses have none. */
+  pause?: import("./pauseMetadata").PipelinePause;
   resumedAt?: string | null;
   /** Durable control token: even same-clock pause/resume cancels old work. */
   controlGeneration?: string;
@@ -1179,7 +1181,9 @@ export type PipelineTaskFinishWait = {
     `waiting-checks`, `updating` and `merging` belong to the runner; `merged`
     is final; `blocked` waits for `retry-merge`; `cancelled` means the setting
     was turned off while the merge only waited. `refreshing` belongs to a
-    successor pipeline and stays outside the runner's queue. */
+    successor pipeline and stays outside the runner's queue. Once that successor
+    completes, its merge progress is reflected here; the record with
+    `refresh.pipelineId` remains delegated and never enters the queue itself. */
 export type PipelineMergeState = "refreshing" | "queued" | "checking" | "waiting-checks" | "updating" | "merging" | "merged" | "blocked" | "cancelled";
 
 export const PIPELINE_MERGE_LIVE_STATES: ReadonlySet<PipelineMergeState> = new Set(["queued", "checking", "waiting-checks", "updating", "merging"]);
@@ -1192,6 +1196,8 @@ export type PipelineRefreshOf = {
 };
 
 export type PipelineRefresh = {
+  /** Forge base captured with the tip; absent on older reservations. */
+  baseBranch?: string;
   attempt: number;
   base: string;
   head: string;
@@ -1329,6 +1335,8 @@ export type PatchPipelineRequest = {
   /** set-delivery-remote: configured Git remote name, default origin; fills an empty target only. */
   remote?: string;
   reason?: string;
+  /** pause only: a date or a cached account usage window below a percentage. */
+  resumeCondition?: import("./pauseMetadata").PipelineResumeCondition;
   action: PipelineAction;
   applyNow?: boolean;
   /** Board task used by link-task and unlink-task. */

@@ -6,6 +6,7 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { Database } from "bun:sqlite";
 
 import type { ViewerDeploymentStatus, ViewerReleaseIdentity } from "@/lib/runtime/contracts";
 import { runtimeHostClient, UnixRuntimeHostClient } from "@/lib/runtime/client";
@@ -24,6 +25,7 @@ import { viewerCandidateDockerArgs, viewerComposeServiceFromConfig } from "./can
 import { RuntimeHost } from "./host";
 import { RuntimeJournal } from "./journal";
 import { serveRuntimeHost } from "./socket";
+import { currentRuntimeHostGeneration, writeRuntimeHostRelease } from "./hostRelease";
 
 const sandboxes: string[] = [];
 afterEach(() => {
@@ -83,6 +85,79 @@ test("deployment admission is serialized and idempotent", async () => {
   await coordinator.waitForDeployment(first.deploymentId);
   expect(adapter.calls.some((call) => call.startsWith("retain-only:"))).toBe(true);
   store.close();
+});
+
+test("a matching busy SHA durably binds its join key through settlement and journal reopen", async () => {
+  const file = journalFile("busy-join-key");
+  const store = new RuntimeJournal(file, { now: () => 1_000 });
+  const adapter = new FakeDeploymentAdapter();
+  let releaseBuild!: () => void;
+  adapter.buildGate = new Promise<void>((resolve) => { releaseBuild = resolve; });
+  const coordinator = new ViewerDeploymentCoordinator(store, adapter, { pid: 10, startIdentity: "10:1" });
+  const revision = "a".repeat(40);
+  let closed = false;
+  try {
+    const first = await coordinator.requestViewerDeployment({ revision, idempotencyKey: "seat-a-key" });
+    if (first.state !== "accepted") throw new Error("first deployment was not accepted");
+    const joined = await coordinator.requestViewerDeployment({ revision, idempotencyKey: "seat-b-join" });
+    expect(joined).toEqual({ state: "accepted", deploymentId: first.deploymentId, revision, replayed: false });
+    expect(await coordinator.requestViewerDeployment({ revision: "b".repeat(40), idempotencyKey: "different-sha-key" }))
+      .toEqual({ state: "busy", deploymentId: first.deploymentId, revision });
+    expect(store.viewerDeploymentByIdempotencyKey("seat-b-join")).toMatchObject({
+      deploymentId: first.deploymentId,
+      idempotencyKey: "seat-b-join",
+      requestedRevision: revision,
+    });
+    releaseBuild();
+    await coordinator.waitForDeployment(first.deploymentId);
+    store.close();
+    closed = true;
+
+    const reopened = new RuntimeJournal(file, { now: () => 2_000 });
+    const replayCoordinator = new ViewerDeploymentCoordinator(reopened, new FakeDeploymentAdapter(), { pid: 11, startIdentity: "11:1" });
+    expect(await replayCoordinator.requestViewerDeployment({ revision, idempotencyKey: "seat-b-join" }))
+      .toEqual({ state: "accepted", deploymentId: first.deploymentId, revision, replayed: true });
+    expect(reopened.viewerDeploymentByIdempotencyKey("seat-b-join")?.terminal).toBe(true);
+    reopened.close();
+    expect(adapter.calls.filter(call => call.startsWith("build:"))).toHaveLength(1);
+  } finally {
+    releaseBuild();
+    if (!closed) store.close();
+  }
+});
+
+test("same-SHA join retries a contended journal lock without blocking the host loop", async () => {
+  const file = journalFile("busy-join-lock");
+  const store = new RuntimeJournal(file, { now: () => 1_500 });
+  const adapter = new FakeDeploymentAdapter();
+  const build = Promise.withResolvers<void>();
+  adapter.buildGate = build.promise;
+  const coordinator = new ViewerDeploymentCoordinator(store, adapter, { pid: 12, startIdentity: "12:1" });
+  const peer = new Database(file);
+  try {
+    const first = await coordinator.requestViewerDeployment({ revision: "c".repeat(40), idempotencyKey: "lock-original" });
+    if (first.state !== "accepted") throw new Error("initial deployment was not accepted");
+    peer.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+    let loopReleaseRan = false;
+    const joining = coordinator.requestViewerDeployment({ revision: "c".repeat(40), idempotencyKey: "lock-join" });
+    const release = new Promise<void>((resolve, reject) => setImmediate(() => {
+      try { peer.exec("ROLLBACK"); loopReleaseRan = true; resolve(); }
+      catch (error) { reject(error); }
+    }));
+    await release;
+    const joined = await joining;
+    expect(loopReleaseRan).toBe(true);
+    expect(joined).toMatchObject({ state: "accepted", deploymentId: first.deploymentId, replayed: false });
+    expect(store.viewerDeploymentByIdempotencyKey("lock-join")?.deploymentId).toBe(first.deploymentId);
+    expect(adapter.calls.filter(call => call.startsWith("build:"))).toHaveLength(1);
+  } finally {
+    try { peer.exec("ROLLBACK"); } catch { /* release callback already closed the transaction */ }
+    peer.close();
+    build.resolve();
+    const active = store.activeViewerDeployment();
+    if (active) await coordinator.waitForDeployment(active.deploymentId);
+    store.close();
+  }
 });
 
 test("issue 1033: a branch ref is resolved by the host and the ledger records the exact commit", async () => {
@@ -433,6 +508,55 @@ test("issue 1268: the predecessor leaves success non-terminal until the staged r
     `verify-host-successor:${handedOff?.candidate?.image}:${handedOff?.candidate?.revision}`,
   );
   store.close();
+});
+
+test.each(["missing", "previous"] as const)("issue 1999: successor with a %s release record completes one handoff after process restart", async recordState => {
+  const filename = journalFile(`one-handoff-${recordState}`);
+  const store = new RuntimeJournal(filename, { now: () => 1_000 });
+  const adapter = new FakeDeploymentAdapter();
+  const handoffs: string[] = [];
+  const predecessor = new ViewerDeploymentCoordinator(store, adapter, { pid: 10, startIdentity: "10:1" }, {
+    hostGeneration: () => currentRuntimeHostGeneration({ NODE_ENV: "test" }),
+    onHostHandoff: context => { handoffs.push(context.deploymentId); },
+  });
+  const receipt = await predecessor.requestViewerDeployment({ idempotencyKey: "one-handoff", revision: "b".repeat(40) });
+  if (receipt.state !== "accepted") throw new Error("deployment was not accepted");
+  await predecessor.waitForDeployment(receipt.deploymentId);
+  const candidate = store.viewerDeployment(receipt.deploymentId)!.candidate!;
+  expect(handoffs).toEqual([receipt.deploymentId]);
+  expect(adapter.calls.filter(call => call.startsWith("stage-host-successor:"))).toHaveLength(1);
+  store.close();
+  const releaseFile = path.join(path.dirname(filename), "host-release.json");
+  if (recordState === "previous") writeRuntimeHostRelease({ ...candidate,
+    image: "viewer:previous", revision: "a".repeat(40), container: "host-previous", stagedAt: "2026-10-19T00:00:00Z" }, releaseFile);
+  const child = Bun.spawn([process.execPath, "--eval", `
+    import { RuntimeJournal } from "./src/runtime-host/journal";
+    import { ViewerDeploymentCoordinator } from "./src/runtime-host/deployment";
+    import { FakeDeploymentAdapter } from "./src/runtime-host/fixtures/fakeDeploymentAdapter";
+    import { currentRuntimeHostGeneration } from "./src/runtime-host/hostRelease";
+    const store = new RuntimeJournal(process.argv[1], { now: () => 2_000 });
+    const adapter = new FakeDeploymentAdapter();
+    const handoffs = [];
+    const generation = currentRuntimeHostGeneration();
+    try {
+      const coordinator = new ViewerDeploymentCoordinator(store, adapter, { pid: 11, startIdentity: "11:2" }, {
+        ownerAlive: () => false, hostGeneration: () => generation, log: () => {},
+        onHostHandoff: context => { handoffs.push(context.deploymentId); },
+      });
+      await coordinator.recover();
+      const status = await coordinator.waitForDeployment(process.argv[2]);
+      await coordinator.recover();
+      console.log(JSON.stringify({ generation, handoffs, calls: adapter.calls, phase: status?.phase }));
+    } finally { store.close(); }
+  `, filename, receipt.deploymentId], { cwd: process.cwd(), env: { ...process.env,
+    LLV_RUNTIME_HOST_RELEASE_TARGET: releaseFile, LLV_RUNTIME_HOST_IMAGE: candidate.image,
+    LLV_RUNTIME_HOST_REVISION: candidate.revision, LLV_RUNTIME_HOST_CONTAINER: "host-successor" }, stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect({ exit, stderr }).toEqual({ exit: 0, stderr: "" });
+  const recovered = JSON.parse(stdout);
+  expect(recovered).toMatchObject({ generation: { image: candidate.image, revision: candidate.revision }, handoffs: [], phase: "succeeded" });
+  expect(recovered.calls.filter((call: string) => call.startsWith("stage-host-successor:"))).toEqual([]);
+  expect(recovered.calls.filter((call: string) => call.startsWith("verify-host-successor:"))).toHaveLength(1);
 });
 
 test("issue 1412: a failed runtime-host handoff settles terminal and clears deployment admission", async () => {

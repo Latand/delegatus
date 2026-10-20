@@ -1,4 +1,4 @@
-import crypto from "node:crypto";
+import { projectCurationStore, readProjectDocument } from "./persistence";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -24,10 +24,6 @@ export interface ProjectCurationSnapshot {
   /** Projects the operator crowned; they pin to the top of the rail. */
   crowned: string[];
   manualProjects: ManualProject[];
-}
-
-interface ProjectCurationFile extends ProjectCurationSnapshot {
-  schemaVersion: 1;
 }
 
 export type CreateProjectFailure =
@@ -62,71 +58,8 @@ export type CreateProjectResult =
   | { ok: true; entry: ManualProject }
   | { ok: false; code: CreateProjectFailure; message: string };
 
-type CurationCache = {
-  file: string;
-  mtimeMs: number;
-  size: number;
-  snapshot: ProjectCurationSnapshot;
-};
-
-let cache: CurationCache | null = null;
-
-function curationFile(): string {
-  return statePath("project-curation.json");
-}
-
-function manualProjectList(value: unknown): ManualProject[] | null {
-  if (!Array.isArray(value)) return null;
-  const entries: ManualProject[] = [];
-  for (const item of value) {
-    if (!item || typeof item !== "object" || Array.isArray(item)) return null;
-    const record = item as Record<string, unknown>;
-    if (typeof record.project !== "string" || !record.project.trim()
-      || typeof record.displayName !== "string" || !record.displayName.trim()
-      || typeof record.root !== "string" || !record.root.trim()
-      || typeof record.createdAt !== "number" || !Number.isFinite(record.createdAt)) return null;
-    entries.push({
-      project: record.project,
-      displayName: record.displayName,
-      root: record.root,
-      createdAt: record.createdAt,
-    });
-  }
-  return entries;
-}
-
-function crownedList(value: unknown): string[] | null {
-  if (!Array.isArray(value)) return null;
-  return value.every((item): item is string => typeof item === "string" && Boolean(item.trim()))
-    ? [...new Set(value)]
-    : null;
-}
-
-function readSnapshot(): ProjectCurationSnapshot {
-  const file = curationFile();
-  let stat: fs.Stats;
-  try {
-    stat = fs.statSync(file);
-  } catch {
-    cache = { file, mtimeMs: -1, size: -1, snapshot: { crowned: [], manualProjects: [] } };
-    return cache.snapshot;
-  }
-  if (cache && cache.file === file && cache.mtimeMs === stat.mtimeMs && cache.size === stat.size) {
-    return cache.snapshot;
-  }
-  try {
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as Partial<ProjectCurationFile>;
-    const crowned = parsed.schemaVersion === 1 ? crownedList(parsed.crowned) : null;
-    const manualProjects = parsed.schemaVersion === 1 ? manualProjectList(parsed.manualProjects) : null;
-    const snapshot = crowned && manualProjects ? { crowned, manualProjects } : { crowned: [], manualProjects: [] };
-    cache = { file, mtimeMs: stat.mtimeMs, size: stat.size, snapshot };
-    return snapshot;
-  } catch {
-    const snapshot = { crowned: [], manualProjects: [] };
-    cache = { file, mtimeMs: stat.mtimeMs, size: stat.size, snapshot };
-    return snapshot;
-  }
-}
+function curationFile(): string { return statePath("project-curation.json"); }
+function readSnapshot(): ProjectCurationSnapshot { return readProjectDocument(projectCurationStore, "project-curation.json"); }
 
 export function projectCurationSnapshot(): ProjectCurationSnapshot {
   const snapshot = readSnapshot();
@@ -136,39 +69,19 @@ export function projectCurationSnapshot(): ProjectCurationSnapshot {
   };
 }
 
-function writeSnapshot(snapshot: ProjectCurationSnapshot): boolean {
-  const file = curationFile();
-  const temporary = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.${crypto.randomUUID()}.tmp`);
-  try {
-    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(
-      temporary,
-      JSON.stringify({ schemaVersion: 1, ...snapshot } satisfies ProjectCurationFile, null, 2) + "\n",
-      { encoding: "utf8", mode: 0o600 },
-    );
-    fs.renameSync(temporary, file);
-    cache = null;
-    readSnapshot();
-    return true;
-  } catch {
-    try {
-      fs.rmSync(temporary, { force: true });
-    } catch {
-      // The next toggle retries the write.
-    }
-    return false;
-  }
-}
-
-/** Crown or uncrown one project. Idempotent; false only on a failed write. */
+/** Crown or uncrown one project in a serialized transaction. */
 export function setProjectCrown(project: string, crowned: boolean): boolean {
   const key = project.trim();
   if (!key) return false;
-  const current = readSnapshot();
-  const has = current.crowned.includes(key);
-  if (has === crowned) return true;
-  const next = crowned ? [...current.crowned, key] : current.crowned.filter((entry) => entry !== key);
-  return writeSnapshot({ crowned: next, manualProjects: current.manualProjects });
+  try {
+    return projectCurationStore.patchRows(curationFile(), 2, tx => {
+      const rowKey = `crown:${key}`;
+      const held = tx.get(rowKey);
+      if (Boolean(held) === crowned) return true;
+      if (crowned) tx.put({ key: rowKey, value: { project: key, order: Date.now() } }); else tx.delete(rowKey);
+      return true;
+    });
+  } catch { return false; }
 }
 
 /**
@@ -228,25 +141,17 @@ export function createManualProject(
   if (!identity) {
     return { ok: false, code: "INVALID_ROOT", message: "directory does not resolve to a project identity" };
   }
-  const current = readSnapshot();
-  if (existingProjects.has(identity.project)
-    || current.manualProjects.some((entry) => entry.project === identity.project)) {
-    return { ok: false, code: "DUPLICATE_PROJECT", message: "a project with this identity already exists" };
-  }
-  const entry: ManualProject = {
-    project: identity.project,
-    displayName,
-    root: repositoryRoot ?? resolved,
-    createdAt: Math.floor(Date.now() / 1000),
-  };
-  const persisted = writeSnapshot({
-    crowned: current.crowned,
-    manualProjects: [...current.manualProjects, entry],
-  });
-  if (!persisted) return { ok: false, code: "STORE_ERROR", message: "could not persist the project" };
-  return { ok: true, entry };
+  const entry: ManualProject = { project: identity.project, displayName, root: repositoryRoot ?? resolved, createdAt: Math.floor(Date.now() / 1000) };
+  try {
+    return projectCurationStore.patchRows<CreateProjectResult>(curationFile(), 2, tx => {
+      const rowKey = `manual:${identity.project}`;
+      if (existingProjects.has(identity.project) || tx.get(rowKey)) return { ok: false, code: "DUPLICATE_PROJECT", message: "a project with this identity already exists" };
+      tx.put({ key: rowKey, value: { entry, order: Date.now() } });
+      return { ok: true, entry };
+    });
+  } catch { return { ok: false, code: "STORE_ERROR", message: "could not persist the project" }; }
 }
 
 export function resetProjectCurationForTests(): void {
-  cache = null;
+  // Revision-keyed shared cache requires no local reset.
 }

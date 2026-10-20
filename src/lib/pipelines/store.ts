@@ -1,4 +1,6 @@
+import { projectStoreSignature } from "@/lib/projects/persistence";
 import { deepFreeze } from "@/lib/deepFreeze";
+import { pipelinePauseInputSchema } from "./pauseMetadata";
 import { forEachCooperatively } from "@/lib/cooperative";
 import { controllerPipelineKeys, controllerReferences, inheritControllerGuards } from "./controllerScope";
 import { stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
@@ -824,7 +826,8 @@ function isRefreshOf(value: unknown): boolean {
 function isMergeRefresh(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const refresh = value as Record<string, unknown>;
-  return Number.isSafeInteger(refresh.attempt) && (refresh.attempt as number) >= 0
+  return (refresh.baseBranch === undefined || typeof refresh.baseBranch === "string" && !!refresh.baseBranch)
+    && Number.isSafeInteger(refresh.attempt) && (refresh.attempt as number) >= 0
     && typeof refresh.base === "string" && /^[0-9a-f]{40}$/i.test(refresh.base)
     && typeof refresh.head === "string" && /^[0-9a-f]{40}$/i.test(refresh.head)
     && typeof refresh.key === "string" && !!refresh.key
@@ -924,6 +927,8 @@ function isPipelineShape(value: unknown): value is Pipeline {
     ["draft", "provisioning", "running", "needs_decision", "needs_review", "paused", "completed", "closed"].includes(String(pipeline.state)) &&
     (pipeline.pausedState === null || ["provisioning", "running", "needs_decision", "needs_review", "completed", "closed"].includes(String(pipeline.pausedState))) &&
     (pipeline.pausedAt === undefined || isNullableString(pipeline.pausedAt)) &&
+    (pipeline.pause === undefined || (pipelinePauseInputSchema.safeParse(pipeline.pause).success
+      && (pipeline.pause.actor === undefined || pipeline.pause.actor === null || isActor(pipeline.pause.actor)))) &&
     (pipeline.resumedAt === undefined || isNullableString(pipeline.resumedAt)) &&
     (pipeline.controlGeneration === undefined || (typeof pipeline.controlGeneration === "string" && pipeline.controlGeneration.length > 0)) &&
     isNullableString(pipeline.stateDetail) &&
@@ -2004,6 +2009,20 @@ export function selectArchivedPipelines(select: (pipeline: Pipeline) => boolean,
   return archiveStore().selectReadonlyAsync(select, limit);
 }
 
+/** Narrow attention reconciliation to archived owners named by the current
+ * conversation memberships. The closed-lanes list remains the paged reader. */
+export function loadArchivedPipelinesForOwnership(ids: readonly string[]): Pipeline[] {
+  return [...new Set(ids)].flatMap(id => {
+    const pipeline = archiveStore().get(id);
+    return pipeline ? [pipeline] : [];
+  });
+}
+
+/** Collection revision for rechecking a narrow archived-owner observation after admission. */
+export function archivedPipelinesRevision(): number {
+  return archiveStore().revision();
+}
+
 function pipelineSettledForArchive(pipeline: Pipeline, nowMs: number): boolean {
   if (!pipelineActivitySettled(pipeline)) return false;
   if (pipeline.unconfirmedHosts?.length) return false;
@@ -2065,18 +2084,7 @@ export function pipelineSelectionSource() {
  * on every tick. Replacement at the same path is guarded by the connection. */
 export function pipelineRecordReader(pipelineId: string) {
   const { active, archive } = stores();
-  const aliasesFile = statePath("project-aliases.json");
-  // The decoder reads this file and worktree_recovery. Revision metadata for
-  // the latter travels in the same SQL query; no alias graph is copied here.
-  const authority = () => {
-    try {
-      const stat = fs.statSync(aliasesFile, { bigint: true });
-      return `${stat.dev}:${stat.ino}:${stat.mtimeNs}:${stat.size}`;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing";
-      throw error;
-    }
-  };
+  const authority = () => projectStoreSignature("project-aliases.json");
   return {
     version: active.pipelineRecordVersionReader(pipelineId, authority),
     read: () => active.get(pipelineId) ?? archive.get(pipelineId),

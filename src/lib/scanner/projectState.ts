@@ -1,3 +1,4 @@
+import { projectAliasStore, worktreeMapStore, readProjectDocument, projectStoreSignature } from "@/lib/projects/persistence";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -108,7 +109,7 @@ function stateKeySignature(dir: string): string {
     const revision = revisions.get(collection) ?? null;
     parts.push(revision === null ? fileSignature(dir, legacy) : `${collection}:sqlite:${revision}`);
   }
-  for (const name of STATE_KEY_FILES) parts.push(fileSignature(dir, name));
+  for (const name of STATE_KEY_FILES) parts.push(projectStoreSignature(name, dir));
   parts.push(JSON.stringify(readWorktreeRecoveries().map(({ source, target, cwd, repo, worktree }) => [source, target, cwd, repo, worktree])));
   return parts.join("|");
 }
@@ -134,18 +135,8 @@ function computeProjectResolutionStateKey(dir: string): string {
   hash.update(JSON.stringify(flowProjectFacts(flows === null ? stateJson("flows.json") : { flows })));
   hash.update("\0workflows\0");
   hash.update(JSON.stringify(workflowProjectFacts(workflows === null ? stateJson("workflows.json") : { workflows })));
-  hash.update("\0worktree-map.json\0");
-  try {
-    hash.update(fs.readFileSync(path.join(dir, "worktree-map.json")));
-  } catch {
-    hash.update("<missing>");
-  }
-  hash.update("\0project-aliases.json\0");
-  try {
-    hash.update(fs.readFileSync(path.join(dir, "project-aliases.json")));
-  } catch {
-    hash.update("<missing>");
-  }
+  hash.update(JSON.stringify(readProjectDocument(worktreeMapStore, "worktree-map.json", dir)));
+  hash.update(JSON.stringify(readProjectDocument(projectAliasStore, "project-aliases.json", dir)));
   hash.update(JSON.stringify(readWorktreeRecoveries().map(({ source, target, cwd, repo, worktree }) => [source, target, cwd, repo, worktree])));
   return hash.digest("hex");
 }

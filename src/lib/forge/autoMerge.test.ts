@@ -840,8 +840,10 @@ describe("writes go out as the App", () => {
 describe("rollup reading", () => {
   test("a re-run supersedes the older run of the same name, and a pending run reads pending", () => {
     expect(rollupChecks([
-      { __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "FAILURE", startedAt: "2026-09-25T06:00:00Z" },
-      { __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS", startedAt: "2026-09-25T06:05:00Z" },
+      { __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "FAILURE", startedAt: "2026-09-25T06:00:00Z",
+        app: { id: 7 }, checkSuite: { workflowRun: { workflow: { name: "tests" } } } },
+      { __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS", startedAt: "2026-09-25T06:05:00Z",
+        app: { id: 7 }, checkSuite: { workflowRun: { workflow: { name: "tests" } } } },
       { __typename: "CheckRun", name: "slow", status: "IN_PROGRESS", conclusion: "", startedAt: "2026-09-25T06:05:00Z", completedAt: "0001-01-01T00:00:00Z" },
       { __typename: "StatusContext", context: "legacy", state: "ERROR" },
     ])).toEqual([

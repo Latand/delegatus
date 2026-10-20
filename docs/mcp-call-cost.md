@@ -67,6 +67,9 @@ Ambiguous, missing or stale lineage is refused before admission. Explicit source
 paths keep the existing engine validation. Stage prompts and acceptance criteria
 are preserved. Cryptographic write guards keep their existing lengths.
 
-Synchronous Git/forge work, attention arrival waits, historical tail telemetry,
-conversation cursor redesign and external discovery-instruction duplication
-remain follow-ups. These changes do not guarantee every tool finishes in a second.
+MCP page cursors use short, expiring server-side handles; see
+[MCP page cursors](mcp-page-cursors.md) for ownership, bounds and restart behavior.
+
+Synchronous Git/forge work, attention arrival waits, historical tail telemetry
+and external discovery-instruction duplication remain follow-ups. These changes
+do not guarantee every tool finishes in a second.

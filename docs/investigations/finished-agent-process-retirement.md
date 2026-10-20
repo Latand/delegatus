@@ -17,6 +17,14 @@ attempts from inactive history and source publication; peer writes update that
 evidence atomically with their pipeline row. Publication keeps a compatibility
 reference for the preceding release's live-owner predicate during handover.
 
+The runtime signal fence now applies this same policy through
+`src/lib/pipelines/retirementEvidence.ts`. Its compact projection releases
+terminal and superseded operational attempts and ends successor source custody
+across conversation aliases, while retaining independent path, active-attempt,
+activation and publication claims. Production termination fixtures persist real
+pipeline rows and use that reader before each signal. A store revision change
+invalidates a prepared reader and defers retirement.
+
 Host deduplication also starts with outstanding attempts. A later attempt that
 reuses a previously reaped conversation keeps its own cleanup duty; its earlier
 receipt cannot hide the newly resident host from the controller window.
@@ -55,6 +63,11 @@ Regressions exercise budget-exhausted completion, outside merge, completed
 successor lanes, legacy closed lanes, superseded attempts, an open turn becoming
 idle, archive custody, production termination guards and schema recovery in a
 fresh process. The runtime-host process implementation is unchanged.
+
+Teardown success fixtures now record their simulated host termination. A
+delivered receipt alone remains unconfirmed while the recorded host is still
+resident. This corrects six stale fixture expectations reproduced on the merged
+main tree.
 
 ## Original investigation
 

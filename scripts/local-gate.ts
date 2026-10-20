@@ -1,9 +1,10 @@
 import { spawnSync } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { changedSinceBase, platformScope, workflowEntries } from "./ci-platform-scope";
 import { cpuBudgetTimer, cpuInheritedWaitMs, cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
+import { publicationHookDeadline, publicationPushBudgetMs } from "../src/lib/pipelines/gateBudget";
 
 export type Mode = "pre-commit" | "pre-push";
 export interface Step {
@@ -234,6 +235,33 @@ export function isolatedEnvironment(root: string, inherited: NodeJS.ProcessEnv):
   return env;
 }
 
+/** One build and its consumers share a private tree. Next holds .next/lock
+ * for the whole build; another verifier or an agent may be building the lane
+ * already. Never contend on that output, remove its lock, or reuse its result.
+ * Copy the current inputs, including staged/unstaged and new files; dependencies
+ * are read-only and generated output belongs only to this invocation.
+ */
+export function createRuntimeCheckTree(root: string, sandbox: string): string {
+  const tree = mkdtempSync(path.join(sandbox, "runtime-"));
+  const generated = new Set(["node_modules", ".next", "dist", "tsconfig.tsbuildinfo"]);
+  try {
+    const files = new Set(git(root, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean));
+    for (const file of files) {
+      if (generated.has(file.split("/")[0]!)) continue;
+      const source = path.join(root, file);
+      if (!existsSync(source)) continue; // A tracked deletion is a current input too.
+      const target = path.join(tree, file);
+      mkdirSync(path.dirname(target), { recursive: true });
+      cpSync(source, target, { recursive: true, verbatimSymlinks: true });
+    }
+    symlinkSync(path.join(root, "node_modules"), path.join(tree, "node_modules"), "dir");
+    return tree;
+  } catch (error) {
+    rmSync(tree, { recursive: true, force: true });
+    throw error;
+  }
+}
+
 function git(root: string, args: string[]): string {
   const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
   if (result.status !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr.trim()}`);
@@ -294,7 +322,7 @@ export interface PushDeadline { at: number; startedAt: number; cpuWaitMs?: numbe
     publication controller. Fetch, installs and checks use that execution
     deadline; CPU queue waits extend it. Nothing starts once its execution
     budget is spent. Local reads (Git plumbing, planning) run outside it.
-    Without it every step reaches its verdict. */
+    Without it main derives the repository's default budget after planning. */
 export function pushDeadline(env: Partial<NodeJS.ProcessEnv>, startedAt: number, admitted = false): PushDeadline | null {
   const raw = env.LLV_GATE_PUSH_DEADLINE;
   if (raw === undefined || raw === "") return null;
@@ -499,7 +527,20 @@ async function execute(command: string[], root: string, env: NodeJS.ProcessEnv, 
   }
 }
 
-export interface Prepared { command: string[]; env: NodeJS.ProcessEnv }
+export interface Prepared { command: string[]; env: NodeJS.ProcessEnv; root?: string }
+
+/** Only a complete comparator verdict can authorize a flaky phase retry.
+ * New assertions, broken runners and failed cleanup remain decisive. */
+function comparatorAllowsFlakyRetry(output: string): boolean {
+  const summary = /^touched-tests: (\d+) new failures, \d+ pre-existing failures, \d+ fixed, \d+ removed\/skipped, (\d+) flaky$/m.exec(output);
+  if (!summary || Number(summary[1]) < 1 || Number(summary[2]) < 1 || !/^FLAKY /m.test(output)) return false;
+  const failures = output.split("\n").filter(line => line.startsWith("NEW "));
+  return failures.length === Number(summary[1])
+    && failures.every(line => /^NEW .+: <between-tests error> /.test(line))
+    && !/gate error \(blocking\)|surviving owned processes|survived teardown|budget cleanup failed|guardian.*(?:failed|could not|surviving)/.test(output);
+}
+
+const comparableStep = (step: Step) => ["touched tests", "Linux tests", "native Codex shared contracts"].includes(step.name);
 /** Prepares a step without running it past `until`; an installation the
     deadline stops is reported as a step that was being prepared. */
 async function prepared(prepare: RunOptions["prepare"], step: Step, until: number, cancel?: AbortSignal, waitEnv = process.env): Promise<Prepared | Outcome> {
@@ -534,6 +575,32 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
     // A stopped step is deferred when the hosted job also runs it, and is a
     // missing verdict otherwise.
     const until = deadline ? deadline.at + (deadline.cpuWaitMs ?? 0) : Infinity;
+    const runPrepared = async (step: Step, ready: Prepared, log: string | undefined, cancel?: AbortSignal): Promise<Outcome> => {
+      const run = (destination: string | undefined) => execute(ready.command, ready.root ?? root, withBudget(ready.env), until, destination, cancel);
+      const first = await run(log);
+      if (mode !== "pre-push" || first.code !== 1 || first.stopped || first.leaked || cancel?.aborted
+        || !comparableStep(step) || !log || !existsSync(log)) return first;
+      const original = readFileSync(log, "utf8");
+      if (!comparatorAllowsFlakyRetry(original)) return first;
+      say(`${mode}: ${step.name}: comparator reported an intermittent diagnostic; retrying the check once in fresh isolation`);
+      for (const line of original.split("\n").filter(line => line.startsWith("FLAKY "))) say(line);
+      const retryLog = `${log}.retry`;
+      const retry = await run(retryLog);
+      if (retry.leaked) {
+        if (existsSync(retryLog)) writeFileSync(log, readFileSync(retryLog));
+        return retry;
+      }
+      if (retry.stopped || retry.cancelled) {
+        // A retry without a verdict cannot erase the first decisive refusal,
+        // even if another lane reached the group's deadline first.
+        say(`${mode}: ${step.name}: failed (1); flaky retry got no verdict, retaining the comparator refusal`);
+        for (const line of original.split("\n").filter(line => line.startsWith("NEW "))) say(line);
+        return first;
+      }
+      if (existsSync(retryLog)) writeFileSync(log, readFileSync(retryLog));
+      say(`${mode}: ${step.name}: automatic flaky retry ${retry.code === 0 ? "passed" : "failed"}`);
+      return retry;
+    };
     const settle = (step: Step, outcome: Outcome) => {
       if (outcome.leaked) throw new ContainmentFailed(`"${step.name}"`, outcome.leaked);
       if (!outcome.stopped || !deadline) return outcome.code === 0;
@@ -552,7 +619,12 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
       say(`${mode}: ${step.group ?? step.name}`);
       if (!step.group) {
         const ready = await prepared(prepare, step, until, options.cancel, budget.env);
-        const outcome = isOutcome(ready) ? ready : await execute(ready.command, root, withBudget(ready.env), until, undefined, options.cancel);
+        const log = mode === "pre-push" && comparableStep(step) ? path.join(logDir, `${step.name.replace(/[^\w.-]+/g, "-")}.log`) : undefined;
+        const outcome = isOutcome(ready) ? ready : await runPrepared(step, ready, log, options.cancel);
+        if (log && existsSync(log)) {
+          const output = readFileSync(log, "utf8").trimEnd();
+          if (output) say(output);
+        }
         if (outcome.cancelled) {
           if (outcome.leaked) throw new ContainmentFailed(`"${step.name}"`, outcome.leaked, true);
           return deferred;
@@ -579,7 +651,7 @@ export async function runSteps(mode: Mode, steps: readonly Step[], options: RunO
           const started = Date.now();
           try {
             const ready = await prepared(prepare, member, until, cancel.signal, budget.env);
-            const outcome = isOutcome(ready) ? ready : await execute(ready.command, root, withBudget(ready.env), until, log, cancel.signal);
+            const outcome = isOutcome(ready) ? ready : await runPrepared(member, ready, log, cancel.signal);
             if (!outcome.cancelled && !settle(member, outcome)) throw new Error(String(outcome.code));
             if (!outcome.stopped && ["touched tests", "Linux tests", "eslint"].includes(member.name) && existsSync(log)) say(readFileSync(log, "utf8").trimEnd());
             if (!outcome.stopped) say(`${mode}: ${member.name}: passed in ${seconds(Date.now() - started)}`);
@@ -634,6 +706,7 @@ class AdmittedGateFailed extends Error {
  * Cancellation remains owned by execute throughout admission and execution. */
 export async function runAdmittedChecks(command: string[], root: string, env: NodeJS.ProcessEnv, deadline: PushDeadline | null, cancel?: AbortSignal): Promise<void> {
   const budget = cpuWaitBudget(env);
+  console.error("pre-push: CPU admission for publication checks");
   try {
     const outcome = await execute(command, root, {
       ...budget.env, LLV_GATE_ADMISSION_WAIT_ROOTS: budget.env.LLV_CPU_WAIT_ROOTS,
@@ -643,7 +716,10 @@ export async function runAdmittedChecks(command: string[], root: string, env: No
     if (outcome.leaked) throw new ContainmentFailed("admitted checks", outcome.leaked, outcome.cancelled);
     if (outcome.cancelled) return;
     if (outcome.code !== 0) throw new AdmittedGateFailed(outcome.code ?? 1);
-  } finally { budget.close(); }
+  } finally {
+    console.error(`pre-push: publication checks CPU wait: ${Math.round(budget.elapsed())} ms (excluded from execution budget)`);
+    budget.close();
+  }
 }
 
 /** Both verdicts are mandatory. Refusal cancels the peer and waits for its
@@ -676,7 +752,7 @@ export function endHook(mode: Mode, error: unknown): never {
 
 async function main(mode: Mode, admitted = false): Promise<void> {
   if (process.env.LLV_SKIP_HOOKS === "1") return;
-  const deadline = pushDeadline(process.env, Date.now(), admitted);
+  let deadline = pushDeadline(process.env, Date.now(), admitted);
   const root = git(process.cwd(), ["rev-parse", "--show-toplevel"]);
   let base = mode === "pre-commit" ? git(root, ["merge-base", "HEAD", "origin/main"]) : "HEAD";
   const until = deadline?.at ?? Infinity;
@@ -703,10 +779,15 @@ async function main(mode: Mode, admitted = false): Promise<void> {
   const privacyBase = mode === "pre-commit" ? "HEAD" : base;
   for (const file of context.skippedMedia) console.warn(`${mode}: media OCR deferred to required CI (tesseract/ffmpeg/ffprobe unavailable): ${file}`);
   const steps = plan(mode, files, { ...context, base: privacyBase, lintBase: base });
+  if (mode === "pre-push" && !deadline) {
+    const startedAt = Date.now();
+    deadline = { startedAt, at: publicationHookDeadline(publicationPushBudgetMs(files), startedAt) };
+  }
   if (mode === "pre-push" && !files.length) console.error(`pre-push: nothing changed since ${base.slice(0, 12)}; checking the pushed commits for privacy only`);
   const cache = path.join(process.env.XDG_CACHE_HOME ?? path.join(homedir(), ".cache"), "delegatus-gate");
   // Installed on first use, inside the step that needs it and by its deadline.
   let runtime: Promise<string> | undefined;
+  let runtimeTree: string | undefined;
   const fixtures = new Map<string, Promise<string>>();
   const sandbox = createGateSandbox();
   try {
@@ -732,6 +813,7 @@ async function main(mode: Mode, admitted = false): Promise<void> {
         command.push(await fixtures.get(step.codex)!);
       }
       if (step.selection) command.push(step.selection);
+      if (step.selection === "--shared-only") env.LLV_GATE_COMPARE_BASE = base;
       if (step.name === "Viewer build") Object.assign(env, { NODE_ENV: "production", NEXT_TELEMETRY_DISABLED: "1", NEXT_PUBLIC_RUNTIME_UI: "1" });
       // Missing named tests must not shrink a green `bun test` run.
       if (command[1] === "test") {
@@ -740,7 +822,9 @@ async function main(mode: Mode, admitted = false): Promise<void> {
           if (!isTest(file) || !existsSync(path.resolve(root, file))) throw new Error(`missing or invalid test path: ${file}`);
         }
       }
-      return { command: step.capped ? ["bash", "scripts/gate-slot.sh", ...command] : command, env };
+      const usesBuild = ["Viewer build", "MCP size budgets", "Viewer runtime", "runtime host", "runtime negative controls"].includes(step.name);
+      if (usesBuild) runtimeTree ??= createRuntimeCheckTree(root, sandbox);
+      return { command: step.capped ? ["bash", "scripts/gate-slot.sh", ...command] : command, env, ...(usesBuild ? { root: runtimeTree } : {}) };
     };
     const branch = spawnSync("git", ["symbolic-ref", "--short", "-q", "HEAD"], { cwd: root, encoding: "utf8" }).stdout?.trim();
     const options = { root, deadline, logDir: sandbox, prepare, ...(branch ? { ref: branch } : {}) };

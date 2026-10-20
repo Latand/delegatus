@@ -15,21 +15,6 @@ export function pipelineAttemptReleased(pipeline: Pipeline, attempt: PipelineSta
     || (!!latest && !latest.historical && latest.n !== attempt.n));
 }
 
-function publicationHasCustody(pipeline: Pipeline): boolean {
-  const publication = pipeline.delivery?.operation;
-  const result = publication?.result;
-  return (publication !== undefined && (publication.state !== "settled" || !result
-      || (result.ok !== true && result.ok !== false)
-      || (result.ok === false && typeof result.error !== "string")
-      || (result.ok === true && (typeof result.sha !== "string"
-        || !["published", "unavailable"].includes(result.remote)
-        || (result.uncertain !== undefined && result.uncertain !== false)))
-      || (publication.executor !== undefined && publication.executor.finished !== true)))
-      || pipeline.publicationAdmission?.state === "pending"
-      || pipeline.remoteAction?.state === "pending"
-      || pipeline.cursor?.state === "committing";
-}
-
 /** Fresh pipeline ownership for an engine-issued recovery. A ref never grants
     authority to a source owner, publication, or a different/current attempt. */
 export function providerRecoveryAttempt(
@@ -94,7 +79,7 @@ export function pipelineHostHasLiveWork(
   // protect it independently. Proof is re-read on every actuation boundary.
   let releasedConversation = false, releasedPath = false;
   for (const pipeline of pipelines) {
-    if (publicationHasCustody(pipeline)) continue;
+    if (pipelinePublicationHoldsHost(pipeline)) continue;
     for (const run of pipeline.runs) {
       const latest = run.attempts.findLast(attempt => !attempt.historical);
       for (const attempt of run.attempts) {
@@ -106,7 +91,7 @@ export function pipelineHostHasLiveWork(
     }
   }
   for (const pipeline of pipelines) {
-    const publishing = publicationHasCustody(pipeline);
+    const publishing = pipelinePublicationHoldsHost(pipeline);
     const sourceConversation = sameConversation(pipeline.srcConversationId), sourcePath = samePath(pipeline.srcPath);
     if ((publishing && (sourceConversation || sourcePath))
       || (!["completed", "closed"].includes(pipeline.state)
@@ -132,4 +117,20 @@ export function pipelineHostHasLiveWork(
     }
   }
   return false;
+}
+
+/** Publication keeps every matching host in custody until its receipt settles. */
+export function pipelinePublicationHoldsHost(pipeline: Pipeline): boolean {
+  const publication = pipeline.delivery?.operation;
+  const result = publication?.result;
+  return (publication !== undefined && (publication.state !== "settled" || !result
+      || (result.ok !== true && result.ok !== false)
+      || (result.ok === false && typeof result.error !== "string")
+      || (result.ok === true && (typeof result.sha !== "string"
+        || !["published", "unavailable"].includes(result.remote)
+        || (result.uncertain !== undefined && result.uncertain !== false)))
+      || (publication.executor !== undefined && publication.executor.finished !== true)))
+      || pipeline.publicationAdmission?.state === "pending"
+      || pipeline.remoteAction?.state === "pending"
+      || pipeline.cursor?.state === "committing";
 }

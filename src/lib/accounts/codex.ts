@@ -512,7 +512,23 @@ export function retiredCodexSessionRoots(): string[] {
 
 /** Every Codex session root the scanner reads: live accounts first, then retained archives. */
 export function codexSessionRoots(): string[] {
-  return [...new Set([...listCodexAccounts().map((account) => account.sessionsDir), ...retiredCodexSessionRoots()])];
+  return codexSessionRootInventory().roots;
+}
+
+/** Retention must distinguish an empty root list from a registry that fell
+ * back to the default account because its managed-account inventory failed. */
+export function codexSessionRootInventory(): { roots: string[]; complete: boolean } {
+  recoverRemovalsAtStartup();
+  const loaded = readRegistry();
+  const registry = loaded.registry;
+  return {
+    complete: !loaded.corrupt,
+    roots: [...new Set([
+      path.join(legacyHome(), "sessions"),
+      ...registry.accounts.map(account => path.join(managedHome(account.id), "sessions")),
+      ...registry.retired.map(account => path.join(account.archived ? retiredAccountArchive("codex", account.id) : managedHome(account.id), "sessions")),
+    ])],
+  };
 }
 
 export function codexHomeOwningSessionPath(pathname: string): string | null {
