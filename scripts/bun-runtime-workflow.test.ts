@@ -109,7 +109,7 @@ test("the native queue campaign is manual-only and exercises twenty cases per su
   const campaign = workflow.jobs["native-queue-campaign"];
   expect(campaign.if).toBe("github.event_name == 'workflow_dispatch' && inputs.native_queue_campaign");
   expect(campaign.strategy?.matrix.repetition).toEqual(Array.from({ length: 20 }, (_, i) => i + 1));
-  expect(campaign.strategy?.matrix.codex).toEqual(["0.154.0", "0.159.0"]);
+  expect(campaign.strategy?.matrix.codex).toEqual(workflow.jobs["native-codex-runtime"].strategy?.matrix.codex);
   const run = campaign.steps.find(step => step.name === "Exercise cold resume and native queue dispatch")!.run!;
   expect(run).toContain("bun test src/lib/runtime/nativeQueueHost.integration.test.ts");
   expect(run).toContain("NATIVE_CODEX_QUEUE_TEST_BINARY=");
@@ -118,10 +118,25 @@ test("the native queue campaign is manual-only and exercises twenty cases per su
   expect(workflow.jobs["bun-runtime"].if).toBe("github.event_name != 'workflow_dispatch' || !inputs.native_queue_campaign");
 });
 
-test("both supported Codex CLIs run the full native contracts at the proposed commit", () => {
+test("the native Codex matrix covers the documented installed CLI and every pinned host version", () => {
+  const document = fs.readFileSync(path.join(repositoryRoot, "docs/design/codex-pinned-protocol.md"), "utf8");
+  const installed = [...document.matchAll(/^Installed CLI pin: `(\d+\.\d+\.\d+)`\.$/gm)];
+  expect(installed).toHaveLength(1);
+  const versions = workflow.jobs["native-codex-runtime"].strategy?.matrix.codex;
+  expect(versions).toContain(installed[0]![1]);
+  const protocolRoot = path.join(repositoryRoot, "src/lib/accounts/protocol");
+  const supported = fs.readdirSync(protocolRoot).filter(version => /^\d+\.\d+\.\d+$/.test(version));
+  expect(supported.length).toBeGreaterThan(0);
+  expect(versions?.toSorted()).toEqual(supported.toSorted());
+  // Keeping the declaration and alias wired prevents a second list drifting.
+  expect(workflowSource.match(/&native-codex-versions/g)).toHaveLength(1);
+  expect(workflowSource.match(/\*native-codex-versions/g)).toHaveLength(1);
+});
+
+test("supported Codex CLIs run the full native contracts at the proposed commit", () => {
   const job = workflow.jobs["native-codex-runtime"];
   expect(job.if).toBe(workflow.jobs["bun-runtime"].if);
-  expect(job.strategy?.matrix.codex).toEqual(["0.154.0", "0.159.0"]);
+  expect(job.strategy?.matrix.codex?.length).toBeGreaterThan(0);
   expect(job.steps.find(step => step.uses?.startsWith("actions/checkout@"))?.with?.ref)
     .toContain("github.event.pull_request.head.sha");
   expect(job.steps.find(step => step.uses?.startsWith("oven-sh/setup-bun@"))?.with?.["bun-version"])
@@ -194,4 +209,16 @@ exit "$CONTROL_EXIT"
       expect(fs.existsSync(path.join(scratch, "controls-ready"))).toBeTrue();
     }
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("README seed and all frame layouts run against the PR build with isolated state", () => {
+  const index = steps.findIndex(step => step.name === "Check README seed and frame layout");
+  expect(index).toBeGreaterThan(steps.findIndex(step => step.name === "Build the Viewer"));
+  const step = steps[index]!;
+  expect(step.if).toBeUndefined();
+  for (const name of ["HOME", "XDG_CONFIG_HOME", "LLV_STATE_DIR", "TMPDIR"]) expect(step.env?.[name]).toContain("${{ runner.temp }}/readme-");
+  expect(step.env?.LLV_VIEWER_CONTROL_URL).toBe("http://127.0.0.1:1");
+  expect(step.run).toContain("install --with-deps chromium");
+  expect(step.run).toContain("bash scripts/gate-slot.sh bun test scripts/capture-readme-media.test.ts");
+  expect(step.run).toContain("bash scripts/gate-slot.sh bun scripts/capture-readme-media.ts --check-layout");
 });

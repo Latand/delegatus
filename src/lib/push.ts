@@ -1,3 +1,5 @@
+import { smallStore } from "@/lib/state/smallStore";
+import { waitForStateLock } from "@/lib/state/lockWait";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -33,6 +35,21 @@ interface PushPayload {
 }
 
 type PushResult = "sent" | "dead" | "failed";
+
+export const pushSubscriptionStore = smallStore<PushSubscriptionRecord[]>({
+  collection: "push_subscriptions", empty: () => [],
+  parse: raw => Array.isArray(raw) ? raw.filter((row): row is PushSubscriptionRecord => Boolean(row) && typeof row.endpoint === "string" && Boolean(row.endpoint)) : [],
+  toRows: items => [...new Map(items.map(value => [value.endpoint, { key: value.endpoint, value }])).values()],
+  fromRows: rows => rows.map(row => row.value as PushSubscriptionRecord),
+  toFile: items => items,
+});
+
+export const pushSentStore = smallStore<string[]>({
+  collection: "push_sent", empty: () => [],
+  parse: raw => Array.isArray(raw) ? raw.filter((id): id is string => typeof id === "string").slice(-500) : [],
+  toRows: ids => [...new Set(ids)].slice(-500).map(value => ({ key: value, value })),
+  fromRows: rows => rows.map(row => row.value as string), toFile: ids => ids,
+});
 
 let notifyChain = Promise.resolve();
 
@@ -87,15 +104,16 @@ export function pushKeys(): Keys {
 }
 
 async function saveSubscriptionNow(subscription: PushSubscriptionRecord): Promise<void> {
+  if (typeof subscription.endpoint !== "string") throw new TypeError("subscription endpoint must be a string");
   if (!subscription.endpoint) return;
-  const items = readJson<PushSubscriptionRecord[]>(SUBS_FILE, []).filter((item) => item.endpoint !== subscription.endpoint);
-  items.push(subscription);
-  writeJson(SUBS_FILE, items);
+  await waitForStateLock("push.subscription", () => pushSubscriptionStore.patchRows(SUBS_FILE, 1, tx => {
+    tx.put({ key: subscription.endpoint, value: subscription });
+  }));
 }
 
 export async function saveSubscription(subscription: PushSubscriptionRecord): Promise<void> {
   notifyChain = notifyChain.then(() => saveSubscriptionNow(subscription), () => saveSubscriptionNow(subscription));
-  await notifyChain.catch(() => undefined);
+  await notifyChain;
 }
 
 function vapidJwt(audience: string): string {
@@ -111,10 +129,10 @@ function vapidJwt(audience: string): string {
 
 function encryptPayload(subscription: PushSubscriptionRecord, payload: PushPayload): Buffer | null {
   const receiverKey = subscription.keys?.p256dh;
-  const authSecret = subscription.keys?.auth;
-  if (!receiverKey || !authSecret) return null;
+  const subscriptionAuth = subscription.keys?.auth;
+  if (!receiverKey || !subscriptionAuth) return null;
   const receiverPublic = b64urlDecode(receiverKey);
-  const auth = b64urlDecode(authSecret);
+  const auth = b64urlDecode(subscriptionAuth);
   const salt = crypto.randomBytes(16);
   const sender = crypto.createECDH("prime256v1");
   const senderPublic = sender.generateKeys();
@@ -191,30 +209,29 @@ async function notifyQuestionNow(entry: FileEntry): Promise<void> {
   if (!entry.pendingQuestion && !entry.waitingInput) return;
   const id = attentionId(entry);
   if (!id) return;
-  const sent = new Set(readJson<string[]>(SENT_FILE, []));
-  if (sent.has(id)) return;
-  const subscriptions = readJson<PushSubscriptionRecord[]>(SUBS_FILE, []);
-  if (!subscriptions.length) return;
-  const alive: PushSubscriptionRecord[] = [];
+  const alreadySent = await waitForStateLock("push.dedupe", () => pushSentStore.readRow(SENT_FILE, id));
+  if (alreadySent) return;
+  let after = "";
   let delivered = false;
-  let changed = false;
   const payload = payloadFor(entry);
-  for (const subscription of subscriptions) {
-    const result = await sendPush(subscription, payload);
-    if (result === "sent") {
-      delivered = true;
-      alive.push(subscription);
-    } else if (result === "failed") {
-      alive.push(subscription);
-    } else {
-      changed = true;
+  for (;;) {
+    const page = await waitForStateLock("push.subscriptions.page", () => pushSubscriptionStore.readPage(SUBS_FILE, after, 32));
+    if (!page.length) break;
+    for (const row of page) {
+      const subscription = row.value as PushSubscriptionRecord;
+      const result = await sendPush(subscription, payload);
+      if (result === "sent") delivered = true;
+      if (result === "dead") await waitForStateLock("push.subscription.retire", () => pushSubscriptionStore.patchRows(SUBS_FILE, 2, tx => {
+        // A renewal may have arrived while the old subscription was in flight.
+        if (JSON.stringify(tx.get(row.key)) === JSON.stringify(row)) tx.delete(row.key);
+      }));
     }
+    after = page.at(-1)!.key;
+    await new Promise<void>(resolve => setImmediate(resolve));
   }
-  if (delivered) {
-    sent.add(id);
-    writeJson(SENT_FILE, [...sent].slice(-500));
-  }
-  if (changed) writeJson(SUBS_FILE, alive);
+  if (delivered) await waitForStateLock("push.sent", () => pushSentStore.mutate(SENT_FILE, sent => ({
+    next: [...new Set([...sent, id])].slice(-500), result: undefined,
+  })));
 }
 
 export async function notifyQuestion(entry: FileEntry): Promise<void> {

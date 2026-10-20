@@ -1,7 +1,10 @@
+import { projectStoreSignature } from "@/lib/projects/persistence";
 import { deepFreeze } from "@/lib/deepFreeze";
+import { pipelinePauseInputSchema } from "./pauseMetadata";
 import { forEachCooperatively } from "@/lib/cooperative";
 import { controllerPipelineKeys, controllerReferences, inheritControllerGuards } from "./controllerScope";
-import { stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
+import { StateLockDeferredError, outsideStateLockWait, stateLockAttempt, stateLockProcessKind, waitForStateLock } from "@/lib/state/lockWait";
+import { withWaitCorrelation } from "@/lib/blockingWaits";
 import crypto from "node:crypto";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -18,7 +21,7 @@ import { canonicalProjectKeys, replaceProjectKeySource } from "@/lib/projects/pr
 import { effortScale } from "@/lib/agent/efforts";
 import { normalizeClaudeLaunchModel } from "@/lib/agent/models";
 import { MAX_SCAFFOLD_LENGTH } from "@/lib/roles/store";
-import { refuseBusyBeforeAdmission } from "@/lib/state/fileTransaction";
+import { FileTransactionBusyError, refuseBusyBeforeAdmission } from "@/lib/state/fileTransaction";
 import { jsonArrayRecordBytes, preservedRecordJson, rememberRecordBytes, registryRecordKey, reportRegistryRecord, stringifyRegistryDocument, type RegistryRecordIssue } from "@/lib/state/registryRecords";
 import { initializeStateCollections, readStateCollectionRevisions, stateEvidenceVersion, pipelineEvidenceRevision, readCompactPipelineEvidence, type CompactEvidenceCache, visitStateCollectionsRows, readStateCollectionsRows, SqliteStateCollection, type StateBoundedTransaction, type StateCollectionSeed } from "@/lib/state/sqliteStateStore";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -925,6 +928,8 @@ function isPipelineShape(value: unknown): value is Pipeline {
     ["draft", "provisioning", "running", "needs_decision", "needs_review", "paused", "completed", "closed"].includes(String(pipeline.state)) &&
     (pipeline.pausedState === null || ["provisioning", "running", "needs_decision", "needs_review", "completed", "closed"].includes(String(pipeline.pausedState))) &&
     (pipeline.pausedAt === undefined || isNullableString(pipeline.pausedAt)) &&
+    (pipeline.pause === undefined || (pipelinePauseInputSchema.safeParse(pipeline.pause).success
+      && (pipeline.pause.actor === undefined || pipeline.pause.actor === null || isActor(pipeline.pause.actor)))) &&
     (pipeline.resumedAt === undefined || isNullableString(pipeline.resumedAt)) &&
     (pipeline.controlGeneration === undefined || (typeof pipeline.controlGeneration === "string" && pipeline.controlGeneration.length > 0)) &&
     isNullableString(pipeline.stateDetail) &&
@@ -1184,6 +1189,8 @@ function evidenceFileIdentity(filename: string): string {
   try { const stat = fs.statSync(filename, { bigint: true }); return `${stat.dev}:${stat.ino}`; }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing"; throw error; }
 }
+class PipelineEvidenceChangedError extends PipelineStoreError {}
+
 function evidenceSignature(): string {
   return performanceSpans.sync("pipeline.identity", readEvidenceSignature);
 }
@@ -1201,12 +1208,24 @@ function readEvidenceSignature(): string {
 
 /** Shared only while a fresh read is in flight. Complete historical payloads
     are released when the last admission using that read finishes. */
-async function preparePipelineEvidence(mode: "startup" | "health" | "ownership" = "startup"): Promise<PreparedPipelineEvidence> {
+type PipelineEvidenceBudget = { deadline?: number; signal?: AbortSignal };
+
+function assertPipelineEvidenceBudget(budget?: PipelineEvidenceBudget): void {
+  budget?.signal?.throwIfAborted();
+  if (budget?.deadline !== undefined && performance.now() >= budget.deadline) {
+    throw new FileTransactionBusyError("pipeline evidence preparation deadline exceeded");
+  }
+}
+
+async function preparePipelineEvidence(mode: "startup" | "health" | "ownership" = "startup", budget?: PipelineEvidenceBudget): Promise<PreparedPipelineEvidence> {
+  assertPipelineEvidenceBudget(budget);
   const signature = evidenceSignature();
+  assertPipelineEvidenceBudget(budget);
   const pendingKey = `${signature}:${mode}`;
-  const existing = pendingEvidence.get(`${signature}:startup`) ?? (mode !== "startup" ? pendingEvidence.get(`${signature}:ownership`) ?? pendingEvidence.get(`${signature}:health`) : undefined) ?? pendingEvidence.get(pendingKey);
+  const existing = budget ? undefined : pendingEvidence.get(`${signature}:startup`) ?? (mode !== "startup" ? pendingEvidence.get(`${signature}:ownership`) ?? pendingEvidence.get(`${signature}:health`) : undefined) ?? pendingEvidence.get(pendingKey);
   if (existing) { performanceSpans.event("pipeline.shared"); return existing; }
   const pending = withViewerOperation("pipelines.evidence", async () => {
+    assertPipelineEvidenceBudget(budget);
     const pipelines: Pipeline[] = [];
     const issues: RegistryRecordIssue[] = [];
     if (mode !== "startup") {
@@ -1215,7 +1234,8 @@ async function preparePipelineEvidence(mode: "startup" | "health" | "ownership" 
         return performanceSpans.sync("pipeline.validate", () => isPipeline(record))
           ? { key, ownership: startupOwnership(record as Pipeline) }
           : { key, issue: pipelineRecordIssue(record, collection) };
-      });
+      }, budget);
+      assertPipelineEvidenceBudget(budget);
       if (prepared) {
         const identities = new Set<string>();
         const ownership: PipelineStartupOwnership[] = [];
@@ -1225,7 +1245,7 @@ async function preparePipelineEvidence(mode: "startup" | "health" | "ownership" 
           if (value.ownership) ownership.push(value.ownership);
           if (value.issue) issues.push(value.issue);
         }
-        if (signature !== evidenceSignature()) throw new PipelineStoreError("pipeline evidence changed during preparation");
+        if (signature !== evidenceSignature()) throw new PipelineEvidenceChangedError("pipeline evidence changed during preparation");
         compactEvidence = prepared;
         return { pipelines, ownership, issues, signature };
       }
@@ -1235,6 +1255,7 @@ async function preparePipelineEvidence(mode: "startup" | "health" | "ownership" 
     const ownership: PipelineStartupOwnership[] = [];
     const resolveProject = projectAliasResolver();
     const visit = (record: unknown, collection: string) => {
+      assertPipelineEvidenceBudget(budget);
       const key = registryRecordKey(record);
       if (identities.has(key)) throw new PipelineStoreError("pipeline startup records have contradictory identities");
       identities.add(key);
@@ -1243,24 +1264,26 @@ async function preparePipelineEvidence(mode: "startup" | "health" | "ownership" 
         else ownership.push(startupOwnership(record as Pipeline));
       } else issues.push(pipelineRecordIssue(record, collection));
     };
-    const revisions = await visitStateCollectionsRows(stateDatabaseFile(), evidenceCollections, visit);
+    const revisions = await visitStateCollectionsRows(stateDatabaseFile(), evidenceCollections, visit, budget);
     if ((revisions.get("pipelines") === null) !== (revisions.get("pipelines_archive") === null)) {
       throw new PipelineStoreError("pipeline startup collections are incomplete");
     }
     if (revisions.get("pipelines") === null) {
       for (const collection of evidenceCollections) {
         for (const record of parsePipelinesFile(collection === "pipelines" ? pipelinesFile() : pipelinesArchiveFile(), true)) {
+          assertPipelineEvidenceBudget(budget);
           visit(record, collection);
           await new Promise<void>(resolve => setTimeout(resolve, 0));
         }
       }
     }
-    if (signature !== evidenceSignature()) throw new PipelineStoreError("pipeline evidence changed during preparation");
+    assertPipelineEvidenceBudget(budget);
+    if (signature !== evidenceSignature()) throw new PipelineEvidenceChangedError("pipeline evidence changed during preparation");
     return { pipelines, ...(mode === "startup" ? {} : { ownership }), issues, signature };
   });
-  pendingEvidence.set(pendingKey, pending);
+  if (!budget) pendingEvidence.set(pendingKey, pending);
   try { return await pending; }
-  finally { if (pendingEvidence.get(pendingKey) === pending) pendingEvidence.delete(pendingKey); }
+  finally { if (!budget && pendingEvidence.get(pendingKey) === pending) pendingEvidence.delete(pendingKey); }
 }
 
 export async function loadPipelineOwnershipForStartupAsync(): Promise<PipelineStartupOwnership[]> {
@@ -1784,39 +1807,82 @@ export async function withPipelineControllerMutation<T>(
  * Never reinterpret a failure inside admission as permission to run it again.
  */
 export async function withPipelineStartupAdmission<T>(
-  admit: (available: boolean) => Promise<T>,
+  admit: (available: boolean, refusal?: unknown) => Promise<T>,
   phase = "startup evidence",
   observeHold?: (heldMs: number) => void,
   compact = false,
+  options: { signal?: AbortSignal } = {},
 ): Promise<T> {
-  return withViewerOperation("pipelines.startup-admission", async () => {
+  return withViewerOperation("pipelines.startup-admission", () => withWaitCorrelation({ label: `pipelines.startup-admission:${phase}` }, async () => {
     let entered = false;
+    let prepared: PreparedPipelineEvidence | undefined;
+    const waitMs = pipelineLockWaitMs();
+    const deadline = performance.now() + waitMs;
     try {
-      let evidence = await preparePipelineEvidence(compact ? "ownership" : "startup");
-      const store = await waitForStateLock("pipelines.open", pipelineStore, { waitMs: pipelineLockWaitMs() });
-      // A first migration changes authority. Reread its result before taking
-      // the lease; a corrupt legacy source has already refused preparation.
-      if (evidence.signature !== evidenceSignature()) evidence = await preparePipelineEvidence(compact ? "ownership" : "startup");
-      return await store.admit(() => {
-        if (evidence.signature !== evidenceSignature()) throw new PipelineStoreError("pipeline evidence changed before admission");
-        entered = true;
-        const scope = { current: evidence as PreparedPipelineEvidence | null };
-        return admittedEvidence.run(scope, async () => {
-          try { return await admit(true); }
-          finally { scope.current = null; }
-        });
-      }, pipelineLockWaitMs(), heldMs => {
-        if (heldMs > 100) console.warn("[structured hosts] state lease exceeded budget", {
-          phase, collection: "pipelines", heldMs: Math.round(heldMs), budgetMs: 100,
-        });
-        observeHold?.(heldMs);
-      });
+      const outcome = await waitForStateLock("pipelines.startup-admission", async () => {
+        try {
+          let evidence = prepared;
+          const evidenceBudget = { ...(waitMs > 0 ? { deadline } : {}), signal: options.signal };
+          if (!evidence) evidence = await preparePipelineEvidence(compact ? "ownership" : "startup", evidenceBudget);
+          assertPipelineEvidenceBudget(evidenceBudget);
+          const store = pipelineStore();
+          assertPipelineEvidenceBudget(evidenceBudget);
+          // First migration changes authority. Refresh before taking the lease.
+          if (!prepared) {
+            assertPipelineEvidenceBudget(evidenceBudget);
+            const currentSignature = evidenceSignature();
+            assertPipelineEvidenceBudget(evidenceBudget);
+            if (evidence.signature !== currentSignature) {
+              evidence = await preparePipelineEvidence(compact ? "ownership" : "startup", evidenceBudget);
+            }
+          }
+          prepared = evidence;
+          assertPipelineEvidenceBudget(evidenceBudget);
+          const admitted = evidence;
+          // Retain unchanged preparation while yielding to a local lease holder.
+          // Never enqueue behind its callback: that could outlive this deadline
+          // or cancellation. The outer async wait owns every acquisition retry.
+          return await store.admit(async () => {
+            options.signal?.throwIfAborted();
+            if (waitMs > 0 && performance.now() >= deadline) throw new FileTransactionBusyError("pipeline startup admission deadline exceeded");
+            const currentSignature = evidenceSignature();
+            assertPipelineEvidenceBudget(evidenceBudget);
+            if (admitted.signature !== currentSignature) throw new PipelineEvidenceChangedError("pipeline evidence changed before admission");
+            entered = true;
+            const scope = { current: admitted as PreparedPipelineEvidence | null };
+            return outsideStateLockWait(() => admittedEvidence.run(scope, async () => {
+              // Return a callback error as data across the retry boundary: even
+              // a typed admission error here may follow an external effect.
+              try { return { ok: true as const, value: await admit(true) }; }
+              catch (error) { return { ok: false as const, error }; }
+              finally { scope.current = null; }
+            }));
+          }, 0, heldMs => {
+            if (heldMs > 100) console.warn(`[structured hosts] state lease exceeded budget ${JSON.stringify({
+              pid: process.pid, role: process.env.LLV_STATE_OWNER ?? stateLockProcessKind(),
+              phase, collection: "pipelines", heldMs: Math.round(heldMs), budgetMs: 100,
+            })}`);
+            observeHold?.(heldMs);
+          });
+        } catch (error) {
+          // Lease observers and teardown also run after callback effects.
+          if (entered) return { ok: false as const, error };
+          if (error instanceof PipelineEvidenceChangedError) prepared = undefined;
+          if (error instanceof PipelineEvidenceChangedError || error instanceof FileTransactionBusyError) {
+            throw new StateLockDeferredError("pipelines.startup-admission", error instanceof PipelineEvidenceChangedError ? "sqlite" : "lease");
+          }
+          throw error;
+        }
+      }, { waitMs, signal: options.signal, subject: "pipelines" });
+      if (!outcome.ok) throw outcome.error;
+      return outcome.value;
     } catch (error) {
+      options.signal?.throwIfAborted();
       if (entered) throw error;
       performanceSpans.event("pipeline.refused", undefined, 0, true);
-      return admit(false);
+      return admit(false, error);
     }
-  });
+  }));
 }
 
 export function deliveryJournal(pipeline: Pipeline, kind: NonNullable<Pipeline["delivery"]>["journal"][number]["kind"], reason: string, conversationId: string | null = null): void {
@@ -2071,18 +2137,7 @@ export function pipelineSelectionSource() {
  * on every tick. Replacement at the same path is guarded by the connection. */
 export function pipelineRecordReader(pipelineId: string) {
   const { active, archive } = stores();
-  const aliasesFile = statePath("project-aliases.json");
-  // The decoder reads this file and worktree_recovery. Revision metadata for
-  // the latter travels in the same SQL query; no alias graph is copied here.
-  const authority = () => {
-    try {
-      const stat = fs.statSync(aliasesFile, { bigint: true });
-      return `${stat.dev}:${stat.ino}:${stat.mtimeNs}:${stat.size}`;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing";
-      throw error;
-    }
-  };
+  const authority = () => projectStoreSignature("project-aliases.json");
   return {
     version: active.pipelineRecordVersionReader(pipelineId, authority),
     read: () => active.get(pipelineId) ?? archive.get(pipelineId),

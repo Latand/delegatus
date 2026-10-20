@@ -70,8 +70,11 @@ export function productionDeputyCommandPorts(dependencies: { registry?: AgentReg
       }
       throw lastError instanceof Error ? lastError : new Error(String(lastError));
     },
-    registerConversation: ({ artifactPath, accountId, launchProfile }) =>
-      registry.ensureForkedConversation("claude", artifactPath, accountId, launchProfile).id,
+    registerConversation: ({ artifactPath, accountId, launchProfile, assertCurrent }) =>
+      registry.deliveryWriteBatchOrBusy({ label: "registry.deputy-register" }, () => {
+        assertCurrent?.();
+        return registry.ensureForkedConversation("claude", artifactPath, accountId, launchProfile).id;
+      }),
     joinSeatTask: async ({ project, seatConversationId, seatPath, deputyConversationId, artifactPath, accountId }) => {
       /* The deputy joins the seat's own task (the seat-only task of #1841), so
          the scanner's admission finds its membership and mints no card. */

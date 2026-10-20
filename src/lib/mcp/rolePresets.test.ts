@@ -1,3 +1,4 @@
+import { hasRoleOverrides, loadRoleOverrides } from "@/lib/roles/store";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -56,9 +57,10 @@ async function refusal(call: Promise<unknown>): Promise<Refusal> {
   throw new Error("the call was not refused");
 }
 
+let stateCounter = 0;
 beforeEach(() => {
   closeAgentRegistryForTests();
-  fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
+  process.env.LLV_STATE_DIR = path.join(sandbox, `state-${++stateCounter}`);
   fs.mkdirSync(process.env.LLV_STATE_DIR!, { recursive: true });
 });
 
@@ -76,7 +78,7 @@ test("a read answers every role's config and variants, the revision, the health 
   const registry = await read();
   expect(registry.revision).toStartWith("roles-");
   expect(registry.health).toEqual({ state: "healthy" });
-  expect(registry.roles.map((role) => role.id)).toEqual(["orchestrator", "reviewer", "verifier", "builder", "architect", "cleaner", "prod-auditor", "deployer", "merger", "maintainer", "issue-reporter", "visual-critic"]);
+  expect(registry.roles.map((role) => role.id)).toEqual(["orchestrator", "reviewer", "verifier", "builder", "architect", "cleaner", "prod-auditor", "deployer", "merger", "maintainer", "curator", "issue-reporter", "visual-critic"]);
   const builder = registry.roles.find((role) => role.id === "builder")!;
   expect(builder.config).toEqual(builder.shipped.config);
   expect(Object.keys(builder.variants!)).toContain("frontend");
@@ -85,18 +87,18 @@ test("a read answers every role's config and variants, the revision, the health 
   expect(registry.choices.claude!["claude-haiku-5-5"]).toEqual(["low", "medium", "high", "xhigh", "max"]);
   expect(registry.choices.claude!["claude-haiku-4-5"]).toContain("low");
   expect(Object.keys(registry.choices.codex!)).toContain("gpt-6.1-sol");
-  expect(fs.existsSync(stateFile("role-presets.json"))).toBe(false);
+  expect(hasRoleOverrides()).toBe(false);
 });
 
 test("role_presets persists pinned Haiku 5.5 for trivial builder work", async () => {
-  const config = { engine: "claude", model: "claude-haiku-5-5", effort: "max" };
+  const config = { engine: "claude" as const, model: "claude-haiku-5-5", effort: "max" };
   const answer = await tools(SEAT).role_presets({
     clientRequestId: "haiku-preset",
     overrides: { builder: { variants: { trivial: config } } },
   }) as { changed: boolean };
   expect(answer.changed).toBe(true);
   expect((await read()).roles.find((role) => role.id === "builder")!.variants!.trivial).toEqual(config);
-  expect(JSON.parse(fs.readFileSync(stateFile("role-presets.json"), "utf8")).overrides.builder.variants.trivial).toEqual(config);
+  expect(loadRoleOverrides().overrides.builder?.variants?.trivial).toEqual(config);
 });
 
 test("the seat writes a full config, and the row, the revision and an independent read agree", async () => {
@@ -109,7 +111,7 @@ test("the seat writes a full config, and the row, the revision and an independen
   expect(answer).toMatchObject({ changed: true, previousRevision: before.revision });
   expect(answer.revision).not.toBe(before.revision);
   expect(answer.rows.map((row) => row.row)).toEqual(expect.arrayContaining(["builder", "reviewer"]));
-  expect(JSON.parse(fs.readFileSync(stateFile("role-presets.json"), "utf8")).overrides).toMatchObject({ reviewer: { config: SOL } });
+  expect(loadRoleOverrides().overrides).toMatchObject({ reviewer: { config: SOL } });
   const after = await read();
   expect(after.revision).toBe(answer.revision);
   expect(after.roles.find((role) => role.id === "reviewer")!.config).toEqual(SOL);
@@ -132,13 +134,13 @@ test("null resets a row to the shipped default and the file drops it", async () 
   expect(reset.changed).toBe(true);
   expect(reset.rows).toEqual([{ row: "reviewer", before: SOL, after: shipped }]);
   expect((await read()).roles.find((role) => role.id === "reviewer")!.config).toEqual(shipped);
-  expect(JSON.parse(fs.readFileSync(stateFile("role-presets.json"), "utf8")).overrides.reviewer).toBeUndefined();
+  expect(loadRoleOverrides().overrides.reviewer).toBeUndefined();
 });
 
 test("a stale revision is refused with the current registry and writes nothing", async () => {
   const before = await read();
   await tools(SEAT).role_presets({ clientRequestId: "move", overrides: { builder: { config: SONNET } } });
-  const file = fs.readFileSync(stateFile("role-presets.json"), "utf8");
+  const file = JSON.stringify(loadRoleOverrides());
   const refused = await refusal(tools(SEAT).role_presets({
     clientRequestId: "stale",
     overrides: { reviewer: { config: SOL } },
@@ -147,7 +149,7 @@ test("a stale revision is refused with the current registry and writes nothing",
   expect(refused.details.code).toBe("role_presets_stale_revision");
   expect((refused.details as unknown as Registry).revision).not.toBe(before.revision);
   expect((refused.details as unknown as Registry).roles.find((role) => role.id === "builder")!.config).toEqual(SONNET);
-  expect(fs.readFileSync(stateFile("role-presets.json"), "utf8")).toBe(file);
+  expect(JSON.stringify(loadRoleOverrides())).toBe(file);
   expect(auditLines()).toHaveLength(1);
 });
 
@@ -160,7 +162,7 @@ test("an unknown model is refused with the valid choices and nothing is written,
   expect(refused.message).toContain("gpt-9-imaginary");
   expect(refused.message).toContain("gpt-6.1-sol");
   expect(refused.details.violations).toEqual([expect.objectContaining({ field: "overrides.reviewer.config.model", expected: expect.stringContaining("gpt-6-astra") })]);
-  expect(fs.existsSync(stateFile("role-presets.json"))).toBe(false);
+  expect(hasRoleOverrides()).toBe(false);
   expect(auditLines()).toEqual([]);
 });
 
@@ -187,21 +189,21 @@ test("an effort the model does not offer is refused with the valid efforts, incl
     expect.objectContaining({ field: "overrides.builder.config.effort", expected: "one of: low, medium, high, xhigh, max" }),
     expect.objectContaining({ field: "overrides.reviewer.variants.trivial.effort", expected: expect.stringContaining("ultra") }),
   ]);
-  expect(fs.existsSync(stateFile("role-presets.json"))).toBe(false);
+  expect(hasRoleOverrides()).toBe(false);
 });
 
 test("a malformed patch is refused with the store's own words and the choices", async () => {
   const refused = await refusal(tools(SEAT).role_presets({ clientRequestId: "bad-role", overrides: { janitor: { config: SONNET } } }));
   expect(refused.details.code).toBe("role_presets_invalid");
   expect(refused.message).toContain("unknown role: janitor");
-  expect(fs.existsSync(stateFile("role-presets.json"))).toBe(false);
+  expect(hasRoleOverrides()).toBe(false);
 });
 
 test("a spawned worker and an unidentified caller read but their writes are refused with a clear code", async () => {
   for (const caller of [WORKER, UNKNOWN]) {
     const refused = await refusal(tools(caller).role_presets({ clientRequestId: `worker-${caller.kind}`, overrides: { builder: { config: SONNET } } }));
     expect(refused.details.code).toBe("role_presets_write_refused");
-    expect(fs.existsSync(stateFile("role-presets.json"))).toBe(false);
+    expect(hasRoleOverrides()).toBe(false);
     expect(auditLines()).toEqual([]);
     expect(await tools(caller).role_presets({ clientRequestId: `read-${caller.kind}` })).toHaveProperty("roles");
   }
@@ -257,16 +259,16 @@ test("a write whose audit record cannot be stored is refused and leaves the regi
   fs.mkdirSync(stateFile("role-presets-audit.jsonl"));
   const refused = await refusal(tools(SEAT).role_presets({ clientRequestId: "no-audit", overrides: { reviewer: { config: SOL } } }));
   expect(refused.details.code).toBe("role_presets_audit_unavailable");
-  expect(fs.existsSync(stateFile("role-presets.json"))).toBe(false);
+  expect(hasRoleOverrides()).toBe(false);
   expect((await read()).revision).toBe(before.revision);
 
   fs.rmSync(stateFile("role-presets-audit.jsonl"), { recursive: true });
   await tools(SEAT).role_presets({ clientRequestId: "ok", overrides: { builder: { config: SONNET } } });
-  const file = fs.readFileSync(stateFile("role-presets.json"), "utf8");
+  const file = JSON.stringify(loadRoleOverrides());
   fs.rmSync(stateFile("role-presets-audit.jsonl"));
   fs.mkdirSync(stateFile("role-presets-audit.jsonl"));
   await refusal(tools(SEAT).role_presets({ clientRequestId: "no-audit-2", overrides: { reviewer: { config: SOL } } }));
-  expect(fs.readFileSync(stateFile("role-presets.json"), "utf8")).toBe(file);
+  expect(JSON.stringify(loadRoleOverrides())).toBe(file);
 });
 
 test("a second process that writes between the read and the write makes the stale write refuse and leaves its row and no audit entry", async () => {
@@ -295,14 +297,14 @@ test("role_presets validates catalog-backed Codex tiers and persists a reviewer 
   const config = { engine: "codex", model: "gpt-6-astra", effort: "high", serviceTier: "ultrafast" };
   await tools(SEAT).role_presets({ clientRequestId: "tier-role-default", overrides: { reviewer: { config } } });
   expect((await read()).roles.find(role => role.id === "reviewer")?.config).toEqual(config);
-  expect(JSON.parse(fs.readFileSync(stateFile("role-presets.json"), "utf8")).schemaVersion).toBe(5);
+  expect(loadRoleOverrides().schemaVersion).toBe(5);
   const refused = await refusal(tools(SEAT).role_presets({ clientRequestId: "tier-role-unoffered", overrides: { reviewer: { config: { ...config, serviceTier: "unoffered" } } } }));
   expect(refused.message).toContain("offered: priority, ultrafast");
   expect((await read()).roles.find(role => role.id === "reviewer")?.config).toEqual(config);
   const cleared = { engine: "codex", model: "gpt-6-astra", effort: "high" };
   await tools(SEAT).role_presets({ clientRequestId: "tier-role-clear", overrides: { reviewer: { config: cleared } } });
   expect((await read()).roles.find(role => role.id === "reviewer")?.config).toEqual(cleared);
-  const saved = JSON.parse(fs.readFileSync(stateFile("role-presets.json"), "utf8"));
+  const saved = loadRoleOverrides();
   expect(saved.schemaVersion).toBeLessThan(5);
   expect(JSON.stringify(saved)).not.toContain("serviceTier");
 });

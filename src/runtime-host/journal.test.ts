@@ -1749,6 +1749,11 @@ test("retry chains expose only the current leaf while retaining every durable at
   ]);
   expect(journal.operationResult(original.operationId)?.receipt.status).toBe("failed");
   expect(journal.operationResult(replacement.operationId)?.receipt.status).toBe("failed");
+  expect(journal.currentRetryResult(original.operationId)).toMatchObject({
+    operationId: leaf.operationId,
+    receipt: { status: "delivered", retryOfOperationId: replacement.operationId },
+    replayed: true,
+  });
   expect(journal.replay(0).events.filter((event) => event.kind === "receipt").length).toBeGreaterThanOrEqual(6);
   journal.close();
 });

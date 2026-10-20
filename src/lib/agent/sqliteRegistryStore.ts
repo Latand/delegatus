@@ -839,6 +839,7 @@ export class SqliteAgentRegistryStore {
   private readonly writerClock: () => number;
   /** Set while {@link withWriter} holds an open write transaction for the next {@link mutate}. */
   private writerHeld = false;
+  private mutationBatch = false;
   private onSnapshotLoad: (() => void) | undefined;
   private onRowPayloadRead: ((collection: RowCollection, count: number) => void) | undefined;
   private onRowPayloadParse: ((collection: RowCollection, count: number) => void) | undefined;
@@ -1463,7 +1464,7 @@ export class SqliteAgentRegistryStore {
 
   snapshot(): SqliteRegistrySnapshot {
     // Preparation transfers ownership to its read connection; keep one cache.
-    if (this.preparedReader) return this.preparedReader.snapshot();
+    if (this.preparedReader && !this.writerHeld) return this.preparedReader.snapshot();
     return performanceSpans.sync("registry.writer-snapshot", () => {
       const previous = this.writerSnapshotCache;
       if (previous) {
@@ -1549,7 +1550,7 @@ export class SqliteAgentRegistryStore {
   }
 
   readOnlySnapshot(): SqliteRegistrySnapshot {
-    if (this.preparedReader) return this.preparedReader.readOnlySnapshot();
+    if (this.preparedReader && !this.writerHeld) return this.preparedReader.readOnlySnapshot();
     return performanceSpans.sync("registry.snapshot", () => this.readOnlySnapshotMeasured());
   }
 
@@ -3314,7 +3315,68 @@ export class SqliteAgentRegistryStore {
     }
   }
 
+  /** Keep one admitted writer through a synchronous group. Each successful
+   * mutation keeps its existing durability semantics if a later step throws;
+   * a failed mutation rolls back only its own savepoint. No callback is replayed. */
+  withMutationBatch<T>(operation: () => T): T {
+    if (this.mutationBatch) return operation();
+    if (!this.writerHeld) throw new Error("registry mutation batch needs an admitted writer");
+    this.mutationBatch = true;
+    try { return operation(); }
+    finally {
+      this.mutationBatch = false;
+      try { this.db.exec("COMMIT"); }
+      catch (error) {
+        try { this.db.exec("ROLLBACK"); } catch { /* SQLite may already have ended the transaction. */ }
+        // Batch reads may have cached drafts of earlier successful members.
+        this.onDatabaseReopened(this.db);
+        throw error;
+      } finally { this.writerHeld = false; }
+      this.rememberRevision(Number(this.meta("revision") ?? 0));
+    }
+  }
+
+  private mutateBatchMember<T>(operation: (file: RegistryFile) => T, includeSnapshot: boolean): SqliteRegistryMutation<T> {
+    this.db.exec("SAVEPOINT registry_admitted_mutation");
+    let current: LazyRegistrySnapshot;
+    let changes: RegistryChanges;
+    let result: T;
+    let revision: number;
+    const stamps = { before: "", after: "" };
+    try {
+      current = this.loadLazyInTransaction();
+      result = operation(current.file);
+      changes = current.changes();
+      const changed = changes.rows.size > 0 || changes.meta.size > 0 || changes.order.size > 0;
+      revision = changed ? current.revision + 1 : current.revision;
+      if (changed) {
+        stamps.before = this.storeStamp();
+        this.persistChanges(current.file, changes, revision);
+        stamps.after = this.storeStamp();
+      }
+      this.db.exec("RELEASE registry_admitted_mutation");
+    } catch (error) {
+      this.db.exec("ROLLBACK TO registry_admitted_mutation");
+      this.db.exec("RELEASE registry_admitted_mutation");
+      throw error;
+    }
+    if (stamps.after) {
+      this.secureFiles();
+      this.updateCachesAfterCommit(current.file, changes, revision, stamps);
+      this.rememberRevision(revision);
+    }
+    const guardChanged = changes.meta.has("quotaObservations") || [...changes.rows.keys(), ...changes.order]
+      .some(collection => ["entries", "conversations", "conversationAliases", "heldDeliveries", "deliveryOperationOwners", "memberships"].includes(collection));
+    if (guardChanged) this.onCreditGuardChange?.();
+    if (includeSnapshot) {
+      const snapshot = this.snapshot();
+      return { result, file: snapshot.file, revision: snapshot.revision };
+    }
+    return { result, file: null, revision };
+  }
+
   mutate<T>(operation: (file: RegistryFile) => T, includeSnapshot = true, options: { operationName?: string; noWait?: boolean } = {}): SqliteRegistryMutation<T> {
+    if (this.mutationBatch) return this.mutateBatchMember(operation, includeSnapshot);
     let operationName = options.operationName ?? operation.name;
     /* {@link withWriter} already opened the write transaction for this call. */
     const writerHeld = this.writerHeld;
@@ -3329,7 +3391,7 @@ export class SqliteAgentRegistryStore {
       let changes: RegistryChanges;
       let result: T;
       try {
-        if (pessimistic && !writerHeld) this.noteWriterWait(performance.now() - waitStartedAt, operationName);
+        if (pessimistic && !writerHeld) this.noteWriterWait(performance.now() - waitStartedAt, operationName, options.noWait);
         current = this.loadLazyInTransaction();
         result = operation(current.file);
         changes = current.changes();
@@ -3344,7 +3406,7 @@ export class SqliteAgentRegistryStore {
       let stamps = { before: "", after: "" };
       const changed = changes.rows.size > 0 || changes.meta.size > 0 || changes.order.size > 0;
       try {
-        if (!pessimistic) this.noteWriterWait(performance.now() - optimisticWaitStartedAt, operationName);
+        if (!pessimistic) this.noteWriterWait(performance.now() - optimisticWaitStartedAt, operationName, options.noWait);
         if (!pessimistic && Number(this.meta("revision") ?? 0) !== current.revision) {
           this.db.exec("ROLLBACK");
           operationName ||= new Error().stack?.split("\n")[2]?.trim() ?? "anonymous";
@@ -3353,7 +3415,7 @@ export class SqliteAgentRegistryStore {
           recordBlockingWait({
             site: "registry-revision-retry",
             durationMs: performance.now() - waitStartedAt,
-            synchronous: true,
+            synchronous: !options.noWait,
             subject: operationName,
           });
           if (attempt >= this.maxMutationAttempts) {
@@ -3402,9 +3464,11 @@ export class SqliteAgentRegistryStore {
     throw new RegistryMutationRetryLimitError(operationName || "anonymous", this.maxMutationAttempts);
   }
 
-  private noteWriterWait(durationMs: number, operationName: string): void {
+  private noteWriterWait(durationMs: number, operationName: string, noWait = false): void {
     this.onWriterWait?.(durationMs);
-    recordBlockingWait({ site: "registry-lock", durationMs, synchronous: true, subject: operationName || "anonymous" });
+    // Account admission retries outside its lease. This probe has SQLite's
+    // busy timeout disabled; attribute it to that asynchronous admission.
+    recordBlockingWait({ site: noWait ? "registry-lock-async" : "registry-lock", durationMs, synchronous: !noWait, subject: operationName || "anonymous" });
   }
 
   /**

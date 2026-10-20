@@ -1,3 +1,4 @@
+import { waitForStateLock } from "@/lib/state/lockWait";
 import { NextRequest, NextResponse } from "next/server";
 
 import {
@@ -17,7 +18,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(): Promise<NextResponse<SpawnNestingPolicy>> {
-  return NextResponse.json(loadSpawnNestingPolicy());
+  return NextResponse.json(await waitForStateLock("spawn.policy.read", loadSpawnNestingPolicy));
 }
 
 /** Operator-only ceiling change (#393): the agent lane can never raise its
@@ -39,6 +40,9 @@ export async function PATCH(req: NextRequest): Promise<NextResponse<SpawnNesting
       error: `maxAgentNestingDepth must be an integer between ${MIN_AGENT_NESTING_DEPTH} and ${MAX_AGENT_NESTING_DEPTH}`,
     }, { status: 400 });
   }
-  saveSpawnNestingPolicy({ maxAgentNestingDepth: body.maxAgentNestingDepth });
-  return NextResponse.json(loadSpawnNestingPolicy());
+  const depth = body.maxAgentNestingDepth;
+  return await waitForStateLock("spawn.policy.write", () => {
+    saveSpawnNestingPolicy({ maxAgentNestingDepth: depth });
+    return NextResponse.json(loadSpawnNestingPolicy());
+  });
 }

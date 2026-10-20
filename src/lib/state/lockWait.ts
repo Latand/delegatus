@@ -2,7 +2,7 @@ import { performanceSpans, performanceProcess } from "@/lib/performanceSpans";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { accountMutationHeld, AccountCommitBusyError } from "@/lib/accounts/accountMutationContext";
 import { recordBlockingWait, currentWaitCorrelation } from "@/lib/blockingWaits";
-import { FileTransactionBusyError } from "./fileTransaction";
+import { FileTransactionAdmissionError, FileTransactionBusyError } from "./fileTransaction";
 import { isMainThread } from "node:worker_threads";
 
 /** Only acquisition failures carry this type. Never wrap an error raised after
@@ -23,13 +23,25 @@ export function stateLockDeferral(error: unknown): StateLockDeferredError | null
   // callbacks consume that type before returning an error to their caller.
   for (let depth = 0; depth < 4 && error instanceof Error; depth++) {
     if (error instanceof StateLockDeferredError) return error;
+    if (error instanceof FileTransactionAdmissionError) return new StateLockDeferredError(error.callSite, "lease");
     error = error.cause;
   }
   return null;
 }
 
-type Wait = { start: number; deadline: number; attempts: number; maxSliceMs: number; backoffMs: number; synchronousSleepMs?: number; callSite: string; reason: string; subject?: string };
+type Wait = { start: number; deadline: number; attempts: number; maxSliceMs: number; backoffMs: number; synchronousSleepMs?: number; callSite: string; reason: string; subject?: string; completed?: boolean };
 const admission = new AsyncLocalStorage<Wait>();
+/** An admitted callback owns its effects and any later resource admissions.
+ * Do not inherit the acquisition retry context into that work. */
+export function outsideStateLockWait<T>(operation: () => T): T {
+  const wait = admission.getStore();
+  if (wait && !wait.completed) {
+    wait.completed = true;
+    active.delete(wait);
+    record(wait, "success", false);
+  }
+  return admission.exit(operation);
+}
 const active = new Set<Wait>();
 export const STATE_LOCK_WAIT_MS = 30_000;
 const totals = { completed: 0, refused: 0, totalMs: 0, maxMs: 0, buckets: [0, 0, 0, 0, 0] };
@@ -140,7 +152,7 @@ export async function waitForStateLock<T>(callSite: string, operation: () => T |
     attempts: 0, maxSliceMs: 0, backoffMs: 0, callSite, reason: "sqlite", subject: options.subject };
   active.add(wait);
   // Emit an in-flight observation even if the process never finishes its wait.
-  const timer = setTimeout(() => { if (wait.attempts) record(wait, "waiting", false); }, 51);
+  const timer = setTimeout(() => { if (wait.attempts && !wait.completed) record(wait, "waiting", false); }, 51);
   timer.unref();
   let outcome = "error";
   try {
@@ -166,6 +178,6 @@ export async function waitForStateLock<T>(callSite: string, operation: () => T |
     clearTimeout(timer);
     active.delete(wait);
     if (options.signal?.aborted) outcome = "cancelled";
-    record(wait, outcome, false);
+    if (!wait.completed) record(wait, outcome, false);
   }
 }

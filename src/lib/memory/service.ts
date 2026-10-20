@@ -38,6 +38,7 @@ async function defaultRoots(): Promise<MemoryRoots> {
 /** Refresh on the existing scan cadence. A test/build cannot discover live memories. */
 export async function refreshMemoryIndex(roots?: MemoryRoots) {
   if (!roots && guardedContext()) return;
+  void (await import("./importController")).scheduleMemoryImport();
   const inventory = await withViewerOperation("memory.discovery", () =>
     performanceSpans.wait("memory.discovery", async () => discoverMemorySources(roots ?? await defaultRoots())));
   return withViewerOperation("memory.refresh", () =>

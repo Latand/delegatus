@@ -5,11 +5,11 @@ import path from "node:path";
 
 import { NextRequest } from "next/server";
 
-import { loadSessionTitles, writeSessionTitle } from "@/lib/session/titleStore";
+import { loadSessionTitles, writeSessionTitle, sessionTitleStore } from "@/lib/session/titleStore";
 import type { TitleTarget, TitleTargetInput } from "@/lib/session/titleTarget";
 
-const UUID = "11111111-2222-4333-8444-555555555555";
-const SESSION_PATH = `/home/u/.claude/projects/proj/${UUID}.jsonl`;
+const UUID = "11111111-2222-0333-8444-555555555555";
+const SESSION_PATH = `/fixture/.claude/projects/proj/${UUID}.jsonl`;
 
 /* Session resolution and tmux propagation live behind @/lib/session/titleTarget
    so this route test can stub them without importing @/lib/scanner/roots or
@@ -74,13 +74,24 @@ test("sets a custom title keyed by the stable conversation identity and persists
   expect(loadSessionTitles()).toHaveLength(1);
 });
 
-test("a corrupt store fails with 503 and never erases the existing bytes", async () => {
+test("torn legacy titles recover through the route and retain the original bytes", async () => {
   const corrupt = "{ not valid json";
-  fs.writeFileSync(path.join(stateDir, "session-titles.json"), corrupt);
+  const file = path.join(stateDir, "session-titles.json");
+  fs.writeFileSync(file, corrupt);
   const res = await patch({ conversationId: "conversation_owner", title: "My name" });
-  expect(res.status).toBe(503);
-  // The rename aborted; the (recoverable) file was left intact.
-  expect(fs.readFileSync(path.join(stateDir, "session-titles.json"), "utf8")).toBe(corrupt);
+  expect(res.status).toBe(200);
+  expect(loadSessionTitles().map(row => row.title)).toEqual(["My name"]);
+  const preserved = fs.readdirSync(stateDir).find(name => name.startsWith("session-titles.json.unreadable-"));
+  expect(preserved).toBeDefined();
+  expect(fs.readFileSync(path.join(stateDir, preserved!), "utf8")).toBe(corrupt);
+  expect(sessionTitleStore.importLegacy(file).record.gap).toBe("legacy-unreadable");
+});
+
+test("an unsupported title schema returns 503 with its bytes unchanged", async () => {
+  const file = path.join(stateDir, "session-titles.json"), body = JSON.stringify({ version: 2, titles: [] });
+  fs.writeFileSync(file, body);
+  expect((await patch({ conversationId: "conversation_owner", title: "My name" })).status).toBe(503);
+  expect(fs.readFileSync(file, "utf8")).toBe(body);
 });
 
 test("falls back to the session UUID key when the registry does not own the session", async () => {
@@ -111,8 +122,8 @@ test("a title filed under a coalesced alias id migrates onto the canonical key",
 
 test("a rename finds and migrates a title filed under a predecessor generation", async () => {
   // A title was filed under a predecessor transcript's UUID before succession.
-  const predUuid = "22222222-2222-4333-8444-555555555555";
-  const predPath = `/home/u/.claude/projects/proj/${predUuid}.jsonl`;
+  const predUuid = "22222222-2222-0333-8444-555555555555";
+  const predPath = `/fixture/.claude/projects/proj/${predUuid}.jsonl`;
   writeSessionTitle([`uuid:claude:${predUuid}`], `uuid:claude:${predUuid}`, "Kept", undefined, "t1");
 
   // The current target owns that predecessor path; the rename must find and

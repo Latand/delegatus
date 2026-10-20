@@ -662,6 +662,10 @@ export type PipelineStageAttempt = {
       without this count left behind starts it past every id that engine
       could have spent (#1678 review 3). */
   spawnCalls?: number;
+  /** After a privacy revision conflict, require two stable revision
+      observations across persisted ticks before composing again. */
+  roleMemoryWait?: { revision: string; observations: number; retryAfter: string; ready?: boolean };
+  roleMemoryFailures?: number;
   /** Launches this attempt reserved and then retired because their receipt
       settled `failed` before any host ran them (#1678): the runtime host was
       unreachable or the account mutation lock was busy. The receipt's own
@@ -1082,6 +1086,8 @@ export type Pipeline = {
       from them, and a key built on the timestamp is what lets a second pause
       after a resume be a genuinely new event instead of a replay of the first. */
   pausedAt?: string | null;
+  /** Last pause's reason, condition and server-attributed author. Legacy pauses have none. */
+  pause?: import("./pauseMetadata").PipelinePause;
   resumedAt?: string | null;
   /** Durable control token: even same-clock pause/resume cancels old work. */
   controlGeneration?: string;
@@ -1333,6 +1339,8 @@ export type PatchPipelineRequest = {
   /** set-delivery-remote: configured Git remote name, default origin; fills an empty target only. */
   remote?: string;
   reason?: string;
+  /** pause only: a date or a cached account usage window below a percentage. */
+  resumeCondition?: import("./pauseMetadata").PipelineResumeCondition;
   action: PipelineAction;
   applyNow?: boolean;
   /** Board task used by link-task and unlink-task. */

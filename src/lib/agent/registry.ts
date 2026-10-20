@@ -1,6 +1,6 @@
 import { agentSignalDomainAlive, normalizeAgentSignalDomain, normalizeSignalBoundaryOff, type AgentSignalDomain, type SignalBoundaryOff } from "@/lib/runtime/agentSignalSandbox";
 import { liveRootSession } from "@/lib/root/adopt";
-import { StateLockDeferredError, waitForStateLock } from "@/lib/state/lockWait";
+import { StateLockDeferredError, stateLockDeferral, waitForStateLock } from "@/lib/state/lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { normalizeHostMemory, type HostMemoryState } from "@/lib/runtime/agentMemoryState";
@@ -2537,13 +2537,15 @@ function canonicalHeldDeliveryCommand(
   const origin = parseMessageOrigin(value?.origin);
   if (origin) command.origin = origin;
   if (typeof value?.cohortAt === "string" && Number.isFinite(Date.parse(value.cohortAt))) command.cohortAt = value.cohortAt;
+  if (typeof value?.roleMemoryRevision === "string" && /^[a-f0-9]{64}$/.test(value.roleMemoryRevision)
+    && command.operationId.startsWith("spawn_message_")) command.roleMemoryRevision = value.roleMemoryRevision;
   return command;
 }
 
 function heldDeliveryRequestDigest(
   conversationId: ViewerConversationId,
   text: string,
-  command: Pick<HeldDeliveryCommand, "kind" | "policy" | "turnId" | "onlyIfIdle">,
+  command: Pick<HeldDeliveryCommand, "kind" | "policy" | "turnId" | "onlyIfIdle" | "roleMemoryRevision">,
 ): string {
   const turnFence = command.turnId === undefined
     ? ["absent"]
@@ -2556,6 +2558,7 @@ function heldDeliveryRequestDigest(
     command.policy,
     turnFence,
     ...(command.onlyIfIdle ? [["idle", command.onlyIfIdle.revision, command.onlyIfIdle.writerClaim]] : []),
+    ...(command.roleMemoryRevision ? [["role-memory-revision", command.roleMemoryRevision]] : []),
   ])).digest("hex");
 }
 
@@ -2677,6 +2680,12 @@ function terminalDeliveryState(
 }
 
 const OPERATOR_DISCARDED_DELIVERY_REASON = "delivery-discarded";
+
+function discardableDeliveryFailure(error: string | null, disposition: DeliveryTerminalDisposition | null,
+  reason = OPERATOR_DISCARDED_DELIVERY_REASON): boolean {
+  return error === reason || disposition === "unverified" || (disposition === null
+    && !error?.startsWith(MIGRATION_DELIVERY_CANCELLATION_PREFIX));
+}
 
 function terminalDeliveryFailureIsAbsorbing(delivery: HeldDelivery): boolean {
   return delivery.state === "failed"
@@ -5665,6 +5674,18 @@ export class AgentRegistry {
     return written.value;
   }
 
+  /** A synchronous multi-mutation callback keeps the admitted SQLite writer
+   * through every member. Successful members retain their ordinary failure
+   * semantics if a later member throws; the callback is never retried. */
+  async deliveryWriteBatchOrBusy<T>(correlation: { label: string; operationId?: string | null }, write: () => T): Promise<T> {
+    return this.deliveryWriteOrBusy(correlation, () => this.withMutationBatch(write));
+  }
+
+  private withMutationBatch<T>(write: () => T): T {
+    return this.sqliteMode === "read" || this.sqliteMode === "sqlite"
+      ? this.sqliteStore!.withMutationBatch(write) : write();
+  }
+
   /**
    * {@link deliveryWrite} for a caller that may not wait at all, because it
    * runs inside another synchronous lock (account retirement holds the
@@ -6028,7 +6049,7 @@ export class AgentRegistry {
   spawnEvidence(launchId: string): {
     receipt: SpawnReceipt | null;
     generation: { engine: AgentEngine; id: string; path: string } | null;
-    entry: Pick<AgentRegistryEntry, "artifactPath" | "structuredHostOperationId"> | null;
+    entry: Pick<AgentRegistryEntry, "artifactPath" | "structuredHostOperationId" | "status" | "claimOwner" | "structuredHost" | "structuredTerminationSurvivors"> | null;
     structured: boolean;
   } {
     return this.readKeyed(file => {
@@ -6040,7 +6061,9 @@ export class AgentRegistry {
       return {
         receipt: clone(receipt),
         generation: conversation && generation ? { engine: conversation.engine, id: generation.id, path: generation.path } : null,
-        entry: entry ? { artifactPath: entry.artifactPath, structuredHostOperationId: entry.structuredHostOperationId } : null,
+        entry: entry ? { artifactPath: entry.artifactPath, structuredHostOperationId: entry.structuredHostOperationId,
+          status: entry.status, claimOwner: entry.claimOwner, structuredHost: entry.structuredHost,
+          structuredTerminationSurvivors: entry.structuredTerminationSurvivors } : null,
         structured: !!entry?.structuredHost || typeof entry?.structuredHostOperationId === "string",
       };
     });
@@ -6319,6 +6342,7 @@ export class AgentRegistry {
     if (!written.acquired) throw new RegistryWriterBusyError(`${caller} admission`);
     const result = written.value;
     if (result.kind === "created" || result.kind === "replay") {
+      await new Promise<void>(resolve => setImmediate(resolve));
       // Reservation is durable. Retry only its idempotent prerequisite, with
       // no registry writer held while the task store takes its own writer.
       const admission = await waitForStateLock(`${caller}.membership`, async () => {
@@ -6333,6 +6357,7 @@ export class AgentRegistry {
         }
       }, { waitMs: remaining(), subject: result.receipt.launchId });
       if (admission.ok) {
+        await new Promise<void>(resolve => setImmediate(resolve));
         const recorded = await this.accountMutationWrite(`${caller} membership record`, () => {
           this.recordSpawnMembership(result.receipt, admission.taskIds);
         }, guard, { waitMs: remaining() });
@@ -6348,6 +6373,11 @@ export class AgentRegistry {
     operationId?: string | null;
     correlate?: (value: T) => BlockingWaitCorrelation | null;
     waitMs?: number;
+    /** Mixed account/state writers share state.sqlite with this registry.
+     * Probe first, then release SQLite before their callback; account custody
+     * remains held and every registry mutation still makes a zero-wait probe.
+     * These callbacks must roll back or be idempotent on a deferred write. */
+    releaseBeforeWrite?: boolean;
   } = {}): Promise<{ acquired: true; value: T } | { acquired: false }> {
     const inherited = accountMutationHeld();
     const startedAt = performance.now();
@@ -6360,20 +6390,34 @@ export class AgentRegistry {
       const deadline = performance.now() + remainingMs;
       try {
         for (;;) {
-          const result = await withAccountMutationLockAsync(() => {
-            guard?.();
-            // Publish one correlated wait after admission supplies its operation
-            // id; individual failed probes are part of this same wait.
-            return this.deliveryWriteNow(correlation, () => { acquiredAt = performance.now(); refused = false; return write(); }, { recordRefusal: false });
-          }, {
-            holder: label, caller: label,
-            waitMs: Math.min(ACCOUNT_MUTATION_ADMISSION_WAIT_MS, Math.max(0, deadline - performance.now())),
-          });
+          let result: { acquired: true; value: T } | { acquired: false };
+          try {
+            result = await withAccountMutationLockAsync(() => {
+              guard?.();
+              // Publish one correlated wait after admission supplies its operation
+              // id; individual failed probes are part of this same wait.
+              const invoke = () => { acquiredAt = performance.now(); refused = false; return write(); };
+              if (options.releaseBeforeWrite) {
+                const probe = this.deliveryWriteNow(correlation, () => undefined, { recordRefusal: false });
+                return probe.acquired ? { acquired: true, value: withWaitCorrelation(correlation, invoke) } : probe;
+              }
+              return this.deliveryWriteNow(correlation, invoke, { recordRefusal: false });
+            }, {
+              holder: label, caller: label,
+              waitMs: Math.min(ACCOUNT_MUTATION_ADMISSION_WAIT_MS, Math.max(0, deadline - performance.now())),
+            });
+          } catch (error) {
+            const registryBusy = error instanceof RegistryWriterBusyError
+              || (error instanceof Error && (error as { code?: string }).code === "SQLITE_BUSY");
+            if (!options.releaseBeforeWrite || !(registryBusy || error instanceof AccountMutationBusyError || stateLockDeferral(error))) throw error;
+            result = { acquired: false };
+          }
           if (result.acquired) {
             correlation = options.correlate?.(result.value) ?? correlation;
             return result;
           }
           refused = true;
+          acquiredAt = undefined;
           if (inherited || performance.now() >= deadline) return result;
           waited = true;
           await new Promise<void>(resolve => setTimeout(resolve, 5));
@@ -6383,13 +6427,13 @@ export class AgentRegistry {
           durationMs: (acquiredAt ?? performance.now()) - startedAt, correlation, subject: "agent-registry", refused });
       }
     };
-    if (inherited) return run(totalWaitMs);
-    return this.withWriterAdmissionQueue(run, totalWaitMs, () => {
+    if (inherited) return withViewerOperation("registry.write", () => run(totalWaitMs));
+    return withViewerOperation("registry.write", () => this.withWriterAdmissionQueue(run, totalWaitMs, () => {
       refused = true;
       recordBlockingWait({ site: "registry-lock-async", synchronous: false,
         durationMs: performance.now() - startedAt, correlation, subject: "agent-registry", refused: true });
       return { acquired: false };
-    });
+    }));
   }
 
   private reserveSpawnRequest(input: SpawnRequest): SpawnBeginResult {
@@ -11185,8 +11229,16 @@ export class AgentRegistry {
       const settled = outcomes.map((outcome) => {
         const canonicalId = resolveConversationAlias(file, outcome.conversationId);
         const delivery = deliveries.get(keyFor(canonicalId, outcome.operationId));
+        const discarded = outcome.state === "failed" && outcome.error === OPERATOR_DISCARDED_DELIVERY_REASON;
         if (!delivery) {
           const owner = file.deliveryOperationOwners[outcome.operationId];
+          if (discarded && owner && resolveConversationAlias(file, owner.conversationId) === canonicalId
+            && owner.terminalState === "failed"
+            && discardableDeliveryFailure(owner.terminalReason, owner.terminalDisposition)) {
+            owner.terminalReason = OPERATOR_DISCARDED_DELIVERY_REASON;
+            owner.terminalDisposition = "unverified";
+            owner.evidenceText = "";
+          }
           if (owner && resolveConversationAlias(file, owner.conversationId) === canonicalId
             && outcome.state === "delivered" && outcome.disposition === "delivered"
             && owner.terminalState === "failed" && owner.terminalDisposition === "unverified"
@@ -11203,17 +11255,29 @@ export class AgentRegistry {
         const retryRecovered = delivery.state === "failed"
           && outcome.state === "delivered"
           && !terminalDeliveryFailureIsAbsorbing(delivery);
-        if (delivery.state !== "delivery-uncertain" && !retryRecovered) return null;
+        const discardRecovered = discarded && (delivery.state === "held" || delivery.state === "assigned"
+          || (delivery.state === "failed" && discardableDeliveryFailure(delivery.error,
+            file.deliveryOperationOwners[outcome.operationId]?.terminalDisposition ?? null)));
+        if (delivery.state !== "delivery-uncertain" && !retryRecovered && !discardRecovered) return null;
         const conversation = file.conversations[canonicalId];
         const paths = new Set([conversation?.generations.at(-1)?.path].filter((pathname): pathname is string => Boolean(pathname)));
         const signature = conversation ? migrationReadinessSignature(file, conversation.engine, paths) : "";
         delivery.state = outcome.state;
         delivery.deliveredAt = outcome.state === "delivered" ? now() : null;
         delivery.error = outcome.error?.slice(0, 240) ?? null;
+        if (discarded) {
+          delivery.text = "";
+          delivery.generationId = null;
+          delivery.assignedAt = null;
+        }
         if (outcome.state === "delivered") delivery.text = "";
         if (outcome.state === "failed") failInitialSpawnReceiptForDelivery(file, delivery);
         if (conversation) advanceMigrationScopeRevision(file, conversation.engine, signature, paths);
         syncDeliveryOperationOwnerState(file, delivery, outcome.disposition);
+        if (discarded) {
+          const owner = file.deliveryOperationOwners[outcome.operationId];
+          if (owner) owner.evidenceText = "";
+        }
         if (outcome.state === "delivered") recordDeliveryRoute(deliveryOwner(file, delivery), outcome.route);
         compactConversations.add(delivery.conversationId);
         return clone(delivery);
@@ -11304,13 +11368,10 @@ export class AgentRegistry {
       // is the durable record in that case; there is no reservation to mutate.
       // An explicit unverified disposition also covers account switches after
       // an attempt; the migration reason alone cannot establish a known loss.
-      const discardableFailure = (error: string | null, terminalDisposition: DeliveryTerminalDisposition | null) =>
-        error === reason || terminalDisposition === "unverified" || (terminalDisposition === null
-          && !error?.startsWith(MIGRATION_DELIVERY_CANCELLATION_PREFIX));
       if (!delivery) {
         if (owner && resolveConversationAlias(file, owner.conversationId) === canonicalId
           && owner.terminalState === "failed"
-          && discardableFailure(owner.terminalReason, owner.terminalDisposition)) {
+          && discardableDeliveryFailure(owner.terminalReason, owner.terminalDisposition, reason)) {
           owner.terminalReason = reason.slice(0, 240);
           owner.terminalDisposition = disposition;
           owner.settledAt = now();
@@ -11325,7 +11386,7 @@ export class AgentRegistry {
         || delivery.state === "assigned"
         || delivery.state === "delivery-uncertain"
         || (delivery.state === "failed"
-          && discardableFailure(delivery.error, owner?.terminalDisposition ?? null));
+          && discardableDeliveryFailure(delivery.error, owner?.terminalDisposition ?? null, reason));
       if (!discardable) return null;
       const conversation = file.conversations[canonicalId];
       const paths = new Set([conversation?.generations.at(-1)?.path]

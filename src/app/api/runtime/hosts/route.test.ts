@@ -72,6 +72,47 @@ function post(body: unknown, headers: Record<string, string> = {}): NextRequest 
   });
 }
 
+test("operator termination awaits captured-tree persistence while a child holds the registry writer", async () => {
+  const { registryLockHolder } = await import("@/lib/agent/registryLockHolderFixture");
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "runtime-host-capture-wait-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const tree = spawnFixtureTree();
+  const identity = captureProcessIdentity(tree.pid);
+  const sessionId = ["22222222", "2222", "4222", "8222", "222222222222"].join("-");
+  registry.upsert({ key: { engine: "claude", sessionId }, artifactPath: `/sessions/${sessionId}.jsonl`, cwd: "/repo", accountId: null,
+    status: "idle", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
+    structuredHost: { kind: "claude-broker", endpoint: "stdio:fixture", process: identity, eventCursor: 0, protocolVersion: "1",
+      writerClaimEpoch: 0, activeTurnRef: null, pendingAttention: [], activeFlags: [] } });
+  registryModule.setAgentRegistryForTests(registry);
+  const target = `structured:pid:${tree.pid}`;
+  noteSessionTargets([{ target, ref: ref({ pid: tree.pid, startIdentity: tree.startIdentity, sessionId }) }]);
+  const holder = registryLockHolder(path.join(directory, "registry.sqlite"));
+  let waitSample: Promise<number> | null = null;
+  const record = registry.recordStructuredTerminationSurvivors.bind(registry);
+  // This method sits just after census on the old path, and after async writer
+  // admission on the fixed path; the timer therefore isolates the lock wait.
+  const writerObservation = spyOn(registry, "recordStructuredTerminationSurvivors").mockImplementation((...args) => {
+    const startedAt = performance.now();
+    waitSample = new Promise(resolve => {
+      setTimeout(() => resolve(performance.now() - startedAt), 5);
+    });
+    return record(...args);
+  });
+  try {
+    await holder.hold(1_500);
+    const startedAt = performance.now();
+    const response = await POST(post({ action: "kill", target, intent: "row" }));
+    expect(waitSample).not.toBeNull();
+    expect(await waitSample!).toBeLessThan(50);
+    expect(performance.now() - startedAt).toBeLessThan(1_800);
+    expect(response.status).toBe(200);
+    expect(registry.readOnlySnapshot().entries[`claude:${sessionId}`]).toMatchObject({ status: "dead", claimOwner: null });
+  } finally {
+    writerObservation.mockRestore(); await holder.close(); registryModule.setAgentRegistryForTests(null); registry.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 afterEach(async () => {
   for (const identity of ownedIdentities.splice(0)) signalFixtureIdentity(identity, "SIGKILL");
   for (const child of fixtures.splice(0)) await stopFixtureTree(child);

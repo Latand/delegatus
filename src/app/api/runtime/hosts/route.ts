@@ -71,14 +71,19 @@ export async function POST(req: NextRequest): Promise<NextResponse<KillResponse 
   const refusal = structuredHostKillRefusal(ref, intent, body.includeSeat === true);
   if (refusal) return NextResponse.json({ error: refusal.error }, { status: refusal.status });
 
+  const key = ref.sessionId === null ? null : { engine: ref.engine, sessionId: ref.sessionId };
+  const observed = key ? agentRegistry().readOnlySnapshot().entries[sessionKeyId(key)] : null;
   const outcome = await terminateStructuredHostTree(ref, {
-    retainedSurvivors: ref.sessionId === null ? [] : agentRegistry().readOnlySnapshot()
-      .entries[sessionKeyId({ engine: ref.engine, sessionId: ref.sessionId })]?.structuredTerminationSurvivors ?? [],
-    persistCapturedTree: identities => ref.sessionId === null || agentRegistry().recordStructuredTerminationSurvivors(
-      { engine: ref.engine, sessionId: ref.sessionId },
-      { pid: ref.pid, startIdentity: ref.startIdentity, bootEpoch: ref.bootEpoch },
-      identities,
-    ),
+    retainedSurvivors: observed?.structuredTerminationSurvivors ?? [],
+    persistCapturedTree: identities => ref.sessionId === null || agentRegistry().deliveryWriteOrBusy({ label: "registry.operator-stop-capture" }, () => {
+      if (structuredHostKillRefusal(ref, intent, body.includeSeat === true)) return false;
+      const current = agentRegistry().readOnlySnapshot().entries[sessionKeyId(key!)];
+      if (!current || current.claimOwner !== observed?.claimOwner || current.claimEpoch !== observed?.claimEpoch
+        || current.structuredHost?.writerClaimEpoch !== observed?.structuredHost?.writerClaimEpoch) return false;
+      return agentRegistry().recordStructuredTerminationSurvivors(
+        key!, { pid: ref.pid, startIdentity: ref.startIdentity, bootEpoch: ref.bootEpoch }, identities,
+      );
+    }),
   });
   if (!outcome.ok) {
     /* A stale target names a pid the kernel has moved on from: its authority

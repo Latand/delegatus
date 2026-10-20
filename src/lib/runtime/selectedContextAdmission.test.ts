@@ -138,13 +138,13 @@ test("a malformed durable reference is dropped, and the message is still deliver
   expect(entries[0]!.content?.text).toBe("Look at that one.");
 });
 
-test("the record the host writes carries the reference on the canonical marker", () => {
+test("the record the host writes carries the reference on the canonical marker", async () => {
   const normalized = normalizeQueueEntry({
     id: "op-one",
     text: "Look at that one.",
     selectedContext: REFERENCE,
   });
-  const record = encodeCodexStructuredUserText(normalized.content.text, undefined, normalized.selectedContext);
+  const record = await encodeCodexStructuredUserText(normalized.content.text, undefined, normalized.selectedContext);
   expect(decodeCodexStructuredUserText(record)).toEqual({
     text: "Look at that one.",
     structured: true,

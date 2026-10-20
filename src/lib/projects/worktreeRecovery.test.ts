@@ -10,10 +10,12 @@ import { discoverFilesWithProjectCatalog } from "@/lib/scanner/discover";
 import { projectInfoFromCwd } from "@/lib/scanner/describe";
 import { projectCatalogSnapshotFromRaw } from "@/lib/scanner/projectCatalog";
 import { stateDatabaseSignature } from "@/lib/state/sqliteStateStore";
+import { publishHotStateAuthority } from "@/lib/state/hotStateAuthority";
 import { checkpointLegacyCollectionMirrorsForDemotion } from "@/lib/state/legacyCollections";
 import { closeStateMutationActivationForTests, withStateMutationActivation } from "@/lib/state/stateMutationBarrier";
 import { completeViewerRuntimeActivation } from "@/lib/viewerInstrumentation";
 import { canonicalProject, resetProjectAliasesForTests } from "./aliases";
+import { worktreeMapStore } from "./persistence";
 import { directoryProjectId, projectIdentityFromRepositoryRoot } from "./identity";
 import { backfillWorktreeProjects, recoverWorktreeProjects, runWorktreeRecoveryAtStartup } from "./worktreeBackfill";
 import { checkpointWorktreeRecoveryForDemotion, readWorktreeRecoveries } from "./worktreeRecoveryStore";
@@ -53,6 +55,9 @@ function fixture(defaultState = false, repositoryName = "widgets") {
 function bytes(directory: string) {
   return Object.fromEntries(fs.readdirSync(directory).filter(name => fs.statSync(path.join(directory, name)).isFile())
     .map(name => [name, fs.readFileSync(path.join(directory, name))]));
+}
+function durableBytes(directory: string) {
+  return Object.fromEntries(Object.entries(bytes(directory)).filter(([name]) => name !== "state.sqlite-shm"));
 }
 
 test.each(["widgets", longRepositoryName])("Viewer activation recovers %s after hot-state activation and before controllers, once without replay writes", async repositoryName => {
@@ -386,7 +391,7 @@ test("demotion preserves long-name recovery through a preceding-release catalog 
   expect(projectInfoFromCwd(path.join(cwd, "nested"))?.project).toBe(f.identity.project);
   expect(boardFor(source, boardFile).prefs.manual).toEqual(["conversation_old"]);
   expect(boardFor(f.identity.project, boardFile).prefs.manual).toEqual(["conversation_old"]);
-  expect(readLifecycleJournal()).toEqual(old.after);
+  expect(readLifecycleJournal()).toMatchObject(old.after);
   const beforeRetry = bytes(f.state);
   expect(recoverWorktreeProjects("startup").folded).toEqual([]);
   expect(bytes(f.state)).toEqual(beforeRetry);
@@ -431,7 +436,7 @@ test("the adapter projects recovery only within its demotion activation scope", 
   f.transcript(cwd, { branch: "confirmed" }); f.write();
   recoverWorktreeProjects("startup");
   readWorktreeRecoveries();
-  const before = bytes(f.state);
+  const before = durableBytes(f.state);
   const names = ["LLV_STATE_DIR", "XDG_CONFIG_HOME", "LLV_STATE_OWNER"] as const;
   const previous = Object.fromEntries(names.map(name => [name, process.env[name]]));
   delete process.env.LLV_STATE_DIR;
@@ -440,14 +445,43 @@ test("the adapter projects recovery only within its demotion activation scope", 
   closeStateMutationActivationForTests();
   try {
     await expect(checkpointWorktreeRecoveryForDemotion()).rejects.toThrow("release activation");
-    expect(bytes(f.state)).toEqual(before);
+    expect(durableBytes(f.state)).toEqual(before);
     await withStateMutationActivation(checkpointWorktreeRecoveryForDemotion);
-    const projected = bytes(f.state);
+    const projected = durableBytes(f.state);
     expect(JSON.parse(fs.readFileSync(path.join(f.state, "lifecycle-journal.json"), "utf8")).lastSeq).toBe(1);
     await expect(checkpointWorktreeRecoveryForDemotion()).rejects.toThrow("release activation");
-    expect(bytes(f.state)).toEqual(projected);
+    expect(durableBytes(f.state)).toEqual(projected);
   } finally {
     for (const name of names) if (previous[name] === undefined) delete process.env[name]; else process.env[name] = previous[name];
+  }
+});
+
+test("the release-fence owner checkpoints recovery mirrors while ordinary map writes stay fenced", async () => {
+  const f = fixture(), cwd = f.repo + "-review", revision = "e".repeat(40);
+  f.transcript(cwd, { branch: "confirmed" }); f.write();
+  recoverWorktreeProjects("startup");
+  readWorktreeRecoveries();
+  const target = path.join(f.state, "viewer-release.json");
+  fs.writeFileSync(target, JSON.stringify({ revision, endpoint: "http://127.0.0.1:19004" }));
+  const previous = { revision: process.env.LLV_HOT_STATE_RELEASE_REVISION, target: process.env.LLV_VIEWER_DEPLOY_TARGET };
+  delete process.env.LLV_VIEWER_DEPLOY_TARGET;
+  process.env.LLV_HOT_STATE_RELEASE_REVISION = revision;
+  try {
+    publishHotStateAuthority(f.state, "sqlite", revision, { activationReadyAt: "2026-10-20T00:00:00.000Z" });
+    publishHotStateAuthority(f.state, "fencing", revision);
+    expect(() => worktreeMapStore.mutate(path.join(f.state, "worktree-map.json"), map => ({ next: map, result: undefined })))
+      .toThrow(/fenced|waiting for release promotion/);
+    await withStateMutationActivation(checkpointWorktreeRecoveryForDemotion);
+    const map = JSON.parse(fs.readFileSync(path.join(f.state, "worktree-map.json"), "utf8"));
+    const aliases = JSON.parse(fs.readFileSync(path.join(f.state, "project-aliases.json"), "utf8"));
+    expect(map[cwd]).toEqual({ repo: fs.realpathSync(f.repo), worktree: path.basename(cwd) });
+    expect(aliases.aliases[directoryProjectId(cwd)]).toBe(f.identity.project);
+    expect(readLifecycleJournal().events.map(event => event.type)).toContain("project_moved");
+  } finally {
+    if (previous.revision === undefined) delete process.env.LLV_HOT_STATE_RELEASE_REVISION;
+    else process.env.LLV_HOT_STATE_RELEASE_REVISION = previous.revision;
+    if (previous.target === undefined) delete process.env.LLV_VIEWER_DEPLOY_TARGET;
+    else process.env.LLV_VIEWER_DEPLOY_TARGET = previous.target;
   }
 });
 

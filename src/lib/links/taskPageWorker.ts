@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { stateDir } from "@/lib/configDir";
 import { leasedHelperInput, spawnLeasedHelper, unrefLeasedHelper } from "@/lib/helperLease";
-import { storedLessonRevision } from "@/lib/memory/roleStore";
+import { RoleMemoryRefusal, storedLessonRevision } from "@/lib/memory/roleStore";
 import { lastScannedFiles } from "@/lib/scanner/scanCache";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import type { FeedFilter, FeedFiles, ScanPage, LogPage, Position } from "./taskFeed";
@@ -48,7 +48,7 @@ export class TaskPageWorker {
   }
   private submit(request: PageRequest | PrivacyRequest, filter?: FeedFilter): Promise<WorkResult> {
     if (this.jobs.size >= 16) return Promise.reject(unavailable());
-    return withViewerOperation(filter ? "links.task-export" : "memory.privacy.worker", () => performanceSpans.wait("privacy.worker", () => new Promise<WorkResult>((resolve, reject) => {
+    return withViewerOperation(filter ? "links.task-export" : request.kind === "curation-undo" ? "memory.import.curation" : "memory.privacy.worker", () => performanceSpans.wait("privacy.worker", () => new Promise<WorkResult>((resolve, reject) => {
       let complete!: () => void;
       const completed = new Promise<void>(done => { complete = done; });
       const job: Job = { id: ++this.nextId, settled: false, finish: (error, result) => {
@@ -138,6 +138,9 @@ export class TaskPageWorker {
             this.runtime.onPhase?.(phase);
             void withViewerOperation(`memory.privacy.${phase}`, () => performanceSpans.wait(`privacy.${phase}`, () => new Promise<void>(done => { job.phaseDone = done; })));
             continue;
+          }
+          if (frame.curationRefusal === "CURATE_LIVE" || frame.curationRefusal === "CURATE_INVALID") {
+            job.finish(new RoleMemoryRefusal(frame.curationRefusal, frame.curationRefusal === "CURATE_LIVE" ? "only a completed curator pass can be undone" : "pass version is unavailable")); continue;
           }
           if (frame.error || !frame.result || typeof frame.result.privacyRevision !== "string"
             || !(frame.result.page || Object.hasOwn(frame.result, "value"))) throw unavailable();

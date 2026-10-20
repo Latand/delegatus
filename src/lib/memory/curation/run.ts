@@ -8,7 +8,7 @@ import { roleMemoryEnabled } from "../settings";
 import { withSystemRunTask } from "@/lib/tasks/systemRun";
 import { curatorBrief } from "./brief";
 import { admissionHeld, hostAdmission, settle, type CurationAdmissionPorts } from "./admission";
-import { claimPass, curationStatus, currentPass, machinePass, patchPass, readPass, passIsLive, type CuratorPass } from "./store";
+import { claimPass, curationStatus, currentPassAuthority, machinePassAuthority, patchPass, readPassAuthority, passIsLive, type CuratorPass } from "./store";
 
 const LAUNCH_GRACE_MS = 15 * 60_000;
 const TURN_LIMIT_MS = 60 * 60_000;
@@ -28,7 +28,7 @@ async function launch(pass: CuratorPass, ports: CurationPorts): Promise<string |
   const held = admissionHeld(pass.project, ports); if (held) return held;
   if (!pass.repoDir) return settle(pass, ports, "no-repository");
   if (!pass.launchBody) pass = patchPass(pass.id, { state: "launching", launchBody: { role: "curator", roleParams: {}, project: pass.project, cwd: pass.repoDir, prompt: curatorBrief(pass.project), title: "Role memory curation", clientAttemptId: pass.id, mcpServers: ["viewer"], notifyLauncher: false } })!;
-  const fresh = readPass(pass.id);
+  const fresh = readPassAuthority(pass.id);
   if (!fresh || !passIsLive(fresh)) return null;
   const launchBody = await withSystemRunTask(pass.launchBody!, new Date(ports.sources.now()).toISOString());
   const heldAgain = admissionHeld(pass.project, ports); if (heldAgain) return heldAgain;
@@ -38,7 +38,7 @@ async function launch(pass: CuratorPass, ports: CurationPorts): Promise<string |
     const ineligible = host.guard();
     if (ineligible) { settle(pass, ports, `abandoned: ${ineligible}`); throw Error(`curation admission held: ${ineligible}`); }
     if (admissionHeld(pass.project, ports)) throw Error("curation admission held");
-    if (machinePass()?.id !== pass.id || !passIsLive(readPass(pass.id))) throw Error("curation pass ended");
+    if (machinePassAuthority()?.id !== pass.id || !passIsLive(readPassAuthority(pass.id))) throw Error("curation pass ended");
   };
   const response = await Promise.race([
     (ports.launch ?? launchAutonomousConversation)(launchBody, authorize),
@@ -46,7 +46,7 @@ async function launch(pass: CuratorPass, ports: CurationPorts): Promise<string |
   ]).finally(() => { if (timer) clearTimeout(timer); });
   const ineligibleAfterLaunch = host.guard();
   if (ineligibleAfterLaunch) return settle(pass, ports, `abandoned: ${ineligibleAfterLaunch}`);
-  if (!passIsLive(readPass(pass.id))) return null;
+  if (!passIsLive(readPassAuthority(pass.id))) return null;
   if (!response) return "curation: launch pending";
   if (response.body.code === "AUTO_UPDATE_DRAIN") {
     patchPass(pass.id, { launchedAt: null }); return "curation: held for the automatic update";
@@ -57,7 +57,7 @@ async function launch(pass: CuratorPass, ports: CurationPorts): Promise<string |
 }
 export async function reconcileCuration(project: string, ports: CurationPorts): Promise<string | null> {
   // Every sweep checks the incumbent's own host project before recovery.
-  let pass = machinePass() ?? currentPass(project);
+  let pass = machinePassAuthority() ?? currentPassAuthority(project);
   if (!pass || !passIsLive(pass)) return null;
   const host = await hostAdmission(pass.project, ports);
   if (host.held !== null) return settle(pass, ports, `abandoned: ${host.held}`);

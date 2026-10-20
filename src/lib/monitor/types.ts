@@ -252,12 +252,15 @@ export interface SeatTickWakeReason {
 
 /** One line of the wake's body. Bounded and structural — never transcript text. */
 export interface SeatTickItem {
+  reminderKind?: "task" | "pause";
   occurredAt?: string | null;
   /** Journal identity of a merge this visible line announces on delivery. */
   mergeEventSeq?: number;
   diskPressureEpisode?: string;
   /** Version credited only by delivery of this visible item. */
   itemVersion?: string;
+  /** Other agenda versions this same visible line also fulfills. */
+  creditVersions?: string[];
   outcomeId?: string;
   /** Every owed outcome this ONE line stands for (#1783). A child's outcome
       identity is a turn of a ledger generation, so a worker the seat spawned
@@ -507,6 +510,11 @@ export interface SeatTickSeatInput {
  * running stage holds is still progressing.
  */
 export interface SeatTickPipelineInput {
+  pausedAt?: string | null;
+  pauseGeneration?: string;
+  pause?: import("@/lib/pipelines/pauseMetadata").PipelinePause;
+  /** True only from a fresh cached observation; unknown remains unproven. */
+  pauseConditionMet?: boolean;
   id: string;
   title: string;
   /** `terminal` closed or completed, `inert` parked, `active` otherwise. */
@@ -518,16 +526,19 @@ export interface SeatTickPipelineInput {
       stage, or null when no stage is running or the plane had no answer. */
   stageActivity: SeatTickActivity | null;
   stageId: string | null;
+  /** Durable stage progress, independent of its movement timestamp. */
+  stageState?: string | null;
+  stageAttemptState?: string | null;
   /** Attempt identity observed with stage liveness; refreshed sources must match it. */
   stageAttempt?: string | null;
   /**
    * Who paused the lane, read off its pause record (#2063); absent when it is
    * not paused. `seat` is the seat this check is about: a lane it paused, for a
-   * deploy or anything else, is owed work until it is resumed. Its first wake
-   * and each later deploy settlement list it. `operator` is excluded from the seat's work altogether: the
+   * deploy or anything else, is owed work until it is resumed. A met condition,
+   * an unconditioned pause's bound, or a deploy settlement lists it.
+   * `operator` is excluded from the seat's work altogether: the
    * operator stopped it, and only the operator's resume starts it again.
-   * `other` is anyone else, a predecessor seat among them, and is read as any
-   * parked lane is.
+   * `other` includes predecessor seats; their pauses use the same reminder bound.
    */
   pausedBy?: "seat" | "operator" | "other";
 }
@@ -600,12 +611,16 @@ export interface SeatTickOwnLaneInput {
 }
 
 export interface SeatTickTaskInput {
+  /** Explicitly chosen work, including a submitted continuation. */
+  accepted?: boolean;
+  waitingSince?: string;
+  hold?: import("@/lib/tasks/types").TaskHold;
   id: string;
   title: string;
   status: "inbox" | "assigned" | "blocked" | "done";
-  /** A linked pipeline or a live assignment already owns it. */
+  /** An open lane owns accepted work; legacy tasks also count assignments. */
   owned: boolean;
-  /** When the card last moved. An assigned card nobody started is only an
+  /** When the card last moved. A legacy assigned card nobody started is only an
       unstarted TASK while this is recent; past the backlog bound it is
       backlog, and a wake reason nothing can discharge (#1262). Because it
       decides that, it is also part of the change fingerprint: moving the card
@@ -881,6 +896,8 @@ export interface SeatTickWakeCommit {
   wakeIntervalMs?: number;
   catchUp?: { key: string; from: string; through: string; covers: string[] };
   diskPressure?: { episode: string; version: string };
+  /** Latest settlement timestamp carried by this delivered deploy agenda. */
+  deployResumeThrough?: string;
   /** Versions of agenda items carried by this frozen delivery plan. */
   itemsShown?: string[];
   /** Stall episodes still active when this wake was decided. */
@@ -1100,6 +1117,8 @@ export interface SeatTickReportsInput {
 
 /** Project tick state; SQLite accounting owns persistence and legacy migration. */
 export interface SeatTickProjectState {
+  /** Last delivered deployment wake's cutoff for draining its pause instructions. */
+  deployResumeThrough?: string;
   /** First identity-checked gone-host observation; cleared by a landed wake. */
   unreachableSince?: string | null;
   /** Last confirmed wake bounding the backlog held for that host loss. */
@@ -1266,11 +1285,11 @@ export interface SeatTickProjectState {
   reportsOwed?: SeatTickReportOwed[];
   /** Owed outcomes dropped past the bound, which the wake states. */
   reportsOwedDropped?: number;
-  /** The newest manager report this tick has observed, and the board
+  /** The newest manager report this tick has observed, and the material
       fingerprint the digest compares against (§5.1). */
   reportSeenAt?: string | null;
   reportFingerprint?: string | null;
-  /** The board fingerprint of the previous check. */
+  /** The digest fingerprint of the previous check (legacy rows: board hash). */
   checkFingerprint?: string | null;
 }
 
@@ -1351,6 +1370,9 @@ export interface SeatTickCheckInput {
    * a {@link SeatTickEvidenceGap} naming what was unreadable.
    */
   pullRequestsUnavailable: SeatTickPullRequestGap | null;
+  /** True only when this check actually verified the PR set. Gated reads keep
+      their prior digest evidence without claiming the set is empty. */
+  pullRequestsObserved?: boolean;
   /** Ephemeral provenance for the gates and lane associations of the PR read. */
   pullRequestEvidenceKey?: string;
   signals: readonly SeatTickSignalInput[];
@@ -1390,6 +1412,10 @@ export interface SeatTickCheckInput {
    * read, and {@link seatTickBoardMoved} is the only thing that interprets it.
    */
   changeFingerprint: string;
+  /** Material board and pull-request changes for digest accounting. Versioned
+      separately from the retry guard, which also observes task timestamps.
+      Absent on legacy inputs: retain their board-half comparison. */
+  digestFingerprint?: string;
   state: SeatTickProjectState;
   policy: SeatTickPolicy;
   /** This project's own tick settings, with their expiry already applied

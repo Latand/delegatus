@@ -284,6 +284,69 @@ function gather(over: Parameters<typeof sources>[0], state: SeatTickProjectState
   return gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, sources(over));
 }
 
+test("gather and refresh retain explicit work and its blocker for the reminder composer", async () => {
+  const hold = { kind: "external", note: "waiting for the upstream release", since: new Date(NOW - DAY_MS).toISOString(), by: "agent" };
+  const task = boardCard({ chosen: true, status: "inbox", hold });
+  const ports = sources({ tasks: [task], pipelines: [] });
+  const gathered = await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  for (const observed of [gathered, refreshSeatTickInput(gathered, ports)]) {
+    expect(observed.tasks[0]).toMatchObject({ accepted: true, hold, waitingSince: task.createdAt });
+    expect(seatTickDecision(observed).verdict.kind).toBe("quiet");
+  }
+  delete task.hold;
+  const refreshed = refreshSeatTickInput(gathered, ports);
+  expect(seatTickDecision(refreshed).verdict.kind).toBe("wake");
+});
+
+test("accepted work is owned only by an open lane, including a hidden open lane", async () => {
+  const task = boardCard({ chosen: true, status: "assigned", assignments: [{ state: "linked", path: null }] });
+  const predecessor = lane({ state: "completed", closedAt: new Date(NOW - DAY_MS).toISOString(), taskIds: [task.id] });
+  const ports = sources({ tasks: [task], pipelines: [predecessor] });
+  const gathered = await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  expect(gathered.tasks[0]!.owned).toBe(false);
+  expect(seatTickDecision(gathered).verdict.kind).toBe("wake");
+  predecessor.state = "running";
+  predecessor.closedAt = null;
+  predecessor.hiddenAt = new Date(NOW).toISOString();
+  const fresh = refreshSeatTickInput(gathered, ports);
+  expect(fresh.tasks[0]!.owned).toBe(true);
+  expect(seatTickDecision(fresh).verdict.kind).toBe("quiet");
+});
+
+test("pause account conditions use fresh cached quota once per engine and refresh after recovery", async () => {
+  const pausedAt = new Date(NOW - 4 * DAY_MS).toISOString();
+  const condition = { kind: "account-usage", engine: "codex", accountId: "fixture", window: "weekly", belowPercent: 80 };
+  const pipelines = ["paused-first", "paused-second"].map(id => lane({ id, state: "paused", pausedAt,
+    pause: { reason: "wait for quota recovery", resumeCondition: condition,
+      actor: { kind: "agent", role: "orchestrator", conversationId: CONVERSATION } } }));
+  const ports = sources({ pipelines });
+  const registry = ports.registry();
+  let reads = 0;
+  const observation = { engine: "codex", accountId: "fixture", authenticated: true,
+    observedAt: new Date(NOW).toISOString(), authCheckedAt: new Date(NOW).toISOString(),
+    provenance: { source: "live" }, limits: { weekly: { usedPercent: 90, resetsAt: null } } };
+  ports.registry = () => ({ ...registry, quotaObservations: () => { reads++; return [observation]; } }) as never;
+  const gathered = await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  expect(reads).toBe(1);
+  expect(gathered.pipelines.every(pipeline => pipeline.pauseConditionMet === false)).toBe(true);
+  expect(seatTickDecision(gathered).verdict.kind).toBe("quiet");
+  observation.limits.weekly.usedPercent = 79;
+  const recovered = refreshSeatTickInput(gathered, ports);
+  expect(reads).toBe(2);
+  expect(recovered.pipelines.every(pipeline => pipeline.pauseConditionMet === true)).toBe(true);
+  expect(seatTickDecision(recovered).verdict.kind).toBe("wake");
+  observation.observedAt = pausedAt;
+  expect(seatTickDecision(refreshSeatTickInput(recovered, ports)).verdict.kind).toBe("quiet");
+  observation.observedAt = new Date(NOW).toISOString();
+  observation.limits.weekly.usedPercent = 80;
+  expect(seatTickDecision(refreshSeatTickInput(recovered, ports)).verdict.kind).toBe("quiet");
+  observation.limits.weekly.usedPercent = 79;
+  observation.engine = "claude";
+  expect(seatTickDecision(refreshSeatTickInput(recovered, ports)).verdict.kind).toBe("quiet");
+  ports.registry = () => ({ ...registry, quotaObservations: () => { throw new Error("cached quota unavailable"); } }) as never;
+  expect(seatTickDecision(refreshSeatTickInput(recovered, ports)).verdict.kind).toBe("quiet");
+});
+
 test("an unrotated seat's next gather reads changed machine and project worker limits", async () => {
   const { setMachineWorkerLimit, setProjectWorkerLimit } = await import("@/lib/operator/workerLimit");
   const ports = sources({});
@@ -1867,7 +1930,7 @@ test("a timed-out Codex wake retains canonical transcript confirmation", async (
   const held = registry.holdDelivery(conversation.id, text, key, "text", [], null, { kind: "send", policy: "queue" });
   registry.beginDeliveryAttempt(held.id, conversation.generations[0]!.id);
   registry.recordDeliveryOutcome(held.id, "failed", "Codex delivery confirmation timed out; outcome is uncertain", "unverified");
-  const wire = encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken(held.command.operationId));
+  const wire = await encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken(held.command.operationId));
   fs.writeFileSync(transcript, JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: wire } }) + "\n");
   const previousSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
   process.env.LLV_RUNTIME_HOST_SOCKET = "";
@@ -2523,7 +2586,7 @@ test("foreign flipping retirement reports never wake an idle project or make its
   ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
   let state: SeatTickProjectState = { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: new Date(NOW - 61 * 60_000).toISOString() };
   const baseline = await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports);
-  state = { ...state, reportFingerprint: baseline.changeFingerprint.split(".")[0], checkFingerprint: baseline.changeFingerprint.split(".")[0] };
+  state = { ...state, reportFingerprint: baseline.digestFingerprint!, checkFingerprint: baseline.digestFingerprint! };
   for (let check = 0; check < 24; check++) {
     ports.now = () => NOW + check * 15 * 60_000;
     ports.retirementReport = () => ({ failed: [], refused: Array.from({ length: 4 + check % 2 }, () => ({
@@ -2544,7 +2607,7 @@ test("non-actionable signal churn and machine-wide retirement stalls leave idle 
     ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
     let state: SeatTickProjectState = { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: new Date(NOW - 61 * 60_000).toISOString(), lastProposalAt: new Date(NOW).toISOString() };
     const baseline = await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports);
-    state = { ...state, reportFingerprint: baseline.changeFingerprint.split(".")[0], checkFingerprint: baseline.changeFingerprint.split(".")[0] };
+    state = { ...state, reportFingerprint: baseline.digestFingerprint!, checkFingerprint: baseline.digestFingerprint! };
     for (let check = 0; check < 24; check++) {
       ports.now = () => NOW + check * 15 * 60_000;
       ports.memoryProblems = () => [{ id: "memory-problem:informational", actionable: false, label: `host retirement: ${4 + check % 2} undetermined at check ${check}` }];
@@ -2566,7 +2629,7 @@ test("an own-project lane change wakes and makes a digest due while signal churn
   ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
   const initial = { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: new Date(NOW - 61 * 60_000).toISOString() };
   const baseline = await gatherSeatTickInput(PROJECT, initial, DEFAULT_SEAT_TICK_POLICY, ports);
-  let state: SeatTickProjectState = { ...initial, reportFingerprint: baseline.changeFingerprint.split(".")[0], checkFingerprint: baseline.changeFingerprint.split(".")[0] };
+  let state: SeatTickProjectState = { ...initial, reportFingerprint: baseline.digestFingerprint!, checkFingerprint: baseline.digestFingerprint! };
   ports.memoryProblems = () => [{ id: "memory-problem:informational", actionable: false, label: "host retirement: 4 undetermined" }];
   pipelines = [lane({ project: "elsewhere", resumedAt: new Date(NOW).toISOString() })];
   const foreign = await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports);
@@ -2582,7 +2645,7 @@ test("an own-project lane change wakes and makes a digest due while signal churn
   expect(decision.verdict.reportLines?.some(line => line.startsWith("Digest due"))).toBe(true);
   // A report covering this board followed by informational churn owes no digest,
   // including during the live lane's normal periodic interval wake.
-  state = { ...decision.state, reportFingerprint: moved.changeFingerprint.split(".")[0] };
+  state = { ...decision.state, reportFingerprint: moved.digestFingerprint! };
   ports.memoryProblems = () => [{ id: "memory-problem:informational", actionable: false, label: "host retirement: 5 undetermined" }];
   ports.now = () => NOW + 2 * 60 * 60_000;
   const unchanged = seatTickDecision(await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports));
@@ -2590,6 +2653,181 @@ test("an own-project lane change wakes and makes a digest due while signal churn
   if (unchanged.verdict.kind !== "wake") throw new Error("live lane keeps its cadence");
   expect(unchanged.verdict.reportLines ?? []).toEqual([]);
   expect(unchanged.verdict.items.some(item => item.id === "memory-problem:informational")).toBe(false);
+});
+
+test.each(["task note edits", "maintenance timestamps", "details appends", "report writes"])("repeated %s owe no digest", async (write) => {
+  let task = boardCard({ status: "inbox" });
+  const ports = sources({ laneRows: [livenessRow({ lifecycle: "running" })] });
+  ports.tasks = () => [task] as never;
+  let reports: { id: string; project: string; at: string; origin: { kind: "manager" } }[] = [];
+  ports.reports = { log: () => reports as never, enabled: () => true, operatorLocale: () => "en" };
+  const baseline = seatTickDecision(await gatherSeatTickInput(PROJECT,
+    { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, DEFAULT_SEAT_TICK_POLICY, ports));
+  let state = baseline.state;
+  for (let check = 1; check <= 4; check++) {
+    const now = NOW + check * 2 * 60 * 60_000;
+    ports.now = () => now;
+    task = { ...task, updatedAt: new Date(now).toISOString(),
+      ...(write === "task note edits" ? { text: `wire the chip\nProgress note ${check}` } : {}),
+      ...(write === "details appends" ? { details: `${task.details ?? "Investigation notes"}\nCheck ${check}` } : {}) };
+    if (write === "report writes") reports = [...reports,
+      { id: `fixture-report-${check}`, project: PROJECT, at: new Date(now - 60 * 60_000).toISOString(), origin: { kind: "manager" } }];
+    const gathered = await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports);
+    for (const input of [gathered, refreshSeatTickInput(gathered, ports)]) {
+      const decision = seatTickDecision(input);
+      expect(decision.verdict.kind).toBe("wake");
+      if (decision.verdict.kind !== "wake") throw new Error("live lane keeps its cadence");
+      expect(decision.verdict.reasons.some(reason => reason.kind === "interval")).toBe(true);
+      expect(decision.verdict.reportLines ?? []).toEqual([]);
+      state = decision.state;
+    }
+  }
+});
+
+test.each(["task status", "stage transition", "stage state", "attempt state", "merge", "deployment"])("a real %s change still owes a report", async (change) => {
+  let task = boardCard({ status: "inbox" });
+  let activeLane = lane();
+  let pullRequests = change === "merge" ? [openPullRequest()] : [];
+  let deployed = false;
+  const ports = sources({ laneRows: [livenessRow({ lifecycle: "running" })] });
+  ports.tasks = () => [task] as never;
+  ports.pipelines = () => [activeLane, finishedLane()] as never;
+  ports.openPullRequests = async () => ({ ok: true, pullRequests });
+  ports.seatDeployments = () => deployed ? [{ deploymentId: "deploy-material", conversationId: CONVERSATION, project: PROJECT,
+    revision: "c".repeat(40), requestedAt: new Date(NOW).toISOString() }] : [];
+  ports.deployment = () => ({ state: "ok", value: { deploymentId: "deploy-material", phase: "succeeded", terminal: true,
+    revision: "c".repeat(40), error: null, updatedAt: new Date(NOW).toISOString() } }) as never;
+  ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+  const baseline = seatTickDecision(await gatherSeatTickInput(PROJECT,
+    { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, DEFAULT_SEAT_TICK_POLICY, ports));
+  ports.now = () => NOW + 2 * 60 * 60_000;
+  if (change === "task status") task = { ...task, status: "blocked" };
+  if (change === "stage transition") activeLane = lane({ cursor: { stageId: "review", state: "running" } });
+  if (change === "stage state") activeLane = lane({ cursor: { stageId: "build", state: "committing" } });
+  if (change === "attempt state") activeLane = lane({ runs: [{ stageId: "build", attempts: [{ n: 1, state: "passed",
+    conversationId: STAGE_CONVERSATION, agentPath: TRANSCRIPT, startedAt: "2026-08-28T11:00:00.000Z" }] }] });
+  if (change === "merge") pullRequests = [];
+  if (change === "deployment") deployed = true;
+  const gathered = await gatherSeatTickInput(PROJECT, baseline.state, DEFAULT_SEAT_TICK_POLICY, ports);
+  for (const input of [gathered, refreshSeatTickInput(gathered, ports)]) {
+    const decision = seatTickDecision(input);
+    expect(decision.verdict.kind).toBe("wake");
+    if (decision.verdict.kind !== "wake") throw new Error("material change must wake");
+    expect(decision.verdict.reportLines?.some(line => line.startsWith(change === "deployment" ? "Report owed" : "Digest due"))).toBe(true);
+  }
+});
+
+test("a legacy digest baseline upgrades without owing a digest for task timestamps", async () => {
+  const ports = sources({ tasks: [boardCard({ status: "inbox", updatedAt: new Date(NOW).toISOString() })] });
+  ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+  const state = { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE,
+    reportFingerprint: "legacy-board", checkFingerprint: "legacy-board" };
+  const decision = seatTickDecision(await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports));
+  expect(decision.verdict.kind).toBe("wake");
+  if (decision.verdict.kind !== "wake") throw new Error("live lane keeps its cadence");
+  expect(decision.verdict.reportLines ?? []).toEqual([]);
+  expect(decision.state.checkFingerprint).toStartWith("digest-v1:");
+  ports.tasks = () => [boardCard({ status: "blocked" })] as never;
+  const changed = seatTickDecision(await gatherSeatTickInput(PROJECT, decision.state, DEFAULT_SEAT_TICK_POLICY, ports));
+  expect(changed.verdict.kind).toBe("wake");
+  if (changed.verdict.kind !== "wake") throw new Error("material change must wake after upgrade");
+  expect(changed.verdict.reportLines?.some(line => line.startsWith("Digest due"))).toBe(true);
+});
+
+test("a flapping pull-request source owes no digest, but a verified merge does", async () => {
+  const ports = sources({ pipelines: [lane(), finishedLane()], openPullRequests: [openPullRequest()],
+    laneRows: [livenessRow({ lifecycle: "running" })] });
+  ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+  let state = seatTickDecision(await gatherSeatTickInput(PROJECT,
+    { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, DEFAULT_SEAT_TICK_POLICY, ports)).state;
+  for (let check = 1; check <= 4; check++) {
+    ports.now = () => NOW + check * 2 * 60 * 60_000;
+    ports.openPullRequests = async () => check % 2
+      ? { ok: false, unavailable: "command-failed" }
+      : { ok: true, pullRequests: [openPullRequest()] };
+    const decision = seatTickDecision(await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports));
+    expect(decision.verdict.kind).toBe("wake");
+    if (decision.verdict.kind !== "wake") throw new Error("live lane keeps its cadence");
+    expect(decision.verdict.reportLines ?? []).toEqual([]);
+    state = decision.state;
+  }
+  ports.openPullRequests = async () => ({ ok: true, pullRequests: [] });
+  const merged = seatTickDecision(await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports));
+  expect(merged.verdict.kind).toBe("wake");
+  if (merged.verdict.kind !== "wake") throw new Error("live lane keeps its cadence");
+  expect(merged.verdict.reportLines?.some(line => line.startsWith("Digest due"))).toBe(true);
+});
+
+test("gated PR reads and report writes cannot invent digest movement", async () => {
+  const pullRequestCalls: { cwd: string; limit: number }[] = [];
+  const ports = sources({ pipelines: [lane(), finishedLane()], openPullRequests: [openPullRequest()], pullRequestCalls,
+    laneRows: [livenessRow({ lifecycle: "running" })] });
+  let reports: { id: string; project: string; at: string; origin: { kind: "manager" } }[] = [];
+  ports.reports = { log: () => reports as never, enabled: () => true, operatorLocale: () => "en" };
+  let state = seatTickDecision(await gatherSeatTickInput(PROJECT,
+    { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, DEFAULT_SEAT_TICK_POLICY, ports)).state;
+  state = { ...state, lastWakeAt: new Date(NOW).toISOString() };
+  const readsAfterBaseline = pullRequestCalls.length;
+
+  for (const minute of [5, 10]) {
+    ports.now = () => NOW + minute * 60_000;
+    if (minute === 10) reports = [{ id: "fixture-report", project: PROJECT,
+      at: new Date(NOW + 6 * 60_000).toISOString(), origin: { kind: "manager" } }];
+    const decision = seatTickDecision(await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports));
+    const lines = decision.verdict.kind === "wake" ? decision.verdict.reportLines ?? [] : [];
+    expect(lines.some(line => line.startsWith("Digest due"))).toBe(false);
+    expect(pullRequestCalls).toHaveLength(readsAfterBaseline);
+    state = decision.state;
+  }
+
+  ports.now = () => NOW + 2 * 60 * 60_000;
+  const due = seatTickDecision(await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports));
+  const lines = due.verdict.kind === "wake" ? due.verdict.reportLines ?? [] : [];
+  expect(lines.some(line => line.startsWith("Digest due"))).toBe(false);
+  expect(pullRequestCalls).toHaveLength(readsAfterBaseline + 1);
+});
+
+test("recovered PR evidence establishes a baseline before a later verified merge", async () => {
+  const ports = sources({ pipelines: [lane(), finishedLane()], laneRows: [livenessRow({ lifecycle: "running" })] });
+  ports.openPullRequests = async () => ({ ok: false, unavailable: "command-failed" });
+  ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+  let state = seatTickDecision(await gatherSeatTickInput(PROJECT,
+    { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, DEFAULT_SEAT_TICK_POLICY, ports)).state;
+  state = { ...state, lastWakeAt: new Date(NOW).toISOString() };
+
+  ports.now = () => NOW + 2 * 60 * 60_000;
+  ports.openPullRequests = async () => ({ ok: true, pullRequests: [openPullRequest()] });
+  const recovered = seatTickDecision(await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports));
+  expect(recovered.verdict.kind).toBe("wake");
+  if (recovered.verdict.kind !== "wake") throw new Error("live lane keeps its cadence");
+  expect(recovered.verdict.reportLines ?? []).toEqual([]);
+  state = { ...recovered.state, lastWakeAt: new Date(NOW + 2 * 60 * 60_000).toISOString() };
+
+  ports.now = () => NOW + 4 * 60 * 60_000;
+  ports.openPullRequests = async () => ({ ok: true, pullRequests: [] });
+  const merged = seatTickDecision(await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports));
+  expect(merged.verdict.kind).toBe("wake");
+  if (merged.verdict.kind !== "wake") throw new Error("live lane keeps its cadence");
+  expect(merged.verdict.reportLines?.some(line => line.startsWith("Digest due"))).toBe(true);
+});
+
+test("first recovered PR evidence preserves unreported board movement", async () => {
+  let task = boardCard({ status: "inbox" });
+  const ports = sources({ pipelines: [lane(), finishedLane()], tasks: [task], laneRows: [livenessRow({ lifecycle: "running" })] });
+  ports.openPullRequests = async () => ({ ok: false, unavailable: "command-failed" });
+  ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+  let state = seatTickDecision(await gatherSeatTickInput(PROJECT,
+    { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, DEFAULT_SEAT_TICK_POLICY, ports)).state;
+  state = { ...state, lastWakeAt: new Date(NOW).toISOString() };
+
+  task = { ...task, status: "blocked" };
+  ports.tasks = () => [task] as never;
+  ports.now = () => NOW + 2 * 60 * 60_000;
+  ports.openPullRequests = async () => ({ ok: true, pullRequests: [openPullRequest()] });
+  const recovered = seatTickDecision(await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports));
+  expect(recovered.verdict.kind).toBe("wake");
+  if (recovered.verdict.kind !== "wake") throw new Error("live lane keeps its cadence");
+  expect(seatTickBoardMoved(recovered.state.reportFingerprint ?? null, recovered.state.checkFingerprint ?? "")).toBe(true);
 });
 
 test("observing an old report without a board baseline cannot invent digest movement", async () => {
