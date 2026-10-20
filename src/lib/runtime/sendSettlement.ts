@@ -239,6 +239,9 @@ export interface SendSettlementPorts {
   now?: () => number;
   windowMs?: number;
   inTurnCeilingMs?: number;
+  /** An owning workflow may impose an earlier absolute cutoff on an admitted
+      send. Started work remains governed by its durable activity evidence. */
+  absoluteDeadline?: number;
   /** The bound on each evidence read; tests shorten it. */
   readMs?: number;
   /** The progress records a settled receipt is mirrored into; the Viewer's
@@ -623,11 +626,13 @@ function pastSettlementDeadline(
   ports: SendSettlementPorts,
 ): boolean {
   if (!subject.settleable) return false;
+  const now = (ports.now ?? Date.now)();
+  if (ports.absoluteDeadline !== undefined && now >= ports.absoluteDeadline) return true;
   const acceptedAt = parseTime(subject.acceptedAt);
   /* An acceptance time that cannot be parsed can never age, and a send nothing
      can ever end is the silence this issue is about. */
   if (acceptedAt === null) return true;
-  const restedMs = (ports.now ?? Date.now)() - acceptedAt;
+  const restedMs = now - acceptedAt;
   if (restedMs < (ports.windowMs ?? SEND_SETTLEMENT_WINDOW_MS)) return false;
   if (restedMs >= (ports.inTurnCeilingMs ?? SEND_SETTLEMENT_IN_TURN_CEILING_MS)) return true;
   return !awaitingRecipientTurn(registry, file, subject.conversationId);
@@ -654,7 +659,9 @@ function settlementDeadline(
   const span = inTurn
     ? ports.inTurnCeilingMs ?? SEND_SETTLEMENT_IN_TURN_CEILING_MS
     : ports.windowMs ?? SEND_SETTLEMENT_WINDOW_MS;
-  return { deadlineAt: new Date(acceptedAt + span).toISOString(), policy: inTurn ? "in-turn-ceiling" : "settlement-window" };
+  const ordinaryDeadline = acceptedAt + span;
+  const deadline = ports.absoluteDeadline === undefined ? ordinaryDeadline : Math.min(ordinaryDeadline, ports.absoluteDeadline);
+  return { deadlineAt: new Date(deadline).toISOString(), policy: inTurn ? "in-turn-ceiling" : "settlement-window" };
 }
 
 export interface SettledSend {
