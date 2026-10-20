@@ -888,21 +888,6 @@ function assignCorridorLanes(group: readonly TaskEdgeGeom[], lanes: Map<string, 
   group.forEach((edge, i) => lanes.set(edge.key, corridorLane(edge, i, canon)));
 }
 
-/**
- * Deterministic lane index per edge so overlapping edges never overdraw (issue
- * #17). Edges sharing a collinear corridor — coincident source/assignment pairs,
- * or partially-overlapping connectors on the same line — are grouped and fanned
- * onto parallel bowed tracks by {@link routeTaskEdge}, each lane oriented against
- * the corridor's canonical direction so mixed-direction edges never collapse onto
- * one curve. A lone edge is lane 0. Order-independent — grouping, canonical
- * direction and lane signs read only edge data.
- */
-export function assignEdgeLanes(edges: readonly TaskEdgeGeom[]): Map<string, number> {
-  const lanes = new Map<string, number>();
-  for (const group of corridorGroups(edges)) assignCorridorLanes(group, lanes);
-  return lanes;
-}
-
 type RoutePoint = { x: number; y: number };
 type Bounds = { minX: number; minY: number; maxX: number; maxY: number };
 
@@ -1104,9 +1089,11 @@ export interface RouteWork {
 }
 
 /**
- * Routes every task edge together (issue #17): lanes fan coincident edges apart
- * (see {@link assignEdgeLanes}), each edge routes around cards and panes (see
- * {@link edgeObstacles} / {@link routeTaskEdge}), and a bounded, deterministic
+ * Routes every task edge together (issue #17): lanes fan overlapping edges apart
+ * within each collinear corridor (see {@link corridorGroups}), oriented against
+ * its canonical direction so mixed-direction edges stay on distinct curves.
+ * Each edge routes around cards and panes (see {@link edgeObstacles} /
+ * {@link routeTaskEdge}), and a bounded, deterministic
  * pass then reduces edge-to-edge crossings. For each lone edge still crossing
  * another, it tries a few extra perpendicular bows and keeps whichever crosses
  * the *fewest* other edges without re-entering an obstacle. Coincident edges are
