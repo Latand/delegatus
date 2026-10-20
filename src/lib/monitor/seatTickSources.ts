@@ -1561,6 +1561,7 @@ function changeFingerprint(
   ownLanes: readonly SeatTickOwnLaneInput[],
   settledDeploys: readonly SeatTickDeployInput[] = [],
   settledMaintenance: readonly MaintenanceRun[] = [],
+  purpose: "guard" | "digest" = "guard",
 ): string {
   /* A child's status and outcome instant decide two wake reasons (#1465), so
      they are in the half the guard reads: a child finishing, or a harvested one
@@ -1568,8 +1569,10 @@ function changeFingerprint(
      that could not be read contributes nothing here — the children list is
      empty then, and the gap beside it keeps the check from concluding quiet. */
   const board = [
-    ...pipelines.map((pipeline) => `p:${pipeline.id}:${pipeline.state}:${pipeline.updatedAt ?? ""}:${JSON.stringify([pipeline.pausedBy, pipeline.pausedAt, pipeline.pauseGeneration, pipeline.pause, pipeline.pauseConditionMet])}`),
-    ...tasks.map((task) => `t:${task.id}:${task.status}:${task.owned}:${task.updatedAt ?? ""}:${JSON.stringify([task.accepted, task.hold, task.waitingSince])}`),
+    ...pipelines.map((pipeline) => `p:${pipeline.id}:${pipeline.state}:${pipeline.updatedAt ?? ""}:${JSON.stringify([pipeline.pausedBy, pipeline.pausedAt, pipeline.pauseGeneration, pipeline.pause, pipeline.pauseConditionMet])}${purpose === "digest" ? `:${JSON.stringify([pipeline.stageId, pipeline.stageState, pipeline.stageAttempt, pipeline.stageAttemptState])}` : ""}`),
+    // Notes, details and report bookkeeping bump task timestamps. The guard
+    // needs those instants for backlog eligibility; a digest needs state changes.
+    ...tasks.map((task) => `t:${task.id}:${task.status}:${task.owned}:${purpose === "guard" ? task.updatedAt ?? "" : ""}:${JSON.stringify([task.accepted, task.hold, purpose === "guard" ? task.waitingSince : null])}`),
     ...children.map((child) => `c:${child.conversationId}:${child.outcomeId ?? ""}:${child.status}:${child.terminalAt ?? ""}`),
     /* The seat's own settled lanes decide a wake reason of their own (#1749),
        so the guard has to see them move: closing the lane out is the discharge,
@@ -1592,7 +1595,7 @@ function changeFingerprint(
      unreadable source says `unread` here and the guard declines to conclude
      anything from this half at all. */
   const open = pullRequests.map((pullRequest) => `pr:${pullRequest.number}:${pullRequest.pipelineId}`).sort();
-  return `${digest(board)}.${pullRequestsUnavailable ? FINGERPRINT_UNREAD : digest(open)}`;
+  return `${purpose === "digest" ? "digest-v1:" : ""}${digest(board)}.${pullRequestsUnavailable ? FINGERPRINT_UNREAD : digest(open)}`;
 }
 
 function digest(parts: readonly string[]): string {
@@ -2419,6 +2422,8 @@ export function refreshSeatTickInput(input: SeatTickCheckInput, sources: SeatTic
   const pipelines = openLanes.map((lane, index): SeatTickPipelineInput => ({
     id: lane.id, title: evidence[index]!.title, state: evidence[index]!.state, updatedAt: evidence[index]!.updatedAt,
     stageId: lane.cursor?.stageId ?? null,
+    stageState: lane.cursor?.state ?? null,
+    stageAttemptState: stageAttempt(lane)?.state ?? null,
     stageAttempt: stageAttemptIdentity(lane),
     stageActivity: previous.get(lane.id)?.stageId === (lane.cursor?.stageId ?? null)
       && previous.get(lane.id)?.stageAttempt === stageAttemptIdentity(lane)
@@ -2443,6 +2448,7 @@ export function refreshSeatTickInput(input: SeatTickCheckInput, sources: SeatTic
     events: input.events.map((event) => ({ ...event, pipelineTerminal: event.pipelineId !== null && !openIds.has(event.pipelineId) })),
     settings: effectiveSeatTickSettings(sources.settings(input.project), now, SEAT_TICK_WAKE_INTERVAL_MS),
     changeFingerprint: changeFingerprint(pipelines, tasks, input.children, input.pullRequests, input.pullRequestsUnavailable, ownLanes, input.settledDeploys, input.settledMaintenance),
+    digestFingerprint: changeFingerprint(pipelines, tasks, input.children, input.pullRequests, input.pullRequestsUnavailable, ownLanes, input.settledDeploys, input.settledMaintenance, "digest"),
   };
 }
 
@@ -2539,6 +2545,8 @@ export async function gatherSeatTickInput(
     updatedAt: evidence[index]!.updatedAt,
     stageActivity: activity.get(pipeline.id) ?? null,
     stageId: observedStages.get(pipeline.id)!.stageId,
+    stageState: pipeline.cursor?.state ?? null,
+    stageAttemptState: stageAttempt(pipeline)?.state ?? null,
     stageAttempt: observedStages.get(pipeline.id)!.attempt,
     ...pauses.get(pipeline.id),
   }));
@@ -2648,6 +2656,7 @@ export async function gatherSeatTickInput(
     childrenUnavailable,
     childrenCatchUpPending,
     changeFingerprint: changeFingerprint(pipelines, tasks, children, pullRequests, pullRequestsUnavailable, ownLanes, settledDeploys, settledMaintenance),
+    digestFingerprint: changeFingerprint(pipelines, tasks, children, pullRequests, pullRequestsUnavailable, ownLanes, settledDeploys, settledMaintenance, "digest"),
     /* The sealed cursor travels on the state the decision carries forward, so a
        check of any verdict — a skip included, which remembers nothing else —
        persists where the journal stood when the tick first saw this project.
