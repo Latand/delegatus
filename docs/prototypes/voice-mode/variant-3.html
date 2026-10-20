@@ -18,7 +18,7 @@
 <section class="frame" data-frame="1" data-caption="opciia-b-okremyi-khab">
   <div class="kicker">Варіант 3 · Опція B з дизайну розширюваних інструментів голосу</div>
   <h1 class="flagged">Опція B: хаб як окремий процес<span class="flag maybe">Лише якщо A шкодитиме Delegatus</span></h1>
-  <p class="lede">Те саме, що опція A, але сервери живуть у <b>окремому процесі-хабі</b> з власною адресою. Delegatus звертається до нього за локальною адресою <code>127.0.0.1</code>.</p>
+  <p class="lede">Те саме, що опція A, але сервери живуть в <b>окремому процесі-хабі</b> на цьому ж комп'ютері.</p>
 
   <h2>Де що працює</h2>
   <div class="chain">
@@ -47,7 +47,7 @@
     <div class="sc op key" style="grid-row:9;grid-column:1/5"><span class="num">7</span><div><div class="dir">Оператор <svg class="ia"><use href="#a-r"/></svg> Delegatus</div><p>У налаштуваннях голосу вводить секрет, обирає інструменти й натискає <b>«Схвалити»</b>. Голосом чи агентом схвалити не можна.</p><p>Схвалення фіксує команду, хеш файла й перелік інструментів. Зміниться щось із цього — сервер знову чекатиме схвалення. Хаб перечитує реєстр після схвалення.</p></div></div>
     <div class="phase next" style="grid-row:10">Наступний дзвінок</div>
     <div class="sc op" style="grid-row:11;grid-column:1/3"><span class="num">8</span><div><div class="dir">Оператор <svg class="ia"><use href="#a-r"/></svg> Голос</div><p>Кладе слухавку й дзвонить знову.</p></div></div>
-    <div class="sc key" style="grid-row:12;grid-column:4/6"><span class="num">9</span><div><div class="dir">Delegatus <svg class="ia"><use href="#a-r"/></svg> Хаб</div><p>Просить у хаба знімок інструментів через <code>127.0.0.1</code> і чекає до 1 с.</p><p>Хаб мовчить — береться останній збережений знімок. Немає й його — дзвінок іде без нових інструментів, і голос про це знає.</p></div></div>
+    <div class="sc key" style="grid-row:12;grid-column:4/6"><span class="num">9</span><div><div class="dir">Delegatus <svg class="ia"><use href="#a-r"/></svg> Хаб</div><p>Просить у хаба знімок інструментів і чекає до 1 с.</p><p>Хаб мовчить — береться останній збережений знімок. Немає й його — дзвінок іде без нових інструментів, і голос про це знає.</p></div></div>
     <div class="sc " style="grid-row:13;grid-column:2/5"><span class="num">10</span><div><div class="dir">Delegatus <svg class="ia"><use href="#a-r"/></svg> Голос</div><p>Бекенд API отримує <code>spotify__search</code>, <code>spotify__play</code>; Codex — простір імен <code>spotify</code>. У підказку голосу додається рядок «Spotify: …».</p></div></div>
     <div class="sc " style="grid-row:14;grid-column:2/7"><span class="num">11</span><div><div class="dir">Голос <svg class="ia"><use href="#a-r"/></svg> Delegatus <svg class="ia"><use href="#a-r"/></svg> Хаб <svg class="ia"><use href="#a-r"/></svg> MCP-сервер</div><p>«Увімкни джаз» <svg class="ia"><use href="#a-r"/></svg> Delegatus перевіряє виклик так само, як в опції A, і передає його хабу через HTTP. Хаб викликає сервер, результат іде назад голосу.</p></div></div>
   </div>

@@ -39,6 +39,9 @@
   font-size: 18px;
 }
 
+@media (max-width: 900px) {
+  :root { --pad: 24px; }
+}
 @media (max-width: 700px) {
   :root { --gap: 10px; --pad: 14px; font-size: 15px; }
 }
@@ -198,7 +201,7 @@ li + li { margin-top: 4px; }
 /* ── Frame 2: timeline ─────────────────────────────────────────────────── */
 .timeline {
   display: grid;
-  grid-template-columns: 170px repeat(9, 1fr);
+  grid-template-columns: 170px repeat(16, 1fr);
   grid-template-rows: auto minmax(64px, auto) auto minmax(64px, auto) minmax(56px, auto) minmax(56px, auto) auto;
   gap: 8px 6px;
   position: relative;
@@ -240,15 +243,25 @@ li + li { margin-top: 4px; }
 }
 .band.duplex { background: color-mix(in oklch, var(--info) 10%, transparent); border-color: color-mix(in oklch, var(--info) 50%, transparent); }
 .bandlabel { grid-row: 7; font-size: 0.85rem; font-weight: 700; text-align: center; align-self: start; }
-.bandlabel.cutl { color: var(--danger); }
+.bandlabel.cutl { color: var(--danger); grid-column: 5 / 14; }
 .bandlabel.dupl { color: var(--info); }
+/* A bar carries its full line on wide screens and a short one from 700px up;
+   below 700px only its number, and the step cards say the rest. */
+.bar .say.short { display: none; }
 @media (max-width: 1100px) {
-  .bar { padding: 4px; justify-content: center; }
-  .bar .say, .bar .cutmark { display: none; }
+  .timeline { grid-template-columns: 112px repeat(16, 1fr); gap: 8px 5px; }
+  .timeline .lane small { font-size: 0.72rem; }
+  .bar { padding: 4px 6px; gap: 4px 6px; flex-wrap: wrap; align-content: center; font-size: 0.85rem; line-height: 1.2; }
+  .timeline .lane { padding-right: 4px; }
+  .bar .say.long { display: none; }
+  .bar .say.short { display: inline; }
 }
 @media (max-width: 700px) {
-  .timeline { grid-template-columns: 62px repeat(9, 1fr); gap: 6px 3px; padding: 8px; grid-template-rows: auto minmax(44px, auto) auto minmax(44px, auto) minmax(40px, auto) minmax(40px, auto) auto; }
-  .timeline .lane { font-size: 0.82rem; }
+  .timeline { grid-template-columns: 70px repeat(16, 1fr); gap: 6px 3px; padding: 8px; grid-template-rows: auto minmax(44px, auto) auto minmax(44px, auto) minmax(40px, auto) minmax(40px, auto) auto; }
+  .bar { padding: 4px; justify-content: center; flex-wrap: nowrap; }
+  .bar .say, .bar .say.short, .bar .cutmark { display: none; }
+  .bandlabel.cutl { grid-column: 2 / -1; }
+  .timeline .lane { font-size: 0.82rem; padding-right: 4px; }
   .timeline .lane small { display: none; }
   .bar.mic { font-size: 0.75rem; padding: 2px 4px; line-height: 1.2; }
   /* Each half of the label wraps word by word, so it ends clear of the interruption band. */
@@ -300,12 +313,14 @@ li + li { margin-top: 4px; }
 .chain .node { flex: 1; }
 .chain .arrbox { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 4px; color: var(--muted); font-size: 0.85rem; text-align: center; max-width: 9em; }
 .chain .arrbox .arr { width: 64px; height: 20px; color: var(--accent); }
-.chain .node.off { border-style: dashed; border-color: color-mix(in oklch, var(--danger) 60%, transparent); }
+.chain .node.off { flex: 0 1 10em; border-style: dashed; border-color: color-mix(in oklch, var(--danger) 60%, transparent); }
 .chain .node.new { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+/* Stacked, every arrow of a chain sits on the boxes' centre line and its label beside it. */
 @media (max-width: 1100px) {
   .chain { flex-direction: column; }
-  .chain .arrbox { max-width: none; flex-direction: row; }
-  .chain .arrbox .arr { transform: rotate(90deg); width: 30px; }
+  .chain .arrbox { max-width: none; display: grid; grid-template-columns: 1fr 30px 1fr; column-gap: 12px; align-items: center; text-align: left; }
+  .chain .arrbox .arr { grid-column: 2; transform: rotate(90deg); width: 30px; }
+  .chain .arrbox > span { grid-column: 3; }
 }
 /* A title with a status badge wraps as a row: the badge starts at the title's left edge when it wraps. */
 .frame h1.flagged { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
@@ -372,9 +387,11 @@ li + li { margin-top: 4px; }
 /* ── Index ─────────────────────────────────────────────────────────────── */
 .index a { color: var(--accent); }
 .index li { margin-top: 10px; }
-.chain .arrbox.gap { border-left: 2px dashed var(--strong); padding-left: 12px; font-weight: 700; color: var(--secondary); }
+.chain .arrbox.gap { max-width: 7em; border-left: 2px dashed var(--strong); padding-left: 12px; font-weight: 700; color: var(--secondary); }
 @media (max-width: 1100px) {
-  .chain .arrbox.gap { border-left: 0; border-top: 2px dashed var(--strong); padding: 10px 0 0; justify-content: flex-start; }
+  .chain .node.off { flex: none; }
+  .chain .arrbox.gap { display: block; max-width: none; border-left: 0; border-top: 2px dashed var(--strong); padding: 10px 0 0; }
 }
 .chain .arrbox code { font-size: 1em; }
+.nw { white-space: nowrap; }
 .pros .note + .note { margin-top: 0; }
