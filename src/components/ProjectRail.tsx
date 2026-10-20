@@ -10,6 +10,7 @@ import type { CreateProjectOutcome, CreateProjectRequestOptions } from "@/hooks/
 import { projectMatchesQuery } from "@/lib/displayNames";
 import { PRODUCT_NAME } from "@/lib/brand";
 import { useLocale } from "@/lib/i18n";
+import type { Workspace } from "@/lib/team/contract";
 import type { FileEntry, ProjectCatalogEntry } from "@/lib/types";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { Workflow } from "@/lib/workflows/types";
@@ -25,6 +26,8 @@ import { BoardRowsSkeleton } from "./skeletons";
 import { LanguageToggle } from "./LanguageToggle";
 import { LimitsFooter } from "./LimitsFooter";
 import { attentionTotal, buildProjectSummaries, OVERVIEW, partitionCrownedSummaries, type ProjectSummary } from "./projectModel";
+import { MoveLabel, MoveToMenu, WorkspaceChip, WorkspaceDot, workspaceErrorText, type WorkspaceCounts, type WorkspaceRailState } from "./team/WorkspaceSwitch";
+import { groupAll, workspaceScope } from "./team/workspaceFilter";
 import { overviewWorkingTotal, workingAgentCounts } from "./workingAgents";
 import { PushBell } from "./PushBell";
 import { ResourcesFooter } from "./ResourcesFooter";
@@ -68,6 +71,10 @@ export interface ProjectRailProps {
   onSelect: (project: string) => void;
   onToggleCrown?: (project: string, crowned: boolean) => void;
   onCreateProject?: (name: string, root: string, options?: CreateProjectRequestOptions) => Promise<CreateProjectOutcome>;
+  /** A team install's workspaces (docs/design/workspaces.md §13.4): the
+      header names the current one, the list shows its projects, and All
+      groups them. Absent, the rail is exactly what it was. */
+  workspace?: WorkspaceRailState;
 }
 
 const EMPTY_CROWNS: ReadonlySet<string> = new Set();
@@ -133,17 +140,18 @@ function MarkColumns({ needs, live, anyNeeds, anyLive, own = false }: { needs: n
 }
 
 /* Every label in the list starts where a project's name starts: 11 px inside the list's own 8 px. */
-function SectionLabel({ children, count, icon }: { children: ReactNode; count: number; icon?: ReactNode }) {
+function SectionLabel({ children, count, icon, lead }: { children: ReactNode; count: number; icon?: ReactNode; lead?: ReactNode }) {
   return (
     <div data-rail-section="" className="flex h-6 items-center gap-1.5 px-[11px] text-[11px] font-bold text-muted">
-      <span data-rail-label="">{children}</span>
+      {lead}
+      <span data-rail-label="" className={lead ? "min-w-0 truncate" : undefined}>{children}</span>
       <span data-rail-count="" className="font-semibold tabular-nums">{count}</span>
       {icon}
     </div>
   );
 }
 
-export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, pipelines, workflows, archivedProjects, crownedProjects = EMPTY_CROWNS, selected, loaded, catalogFailures = 0, now, needsYouCounts, onHide, onSelect, onToggleCrown, onCreateProject }: ProjectRailProps) {
+export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, pipelines, workflows, archivedProjects, crownedProjects = EMPTY_CROWNS, selected, loaded, catalogFailures = 0, now, needsYouCounts, onHide, onSelect, onToggleCrown, onCreateProject, workspace }: ProjectRailProps) {
   const { t } = useLocale();
   const isMobile = useIsMobile();
   const [query, setQuery] = useState("");
@@ -152,9 +160,20 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
     () => buildProjectSummaries(files, now, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouCounts, workingAgentCounts(files, now)),
     [files, now, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouCounts],
   );
+  /* A chosen workspace narrows the list before the pinned, projects and
+     archive split, so the crown and the archive keep working inside it. */
+  const scope = useMemo(() => (workspace ? workspaceScope(workspace.view, workspace.chosen) : null), [workspace]);
+  const scoped = useMemo(() => (scope ? summaries.filter((summary) => scope.has(summary.project)) : summaries), [summaries, scope]);
+  const workspaceCounts = useMemo<WorkspaceCounts | null>(() => {
+    if (!workspace) return null;
+    return {
+      all: summaries.length,
+      byWorkspace: new Map(groupAll(summaries, workspace.view).flatMap((section) => (section.workspace ? [[section.workspace.id, section.rows.length] as const] : []))),
+    };
+  }, [summaries, workspace]);
   const visible = useMemo(() => {
-    return summaries.filter((summary) => projectMatchesQuery(summary.project, query, summary.displayName));
-  }, [summaries, query]);
+    return scoped.filter((summary) => projectMatchesQuery(summary.project, query, summary.displayName));
+  }, [scoped, query]);
   const activeRows = useMemo(() => visible.filter((summary) => !archivedProjects.has(summary.project)), [visible, archivedProjects]);
   const archivedRows = useMemo(() => visible.filter((summary) => archivedProjects.has(summary.project)), [visible, archivedProjects]);
   /* Crowned rows float in their own pinned section; both halves keep the
@@ -165,8 +184,24 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
   );
   /* The Overview row sums the rows the Overview shows: an archived project
      keeps its count on its own row in the archive section. */
-  const totalLive = useMemo(() => overviewWorkingTotal(summaries, archivedProjects), [summaries, archivedProjects]);
-  const totalAttention = useMemo(() => attentionTotal(summaries), [summaries]);
+  const totalLive = useMemo(() => overviewWorkingTotal(scoped, archivedProjects), [scoped, archivedProjects]);
+  const totalAttention = useMemo(() => attentionTotal(scoped), [scoped]);
+  /* The All view of a team with workspaces: one section per workspace, then
+     Unassigned, whose rows the owner can move (§13.5 D3). Every project stands
+     under its own workspace, as in the prototype, a crowned one first with its
+     crown, so a heading counts the rows under it and the switcher's number. */
+  const sections = useMemo(
+    () => (workspace && !scope ? groupAll([...crownedRows, ...regularRows], workspace.view).filter((section) => section.rows.length || !query.trim()) : null),
+    [workspace, scope, crownedRows, regularRows, query],
+  );
+  const [moveError, setMoveError] = useState<{ project: string; text: string } | null>(null);
+  const moveProject = (project: string, workspaceId: string) => {
+    if (!workspace) return;
+    setMoveError(null);
+    void workspace.place(project, workspaceId).then((result) => {
+      if (!result.ok) setMoveError({ project, text: workspaceErrorText(t, result.code) });
+    });
+  };
   /* First run (issue #1162): the catalog answered and named no project at all.
      Distinct from a filter query that matched none, and from a failed fetch —
      both of those keep their own treatment. */
@@ -194,16 +229,22 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
 
   const columns = { anyNeeds: totalAttention > 0, anyLive: totalLive > 0 };
   /* An archived row is drawn as the quiet rows above it, without the crown control. */
-  const railRow = (summary: ProjectSummary, archived = false) => (
+  const railRow = (summary: ProjectSummary, archived = false, movable = false, pinnedMark = false) => (
     <RailRow
       key={summary.project}
       summary={summary}
+      pinnedMark={pinnedMark}
       active={selected === summary.project}
       now={now}
       columns={columns}
       crowned={crownedProjects.has(summary.project)}
       onSelect={onSelect}
       onToggleCrown={archived ? undefined : onToggleCrown}
+      move={movable && workspace?.view.canManage ? {
+        workspaces: workspace.view.workspaces,
+        error: moveError?.project === summary.project ? moveError.text : null,
+        onPick: (workspaceId) => moveProject(summary.project, workspaceId),
+      } : undefined}
     />
   );
   const overview = selected === OVERVIEW;
@@ -251,7 +292,11 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
           <>
             <span className="flex min-w-0 flex-1 items-center gap-2">
               <DelegatusMark size={20} />
-              <span className="min-w-0 truncate" data-rail-brand="">{PRODUCT_NAME}</span>
+              {workspace && workspaceCounts ? (
+                <WorkspaceChip state={workspace} counts={workspaceCounts} />
+              ) : (
+                <span className="min-w-0 truncate" data-rail-brand="">{PRODUCT_NAME}</span>
+              )}
             </span>
             {onHide ? (
               <button
@@ -342,17 +387,34 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
           <MarkColumns needs={totalAttention} live={totalLive} {...columns} />
           <span className={SLOT_AGE} />
         </button>
-        {crownedRows.length ? (
+        {crownedRows.length && !sections ? (
           <SectionLabel count={crownedRows.length} icon={<Crown className="h-3 w-3 fill-crown text-crown" aria-hidden data-testid="crown-marker" />}>{t("rail.pinned")}</SectionLabel>
         ) : null}
         <FlipRow>
-          {crownedRows.map((summary) => railRow(summary))}
-          {crownedRows.length || regularRows.length ? (
-            <div data-flip-key="__projects-label__" className={crownedRows.length ? "mt-1.5" : ""}>
-              <SectionLabel count={regularRows.length}>{t("rail.projects")}</SectionLabel>
-            </div>
-          ) : null}
-          {regularRows.map((summary) => railRow(summary))}
+          {sections ? null : crownedRows.map((summary) => railRow(summary))}
+          {sections ? sections.flatMap((section, index) => [
+            <div
+              key={`__workspace-label-${section.workspace?.id ?? "unassigned"}__`}
+              data-flip-key={`__workspace-label-${section.workspace?.id ?? "unassigned"}__`}
+              data-rail-workspace-section={section.workspace?.id ?? "unassigned"}
+              className={index > 0 ? "mt-1.5" : ""}
+            >
+              <SectionLabel count={section.rows.length} lead={section.workspace ? <WorkspaceDot color={section.workspace.color} size={7} /> : undefined}>
+                {section.workspace ? section.workspace.name : t("workspaces.unassigned")}
+              </SectionLabel>
+            </div>,
+            ...section.rows.map((summary) => railRow(summary, false, !section.workspace, crownedProjects.has(summary.project))),
+          ]) : (
+            <>
+              {/* Inside a workspace whose every project is pinned, an empty «Projects 0» says nothing. */}
+              {regularRows.length || (crownedRows.length && !scope) ? (
+                <div data-flip-key="__projects-label__" className={crownedRows.length ? "mt-1.5" : ""}>
+                  <SectionLabel count={regularRows.length}>{t("rail.projects")}</SectionLabel>
+                </div>
+              ) : null}
+              {regularRows.map((summary) => railRow(summary))}
+            </>
+          )}
         </FlipRow>
         {archivedRows.length ? (
           <>
@@ -383,6 +445,8 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
                to do instead, and the overview carries the full statement. */
             query.trim() ? (
               <div className="px-3 py-4 text-center text-[12px] text-muted">{t("common.nothingFound")}</div>
+            ) : scope ? (
+              <div data-rail-workspace-empty="" className="px-3 py-4 text-center text-[12px] text-muted">{t("workspaces.page.empty")}</div>
             ) : null
           ) : (
             /* Rows in the shape of the project rows that are coming (#2071). */
@@ -403,8 +467,21 @@ export function ProjectRail({ files, projectCatalog, projectDisplayNames = {}, p
  * whole name in the tooltip. The conversation count is in the tooltip too.
  * A row is the same height selected or not, so choosing a project moves nothing.
  */
-function RailRow({ summary, active, now, columns, crowned, onSelect, onToggleCrown }: {
+function focusVisible(element: Element): boolean {
+  try {
+    return element.matches(":focus-visible");
+  } catch {
+    return false;
+  }
+}
+
+/* The Move control's face; its placeholder in the row's first line takes exactly its width. */
+const MOVE_FACE = "inline-flex h-[22px] items-center gap-1 rounded-[7px] border px-1.5 text-[11px] font-semibold";
+
+function RailRow({ summary, pinnedMark = false, active, now, columns, crowned, onSelect, onToggleCrown, move }: {
   summary: ProjectSummary;
+  /** In the All view a pinned row stands under its workspace, so its name carries the crown the Pinned heading carried. */
+  pinnedMark?: boolean;
   active: boolean;
   now: number;
   columns: { anyNeeds: boolean; anyLive: boolean };
@@ -412,12 +489,22 @@ function RailRow({ summary, active, now, columns, crowned, onSelect, onToggleCro
   onSelect: (project: string) => void;
   /** Absent on an archived row, which carries no crown control. */
   onToggleCrown?: (project: string, crowned: boolean) => void;
+  /** The owner's «Move to…» on an Unassigned row (workspaces.md §13.5 D3). */
+  move?: { workspaces: readonly Workspace[]; error: string | null; onPick: (workspaceId: string) => void };
 }) {
   const { t } = useLocale();
   const isMobile = useIsMobile();
+  const moveRef = useRef<HTMLButtonElement | null>(null);
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  const [moveOpen, setMoveOpen] = useState(false);
+  const [keyboardOn, setKeyboardOn] = useState(false);
+  /* Move shows on the selected row and on a row the keyboard is on; it then
+     takes the marks' place in the first line, so it covers no text. */
+  const moveShown = Boolean(move) && (active || keyboardOn || moveOpen);
   const age = shortAge(summary.smt, now, t);
   const title = [
     summary.displayName,
+    pinnedMark ? t("rail.pinned") : null,
     summary.attentionCount ? t("rail.rowNeedsYou", { count: summary.attentionCount }) : null,
     summary.liveCount ? t("rail.rowWorking", { count: summary.liveCount }) : null,
     t("rail.rowConversations", { count: summary.conversations }),
@@ -428,7 +515,13 @@ function RailRow({ summary, active, now, columns, crowned, onSelect, onToggleCro
      the control in view, so its rows carry no age. */
   const ageClass = !onToggleCrown ? "" : isMobile ? "opacity-0" : "group-hover:opacity-0 group-has-[[data-rail-crown]:focus-visible]:opacity-0";
   return (
-    <div data-flip-key={summary.project} className="group relative">
+    <div
+      ref={rowRef}
+      data-flip-key={summary.project}
+      className="group relative"
+      onFocus={move ? (event) => setKeyboardOn(focusVisible(event.target)) : undefined}
+      onBlur={move ? (event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setKeyboardOn(false); } : undefined}
+    >
       <button
         type="button"
         data-rail-project={summary.project}
@@ -440,13 +533,45 @@ function RailRow({ summary, active, now, columns, crowned, onSelect, onToggleCro
         <span data-rail-name="" className={`my-1.5 line-clamp-2 text-[13px] leading-[18px] ${active ? "font-bold" : "font-semibold"} ${summary.catalogOnly ? "text-muted" : ""}`}>
           <span className="block break-words">
             <span className="float-right ml-1.5 flex h-[18px] items-center gap-1.5 font-normal">
-              <MarkColumns needs={summary.attentionCount} live={summary.liveCount} {...columns} own />
+              {moveShown ? (
+                <span aria-hidden data-rail-move-space="" className={`invisible ${MOVE_FACE} border-transparent`}><MoveLabel /></span>
+              ) : (
+                <MarkColumns needs={summary.attentionCount} live={summary.liveCount} {...columns} own />
+              )}
               <span data-rail-slot="age" className={`${SLOT_AGE} ${ageClass}`}>{age}</span>
             </span>
+            {pinnedMark ? <Crown data-rail-pinned-mark="" className="mr-1 inline h-3 w-3 -translate-y-px fill-crown text-crown" aria-hidden /> : null}
             {summary.displayName}
           </span>
         </span>
       </button>
+      {move ? (
+        <button
+          ref={moveRef}
+          type="button"
+          data-rail-move=""
+          aria-haspopup="menu"
+          aria-expanded={moveOpen}
+          aria-label={t("workspaces.moveProject", { name: summary.displayName })}
+          className={`absolute right-[47px] top-[5px] ${MOVE_FACE} border-border bg-card text-secondary hover:text-primary ${FOCUS} ${moveShown ? "" : "pointer-events-none opacity-0"}`}
+          onClick={() => setMoveOpen((value) => !value)}
+        >
+          <MoveLabel />
+        </button>
+      ) : null}
+      {move && moveOpen ? (
+        <MoveToMenu
+          workspaces={move.workspaces}
+          anchor={moveRef}
+          beside={rowRef}
+          onClose={() => setMoveOpen(false)}
+          onPick={(workspaceId) => {
+            setMoveOpen(false);
+            move.onPick(workspaceId);
+          }}
+        />
+      ) : null}
+      {move?.error ? <p role="alert" data-rail-move-error="" className="px-2.5 pb-1 text-[11px] font-semibold text-danger">{move.error}</p> : null}
       {onToggleCrown ? (
         <button
           type="button"

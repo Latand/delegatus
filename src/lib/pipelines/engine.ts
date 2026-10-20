@@ -13528,6 +13528,20 @@ export async function patchPipeline(
         requestPipelineTick();
         return { pipeline: current };
       }
+      const attempt = current.cursor ? currentAttempt(current, current.cursor.stageId) : null;
+      if (req.acceptedSha === undefined && current.state === "needs_decision" && passedStageCustodyPark(current, attempt)) {
+        // Custody stopped before lastPassedCommit could accept the stage head.
+        // Retry that proof outside the mutation lease before reserving a push.
+        attempt!.state = "committing";
+        attempt!.error = null;
+        current.state = "running";
+        current.pausedState = null;
+        current.stateDetail = "passed stage head verification and publication pending";
+        if (current.delivery?.operation?.state === "pending") delete current.delivery.operation;
+        delete current.publicationAdmission;
+        await persist(); requestPipelineTick();
+        return { pipeline: current };
+      }
       if (moved) {
         current.lastPassedCommit = accepted;
         currentAttempt(current, current.cursor!.stageId)!.publicationIntegration = integration;

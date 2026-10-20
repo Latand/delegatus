@@ -12112,3 +12112,204 @@ browserTest("what a full-screen conversation opens draws above it on the phone: 
     fs.writeFileSync("evidence/reader-overlays/phone.json", JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", readings }, null, 2));
   } finally { await browser.close(); stop(); }
 }, 300_000);
+
+/*
+ * Team workspaces, slice (a), on the phone (docs/design/workspaces.md §13.5
+ * P1–P6, §13.9): the line above the bar's title naming the workspace, on the
+ * Overview and on a project's board; the projects sheet's workspace row and
+ * its expanded list; All with its headings and Move to…; the Team page's
+ * Workspaces tab, New workspace as a sheet, and one workspace's page. 390 ×
+ * 844 with a touch pointer, en and uk, light and dark. Each state's words are
+ * measured from text ranges on the first screen; the eyebrow and the name
+ * both sit inside the 52 px bar. Frames go to `.artifacts/team-workspaces-phone/`;
+ * the readings are committed to `evidence/team-workspaces/phone.json`.
+ */
+describe("team workspaces slice (a) on the phone", () => {
+  browserTest("eyebrow, sheet switcher, All with Move to…, Workspaces tab, New workspace and the workspace page", async () => {
+    const out = path.resolve(process.env.LLV_WORKSPACES_PHONE_OUT ?? ".artifacts/team-workspaces-phone");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/mobile/issue1671Evidence.fixture.tsx");
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"] });
+    const failures: string[] = [];
+    const readings: Array<Record<string, unknown>> = [];
+    const words = (lang: "en" | "uk", key: string, params?: Record<string, string | number>) => translate(lang, key as never, params as never);
+    const client = { en: "Client work", uk: "Клієнтська робота" };
+    const CLIENT_ID = `w_${"c1".repeat(16)}`;
+    const forge = `repo-${"c3d4".repeat(4)}`;
+    const delegatus = `repo-${"a1b2".repeat(4)}`;
+
+    const measure = (page: Page, selector: string, text: string) => page.evaluate(({ selector, text }) => {
+      const root = [...document.querySelectorAll<HTMLElement>(selector)].find((element) => element.getClientRects().length > 0
+        && (element.textContent ?? "").replace(/\s+/g, " ").includes(text));
+      if (!root) return { found: false, cut: false, boxes: [] as number[][] };
+      const boxes: number[][] = [];
+      let cut = false;
+      /* The deepest element that holds the words: only its text is measured, not a whole list around it. */
+      const words = (element: Element) => (element.textContent ?? "").replace(/\s+/g, " ");
+      let holder: Element = root;
+      for (let child = [...holder.children].find((candidate) => words(candidate).includes(text)); child; child = [...holder.children].find((candidate) => words(candidate).includes(text))) holder = child;
+      const walker = document.createTreeWalker(holder, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!(node.textContent ?? "").trim()) continue;
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        for (const rect of range.getClientRects()) {
+          if (rect.width === 0) continue;
+          boxes.push([rect.left, rect.top, rect.right, rect.bottom].map(Math.round));
+          if (rect.top < -0.5 || rect.bottom > innerHeight + 0.5 || rect.left < -0.5 || rect.right > innerWidth + 0.5) cut = true;
+          for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+            const style = getComputedStyle(parent);
+            if (style.overflowY === "visible" && style.overflowX === "visible") continue;
+            const clip = parent.getBoundingClientRect();
+            if (rect.top < clip.top - 0.5 || rect.bottom > clip.bottom + 0.5) cut = true;
+          }
+        }
+      }
+      return { found: boxes.length > 0, cut, boxes: boxes.slice(0, 6) };
+    }, { selector, text });
+
+    async function frame(page: Page, tag: string, state: string, defining: Array<[selector: string, text: string]>) {
+      for (const [selector, text] of defining) {
+        const reading = await measure(page, selector, text);
+        if (!reading.found) failures.push(`${tag} ${state}: «${text}» is not on the first screen in ${selector}`);
+        else if (reading.cut) failures.push(`${tag} ${state}: «${text}» is cut ${JSON.stringify(reading.boxes)}`);
+      }
+      const file = `${tag}-${state}.png`;
+      await page.screenshot({ path: path.join(out, file) });
+      readings.push({ tag, state, defining: defining.map(([, text]) => text), file });
+    }
+
+    /** The bar's two lines inside its 52 px: the eyebrow above the name. */
+    async function bar(page: Page, tag: string, state: string, name: string, eyebrow: string) {
+      const fit = await page.evaluate(() => {
+        const header = document.querySelector("[data-mobile2-bar]")!.getBoundingClientRect();
+        const box = (selector: string) => document.querySelector(`[data-mobile2-bar] ${selector}`)?.getBoundingClientRect() ?? null;
+        const top = box("[data-mobile2-title-eyebrow]");
+        const name = box("[data-mobile2-title-text]");
+        return { header: [header.top, header.bottom, header.height], eyebrow: top ? [top.top, top.bottom] : null, name: name ? [name.top, name.bottom] : null,
+          text: [document.querySelector("[data-mobile2-bar] [data-mobile2-title-eyebrow]")?.textContent ?? null, document.querySelector("[data-mobile2-bar] [data-mobile2-title-text]")?.textContent ?? null] };
+      });
+      readings.push({ tag, state: `${state}-bar`, ...fit });
+      if (fit.header[2] !== 52) failures.push(`${tag} ${state}: the bar is ${fit.header[2]} px`);
+      if (!fit.eyebrow || !fit.name) { failures.push(`${tag} ${state}: the bar has no eyebrow or no name ${JSON.stringify(fit.text)}`); return; }
+      if (fit.eyebrow[0] < fit.header[0] - 0.5 || fit.name[1] > fit.header[1] + 0.5 || fit.eyebrow[1] > fit.name[0] + 0.5) failures.push(`${tag} ${state}: the two lines do not fit ${JSON.stringify(fit)}`);
+      if (fit.text[0] !== eyebrow || fit.text[1] !== name) failures.push(`${tag} ${state}: the bar reads ${JSON.stringify(fit.text)}`);
+    }
+
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        const tag = `${lang}-${theme}-390`;
+        const open = (query: string) => openFixture(browser, `${server.base.replace(/\/$/, "")}/?${query}`, { width: 390, height: 844 }, theme, lang, "reduce", true);
+        /* P1 and P2: the Overview of Client work, its sheet, the list of workspaces, then a project's board. */
+        {
+          const { context, page, pageErrors } = await open("overview=1&scenario=workspaces&ws=client");
+          try {
+            await page.locator("[data-mobile2-bar] [data-mobile2-title-eyebrow]").waitFor({ timeout: 20_000 });
+            await bar(page, tag, "P1-overview", words(lang, "rail.overview"), client[lang]);
+            await frame(page, tag, "P1-overview", [["[data-mobile2-bar]", client[lang]], ["[data-mobile2-bar]", words(lang, "rail.overview")]]);
+            await page.locator('[data-mobile2-bar] [data-mobile2-open="projects"]').click();
+            await page.locator("[data-mobile2-sheet='projects'] [data-mobile2-workspace]").waitFor();
+            const listed = await page.locator("[data-mobile2-sheet='projects'] [data-mobile2-project]").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-mobile2-project")));
+            if (JSON.stringify(listed) !== JSON.stringify(["__overview__", forge])) failures.push(`${tag} P2: the sheet lists ${JSON.stringify(listed)}`);
+            await frame(page, tag, "P2-sheet", [["[data-mobile2-workspace]", client[lang]], ["[data-mobile2-workspace]", words(lang, "workspaces.label")], [`[data-mobile2-project='${forge}']`, "forge-api"]]);
+            await page.locator("[data-mobile2-workspace]").click();
+            await page.locator("[data-mobile2-workspace-list]").waitFor();
+            await frame(page, tag, "P2-expanded", [
+              ["[data-mobile2-workspace-list]", words(lang, "workspaces.all")],
+              ["[data-mobile2-workspace-list]", words(lang, "workspaces.settings")],
+              ["[data-mobile2-workspace-list]", words(lang, "workspaces.new")],
+            ]);
+            if (await page.locator("[data-mobile2-sheet='projects'] [data-mobile2-project]").count() !== 1) failures.push(`${tag} P2: the project list stays under the expanded switcher`);
+            await page.locator("[data-mobile2-workspace]").click();
+            await page.locator(`[data-mobile2-sheet='projects'] [data-mobile2-project='${forge}']`).click();
+            await page.locator("[data-mobile2-bar] [data-mobile2-title-text]").filter({ hasText: "forge-api" }).waitFor();
+            await bar(page, tag, "P1-board", "forge-api", client[lang]);
+            await frame(page, tag, "P1-board", [["[data-mobile2-bar]", client[lang]], ["[data-mobile2-bar]", "forge-api"]]);
+            if (pageErrors.length) failures.push(`${tag} P1/P2: page errors ${pageErrors.join("; ")}`);
+          } finally { await context.close(); }
+        }
+        /* P3: All, a heading per workspace and Unassigned with Move; Move to… expands under the row and lands. */
+        {
+          const { context, page, pageErrors } = await open("overview=1&scenario=workspaces&ws=all");
+          try {
+            await page.locator("[data-mobile2-bar] [data-mobile2-title-eyebrow]").waitFor({ timeout: 20_000 });
+            await bar(page, tag, "P3-overview", words(lang, "rail.overview"), words(lang, "workspaces.all"));
+            await page.locator('[data-mobile2-bar] [data-mobile2-open="projects"]').click();
+            await page.locator("[data-mobile2-workspace-section='unassigned']").waitFor();
+            await page.locator("[data-mobile2-workspace-section='unassigned']").scrollIntoViewIfNeeded();
+            /* The rows carry the projects' names, whole: Move takes the marks' place on the Unassigned row. */
+            const label = await page.locator(`[data-mobile2-project='${delegatus}'] .truncate`).first().evaluate((element) => ({ text: (element.textContent ?? "").trim(), cut: element.scrollWidth > element.clientWidth + 0.5 }));
+            readings.push({ tag, state: "P3-unassigned-label", ...label });
+            if (label.text !== "delegatus" || label.cut) failures.push(`${tag} P3: the Unassigned row reads ${JSON.stringify(label)}`);
+            await frame(page, tag, "P3-all", [
+              ["[data-mobile2-workspace-section='unassigned']", words(lang, "workspaces.unassigned")],
+              ["[data-mobile2-workspace-section='unassigned']", words(lang, "workspaces.move")],
+              [`[data-mobile2-project='${delegatus}']`, "delegatus"],
+              ["[data-mobile2-sheet='projects']", "atlas-docs"],
+            ]);
+            const move = page.locator(`[data-mobile2-movable='${delegatus}'] [data-mobile2-move]`);
+            const target = await move.boundingBox();
+            if (!target || target.height < 44) failures.push(`${tag} P3: Move is ${target?.height ?? 0} px tall`);
+            await move.click();
+            await page.locator(`[data-mobile2-movable='${delegatus}'] [data-mobile2-move-list]`).scrollIntoViewIfNeeded();
+            await frame(page, tag, "P3-move", [[`[data-mobile2-movable='${delegatus}'] [data-mobile2-move-list]`, words(lang, "workspaces.moveTo")], [`[data-mobile2-movable='${delegatus}'] [data-mobile2-move-list]`, client[lang]]]);
+            await page.locator(`[data-mobile2-movable='${delegatus}'] [data-mobile2-move-to='${CLIENT_ID}']`).click();
+            await page.locator(`[data-mobile2-workspace-section='${CLIENT_ID}'] [data-mobile2-project='${delegatus}']`).waitFor();
+            if (pageErrors.length) failures.push(`${tag} P3: page errors ${pageErrors.join("; ")}`);
+          } finally { await context.close(); }
+        }
+        /* P4: the Workspaces tab, its four tabs sharing the width. */
+        {
+          const { context, page, pageErrors } = await open("scenario=workspaces-team");
+          try {
+            await page.locator("[data-workspace-unassigned]").waitFor({ timeout: 20_000 });
+            const tabs = await page.locator("[data-team-tab]").evaluateAll((items) => items.map((item) => { const box = item.getBoundingClientRect(); return [box.left, box.right, box.height]; }));
+            if (tabs.length !== 4 || tabs.some(([left, right, height]) => left < 0 || right > 390.5 || height < 44)) failures.push(`${tag} P4: the tabs ${JSON.stringify(tabs)}`);
+            await frame(page, tag, "P4", [["[data-team-tab='workspaces']", words(lang, "team.tabs.workspaces")], [`[data-workspace-row='${CLIENT_ID}']`, client[lang]]]);
+            if (pageErrors.length) failures.push(`${tag} P4: page errors ${pageErrors.join("; ")}`);
+          } finally { await context.close(); }
+        }
+        /* P5: New workspace as a bottom sheet. */
+        {
+          const { context, page } = await open("scenario=workspaces-team&create=1");
+          try {
+            await page.locator("[data-team-dialog='workspace-create']").waitFor({ timeout: 20_000 });
+            await frame(page, tag, "P5", [["[data-team-dialog='workspace-create']", words(lang, "workspaces.new")], ["[data-team-dialog='workspace-create']", words(lang, "workspaces.create.name")]]);
+            /* The eight swatches stand four to a row, each a 44 px target. */
+            const swatches = await page.locator("[data-workspace-color]").evaluateAll((items) => items.map((item) => { const box = item.getBoundingClientRect(); return [Math.round(box.top), Math.round(box.width), Math.round(box.height)]; }));
+            const perRow = [...swatches.reduce((rows, [top]) => rows.set(top!, (rows.get(top!) ?? 0) + 1), new Map<number, number>()).values()];
+            readings.push({ tag, state: "P5-swatch-rows", perRow });
+            if (!(perRow.length === 1 && perRow[0] === 8) && !perRow.every((count) => count === 4)) failures.push(`${tag} P5: the swatches stand ${JSON.stringify(perRow)} to a row`);
+            if (swatches.some(([, width, height]) => width! < 44 || height! < 44)) failures.push(`${tag} P5: a swatch is under 44 px ${JSON.stringify(swatches)}`);
+            await page.locator("[data-workspace-create-submit]").scrollIntoViewIfNeeded();
+            await frame(page, tag, "P5-submit", [["[data-workspace-create-submit]", words(lang, "workspaces.create.submit")]]);
+          } finally { await context.close(); }
+        }
+        /* P6: the workspace page in one column, Remove written out. */
+        {
+          const { context, page } = await open("scenario=workspaces-page&page=client");
+          try {
+            await page.locator("[data-workspace-title]").waitFor({ timeout: 20_000 });
+            const remove = await page.locator("[data-workspace-remove]").first().boundingBox();
+            if (!remove || remove.height < 44) failures.push(`${tag} P6: Remove is ${remove?.height ?? 0} px tall`);
+            /* Remove starts where the project's name starts, a bordered button on its own line. */
+            const edges = await page.evaluate(() => {
+              const row = document.querySelector("[data-workspace-project]")!;
+              const button = row.querySelector<HTMLElement>("[data-workspace-remove]")!;
+              return { removeLeft: button.getBoundingClientRect().left, nameLeft: row.querySelector("span.truncate")!.getBoundingClientRect().left, border: getComputedStyle(button).borderTopWidth };
+            });
+            readings.push({ tag, state: "P6-remove", ...edges });
+            if (Math.abs(edges.removeLeft - edges.nameLeft) > 1 || edges.border === "0px") failures.push(`${tag} P6: Remove ${JSON.stringify(edges)}`);
+            await frame(page, tag, "P6", [["[data-workspace-title]", client[lang]], ["[data-workspace-remove]", words(lang, "workspaces.page.remove")], ["[data-workspace-delete-blocked]", words(lang, "workspaces.deleteBlocked")]]);
+          } finally { await context.close(); }
+        }
+      }
+      fs.mkdirSync("evidence/team-workspaces", { recursive: true });
+      fs.writeFileSync("evidence/team-workspaces/phone.json", JSON.stringify({
+        driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", block: "team workspaces slice (a) on the phone",
+        frames: readings.filter((reading) => typeof reading.file === "string").length, failures, readings,
+      }, null, 2) + "\n");
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 600_000);
+});
