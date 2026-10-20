@@ -8,7 +8,7 @@ import { readAsksYouSettings, readOpenRouterApiKey } from "@/lib/asks/settings";
 import { mutateOperatorAsks, spendMonth } from "@/lib/asks/store";
 import { projectInfoFromCwd } from "@/lib/scanner/describe";
 import { decodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText";
-import { deliveryDedupToken } from "@/lib/runtime/deliveryDedup";
+import { memoryDeliveryEvidence, memoryDeliveryForToken } from "./deliveryEvidence";
 import { FileClaudeDeliveryLedger } from "@/lib/runtime/claudeStreamBrokerHost";
 import { readStructuredUserMetadata } from "@/lib/selection/structuredUserMetadata";
 import { viewerReleaseOwnsTraffic } from "@/lib/viewerInstrumentation";
@@ -85,8 +85,7 @@ export async function offerForHook(request: Request, input: Record<string, unkno
     // membership, a delegated depth or a board maintenance run. Drafts from
     // the new-agent form carry none of them, with or without a role or parent.
     // Later human messages in the same conversation remain eligible.
-    const delivery = deliveryKey ? Object.values(snapshot.deliveryOperationOwners).find(owner =>
-      owner.conversationId === conversationId && deliveryDedupToken(owner.command.operationId) === deliveryKey) : undefined;
+    const delivery = deliveryKey ? memoryDeliveryForToken(snapshot, conversationId, deliveryKey) : undefined;
     if (delivery?.command.origin?.kind === "agent") { possibleOperator = false; return ""; }
     const humanSubmission = delivery?.command.origin?.kind === "operator" && !delivery.command.operationId.startsWith("spawn_message_");
     const containerLaunch = snapshot.memberships[conversationId]?.some(entry => entry.kind === "pipeline" || entry.kind === "flow");
@@ -112,11 +111,14 @@ export async function offerForHook(request: Request, input: Record<string, unkno
         // registry reservation predates transport and survives reload; without
         // its matching receipt, native authorship remains unproven. Explicit
         // structured operator metadata above needs no such inference.
-        const owners = Object.values(snapshot.deliveryOperationOwners);
+        const relay = prompt.match(/^User message for your branch «[^\n]*» — forward it or handle it yourself:\n([\s\S]*)$/);
+        const rows = memoryDeliveryEvidence(snapshot, conversationId, !!relay);
+        if (!rows) return "";
+        const owners = rows.owners;
         const ownerCounts = new Map<string, number>();
         for (const owner of owners) ownerCounts.set(owner.conversationId, (ownerCounts.get(owner.conversationId) ?? 0) + 1);
         const evidence = new Map(owners.filter(owner => owner.terminalDisposition !== "lost").map(owner => [owner.command.operationId, { conversationId: owner.conversationId, command: owner.command, contentDigest: owner.contentDigest, payloadKind: "unknown" }]));
-        for (const held of Object.values(snapshot.heldDeliveries)) if (snapshot.deliveryOperationOwners[held.command.operationId]?.terminalDisposition !== "lost") evidence.set(held.command.operationId, held);
+        for (const held of rows.deliveries) if (snapshot.deliveryOperationOwners[held.command.operationId]?.terminalDisposition !== "lost") evidence.set(held.command.operationId, held);
         // At the owner's retention bound, absence no longer proves that this
         // native input lacks a machine sender. Compaction markers survive it.
         const incompleteHistory = !!snapshot.deliveryEvidenceCompactions[conversationId] || (ownerCounts.get(conversationId) ?? 0) >= 200;
@@ -125,7 +127,6 @@ export async function offerForHook(request: Request, input: Record<string, unkno
           delivery.conversationId === conversationId && delivery.command.origin?.kind !== "operator"
           && (delivery.contentDigest === contentDigest || delivery.payloadKind !== "text")
           && !index.hasTerminalDelivery(delivery.command.operationId));
-        const relay = prompt.match(/^User message for your branch «[^\n]*» — forward it or handle it yourself:\n([\s\S]*)$/);
         const relayDigest = relay ? structuredContent(relay[1], []).contentDigest : null;
         // A relay reservation belongs to its child conversation, while its
         // terminal receipt belongs to the root. Every matching source delivery

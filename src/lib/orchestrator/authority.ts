@@ -92,15 +92,17 @@ export function authorizedManagerSeats(sources: ManagerAuthoritySources): Author
     const id = sources.resolveAlias(seat.conversationId!);
     byConversation.set(id, [...(byConversation.get(id) ?? []), seat]);
   }
-  const newestRevocation = (conversationId: string): number => Math.max(0, ...revocations
-    .filter((revocation) => sources.resolveAlias(revocation.conversationId) === conversationId)
-    .map((revocation) => revocation.seatEpoch));
+  const newestRevocations = new Map<string, number>();
+  for (const revocation of revocations) {
+    const id = sources.resolveAlias(revocation.conversationId);
+    newestRevocations.set(id, Math.max(newestRevocations.get(id) ?? 0, revocation.seatEpoch));
+  }
 
   const authorized: AuthorizedManagerSeat[] = [];
   for (const [conversationId, claims] of byConversation) {
     if (new Set(claims.map((claim) => claim.project)).size > 1) continue;
     const seat = claims[0]!;
-    if (newestRevocation(conversationId) >= seat.seatEpoch) continue;
+    if ((newestRevocations.get(conversationId) ?? 0) >= seat.seatEpoch) continue;
     if (!factsPermit(sources.conversationFacts(conversationId), seat.project)) continue;
     authorized.push({ conversationId, path: seat.path, project: seat.project });
   }

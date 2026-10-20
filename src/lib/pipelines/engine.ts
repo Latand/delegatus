@@ -13,7 +13,8 @@ import { StateSnapshotChangedError } from "@/lib/state/sqliteStateStore";
 import { controllerSnapshotPorts, StaleControllerFlowError } from "./controllerSnapshot";
 import { attemptEvidenceFloor, attemptAccountPin, currentRuntimeSeat, openRuntimeSwitch, pendingRuntimeSwitchRetry, recoverableRuntimeSwitch, parkRuntimeSwitch, requestRuntimeSwitchRetry, switchOperationKey, driveRuntimeSwitch, runtimeTargetsEqual, hasRuntimeSwitchKill, cancelPendingRuntimeSwitch, RuntimeSwitchSuperseded, runtimeSwitchControlAcknowledgement, runtimeSwitchReconfigureOutcome } from "./runtimeSwitch";
 import { hardenedRedact } from "@/lib/view/compactText";
-import { resolveSendReceipt } from "@/lib/runtime/sendSettlement";
+import { resolveSendReceipt, SEND_LOST_REASON } from "@/lib/runtime/sendSettlement";
+import { FENCED_MESSAGE_RETRY_DELAYS_MS, fencedFirstMessageRetrySafe } from "./fencedFirstMessage";
 import { stageRepairDelivery } from "./repairDelivery";
 import { PUBLICATION_RETRY_DELAYS_MS, publicationInterrupted, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
 import type { RuntimeSwitchDelivery } from "./runtimeSwitch";
@@ -25,8 +26,9 @@ import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { stateDatabaseBusy, stateLockDeferral } from "@/lib/state/lockWait";
 import { agentMemoryHeadroom, memoryKillText, type AgentMemoryKill } from "@/lib/runtime/agentMemory";
 import { claudeHostEndText } from "@/lib/runtime/hostEndCause";
+import { cpuPriorityEnv, type CpuPrioritySource } from "@/lib/runtime/cpuPriority";
 import { CPU_PRESSURE_DETAIL_PREFIXES, cpuPressureHoldDetail, machineCpuPressureGate, machineCpuPressurePollMs, type CpuPressureHold } from "@/lib/runtime/cpuPressure";
-import { instanceCpuAdmissionQueue } from "@/lib/runtime/cpuAdmissionScope";
+import { instanceCpuPrioritySource, instanceCpuAdmissionQueue } from "@/lib/runtime/cpuAdmissionScope";
 import { stateDir } from "@/lib/configDir";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -245,6 +247,10 @@ export type PipelineSpawnReceipt = PipelineStageSpawn & {
   roleMemoryRetrySafe?: boolean;
   /** The reserved session is still this conversation's current generation. */
   currentGeneration?: boolean;
+  /** Generation identity checked independently from the retry-claim fence. */
+  generationMatches?: boolean;
+  /** Persisted retry owner, used to resume this controller's idempotent claim. */
+  retryClaimId?: string | null;
   /** The artifact path the launch reserved, whether or not the identity fence
       publishes it (#1750). Read for one purpose only — whether a transcript
       exists on disk — which is what decides that an unverified first delivery
@@ -327,9 +333,10 @@ export interface PipelinePorts {
   /** Original launch/message journal evidence, freshly fenced by the failed
       receipt. An unavailable read never proves that a prompt was absent. */
   unpublishedLaunchRetrySafe?(launchId: string): Promise<boolean>;
+  fencedFirstMessageRetrySafe?(launchId: string, conversationId: string, eligible: () => boolean): Promise<boolean>;
   drainHold?(): DrainLease | null;
   /** A held stage start waits in the shared bounded CPU queue; null admits. */
-  cpuPressureHold?(key?: string): CpuPressureHold | null;
+  cpuPressureHold?(key?: string, priority?: CpuPrioritySource): CpuPressureHold | null;
   cpuAdmissionReconcile?(admission?: Pick<PipelinePorts, "drainHold" | "structuredDeliveryPublication" | "now">): void | Promise<void>;
   cpuAdmissionSuspend?(key: string): void;
   observeControllerLeaseHold?(heldMs: number): void;
@@ -861,7 +868,7 @@ async function spawnPipelineAgent(
   try {
     const guard = await performanceSpans.wait("pipeline.git-guard-prepare", () =>
       prepareStageGitGuard(begun.receipt.launchId, input.cwd, realExec, new Date().toISOString()));
-    guardedAccount = { ...account, env: { ...account.env, ...guard } };
+    guardedAccount = { ...account, env: { ...account.env, ...guard, ...cpuPriorityEnv(instanceCpuPrioritySource(findPipelineRecord(input.membership.containerId!)?.taskIds ?? [])) } };
     // The same reservation callback rechecks durable activation after setup
     // yielded. A pause or ownership change still prevents native dispatch.
     message = await withCurrentRoleMemory(async () => {
@@ -1475,13 +1482,19 @@ const ADOPTION_MEMBERSHIPS: RegistryRowProjector<"memberships", RegistryFile["me
 
 /** A retained generation can use an id from the transcript filename. Its
  * path and the original native entry must agree on this launch. */
-function stageLaunchGenerationMatches(receipt: RegistryFile["receipts"][string] | null,
+function stageLaunchGenerationIdentityMatches(receipt: RegistryFile["receipts"][string] | null,
   generation: { engine: string; path: string } | null | undefined,
   entry: Pick<AgentRegistryEntry, "artifactPath" | "structuredHostOperationId"> | null | undefined): boolean {
-  if (!receipt?.key || !receipt.artifactPath || receipt.retryClaim) return false;
+  if (!receipt?.key || !receipt.artifactPath) return false;
   if (!generation || !entry || generation.engine !== receipt.key.engine || generation.path !== receipt.artifactPath
     || entry.artifactPath !== receipt.artifactPath) return false;
   return !entry.structuredHostOperationId || entry.structuredHostOperationId === receipt.launchId;
+}
+
+function stageLaunchGenerationMatches(receipt: RegistryFile["receipts"][string] | null,
+  generation: { engine: string; path: string } | null | undefined,
+  entry: Pick<AgentRegistryEntry, "artifactPath" | "structuredHostOperationId"> | null | undefined): boolean {
+  return !receipt?.retryClaim && stageLaunchGenerationIdentityMatches(receipt, generation, entry);
 }
 
 export function defaultPipelinePorts(
@@ -1613,10 +1626,10 @@ export function defaultPipelinePorts(
        structured hosting switched off there is no publication to wait for and
        the spawn must fail in the open, as it always did. */
     drainHold: () => activeDrain(),
-    cpuPressureHold: (key) => {
+    cpuPressureHold: (key, priority) => {
       const gate = machineCpuPressureGate();
       if (!gate) return null;
-      return gate.check(key);
+      return gate.check(key, priority);
     },
     cpuAdmissionReconcile: async (admission) => {
       let waiting: Pipeline[];
@@ -1679,6 +1692,8 @@ export function defaultPipelinePorts(
           && (!evidence.entry.structuredHost?.process || processIdentityStatus(evidence.entry.structuredHost.process) === "dead")
           && !(evidence.entry.structuredTerminationSurvivors ?? []).some(process => processIdentityStatus(process) !== "dead"),
         currentGeneration: stageLaunchGenerationMatches(receipt, evidence.generation, evidence.entry),
+        generationMatches: stageLaunchGenerationIdentityMatches(receipt, evidence.generation, evidence.entry),
+        retryClaimId: receipt.retryClaim?.claimId ?? null,
       };
     },
     recoverStagedLaunch: (launchId, eligible) => withViewerOperation("pipelines.evidence", async () => {
@@ -1821,6 +1836,15 @@ export function defaultPipelinePorts(
         delivery.command.operationId === `spawn_message_${launchId}`
           && (delivery.attempts !== 0 || delivery.state !== "failed" || deliveryMayHaveArrived(current, delivery)));
     },
+    fencedFirstMessageRetrySafe: (launchId, conversationId, eligible) => withViewerOperation("pipelines.evidence", async () => {
+      const before = registry.spawnReceipt(launchId);
+      if (before?.state !== "failed" || before.conversationId !== conversationId || before.error !== SEND_LOST_REASON) return false;
+      const client = dependencies.spawnRecoveryClient ? dependencies.spawnRecoveryClient() : runtimeHostClient();
+      return fencedFirstMessageRetrySafe(client, launchId, conversationId, () => {
+        const current = registry.spawnReceipt(launchId);
+        return eligible() && current?.state === "failed" && current.conversationId === conversationId && current.error === before.error;
+      });
+    }),
     claimSpawnRetry: async (launchId, claimId) => {
       const result = (await registry.deliveryWriteOrBusy({ label: "pipeline.spawn-retry", operationId: launchId },
         () => registry.claimFailedSpawnForRetry(launchId, claimId))).kind;
@@ -6722,6 +6746,8 @@ async function spawnRunStage(
            It joins the receipt-gated route, where the transcript decides. */
         const unverifiedDelivery = isUnverifiedDeliverySpawnFailure(message);
         const prepublicationInterruption = isPrepublicationSpawnFailure(message);
+        const fencedFirstMessage = message === SEND_LOST_REASON;
+        if (fencedFirstMessage && attempt.launchId === null) throw error;
         if (prepublicationInterruption && attempt.launchId === null) throw error;
         /* A busy account or an unreachable runtime host is retryable before
            the registry publishes a launch claim. Once a callback supplied an
@@ -6729,12 +6755,12 @@ async function spawnRunStage(
            the spawn layer's own retry-safe verdict and the launch is retired
            below; anything else parks, and the existing receipt recovery
            adopts a launch that settles after all. */
-        if ((accountMutationContention || hostUnavailable || unverifiedDelivery || prepublicationInterruption) && attempt.launchId !== null) {
+        if ((accountMutationContention || hostUnavailable || unverifiedDelivery || prepublicationInterruption || fencedFirstMessage) && attempt.launchId !== null) {
           const receipt = ports.spawnReceipt(attempt.launchId);
           if (receipt?.state !== "failed" || receipt.launchId !== attempt.launchId) throw error;
           failedReceipt = receipt;
         }
-        if (isStructuredDeliveryControllerFailure(message) || accountMutationContention || hostUnavailable || unverifiedDelivery || prepublicationInterruption) {
+        if (isStructuredDeliveryControllerFailure(message) || accountMutationContention || hostUnavailable || unverifiedDelivery || prepublicationInterruption || fencedFirstMessage) {
           controllerFailure = message;
           break;
         }
@@ -7022,7 +7048,7 @@ async function holdStageLaunch(pipeline: Pipeline, ports: PipelinePorts, persist
   }
   // Heavy work yields to production under CPU pressure. Only a fresh stage
   // start asks; recovery and reconciliation of launched work never do.
-  const pressure = ports.cpuPressureHold?.(cpuStageKey(pipeline));
+  const pressure = ports.cpuPressureHold?.(cpuStageKey(pipeline), instanceCpuPrioritySource(pipeline.taskIds));
   if (pressure) {
     const detail = cpuPressureHoldDetail(pressure);
     if (pipeline.stateDetail !== detail) { pipeline.stateDetail = detail; await persist(); }
@@ -7789,6 +7815,13 @@ async function tickRunStage(
      lag behind receipt settlement or fail to answer, so it has no authority to
      hide the recorded drain cause behind a later transcript park (#1326). */
   if (terminalSpawnFailure && !(isUnverifiedDeliverySpawnFailure(terminalSpawnFailure) && attempt.agentPath)) {
+    if (terminalSpawnFailure === SEND_LOST_REASON && spawnReceipt?.state === "failed") {
+      const now = ports.now();
+      const retry = await deferRetiredLaunchRetry(pipeline, stage, attempt, spawnReceipt, now, now, ports);
+      if (retry === "waiting") return;
+      if (retry === "exhausted") { await park(pipeline, controllerWaitParkDetail(attempt, now, terminalSpawnFailure), attempt); return; }
+      if (retry === "delivered") { await park(pipeline, unverifiedLaunchRetryRefusal(terminalSpawnFailure), attempt); return; }
+    }
     await park(pipeline, terminalSpawnFailure, attempt);
     return;
   }
@@ -9930,7 +9963,8 @@ async function reconcileParkedStructuredSpawn(pipeline: Pipeline, ports: Pipelin
   if (!attempt.activation && !attempt.report && !attempt.historical && !openRuntimeSwitch(attempt)
     && receipt?.state === "failed" && receipt.launchId === attempt.launchId
     && receipt.conversationId === attempt.conversationId
-    && (receipt.neverBegan === true || isPrepublicationSpawnFailure(attempt.error ?? "") && isPrepublicationSpawnFailure(receipt.error ?? ""))) {
+    && (receipt.neverBegan === true || attempt.error === SEND_LOST_REASON && receipt.error === SEND_LOST_REASON
+      || isPrepublicationSpawnFailure(attempt.error ?? "") && isPrepublicationSpawnFailure(receipt.error ?? ""))) {
     const now = ports.now();
     if (unixMs(attempt.controllerWait?.retryAfter ?? "") > unixMs(now)) return false;
     const result = await deferRetiredLaunchRetry(pipeline, stage, attempt, receipt, now, now, ports);
@@ -10075,6 +10109,27 @@ async function deferRetiredLaunchRetry(
   ports: PipelinePorts,
 ): Promise<"waiting" | "exhausted" | "settled" | "delivered"> {
   const failure = receipt.error ?? `stage spawn cannot recover from receipt state ${receipt.state}`;
+  const fencedFirstMessage = failure === SEND_LOST_REASON;
+  const claimId = `${pipeline.id}:${stage.id}:${receipt.launchId}`;
+  const eligible = () => {
+    const current = findPipelineRecord(pipeline.id);
+    const a = current && currentAttempt(current, stage.id);
+    const launch = ports.spawnReceipt(receipt.launchId);
+    return !!current && ["running", "needs_decision"].includes(current.state) && current.cursor?.stageId === stage.id
+      && a?.n === attempt.n && a.launchId === receipt.launchId && a.conversationId === receipt.conversationId
+      && !a.report && !a.verdict && !a.completedAt && !a.historical && !openRuntimeSwitch(a)
+      && launch?.state === "failed" && launch.launchId === receipt.launchId && launch.conversationId === receipt.conversationId
+      && launch.error === failure
+      && (launch.currentGeneration !== false
+        || launch.retryClaimId === claimId && launch.generationMatches === true)
+      && !pipelineSurvivorRefusal(current);
+  };
+  const fencedRetrySafe = async () => eligible()
+    && await ports.fencedFirstMessageRetrySafe?.(receipt.launchId, receipt.conversationId, eligible) === true && eligible();
+  if (fencedFirstMessage) {
+    if (!await fencedRetrySafe()) return "delivered";
+    if ((attempt.fencedMessageRetries ?? 0) >= FENCED_MESSAGE_RETRY_DELAYS_MS.length) return "exhausted";
+  }
   /* The only class whose failure may already have reached the agent (#1750).
      The transcript decides: an artifact the spawn layer named and never
      created proves no turn started and the prompt is safe to send again;
@@ -10097,7 +10152,7 @@ async function deferRetiredLaunchRetry(
   const neverBegan = receipt.neverBegan === true;
   const originalError = receipt.error;
   let claim: Awaited<ReturnType<PipelinePorts["claimSpawnRetry"]>>;
-  try { claim = await ports.claimSpawnRetry(receipt.launchId, `${pipeline.id}:${stage.id}:${receipt.launchId}`); }
+  try { claim = await ports.claimSpawnRetry(receipt.launchId, claimId); }
   catch (error) {
     if (!(error instanceof RegistryWriterBusyError)) throw error;
     if (bookControllerWaitRound(attempt, since, now, ports,
@@ -10111,20 +10166,24 @@ async function deferRetiredLaunchRetry(
     return "waiting";
   }
   if (claim !== "claimed") return "settled";
+  if (fencedFirstMessage && !await fencedRetrySafe()) return "delivered";
   const currentReceipt = ports.spawnReceipt(receipt.launchId);
   if (!currentReceipt || currentReceipt.state !== "failed" || currentReceipt.launchId !== receipt.launchId
     || currentReceipt.conversationId !== receipt.conversationId || currentReceipt.error !== originalError
     || neverBegan && currentReceipt.neverBegan !== true) return "settled";
   const startupCondition: ProviderCondition = { kind: "host_death", scope: null, resetLabel: null, label: "failed startup" };
   const recoverySummary = `failed startup: ${redactBounded(failure, 300)}; keeping uncommitted work`;
-  if (prepublicationInterruption || (receipt.staged === true && attempt.effectiveRole.access === "read-write")) {
+  if (fencedFirstMessage || prepublicationInterruption || (receipt.staged === true && attempt.effectiveRole.access === "read-write")) {
     const lastRecovery = attempt.providerRecoveries?.at(-1);
     if (lastRecovery?.action !== "wait" || lastRecovery.condition.label !== startupCondition.label) {
       recordProviderRecovery(attempt, "wait", startupCondition, `waiting after ${recoverySummary}`, now);
     }
-    const stopped = await stopStageForRecovery({ stageId: stage.id, attempt: attempt.n,
+    const target = { stageId: stage.id, attempt: attempt.n,
       launchId: receipt.launchId, conversationId: attempt.conversationId ?? receipt.conversationId,
-      agentPath: attempt.agentPath ?? receipt.stagedTranscript ?? receipt.transcript ?? null, paneId: attempt.paneId }, ports);
+      agentPath: attempt.agentPath ?? receipt.stagedTranscript ?? receipt.transcript ?? null, paneId: attempt.paneId };
+    const stopped = fencedFirstMessage
+      ? await ports.stopStageAgent(target, { automatic: true, recordedIdentity: true, eligible })
+      : await stopStageForRecovery(target, ports);
     if (!["stopped", "not-running"].includes(stopped.outcome)) {
       if (stopped.outcome === "unresolved") rememberUnresolvedTermination(attempt, stopped, now);
       if (stopped.outcome === "unresolved") {
@@ -10139,6 +10198,7 @@ async function deferRetiredLaunchRetry(
     // Stop is an async boundary too: completion or new message evidence wins
     // before retirement, including for a read-only reviewer.
     if (prepublicationInterruption && !await safeToReplace()) return "delivered";
+    if (fencedFirstMessage && !await fencedRetrySafe()) return "delivered";
     const current = ports.spawnReceipt(receipt.launchId);
     if (!current || current.state !== "failed" || current.conversationId !== receipt.conversationId) return "settled";
     if (attempt.effectiveRole.access === "read-write") {
@@ -10146,7 +10206,14 @@ async function deferRetiredLaunchRetry(
       pipeline.cursor!.input = attempt.input;
     }
   }
-  if (bookControllerWaitRound(attempt, since, now, ports, neverBegan
+  if (fencedFirstMessage) {
+    const retries = attempt.fencedMessageRetries ?? 0;
+    const delay = FENCED_MESSAGE_RETRY_DELAYS_MS[retries]!;
+    attempt.fencedMessageRetries = retries + 1;
+    attempt.controllerWait = { startedAt: attempt.controllerWait?.startedAt ?? now, rounds: retries + 1,
+      retryAfter: new Date(unixMs(now) + delay).toISOString() };
+    ports.scheduleTick?.(delay);
+  } else if (bookControllerWaitRound(attempt, since, now, ports, neverBegan
     ? { budgetMs: SPAWN_HOST_WAIT_BUDGET_MS, retryMaxMs: SPAWN_HOST_RETRY_MAX_MS }
     : spawnWaitBudget(failure)) === "exhausted") return "exhausted";
   const retired = attempt.retiredLaunches ?? [];
@@ -10167,14 +10234,15 @@ async function deferRetiredLaunchRetry(
   attempt.paneId = null;
   attempt.state = "pending";
   attempt.error = null;
-  if ((prepublicationInterruption || receipt.neverBegan) && pipeline.state === "needs_decision") {
+  if ((fencedFirstMessage || prepublicationInterruption || receipt.neverBegan) && pipeline.state === "needs_decision") {
     pipeline.state = "running";
     await clearEngineTaskNote(pipeline);
   }
   setCursorState(pipeline, stage.id, "pending");
   syncControllerWaitStateDetail(pipeline, attempt, failure);
+  if (fencedFirstMessage) pipeline.stateDetail = `stage first message fenced before execution; automatic retry ${attempt.fencedMessageRetries} of ${FENCED_MESSAGE_RETRY_DELAYS_MS.length} at ${attempt.controllerWait!.retryAfter}`;
   if (neverBegan) pipeline.stateDetail = `stage spawn deferred: ${redactBounded(failure, 300)}; retry at ${attempt.controllerWait?.retryAfter ?? now}`;
-  if (receipt.staged === true && attempt.effectiveRole.access === "read-write") {
+  if (!fencedFirstMessage && receipt.staged === true && attempt.effectiveRole.access === "read-write") {
     pipeline.stateDetail = `waiting to relaunch after ${recoverySummary}; next try at ${attempt.controllerWait?.retryAfter ?? now}`;
   }
   return "waiting";
@@ -10187,6 +10255,7 @@ function controllerFailureReason(failure: string): string {
 const PREPUBLICATION_RETRY_REFUSAL_SUFFIX = "; original launch and first-message journal evidence do not prove a safe replacement";
 
 function unverifiedLaunchRetryRefusal(failure: string): string {
+  if (failure === SEND_LOST_REASON) return `${failure}; original first-message journal fence could not be verified; original launch retained`;
   if (isPrepublicationSpawnFailure(failure)) {
     return `${controllerFailureReason(failure)}${PREPUBLICATION_RETRY_REFUSAL_SUFFIX}`;
   }
@@ -10236,7 +10305,7 @@ function isLaunchAdmissionContention(error: unknown): boolean {
 }
 
 function isTransientStructuredSpawnFailure(failure: string): boolean {
-  return isStructuredDeliveryControllerFailure(failure)
+  return failure === SEND_LOST_REASON || isStructuredDeliveryControllerFailure(failure)
     || isAccountMutationContention(failure)
     || isRuntimeHostUnavailableSpawnFailure(failure)
     || isUnverifiedDeliverySpawnFailure(failure)
@@ -10344,6 +10413,7 @@ function nextBoundedWait(
 }
 
 function controllerWaitParkDetail(attempt: PipelineStageAttempt, now: string, failure: string): string {
+  if (failure === SEND_LOST_REASON) return `stage first-message recovery exhausted after ${attempt.fencedMessageRetries ?? 0} automatic retries: ${failure}`;
   const seconds = Math.round(controllerWaitElapsedMs(attempt, unixMs(now)) / 1_000);
   const rounds = attempt.controllerWait?.rounds ?? 0;
   return `stage spawn failed after ${rounds} retries over ${seconds}s: ${controllerFailureReason(failure)}`;

@@ -65,3 +65,9 @@ export function instanceCpuAdmissionFile(): string {
 export function instanceCpuAdmissionQueue(): CpuAdmissionQueue {
   return machineCpuAdmissionQueue(isolatedCpuAdmissionDir(stateDir()));
 }
+
+/** The migrated task database is owned by the lane's installation, even when
+ * a gate's HOME and state root are sandboxed later. */
+export function instanceCpuPrioritySource(taskIds: readonly string[]): import("./cpuPriority").CpuPrioritySource {
+  return { database: path.join(stateDir(), "state.sqlite"), taskIds: [...taskIds] };
+}

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { afterAll, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
@@ -14,11 +15,13 @@ import { UNKNOWN_RESET_RECHECK_MS } from "./accountPark";
 import type { RuntimeHostClient } from "./client";
 import { reconcileDeadStructuredRegistryHost } from "./registry";
 import { recoverDeadStructuredConversation, StructuredResumeUnpublishedError } from "./structuredRecovery";
-import { structuredResumeSessionId } from "./structuredSpawn";
+import { materializeStructuredHostAccess, structuredResumeSessionId } from "./structuredSpawn";
 import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
 import { withAccountMutationLockAsync } from "@/lib/accounts/accountMutation";
 import { statePath } from "@/lib/configDir";
 import { trackAccountLeases } from "@/lib/accounts/accountMutation.contention.fixture";
+import { buildPipeline, loadPipelines, savePipelines } from "@/lib/pipelines/store";
+import { cpuPriorityFromEnv, readCpuPriority } from "./cpuPriority";
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-recovery-"));
 /* Publish-readiness now reads the limits cache out of the viewer state dir, so
@@ -630,6 +633,27 @@ test("dead Codex structured recovery retains ownership and starts a pane-less re
     goal: { objective: "Restore Codex review session", status: "active", tokensUsed: null, timeUsedSeconds: null },
   });
   const conversation = registry.ensureConversation("codex", artifactPath, "retained-account");
+  const pipelineId = `recovery-priority-${sessionId}`;
+  const taskId = `recovery-priority-task-${sessionId}`;
+  savePipelines([...loadPipelines(), buildPipeline({
+    id: pipelineId,
+    task: "Recover prioritized stage",
+    taskIds: [taskId],
+    project: "fixture",
+    repoDir: cwd,
+    stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: null, onFail: null,
+      effectiveRole: { roleId: "builder", engine: "codex", model: "gpt-6.1-sol", effort: "high", access: "read-write", promptScaffold: "Builder" } }],
+    srcPath: null,
+    srcConversationId: null,
+    now: new Date(0).toISOString(),
+  })]);
+  registry.rememberMembership(conversation.id, {
+    kind: "pipeline", containerId: pipelineId, role: "builder", slot: "build",
+    stageId: "build", stageOrder: 0, round: 1, parentConversationId: null,
+  });
+  const taskDb = new Database(statePath("state.sqlite"));
+  taskDb.query("INSERT OR REPLACE INTO state_rows (collection, row_key, value_json, row_order, row_revision, controller_active) VALUES ('tasks', ?, ?, 1, 1, 0)")
+    .run(`t:${taskId}`, JSON.stringify({ priority: "high" }));
   const original = registry.beginSpawnRequest({
     engine: "codex",
     cwd,
@@ -690,6 +714,19 @@ test("dead Codex structured recovery retains ownership and starts a pane-less re
     },
     spawn: async (input) => {
       spawnCalls.push(input);
+      const prioritySource = cpuPriorityFromEnv(input.account.env);
+      expect(prioritySource.taskIds).toEqual([taskId]);
+      expect(readCpuPriority(prioritySource)).toBe("high");
+      const access = materializeStructuredHostAccess(
+        { readOnly: true, sandbox: "restricted" }, input.account.env, "recovery-capability", path.join(cwd, "scratch"),
+      );
+      try {
+        expect(cpuPriorityFromEnv(access.env)).toEqual(prioritySource);
+      } finally { access.cleanup(); }
+      taskDb.query("UPDATE state_rows SET value_json = ? WHERE collection = 'tasks' AND row_key = ?")
+        .run(JSON.stringify({ priority: "low" }), `t:${taskId}`);
+      expect(readCpuPriority(prioritySource)).toBe("low");
+      expect(readCpuPriority(cpuPriorityFromEnv(input.account.env))).toBe("low");
       expect(input.prompt).toBe("");
       expect(structuredResumeSessionId(input)).toBe(sessionId);
       expect(input.receipt).toMatchObject({
@@ -739,6 +776,8 @@ test("dead Codex structured recovery retains ownership and starts a pane-less re
     source: "viewer-spawn",
     evidence: { launchId: original.receipt.launchId },
   });
+  taskDb.close();
+  savePipelines(loadPipelines().filter(pipeline => pipeline.id !== pipelineId));
 });
 
 test("dead Claude structured recovery retains ownership and starts a pane-less resume host", async () => {

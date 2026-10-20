@@ -106,13 +106,16 @@ export function loopbackLink(url: string): boolean {
 }
 
 /** A dialog over the Team page: centred on the desktop, a bottom sheet on
-    the phone. Escape, the scrim and × close it; Tab stays inside. */
-export function TeamDialog({ title, onClose, children, closeLabel, testId }: {
+    the phone. Escape, the scrim and × close it; Tab stays inside. A `footer`
+    stands under the scrolling body, so its actions stay in view whatever the
+    body holds. */
+export function TeamDialog({ title, onClose, children, closeLabel, testId, footer }: {
   title: string;
   onClose: () => void;
   children: ReactNode;
   closeLabel: string;
   testId: string;
+  footer?: ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   useModalLayer({ containerRef: ref, onClose });
@@ -134,7 +137,12 @@ export function TeamDialog({ title, onClose, children, closeLabel, testId }: {
             <X className="h-4 w-4" aria-hidden />
           </button>
         </div>
-        <div className="overflow-y-auto px-4 py-4 pb-[max(16px,env(safe-area-inset-bottom))]">{children}</div>
+        <div className={`min-h-0 overflow-y-auto px-4 py-4 ${footer ? "" : "pb-[max(16px,env(safe-area-inset-bottom))]"}`}>{children}</div>
+        {footer ? (
+          <div className="flex shrink-0 justify-end gap-2 border-t border-border px-4 py-3 pb-[max(12px,env(safe-area-inset-bottom))] max-sm:grid max-sm:grid-cols-2" data-team-dialog-footer="">
+            {footer}
+          </div>
+        ) : null}
       </div>
     </div>,
     document.body,
