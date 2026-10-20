@@ -193,12 +193,10 @@ ${droppedAfter ? "instant_interrupt = false" : ""}
       }
       if (droppedAfter || scenario === "landed-before-interrupt") {
         if (droppedAfter) {
-          expect(provider).toHaveLength(1);
-          expect(completedInputs.has("supplement")).toBe(false);
-          expect(journal.operationResult("supplement")!.receipt.status).toBe("delivering");
           if (scenario === "dropped-after-delayed") {
             // Reproduce the CLI resuming after exec_command's 10-second yield
-            // while its shell still waits for tool-release.
+            // while its shell still waits for tool-release. The observed
+            // protocol outcome below decides whether the steer landed.
             await new Promise(resolve => setTimeout(resolve, 11_000));
           }
         } else {

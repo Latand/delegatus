@@ -2,7 +2,7 @@
 
 The five agent/seat delivery call sites use `steer-or-queue`. Codex steering has detached observation, same-operation queue fallback, an order barrier, and unknown outcomes that require verification. The approved journal exception keeps the observed turn on the receipt without persisting it as an outbox fence. Plain sends and the other policies keep their fences.
 
-The real-CLI cases exercise sampling, a running `exec_command`, idle delivery, a compaction refusal, and both turn-ending race orders. They assert original identity, exactly one recorded user item, retained agent origin, and no native-queue entry. Journal/receipt tests also exercise refusal, dropped input and unknown outcome, plus migration into an active successor turn.
+The real-CLI cases exercise sampling, a running `exec_command`, idle delivery, a compaction refusal, and turn-ending races. `dropped-after` accepts either observed protocol outcome after steer acceptance: Codex may consume the input before interruption, or the host may queue it after observing `steer-dropped`. The delayed case pauses beyond the CLI's 10-second yield before waiting on those protocol events. Every outcome asserts original identity, exactly one recorded user item, retained agent origin, and no native-queue entry. Journal/receipt tests also exercise refusal, dropped input and unknown outcome, plus migration into an active successor turn.
 
 ## Isolation and commands
 
@@ -131,7 +131,8 @@ CI run 39359752101 failed `dropped-after` on Codex 0.163.0 at
 (job 118426922774). Both logs show the supplement becoming `delivered`
 before the interrupt receipt becomes `interrupted`. The fixture then waits
 30 seconds for `queued / steer-dropped`, an outcome that cannot follow that
-confirmed delivery.
+confirmed delivery. The reviewed fixture added an observed-outcome wait, but
+retained pre-interrupt assertions that still required the input to be absent.
 
 The baseline at `6be3a78b7` was measured with Bun 1.4.0, real npm-installed
 Codex executables, and the CI fixture's local Responses provider. The provider
@@ -156,10 +157,11 @@ status. No required protocol event is missing; the absent transition is
 `queued / steer-dropped`. Natural intermittency was observed in CI; the local
 unforced samples stayed green.
 
-`src/lib/runtime/codexSteerDelivery.integration.test.ts` now brackets both
-outcomes. `dropped-after` waits for a real tool's `tool-running` handshake,
-holds that tool through steer acceptance, verifies the supplement has no
-completed user item, and interrupts before the tool can finish. The separate
+`src/lib/runtime/codexSteerDelivery.integration.test.ts` covers both outcomes.
+`dropped-after` waits for a real tool's `tool-running` handshake, holds that
+tool through steer acceptance, and interrupts before the tool can finish. It
+waits for the observed completion or `steer-dropped` event before deciding
+which outcome occurred. The separate
 `landed-before-interrupt` case waits for the supplement's `item/completed`
 and durable delivered receipt before issuing the interrupt. Both wait for
 the original turn's `turn/completed` and the interrupt receipt, then require
@@ -182,11 +184,19 @@ bash scripts/gate-slot.sh bun test ./src/lib/runtime/codexSteerDelivery.integrat
 ```
 
 Repeat the test command 20 times per version with the fresh roots described
-above. The baseline-only command selects `real Codex steer delivery:
-dropped-after$`; the baseline file campaign omits the name filter. The complete
-CI command is `bun scripts/verify-native-codex-runtime.ts "$NATIVE_CODEX_QUEUE_TEST_BINARY"`.
+above. The required acceptance case selects `real Codex steer delivery:
+dropped-after$`; the delayed ordering probe selects
+`real Codex steer delivery: dropped-after-delayed$`. The baseline file campaign
+omits the name filter. The complete CI command is
+`bun scripts/verify-native-codex-runtime.ts "$NATIVE_CODEX_QUEUE_TEST_BINARY"`.
 
-Final focused campaign (same Bun, provider and isolation):
+Historical focused campaign, before the timing repair (same Bun, provider and isolation):
+
+This campaign used fixture hash
+`7d48d0c098c9d57beca5ccf78bd0856995aead7a06aa83c8ea51b3338c60a260` and
+selected `dropped-after` plus `landed-before-interrupt`. It predates the delayed
+ordering case and the removal of pre-settlement assertions; the results below
+are historical evidence, not validation of the final fixture.
 
 | Codex | Dropped input | Input consumed before interrupt |
 |---|---:|---:|
@@ -195,11 +205,11 @@ Final focused campaign (same Bun, provider and isolation):
 | 0.162.1 | 20/20 consecutive pass (100%) | 20/20 consecutive pass (100%) |
 | 0.163.0 | 20/20 consecutive pass (100%) | 20/20 consecutive pass (100%) |
 
-Each of the 80 independent test processes completed both cases: 160 passed,
-0 failed. The tested integration file's SHA-256 is
+Each of the 80 independent test processes completed both historical cases:
+160 passed, 0 failed. The tested integration file's SHA-256 was
 `7d48d0c098c9d57beca5ccf78bd0856995aead7a06aa83c8ea51b3338c60a260`.
 
-The complete CI native runner also passed locally against the tested source:
+The complete CI native runner passed locally against that historical source:
 
 | Codex | Named files completed | Passed | Skipped | Failed |
 |---|---:|---:|---:|---:|
@@ -208,3 +218,50 @@ The complete CI native runner also passed locally against the tested source:
 
 Hosted CI follows pipeline publication. The stage does not push or create a
 remote branch.
+
+## Final focused campaign after timing repair
+
+The final integration fixture SHA-256 is
+`6457da98e68e696656e313cc8bb2d3b09df3748bb437b3b4b073e25e130bb416`.
+With Bun 1.4.0 and the local Responses provider, `dropped-after` passed 20/20
+consecutive isolated runs on each CI matrix version: 0.154.0, 0.159.0, 0.162.1
+and 0.163.0. The result is 80 passed, 0 failed. The delayed case
+`dropped-after-delayed` passed once on each of the same four versions; each run
+waited beyond the CLI's 10-second yield and then settled from the observed
+protocol outcome. No protocol-event timeout occurred. Every run retained its
+receipt, replayed the original operation without another send, and recorded
+one supplement item.
+
+The repeated command below selects only `dropped-after`; each invocation gets
+fresh roots and runs through the project's CPU gate. To repeat the delayed
+probe, change the test-name pattern to
+`real Codex steer delivery: dropped-after-delayed$` and run it once per
+version.
+
+```sh
+set -euo pipefail
+CAMPAIGN_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/steer-campaign.XXXXXX")
+GATE=scripts/gate-slot.sh
+for VERSION in 0.154.0 0.159.0 0.162.1 0.163.0; do
+  CLI_ROOT="$CAMPAIGN_ROOT/cli-$VERSION"
+  npm install --prefix "$CLI_ROOT" --no-save --ignore-scripts "@openai/codex@$VERSION"
+  BINARY="$CLI_ROOT/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"
+  test "$("$BINARY" --version)" = "codex-cli $VERSION"
+  for ITERATION in $(seq -w 1 20); do
+    ROOT="$CAMPAIGN_ROOT/run-$VERSION-$ITERATION"
+    mkdir -p "$ROOT/home" "$ROOT/config" "$ROOT/cache" "$ROOT/data" \
+      "$ROOT/state" "$ROOT/tmp" "$ROOT/codex" "$ROOT/claude"
+    HOME="$ROOT/home" XDG_CONFIG_HOME="$ROOT/config" XDG_CACHE_HOME="$ROOT/cache" \
+      XDG_DATA_HOME="$ROOT/data" LLV_STATE_DIR="$ROOT/state" TMPDIR="$ROOT/tmp" \
+      CODEX_HOME="$ROOT/codex" CLAUDE_CONFIG_DIR="$ROOT/claude" \
+      NATIVE_CODEX_QUEUE_TEST_BINARY="$BINARY" \
+      bash "$GATE" bun test ./src/lib/runtime/codexSteerDelivery.integration.test.ts \
+        --test-name-pattern 'real Codex steer delivery: dropped-after$'
+  done
+done
+```
+
+The final test covers either observed settlement path after the steer is
+accepted. Codex may report the supplement as completed before interruption, or
+the host may observe `steer-dropped` and queue the same operation for delivery.
+The 30-second event deadline and 90-second test limit remain unchanged.
