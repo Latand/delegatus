@@ -342,9 +342,9 @@ export async function readHistoryProjection<T>(read: (db: Database) => T, option
 
 export function historyPipelineRef(db: Database, conversationId: string | null, path: string): AgentLivenessPipelineRef | null {
   const read = (field: "conversationId" | "agentPath", value: string) => db.query<AgentLivenessPipelineRef,[string]>(`SELECT a.row_key AS pipelineId,a.stageId,a.n AS attempt,
-    a.state AS reportedState,p.state AS reportedPipelineState,a.paneId FROM history_attempts a JOIN history_inputs p USING(collection,row_key)
-    WHERE a.${field}=? AND a.collection='pipelines' AND COALESCE(a.historical,0)=0
-    ORDER BY p.row_order DESC,p.row_key DESC,a.run DESC,a.attempt DESC LIMIT 1`).get(value);
+    a.state AS reportedState,p.state AS reportedPipelineState,a.paneId,a.conversationId,a.agentPath FROM history_attempts a JOIN history_inputs p USING(collection,row_key)
+    WHERE a.${field}=? AND a.collection IN ('pipelines','pipelines_archive') AND COALESCE(a.historical,0)=0
+    ORDER BY (a.collection='pipelines') DESC,p.row_order DESC,p.row_key DESC,a.run DESC,a.attempt DESC LIMIT 1`).get(value);
   return (conversationId ? read("conversationId",conversationId) : null) ?? read("agentPath",path);
 }
 
