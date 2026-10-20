@@ -41,6 +41,27 @@ export function migrateUsage(db: Database): void {
       requests INTEGER NOT NULL, input INTEGER NOT NULL, cache_read INTEGER NOT NULL,
       cache_write INTEGER NOT NULL, cache_write_1h INTEGER NOT NULL, output INTEGER NOT NULL, reasoning INTEGER NOT NULL,
       PRIMARY KEY(host, hour, conversation, model, tier, account)) WITHOUT ROWID`,
+    "CREATE INDEX IF NOT EXISTS usage_hours_pipeline ON usage_hours(host, pipeline, hour) WHERE pipeline IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS usage_hours_conversation ON usage_hours(host, conversation, hour)",
+    "CREATE TABLE IF NOT EXISTS limit_spend_dirty (key TEXT PRIMARY KEY, at INTEGER NOT NULL) WITHOUT ROWID",
+    "CREATE INDEX IF NOT EXISTS limit_spend_dirty_tasks ON limit_spend_dirty(at,key) WHERE key >= 't:' AND key < 't;'",
+    "CREATE TABLE IF NOT EXISTS task_spend_owners (owner TEXT NOT NULL, task TEXT NOT NULL, PRIMARY KEY(owner, task)) WITHOUT ROWID",
+    `CREATE TABLE IF NOT EXISTS task_spend_progress (task TEXT PRIMARY KEY, stamp INTEGER NOT NULL, signature TEXT NOT NULL,
+      owner TEXT NOT NULL, cursor TEXT, rows TEXT NOT NULL) WITHOUT ROWID`,
+    "CREATE INDEX IF NOT EXISTS task_spend_owners_task ON task_spend_owners(task, owner)",
+    `CREATE TABLE IF NOT EXISTS usage_limit_rates (account TEXT NOT NULL, window TEXT NOT NULL, day TEXT NOT NULL,
+      rate REAL, rise REAL NOT NULL, weight REAL NOT NULL, source TEXT NOT NULL, plan TEXT,
+      frozen INTEGER NOT NULL DEFAULT 0, computed_at INTEGER NOT NULL, PRIMARY KEY(account, window, day)) WITHOUT ROWID`,
+    "CREATE INDEX IF NOT EXISTS usage_limit_rates_day ON usage_limit_rates(day, account, window)",
+    `CREATE TABLE IF NOT EXISTS task_limit_spend (task TEXT NOT NULL, account TEXT NOT NULL, engine TEXT NOT NULL,
+      tokens INTEGER NOT NULL, unpriced_tokens INTEGER NOT NULL, weight REAL NOT NULL, rated_weight REAL NOT NULL,
+      weekly_pp REAL, window_start INTEGER, window_pp REAL, session_start INTEGER, session_pp REAL,
+      first_hour INTEGER NOT NULL, last_hour INTEGER NOT NULL, floor TEXT, computed_at INTEGER NOT NULL,
+      PRIMARY KEY(task, account)) WITHOUT ROWID`,
+    `CREATE TABLE IF NOT EXISTS limit_spend_meta (singleton INTEGER PRIMARY KEY CHECK(singleton=1), schema INTEGER NOT NULL,
+      seed TEXT NOT NULL DEFAULT 'tasks:', task_revision INTEGER NOT NULL DEFAULT -1, task_key TEXT NOT NULL DEFAULT '',
+      rates_hour INTEGER NOT NULL DEFAULT -1)`,
+    "INSERT OR IGNORE INTO limit_spend_meta(singleton, schema) VALUES(1, 1)",
     `CREATE TABLE IF NOT EXISTS usage_days (${dayDefinition}) WITHOUT ROWID`,
     `CREATE TABLE IF NOT EXISTS usage_days_rebuild (${dayDefinition}) WITHOUT ROWID`,
     `CREATE TABLE IF NOT EXISTS usage_summaries (${summaryDefinition}) WITHOUT ROWID`,
@@ -171,6 +192,10 @@ export function commitUsage(db: Database, batch: UsageBatch): void {
       if (scanned?.ok) addDay(db, "usage_days_rebuild", meta.target_zone, row, counts);
     }
   }
+  if (changed && (batch.owner.pipelineId || batch.owner.role !== "orchestrator")) {
+    const key = batch.owner.pipelineId ? `p:${batch.owner.pipelineId}` : `c:${conversationDigest(batch.owner.conversation)}`;
+    db.query("INSERT INTO limit_spend_dirty(key, at) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET at=MAX(at+1, excluded.at)").run(key, batch.now);
+  }
   if (changed || skipped || branch || batch.malformed) db.query(`UPDATE usage_meta SET version=version+1,
     counted_from=CASE WHEN ? IS NULL THEN counted_from ELSE MIN(COALESCE(counted_from, ?), ?) END,
     skipped_old=skipped_old+?, malformed=malformed+?, branch_skipped=branch_skipped+? WHERE singleton=1`).run(oldest, oldest, oldest, skipped, batch.malformed, branch);
@@ -189,9 +214,10 @@ export function maintainUsage(db: Database, now: number, zone: string): void {
       ["usage_hours", "hour", Math.floor((now - 92 * DAY) / HOUR)],
       ["usage_days", "day", usageDay(now - 760 * DAY, meta.zone)],
       ["usage_claude_seen", "at", now - 92 * DAY], ["usage_codex_threads", "at", now - 92 * DAY],
+      ["usage_limit_rates", "day", usageDay(now - 760 * DAY, "UTC")],
     ] as const) {
       const keys = table === "usage_hours" ? "host, hour, conversation, model, tier, account" : table === "usage_days"
-        ? "host, zone, day, price_key, project, role, model, tier, account, member, engine" : table === "usage_claude_seen" ? "k" : "thread";
+        ? "host, zone, day, price_key, project, role, model, tier, account, member, engine" : table === "usage_claude_seen" ? "k" : table === "usage_limit_rates" ? "account, window, day" : "thread";
       const zones=usageZones(meta);
       const scoped = table === "usage_days" ? `host='' AND zone IN (${zones.map(()=>"?").join(",")}) AND ` : table === "usage_hours" ? "host='' AND " : "";
       const bindings=table==="usage_days"?[...zones,cutoff]:[cutoff];

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { historySamples, historySince, readHistory, recordLimitSample, RETENTION_S } from "./limitsHistoryStore";
+import { historySamples, historySince, readHistory, recordLimitSample, recordLimitSamples, RETENTION_S } from "./limitsHistoryStore";
 import type { EngineLimits } from "./types";
 
 let dir: string;
@@ -25,6 +25,23 @@ const limits = (session: number, weekly: number): EngineLimits => ({
   weekly: { usedPercent: weekly, resetsAt: null },
   plan: "pro",
   capturedAt: null,
+});
+
+test("a batch appends every account with one atomic write and retains the five-minute gap", () => {
+  const t = 1_700_000_000_000;
+  const original = fs.renameSync;
+  let writes = 0;
+  fs.renameSync = (...args) => { writes++; return original(...args); };
+  try {
+    recordLimitSamples("codex", [{ accountId: "a", limits: limits(10,20) }, { accountId: "b", limits: limits(30,40) }],t);
+    expect(writes).toBe(1);
+    recordLimitSamples("codex", [{ accountId: "a", limits: limits(20,30) }, { accountId: "b", limits: limits(40,50) }],t+60000);
+    expect(writes).toBe(1);
+    expect(historySamples("codex","b","weekly",t/1000)).toEqual([{ t: t/1000,remaining: 60 }]);
+    recordLimitSamples("codex", [{ accountId: "a", limits: limits(20,30) }],t+300000);
+    expect(writes).toBe(2);
+    expect(historySamples("codex","a","weekly",t/1000+300)).toHaveLength(2);
+  } finally { fs.renameSync = original; }
 });
 
 test("records a remaining-quota sample per window and persists it", () => {
