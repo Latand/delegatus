@@ -526,6 +526,9 @@ export interface SeatTickPipelineInput {
       stage, or null when no stage is running or the plane had no answer. */
   stageActivity: SeatTickActivity | null;
   stageId: string | null;
+  /** Durable stage progress, independent of its movement timestamp. */
+  stageState?: string | null;
+  stageAttemptState?: string | null;
   /** Attempt identity observed with stage liveness; refreshed sources must match it. */
   stageAttempt?: string | null;
   /**
@@ -1282,11 +1285,11 @@ export interface SeatTickProjectState {
   reportsOwed?: SeatTickReportOwed[];
   /** Owed outcomes dropped past the bound, which the wake states. */
   reportsOwedDropped?: number;
-  /** The newest manager report this tick has observed, and the board
+  /** The newest manager report this tick has observed, and the material
       fingerprint the digest compares against (§5.1). */
   reportSeenAt?: string | null;
   reportFingerprint?: string | null;
-  /** The board fingerprint of the previous check. */
+  /** The digest fingerprint of the previous check (legacy rows: board hash). */
   checkFingerprint?: string | null;
 }
 
@@ -1367,6 +1370,9 @@ export interface SeatTickCheckInput {
    * a {@link SeatTickEvidenceGap} naming what was unreadable.
    */
   pullRequestsUnavailable: SeatTickPullRequestGap | null;
+  /** True only when this check actually verified the PR set. Gated reads keep
+      their prior digest evidence without claiming the set is empty. */
+  pullRequestsObserved?: boolean;
   /** Ephemeral provenance for the gates and lane associations of the PR read. */
   pullRequestEvidenceKey?: string;
   signals: readonly SeatTickSignalInput[];
@@ -1406,6 +1412,10 @@ export interface SeatTickCheckInput {
    * read, and {@link seatTickBoardMoved} is the only thing that interprets it.
    */
   changeFingerprint: string;
+  /** Material board and pull-request changes for digest accounting. Versioned
+      separately from the retry guard, which also observes task timestamps.
+      Absent on legacy inputs: retain their board-half comparison. */
+  digestFingerprint?: string;
   state: SeatTickProjectState;
   policy: SeatTickPolicy;
   /** This project's own tick settings, with their expiry already applied

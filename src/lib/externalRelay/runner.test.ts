@@ -3784,7 +3784,8 @@ test.each(["codex", "claude"])("inbound originals reach the %s native image inpu
   const sharp = (await import("sharp")).default;
   const bytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: "red" } }).png().toBuffer();
   const request = richRequest(true); request.request_id = `inbound_original_${engine}`;
-  request.features!.push("requester_context", "relay_media_in");
+  const { RELAY_MEDIA_ANY_DOCUMENT } = await import("./mediaInputValidation");
+  request.features!.push("requester_context", "relay_media_in", RELAY_MEDIA_ANY_DOCUMENT);
   request.input.conversation[0]!.media = [{ ref: "inbound_photo", kind: "photo", availability: "ready", mime_type: "image/png", byte_size: bytes.length, expires_at: "2099-01-01T00:00:00Z" }];
   let downloads = 0;
   const server = await startTestRelay((req) => {
@@ -3814,6 +3815,52 @@ test.each(["codex", "claude"])("inbound originals reach the %s native image inpu
     const result = await runClaimedRequest(paired, request, undefined, { command: fake });
     expect(result).toMatchObject({ outcome: "answered", answer: { text: "Photo received" } });
     expect(downloads).toBe(1); expect(fs.existsSync(fs.readFileSync(marker, "utf8"))).toBe(false);
+  } finally { await server.close(); }
+});
+test.each([["codex", false], ["claude", false], ["codex", true], ["claude", true]] as const)("any-document originals reach the %s agent and are removed at run end (agent failure=%s)", async (engine, failAgent) => {
+  const { richRequest } = await import("./rich.fixture");
+  const { RELAY_MEDIA_ANY_DOCUMENT } = await import("./mediaInputValidation");
+  const bytes = Buffer.from([80, 75, 0, 255]);
+  const request = richRequest(true); request.request_id = `inbound_document_${engine}_${failAgent}`;
+  request.features!.push("requester_context", "relay_media_in", RELAY_MEDIA_ANY_DOCUMENT);
+  const items = [
+    { ref: "sheet", mime_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename: "budget.xlsx" },
+    { ref: "drawing", mime_type: "image/svg+xml", filename: "drawing.svg" },
+  ];
+  request.input.conversation[0]!.media = items.map(item => ({ ...item, kind: "document", availability: "ready", byte_size: bytes.length, expires_at: "2099-01-01T00:00:00Z" }));
+  let downloads = 0;
+  const server = await startTestRelay(req => {
+    const item = items.find(item => req.url?.endsWith(`/media/${item.ref}`));
+    if (item) {
+      downloads++; expect(req.headers["delegatus-relay-lease"]).toBe(request.lease_id);
+      return { raw: bytes, headers: { "content-type": item.mime_type, "content-length": String(bytes.length) } };
+    }
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${server.origin}/v1`); paired.targets[0]!.engine = engine;
+  const marker = path.join(root, `inbound-document-path-${engine}-${failAgent}`);
+  const fake = stub(`const {basename}=await import('node:path'); const a=process.argv.slice(2), prompt=await Bun.stdin.text();
+    const media=JSON.parse(prompt.split('<inbound_media>')[1].split('</inbound_media>')[0]);
+    if(a.includes('--image')||(a.includes('--input-format')&&a[a.indexOf('--input-format')+1]==='stream-json'))process.exit(2);
+    for(const file of media){
+      if(basename(file.local_path)!==file.filename||file.byte_size!==4)process.exit(3);
+      if(Buffer.from(await Bun.file(file.local_path).arrayBuffer()).toString('hex')!=='504b00ff')process.exit(4);
+    }
+    await Bun.write(${JSON.stringify(marker)},JSON.stringify(media));
+    if(${failAgent})process.exit(1);
+    const answer={action:'reply',text:'Documents received',reply_to:null,format:'plain',buttons:[],mentions:[],attachments:[]};
+    if(a.includes('--output-last-message'))await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify(answer));
+    else{
+      console.log(JSON.stringify({type:'system',subtype:'init',tools:['StructuredOutput','WebSearch'],mcp_servers:[]}));
+      console.log(JSON.stringify({type:'result',subtype:'success',structured_output:answer}));
+    }`);
+  try {
+    const result = await runClaimedRequest(paired, request, undefined, { command: fake });
+    expect(result).toMatchObject(failAgent ? { outcome: "failed" } : { outcome: "answered", answer: { text: "Documents received" } });
+    expect(downloads).toBe(2);
+    const media = JSON.parse(fs.readFileSync(marker, "utf8")) as { local_path: string; filename: string; mime_type: string }[];
+    expect(media.map(item => ({ filename: item.filename, mime_type: item.mime_type }))).toEqual(items.map(({ filename, mime_type }) => ({ filename, mime_type })));
+    for (const item of media) { expect(fs.existsSync(item.local_path)).toBe(false); expect(fs.existsSync(path.dirname(item.local_path))).toBe(false); }
   } finally { await server.close(); }
 });
 test.each(["mention", "photo"])("v2 %s contract refusal remains decisive without a changed completion", async kind => {

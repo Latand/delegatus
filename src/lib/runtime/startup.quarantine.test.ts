@@ -206,6 +206,17 @@ test("an hour on the production scheduler contains one full pass and bounded row
   expect(sample.cpuMs).toBeGreaterThan(0);
 });
 
+test("startup warning attribution is confined to each physical record", async () => {
+  const { countAttributedWarningRecords } = await import("../../../scripts/startup-retry-benchmark");
+  const prefix = "[structured hosts] pipeline registry unreadable; deferring pipeline adoption";
+  const valid = `${prefix} ${JSON.stringify({ pid: 31415, role: "viewer", error: "unavailable" })}`;
+  const split = `${prefix} {\n  pid: 31415,\n  role: "viewer"\n}`;
+  expect(countAttributedWarningRecords(`${valid}\n${split}\n`, prefix, 31415, "viewer"))
+    .toEqual({ total: 2, attributed: 1 });
+  expect(countAttributedWarningRecords(`${valid}\n`, prefix, 27182, "viewer"))
+    .toEqual({ total: 1, attributed: 0 });
+});
+
 test("a row retry preserves another pipeline row's existing startup deferral", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-row-fence-"));
   const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "off" });

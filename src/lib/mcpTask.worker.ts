@@ -1,3 +1,4 @@
+import { installMcpLifecycle, logMcpLifecycle } from "../../bin/mcp-lifecycle.mjs";
 // This entry receives an explicit state directory from its Viewer. It never
 // imports or migrates the operator's state on its own authority.
 import { createInterface } from "node:readline";
@@ -9,6 +10,7 @@ import type { TaskExecutorRequest } from "./mcp/taskExecutor";
 import type { TaskChannelResponse } from "./mcp/taskChannel";
 import type { TaskChannelAdmission } from "./mcp/taskChannelServer";
 
+installMcpLifecycle("mcp-task-worker");
 if (!process.env.LLV_STATE_DIR) throw new Error("task executor needs an explicit state directory");
 // App Router modules capture this global when they load. A standalone executor
 // has no Next server bootstrap to install it before the compiled binding graph.
@@ -26,14 +28,20 @@ const service = await createProductionViewerMcpService(false, false, true);
 const calls = new Map<number, AbortController>();
 let pendingBytes = 0, outputs = 0, nextPrivateId = 0;
 let retiring = false;
+let shuttingDown = false;
 let idle: ReturnType<typeof setTimeout> | undefined;
 const configuredIdle = Number(process.env.LLV_MCP_TASK_IDLE_MS);
 const idleMs = Number.isFinite(configuredIdle) && configuredIdle >= 1 ? Math.min(60_000, configuredIdle) : 60_000;
 let privateChannel: Awaited<ReturnType<typeof startTaskChannel>> = null;
 const awake = () => { clearTimeout(idle); idle = undefined; };
 const maybeIdle = () => {
+  if (shuttingDown) {
+    if (!calls.size && !outputs) void writing.then(() => process.exit(0));
+    return;
+  }
   if (retiring || calls.size || outputs || idle) return;
   idle = setTimeout(() => {
+    logMcpLifecycle("idle-retirement");
     retiring = true; privateChannel?.close();
     write(() => '{"id":0,"control":{"retiring":true}}\n', 4096, false);
     // The parent closes its guardian before admitting a successor. Remain
@@ -61,7 +69,7 @@ const write = (frame: () => string, limit: number, activity = true) => {
     if (Buffer.byteLength(value) > limit) throw new Error("task executor reply exceeds frame bound");
     if (!process.stdout.write(value)) await once(process.stdout, "drain");
   }).finally(() => { if (activity) { outputs--; maybeIdle(); } });
-  void writing.catch(() => process.exit(1));
+  void writing.catch(() => { logMcpLifecycle("output-failure"); process.exit(1); });
 };
 const send = (message: unknown) => write(() => JSON.stringify(message) + "\n", TASK_EXECUTOR_FRAME_BYTES);
 
@@ -132,9 +140,15 @@ write(() => JSON.stringify({ id: 0, control: { ready: privateChannel ? encodeTas
 // Independent parent watchdog bounds a worker whose loop stops servicing its
 // own deadlines. Heartbeats never extend the worker's idle lifetime.
 setInterval(() => write(() => '{"id":0,"control":{"heartbeat":true}}\n', 4096, false), 10_000).unref();
+const shutdown = (reason: string) => {
+  if (shuttingDown) return;
+  logMcpLifecycle(reason, { pendingCalls: calls.size });
+  shuttingDown = true; retiring = true; awake(); privateChannel?.close();
+  maybeIdle();
+};
 const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
 input.on("line", (line: string) => {
-  if (Buffer.byteLength(line) > TASK_EXECUTOR_FRAME_BYTES) process.exit(1);
+  if (Buffer.byteLength(line) > TASK_EXECUTOR_FRAME_BYTES) { logMcpLifecycle("input-frame-refused"); process.exit(1); }
   const request = JSON.parse(line) as TaskExecutorRequest & { cancel?: number };
   if (request.cancel !== undefined) { calls.get(request.cancel)?.abort(); return; }
   const admission = admit(request.id, Buffer.byteLength(line) + 1, request.deadlineAt);
@@ -146,12 +160,15 @@ input.on("line", (line: string) => {
     } catch { send({ id: request.id, error: "task executor could not identify the caller" }); }
     admission.close(); return;
   }
-  if ((!TASK_EXECUTOR_TOOLS.has(request.name) && request.name !== "httpTaskCall") || !request.caller) process.exit(1);
+  if ((!TASK_EXECUTOR_TOOLS.has(request.name) && request.name !== "httpTaskCall") || !request.caller) {
+    logMcpLifecycle("invalid-task-request"); process.exit(1);
+  }
   const operation = request.name === "httpTaskCall" ? httpTaskCall(request, admission.signal).then(response => sendHttpReply(request.id, response)) : runAsMcpHttpCaller(request.caller, () => service.callTool(request.name, request.args, {
     signal: admission.signal, deadlineAt: request.deadlineAt, nativeWork: request.nativeWork,
   })).then(result => send({ id: request.id, result }));
   void operation.catch(() => send({ id: request.id, error: "task executor call failed; look up the original request key" }))
     .finally(() => admission.close());
 });
-input.once("close", () => process.exit(0));
+input.once("close", () => shutdown("stdio-eof"));
+for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, () => shutdown(signal));
 maybeIdle();

@@ -990,7 +990,15 @@ export type CompactEvidenceCache<T> = { identity: string; sourceRevision?: numbe
 /** Revalidate only changed rows, against one consistent snapshot. The caller
  * supplies a compact projection; this cache never retains historical JSON. */
 export async function readCompactPipelineEvidence<T>(filename: string, prior: CompactEvidenceCache<T> | undefined,
-  project: (record: unknown, collection: string) => T): Promise<CompactEvidenceCache<T> | null> {
+  project: (record: unknown, collection: string) => T,
+  options: { signal?: AbortSignal; deadline?: number } = {}): Promise<CompactEvidenceCache<T> | null> {
+  const assertActive = () => {
+    options.signal?.throwIfAborted();
+    if (options.deadline !== undefined && performance.now() >= options.deadline) {
+      throw new FileTransactionBusyError("pipeline evidence preparation deadline exceeded");
+    }
+  };
+  assertActive();
   if (!fs.existsSync(filename)) return null;
   const db = connectReadonlyDatabase(filename);
   try {
@@ -1007,6 +1015,7 @@ export async function readCompactPipelineEvidence<T>(filename: string, prior: Co
     let slice = performance.now();
     const yieldIfNeeded = async () => {
       await performanceSpans.wait("pipeline.yield", () => new Promise<void>(resolve => setTimeout(resolve, 0)));
+      assertActive();
       slice = performance.now();
     };
     // Readers retain their old snapshot. Copy only compact references, with
@@ -1022,6 +1031,7 @@ export async function readCompactPipelineEvidence<T>(filename: string, prior: Co
           FROM state_rows r LEFT JOIN pipeline_evidence_rows e ON e.collection=r.collection AND e.row_key=r.row_key
           WHERE r.collection IN ('pipelines','pipelines_archive') ORDER BY r.collection,r.row_order,r.row_key`).iterate();
     for (const header of headers) {
+      assertActive();
       const key = JSON.stringify([header.collection, header.row_key]);
       if (header.present === null) rows.delete(key);
       else {
@@ -1103,7 +1113,15 @@ export async function visitStateCollectionsRows(
   filename: string,
   collections: readonly string[],
   visit: (record: unknown, collection: string) => void,
+  options: { signal?: AbortSignal; deadline?: number } = {},
 ): Promise<Map<string, number | null>> {
+  const assertActive = () => {
+    options.signal?.throwIfAborted();
+    if (options.deadline !== undefined && performance.now() >= options.deadline) {
+      throw new FileTransactionBusyError("state evidence preparation deadline exceeded");
+    }
+  };
+  assertActive();
   const revisions = new Map<string, number | null>(collections.map(collection => [collection, null]));
   if (!fs.existsSync(filename) || !collections.length) return revisions;
   const db = connectReadonlyDatabase(filename);
@@ -1121,6 +1139,7 @@ export async function visitStateCollectionsRows(
     ).iterate(...collections as SQLQueryBindings[]);
     const iterator = rows[Symbol.iterator]();
     for (;;) {
+      assertActive();
       const next = performanceSpans.sync("state.sql-next", () => iterator.next());
       if (next.done) break;
       const row = next.value;
@@ -1130,6 +1149,7 @@ export async function visitStateCollectionsRows(
       visit(value, row.collection);
       if (performance.now() - slice >= 4) {
         await performanceSpans.wait("pipeline.yield", () => new Promise<void>(resolve => setTimeout(resolve, 0)));
+        assertActive();
         slice = performance.now();
       }
     }
@@ -1152,10 +1172,9 @@ export function readStateCollectionRevisions(
   collections: readonly string[],
 ): Map<string, number | null> {
   const revisions = new Map<string, number | null>(collections.map((collection) => [collection, null]));
-  if (!fs.existsSync(filename)) return revisions;
-  const db = connectReadonlyDatabase(filename);
+  if (collections.length === 0 || !fs.existsSync(filename)) return revisions;
+  const db = sharedStateReadonlyDatabase(filename);
   try {
-    if (collections.length === 0) return revisions;
     const placeholders = collections.map(() => "?").join(", ");
     const rows = db.query<{ collection: string; revision: number }, SQLQueryBindings[]>(`
       SELECT collection, revision FROM state_collections
@@ -1166,8 +1185,6 @@ export function readStateCollectionRevisions(
   } catch (error) {
     if (/no such table/i.test(error instanceof Error ? error.message : String(error))) return revisions;
     throw error;
-  } finally {
-    db.close();
   }
 }
 
@@ -1181,6 +1198,13 @@ export function stateReadonlyConnectionCountForTests(): number {
 
 type StateReadonlyReader = { filename: string; db: Database };
 const stateReadonlyReaderOwner = globalThis as typeof globalThis & { __llvStateReadonlyReader?: StateReadonlyReader };
+
+/** Release the test process's shared reader before removing its state root. */
+export function resetStateReadonlyReaderForTests(): void {
+  stateReadonlyReaderOwner.__llvStateReadonlyReader?.db.close();
+  stateReadonlyReaderOwner.__llvStateReadonlyReader = undefined;
+}
+
 /** Shared metadata and controller statements finish synchronously. No transaction or iterator is
  * held over a yield, so all compiled consumers can share this one connection.
  * Switching directories closes the previous handle; replacement is guarded by

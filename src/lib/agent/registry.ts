@@ -2527,13 +2527,15 @@ function canonicalHeldDeliveryCommand(
   const origin = parseMessageOrigin(value?.origin);
   if (origin) command.origin = origin;
   if (typeof value?.cohortAt === "string" && Number.isFinite(Date.parse(value.cohortAt))) command.cohortAt = value.cohortAt;
+  if (typeof value?.roleMemoryRevision === "string" && /^[a-f0-9]{64}$/.test(value.roleMemoryRevision)
+    && command.operationId.startsWith("spawn_message_")) command.roleMemoryRevision = value.roleMemoryRevision;
   return command;
 }
 
 function heldDeliveryRequestDigest(
   conversationId: ViewerConversationId,
   text: string,
-  command: Pick<HeldDeliveryCommand, "kind" | "policy" | "turnId" | "onlyIfIdle">,
+  command: Pick<HeldDeliveryCommand, "kind" | "policy" | "turnId" | "onlyIfIdle" | "roleMemoryRevision">,
 ): string {
   const turnFence = command.turnId === undefined
     ? ["absent"]
@@ -2546,6 +2548,7 @@ function heldDeliveryRequestDigest(
     command.policy,
     turnFence,
     ...(command.onlyIfIdle ? [["idle", command.onlyIfIdle.revision, command.onlyIfIdle.writerClaim]] : []),
+    ...(command.roleMemoryRevision ? [["role-memory-revision", command.roleMemoryRevision]] : []),
   ])).digest("hex");
 }
 
@@ -2667,6 +2670,12 @@ function terminalDeliveryState(
 }
 
 const OPERATOR_DISCARDED_DELIVERY_REASON = "delivery-discarded";
+
+function discardableDeliveryFailure(error: string | null, disposition: DeliveryTerminalDisposition | null,
+  reason = OPERATOR_DISCARDED_DELIVERY_REASON): boolean {
+  return error === reason || disposition === "unverified" || (disposition === null
+    && !error?.startsWith(MIGRATION_DELIVERY_CANCELLATION_PREFIX));
+}
 
 function terminalDeliveryFailureIsAbsorbing(delivery: HeldDelivery): boolean {
   return delivery.state === "failed"
@@ -6034,7 +6043,7 @@ export class AgentRegistry {
   spawnEvidence(launchId: string): {
     receipt: SpawnReceipt | null;
     generation: { engine: AgentEngine; id: string; path: string } | null;
-    entry: Pick<AgentRegistryEntry, "artifactPath" | "structuredHostOperationId"> | null;
+    entry: Pick<AgentRegistryEntry, "artifactPath" | "structuredHostOperationId" | "status" | "claimOwner" | "structuredHost" | "structuredTerminationSurvivors"> | null;
     structured: boolean;
   } {
     return this.readKeyed(file => {
@@ -6046,7 +6055,9 @@ export class AgentRegistry {
       return {
         receipt: clone(receipt),
         generation: conversation && generation ? { engine: conversation.engine, id: generation.id, path: generation.path } : null,
-        entry: entry ? { artifactPath: entry.artifactPath, structuredHostOperationId: entry.structuredHostOperationId } : null,
+        entry: entry ? { artifactPath: entry.artifactPath, structuredHostOperationId: entry.structuredHostOperationId,
+          status: entry.status, claimOwner: entry.claimOwner, structuredHost: entry.structuredHost,
+          structuredTerminationSurvivors: entry.structuredTerminationSurvivors } : null,
         structured: !!entry?.structuredHost || typeof entry?.structuredHostOperationId === "string",
       };
     });
@@ -11203,8 +11214,16 @@ export class AgentRegistry {
       const settled = outcomes.map((outcome) => {
         const canonicalId = resolveConversationAlias(file, outcome.conversationId);
         const delivery = deliveries.get(keyFor(canonicalId, outcome.operationId));
+        const discarded = outcome.state === "failed" && outcome.error === OPERATOR_DISCARDED_DELIVERY_REASON;
         if (!delivery) {
           const owner = file.deliveryOperationOwners[outcome.operationId];
+          if (discarded && owner && resolveConversationAlias(file, owner.conversationId) === canonicalId
+            && owner.terminalState === "failed"
+            && discardableDeliveryFailure(owner.terminalReason, owner.terminalDisposition)) {
+            owner.terminalReason = OPERATOR_DISCARDED_DELIVERY_REASON;
+            owner.terminalDisposition = "unverified";
+            owner.evidenceText = "";
+          }
           if (owner && resolveConversationAlias(file, owner.conversationId) === canonicalId
             && outcome.state === "delivered" && outcome.disposition === "delivered"
             && owner.terminalState === "failed" && owner.terminalDisposition === "unverified"
@@ -11221,17 +11240,29 @@ export class AgentRegistry {
         const retryRecovered = delivery.state === "failed"
           && outcome.state === "delivered"
           && !terminalDeliveryFailureIsAbsorbing(delivery);
-        if (delivery.state !== "delivery-uncertain" && !retryRecovered) return null;
+        const discardRecovered = discarded && (delivery.state === "held" || delivery.state === "assigned"
+          || (delivery.state === "failed" && discardableDeliveryFailure(delivery.error,
+            file.deliveryOperationOwners[outcome.operationId]?.terminalDisposition ?? null)));
+        if (delivery.state !== "delivery-uncertain" && !retryRecovered && !discardRecovered) return null;
         const conversation = file.conversations[canonicalId];
         const paths = new Set([conversation?.generations.at(-1)?.path].filter((pathname): pathname is string => Boolean(pathname)));
         const signature = conversation ? migrationReadinessSignature(file, conversation.engine, paths) : "";
         delivery.state = outcome.state;
         delivery.deliveredAt = outcome.state === "delivered" ? now() : null;
         delivery.error = outcome.error?.slice(0, 240) ?? null;
+        if (discarded) {
+          delivery.text = "";
+          delivery.generationId = null;
+          delivery.assignedAt = null;
+        }
         if (outcome.state === "delivered") delivery.text = "";
         if (outcome.state === "failed") failInitialSpawnReceiptForDelivery(file, delivery);
         if (conversation) advanceMigrationScopeRevision(file, conversation.engine, signature, paths);
         syncDeliveryOperationOwnerState(file, delivery, outcome.disposition);
+        if (discarded) {
+          const owner = file.deliveryOperationOwners[outcome.operationId];
+          if (owner) owner.evidenceText = "";
+        }
         if (outcome.state === "delivered") recordDeliveryRoute(deliveryOwner(file, delivery), outcome.route);
         compactConversations.add(delivery.conversationId);
         return clone(delivery);
@@ -11322,13 +11353,10 @@ export class AgentRegistry {
       // is the durable record in that case; there is no reservation to mutate.
       // An explicit unverified disposition also covers account switches after
       // an attempt; the migration reason alone cannot establish a known loss.
-      const discardableFailure = (error: string | null, terminalDisposition: DeliveryTerminalDisposition | null) =>
-        error === reason || terminalDisposition === "unverified" || (terminalDisposition === null
-          && !error?.startsWith(MIGRATION_DELIVERY_CANCELLATION_PREFIX));
       if (!delivery) {
         if (owner && resolveConversationAlias(file, owner.conversationId) === canonicalId
           && owner.terminalState === "failed"
-          && discardableFailure(owner.terminalReason, owner.terminalDisposition)) {
+          && discardableDeliveryFailure(owner.terminalReason, owner.terminalDisposition, reason)) {
           owner.terminalReason = reason.slice(0, 240);
           owner.terminalDisposition = disposition;
           owner.settledAt = now();
@@ -11343,7 +11371,7 @@ export class AgentRegistry {
         || delivery.state === "assigned"
         || delivery.state === "delivery-uncertain"
         || (delivery.state === "failed"
-          && discardableFailure(delivery.error, owner?.terminalDisposition ?? null));
+          && discardableDeliveryFailure(delivery.error, owner?.terminalDisposition ?? null, reason));
       if (!discardable) return null;
       const conversation = file.conversations[canonicalId];
       const paths = new Set([conversation?.generations.at(-1)?.path]

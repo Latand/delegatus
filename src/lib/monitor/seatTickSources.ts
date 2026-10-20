@@ -1579,6 +1579,8 @@ function changeFingerprint(
   ownLanes: readonly SeatTickOwnLaneInput[],
   settledDeploys: readonly SeatTickDeployInput[] = [],
   settledMaintenance: readonly MaintenanceRun[] = [],
+  purpose: "guard" | "digest" = "guard",
+  pullRequestsObserved = true,
 ): string {
   /* A child's status and outcome instant decide two wake reasons (#1465), so
      they are in the half the guard reads: a child finishing, or a harvested one
@@ -1586,8 +1588,10 @@ function changeFingerprint(
      that could not be read contributes nothing here — the children list is
      empty then, and the gap beside it keeps the check from concluding quiet. */
   const board = [
-    ...pipelines.map((pipeline) => `p:${pipeline.id}:${pipeline.state}:${pipeline.updatedAt ?? ""}:${JSON.stringify([pipeline.pausedBy, pipeline.pausedAt, pipeline.pauseGeneration, pipeline.pause, pipeline.pauseConditionMet])}`),
-    ...tasks.map((task) => `t:${task.id}:${task.status}:${task.owned}:${task.updatedAt ?? ""}:${JSON.stringify([task.accepted, task.hold, task.waitingSince])}`),
+    ...pipelines.map((pipeline) => `p:${pipeline.id}:${pipeline.state}:${pipeline.updatedAt ?? ""}:${JSON.stringify([pipeline.pausedBy, pipeline.pausedAt, pipeline.pauseGeneration, pipeline.pause, pipeline.pauseConditionMet])}${purpose === "digest" ? `:${JSON.stringify([pipeline.stageId, pipeline.stageState, pipeline.stageAttempt, pipeline.stageAttemptState])}` : ""}`),
+    // Notes, details and report bookkeeping bump task timestamps. The guard
+    // needs those instants for backlog eligibility; a digest needs state changes.
+    ...tasks.map((task) => `t:${task.id}:${task.status}:${task.owned}:${purpose === "guard" ? task.updatedAt ?? "" : ""}:${JSON.stringify([task.accepted, task.hold, purpose === "guard" ? task.waitingSince : null])}`),
     ...children.map((child) => `c:${child.conversationId}:${child.outcomeId ?? ""}:${child.status}:${child.terminalAt ?? ""}`),
     /* The seat's own settled lanes decide a wake reason of their own (#1749),
        so the guard has to see them move: closing the lane out is the discharge,
@@ -1610,7 +1614,7 @@ function changeFingerprint(
      unreadable source says `unread` here and the guard declines to conclude
      anything from this half at all. */
   const open = pullRequests.map((pullRequest) => `pr:${pullRequest.number}:${pullRequest.pipelineId}`).sort();
-  return `${digest(board)}.${pullRequestsUnavailable ? FINGERPRINT_UNREAD : digest(open)}`;
+  return `${purpose === "digest" ? "digest-v1:" : ""}${digest(board)}.${pullRequestsUnavailable || (purpose === "digest" && !pullRequestsObserved) ? FINGERPRINT_UNREAD : digest(open)}`;
 }
 
 function seatTickFingerprint(
@@ -1749,6 +1753,7 @@ function eventsSince(
  */
 interface PullRequestEvidence {
   pullRequests: SeatTickPullRequestInput[];
+  observed: boolean;
   /** Null means the question was answered — including answered with nothing
       open, which is what the tick is entitled to go quiet on. */
   unavailable: SeatTickPullRequestGap | null;
@@ -1773,7 +1778,7 @@ async function unmergedPullRequests(context: {
   /* Nothing was asked, so nothing is concluded — and the run of failures is
      left exactly as it stands. A gate is a statement about this check, never
      about whether the source can be read. */
-  const unasked: PullRequestEvidence = { pullRequests: [], unavailable: null, gap: context.gap };
+  const unasked: PullRequestEvidence = { pullRequests: [], observed: false, unavailable: null, gap: context.gap };
   if (!context.wakeDue || !context.enabled) return unasked;
   /* The other two ways a check can be unable to raise any reason at all: a
      project with nobody to wake ends in `no-seat`, and a seat whose turn is
@@ -1786,6 +1791,7 @@ async function unmergedPullRequests(context: {
   const at = new Date(context.now).toISOString();
   const failed = (kind: SeatTickPullRequestGap): PullRequestEvidence => ({
     pullRequests: [],
+    observed: false,
     unavailable: kind,
     gap: seatTickSourceGapAfterFailure(context.gap, kind, at),
   });
@@ -1807,7 +1813,7 @@ async function unmergedPullRequests(context: {
      a gap outliving its question. */
   const standing = context.gap;
   if (standing?.gap === "lanes-unreadable" && !seatTickSourceRetryDue(standing, context.now, context.wakeIntervalMs)) {
-    return { pullRequests: [], unavailable: standing.gap as SeatTickPullRequestGap, gap: standing };
+    return { pullRequests: [], observed: false, unavailable: standing.gap as SeatTickPullRequestGap, gap: standing };
   }
 
   let archived: readonly Pipeline[];
@@ -1841,7 +1847,7 @@ async function unmergedPullRequests(context: {
      refuse a quiet the evidence allows. Everything between the gates and here is
      a local read; the subprocess below is the only thing THIS gate saves. */
   if (context.gap && !seatTickSourceRetryDue(context.gap, context.now, context.wakeIntervalMs)) {
-    return { pullRequests: [], unavailable: context.gap.gap as SeatTickPullRequestGap, gap: context.gap };
+    return { pullRequests: [], observed: false, unavailable: context.gap.gap as SeatTickPullRequestGap, gap: context.gap };
   }
 
   let result: OpenPullRequestsResult;
@@ -1902,7 +1908,7 @@ async function unmergedPullRequests(context: {
   /* An answer, so the run of failures is over: the source spoke, whatever it
      said. This is the only thing that clears the row, which is what makes the
      next outage a fresh run with its own report. */
-  return { pullRequests: found.sort((left, right) => left.number - right.number), unavailable: null, gap: null };
+  return { pullRequests: found.sort((left, right) => left.number - right.number), observed: true, unavailable: null, gap: null };
 }
 
 
@@ -2462,6 +2468,8 @@ export function refreshSeatTickInput(input: SeatTickCheckInput, sources: SeatTic
   const pipelines = openLanes.map((lane, index): SeatTickPipelineInput => ({
     id: lane.id, title: evidence[index]!.title, state: evidence[index]!.state, updatedAt: evidence[index]!.updatedAt,
     stageId: lane.cursor?.stageId ?? null,
+    stageState: lane.cursor?.state ?? null,
+    stageAttemptState: stageAttempt(lane)?.state ?? null,
     stageAttempt: stageAttemptIdentity(lane),
     stageActivity: previous.get(lane.id)?.stageId === (lane.cursor?.stageId ?? null)
       && previous.get(lane.id)?.stageAttempt === stageAttemptIdentity(lane)
@@ -2490,6 +2498,7 @@ export function refreshSeatTickInput(input: SeatTickCheckInput, sources: SeatTic
     settings,
     changeFingerprint: seatTickFingerprint(pipelines, tasks, input.children, input.pullRequests, input.pullRequestsUnavailable, ownLanes,
       input.settledDeploys ?? [], input.settledMaintenance ?? []),
+    digestFingerprint: changeFingerprint(pipelines, tasks, input.children, input.pullRequests, input.pullRequestsUnavailable, ownLanes, input.settledDeploys, input.settledMaintenance, "digest", input.pullRequestsObserved !== false),
   };
   if (Object.isFrozen(hotLanes) && Object.isFrozen(sourceTasks)) {
     seatTickRefreshCache.set(refreshed, {
@@ -2806,6 +2815,7 @@ export async function refreshSeatTickEvidence(input: SeatTickCheckInput, sources
   });
   fresh = await refreshSeatTickInputCooperatively({ ...fresh, pullRequests: evidence.pullRequests,
     pullRequestsUnavailable: evidence.unavailable, pullRequestEvidenceKey: key,
+    pullRequestsObserved: evidence.observed,
     state: { ...fresh.state, pullRequestGap: evidence.gap } }, sources);
   if (await pullRequestEvidenceKey(fresh, sources) !== key) throw new SeatTickEvidenceRefreshCanceledError(fresh.state.pullRequestGap);
   return refreshSeatTickInputCooperatively(fresh, sources);
@@ -2866,6 +2876,8 @@ async function gatherSeatTickInputWork(
     updatedAt: evidence[index]!.updatedAt,
     stageActivity: activity.get(pipeline.id) ?? null,
     stageId: observedStages.get(pipeline.id)!.stageId,
+    stageState: pipeline.cursor?.state ?? null,
+    stageAttemptState: stageAttempt(pipeline)?.state ?? null,
     stageAttempt: observedStages.get(pipeline.id)!.attempt,
     ...pauses.get(pipeline.id),
   }));
@@ -2937,7 +2949,7 @@ async function gatherSeatTickInputWork(
   const harvestedChildren = state.harvestedChildren;
   await yieldToRuntime();
   const pullRequestEvidenceKeyAtRead = await pullRequestEvidenceKey({ project: canonical, now, settings, seat, state }, sources);
-  const { pullRequests, unavailable: pullRequestsUnavailable, gap: pullRequestGap } = await unmergedPullRequests({
+  const { pullRequests, observed: pullRequestsObserved, unavailable: pullRequestsUnavailable, gap: pullRequestGap } = await unmergedPullRequests({
     project: canonical,
     seat,
     /* The same clause the decision applies, asked here because the read behind
@@ -2968,6 +2980,7 @@ async function gatherSeatTickInputWork(
     events,
     pullRequests,
     pullRequestsUnavailable,
+    pullRequestsObserved,
     pullRequestEvidenceKey: pullRequestEvidenceKeyAtRead,
     signals: [...signals(canonical, seat, sources), ...(sources.memoryProblems?.(canonical, state.itemsShown ?? [], seat?.conversationId ? seat : null) ?? []), ...await diskPressureSignals(sources)],
     ownLanes,
@@ -2978,6 +2991,7 @@ async function gatherSeatTickInputWork(
     childrenUnavailable,
     childrenCatchUpPending,
     changeFingerprint: seatTickFingerprint(pipelines, tasks, children, pullRequests, pullRequestsUnavailable, ownLanes, settledDeploys, settledMaintenance),
+    digestFingerprint: changeFingerprint(pipelines, tasks, children, pullRequests, pullRequestsUnavailable, ownLanes, settledDeploys, settledMaintenance, "digest", pullRequestsObserved),
     /* The sealed cursor travels on the state the decision carries forward, so a
        check of any verdict — a skip included, which remembers nothing else —
        persists where the journal stood when the tick first saw this project.

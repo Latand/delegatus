@@ -49,11 +49,13 @@ export interface LegacyDocumentOptions<D> {
   busyMessage: string;
   /** Validate a parsed legacy file. Throwing refuses the import and leaves the
       file untouched; the store's own read of a legacy file uses the same rule. */
-  parse(raw: unknown): D;
+  parse(raw: unknown, sourceText?: string): D;
   toRows(document: D): DocumentRow[];
   fromRows(rows: readonly DocumentRow[]): D;
   /** The legacy file body for a document, for the rollback mirror. */
   toFile(document: D): unknown;
+  /** Preserve opaque legacy record bytes in a rollback file when required. */
+  serializeFile?(document: D): string;
   /** How a legacy file row that differs from the held one merges, when the
       default (the file's row wins unless SQLite rewrote it since the file was
       written from it) is wrong for that row. Returns the value to keep. */
@@ -152,14 +154,15 @@ export class LegacyDocumentStore<D> {
       databasePath: this.databasePath(filePath),
       nonBlockingLock: this.options.nonBlockingLock,
       validateLegacyPath: () => this.options.validateLegacyPath?.(filePath),
-      parse: (raw) => this.options.parse(raw),
+      parse: (raw, sourceText) => this.options.parse(raw, sourceText),
       toRows: (document): StateImportRow[] => this.options.toRows(document)
         .map((row) => ({ key: row.key, value: row, controllerActive: true })),
       reconcile: (document, baseline, reconcileOptions) => this.merge(filePath, document, baseline, reconcileOptions),
       mirrorBody: () => {
-        let mirror: { body: unknown; revision: number } | null = null;
+        let mirror: { body: unknown; revision: number; text?: string } | null = null;
         this.open(this.databasePath(filePath)).checkpointMirror((rows, revision) => {
-          mirror = { body: this.options.toFile(this.options.fromRows(rows)), revision };
+          const document = this.options.fromRows(rows);
+          mirror = { body: this.options.toFile(document), revision, ...(this.options.serializeFile ? { text: this.options.serializeFile(document) } : {}) };
         });
         return mirror!;
       },

@@ -37,7 +37,10 @@ const mergeObservedSites = (first: readonly TestSite[], retry: readonly TestSite
 const digest = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 const RUN_BUDGET_MS = 15 * 60 * 1000;
 const FILE_BUDGET_MS = 5 * 60 * 1000;
-const HEAD_FILE_WORKERS = 4;
+// Engine selections took eleven minutes at six workers, leaving no room for
+// confirmations after a slow full-file baseline. Bound head work to eight owned
+// runners in the shared CPU work slice; baseline and retries retain three.
+const HEAD_FILE_WORKERS = 8;
 export const FLAKY_RERUNS = 3;
 export const FLAKY_BUDGET_MS = 5 * 60 * 1000;
 const RUNNER_ERROR = "<runner error> ";
@@ -267,7 +270,9 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     const failures: TestSite[] = [], passed: TestSite[] = [], completed: string[] = [];
     const remaining = Math.floor(Math.min(budgets.runMs - (now() - budgetStart), (options.deadline ?? Infinity) - now()));
     if (remaining <= 0) throw new Error(`${label}: test run exceeded its ${options.deadline ? "flaky rerun" : "15 minute"} budget`);
-    const filter = options.sites ? testNameFilter(options.sites.filter(site => site.file === file)) : [];
+    const sites = options.sites?.filter(site => site.file === file);
+    const filtered = !!sites && !sites.some(site => site.kind === "error");
+    const filter = filtered ? testNameFilter(sites) : [];
     const privateRoot = mkdtempSync(path.join(sandbox, "test-"));
     const env = isolatedEnvironment(privateRoot, inherited);
     // The outer heavy gate retains its shared machine admission. Synthetic
@@ -294,7 +299,7 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     try {
       if (result.signalCode || ![0, 1].includes(exitCode)) throw new Error(`runner did not finish (${result.signalCode ?? exitCode})`);
       const output = readFileSync(log, "utf8");
-      const parsed = parseReport(readFileSync(report, "utf8"), output, file, root, !!options.sites);
+      const parsed = parseReport(readFileSync(report, "utf8"), output, file, root, filtered);
       const survivors = output.split("\n").find(line => line.startsWith("owned runner: surviving owned processes:"));
       // A complete report still needs the service's ownership verdict.
       // Retain it so cleanup fixed on head can recover a broken baseline.
@@ -308,7 +313,7 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
       if (parsed.failures.length) options.onFailure?.();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (options.sites) throw new Error(`${label}: ${file}: ${message}; elapsed ${(performance.now() - started).toFixed(0)}ms`);
+      if (filtered) throw new Error(`${label}: ${file}: ${message}; elapsed ${(performance.now() - started).toFixed(0)}ms`);
       failures.push({ file, suite: "", name: `${RUNNER_ERROR}${message.split(root).join("<checkout>")}`, kind: "error" });
     } finally { rmSync(privateRoot, { recursive: true, force: true }); }
     options.log?.(`touched-tests: ${label} file ${file}: ${(performance.now() - fileStarted).toFixed(0)}ms wall; ${failures.length} failures; ${completed.length ? "complete" : "incomplete"}`);
@@ -407,12 +412,10 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     };
     // Runner diagnostics require the whole file; assertions need only their
     // names. A missing base assertion remains absent during confirmation.
-    const wholeFiles = oldFiles.filter(file => head.failures.some(site => site.file === file && site.kind === "error"));
-    const assertionFiles = oldFiles.filter(file => !wholeFiles.includes(file));
     const empty: TestRun = { failures: [], passed: [], completed: [], elapsedMs: 0 };
-    const whole = wholeFiles.length ? await runFiles(prepareBaseline(), wholeFiles, sandbox, inherited, "baseline", runOptions) : empty;
-    const assertions = assertionFiles.length ? await runFiles(prepareBaseline(), assertionFiles, sandbox, inherited, "baseline", { ...runOptions, sites: head.failures }) : empty;
-    const baseline = { failures: [...whole.failures, ...assertions.failures], passed: [...whole.passed, ...assertions.passed], completed: [...whole.completed, ...assertions.completed], elapsedMs: whole.elapsedMs + assertions.elapsedMs };
+    // One bounded pool lets assertion samples progress while a full-file
+    // diagnostic sample runs. Select the filter independently for each file.
+    const baseline = oldFiles.length ? await runFiles(prepareBaseline(), oldFiles, sandbox, inherited, "baseline", { ...runOptions, sites: head.failures }) : empty;
     log(`touched-tests: baseline run ${(performance.now() - baselineStarted).toFixed(0)}ms (tests ${baseline.elapsedMs.toFixed(0)}ms; ${oldFiles.length} failing file(s))`);
     log(`touched-tests: ${files.filter(file => !baseFiles.has(file)).length} new file(s), judged on head alone`);
     // A base file that did not finish certifies nothing, unless the head fails
