@@ -79,6 +79,53 @@ test("a pre-upgrade gate cannot admit normal work ahead of an observed high-prio
   tasks.close();
 });
 
+test("legacy insertions keep the shared seq order aligned with priority across restart", () => {
+  const m = mixed(), older = m.older(), q = m.open(), tasks = priorityTasks(m.file);
+  try {
+    tasks.set("first", "low");
+    expect(q.check("stage:low-first", false, undefined, true, tasks.source(["first"]))).toMatchObject({ position: 1 });
+    // The older helper inserts a normal command without knowing about the
+    // priority columns. Its own fixed seq query must still see it at the head.
+    expect(older.check("command:normal", true, captureProcessIdentity(process.pid))).toBeNull();
+    expect(q.check("stage:low-first", false, undefined, false)).toMatchObject({ position: 1 });
+
+    m.at(CPU_QUEUE_SPACING_MS);
+    tasks.set("raised", "normal");
+    expect(q.check("stage:normal-first", false, undefined, true, tasks.source(["raised"]))).toMatchObject({ position: 1 });
+    m.at(CPU_QUEUE_SPACING_MS + 1);
+    expect(older.check("command:normal-second", false, captureProcessIdentity(process.pid))).toMatchObject({ position: 2 });
+
+    q.close(); queues.splice(queues.indexOf(q), 1);
+    older.close(); queues.splice(queues.indexOf(older), 1);
+    const reopened = m.open();
+    expect(reopened.check("command:normal-second", false, captureProcessIdentity(process.pid))).toMatchObject({ position: 2 });
+    tasks.set("first", "high");
+    expect(reopened.check("stage:low-first", false, undefined, false, tasks.source(["first"]))).toMatchObject({ position: 1, priority: "high" });
+    expect(reopened.check("stage:normal-first", false, undefined, false, tasks.source(["raised"]))).toMatchObject({ position: 2 });
+  } finally { tasks.close(); }
+});
+
+test("opening a queue repairs the legacy sequence order left by an earlier checker", () => {
+  const f = fixture(), q = f.open(), tasks = priorityTasks(f.file);
+  try {
+    tasks.set("first", "low");
+    q.check("stage:low", false, undefined, true, tasks.source(["first"]));
+    q.close(); queues.splice(queues.indexOf(q), 1);
+    const older = new PrePollCpuAdmissionQueue(f.file); queues.push(older);
+    expect(older.check("command:normal", false, captureProcessIdentity(process.pid))).toMatchObject({ position: 1 });
+    older.close(); queues.splice(queues.indexOf(older), 1);
+    const legacyDb = new Database(f.file);
+    legacyDb.exec("UPDATE tickets SET seq = seq + 10");
+    legacyDb.query("UPDATE tickets SET seq = 1 WHERE key = ?").run("stage:low");
+    legacyDb.query("UPDATE tickets SET seq = 2 WHERE key = ?").run("command:normal");
+    legacyDb.close();
+
+    const reopened = f.open();
+    expect(reopened.check("command:normal", true, captureProcessIdentity(process.pid))).toBeNull();
+    expect(reopened.check("stage:low", false, undefined, false, tasks.source(["first"]))).toMatchObject({ position: 1 });
+  } finally { tasks.close(); }
+});
+
 test("task priority reads only primary-key priorities, with normal defaults and the highest linked task", () => {
   const f = fixture(), tasks = priorityTasks(f.file);
   try {

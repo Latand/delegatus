@@ -161,9 +161,26 @@ export class CpuAdmissionQueue {
         const next = this.db.query<{ next: number }, []>("SELECT COALESCE(MAX(fifo_seq), 0) + 1 AS next FROM tickets").get()!.next;
         this.db.query("INSERT INTO ticket_order VALUES (1, ?)").run(next);
       }
-      this.db.exec("CREATE TRIGGER IF NOT EXISTS tickets_fifo AFTER INSERT ON tickets WHEN NEW.fifo_seq IS NULL BEGIN UPDATE tickets SET fifo_seq = (SELECT next FROM ticket_order WHERE id = 1) WHERE key = NEW.key; UPDATE ticket_order SET next = next + 1 WHERE id = 1; END");
+      this.db.exec("DROP TRIGGER IF EXISTS tickets_fifo");
+      this.db.exec(`CREATE TRIGGER tickets_fifo AFTER INSERT ON tickets WHEN NEW.fifo_seq IS NULL BEGIN
+        UPDATE tickets SET fifo_seq = (SELECT next FROM ticket_order WHERE id = 1) WHERE key = NEW.key;
+        UPDATE ticket_order SET next = next + 1 WHERE id = 1;
+        -- Rebuild the seq view in the same transaction as every insert. Older
+        -- helpers write only seq/since/owner, so this trigger is their ordering
+        -- boundary too. Offset first to avoid collisions in the primary key.
+        UPDATE tickets SET seq = seq + (SELECT COALESCE(MAX(seq), 0) + COUNT(*) + 1 FROM tickets);
+        UPDATE tickets SET seq = (
+          SELECT COUNT(*) FROM tickets AS earlier
+          WHERE earlier.priority < tickets.priority
+             OR (earlier.priority = tickets.priority AND earlier.fifo_seq <= tickets.fifo_seq)
+        );
+        UPDATE sqlite_sequence SET seq = (SELECT COUNT(*) FROM tickets) WHERE name = 'tickets';
+      END`);
       this.db.exec("CREATE INDEX IF NOT EXISTS tickets_priority_seq ON tickets(priority, seq)");
     }).immediate();
+    // Repair a queue left in the inconsistent order produced by the earlier
+    // priority implementation before any old or new checker can claim it.
+    this.db.transaction(() => this.orderLegacyTicketsByPriority()).immediate();
   }
   close(): void { this.db.close(); }
   cancel(key: string): void {

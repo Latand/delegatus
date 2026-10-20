@@ -339,7 +339,11 @@ test.each([
   try {
     const reloaded = new AgentRegistry(registry.filename, undefined, undefined, { sqliteMode: "off" });
     const entry = reloaded.readOnlySnapshot().entries[`claude:${sessionId}`]!;
-    const options = await claudeStartupHostOptions(entry, null, null, { NODE_ENV: "test", HOME: directory, LLV_STATE_DIR: process.env.LLV_STATE_DIR });
+    const prioritySource = JSON.stringify({ database: path.join(directory, "tasks.sqlite"), taskIds: ["stage-task"] });
+    const options = await claudeStartupHostOptions(entry, null, null, {
+      NODE_ENV: "test", HOME: directory, LLV_STATE_DIR: process.env.LLV_STATE_DIR,
+      LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource,
+    });
     const captured: { args?: string[]; options?: SpawnOptionsWithoutStdio } = {};
     const host = await ClaudeStreamBrokerHost.adopt(sessionId, { ...options,
       eventStore: new MemoryEventStore(), readTranscript: () => [],
@@ -353,6 +357,10 @@ test.each([
       expect(args[args.indexOf("--permission-mode") + 1]).toBe(sandbox === null ? "plan" : "bypassPermissions");
       const denied = args[args.indexOf("--disallowedTools") + 1];
       expect(denied.includes("Edit,Write,NotebookEdit")).toBe(sandbox === null);
+      expect(captured.options?.env).toMatchObject({ LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource });
+      expect(captured.options?.env?.LLV_STATE_DIR).toBe(path.join(
+        captured.options?.env?.XDG_CONFIG_HOME ?? "", "agent-log-viewer", "state",
+      ));
     } finally { await host.release(); }
   } finally {
     if (previousState === undefined) delete process.env.LLV_STATE_DIR;
