@@ -3,6 +3,7 @@ import path from "node:path";
 import { decodeHTML } from "entities";
 import type { TelegramPublishReceipt } from "@/lib/externalRelay/publish";
 import { ownerReviewDestination, publishDurableTelegramMessage, telegramPublicationTarget } from "@/lib/externalRelay/telegramPublication";
+import type { OwnerDestinationFailure } from "@/lib/externalRelay/ownerDestination";
 
 import { agentRegistry } from "@/lib/agent/registry";
 import { stateDir } from "@/lib/configDir";
@@ -1011,9 +1012,14 @@ export class TelegramBotService {
   async sendOwnerReview(input: {
     clientRequestId: string; message: TelegramRichMessage;
     fallbackMarkdown?: string; fallbackPlainText?: string; limitFallback?: TelegramRichMessage;
-  }): Promise<TelegramBotSendAnswer | null> {
+  }, onUnavailable?: (failure: OwnerDestinationFailure) => void): Promise<TelegramBotSendAnswer | null> {
     const selected = ownerReviewDestination();
-    if (selected.reason) return null;
+    if (selected.reason) {
+      // Capture the refusing selection. Reading again after the caller awaits
+      // this result could describe a replacement destination instead.
+      onUnavailable?.(selected);
+      return null;
+    }
     const store = this.connectedStore();
     const transport = this.transport();
     const botId = this.storedBotId();
