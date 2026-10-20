@@ -4821,6 +4821,8 @@ describe("CodexAppServerHost", () => {
     });
 
     const delivery = host.send({ id: "compaction-delivery", text: "continue after compaction" });
+    // Dispatch waits on metadata I/O first; time the deadline from the request itself.
+    await waitForCondition(() => server.requests.some((candidate) => candidate.method === "turn/start"), "turn/start was never sent");
     await Bun.sleep(10);
     server.notify("item/started", {
       threadId: "compaction-delivery-thread",
@@ -4858,11 +4860,19 @@ describe("CodexAppServerHost", () => {
     });
     expect(await host.send({ id: "first", text: "begin" })).toEqual({ outcome: "turn-started", turnId: "turn-1" });
     ignoredMethods.push("thread/read");
+    const reads = () => server.requests.filter((request) => request.method === "thread/read");
+    const earlierReads = reads().length;
 
     const pending = host.send({ id: "slow-read-follow-up", text: "continue", expectedTurnId: "turn-1" })
       .then((value) => ({ value }), (error: Error) => ({ error }));
-    await Bun.sleep(35);
-    const read = server.requests.findLast((request) => request.method === "thread/read")!;
+    // Answer past the ordinary 20 ms deadline and within the active turn's 60 ms.
+    const sent = Date.now() + 5_000;
+    while (reads().length === earlierReads) {
+      if (Date.now() > sent) throw new Error("thread/read was never sent");
+      await Bun.sleep(1);
+    }
+    await Bun.sleep(30);
+    const read = reads().at(-1)!;
     server.stdout.write(`${JSON.stringify({
       jsonrpc: "2.0",
       id: read.id,
