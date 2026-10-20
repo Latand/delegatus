@@ -22,15 +22,33 @@ function repository(name: string): string {
 test("stage input cancellation stops owned children and the shared deadline prevents index-write replay", async () => {
   const runOwnedGitChild = async (cancelBy: "deadline" | "activation") => {
     const repo = repository(`owned-child-${cancelBy}`);
+    const readyFile = path.join(repo, "child-ready");
     const program = `
+      import fs from "node:fs";
       import { createStageInputExec } from "./src/lib/pipelines/stageInputExec.ts";
       import { realExec } from "./src/lib/workflows/provision.ts";
       const deadline = new AbortController();
       const activation = new AbortController();
       const wrapped = createStageInputExec(realExec, activation.signal, () => {}, new Error("activation superseded"));
-      const result = wrapped("git", ["-c", "alias.wait=!sleep 30", "wait"], ${JSON.stringify(repo)}, undefined, {
+      const result = wrapped("git", ["-c", ${JSON.stringify(`alias.wait=!touch ${readyFile}; exec sleep 30`)}, "wait"], ${JSON.stringify(repo)}, undefined, {
         timeoutMs: 3_000,
         signal: deadline.signal,
+      });
+      await new Promise((resolve, reject) => {
+        let settled = false;
+        const watcher = fs.watch(${JSON.stringify(repo)}, () => {
+          if (!settled && fs.existsSync(${JSON.stringify(readyFile)})) {
+            settled = true;
+            watcher.close();
+            resolve(undefined);
+          }
+        });
+        watcher.on("error", reject);
+        if (fs.existsSync(${JSON.stringify(readyFile)})) {
+          settled = true;
+          watcher.close();
+          resolve(undefined);
+        }
       });
       ( ${JSON.stringify(cancelBy)} === "deadline" ? deadline : activation).abort();
       const cancelled = await result;
