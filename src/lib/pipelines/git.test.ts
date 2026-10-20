@@ -15,6 +15,7 @@ import { createPipelineWithDelivery, findPipelineRecord, savePipelines, takeover
 import { realExec, type ExecPort } from "@/lib/workflows/provision";
 import { closeAgentRegistryForTests } from "@/lib/agent/registry";
 import { shortId } from "@/lib/shortIds";
+import { publicationPushBudgetMs } from "./gateBudget";
 
 test("delivery remote resolution distinguishes absence, read failures and relative push aliases", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "delivery-remote-"));
@@ -1998,6 +1999,77 @@ async function publishSandbox(withOrigin = true): Promise<PublishSandbox> {
   };
 }
 
+for (const scenario of [
+  { name: "ordinary repository", adapter: false, file: "src/lib/pipelines/engine.ts", refused: false, unreadable: null, ms: 900_000 },
+  { name: "ordinary gate change", adapter: true, file: "docs/change.md", refused: false, unreadable: null, ms: 900_000 },
+  { name: "engine gate change", adapter: true, file: "src/lib/pipelines/engine.ts", refused: false, unreadable: null, ms: 1_500_000 },
+  { name: "engine gate refusal", adapter: true, file: "src/lib/pipelines/engine.ts", refused: true, unreadable: null, ms: 1_500_000 },
+  { name: "truncated gate scope", adapter: true, file: "docs/change.md", refused: true, unreadable: "truncated", ms: 1_500_000 },
+  { name: "unreadable gate scope", adapter: true, file: "docs/change.md", refused: true, unreadable: 'refused', ms: 1_500_000 },
+]) test("publication hands matching budgets to Git and the real hook: " + scenario.name, async () => {
+  const box = await publishSandbox();
+  try {
+    if (scenario.adapter) {
+      fs.mkdirSync(path.join(box.subject.worktreeDir, "scripts"));
+      fs.writeFileSync(path.join(box.subject.worktreeDir, "scripts/local-gate-tests.ts"), "// comparator marker\n");
+    }
+    fs.mkdirSync(path.dirname(path.join(box.subject.worktreeDir, scenario.file)), { recursive: true });
+    const head = await box.commit(scenario.file, "accepted work\n");
+    const hooks = path.join(box.root, "hooks"); fs.mkdirSync(hooks);
+    fs.writeFileSync(path.join(hooks, "pre-push"), '#!/bin/sh\nprintf "# hook deadline %s\\n" "$LLV_GATE_PUSH_DEADLINE"\n'
+      + (scenario.refused ? 'echo "fixture gate refusal" >&2\nexit 1\n' : 'exit 0\n'), { mode: 0o700 });
+    await git(box.subject.worktreeDir, "config", "core.hooksPath", hooks);
+    let observed: { ms?: number; deadline?: string; output: string } | undefined;
+    const exec: ExecPort = async (command, args, cwd, env, options) => {
+      if (scenario.unreadable && command === "git" && args[0] === "diff" && args.includes("--no-renames")) {
+        return scenario.unreadable === "truncated"
+          ? { code: 0, stdout: "src/lib/pipelines/engine", stderr: "" }
+          : { code: 1, stdout: "", stderr: "fixture scope unavailable" };
+      }
+      const inner = command === "systemd-run" ? args.slice(args.indexOf("--") + 1) : [command, ...args];
+      const result = await realExec(command, args, cwd, env, options);
+      if (inner[0] === "git" && inner[1] === "push") observed = {
+        ms: options?.timeoutMs, deadline: env?.LLV_GATE_PUSH_DEADLINE, output: result.stdout + result.stderr,
+      };
+      return result;
+    };
+    const result = await publishPipelineBranch(box.subject, exec, { acceptedSha: head });
+    expect(observed?.ms).toBe(scenario.ms);
+    expect(observed?.deadline).toMatch(/^\d+$/);
+    expect(observed?.output).toContain("# hook deadline " + observed?.deadline);
+    expect(result.ok).toBe(!scenario.refused);
+    expect(await box.originHead()).toBe(scenario.refused ? "" : head);
+    if (scenario.refused) expect(JSON.stringify(result)).toContain("fixture gate refusal");
+    if (!scenario.unreadable && scenario.adapter) expect(observed?.ms).toBe(publicationPushBudgetMs([scenario.file]));
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+}, 60_000);
+
+for (const phase of ["merge-base", "diff"] as const) test("publication rechecks the accepted head after budget " + phase, async () => {
+  const box = await publishSandbox();
+  try {
+    fs.mkdirSync(path.join(box.subject.worktreeDir, "scripts"));
+    fs.writeFileSync(path.join(box.subject.worktreeDir, "scripts/local-gate-tests.ts"), "// comparator marker\n");
+    const head = await box.commit("accepted.txt", "accepted work\n");
+    let changed = false, pushes = 0;
+    const exec: ExecPort = async (command, args, cwd, env, options) => {
+      const inner = command === "systemd-run" ? args.slice(args.indexOf("--") + 1) : [command, ...args];
+      if (inner[0] === "git" && inner[1] === "push") pushes++;
+      const result = await realExec(command, args, cwd, env, options);
+      if (!changed && command === "git" && args[0] === phase
+        && (phase === "merge-base" ? args[1] === head && args[2] === "refs/remotes/origin/main" : args.includes("--no-renames"))) {
+        changed = true;
+        await box.commit("moved.txt", "a later revision\n");
+      }
+      return result;
+    };
+    const result = await publishPipelineBranch(box.subject, exec, { acceptedSha: head });
+    expect(changed).toBe(true);
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining("changed while planning") });
+    expect(pushes).toBe(0);
+    expect(await box.originHead()).toBe("");
+  } finally { fs.rmSync(box.root, { recursive: true, force: true }); }
+}, 60_000);
+
 async function rebasedStageSandbox(prepare?: (box: PublishSandbox) => void | Promise<void>, acceptedBody = "accepted work\n") {
   const box = (await publishSandbox());
   await prepare?.(box);
@@ -2102,9 +2174,11 @@ async function siblingHunkRebaseSandbox(targetPath: string, siblingPath: string)
   return { ...box, accepted, head, target: (first: number, second: number) => target(first, second, 11) };
 }
 
-test("an unreadable role memory refuses publication before the push, quoting no lesson", async () => {
+for (const when of ["before", "during-budget"] as const) test("an unreadable role memory refuses publication before the push, quoting no lesson: " + when, async () => {
   const box = (await publishSandbox());
   try {
+    fs.mkdirSync(path.join(box.subject.worktreeDir, "scripts"));
+    fs.writeFileSync(path.join(box.subject.worktreeDir, "scripts/local-gate-tests.ts"), "// comparator marker\n");
     const head = (await box.commit("accepted.txt", "accepted\n"));
     const rule = "When a change adds a branch for empty or missing input, write the test for that branch in the same commit.";
     /* Stored by another process and then damaged, so this one first opens it damaged. */
@@ -2115,12 +2189,22 @@ store.leaveLessons({ request: ${JSON.stringify(request)}, source: { ...${JSON.st
   lessons: [{ scope: "role", rule: ${JSON.stringify(rule)}, why: "Review failed on an untested empty-input path." }], none: null });`], { env: { ...process.env, LLV_STATE_DIR: publicationState }, encoding: "utf8" });
     expect(stored.stderr).toBe("");
     expect(stored.status).toBe(0);
-    const database = new Database(path.join(publicationState, "state.sqlite"));
-    expect(database.query("UPDATE state_rows SET value_json = ? WHERE collection = 'role_memory' AND row_key LIKE 'r:%'").run(JSON.stringify({ kind: "rule", id: 7, rule })).changes).toBe(1);
-    database.close();
+    let damaged = false;
+    const damage = () => {
+      const database = new Database(path.join(publicationState, "state.sqlite"));
+      try { expect(database.query("UPDATE state_rows SET value_json = ? WHERE collection = 'role_memory' AND row_key LIKE 'r:%'").run(JSON.stringify({ kind: "rule", id: 7, rule })).changes).toBe(1); }
+      finally { database.close(); }
+      damaged = true;
+    };
+    if (when === "before") damage();
+    const exec: ExecPort = async (command, args, cwd, env, options) => {
+      const result = await realExec(command, args, cwd, env, options);
+      if (!damaged && command === "git" && args[0] === "diff" && args.includes("--no-renames")) damage();
+      return result;
+    };
+    const result = await publishPipelineBranch(box.subject, exec, { acceptedSha: head });
 
-    const result = await publishPipelineBranch(box.subject, realExec, { acceptedSha: head });
-
+    expect(damaged).toBe(true);
     expect(result.ok).toBe(false);
     expect(JSON.stringify(result)).toContain("role memory could not be read");
     expect(JSON.stringify(result)).not.toContain("empty or missing input");

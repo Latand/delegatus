@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { canonicalProject, persistProjectAliases, resetProjectAliasesForTests } from "@/lib/projects/aliases";
 import { directoryProjectId, projectIdentityFromRepositoryRoot } from "@/lib/projects/identity";
-import { projectInfoFromCwd } from "@/lib/scanner/describe";
+import { projectInfoFromCwd, recordRecoveredWorktrees } from "@/lib/scanner/describe";
 import { projectCatalogSnapshotFromRaw } from "@/lib/scanner/projectCatalog";
 import { readWorktreeRecoveries } from "./worktreeRecoveryStore";
 import { backfillWorktreeProjects, planWorktreeBackfill } from "./worktreeBackfill";
@@ -355,4 +355,15 @@ test("branch corroboration follows a known repository's git pointer and common r
   fs.writeFileSync(path.join(f.repo, ".git"), `gitdir: ${path.relative(f.repo, metadata)}\n`);
   f.transcript(f.repo + "-review", { branch: "lane/7" });
   expect(planWorktreeBackfill(f.files, {}).folded[0]?.reason).toBe("sibling-name-and-branch-hint");
+});
+
+
+test("SQLite mapping writers refuse to contradict atomic recovery ownership", async () => {
+  const f = fixture(), checkout = f.repo + "-review";
+  f.transcript(checkout, { branch: "lane/7" }); f.write();
+  await backfillWorktreeProjects({ dryRun: false }, async () => {});
+  const held = structuredClone(readWorktreeRecoveries());
+  expect(() => recordRecoveredWorktrees([{ cwd: checkout, repo: f.repo + "-foreign", worktree: "review" }])).toThrow("conflicts");
+  expect(readWorktreeRecoveries()).toEqual(held);
+  expect(projectInfoFromCwd(checkout)?.project).toBe(f.identity.project);
 });

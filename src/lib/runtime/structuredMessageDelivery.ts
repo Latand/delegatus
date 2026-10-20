@@ -65,6 +65,7 @@ import { markStructuredRuntimeSessionRecovered } from "./startupStatus";
 import { isInterruptionObligationId } from "./interruptionObligations";
 import { isInterruptedCodexContinuationId, RECOVERY_NOTICE_ORIGIN } from "./recoveryNotices";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { RoleMemoryChanged } from "@/lib/memory/privacy";
 
 function receiptAttemptForOperation(registry: AgentRegistry, operationId?: string | null, launchId?: string | null): string | null | undefined {
   const fromOperation = operationId?.startsWith("spawn_message_") ? operationId.slice("spawn_message_".length) : null;
@@ -116,6 +117,8 @@ export interface StructuredMessageRequest {
       (#2051). The registry honours it only for the launch that created the
       conversation's current generation, on that generation's account. */
   launchId?: string;
+  /** Current role-memory revision for a pipeline's first message. */
+  roleMemoryRevision?: string;
   /** Admission time of the work this message continues (a stage attempt the
       controller follows up on). Kept on the reservation so an update drain
       treats the message as part of that cohort. */
@@ -524,6 +527,7 @@ function commandInput(request: StructuredMessageRequest) {
     ...(request.onlyIfIdle ? { onlyIfIdle: request.onlyIfIdle } : {}),
     ...(request.origin ? { origin: request.origin } : {}),
     ...(request.cohortAt ? { cohortAt: request.cohortAt } : {}),
+    ...(request.roleMemoryRevision ? { roleMemoryRevision: request.roleMemoryRevision } : {}),
   };
 }
 
@@ -1315,6 +1319,7 @@ async function deliverHeldAttempt(
       /* #1117: the authorship persisted on the held record survives the
          migration hold — the drained message re-attributes exactly as admitted. */
       ...(command.origin ? { origin: command.origin } : {}),
+      ...(command.roleMemoryRevision ? { roleMemoryRevision: command.roleMemoryRevision } : {}),
     }); });
     if ("blocked" in fenced) return fenced.blocked;
     const result = fenced.dispatched;
@@ -2080,12 +2085,15 @@ export async function enqueueStructuredMessage(
         await dependencies.authorizeDispatch?.();
         if (!ownerFirstPromptAllowed(registry, assigned.command.operationId)) throw new Error("owner relay first prompt authorization revoked");
       }
-      catch {
+      catch (error) {
         // Nothing reached the journal: terminalize the reservation so recovery
         // cannot dispatch this first prompt later as an uncertain send.
+        const privacyChanged = error instanceof RoleMemoryChanged;
+        const refusal = privacyChanged ? error.message : "autonomous first prompt authorization revoked";
         const ended = await registry.deliveryWrite({ label: "delivery.owner-cutoff", operationId: assigned.command.operationId },
-          () => registry.terminalizeHeldDelivery(assigned.id, "autonomous first prompt authorization revoked"));
-        return ended.acquired ? "caller-revoked" as const : "caller-revocation-pending" as const;
+          () => registry.terminalizeHeldDelivery(assigned.id, refusal));
+        if (!ended.acquired) return "caller-revocation-pending" as const;
+        return privacyChanged ? "role-memory-changed" as const : "caller-revoked" as const;
       }
       commandResult = await client.command({
         kind: assigned.command.kind,
@@ -2106,10 +2114,12 @@ export async function enqueueStructuredMessage(
         ...(request.runtime ? { runtime: request.runtime } : {}),
         ...(request.selectedContext ? { selectedContext: request.selectedContext } : {}),
         ...(request.origin ? { origin: request.origin } : {}),
+        ...(request.roleMemoryRevision ? { roleMemoryRevision: request.roleMemoryRevision } : {}),
       });
       return commandResult;
     }, dependencies.actuationLease ?? null);
     if (admitted === "caller-revoked") return { ok: false, structured: true, outcome: "failed", error: "autonomous first prompt authorization revoked", status: 403 };
+    if (admitted === "role-memory-changed") return { ok: false, structured: true, outcome: "failed", error: "Role-memory privacy changed; retrying before dispatch", status: 409 };
     if (admitted === "caller-revocation-pending") return { ok: false, structured: true, outcome: "failed", error: "autonomous first prompt cancellation awaits the registry writer", status: 503, operationId: assigned.command.operationId, transportUncertain: true };
     if (admitted === "continuation-cancelled") return continuationRefused("stage eligibility changed before runtime admission");
     if (!admitted) {

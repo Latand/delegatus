@@ -25,6 +25,7 @@ interface ScheduledFeed {
 }
 
 interface TranscriptFeedState {
+  generation?: number;
   pending?: ScheduledFeed;
   active?: Promise<void>;
   scheduled: boolean;
@@ -44,6 +45,7 @@ async function productionRun(
   complete: boolean,
   listedAt: number,
 ): Promise<void> {
+  const generation = state().generation;
   const indexed = await withViewerOperation("transcript.index", () =>
     performanceSpans.wait("transcript.index", () => indexTranscriptSources(sources, { complete })));
   try {
@@ -62,6 +64,24 @@ async function productionRun(
   }
   if (indexed.failures.length) {
     throw new Error(`${indexed.failures.length} transcript file(s) could not be indexed`);
+  }
+  if (complete) {
+    const { maybeCollectStructuredUserMetadata } = await import("@/lib/selection/structuredUserMetadataRetention");
+    const { scanRootEntries } = await import("@/lib/scanner/roots");
+    const { codexSessionRootInventory } = await import("@/lib/accounts/codex");
+    const { join, dirname } = await import("node:path");
+    const retentionRoots = () => {
+      const codexRoots = codexSessionRootInventory().roots;
+      return [...scanRootEntries().map(([, root]) => root),
+        ...codexRoots.map(root => join(dirname(root), "archived_sessions"))].sort();
+    };
+    const rootsAtCensus = retentionRoots();
+    await maybeCollectStructuredUserMetadata({ sources, complete, listedAt }, {
+      roots: rootsAtCensus,
+      rootsComplete: () => codexSessionRootInventory().complete,
+      rootsCurrent: () => JSON.stringify(retentionRoots()) === JSON.stringify(rootsAtCensus),
+      current: () => state().generation === generation,
+    });
   }
 }
 
@@ -110,6 +130,7 @@ export function scheduleTranscriptIndex(
 ): void {
   if (process.env.NODE_ENV === "test" && !options.force) return;
   const current = state();
+  current.generation = (current.generation ?? 0) + 1;
   current.pending = { feed: { ...feed, listedAt: feed.listedAt ?? Date.now() }, run: options.run ?? productionRun };
   if (current.active || current.scheduled) return;
   current.scheduled = true;

@@ -57,7 +57,7 @@ import { translate } from "@/lib/i18n";
 const serverActionBoundary: BunPlugin = {
   name: "fixture-server-action-boundary",
   setup(build) {
-    build.onLoad({ filter: /structuredUserMetadataAction\.ts$/ }, () => ({ loader: "js",
+    build.onLoad({ filter: /structuredUserProvenanceClient\.ts$/ }, () => ({ loader: "js",
       contents: 'export async function structuredUserProvenance() { throw new Error("No transcript metadata in this rendered fixture"); }',
     }));
   },

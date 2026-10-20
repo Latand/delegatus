@@ -59,6 +59,7 @@ export function createMigrationDeliveryPort(
       /* #1117: the authorship persisted on the held command replays with the
          message, so a re-routed hold re-attributes exactly as admitted. */
       ...(delivery.command.origin ? { origin: delivery.command.origin } : {}),
+      ...(delivery.command.roleMemoryRevision ? { roleMemoryRevision: delivery.command.roleMemoryRevision } : {}),
     }, {
       ...dependencies.legacyOverrides,
       ...(dependencies.progress !== undefined ? { progress: dependencies.progress } : {}),

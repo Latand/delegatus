@@ -97,6 +97,25 @@ test("runtime command parsing rejects malformed and oversized bodies", () => {
   expect(() => parseRuntimeCommand("send", { conversationId: "conv-one", text: "x".repeat(256 * 1024), idempotencyKey: "send-one" })).toThrow("request body exceeds 256 KiB");
 });
 
+test("role-memory revisions are accepted only on the staged first-message operation", () => {
+  const revision = "a".repeat(64);
+  expect(parseRuntimeCommand("send", {
+    conversationId: "conv-one", operationId: "spawn_message_launch-one", text: "first message",
+    idempotencyKey: "send-one", roleMemoryRevision: revision,
+  })).toMatchObject({ operationId: "spawn_message_launch-one", roleMemoryRevision: revision });
+  expect(() => parseRuntimeCommand("send", {
+    conversationId: "conv-one", operationId: "ordinary-send", text: "message",
+    idempotencyKey: "send-two", roleMemoryRevision: revision,
+  })).toThrow("role-memory revision is invalid");
+  expect(() => parseRuntimeCommand("send", {
+    conversationId: "conv-one", operationId: "spawn_message_launch-two", text: "message",
+    idempotencyKey: "send-three", roleMemoryRevision: "invalid",
+  })).toThrow("role-memory revision is invalid");
+  expect(parseRuntimeCommand("spawn", {
+    conversationId: "conv-one", operationId: "spawn-launch", engine: "codex", cwd: "/repo", prompt: "first message", roleMemoryRevision: revision,
+  })).toMatchObject({ roleMemoryRevision: revision });
+});
+
 test("a send may carry a per-turn runtime settings snapshot (issue #390 §10)", () => {
   // Explicit fields survive normalized; the model reuses the CLI-argument
   // bounds and the effort lowercases to its CLI token.

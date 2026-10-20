@@ -20,7 +20,7 @@ export function smallStore<D>(options: Omit<LegacyDocumentOptions<D>, "migration
     maxOpenCollections: 4,
     error: options.error ?? ((message, cause) => new Error(message, { cause })),
     readLegacy: options.readLegacy ?? ((filePath) => {
-      try { return options.parse(JSON.parse(fs.readFileSync(filePath, "utf8"))); }
+      try { const text = fs.readFileSync(filePath, "utf8"); return options.parse(JSON.parse(text), text); }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") return options.empty();
         throw error;

@@ -1,7 +1,7 @@
 "use client";
 
 import type { LogTailStreamResult } from "@/lib/logTailStream";
-import { openEventStream, type EventStream } from "@/lib/streamMux/client";
+import { onStreamsResume, openEventStream, type EventStream } from "@/lib/streamMux/client";
 import type { LogChunk } from "@/lib/types";
 
 const POLL_MS = 1200;
@@ -203,6 +203,15 @@ function startSse(): void {
     startFallback();
   };
 }
+
+/* A page back from the back/forward cache let its stream go while it was away (src/lib/streamMux/client.ts).
+   The stream it had was opened at the offsets of that moment, and the panes have read past them since; it
+   is opened afresh from where each pane is, at once, rather than reported as a server that went away. */
+onStreamsResume(() => {
+  if (!source || usingFallback) return;
+  closeSource();
+  scheduleSseReconnect(0);
+});
 
 function scheduleSseReconnect(delay = RECONNECT_DEBOUNCE_MS): void {
   if (usingFallback) {
