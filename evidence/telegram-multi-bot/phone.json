@@ -1,0 +1,1456 @@
+{
+  "readings": [
+    {
+      "key": "phone-390-en-light-multi-one",
+      "width": 390,
+      "height": 844,
+      "panelWidth": 366,
+      "overflow": 0,
+      "controls": [
+        {
+          "label": "Bot token from @BotFather",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Agents may post: Team Reports",
+          "disabled": false
+        },
+        {
+          "label": "Alias agents use: Team Reports",
+          "disabled": false
+        },
+        {
+          "label": "Chat id or @username",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Where the reports of atlas go",
+          "disabled": false
+        },
+        {
+          "label": "Chat or topic link, @username or ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Where the reports of ledger go",
+          "disabled": false
+        },
+        {
+          "label": "Chat or topic link, @username or ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Where the reports of mesh go",
+          "disabled": false
+        },
+        {
+          "label": "Chat or topic link, @username or ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        }
+      ],
+      "actions": [
+        "add_bot"
+      ],
+      "frames": [
+        "phone-390-en-light-multi-one.png",
+        "phone-390-en-light-multi-one-add.png"
+      ]
+    },
+    {
+      "key": "phone-390-en-light-multi-kicked",
+      "width": 390,
+      "height": 844,
+      "panelWidth": 366,
+      "overflow": 0,
+      "controls": [
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Bot token from @BotFather",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Agents may post: Team Reports",
+          "disabled": false
+        },
+        {
+          "label": "Alias agents use: Team Reports",
+          "disabled": false
+        },
+        {
+          "label": "Chat id or @username",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Where the reports of atlas go",
+          "disabled": false
+        },
+        {
+          "label": "Chat or topic link, @username or ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Where the reports of ledger go",
+          "disabled": false
+        },
+        {
+          "label": "Chat or topic link, @username or ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Where the reports of mesh go",
+          "disabled": false
+        },
+        {
+          "label": "Chat or topic link, @username or ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        }
+      ],
+      "actions": [],
+      "frames": [
+        "phone-390-en-light-multi-kicked.png"
+      ]
+    },
+    {
+      "key": "phone-390-en-light-multi-refused",
+      "width": 390,
+      "height": 844,
+      "panelWidth": 366,
+      "overflow": 0,
+      "controls": [
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Bot token from @BotFather",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Agents may post: Team Reports",
+          "disabled": false
+        },
+        {
+          "label": "Alias agents use: Team Reports",
+          "disabled": false
+        },
+        {
+          "label": "Chat id or @username",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Where the reports of atlas go",
+          "disabled": false
+        },
+        {
+          "label": "Chat or topic link, @username or ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Where the reports of ledger go",
+          "disabled": false
+        },
+        {
+          "label": "Chat or topic link, @username or ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Where the reports of mesh go",
+          "disabled": false
+        },
+        {
+          "label": "Chat or topic link, @username or ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        }
+      ],
+      "actions": [],
+      "frames": [
+        "phone-390-en-light-multi-refused.png"
+      ]
+    },
+    {
+      "key": "phone-390-en-light-multi-ready",
+      "width": 390,
+      "height": 844,
+      "panelWidth": 366,
+      "overflow": 0,
+      "controls": [
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Bot token from @BotFather",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Agents may post: Team Reports",
+          "disabled": false
+        },
+        {
+          "label": "Alias agents use: Team Reports",
+          "disabled": false
+        },
+        {
+          "label": "Posts as: Team Reports",
+          "disabled": false
+        },
+        {
+          "label": "Chat id or @username",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Where the reports of atlas go",
+          "disabled": false
+        },
+        {
+          "label": "Chat or topic link, @username or ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Where the reports of ledger go",
+          "disabled": false
+        },
+        {
+          "label": "Chat or topic link, @username or ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Where the reports of mesh go",
+          "disabled": false
+        },
+        {
+          "label": "Chat or topic link, @username or ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        }
+      ],
+      "actions": [
+        "chat_bot",
+        "remove_bot"
+      ],
+      "frames": [
+        "phone-390-en-light-multi-ready.png",
+        "phone-390-en-light-multi-ready-remove.png"
+      ]
+    },
+    {
+      "key": "phone-390-en-dark-multi-one",
+      "width": 390,
+      "height": 844,
+      "panelWidth": 366,
+      "overflow": 0,
+      "controls": [
+        {
+          "label": "Bot token from @BotFather",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Agents may post: Team Reports",
+          "disabled": false
+        },
+        {
+          "label": "Alias agents use: Team Reports",
+          "disabled": false
+        },
+        {
+          "label": "Chat id or @username",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Where the reports of atlas go",
+          "disabled": false
+        },
+        {
+          "label": "Chat or topic link, @username or ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Where the reports of ledger go",
+          "disabled": false
+        },
+        {
+          "label": "Chat or topic link, @username or ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Where the reports of mesh go",
+          "disabled": false
+        },
+        {
+          "label": "Chat or topic link, @username or ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        }
+      ],
+      "actions": [
+        "add_bot"
+      ],
+      "frames": [
+        "phone-390-en-dark-multi-one.png",
+        "phone-390-en-dark-multi-one-add.png"
+      ]
+    },
+    {
+      "key": "phone-390-en-dark-multi-kicked",
+      "width": 390,
+      "height": 844,
+      "panelWidth": 366,
+      "overflow": 0,
+      "controls": [
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Bot token from @BotFather",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Agents may post: Team Reports",
+          "disabled": false
+        },
+        {
+          "label": "Alias agents use: Team Reports",
+          "disabled": false
+        },
+        {
+          "label": "Chat id or @username",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Where the reports of atlas go",
+          "disabled": false
+        },
+        {
+          "label": "Chat or topic link, @username or ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Where the reports of ledger go",
+          "disabled": false
+        },
+        {
+          "label": "Chat or topic link, @username or ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Where the reports of mesh go",
+          "disabled": false
+        },
+        {
+          "label": "Chat or topic link, @username or ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        }
+      ],
+      "actions": [],
+      "frames": [
+        "phone-390-en-dark-multi-kicked.png"
+      ]
+    },
+    {
+      "key": "phone-390-en-dark-multi-refused",
+      "width": 390,
+      "height": 844,
+      "panelWidth": 366,
+      "overflow": 0,
+      "controls": [
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Bot token from @BotFather",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Agents may post: Team Reports",
+          "disabled": false
+        },
+        {
+          "label": "Alias agents use: Team Reports",
+          "disabled": false
+        },
+        {
+          "label": "Chat id or @username",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Where the reports of atlas go",
+          "disabled": false
+        },
+        {
+          "label": "Chat or topic link, @username or ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Where the reports of ledger go",
+          "disabled": false
+        },
+        {
+          "label": "Chat or topic link, @username or ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Where the reports of mesh go",
+          "disabled": false
+        },
+        {
+          "label": "Chat or topic link, @username or ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        }
+      ],
+      "actions": [],
+      "frames": [
+        "phone-390-en-dark-multi-refused.png"
+      ]
+    },
+    {
+      "key": "phone-390-en-dark-multi-ready",
+      "width": 390,
+      "height": 844,
+      "panelWidth": 366,
+      "overflow": 0,
+      "controls": [
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Bot token from @BotFather",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Agents may post: Team Reports",
+          "disabled": false
+        },
+        {
+          "label": "Alias agents use: Team Reports",
+          "disabled": false
+        },
+        {
+          "label": "Posts as: Team Reports",
+          "disabled": false
+        },
+        {
+          "label": "Chat id or @username",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Where the reports of atlas go",
+          "disabled": false
+        },
+        {
+          "label": "Chat or topic link, @username or ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Where the reports of ledger go",
+          "disabled": false
+        },
+        {
+          "label": "Chat or topic link, @username or ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Where the reports of mesh go",
+          "disabled": false
+        },
+        {
+          "label": "Chat or topic link, @username or ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        }
+      ],
+      "actions": [
+        "chat_bot",
+        "remove_bot"
+      ],
+      "frames": [
+        "phone-390-en-dark-multi-ready.png",
+        "phone-390-en-dark-multi-ready-remove.png"
+      ]
+    },
+    {
+      "key": "phone-390-uk-light-multi-one",
+      "width": 390,
+      "height": 844,
+      "panelWidth": 366,
+      "overflow": 0,
+      "controls": [
+        {
+          "label": "Токен бота від @BotFather",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Агентам можна писати: Team Reports",
+          "disabled": false
+        },
+        {
+          "label": "Псевдонім для агентів: Team Reports",
+          "disabled": false
+        },
+        {
+          "label": "Id чату або @username",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Куди йдуть звіти проєкту atlas",
+          "disabled": false
+        },
+        {
+          "label": "Посилання на чат або топік, @username чи ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Куди йдуть звіти проєкту ledger",
+          "disabled": false
+        },
+        {
+          "label": "Посилання на чат або топік, @username чи ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Куди йдуть звіти проєкту mesh",
+          "disabled": false
+        },
+        {
+          "label": "Посилання на чат або топік, @username чи ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        }
+      ],
+      "actions": [
+        "add_bot"
+      ],
+      "frames": [
+        "phone-390-uk-light-multi-one.png",
+        "phone-390-uk-light-multi-one-add.png"
+      ]
+    },
+    {
+      "key": "phone-390-uk-light-multi-kicked",
+      "width": 390,
+      "height": 844,
+      "panelWidth": 366,
+      "overflow": 0,
+      "controls": [
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Токен бота від @BotFather",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Агентам можна писати: Team Reports",
+          "disabled": false
+        },
+        {
+          "label": "Псевдонім для агентів: Team Reports",
+          "disabled": false
+        },
+        {
+          "label": "Id чату або @username",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Куди йдуть звіти проєкту atlas",
+          "disabled": false
+        },
+        {
+          "label": "Посилання на чат або топік, @username чи ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Куди йдуть звіти проєкту ledger",
+          "disabled": false
+        },
+        {
+          "label": "Посилання на чат або топік, @username чи ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Куди йдуть звіти проєкту mesh",
+          "disabled": false
+        },
+        {
+          "label": "Посилання на чат або топік, @username чи ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        }
+      ],
+      "actions": [],
+      "frames": [
+        "phone-390-uk-light-multi-kicked.png"
+      ]
+    },
+    {
+      "key": "phone-390-uk-light-multi-refused",
+      "width": 390,
+      "height": 844,
+      "panelWidth": 366,
+      "overflow": 0,
+      "controls": [
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Токен бота від @BotFather",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Агентам можна писати: Team Reports",
+          "disabled": false
+        },
+        {
+          "label": "Псевдонім для агентів: Team Reports",
+          "disabled": false
+        },
+        {
+          "label": "Id чату або @username",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Куди йдуть звіти проєкту atlas",
+          "disabled": false
+        },
+        {
+          "label": "Посилання на чат або топік, @username чи ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Куди йдуть звіти проєкту ledger",
+          "disabled": false
+        },
+        {
+          "label": "Посилання на чат або топік, @username чи ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Куди йдуть звіти проєкту mesh",
+          "disabled": false
+        },
+        {
+          "label": "Посилання на чат або топік, @username чи ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        }
+      ],
+      "actions": [],
+      "frames": [
+        "phone-390-uk-light-multi-refused.png"
+      ]
+    },
+    {
+      "key": "phone-390-uk-light-multi-ready",
+      "width": 390,
+      "height": 844,
+      "panelWidth": 366,
+      "overflow": 0,
+      "controls": [
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Токен бота від @BotFather",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Агентам можна писати: Team Reports",
+          "disabled": false
+        },
+        {
+          "label": "Псевдонім для агентів: Team Reports",
+          "disabled": false
+        },
+        {
+          "label": "Публікує від: Team Reports",
+          "disabled": false
+        },
+        {
+          "label": "Id чату або @username",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Куди йдуть звіти проєкту atlas",
+          "disabled": false
+        },
+        {
+          "label": "Посилання на чат або топік, @username чи ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Куди йдуть звіти проєкту ledger",
+          "disabled": false
+        },
+        {
+          "label": "Посилання на чат або топік, @username чи ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Куди йдуть звіти проєкту mesh",
+          "disabled": false
+        },
+        {
+          "label": "Посилання на чат або топік, @username чи ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        }
+      ],
+      "actions": [
+        "chat_bot",
+        "remove_bot"
+      ],
+      "frames": [
+        "phone-390-uk-light-multi-ready.png",
+        "phone-390-uk-light-multi-ready-remove.png"
+      ]
+    },
+    {
+      "key": "phone-390-uk-dark-multi-one",
+      "width": 390,
+      "height": 844,
+      "panelWidth": 366,
+      "overflow": 0,
+      "controls": [
+        {
+          "label": "Токен бота від @BotFather",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Агентам можна писати: Team Reports",
+          "disabled": false
+        },
+        {
+          "label": "Псевдонім для агентів: Team Reports",
+          "disabled": false
+        },
+        {
+          "label": "Id чату або @username",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Куди йдуть звіти проєкту atlas",
+          "disabled": false
+        },
+        {
+          "label": "Посилання на чат або топік, @username чи ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Куди йдуть звіти проєкту ledger",
+          "disabled": false
+        },
+        {
+          "label": "Посилання на чат або топік, @username чи ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Куди йдуть звіти проєкту mesh",
+          "disabled": false
+        },
+        {
+          "label": "Посилання на чат або топік, @username чи ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        }
+      ],
+      "actions": [
+        "add_bot"
+      ],
+      "frames": [
+        "phone-390-uk-dark-multi-one.png",
+        "phone-390-uk-dark-multi-one-add.png"
+      ]
+    },
+    {
+      "key": "phone-390-uk-dark-multi-kicked",
+      "width": 390,
+      "height": 844,
+      "panelWidth": 366,
+      "overflow": 0,
+      "controls": [
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Токен бота від @BotFather",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Агентам можна писати: Team Reports",
+          "disabled": false
+        },
+        {
+          "label": "Псевдонім для агентів: Team Reports",
+          "disabled": false
+        },
+        {
+          "label": "Id чату або @username",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Куди йдуть звіти проєкту atlas",
+          "disabled": false
+        },
+        {
+          "label": "Посилання на чат або топік, @username чи ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Куди йдуть звіти проєкту ledger",
+          "disabled": false
+        },
+        {
+          "label": "Посилання на чат або топік, @username чи ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Куди йдуть звіти проєкту mesh",
+          "disabled": false
+        },
+        {
+          "label": "Посилання на чат або топік, @username чи ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        }
+      ],
+      "actions": [],
+      "frames": [
+        "phone-390-uk-dark-multi-kicked.png"
+      ]
+    },
+    {
+      "key": "phone-390-uk-dark-multi-refused",
+      "width": 390,
+      "height": 844,
+      "panelWidth": 366,
+      "overflow": 0,
+      "controls": [
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Токен бота від @BotFather",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Агентам можна писати: Team Reports",
+          "disabled": false
+        },
+        {
+          "label": "Псевдонім для агентів: Team Reports",
+          "disabled": false
+        },
+        {
+          "label": "Id чату або @username",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Куди йдуть звіти проєкту atlas",
+          "disabled": false
+        },
+        {
+          "label": "Посилання на чат або топік, @username чи ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Куди йдуть звіти проєкту ledger",
+          "disabled": false
+        },
+        {
+          "label": "Посилання на чат або топік, @username чи ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Куди йдуть звіти проєкту mesh",
+          "disabled": false
+        },
+        {
+          "label": "Посилання на чат або топік, @username чи ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        }
+      ],
+      "actions": [],
+      "frames": [
+        "phone-390-uk-dark-multi-refused.png"
+      ]
+    },
+    {
+      "key": "phone-390-uk-dark-multi-ready",
+      "width": 390,
+      "height": 844,
+      "panelWidth": 366,
+      "overflow": 0,
+      "controls": [
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Токен бота від @BotFather",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": "Агентам можна писати: Team Reports",
+          "disabled": false
+        },
+        {
+          "label": "Псевдонім для агентів: Team Reports",
+          "disabled": false
+        },
+        {
+          "label": "Публікує від: Team Reports",
+          "disabled": false
+        },
+        {
+          "label": "Id чату або @username",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Куди йдуть звіти проєкту atlas",
+          "disabled": false
+        },
+        {
+          "label": "Посилання на чат або топік, @username чи ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Куди йдуть звіти проєкту ledger",
+          "disabled": false
+        },
+        {
+          "label": "Посилання на чат або топік, @username чи ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": "Куди йдуть звіти проєкту mesh",
+          "disabled": false
+        },
+        {
+          "label": "Посилання на чат або топік, @username чи ID",
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": true
+        },
+        {
+          "label": null,
+          "disabled": false
+        },
+        {
+          "label": null,
+          "disabled": false
+        }
+      ],
+      "actions": [
+        "chat_bot",
+        "remove_bot"
+      ],
+      "frames": [
+        "phone-390-uk-dark-multi-ready.png",
+        "phone-390-uk-dark-multi-ready-remove.png"
+      ]
+    }
+  ]
+}

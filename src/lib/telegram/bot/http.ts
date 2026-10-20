@@ -34,6 +34,7 @@ const STATUS: Record<TelegramBotErrorCode, number> = {
   document_roots_invalid: 400,
   format_invalid: 400,
   forbidden: 403,
+  not_enough_rights: 403,
   rate_limited: 429,
   send_uncertain: 409,
   send_partial: 409,
@@ -64,6 +65,7 @@ export function telegramBotFailure(error: unknown): NextResponse {
       retryable: error.retryable,
       ...(error.extra.retryAfterSeconds !== undefined ? { retryAfterSeconds: error.extra.retryAfterSeconds } : {}),
       ...(error.extra.sentMessageIds ? { sentMessageIds: error.extra.sentMessageIds } : {}),
+      ...(error.extra.refusals ? { refusals: error.extra.refusals } : {}),
       ...(error.extra.secretClass ? { secretClass: error.extra.secretClass } : {}),
     }, { status: STATUS[error.code] ?? 400 });
   }

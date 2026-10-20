@@ -84,7 +84,7 @@ test("connected with mixed chats: name, receiving state, one compact row per cha
   expect(html).toContain("Team Reports");
   /* The alias field only where posting is on. */
   expect(html).toContain('value="team-reports"');
-  expect(html.match(/aria-label="Alias agents use: /g)).toHaveLength(1);
+  expect(html.match(/aria-label="Alias agents use: /g)).toHaveLength(2);
   /* A post-only bot never hears of a group it joins, so a chat is added by id. */
   expect(html).toContain('aria-label="Chat id or @username"');
   expect(html).toContain('role="switch" aria-checked="true" aria-label="Agents may post: Team Reports"');
@@ -101,8 +101,10 @@ test("connected with mixed chats: name, receiving state, one compact row per cha
   expect(html.indexOf("Privacy mode on")).toBeGreaterThan(html.indexOf("What a bot can see"));
   expect(html).toContain("Remove bot");
   expect(html).toContain("/revoke");
-  /* No token field once connected and healthy. */
-  expect(html).not.toContain("Bot token from @BotFather");
+  /* Additional bots connect in a collapsed disclosure on this same surface. */
+  expect(html).toContain("Add another bot</summary>");
+  expect(html.match(/type="password"/g)).toHaveLength(1);
+  expect(html).not.toMatch(/<input[^>]*type="password"[^>]*value=/);
 });
 
 test("a webhook elsewhere says reading is blocked and why", () => {

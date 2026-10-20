@@ -1,11 +1,32 @@
 # Telegram: several bots, each send through a bot that is in the chat
 
-Status: design, the first step of the lane. Grounded in `main` at
+Status: implemented after the design step. The design was grounded in `main` at
 `f335de650` (2026-10-20). `origin/main` had not moved when this was written,
 and no open pull request or lane touches the files named here (checked with
 `gh pr list` and `list_pipelines` on 2026-10-20). The prototype-review
 `no_target` diagnostics named in the task's fences landed as #3136
 (`f335de650`), which this design builds on and keeps.
+
+## Implementation record
+
+The implementation keeps the existing receiving-bot token and adds the sending
+bots' owner-only token file. `multiBot.ts` owns per-chat selection, rights
+checks, expiry, refusal commits and delivery details. Every content send uses
+its transport under the existing logical send claim; private chats have only
+the receiving bot as a candidate. Status polling reads cached facts only.
+
+The store uses `chat_bots.value_json` for the membership fields specified
+below, with the same `(chat_id, bot_id)` primary key. The assignment column is
+`chats.assigned_bot`. The send row also stores `bot_identity`, so replay still
+names the delivering bot after its connection is removed. New writes use
+`outboundState` admission. No performance improvement is claimed.
+
+The existing Telegram panel gains the controls in section 7 through
+`src/components/TelegramBot.tsx` and `src/hooks/useTelegramBot.ts`; operator
+actions remain on `src/app/api/telegram/bot/route.ts`. Both shipped locales
+are updated. The existing phone and kanban browser drivers share the new
+case in `issue1695BrowserHarness.ts` and use the phone's existing fixture.
+Their readings are recorded under `evidence/telegram-multi-bot/`.
 
 ## Originating requirement
 
