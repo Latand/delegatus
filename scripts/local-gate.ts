@@ -4,6 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { changedSinceBase, platformScope, workflowEntries } from "./ci-platform-scope";
 import { cpuBudgetTimer, cpuInheritedWaitMs, cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
+import { publicationHookDeadline, publicationPushBudgetMs } from "../src/lib/pipelines/gateBudget";
 
 export type Mode = "pre-commit" | "pre-push";
 export interface Step {
@@ -321,7 +322,7 @@ export interface PushDeadline { at: number; startedAt: number; cpuWaitMs?: numbe
     publication controller. Fetch, installs and checks use that execution
     deadline; CPU queue waits extend it. Nothing starts once its execution
     budget is spent. Local reads (Git plumbing, planning) run outside it.
-    Without it every step reaches its verdict. */
+    Without it main derives the repository's default budget after planning. */
 export function pushDeadline(env: Partial<NodeJS.ProcessEnv>, startedAt: number, admitted = false): PushDeadline | null {
   const raw = env.LLV_GATE_PUSH_DEADLINE;
   if (raw === undefined || raw === "") return null;
@@ -751,7 +752,7 @@ export function endHook(mode: Mode, error: unknown): never {
 
 async function main(mode: Mode, admitted = false): Promise<void> {
   if (process.env.LLV_SKIP_HOOKS === "1") return;
-  const deadline = pushDeadline(process.env, Date.now(), admitted);
+  let deadline = pushDeadline(process.env, Date.now(), admitted);
   const root = git(process.cwd(), ["rev-parse", "--show-toplevel"]);
   let base = mode === "pre-commit" ? git(root, ["merge-base", "HEAD", "origin/main"]) : "HEAD";
   const until = deadline?.at ?? Infinity;
@@ -778,6 +779,10 @@ async function main(mode: Mode, admitted = false): Promise<void> {
   const privacyBase = mode === "pre-commit" ? "HEAD" : base;
   for (const file of context.skippedMedia) console.warn(`${mode}: media OCR deferred to required CI (tesseract/ffmpeg/ffprobe unavailable): ${file}`);
   const steps = plan(mode, files, { ...context, base: privacyBase, lintBase: base });
+  if (mode === "pre-push" && !deadline) {
+    const startedAt = Date.now();
+    deadline = { startedAt, at: publicationHookDeadline(publicationPushBudgetMs(files), startedAt) };
+  }
   if (mode === "pre-push" && !files.length) console.error(`pre-push: nothing changed since ${base.slice(0, 12)}; checking the pushed commits for privacy only`);
   const cache = path.join(process.env.XDG_CACHE_HOME ?? path.join(homedir(), ".cache"), "delegatus-gate");
   // Installed on first use, inside the step that needs it and by its deadline.
