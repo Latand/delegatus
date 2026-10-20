@@ -1,13 +1,16 @@
+import { worktreeMapStore } from "@/lib/projects/persistence";
 import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 
 import { canonicalProject, persistProjectAliases, resetProjectAliasesForTests } from "@/lib/projects/aliases";
 import { directoryProjectId, projectIdentityFromRepositoryRoot } from "@/lib/projects/identity";
+import { resetLegacyDocumentStoresForTests } from "@/lib/state/legacyDocumentStore";
+import { resetStateReadonlyReaderForTests } from "@/lib/state/sqliteStateStore";
 
 import { globalCache } from "./caches";
 import {
@@ -60,6 +63,25 @@ function useStateDirectory(name: string): string {
   return state;
 }
 
+/** Exercise the Windows directory-flush restriction on Linux too. Keep native
+    filesystem paths: changing the OS path parser would test a different bug. */
+function withWindowsDirectoryFlush<T>(operation: () => T): T {
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  const fsync = fs.fsyncSync;
+  const flush = spyOn(fs, "fsyncSync").mockImplementation(descriptor => {
+    if (fs.fstatSync(descriptor).isDirectory()) {
+      throw Object.assign(new Error("EPERM: operation not permitted, fsync"), { code: "EPERM" });
+    }
+    return fsync(descriptor);
+  });
+  Object.defineProperty(process, "platform", { ...platform, value: "win32" });
+  try { return operation(); }
+  finally {
+    Object.defineProperty(process, "platform", platform);
+    flush.mockRestore();
+  }
+}
+
 test("symlinked and physical sibling worktrees keep one project after deletion", () => {
   useStateDirectory("symlink-worktree-state");
   const disk = path.join(SANDBOX, "grouping-disk");
@@ -84,6 +106,15 @@ test("symlinked and physical sibling worktrees keep one project after deletion",
 });
 
 afterAll(() => {
+  resetLegacyDocumentStoresForTests();
+  resetStateReadonlyReaderForTests();
+  // Linux permits unlinking open SQLite files; Windows requires them closed.
+  if (process.platform === "linux" && fs.existsSync("/proc/self/fd")) {
+    const held = fs.readdirSync("/proc/self/fd").flatMap(fd => {
+      try { return [fs.readlinkSync(`/proc/self/fd/${fd}`)]; } catch { return []; }
+    }).filter(filename => filename.startsWith(SANDBOX + path.sep) && filename.includes("state.sqlite"));
+    expect(held).toEqual([]);
+  }
   if (REAL_STATE !== undefined) process.env.LLV_STATE_DIR = REAL_STATE;
   else delete process.env.LLV_STATE_DIR;
   if (REAL_HOME !== undefined) process.env.HOME = REAL_HOME;
@@ -210,13 +241,14 @@ test("search text hydration retries after a transient filesystem failure", () =>
   }
 });
 
-test("a deleted codex worktree still groups under its parent repo project", () => {
-  const state = useStateDirectory("deleted-codex-state");
+test.each(["native", "Windows"])("a deleted codex worktree still groups under its parent repo project (%s directory flush)", flushMode => {
+  const state = useStateDirectory(`deleted-codex-state-${flushMode}`);
   const liveRepo = path.join(SANDBOX, "deleted-codex-main");
   const identity = createRepository(liveRepo);
-  expect(persistProjectAliases([
+  const persist = () => persistProjectAliases([
     { source: "shared-repository", target: identity.project, displayName: identity.displayName },
-  ])).toBe(true);
+  ]);
+  expect(flushMode === "Windows" ? withWindowsDirectoryFlush(persist) : persist()).toBe(true);
   const dead = path.join(state, ".codex", "worktrees", "2d25", "shared-repository");
   expect(fs.existsSync(dead)).toBe(false);
   expect(projectForCwd(dead)).toBe(identity.project);
@@ -241,12 +273,13 @@ test("a Claude worktree keeps its parent project after the checkout is removed",
   expect(projectForCwd(worktree)).toBe(projectForCwd(repo));
 });
 
-test("a deleted nested checkout inside a Codex worktree groups under the main repo", () => {
-  const state = useStateDirectory("deleted-nested-codex-state");
+test.each(["native", "Windows"])("a deleted nested checkout inside a Codex worktree groups under the main repo (%s directory flush)", flushMode => {
+  const state = useStateDirectory(`deleted-nested-codex-state-${flushMode}`);
   const identity = createRepository(path.join(SANDBOX, "deleted-nested-codex-main"));
-  expect(persistProjectAliases([
+  const persist = () => persistProjectAliases([
     { source: "shared-repository", target: identity.project, displayName: identity.displayName },
-  ])).toBe(true);
+  ]);
+  expect(flushMode === "Windows" ? withWindowsDirectoryFlush(persist) : persist()).toBe(true);
   const dead = path.join(
     state,
     ".codex",
@@ -546,14 +579,64 @@ test("a project-state change recomputes only the overlay, never transcript metad
   expect(after.worktree).toBe("live-log-viewer-split-branch");
 });
 
-test("a nested `worktrees` segment under .claude/.codex is left to its own recognizer", () => {
-  const state = useStateDirectory("nested-recognizer-state");
+test.each(["native", "Windows"])("a nested `worktrees` segment under .claude/.codex is left to its own recognizer (%s directory flush)", flushMode => {
+  const state = useStateDirectory(`nested-recognizer-state-${flushMode}`);
   const identity = createRepository(path.join(SANDBOX, "nested-recognizer-main"));
-  expect(persistProjectAliases([
+  const persist = () => persistProjectAliases([
     { source: "shared-repository", target: identity.project, displayName: identity.displayName },
-  ])).toBe(true);
+  ]);
+  expect(flushMode === "Windows" ? withWindowsDirectoryFlush(persist) : persist()).toBe(true);
   const codex = path.join(state, ".codex", "worktrees", "2d25", "shared-repository");
   expect(projectForCwd(codex)).toBe(identity.project);
+});
+
+test("Windows worktree paths survive SQLite import and a rollback mirror byte for byte", () => {
+  const state = useStateDirectory("windows-path-import-state");
+  const repo = path.win32.join("R:\\", "repositories", "shared-repository");
+  const cwd = path.win32.join("R:\\", "agent-home", ".codex", "worktrees", "lane", "shared-repository");
+  const mapping = { [cwd]: { repo, worktree: "lane" } };
+  const file = path.join(state, "worktree-map.json");
+  const bytes = JSON.stringify(mapping);
+  fs.writeFileSync(file, bytes);
+  withWindowsDirectoryFlush(() => {
+    expect(worktreeMapStore.importLegacy(file).state).toBe("imported");
+    expect(worktreeMapStore.read(file)).toEqual(mapping);
+    expect(fs.statSync(file).isDirectory()).toBe(true);
+    worktreeMapStore.checkpointRollbackMirror(file);
+    expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual(mapping);
+    expect(worktreeMapStore.importLegacy(file).state).toBe("already-imported");
+    expect(worktreeMapStore.read(file)).toEqual(mapping);
+  });
+  const kept = fs.readdirSync(state).filter(name => name.startsWith("worktree-map.json.imported-"));
+  expect(kept).toHaveLength(1);
+  expect(fs.readFileSync(path.join(state, kept[0]!), "utf8")).toBe(bytes);
+  const script = `const { worktreeMapStore } = await import(${JSON.stringify(path.resolve(import.meta.dir, "../projects/persistence.ts"))});`
+    + `console.log(JSON.stringify(worktreeMapStore.read(${JSON.stringify(file)})));`;
+  const restarted = spawnSync(process.execPath, ["-e", script], { env: { ...process.env, LLV_STATE_DIR: state }, encoding: "utf8" });
+  expect(restarted.stderr).toBe("");
+  expect(restarted.status).toBe(0);
+  expect(JSON.parse(restarted.stdout)).toEqual(mapping);
+});
+
+test("a failed Windows rollback file flush still refuses the mirror and can retry", () => {
+  const state = useStateDirectory("windows-file-flush-state");
+  const file = path.join(state, "worktree-map.json");
+  const mapping = { [path.win32.join("R:\\", "checkouts", "lane")]: {
+    repo: path.win32.join("R:\\", "repositories", "shared-repository"), worktree: "lane",
+  } };
+  fs.writeFileSync(file, JSON.stringify(mapping));
+  withWindowsDirectoryFlush(() => {
+    worktreeMapStore.importLegacy(file);
+    const flush = spyOn(fs, "fsyncSync").mockImplementation(() => {
+      throw Object.assign(new Error("EIO: file flush failed"), { code: "EIO" });
+    });
+    try { expect(() => worktreeMapStore.checkpointRollbackMirror(file)).toThrow("EIO"); }
+    finally { flush.mockRestore(); }
+    expect(worktreeMapStore.read(file)).toEqual(mapping);
+    expect(fs.statSync(file).isDirectory()).toBe(true);
+    worktreeMapStore.checkpointRollbackMirror(file);
+    expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual(mapping);
+  });
 });
 
 test("a wrong-HOME durable mapping is corrected by repository evidence after worktree deletion", () => {
@@ -742,7 +825,7 @@ test("two processes writing the worktree map keep each other's records (#2202)",
 
   /* A: records wt-a without having re-read the file. */
   expect(recordWorktreeResolution(a)).not.toBeNull();
-  const onDisk = JSON.parse(fs.readFileSync(path.join(state, "worktree-map.json"), "utf8")) as Record<string, unknown>;
+  const onDisk = worktreeMapStore.read(path.join(state, "worktree-map.json")) as Record<string, unknown>;
   expect(Object.keys(onDisk).sort()).toEqual([a, b, c].sort());
 
   /* B's checkout is removed; A still resolves it through the file B wrote. */
@@ -1045,7 +1128,7 @@ test("first scan of a sibling worktree descendant records it before outside dele
   expect(projectInfoFromCwd(cwd)?.project.startsWith("dir-")).toBe(true);
   fs.writeFileSync(path.join(checkout, ".git"), `gitdir: ${path.join(repo, ".git", "worktrees", "lane-12")}\n`);
   expect(projectInfoFromCwd(cwd)).toMatchObject({ project: identity.project, displayName: identity.displayName, worktree: "lane-12" });
-  expect(JSON.parse(fs.readFileSync(path.join(state, "worktree-map.json"), "utf8"))[checkout]).toEqual({ repo, worktree: "lane-12" });
+  expect(worktreeMapStore.read(path.join(state, "worktree-map.json"))[checkout]).toEqual({ repo, worktree: "lane-12" });
   fs.rmSync(checkout, { recursive: true });
   globalCache("project-info-cwd-v2").clear();
   globalCache("worktree-git").clear();
@@ -1094,7 +1177,7 @@ test.each(["ordinary", "separate", "refreshed"])("a real linked sibling with %s 
   expect(describe("codex-sessions", state, transcript, fs.statSync(transcript))).toMatchObject({
     project: identity.project, projectName: identity.displayName, projectRoot: repo, worktree: path.basename(checkout),
   });
-  const map = JSON.parse(fs.readFileSync(path.join(state, "worktree-map.json"), "utf8"));
+  const map = worktreeMapStore.read(path.join(state, "worktree-map.json"));
   expect(map[checkout]).toEqual({ repo, worktree: path.basename(checkout) });
   if (mapOnly) expect(map[previous]).toEqual({ repo, worktree: path.basename(previous) });
   fs.rmdirSync(cwd);
@@ -1104,6 +1187,37 @@ test.each(["ordinary", "separate", "refreshed"])("a real linked sibling with %s 
   const result = spawnSync(process.execPath, ["-e", script], { cwd: path.resolve(import.meta.dir, "../../.."), env: { ...env, LLV_STATE_DIR: state }, encoding: "utf8" });
   expect(result.status).toBe(0);
   expect(JSON.parse(result.stdout.trim())).toMatchObject({ project: identity.project, displayName: identity.displayName });
+});
+
+test("a reused arbitrary checkout path replaces its stale ordinary mapping before deletion", () => {
+  const state = useStateDirectory("reused-worktree-state");
+  const repoA = path.join(SANDBOX, "reused-worktree-repo-a"), repoB = path.join(SANDBOX, "reused-worktree-repo-b");
+  const checkout = path.join(SANDBOX, "reused-worktree-checkout");
+  const env = { ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_COMMITTER_NAME: "Fixture",
+    GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_EMAIL: "fixture@example.invalid" };
+  const git = (repo: string, ...args: string[]) => {
+    const result = spawnSync("git", ["-c", "core.hooksPath=", "-C", repo, ...args], { env, encoding: "utf8" });
+    expect(result.status).toBe(0);
+  };
+  for (const repo of [repoA, repoB]) {
+    fs.mkdirSync(repo);
+    const init = spawnSync("git", ["-c", "core.hooksPath=", "-C", repo, "init"], { env, encoding: "utf8" });
+    expect(init.status).toBe(0);
+    git(repo, "commit", "--allow-empty", "-m", "fixture");
+    git(repo, "remote", "add", "origin", `https://example.invalid/team/${path.basename(repo)}.git`);
+  }
+  const identityB = projectIdentityFromRepositoryRoot(repoB)!;
+  git(repoA, "worktree", "add", "--detach", checkout);
+  expect(recordWorktreeResolution(checkout)).toEqual({ repo: repoA, worktree: path.basename(checkout) });
+  git(repoA, "worktree", "remove", checkout);
+  git(repoB, "worktree", "add", "--detach", checkout);
+  expect(recordWorktreeResolution(checkout)).toEqual({ repo: repoB, worktree: path.basename(checkout) });
+  fs.rmSync(checkout, { recursive: true });
+  const resolver = `const { projectInfoFromCwd } = await import(${JSON.stringify(path.join(import.meta.dir, "describe.ts"))});`
+    + `console.log(JSON.stringify(projectInfoFromCwd(${JSON.stringify(checkout)})));`;
+  const result = spawnSync(process.execPath, ["-e", resolver], { cwd: path.resolve(import.meta.dir, "../../.."), env: { ...env, LLV_STATE_DIR: state }, encoding: "utf8" });
+  expect(result.status).toBe(0);
+  expect(JSON.parse(result.stdout.trim())).toMatchObject({ project: identityB.project, repo: repoB, worktree: path.basename(checkout) });
 });
 
 test.each(["direct", "container"])("a removed sibling inside an enclosing repository keeps its saved owner (%s)", layout => {
@@ -1138,7 +1252,7 @@ test.each(["direct", "container"])("a removed sibling inside an enclosing reposi
   };
   const live = resolveFresh();
   expect(live).toMatchObject({ info: { project: identity.project, displayName: identity.displayName, repo }, root: repo });
-  expect(JSON.parse(fs.readFileSync(path.join(state, "worktree-map.json"), "utf8"))[checkout]).toEqual({ repo, worktree: path.basename(checkout) });
+  expect(worktreeMapStore.read(path.join(state, "worktree-map.json"))[checkout]).toEqual({ repo, worktree: path.basename(checkout) });
   fs.rmdirSync(cwd);
   git(repo, "worktree", "remove", checkout);
   expect(fs.existsSync(checkout)).toBe(false);
@@ -1172,7 +1286,22 @@ test("a path-recognized live checkout is recorded on its first observation", () 
   fs.mkdirSync(cwd, { recursive: true });
   fs.writeFileSync(path.join(checkout, ".git"), `gitdir: ${path.join(repo, ".git", "worktrees", "lane-14")}\n`);
   expect(projectInfoFromCwd(cwd)).toMatchObject({ project: identity.project, displayName: identity.displayName });
-  expect(JSON.parse(fs.readFileSync(path.join(state, "worktree-map.json"), "utf8"))[checkout]).toEqual({ repo, worktree: "lane-14" });
+  expect(worktreeMapStore.read(path.join(state, "worktree-map.json"))[checkout]).toEqual({ repo, worktree: "lane-14" });
   fs.rmSync(checkout, { recursive: true });
   expect(projectInfoFromCwd(cwd)).toMatchObject({ project: identity.project, displayName: identity.displayName });
+});
+
+
+test("deleted worktree still groups under its parent repo after SQLite import", () => {
+  const state = useStateDirectory("slice6-deleted-checkout");
+  const repo = path.join(SANDBOX, "slice6-parent");
+  const identity = createRepository(repo);
+  const cwd = path.join(SANDBOX, "slice6-arbitrary-checkout");
+  const file = path.join(state, "worktree-map.json");
+  fs.writeFileSync(file, JSON.stringify({ [cwd]: { repo, worktree: "slice6-lane" } }));
+  worktreeMapStore.importLegacy(file);
+  expect(fs.existsSync(cwd)).toBe(false);
+  globalCache("project-info-cwd-v2").clear();
+  globalCache("worktree-git").clear();
+  expect(projectInfoFromCwd(path.join(cwd, "src"))).toMatchObject({ project: identity.project, repo, worktree: "slice6-lane" });
 });

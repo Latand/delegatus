@@ -93,7 +93,7 @@ whitespace, privacy with the committed fingerprints, and eslint. Pre-push checks
 commit publication, types, changed-file lint, touched tests, and scoped Linux,
 pinned Bun runtime, native Codex and supply-chain gates. Tests and builds use
 isolated state roots; heavy commands go through `scripts/gate-slot.sh`.
-Touched tests run the branch first, up to four explicit head files at once, each
+Touched tests run the branch first, up to eight explicit head files at once, each
 with fresh state, HOME and TMPDIR under the OS temp root. Only files failing on
 the branch are sampled on the merge base with `origin/main`, filtered to the
 failing assertions; runner errors require the full file. A green branch needs
@@ -103,7 +103,12 @@ between-tests errors. An incomplete baseline for a red branch blocks unless
 both sides are broken the same way, which lists as pre-existing.
 Samples report elapsed time. Budgets are five minutes per file and fifteen
 minutes per baseline/head test run. Privacy and isolated checks run concurrently
-and both must pass; a refusal or timeout stops the peer and waits for owned process cleanup. Privacy retains its
+and use the same publication budget as the pipeline's publisher: changes to
+the pipeline engine source/test family, `git.ts` or `parkedPublication.test.ts`
+get 25 minutes for the push, including one minute for the pack; other changes
+retain 15 minutes. An explicit caller deadline remains authoritative. The
+shared rule is `src/lib/pipelines/gateBudget.ts`. Both must pass; a refusal or
+timeout stops the peer and waits for owned process cleanup. Privacy retains its
 refusal text and exit behaviour. Pre-push takes one admission for independent types/lint,
 test, runtime and native lanes. Pre-commit lint on up to 40 files needs no
 admission. Privacy, types and ESLint retain their own checks.

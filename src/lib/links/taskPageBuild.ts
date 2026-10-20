@@ -1,3 +1,4 @@
+import { projectStoreSignature } from "@/lib/projects/persistence";
 import fs from "node:fs";
 import { repairLinkedTasks } from "./taskRepair";
 import { statePath } from "@/lib/configDir";
@@ -52,11 +53,10 @@ export class TaskPageBuilder {
     const database = statePath("state.sqlite");
     const context = () => {
       const seat = fs.statSync(statePath("orchestrator-seats.json"), { bigint: true, throwIfNoEntry: false });
-      const aliases = fs.statSync(statePath("project-aliases.json"), { bigint: true, throwIfNoEntry: false });
       return JSON.stringify([source?.revision(), this.revision(database),
       source && source.database !== database ? this.revision(source.database) : null, storedLessonRevision(),
       seat ? `${seat.dev}:${seat.ino}:${seat.size}:${seat.mtimeNs}:${seat.ctimeNs}` : "absent",
-      aliases ? `${aliases.dev}:${aliases.ino}:${aliases.size}:${aliases.mtimeNs}:${aliases.ctimeNs}` : "absent"]);
+      projectStoreSignature("project-aliases.json")]);
     };
     const before = context();
     const key = JSON.stringify([request.kind, request.after, request.filter, this.filesEpoch, before]);

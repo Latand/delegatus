@@ -1,3 +1,4 @@
+import { projectStoreSignature } from "@/lib/projects/persistence";
 /**
  * Which projects are linked, over which link, and which machine runs a task
  * (docs/design/linked-installs.md M.2, M.4). Read on every task write, so the
@@ -37,7 +38,7 @@ export function linkedContext(): LinkedContext {
   // Nothing shared and no identity: no project can be linked, and no row can
   // name another machine this install could know.
   if (shared === "-" && selfStat === "-") return EMPTY;
-  const signature = [statePath(), shared, selfStat, stat(linkFile("peers")), stat(linkFile("grants")), stat(statePath("project-remotes.json")), boardLinksRevision()].join("|");
+  const signature = [statePath(), shared, selfStat, stat(linkFile("peers")), stat(linkFile("grants")), projectStoreSignature("project-remotes.json"), boardLinksRevision()].join("|");
   if (cached?.signature === signature) return cached.context;
   const installId = readInstallId();
   const local = new Set(sharedProjects().map((project) => project.key));
