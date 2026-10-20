@@ -25,8 +25,9 @@ import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { stateDatabaseBusy, stateLockDeferral } from "@/lib/state/lockWait";
 import { agentMemoryHeadroom, memoryKillText, type AgentMemoryKill } from "@/lib/runtime/agentMemory";
 import { claudeHostEndText } from "@/lib/runtime/hostEndCause";
+import { cpuPriorityEnv, type CpuPrioritySource } from "@/lib/runtime/cpuPriority";
 import { CPU_PRESSURE_DETAIL_PREFIXES, cpuPressureHoldDetail, machineCpuPressureGate, machineCpuPressurePollMs, type CpuPressureHold } from "@/lib/runtime/cpuPressure";
-import { instanceCpuAdmissionQueue } from "@/lib/runtime/cpuAdmissionScope";
+import { instanceCpuPrioritySource, instanceCpuAdmissionQueue } from "@/lib/runtime/cpuAdmissionScope";
 import { stateDir } from "@/lib/configDir";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -329,7 +330,7 @@ export interface PipelinePorts {
   unpublishedLaunchRetrySafe?(launchId: string): Promise<boolean>;
   drainHold?(): DrainLease | null;
   /** A held stage start waits in the shared bounded CPU queue; null admits. */
-  cpuPressureHold?(key?: string): CpuPressureHold | null;
+  cpuPressureHold?(key?: string, priority?: CpuPrioritySource): CpuPressureHold | null;
   cpuAdmissionReconcile?(admission?: Pick<PipelinePorts, "drainHold" | "structuredDeliveryPublication" | "now">): void | Promise<void>;
   cpuAdmissionSuspend?(key: string): void;
   observeControllerLeaseHold?(heldMs: number): void;
@@ -861,7 +862,7 @@ async function spawnPipelineAgent(
   try {
     const guard = await performanceSpans.wait("pipeline.git-guard-prepare", () =>
       prepareStageGitGuard(begun.receipt.launchId, input.cwd, realExec, new Date().toISOString()));
-    guardedAccount = { ...account, env: { ...account.env, ...guard } };
+    guardedAccount = { ...account, env: { ...account.env, ...guard, ...cpuPriorityEnv(instanceCpuPrioritySource(findPipelineRecord(input.membership.containerId!)?.taskIds ?? [])) } };
     // The same reservation callback rechecks durable activation after setup
     // yielded. A pause or ownership change still prevents native dispatch.
     message = await withCurrentRoleMemory(async () => {
@@ -1613,10 +1614,10 @@ export function defaultPipelinePorts(
        structured hosting switched off there is no publication to wait for and
        the spawn must fail in the open, as it always did. */
     drainHold: () => activeDrain(),
-    cpuPressureHold: (key) => {
+    cpuPressureHold: (key, priority) => {
       const gate = machineCpuPressureGate();
       if (!gate) return null;
-      return gate.check(key);
+      return gate.check(key, priority);
     },
     cpuAdmissionReconcile: async (admission) => {
       let waiting: Pipeline[];
@@ -7022,7 +7023,7 @@ async function holdStageLaunch(pipeline: Pipeline, ports: PipelinePorts, persist
   }
   // Heavy work yields to production under CPU pressure. Only a fresh stage
   // start asks; recovery and reconciliation of launched work never do.
-  const pressure = ports.cpuPressureHold?.(cpuStageKey(pipeline));
+  const pressure = ports.cpuPressureHold?.(cpuStageKey(pipeline), instanceCpuPrioritySource(pipeline.taskIds));
   if (pressure) {
     const detail = cpuPressureHoldDetail(pressure);
     if (pipeline.stateDetail !== detail) { pipeline.stateDetail = detail; await persist(); }

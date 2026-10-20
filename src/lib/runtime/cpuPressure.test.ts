@@ -92,3 +92,14 @@ test("an aborted wait answers false and starts nothing", async () => {
   abort.abort();
   expect(await waiting).toBe(false);
 });
+
+test("a publication install forwards its task binding on admission checks and cancels its ticket", async () => {
+  const source = { database: "fixture/state.sqlite", taskIds: ["task-high", "task-low"] };
+  const checked: string[] = [], cancelled: string[] = [];
+  expect(await waitForCpuPressure({
+    check: (key, priority) => { expect(priority).toEqual(source); checked.push(key!); return null; },
+    cancel: key => { cancelled.push(key); },
+  }, { subject: "publication-install", priority: source, onReason: () => { throw new Error("admitted"); } })).toBe(true);
+  expect(checked).toHaveLength(1);
+  expect(cancelled).toEqual(checked);
+});
