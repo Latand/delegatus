@@ -595,10 +595,9 @@ function worktreeFromMemory(cwd: string, liveRepositoryRoot: string | null): Wor
 }
 
 /** Writes what this process learned into the map on disk. The file is read
-    again under the state lock every writer of it takes and the learned entries
-    are added to it, so a write only ever adds: a process that read the map
-    before another one wrote does not drop the other's records (#2202 — after
-    the worktree sweep removes a checkout, its record cannot be learned again). */
+    under the state lock and live Git evidence replaces an obsolete ordinary
+    mapping when a checkout path is reused. Atomic recovery rows remain guarded
+    against conflicting ownership (#2202). */
 function writeWorktreeMap(): void {
   const memory = worktreeMemory;
   if (!memory) return;
@@ -610,8 +609,7 @@ function writeWorktreeMap(): void {
       const recovery = recovered.get(cwd);
       if (recovery && (recovery.repo !== info.repo || recovery.worktree !== info.worktree)) throw new Error("Worktree recovery conflicts with a recorded mapping");
       const held = tx.get(cwd)?.value as WorktreeInfo | undefined;
-      if (held && (held.repo !== info.repo || held.worktree !== info.worktree)) throw new Error("Worktree mapping conflicts with a recorded mapping");
-      if (!held) tx.put({ key: cwd, value: info });
+      if (!held || held.repo !== info.repo || held.worktree !== info.worktree) tx.put({ key: cwd, value: info });
     }
   });
   memory.learned.clear();

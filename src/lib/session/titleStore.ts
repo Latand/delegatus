@@ -66,7 +66,8 @@ export function readSessionTitles(filePath = titlesFile()): SessionTitleOverride
   return sessionTitleStore.read(filePath).records;
 }
 
-type TitleDocument = { records: SessionTitleOverride[]; preserved: { key: string; json: string }[] };
+type PreservedTitleRecord = { key: string; rowKey: string; json: string };
+type TitleDocument = { records: SessionTitleOverride[]; preserved: PreservedTitleRecord[] };
 function parseTitlesDocument(raw: unknown, sourceText?: string): TitleDocument {
   const parsed = raw;
   const text = sourceText ?? JSON.stringify(raw);
@@ -82,12 +83,17 @@ function parseTitlesDocument(raw: unknown, sourceText?: string): TitleDocument {
   }
   const records = file.titles.filter(isRecord);
   const bytes = jsonArrayRecordBytes(text, "titles");
+  const logicalKeys = new Set(records.map(record => record.key));
+  const rowKeys = new Set<string>();
   const preserved = file.titles.flatMap((record, index) => {
     if (isRecord(record)) return [];
     const ownKey = record && typeof record === "object" ? (record as { key?: unknown }).key : undefined;
     const key = typeof ownKey === "string" && ownKey ? ownKey : registryRecordKey(record);
     reportRegistryRecord("session-titles", { id: key });
-    return [{ key, json: bytes[index]! }];
+    let rowKey = `preserved:${index}`;
+    while (logicalKeys.has(rowKey) || rowKeys.has(rowKey)) rowKey += ":";
+    rowKeys.add(rowKey);
+    return [{ key, rowKey, json: bytes[index]! }];
   });
   return { records, preserved };
 }
@@ -105,15 +111,35 @@ export function loadSessionTitles(filePath = titlesFile()): SessionTitleOverride
 
 function withTitleRecords(document: TitleDocument, records: SessionTitleOverride[]): TitleDocument {
   const protectedKeys = new Set(document.preserved.map(record => record.key));
+  const previous = new Map(document.records.map(record => [record.key, record]));
   for (const record of records) {
-    if (!isRecord(record) || protectedKeys.has(record.key)) throw new TitleStoreUnreadableError(`refusing to overwrite preserved title record: ${record.key}`);
+    if (!isRecord(record)) throw new TitleStoreUnreadableError("refusing to write an invalid title record");
+    if (protectedKeys.has(record.key) && JSON.stringify(previous.get(record.key)) !== JSON.stringify(record)) {
+      throw new TitleStoreUnreadableError(`refusing to overwrite preserved title record: ${record.key}`);
+    }
+  }
+  for (const record of document.records) {
+    if (protectedKeys.has(record.key) && JSON.stringify(records.find(candidate => candidate.key === record.key)) !== JSON.stringify(record)) {
+      throw new TitleStoreUnreadableError(`refusing to overwrite preserved title record: ${record.key}`);
+    }
   }
   return { records, preserved: document.preserved };
 }
+function titleRows(document: TitleDocument): { key: string; value: unknown }[] {
+  const occupied = new Set(document.records.map(record => record.key));
+  const result: { key: string; value: unknown }[] = document.records.map(record => ({ key: record.key, value: { record } }));
+  for (const record of document.preserved) {
+    let key = record.rowKey;
+    while (occupied.has(key)) key += ":";
+    occupied.add(key);
+    result.push({ key, value: { preserved: record } });
+  }
+  return result;
+}
 export const sessionTitleStore = smallStore<TitleDocument>({
   collection: "session_titles", empty: () => ({ records: [], preserved: [] }), parse: parseTitlesDocument,
-  toRows: document => [...document.records.map(record => ({ key: record.key, value: { record } })), ...document.preserved.map(record => ({ key: record.key, value: { preserved: record } }))],
-  fromRows: rows => ({ records: rows.flatMap(row => (row.value as { record?: SessionTitleOverride }).record ? [(row.value as { record: SessionTitleOverride }).record] : []), preserved: rows.flatMap(row => (row.value as { preserved?: TitleDocument["preserved"][number] }).preserved ? [(row.value as { preserved: TitleDocument["preserved"][number] }).preserved] : []) }),
+  toRows: titleRows,
+  fromRows: rows => ({ records: rows.flatMap(row => (row.value as { record?: SessionTitleOverride }).record ? [(row.value as { record: SessionTitleOverride }).record] : []), preserved: rows.flatMap(row => { const record = (row.value as { preserved?: TitleDocument["preserved"][number] }).preserved; return record ? [{ ...record, rowKey: record.rowKey ?? row.key }] : []; }) }),
   toFile: document => ({ version: 1, titles: [...document.records, ...document.preserved.map(record => JSON.parse(record.json))] }),
   serializeFile: document => `{\n  "version": 1,\n  "titles": [\n${[...document.records.map(record => JSON.stringify(record)), ...document.preserved.map(record => record.json)].join(",\n")}\n  ]\n}\n`,
   error: message => new TitleStoreUnreadableError(message),

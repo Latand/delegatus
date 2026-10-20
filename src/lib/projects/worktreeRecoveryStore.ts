@@ -1,4 +1,5 @@
-import { worktreeMapStore, projectAliasStore, readProjectDocument } from "./persistence";
+import crypto from "node:crypto";
+import { worktreeMapStore, readProjectDocument } from "./persistence";
 
 import { stateDir, statePath } from "@/lib/configDir";
 import type { LifecycleEvent } from "@/lib/lifecycle/journal";
@@ -6,7 +7,7 @@ import { writeJsonDurably } from "@/lib/state/durableJson";
 import { withFileTransactionAttempt } from "@/lib/state/fileTransaction";
 import { assertStateMutationAllowed } from "@/lib/state/stateMutationBarrier";
 import {
-  initializeStateCollections, readStateCollectionRows, SqliteStateCollection, stateDatabaseSignature,
+  initializeStateCollections, readStateCollectionRevision, readStateCollectionRows, readStateImport, recordStateImportMirror, SqliteStateCollection, stateDatabaseSignature,
 } from "@/lib/state/sqliteStateStore";
 
 /** Recovery's mapping, alias and journal event share the board's SQLite commit.
@@ -59,6 +60,17 @@ export function worktreeRecoveryCollection(): SqliteStateCollection<WorktreeReco
   });
 }
 
+function writeProjectedMirror(file: string, collection: string, document: unknown): void {
+  const database = statePath("state.sqlite");
+  const text = `${JSON.stringify(document, null, 2)}\n`;
+  writeJsonDurably(file, document);
+  if (readStateImport(database, collection)) {
+    const revision = readStateCollectionRevision(database, collection);
+    if (revision === null) throw new Error(`${collection} import has no collection revision during recovery checkpoint`);
+    recordStateImportMirror(database, collection, crypto.createHash("sha256").update(text).digest("hex"), revision);
+  }
+}
+
 /** The retiring Viewer (or the adapter in its scoped activation) holds the
     release fence until every mirror succeeds. Project the atomic recovery into
     the files a retained release reads before it may resume writes. A failed
@@ -82,10 +94,11 @@ export async function checkpointWorktreeRecoveryForDemotion(): Promise<void> {
         // compatibility files only; the live commit remains wholly in SQLite.
         const aliases = projectAliasSnapshot({ strict: true });
         const journal = readLifecycleJournal();
-        worktreeMapStore.mutate(mapFile, () => ({ next: map, result: undefined }));
-        projectAliasStore.mutate(aliasesFile, () => ({ next: aliases, result: undefined }));
-        worktreeMapStore.checkpointRollbackMirror(mapFile);
-        projectAliasStore.checkpointRollbackMirror(aliasesFile);
+        // Recovery rows are already committed atomically in SQLite. During
+        // release fencing ordinary collection writes are denied, so publish
+        // only the legacy documents the retained release needs.
+        writeProjectedMirror(mapFile, "worktree_map", map);
+        writeProjectedMirror(aliasesFile, "project_aliases", { schemaVersion: 1, ...aliases });
         writeJsonDurably(lifecycleJournalPath(), journal);
       });
 }

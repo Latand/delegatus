@@ -9,7 +9,7 @@ import { projectAliasStore, projectCurationStore, projectRemoteStore, worktreeMa
 import { canonicalProject, persistProjectAliases, recordedProjectRemote, recordProjectRemote } from "@/lib/projects/aliases";
 import { setProjectCrown, createManualProject } from "@/lib/projects/curation";
 import { archiveProjects } from "@/lib/reviewHistory/reader";
-import { readStateImport } from "./sqliteStateStore";
+import { readStateImport, resetStateReadonlyConnectionCountForTests, stateReadonlyConnectionCountForTests } from "./sqliteStateStore";
 import { FileTransactionAdmissionError, withFileTransactionAttempt } from "./fileTransaction";
 const roots: string[] = [];
 const previous = process.env.LLV_STATE_DIR;
@@ -124,6 +124,47 @@ test("alias decoders read committed SQLite inside a peer transaction; guards fol
     db.exec("ROLLBACK");
   } finally { db.close(); }
   expect(readProjectDocument(worktreeMapStore, "worktree-map.json")).toEqual({});
+});
+
+test.skipIf(process.platform === "win32")("warm alias revisions reuse the shared reader and observe peer writes and same-path database replacement", async () => {
+  const root = sandbox(), aliasesFile = seed(root, "project-aliases.json", slice6Cases[0]![2]);
+  projectAliasStore.importLegacy(aliasesFile);
+  resetStateReadonlyConnectionCountForTests();
+  const first = projectStoreSignature("project-aliases.json");
+  const connections = stateReadonlyConnectionCountForTests();
+  for (let i = 0; i < 1_000; i++) expect(canonicalProject("old")).toBe("fixture");
+  expect(stateReadonlyConnectionCountForTests()).toBe(connections);
+
+  const childCode = `const { persistProjectAliases } = await import(${JSON.stringify(path.resolve(import.meta.dir, "../projects/aliases.ts"))});`
+    + `if (!persistProjectAliases([{source:"cross-process",target:"peer",displayName:"Peer"}])) process.exit(3);`;
+  const child = Bun.spawn([process.execPath, "-e", childCode], {
+    env: { ...process.env, LLV_STATE_DIR: root }, stdout: "pipe", stderr: "pipe",
+  });
+  const [childOut, childErr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect(childOut).toBe(""); expect(childErr).toBe(""); expect(code).toBe(0);
+  expect(canonicalProject("cross-process")).toBe("peer");
+  expect(projectStoreSignature("project-aliases.json")).not.toBe(first);
+
+  const replacement = path.join(root, "replacement"); fs.mkdirSync(replacement);
+  const replacementCode = `const fs=await import("node:fs"),path=await import("node:path");`
+    + `const {projectAliasStore}=await import(${JSON.stringify(path.resolve(import.meta.dir, "../projects/persistence.ts"))});`
+    + `const root=${JSON.stringify(replacement)},file=path.join(root,"project-aliases.json");`
+    + `fs.writeFileSync(file,JSON.stringify({schemaVersion:1,aliases:{old:"replacement"},displayNames:{replacement:"Replacement"}}));`
+    + `projectAliasStore.importLegacy(file);`;
+  const replacementChild = Bun.spawn([process.execPath, "-e", replacementCode], {
+    env: { ...process.env, LLV_STATE_DIR: replacement }, stdout: "pipe", stderr: "pipe",
+  });
+  const [replacementOut, replacementErr, replacementCodeResult] = await Promise.all([
+    new Response(replacementChild.stdout).text(), new Response(replacementChild.stderr).text(), replacementChild.exited,
+  ]);
+  expect(replacementOut).toBe(""); expect(replacementErr).toBe(""); expect(replacementCodeResult).toBe(0);
+  const database = path.join(root, "state.sqlite");
+  for (const suffix of ["-wal", "-shm", ""]) {
+    const current = database + suffix;
+    if (fs.existsSync(current)) fs.renameSync(current, `${current}.previous`);
+  }
+  fs.renameSync(path.join(replacement, "state.sqlite"), database);
+  expect(canonicalProject("old")).toBe("replacement");
 });
 
 

@@ -1152,10 +1152,9 @@ export function readStateCollectionRevisions(
   collections: readonly string[],
 ): Map<string, number | null> {
   const revisions = new Map<string, number | null>(collections.map((collection) => [collection, null]));
-  if (!fs.existsSync(filename)) return revisions;
-  const db = connectReadonlyDatabase(filename);
+  if (collections.length === 0 || !fs.existsSync(filename)) return revisions;
+  const db = sharedStateReadonlyDatabase(filename);
   try {
-    if (collections.length === 0) return revisions;
     const placeholders = collections.map(() => "?").join(", ");
     const rows = db.query<{ collection: string; revision: number }, SQLQueryBindings[]>(`
       SELECT collection, revision FROM state_collections
@@ -1166,8 +1165,6 @@ export function readStateCollectionRevisions(
   } catch (error) {
     if (/no such table/i.test(error instanceof Error ? error.message : String(error))) return revisions;
     throw error;
-  } finally {
-    db.close();
   }
 }
 

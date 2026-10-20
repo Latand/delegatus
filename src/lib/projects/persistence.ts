@@ -71,15 +71,44 @@ export const PROJECT_COLLECTIONS = {
   "project-curation.json": "project_curation", "worktree-map.json": "worktree_map", "session-titles.json": "session_titles",
 } as const;
 export type ProjectStateFile = keyof typeof PROJECT_COLLECTIONS;
+type RevisionCache = { stamp: string; revision: number | null };
+const revisionCacheHost = globalThis as typeof globalThis & { __llvProjectRevisionCache?: Map<string, RevisionCache> };
+const projectRevisionCache = revisionCacheHost.__llvProjectRevisionCache ??= new Map();
+function stateRevisionStamp(database: string): { stamp: string; identity: string } | null {
+  try {
+    const main = fs.statSync(database, { bigint: true });
+    let wal = "missing";
+    try {
+      const stat = fs.statSync(`${database}-wal`, { bigint: true });
+      wal = `${stat.dev}:${stat.ino}:${stat.mtimeNs}:${stat.ctimeNs}:${stat.size}`;
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    return {
+      stamp: `${main.dev}:${main.ino}:${main.mtimeNs}:${main.ctimeNs}:${main.size}|${wal}`,
+      identity: `${main.dev}:${main.ino}:${main.birthtimeNs}`,
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
 /** Revision and physical database identity, without reading any document rows.
  * The legacy stamp is used only until activation imports the collection. */
 export function projectStoreSignature(name: ProjectStateFile, directory = stateDir()): string {
   const database = path.join(directory, "state.sqlite");
-  const revision = readStateCollectionRevision(database, PROJECT_COLLECTIONS[name]);
+  const collection = PROJECT_COLLECTIONS[name];
+  const stateStamp = stateRevisionStamp(database);
+  const stamp = stateStamp?.stamp ?? "missing";
+  const key = JSON.stringify([directory, collection]);
+  const cached = projectRevisionCache.get(key);
+  const revision = cached?.stamp === stamp ? cached.revision : readStateCollectionRevision(database, collection);
+  if (cached?.stamp !== stamp) {
+    projectRevisionCache.set(key, { stamp, revision });
+    while (projectRevisionCache.size > 8) projectRevisionCache.delete(projectRevisionCache.keys().next().value!);
+  }
   const file = revision === null ? path.join(directory, name) : database;
   try {
     const stat = fs.statSync(file, { bigint: true });
-    return revision === null ? `${file}:${stat.ino}:${stat.mtimeNs}:${stat.ctimeNs}:${stat.size}` : `${database}:${stat.dev}:${stat.ino}:${stat.birthtimeNs}:${revision}`;
+    return revision === null ? `${file}:${stat.ino}:${stat.mtimeNs}:${stat.ctimeNs}:${stat.size}` : `${database}:${stateStamp?.identity ?? `${stat.dev}:${stat.ino}:${stat.birthtimeNs}`}:${revision}`;
   } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; return `${file}:missing`; }
 }
 /** One shared, bounded decoded cache across compiled bundles. Decoders use

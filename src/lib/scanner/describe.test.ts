@@ -1107,6 +1107,37 @@ test.each(["ordinary", "separate", "refreshed"])("a real linked sibling with %s 
   expect(JSON.parse(result.stdout.trim())).toMatchObject({ project: identity.project, displayName: identity.displayName });
 });
 
+test("a reused arbitrary checkout path replaces its stale ordinary mapping before deletion", () => {
+  const state = useStateDirectory("reused-worktree-state");
+  const repoA = path.join(SANDBOX, "reused-worktree-repo-a"), repoB = path.join(SANDBOX, "reused-worktree-repo-b");
+  const checkout = path.join(SANDBOX, "reused-worktree-checkout");
+  const env = { ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_COMMITTER_NAME: "Fixture",
+    GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_EMAIL: "fixture@example.invalid" };
+  const git = (repo: string, ...args: string[]) => {
+    const result = spawnSync("git", ["-c", "core.hooksPath=", "-C", repo, ...args], { env, encoding: "utf8" });
+    expect(result.status).toBe(0);
+  };
+  for (const repo of [repoA, repoB]) {
+    fs.mkdirSync(repo);
+    const init = spawnSync("git", ["-c", "core.hooksPath=", "-C", repo, "init"], { env, encoding: "utf8" });
+    expect(init.status).toBe(0);
+    git(repo, "commit", "--allow-empty", "-m", "fixture");
+    git(repo, "remote", "add", "origin", `https://example.invalid/team/${path.basename(repo)}.git`);
+  }
+  const identityB = projectIdentityFromRepositoryRoot(repoB)!;
+  git(repoA, "worktree", "add", "--detach", checkout);
+  expect(recordWorktreeResolution(checkout)).toEqual({ repo: repoA, worktree: path.basename(checkout) });
+  git(repoA, "worktree", "remove", checkout);
+  git(repoB, "worktree", "add", "--detach", checkout);
+  expect(recordWorktreeResolution(checkout)).toEqual({ repo: repoB, worktree: path.basename(checkout) });
+  fs.rmSync(checkout, { recursive: true });
+  const resolver = `const { projectInfoFromCwd } = await import(${JSON.stringify(path.join(import.meta.dir, "describe.ts"))});`
+    + `console.log(JSON.stringify(projectInfoFromCwd(${JSON.stringify(checkout)})));`;
+  const result = spawnSync(process.execPath, ["-e", resolver], { cwd: path.resolve(import.meta.dir, "../../.."), env: { ...env, LLV_STATE_DIR: state }, encoding: "utf8" });
+  expect(result.status).toBe(0);
+  expect(JSON.parse(result.stdout.trim())).toMatchObject({ project: identityB.project, repo: repoB, worktree: path.basename(checkout) });
+});
+
 test.each(["direct", "container"])("a removed sibling inside an enclosing repository keeps its saved owner (%s)", layout => {
   const state = useStateDirectory(`enclosing-repository-${layout}`);
   const outer = path.join(SANDBOX, `enclosing-${layout}`);

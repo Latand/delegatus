@@ -304,6 +304,38 @@ test("a malformed record is preserved while healthy titles remain writable", () 
   expect(() => write("path:/b", "New", undefined, "t1")).toThrow("preserved title record");
 });
 
+test("duplicate rejected title rows and valid-key collisions import with distinct internal keys", async () => {
+  const legacy = `{"version":1,"titles":[{"key":"path:/healthy","title":"ok","revision":1,"updatedAt":"t"},null,null,{"key":"path:/healthy","future":true},{"key":"path:/future","future":true}]}`;
+  fs.writeFileSync(file, legacy);
+  const imported = sessionTitleStore.importLegacy(file);
+  expect(imported.state).toBe("imported");
+  const importedDocument = sessionTitleStore.read(file);
+  expect(importedDocument.preserved).toHaveLength(4);
+  expect(new Set(importedDocument.preserved.map(row => row.rowKey)).size).toBe(4);
+  write(importedDocument.preserved[0]!.rowKey, "Internal-key-shaped title", undefined, "t1");
+  write("path:/neighbor", "Neighbor", undefined, "t2");
+  expect(readSessionTitles(file).map(row => row.key)).toEqual(["path:/healthy", importedDocument.preserved[0]!.rowKey, "path:/neighbor"]);
+  expect(() => write("path:/healthy", "Blocked", undefined, "t3")).toThrow("preserved title record");
+  sessionTitleStore.checkpointRollbackMirror(file);
+  const mirror = fs.readFileSync(file, "utf8");
+  for (const occurrence of ["null", "null", '"future":true', '"key":"path:/future"']) expect(mirror).toContain(occurrence);
+  const storeModule = path.resolve(import.meta.dir, "titleStore.ts");
+  const childCode = `const {readSessionTitles,writeSessionTitle,sessionTitleStore}=await import(${JSON.stringify(storeModule)});`
+    + `const file=${JSON.stringify(file)}, expected=${JSON.stringify(importedDocument.preserved.map(row => row.json))};`
+    + `const actual=sessionTitleStore.read(file).preserved.map(row=>row.json).sort();`
+    + `if(JSON.stringify(actual)!==JSON.stringify(expected.slice().sort()))process.exit(3);`
+    + `if(!writeSessionTitle(["path:/after-restart"],"path:/after-restart","After restart",undefined,"t4",file).ok)process.exit(4);`
+    + `sessionTitleStore.checkpointRollbackMirror(file);`;
+  const child = Bun.spawn([process.execPath, "-e", childCode], {
+    env: { ...process.env }, stdout: "pipe", stderr: "pipe",
+  });
+  const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect(stdout).toBe(""); expect(stderr).toBe(""); expect(code).toBe(0);
+  const restarted = sessionTitleStore.read(file);
+  expect(restarted.preserved.map(row => row.json).sort()).toEqual(importedDocument.preserved.map(row => row.json).sort());
+  expect(readSessionTitles(file).some(row => row.key === "path:/after-restart")).toBe(true);
+});
+
 test("read consumers degrade to no overrides on a corrupt store", () => {
   fs.writeFileSync(file, "garbage");
   expect(loadSessionTitles(file)).toEqual([]);
