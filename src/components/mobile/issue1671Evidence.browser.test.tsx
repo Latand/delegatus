@@ -187,7 +187,7 @@ describe("shared memory settings", () => {
         accountId: null, status: "live", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
       const stageHeaders = { ...headers, "x-llv-spawn-capability": registry.rotateSpawnCapabilityForReceipt(stage.receipt.launchId), "x-llv-memory-hook": crypto.randomUUID() };
       const activity = memoryIndex().injectionActivity();
-      const stageText = encodeCodexStructuredUserText(stagePrompt, undefined, null, { kind: "operator" }, messageTextDigest("synthetic-stage-start"));
+      const stageText = await encodeCodexStructuredUserText(stagePrompt, undefined, null, { kind: "operator" }, messageTextDigest("synthetic-stage-start"));
       expect(await offerForHook(new Request("http://localhost/api/memory/inject", { headers: stageHeaders }),
         { hook_event_name: "UserPromptSubmit", session_id: stageSession, cwd: root, prompt: stageText })).toBe("");
       expect(memoryIndex().lastTurn(project)).toBe("delivered");
