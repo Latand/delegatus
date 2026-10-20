@@ -15,7 +15,7 @@ import {
 } from "./structuredDeliveryQueue";
 import { STRUCTURED_IMAGE_CAPABILITY, structuredContentDigest, type StructuredImageRef } from "./structuredContent";
 import { deputySeatNoteRequest } from "@/lib/orchestrator/deputySweep";
-import { roleMemoryCollection, storedLessonRevision } from "@/lib/memory/roleStore";
+import { ROLE_MEMORY_CHANGED_MESSAGE, roleMemoryCollection, storedLessonRevision } from "@/lib/memory/roleStore";
 
 const privacyFixtureId = "r:delivery-privacy-fence-test";
 afterEach(() => {
@@ -48,7 +48,7 @@ function idleState(sessionKey = "session-one"): HostState {
   };
 }
 
-function host(send: (entry: QueueEntry, firstDispatch?: FirstDispatchEvidence) => Promise<DeliveryReceipt>): EngineHost {
+function host(send: (entry: QueueEntry, firstDispatch?: FirstDispatchEvidence, authorize?: () => void) => Promise<DeliveryReceipt>): EngineHost {
   return {
     supportsSteer: true,
     attach: () => ({ async *[Symbol.asyncIterator](): AsyncIterator<RuntimeEvent> {} }),
@@ -100,12 +100,15 @@ test("a role-memory change during delivery admission prevents first-message disp
     createdAt: "2026-10-19T00:00:00Z", changedAt: "2026-10-19T00:00:00Z",
   }));
   const revision = crypto.createHash("sha256").update(storedLessonRevision()).digest("hex");
+  let currentRevision = revision;
+  let currentPrompt = "filtered first message from the old revision";
+  const transitions: Array<{ status: string; reason?: string | null }> = [];
   let sent = 0;
   let changed = false;
   const queue = new StructuredDeliveryQueue({
     effects: async () => [{ id: "effect:role-privacy", kind: "runtime.send", eventSeq: 1,
       payload: { kind: "send", operationId: "spawn_message_privacy_fixture", conversationId: "conversation-one",
-        text: "filtered first message", policy: "queue", roleMemoryRevision: revision } }],
+        text: currentPrompt, policy: "queue", roleMemoryRevision: currentRevision } }],
     status: async () => {
       if (!changed) {
         changed = true;
@@ -119,12 +122,81 @@ test("a role-memory change during delivery admission prevents first-message disp
       return { status: "queued", revision: 1 };
     },
     hostClaim: async () => "owner:privacy",
-    transition: async () => {},
-  }, () => host(async () => { sent += 1; return { outcome: "turn-started", turnId: "turn-privacy" }; }));
+    transition: async (_id, status, options) => { transitions.push({ status, reason: options?.reason }); },
+  }, () => host(async entry => {
+    sent += 1;
+    expect(entry.text).toBe(currentPrompt);
+    return { outcome: "turn-started", turnId: "turn-privacy" };
+  }));
 
   await queue.drain();
   expect(changed).toBe(true);
   expect(sent).toBe(0);
+  expect(transitions).toContainEqual({ status: "queued", reason: ROLE_MEMORY_CHANGED_MESSAGE });
+  expect(transitions.some(transition => transition.status === "uncertain")).toBe(false);
+  currentRevision = crypto.createHash("sha256").update(storedLessonRevision()).digest("hex");
+  currentPrompt = "filtered first message from the current revision";
+  await queue.drain();
+  expect(sent).toBe(1);
+});
+
+test("a role-memory change after inbox binding keeps the batch retryable", async () => {
+  const collection = roleMemoryCollection(true)!;
+  collection.boundedPatch(1, tx => tx.put({
+    kind: "rule", id: "delivery-privacy-batch-test", scope: "machine", rule: "old batch privacy fixture",
+    why: "", state: "active", hints: [], source: { project: "fixture", pipelineId: "fixture", stageId: "build",
+      attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation-one" },
+    createdAt: "2026-10-19T00:00:00Z", changedAt: "2026-10-19T00:00:00Z",
+  }));
+  const revision = crypto.createHash("sha256").update(storedLessonRevision()).digest("hex");
+  let sent = 0;
+  let changed = false;
+  let running = true;
+  const transitions: Array<{ id: string; status: string; reason?: string | null }> = [];
+  const statuses = new Map(["spawn_message_one", "spawn_message_two"].map(id => [id,
+    { status: "queued", revision: 1, admittedAt: "2026-10-20T00:00:00Z", reason: null as string | null, turnId: null as string | null }]));
+  const queueHost = host(async (_entry, _proof, authorize) => {
+    authorize?.();
+    sent++;
+    return { outcome: "turn-started", turnId: "turn-privacy-batch" };
+  });
+  Object.assign(queueHost, { supportsSteer: false, coalescesQueuedInput: true, sendWaitsForRunningTurn: true, supportsQueuedSend: false });
+  queueHost.health = async () => ({ ...idleState(), ...(running ? { status: "active" as const, activeTurnRef: "incumbent" } : {}) });
+  const queue = new StructuredDeliveryQueue({
+    effects: async () => ["one", "two"].map((id, index) => ({ id: `effect:${id}`, kind: "runtime.send" as const,
+      eventSeq: index + 1, payload: { kind: "send" as const, operationId: `spawn_message_${id}`, conversationId: "conversation-one",
+        text: id, policy: "queue" as const, roleMemoryRevision: revision } })),
+    status: async id => statuses.get(id) ?? null,
+    hostClaim: async () => "owner:privacy-batch",
+    coalescesConversation: () => true,
+    bindDeliveryBatch: async () => {
+      if (!changed) {
+        changed = true;
+        collection.boundedPatch(1, tx => tx.put({
+          kind: "rule", id: "delivery-privacy-batch-test", scope: "machine", rule: "new batch privacy fixture",
+          why: "", state: "active", hints: [], source: { project: "fixture", pipelineId: "fixture", stageId: "build",
+            attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation-one" },
+          createdAt: "2026-10-19T00:00:00Z", changedAt: "2026-10-19T00:00:01Z",
+        }));
+      }
+      return true;
+    },
+    transition: async (id, status, details) => {
+      transitions.push({ id, status, reason: details?.reason });
+      statuses.set(id, { ...statuses.get(id)!, ...details, status, revision: statuses.get(id)!.revision + 1 });
+    },
+  }, () => queueHost);
+  try {
+    await queue.drain();
+    running = false;
+    await queue.drain();
+    expect(changed, JSON.stringify({ transitions })).toBe(true);
+    expect(sent).toBe(0);
+    expect(transitions).toContainEqual({ id: "spawn_message_one", status: "queued", reason: ROLE_MEMORY_CHANGED_MESSAGE });
+    expect(transitions).not.toContainEqual(expect.objectContaining({ status: "uncertain" }));
+  } finally {
+    collection.boundedPatch(1, tx => tx.delete("r:delivery-privacy-batch-test"));
+  }
 });
 
 test("only the first journal admission under a known claim supplies first-dispatch evidence", async () => {

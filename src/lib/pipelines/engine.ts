@@ -58,6 +58,7 @@ import { forEachCooperatively, yieldToRuntime } from "@/lib/cooperative";
 import { transcriptAllowed } from "@/lib/agent/spawnParent";
 import { sessionKeyFromTranscript, sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { headCwd } from "@/lib/agent/transcript";
+import { hasUserAuthoredMessage } from "@/lib/session/reader";
 import { MAX_FLOW_NOTE_LENGTH, closeFlow, createFlowFromRequest, isRecoverableLegacyRelayFailurePause, patchFlow, type PreparedFlowGit } from "@/lib/flows/commands";
 import { resolveFlowMergeIdentity } from "@/lib/flows/git";
 import { lastAssistantMessage, readFindingsFile } from "@/lib/flows/findings";
@@ -236,6 +237,9 @@ export type PipelineSpawnReceipt = PipelineStageSpawn & {
   staged?: boolean;
   /** Membership failed before dispatch, with no host or conversation generation. */
   neverBegan?: boolean;
+  /** Exact pre-dispatch role-memory refusal, no user-authored transcript, and every recorded
+      host owner proven gone by the registry evidence read. */
+  roleMemoryRetrySafe?: boolean;
   /** The reserved session is still this conversation's current generation. */
   currentGeneration?: boolean;
   /** The artifact path the launch reserved, whether or not the identity fence
@@ -1635,6 +1639,15 @@ export function defaultPipelinePorts(
         neverBegan: receipt.state === "failed" && !receipt.rejection && receipt.membershipAdmitted === false
           && !receipt.key && !receipt.pane && !receipt.verifiedHost && !receipt.artifactPath
           && !evidence.generation,
+        roleMemoryRetrySafe: receipt.state === "failed" && !receipt.rejection
+          && receipt.error === ROLE_MEMORY_CHANGED_MESSAGE && receipt.key !== null && receipt.artifactPath !== null
+          && evidence.generation?.path === receipt.artifactPath && evidence.entry?.artifactPath === receipt.artifactPath
+          && (!evidence.entry.structuredHostOperationId || evidence.entry.structuredHostOperationId === receipt.launchId)
+          && !hasUserAuthoredMessage(receipt.artifactPath, receipt.engine)
+          && (evidence.entry.status === "dead" || evidence.entry.status === "unhosted")
+          && evidence.entry.claimOwner === null
+          && (!evidence.entry.structuredHost?.process || processIdentityStatus(evidence.entry.structuredHost.process) === "dead")
+          && !(evidence.entry.structuredTerminationSurvivors ?? []).some(process => processIdentityStatus(process) !== "dead"),
         currentGeneration: stageLaunchGenerationMatches(receipt, evidence.generation, evidence.entry),
       };
     },
@@ -6581,14 +6594,14 @@ async function spawnRunStage(
     }
     if (!spawned) throw new Error("stage spawn failed without a result");
     const replayReceipt = ports.spawnReceipt(spawned.launchId);
-    if (recoveringReservation && replayReceipt?.state === "failed" && replayReceipt.neverBegan
+    if (recoveringReservation && replayReceipt?.state === "failed" && (replayReceipt.neverBegan || replayReceipt.roleMemoryRetrySafe)
       && replayReceipt.conversationId === attempt.conversationId) {
       if (replayReceipt.error === ROLE_MEMORY_CHANGED_MESSAGE) {
         if (await ports.claimSpawnRetry(replayReceipt.launchId, `${pipeline.id}:${stage.id}:${replayReceipt.launchId}`) !== "claimed") {
           throw new RoleMemoryChanged();
         }
         const current = ports.spawnReceipt(replayReceipt.launchId);
-        if (!current || current.state !== "failed" || current.staged || current.transcript
+        if (!current || current.state !== "failed" || (!current.neverBegan && !current.roleMemoryRetrySafe) || current.transcript
           || current.launchId !== replayReceipt.launchId || current.error !== replayReceipt.error
           || current.conversationId !== attempt.conversationId) throw new RoleMemoryChanged();
         attempt.retiredLaunches = [...attempt.retiredLaunches ?? [], {
@@ -6670,11 +6683,11 @@ async function spawnRunStage(
       // reservation; uncertain delivery continues through ordinary recovery.
       if (attempt.launchId) {
         const receipt = ports.spawnReceipt(attempt.launchId);
-        if (!receipt || receipt.state !== "failed" || receipt.staged || receipt.transcript
+        if (!receipt || receipt.state !== "failed" || (!receipt.neverBegan && !receipt.roleMemoryRetrySafe) || receipt.transcript
           || receipt.conversationId !== attempt.conversationId
           || await ports.claimSpawnRetry(receipt.launchId, `${pipeline.id}:${stage.id}:${receipt.launchId}`) !== "claimed") throw error;
         const current = ports.spawnReceipt(receipt.launchId);
-        if (!current || current.state !== "failed" || current.staged || current.transcript
+        if (!current || current.state !== "failed" || (!current.neverBegan && !current.roleMemoryRetrySafe) || current.transcript
           || current.launchId !== receipt.launchId || current.error !== receipt.error
           || current.conversationId !== attempt.conversationId) throw error;
         attempt.retiredLaunches = [...attempt.retiredLaunches ?? [], {

@@ -65,6 +65,7 @@ import { markStructuredRuntimeSessionRecovered } from "./startupStatus";
 import { isInterruptionObligationId } from "./interruptionObligations";
 import { isInterruptedCodexContinuationId, RECOVERY_NOTICE_ORIGIN } from "./recoveryNotices";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { RoleMemoryChanged } from "@/lib/memory/privacy";
 
 function receiptAttemptForOperation(registry: AgentRegistry, operationId?: string | null, launchId?: string | null): string | null | undefined {
   const fromOperation = operationId?.startsWith("spawn_message_") ? operationId.slice("spawn_message_".length) : null;
@@ -2084,12 +2085,15 @@ export async function enqueueStructuredMessage(
         await dependencies.authorizeDispatch?.();
         if (!ownerFirstPromptAllowed(registry, assigned.command.operationId)) throw new Error("owner relay first prompt authorization revoked");
       }
-      catch {
+      catch (error) {
         // Nothing reached the journal: terminalize the reservation so recovery
         // cannot dispatch this first prompt later as an uncertain send.
+        const privacyChanged = error instanceof RoleMemoryChanged;
+        const refusal = privacyChanged ? error.message : "autonomous first prompt authorization revoked";
         const ended = await registry.deliveryWrite({ label: "delivery.owner-cutoff", operationId: assigned.command.operationId },
-          () => registry.terminalizeHeldDelivery(assigned.id, "autonomous first prompt authorization revoked"));
-        return ended.acquired ? "caller-revoked" as const : "caller-revocation-pending" as const;
+          () => registry.terminalizeHeldDelivery(assigned.id, refusal));
+        if (!ended.acquired) return "caller-revocation-pending" as const;
+        return privacyChanged ? "role-memory-changed" as const : "caller-revoked" as const;
       }
       commandResult = await client.command({
         kind: assigned.command.kind,
@@ -2115,6 +2119,7 @@ export async function enqueueStructuredMessage(
       return commandResult;
     }, dependencies.actuationLease ?? null);
     if (admitted === "caller-revoked") return { ok: false, structured: true, outcome: "failed", error: "autonomous first prompt authorization revoked", status: 403 };
+    if (admitted === "role-memory-changed") return { ok: false, structured: true, outcome: "failed", error: "Role-memory privacy changed; retrying before dispatch", status: 409 };
     if (admitted === "caller-revocation-pending") return { ok: false, structured: true, outcome: "failed", error: "autonomous first prompt cancellation awaits the registry writer", status: 503, operationId: assigned.command.operationId, transportUncertain: true };
     if (admitted === "continuation-cancelled") return continuationRefused("stage eligibility changed before runtime admission");
     if (!admitted) {

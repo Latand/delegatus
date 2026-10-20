@@ -6033,7 +6033,7 @@ export class AgentRegistry {
   spawnEvidence(launchId: string): {
     receipt: SpawnReceipt | null;
     generation: { engine: AgentEngine; id: string; path: string } | null;
-    entry: Pick<AgentRegistryEntry, "artifactPath" | "structuredHostOperationId"> | null;
+    entry: Pick<AgentRegistryEntry, "artifactPath" | "structuredHostOperationId" | "status" | "claimOwner" | "structuredHost" | "structuredTerminationSurvivors"> | null;
     structured: boolean;
   } {
     return this.readKeyed(file => {
@@ -6045,7 +6045,9 @@ export class AgentRegistry {
       return {
         receipt: clone(receipt),
         generation: conversation && generation ? { engine: conversation.engine, id: generation.id, path: generation.path } : null,
-        entry: entry ? { artifactPath: entry.artifactPath, structuredHostOperationId: entry.structuredHostOperationId } : null,
+        entry: entry ? { artifactPath: entry.artifactPath, structuredHostOperationId: entry.structuredHostOperationId,
+          status: entry.status, claimOwner: entry.claimOwner, structuredHost: entry.structuredHost,
+          structuredTerminationSurvivors: entry.structuredTerminationSurvivors } : null,
         structured: !!entry?.structuredHost || typeof entry?.structuredHostOperationId === "string",
       };
     });

@@ -1854,7 +1854,8 @@ export class StructuredDeliveryQueue {
         this.firstDispatches.delete(p.effect.operationId);
         this.noteWait(p.effect, "dispatching", { lane, detail: `handed over in one message with ${selected.length - 1} others` });
         if ("error" in outcome && !(outcome.error instanceof StructuredDispatchDeferredError)
-          && !(outcome.error instanceof StructuredSendRefusedError) && !(outcome.error instanceof NativeQueueProtocolRefusal)) {
+          && !(outcome.error instanceof StructuredSendRefusedError) && !(outcome.error instanceof NativeQueueProtocolRefusal)
+          && !(outcome.error instanceof RoleMemoryRefusal && outcome.error.message === ROLE_MEMORY_CHANGED_MESSAGE)) {
           await this.terminalizeUnverified(p.effect.operationId, `${DELIVERY_UNVERIFIED_AFTER_ACTUATION}: ${failureReason(outcome.error)}`);
           stopped = true;
         } else if (await this.settleSendOutcome(p.effect, p.host, outcome, p.context) === "stop") stopped = true;
@@ -2477,6 +2478,15 @@ export class StructuredDeliveryQueue {
     if ("error" in outcome) {
       const error = outcome.error;
       const reason = failureReason(error);
+      if (error instanceof RoleMemoryRefusal && reason === ROLE_MEMORY_CHANGED_MESSAGE) {
+        // This refusal is raised by the last authorization check before the
+        // host dispatches the message. Keep the original queue key retryable;
+        // it carries no evidence that the recipient received anything.
+        await this.transitionUnlessSettled(effect.operationId, "queued", { reason });
+        this.noteWait(effect, "dispatching", { wake: "retry", detail: reason });
+        this.retrySoon();
+        return "stop";
+      }
       if (error instanceof StructuredDispatchDeferredError) {
         await this.transitionUnlessSettled(effect.operationId, "queued", { reason });
         this.noteWait(effect, "evidence-unreadable", { wake: "retry", detail: reason });
