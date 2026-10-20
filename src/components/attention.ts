@@ -69,6 +69,9 @@ export interface AttentionItem {
    switchboard's isAwaitingUser so the stalled row and the «waiting» bucket
    agree. */
 export const STALLED_ATTENTION_TTL = 2 * 3600;
+/** An owed message raises attention for at most one day from admission. The
+    durable delivery and its receipt remain available after the entry expires. */
+export const DELIVERY_ATTENTION_TTL = 24 * 3600;
 
 /** Epoch seconds an ISO timestamp names, or null when it does not parse. */
 function isoSeconds(iso: string): number | null {
@@ -87,7 +90,7 @@ export function blockingStuckDelivery(file: FileEntry, now: number): number | nu
   const delivery = file.stuckDelivery;
   if (!delivery || delivery.origin?.kind === "agent") return null;
   const since = isoSeconds(delivery.since);
-  if (since === null) return null;
+  if (since === null || now < since || now - since >= DELIVERY_ATTENTION_TTL) return null;
   if (delivery.state === "delivery-uncertain") return since;
   return now - since >= DELIVERY_UNCERTAIN_MS / 1000 ? since : null;
 }
@@ -187,7 +190,7 @@ export function attentionExpiries(files: readonly FileEntry[]): number[] {
     const memoryAt = file.memoryKill ? isoSeconds(file.memoryKill.at) : null;
     if (memoryAt !== null) expiries.push(memoryAt + 24 * 3600);
     const deliverySince = file.stuckDelivery ? isoSeconds(file.stuckDelivery.since) : null;
-    if (deliverySince !== null) expiries.push(deliverySince + DELIVERY_UNCERTAIN_MS / 1000);
+    if (deliverySince !== null) expiries.push(deliverySince + DELIVERY_UNCERTAIN_MS / 1000, deliverySince + DELIVERY_ATTENTION_TTL);
   }
   return expiries;
 }

@@ -1,4 +1,5 @@
 import { waitForStateLock } from "@/lib/state/lockWait";
+import { runtimeDataCorruptionCode } from "@/lib/runtime/dataCorruption";
 import { checkpointHotStateRollbackMirrorsForDemotion } from "./state/checkpointRollbackMirrors";
 export { checkpointHotStateRollbackMirrorsForDemotion } from "./state/checkpointRollbackMirrors";
 import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
@@ -640,7 +641,6 @@ const TRANSIENT_IO_CODES = new Set([
   "ENFILE",
   "ENOENT",
 ]);
-const DATA_CORRUPTION_CODES = new Set(["SQLITE_CORRUPT", "SQLITE_NOTADB"]);
 
 function startupErrorField(error: unknown, field: "code" | "name" | "message" | "hostKey"): string {
   if (typeof error !== "object" || error === null || !(field in error)) return "";
@@ -666,7 +666,7 @@ export function classifyStructuredHostStartupError(
   }
   if (name === "RegistryParityError"
     || name === "RegistryBackendIdentityError"
-    || DATA_CORRUPTION_CODES.has(code)
+    || runtimeDataCorruptionCode(error)
     || /corrupt .* SQLite row|SQLite row is malformed|schema is unsupported/i.test(message)) {
     return {
       disposition: "terminal",
