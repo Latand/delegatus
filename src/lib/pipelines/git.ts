@@ -1,4 +1,6 @@
 import { shortId } from "@/lib/shortIds";
+import { publicationFailurePhase } from "./publicationHistory";
+export { publicationFailurePhase } from "./publicationHistory";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -1554,21 +1556,6 @@ function redactPublicationOutput(stdout: string, stderr: string): string {
 function publicationFailureDetail(failure: PipelinePublicationFailure): string {
   const status = failure.code === null ? `signal ${failure.signal ?? "unknown"}` : `exit ${failure.code}`;
   return redactPublicationText(`${failure.step}: ${status} (${failure.durationMs} ms)\n${failure.outputTail || "no output"}`);
-}
-
-/** The hook's verdict for one member of a group it runs at once (a native
-    Codex version), `pre-push: <check>: failed (<code>) after <n> s`. */
-const HOOK_MEMBER_FAILED = /^pre-push: ([^;:]{1,60}): failed \(/;
-/** The last phase the hook announced with its own `pre-push: <phase>` marker,
-    or the group member it last named as failed after that. A member that
-    passed is never a phase. */
-export function publicationFailurePhase(failure: PipelinePublicationFailure): string | null {
-  for (const line of failure.outputTail.split("\n").map((line) => line.trim()).reverse()) {
-    const member = HOOK_MEMBER_FAILED.exec(line);
-    if (member) return member[1]!;
-    if (/^pre-push: [^;:]{1,60}$/.test(line)) return line.slice("pre-push: ".length);
-  }
-  return null;
 }
 
 /** What stopped a publication, in one line a person can act on. The hook's
