@@ -48,10 +48,16 @@ test("confirmed parts publish immediately with Telegram ids; pending or failed p
       return testCalls++ === 0 ? refused(400, "fixture migration", { migrateToChatId: "77" })
         : ok({ message_id: 21, date: 1791724800 });
     };
+    // Replacing the connected bot after a migration refusal revokes the next
+    // call. The original transport must never be labeled as the replacement.
+    await expect(service.testPost("owner", "Connection confirmed")).rejects.toMatchObject({ code: "chat_not_allowed" });
+    expect(receipts.at(-1)).toEqual({ botId: "123", chatId: "77", messageId: 17, date: 1791724800, topicId: 7, text: "A & B" });
+    expect(service.status().chats[0]!.lastPostAt).toBe(lastPostBefore);
+    connectedBot = "123"; delete transport.handlers.sendMessage;
+    transport.script("sendMessage", ok({ message_id: 21, date: 1791724800 }));
     await service.testPost("owner", "Connection confirmed");
     expect(receipts.at(-1)).toEqual({ botId: "123", chatId: "77", messageId: 21, date: 1791724800, topicId: null, text: "Connection confirmed" });
     expect(service.status().chats[0]!.lastPostAt).toBe(lastPostBefore);
-    connectedBot = "123"; delete transport.handlers.sendMessage;
     transport.handlers.getUpdates = () => {
       connectedBot = "456";
       return ok([{ update_id: 2, message: { message_id: 2, date: 1791724800,

@@ -3,6 +3,7 @@ export { SEND_SEAT_REVOKED_REASON } from "@/lib/orchestrator/seatChannel";
 import {
   agentRegistry,
   conversationRegistryEntries,
+  deliveryRegistryEntriesForKey,
   ownsItsSettlement,
   readOnlyConversationLookupFromSnapshot,
   type AgentRegistry,
@@ -1124,7 +1125,7 @@ export type OriginalSendLookup =
 
 export function lookupOriginalSend(file: RegistryFile, binding: OriginalSendBinding): OriginalSendLookup {
   const lookup = readOnlyConversationLookupFromSnapshot(file);
-  const canonical = (id: string): string => lookup.conversation(id as ViewerConversationId)?.id ?? id;
+  const canonical = (id: string): string => lookup.canonicalConversationId(id as ViewerConversationId);
   /* The target is resolved through the registry's own lookup — a conversation
      id through its alias walk, a path through the path index — and a target
      nothing resolves matches nothing. An exact id the registry does not know
@@ -1137,11 +1138,11 @@ export function lookupOriginalSend(file: RegistryFile, binding: OriginalSendBind
   if (!target) return { kind: "unresolved" };
   const matches = (conversationId: string): boolean => canonical(conversationId) === target;
   const operations = new Map<string, string | null>();
-  for (const [, delivery] of conversationRegistryEntries(file, "heldDeliveries", target as ViewerConversationId)) {
+  for (const [, delivery] of deliveryRegistryEntriesForKey(file, "heldDeliveries", binding.clientMessageId, [target])) {
     if (delivery.clientMessageId !== binding.clientMessageId || !matches(delivery.conversationId)) continue;
     operations.set(delivery.command.operationId, delivery.id);
   }
-  for (const [operationId, owner] of conversationRegistryEntries(file, "deliveryOperationOwners", target as ViewerConversationId)) {
+  for (const [operationId, owner] of deliveryRegistryEntriesForKey(file, "deliveryOperationOwners", binding.clientMessageId, [target])) {
     if (owner.clientMessageId !== binding.clientMessageId || owner.retryOfOperationId || !matches(owner.conversationId)) continue;
     if (!operations.has(operationId)) operations.set(operationId, owner.deliveryId);
   }
