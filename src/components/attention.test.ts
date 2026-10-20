@@ -52,6 +52,19 @@ function owed(sinceSeconds: number, state: StuckDelivery["state"] = "held"): Stu
 
 const HALF_HOUR = 30 * 60;
 
+test("delivery attention expires by admission age even when the cached file never changes", () => {
+  const since = NOW - HALF_HOUR;
+  const file = entry({ path: "/owed", stuckDelivery: owed(since) });
+  const ceiling = since + 24 * 3600;
+  expect(attentionId(file, ceiling - 1)).toBe(`/owed:delivery:${since}`);
+  expect(attentionId(file, ceiling)).toBeNull();
+  expect(attentionExpiries([file])).toContain(ceiling);
+  expect(attentionId({ ...file, stuckDelivery: owed(since, "delivery-uncertain") }, ceiling)).toBeNull();
+  expect(attentionId({ ...file, stuckDelivery: owed(NOW + 60, "delivery-uncertain") }, NOW)).toBeNull();
+  expect(attentionId({ ...file, stuckDelivery: undefined }, NOW)).toBeNull();
+  expect(buildAttentionQueue([file], NOW)).toHaveLength(1);
+});
+
 test("rule 4: held agent messages never ask the operator; the operator's uncertain delivery still does", () => {
   const stuckDelivery = { ...owed(NOW - 4 * HALF_HOUR), origin: { kind: "agent" as const, role: "orchestrator" } };
   expect(attentionId(entry({ path: "/agent-delivery", stuckDelivery }), NOW)).toBeNull();
@@ -389,6 +402,7 @@ describe("bridge asks", () => {
     expect(attentionExpiries(files).sort((a, b) => a - b)).toEqual([
       filed + BRIDGE_ASK_TTL_SECONDS,
       NOW - 60 + HALF_HOUR,
+      NOW - 60 + 24 * 3600,
     ].sort((a, b) => a - b));
     /* An unparseable time schedules nothing: there is no moment to wake for. */
     expect(attentionExpiries([entry({ path: "/seat", bridgeAsk: { id: "x", at: "whenever" } })])).toEqual([]);

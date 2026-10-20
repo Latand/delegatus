@@ -42,7 +42,7 @@ export function registerProviderOutputBudgetCases(pools: readonly boolean[]) {
             }
           } else {
             const { encodeCodexStructuredUserText } = await import("@/lib/runtime/codexStructuredUserText.server");
-            records.push({ type: "event_msg", timestamp: at(), payload: { type: "user_message", message: role ? encodeCodexStructuredUserText(text, undefined, null, { kind: "agent", role } as never) : text } },
+            records.push({ type: "event_msg", timestamp: at(), payload: { type: "user_message", message: role ? await encodeCodexStructuredUserText(text, undefined, null, { kind: "agent", role } as never) : text } },
               { type: "event_msg", timestamp: at(), payload: { type: "task_started" } });
           }
         };

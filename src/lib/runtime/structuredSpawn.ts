@@ -583,6 +583,65 @@ async function failStructuredLaunchAndReap(
   return { claimed: true, receipt: registry.readOnlySnapshot().receipts[launchId] ?? null };
 }
 
+/** Delivery settlement can fail the launch in the registry without reaching
+ * the runtime journal. Finish that original operation, including after its
+ * placeholder became unhosted. This is evidence-only: never replay a spawn or
+ * release a writer on the strength of an old failed receipt.
+ */
+async function settleTerminalStructuredSpawnOperation(
+  launchId: string,
+  registry: AgentRegistry,
+  client: RuntimeHostClient,
+  operation: RuntimeOperationResult | null,
+  message: RuntimeOperationResult | null,
+  runtime: Pick<RuntimeSnapshot, "sessions"> | null,
+  assertActive: () => void,
+  messageEvidenceAvailable = true,
+): Promise<void> {
+  assertActive();
+  const fresh = registry.spawnRecoverySnapshot([launchId]);
+  const receipt = fresh.receipts[launchId];
+  if (!receipt || (receipt.state !== "failed" && receipt.state !== "completed") || receipt.transport === "tmux" || !operation
+    || operation.receipt.operationId !== launchId
+    || operation.receipt.kind !== "spawn"
+    || operation.receipt.conversationId !== receipt.conversationId
+    || !["pending", "queued", "delivering"].includes(operation.receipt.status)) return;
+  const messageId = `spawn_message_${launchId}`;
+  const delivery = registry.deliverySnapshotForOperation(messageId);
+  const owner = delivery.deliveryOperationOwners[messageId];
+  const matchingOwner = owner?.conversationId === receipt.conversationId ? owner : null;
+  const attemptedWithoutLossProof = Object.values(delivery.heldDeliveries).some(row =>
+    row.conversationId === receipt.conversationId && row.attempts > 0 && matchingOwner?.terminalDisposition !== "lost");
+  const entry = receipt.key ? fresh.entries[sessionKeyId(receipt.key)] : null;
+  const session = runtime?.sessions.find(candidate => candidate.conversationId === receipt.conversationId);
+  const uncertain = !messageEvidenceAvailable || runtime === null || operation.receipt.status === "delivering"
+    || message?.receipt.status === "delivering" || message?.receipt.status === "uncertain" || message?.receipt.status === "interrupted"
+    || (message !== null && INITIAL_MESSAGE_DELIVERED.has(message.receipt.status))
+    || (matchingOwner !== null && matchingOwner.terminalDisposition !== "lost")
+    || attemptedWithoutLossProof
+    || Boolean(entry?.claimOwner || entry?.structuredHost?.process || entry?.status === "live")
+    || Boolean(entry?.structuredTerminationSurvivors?.some(identity => processIdentityStatus(identity) !== "dead"))
+    || session?.host === "hosted" || session?.host === "recovering";
+  const status = receipt.state === "completed" ? "delivered" : uncertain ? "uncertain" : "failed";
+  try {
+    await client.transitionOperation(launchId, status, {
+      reason: status === "delivered" ? null : uncertain ? "launch setup ended; whether its first prompt reached the agent is unverified"
+        : (receipt.error ?? "structured spawn failed before runtime acknowledgement").slice(0, 240),
+    }, { fromStatuses: [operation.receipt.status] });
+    assertActive();
+  } catch (error) {
+    assertActive();
+    // A concurrent completion, or a committed transition with a lost reply,
+    // wins. An unreadable or still-open operation keeps its repair obligation.
+    const latest = await client.operationStatus(launchId);
+    assertActive();
+    if (latest?.receipt.operationId === launchId && latest.receipt.kind === "spawn"
+      && latest.receipt.conversationId === receipt.conversationId
+      && !["pending", "queued", "delivering"].includes(latest.receipt.status)) return;
+    throw error;
+  }
+}
+
 export async function reconcileStructuredSpawnReplay(
   launchId: string,
   registry: AgentRegistry,
@@ -624,14 +683,24 @@ export async function reconcileStructuredSpawnReplay(
     return { ...recovered, initialMessage: recovered.state === "completed" ? "delivered" : "queued" };
   }
   if (current.state === "completed") {
+    const operation = await evidenceOrNull(client.operationStatus(launchId));
+    await settleTerminalStructuredSpawnOperation(launchId, registry, client, operation, null, null, assertActive);
     return { ...current, initialMessage: "delivered" };
   }
   if (current.state === "conflicted") {
     return { ...current, initialMessage: "failed" };
   }
+  let spawnStatusAvailable = true;
+  let initialMessageStatusAvailable = true;
   const [initialOperation, spawnOperation, runtime] = await Promise.all([
-    evidenceOrNull(client.operationStatus(`spawn_message_${launchId}`, { currentRetryLeaf: true })),
-    evidenceOrNull(client.operationStatus(launchId, { currentRetryLeaf: true })),
+    evidenceOrNull(client.operationStatus(`spawn_message_${launchId}`, { currentRetryLeaf: true }).catch(error => {
+      initialMessageStatusAvailable = false;
+      throw error;
+    })),
+    evidenceOrNull(client.operationStatus(launchId, { currentRetryLeaf: true }).catch(error => {
+      spawnStatusAvailable = false;
+      throw error;
+    })),
     evidenceOrNull(client.readSession
       ? client.readSession({ conversationId: current.conversationId }).then((session) => ({ sessions: session ? [session] : [] }))
       : current.state === "failed" && options.failedReceiptSnapshot
@@ -727,8 +796,16 @@ export async function reconcileStructuredSpawnReplay(
     } : undefined;
     const recovered = (await registry.deliveryWriteOrBusy({ label: "registry.recoverStructuredSpawnFromEvidence" }, registry.recoverStructuredSpawnFromEvidence.bind(registry, launchId, evidence)));
     if (recovered.kind === "settled") {
+      await settleTerminalStructuredSpawnOperation(launchId, registry, client, spawnOperation, operation, runtime, assertActive);
       return { ...recovered.receipt, initialMessage: "delivered" };
     }
+  }
+  if (current.state === "failed") {
+    if (!spawnStatusAvailable) throw new RuntimeHostUnavailableError("structured spawn operation evidence is unavailable");
+    await settleTerminalStructuredSpawnOperation(launchId, registry, client, spawnOperation, operation, runtime, assertActive,
+      initialMessageStatusAvailable);
+    const receipt = registry.spawnRecoverySnapshot([launchId]).receipts[launchId] ?? current;
+    return { ...receipt, initialMessage: receipt.state === "completed" ? "delivered" : "failed" };
   }
   const messageStatus = operation?.receipt.status;
   const runtimeSession = runtime?.sessions.find((candidate) => candidate.conversationId === current.conversationId
@@ -796,6 +873,9 @@ export async function reconcileStructuredSpawnReplay(
    first-message status poll has no authority over session materialization. */
 export const STALE_STRUCTURED_SPAWN_TIMEOUT_MS = STRUCTURED_SPAWN_DURABLE_SETUP_TIMEOUT_MS;
 export const STALE_STRUCTURED_SPAWN_ACTUATION_CAP = 50;
+// A position in the active outbox, never a cache of terminal launch history.
+// One registry owns one cursor; restarting safely starts from the first page.
+const terminalSpawnOperationCursors = new WeakMap<AgentRegistry, number>();
 
 function queuedPinnedSpawnForReceipt(receipt: SpawnReceipt): NonNullable<SpawnReceipt["queuedPinnedSpawn"]> | null {
   const queued = receipt.queuedPinnedSpawn;
@@ -1086,8 +1166,61 @@ export async function terminalizeStaleStructuredSpawns(
       options.assertActive?.();
       return registry.backfillFailedLaunchReporting(actuationCap);
     });
+    const reconciledLaunches = new Set<string>();
+    const deferredLaunches = new Set<string>();
+    if (client) {
+      // Reporting may already be complete when a journal transition loses its
+      // reply. The active spawn outbox is the durable remaining obligation;
+      // scanning one page also finds old failures with no reporting debt.
+      const effects = await client.effectBatch(["runtime.spawn"], terminalSpawnOperationCursors.get(registry) ?? 0).catch(error => {
+        assertActive();
+        spawnDiagnosticErrorFor(undefined, "[reaper] failed launch outbox read deferred", { error });
+        return null;
+      });
+      assertActive();
+      if (effects !== null) {
+        const launchIds = effects.flatMap(effect => typeof effect.payload.operationId === "string" ? [effect.payload.operationId] : []);
+        const receipts = new Map(launchIds.map(id => [id, registry.spawnReceipt(id)]));
+        let attempted = 0;
+        let last = 0;
+        for (const effect of effects) {
+          assertActive();
+          if (attempted >= actuationCap) break;
+          last = effect.eventSeq;
+          const launchId = effect.payload.operationId;
+          if (typeof launchId !== "string") continue;
+          const receipt = receipts.get(launchId);
+          if (!receipt || (receipt.state !== "failed" && receipt.state !== "completed") || receipt.transport === "tmux") continue;
+          attempted++;
+          try {
+            await reconcile(launchId, registry, client, { now, timeoutMs, assertActive });
+            assertActive();
+            reconciledLaunches.add(launchId);
+          } catch (error) {
+            assertActive();
+            deferredLaunches.add(launchId);
+            spawnDiagnosticErrorFor(receipt.clientAttemptId, "[reaper] failed launch operation reconciliation deferred", { launchId, error });
+          }
+        }
+        terminalSpawnOperationCursors.set(registry, last === effects.at(-1)?.eventSeq && effects.length < 100 ? 0 : last);
+      }
+    }
     for (const receipt of registry.failedSpawnReceipts(actuationCap)) {
-      options.assertActive?.();
+      assertActive();
+      if (deferredLaunches.has(receipt.launchId)) continue;
+      if (client && receipt.transport !== "tmux" && !reconciledLaunches.has(receipt.launchId)) {
+        try {
+          const reconciled = await reconcile(receipt.launchId, registry, client, { now, timeoutMs, assertActive });
+          assertActive();
+          if (reconciled.state !== "failed") continue;
+        } catch (error) {
+          assertActive();
+          spawnDiagnosticErrorFor(receipt.clientAttemptId, "[reaper] failed launch operation reconciliation deferred", {
+            launchId: receipt.launchId, error,
+          });
+          continue;
+        }
+      }
       registry.reportFailedLaunch(receipt, { now: now() });
     }
   }
@@ -1504,14 +1637,6 @@ async function recoverPendingStructuredSpawnPass(
   let failedReceiptRuntime: Promise<RuntimeSnapshot> | undefined;
   const failedReceiptSnapshot = () => failedReceiptRuntime ??= client.snapshot();
 
-  let registeringConversationIds: Promise<Set<string>> | undefined;
-  const registeringSessions = (): Promise<Set<string>> => registeringConversationIds ??= (async () => {
-    const runtime = await client.snapshot().catch(() => null);
-    return new Set((runtime?.sessions ?? [])
-      .filter((session) => session.host === "registering")
-      .map((session) => session.conversationId));
-  })();
-
   const failedGroups = new Map<string, SpawnReceipt[]>();
   for (const receipt of Object.values(snapshot.receipts)) {
     if (receipt.state !== "failed" || receipt.transport === "tmux") continue;
@@ -1523,32 +1648,9 @@ async function recoverPendingStructuredSpawnPass(
   await forEachStartupBatch([...failedGroups.values()], async (receipts) => {
     for (const receipt of receipts) {
       assertActive();
-      await reconcileFailed(receipt);
+      await reconcileStructuredSpawnReplay(receipt.launchId, registry, client, { failedReceiptSnapshot, assertActive });
     }
   }, assertActive);
-  async function reconcileFailed(receipt: SpawnReceipt): Promise<void> {
-    const reconciled = await reconcileStructuredSpawnReplay(receipt.launchId, registry, client, { failedReceiptSnapshot, assertActive });
-    if (reconciled.state === "completed") return;
-    /* The durable launch receipt failed, but its runtime spawn operation can
-       survive as queued when the terminal transition itself timed out. The
-       placeholder session then sits registering/unknown until someone closes
-       the operation; the journal retires the placeholder on that transition. */
-    const registering = client.readSession
-      ? (await client.readSession({ conversationId: receipt.conversationId }).catch(() => null))?.host === "registering"
-      : (await registeringSessions()).has(receipt.conversationId);
-    assertActive();
-    if (!registering) return;
-    const operation = await client.operationStatus(receipt.launchId);
-    assertActive();
-    const status = operation?.receipt.status;
-    if (operation
-      && operation.receipt.conversationId === receipt.conversationId
-      && (status === "pending" || status === "queued" || status === "delivering")) {
-      await client.transitionOperation(receipt.launchId, "failed", {
-        reason: (receipt.error ?? "structured spawn failed before runtime acknowledgement").slice(0, 240),
-      });
-    }
-  }
   const ordered = Object.values(snapshot.receipts).sort((a, b) => a.launchId < b.launchId ? -1 : a.launchId > b.launchId ? 1 : 0);
   const cursor = spawnRecoveryCursors.get(registry);
   const next = cursor ? ordered.findIndex(receipt => receipt.launchId > cursor) : 0;
@@ -2295,6 +2397,18 @@ const stagedStore = process as typeof process & {
 const stagedContinuations = stagedStore.__llvStagedContinuations ??= new Map<string, StagedContinuation>();
 const stagedRecoveryWork = stagedStore.__llvStagedRecoveryWork ??= new Map<string, Promise<SpawnReceipt>>();
 
+/** Drop only the in-memory continuation whose exact launch has durably failed.
+ * This also closes the receipt-settlement handoff where the failure committed
+ * before the pipeline could finish replacing its attempt. */
+export function releaseFailedStagedLaunchContinuation(
+  launchId: string, conversationId: string, registry: AgentRegistry,
+): boolean {
+  const receipt = registry.spawnReceipt(launchId);
+  if (receipt?.state !== "failed" || receipt.conversationId !== conversationId) return false;
+  stagedContinuations.delete(launchId);
+  return true;
+}
+
 /** One probe per wake. No sleep, new host, retry operation, or new message id.
  * Only the process holding the staged host can publish or dispatch. Other
  * controllers adopt the completed receipt without actuating this launch. */
@@ -2370,7 +2484,7 @@ export async function recoverStagedStructuredLaunch(
     }
     // Downtime before the first probe is not sixteen failed checks. Start its
     // bounded observation window once, persisted before the first I/O.
-    if (!ownsHost && recovery.checks === 0 && now() - recovery.startedAt >= STAGED_RECOVERY_BUDGET_MS) {
+    if (recovery.checks === 0 && now() - recovery.startedAt >= STAGED_RECOVERY_BUDGET_MS) {
       recovery = { ...recovery, startedAt: now() };
     }
     let observedError = receipt.error;

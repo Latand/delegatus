@@ -69,7 +69,9 @@ jobs:
       max-parallel: 4
       matrix:
         repetition: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
-        codex: [0.154.0, 0.159.0]
+        # One list for both hosted jobs and scripts/local-gate.ts. The held
+        # workflow tests require the documented installed pin and host pins.
+        codex: &native-codex-versions [0.154.0, 0.159.0, 0.162.1, 0.163.0]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
@@ -110,7 +112,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        codex: [0.154.0, 0.159.0]
+        codex: *native-codex-versions
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:

@@ -729,6 +729,8 @@ export async function handleRuntimeDiscard(
         retryable: true,
       }, { status: 503 });
     }
+    try { await client.acknowledgeTerminalProjection?.([operation.operationId]); }
+    catch { /* The journal retains the receipt; startup reconciliation acknowledges it. */ }
     const receipt = runtimeReceiptForSend(settled);
     return NextResponse.json({
       operationId: presentationOperationId,

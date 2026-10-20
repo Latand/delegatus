@@ -1,7 +1,10 @@
 import { assertCpuReadGuardSurvivesSpyRestoration, startAutoAndSettle } from "./engineEnvironment.fixture";
-import { expect, spyOn, test, crypto, spawn, fs, os, path, activeDrain, DRAIN_LEASE_MS, initialAuto, writeAuto, initialCheck, SelfUpdateService, idleCheck, accountManager, realExec, engineModule, defaultPipelinePorts, pipelineClaudePermissionMode, tickPipelines, AgentRegistry, setAgentRegistryForTests, newRound, tickFlow, saveFlows, createPipelineFromRequest, registerPipelineTick, loadPipelines, savePipelines, pipelineIdentity, patchPipeline, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, REMOTE_BRANCH, finishReported, realWorktreeLane, successorOnPullRequestBranch, create, publishHarness, PUBLISH_STAGES } from "./engine.fixture";
+import { expect, spyOn, test, crypto, spawn, fs, os, path, activeDrain, DRAIN_LEASE_MS, initialAuto, writeAuto, initialCheck, SelfUpdateService, idleCheck, accountManager, realExec, engineModule, defaultPipelinePorts, pipelineClaudePermissionMode, tickPipelines, AgentRegistry, setAgentRegistryForTests, newRound, tickFlow, saveFlows, createPipelineFromRequest, registerPipelineTick, loadPipelines, savePipelines, pipelineIdentity, pipelineRevision, patchPipeline, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, REMOTE_BRANCH, finishReported, realWorktreeLane, successorOnPullRequestBranch, create, publishHarness, PUBLISH_STAGES } from "./engine.fixture";
 import type { ServiceDeps, Snapshot, PipelinePorts } from "./engine.fixture";
+import { prepareStageGitGuard, stageGitReceiptDirectory } from "@/lib/git/stageAttemptGuard";
+import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { shortId } from "@/lib/shortIds";
+import { OPERATOR_PAUSE_RESUME_ACTOR } from "@/lib/pauseResumeActor";
 
 
 test("default pane liveness keeps failed or unreadable tmux observations alive", async () => {
@@ -2369,6 +2372,7 @@ test("attempt Git custody refuses an unproved detached push and fails the stage 
     const r = await realExec("git", ["commit", "--allow-empty", "-m", "foreign"], f.detached,
       { ...f.env, GIT_CONFIG_COUNT: "0" });
     expect(r.code).toBe(0);
+    const foreignHead = await f.run("rev-parse", "HEAD");
     const refused = await realExec("git", ["push", "origin", `HEAD:refs/heads/${f.lane.branch}`], f.detached, f.env);
     expect(refused.code).not.toBe(0);
     expect(refused.stderr).toContain("not created in the attempt worktree");
@@ -2378,6 +2382,46 @@ test("attempt Git custody refuses an unproved detached push and fails the stage 
     expect(failed.stateDetail).toContain("stage push refused");
     expect(failed.lastPassedCommit).toBe(f.base);
     expect(await f.git(f.worktree, "rev-parse", "HEAD")).toBe(f.base);
+    const parked = loadPipelines().find(pipeline => pipeline.id === f.id)!;
+    f.h.setConversationActive(true);
+    const active = await engineModule.patchPipeline(f.id, { action: "resolve-decision", clientRequestId: "native-custody-active-producer",
+      answer: "Repair the missing creation evidence and rerun the stage.", expectedStageId: "build", expectedAttempt: 1,
+      expectedRevision: pipelineRevision(parked) }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
+    expect(active.status).toBe(409);
+    expect(loadPipelines().find(pipeline => pipeline.id === f.id)!.runs[0]!.attempts).toHaveLength(1);
+    f.h.setConversationActive(false);
+    const resumed = await engineModule.patchPipeline(f.id, { action: "resolve-decision", clientRequestId: "native-custody-repair",
+      answer: "Repair the missing creation evidence and rerun the stage.", expectedStageId: "build", expectedAttempt: 1,
+      expectedRevision: pipelineRevision(parked) }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
+    expect(resumed.error).toBeUndefined();
+    expect(loadPipelines().find(pipeline => pipeline.id === f.id)!.runs[0]!.attempts).toHaveLength(2);
+    expect(loadPipelines().find(pipeline => pipeline.id === f.id)!.lastPassedCommit).toBe(f.base);
+    expect(loadPipelines().find(pipeline => pipeline.id === f.id)!.publishedCommit).toBeNull();
+
+    for (let n = 0; n < 4 && f.h.spawnInputs.length < 2; n += 1) await tickPipelines([], f.h.ports);
+    expect(f.h.spawnInputs).toHaveLength(2);
+    const repair = loadPipelines().find(pipeline => pipeline.id === f.id)!.runs[0]!.attempts[1]!;
+    expect(repair).toMatchObject({ n: 2, state: "running", decisionAnswerId: "native-custody-repair" });
+    const guard = await prepareStageGitGuard(repair.launchId!, f.worktree, realExec, repair.startedAt!);
+    Object.assign(f.env, guard, agentPublicationIdentityEnv({ ...f.env, ...guard }));
+    expect(await f.git(f.worktree, "rev-parse", "HEAD")).toBe(f.base);
+    fs.writeFileSync(path.join(f.worktree, "repair.txt"), "valid custody repair output\n");
+    await f.git(f.worktree, "add", "repair.txt");
+    await f.git(f.worktree, "commit", "-m", "valid custody repair output");
+    const repaired = await f.git(f.worktree, "rev-parse", "HEAD");
+    expect(fs.readFileSync(path.join(stageGitReceiptDirectory(repair.launchId!), "commits", repaired), "utf8")).toBe("");
+    const foreignImported = await realExec("git", ["merge-base", "--is-ancestor", foreignHead, repaired], f.worktree, f.env);
+    expect(foreignImported.code).not.toBe(0);
+    expect(await engineModule.reportStageCompletion({ verdict: "pass" },
+      { kind: "agent", role: "builder", conversationId: "conversation_stage_2" }, f.h.ports)).toMatchObject({ report: { verdict: { status: "pass" } } });
+    await tickPipelines([finishReported(f.h, "/codex/stage-2.jsonl", "pass", "Fresh repair is complete.")], f.h.ports);
+    await tickPipelines([], f.h.ports);
+    const accepted = loadPipelines().find(pipeline => pipeline.id === f.id)!;
+    expect(accepted.lastPassedCommit).toBe(repaired);
+    expect(accepted.cursor?.stageId).toBe("review");
+    expect(await f.git(f.worktree, "rev-parse", "HEAD")).toBe(repaired);
+    expect(await f.git(f.origin, "rev-parse", `refs/heads/${f.lane.branch}`)).toBe(repaired);
+    expect(await f.run("rev-parse", "HEAD")).toBe(foreignHead);
   } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 

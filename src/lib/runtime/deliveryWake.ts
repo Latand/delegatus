@@ -22,3 +22,9 @@ export class DeliveryWake {
     this.dueAt = Infinity;
   }
 }
+
+/** A fresh admission supersedes pending work; an observer can do so only if
+    the queue is ready to start a replacement pass. */
+export function cancelDeliveryWakeForKick(wake: DeliveryWake, freshAdmission: boolean, passCanStart: boolean): void {
+  if (freshAdmission || passCanStart) wake.cancel();
+}
