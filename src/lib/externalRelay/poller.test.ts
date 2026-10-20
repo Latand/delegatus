@@ -23,6 +23,7 @@ import { sampleRequest } from "./request.fixture";
 import { answerRecorder, pruneAnswerRecords, readAnswerRecord, relayAnswersRoot } from "./answers";
 import { setRelaySwitch } from "./switches";
 import { createRelaySteps } from "./progressSteps";
+import { RELAY_MEDIA_ANY_DOCUMENT } from "./mediaInputValidation";
 const root = fs.mkdtempSync(path.join(externalRelayTempRoot(), "relay-poller-test-"));
 process.env.LLV_STATE_DIR = root;
 const runDirs: string[] = [];
@@ -993,4 +994,12 @@ test("claim advertises on-demand tools only when the stored descriptor offers th
 test("inbound media is advertised only when the descriptor offers it and includes requester context", () => {
   expect(relayClaimCapabilities({ features: ["relay_media_in"] }).features).toEqual(expect.arrayContaining(["relay_media_in", "requester_context"]));
   expect(relayClaimCapabilities({ features: [] }).features).not.toContain("relay_media_in");
+});
+
+test("any-document claims require both inbound capabilities in the descriptor", () => {
+  expect(relayClaimCapabilities({ features: ["relay_media_in", RELAY_MEDIA_ANY_DOCUMENT] }).features)
+    .toEqual(expect.arrayContaining(["relay_media_in", "requester_context", RELAY_MEDIA_ANY_DOCUMENT]));
+  for (const features of [[], ["relay_media_in"], [RELAY_MEDIA_ANY_DOCUMENT]]) {
+    expect(relayClaimCapabilities({ features }).features).not.toContain(RELAY_MEDIA_ANY_DOCUMENT);
+  }
 });
