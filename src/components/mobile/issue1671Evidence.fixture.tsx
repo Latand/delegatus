@@ -1309,7 +1309,6 @@ const WORKSPACES = WORKSPACE_SCENE ? workspacesFixture({
 if (WORKSPACES) {
   const chosen = WORKSPACE_PARAMS.get("ws");
   if (chosen) localStorage.setItem(WORKSPACE_STORAGE_KEY, chosen === "all" ? "all" : FIXTURE_WORKSPACE_IDS[chosen as keyof typeof FIXTURE_WORKSPACE_IDS] ?? chosen);
-  void refreshTeamView();
 }
 
 /* The one request that leaves the page: the evidence server draws task icons from lucide (#2102). */
@@ -1964,6 +1963,8 @@ function VoiceFullSheet() {
     </MobileSheet>
   );
 }
+/* The team view is read once the fetch double above answers it. */
+if (WORKSPACES) void refreshTeamView();
 createRoot(document.getElementById("root")!).render(WORKSPACE_PARAMS.get("scenario") === "workspaces-team" ? <TeamPage initialTab="workspaces" initialCreate={WORKSPACE_PARAMS.has("create")} />
   : WORKSPACE_PARAMS.get("scenario") === "workspaces-page" ? <WorkspacePage id={FIXTURE_WORKSPACE_IDS[(WORKSPACE_PARAMS.get("page") ?? "client") as keyof typeof FIXTURE_WORKSPACE_IDS]} />
   : new URLSearchParams(location.search).has("switch-receipts")

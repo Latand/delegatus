@@ -489,6 +489,7 @@ function RailRow({ summary, active, now, columns, crowned, onSelect, onToggleCro
   const { t } = useLocale();
   const isMobile = useIsMobile();
   const moveRef = useRef<HTMLButtonElement | null>(null);
+  const rowRef = useRef<HTMLDivElement | null>(null);
   const [moveOpen, setMoveOpen] = useState(false);
   const [keyboardOn, setKeyboardOn] = useState(false);
   /* Move shows on the selected row and on a row the keyboard is on; it then
@@ -508,6 +509,7 @@ function RailRow({ summary, active, now, columns, crowned, onSelect, onToggleCro
   const ageClass = !onToggleCrown ? "" : isMobile ? "opacity-0" : "group-hover:opacity-0 group-has-[[data-rail-crown]:focus-visible]:opacity-0";
   return (
     <div
+      ref={rowRef}
       data-flip-key={summary.project}
       className="group relative"
       onFocus={move ? (event) => setKeyboardOn(focusVisible(event.target)) : undefined}
@@ -553,6 +555,7 @@ function RailRow({ summary, active, now, columns, crowned, onSelect, onToggleCro
         <MoveToMenu
           workspaces={move.workspaces}
           anchor={moveRef}
+          beside={rowRef}
           onClose={() => setMoveOpen(false)}
           onPick={(workspaceId) => {
             setMoveOpen(false);

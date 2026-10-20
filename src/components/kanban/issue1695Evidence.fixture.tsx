@@ -3848,7 +3848,6 @@ const WORKSPACES = SCENARIO?.startsWith("workspaces") ? workspacesFixture({
 if (WORKSPACES) {
   const chosen = WORKSPACE_PARAMS.get("ws");
   if (chosen) localStorage.setItem(WORKSPACE_STORAGE_KEY, chosen === "all" ? "all" : FIXTURE_WORKSPACE_IDS[chosen as keyof typeof FIXTURE_WORKSPACE_IDS] ?? chosen);
-  void refreshTeamView();
 }
 const ROLE_MEMORY = new URLSearchParams(location.search).has("rolememory");
 /* The one request that leaves the page: the evidence server draws task icons from lucide (#2102). */
@@ -4884,6 +4883,8 @@ function CodexCallbacksScene() {
   </main>;
 }
 
+/* The team view is read once the fetch double above answers it. */
+if (WORKSPACES) void refreshTeamView();
 if (HEADER_MENU && new URLSearchParams(location.search).has("member")) void refreshTeamView();
 const diskDensity = new URLSearchParams(location.search).get("disk-density");
 // Mount the production dock beside the Viewer for shared desktop-host cases.

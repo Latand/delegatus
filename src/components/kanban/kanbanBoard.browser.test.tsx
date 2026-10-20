@@ -34848,9 +34848,13 @@ describe("team workspaces slice (a)", () => {
       const roots = [...document.querySelectorAll<HTMLElement>(selector)].filter((element) => element.getClientRects().length > 0);
       const boxes: Array<{ left: number; top: number; right: number; bottom: number }> = [];
       let cut = false;
+      const words = (element: Element) => (element.textContent ?? "").replace(/\s+/g, " ");
       for (const root of roots) {
-        if (!(root.textContent ?? "").replace(/\s+/g, " ").includes(text)) continue;
-        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        if (!words(root).includes(text)) continue;
+        /* The deepest element that holds the words: only its text is measured, not a whole list around it. */
+        let holder: Element = root;
+        for (let child = [...holder.children].find((candidate) => words(candidate).includes(text)); child; child = [...holder.children].find((candidate) => words(candidate).includes(text))) holder = child;
+        const walker = document.createTreeWalker(holder, NodeFilter.SHOW_TEXT);
         for (let node = walker.nextNode(); node; node = walker.nextNode()) {
           if (!(node.textContent ?? "").trim()) continue;
           const range = document.createRange();
@@ -34999,7 +35003,7 @@ describe("team workspaces slice (a)", () => {
         }
         /* D4 as the owner and as a member, P4 at 390. */
         for (const member of [false, true]) {
-          const { context, page, pageErrors } = await open(`scenario=workspaces-team${member ? "&member=1" : ""}`);
+          const { context, page, pageErrors } = await open(`scenario=workspaces-team&rail=1${member ? "&member=1" : ""}`);
           try {
             await page.locator("[data-team-workspaces]").waitFor();
             await page.locator("[data-workspace-unassigned]").waitFor();
@@ -35026,7 +35030,7 @@ describe("team workspaces slice (a)", () => {
         }
         /* D5 (P5 at 390): New workspace, opened by `?create=1` as the switcher's row opens it; Create stays reachable. */
         {
-          const { context, page, pageErrors } = await open("scenario=workspaces-team&create=1");
+          const { context, page, pageErrors } = await open("scenario=workspaces-team&rail=1&create=1");
           try {
             await page.locator("[data-team-dialog='workspace-create']").waitFor();
             await frame(page, tag, "D5", [
@@ -35054,7 +35058,7 @@ describe("team workspaces slice (a)", () => {
         }
         /* D6 and D7 (P6 at 390): the workspace page, Rename inline, Add project, and Delete refused while it has projects. */
         {
-          const { context, page, pageErrors } = await open("scenario=workspaces-page&page=client");
+          const { context, page, pageErrors } = await open("scenario=workspaces-page&rail=1&page=client");
           try {
             await page.locator("[data-workspace-title]").waitFor();
             await frame(page, tag, "D6", [

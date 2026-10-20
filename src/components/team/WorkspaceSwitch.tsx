@@ -191,8 +191,10 @@ export function WorkspaceChip({ state, counts }: { state: WorkspaceRailState; co
  * drawn in a portal so a scrolling list or the rail's edge never cuts it. The
  * outside pointer and Escape close it; Escape gives focus back to the control.
  */
-export function WorkspacePopover({ anchor, label, onClose, testId, width = 236, children }: {
+export function WorkspacePopover({ anchor, beside, label, onClose, testId, width = 236, children }: {
   anchor: RefObject<HTMLElement | null>;
+  /** The element whose right edge the menu stands beside (a whole row), so it covers none of the row; the control by default. */
+  beside?: RefObject<HTMLElement | null>;
   label: string;
   onClose: () => void;
   testId: string;
@@ -208,9 +210,10 @@ export function WorkspacePopover({ anchor, label, onClose, testId, width = 236, 
     const panel = menu.current;
     if (!trigger || !panel) return;
     const rect = trigger.getBoundingClientRect();
+    const edge = beside?.current?.getBoundingClientRect().right ?? rect.right;
     const margin = 8;
-    /* Beside the control when the window has room; under it otherwise. */
-    let left = rect.right + 4;
+    /* Beside the control (or its row) when the window has room; under it otherwise. */
+    let left = edge + 4;
     let top = rect.top;
     if (left + panel.offsetWidth > window.innerWidth - margin) {
       left = Math.max(margin, Math.min(rect.right, window.innerWidth - margin) - panel.offsetWidth);
@@ -219,7 +222,7 @@ export function WorkspacePopover({ anchor, label, onClose, testId, width = 236, 
     if (top + panel.offsetHeight > window.innerHeight - margin) top = Math.max(margin, rect.top - panel.offsetHeight - 4);
     setPlace({ left, top });
     panel.querySelector<HTMLElement>("button:not(:disabled), a[href]")?.focus();
-  }, [anchor]);
+  }, [anchor, beside]);
   if (typeof document === "undefined") return null;
   return createPortal(
     <div
@@ -237,16 +240,17 @@ export function WorkspacePopover({ anchor, label, onClose, testId, width = 236, 
 }
 
 /** The one «Move to…» menu (D3, D4): the workspaces a project can go to. */
-export function MoveToMenu({ workspaces, exclude = null, anchor, onPick, onClose }: {
+export function MoveToMenu({ workspaces, exclude = null, anchor, beside, onPick, onClose }: {
   workspaces: readonly Workspace[];
   exclude?: string | null;
   anchor: RefObject<HTMLElement | null>;
+  beside?: RefObject<HTMLElement | null>;
   onPick: (workspaceId: string) => void;
   onClose: () => void;
 }) {
   const { t } = useLocale();
   return (
-    <WorkspacePopover anchor={anchor} label={t("workspaces.moveTo")} onClose={onClose} testId="move">
+    <WorkspacePopover anchor={anchor} beside={beside} label={t("workspaces.moveTo")} onClose={onClose} testId="move">
       <div className={MENU_LABEL}>{t("workspaces.moveTo")}</div>
       {workspaces.filter((workspace) => workspace.id !== exclude).map((workspace) => (
         <button

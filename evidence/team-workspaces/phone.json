@@ -1,0 +1,628 @@
+{
+  "driver": "src/components/mobile/issue1671Evidence.browser.test.tsx",
+  "block": "team workspaces slice (a) on the phone",
+  "frames": 40,
+  "failures": [],
+  "readings": [
+    {
+      "tag": "en-light-390",
+      "state": "P1-overview-bar",
+      "header": [
+        0,
+        52,
+        52
+      ],
+      "eyebrow": [
+        9.25,
+        23
+      ],
+      "name": [
+        23,
+        41.75
+      ],
+      "text": [
+        "Client work",
+        "Overview"
+      ]
+    },
+    {
+      "tag": "en-light-390",
+      "state": "P1-overview",
+      "defining": [
+        "Client work",
+        "Overview"
+      ],
+      "file": "en-light-390-P1-overview.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "P2-sheet",
+      "defining": [
+        "Client work",
+        "Workspace"
+      ],
+      "file": "en-light-390-P2-sheet.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "P2-expanded",
+      "defining": [
+        "All workspaces",
+        "Workspace settings",
+        "New workspace"
+      ],
+      "file": "en-light-390-P2-expanded.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "P1-board-bar",
+      "header": [
+        0,
+        52,
+        52
+      ],
+      "eyebrow": [
+        9.25,
+        23
+      ],
+      "name": [
+        23,
+        41.75
+      ],
+      "text": [
+        "Client work",
+        "forge-api"
+      ]
+    },
+    {
+      "tag": "en-light-390",
+      "state": "P1-board",
+      "defining": [
+        "Client work",
+        "forge-api"
+      ],
+      "file": "en-light-390-P1-board.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "P3-overview-bar",
+      "header": [
+        0,
+        52,
+        52
+      ],
+      "eyebrow": [
+        9.25,
+        23
+      ],
+      "name": [
+        23,
+        41.75
+      ],
+      "text": [
+        "All workspaces",
+        "Overview"
+      ]
+    },
+    {
+      "tag": "en-light-390",
+      "state": "P3-all",
+      "defining": [
+        "Unassigned",
+        "Move",
+        "repo-a1b2a1b2a1b2a1b2"
+      ],
+      "file": "en-light-390-P3-all.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "P3-move",
+      "defining": [
+        "Move to…",
+        "Client work"
+      ],
+      "file": "en-light-390-P3-move.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "P4",
+      "defining": [
+        "Workspaces",
+        "Client work"
+      ],
+      "file": "en-light-390-P4.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "P5",
+      "defining": [
+        "New workspace",
+        "Name"
+      ],
+      "file": "en-light-390-P5.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "P5-submit",
+      "defining": [
+        "Create workspace"
+      ],
+      "file": "en-light-390-P5-submit.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "P6",
+      "defining": [
+        "Client work",
+        "Remove from workspace",
+        "Move its projects out first."
+      ],
+      "file": "en-light-390-P6.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "P1-overview-bar",
+      "header": [
+        0,
+        52,
+        52
+      ],
+      "eyebrow": [
+        9.25,
+        23
+      ],
+      "name": [
+        23,
+        41.75
+      ],
+      "text": [
+        "Client work",
+        "Overview"
+      ]
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "P1-overview",
+      "defining": [
+        "Client work",
+        "Overview"
+      ],
+      "file": "en-dark-390-P1-overview.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "P2-sheet",
+      "defining": [
+        "Client work",
+        "Workspace"
+      ],
+      "file": "en-dark-390-P2-sheet.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "P2-expanded",
+      "defining": [
+        "All workspaces",
+        "Workspace settings",
+        "New workspace"
+      ],
+      "file": "en-dark-390-P2-expanded.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "P1-board-bar",
+      "header": [
+        0,
+        52,
+        52
+      ],
+      "eyebrow": [
+        9.25,
+        23
+      ],
+      "name": [
+        23,
+        41.75
+      ],
+      "text": [
+        "Client work",
+        "forge-api"
+      ]
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "P1-board",
+      "defining": [
+        "Client work",
+        "forge-api"
+      ],
+      "file": "en-dark-390-P1-board.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "P3-overview-bar",
+      "header": [
+        0,
+        52,
+        52
+      ],
+      "eyebrow": [
+        9.25,
+        23
+      ],
+      "name": [
+        23,
+        41.75
+      ],
+      "text": [
+        "All workspaces",
+        "Overview"
+      ]
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "P3-all",
+      "defining": [
+        "Unassigned",
+        "Move",
+        "repo-a1b2a1b2a1b2a1b2"
+      ],
+      "file": "en-dark-390-P3-all.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "P3-move",
+      "defining": [
+        "Move to…",
+        "Client work"
+      ],
+      "file": "en-dark-390-P3-move.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "P4",
+      "defining": [
+        "Workspaces",
+        "Client work"
+      ],
+      "file": "en-dark-390-P4.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "P5",
+      "defining": [
+        "New workspace",
+        "Name"
+      ],
+      "file": "en-dark-390-P5.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "P5-submit",
+      "defining": [
+        "Create workspace"
+      ],
+      "file": "en-dark-390-P5-submit.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "P6",
+      "defining": [
+        "Client work",
+        "Remove from workspace",
+        "Move its projects out first."
+      ],
+      "file": "en-dark-390-P6.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "P1-overview-bar",
+      "header": [
+        0,
+        52,
+        52
+      ],
+      "eyebrow": [
+        9.25,
+        23
+      ],
+      "name": [
+        23,
+        41.75
+      ],
+      "text": [
+        "Клієнтська робота",
+        "Огляд"
+      ]
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "P1-overview",
+      "defining": [
+        "Клієнтська робота",
+        "Огляд"
+      ],
+      "file": "uk-light-390-P1-overview.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "P2-sheet",
+      "defining": [
+        "Клієнтська робота",
+        "Простір"
+      ],
+      "file": "uk-light-390-P2-sheet.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "P2-expanded",
+      "defining": [
+        "Усі простори",
+        "Налаштування простору",
+        "Новий простір"
+      ],
+      "file": "uk-light-390-P2-expanded.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "P1-board-bar",
+      "header": [
+        0,
+        52,
+        52
+      ],
+      "eyebrow": [
+        9.25,
+        23
+      ],
+      "name": [
+        23,
+        41.75
+      ],
+      "text": [
+        "Клієнтська робота",
+        "forge-api"
+      ]
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "P1-board",
+      "defining": [
+        "Клієнтська робота",
+        "forge-api"
+      ],
+      "file": "uk-light-390-P1-board.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "P3-overview-bar",
+      "header": [
+        0,
+        52,
+        52
+      ],
+      "eyebrow": [
+        9.25,
+        23
+      ],
+      "name": [
+        23,
+        41.75
+      ],
+      "text": [
+        "Усі простори",
+        "Огляд"
+      ]
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "P3-all",
+      "defining": [
+        "Без простору",
+        "Перенести",
+        "repo-a1b2a1b2a1b2a1b2"
+      ],
+      "file": "uk-light-390-P3-all.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "P3-move",
+      "defining": [
+        "Перенести в…",
+        "Клієнтська робота"
+      ],
+      "file": "uk-light-390-P3-move.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "P4",
+      "defining": [
+        "Простори",
+        "Клієнтська робота"
+      ],
+      "file": "uk-light-390-P4.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "P5",
+      "defining": [
+        "Новий простір",
+        "Назва"
+      ],
+      "file": "uk-light-390-P5.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "P5-submit",
+      "defining": [
+        "Створити простір"
+      ],
+      "file": "uk-light-390-P5-submit.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "P6",
+      "defining": [
+        "Клієнтська робота",
+        "Прибрати з простору",
+        "Спершу перенесіть його проєкти."
+      ],
+      "file": "uk-light-390-P6.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "P1-overview-bar",
+      "header": [
+        0,
+        52,
+        52
+      ],
+      "eyebrow": [
+        9.25,
+        23
+      ],
+      "name": [
+        23,
+        41.75
+      ],
+      "text": [
+        "Клієнтська робота",
+        "Огляд"
+      ]
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "P1-overview",
+      "defining": [
+        "Клієнтська робота",
+        "Огляд"
+      ],
+      "file": "uk-dark-390-P1-overview.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "P2-sheet",
+      "defining": [
+        "Клієнтська робота",
+        "Простір"
+      ],
+      "file": "uk-dark-390-P2-sheet.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "P2-expanded",
+      "defining": [
+        "Усі простори",
+        "Налаштування простору",
+        "Новий простір"
+      ],
+      "file": "uk-dark-390-P2-expanded.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "P1-board-bar",
+      "header": [
+        0,
+        52,
+        52
+      ],
+      "eyebrow": [
+        9.25,
+        23
+      ],
+      "name": [
+        23,
+        41.75
+      ],
+      "text": [
+        "Клієнтська робота",
+        "forge-api"
+      ]
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "P1-board",
+      "defining": [
+        "Клієнтська робота",
+        "forge-api"
+      ],
+      "file": "uk-dark-390-P1-board.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "P3-overview-bar",
+      "header": [
+        0,
+        52,
+        52
+      ],
+      "eyebrow": [
+        9.25,
+        23
+      ],
+      "name": [
+        23,
+        41.75
+      ],
+      "text": [
+        "Усі простори",
+        "Огляд"
+      ]
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "P3-all",
+      "defining": [
+        "Без простору",
+        "Перенести",
+        "repo-a1b2a1b2a1b2a1b2"
+      ],
+      "file": "uk-dark-390-P3-all.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "P3-move",
+      "defining": [
+        "Перенести в…",
+        "Клієнтська робота"
+      ],
+      "file": "uk-dark-390-P3-move.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "P4",
+      "defining": [
+        "Простори",
+        "Клієнтська робота"
+      ],
+      "file": "uk-dark-390-P4.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "P5",
+      "defining": [
+        "Новий простір",
+        "Назва"
+      ],
+      "file": "uk-dark-390-P5.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "P5-submit",
+      "defining": [
+        "Створити простір"
+      ],
+      "file": "uk-dark-390-P5-submit.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "P6",
+      "defining": [
+        "Клієнтська робота",
+        "Прибрати з простору",
+        "Спершу перенесіть його проєкти."
+      ],
+      "file": "uk-dark-390-P6.png"
+    }
+  ]
+}

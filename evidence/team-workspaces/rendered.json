@@ -1,0 +1,2668 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "block": "team workspaces slice (a)",
+  "frames": 200,
+  "failures": [],
+  "readings": [
+    {
+      "tag": "en-light-1440",
+      "state": "D1-client",
+      "defining": [
+        "Client work"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-1440-D1-client.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "D2-owner",
+      "defining": [
+        "Workspaces",
+        "All workspaces",
+        "Workspace settings",
+        "New workspace",
+        "Manage workspaces"
+      ],
+      "popover": "[data-workspace-menu]",
+      "box": [
+        36,
+        40,
+        272,
+        270
+      ],
+      "file": "en-light-1440-D2-owner.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "D2-member",
+      "defining": [
+        "Manage workspaces"
+      ],
+      "popover": "[data-workspace-menu]",
+      "box": [
+        36,
+        40,
+        272,
+        206
+      ],
+      "file": "en-light-1440-D2-member.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "chip-long",
+      "truncated": true,
+      "labelRight": 154,
+      "chipRight": 179,
+      "hideLeft": 183
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "D1-long",
+      "defining": [
+        "Northwin"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-1440-D1-long.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "D3-all",
+      "defining": [
+        "Unassigned",
+        "All workspaces",
+        "Move",
+        "Paper Kite"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-1440-D3-all.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "D3-move",
+      "defining": [
+        "Move to…",
+        "Client work"
+      ],
+      "popover": "[data-workspace-popover='move']",
+      "box": [
+        243,
+        453,
+        236,
+        133
+      ],
+      "file": "en-light-1440-D3-move.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "D4-owner",
+      "defining": [
+        "Workspaces",
+        "Each workspace is a named set of projects.",
+        "Client work",
+        "New workspace"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-1440-D4-owner.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "D4-owner-unassigned",
+      "defining": [
+        "Unassigned projects · 2",
+        "Move to…"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-1440-D4-owner-unassigned.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "D4-row-menu",
+      "defining": [
+        "Move its projects out first."
+      ],
+      "popover": "[data-workspace-popover='row']",
+      "box": [
+        1163,
+        192,
+        248,
+        129
+      ],
+      "file": "en-light-1440-D4-row-menu.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "D4-member",
+      "defining": [
+        "Workspaces",
+        "Each workspace is a named set of projects.",
+        "Client work"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-1440-D4-member.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "D4-member-unassigned",
+      "defining": [
+        "Unassigned projects · 2"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-1440-D4-member-unassigned.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "D5",
+      "defining": [
+        "New workspace",
+        "Name",
+        "Colour",
+        "Projects"
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        480,
+        170,
+        480,
+        560
+      ],
+      "file": "en-light-1440-D5.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "D5-submit",
+      "defining": [
+        "A project belongs to one workspace.",
+        "Create workspace"
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        480,
+        170,
+        480,
+        560
+      ],
+      "file": "en-light-1440-D5-submit.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "D5-refused",
+      "defining": [
+        "Give the workspace a name."
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        480,
+        145,
+        480,
+        610
+      ],
+      "file": "en-light-1440-D5-refused.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "D6",
+      "defining": [
+        "Board",
+        "Client work",
+        "Workspace · 2 projects",
+        "Remove from workspace",
+        "Move its projects out first."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-1440-D6.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "D6-rename",
+      "defining": [
+        "Save"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-1440-D6-rename.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "D6-add",
+      "defining": [
+        "Add project",
+        "Paper Kite"
+      ],
+      "popover": "[data-workspace-popover='add']",
+      "box": [
+        852,
+        112,
+        320,
+        191
+      ],
+      "file": "en-light-1440-D6-add.png"
+    },
+    {
+      "tag": "en-light-1440",
+      "state": "D7-empty",
+      "defining": [
+        "No projects yet.",
+        "Delete workspace"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-1440-D7-empty.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "D1-client",
+      "defining": [
+        "Client work"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-820-D1-client.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "D2-owner",
+      "defining": [
+        "Workspaces",
+        "All workspaces",
+        "Workspace settings",
+        "New workspace",
+        "Manage workspaces"
+      ],
+      "popover": "[data-workspace-menu]",
+      "box": [
+        36,
+        40,
+        272,
+        270
+      ],
+      "file": "en-light-820-D2-owner.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "D2-member",
+      "defining": [
+        "Manage workspaces"
+      ],
+      "popover": "[data-workspace-menu]",
+      "box": [
+        36,
+        40,
+        272,
+        206
+      ],
+      "file": "en-light-820-D2-member.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "chip-long",
+      "truncated": true,
+      "labelRight": 154,
+      "chipRight": 179,
+      "hideLeft": 183
+    },
+    {
+      "tag": "en-light-820",
+      "state": "D1-long",
+      "defining": [
+        "Northwin"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-820-D1-long.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "D3-all",
+      "defining": [
+        "Unassigned",
+        "All workspaces",
+        "Move",
+        "Paper Kite"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-820-D3-all.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "D3-move",
+      "defining": [
+        "Move to…",
+        "Client work"
+      ],
+      "popover": "[data-workspace-popover='move']",
+      "box": [
+        243,
+        453,
+        236,
+        133
+      ],
+      "file": "en-light-820-D3-move.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "D4-owner",
+      "defining": [
+        "Workspaces",
+        "Each workspace is a named set of projects.",
+        "Client work",
+        "New workspace"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-820-D4-owner.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "D4-owner-unassigned",
+      "defining": [
+        "Unassigned projects · 2",
+        "Move to…"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-820-D4-owner-unassigned.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "D4-row-menu",
+      "defining": [
+        "Move its projects out first."
+      ],
+      "popover": "[data-workspace-popover='row']",
+      "box": [
+        531,
+        228,
+        248,
+        129
+      ],
+      "file": "en-light-820-D4-row-menu.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "D4-member",
+      "defining": [
+        "Workspaces",
+        "Each workspace is a named set of projects.",
+        "Client work"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-820-D4-member.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "D4-member-unassigned",
+      "defining": [
+        "Unassigned projects · 2"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-820-D4-member-unassigned.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "D5",
+      "defining": [
+        "New workspace",
+        "Name",
+        "Colour",
+        "Projects"
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        170,
+        170,
+        480,
+        560
+      ],
+      "file": "en-light-820-D5.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "D5-submit",
+      "defining": [
+        "A project belongs to one workspace.",
+        "Create workspace"
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        170,
+        170,
+        480,
+        560
+      ],
+      "file": "en-light-820-D5-submit.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "D5-refused",
+      "defining": [
+        "Give the workspace a name."
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        170,
+        145,
+        480,
+        610
+      ],
+      "file": "en-light-820-D5-refused.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "D6",
+      "defining": [
+        "Board",
+        "Client work",
+        "Workspace · 2 projects",
+        "Remove from workspace",
+        "Move its projects out first."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-820-D6.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "D6-rename",
+      "defining": [
+        "Save"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-820-D6-rename.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "D6-add",
+      "defining": [
+        "Add project",
+        "Paper Kite"
+      ],
+      "popover": "[data-workspace-popover='add']",
+      "box": [
+        472,
+        112,
+        320,
+        191
+      ],
+      "file": "en-light-820-D6-add.png"
+    },
+    {
+      "tag": "en-light-820",
+      "state": "D7-empty",
+      "defining": [
+        "No projects yet.",
+        "Delete workspace"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-820-D7-empty.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "D4-owner",
+      "defining": [
+        "Workspaces",
+        "Each workspace is a named set of projects.",
+        "Client work",
+        "New workspace"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-390-D4-owner.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "D4-owner-unassigned",
+      "defining": [
+        "Unassigned projects · 2",
+        "Move to…"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-390-D4-owner-unassigned.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "D4-row-menu",
+      "defining": [
+        "Move its projects out first."
+      ],
+      "popover": "[data-workspace-popover='row']",
+      "box": [
+        117,
+        253,
+        248,
+        129
+      ],
+      "file": "en-light-390-D4-row-menu.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "D4-member",
+      "defining": [
+        "Workspaces",
+        "Each workspace is a named set of projects.",
+        "Client work"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-390-D4-member.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "D4-member-unassigned",
+      "defining": [
+        "Unassigned projects · 2"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-390-D4-member-unassigned.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "D5",
+      "defining": [
+        "New workspace",
+        "Name",
+        "Colour",
+        "Projects"
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        0,
+        152,
+        390,
+        692
+      ],
+      "file": "en-light-390-D5.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "D5-submit",
+      "defining": [
+        "A project belongs to one workspace.",
+        "Create workspace"
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        0,
+        152,
+        390,
+        692
+      ],
+      "file": "en-light-390-D5-submit.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "D5-refused",
+      "defining": [
+        "Give the workspace a name."
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        0,
+        102,
+        390,
+        742
+      ],
+      "file": "en-light-390-D5-refused.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "D6",
+      "defining": [
+        "Board",
+        "Client work",
+        "Workspace · 2 projects",
+        "Remove from workspace",
+        "Move its projects out first."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-390-D6.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "D6-rename",
+      "defining": [
+        "Save"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-390-D6-rename.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "D6-add",
+      "defining": [
+        "Add project",
+        "Paper Kite"
+      ],
+      "popover": "[data-workspace-popover='add']",
+      "box": [
+        54,
+        176,
+        320,
+        223
+      ],
+      "file": "en-light-390-D6-add.png"
+    },
+    {
+      "tag": "en-light-390",
+      "state": "D7-empty",
+      "defining": [
+        "No projects yet.",
+        "Delete workspace"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-light-390-D7-empty.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "D1-client",
+      "defining": [
+        "Client work"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-1440-D1-client.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "D2-owner",
+      "defining": [
+        "Workspaces",
+        "All workspaces",
+        "Workspace settings",
+        "New workspace",
+        "Manage workspaces"
+      ],
+      "popover": "[data-workspace-menu]",
+      "box": [
+        36,
+        40,
+        272,
+        270
+      ],
+      "file": "en-dark-1440-D2-owner.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "D2-member",
+      "defining": [
+        "Manage workspaces"
+      ],
+      "popover": "[data-workspace-menu]",
+      "box": [
+        36,
+        40,
+        272,
+        206
+      ],
+      "file": "en-dark-1440-D2-member.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "chip-long",
+      "truncated": true,
+      "labelRight": 154,
+      "chipRight": 179,
+      "hideLeft": 183
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "D1-long",
+      "defining": [
+        "Northwin"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-1440-D1-long.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "D3-all",
+      "defining": [
+        "Unassigned",
+        "All workspaces",
+        "Move",
+        "Paper Kite"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-1440-D3-all.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "D3-move",
+      "defining": [
+        "Move to…",
+        "Client work"
+      ],
+      "popover": "[data-workspace-popover='move']",
+      "box": [
+        243,
+        453,
+        236,
+        133
+      ],
+      "file": "en-dark-1440-D3-move.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "D4-owner",
+      "defining": [
+        "Workspaces",
+        "Each workspace is a named set of projects.",
+        "Client work",
+        "New workspace"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-1440-D4-owner.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "D4-owner-unassigned",
+      "defining": [
+        "Unassigned projects · 2",
+        "Move to…"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-1440-D4-owner-unassigned.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "D4-row-menu",
+      "defining": [
+        "Move its projects out first."
+      ],
+      "popover": "[data-workspace-popover='row']",
+      "box": [
+        1163,
+        192,
+        248,
+        129
+      ],
+      "file": "en-dark-1440-D4-row-menu.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "D4-member",
+      "defining": [
+        "Workspaces",
+        "Each workspace is a named set of projects.",
+        "Client work"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-1440-D4-member.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "D4-member-unassigned",
+      "defining": [
+        "Unassigned projects · 2"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-1440-D4-member-unassigned.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "D5",
+      "defining": [
+        "New workspace",
+        "Name",
+        "Colour",
+        "Projects"
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        480,
+        170,
+        480,
+        560
+      ],
+      "file": "en-dark-1440-D5.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "D5-submit",
+      "defining": [
+        "A project belongs to one workspace.",
+        "Create workspace"
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        480,
+        170,
+        480,
+        560
+      ],
+      "file": "en-dark-1440-D5-submit.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "D5-refused",
+      "defining": [
+        "Give the workspace a name."
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        480,
+        145,
+        480,
+        610
+      ],
+      "file": "en-dark-1440-D5-refused.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "D6",
+      "defining": [
+        "Board",
+        "Client work",
+        "Workspace · 2 projects",
+        "Remove from workspace",
+        "Move its projects out first."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-1440-D6.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "D6-rename",
+      "defining": [
+        "Save"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-1440-D6-rename.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "D6-add",
+      "defining": [
+        "Add project",
+        "Paper Kite"
+      ],
+      "popover": "[data-workspace-popover='add']",
+      "box": [
+        852,
+        112,
+        320,
+        191
+      ],
+      "file": "en-dark-1440-D6-add.png"
+    },
+    {
+      "tag": "en-dark-1440",
+      "state": "D7-empty",
+      "defining": [
+        "No projects yet.",
+        "Delete workspace"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-1440-D7-empty.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "D1-client",
+      "defining": [
+        "Client work"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-820-D1-client.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "D2-owner",
+      "defining": [
+        "Workspaces",
+        "All workspaces",
+        "Workspace settings",
+        "New workspace",
+        "Manage workspaces"
+      ],
+      "popover": "[data-workspace-menu]",
+      "box": [
+        36,
+        40,
+        272,
+        270
+      ],
+      "file": "en-dark-820-D2-owner.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "D2-member",
+      "defining": [
+        "Manage workspaces"
+      ],
+      "popover": "[data-workspace-menu]",
+      "box": [
+        36,
+        40,
+        272,
+        206
+      ],
+      "file": "en-dark-820-D2-member.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "chip-long",
+      "truncated": true,
+      "labelRight": 154,
+      "chipRight": 179,
+      "hideLeft": 183
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "D1-long",
+      "defining": [
+        "Northwin"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-820-D1-long.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "D3-all",
+      "defining": [
+        "Unassigned",
+        "All workspaces",
+        "Move",
+        "Paper Kite"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-820-D3-all.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "D3-move",
+      "defining": [
+        "Move to…",
+        "Client work"
+      ],
+      "popover": "[data-workspace-popover='move']",
+      "box": [
+        243,
+        453,
+        236,
+        133
+      ],
+      "file": "en-dark-820-D3-move.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "D4-owner",
+      "defining": [
+        "Workspaces",
+        "Each workspace is a named set of projects.",
+        "Client work",
+        "New workspace"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-820-D4-owner.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "D4-owner-unassigned",
+      "defining": [
+        "Unassigned projects · 2",
+        "Move to…"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-820-D4-owner-unassigned.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "D4-row-menu",
+      "defining": [
+        "Move its projects out first."
+      ],
+      "popover": "[data-workspace-popover='row']",
+      "box": [
+        531,
+        228,
+        248,
+        129
+      ],
+      "file": "en-dark-820-D4-row-menu.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "D4-member",
+      "defining": [
+        "Workspaces",
+        "Each workspace is a named set of projects.",
+        "Client work"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-820-D4-member.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "D4-member-unassigned",
+      "defining": [
+        "Unassigned projects · 2"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-820-D4-member-unassigned.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "D5",
+      "defining": [
+        "New workspace",
+        "Name",
+        "Colour",
+        "Projects"
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        170,
+        170,
+        480,
+        560
+      ],
+      "file": "en-dark-820-D5.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "D5-submit",
+      "defining": [
+        "A project belongs to one workspace.",
+        "Create workspace"
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        170,
+        170,
+        480,
+        560
+      ],
+      "file": "en-dark-820-D5-submit.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "D5-refused",
+      "defining": [
+        "Give the workspace a name."
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        170,
+        145,
+        480,
+        610
+      ],
+      "file": "en-dark-820-D5-refused.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "D6",
+      "defining": [
+        "Board",
+        "Client work",
+        "Workspace · 2 projects",
+        "Remove from workspace",
+        "Move its projects out first."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-820-D6.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "D6-rename",
+      "defining": [
+        "Save"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-820-D6-rename.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "D6-add",
+      "defining": [
+        "Add project",
+        "Paper Kite"
+      ],
+      "popover": "[data-workspace-popover='add']",
+      "box": [
+        472,
+        112,
+        320,
+        191
+      ],
+      "file": "en-dark-820-D6-add.png"
+    },
+    {
+      "tag": "en-dark-820",
+      "state": "D7-empty",
+      "defining": [
+        "No projects yet.",
+        "Delete workspace"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-820-D7-empty.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "D4-owner",
+      "defining": [
+        "Workspaces",
+        "Each workspace is a named set of projects.",
+        "Client work",
+        "New workspace"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-390-D4-owner.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "D4-owner-unassigned",
+      "defining": [
+        "Unassigned projects · 2",
+        "Move to…"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-390-D4-owner-unassigned.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "D4-row-menu",
+      "defining": [
+        "Move its projects out first."
+      ],
+      "popover": "[data-workspace-popover='row']",
+      "box": [
+        117,
+        253,
+        248,
+        129
+      ],
+      "file": "en-dark-390-D4-row-menu.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "D4-member",
+      "defining": [
+        "Workspaces",
+        "Each workspace is a named set of projects.",
+        "Client work"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-390-D4-member.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "D4-member-unassigned",
+      "defining": [
+        "Unassigned projects · 2"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-390-D4-member-unassigned.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "D5",
+      "defining": [
+        "New workspace",
+        "Name",
+        "Colour",
+        "Projects"
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        0,
+        152,
+        390,
+        692
+      ],
+      "file": "en-dark-390-D5.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "D5-submit",
+      "defining": [
+        "A project belongs to one workspace.",
+        "Create workspace"
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        0,
+        152,
+        390,
+        692
+      ],
+      "file": "en-dark-390-D5-submit.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "D5-refused",
+      "defining": [
+        "Give the workspace a name."
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        0,
+        102,
+        390,
+        742
+      ],
+      "file": "en-dark-390-D5-refused.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "D6",
+      "defining": [
+        "Board",
+        "Client work",
+        "Workspace · 2 projects",
+        "Remove from workspace",
+        "Move its projects out first."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-390-D6.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "D6-rename",
+      "defining": [
+        "Save"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-390-D6-rename.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "D6-add",
+      "defining": [
+        "Add project",
+        "Paper Kite"
+      ],
+      "popover": "[data-workspace-popover='add']",
+      "box": [
+        54,
+        176,
+        320,
+        223
+      ],
+      "file": "en-dark-390-D6-add.png"
+    },
+    {
+      "tag": "en-dark-390",
+      "state": "D7-empty",
+      "defining": [
+        "No projects yet.",
+        "Delete workspace"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "en-dark-390-D7-empty.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "D1-client",
+      "defining": [
+        "Клієнтська робота"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-1440-D1-client.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "D2-owner",
+      "defining": [
+        "Простори",
+        "Усі простори",
+        "Налаштування простору",
+        "Новий простір",
+        "Керувати просторами"
+      ],
+      "popover": "[data-workspace-menu]",
+      "box": [
+        36,
+        40,
+        272,
+        270
+      ],
+      "file": "uk-light-1440-D2-owner.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "D2-member",
+      "defining": [
+        "Керувати просторами"
+      ],
+      "popover": "[data-workspace-menu]",
+      "box": [
+        36,
+        40,
+        272,
+        206
+      ],
+      "file": "uk-light-1440-D2-member.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "chip-long",
+      "truncated": true,
+      "labelRight": 154,
+      "chipRight": 179,
+      "hideLeft": 183
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "D1-long",
+      "defining": [
+        "Впровадж"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-1440-D1-long.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "D3-all",
+      "defining": [
+        "Без простору",
+        "Усі простори",
+        "Перенести",
+        "Paper Kite"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-1440-D3-all.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "D3-move",
+      "defining": [
+        "Перенести в…",
+        "Клієнтська робота"
+      ],
+      "popover": "[data-workspace-popover='move']",
+      "box": [
+        243,
+        453,
+        236,
+        133
+      ],
+      "file": "uk-light-1440-D3-move.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "D4-owner",
+      "defining": [
+        "Простори",
+        "Простір — це іменований набір проєктів.",
+        "Клієнтська робота",
+        "Новий простір"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-1440-D4-owner.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "D4-owner-unassigned",
+      "defining": [
+        "Проєкти без простору · 2",
+        "Перенести в…"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-1440-D4-owner-unassigned.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "D4-row-menu",
+      "defining": [
+        "Спершу перенесіть його проєкти."
+      ],
+      "popover": "[data-workspace-popover='row']",
+      "box": [
+        1163,
+        318,
+        248,
+        129
+      ],
+      "file": "uk-light-1440-D4-row-menu.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "D4-member",
+      "defining": [
+        "Простори",
+        "Простір — це іменований набір проєктів.",
+        "Клієнтська робота"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-1440-D4-member.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "D4-member-unassigned",
+      "defining": [
+        "Проєкти без простору · 2"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-1440-D4-member-unassigned.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "D5",
+      "defining": [
+        "Новий простір",
+        "Назва",
+        "Колір",
+        "Проєкти"
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        480,
+        170,
+        480,
+        560
+      ],
+      "file": "uk-light-1440-D5.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "D5-submit",
+      "defining": [
+        "Проєкт належить одному простору.",
+        "Створити простір"
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        480,
+        170,
+        480,
+        560
+      ],
+      "file": "uk-light-1440-D5-submit.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "D5-refused",
+      "defining": [
+        "Дайте простору назву."
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        480,
+        145,
+        480,
+        610
+      ],
+      "file": "uk-light-1440-D5-refused.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "D6",
+      "defining": [
+        "Дошка",
+        "Клієнтська робота",
+        "Простір · 2 проєкти",
+        "Прибрати з простору",
+        "Спершу перенесіть його проєкти."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-1440-D6.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "D6-rename",
+      "defining": [
+        "Зберегти"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-1440-D6-rename.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "D6-add",
+      "defining": [
+        "Додати проєкт",
+        "Paper Kite"
+      ],
+      "popover": "[data-workspace-popover='add']",
+      "box": [
+        852,
+        112,
+        320,
+        191
+      ],
+      "file": "uk-light-1440-D6-add.png"
+    },
+    {
+      "tag": "uk-light-1440",
+      "state": "D7-empty",
+      "defining": [
+        "Проєктів ще немає.",
+        "Видалити простір"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-1440-D7-empty.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "D1-client",
+      "defining": [
+        "Клієнтська робота"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-820-D1-client.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "D2-owner",
+      "defining": [
+        "Простори",
+        "Усі простори",
+        "Налаштування простору",
+        "Новий простір",
+        "Керувати просторами"
+      ],
+      "popover": "[data-workspace-menu]",
+      "box": [
+        36,
+        40,
+        272,
+        270
+      ],
+      "file": "uk-light-820-D2-owner.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "D2-member",
+      "defining": [
+        "Керувати просторами"
+      ],
+      "popover": "[data-workspace-menu]",
+      "box": [
+        36,
+        40,
+        272,
+        206
+      ],
+      "file": "uk-light-820-D2-member.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "chip-long",
+      "truncated": true,
+      "labelRight": 154,
+      "chipRight": 179,
+      "hideLeft": 183
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "D1-long",
+      "defining": [
+        "Впровадж"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-820-D1-long.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "D3-all",
+      "defining": [
+        "Без простору",
+        "Усі простори",
+        "Перенести",
+        "Paper Kite"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-820-D3-all.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "D3-move",
+      "defining": [
+        "Перенести в…",
+        "Клієнтська робота"
+      ],
+      "popover": "[data-workspace-popover='move']",
+      "box": [
+        243,
+        453,
+        236,
+        133
+      ],
+      "file": "uk-light-820-D3-move.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "D4-owner",
+      "defining": [
+        "Простори",
+        "Простір — це іменований набір проєктів.",
+        "Клієнтська робота",
+        "Новий простір"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-820-D4-owner.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "D4-owner-unassigned",
+      "defining": [
+        "Проєкти без простору · 2",
+        "Перенести в…"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-820-D4-owner-unassigned.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "D4-row-menu",
+      "defining": [
+        "Спершу перенесіть його проєкти."
+      ],
+      "popover": "[data-workspace-popover='row']",
+      "box": [
+        531,
+        354,
+        248,
+        129
+      ],
+      "file": "uk-light-820-D4-row-menu.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "D4-member",
+      "defining": [
+        "Простори",
+        "Простір — це іменований набір проєктів.",
+        "Клієнтська робота"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-820-D4-member.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "D4-member-unassigned",
+      "defining": [
+        "Проєкти без простору · 2"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-820-D4-member-unassigned.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "D5",
+      "defining": [
+        "Новий простір",
+        "Назва",
+        "Колір",
+        "Проєкти"
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        170,
+        170,
+        480,
+        560
+      ],
+      "file": "uk-light-820-D5.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "D5-submit",
+      "defining": [
+        "Проєкт належить одному простору.",
+        "Створити простір"
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        170,
+        170,
+        480,
+        560
+      ],
+      "file": "uk-light-820-D5-submit.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "D5-refused",
+      "defining": [
+        "Дайте простору назву."
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        170,
+        145,
+        480,
+        610
+      ],
+      "file": "uk-light-820-D5-refused.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "D6",
+      "defining": [
+        "Дошка",
+        "Клієнтська робота",
+        "Простір · 2 проєкти",
+        "Прибрати з простору",
+        "Спершу перенесіть його проєкти."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-820-D6.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "D6-rename",
+      "defining": [
+        "Зберегти"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-820-D6-rename.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "D6-add",
+      "defining": [
+        "Додати проєкт",
+        "Paper Kite"
+      ],
+      "popover": "[data-workspace-popover='add']",
+      "box": [
+        472,
+        156,
+        320,
+        191
+      ],
+      "file": "uk-light-820-D6-add.png"
+    },
+    {
+      "tag": "uk-light-820",
+      "state": "D7-empty",
+      "defining": [
+        "Проєктів ще немає.",
+        "Видалити простір"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-820-D7-empty.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "D4-owner",
+      "defining": [
+        "Простори",
+        "Простір — це іменований набір проєктів.",
+        "Клієнтська робота",
+        "Новий простір"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-390-D4-owner.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "D4-owner-unassigned",
+      "defining": [
+        "Проєкти без простору · 2",
+        "Перенести в…"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-390-D4-owner-unassigned.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "D4-row-menu",
+      "defining": [
+        "Спершу перенесіть його проєкти."
+      ],
+      "popover": "[data-workspace-popover='row']",
+      "box": [
+        117,
+        391,
+        248,
+        129
+      ],
+      "file": "uk-light-390-D4-row-menu.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "D4-member",
+      "defining": [
+        "Простори",
+        "Простір — це іменований набір проєктів.",
+        "Клієнтська робота"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-390-D4-member.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "D4-member-unassigned",
+      "defining": [
+        "Проєкти без простору · 2"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-390-D4-member-unassigned.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "D5",
+      "defining": [
+        "Новий простір",
+        "Назва",
+        "Колір",
+        "Проєкти"
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        0,
+        152,
+        390,
+        692
+      ],
+      "file": "uk-light-390-D5.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "D5-submit",
+      "defining": [
+        "Проєкт належить одному простору.",
+        "Створити простір"
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        0,
+        152,
+        390,
+        692
+      ],
+      "file": "uk-light-390-D5-submit.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "D5-refused",
+      "defining": [
+        "Дайте простору назву."
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        0,
+        102,
+        390,
+        742
+      ],
+      "file": "uk-light-390-D5-refused.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "D6",
+      "defining": [
+        "Дошка",
+        "Клієнтська робота",
+        "Простір · 2 проєкти",
+        "Прибрати з простору",
+        "Спершу перенесіть його проєкти."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-390-D6.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "D6-rename",
+      "defining": [
+        "Зберегти"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-390-D6-rename.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "D6-add",
+      "defining": [
+        "Додати проєкт",
+        "Paper Kite"
+      ],
+      "popover": "[data-workspace-popover='add']",
+      "box": [
+        54,
+        201,
+        320,
+        223
+      ],
+      "file": "uk-light-390-D6-add.png"
+    },
+    {
+      "tag": "uk-light-390",
+      "state": "D7-empty",
+      "defining": [
+        "Проєктів ще немає.",
+        "Видалити простір"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-light-390-D7-empty.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "D1-client",
+      "defining": [
+        "Клієнтська робота"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-1440-D1-client.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "D2-owner",
+      "defining": [
+        "Простори",
+        "Усі простори",
+        "Налаштування простору",
+        "Новий простір",
+        "Керувати просторами"
+      ],
+      "popover": "[data-workspace-menu]",
+      "box": [
+        36,
+        40,
+        272,
+        270
+      ],
+      "file": "uk-dark-1440-D2-owner.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "D2-member",
+      "defining": [
+        "Керувати просторами"
+      ],
+      "popover": "[data-workspace-menu]",
+      "box": [
+        36,
+        40,
+        272,
+        206
+      ],
+      "file": "uk-dark-1440-D2-member.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "chip-long",
+      "truncated": true,
+      "labelRight": 154,
+      "chipRight": 179,
+      "hideLeft": 183
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "D1-long",
+      "defining": [
+        "Впровадж"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-1440-D1-long.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "D3-all",
+      "defining": [
+        "Без простору",
+        "Усі простори",
+        "Перенести",
+        "Paper Kite"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-1440-D3-all.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "D3-move",
+      "defining": [
+        "Перенести в…",
+        "Клієнтська робота"
+      ],
+      "popover": "[data-workspace-popover='move']",
+      "box": [
+        243,
+        453,
+        236,
+        133
+      ],
+      "file": "uk-dark-1440-D3-move.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "D4-owner",
+      "defining": [
+        "Простори",
+        "Простір — це іменований набір проєктів.",
+        "Клієнтська робота",
+        "Новий простір"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-1440-D4-owner.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "D4-owner-unassigned",
+      "defining": [
+        "Проєкти без простору · 2",
+        "Перенести в…"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-1440-D4-owner-unassigned.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "D4-row-menu",
+      "defining": [
+        "Спершу перенесіть його проєкти."
+      ],
+      "popover": "[data-workspace-popover='row']",
+      "box": [
+        1163,
+        318,
+        248,
+        129
+      ],
+      "file": "uk-dark-1440-D4-row-menu.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "D4-member",
+      "defining": [
+        "Простори",
+        "Простір — це іменований набір проєктів.",
+        "Клієнтська робота"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-1440-D4-member.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "D4-member-unassigned",
+      "defining": [
+        "Проєкти без простору · 2"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-1440-D4-member-unassigned.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "D5",
+      "defining": [
+        "Новий простір",
+        "Назва",
+        "Колір",
+        "Проєкти"
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        480,
+        170,
+        480,
+        560
+      ],
+      "file": "uk-dark-1440-D5.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "D5-submit",
+      "defining": [
+        "Проєкт належить одному простору.",
+        "Створити простір"
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        480,
+        170,
+        480,
+        560
+      ],
+      "file": "uk-dark-1440-D5-submit.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "D5-refused",
+      "defining": [
+        "Дайте простору назву."
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        480,
+        145,
+        480,
+        610
+      ],
+      "file": "uk-dark-1440-D5-refused.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "D6",
+      "defining": [
+        "Дошка",
+        "Клієнтська робота",
+        "Простір · 2 проєкти",
+        "Прибрати з простору",
+        "Спершу перенесіть його проєкти."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-1440-D6.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "D6-rename",
+      "defining": [
+        "Зберегти"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-1440-D6-rename.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "D6-add",
+      "defining": [
+        "Додати проєкт",
+        "Paper Kite"
+      ],
+      "popover": "[data-workspace-popover='add']",
+      "box": [
+        852,
+        112,
+        320,
+        191
+      ],
+      "file": "uk-dark-1440-D6-add.png"
+    },
+    {
+      "tag": "uk-dark-1440",
+      "state": "D7-empty",
+      "defining": [
+        "Проєктів ще немає.",
+        "Видалити простір"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-1440-D7-empty.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "D1-client",
+      "defining": [
+        "Клієнтська робота"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-820-D1-client.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "D2-owner",
+      "defining": [
+        "Простори",
+        "Усі простори",
+        "Налаштування простору",
+        "Новий простір",
+        "Керувати просторами"
+      ],
+      "popover": "[data-workspace-menu]",
+      "box": [
+        36,
+        40,
+        272,
+        270
+      ],
+      "file": "uk-dark-820-D2-owner.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "D2-member",
+      "defining": [
+        "Керувати просторами"
+      ],
+      "popover": "[data-workspace-menu]",
+      "box": [
+        36,
+        40,
+        272,
+        206
+      ],
+      "file": "uk-dark-820-D2-member.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "chip-long",
+      "truncated": true,
+      "labelRight": 154,
+      "chipRight": 179,
+      "hideLeft": 183
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "D1-long",
+      "defining": [
+        "Впровадж"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-820-D1-long.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "D3-all",
+      "defining": [
+        "Без простору",
+        "Усі простори",
+        "Перенести",
+        "Paper Kite"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-820-D3-all.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "D3-move",
+      "defining": [
+        "Перенести в…",
+        "Клієнтська робота"
+      ],
+      "popover": "[data-workspace-popover='move']",
+      "box": [
+        243,
+        453,
+        236,
+        133
+      ],
+      "file": "uk-dark-820-D3-move.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "D4-owner",
+      "defining": [
+        "Простори",
+        "Простір — це іменований набір проєктів.",
+        "Клієнтська робота",
+        "Новий простір"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-820-D4-owner.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "D4-owner-unassigned",
+      "defining": [
+        "Проєкти без простору · 2",
+        "Перенести в…"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-820-D4-owner-unassigned.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "D4-row-menu",
+      "defining": [
+        "Спершу перенесіть його проєкти."
+      ],
+      "popover": "[data-workspace-popover='row']",
+      "box": [
+        531,
+        354,
+        248,
+        129
+      ],
+      "file": "uk-dark-820-D4-row-menu.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "D4-member",
+      "defining": [
+        "Простори",
+        "Простір — це іменований набір проєктів.",
+        "Клієнтська робота"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-820-D4-member.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "D4-member-unassigned",
+      "defining": [
+        "Проєкти без простору · 2"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-820-D4-member-unassigned.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "D5",
+      "defining": [
+        "Новий простір",
+        "Назва",
+        "Колір",
+        "Проєкти"
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        170,
+        170,
+        480,
+        560
+      ],
+      "file": "uk-dark-820-D5.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "D5-submit",
+      "defining": [
+        "Проєкт належить одному простору.",
+        "Створити простір"
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        170,
+        170,
+        480,
+        560
+      ],
+      "file": "uk-dark-820-D5-submit.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "D5-refused",
+      "defining": [
+        "Дайте простору назву."
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        170,
+        145,
+        480,
+        610
+      ],
+      "file": "uk-dark-820-D5-refused.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "D6",
+      "defining": [
+        "Дошка",
+        "Клієнтська робота",
+        "Простір · 2 проєкти",
+        "Прибрати з простору",
+        "Спершу перенесіть його проєкти."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-820-D6.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "D6-rename",
+      "defining": [
+        "Зберегти"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-820-D6-rename.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "D6-add",
+      "defining": [
+        "Додати проєкт",
+        "Paper Kite"
+      ],
+      "popover": "[data-workspace-popover='add']",
+      "box": [
+        472,
+        156,
+        320,
+        191
+      ],
+      "file": "uk-dark-820-D6-add.png"
+    },
+    {
+      "tag": "uk-dark-820",
+      "state": "D7-empty",
+      "defining": [
+        "Проєктів ще немає.",
+        "Видалити простір"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-820-D7-empty.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "D4-owner",
+      "defining": [
+        "Простори",
+        "Простір — це іменований набір проєктів.",
+        "Клієнтська робота",
+        "Новий простір"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-390-D4-owner.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "D4-owner-unassigned",
+      "defining": [
+        "Проєкти без простору · 2",
+        "Перенести в…"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-390-D4-owner-unassigned.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "D4-row-menu",
+      "defining": [
+        "Спершу перенесіть його проєкти."
+      ],
+      "popover": "[data-workspace-popover='row']",
+      "box": [
+        117,
+        391,
+        248,
+        129
+      ],
+      "file": "uk-dark-390-D4-row-menu.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "D4-member",
+      "defining": [
+        "Простори",
+        "Простір — це іменований набір проєктів.",
+        "Клієнтська робота"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-390-D4-member.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "D4-member-unassigned",
+      "defining": [
+        "Проєкти без простору · 2"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-390-D4-member-unassigned.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "D5",
+      "defining": [
+        "Новий простір",
+        "Назва",
+        "Колір",
+        "Проєкти"
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        0,
+        152,
+        390,
+        692
+      ],
+      "file": "uk-dark-390-D5.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "D5-submit",
+      "defining": [
+        "Проєкт належить одному простору.",
+        "Створити простір"
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        0,
+        152,
+        390,
+        692
+      ],
+      "file": "uk-dark-390-D5-submit.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "D5-refused",
+      "defining": [
+        "Дайте простору назву."
+      ],
+      "popover": "[data-team-dialog='workspace-create']",
+      "box": [
+        0,
+        102,
+        390,
+        742
+      ],
+      "file": "uk-dark-390-D5-refused.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "D6",
+      "defining": [
+        "Дошка",
+        "Клієнтська робота",
+        "Простір · 2 проєкти",
+        "Прибрати з простору",
+        "Спершу перенесіть його проєкти."
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-390-D6.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "D6-rename",
+      "defining": [
+        "Зберегти"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-390-D6-rename.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "D6-add",
+      "defining": [
+        "Додати проєкт",
+        "Paper Kite"
+      ],
+      "popover": "[data-workspace-popover='add']",
+      "box": [
+        54,
+        201,
+        320,
+        223
+      ],
+      "file": "uk-dark-390-D6-add.png"
+    },
+    {
+      "tag": "uk-dark-390",
+      "state": "D7-empty",
+      "defining": [
+        "Проєктів ще немає.",
+        "Видалити простір"
+      ],
+      "popover": null,
+      "box": null,
+      "file": "uk-dark-390-D7-empty.png"
+    }
+  ]
+}

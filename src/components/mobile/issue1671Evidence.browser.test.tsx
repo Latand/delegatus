@@ -12144,7 +12144,11 @@ describe("team workspaces slice (a) on the phone", () => {
       if (!root) return { found: false, cut: false, boxes: [] as number[][] };
       const boxes: number[][] = [];
       let cut = false;
-      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      /* The deepest element that holds the words: only its text is measured, not a whole list around it. */
+      const words = (element: Element) => (element.textContent ?? "").replace(/\s+/g, " ");
+      let holder: Element = root;
+      for (let child = [...holder.children].find((candidate) => words(candidate).includes(text)); child; child = [...holder.children].find((candidate) => words(candidate).includes(text))) holder = child;
+      const walker = document.createTreeWalker(holder, NodeFilter.SHOW_TEXT);
       for (let node = walker.nextNode(); node; node = walker.nextNode()) {
         if (!(node.textContent ?? "").trim()) continue;
         const range = document.createRange();
@@ -12233,10 +12237,12 @@ describe("team workspaces slice (a) on the phone", () => {
             await page.locator('[data-mobile2-bar] [data-mobile2-open="projects"]').click();
             await page.locator("[data-mobile2-workspace-section='unassigned']").waitFor();
             await page.locator("[data-mobile2-workspace-section='unassigned']").scrollIntoViewIfNeeded();
+            /* The row's own label, as the sheet names the project (this scene's catalog carries no display name). */
+            const label = (await page.locator(`[data-mobile2-project='${delegatus}'] .truncate`).first().innerText()).trim();
             await frame(page, tag, "P3-all", [
               ["[data-mobile2-workspace-section='unassigned']", words(lang, "workspaces.unassigned")],
               ["[data-mobile2-workspace-section='unassigned']", words(lang, "workspaces.move")],
-              ["[data-mobile2-workspace-section='unassigned']", "delegatus"],
+              [`[data-mobile2-project='${delegatus}']`, label.replace(/…$/, "")],
             ]);
             const move = page.locator(`[data-mobile2-movable='${delegatus}'] [data-mobile2-move]`);
             const target = await move.boundingBox();
