@@ -55,30 +55,34 @@ body { font-family: var(--font-sans); }
 .spend-n { font-weight: 600; }
 /* A lower bound is the one figure in amber: part of the work is uncounted. */
 .spend-p[data-kind="floor"] .spend-n { color: var(--color-warning); }
-/* Counting and no rate: the word is the mark, in muted ink. */
-.spend-p:is([data-kind="counting"], [data-kind="norate"]) .spend-n { font-weight: 400; color: var(--color-muted); }
+/* No limit data: the word, in muted ink. A lane with no figure yet shows
+   nothing; the card already says it is working. */
+.spend-p[data-kind="norate"] .spend-n { font-weight: 400; color: var(--color-muted); }
 
-/* Variant 1: at the end of the fact line, under the state line. */
+/* Variant 1: at the end of the fact line when the card has one. */
 .card-meta-line .spend { margin-left: auto; padding-left: 10px; }
-.card-meta-line:has(> .spend:only-child) { justify-content: flex-end; }
 
-/* Variant 2: the scale. A 10 px disc filled by quarters in the engine's
-   colour; its fill steps differ by shape, so they read without colour. */
-.card-state .spend { margin-top: 0; align-self: flex-start; gap: 6px; }
-.spend-p .scale { display: block; width: 10px; height: 10px; flex: none; }
-.spend-p .scale circle { fill: none; stroke: currentColor; stroke-width: 1.3; }
-.spend-p .scale path { fill: currentColor; }
+/* On the state line (variant 1 with no fact line, variant 2, variant 3 on a
+   finished card): at the end of the words while they leave room, otherwise on
+   a row of its own under them, so spend never clamps the state sentence. */
+.card-state:has(> .spend) { flex-wrap: wrap; row-gap: 2px; }
+.card-state:has(> .spend) > :is(.card-state-toggle, .card-state-words) { flex: 1 1 auto; max-width: calc(100% - 15px); }
+.card-state > .spend { margin-left: auto; padding-left: 4px; }
+
+/* Variant 2: the scale. Four short cells, filled in the engine's colour;
+   a bar, so it never reads as the round engine mark or the state dot. */
+.spend-p .scale { display: block; width: 15px; height: 8px; flex: none; }
+.spend-p .scale rect { fill: var(--border-strong); }
+.spend-p .scale rect.on { fill: currentColor; }
 .spend-p[data-engine="claude"] .scale { color: var(--color-claude-mark); }
 .spend-p[data-engine="codex"] .scale { color: var(--color-codex-mark); }
 .spend-p[data-kind="floor"] .scale { color: var(--color-warning); }
 .spend-p .scale-floor { font-weight: 600; color: var(--color-warning); margin-right: -1px; }
 
-/* Variant 3: after the lane's PR on its chain row. A finished lane's row has
-   no fold; when the PR and the figures do not fit beside its words, they move
-   together to the line below, at its end. */
+/* Variant 3: after the lane's PR on its chain row. A finished card has no
+   moving lane: its figures sit at the end of the state line (above), so its
+   PR keeps the place it has on every finished card. */
 .pblock .spend { margin-left: 2px; }
-.pblock .pb-line.ended:has(.spend-tail) { flex-wrap: wrap; row-gap: 2px; }
-.pblock .spend-tail { display: inline-flex; flex: none; align-items: center; gap: 6px; margin-left: auto; }
 .pblock .spend-sep { color: var(--color-muted); }
 
 /* Done cards sit on the quiet surface; Codex's cut-out follows it. */
@@ -98,14 +102,16 @@ body { font-family: var(--font-sans); }
 .spend-pop .pop-sub { display: block; color: var(--color-secondary); }
 .spend-pop .pop-note { display: block; margin-top: 6px; padding-top: 5px; border-top: 1px solid var(--border-default); color: var(--color-muted); }
 .spend-pop .pop-warn { color: var(--color-warning); }
+.spend-pop .meter-note { margin: 2px 0 0 17px; }
 
 /* Variant 2's account lines: the sidebar's limit line (WindowLine), with the
    task's part drawn over the week the account has used so far. */
 .spend-pop .meter { display: flex; align-items: center; gap: 8px; height: 18px; margin-left: 17px; }
-.spend-pop .meter-label { flex: 1; min-width: 0; color: var(--color-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spend-pop .meter-label { flex: 1 0 auto; color: var(--color-secondary); white-space: nowrap; }
 .spend-pop .meter-value { flex: none; color: var(--color-muted); font-variant-numeric: tabular-nums; }
 .spend-pop .meter-value b { color: var(--color-primary); font-weight: 600; }
-.spend-pop .meter-bar { position: relative; display: block; flex: none; width: 56px; height: 4px; overflow: hidden; border-radius: 999px; background: var(--surface-sunken); }
+.spend-pop:has(.meter) { max-width: 320px; }
+.spend-pop .meter-bar { position: relative; display: block; flex: none; width: 44px; height: 4px; overflow: hidden; border-radius: 999px; background: var(--surface-sunken); }
 .spend-pop .meter-bar .week { position: absolute; inset: 0 auto 0 0; background: var(--border-strong); }
 .spend-pop .meter-bar .task { position: absolute; top: 0; bottom: 0; min-width: 2px; }
 .spend-pop .meter-bar .task[data-engine="claude"] { background: var(--color-claude-mark); }
@@ -119,6 +125,7 @@ body { font-family: var(--font-sans); }
 .phone-spend .pop-sub { display: block; color: var(--color-secondary); }
 .phone-spend .pop-note { color: var(--color-muted); font-size: var(--text-label); line-height: 16px; padding-top: 6px; border-top: 1px solid var(--border-default); }
 .phone-spend .pop-warn { color: var(--color-warning); }
+.phone-spend .meter-note { margin-left: 18px; font-size: var(--text-label); line-height: 16px; }
 .phone-spend .meter { display: flex; align-items: center; gap: 8px; min-height: 20px; margin-left: 18px; font-size: var(--text-label); }
 .phone-spend .meter-label { flex: 1; min-width: 0; color: var(--color-secondary); }
 .phone-spend .meter-value { flex: none; color: var(--color-muted); font-variant-numeric: tabular-nums; }
