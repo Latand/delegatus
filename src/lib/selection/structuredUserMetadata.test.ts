@@ -5,7 +5,7 @@ import * as io from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { persistStructuredUserMetadata, readStructuredUserMetadata, type StructuredUserMetadata } from "./structuredUserMetadata";
-import { withFileTransaction } from "@/lib/state/fileTransaction";
+import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { collectStructuredUserMetadata } from "./structuredUserMetadataRetention";
 
 let restore: (() => void) | undefined;
@@ -55,7 +55,7 @@ test("publication lock admission uses no synchronous filesystem calls and yields
   let entered!: () => void, release!: () => void;
   const ready = new Promise<void>(resolve => { entered = resolve; });
   const held = new Promise<void>(resolve => { release = resolve; });
-  const owner = withFileTransaction(join(root, "structured-user-metadata-publication"), "fixture busy", async () => {
+  const owner = withFileTransactionAsync(join(root, "structured-user-metadata-publication"), "fixture busy", async () => {
     entered(); await held;
   });
   await ready;

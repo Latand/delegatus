@@ -1,12 +1,12 @@
 import { expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs";
 import * as io from "node:fs/promises";
-import { mkdir, mkdtemp, readdir, readFile, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rename, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { encodeCodexStructuredUserText, decodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText.server";
 import { collectStructuredUserMetadata, maybeCollectStructuredUserMetadata } from "./structuredUserMetadataRetention";
-import { withFileTransaction } from "@/lib/state/fileTransaction";
+import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { structuredUserReferenceKey, decodeCodexStructuredUserText as decodeWire } from "@/lib/runtime/codexStructuredUserText";
 
 async function fixture(work: (root: string) => Promise<void>) {
@@ -180,6 +180,89 @@ test("a rollout added beneath a retained root after census preserves its metadat
   } finally { statSpy.mockRestore(); }
 }));
 
+test("supplied roots that appear, disappear or change symlink target refuse deletion", async () => fixture(async root => {
+  for (const mode of ["appear", "disappear", "retarget"] as const) {
+    const digest = mode === "appear" ? "8".repeat(64) : mode === "disappear" ? "a".repeat(64) : "b".repeat(64);
+    const wire = await encodeCodexStructuredUserText(`root ${mode} fixture`, digest);
+    await age(root);
+    const supplied = join(root, `supplied-${mode}`);
+    const previousTarget = join(root, `previous-${mode}`);
+    const currentTarget = join(root, `current-${mode}`);
+    await mkdir(previousTarget);
+    await mkdir(currentTarget);
+    if (mode === "retarget") await symlink(previousTarget, supplied);
+    else if (mode === "disappear") {
+      await mkdir(supplied);
+      await writeFile(join(supplied, "initial-rollout.jsonl"), wire);
+    }
+    const original = io.opendir;
+    let changed = false;
+    const directorySpy = spyOn(io, "opendir").mockImplementation((async (...args) => {
+      if (!changed && mode !== "disappear" && String(args[0]) === join(root, "structured-user-metadata")) {
+        changed = true;
+        if (mode === "appear") await mkdir(supplied);
+        else {
+          const replacement = join(root, "replacement-link");
+          await symlink(currentTarget, replacement);
+          await rename(replacement, supplied);
+        }
+        await writeFile(join(mode === "appear" ? supplied : currentTarget, "late-rollout.jsonl"), wire);
+      }
+      return original(...args);
+    }) as typeof io.opendir);
+    try {
+      const options = mode === "disappear" ? { roots: [supplied], rootsCurrent: () => {
+        if (!changed) { changed = true; fs.renameSync(supplied, join(root, "removed-root")); }
+        return true;
+      } } : { roots: [supplied] };
+      await expect(collectStructuredUserMetadata({ complete: true, listedAt, sources: [] }, options))
+        .rejects.toThrow("root inventory changed");
+      expect(changed).toBeTrue();
+      expect(decodeCodexStructuredUserText(wire).text).toBe(`root ${mode} fixture`);
+    } finally { directorySpy.mockRestore(); }
+  }
+}));
+
+test("a collector exit after unlink leaves metadata readable in a fresh process", async () => fixture(async root => {
+  const wire = await encodeCodexStructuredUserText("crash recovery fixture", "c".repeat(64));
+  await age(root);
+  const source = join(root, "concurrent-source.jsonl");
+  await writeFile(source, "initial");
+  const moduleUrl = new URL("./structuredUserMetadataRetention.ts", import.meta.url).href;
+  const child = Bun.spawn([process.execPath, "-e", `
+    const { spyOn } = await import("bun:test");
+    const fs = await import("node:fs/promises");
+    const original = fs.unlink;
+    spyOn(fs, "unlink").mockImplementation(async path => {
+      if (String(path).includes("/structured-user-metadata/") && String(path).endsWith(".json")) {
+        await fs.appendFile(${JSON.stringify(source)}, ${JSON.stringify(wire)});
+        await original(path);
+        process.exit(77);
+      }
+      return original(path);
+    });
+    const retention = await import(${JSON.stringify(moduleUrl)});
+    await retention.collectStructuredUserMetadata(${JSON.stringify({ complete: true, listedAt, sources: [
+      { path: source, size: 7, mtimeMs: 0, engine: "codex", project: "repo-fixture" },
+    ] })});
+  `], { env: { ...process.env, LLV_STATE_DIR: root }, stdout: "pipe", stderr: "pipe" });
+  const [error, code] = await Promise.all([new Response(child.stderr).text(), child.exited]);
+  expect({ code, error }).toEqual({ code: 77, error: "" });
+  expect((await readdir(join(root, "structured-user-metadata"))).some(name => name.endsWith(".retention-recovery"))).toBeTrue();
+  const codecUrl = new URL("../runtime/codexStructuredUserText.server.ts", import.meta.url).href;
+  const reader = Bun.spawn([process.execPath, "-e", `
+    const codec = await import(${JSON.stringify(codecUrl)});
+    console.log(codec.decodeCodexStructuredUserText(${JSON.stringify(wire)}).contentDigest);
+  `], { env: { ...process.env, LLV_STATE_DIR: root }, stdout: "pipe", stderr: "pipe" });
+  const [output, readerError, readerCode] = await Promise.all([
+    new Response(reader.stdout).text(), new Response(reader.stderr).text(), reader.exited,
+  ]);
+  expect({ output: output.trim(), readerError, readerCode }).toEqual({ output: "c".repeat(64), readerError: "", readerCode: 0 });
+  const repairedNames = await readdir(join(root, "structured-user-metadata"));
+  expect(repairedNames.some(name => name.endsWith(".json"))).toBeTrue();
+  expect(repairedNames.some(name => name.endsWith(".retention-recovery"))).toBeFalse();
+}));
+
 test("degraded root discovery preserves metadata and a repaired inventory can collect", async () => fixture(async root => {
   const wire = await encodeCodexStructuredUserText("managed account fixture", "8".repeat(64));
   await age(root);
@@ -251,7 +334,7 @@ test("a source changed while publication admission is held refuses deletion", as
   const held = new Promise<void>(resolve => { release = resolve; });
   const checked = new Promise<void>(resolve => { census = resolve; });
   let checks = 0;
-  const holder = withFileTransaction(lock, "fixture busy", async () => { entered(); await held; });
+  const holder = withFileTransactionAsync(lock, "fixture busy", async () => { entered(); await held; });
   await acquired;
   let collection: ReturnType<typeof collectStructuredUserMetadata> | undefined;
   try {

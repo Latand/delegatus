@@ -31,9 +31,13 @@ directories, preserving copies outside the board window and deduplicated
 catalog. A degraded Codex account registry makes discovery incomplete, so the
 fallback default-account view cannot authorize deletion. Per-source reference
 projections are validated against file identity, size, mtime and ctime, and only
-changed sources are streamed again. Source and retained-directory identities
-are rechecked after publication admission and around each unlink; if they change
-at that boundary, the in-flight metadata link is restored. Native queue
+changed sources are streamed again. Source identities, each supplied root's
+lexical existence and identity, its resolved symlink target, and retained
+directory identities are rechecked after publication admission and around each
+unlink; if they change at that boundary, the in-flight metadata link is
+restored. Before unlink, a stable recovery hard link is synced with its
+directory. A reader restores that name if a collector exits after unlink and
+before rollback. Native queue
 inputs in the runtime journal protect their references even before a rollout
 contains them. The journal is opened read-only with no busy wait; missing schema,
 contention, unreadable sources, changed sources and exceeded discovery bounds

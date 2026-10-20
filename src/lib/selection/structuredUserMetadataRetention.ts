@@ -1,11 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { link, mkdir, open, opendir, readFile, realpath, rename, stat, unlink } from "node:fs/promises";
+import { link, lstat, mkdir, open, opendir, readFile, realpath, rename, stat, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { statePath } from "@/lib/configDir";
 import type { TranscriptIndexFeed } from "@/lib/search/transcriptFeed";
 import { structuredUserReferenceKey } from "@/lib/runtime/codexStructuredUserText";
-import { withFileTransaction } from "@/lib/state/fileTransaction";
+import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 
 const GRACE_MS = 30 * 24 * 60 * 60 * 1_000;
@@ -14,12 +14,23 @@ const MAX_REFS = 100_000;
 const MAX_INDEX_BYTES = 4 * 1024 * 1024;
 const yieldLoop = () => new Promise<void>(resolve => setImmediate(resolve));
 type Identity = { size: number; mtimeMs: number; ctimeMs: number; ino: number; dev: number };
+type RootIdentity = { path: string; lexical: Identity | null; canonical: string | null; target: Identity | null };
 type SourceIndex = { version: 1; identity: Identity; refs: string[] };
 
 function identity(value: Identity): Identity {
   return { size: value.size, mtimeMs: value.mtimeMs, ctimeMs: value.ctimeMs, ino: value.ino, dev: value.dev };
 }
 function same(a: Identity, b: Identity): boolean { return JSON.stringify(identity(a)) === JSON.stringify(identity(b)); }
+async function rootIdentity(path: string): Promise<RootIdentity> {
+  let lexical: Identity | null = null;
+  try { lexical = identity(await lstat(path)); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  let canonical: string | null = null;
+  let target: Identity | null = null;
+  try { canonical = await realpath(path); target = identity(await stat(canonical)); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  return { path, lexical, canonical, target };
+}
 function addReferences(text: string, refs: Set<string>): void {
   // Over-retain quoted references too. Normalize JSON Unicode escapes so a
   // legally escaped marker remains a root. The stream overlap holds a whole
@@ -133,6 +144,8 @@ export async function collectStructuredUserMetadata(feed: TranscriptIndexFeed, o
     const directorySources = new Map<string, Identity>();
     if (options.rootsComplete?.() === false) return { removed: 0, complete: false };
     const roots = typeof options.roots === "function" ? options.roots() : options.roots ?? [];
+    const rootSources = new Map<string, RootIdentity>();
+    for (const root of roots) rootSources.set(root, await rootIdentity(root));
     for (const root of roots) await walk(root, paths, directories, directorySources);
     const cache = statePath("structured-user-reference-index");
     await mkdir(cache, { recursive: true, mode: 0o700 });
@@ -148,6 +161,16 @@ export async function collectStructuredUserMetadata(feed: TranscriptIndexFeed, o
     const assertCensusCurrent = async () => {
       if (options.current?.() === false || options.rootsComplete?.() === false || options.rootsCurrent?.() === false) {
         throw new Error("metadata reference inventory was superseded");
+      }
+      for (const [root, before] of rootSources) {
+        const after = await rootIdentity(root);
+        if (after.canonical !== before.canonical
+          || (after.lexical === null) !== (before.lexical === null)
+          || (after.lexical !== null && before.lexical !== null && !same(after.lexical, before.lexical))
+          || (after.target === null) !== (before.target === null)
+          || (after.target !== null && before.target !== null && !same(after.target, before.target))) {
+          throw new Error("metadata root inventory changed");
+        }
       }
       for (const [sourcePath, before] of sources) {
         if (!same(before, await stat(sourcePath))) throw new Error("metadata reference inventory changed");
@@ -171,23 +194,41 @@ export async function collectStructuredUserMetadata(feed: TranscriptIndexFeed, o
       const ref = `${match[1]}.${Buffer.from(match[2], "hex").toString("base64url")}${match[3] ? `.${match[3]}` : ""}`;
       if (refs.has(ref)) continue;
       const path = join(directory, entry.name);
-      await withFileTransaction(join(directory, "..", "structured-user-metadata-publication"), "metadata collection is busy", async () => {
+      await withFileTransactionAsync(join(directory, "..", "structured-user-metadata-publication"), "metadata collection is busy", async () => {
         // Publication admission can wait. Revalidate sources and root authority
         // inside the lock, immediately before each destructive operation.
         await assertCensusCurrent();
         const current = await stat(path);
         if (current.mtimeMs >= cutoff) return;
         await assertCensusCurrent();
-        const recovery = `${path}.${randomUUID()}.retention-recovery`;
+        const recovery = `${path}.retention-recovery`;
+        // Reconcile a recovery name from a prior interrupted attempt first.
+        try { await link(recovery, path); }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT" && (error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        }
+        const active = await stat(path);
+        if (active.ino !== current.ino || active.dev !== current.dev) return;
+        await unlink(recovery).catch(error => { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; });
         await link(path, recovery);
+        const linkedDirectory = await open(directory, "r");
+        try { await linkedDirectory.sync(); } finally { await linkedDirectory.close(); }
         try {
           await unlink(path);
+          const removedDirectory = await open(directory, "r");
+          try { await removedDirectory.sync(); } finally { await removedDirectory.close(); }
           try { await assertCensusCurrent(); }
           catch (error) {
             await link(recovery, path);
+            const restoredDirectory = await open(directory, "r");
+            try { await restoredDirectory.sync(); } finally { await restoredDirectory.close(); }
             throw error;
           }
-        } finally { await unlink(recovery).catch(error => { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }); }
+        } finally {
+          await unlink(recovery).catch(error => { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; });
+          const cleanedDirectory = await open(directory, "r");
+          try { await cleanedDirectory.sync(); } finally { await cleanedDirectory.close(); }
+        }
         removed++;
       });
       if (removed >= 256) break;
@@ -205,7 +246,7 @@ export async function collectStructuredUserMetadata(feed: TranscriptIndexFeed, o
 export async function maybeCollectStructuredUserMetadata(feed: TranscriptIndexFeed, options: MetadataRetentionOptions = {}) {
   if (!feed.complete || options.current?.() === false) return;
   const checkpoint = statePath("structured-user-retention.json");
-  await withViewerOperation("structured-user.retention", () => withFileTransaction(checkpoint, "metadata retention is busy", async () => {
+  await withViewerOperation("structured-user.retention", () => withFileTransactionAsync(checkpoint, "metadata retention is busy", async () => {
     try {
       if ((await stat(checkpoint)).size > 1_024) throw new Error("invalid retention checkpoint");
       const previous = JSON.parse(await readFile(checkpoint, "utf8"));

@@ -10,6 +10,9 @@ const LOCK_ATTEMPTS = 6_000;
 const LOCK_WAIT_MS = 5;
 const LOCK_STALE_MS = 30_000;
 const SYNC_SLEEP = new Int32Array(new SharedArrayBuffer(4));
+const activeAsyncTransactions = new Map<string, number>();
+
+function transactionPath(filePath: string): string { return path.resolve(filePath); }
 
 interface LockOwner {
   pid: number;
@@ -204,6 +207,11 @@ export function withFileTransactionSync<T>(filePath: string, busyMessage: string
   const startedAt = performance.now();
   let waited = false;
   let admittedAt: number | undefined;
+  // A same-process async owner cannot make progress while this API blocks the
+  // event loop. Refuse before queuing so mixed sync/async callers stay safe.
+  if ((activeAsyncTransactions.get(transactionPath(filePath)) ?? 0) > 0) {
+    throw new FileTransactionBusyError(busyMessage);
+  }
   const ticket = enqueue(filePath);
   try {
     for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
@@ -237,6 +245,40 @@ export async function withFileTransaction<T>(filePath: string, busyMessage: stri
   const startedAt = performance.now();
   let waited = false;
   let admittedAt: number | undefined;
+  const ticket = enqueue(filePath);
+  try {
+    for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
+      const descriptor = tryAcquire(ticket);
+      if (descriptor === null) {
+        waited = true;
+        await new Promise<void>(resolve => setTimeout(resolve, LOCK_WAIT_MS));
+        continue;
+      }
+      admittedAt = performance.now();
+      try {
+        const result = operation();
+        // A synchronous commit releases before another in-process synchronous
+        // writer can run. Only an asynchronous body holds across a microtask.
+        return result && typeof (result as Promise<T>).then === "function" ? await result : result;
+      } finally { release(ticket, descriptor); }
+    }
+    throw new FileTransactionBusyError(busyMessage);
+  } finally {
+    removeIfOwned(ticket.ticketPath, ticket.owner.token);
+    if (waited) recordBlockingWait({ site: "file-transaction", synchronous: false,
+      durationMs: (admittedAt ?? performance.now()) - startedAt, subject: "file-transaction", refused: admittedAt === undefined });
+  }
+}
+
+/** Async filesystem admission for paths whose publication must not perform
+ * synchronous filesystem work on the Viewer loop. */
+export async function withFileTransactionAsync<T>(filePath: string, busyMessage: string, operation: () => Promise<T> | T): Promise<T> {
+  const startedAt = performance.now();
+  let waited = false;
+  let admittedAt: number | undefined;
+  const inProcessPath = transactionPath(filePath);
+  activeAsyncTransactions.set(inProcessPath, (activeAsyncTransactions.get(inProcessPath) ?? 0) + 1);
+  try {
   const lockPath = `${filePath}.write-lock`;
   const queuePath = `${filePath}.write-locks`;
   await fsp.mkdir(queuePath, { recursive: true, mode: 0o700 });
@@ -325,5 +367,10 @@ export async function withFileTransaction<T>(filePath: string, busyMessage: stri
     await removeOwnedAsync(ticket.ticketPath, owner.token);
     if (waited) recordBlockingWait({ site: "file-transaction", synchronous: false,
       durationMs: (admittedAt ?? performance.now()) - startedAt, subject: "file-transaction", refused: admittedAt === undefined });
+  }
+  } finally {
+    const remaining = (activeAsyncTransactions.get(inProcessPath) ?? 1) - 1;
+    if (remaining > 0) activeAsyncTransactions.set(inProcessPath, remaining);
+    else activeAsyncTransactions.delete(inProcessPath);
   }
 }

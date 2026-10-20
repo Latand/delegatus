@@ -1,14 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
+import { closeSync, fsyncSync, linkSync, openSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { link, mkdir, open, unlink, utimes } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { statePath } from "@/lib/configDir";
 import { structuredUserReference, structuredUserReferenceKey } from "@/lib/runtime/codexStructuredUserText";
 import { parseMessageOrigin, type MessageOrigin, type DeliveredMessageProvenance } from "@/lib/runtime/messageOrigin";
 import { parseSelectedContextRef, type SelectedContextRef } from "./selectedContext";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
-import { withFileTransaction } from "@/lib/state/fileTransaction";
+import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 
 export interface StructuredUserMetadata {
   version: 1;
@@ -56,7 +56,7 @@ export async function readStructuredUserProvenanceAsync(refs: string[]): Promise
   validateReferences(refs);
   const result: Record<string, DeliveredMessageProvenance | null> = {};
   for (const ref of refs) {
-    try { result[ref] = provenance(validateRecord(ref, await readRecordBody(filename(ref)))); }
+    try { result[ref] = provenance(validateRecord(ref, await readRecordBodyWithRecovery(ref))); }
     catch { result[ref] = null; }
   }
   return result;
@@ -77,6 +77,24 @@ async function readRecordBody(path: string): Promise<string> {
   } finally { await file.close(); }
 }
 
+async function readRecordBodyWithRecovery(ref: string): Promise<string> {
+  const path = filename(ref);
+  try { return await readRecordBody(path); }
+  catch {
+    const body = await readRecordBody(`${path}.retention-recovery`);
+    validateRecord(ref, body);
+    try {
+      await link(`${path}.retention-recovery`, path);
+      await syncDirectory(dirname(path));
+      await unlink(`${path}.retention-recovery`);
+      await syncDirectory(dirname(path));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+    return body;
+  }
+}
+
 function filename(ref: string): string {
   const key = structuredUserReferenceKey(ref);
   if (!key) throw new Error("invalid structured-user metadata reference");
@@ -87,11 +105,39 @@ function filename(ref: string): string {
 export function readStructuredUserMetadata(ref: string): StructuredUserMetadata {
   try {
     const path = filename(ref);
-    if (statSync(path).size > MAX_RECORD_BYTES) throw new Error("oversized record");
-    return validateRecord(ref, readFileSync(path, "utf8"));
+    const primary = readMetadataPathSync(path);
+    return validateRecord(ref, primary);
   } catch {
-    throw new Error("structured-user metadata reference is unavailable; the delivery context cannot be recovered");
+    try {
+      const path = `${filename(ref)}.retention-recovery`;
+      const body = readMetadataPathSync(path);
+      const record = validateRecord(ref, body);
+      try {
+        linkSync(path, filename(ref));
+        syncDirectorySync(directory());
+        unlinkSync(path);
+        syncDirectorySync(directory());
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+      return record;
+    } catch {
+      throw new Error("structured-user metadata reference is unavailable; the delivery context cannot be recovered");
+    }
   }
+}
+
+async function syncDirectory(path: string): Promise<void> {
+  const handle = await open(path, "r");
+  try { await handle.sync(); } finally { await handle.close(); }
+}
+
+function syncDirectorySync(path: string): void {
+  const descriptor = openSync(path, "r");
+  try { fsyncSync(descriptor); } finally { closeSync(descriptor); }
+}
+
+function readMetadataPathSync(path: string): string {
+  if (statSync(path).size > MAX_RECORD_BYTES) throw new Error("oversized record");
+  return readFileSync(path, "utf8");
 }
 
 function validateRecord(ref: string, body: string): StructuredUserMetadata {
@@ -134,7 +180,7 @@ export async function persistStructuredUserMetadata(record: StructuredUserMetada
   const parentPath = directory();
   return withViewerOperation("structured-user.publish", async () => {
     await mkdir(parentPath, { recursive: true, mode: 0o700 });
-    return withFileTransaction(join(parentPath, "..", "structured-user-metadata-publication"), "structured-user publication is busy", async () => {
+    return withFileTransactionAsync(join(parentPath, "..", "structured-user-metadata-publication"), "structured-user publication is busy", async () => {
       const temporary = `${path}.${randomUUID()}.tmp`;
       const fd = await open(temporary, "wx", 0o600);
       try {
