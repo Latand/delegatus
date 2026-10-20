@@ -25,6 +25,7 @@ export const performanceSites = [
   "runtime-journal.retention-map",
   "memory.project-view",
   "memory.import",
+  "seat-tick.check", "seat-tick.hash", "seat-tick.project", "forge.auto-merge.read", "forge.auto-merge.step",
 ] as const;
 export type PerformanceSite = typeof performanceSites[number];
 type Slice = { sequence: number; span: number; parent: number; site: number; kind: "sync" | "await" | "event";

@@ -1,7 +1,7 @@
 import { performanceSpans } from "@/lib/performanceSpans";
 import { forEachCooperatively, yieldToRuntime } from "@/lib/cooperative";
 import { deepFreeze } from "@/lib/deepFreeze";
-import { projectAliasResolver } from "@/lib/projects/aliases";
+import { projectAliasResolver, projectAliasSnapshot } from "@/lib/projects/aliases";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { shortId } from "@/lib/shortIds";
 import { seatTickCatchUp } from "./seatTick";
@@ -2477,15 +2477,36 @@ function laneEvidenceHash(lane: Pipeline): string {
   return hash;
 }
 
-function pullRequestEvidenceKey(input: Pick<SeatTickCheckInput, "project" | "now" | "settings" | "seat" | "state">, sources: SeatTickSources): string {
-  const canonicalProject = seatProjectResolver();
-  return crypto.createHash("sha256").update(JSON.stringify([
-    input.settings.enabled,
-    seatTickWakeDue(input.state.lastWakeAt, input.now, input.settings.wakeIntervalMs),
-    input.settings.wakeIntervalMs,
-    input.seat ? seatTurnProgressing(input.seat) : null,
-    sources.pipelines().filter(lane => canonicalProject(lane.project) === input.project).map(laneEvidenceHash),
-  ])).digest("hex");
+async function pullRequestEvidenceKey(input: Pick<SeatTickCheckInput, "project" | "now" | "settings" | "seat" | "state">, sources: SeatTickSources): Promise<string> {
+  return withViewerOperation("seat-tick.check", async () => {
+    const canonicalProject = seatProjectResolver();
+    const aliases = JSON.stringify(projectAliasSnapshot().aliases);
+    const seatIdentity = () => {
+      const seat = sources.seatFor(input.project).active;
+      return JSON.stringify([seat?.conversationId, seat?.seatEpoch]);
+    };
+    const seat = seatIdentity();
+    const lanes = sources.pipelines();
+    const hashes: string[] = [];
+    await forEachCooperatively(lanes, lane => {
+      if (canonicalProject(lane.project) === input.project) {
+        hashes.push(performanceSpans.sync("seat-tick.hash", () => laneEvidenceHash(lane)));
+      }
+    }, { batchSize: 4, timeBudgetMs: 8 });
+    const now = sources.now(), settings = effectiveSeatTickSettings(sources.settings(input.project), now, SEAT_TICK_WAKE_INTERVAL_MS);
+    if (Object.isFrozen(lanes) && sources.pipelines() !== lanes || JSON.stringify(projectAliasSnapshot().aliases) !== aliases
+      || seatIdentity() !== seat || settings.enabled !== input.settings.enabled || settings.wakeIntervalMs !== input.settings.wakeIntervalMs
+      || seatTickWakeDue(input.state.lastWakeAt, now, settings.wakeIntervalMs) !== seatTickWakeDue(input.state.lastWakeAt, input.now, input.settings.wakeIntervalMs)) {
+      throw new SeatTickEvidenceRefreshCanceledError(input.state.pullRequestGap);
+    }
+    return crypto.createHash("sha256").update(JSON.stringify([
+      input.settings.enabled,
+      seatTickWakeDue(input.state.lastWakeAt, input.now, input.settings.wakeIntervalMs),
+      input.settings.wakeIntervalMs,
+      input.seat ? seatTurnProgressing(input.seat) : null,
+      hashes,
+    ])).digest("hex");
+  });
 }
 
 /** Revalidate gated evidence too when fresh state changes its question. A
@@ -2493,7 +2514,8 @@ function pullRequestEvidenceKey(input: Pick<SeatTickCheckInput, "project" | "now
  */
 export async function refreshSeatTickEvidence(input: SeatTickCheckInput, sources: SeatTickSources): Promise<SeatTickCheckInput> {
   let fresh = refreshSeatTickInput(input, sources);
-  const key = pullRequestEvidenceKey(fresh, sources);
+  const key = await pullRequestEvidenceKey(fresh, sources);
+  fresh = refreshSeatTickInput(fresh, sources);
   if (key === input.pullRequestEvidenceKey) return fresh;
   const evidence = await unmergedPullRequests({
     project: fresh.project, seat: fresh.seat,
@@ -2504,11 +2526,23 @@ export async function refreshSeatTickEvidence(input: SeatTickCheckInput, sources
   fresh = refreshSeatTickInput({ ...fresh, pullRequests: evidence.pullRequests,
     pullRequestsUnavailable: evidence.unavailable, pullRequestEvidenceKey: key,
     state: { ...fresh.state, pullRequestGap: evidence.gap } }, sources);
-  if (pullRequestEvidenceKey(fresh, sources) !== key) throw new SeatTickEvidenceRefreshCanceledError(fresh.state.pullRequestGap);
-  return fresh;
+  if (await pullRequestEvidenceKey(fresh, sources) !== key) throw new SeatTickEvidenceRefreshCanceledError(fresh.state.pullRequestGap);
+  return refreshSeatTickInput(fresh, sources);
 }
 
 export async function gatherSeatTickInput(
+  project: string,
+  state: SeatTickProjectState,
+  policy: SeatTickPolicy,
+  sources: SeatTickSources,
+): Promise<SeatTickCheckInput> {
+  return withViewerOperation("seat-tick.check", () => performanceSpans.wait("seat-tick.check", async () => {
+    await sources.prepareRead?.();
+    return gatherSeatTickInputWork(project, state, policy, sources);
+  }));
+}
+
+async function gatherSeatTickInputWork(
   project: string,
   state: SeatTickProjectState,
   policy: SeatTickPolicy,
@@ -2522,7 +2556,7 @@ export async function gatherSeatTickInput(
 
   const catchUp = !!seatTickCatchUp({ state, now, settings, seat });
   canonicalProject = seatProjectResolver();
-  const hotLanes = sources.pipelines();
+  const hotLanes = performanceSpans.sync("seat-tick.project", sources.pipelines);
   const { lanes: openLanes, tasks: openTasks } = openTickLanes(hotLanes, canonical, canonicalProject);
   const evidence = evidenceFromPipelines(openLanes.map(pipelineSummary));
   const observedStages = new Map(openLanes.map((lane) => {
@@ -2606,7 +2640,7 @@ export async function gatherSeatTickInput(
     : childrenUnavailable ? seatTickSourceGapAfterFailure(state.childrenGap, childrenUnavailable, new Date(now).toISOString()) : null;
   const harvestedChildren = state.harvestedChildren;
   await yieldToRuntime();
-  const pullRequestEvidenceKeyAtRead = pullRequestEvidenceKey({ project: canonical, now, settings, seat, state }, sources);
+  const pullRequestEvidenceKeyAtRead = await pullRequestEvidenceKey({ project: canonical, now, settings, seat, state }, sources);
   const { pullRequests, unavailable: pullRequestsUnavailable, gap: pullRequestGap } = await unmergedPullRequests({
     project: canonical,
     seat,

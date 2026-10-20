@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { readSession } from "@/lib/session/reader";
-import { agentRegistry, identityMaterializationFence, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
+import { agentRegistry } from "@/lib/agent/registry";
 import { claudeProjectRootFor, codexSessionRootFor, pathAllowed } from "@/lib/scanner/roots";
 import type { ApiError } from "@/lib/types";
 
@@ -17,21 +17,9 @@ function engineForPath(pathname: string): "claude" | "codex" | null {
 export async function GET(req: NextRequest): Promise<NextResponse<ReturnType<typeof readSession> | ApiError>> {
   const conversationId = req.nextUrl.searchParams.get("conversationId");
   const registry = agentRegistry();
-  const snapshot = registry.readOnlySnapshot();
-  const lookup = readOnlyConversationLookupFromSnapshot(snapshot);
-  const fence = identityMaterializationFence(snapshot);
-  const conversation = conversationId?.startsWith("conversation_")
-    ? lookup.conversation(conversationId as `conversation_${string}`)
-    : null;
-  const conversationPath = conversation ? fence.pathForConversation(conversation.id) : null;
-  if (conversation && !conversationPath) {
-    return NextResponse.json(
-      { error: "session is not available until its transcript materializes" },
-      { status: 409 },
-    );
-  }
-  const pathname = conversationPath ?? req.nextUrl.searchParams.get("path") ?? "";
-  if (pathname && !fence.allowsPath(pathname)) {
+  const target = registry.sessionTarget(conversationId, req.nextUrl.searchParams.get("path") ?? "");
+  const pathname = target.path;
+  if (target.unavailable) {
     return NextResponse.json(
       { error: "session is not available until its transcript materializes" },
       { status: 409 },

@@ -284,6 +284,24 @@ function gather(over: Parameters<typeof sources>[0], state: SeatTickProjectState
   return gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, sources(over));
 }
 
+test("lane hashing yields and refuses a frozen source replaced while hashing", async () => {
+  let rows = Object.freeze(Array.from({ length: 24 }, (_, index) => Object.freeze(lane({ id: `hash-${index}`, state: "closed", cursor: null }))));
+  const ports = sources({ pipelines: rows as never, noSeat: true });
+  ports.pipelines = () => rows as never;
+  const { performanceSpans, performanceSites } = await import("@/lib/performanceSpans");
+  let scheduled = false;
+  performanceSpans.observeSite(site => {
+    if (performanceSites[site] !== "seat-tick.hash" || scheduled) return;
+    scheduled = true;
+    setImmediate(() => { rows = Object.freeze([...rows]); });
+  });
+  try {
+    await expect(gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports)).rejects.toThrow("sources changed");
+  } finally { performanceSpans.observeSite(); }
+  expect(scheduled).toBe(true);
+  expect((await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports)).project).toBe(PROJECT);
+}, 30_000);
+
 test("gather and refresh retain explicit work and its blocker for the reminder composer", async () => {
   const hold = { kind: "external", note: "waiting for the upstream release", since: new Date(NOW - DAY_MS).toISOString(), by: "agent" };
   const task = boardCard({ chosen: true, status: "inbox", hold });

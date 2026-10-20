@@ -1,6 +1,8 @@
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import { performanceSpans } from "@/lib/performanceSpans";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import path from "node:path";
@@ -203,6 +205,29 @@ function finishSteps<T>(steps: Generator<void, T>): T {
   let next = steps.next();
   while (!next.done) next = steps.next();
   return next.value;
+}
+
+/** Native sorts see at most 128 headers. Merge copying also yields every 128
+ * items, so neither SQL nor JavaScript sorts the entire archive in one step. */
+function* orderedHeaderSteps<T>(rows: T[], compare: (a: T, b: T) => number): Generator<void, T[]> {
+  for (let offset = 0; offset < rows.length; offset += 128) {
+    const chunk = rows.slice(offset, offset + 128).sort(compare);
+    for (let index = 0; index < chunk.length; index++) rows[offset + index] = chunk[index]!;
+    yield;
+  }
+  let target = new Array<T>(rows.length);
+  for (let width = 128; width < rows.length; width *= 2) {
+    for (let base = 0; base < rows.length; base += width * 2) {
+      let left = base, right = Math.min(base + width, rows.length);
+      const middle = right, end = Math.min(base + width * 2, rows.length);
+      for (let index = base; index < end; index++) {
+        target[index] = left < middle && (right >= end || compare(rows[left]!, rows[right]!) <= 0) ? rows[left++]! : rows[right++]!;
+        if ((index + 1) % 128 === 0) yield;
+      }
+    }
+    [rows, target] = [target, rows];
+  }
+  return rows;
 }
 
 class RegistryReaderViews {
@@ -988,19 +1013,18 @@ export class SqliteAgentRegistryStore {
          held across a fallback restore reads the registry that now carries it. */
       this.db = openCurrentDatabase(filename, () => {
         const db = observeSqlite(new Database(filename, { readonly: true, strict: true }), "registry");
-        db.exec("PRAGMA busy_timeout = 5000");
+        db.exec("PRAGMA busy_timeout = 0");
         return db;
       }, { reopened: (db, previous) => this.onDatabaseReopened(db, previous) });
-      const table = this.db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'registry_meta'").get();
-      if (!table || !this.imported()) {
-        this.db.close();
-        throw new Error(`${path.basename(filename)} holds no imported registry`);
-      }
-      this.recordsSource = this.db.query("SELECT 1 FROM sqlite_master WHERE name='registry_records'").get() ? "registry_records" : "registry_rows";
-      this.changesReady = Boolean(this.db.query("SELECT 1 FROM sqlite_master WHERE name='registry_changes'").get());
-      this.grantJournalReady = Boolean(this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'registry_grant_changes'").get());
-      this.generationIdentitiesReady = this.generationIdentitiesInstalled(this.db);
-      return;
+      try {
+        const table = this.db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'registry_meta'").get();
+        if (!table || !this.imported()) throw new Error(`${path.basename(filename)} holds no imported registry`);
+        this.recordsSource = this.db.query("SELECT 1 FROM sqlite_master WHERE name='registry_records'").get() ? "registry_records" : "registry_rows";
+        this.changesReady = Boolean(this.db.query("SELECT 1 FROM sqlite_master WHERE name='registry_changes'").get());
+        this.grantJournalReady = Boolean(this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'registry_grant_changes'").get());
+        this.generationIdentitiesReady = this.generationIdentitiesInstalled(this.db);
+        return;
+      } catch (error) { this.db.close(); throw error; }
     }
     /* Bound to the file at its name: a registry the activation fallback
        replaced is reopened, never written through the moved handle. */
@@ -1536,13 +1560,17 @@ export class SqliteAgentRegistryStore {
 
   readOnlySnapshot(): SqliteRegistrySnapshot {
     if (this.preparedReader && !this.writerHeld) return this.preparedReader.readOnlySnapshot();
-    return performanceSpans.sync("registry.snapshot", () => this.readOnlySnapshotMeasured());
+    return withViewerOperation("registry.read", () => performanceSpans.sync("registry.snapshot", () => this.readOnlySnapshotMeasured()));
   }
 
   /** Prepare an immutable view without holding the writer connection across
       a yield. One read transaction pins rows, grants and revision together;
       the complete view becomes visible only after validation. */
   prepareReadOnlySnapshot(signal?: AbortSignal): Promise<SqliteRegistrySnapshot> {
+    return withViewerOperation("registry.prepare", () => this.prepareReadOnlySnapshotWork(signal));
+  }
+
+  private prepareReadOnlySnapshotWork(signal?: AbortSignal): Promise<SqliteRegistrySnapshot> {
     if (signal?.aborted) return Promise.reject(signal.reason);
     if (this.preparedReader) return Promise.resolve(this.preparedReader.readOnlySnapshot());
     if (this.preparingReader) return this.preparingReader;
@@ -1552,33 +1580,38 @@ export class SqliteAgentRegistryStore {
       // materializing the read connection in the next bounded slice.
       await yieldToRuntime();
       signal?.throwIfAborted();
-      const reader = new SqliteAgentRegistryStore(this.filename, { ...this.options, readOnly: true });
-      reader.db.exec("PRAGMA busy_timeout = 0");
+      const reader = await waitForStateLock("registry.prepare.open", () => stateLockAttempt("registry.prepare.open", () =>
+        new SqliteAgentRegistryStore(this.filename, { ...this.options, readOnly: true })), { signal });
       try {
+        signal?.throwIfAborted();
+        if (this.closed) throw new Error("registry closed during preparation");
         for (let attempt = 0; attempt < 3; attempt++) {
           const identity = databaseFileIdentity(this.filename);
           reader.db.exec("BEGIN");
+          const steps = (function* () {
+            const hot = yield* reader.loadHotSteps();
+            const stamp = reader.storeStamp();
+            const result = yield* reader.rememberReadOnlySteps({ ...hot, stamp }, true, true);
+            reader.snapshotChangeId = reader.changeId();
+            return result;
+          })();
           try {
             reader.onSnapshotLoad?.();
-            const steps = (function* () {
-              const hot = yield* reader.loadHotSteps();
-              const stamp = reader.storeStamp();
-              const result = yield* reader.rememberReadOnlySteps({ ...hot, stamp }, true, true);
-              reader.snapshotChangeId = reader.changeId();
-              return result;
-            })();
             let next = steps.next();
             while (!next.done) {
               signal?.throwIfAborted();
               if (this.closed) throw new Error("registry closed during preparation");
               const started = performance.now();
               performanceSpans.sync("registry.prepare.slice", () => {
-                do { next = steps.next(); } while (!next.done && performance.now() - started < 16);
+                do { next = steps.next(); } while (!next.done && performance.now() - started < 8);
               });
               if (!next.done) await yieldToRuntime();
             }
             reader.db.exec("COMMIT");
           } catch (error) {
+            // A yielded header iterator still owns a native statement. Finish
+            // it before ending its read transaction or closing the connection.
+            try { steps.return(undefined as never); } catch { /* Preserve the preparation refusal. */ }
             try { reader.db.exec("ROLLBACK"); } catch { /* Closed transaction. */ }
             throw error;
           }
@@ -1693,6 +1726,10 @@ export class SqliteAgentRegistryStore {
   }
 
   private refreshColdKeys(): void {
+    finishSteps(this.refreshColdKeySteps());
+  }
+
+  private *refreshColdKeySteps(): Generator<void, void> {
     const stamp = this.storeStamp();
     if (stamp === this.coldKeysStamp) return;
     /* Another writer committed. Replay only the journalled identities since the
@@ -1707,16 +1744,23 @@ export class SqliteAgentRegistryStore {
         `SELECT DISTINCT j.collection,j.row_key,EXISTS (SELECT 1 FROM registry_cold c WHERE c.collection=j.collection AND c.row_key=j.row_key) AS cold
           FROM registry_changes j WHERE j.seq>?`).all(this.coldKeysChangeId);
       for (const { collection,row_key: key,cold } of changed) {
+        yield;
         const identity = grantDecisionKey(collection,key);
         if (!cold) { this.coldKeys.delete(identity); continue; }
         this.coldKeys.add(identity);
         this.rowCache.get(collection as RowCollection)?.delete(key);
       }
     } else {
-      this.coldKeys = new Set(this.db.query<{ collection: string; row_key: string }, []>(
-        "SELECT collection,row_key FROM registry_cold").all().map(row => grantDecisionKey(row.collection,row.row_key)));
+      this.coldKeys = new Set();
+      const keys = this.db.query<{ collection: string; row_key: string }, []>("SELECT collection,row_key FROM registry_cold").iterate();
+      try {
+        for (const row of keys) { this.coldKeys.add(grantDecisionKey(row.collection,row.row_key)); yield; }
+      } finally { keys.return?.(); }
       for (const [collection,rows] of this.rowCache) {
-        for (const key of rows.keys()) if (this.coldKeys.has(grantDecisionKey(collection,key))) rows.delete(key);
+        for (const key of rows.keys()) {
+          if (this.coldKeys.has(grantDecisionKey(collection,key))) rows.delete(key);
+          yield;
+        }
       }
     }
     if (this.coldKeys.size) this.grantDecisions = null;
@@ -1729,7 +1773,7 @@ export class SqliteAgentRegistryStore {
   }
 
   private *loadHotSteps(): Generator<void, SqliteRegistrySnapshot> {
-    this.refreshColdKeys();
+    yield* this.refreshColdKeySteps();
     const input: Record<string, unknown> = { version: 2,entries: {},receipts: {} };
     for (const collection of ROW_COLLECTIONS) {
       const values: Record<string, unknown> = {};
@@ -2331,15 +2375,27 @@ export class SqliteAgentRegistryStore {
     if (complete && !tracked) this.resetHotGrants();
     if (complete) this.collectionOrders.clear();
     const identity = databaseFileIdentity(this.filename);
-    /* Archive ids only grow, so the mapping's count, sum and largest id change
-       whenever a version is archived, promoted or deleted. */
+    /* The snapshot's validated store stamp covers unjournalled peer changes
+       too. A journal-proven unchanged archive keeps its old signature. */
     const prior = this.coldViewCache;
     const signature = prior && journal.archiveUnchanged ? prior.signature
-      : this.changesReady ? JSON.stringify(this.db.query<{ count: number; total: number; largest: number }, []>(
-        "SELECT COUNT(*) AS count,COALESCE(SUM(archive_id),0) AS total,COALESCE(MAX(archive_id),0) AS largest FROM registry_cold").get()) : "";
+      : this.changesReady ? snapshot.stamp : "";
     const cache = prior?.signature === signature ? prior : null;
-    const headers = cache ? cache.headers : this.changesReady ? performanceSpans.sync("registry.headers", () => this.db.query<{ collection: RowCollection; row_key: string; archive_id: number }, []>(
-      "SELECT c.collection,c.row_key,c.archive_id FROM registry_cold c JOIN registry_archive a ON a.id=c.archive_id ORDER BY a.row_order").all()) : [];
+    const readHeaders: Array<{ collection: RowCollection; row_key: string; archive_id: number; row_order: number }> = [];
+    let headers = cache?.headers ?? readHeaders;
+    if (!cache && this.changesReady) {
+      const rows = this.db.query<{ collection: RowCollection; row_key: string; archive_id: number; row_order: number }, []>(
+        "SELECT c.collection,c.row_key,c.archive_id,a.row_order FROM registry_cold c JOIN registry_archive a ON a.id=c.archive_id").iterate();
+      try {
+        for (;;) {
+          const next = performanceSpans.sync("registry.headers", () => rows.next());
+          if (next.done) break;
+          readHeaders.push(next.value);
+          yield;
+        }
+      } finally { rows.return?.(); }
+      headers = yield* orderedHeaderSteps(readHeaders, (a, b) => a.row_order - b.row_order);
+    }
     yield;
     if (!cache) yield* this.rememberColdProjectionSteps(headers);
     const coldGrantChangeId = this.refreshColdGrantDecisions(snapshot.stamp);

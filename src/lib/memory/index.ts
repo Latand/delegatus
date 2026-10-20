@@ -1,6 +1,7 @@
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import { performanceSpans } from "@/lib/performanceSpans";
+import { stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
@@ -203,11 +204,13 @@ export class MemoryIndex {
   }
 
   async refresh(sources: readonly MemorySource[], options: { complete?: boolean } = {}) {
-    const db = performanceSpans.sync("memory.refresh", () => {
+    const write = <T>(run: () => T) => waitForStateLock("memory.refresh", () =>
+      stateLockAttempt("memory.refresh", () => this.hookDatabase(() => run())));
+    const db = await write(() => performanceSpans.sync("memory.refresh", () => {
       const db = this.database();
       this.normalizeProjects(db);
       return db;
-    });
+    }));
     const result = { filesRead: 0, filesSkipped: 0, entriesIndexed: 0, filesFailed: 0 };
     const nativeResolution = performanceSpans.sync("memory.refresh", () =>
       sources.some(source => ["codex_memory", "codex_summary", "rollout_summary"].includes(source.sourceKind)) ? projectResolutionStateKey() : null);
@@ -215,7 +218,7 @@ export class MemoryIndex {
       try {
         const stat = await fs.stat(source.path);
         if (!stat.isFile() || stat.size > 4 * 1024 * 1024) {
-          performanceSpans.sync("memory.refresh", () => db.transaction(() => this.removeSource(source.path))());
+          await write(() => performanceSpans.sync("memory.refresh", () => db.transaction(() => this.removeSource(source.path))()));
           result.filesSkipped++; continue;
         }
         const { identity, previous } = performanceSpans.sync("memory.refresh", () => ({
@@ -230,7 +233,7 @@ export class MemoryIndex {
         result.filesRead++;
         const entries = performanceSpans.sync("memory.refresh", () =>
           [...new Map(parseMemory(source, content).map(entry => [entry.anchor, entry])).values()]);
-        performanceSpans.sync("memory.refresh", () => db.transaction(() => {
+        await write(() => performanceSpans.sync("memory.refresh", () => db.transaction(() => {
           this.removeSource(source.path);
           for (const entry of entries) {
             const id = "m_" + crypto.createHash("sha256").update(`${source.engine}\0${source.path}\0${entry.anchor}`).digest("hex").slice(0, 24);
@@ -245,14 +248,14 @@ export class MemoryIndex {
             db.query("INSERT INTO memory_fts VALUES (?, ?, ?, ?)").run(id, title, summary, searchableBody);
           }
           db.query("INSERT OR REPLACE INTO memory_files VALUES (?, ?)").run(source.path, identity);
-        })());
+        })()));
         result.entriesIndexed += entries.length;
         if (!entries.length) result.filesSkipped++;
       } catch { result.filesFailed++; } // Counts only: paths and personal content never enter logs.
     }
     if (options.complete && !result.filesFailed) {
       // Only absent source files leave the derivative. Disuse never removes anything.
-      performanceSpans.sync("memory.refresh", () => {
+      await write(() => performanceSpans.sync("memory.refresh", () => {
         const listed = new Set(sources.map(source => source.path));
         db.transaction(() => {
           for (const row of db.query<{ path: string }, []>("SELECT path FROM memory_files").all()) {
@@ -260,7 +263,7 @@ export class MemoryIndex {
             this.removeSource(row.path);
           }
         })();
-      });
+      }));
     }
     return result;
   }

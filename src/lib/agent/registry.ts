@@ -5729,8 +5729,8 @@ export class AgentRegistry {
   }
 
   private readKeyed<T>(reader: (file: RegistryFile) => T): T {
-    return performanceSpans.sync("registry.keyed", () => this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
-      ? this.sqliteStore.read(reader) : reader(this.readOnlySnapshot()));
+    return withViewerOperation("registry.read", () => performanceSpans.sync("registry.keyed", () => this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
+      ? this.sqliteStore.read(reader) : reader(this.readOnlySnapshot())));
   }
 
   /** Retention evidence for one pending runtime effect. SQLite selectors run
@@ -8954,6 +8954,19 @@ export class AgentRegistry {
     });
   }
 
+  /** One request's aliases, conversation and staged-path receipts, under the
+      same keyed read transaction. No lookup or lazy registry row escapes it. */
+  sessionTarget(conversationId: string | null, fallbackPath: string): { path: string; unavailable: boolean } {
+    return this.readKeyed(file => {
+      const lookup = readOnlyConversationLookupFromSnapshot(file);
+      const fence = identityMaterializationFence(file);
+      const conversation = conversationId?.startsWith("conversation_") ? lookup.conversation(conversationId as ViewerConversationId) : null;
+      const materialized = conversation ? fence.pathForConversation(conversation.id) : null;
+      const path = materialized ?? fallbackPath;
+      return { path, unavailable: Boolean(conversation && !materialized || path && !fence.allowsPath(path)) };
+    });
+  }
+
   canonicalConversationId(id: ViewerConversationId): ViewerConversationId {
     return this.readKeyed(file => resolveConversationAlias(file, id));
   }
@@ -11461,7 +11474,8 @@ const registryProcessState = process as typeof process & {
 };
 
 export function agentRegistry(): AgentRegistry {
-  registryProcessState.__llvAgentRegistry ??= new AgentRegistry(undefined, undefined, undefined, { resolveBackendIdentity: true });
+  registryProcessState.__llvAgentRegistry ??= withViewerOperation("registry.prepare", () => performanceSpans.sync("registry.prepare.index", () =>
+    new AgentRegistry(undefined, undefined, undefined, { resolveBackendIdentity: true })));
   return registryProcessState.__llvAgentRegistry;
 }
 
