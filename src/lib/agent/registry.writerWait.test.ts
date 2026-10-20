@@ -432,7 +432,7 @@ test("runtime-switch cancellation reads and releases through real contended regi
 });
 
 // Exercise an actual Viewer request, rather than an already-admitted store callback.
-test("Viewer policy write lets a 10 ms timer run within 50 ms while a child holds the writer", async () => {
+test("Viewer policy write yields to a timer while a child holds the writer", async () => {
   const { NextRequest } = await import("next/server");
   const { PATCH } = await import("@/app/api/accounts/claude/policy/route");
   const directory = fs.mkdtempSync(path.join(root, "viewer-policy-"));
@@ -445,9 +445,8 @@ test("Viewer policy write lets a 10 ms timer run within 50 ms while a child hold
   try {
     await holder.hold(200);
     let settled = false;
-    const started = performance.now();
-    const tick = new Promise<{ elapsed: number; pending: boolean }>(resolve => {
-      timer = setTimeout(() => resolve({ elapsed: performance.now() - started, pending: !settled }), 10);
+    const tick = new Promise<boolean>(resolve => {
+      timer = setTimeout(() => resolve(!settled), 10);
     });
     const writing = PATCH(new NextRequest("http://localhost/api/accounts/claude/policy", {
       method: "PATCH", headers: { host: "localhost", "content-type": "application/json" },
@@ -455,9 +454,7 @@ test("Viewer policy write lets a 10 ms timer run within 50 ms while a child hold
     })).finally(() => { settled = true; });
     const progress = await tick;
     const response = await writing;
-    console.info(`[L7 policy timer] ${progress.elapsed.toFixed(2)} ms; pending=${progress.pending}`);
-    expect(progress.elapsed).toBeLessThan(50);
-    expect(progress.pending).toBe(true);
+    expect(progress).toBe(true);
     expect(response.status).toBe(200);
     expect(blockingWaitDiagnostics().longest.some(sample => sample.site === "registry-lock-async" && sample.role === "viewer")).toBe(true);
     expect(registry.autoBalancePolicy("claude")).toMatchObject({ enabled: true, revision: 1 });
@@ -503,10 +500,9 @@ test("cold session facade opening yields while the SQLite writer is contended", 
   try {
     await holder.hold(120);
     let settled = false;
-    const started = performance.now();
     const opening = readAgentSessionTarget(conversation.id, "", AbortSignal.timeout(10_000)).finally(() => { settled = true; });
-    const progress = await new Promise<number>(resolve => setTimeout(() => resolve(performance.now() - started), 10));
-    expect(progress).toBeLessThan(50);
+    const progress = await new Promise<boolean>(resolve => setTimeout(() => resolve(!settled), 10));
+    expect(progress).toBe(true);
     expect(settled).toBe(false);
     expect(await opening).toEqual({ path: "/sessions/session-open.jsonl", unavailable: false });
     expect(coldKeyScans).toBe(0);

@@ -46,7 +46,9 @@ const pipelines: Pipeline[] = Array.from({ length: 804 }, (_, i) => {
   const id = `lane${String(i).padStart(4, "0")}`;
   return { ...seed, id, worktreeDir: `/repo-pipeline-${id}`, branch: `pipeline/synthetic-work-${id}`,
     taskIds: [`task-${i}`], spec: "Synthetic context. ".repeat(5500),
-    state: "completed", lastPassedCommit: reviewedHead, cursor: null,
+    state: i < 603 ? "running" : "completed", lastPassedCommit: reviewedHead,
+    srcConversationId: i >= 603 ? "benchmark-seat" : null,
+    cursor: i < 603 ? { stageId: "build", state: "running", input: null, activatedBy: null } : null,
     runs: [{ stageId: "build", attempts: i === 0 ? attempts : attempts.slice(0, 8) }],
     merge: { state: "queued", by: null, repository: "fixture/project", prNumber: null,
       policyChangedAt: new Date(NOW).toISOString(), reviewedHead, chain: [reviewedHead], updates: [], seenChecks: [],
@@ -55,6 +57,7 @@ const pipelines: Pipeline[] = Array.from({ length: 804 }, (_, i) => {
       mergedAt: null, attempts: 0, reason: null, blockedAt: null, updatedAt: new Date(NOW).toISOString() } };
 });
 savePipelines(pipelines);
+let sourcePipelines: readonly Pipeline[] = loadPipelinesForList();
 const tasks = Array.from({ length: 1200 }, (_, i) => ({
   id: `task-${i}`, project: "fixture", status: "done", text: "Synthetic task", placement: "unplaced", assignments: [],
   createdAt: new Date(NOW - 86400000).toISOString(), updatedAt: new Date(NOW - 86400000).toISOString(),
@@ -66,8 +69,8 @@ const memoryText = "v1\n## User preferences\n" + Array.from({ length: 3500 }, (_
 let iteration = 0;
 const sources = {
   prepareRead: async () => { await loadPipelinesForListAsync(); }, now: () => NOW,
-  settings: () => defaultSeatTickSettings("fixture"), seatFor: () => ({ active: null, pending: null, history: [] }), activeSeats: () => [],
-  pipelines: () => loadPipelinesForList(), archivedPipelines: () => [], tasks: () => tasks,
+  settings: () => defaultSeatTickSettings("fixture"), seatFor: () => ({ active: { conversationId: "benchmark-seat", seatEpoch: 1, path: null, designatedAt: new Date(NOW).toISOString(), turn: "idle", activity: null }, pending: null, history: [] }), activeSeats: () => ["fixture"],
+  pipelines: () => sourcePipelines, archivedPipelines: () => [], tasks: () => tasks,
   registry: () => ({
     pageSeatChildren: () => ({ file: { entries: {}, receipts: {}, lineageEdges: {}, memberships: {}, conversations: {}, conversationAliases: {} },
       keys: [], after: null, complete: true, evidenceGap: false }),
@@ -119,8 +122,17 @@ const cases = {
     fs.utimesSync(memoryFile, new Date(NOW + iteration * 1000), new Date(NOW + iteration * 1000));
     return refreshMemoryIndex({ claudeHomes: [], codexHome: path.join(root, "codex"), skillRoots: [] });
   },
-  seat: async () => refreshSeatTickEvidence(
-    await gatherSeatTickInput("fixture", emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, sources), sources),
+  seat: async () => {
+    const input = await gatherSeatTickInput("fixture", emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, sources);
+    setImmediate(() => {
+      sourcePipelines = Object.freeze(sourcePipelines.map((pipeline, index) => index === 0
+        ? Object.freeze({ ...pipeline, task: "", spec: `replacement spec projection #654321\n${"Evidence changed. ".repeat(1200)}` }) : pipeline));
+    });
+    const refreshed = await refreshSeatTickEvidence(input, sources);
+    return { pipelines: refreshed.pipelines.length, ownLanes: refreshed.ownLanes.length,
+      specTitle: refreshed.pipelines[0]?.title ?? null,
+      specProjected: refreshed.pipelines[0]?.title.startsWith("replacement spec projection") ?? false };
+  },
   merge: async () => {
     for (let i = 0; i < 6; i++) await ports.mutate(pipelines[pipelines.length - 1 - i]!.id, row => { row.stateDetail = `sample-${++iteration}`; return true; });
     await sweepAutoMerge(ports);
@@ -148,6 +160,7 @@ const cases = {
 const conditions = {
   runtime: Bun.version, utc: new Date().toISOString(), synthetic: { agents: 0, mutatingLanes: 6, mutationPosition: "tail", pipelines: pipelines.length,
     pipelinePayloadField: "spec", pipelineBytes: Buffer.byteLength(JSON.stringify(pipelines)), mergeQueueRows: pipelines.length,
+    openLanes: 603, ownSettledLanes: 201, activeSeat: true,
     tasks: tasks.length, memoryBytes: Buffer.byteLength(memoryText), memoryEntries: 3500,
     registryRows: registryDataset.rows, registryBytes: registryDataset.payloadBytes, warmArchiveInvalidations: 3, registrySha256 },
 };
@@ -190,7 +203,7 @@ const server = Bun.serve({
         gapP95: gaps[Math.floor(gaps.length * .95)] ?? 0, gapMax: gaps.at(-1) ?? 0,
         exclusiveMs, spansDropped: spans.dropped, top: [...frames].sort((a, b) => b[1] - a[1]).slice(0, 18),
         longestSlices: sync.toSorted((a, b) => b.maxMs - a.maxMs).slice(0, 8).map(span => ({ site: performanceSites[span.site], maxMs: span.maxMs })),
-        ...(name === "memory" || name === "session" ? { answer } : {}) });
+        ...(name === "memory" || name === "session" || name === "seat" ? { answer } : {}) });
     } finally { clearInterval(timer); }
   },
 });

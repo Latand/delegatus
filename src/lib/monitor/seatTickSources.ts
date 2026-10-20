@@ -1613,6 +1613,18 @@ function changeFingerprint(
   return `${digest(board)}.${pullRequestsUnavailable ? FINGERPRINT_UNREAD : digest(open)}`;
 }
 
+function seatTickFingerprint(
+  pipelines: readonly SeatTickPipelineInput[], tasks: readonly SeatTickTaskInput[], children: readonly SeatTickChildInput[],
+  pullRequests: readonly SeatTickPullRequestInput[], pullRequestsUnavailable: SeatTickPullRequestGap | null,
+  ownLanes: readonly SeatTickOwnLaneInput[], settledDeploys: readonly SeatTickDeployInput[],
+  settledMaintenance: readonly MaintenanceRun[],
+): string {
+  const rows = pipelines.length + tasks.length + children.length + pullRequests.length + ownLanes.length
+    + settledDeploys.length + settledMaintenance.length;
+  return performanceSpans.sync("seat-tick.project", () => changeFingerprint(pipelines, tasks, children,
+    pullRequests, pullRequestsUnavailable, ownLanes, settledDeploys, settledMaintenance), rows);
+}
+
 function digest(parts: readonly string[]): string {
   return crypto.createHash("sha256").update(parts.join("\n")).digest("hex").slice(0, 32);
 }
@@ -2427,9 +2439,21 @@ function stageAttemptIdentity(lane: Pipeline): string | null {
  * Liveness belongs to the stage that was observed; a new stage inherits none.
  */
 export function refreshSeatTickInput(input: SeatTickCheckInput, sources: SeatTickSources): SeatTickCheckInput {
-  const canonicalProject = seatProjectResolver();
-  const now = sources.now();
   const hotLanes = sources.pipelines();
+  const sourceTasks = sources.tasks();
+  const now = sources.now();
+  const settings = effectiveSeatTickSettings(sources.settings(input.project), now, SEAT_TICK_WAKE_INTERVAL_MS);
+  const announcedKey = announcedLaneKey(input.state, seatTickCatchUp({ ...input, now, settings })?.key ?? null);
+  const cache = seatTickRefreshCache.get(input);
+  if (cache && Object.isFrozen(hotLanes) && Object.isFrozen(sourceTasks)
+    && cache.pipelinesSource === hotLanes && cache.tasksSource === sourceTasks
+    && cache.project === input.project && cache.seatKey === seatInputKey(input.seat)
+    && cache.announcedKey === announcedKey
+    && cache.aliasesKey === JSON.stringify(projectAliasSnapshot().aliases)
+    && cache.linkedKey === (cache.linkedKey === null ? null : JSON.stringify(linkedContext()))) {
+    return reuseSeatTickProjection(input, sources, cache, now, settings);
+  }
+  const canonicalProject = seatProjectResolver();
   const { lanes: openLanes, tasks: openTasks } = performanceSpans.sync("seat-tick.project",
     () => openTickLanes(hotLanes, input.project, canonicalProject), hotLanes.length);
   const evidence = performanceSpans.sync("seat-tick.project", () => openLanes.map(pipelineEvidence), openLanes.length);
@@ -2445,7 +2469,6 @@ export function refreshSeatTickInput(input: SeatTickCheckInput, sources: SeatTic
       ? previous.get(lane.id)?.stageActivity ?? null : null,
     ...pauses.get(lane.id),
   }));
-  const sourceTasks = sources.tasks();
   const sourceById = performanceSpans.sync("seat-tick.project", () => new Map(sourceTasks.map(task => [task.id, task] as const)), sourceTasks.length);
   const board = performanceSpans.sync("seat-tick.project", () => projectTaskPipelineIds(
     sourceTasks.filter(task => canonicalProject(task.project) === input.project), [...hotLanes]));
@@ -2458,15 +2481,109 @@ export function refreshSeatTickInput(input: SeatTickCheckInput, sources: SeatTic
     ...(linked && !runsHere(task, linked) ? { runsOn: machineLabel(task.machine!, linked).label } : {}),
   }));
   const ownLanes = performanceSpans.sync("seat-tick.project", () => ownSettledLanes(
-    input.project, input.seat, input.state.announcedLanes ?? [], hotLanes, !!seatTickCatchUp(input)), hotLanes.length);
+    input.project, input.seat, input.state.announcedLanes ?? [], hotLanes, !!seatTickCatchUp({ ...input, now, settings })), hotLanes.length);
   const openIds = new Set(hotLanes.filter(isOpen).map((lane) => lane.id));
-  return {
+  const refreshed: SeatTickCheckInput = {
     ...input, now, pipelines, tasks, ownLanes,
     ...(sources.memoryProblems ? { signals: [...input.signals.filter(signal => !signal.id.startsWith("memory-problem:")), ...sources.memoryProblems(input.project, input.state.itemsShown ?? [], input.seat?.conversationId ? input.seat : null)] } : {}),
     events: input.events.map((event) => ({ ...event, pipelineTerminal: event.pipelineId !== null && !openIds.has(event.pipelineId) })),
-    settings: effectiveSeatTickSettings(sources.settings(input.project), now, SEAT_TICK_WAKE_INTERVAL_MS),
-    changeFingerprint: changeFingerprint(pipelines, tasks, input.children, input.pullRequests, input.pullRequestsUnavailable, ownLanes, input.settledDeploys, input.settledMaintenance),
+    settings,
+    changeFingerprint: seatTickFingerprint(pipelines, tasks, input.children, input.pullRequests, input.pullRequestsUnavailable, ownLanes,
+      input.settledDeploys ?? [], input.settledMaintenance ?? []),
   };
+  if (Object.isFrozen(hotLanes) && Object.isFrozen(sourceTasks)) {
+    seatTickRefreshCache.set(refreshed, {
+      pipelinesSource: hotLanes, tasksSource: sourceTasks, project: input.project,
+      seatKey: seatInputKey(input.seat), announcedKey,
+      aliasesKey: JSON.stringify(projectAliasSnapshot().aliases), pipelines, tasks, ownLanes,
+      linkedKey: linked ? JSON.stringify(linked) : null,
+      openIds, pausedLanes: hotLanes.filter(lane => lane.state === "paused" && canonicalProject(lane.project) === input.project),
+      pipelineById: new Map(pipelines.map(pipeline => [pipeline.id, pipeline])),
+      children: refreshed.children, pullRequests: refreshed.pullRequests,
+      pullRequestsUnavailable: refreshed.pullRequestsUnavailable, settledDeploys: refreshed.settledDeploys,
+      settledMaintenance: refreshed.settledMaintenance, fingerprint: refreshed.changeFingerprint,
+    });
+  }
+  return refreshed;
+}
+
+type SeatTickRefreshCache = {
+  pipelinesSource: readonly Pipeline[];
+  tasksSource: readonly BoardTask[];
+  project: string;
+  seatKey: string;
+  announcedKey: string;
+  aliasesKey: string;
+  linkedKey: string | null;
+  pipelines: SeatTickPipelineInput[];
+  tasks: SeatTickTaskInput[];
+  ownLanes: SeatTickOwnLaneInput[];
+  openIds: Set<string>;
+  pausedLanes: readonly Pipeline[];
+  pipelineById: Map<string, SeatTickPipelineInput>;
+  children: SeatTickCheckInput["children"];
+  pullRequests: SeatTickCheckInput["pullRequests"];
+  pullRequestsUnavailable: SeatTickCheckInput["pullRequestsUnavailable"];
+  settledDeploys: SeatTickCheckInput["settledDeploys"];
+  settledMaintenance: SeatTickCheckInput["settledMaintenance"];
+  fingerprint: string;
+};
+const seatTickRefreshCache = new WeakMap<SeatTickCheckInput, SeatTickRefreshCache>();
+function seatInputKey(seat: SeatTickSeatInput | null): string {
+  return JSON.stringify(seat ? [seat.conversationId, seat.seatEpoch] : null);
+}
+function sameTaskSource(current: readonly BoardTask[], prepared: readonly BoardTask[]): boolean {
+  if (current === prepared || (current.length === 0 && prepared.length === 0)) return true;
+  if (current.length !== prepared.length) return false;
+  for (let index = 0; index < current.length; index++) {
+    if (current[index] !== prepared[index] || !deeplyFrozen(current[index])) return false;
+  }
+  return true;
+}
+function samePipelineSource(current: readonly Pipeline[], prepared: readonly Pipeline[]): boolean {
+  if (current === prepared) return true;
+  if (current.length !== prepared.length) return false;
+  for (let index = 0; index < current.length; index++) {
+    if (current[index] !== prepared[index] || !deeplyFrozen(current[index])) return false;
+  }
+  return true;
+}
+function announcedLaneKey(state: SeatTickProjectState, catchUpKey: string | null): string {
+  return JSON.stringify([state.announcedLanes ?? [], catchUpKey]);
+}
+function reuseSeatTickProjection(input: SeatTickCheckInput, sources: SeatTickSources, cache: SeatTickRefreshCache,
+  now: number, settings: ReturnType<typeof effectiveSeatTickSettings>): SeatTickCheckInput {
+  const pauses = performanceSpans.sync("seat-tick.project", () => pauseInputs(cache.pausedLanes, input.seat, sources, now), cache.pausedLanes.length);
+  let pauseChanged = false;
+  for (const [id, pause] of pauses) {
+    const previous = cache.pipelineById.get(id);
+    if (!previous || previous.pausedAt !== pause.pausedAt || previous.pauseGeneration !== pause.pauseGeneration
+      || previous.pauseConditionMet !== pause.pauseConditionMet || JSON.stringify(previous.pause) !== JSON.stringify(pause.pause)) {
+      pauseChanged = true; break;
+    }
+  }
+  const pipelines = pauseChanged ? cache.pipelines.map(pipeline => {
+    const { pausedAt: _pausedAt, pauseGeneration: _pauseGeneration, pause: _pause, pauseConditionMet: _condition, ...base } = pipeline;
+    return { ...base, ...pauses.get(pipeline.id) };
+  }) : cache.pipelines;
+  const linked = input.events.map(event => ({ ...event, pipelineTerminal: event.pipelineId !== null && !cache.openIds.has(event.pipelineId) }));
+  const signals = sources.memoryProblems
+    ? [...input.signals.filter(signal => !signal.id.startsWith("memory-problem:")), ...sources.memoryProblems(input.project, input.state.itemsShown ?? [], input.seat?.conversationId ? input.seat : null)]
+    : input.signals;
+  const fingerprintStable = pipelines === cache.pipelines && input.children === cache.children
+    && input.pullRequests === cache.pullRequests && input.pullRequestsUnavailable === cache.pullRequestsUnavailable
+    && input.settledDeploys === cache.settledDeploys && input.settledMaintenance === cache.settledMaintenance;
+  const refreshed: SeatTickCheckInput = {
+    ...input, now, pipelines, tasks: cache.tasks, ownLanes: cache.ownLanes, events: linked, signals, settings,
+    changeFingerprint: fingerprintStable ? cache.fingerprint : seatTickFingerprint(pipelines, cache.tasks, input.children,
+      input.pullRequests, input.pullRequestsUnavailable, cache.ownLanes, input.settledDeploys ?? [], input.settledMaintenance ?? []),
+  };
+  seatTickRefreshCache.set(refreshed, { ...cache, pipelines, children: input.children, pullRequests: input.pullRequests,
+    pullRequestsUnavailable: input.pullRequestsUnavailable, settledDeploys: input.settledDeploys,
+    settledMaintenance: input.settledMaintenance, pipelineById: pauseChanged
+      ? new Map(pipelines.map(pipeline => [pipeline.id, pipeline])) : cache.pipelineById,
+    fingerprint: refreshed.changeFingerprint });
+  return refreshed;
 }
 
 /** Refresh after the immutable evidence rows have been prepared in bounded
@@ -2477,8 +2594,25 @@ async function refreshSeatTickInputCooperatively(
   sources: SeatTickSources,
 ): Promise<SeatTickCheckInput> {
   return withViewerOperation("seat-tick.check", async () => {
-    await performanceSpans.wait("seat-tick.project", () => prepareSeatTickProjection(sources, input.project));
-    return performanceSpans.sync("seat-tick.project", () => refreshSeatTickInput(input, sources));
+    let pipelines = sources.pipelines(), tasks = sources.tasks();
+    const cached = seatTickRefreshCache.get(input);
+    if (cached && Object.isFrozen(pipelines) && Object.isFrozen(tasks)
+      && cached.pipelinesSource === pipelines && cached.tasksSource === tasks) {
+      return performanceSpans.sync("seat-tick.project", () => refreshSeatTickInput(input, sources));
+    }
+    for (let attempt = 0; ; attempt++) {
+      pipelines = sources.pipelines();
+      tasks = sources.tasks();
+      await performanceSpans.wait("seat-tick.project", () => prepareSeatTickProjection(sources, input.project, pipelines, tasks));
+      // Never use metadata prepared for a prior publication. Re-capture and
+      // warm the replacement after the await; sustained churn defers this tick.
+      if (samePipelineSource(sources.pipelines(), pipelines) && sameTaskSource(sources.tasks(), tasks)) break;
+      if (attempt >= 2) throw new SeatTickEvidenceRefreshCanceledError(input.state.pullRequestGap);
+    }
+    const preparedSources = Object.create(sources) as SeatTickSources;
+    preparedSources.pipelines = () => pipelines;
+    preparedSources.tasks = () => tasks;
+    return performanceSpans.sync("seat-tick.project", () => refreshSeatTickInput(input, preparedSources));
   });
 }
 
@@ -2560,15 +2694,18 @@ function taskEvidenceFor(task: BoardTask, pipelineIds: readonly string[] = []): 
   return pipelineIds[0] ? { ...evidence, owner: `pipeline ${pipelineIds[0]}` } : evidence;
 }
 
-async function prepareSeatTickProjection(sources: SeatTickSources, project: string): Promise<void> {
+async function prepareSeatTickProjection(
+  sources: SeatTickSources,
+  project: string,
+  pipelines: readonly Pipeline[] = sources.pipelines(),
+  tasks: readonly BoardTask[] = sources.tasks(),
+): Promise<void> {
   const canonical = seatProjectResolver();
-  const pipelines = sources.pipelines();
   await forEachCooperatively(pipelines, async pipeline => {
     if (canonical(pipeline.project) !== project) return;
     await preparePipelineMetadata(pipeline);
     if (isOpen(pipeline)) await preparePipelineEvidence(pipeline);
   }, { batchSize: 4, timeBudgetMs: 8 });
-  const tasks = sources.tasks();
   await forEachCooperatively(tasks, task => {
     if (canonical(task.project) === project && deeplyFrozen(task)) taskEvidenceFor(task);
   }, { batchSize: 4, timeBudgetMs: 8 });
@@ -2816,7 +2953,7 @@ async function gatherSeatTickInputWork(
   });
 
   await yieldToRuntime();
-  return {
+  const gathered: SeatTickCheckInput = {
     project: canonical,
     now,
     seat,
@@ -2840,7 +2977,7 @@ async function gatherSeatTickInputWork(
     children,
     childrenUnavailable,
     childrenCatchUpPending,
-    changeFingerprint: changeFingerprint(pipelines, tasks, children, pullRequests, pullRequestsUnavailable, ownLanes, settledDeploys, settledMaintenance),
+    changeFingerprint: seatTickFingerprint(pipelines, tasks, children, pullRequests, pullRequestsUnavailable, ownLanes, settledDeploys, settledMaintenance),
     /* The sealed cursor travels on the state the decision carries forward, so a
        check of any verdict — a skip included, which remembers nothing else —
        persists where the journal stood when the tick first saw this project.
@@ -2856,4 +2993,21 @@ async function gatherSeatTickInputWork(
       return reports ? { reports } : {};
     })(),
   };
+  if (Object.isFrozen(hotLanes) && Object.isFrozen(hotTasks)
+    && samePipelineSource(sources.pipelines(), hotLanes) && sameTaskSource(sources.tasks(), hotTasks)) {
+    seatTickRefreshCache.set(gathered, {
+      pipelinesSource: hotLanes, tasksSource: hotTasks, project: canonical,
+      seatKey: seatInputKey(seat),
+      announcedKey: announcedLaneKey(gathered.state, seatTickCatchUp(gathered)?.key ?? null),
+      aliasesKey: JSON.stringify(projectAliasSnapshot().aliases), pipelines, tasks, ownLanes,
+      linkedKey: linked ? JSON.stringify(linked) : null,
+      openIds: openPipelineIds,
+      pipelineById: new Map(pipelines.map(pipeline => [pipeline.id, pipeline])),
+      pausedLanes: hotLanes.filter(pipeline => pipeline.state === "paused" && canonicalProject(pipeline.project) === canonical),
+      children: gathered.children, pullRequests: gathered.pullRequests,
+      pullRequestsUnavailable: gathered.pullRequestsUnavailable, settledDeploys: gathered.settledDeploys,
+      settledMaintenance: gathered.settledMaintenance, fingerprint: gathered.changeFingerprint,
+    });
+  }
+  return gathered;
 }

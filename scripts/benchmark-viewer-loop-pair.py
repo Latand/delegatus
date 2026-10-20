@@ -96,6 +96,10 @@ try:
             for arm in (("before", "after") if repeat % 2 == 0 else ("after", "before")):
                 with urllib.request.urlopen(origins[arm] + "/" + case, timeout=180) as response:
                     row = json.load(response)
+                if arm == "after" and case == "seat":
+                    answer = row.get("answer") or {}
+                    if not answer.get("pipelines") or not answer.get("ownLanes") or not answer.get("specProjected"):
+                        raise RuntimeError("candidate seat case missed open, own-settled, or populated-spec projection")
                 result["runs"].append({"arm": arm, "repeat": repeat, **row})
                 print(json.dumps({"arm": arm, "repeat": repeat, "case": case, "sampledMs": row["profiledSyncMs"], "gapP95": row["gapP95"], "gapMax": row["gapMax"]}), flush=True)
     result["utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())

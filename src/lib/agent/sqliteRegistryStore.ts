@@ -1652,7 +1652,17 @@ export class SqliteAgentRegistryStore {
             this.collectionOrders.clear();
             const previousReader = this.preparedReader;
             this.preparedReader = reader;
-            if (previousReader && previousReader !== reader) previousReader.close();
+            if (previousReader && previousReader !== reader) {
+              const previousView = previousReader.readOnlyCache;
+              if (previousView) {
+                // A published snapshot can still contain lazy archive payloads
+                // and indexed readers backed by this connection. Transfer its
+                // lifetime to the view; the finalizer closes it after the last
+                // caller releases that immutable view.
+                previousReader.readOnlyCache = null;
+                retiredPreparedReaderFinalizer.register(previousView.file, previousReader);
+              } else previousReader.close();
+            }
             return current;
           }
           reader.onDatabaseReopened(reader.db);
@@ -4731,6 +4741,10 @@ export class SqliteAgentRegistryStore {
     this.revisionCache = { signature: this.storageSignature(), revision };
   }
 }
+
+const retiredPreparedReaderFinalizer = new FinalizationRegistry<SqliteAgentRegistryStore>((reader) => {
+  reader.close();
+});
 
 /** Whether a registry store already holds a committed import, read without
     creating, migrating or importing anything. A missing file is `false`. */

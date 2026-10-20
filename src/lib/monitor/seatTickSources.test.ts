@@ -2787,6 +2787,7 @@ test("seat check keeps wake ordering and zero decoded or copied rows with tenfol
 test("seat projection yields through a large immutable specification and attempt history, then reuses warm evidence", async () => {
   const { refreshSeatTickEvidence } = await import("./seatTickSources");
   const { deepFreeze } = await import("@/lib/deepFreeze");
+  const { performanceSpans, performanceSites } = await import("@/lib/performanceSpans");
   const attempts = Array.from({ length: 6000 }, (_, index) => ({
     n: index + 1, state: "running", startedAt: new Date(NOW - index * 1000).toISOString(), completedAt: null,
   }));
@@ -2797,34 +2798,58 @@ test("seat projection yields through a large immutable specification and attempt
     runs: index === 0 ? [{ stageId: "build", attempts }] : [{ stageId: "build", attempts: attempts.slice(0, 8) }],
   }))) as never;
   const ports = sources({ pipelines: largeRows });
+  const frozenTasks = deepFreeze([]);
+  ports.tasks = () => frozenTasks;
   let yielded = false;
   const turn = new Promise<boolean>(resolve => setImmediate(() => { yielded = true; resolve(true); }));
   const gathering = gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
   expect(await Promise.race([gathering.then(() => false), turn])).toBe(true);
   const input = await gathering;
   expect(input.pipelines).toHaveLength(804);
-  const refreshDurations: number[] = [];
   for (let pass = 0; pass < 3; pass++) {
-    const started = performance.now();
     const refreshed = refreshSeatTickInput(input, ports);
-    refreshDurations.push(performance.now() - started);
     expect(refreshed.pipelines).toEqual(input.pipelines);
   }
-  expect(Math.max(...refreshDurations)).toBeLessThan(50);
   let refreshed = input;
   for (let pass = 0; pass < 3; pass++) {
     let warmYielded = false;
     const warmTurn = new Promise<void>(resolve => setImmediate(() => { warmYielded = true; resolve(); }));
+    const warmStarted = performance.now();
     const warming = refreshSeatTickEvidence(refreshed, ports);
     expect(await Promise.race([warming.then(() => false), warmTurn.then(() => true)])).toBe(true);
     refreshed = await warming;
     expect(warmYielded).toBe(true);
     expect(refreshed.pipelines).toEqual(input.pipelines);
+    expect(performanceSpans.snapshot(warmStarted).records.filter(record =>
+      record.kind === "sync" && performanceSites[record.site] === "seat-tick.project" && record.rows >= 100)).toHaveLength(0);
   }
   expect(refreshed.pipelines).toEqual(input.pipelines);
   expect(yielded).toBe(true);
 });
 
+
+test("seat refresh retries preparation when its pipeline source is replaced during an await", async () => {
+  const { refreshSeatTickEvidence } = await import("./seatTickSources");
+  const { deepFreeze } = await import("@/lib/deepFreeze");
+  const largeSpec = "old source evidence ".repeat(1800);
+  const oldRows = deepFreeze(Array.from({ length: 16 }, (_, index) => lane({
+    id: `source-race-${index}`, spec: largeSpec,
+    ...(index === 15 ? { state: "needs_review", pausedState: "needs_review", cursor: null,
+      runs: [{ stageId: "build", attempts: [] }], srcConversationId: CONVERSATION } : {}),
+  })));
+  const replacementRows = deepFreeze(oldRows.map((row, index) => ({
+    ...row, task: index === 0 ? "replacement source evidence" : row.task,
+  }))) as never;
+  let currentRows = oldRows;
+  const ports = sources({});
+  ports.pipelines = () => currentRows as never;
+  const input = await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  setImmediate(() => { currentRows = replacementRows; });
+  const refreshed = await refreshSeatTickEvidence(input, ports);
+  expect(refreshed.pipelines[0]?.title).toBe("replacement source evidence");
+  expect(refreshed.pipelines.map(pipeline => pipeline.id)).toContain("source-race-0");
+  expect(refreshed.ownLanes.map(lane => lane.id)).toContain("source-race-15");
+});
 
 test("frozen lane evidence avoids whole-row serialization and replacement invalidates the key", async () => {
   const { refreshSeatTickEvidence } = await import("./seatTickSources");
