@@ -926,7 +926,11 @@ async function captureShots(repoRoot: string, baseUrl: string, layout: Layout, c
       });
       /* A phone's overlay scrollbar takes no room and the print never draws
          it, so the screen frame drops its thumb too, leaving the layout as is. */
+      /* A desktop scrollbar keeps its room, which the layout check measures,
+         and is painted transparent on screen and in the print, so neither
+         frame carries the capture browser's track, thumb or arrows. */
       if (shot.viewport.width < 600) await page.addStyleTag({ content: "* { scrollbar-width: none !important; }" });
+      else await page.addStyleTag({ content: "* { scrollbar-color: transparent transparent !important; }" });
       await page.waitForTimeout(300);
 
       const text = await page.evaluate(() => document.body.innerText);

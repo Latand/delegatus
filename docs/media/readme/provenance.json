@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "classification": "synthetic",
   "generator": "scripts/capture-readme-media.ts",
-  "generatorSha256": "6f091bd6614d018ff70b25416aad53b7fba97ec9922907048447597c4c2c3cc5",
+  "generatorSha256": "a713bd2b911eb816e32683300334218284506e026b5189f3a44b0c791c22eb6a",
   "seed": "scripts/readme-demo-state.ts",
   "seedSha256": "a87949b4f1615a6a66fa13611b07548a7fd2fb33a331f422fc29538981151710",
   "command": "bun run build && bun scripts/capture-readme-media.ts",
@@ -28,7 +28,7 @@
         "meanDifference": 0.199,
         "ringsClipped": 0
       },
-      "sha256": "449049f83d087e8d04106a7127b5232868e6b0dc362c233074ebcf496640c391"
+      "sha256": "b3d41092f02abb0c3370b271199d8cbc67aeddd55b978f0385112916ef906628"
     },
     {
       "path": "orchestrator.svg",
@@ -48,10 +48,10 @@
       "renderBack": {
         "worstTileMean": 13.513,
         "changedTileShare": 0.032,
-        "meanDifference": 0.624,
+        "meanDifference": 0.625,
         "ringsClipped": 1
       },
-      "sha256": "69b9bd4271ac0c784e04a93865173212c8d20cfab4f92493b68c693a8f7b246d"
+      "sha256": "cb48808783bca404fd2bf5e33a7b54cc36792903f6df76c9479d5f0fd46a847e"
     },
     {
       "path": "conversation.svg",
@@ -71,10 +71,10 @@
       "renderBack": {
         "worstTileMean": 14.152,
         "changedTileShare": 0.007,
-        "meanDifference": 0.369,
+        "meanDifference": 0.368,
         "ringsClipped": 2
       },
-      "sha256": "7c794e05f022cbddb89b5f6b35b3985a3faaf9076de3f1e64ce6ed0f443382c6"
+      "sha256": "895d557a88c92656271fa48b937fdf3c4887dce4dac40cb7d70121e906916271"
     },
     {
       "path": "pipeline.svg",
@@ -94,10 +94,10 @@
       "renderBack": {
         "worstTileMean": 9.363,
         "changedTileShare": 0.001,
-        "meanDifference": 0.272,
+        "meanDifference": 0.271,
         "ringsClipped": 0
       },
-      "sha256": "b01e565cd8a875610b275e223211d0f89bf5a0bfcafdf5e759d0c8d373a1202a"
+      "sha256": "58c87364d85b86ca61fc4a9cfca0b03191229110106ba149eee6f15f7ebd4b49"
     },
     {
       "path": "card-menu.svg",
@@ -120,7 +120,7 @@
         "meanDifference": 0.312,
         "ringsClipped": 0
       },
-      "sha256": "d397e9e1c37341c59432c27551ca9bb6607add0c18f00a4995c5a11da6d51729"
+      "sha256": "87940bdd8ca3f5d109ff282103403652ec446213da0b84b0908ac2a57ca0c523"
     },
     {
       "path": "accounts.svg",
@@ -140,10 +140,10 @@
       "renderBack": {
         "worstTileMean": 3.062,
         "changedTileShare": 0,
-        "meanDifference": 0.26,
+        "meanDifference": 0.259,
         "ringsClipped": 0
       },
-      "sha256": "fe690b78ad53cbe8318d36beeda8cffb3a8951cd2581bc0325eef6777dee6e28"
+      "sha256": "92fc0951ffaa2da710a0a2ad5d130a669fe1a7ff33f8a5479e6383062f870991"
     },
     {
       "path": "phone-conversation.svg",
@@ -160,7 +160,7 @@
         "meanDifference": 0.756,
         "ringsClipped": 0
       },
-      "sha256": "bdc5a86a793195e8bd4cb57e0bd4698df7dcf69db61a2298749c0775672dbd17"
+      "sha256": "c5d83f007ff1c7b9024f67b0ebb44a1e2c36a8b3bc6bb1f7fdc1dec8d4a31443"
     },
     {
       "path": "phone-board.svg",
@@ -173,11 +173,11 @@
       "rasterTiles": 10,
       "renderBack": {
         "worstTileMean": 12.37,
-        "changedTileShare": 0.021,
-        "meanDifference": 0.421,
+        "changedTileShare": 0.022,
+        "meanDifference": 0.422,
         "ringsClipped": 0
       },
-      "sha256": "3e1a1c293505e6e1f79d0b27502076df8b65a9dd90209b05dbc1ee08af4545fb"
+      "sha256": "592feef247fd068a8c5e3b02f3cf0d0d040a1fcca096364c0c4a53d1a2656d06"
     }
   ]
 }
