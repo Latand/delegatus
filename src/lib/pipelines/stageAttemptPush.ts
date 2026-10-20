@@ -355,6 +355,9 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
     const verifiedSuffix = async (target: string, from = repair?.acceptedHead ?? anchor): Promise<string | null> => {
       if (target === from) return null;
       if (target === tip && integrationBase !== null) return null;
+      // A successor can start beyond its delivery branch. That older tip is
+      // already accepted history; only the attempt's new suffix needs proof.
+      if (target === publishedPrefix && (await exec("git", ["merge-base", "--is-ancestor", target, pipeline.lastPassedCommit], pipeline.worktreeDir)).code === 0) return null;
       let suffixAnchor = from;
       if ((await exec("git", ["merge-base", "--is-ancestor", suffixAnchor, target], pipeline.worktreeDir)).code !== 0) {
         if (repair || directories.length > 1) {

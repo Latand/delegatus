@@ -3,8 +3,7 @@ import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
 import type { FileEntry } from "@/lib/types";
 import { DEFAULT_BOARD_IDLE_COLLAPSE_MINUTES } from "@/lib/board/types";
 
-import { reviewerBindingTargetsForRound } from "@/components/flows/flowModel";
-import { activityBand, isChildConversation, projectKey, schemeAgeHorizonSeconds, withinPlacementHorizon } from "@/components/projectModel";
+import { activityBand, projectKey, schemeAgeHorizonSeconds, withinPlacementHorizon } from "@/components/projectModel";
 import { IDENTITY_CLAIM_RESOLVER, transcriptClaimResolver, type TranscriptClaimResolver } from "@/components/transcriptClaims";
 
 /*
@@ -33,8 +32,6 @@ import { IDENTITY_CLAIM_RESOLVER, transcriptClaimResolver, type TranscriptClaimR
  * writes nothing — the collapsed placement is a deterministic function of the
  * scan, so it survives reloads and redeploys with no stored "collapsed" flag.
  */
-
-export type WorkerClass = "flow-reviewer" | "flow-implementer" | "pipeline-stage" | "spawned-worker" | "spawned-descendant";
 
 /** Default board inactivity window. It no longer removes anything from the
     board (#1244) — collapse is completion-keyed. What still reads it is the
@@ -211,45 +208,6 @@ function flowMembership(
   const implementer = index.implementerByPath.get(file.path);
   if (implementer) return { role: "implementer", flow: implementer, round: null };
   return null;
-}
-
-/**
- * Worker lineage of a conversation, or null for an owner-started root. Order
- * matters: a reviewer is unambiguous automation (the flow engine spawns it),
- * then a flow implementer — but ONLY when it was itself spawned by an agent
- * (`file.parent` set). A parentless flow implementer is a top-level conversation
- * the OWNER created and then started a flow on; the issue keeps "root
- * conversations the owner started" out of scope, and this is also the safe side
- * of the authorship discount — an owner's first composer prompt can be discounted
- * as an automated launch, so topology, not message-counting, decides ownership
- * here. Then pipeline stage ownership, then generic spawned lineage.
- *
- * Durable flow and pipeline membership is checked before the legacy handoff
- * marker. That ordering keeps orchestration stages worker-class even when an old
- * compatibility record still carries a polluted handoff flag.
- *
- * FAIL TOWARD COLLAPSED (issue #136): the precise classes above miss workers
- * whenever the flow/pipeline attachment can't be resolved by path (a migrated or
- * renamed transcript, a stale flows list, a spawned claude *main* session the
- * `isChildConversation` kinds don't cover). The operator's board floods with
- * exactly those finished-but-uncollapsed cards. So any conversation that was
- * spawned *under something* — it carries a `parent` — is worker-class by
- * default: a `spawned-descendant`. Classification remains useful for stack labels;
- * the view-collapse decision itself applies to every conversation through
- * {@link keepExpanded}.
- */
-export function classifyWorker(file: FileEntry, lineage: WorkerLineage): WorkerClass | null {
-  const durableFlow = file.durableLineage?.memberships.find((membership) => membership.kind === "flow");
-  if (durableFlow?.role === "reviewer") return "flow-reviewer";
-  if (durableFlow?.role === "implementer") return "flow-implementer";
-  if (file.durableLineage?.memberships.some((membership) => membership.kind === "pipeline")) return "pipeline-stage";
-  const membership = flowMembership(file, lineage.flows, lineage.resolveClaimPath);
-  if (membership?.role === "reviewer") return "flow-reviewer";
-  if (membership?.role === "implementer") return file.parent ? "flow-implementer" : null;
-  if (lineage.pipelineStagePaths.has(file.path)) return "pipeline-stage";
-  if (file.handoff) return null;
-  if (isChildConversation(file)) return "spawned-worker";
-  return file.parent ? "spawned-descendant" : null;
 }
 
 /** Flow states in which the loop produced its result and the implementer is the
@@ -494,71 +452,14 @@ export interface WorkerStack {
 }
 
 /** Flow id owning a transcript, derived from the flows list by path (a flow
-    member groups per flow, everything else per worktree). Uses the same
-    path-matching as classification — never the absent `file.flow`. */
+    member groups per flow, everything else per worktree). Resolves membership
+    from durable lineage or recorded paths — never the absent `file.flow`. */
 export function flowIdForPath(
   file: FileEntry,
   flows: readonly Flow[],
   resolve: TranscriptClaimResolver = IDENTITY_CLAIM_RESOLVER,
 ): string | null {
   return flowMembership(file, flows, resolve)?.flow.id ?? null;
-}
-
-/** Transcript path → the id of the pipeline that owns it, so a pipeline's stage
-    workers fold into ONE chip (issue #136). A stage's own `agentPath` is owned;
-    for a review-loop stage the embedded flow's implementer + reviewer paths are
-    owned too, otherwise the flow bucket would split them off into a second stack
-    (a build stage in the pipeline stack, its reviewer in a flow stack). */
-export function pipelineStagePipelineIds(
-  pipelines: readonly Pipeline[],
-  flows: readonly Flow[] = [],
-  files: readonly FileEntry[] = [],
-): Map<string, string> {
-  const flowById = new Map(flows.map((flow) => [flow.id, flow] as const));
-  const map = new Map<string, string>();
-  for (const pipeline of pipelines) {
-    for (const run of pipeline.runs) {
-      for (const attempt of run.attempts) {
-        if (attempt.agentPath && !map.has(attempt.agentPath)) map.set(attempt.agentPath, pipeline.id);
-        if (attempt.flowId) {
-          const flow = flowById.get(attempt.flowId);
-          if (flow) {
-            if (!map.has(flow.implementerPath)) map.set(flow.implementerPath, pipeline.id);
-            for (const round of flow.rounds) {
-              for (const { path } of reviewerBindingTargetsForRound(flow, round, files)) {
-                if (!map.has(path)) map.set(path, pipeline.id);
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-  return map;
-}
-
-/**
- * The pipeline a worker belongs to, resolved through its ANCESTOR chain (issue
- * #136). A pipeline records ownership only for each stage attempt's `agentPath`;
- * a conversation that stage spawns has its own path, so a path-only lookup would
- * miss it and split it into a separate origin stack while the stage stays in the
- * pipeline stack — one pipeline reading as two chips. Walking up `parent` to the
- * nearest pipeline-owned ancestor keeps the whole subtree in one pipeline stack.
- */
-export function pipelineOriginOf(
-  file: FileEntry,
-  filesByPath: ReadonlyMap<string, FileEntry>,
-  pipelineIds: ReadonlyMap<string, string>,
-): string | null {
-  let cursor: FileEntry | undefined = file;
-  const seen = new Set<string>();
-  while (cursor && !seen.has(cursor.path)) {
-    const id = pipelineIds.get(cursor.path);
-    if (id) return id;
-    seen.add(cursor.path);
-    cursor = cursor.parent ? filesByPath.get(cursor.parent) : undefined;
-  }
-  return null;
 }
 
 /** Resolvers that place a worker under its origin (issue #136). Both are pure
@@ -775,19 +676,4 @@ export function groupWorkerStacks(
     if (a.kind !== b.kind) return STACK_KIND_RANK[a.kind] - STACK_KIND_RANK[b.kind];
     return freshness(a.items[0]!) - freshness(b.items[0]!);
   });
-}
-
-export interface WorkerStacksInput extends CollapsibleInput {
-  /** Conversations already drawn on the scheme (nodes, mini-stack rows, reviewer
-      decks): excluded so a card is never rendered in two places at once. */
-  renderedPaths: ReadonlySet<string>;
-}
-
-/**
- * Convenience composition: the per-flow / per-worktree stacks of every
- * collapse-eligible worker the scheme is not already drawing. Equivalent to
- * grouping {@link collapsibleWorkerFiles} minus `renderedPaths`.
- */
-export function computeWorkerStacks(input: WorkerStacksInput): WorkerStack[] {
-  return groupWorkerStacks(collapsibleWorkerFiles(input), input.flows, input.renderedPaths);
 }

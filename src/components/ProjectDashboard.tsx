@@ -2330,7 +2330,7 @@ function ProjectDashboardView({
                meta line. */
             back={mobileConversationKey !== null}
             /* A restored answer being confirmed says so under the name (#2071). */
-            title={<MobileBarTitle meta={cached && !loaded ? t("dash.updating") : undefined}>{projectTitleNode}</MobileBarTitle>}
+            title={<MobileBarTitle meta={cached && !loaded ? t("dash.updating") : undefined} eyebrow={mobileShell?.workspaceEyebrow}>{projectTitleNode}</MobileBarTitle>}
             titleLabel={t("mobile2.bar.switchProject")}
             titleOpens={mobileShell ? "projects" : undefined}
             host={mobileShell}

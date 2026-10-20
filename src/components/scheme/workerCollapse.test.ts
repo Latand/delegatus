@@ -7,19 +7,15 @@ import type { FileEntry } from "@/lib/types";
 import { transcriptClaimResolver } from "@/components/transcriptClaims";
 
 import {
-  classifyWorker,
   collapsibleWorkerFiles,
   conversationSettled,
-  computeWorkerStacks,
   finishedLaneOutcomePaths,
   flowIdForPath,
   groupWorkerStacks,
   keepExpanded,
   outcomeSeen,
   pipelineCursorStagePaths,
-  pipelineOriginOf,
   pipelineStageAgentPaths,
-  pipelineStagePipelineIds,
   protectedReviewerNodes,
   reviewerRoundFinished,
   shouldCollapseWorker,
@@ -109,41 +105,27 @@ const ctx = (over: Partial<Parameters<typeof shouldCollapseWorker>[1]> = {}) => 
   ...over,
 });
 
-describe("classifyWorker", () => {
-  test("roles are derived from the flows list by path, NOT from file.flow (integration seam)", () => {
+describe("flowIdForPath — membership", () => {
+  test("flow membership is derived from recorded paths without file.flow", () => {
     /* /api/files ships raw scanner entries with no `file.flow` annotation, so
-       classification must match flow.implementerPath / round.reviewerPath. */
+       membership must match flow.implementerPath / round.reviewerPath. */
     const reviewer = entry({ path: "/rev" });
     const impl = entry({ path: "/impl", parent: "/orchestrator" });
     const flows = [flow({ id: "f1", implementerPath: "/impl", rounds: [round({ reviewerPath: "/rev" })] })];
     expect(reviewer.flow).toBeUndefined();
-    expect(classifyWorker(reviewer, lineage(flows))).toBe("flow-reviewer");
-    expect(classifyWorker(impl, lineage(flows))).toBe("flow-implementer");
+    expect(flowIdForPath(reviewer, flows)).toBe("f1");
+    expect(flowIdForPath(impl, flows)).toBe("f1");
   });
 
-  test("a parentless flow implementer is an owner root, never worker-class", () => {
-    /* The owner started a top-level conversation and then a flow on it; keep it
-       out of scope (and off the fragile authorship discount). */
+  test("a parentless implementer retains its flow membership", () => {
     const impl = entry({ path: "/impl", parent: null });
     const flows = [flow({ id: "f1", implementerPath: "/impl" })];
-    expect(classifyWorker(impl, lineage(flows))).toBeNull();
+    expect(flowIdForPath(impl, flows)).toBe("f1");
   });
 
-  test("pipeline stage ownership is worker-class", () => {
-    const stage = entry({ path: "/stage" });
-    expect(classifyWorker(stage, lineage([], new Set(["/stage"])))).toBe("pipeline-stage");
-  });
-
-  test("agent-spawned subagents and codex children are spawned workers", () => {
-    const subagent = entry({ path: "/sub", kind: "subagent", parent: "/root" });
-    const codexChild = entry({ path: "/c", root: "codex-sessions", engine: "codex", parent: "/root" });
-    expect(classifyWorker(subagent, lineage())).toBe("spawned-worker");
-    expect(classifyWorker(codexChild, lineage())).toBe("spawned-worker");
-  });
-
-  test("durable flow membership classifies before a legacy handoff marker", () => {
+  test("durable flow membership survives a legacy handoff marker", () => {
     const handoff = entry({ path: "/h", parent: "/root", handoff: true });
-    expect(classifyWorker(handoff, lineage())).toBeNull();
+    expect(flowIdForPath(handoff, [])).toBeNull();
     const handoffImplementer = entry({
       path: "/h",
       parent: "/root",
@@ -157,53 +139,13 @@ describe("classifyWorker", () => {
       },
     });
     const flows = [flow({ id: "f1", implementerPath: "/h", rounds: [] })];
-    expect(classifyWorker(handoffImplementer, lineage(flows))).toBe("flow-implementer");
-  });
-
-  test("an owner-started root conversation is not worker-class", () => {
-    const root = entry({ path: "/root" });
-    expect(classifyWorker(root, lineage())).toBeNull();
-  });
-
-  test("FAIL TOWARD COLLAPSED: a parented conversation the specific classes miss is still worker-class (#136)", () => {
-    /* A spawned claude *main* session (kind "session", not "subagent"), or any
-       worker whose flow/pipeline attachment can't be resolved by path, must still
-       fold — a classification miss defaults to collapsed, not to a full node. */
-    const spawnedMain = entry({ path: "/spawned", parent: "/root" });
-    expect(spawnedMain.kind).toBe("session");
-    expect(classifyWorker(spawnedMain, lineage())).toBe("spawned-descendant");
-  });
-
-  test("fail-toward-collapsed never overrides the parentless-root exemption (#136)", () => {
-    const root = entry({ path: "/root", parent: null });
-    expect(classifyWorker(root, lineage())).toBeNull();
+    expect(flowIdForPath(handoffImplementer, flows)).toBe("f1");
   });
 });
 
-describe("pipelineOriginOf — ancestor-chain pipeline ownership (#136)", () => {
-  test("a stage resolves directly; its spawned descendant resolves through the chain", () => {
-    const stage = entry({ path: "/stage", parent: "/orch" });
-    const child = entry({ path: "/stage/child", parent: "/stage", kind: "subagent" });
-    const grandchild = entry({ path: "/stage/child/leaf", parent: "/stage/child", kind: "subagent" });
-    const filesByPath = new Map([[stage.path, stage], [child.path, child], [grandchild.path, grandchild]]);
-    const pipelineIds = new Map([["/stage", "pipe1"]]);
-    expect(pipelineOriginOf(stage, filesByPath, pipelineIds)).toBe("pipe1");
-    expect(pipelineOriginOf(child, filesByPath, pipelineIds)).toBe("pipe1");
-    expect(pipelineOriginOf(grandchild, filesByPath, pipelineIds)).toBe("pipe1");
-  });
-
-  test("a worker with no pipeline ancestor resolves to null", () => {
-    const a = entry({ path: "/a" });
-    const b = entry({ path: "/a/b", parent: "/a", kind: "subagent" });
-    const filesByPath = new Map([[a.path, a], [b.path, b]]);
-    expect(pipelineOriginOf(b, filesByPath, new Map())).toBeNull();
-  });
-
-  test("ownership map covers every durable reviewer binding in one embedded flow group (#136, #353)", () => {
+describe("groupWorkerStacks — durable reviewer bindings", () => {
+  test("explicit pipeline ownership groups every durable reviewer binding (#136, #353)", () => {
     const flows = [flow({ id: "flow1", implementerPath: "/builder", rounds: [round({ n: 1, reviewerPath: "/reviewer" })] })];
-    const pipelines = [
-      { id: "pipe1", runs: [{ stageId: "review", attempts: [{ agentPath: "/reviewer", flowId: "flow1" }] }] } as unknown as Pipeline,
-    ];
     const membership = (slot: string) => ({
       kind: "flow" as const, containerId: "flow1", role: "reviewer", slot,
       stageId: null, stageOrder: null, round: 1, parentConversationId: "conversation-builder",
@@ -212,10 +154,16 @@ describe("pipelineOriginOf — ancestor-chain pipeline ownership (#136)", () => 
       entry({ path: "/reviewer-prior", conversationId: "conversation-prior", durableLineage: { kind: "review", role: "reviewer", parentConversationId: "conversation-builder", reviewsConversationId: "conversation-builder", memberships: [membership("reviewer:1:binding-a")] } }),
       entry({ path: "/reviewer", conversationId: "conversation-current", durableLineage: { kind: "review", role: "reviewer", parentConversationId: "conversation-builder", reviewsConversationId: "conversation-builder", memberships: [membership("reviewer:1:binding-b")] } }),
     ];
-    const map = pipelineStagePipelineIds(pipelines, flows, files);
-    expect(map.get("/reviewer")).toBe("pipe1");
-    expect(map.get("/reviewer-prior")).toBe("pipe1");
-    expect(map.get("/builder")).toBe("pipe1");
+    const builder = entry({ path: "/builder" });
+    const ownership = new Map([
+      ["/builder", "pipe1"], ["/reviewer", "pipe1"], ["/reviewer-prior", "pipe1"],
+    ]);
+    const stacks = groupWorkerStacks([builder, ...files], flows, new Set(), {
+      pipelineIdOf: (path) => ownership.get(path) ?? null,
+    });
+    expect(stacks.map(({ key }) => key)).toEqual(["wstack::pipeline::pipe1"]);
+    expect(stacks[0]!.items.map(({ path }) => path).sort())
+      .toEqual(["/builder", "/reviewer", "/reviewer-prior"]);
   });
 });
 
@@ -388,13 +336,13 @@ describe("shouldCollapseWorker", () => {
       },
     }));
 
-    const stacks = computeWorkerStacks({
+    const collapsed = collapsibleWorkerFiles({
       files: terminal,
       project: "demo",
       flows: [],
       pinnedPaths: new Set(),
-      renderedPaths: new Set(),
     });
+    const stacks = groupWorkerStacks(collapsed, []);
 
     expect(stacks.flatMap((stack) => stack.items).map((file) => file.path).sort())
       .toEqual(["spawn:failed", "spawn:recovered"]);
@@ -697,32 +645,30 @@ describe("pipelineStageAgentPaths", () => {
 describe("claims across recorded path spellings (#943 follow-up)", () => {
   /* Flow rounds and pipeline attempts hold whatever spelling was current when
      they ran; the projection publishes the shared-store one. A raw string claim
-     misses, so a finished reviewer never classifies as worker-class and holds a
-     full node forever. */
+     misses, so a finished reviewer can hold a full node forever. */
   const LEGACY = "/store/legacy/projects/enc-project";
   const SHARED = "/store/shared/projects/enc-project";
   const corpus = (...files: FileEntry[]) => files;
 
-  test("a reviewer round recorded pre-canonically is still flow-reviewer", () => {
+  test("a reviewer recorded pre-canonically retains its flow membership", () => {
     const reviewer = entry({ path: `${SHARED}/rev-9c41.jsonl` });
     const flows = [flow({ id: "f1", implementerPath: `${LEGACY}/impl-3f2a.jsonl`, rounds: [round({ reviewerPath: `${LEGACY}/rev-9c41.jsonl` })] })];
-    expect(classifyWorker(reviewer, { ...lineage(flows), resolveClaimPath: transcriptClaimResolver(corpus(reviewer)) })).toBe("flow-reviewer");
+    expect(flowIdForPath(reviewer, flows, transcriptClaimResolver(corpus(reviewer)))).toBe("f1");
   });
 
-  test("an implementer recorded pre-canonically is still flow-implementer", () => {
+  test("an implementer recorded pre-canonically retains its flow membership", () => {
     const impl = entry({ path: `${SHARED}/impl-3f2a.jsonl`, parent: "/orchestrator" });
     const flows = [flow({ id: "f1", implementerPath: `${LEGACY}/impl-3f2a.jsonl` })];
-    expect(classifyWorker(impl, { ...lineage(flows), resolveClaimPath: transcriptClaimResolver(corpus(impl)) })).toBe("flow-implementer");
+    expect(flowIdForPath(impl, flows, transcriptClaimResolver(corpus(impl)))).toBe("f1");
   });
 
-  test("a stage attempt recorded pre-canonically is still pipeline-stage", () => {
+  test("a stage attempt recorded pre-canonically claims the projected path", () => {
     const stage = entry({ path: `${SHARED}/stage-77bd.jsonl` });
     const pipelines = [
       { runs: [{ attempts: [{ agentPath: `${LEGACY}/stage-77bd.jsonl` }] }] },
     ] as unknown as Parameters<typeof pipelineStageAgentPaths>[0];
     const paths = pipelineStageAgentPaths(pipelines, transcriptClaimResolver(corpus(stage)));
     expect(paths.has(stage.path)).toBe(true);
-    expect(classifyWorker(stage, lineage([], paths as Set<string>))).toBe("pipeline-stage");
   });
 
   test("a finished round recorded pre-canonically folds, a running one does not", () => {
@@ -750,7 +696,7 @@ describe("claims across recorded path spellings (#943 follow-up)", () => {
        transcript has left the window must not fold an unrelated card. */
     const other = entry({ path: `${SHARED}/rev-0000.jsonl` });
     const flows = [flow({ id: "f1", implementerPath: `${LEGACY}/impl-3f2a.jsonl`, rounds: [round({ reviewerPath: `${LEGACY}/rev-9c41.jsonl` })] })];
-    expect(classifyWorker(other, { ...lineage(flows), resolveClaimPath: transcriptClaimResolver(corpus(other)) })).toBeNull();
+    expect(flowIdForPath(other, flows, transcriptClaimResolver(corpus(other)))).toBeNull();
   });
 
   test("an ambiguous tail stays unresolved", () => {
@@ -814,23 +760,22 @@ describe("collapsibleWorkerFiles — independent conversation projection", () =>
   });
 });
 
-describe("computeWorkerStacks", () => {
+describe("collapsibleWorkerFiles with groupWorkerStacks", () => {
   const stale = (over: Partial<FileEntry> & { path: string }) => entry({ mtime: NOW_SEC - 3 * 60 * 60, proc: "done", ...over });
 
   test("groups collapse-eligible workers per flow, then per worktree (from flows, no file.flow)", () => {
-    // Files carry NO flow annotation (as /api/files serves them); classification
-    // and grouping both derive from the flows list by path.
+    // Files carry no flow annotation; grouping derives membership from recorded paths.
     const flowWorker = stale({ path: "/rev" });
     const worktreeWorker = stale({ path: "/w", kind: "subagent", parent: "/root", worktree: "feat" });
     const flows = [flow({ id: "f1", implementerPath: "/impl", rounds: [round({ reviewerPath: "/rev", verdict: "APPROVE" })] })];
     expect(flowWorker.flow).toBeUndefined();
-    const stacks = computeWorkerStacks({
+    const collapsed = collapsibleWorkerFiles({
       files: [flowWorker, worktreeWorker],
       project: "demo",
       flows,
-      renderedPaths: new Set(),
       pinnedPaths: new Set(),
     });
+    const stacks = groupWorkerStacks(collapsed, flows);
     expect(stacks.map((s) => s.kind)).toEqual(["flow", "worktree"]);
     expect(stacks[0]!.items.map((f) => f.path)).toEqual(["/rev"]);
     expect(stacks[1]!.items.map((f) => f.path)).toEqual(["/w"]);
@@ -838,26 +783,20 @@ describe("computeWorkerStacks", () => {
 
   test("excludes conversations already drawn on the scheme", () => {
     const worker = stale({ path: "/w", kind: "subagent", parent: "/root" });
-    const stacks = computeWorkerStacks({
-      files: [worker],
-      project: "demo",
-      flows: [],
-      renderedPaths: new Set(["/w"]),
-      pinnedPaths: new Set(),
-    });
+    const stacks = groupWorkerStacks([worker], [], new Set(["/w"]));
     expect(stacks).toHaveLength(0);
   });
 
   test("owner roots and user-authored workers follow the same settlement rule", () => {
     const root = stale({ path: "/root" });
     const touched = stale({ path: "/w", kind: "subagent", parent: "/root", userAuthored: true });
-    const stacks = computeWorkerStacks({
+    const collapsed = collapsibleWorkerFiles({
       files: [root, touched],
       project: "demo",
       flows: [],
-      renderedPaths: new Set(),
       pinnedPaths: new Set(),
     });
+    const stacks = groupWorkerStacks(collapsed, []);
     expect(stacks.flatMap((stack) => stack.items).map((file) => file.path).sort()).toEqual(["/root", "/w"]);
   });
 });
@@ -887,17 +826,12 @@ describe("groupWorkerStacks — one stack per origin (#136)", () => {
   });
 
   test("a pipeline stage and its spawned child fold into ONE pipeline stack, not a second origin stack (#136)", () => {
-    /* The stage is owned by agentPath; its child has a different path. Ancestor
-       resolution keeps both in the same pipeline stack. */
+    /* The caller supplies the resolved pipeline ownership for both paths. */
     const stage = stale({ path: "/stage", parent: "/orch" });
     const child = stale({ path: "/stage/child", parent: "/stage", kind: "subagent" });
-    const filesByPath = new Map([[stage.path, stage], [child.path, child]]);
-    const pipelineIds = new Map([["/stage", "pipe1"]]);
+    const pipelineIds = new Map([["/stage", "pipe1"], ["/stage/child", "pipe1"]]);
     const stacks = groupWorkerStacks([stage, child], [], new Set(), {
-      pipelineIdOf: (path) => {
-        const file = filesByPath.get(path);
-        return file ? pipelineOriginOf(file, filesByPath, pipelineIds) : null;
-      },
+      pipelineIdOf: (path) => pipelineIds.get(path) ?? null,
       /* Without the pipeline resolver both would fall here — proving the split. */
       originOf: () => "/orch",
     });
@@ -915,21 +849,11 @@ describe("groupWorkerStacks — one stack per origin (#136)", () => {
     const builder = stale({ path: "/builder", parent: "/orch" });
     const reviewer = stale({ path: "/reviewer", parent: "/builder" });
     const flows = [flow({ id: "flow1", implementerPath: "/builder", rounds: [round({ reviewerPath: "/reviewer", verdict: "APPROVE" })] })];
-    const pipelines = [
-      {
-        id: "pipe1", runs: [
-          { stageId: "arch", attempts: [{ agentPath: "/architect", flowId: null }] },
-          { stageId: "review", attempts: [{ agentPath: "/reviewer", flowId: "flow1" }] },
-        ],
-      } as unknown as Pipeline,
-    ];
-    const ownership = pipelineStagePipelineIds(pipelines, flows);
-    const filesByPath = new Map([[architect.path, architect], [builder.path, builder], [reviewer.path, reviewer]]);
+    const ownership = new Map([
+      ["/architect", "pipe1"], ["/builder", "pipe1"], ["/reviewer", "pipe1"],
+    ]);
     const stacks = groupWorkerStacks([architect, builder, reviewer], flows, new Set(), {
-      pipelineIdOf: (path) => {
-        const file = filesByPath.get(path);
-        return file ? pipelineOriginOf(file, filesByPath, ownership) : null;
-      },
+      pipelineIdOf: (path) => ownership.get(path) ?? null,
       originOf: () => "/orch",
     });
     expect(stacks).toHaveLength(1);
@@ -1060,7 +984,6 @@ describe("flow membership index", () => {
       flow({ id: "a", implementerPath: "/both", rounds: [round({ reviewerPath: "/other" })] }),
       flow({ id: "b", implementerPath: "/impl", rounds: [round({ reviewerPath: "/both" })] }),
     ];
-    expect(classifyWorker(both, lineage(flows))).toBe("flow-reviewer");
     expect(flowIdForPath(both, flows)).toBe("b");
   });
 
@@ -1102,9 +1025,9 @@ describe("flow membership index", () => {
     const files = [entry({ path: "/accounts/claude/account-b/projects/p/rev.jsonl" })];
     const resolve = transcriptClaimResolver(files);
     const flows = [flow({ id: "f1", implementerPath: "/impl", rounds: [round({ reviewerPath: "$HOME/.claude/projects/p/rev.jsonl" })] })];
-    expect(classifyWorker(files[0]!, { flows, pipelineStagePaths: new Set(), resolveClaimPath: resolve })).toBe("flow-reviewer");
+    expect(flowIdForPath(files[0]!, flows, resolve)).toBe("f1");
     /* Without the resolver the recorded spelling stays unmatched, exactly as before. */
-    expect(classifyWorker(files[0]!, lineage(flows))).toBeNull();
+    expect(flowIdForPath(files[0]!, flows)).toBeNull();
   });
 
   test("a NEW flows projection is never answered from the previous one's index", () => {
@@ -1137,6 +1060,5 @@ describe("flow membership index", () => {
       flow({ id: "later", implementerPath: "/impl", rounds: [round({ reviewerPath: "/rev" })] }),
     ];
     expect(flowIdForPath(implementer, flows)).toBe("empty");
-    expect(classifyWorker(implementer, lineage(flows))).toBe("flow-implementer");
   });
 });

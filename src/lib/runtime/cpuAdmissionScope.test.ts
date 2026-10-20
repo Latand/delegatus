@@ -36,6 +36,19 @@ function run(argv: string[], env: Record<string, string>): { code: number; stdou
   return { code: child.exitCode, stdout: child.stdout.toString(), stderr: child.stderr.toString() };
 }
 
+test("test startup drops the admitting gate's task database binding before fixtures run", async () => {
+  const root = sandbox(), file = path.join(root, "binding.test.ts");
+  fs.writeFileSync(file, 'import { test, expect } from "bun:test"; test("private binding", () => expect(process.env.LLV_GATE_CPU_PRIORITY_SOURCE).toBeUndefined());');
+  const child = Bun.spawn([process.execPath, "test", file], {
+    cwd: path.join(import.meta.dir, "../../.."),
+    env: { ...process.env, LLV_GATE_CPU_PRIORITY_SOURCE: JSON.stringify({ database: path.join(root, "outside-fixture.sqlite"), taskIds: ["source-task"] }) },
+    stdout: "pipe", stderr: "pipe",
+  });
+  const [out, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect(code).toBe(0);
+  expect(out + error).toContain("1 pass");
+});
+
 test("only the live installation's state directory shares the machine queue", () => {
   const live = { home: () => "/srv/operator", staging: false, guarded: false };
   const state = "/srv/operator/.config/delegatus/state";
