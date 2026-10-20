@@ -16,7 +16,8 @@ import { peerCredentials } from "./nativePeer";
 
 const seedTaskId = `00000000-0000-4000-8000-${String(0).padStart(12, "0")}`;
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-task-executor-"));
-for (const name of ["HOME", "XDG_CONFIG_HOME", "LLV_STATE_DIR", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME"]) {
+// Keep the preload's private state root: static imports already captured it.
+for (const name of ["HOME", "XDG_CONFIG_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME"]) {
   process.env[name] = path.join(root, name); fs.mkdirSync(process.env[name]!, { recursive: true });
 }
 process.env.TMPDIR = root;
@@ -618,7 +619,8 @@ test("concurrent callers keep their own server-derived note attribution across t
 
 test("timed-out replies retain admission until the executor settles or closes", async () => {
   const ready = path.join(root, "stalled-worker.pid");
-  const executor = new McpTaskExecutor({ launch: { executable: process.execPath, workerPath: path.join(import.meta.dir, "writerConcurrencyChild.ts") },
+  const executor = new McpTaskExecutor({ drainMs: 1000,
+    launch: { executable: process.execPath, workerPath: path.join(import.meta.dir, "writerConcurrencyChild.ts") },
     env: { LLV_TASK_EXECUTOR_STALL: "1", LLV_WRITER_READY: ready } });
   executors.push(executor);
   const deadlineAt = Date.now() + 100;
@@ -629,10 +631,11 @@ test("timed-out replies retain admission until the executor settles or closes", 
   const deadline = Date.now() + 3_000;
   while (!fs.existsSync(ready) && Date.now() < deadline) await Bun.sleep(10);
   const identity = captureProcessIdentity(Number(fs.readFileSync(ready, "utf8")));
-  while (identity && processIdentityStatus(identity) === "alive" && Date.now() < deadline) await Bun.sleep(10);
-  if (identity) expect(processIdentityStatus(identity)).not.toBe("alive");
-  await expect(call(executor, "list_tasks", {}, { deadlineAt: Date.now() + 10 })).rejects.toThrow("timed out");
+  expect(processIdentityStatus(identity)).toBe("alive");
+  // Cancellation preserves the shared worker and its occupied admission;
+  // explicit close is the owner of this unresponsive fixture's deadline.
   await executor.close();
+  expect(processIdentityStatus(identity)).not.toBe("alive");
 });
 
 test("retiring before a queued dispatch releases its byte reservation once", async () => {
@@ -646,7 +649,7 @@ test("retiring before a queued dispatch releases its byte reservation once", asy
   const queued = call(executor, "get_task", { padding: "x".repeat(3 * 1024 * 1024) });
   void queued.catch(() => {});
   const closed = executor.close();
-  await expect(queued).rejects.toThrow("before its reply");
+  await expect(queued).rejects.toThrow("before dispatch");
   await closed; fs.unlinkSync(ready);
   await expect(call(executor, "get_task", { padding: "x".repeat(5 * 1024 * 1024) })).rejects.toThrow("admission is full");
   expect(fs.existsSync(ready)).toBe(false);

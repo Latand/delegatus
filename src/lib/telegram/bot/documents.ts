@@ -349,7 +349,12 @@ function refusePlace(real: string, requested: string, realRoots: readonly string
     throw new DocumentRefusal("document_forbidden_path", `${requested} is inside the Delegatus state directory, which is never sent`);
   }
   if (!realRoots.some((root) => within(real, root) && real !== root)) {
-    throw new DocumentRefusal("document_outside_roots", `${requested} is not under a document root (${roots.join(", ")}); write the file under one of them`);
+    const displayPath = (filename: string) => {
+      if (!within(filename, environment.home)) return filename;
+      const relative = path.relative(environment.home, filename).split(path.sep).join("/");
+      return relative ? `$HOME/${relative}` : "$HOME";
+    };
+    throw new DocumentRefusal("document_outside_roots", `${displayPath(requested)} is outside the allowed document roots (${roots.map(displayPath).join(", ")}); write the file under one of them`);
   }
 }
 

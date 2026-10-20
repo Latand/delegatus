@@ -972,16 +972,20 @@ for (const dirty of [false, true]) test(`publication refuses unsuccessful depend
   } finally { h.cleanup(); }
 });
 
-for (const action of ["publish", "retry-stage"] as const) test(`next explicit ${action} retries a settled failure without takeover`, async () => {
+for (const action of ["publish", "retry-stage"] as const) test(`next explicit ${action} retains a settled deadline failure before retry`, async () => {
   const h = fixture();
   try {
+    h.ports.now = () => "2026-10-16T10:00:00.000Z";
     h.lane.lastPassedCommit = h.head;
     h.lane.delivery!.operation = { id: "failed", state: "settled", epoch: 1, sha: h.head,
-      result: { ok: false, error: "hook failed" } };
+      result: { ok: false, error: "hook deadline", failure: { step: "publishing the pipeline branch", code: 124, signal: null,
+        durationMs: 60_000, outputTail: "owned runner: deadline expired", retryableDeadline: true } } };
     h.lane.stateDetail = "hook failed"; savePipelines([h.lane]);
     expect((await patchPipeline(h.lane.id, { action }, h.ports)).error).toBeUndefined(); await h.tick();
     expect(h.current()).toMatchObject({ state: "completed", publishedCommit: h.head, delivery: { epoch: 1, ownerId: h.lane.id } });
     expect(h.pushes()).toBe(1);
+    expect(h.current().publicationRecovery?.[h.head]).toMatchObject({ failures: 1, totalAttempts: 1,
+      history: [{ operationId: "failed", cause: "infrastructure-deadline", retryAt: "2026-10-16T10:01:00.000Z" }] });
   } finally { h.cleanup(); }
 });
 
@@ -1341,6 +1345,8 @@ for (const failsAfterWait of [false, true]) test(`capacity retries survive a con
     for (let n = 0; n < 8; n++) await tickPipelines([], ports);
     expect(h.current().state).toBe("running");
     expect(h.current().runs[0]!.attempts[0]!.publicationRetry).toMatchObject({ failures: 1, retryAt: "2026-10-16T10:01:00.000Z" });
+    expect(h.current().publicationRecovery?.[head]).toMatchObject({ failures: 1, totalAttempts: 1,
+      history: [{ cause: "infrastructure-deadline", retryAt: "2026-10-16T10:01:00.000Z" }] });
     const engine = path.join(import.meta.dir, "engine.ts");
     const restart = async () => {
       const script = `const { realExec } = await import(${JSON.stringify(path.join(import.meta.dir, "../workflows/provision.ts"))});
@@ -1355,6 +1361,7 @@ for (const failsAfterWait of [false, true]) test(`capacity retries survive a con
     // A new controller process sees the durable future retry and does no push.
     await restart();
     expect(h.current().runs[0]!.attempts[0]!.publicationRetry!.failures).toBe(1);
+    expect(h.current().publicationRecovery?.[head]!.history).toHaveLength(1);
     // A transient overload clears before the bounded retry budget is spent.
     clock += 60_000; await restart();
     fs.writeFileSync(h.hook, failsAfterWait
@@ -1365,6 +1372,8 @@ for (const failsAfterWait of [false, true]) test(`capacity retries survive a con
     if (failsAfterWait) {
       expect(h.current().stateDetail!.split("\n")[0]).toContain("named publication assertion");
       expect(h.current().publishedCommit).toBeNull();
+      expect(h.current().publicationRecovery?.[head]!.history.at(-1)).toMatchObject({ cause: "check-failure", retryAt: null,
+        detail: expect.stringContaining("named publication assertion") });
     } else expect(h.current().publishedCommit).toBe(head);
   } finally { h.cleanup(); }
 }, 90_000);
@@ -1407,12 +1416,23 @@ test("permanent capacity deadlines stop after three retries across controller re
     for (const wait of [60_000, 5 * 60_000, 15 * 60_000]) { clock += wait; await restart(); }
     expect(fs.readFileSync(attempts, "utf8").trim().split("\n")).toHaveLength(4);
     expect(h.current().state).toBe("needs_decision");
+    const head = h.current().lastPassedCommit;
+    expect(h.current().publicationRecovery?.[head]).toMatchObject({ failures: 4, totalAttempts: 4 });
+    expect(h.current().publicationRecovery?.[head]!.history.map(entry => entry.retryAt)).toEqual([
+      "2026-10-16T11:01:00.000Z", "2026-10-16T11:06:00.000Z", "2026-10-16T11:21:00.000Z", null,
+    ]);
     expect(h.current().runs[0]!.attempts[0]!.publicationRetry).toMatchObject({ failures: 3, exhausted: true });
     expect(h.current().stateDetail!.split("\n")[0]).toContain("after 3 automatic retries");
     clock += 60 * 60_000;
     await restart();
     expect(fs.readFileSync(attempts, "utf8").trim().split("\n")).toHaveLength(4);
     expect(h.current().state).toBe("needs_decision");
+    // An explicit request grants one push and retains the exhausted automatic bound.
+    expect((await patchPipeline(h.lane.id, { action: "retry-stage" }, ports)).error).toBeUndefined();
+    await restart();
+    expect(fs.readFileSync(attempts, "utf8").trim().split("\n")).toHaveLength(5);
+    expect(h.current().state).toBe("needs_decision");
+    expect(h.current().publicationRecovery?.[head]).toMatchObject({ failures: 5, totalAttempts: 5 });
   } finally { h.cleanup(); }
 }, 90_000);
 

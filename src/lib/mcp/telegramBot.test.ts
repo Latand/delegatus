@@ -231,13 +231,17 @@ test("the reads carry their arguments into the agent route query", async () => {
 test("through the MCP service, a send refusal answers with the bot's code and its retryable at the top, and a partial send keeps its ids", async () => {
   /* The real dispatch against a stand-in Viewer that answers exactly as the
      agent route does, through the route's own failure writer. */
-  let next: TelegramBotError = new TelegramBotError("chat_unknown", "unset");
+  let next: unknown = new TelegramBotError("chat_unknown", "unset");
   const viewer = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => telegramBotFailure(next) });
   process.env.LLV_VIEWER_CONTROL_URL = `http://127.0.0.1:${viewer.port}`;
   try {
     const service = createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true)), new MemoryMcpReceiptStore());
     const send = (key: string, error: TelegramBotError) => {
-      next = error;
+      // A service shared through globalThis can come from another route bundle.
+      next = Object.assign(new Error(error.message), {
+        name: error.name, code: error.code, retryable: error.retryable, extra: error.extra,
+      });
+      expect(next).not.toBeInstanceOf(TelegramBotError);
       return service.callTool("telegram_bot_send", { clientRequestId: key, chat: "team-reports", text: "Weekly report" });
     };
 
@@ -258,5 +262,36 @@ test("through the MCP service, a send refusal answers with the bot's code and it
     expect(await send("req-uncertain", new TelegramBotError("chat_unknown", "a second dispatch"))).toMatchObject({ code: "send_uncertain", replayed: true });
   } finally {
     viewer.stop(true);
+  }
+});
+
+test.each([
+  ["telegram_bot_send_media", { images: [{ path: "/sandbox/outside.jpg", caption: "" }] }],
+  ["telegram_bot_send_document", { document: { path: "/sandbox/outside.md" } }],
+] as const)("%s keeps an outside-roots refusal from another service bundle", async (tool, input) => {
+  const message = `$HOME/outside.${tool === "telegram_bot_send_media" ? "jpg" : "md"} is outside the allowed document roots ($HOME/handoff); write the file under one of them`;
+  const refusal = { name: "TelegramBotError", code: "document_outside_roots", message, retryable: false, extra: {} };
+  const viewer = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => telegramBotFailure(refusal) });
+  process.env.LLV_VIEWER_CONTROL_URL = `http://127.0.0.1:${viewer.port}`;
+  try {
+    const service = createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true)), new MemoryMcpReceiptStore());
+    const args = { clientRequestId: "outside-roots", chat: "team-reports", ...input };
+    expect(await service.callTool(tool, args)).toMatchObject({ ok: false, code: "document_outside_roots", error: expect.stringContaining(message), retryable: false });
+    expect(await service.callTool(tool, args)).toMatchObject({ code: "document_outside_roots", replayed: true });
+  } finally {
+    await viewer.stop(true);
+  }
+});
+
+test("the bot failure mapper withholds unrelated and malformed errors", async () => {
+  for (const error of [
+    new Error("internal detail"),
+    { name: "OtherError", code: "chat_unknown", message: "internal detail", retryable: false, extra: {} },
+    { name: "TelegramBotError", code: "toString", message: "internal detail", retryable: false, extra: {} },
+    { name: "TelegramBotError", code: "chat_unknown", message: "internal detail", retryable: false, extra: null },
+  ]) {
+    const response = telegramBotFailure(error);
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: "Telegram bot request failed", code: "action_failed", retryable: false });
   }
 });
