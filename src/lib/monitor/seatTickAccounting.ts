@@ -551,7 +551,7 @@ export class SeatTickAccounting {
         if (existing) {
           if (existing.kind !== "outcome" || JSON.stringify(existing.tuple) !== JSON.stringify(tuple)) throw new Error("outcome identity collision");
           if (existing.input.outcome !== result) tx.put({ ...existing, gap: "conflicting-terminal" });
-          return;
+          continue;
         }
         const legacy = tx.get(key("legacy", this.project, child.input.conversationId));
         const input: SeatTickChildInput = { ...child.input, status: "terminal", outcome: result, outcomeId: identity };

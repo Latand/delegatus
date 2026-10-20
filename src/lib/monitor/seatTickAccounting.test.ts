@@ -103,6 +103,65 @@ test("a resolved launch stays acknowledged across a process restart and a recove
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }, 15_000);
 
+test("replaying an existing ledger outcome still records later completions and advances its cursor", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seat-accounting-replay-outcomes-"));
+  try {
+    const accounting = new SeatTickAccounting(path.join(dir, "state.sqlite"), "project");
+    accounting.initialize(emptySeatTickState(), null);
+    const owner = accounting.owner(CONVERSATION, 1);
+    const child = accounting.child("child-row", CONVERSATION, "launch-one", childInput("conversation_child", "terminal"));
+    accounting.discovery(owner, [{ child }]);
+    const stored = accounting.get(child.key) as typeof child;
+    const source = accounting.source(stored, "claude", "generation-one");
+    source.cursor = { ...source.cursor, identity: "generation-one:1", offset: 100, initialSize: 100, atEnd: true };
+    accounting.ingest(stored, source, [{ turnId: "turn-one", status: "completed", seq: 2, endOffset: 100 }]);
+    const afterFirstPoll = accounting.get(child.key) as typeof child;
+    const firstPollKey = afterFirstPoll.pollKey;
+    const replay = accounting.get(source.key) as typeof source;
+    replay.cursor = { ...replay.cursor, identity: "generation-one:1", offset: 200, initialSize: 200, atEnd: true };
+
+    accounting.ingest(afterFirstPoll, replay, [
+      { turnId: "turn-one", status: "completed", seq: 2, endOffset: 100 },
+      { turnId: "turn-two", status: "completed", seq: 4, endOffset: 200 },
+    ]);
+
+    expect(accounting.ready(10).map((row) => row.tuple.at(-1))).toEqual(["turn-one", "turn-two"]);
+    expect((accounting.get(source.key) as typeof source).cursor.offset).toBe(200);
+    expect((accounting.get(child.key) as typeof child).pollKey).not.toBe(firstPollKey);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("repeated orphan-resolution polls account for every child within the bounded visit window", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seat-accounting-orphan-replay-"));
+  try {
+    const accounting = new SeatTickAccounting(path.join(dir, "state.sqlite"), "project");
+    accounting.initialize(emptySeatTickState(), null);
+    const owner = accounting.owner(CONVERSATION, 1);
+    const children = Array.from({ length: 63 }, (_, index) => accounting.child(
+      `child-${index.toString().padStart(2, "0")}`, CONVERSATION, `launch-${index.toString().padStart(2, "0")}`,
+      { ...childInput(`conversation_child_${index.toString().padStart(2, "0")}`, "terminal"), outcome: "failed" },
+    ));
+    accounting.discovery(owner, children.map((child) => ({ child, position: "head" as const })));
+
+    for (let tick = 0; tick < 4; tick++) {
+      const visits = accounting.pollPage(40);
+      expect(visits.length).toBeLessThanOrEqual(40);
+      for (const ticket of visits) {
+        if (ticket.kind !== "poll") continue;
+        const child = accounting.get(ticket.target);
+        if (child?.kind !== "child") throw new Error("missing child provenance");
+        accounting.ingest(child, null, [], "launch-unmaterialized");
+        expect((accounting.get(child.key) as typeof child).pollKey).not.toBe(ticket.key);
+      }
+    }
+
+    const outcomes = accounting.ready(100);
+    expect(outcomes).toHaveLength(63);
+    expect(new Set(outcomes.map((row) => row.child)).size).toBe(63);
+    expect(accounting.page("poll", 100)).toHaveLength(63);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+}, 15_000);
+
 /* Running tickets are a FIFO the check observes eight of and rotates four of,
    so every running child is observed on two consecutive checks once per cycle
    (#1465). The fixed identity-ordered eight this replaces never observed the
