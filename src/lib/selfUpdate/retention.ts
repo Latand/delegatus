@@ -1,3 +1,4 @@
+import type { RetentionScan } from "./retentionInspection";
 import { RetentionWorker, RetentionInspectionError, type RetentionInspection } from "./retentionWorker";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
@@ -19,13 +20,15 @@ export type RetentionInputs = {
 };
 export type RetentionReport = {
   at: string; removed: { dir: string; sha: string; bytes: number }[];
+  cursor?: { age: number; dir: string };
   reclaimedCacheBytes: number; kept: { dir: string; reason: string; bytes: number }[]; errors: string[];
 };
 export type RetentionPorts = {
   inspection?: RetentionInspection;
-  git?: typeof runGit; scan?: () => ProcessScan; mountPoints?: (directory: string) => string[];
+  git?: typeof runGit; scan?: () => ProcessScan & Partial<Pick<RetentionScan, "uncertain">>; mountPoints?: (directory: string) => string[];
   now?: () => number; env?: Readonly<Record<string, string | undefined>>; reportFile?: string;
-  current?: () => { record: LauncherRecord; inputs: RetentionInputs };
+  current?: () => { record: LauncherRecord; inputs: RetentionInputs } | Promise<{ record: LauncherRecord; inputs: RetentionInputs }>;
+  maxCandidates?: number;
   removeTree?: (directory: string) => Promise<void>;
   lockHead?: (directory: string) => (() => void) | null;
 };
@@ -61,9 +64,18 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
   const report: RetentionReport = { at: new Date(now()).toISOString(), removed: [], reclaimedCacheBytes: 0, kept: [], errors: [] };
   const reportFile = ports.reportFile ?? statePath("self-update", "retention.json");
   fs.mkdirSync(path.dirname(reportFile), { recursive: true });
-  const previousTrash = fs.readdirSync(path.dirname(reportFile));
+  const previousTrash = fs.readdirSync(path.dirname(reportFile)).sort();
+  let cursor: RetentionReport["cursor"];
+  try {
+    const previous = JSON.parse(fs.readFileSync(reportFile, "utf8")).cursor;
+    if (Number.isFinite(previous?.age) && typeof previous?.dir === "string" && path.dirname(previous.dir) === path.resolve(record.releasesDir)) cursor = previous;
+  } catch { /* A first pass, or an older report with no cursor. */ }
   const mounts = ports.mountPoints ?? mountPointsUnder;
-  const read = () => ports.current?.() ?? { record, inputs };
+  const read = async () => ports.current?.() ?? { record, inputs };
+  const budget = ports.maxCandidates ?? 4;
+  const maxCandidates = Number.isFinite(budget) ? Math.max(1, Math.min(128, Math.floor(budget))) : 4;
+  let worked = 0;
+  const deadline = now() + 120_000;
   const scan = async () => {
     try {
       const value = ports.scan ? ports.scan() : await inspection.scan(path.resolve(record.releasesDir));
@@ -72,10 +84,16 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
     } catch (error) { throw new RetentionInspectionError(String(error)); }
   };
   type Candidate = { dir: string; sha: string; age: number; locked: boolean; identity: string };
+  const byAge = (a: Candidate, b: Candidate) => a.age - b.age || (a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0);
   const identity = (dir: string) => { const stat = fs.lstatSync(dir); return `${stat.dev}:${stat.ino}`; };
   const candidates: Candidate[] = [];
   const physicalPaths = new WeakMap<ProcessScan, Map<string, string>>();
+  const uncertainReason = (dir: string, processes: ProcessScan) => {
+    const uncertain = (processes as Partial<RetentionScan>).uncertain?.find(row => row.roots.some(root => under(dir, root) || under(root, dir)));
+    return uncertain ? `process-unreadable:${uncertain.pid}:${uncertain.reason}` : null;
+  };
   const heldByProcess = (dir: string, processes: ProcessScan) => {
+    if (uncertainReason(dir, processes)) return true;
     const resolved = physicalPaths.get(processes) ?? new Map<string, string>();
     physicalPaths.set(processes, resolved);
     const physical = (entry: string) => {
@@ -90,7 +108,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
       return under(target, dir) || under(physical(target), dir);
     }) || proc.references?.some(entry => entry.includes(dir)));
   };
-  const protect = (candidate: Candidate, current: ReturnType<typeof read>, processes: ProcessScan, recovering = false): string | null => {
+  const protect = (candidate: Candidate, current: Awaited<ReturnType<typeof read>>, processes: ProcessScan, recovering = false): string | null => {
     const { record: owner, inputs: state } = current;
     if (owner.releasesDir !== record.releasesDir || owner.checkout !== record.checkout || owner.releasePointer !== record.releasePointer)
       throw new Error("installation changed during retention");
@@ -102,6 +120,8 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
     if ((state.rollbackPointers ?? []).some(raw => names(pointerDir(raw))) || names(state.rollbackPackage ?? null)) return "rollback";
     if ((state.inFlight ?? []).some(names)) return "in-flight";
     if ([owner.web.revision, owner.runtimeHost.revision, owner.launcher.revision].some(sha => sha && candidate.sha.startsWith(sha))) return "serving";
+    const uncertainty = uncertainReason(candidate.dir, processes);
+    if (uncertainty) return uncertainty;
     if (heldByProcess(candidate.dir, processes)) return "process";
     if (candidate.locked) return "locked";
     if (!recovering && now() - releaseAge(candidate.dir, !!record.checkout) < DAY) return "recent";
@@ -109,11 +129,11 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
   };
   const freshProtection = async (candidate: Candidate, recovering = false) => {
     const processes = await scan();
-    return protect(candidate, read(), processes, recovering);
+    return protect(candidate, await read(), processes, recovering);
   };
   try {
     const processes = await scan();
-    const initial = read();
+    const initial = await read();
     const root = path.resolve(record.releasesDir);
     if (fs.realpathSync(root) !== root) throw new Error("release root is an alias; skipped");
     let listed: ReturnType<typeof parseWorktreeList> = [];
@@ -122,7 +142,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
       if (result.code !== 0) throw new Error(`cannot list release worktrees: ${result.stderr}`);
       listed = parseWorktreeList(result.stdout);
     }
-    for (const name of fs.readdirSync(root)) {
+    for (const name of fs.readdirSync(root).sort()) {
       const dir = path.join(root, name);
       const stat = fs.lstatSync(dir);
       if (!stat.isDirectory() || stat.isSymbolicLink()) continue;
@@ -140,7 +160,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
     const keepCount = Number.isFinite(rawKeep) ? Math.max(1, Math.floor(rawKeep)) : 3;
     // Validate every safety input before the first mutation.
     const protectedSet = new Map(candidates.map(candidate => [candidate.dir, protect(candidate, initial, processes)]));
-    const newest = new Set(candidates.filter(candidate => !protectedSet.get(candidate.dir) && now() - candidate.age >= DAY).sort((a, b) => b.age - a.age).slice(0, keepCount).map(candidate => candidate.dir));
+    const newest = new Set(candidates.filter(candidate => !protectedSet.get(candidate.dir) && now() - candidate.age >= DAY).sort((a, b) => byAge(b, a)).slice(0, keepCount).map(candidate => candidate.dir));
     const worktreeStatus = async (directory: string) => {
       const status = await run(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], directory);
       if (status.code !== 0) return { ok: false, changed: ["status unavailable"], ignored: [] as string[], allIgnored: [] as string[] };
@@ -155,18 +175,30 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
       const refs = await run(["for-each-ref", "--contains", sha, "--format=%(refname)", "refs/heads", "refs/remotes", "refs/self-update/tip"], record.checkout!);
       return refs.code === 0 && refs.stdout.split("\n").some(ref => ref.trim().length > 0);
     };
-    for (const candidate of candidates.sort((a, b) => a.age - b.age)) {
+    const ordered = candidates.sort(byAge);
+    const afterCursor = (candidate: Candidate) => cursor && (candidate.age > cursor.age || candidate.age === cursor.age && candidate.dir > cursor.dir);
+    const window = cursor ? [...ordered.filter(afterCursor), ...ordered.filter(candidate => !afterCursor(candidate))] : ordered;
+    for (const candidate of window) {
       try {
-        const current = read();
+        const current = await read();
         let reason = protect(candidate, current, processes) ?? (now() - candidate.age < DAY ? "recent" : newest.has(candidate.dir) ? "newest" : null);
         if (mounts(candidate.dir).length) reason = "mount-boundary";
         if (identity(candidate.dir) !== candidate.identity || fs.realpathSync(candidate.dir) !== candidate.dir) reason = "changed";
+        if (worked >= maxCandidates || now() >= deadline) {
+          report.kept.push({ dir: candidate.dir, reason: reason ?? "pass-budget", bytes: 0 }); continue;
+        }
+        // Unknown ownership also protects generated contents of the release.
+        if (uncertainReason(candidate.dir, processes)) {
+          report.kept.push({ dir: candidate.dir, reason: reason!, bytes: 0 }); continue;
+        }
+        worked++;
+        report.cursor = { age: candidate.age, dir: candidate.dir };
         if (reason) {
           const bytes = reason === "mount-boundary" ? 0 : await bytesOf(candidate.dir);
           report.kept.push({ dir: candidate.dir, reason, bytes });
           // Runtime caches and unfinished builds are kept. Only webpack is disposable.
           if (["mount-boundary", "in-flight", "changed"].includes(reason) || !record.checkout
-            || (read().inputs.inFlight ?? []).some(dir => under(dir, candidate.dir))) continue;
+            || ((await read()).inputs.inFlight ?? []).some(dir => under(dir, candidate.dir))) continue;
           const head = await run(["rev-parse", "HEAD"], candidate.dir);
           if (head.code !== 0 || builtRevision(candidate.dir) !== head.stdout.trim()) continue;
           const cache = path.join(candidate.dir, ".next/cache/webpack");
@@ -178,7 +210,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
           const inUse = async (trash: string) => {
             const fresh = await scan();
             return heldByProcess(trash, fresh) || heldByProcess(cache, fresh)
-              || (read().inputs.inFlight ?? []).some(dir => under(dir, candidate.dir));
+              || ((await read()).inputs.inFlight ?? []).some(dir => under(dir, candidate.dir));
           };
           if (await inUse(cache) || mounts(candidate.dir).length || fs.realpathSync(cache) !== cache || identity(candidate.dir) !== candidate.identity
             || inspectTree(cache, { git: true, mounts: mounts(cache) }).hold) continue;
@@ -188,7 +220,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
         }
         // Awaited listing and measurements cannot carry stale authority into removal.
         const fresh = await scan();
-        const latest = read();
+        const latest = await read();
         if (protect(candidate, latest, fresh) || mounts(candidate.dir).length || identity(candidate.dir) !== candidate.identity) {
           report.kept.push({ dir: candidate.dir, reason: "changed", bytes: 0 }); continue;
         }
@@ -282,7 +314,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
           }
           const journal = path.join(path.dirname(reportFile), `package-trash-${randomUUID()}.json`);
           if (!await removeTreeViaTrash(candidate.dir, { journal, context: { sha: candidate.sha }, held: async trash => {
-            const activeProcesses = await scan(); const current = read();
+            const activeProcesses = await scan(); const current = await read();
             const reason = protect({ dir: candidate.dir, sha: candidate.sha, age: candidate.age, locked: candidate.locked, identity: candidate.identity }, current, activeProcesses, true);
             if (reason) report.kept.push({ dir: candidate.dir, reason, bytes: 0 });
             return !!reason || heldByProcess(trash, activeProcesses)
@@ -294,9 +326,12 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
       } catch (error) { if (error instanceof RetentionInspectionError) throw error; report.errors.push(`${candidate.dir}: ${String(error)}`); }
     }
     // Recover only intents whose original path belongs to this releases root.
+    let recovered = 0;
     for (const file of previousTrash) {
+      if (recovered >= maxCandidates || now() >= deadline) break;
       if (!/^(cache|package|release-output)-trash-.*\.json$/.test(file)) continue;
       const journal = path.join(path.dirname(reportFile), file);
+      recovered++;
       try {
         const row = JSON.parse(fs.readFileSync(journal, "utf8"));
         const packageTrash = file.startsWith("package-");
@@ -319,12 +354,12 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
           const processes = await scan();
           if (heldByProcess(trash, processes) || heldByProcess(row.directory, processes)) return true;
           if (outputCandidate) {
-            const reason = protect(outputCandidate, read(), processes, true);
+            const reason = protect(outputCandidate, await read(), processes, true);
             if (reason) report.kept.push({ dir: outputCandidate.dir, reason, bytes: 0 });
             return !!reason;
           }
-          if (!packageTrash) return (read().inputs.inFlight ?? []).some(dir => under(row.directory, dir));
-          const reason = protect({ dir: row.directory, sha: row.context?.sha ?? "", age: 0, locked: false, identity: row.identity }, read(), processes, true);
+          if (!packageTrash) return ((await read()).inputs.inFlight ?? []).some(dir => under(row.directory, dir));
+          const reason = protect({ dir: row.directory, sha: row.context?.sha ?? "", age: 0, locked: false, identity: row.identity }, await read(), processes, true);
           if (reason) report.kept.push({ dir: row.directory, reason, bytes: 0 });
           return !!reason;
         };

@@ -128,11 +128,44 @@ function fixture(count = 8) {
     throw new Error(`unexpected Git command: ${args.join(" ")}`);
   };
   const inputs: RetentionInputs = {};
-  const ports: RetentionPorts = { git, scan: () => EMPTY, mountPoints: () => [], now: () => now, env: {},
+  const ports: RetentionPorts = { maxCandidates: 128, git, scan: () => EMPTY, mountPoints: () => [], now: () => now, env: {},
     lockHead: () => () => {}, reportFile: path.join(root, "state/retention.json") };
   return { root, dirs, shas, record, inputs, ports, commands, locked, now, run: () => retainReleases(record, inputs, ports) };
 }
 const exists = fs.existsSync;
+
+test("a scoped partial scan protects only its affected release, including caches", async () => {
+  const h = fixture();
+  h.ports.scan = () => ({ ...EMPTY, uncertain: [{ pid: 123, reason: "maps:EACCES", roots: [h.dirs[1]!] }] });
+  const report = await h.run();
+  expect(report.errors).toEqual([]);
+  expect(report.kept).toContainEqual(expect.objectContaining({ dir: h.dirs[1], reason: "process-unreadable:123:maps:EACCES" }));
+  expect(exists(path.join(h.dirs[1]!, ".next/cache/webpack/cache"))).toBeTrue();
+  expect(report.removed.some(row => row.dir === h.dirs[2])).toBeTrue();
+});
+
+test("an unscoped unreadable process keeps every release with its reason", async () => {
+  const h = fixture();
+  h.ports.scan = () => ({ ...EMPTY, uncertain: [{ pid: 123, reason: "fd:EACCES", roots: [h.record.releasesDir] }] });
+  const report = await h.run();
+  expect(report.errors).toEqual([]);
+  expect(report.removed).toEqual([]);
+  expect(report.kept.filter(row => row.reason.startsWith("process-unreadable:")).length).toBeGreaterThan(0);
+  for (const dir of h.dirs) expect(exists(path.join(dir, ".next/cache/webpack/cache"))).toBeTrue();
+});
+
+test("a pass bounds release work and a later pass drains the remaining backlog", async () => {
+  const h = fixture(12);
+  const at = new Date(h.now - 10 * DAY);
+  for (const dir of h.dirs) for (const file of [dir, path.join(dir, ".next/DELEGATUS_RELEASE_READY"), path.join(dir, ".next/BUILD_ID")]) fs.utimesSync(file, at, at);
+  Object.assign(h.ports, { maxCandidates: 2 });
+  const first = await h.run();
+  expect(first.removed).toHaveLength(1);
+  expect(first.kept.some(row => row.reason === "pass-budget")).toBeTrue();
+  const second = await h.run();
+  expect(second.removed).toHaveLength(2);
+  expect(second.removed.every(row => !first.removed.some(old => old.dir === row.dir))).toBeTrue();
+});
 
 test("keep decisions over 87 releases use one inventory; destructive steps use fresh helper scans", async () => {
   const h = fixture(87);
@@ -174,6 +207,7 @@ test("a separately sampled 120 ms loop stall exceeds the 50 ms budget", async ()
 
 test("the loop stays within 50 ms while counting 87 retained release trees", async () => {
   const h = fixture(87);
+  h.ports.maxCandidates = 100;
   h.inputs.inFlight = [...h.dirs];
   for (const dir of h.dirs) {
     const tree = path.join(dir, "node_modules/fixture");

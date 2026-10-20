@@ -2511,10 +2511,13 @@ pointers, in-flight builds, process holders and the existing Git and mount
 checks retain their protection.
 
 The helper counts allocated bytes without following symlinks or counting
-multiply linked files. An unreadable tree, an incomplete byte walk, an
-unreadable process, malformed or partial replies, helper exit and
-request timeout refuse cleanup. An inspection refusal aborts the remaining
-pass. A refusal after a trash rename restores the original path; interrupted
+multiply linked files. An unreadable tree, an incomplete byte walk, malformed
+or partial replies, helper exit and request timeout refuse cleanup. An
+inspection refusal aborts the remaining pass. Inaccessible processes instead
+produce explicit uncertainty scopes; those scopes protect releases and their
+contents. A bounded read-only proc observer can resolve permission failures.
+See [retention verification](../verification/self-update-retention.md).
+A refusal after a trash rename restores the original path; interrupted
 removals keep their durable recovery journal. The helper has one outstanding
 request, a bounded reply and a 60-second request deadline. The pass closes its
 recorded lease and waits for the guardian and its process group to end.
@@ -2531,8 +2534,9 @@ Both sides validate the entire inventory before timing, warming filesystem
 metadata equally. The same legacy process collector is injected on both sides
 to measure whole passes even when the stricter production scanner refuses
 unreadable proc entries. Success and refusal of the production scanner are tested separately.
-This replay measures the byte-helper and inventory-reuse changes; it does not
-measure production safety scans during removals.
+This replay explicitly raises the production candidate bound to 128 to measure
+all 87 copied trees. It measures the byte-helper and inventory-reuse changes;
+it does not measure production safety scans during removals.
 
 Use the same immutable seed and Bun for six alternating before/after pairs.
 Immediately before each sample, read the scoped `agent_fleet` summary and pass
