@@ -117,6 +117,32 @@ export const LEGACY_COLLECTIONS: readonly LegacyCollectionEntry[] = [
     importAtActivation: async () => (await import("@/lib/telegram/hostRegistration")).telegramRegistrationStore.importLegacy(statePath("telegram/registrations.json"), { reconcile: true }),
     checkpointMirrorForDemotion: async () => (await import("@/lib/telegram/hostRegistration")).telegramRegistrationStore.checkpointRollbackMirror(statePath("telegram/registrations.json")),
   },
+  // Slice 6; inventory: docs/design/state-sqlite-slice-6.md.
+  {
+    collection: "project_aliases",
+    importAtActivation: async () => (await import("@/lib/projects/persistence")).projectAliasStore.importLegacy(statePath("project-aliases.json"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/projects/persistence")).projectAliasStore.checkpointRollbackMirror(statePath("project-aliases.json")),
+  },
+  {
+    collection: "project_curation",
+    importAtActivation: async () => (await import("@/lib/projects/persistence")).projectCurationStore.importLegacy(statePath("project-curation.json"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/projects/persistence")).projectCurationStore.checkpointRollbackMirror(statePath("project-curation.json")),
+  },
+  {
+    collection: "worktree_map",
+    importAtActivation: async () => (await import("@/lib/projects/persistence")).worktreeMapStore.importLegacy(statePath("worktree-map.json"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/projects/persistence")).worktreeMapStore.checkpointRollbackMirror(statePath("worktree-map.json")),
+  },
+  {
+    collection: "project_remotes",
+    importAtActivation: async () => (await import("@/lib/projects/persistence")).projectRemoteStore.importLegacy(statePath("project-remotes.json"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/projects/persistence")).projectRemoteStore.checkpointRollbackMirror(statePath("project-remotes.json")),
+  },
+  {
+    collection: "session_titles",
+    importAtActivation: async () => (await import("@/lib/session/titleStore")).sessionTitleStore.importLegacy(statePath("session-titles.json"), { reconcile: true }),
+    checkpointMirrorForDemotion: async () => (await import("@/lib/session/titleStore")).sessionTitleStore.checkpointRollbackMirror(statePath("session-titles.json")),
+  },
   /* The conversation-migration journal roots: a directory of per-operation
      files rather than one file, so the entry names the root and the store keys
      its collection off the root's basename. */

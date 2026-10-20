@@ -25,9 +25,8 @@ test("concurrent writers in separate processes never lose an update", async () =
   const PER_WRITER = 12;
   const env = { ...process.env, LLV_STATE_DIR: stateDir };
 
-  // Each process runs many read-modify-write cycles against the shared file;
-  // without the interprocess lock, interleaved cycles drop keys. The lock must
-  // serialize them so every distinct key survives.
+  // Real SQLite writers contend through asynchronous admission; each distinct
+  // key must survive, and every reported wait must leave the loop available.
   const children = Array.from({ length: WRITERS }, (_unused, writer) =>
     Bun.spawn({
       cmd: [process.execPath, child, String(writer), String(PER_WRITER)],
@@ -41,7 +40,12 @@ test("concurrent writers in separate processes never lose an update", async () =
     stderr: await new Response(proc.stderr).text(),
   })));
   for (const result of results) {
-    expect(result.stderr).toBe("");
+    for (const line of result.stderr.split("\n").filter(Boolean)) {
+      expect(line.startsWith("[blocking-wait] ")).toBe(true);
+      const wait = JSON.parse(line.slice("[blocking-wait] ".length));
+      expect(wait.synchronous).toBe(false);
+      expect(wait.stateWait.synchronousSleepMs).toBe(0);
+    }
     expect(result.code).toBe(0);
   }
 

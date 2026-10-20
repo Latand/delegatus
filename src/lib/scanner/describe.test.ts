@@ -1,3 +1,4 @@
+import { worktreeMapStore } from "@/lib/projects/persistence";
 import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -742,7 +743,7 @@ test("two processes writing the worktree map keep each other's records (#2202)",
 
   /* A: records wt-a without having re-read the file. */
   expect(recordWorktreeResolution(a)).not.toBeNull();
-  const onDisk = JSON.parse(fs.readFileSync(path.join(state, "worktree-map.json"), "utf8")) as Record<string, unknown>;
+  const onDisk = worktreeMapStore.read(path.join(state, "worktree-map.json")) as Record<string, unknown>;
   expect(Object.keys(onDisk).sort()).toEqual([a, b, c].sort());
 
   /* B's checkout is removed; A still resolves it through the file B wrote. */
@@ -1045,7 +1046,7 @@ test("first scan of a sibling worktree descendant records it before outside dele
   expect(projectInfoFromCwd(cwd)?.project.startsWith("dir-")).toBe(true);
   fs.writeFileSync(path.join(checkout, ".git"), `gitdir: ${path.join(repo, ".git", "worktrees", "lane-12")}\n`);
   expect(projectInfoFromCwd(cwd)).toMatchObject({ project: identity.project, displayName: identity.displayName, worktree: "lane-12" });
-  expect(JSON.parse(fs.readFileSync(path.join(state, "worktree-map.json"), "utf8"))[checkout]).toEqual({ repo, worktree: "lane-12" });
+  expect(worktreeMapStore.read(path.join(state, "worktree-map.json"))[checkout]).toEqual({ repo, worktree: "lane-12" });
   fs.rmSync(checkout, { recursive: true });
   globalCache("project-info-cwd-v2").clear();
   globalCache("worktree-git").clear();
@@ -1094,7 +1095,7 @@ test.each(["ordinary", "separate", "refreshed"])("a real linked sibling with %s 
   expect(describe("codex-sessions", state, transcript, fs.statSync(transcript))).toMatchObject({
     project: identity.project, projectName: identity.displayName, projectRoot: repo, worktree: path.basename(checkout),
   });
-  const map = JSON.parse(fs.readFileSync(path.join(state, "worktree-map.json"), "utf8"));
+  const map = worktreeMapStore.read(path.join(state, "worktree-map.json"));
   expect(map[checkout]).toEqual({ repo, worktree: path.basename(checkout) });
   if (mapOnly) expect(map[previous]).toEqual({ repo, worktree: path.basename(previous) });
   fs.rmdirSync(cwd);
@@ -1138,7 +1139,7 @@ test.each(["direct", "container"])("a removed sibling inside an enclosing reposi
   };
   const live = resolveFresh();
   expect(live).toMatchObject({ info: { project: identity.project, displayName: identity.displayName, repo }, root: repo });
-  expect(JSON.parse(fs.readFileSync(path.join(state, "worktree-map.json"), "utf8"))[checkout]).toEqual({ repo, worktree: path.basename(checkout) });
+  expect(worktreeMapStore.read(path.join(state, "worktree-map.json"))[checkout]).toEqual({ repo, worktree: path.basename(checkout) });
   fs.rmdirSync(cwd);
   git(repo, "worktree", "remove", checkout);
   expect(fs.existsSync(checkout)).toBe(false);
@@ -1172,7 +1173,22 @@ test("a path-recognized live checkout is recorded on its first observation", () 
   fs.mkdirSync(cwd, { recursive: true });
   fs.writeFileSync(path.join(checkout, ".git"), `gitdir: ${path.join(repo, ".git", "worktrees", "lane-14")}\n`);
   expect(projectInfoFromCwd(cwd)).toMatchObject({ project: identity.project, displayName: identity.displayName });
-  expect(JSON.parse(fs.readFileSync(path.join(state, "worktree-map.json"), "utf8"))[checkout]).toEqual({ repo, worktree: "lane-14" });
+  expect(worktreeMapStore.read(path.join(state, "worktree-map.json"))[checkout]).toEqual({ repo, worktree: "lane-14" });
   fs.rmSync(checkout, { recursive: true });
   expect(projectInfoFromCwd(cwd)).toMatchObject({ project: identity.project, displayName: identity.displayName });
+});
+
+
+test("deleted worktree still groups under its parent repo after SQLite import", () => {
+  const state = useStateDirectory("slice6-deleted-checkout");
+  const repo = path.join(SANDBOX, "slice6-parent");
+  const identity = createRepository(repo);
+  const cwd = path.join(SANDBOX, "slice6-arbitrary-checkout");
+  const file = path.join(state, "worktree-map.json");
+  fs.writeFileSync(file, JSON.stringify({ [cwd]: { repo, worktree: "slice6-lane" } }));
+  worktreeMapStore.importLegacy(file);
+  expect(fs.existsSync(cwd)).toBe(false);
+  globalCache("project-info-cwd-v2").clear();
+  globalCache("worktree-git").clear();
+  expect(projectInfoFromCwd(path.join(cwd, "src"))).toMatchObject({ project: identity.project, repo, worktree: "slice6-lane" });
 });

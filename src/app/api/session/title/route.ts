@@ -1,3 +1,4 @@
+import { waitForStateLock } from "@/lib/state/lockWait";
 import { NextRequest, NextResponse } from "next/server";
 
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
@@ -62,7 +63,7 @@ export async function PATCH(req: NextRequest): Promise<NextResponse<PatchTitleRe
   const candidateKeys = titleKeysForEntry(target, target.aliasConversationIds, target.ownedPaths);
   let outcome;
   try {
-    outcome = writeSessionTitle(candidateKeys, candidateKeys[0]!, body.title as string | null, body.baseRevision as number | undefined, isoNow());
+    outcome = await waitForStateLock("session.title", () => writeSessionTitle(candidateKeys, candidateKeys[0]!, body.title as string | null, body.baseRevision as number | undefined, isoNow()));
   } catch (error) {
     // The store is corrupt/unreadable: the mutation aborted without touching the
     // existing bytes. Surface it instead of silently erasing every title.

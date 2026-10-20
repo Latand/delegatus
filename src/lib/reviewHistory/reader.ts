@@ -1,3 +1,4 @@
+import { projectAliasStore, readProjectDocument } from "@/lib/projects/persistence";
 import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import type { Database } from "bun:sqlite";
 import fs from "node:fs";
@@ -93,15 +94,8 @@ export function reviewHistorySelectionSource(directory = archiveDirectory()) {
  * either the project catalog or the state directory. */
 export function archiveProjects(directory: string) {
   let aliases: Record<string, string> = {};
-  const file = path.join(directory, "project-aliases.json");
-  if (fs.existsSync(file)) {
-    if (fs.statSync(file).size > MAX_ROW_BYTES) throw new ArchiveReadError("ARCHIVE_TOO_LARGE", 413);
-    try {
-      const stored = JSON.parse(fs.readFileSync(file, "utf8"));
-      if (stored.schemaVersion !== 1 || !stored.aliases || typeof stored.aliases !== "object" || Array.isArray(stored.aliases)) throw new Error("invalid aliases");
-      aliases = Object.fromEntries(Object.entries(stored.aliases).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
-    } catch { throw new ArchiveReadError("ARCHIVE_UNAVAILABLE"); }
-  }
+  try { aliases = readProjectDocument(projectAliasStore, "project-aliases.json", directory).aliases; }
+  catch { throw new ArchiveReadError("ARCHIVE_UNAVAILABLE"); }
   const canonical = (project: string) => {
     let current = project;
     const seen = new Set<string>();

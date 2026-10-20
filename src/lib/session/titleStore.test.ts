@@ -18,6 +18,7 @@ import {
   saveSessionTitles,
   titleKeysForEntry,
   TitleStoreUnreadableError,
+  sessionTitleStore,
   writeSessionTitle,
   type SessionTitleOverride,
 } from "./titleStore";
@@ -276,12 +277,14 @@ test("a missing store is a legitimately empty store that a write then creates", 
   expect(loadSessionTitles(file)).toHaveLength(1);
 });
 
-test("a mutation aborts on a corrupt store and never erases the existing bytes", () => {
-  fs.writeFileSync(file, "{ not valid json");
-  expect(() => write("path:/x", "New", undefined, "t1")).toThrow(TitleStoreUnreadableError);
-  // The corrupt bytes are preserved — a blind rewrite would have destroyed the
-  // real (recoverable) file.
-  expect(fs.readFileSync(file, "utf8")).toBe("{ not valid json");
+test("a torn legacy store recovers and retains its original bytes", () => {
+  const torn = "{ not valid json";
+  fs.writeFileSync(file, torn);
+  const outcome = sessionTitleStore.importLegacy(file);
+  expect(outcome.record.gap).toBe("legacy-unreadable");
+  expect(fs.readFileSync(outcome.incident!.preservedAs!, "utf8")).toBe(torn);
+  write("path:/x", "New", undefined, "t1");
+  expect(readSessionTitles(file)).toHaveLength(1);
 });
 
 test("an unsupported schema version aborts a mutation", () => {
@@ -296,15 +299,15 @@ test("a malformed record is preserved while healthy titles remain writable", () 
   ] }));
   write("path:/x", "New", undefined, "t1");
   expect(loadSessionTitles(file)).toHaveLength(2);
-  expect(JSON.parse(fs.readFileSync(file, "utf8")).titles).toHaveLength(3);
-  expect(JSON.parse(fs.readFileSync(file, "utf8")).titles.find((row: { key: string }) => row.key === "path:/b")).toEqual({ key: "path:/b", garbage: true });
+  expect((sessionTitleStore.legacyCollection(file).mirrorBody().body as { titles: unknown[] }).titles).toHaveLength(3);
+  expect((sessionTitleStore.legacyCollection(file).mirrorBody().body as { titles: unknown[] }).titles.find((row) => (row as { key: string }).key === "path:/b")).toEqual({ key: "path:/b", garbage: true });
   expect(() => write("path:/b", "New", undefined, "t1")).toThrow("preserved title record");
 });
 
 test("read consumers degrade to no overrides on a corrupt store", () => {
   fs.writeFileSync(file, "garbage");
   expect(loadSessionTitles(file)).toEqual([]);
-  expect(() => readSessionTitles(file)).toThrow(TitleStoreUnreadableError);
+  expect(readSessionTitles(file)).toEqual([]);
 });
 
 test("clearing an already-tombstoned record reports its revision, not a fabricated one", () => {
@@ -340,6 +343,8 @@ test("title writes retain rejected record bytes and never evict them at the vali
   saveSessionTitles(rows, file);
   write("new-title", "New", undefined, "t2");
   expect(readSessionTitles(file)).toHaveLength(MAX_TITLE_OVERRIDES);
+  expect(sessionTitleStore.read(file).preserved.map(row => row.json)).toContain(rejected);
+  sessionTitleStore.checkpointRollbackMirror(file);
   expect(fs.readFileSync(file, "utf8")).toContain(rejected);
 });
 
@@ -349,5 +354,7 @@ test("a rejected title's own key stays protected even when future metadata also 
   expect(() => write("path:/a", "Replacement", undefined, "t1")).toThrow("preserved title record");
   write("path:/neighbor", "Healthy", undefined, "t1");
   expect(readSessionTitles(file).map((record) => record.key)).toEqual(["path:/neighbor"]);
+  expect(sessionTitleStore.read(file).preserved.map(row => row.json)).toContain(rejected);
+  sessionTitleStore.checkpointRollbackMirror(file);
   expect(fs.readFileSync(file, "utf8")).toContain(rejected);
 });

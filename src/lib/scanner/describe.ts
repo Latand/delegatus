@@ -1,3 +1,4 @@
+import { worktreeMapStore, projectCurationStore, readProjectDocument, projectStoreSignature } from "@/lib/projects/persistence";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,8 +7,6 @@ import { readWorktreeRecoveries } from "@/lib/projects/worktreeRecoveryStore";
 
 import { stateDir } from "@/lib/configDir";
 import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
-import { writeJsonDurably } from "@/lib/state/durableJson";
-import { withFileTransactionSync } from "@/lib/state/fileTransaction";
 import { readStateCollectionsRows } from "@/lib/state/sqliteStateStore";
 import {
   directoryProjectId,
@@ -436,7 +435,7 @@ function liveWorktreeGitdir(cwd: string, gitFileText: string, accessibleCwd = cw
       const root = stringValue(recordValue(file)?.projectRoot);
       if (root) roots.add(root);
     }
-    const curation = recordValue(readStateJson("project-curation.json"));
+    const curation = readProjectDocument(projectCurationStore, "project-curation.json");
     for (const entry of recordsValue(curation?.manualProjects)) {
       const root = stringValue(entry.root);
       if (root) roots.add(root);
@@ -527,26 +526,13 @@ let worktreeMemory: { dir: string; map: Map<string, WorktreeInfo>; learned: Map<
 
 function worktreeMapStamp(file: string): string | null {
   const recovered = JSON.stringify(readWorktreeRecoveries().map(({ cwd, repo, worktree }) => [cwd, repo, worktree]));
-  try {
-    const stat = fs.statSync(file);
-    return `${stat.ino}:${stat.size}:${stat.mtimeMs}:${recovered}`;
-  } catch {
-    return recovered;
-  }
+  return `${projectStoreSignature("worktree-map.json", path.dirname(file))}:${recovered}`;
 }
 
 function readWorktreeMapFile(file: string): Map<string, WorktreeInfo> {
   const map = new Map<string, WorktreeInfo>();
-  try {
-    const raw = JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, { repo?: unknown; worktree?: unknown }>;
-    for (const [cwd, info] of Object.entries(raw)) {
-      if (typeof info?.repo === "string" && typeof info?.worktree === "string") {
-        map.set(cwd, { repo: info.repo, worktree: info.worktree });
-      }
-    }
-  } catch {
-    /* no map yet or unreadable — start empty */
-  }
+  const raw = readProjectDocument(worktreeMapStore, "worktree-map.json", path.dirname(file));
+  for (const [cwd, info] of Object.entries(raw)) map.set(cwd, info);
   for (const { cwd, repo, worktree } of readWorktreeRecoveries()) {
     const held = map.get(cwd);
     if (held && held.repo !== repo) throw new Error("Worktree recovery conflicts with a recorded mapping");
@@ -616,16 +602,21 @@ function worktreeFromMemory(cwd: string, liveRepositoryRoot: string | null): Wor
 function writeWorktreeMap(): void {
   const memory = worktreeMemory;
   if (!memory) return;
-  fs.mkdirSync(memory.dir, { recursive: true });
   const file = path.join(memory.dir, WORKTREE_MAP_FILE);
-  withFileTransactionSync(file, "worktree-map.json is busy", () => {
-    const merged = readWorktreeMapFile(file);
-    for (const [cwd, info] of memory.learned) merged.set(cwd, info);
-    writeJsonDurably(file, Object.fromEntries(merged), { space: 0 });
-    memory.map = merged;
-    memory.learned.clear();
-    memory.stamp = worktreeMapStamp(file);
+  const learned = [...memory.learned];
+  worktreeMapStore.patchRows(file, learned.length * 2, tx => {
+    const recovered = new Map(readWorktreeRecoveries().map(row => [row.cwd, row]));
+    for (const [cwd, info] of learned) {
+      const recovery = recovered.get(cwd);
+      if (recovery && (recovery.repo !== info.repo || recovery.worktree !== info.worktree)) throw new Error("Worktree recovery conflicts with a recorded mapping");
+      const held = tx.get(cwd)?.value as WorktreeInfo | undefined;
+      if (held && (held.repo !== info.repo || held.worktree !== info.worktree)) throw new Error("Worktree mapping conflicts with a recorded mapping");
+      if (!held) tx.put({ key: cwd, value: info });
+    }
   });
+  memory.learned.clear();
+  memory.stamp = null;
+  refreshWorktreeMap();
 }
 
 /** Flush freshly-learned worktree resolutions to disk. Called once per scan
@@ -698,24 +689,16 @@ function worktreeFromGitFile(cwd: string): WorktreeInfo | null {
 /** Explicit recovery writes the same map as live observation and the sweep.
     Refuse a competing mapping under the writer lock; never overwrite it. */
 export function recordRecoveredWorktrees(entries: Array<{ cwd: string; repo: string; worktree: string }>): void {
-  const dir = stateDir();
-  const file = path.join(dir, WORKTREE_MAP_FILE);
-  fs.mkdirSync(dir, { recursive: true });
-  withFileTransactionSync(file, "worktree-map.json is busy", () => {
-    /* Explicit recovery refuses corrupt state rather than replacing it. */
-    try {
-      const raw = JSON.parse(fs.readFileSync(file, "utf8"));
-      if (!raw || typeof raw !== "object" || Array.isArray(raw)
-        || Object.values(raw).some(value => !value || typeof value !== "object"
-          || typeof (value as WorktreeInfo).repo !== "string" || typeof (value as WorktreeInfo).worktree !== "string")) throw new Error("Worktree map is unreadable");
-    } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-    const merged = readWorktreeMapFile(file);
+  const file = path.join(stateDir(), WORKTREE_MAP_FILE);
+  worktreeMapStore.patchRows(file, entries.length * 2, tx => {
+    const recovered = new Map(readWorktreeRecoveries().map(row => [row.cwd, row]));
     for (const { cwd, repo, worktree } of entries) {
-      const held = merged.get(cwd);
+      const recovery = recovered.get(cwd);
+      if (recovery && (recovery.repo !== repo || recovery.worktree !== worktree)) throw new Error("Worktree recovery conflicts with a recorded mapping");
+      const held = tx.get(cwd)?.value as WorktreeInfo | undefined;
       if (held && (held.repo !== repo || held.worktree !== worktree)) throw new Error("Worktree recovery conflicts with a recorded mapping");
-      merged.set(cwd, { repo, worktree });
+      if (!held) tx.put({ key: cwd, value: { repo, worktree } });
     }
-    writeJsonDurably(file, Object.fromEntries(merged), { space: 0 });
   });
   refreshWorktreeMap();
   projectInfoCwdCache.clear();

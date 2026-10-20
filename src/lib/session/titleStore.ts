@@ -1,6 +1,4 @@
-import crypto from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
+import { smallStore } from "@/lib/state/smallStore";
 
 import { sessionKeyFromTranscript, sessionKeyId } from "@/lib/agent/sessionKey";
 import { statePath } from "@/lib/configDir";
@@ -35,13 +33,6 @@ export interface SessionTitleOverride {
 
 type TitlesFile = { version?: unknown; titles?: unknown };
 
-function atomicWriteText(filePath: string, value: string): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const tmp = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${crypto.randomUUID()}.tmp`);
-  fs.writeFileSync(tmp, value, "utf8");
-  fs.renameSync(tmp, filePath);
-}
-
 /** The store exists but cannot be trusted (unreadable, invalid JSON, unknown
     schema). Mutations must abort on this rather than
     persist over it — a blind rewrite would erase every existing title. */
@@ -67,31 +58,18 @@ function isRecord(value: unknown): value is SessionTitleOverride {
 }
 
 /**
- * Reads the store, distinguishing "not there yet" from "there but broken". A
- * missing file (ENOENT) is a legitimately empty store; anything else — an I/O
- * error, invalid JSON, or an unknown schema version —
- * throws {@link TitleStoreUnreadableError} so a mutation aborts instead of
- * overwriting existing titles. Individual rejected records are preserved
- * separately while valid overrides remain available.
+ * Read committed overrides. First activation preserves torn legacy bytes with
+ * a durable import incident; unsupported schemas refuse migration. Individual
+ * rejected records retain their original bytes beside healthy overrides.
  */
 export function readSessionTitles(filePath = titlesFile()): SessionTitleOverride[] {
-  return readTitlesDocument(filePath).records;
+  return sessionTitleStore.read(filePath).records;
 }
 
-function readTitlesDocument(filePath: string): { records: SessionTitleOverride[]; preserved: { key: string; json: string }[] } {
-  let text: string;
-  try {
-    text = fs.readFileSync(filePath, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { records: [], preserved: [] };
-    throw new TitleStoreUnreadableError(`session titles store is unreadable: ${(error as Error).message}`);
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new TitleStoreUnreadableError("session titles store is not valid JSON");
-  }
+type TitleDocument = { records: SessionTitleOverride[]; preserved: { key: string; json: string }[] };
+function parseTitlesDocument(raw: unknown, sourceText?: string): TitleDocument {
+  const parsed = raw;
+  const text = sourceText ?? JSON.stringify(raw);
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new TitleStoreUnreadableError("session titles store has an unexpected shape");
   }
@@ -125,13 +103,23 @@ export function loadSessionTitles(filePath = titlesFile()): SessionTitleOverride
   }
 }
 
-export function saveSessionTitles(records: SessionTitleOverride[], filePath = titlesFile()): void {
-  const { preserved } = readTitlesDocument(filePath);
-  const protectedKeys = new Set(preserved.map((record) => record.key));
+function withTitleRecords(document: TitleDocument, records: SessionTitleOverride[]): TitleDocument {
+  const protectedKeys = new Set(document.preserved.map(record => record.key));
   for (const record of records) {
     if (!isRecord(record) || protectedKeys.has(record.key)) throw new TitleStoreUnreadableError(`refusing to overwrite preserved title record: ${record.key}`);
   }
-  atomicWriteText(filePath, `{\n  "version": 1,\n  "titles": [\n${[...records.map((record) => JSON.stringify(record)), ...preserved.map((record) => record.json)].join(",\n")}\n  ]\n}\n`);
+  return { records, preserved: document.preserved };
+}
+export const sessionTitleStore = smallStore<TitleDocument>({
+  collection: "session_titles", empty: () => ({ records: [], preserved: [] }), parse: parseTitlesDocument,
+  toRows: document => [...document.records.map(record => ({ key: record.key, value: { record } })), ...document.preserved.map(record => ({ key: record.key, value: { preserved: record } }))],
+  fromRows: rows => ({ records: rows.flatMap(row => (row.value as { record?: SessionTitleOverride }).record ? [(row.value as { record: SessionTitleOverride }).record] : []), preserved: rows.flatMap(row => (row.value as { preserved?: TitleDocument["preserved"][number] }).preserved ? [(row.value as { preserved: TitleDocument["preserved"][number] }).preserved] : []) }),
+  toFile: document => ({ version: 1, titles: [...document.records, ...document.preserved.map(record => JSON.parse(record.json))] }),
+  serializeFile: document => `{\n  "version": 1,\n  "titles": [\n${[...document.records.map(record => JSON.stringify(record)), ...document.preserved.map(record => record.json)].join(",\n")}\n  ]\n}\n`,
+  error: message => new TitleStoreUnreadableError(message),
+});
+export function saveSessionTitles(records: SessionTitleOverride[], filePath = titlesFile()): void {
+  sessionTitleStore.mutate(filePath, document => ({ next: withTitleRecords(document, capRecords(records)), result: undefined }));
 }
 
 /** Sanitize + bound a user title. Returns null when it collapses to empty (an
@@ -243,65 +231,15 @@ export function applyTitleOverride(
   entry.title = record.title;
 }
 
-const LOCK_STALE_MS = 10_000;
-const LOCK_WAIT_MS = 5_000;
-
-function sleep(ms: number): void {
-  // eslint-disable-next-line no-restricted-syntax -- Legacy cross-process title write lock on serving title updates.
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-/**
- * Interprocess mutual exclusion around the whole read-modify-write. Two Viewer
- * instances share one `session-titles.json`; without a cross-process lock both
- * could read the same revision, accept it, and clobber each other's write
- * (mirrors `withRegistryLock` in accounts/claude.ts — exclusive-create lock
- * file with stale reclamation and a bounded wait).
- */
-function withTitlesLock<T>(lockPath: string, operation: () => T): T {
-  const started = Date.now();
-  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
-  for (;;) {
-    try {
-      const fd = fs.openSync(lockPath, "wx", 0o600);
-      try {
-        fs.writeFileSync(fd, `${process.pid}\n`, "utf8");
-        return operation();
-      } finally {
-        fs.closeSync(fd);
-        fs.rmSync(lockPath, { force: true });
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      try {
-        if (Date.now() - fs.statSync(lockPath).mtimeMs > LOCK_STALE_MS) { fs.rmSync(lockPath, { force: true }); continue; }
-      } catch {
-        continue;
-      }
-      if (Date.now() - started >= LOCK_WAIT_MS) throw new Error("session titles store is busy; retry shortly");
-      sleep(10);
-    }
-  }
-}
-
-/**
- * Serialized read-modify-write over the titles file — the only sanctioned way
- * to persist a rename. The load→transform→save runs synchronously inside an
- * interprocess lock, so neither a concurrent request handler nor a second
- * Viewer process can save a snapshot that predates another writer's write
- * (mirrors {@link import("@/lib/tasks/store").mutateTasks}). The **strict**
- * {@link readSessionTitles} aborts the whole mutation (throwing
- * {@link TitleStoreUnreadableError}) when the store is corrupt/unreadable, so a
- * rename never silently overwrites existing titles with an empty snapshot.
- */
+/** Serialized SQLite mutation. Admission never waits synchronously; async
+ * request callers retry the complete operation through waitForStateLock. */
 export function mutateSessionTitles<R>(
   mutate: (records: SessionTitleOverride[]) => { records: SessionTitleOverride[] | undefined; result: R },
   filePath = titlesFile(),
 ): R {
-  return withTitlesLock(`${filePath}.lock`, () => {
-    const outcome = mutate(readSessionTitles(filePath));
-    if (outcome.records) saveSessionTitles(capRecords(outcome.records), filePath);
-    return outcome.result;
+  return sessionTitleStore.mutate(filePath, document => {
+    const outcome = mutate(document.records);
+    return { next: outcome.records ? withTitleRecords(document, capRecords(outcome.records)) : undefined, result: outcome.result };
   });
 }
 
