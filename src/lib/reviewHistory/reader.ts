@@ -1,3 +1,4 @@
+import { readStateImport } from "@/lib/state/sqliteStateStore";
 import { projectAliasStore, readProjectDocument } from "@/lib/projects/persistence";
 import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import type { Database } from "bun:sqlite";
@@ -90,12 +91,19 @@ export function reviewHistorySelectionSource(directory = archiveDirectory()) {
   };
 }
 
-/** Alias projection reads only the already-published file, without initializing
- * either the project catalog or the state directory. */
+/** Alias projection reads committed state without initializing a collection
+ * or the project catalog. Before activation it reads the bounded legacy file. */
 export function archiveProjects(directory: string) {
   let aliases: Record<string, string> = {};
-  try { aliases = readProjectDocument(projectAliasStore, "project-aliases.json", directory).aliases; }
-  catch { throw new ArchiveReadError("ARCHIVE_UNAVAILABLE"); }
+  try {
+    const file = path.join(directory, "project-aliases.json");
+    if (!readStateImport(path.join(directory, "state.sqlite"), "project_aliases")) {
+      const stat = fs.statSync(file, { throwIfNoEntry: false });
+      if (stat?.isFile() && stat.size > MAX_ROW_BYTES) throw new ArchiveReadError("ARCHIVE_TOO_LARGE", 413);
+    }
+    aliases = readProjectDocument(projectAliasStore, "project-aliases.json", directory).aliases;
+  }
+  catch (error) { if (error instanceof ArchiveReadError) throw error; throw new ArchiveReadError("ARCHIVE_UNAVAILABLE"); }
   const canonical = (project: string) => {
     let current = project;
     const seen = new Set<string>();

@@ -1,5 +1,4 @@
 import { worktreeMapStore, projectAliasStore, readProjectDocument } from "./persistence";
-import fs from "node:fs";
 
 import { stateDir, statePath } from "@/lib/configDir";
 import type { LifecycleEvent } from "@/lib/lifecycle/journal";
