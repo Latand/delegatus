@@ -614,3 +614,35 @@ in the JSON.
 | `src/lib/runtime/structuredSpawn.integration.test.ts` | 21.5 | — | 30.1 | — | 0/0 → 0/0 |
 | `src/lib/runtime/structuredSpawn.memory.test.ts` | 0.6 | — | 1.2 | — | 0/0 → 0/0 |
 | `src/lib/runtime/structuredSpawn.terminalize.test.ts` | 7.9 | — | 15.3 | — | 0/0 → 0/0 |
+
+## Loaded engine-family campaign
+
+Status: in progress. The required sample is 30 qualifying after-runs, ten before-runs and two refusal controls. All attempts, including load outliers, are retained in `evidence/perf/pre-push-touched-tests.json#engineLoadCampaign`.
+
+The fixed comparison uses main `144c87e12af0` before the fix and `04df47ce7042` after it, with three captured lane heads and their merged trees recorded in the manifest. The stage merged current main at resumption (`b4cdbbe554b8`); the paired campaign keeps its original inputs so the earlier qualifying runs remain comparable. A separate final gate will verify the integrated source.
+
+Each attempt runs the real pre-push entry point in a scratch clone with its own HOME, config, temp and state roots and a closed Viewer control URL. The local bare origin pins the side’s main revision. No scratch commit or push is created. Load and owned file services are sampled every two seconds. Only an execution-period median load from 25 through 30 qualifies. Outer admission is excluded from complete-gate time; any nested wait is retained in that wall time and also reported by the comparator. Kernel samples retain the three-CPU file quota and eighteen-CPU work quota. CPU counters are sampled lower bounds; short services can finish between samples.
+
+| Side | Qualifying runs | Current sample P90 (s) | File expirations | Refusals | NEW lines |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| before | 1 | 1166.6 | 5 | 1 | 0 |
+| after | 4 | 508.2 | 0 | 0 | 0 |
+
+The sample P90 is provisional until all runs complete. An incomplete baseline or runner error is a refusal even when it emits no NEW assertion line.
+
+| Attempt | Side | Branch | Load min / median / max | Outer admission (s) | Complete gate (s) | Qualifies | Expirations | Exit |
+| --- | --- | ---: | --- | ---: | ---: | --- | ---: | ---: |
+| after-01 | after | 1 | 17.64 / 30.50 / 45.84 | 41.6 | 643.1 | outlier | 0 | 0 |
+| after-101 | after | 1 | 22.72 / 26.46 / 38.68 | 1.5 | 431.1 | yes | 0 | 0 |
+| after-02 | after | 2 | 19.72 / 28.60 / 36.25 | 37.4 | 508.2 | yes | 0 | 0 |
+| after-03 | after | 3 | 21.53 / 32.92 / 37.94 | 25.5 | 459.9 | outlier | 0 | 0 |
+| after-103 | after | 3 | 20.36 / 25.15 / 31.17 | 17.1 | 421.5 | yes | 0 | 0 |
+| before-01 | before | 1 | 9.91 / 29.19 / 36.47 | 36.2 | 1166.6 | yes | 5 | 1 |
+| after-04 | after | 1 | 26.41 / 35.68 / 49.79 | 1.8 | 542.1 | outlier | 0 | 0 |
+| after-104 | after | 1 | 20.02 / 36.03 / 41.26 | 1.4 | 518.6 | outlier | 0 | 0 |
+| after-204 | after | 1 | 23.54 / 29.75 / 34.75 | 29.6 | 461.2 | yes | 0 | 0 |
+| after-05 | after | 2 | 20.72 / 35.44 / 46.92 | 183.7 | 594.9 | outlier | 0 | 0 |
+
+The ten split families retain all 1,078 registered cases, including their names, arguments and assertion bodies. The preserved calibration and JUnit inventory established that partition before the campaign. The measured timeout exceptions are described in `docs/design/pre-push-gate-under-load.md#2-fix`.
+
+Batch 1 resumed the previous ledger at three qualifying after-runs and one before-run. It added one qualifying after-run and two high-load outliers; all three passed with zero file expirations and zero NEW lines. The last outlier captured two existing 15-second explicit test timeouts in `engine.providerReset.part3.test.ts`; filtered retries passed and the comparator classified the occurrences as flaky. No test or verdict rule changed during the resumed campaign.
