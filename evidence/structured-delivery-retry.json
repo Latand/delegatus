@@ -1,0 +1,383 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-20T05:06:33Z",
+  "test": {
+    "file": "src/lib/runtime/structuredDelivery.integration.test.ts",
+    "name": "a kill cancels an automatic delivery retry and fails the send retryably"
+  },
+  "baselineRevision": "720aa48c5537cba0a25c00b65b59504437378886",
+  "sourceSha256": {
+    "baseline": "068605fc9e9f0ca4d18bc566e7b98d8a7d34e9717a93ae8d43b5268dd13b79ed",
+    "fixed": "6e580e28cc67232e449e8b6aa00f82379f80e2a2e1191349f53b188100bfefba",
+    "productController": "2b375097bbdc0abbb1f77fd4be93f5283f9a7f9bc7679afb40bf45f846501326"
+  },
+  "classification": "Product retry-cancellation race, exposed by a test ordering assumption",
+  "cause": [
+    "The post-kill barrier resolved on any effect read containing only retained kill boundaries. The automatic one-second retry itself could satisfy it, moving the baseline past the retry and hiding the extra read.",
+    "An explicit non-fresh kick drained the kill and failed send, but the controller cancelled its pending DeliveryWake only for fresh admissions. The old one-second timer remained armed and later ran a redundant queue pass."
+  ],
+  "fix": [
+    "Use the journal's terminal kill and send receipts as the completion condition; do not issue a second kick before starting the existing 1,100 ms quietness window.",
+    "Cancel the owned delayed DeliveryWake on every explicit queue kick, which supersedes the stale retry while preserving the fresh-admission distinction for queue retry admission."
+  ],
+  "preserved": {
+    "existingAssertions": "All operation, host, recovery and effectBatch quietness assertions retained",
+    "testTimeoutMs": 5000,
+    "quietObservationMs": 1100,
+    "startupSynchronization": "Fresh-admission startup kick remains before send admission",
+    "productSourceChanged": true
+  },
+  "ciEvidence": {
+    "run": 39364747843,
+    "attempt": 1,
+    "version": "0.154.0",
+    "expectedEffectReads": 4,
+    "observedEffectReads": 5
+  },
+  "conditions": {
+    "runtime": "Bun 1.4.0 (34cbb9a40)",
+    "matrixSource": ".github/workflows/bun-runtime.yml native-codex-versions",
+    "invocation": [
+      "bun",
+      "test",
+      "--preload",
+      "<scratch>/pressure.ts",
+      "src/lib/runtime/structuredDelivery.integration.test.ts",
+      "-t",
+      "a kill cancels an automatic delivery retry and fails the send retryably"
+    ],
+    "ownership": "Every batch runs sequentially through the required installed gate-slot.sh and each test process uses its owned runner.",
+    "sampling": "Fresh process and roots for every sample; five baseline and twenty fixed samples per version and condition. All results are process exit verdicts and named test outcomes.",
+    "isolation": [
+      "HOME",
+      "TMPDIR",
+      "XDG_CONFIG_HOME",
+      "XDG_CACHE_HOME",
+      "XDG_DATA_HOME",
+      "LLV_STATE_DIR",
+      "CODEX_HOME",
+      "CLAUDE_CONFIG_DIR"
+    ],
+    "controlUrl": "http://127.0.0.1:1",
+    "normal": "No injected workers; default affinity.",
+    "pressure": "Two Python busy-loop workers pinned to CPU 0 and ready-acknowledged before testing. Each admitted test command runs taskset inside gate-slot.sh; a preload checks the Bun test process Cpus_allowed_list from procfs is exactly CPU 0.",
+    "codex": "Each fake fixture answers its exact matrix version to --version and is supplied through NATIVE_CODEX_QUEUE_TEST_BINARY, LLV_CODEX_HISTORY_CLI and LLV_CODEX_BINARY. The selected shared integration test exercises fake engine hosts.",
+    "exports": "Baseline and fixed source exports share a dependency graph with byte-identical manifests, Bun lockfile and patches."
+  },
+  "matrix": [
+    {
+      "codex": "0.154.0",
+      "normal": {
+        "before": {
+          "passes": 2,
+          "runs": 5,
+          "failures": {
+            "sendCount expected 2, received 4": 0,
+            "effectBatchCalls expected 4, received 5": 3
+          }
+        },
+        "after": {
+          "passes": 20,
+          "runs": 20,
+          "consecutive": true,
+          "pressureAffinityVerified": null,
+          "durationSeconds": {
+            "min": 1.692,
+            "median": 2.3235,
+            "max": 6.303
+          }
+        }
+      },
+      "pressure": {
+        "before": {
+          "passes": 1,
+          "runs": 5,
+          "failures": {
+            "sendCount expected 2, received 4": 2,
+            "effectBatchCalls expected 4, received 5": 2
+          }
+        },
+        "after": {
+          "passes": 20,
+          "runs": 20,
+          "consecutive": true,
+          "pressureAffinityVerified": true,
+          "durationSeconds": {
+            "min": 3.025,
+            "median": 3.786,
+            "max": 6.833
+          }
+        }
+      }
+    },
+    {
+      "codex": "0.159.0",
+      "normal": {
+        "before": {
+          "passes": 3,
+          "runs": 5,
+          "failures": {
+            "sendCount expected 2, received 4": 0,
+            "effectBatchCalls expected 4, received 5": 2
+          }
+        },
+        "after": {
+          "passes": 20,
+          "runs": 20,
+          "consecutive": true,
+          "pressureAffinityVerified": null,
+          "durationSeconds": {
+            "min": 2.024,
+            "median": 3.761,
+            "max": 88.512
+          }
+        }
+      },
+      "pressure": {
+        "before": {
+          "passes": 0,
+          "runs": 5,
+          "failures": {
+            "sendCount expected 2, received 4": 2,
+            "effectBatchCalls expected 4, received 5": 3
+          }
+        },
+        "after": {
+          "passes": 20,
+          "runs": 20,
+          "consecutive": true,
+          "pressureAffinityVerified": true,
+          "durationSeconds": {
+            "min": 3.04,
+            "median": 3.556,
+            "max": 7.273
+          }
+        }
+      }
+    },
+    {
+      "codex": "0.162.1",
+      "normal": {
+        "before": {
+          "passes": 4,
+          "runs": 5,
+          "failures": {
+            "sendCount expected 2, received 4": 1,
+            "effectBatchCalls expected 4, received 5": 0
+          }
+        },
+        "after": {
+          "passes": 20,
+          "runs": 20,
+          "consecutive": true,
+          "pressureAffinityVerified": null,
+          "durationSeconds": {
+            "min": 3.663,
+            "median": 3.682,
+            "max": 5.693
+          }
+        }
+      },
+      "pressure": {
+        "before": {
+          "passes": 0,
+          "runs": 5,
+          "failures": {
+            "sendCount expected 2, received 4": 4,
+            "effectBatchCalls expected 4, received 5": 1
+          }
+        },
+        "after": {
+          "passes": 20,
+          "runs": 20,
+          "consecutive": true,
+          "pressureAffinityVerified": true,
+          "durationSeconds": {
+            "min": 2.758,
+            "median": 3.431,
+            "max": 8.126
+          }
+        }
+      }
+    },
+    {
+      "codex": "0.163.0",
+      "normal": {
+        "before": {
+          "passes": 4,
+          "runs": 5,
+          "failures": {
+            "sendCount expected 2, received 4": 0,
+            "effectBatchCalls expected 4, received 5": 1
+          }
+        },
+        "after": {
+          "passes": 20,
+          "runs": 20,
+          "consecutive": true,
+          "pressureAffinityVerified": null,
+          "durationSeconds": {
+            "min": 3.676,
+            "median": 4.718,
+            "max": 39.734
+          }
+        }
+      },
+      "pressure": {
+        "before": {
+          "passes": 0,
+          "runs": 5,
+          "failures": {
+            "sendCount expected 2, received 4": 4,
+            "effectBatchCalls expected 4, received 5": 1
+          }
+        },
+        "after": {
+          "passes": 20,
+          "runs": 20,
+          "consecutive": true,
+          "pressureAffinityVerified": true,
+          "durationSeconds": {
+            "min": 3.216,
+            "median": 4.3725000000000005,
+            "max": 8.306
+          }
+        }
+      }
+    }
+  ],
+  "negativeControl": {
+    "change": "Restore the pre-fix controller behavior in which an explicit non-fresh kick leaves DeliveryWake armed; run the receipt-barrier version of the focused test.",
+    "expected": "The effectBatch equality fails when the pending one-second wake adds a fifth read after the four-read baseline.",
+    "observed": "Expected 4; received 5; exit 1."
+  },
+  "checks": [
+    {
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/structuredDelivery.integration.test.ts"
+      ],
+      "name": "base-full",
+      "exit": 0,
+      "seconds": 23.537,
+      "bunSummary": [
+        "66 pass",
+        "0 fail",
+        "543 expect() calls"
+      ]
+    },
+    {
+      "command": [
+        "bun",
+        "x",
+        "tsc",
+        "--noEmit",
+        "--incremental",
+        "false"
+      ],
+      "name": "types",
+      "exit": 0,
+      "seconds": 214.502,
+      "bunSummary": []
+    },
+    {
+      "command": [
+        "bash",
+        "<installed gate-slot.sh>",
+        "bun",
+        "test",
+        "src/lib/runtime/structuredDelivery.integration.test.ts"
+      ],
+      "name": "final-full",
+      "exit": 0,
+      "seconds": 19.15,
+      "bunSummary": [
+        "66 pass",
+        "0 fail",
+        "543 expect() calls"
+      ]
+    },
+    {
+      "command": [
+        "bash",
+        "<installed gate-slot.sh>",
+        "bun",
+        "test",
+        "src/lib/runtime/structuredDeliveryController.test.ts"
+      ],
+      "name": "controller",
+      "exit": 0,
+      "bunSummary": [
+        "8 pass",
+        "0 fail",
+        "27 expect() calls"
+      ]
+    },
+    {
+      "command": [
+        "bash",
+        "<installed gate-slot.sh>",
+        "bun",
+        "test",
+        "src/lib/runtime/deliveryWake.test.ts"
+      ],
+      "name": "wake",
+      "exit": 0,
+      "bunSummary": [
+        "3 pass",
+        "0 fail",
+        "9 expect() calls"
+      ]
+    },
+    {
+      "command": [
+        "bun",
+        "node_modules/eslint/bin/eslint.js",
+        "src/lib/runtime/structuredDelivery.integration.test.ts",
+        "src/lib/runtime/structuredDeliveryController.ts"
+      ],
+      "name": "lint",
+      "exit": 0,
+      "warnings": 2,
+      "warningDetails": [
+        "src/lib/runtime/structuredDeliveryController.ts:526:45 receiptOperationId unused",
+        "src/lib/runtime/structuredDeliveryController.ts:1495:43 _entryUpdatedAt unused"
+      ]
+    },
+    {
+      "command": [
+        "bash",
+        ".githooks/pre-push"
+      ],
+      "name": "pre-push",
+      "exit": 0,
+      "summary": [
+        "privacy passed",
+        "touched tests passed",
+        "Linux tests passed",
+        "types passed: 0 errors introduced",
+        "ESLint passed",
+        "publication checks CPU wait 200 ms"
+      ]
+    }
+  ],
+  "publication": "The local repository pre-push gate passed on the final source/evidence changes; no push was performed.",
+  "history": {
+    "priorFixedDelayRevision": "955395780",
+    "inventory": "docs/verification/main-test-recovery.md#srclibruntimestructureddeliveryintegrationtestts",
+    "observation": "The earlier repair added a 100 ms wait. The retained main-test inventory also lists this kill/retry case as an unresolved follow-up."
+  },
+  "preFixRegression": {
+    "command": [
+      "bun",
+      "test",
+      "src/lib/runtime/structuredDelivery.integration.test.ts",
+      "-t",
+      "a kill cancels an automatic delivery retry and fails the send retryably"
+    ],
+    "execution": "Installed gate-slot.sh; private HOME, XDG_CONFIG_HOME, XDG_CACHE_HOME, XDG_DATA_HOME, CODEX_HOME, TMPDIR and LLV_STATE_DIR; closed control URL",
+    "outcome": "Before controller cancellation fix, corrected receipt-based barrier observed 4 effect reads at quietness baseline and 5 after 1,100 ms; assertion failed (exit 1).",
+    "afterFix": "Same final test passed with all 12 expectations."
+  }
+}

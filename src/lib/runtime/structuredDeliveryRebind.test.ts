@@ -31,6 +31,8 @@ const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts"
 const { RuntimeJournal } = await import("@/runtime-host/journal");
 const { createFakeDeliveryLedger, FakeEngineHost } = await import("./fixtures/fakeEngineHost");
 const { RuntimeHostUnavailableError } = await import("./client");
+const { deliveryDedupToken } = await import("./deliveryDedup");
+const { encodeCodexStructuredUserText } = await import("./codexStructuredUserText.server");
 const {
   bindStructuredDeliveryQueue,
   completeStructuredDeliveryQueueStartup,
@@ -65,7 +67,7 @@ function runtimeClient(journal: InstanceType<typeof RuntimeJournal>): RuntimeHos
     producerCursor: async (producerKind: string, eventKeyPrefix: string) =>
       journal.producerCursor(producerKind, eventKeyPrefix),
     effectBatch: async (kinds, afterEventSeq) => journal.effectBatch(100, kinds, afterEventSeq),
-    transitionOperation: async (operationId, status, details) => journal.transitionOperation(operationId, status, details),
+    transitionOperation: async (operationId, status, details, options) => journal.transitionOperation(operationId, status, details, options),
   } as RuntimeHostClient;
 }
 
@@ -240,30 +242,76 @@ test("startup drains registered hosts while retaining original sends for unregis
   }
 });
 
-test("separate Next bundle realms share one delivery controller lifecycle (#572)", async () => {
-  const { registry, directory, client, close } = fixture("bundle-realms");
-  const moduleCopy = (name: string) => `./structuredDeliveryController?${name}`;
-  const instrumentationRealm = await import(moduleCopy("issue-572-instrumentation"));
-  const routeRealm = await import(moduleCopy("issue-572-route"));
-  const { key } = seedConversation(registry, directory, "bundle-realm-session");
-  const host = structuredHost();
-
+test("distinct compiled controller bundles retain one host and drain once across a process restart", async () => {
+  const { registry, journal, directory, close } = fixture("bundle-realms");
+  const { key, conversationId } = seedConversation(registry, directory, "bundle-realm-session");
+  const bundles: string[] = [];
   try {
-    expect(instrumentationRealm).not.toBe(routeRealm);
-    await instrumentationRealm.bindStructuredDeliveryQueue([], { registry, client });
-    expect(routeRealm.hasStructuredDeliveryController(registry)).toBe(true);
-
-    await routeRealm.publishStructuredDeliveryHost({ key, host });
-    expect(instrumentationRealm.hasStructuredDeliveryHost(key)).toBe(true);
-
-    /* Re-entering startup through the other compiled module replaces the
-       generation while preserving its one process-owned host lifecycle. */
-    await routeRealm.bindStructuredDeliveryQueue([], { registry, client });
-    expect(instrumentationRealm.hasStructuredDeliveryController(registry)).toBe(true);
-    expect(instrumentationRealm.hasStructuredDeliveryHost(key)).toBe(true);
+    fs.symlinkSync(path.join(repoRoot, "node_modules"), path.join(directory, "node_modules"), "junction");
+    for (const name of ["instrumentation", "route"]) {
+      const built = await Bun.build({ entrypoints: [path.join(import.meta.dir, "structuredDeliveryController.ts")],
+        target: "bun", format: "esm", packages: "external" });
+      expect(built.success).toBe(true);
+      const filename = path.join(directory, `${name}.mjs`);
+      await Bun.write(filename, built.outputs[0]!);
+      bundles.push(filename);
+    }
+    journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
+      conversationId, sessionKey: key, hostKind: "codex-app-server", host: "hosted", turn: "idle",
+    } });
+    journal.executeOperation({ kind: "send", operationId: "bundled-original", idempotencyKey: "bundled-original-key",
+      conversationId, text: "drain the original once", policy: "queue" });
+    for (let generation = 0; generation < 2; generation++) {
+      const home = path.join(process.env.TMPDIR!, `bundle-home-${generation}`);
+      const config = path.join(process.env.TMPDIR!, `bundle-config-${generation}`);
+      fs.mkdirSync(home);
+      fs.mkdirSync(config);
+      const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "fixtures/bundledDeliveryController.ts"),
+        directory, JSON.stringify(key), ...bundles], {
+        env: { ...process.env, HOME: home, XDG_CONFIG_HOME: config }, stdout: "pipe", stderr: "pipe",
+      });
+      const output = new Response(child.stdout).text();
+      const errors = new Response(child.stderr).text();
+      try {
+        expect(await child.exited).toBe(0);
+        expect(await errors).toBe("");
+        expect(JSON.parse(await output)).toEqual({ distinct: true, retained: true, releases: 1, writes: generation === 0 ? 1 : 0 });
+      } finally {
+        if (child.exitCode === null) child.kill();
+        await child.exited;
+      }
+    }
   } finally {
     await close();
   }
+}, 60_000);
+
+test("startup projects a committed discard before a late canonical acknowledgement", async () => {
+  const { registry, journal, directory, client, close } = fixture("startup-discard-ack");
+  const { key, conversationId } = seedConversation(registry, directory, "startup-discard");
+  const operationId = "startup-discard-operation";
+  const text = "settle the retained instruction";
+  const held = registry.holdDelivery(conversationId as `conversation_${string}`, text, "startup-discard-key", "text", [], null,
+    { operationId, kind: "send", policy: "queue" });
+  registry.beginDeliveryAttempt(held.id, held.generationId!);
+  journal.append({ scope: { type: "session", id: conversationId }, kind: "session-status", payload: {
+    conversationId, sessionKey: key, hostKind: "codex-app-server", host: "hosted", turn: "idle",
+  } });
+  journal.executeOperation({ kind: "send", operationId, idempotencyKey: "startup-discard-key", conversationId, text, policy: "queue" });
+  journal.transitionOperation(operationId, "delivering");
+  journal.transitionOperation(operationId, "uncertain");
+  registry.recordDeliveryOutcome(held.id, "failed", "delivery observation unknown", "unverified");
+  journal.claimDeliveryAction(operationId, "discard");
+  const wire = await encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken(operationId));
+  fs.writeFileSync(path.join(directory, "startup-discard.jsonl"), JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: wire } }) + "\n");
+  try {
+    const { confirmedSend } = await import("./confirmedSend");
+    expect(await confirmedSend(registry.readOnlySnapshot(), operationId)).toBe(true);
+    await bindStructuredDeliveryQueue([], { registry, client, watchdogIntervalMs: 0, settlementSweepMs: 0 });
+    expect(registry.readOnlySnapshot().heldDeliveries[held.id]).toMatchObject({ state: "failed", error: "delivery-discarded" });
+    expect(journal.operationResult(operationId)?.receipt).toMatchObject({ status: "failed", reason: "delivery-discarded" });
+    expect(journal.effectBatch()).toEqual([]);
+  } finally { await close(); }
 });
 
 test("a spawn issued while the queue rebinds is published once the bind completes (#1191)", async () => {
