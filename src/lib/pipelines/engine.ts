@@ -4202,6 +4202,15 @@ function passedStagePublicationPark(pipeline: Pipeline, attempt: PipelineStageAt
         || detail?.startsWith("the accepted head cannot be verified before completion:") === true)));
 }
 
+/** Custody can refuse a pass before its head is accepted or completedAt is
+ * recorded. A guarded answer may retire that attempt for a fresh repair. */
+function passedStageCustodyPark(pipeline: Pipeline, attempt: PipelineStageAttempt | null): boolean {
+  const detail = pipeline.stateDetail;
+  return pipeline.cursor?.state === "committing" && attempt?.state === "needs_decision"
+    && attempt.verdict?.status === "pass" && (detail?.startsWith("settling the stage push:") === true
+      || detail?.startsWith("stage push refused:") === true);
+}
+
 function awaitingPassedPublication(pipeline: Pipeline): boolean {
   const attempt = pipeline.cursor ? currentAttempt(pipeline, pipeline.cursor.stageId) : null;
   return pipeline.cursor?.state === "committing" && attempt?.verdict?.status === "pass"
@@ -12960,8 +12969,9 @@ async function resolveDecision(
   const attempt = stage ? currentAttempt(pipeline, stage.id) : null;
   const budgetRefusal = terminalBudgetDecisionRefusal(attempt);
   if (budgetRefusal) return budgetRefusal;
-  const publicationDecision = pipeline.state === "needs_decision" && passedStagePublicationPark(pipeline, attempt);
-  if (stage?.kind !== "run" || !attempt || !attempt.completedAt || (!publicationDecision
+  const custodyDecision = pipeline.state === "needs_decision" && passedStageCustodyPark(pipeline, attempt);
+  const publicationDecision = pipeline.state === "needs_decision" && (passedStagePublicationPark(pipeline, attempt) || custodyDecision);
+  if (stage?.kind !== "run" || !attempt || (!attempt.completedAt && !custodyDecision) || (!publicationDecision
     && (attempt.state !== "needs_decision" || attempt.verdict?.status !== "needs_decision"))) {
     return { error: "resolve-decision requires a run attempt settled with a needs_decision verdict", status: 409 };
   }
@@ -13006,7 +13016,10 @@ async function resolveDecision(
     question: publicationDecision ? pipeline.stateDetail! : attempt.output ?? attempt.report?.summary ?? "", answer: req.answer,
     actor: structuredClone(actor!), at: ports.now(),
   };
-  // Keep the settled attempt, its report and worktree untouched. A fresh identity owns the continuation.
+  // Custody refused before completion. Retire it only after the producer checks
+  // above, so its decision successor can follow the durable receipt lineage.
+  if (custodyDecision) attempt.completedAt ??= decision.at;
+  // Keep the original report and worktree. A fresh identity owns the continuation.
   setCursorState(pipeline, stage.id, "pending");
   pipeline.cursor!.input = renderDecisionInput(attempt.input, decision);
   recordHandLaunch(pipeline, actor, decision.at);
@@ -13481,7 +13494,8 @@ export async function patchPipeline(
     const snapshot = findPipelineRecord(id);
     const snapshotStage = snapshot ? currentStage(snapshot) : null;
     const snapshotAttempt = snapshot && snapshotStage ? currentAttempt(snapshot, snapshotStage.id) : null;
-    if (snapshot && snapshotAttempt && snapshot.state === "needs_decision" && passedStagePublicationPark(snapshot, snapshotAttempt)) {
+    if (snapshot && snapshotAttempt && snapshot.state === "needs_decision"
+      && (passedStagePublicationPark(snapshot, snapshotAttempt) || passedStageCustodyPark(snapshot, snapshotAttempt))) {
       const worker = publicationRepairWorker(snapshot, snapshotAttempt) ?? { stage: snapshotStage!, attempt: snapshotAttempt };
       if (worker.attempt.conversationId) {
         const conversationId = worker.attempt.conversationId;
