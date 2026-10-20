@@ -35,6 +35,7 @@ import {
   ORCHESTRATOR_SHIPPED_CLOCK_OPENING,
   orchestratorMandateCarriesTickContract,
   orchestratorMandateForDelivery,
+  orchestratorMandateUpgraded,
   orchestratorMandateWithRoleTable,
   orchestratorMandateStale,
   orchestratorRoleTable,
@@ -1140,7 +1141,7 @@ test("delivery takes every reply-draft instruction out of a v55 mandate by exact
   expect(delivered).toContain(`${ORCHESTRATOR_PROTOTYPE_DIRECTIVE}\nBridge reports.`);
   expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
   /* With the role table set aside, the delivered v55 mandate is the current one. */
-  expect(orchestratorMandateWithRoleTable(v55, null)).toBe(orchestratorMandateWithRoleTable(ORCHESTRATOR_SYSTEM_PROMPT, null));
+  expect(orchestratorMandateWithRoleTable(orchestratorMandateUpgraded(v55), null)).toBe(orchestratorMandateWithRoleTable(ORCHESTRATOR_SYSTEM_PROMPT, null));
   expect(orchestratorMandateCarriesTickContract({ mandate: v55, promptVersion: 55 })).toBe(true);
   /* A bespoke mandate's own wording about replies survives. */
   expect(orchestratorMandateForDelivery("Coordinate. Reply drafts: our own wording.")).toContain("Reply drafts: our own wording.");
@@ -1157,7 +1158,7 @@ test("delivery sends a v56 mandate's proposals to a decision form by exact match
   const delivered = orchestratorMandateForDelivery(v56);
   expect(delivered).not.toContain("offered in chat");
   expect(delivered).toContain("anything beyond the literal request is a proposal, put to the operator in a decision form and acted on only after their yes.");
-  expect(orchestratorMandateWithRoleTable(v56, null)).toBe(orchestratorMandateWithRoleTable(ORCHESTRATOR_SYSTEM_PROMPT, null));
+  expect(orchestratorMandateWithRoleTable(orchestratorMandateUpgraded(v56), null)).toBe(orchestratorMandateWithRoleTable(ORCHESTRATOR_SYSTEM_PROMPT, null));
   expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
   /* A bespoke mandate's own wording about proposals survives. */
   expect(orchestratorMandateForDelivery("Coordinate. Proposals are offered in chat.")).toContain("Proposals are offered in chat.");
@@ -1206,8 +1207,12 @@ test("delivery gives a v57 mandate the maintenance practice and the current rule
   expect(delivered.split(MAINTENANCE_BULLET_START)).toHaveLength(2);
   expect(delivered).not.toContain("work in a scratch export;");
   expect(delivered).toContain(WORKING_RULES_SHORT.split("\n").find((line) => line.startsWith("16. "))!);
-  expect(orchestratorMandateWithRoleTable(v57, null)).toBe(orchestratorMandateWithRoleTable(ORCHESTRATOR_SYSTEM_PROMPT, null));
+  expect(orchestratorMandateWithRoleTable(orchestratorMandateUpgraded(v57), null)).toBe(orchestratorMandateWithRoleTable(ORCHESTRATOR_SYSTEM_PROMPT, null));
+  expect(orchestratorMandateUpgraded(orchestratorMandateUpgraded(v57))).toBe(orchestratorMandateUpgraded(v57));
   expect(orchestratorMandateForDelivery(delivered)).toBe(delivered);
+  /* A pending intent replays what it recorded: the upgrade is applied when a
+     request composes a new intent, never on the replay renderer. */
+  expect(orchestratorMandateWithRoleTable(v57, null)).toBe(v57);
   /* A bespoke mandate without the outputs bullet gets no maintenance bullet. */
   expect(orchestratorMandateForDelivery("Coordinate. Audits are ours.")).not.toContain(MAINTENANCE_BULLET_START);
 });

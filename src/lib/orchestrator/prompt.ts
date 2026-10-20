@@ -518,14 +518,15 @@ const SHIPPED_LITERAL_REQUEST_PROPOSALS = [
 
 /** v58 (docs/design/gpt-6-role-prompts.md §3.3, the operator, 2026-10-20):
     the maintenance practice of docs/design/gpt-6-maintenance.md, stated for
-    every installation. It follows the bullet on declared outputs, and delivery
-    adds it there to a v55–v57 mandate by exact match. */
+    every installation. It follows the bullet on declared outputs, and
+    `orchestratorMandateUpgraded` adds it there to a v55–v57 mandate by exact
+    match. */
 const ORCHESTRATOR_OUTPUTS_BULLET = "- A stage that hands a document on (a design, an audit report) declares its path in outputs: read-only stages write only declared outputs. Role params hold short values; put the rest in the brief.";
 const ORCHESTRATOR_MAINTENANCE_PRACTICE = "- Maintenance (dead code, stale mechanisms, flaky tests, check cost) is report first: a read-only architect mode=architecture-audit stage with its report in outputs, deleting nothing. Ramp from one task to one subdirectory to the repository; before each widening, compare model arms on the same snapshot, findings judged blind, by cost per accepted finding. Then one small lane per accepted workstream, its brief carrying the audit's evidence and keep-list. When a role's default model changes, re-run the audit once on its fixed task.";
 
 /** Working rule 16 as v55–v57 carried it in its short form; #3083 rewrote it
     in `WORKING_RULES_SHORT` and v58 is the version that ships the rewrite, so
-    delivery replaces the old line by exact match. */
+    `orchestratorMandateUpgraded` replaces the old line by exact match. */
 const SHIPPED_WORKING_RULE_16 = "16. Leave the checkout as you found it: work in a scratch export; a read-only stage leaves no new file behind.";
 const WORKING_RULE_16 = WORKING_RULES_SHORT.split("\n").find((line) => line.startsWith("16. ")) ?? SHIPPED_WORKING_RULE_16;
 
@@ -732,14 +733,28 @@ const DELIVERED_DIRECTIVES: readonly { markers: readonly string[]; directive: st
     sections are removed and the v40–v55 bug-report rule replaced the same way
     (v56), so no seat is told to ask with reply drafts. A v55–v57 mandate gets
     the v58 maintenance practice after its outputs bullet and the current
-    working rule 16 the same way.
+    working rule 16 the same way, through `orchestratorMandateUpgraded`, which
+    a seat request applies before it records a new intent.
 
     Last, delivery renders the role table (#1880) from `roles` and puts it at
     the end, replacing any table the mandate already carried. Server callers
     pass the live registry; the built-in presets are only the fallback for a
     caller that has none to read. */
 export function orchestratorMandateForDelivery(mandate: string, roles: readonly RoleDefinition[] = ROLE_DEFAULTS): string {
-  return orchestratorMandateWithRoleTable(mandate, orchestratorRoleTable(roles));
+  return orchestratorMandateWithRoleTable(orchestratorMandateUpgraded(mandate), orchestratorRoleTable(roles));
+}
+
+/** The v58 upgrades, idempotent. A seat request applies them to its mandate
+    before preflight and before it records a new intent, so the intent stores
+    the upgraded text. They stay out of `orchestratorMandateWithRoleTable`: a
+    pending intent recorded by an earlier release replays its first attempt's
+    bytes under the same clientAttemptId, and a spawn receipt matched by
+    request digest refuses any other text. */
+export function orchestratorMandateUpgraded(mandate: string): string {
+  mandate = mandate.split(SHIPPED_WORKING_RULE_16).join(WORKING_RULE_16);
+  return mandate.includes(ORCHESTRATOR_MAINTENANCE_PRACTICE)
+    ? mandate
+    : mandate.replace(ORCHESTRATOR_OUTPUTS_BULLET, `${ORCHESTRATOR_OUTPUTS_BULLET}\n${ORCHESTRATOR_MAINTENANCE_PRACTICE}`);
 }
 
 /** Delivery with an already rendered role table. A pending seat intent replays
@@ -749,8 +764,6 @@ export function orchestratorMandateForDelivery(mandate: string, roles: readonly 
 export function orchestratorMandateWithRoleTable(mandate: string, roleTable: string | null): string {
   mandate = mandate.replace("- Keep no more workers running at once than your role parameters allow (3 when they name none), in every mode: each running lane and each live spawned agent counts as one.", "- Keep no more workers running at once than the worker limit each wake and get_orchestrator state, in every mode: each running lane and each live spawned agent counts as one.");
   mandate = SHIPPED_LITERAL_REQUEST_PROPOSALS.reduce((text, shipped) => text.split(shipped).join(ORCHESTRATOR_LITERAL_PROPOSAL), mandate);
-  mandate = mandate.split(SHIPPED_WORKING_RULE_16).join(WORKING_RULE_16);
-  if (!mandate.includes(ORCHESTRATOR_MAINTENANCE_PRACTICE)) mandate = mandate.replace(ORCHESTRATOR_OUTPUTS_BULLET, `${ORCHESTRATOR_OUTPUTS_BULLET}\n${ORCHESTRATOR_MAINTENANCE_PRACTICE}`);
   mandate = SHIPPED_BUG_REPORT_RULES.reduce((text, shipped) => text.split(shipped).join(ORCHESTRATOR_BUG_REPORT_RULE), mandate)
     .split(`${SHIPPED_REPLY_DRAFTS_PARAGRAPH}\n`).join("")
     .split(SHIPPED_REPLY_DRAFTS_PARAGRAPH).join("");
