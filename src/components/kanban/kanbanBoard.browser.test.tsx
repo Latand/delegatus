@@ -34813,3 +34813,281 @@ describe("finished work leaves In progress", () => {
     } finally { await browser?.close(); if (tempFd !== null) fs.closeSync(tempFd); server.stop(); }
   }, 120_000);
 });
+
+/*
+ * Team workspaces, slice (a) (docs/design/workspaces.md §13.5 D1–D7, §13.9):
+ * the rail's chip and its menu as owner and member, the All view with Move to…,
+ * the Team page's Workspaces tab and New workspace, and one workspace's page,
+ * at 1440, 820 and 390, in en and uk, light and dark. The rail frames are
+ * desktop only (at 390 the board is the phone's, framed by the phone driver);
+ * the Team and workspace pages are framed at all three widths. Every state is
+ * reached through the real controls, its defining words are measured from
+ * text ranges on the first screen, and every menu and dialog stays inside the
+ * window. Frames go to `.artifacts/team-workspaces/`; the readings are
+ * committed to `evidence/team-workspaces/rendered.json`.
+ */
+describe("team workspaces slice (a)", () => {
+  browserTest("chip, menu, All with Move to…, Workspaces tab, New workspace and the workspace page", async () => {
+    const out = path.resolve(process.env.LLV_WORKSPACES_OUT ?? ".artifacts/team-workspaces");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(path.join(out, "bundle-root"));
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const failures: string[] = [];
+    const readings: Array<Record<string, unknown>> = [];
+    const words = (lang: "en" | "uk", key: string, params?: Record<string, string | number>) => translate(lang, key as never, params as never);
+    /* The ids `workspacesEvidence.fixture.ts` gives its workspaces. */
+    const FIXTURE_IDS = { client: `w_${"c1".repeat(16)}` };
+    const names = {
+      en: { client: "Client work", long: "Northwind customer data platform rollout" },
+      uk: { client: "Клієнтська робота", long: "Впровадження платформи даних Northwind" },
+    };
+
+    /** Each text node under `selector` that contains `text`: its range boxes, and whether all of them sit inside the
+        window and inside every clipping ancestor (a scroll edge or the window cutting a word fails). */
+    const measure = (page: Page, selector: string, text: string) => page.evaluate(({ selector, text }) => {
+      const roots = [...document.querySelectorAll<HTMLElement>(selector)].filter((element) => element.getClientRects().length > 0);
+      const boxes: Array<{ left: number; top: number; right: number; bottom: number }> = [];
+      let cut = false;
+      for (const root of roots) {
+        if (!(root.textContent ?? "").replace(/\s+/g, " ").includes(text)) continue;
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          if (!(node.textContent ?? "").trim()) continue;
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          for (const rect of range.getClientRects()) {
+            if (rect.width === 0) continue;
+            boxes.push({ left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom });
+            if (rect.top < -0.5 || rect.bottom > innerHeight + 0.5 || rect.left < -0.5 || rect.right > innerWidth + 0.5) cut = true;
+            for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+              const style = getComputedStyle(parent);
+              if (style.overflowY === "visible" && style.overflowX === "visible") continue;
+              const clip = parent.getBoundingClientRect();
+              if (rect.top < clip.top - 0.5 || rect.bottom > clip.bottom + 0.5) cut = true;
+            }
+          }
+        }
+        break;
+      }
+      return { found: boxes.length > 0, cut, boxes: boxes.slice(0, 6).map((box) => Object.values(box).map((value) => Math.round(value))) };
+    }, { selector, text });
+    const inside = (page: Page, selector: string) => page.evaluate((selector) => {
+      const element = [...document.querySelectorAll<HTMLElement>(selector)].find((candidate) => candidate.getClientRects().length > 0);
+      if (!element) return null;
+      const box = element.getBoundingClientRect();
+      return { box: [box.left, box.top, box.width, box.height].map(Math.round), inside: box.left >= -0.5 && box.top >= -0.5 && box.right <= innerWidth + 0.5 && box.bottom <= innerHeight + 0.5 };
+    }, selector);
+
+    async function frame(page: Page, tag: string, state: string, defining: Array<[selector: string, text: string]>, popover?: string) {
+      for (const [selector, text] of defining) {
+        const reading = await measure(page, selector, text);
+        if (!reading.found) failures.push(`${tag} ${state}: «${text}» is not on the first screen in ${selector}`);
+        else if (reading.cut) failures.push(`${tag} ${state}: «${text}» is cut ${JSON.stringify(reading.boxes)}`);
+      }
+      let box: unknown = null;
+      if (popover) {
+        const reading = await inside(page, popover);
+        box = reading?.box ?? null;
+        if (!reading) failures.push(`${tag} ${state}: ${popover} is not open`);
+        else if (!reading.inside) failures.push(`${tag} ${state}: ${popover} leaves the window ${JSON.stringify(reading.box)}`);
+      }
+      const file = `${tag}-${state}.png`.replace(/\s+/g, "-");
+      await page.screenshot({ path: path.join(out, file) });
+      readings.push({ tag, state, defining: defining.map(([, text]) => text), popover: popover ?? null, box, file });
+    }
+
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 820, 390]) {
+        const tag = `${lang}-${theme}-${width}`;
+        const phone = width === 390;
+        const open = async (query: string) => {
+          const opened = await openFixture(browser, `${server.base}?${query}`, { width, height: phone ? 844 : 900 }, theme, lang, "reduce", phone);
+          return opened;
+        };
+        if (!phone) {
+          /* D1: the chip names the chosen workspace in place of the product name; the rail lists its projects alone. */
+          {
+            const { context, page, pageErrors } = await open("scenario=workspaces&rail=1&railview=overview&ws=client");
+            try {
+              await page.locator("[data-workspace-chip]").waitFor();
+              await page.locator("[data-rail-project]").first().waitFor();
+              const listed = await page.locator("[data-rail-project]").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-rail-project")));
+              if (JSON.stringify([...listed].sort()) !== JSON.stringify(["acme-ledger", "harbor-docs"])) failures.push(`${tag} D1: the rail lists ${JSON.stringify(listed)}`);
+              if (await page.locator("[data-rail-brand]").count()) failures.push(`${tag} D1: the product name is still in the header`);
+              await frame(page, tag, "D1-client", [["[data-workspace-chip]", names[lang].client]]);
+              /* D2 as the owner: the menu with the counts, the check, settings, New and Manage. */
+              await page.locator("[data-workspace-chip]").click();
+              await page.locator("[data-workspace-menu]").waitFor();
+              await frame(page, tag, "D2-owner", [
+                ["[data-workspace-menu]", words(lang, "workspaces.heading")],
+                ["[data-workspace-menu]", words(lang, "workspaces.all")],
+                ["[data-workspace-menu]", words(lang, "workspaces.settings")],
+                ["[data-workspace-menu]", words(lang, "workspaces.new")],
+                ["[data-workspace-menu]", words(lang, "workspaces.manage")],
+              ], "[data-workspace-menu]");
+              if (pageErrors.length) failures.push(`${tag} D1/D2: page errors ${pageErrors.join("; ")}`);
+            } finally { await context.close(); }
+          }
+          /* D2 as a member: the rows and Manage only. */
+          {
+            const { context, page } = await open("scenario=workspaces&rail=1&railview=overview&ws=client&member=1");
+            try {
+              await page.locator("[data-workspace-chip]").click();
+              await page.locator("[data-workspace-menu]").waitFor();
+              const links = await page.locator("[data-workspace-link]").evaluateAll((items) => items.map((item) => item.getAttribute("data-workspace-link")));
+              if (JSON.stringify(links) !== JSON.stringify(["manage"])) failures.push(`${tag} D2 member: the menu offers ${JSON.stringify(links)}`);
+              await frame(page, tag, "D2-member", [["[data-workspace-menu]", words(lang, "workspaces.manage")]], "[data-workspace-menu]");
+            } finally { await context.close(); }
+          }
+          /* The longest name truncates inside the chip, clear of the hide control. */
+          {
+            const { context, page } = await open("scenario=workspaces&rail=1&railview=overview&ws=long");
+            try {
+              await page.locator("[data-workspace-chip]").waitFor();
+              const chip = await page.evaluate(() => {
+                const label = document.querySelector<HTMLElement>("[data-workspace-chip-label]")!;
+                const chipBox = document.querySelector<HTMLElement>("[data-workspace-chip]")!.getBoundingClientRect();
+                const hide = document.querySelector<HTMLElement>("[data-rail-hide]")!.getBoundingClientRect();
+                const labelBox = label.getBoundingClientRect();
+                return { truncated: label.scrollWidth > label.clientWidth, labelRight: labelBox.right, chipRight: chipBox.right, hideLeft: hide.left };
+              });
+              if (!chip.truncated) failures.push(`${tag} long name: the chip label is not truncated`);
+              if (chip.labelRight > chip.chipRight + 0.5 || chip.chipRight > chip.hideLeft + 0.5) failures.push(`${tag} long name: the chip overruns ${JSON.stringify(chip)}`);
+              readings.push({ tag, state: "chip-long", ...chip });
+              await frame(page, tag, "D1-long", [["[data-workspace-chip]", names[lang].long.slice(0, 8)]]);
+            } finally { await context.close(); }
+          }
+          /* D3: All, the sections in order, Move on the selected Unassigned row, and its menu. */
+          {
+            const { context, page, pageErrors } = await open("scenario=workspaces&rail=1&railview=overview&ws=all");
+            try {
+              await page.locator("[data-rail-workspace-section='unassigned']").waitFor();
+              const order = await page.locator("[data-rail-workspace-section]").evaluateAll((items) => items.map((item) => item.getAttribute("data-rail-workspace-section")));
+              if (order.at(-1) !== "unassigned" || order.length !== 4) failures.push(`${tag} D3: sections ${JSON.stringify(order)}`);
+              await page.locator("[data-rail-project='paper-kite']").click();
+              const move = page.locator("[data-rail-project='paper-kite']").locator("xpath=..").locator("[data-rail-move]");
+              await move.waitFor();
+              await frame(page, tag, "D3-all", [
+                ["[data-rail-workspace-section='unassigned']", words(lang, "workspaces.unassigned")],
+                ["[data-workspace-chip]", words(lang, "workspaces.all")],
+                ["[data-rail-move]:not(.opacity-0)", words(lang, "workspaces.move")],
+                ["[data-rail-project='paper-kite']", "Paper Kite"],
+              ]);
+              await move.click();
+              await page.locator("[data-workspace-popover='move']").waitFor();
+              /* The menu covers neither the row's own name nor its control. */
+              const covers = await page.evaluate(() => {
+                const menu = document.querySelector("[data-workspace-popover='move']")!.getBoundingClientRect();
+                const own = [document.querySelector("[data-rail-project='paper-kite'] [data-rail-name]"), document.querySelector("[data-rail-project='paper-kite']")?.parentElement?.querySelector("[data-rail-move]")]
+                  .map((element) => element!.getBoundingClientRect());
+                return own.some((box) => box.left < menu.right && box.right > menu.left && box.top < menu.bottom && box.bottom > menu.top);
+              });
+              if (covers) failures.push(`${tag} D3: the Move to… menu covers its own row`);
+              await frame(page, tag, "D3-move", [["[data-workspace-popover='move']", words(lang, "workspaces.moveTo")], ["[data-workspace-popover='move']", names[lang].client]], "[data-workspace-popover='move']");
+              /* The move lands: the row joins Client work and leaves Unassigned. */
+              await page.locator(`[data-workspace-move-to='${FIXTURE_IDS.client}']`).click();
+              await page.waitForFunction(() => !document.querySelector("[data-workspace-popover='move']"));
+              const moved = await page.evaluate(() => [...document.querySelectorAll("[data-rail-workspace-section], [data-rail-project]")]
+                .map((element) => element.getAttribute("data-rail-workspace-section") ?? element.getAttribute("data-rail-project")));
+              const at = moved.indexOf("paper-kite");
+              const start = moved.indexOf(FIXTURE_IDS.client);
+              const next = moved.findIndex((entry, index) => index > start && entry !== null && entry.startsWith("w_") || (index > start && entry === "unassigned"));
+              if (at < 0 || start < 0 || at < start || (next >= 0 && at > next)) failures.push(`${tag} D3: after the move the order is ${JSON.stringify(moved)}`);
+              if (pageErrors.length) failures.push(`${tag} D3: page errors ${pageErrors.join("; ")}`);
+            } finally { await context.close(); }
+          }
+        }
+        /* D4 as the owner and as a member, P4 at 390. */
+        for (const member of [false, true]) {
+          const { context, page, pageErrors } = await open(`scenario=workspaces-team${member ? "&member=1" : ""}`);
+          try {
+            await page.locator("[data-team-workspaces]").waitFor();
+            await page.locator("[data-workspace-unassigned]").waitFor();
+            const defining: Array<[string, string]> = [
+              ["[data-team-tab='workspaces'][aria-selected='true']", words(lang, "team.tabs.workspaces")],
+              ["[data-team-workspaces]", words(lang, "workspaces.lead")],
+              [`[data-workspace-row='${FIXTURE_IDS.client}']`, names[lang].client],
+            ];
+            if (!member) defining.push(["[data-workspace-create-open]", words(lang, "workspaces.new")]);
+            await frame(page, tag, member ? "D4-member" : "D4-owner", defining);
+            await page.locator("#workspaces-unassigned-title").scrollIntoViewIfNeeded();
+            await frame(page, tag, member ? "D4-member-unassigned" : "D4-owner-unassigned", [
+              ["#workspaces-unassigned-title", `${words(lang, "workspaces.unassignedTitle")} · 2`],
+              ...(member ? [] : [["[data-workspace-move-open]", words(lang, "workspaces.moveTo")] as [string, string]]),
+            ]);
+            if (member && await page.locator("[data-workspace-create-open], [data-workspace-row-menu], [data-workspace-move-open]").count()) failures.push(`${tag} D4 member: an owner's control is drawn`);
+            if (!member) {
+              await page.locator(`[data-workspace-row='${FIXTURE_IDS.client}'] [data-workspace-row-menu]`).click();
+              await page.locator("[data-workspace-popover='row']").waitFor();
+              await frame(page, tag, "D4-row-menu", [["[data-workspace-popover='row']", words(lang, "workspaces.deleteBlocked")]], "[data-workspace-popover='row']");
+            }
+            if (pageErrors.length) failures.push(`${tag} D4: page errors ${pageErrors.join("; ")}`);
+          } finally { await context.close(); }
+        }
+        /* D5 (P5 at 390): New workspace, opened by `?create=1` as the switcher's row opens it; Create stays reachable. */
+        {
+          const { context, page, pageErrors } = await open("scenario=workspaces-team&create=1");
+          try {
+            await page.locator("[data-team-dialog='workspace-create']").waitFor();
+            await frame(page, tag, "D5", [
+              ["[data-team-dialog='workspace-create']", words(lang, "workspaces.new")],
+              ["[data-team-dialog='workspace-create']", words(lang, "workspaces.create.name")],
+              ["[data-team-dialog='workspace-create']", words(lang, "workspaces.create.colour")],
+              ["[data-team-dialog='workspace-create']", words(lang, "workspaces.create.projects")],
+            ], "[data-team-dialog='workspace-create']");
+            await page.locator("[data-workspace-create-submit]").scrollIntoViewIfNeeded();
+            await frame(page, tag, "D5-submit", [
+              ["[data-team-dialog='workspace-create']", words(lang, "workspaces.create.projectsHint")],
+              ["[data-workspace-create-submit]", words(lang, "workspaces.create.submit")],
+            ], "[data-team-dialog='workspace-create']");
+            /* The refusal of an empty name says why, in the dialog. */
+            await page.locator("[data-workspace-create-submit]").click();
+            await frame(page, tag, "D5-refused", [["[data-workspace-create-error]", words(lang, "workspaces.error.nameRequired")]], "[data-team-dialog='workspace-create']");
+            await page.locator("[data-workspace-create-name]").fill(lang === "uk" ? "Дизайн" : "Design");
+            await page.locator("[data-workspace-check='atlas'] input").check();
+            await page.locator("[data-workspace-create-submit]").click();
+            await page.waitForFunction(() => !document.querySelector("[data-team-dialog='workspace-create']"));
+            const rows = await page.locator("[data-workspace-row-name]").allInnerTexts();
+            if (!rows.includes(lang === "uk" ? "Дизайн" : "Design")) failures.push(`${tag} D5: the created workspace is not listed ${JSON.stringify(rows)}`);
+            if (pageErrors.length) failures.push(`${tag} D5: page errors ${pageErrors.join("; ")}`);
+          } finally { await context.close(); }
+        }
+        /* D6 and D7 (P6 at 390): the workspace page, Rename inline, Add project, and Delete refused while it has projects. */
+        {
+          const { context, page, pageErrors } = await open("scenario=workspaces-page&page=client");
+          try {
+            await page.locator("[data-workspace-title]").waitFor();
+            await frame(page, tag, "D6", [
+              ["[data-workspace-back]", words(lang, "activity.back")],
+              ["[data-workspace-title]", names[lang].client],
+              ["[data-workspace-sub]", words(lang, "workspaces.page.sub", { projects: words(lang, "mobile2.projects.count", { count: 2 }) })],
+              ["[data-workspace-remove]", words(lang, "workspaces.page.remove")],
+              ["[data-workspace-delete-blocked]", words(lang, "workspaces.deleteBlocked")],
+            ]);
+            if (await page.locator("[data-workspace-delete]").isEnabled()) failures.push(`${tag} D7: Delete is enabled on a workspace with projects`);
+            await page.locator("[data-workspace-rename]").click();
+            await page.locator("[data-workspace-rename-field]").waitFor();
+            await frame(page, tag, "D6-rename", [["[data-workspace-page]", words(lang, "team.member.save")]]);
+            await page.keyboard.press("Escape");
+            await page.locator("[data-workspace-add]").click();
+            await page.locator("[data-workspace-popover='add']").waitFor();
+            await frame(page, tag, "D6-add", [["[data-workspace-popover='add']", words(lang, "workspaces.page.add")], ["[data-workspace-popover='add']", "Paper Kite"]], "[data-workspace-popover='add']");
+            /* Remove every project: Delete is offered, and deleting goes back to the list. */
+            await page.keyboard.press("Escape");
+            for (let left = await page.locator("[data-workspace-remove]").count(); left > 0; left -= 1) await page.locator("[data-workspace-remove]").first().click();
+            await page.locator("[data-workspace-empty]").waitFor();
+            if (!await page.locator("[data-workspace-delete]").isEnabled()) failures.push(`${tag} D7: Delete stays disabled on an empty workspace`);
+            await frame(page, tag, "D7-empty", [["[data-workspace-empty]", words(lang, "workspaces.page.empty")], ["[data-workspace-delete]", words(lang, "workspaces.delete")]]);
+            if (pageErrors.length) failures.push(`${tag} D6: page errors ${pageErrors.join("; ")}`);
+          } finally { await context.close(); }
+        }
+      }
+      fs.mkdirSync("evidence/team-workspaces", { recursive: true });
+      fs.writeFileSync("evidence/team-workspaces/rendered.json", JSON.stringify({
+        driver: "src/components/kanban/kanbanBoard.browser.test.tsx", block: "team workspaces slice (a)",
+        frames: readings.length, failures, readings,
+      }, null, 2) + "\n");
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 900_000);
+});

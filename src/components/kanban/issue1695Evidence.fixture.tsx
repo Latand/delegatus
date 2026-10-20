@@ -65,6 +65,10 @@ import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
 import { refreshTeamView } from "@/components/team/teamClient";
+import { TeamPage } from "@/components/team/TeamPage";
+import { WorkspacePage } from "@/components/team/WorkspacePage";
+import { FIXTURE_WORKSPACE_IDS, workspacesFixture } from "@/components/team/workspacesEvidence.fixture";
+import { WORKSPACE_STORAGE_KEY } from "@/components/team/workspacesClient";
 
 /*
  * The real Viewer on the kanban face (#1695), over invented content equivalent
@@ -3830,6 +3834,22 @@ const workerAnswer = (project: string | null) => ({
   running: { here: project ? workerRunning : null, machine: WORKER_SCENE ? 19 : 0 },
 });
 const HEADER_ROUTES = ["/api/telemetry", "/api/memory/settings", "/api/asks-you/key", "/api/team"];
+/* Team workspaces (docs/design/workspaces.md §13.9): `?scenario=workspaces` is the Viewer over the rail's
+   projects (`&rail=1`) on a team install; `workspaces-team` and `workspaces-page` mount the Team page's
+   Workspaces tab and one workspace's page. `&member=1` signs the member in, `&ws=client|research|long|all`
+   is the browser's stored choice, `&create=1` opens New workspace. The routes answer in the page. */
+const WORKSPACE_PARAMS = new URLSearchParams(location.search);
+const WORKSPACES = SCENARIO?.startsWith("workspaces") ? workspacesFixture({
+  uk: UK,
+  member: WORKSPACE_PARAMS.has("member"),
+  projects: [{ project: PROJECT, displayName: "Atlas", smt: now - 20 * MIN }, ...railCatalog.map(({ project, displayName, smt }) => ({ project, displayName, smt }))],
+  placed: { client: [LEDGER, "harbor-docs"], research: [MESH], long: [RAIL_LONG] },
+}) : null;
+if (WORKSPACES) {
+  const chosen = WORKSPACE_PARAMS.get("ws");
+  if (chosen) localStorage.setItem(WORKSPACE_STORAGE_KEY, chosen === "all" ? "all" : FIXTURE_WORKSPACE_IDS[chosen as keyof typeof FIXTURE_WORKSPACE_IDS] ?? chosen);
+  void refreshTeamView();
+}
 const ROLE_MEMORY = new URLSearchParams(location.search).has("rolememory");
 /* The one request that leaves the page: the evidence server draws task icons from lucide (#2102). */
 const serverFetch = window.fetch.bind(window);
@@ -3840,6 +3860,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     && ["/api/files", "/api/tasks"].includes(url.pathname)) return serverFetch(input, init);
 
   const method = (init?.method ?? "GET").toUpperCase();
+  if (WORKSPACES) {
+    const answered = await WORKSPACES.answer(url, init);
+    if (answered) return answered;
+  }
   if (PIPELINE_INIT && url.pathname === "/api/pipelines/preflight") return PIPELINE_INIT === "refused"
     ? new Response(JSON.stringify({ error: "initialization refused for the Delegatus state directory", code: "initialization_refused", path: "/project" }), { status: 403 })
     : json({ ok: true, repoDir: "/project", gitCommonDir: "/project/.git", worktreeParent: "/" });
@@ -4868,7 +4892,9 @@ if (dockWidth === "440" || dockWidth === "360") localStorage.setItem(`llvOrchest
 const relayChainEvidence: RelayChatsPayload = { relays: [{ id: "fixture-relay", name: "Example relay", origin: "https://relay.example" }], chats:
   (["member", "admin", "owner"] as const).map((authority, i) => ({ id: `chain-${i}`, relayId: "fixture-relay", relayName: "Example relay", targetId: "fixture-target", targetName: "Support bot", chatKey: "fixture-chat-chain-key", authority,
     engine: "claude", turns: 3, compactions: 0, createdAt: "2026-10-17T10:00:00Z", lastTurnAt: "2026-10-17T10:00:00Z", state: "idle", file: { ...files[0]!, path: `fixture-chain-${i}`, title: `Chain ${i}` } })) };
-createRoot(document.getElementById("root")!).render(PIPELINE_INIT ? <PipelineTemplatePicker repoDir="/project" onCreate={async () => ({})} onCreated={() => {}} onClose={() => {}} /> : SCENARIO === "relay-chain-list" ? <RelayChatsView relayId="fixture-relay" payload={relayChainEvidence} /> : dockWidth === "440" || dockWidth === "360" ? (
+createRoot(document.getElementById("root")!).render(SCENARIO === "workspaces-team" ? <TeamPage initialTab="workspaces" initialCreate={WORKSPACE_PARAMS.has("create")} />
+  : SCENARIO === "workspaces-page" ? <WorkspacePage id={FIXTURE_WORKSPACE_IDS[(WORKSPACE_PARAMS.get("page") ?? "client") as keyof typeof FIXTURE_WORKSPACE_IDS]} />
+  : PIPELINE_INIT ? <PipelineTemplatePicker repoDir="/project" onCreate={async () => ({})} onCreated={() => {}} onClose={() => {}} /> : SCENARIO === "relay-chain-list" ? <RelayChatsView relayId="fixture-relay" payload={relayChainEvidence} /> : dockWidth === "440" || dockWidth === "360" ? (
   <div className="flex h-full min-h-0">
     <OrchestratorDock project={PROJECT} projectName="Atlas" files={files} onClose={() => {}} />
     <div className="min-w-0 flex-1"><Viewer /></div>

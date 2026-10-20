@@ -36,6 +36,8 @@ import {
  * needs it, which is claiming the install.
  */
 
+/* Stays 1 when a table is added (workspaces.md §13.1.3): the release before
+   refuses a newer schema number, and it reads an unknown table as nothing. */
 const SCHEMA_VERSION = 1;
 /* A request nobody signed in opened, nobody has answered, and no Telegram
    account has pressed Start on: the ones a flood can push out. The partial
@@ -93,6 +95,25 @@ export interface StoredPasskey {
   label: string;
   createdAt: string;
   lastUsedAt: string | null;
+}
+
+export interface StoredWorkspace {
+  id: string;
+  name: string;
+  nameKey: string;
+  color: string;
+  createdAt: string;
+  createdBy: string;
+  updatedAt: string;
+}
+
+/** A placed project under the key `canonicalProject` answered when it was
+    written; an alias recorded since may join it to another row (§13.2). */
+export interface StoredWorkspaceProject {
+  project: string;
+  workspaceId: string;
+  addedAt: string;
+  addedBy: string;
 }
 
 export interface MessageAuthorRow {
@@ -328,6 +349,21 @@ export class TeamStore {
           member_id TEXT NOT NULL,
           at TEXT NOT NULL,
           text_digest TEXT
+        );
+        CREATE TABLE IF NOT EXISTS workspaces (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          name_key TEXT NOT NULL UNIQUE,
+          color TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          created_by TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS workspace_projects (
+          project TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL,
+          added_at TEXT NOT NULL,
+          added_by TEXT NOT NULL
         );
       `);
       /* A store from before the eviction order knew polls and Start holders
@@ -634,6 +670,58 @@ export class TeamStore {
     this.db.query("DELETE FROM events WHERE at < ?").run(new Date(nowMs - EVENT_RETENTION_MS).toISOString());
     this.db.query(`DELETE FROM events WHERE id IN (SELECT id FROM events ORDER BY id DESC LIMIT -1 OFFSET ?)`).run(EVENT_MAX_ROWS);
     this.db.query("DELETE FROM message_authors WHERE at < ?").run(new Date(nowMs - MESSAGE_AUTHOR_RETENTION_MS).toISOString());
+  }
+
+  /* ---- workspaces ------------------------------------------------------- */
+
+  workspaceRows(): StoredWorkspace[] {
+    return this.db.query<Row, []>("SELECT * FROM workspaces ORDER BY created_at, id").all().map((row) => ({
+      id: String(row.id),
+      name: String(row.name),
+      nameKey: String(row.name_key),
+      color: String(row.color),
+      createdAt: String(row.created_at),
+      createdBy: String(row.created_by),
+      updatedAt: String(row.updated_at),
+    }));
+  }
+
+  workspaceProjectRows(): StoredWorkspaceProject[] {
+    return this.db.query<Row, []>("SELECT * FROM workspace_projects ORDER BY added_at, project").all().map((row) => ({
+      project: String(row.project),
+      workspaceId: String(row.workspace_id),
+      addedAt: String(row.added_at),
+      addedBy: String(row.added_by),
+    }));
+  }
+
+  insertWorkspace(row: StoredWorkspace): void {
+    this.db.query(`INSERT INTO workspaces(id, name, name_key, color, created_at, created_by, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`).run(row.id, row.name, row.nameKey, row.color, row.createdAt, row.createdBy, row.updatedAt);
+  }
+
+  updateWorkspace(row: StoredWorkspace): void {
+    this.db.query("UPDATE workspaces SET name = ?, name_key = ?, color = ?, updated_at = ? WHERE id = ?")
+      .run(row.name, row.nameKey, row.color, row.updatedAt, row.id);
+  }
+
+  /** Also drops rows that still name it after an alias gave their project to
+      another workspace's row, so a deleted workspace leaves nothing behind. */
+  deleteWorkspace(id: string): boolean {
+    this.db.query("DELETE FROM workspace_projects WHERE workspace_id = ?").run(id);
+    return this.db.query("DELETE FROM workspaces WHERE id = ?").run(id).changes > 0;
+  }
+
+  deleteWorkspaceProjects(rawKeys: readonly string[]): void {
+    for (let offset = 0; offset < rawKeys.length; offset += 400) {
+      const batch = rawKeys.slice(offset, offset + 400);
+      if (batch.length) this.db.query(`DELETE FROM workspace_projects WHERE project IN (${batch.map(() => "?").join(", ")})`).run(...batch);
+    }
+  }
+
+  insertWorkspaceProject(row: StoredWorkspaceProject): void {
+    this.db.query("INSERT INTO workspace_projects(project, workspace_id, added_at, added_by) VALUES (?, ?, ?, ?)")
+      .run(row.project, row.workspaceId, row.addedAt, row.addedBy);
   }
 
   /* ---- message authors -------------------------------------------------- */

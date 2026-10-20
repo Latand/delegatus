@@ -21,6 +21,11 @@ import { writeProfile } from "@/components/runtimeProfile";
 import { ReceiptChip } from "@/components/runtime/ReceiptChip";
 import type { RuntimeReceipt } from "@/components/runtime/runtimeModel";
 import { Viewer } from "@/components/Viewer";
+import { refreshTeamView } from "@/components/team/teamClient";
+import { TeamPage } from "@/components/team/TeamPage";
+import { WorkspacePage } from "@/components/team/WorkspacePage";
+import { FIXTURE_WORKSPACE_IDS, workspacesFixture } from "@/components/team/workspacesEvidence.fixture";
+import { WORKSPACE_STORAGE_KEY } from "@/components/team/workspacesClient";
 import { setVoiceCompanionAdapterForTests } from "@/components/voiceCompanion/VoiceCompanionHost";
 import type { VoiceCompanionAdapter } from "@/lib/voiceCompanion/contract";
 import { scenarioScript } from "@/lib/voiceCompanion/scenarios";
@@ -1289,6 +1294,24 @@ const REPORT_LABELS: Record<string, string> = { [PROJECT]: "atlas", "-projects-l
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
+/* Team workspaces (docs/design/workspaces.md §13.9): `&scenario=workspaces` with `?overview=1` is the Overview's
+   three projects on a team install, forge-api in Client work, atlas-docs in Research and delegatus in none;
+   `workspaces-team` and `workspaces-page` mount the Team page's Workspaces tab and one workspace's page.
+   `&member=1` signs the member in, `&ws=client|research|long|all` is the stored choice. The routes answer here. */
+const WORKSPACE_PARAMS = new URLSearchParams(location.search);
+const WORKSPACE_SCENE = WORKSPACE_PARAMS.get("scenario")?.startsWith("workspaces") ?? false;
+const WORKSPACES = WORKSPACE_SCENE ? workspacesFixture({
+  uk: localStorage.getItem("llv_lang") === "uk",
+  member: WORKSPACE_PARAMS.has("member"),
+  projects: Object.values(OVERVIEW_KEYS).map((project, index) => ({ project, displayName: OVERVIEW_NAMES[project]!, smt: now - (index + 1) * 3_600 })),
+  placed: { client: [OVERVIEW_KEYS.forge], research: [OVERVIEW_KEYS.docs], long: [] },
+}) : null;
+if (WORKSPACES) {
+  const chosen = WORKSPACE_PARAMS.get("ws");
+  if (chosen) localStorage.setItem(WORKSPACE_STORAGE_KEY, chosen === "all" ? "all" : FIXTURE_WORKSPACE_IDS[chosen as keyof typeof FIXTURE_WORKSPACE_IDS] ?? chosen);
+  void refreshTeamView();
+}
+
 /* The one request that leaves the page: the evidence server draws task icons from lucide (#2102). */
 const serverFetch = window.fetch.bind(window);
 let agentEvidence: Promise<{ feed: string; provenance: unknown }> | null = null;
@@ -1305,6 +1328,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 
   if (RUNTIME_PERF && url.pathname === "/api/runtime/snapshot") return serverFetch(input, init);
   const method = (init?.method ?? "GET").toUpperCase();
+  if (WORKSPACES) {
+    const answered = await WORKSPACES.answer(url, init);
+    if (answered) return answered;
+  }
   /* The voice head's scenes: the companion on in the settings, and no session route at all. */
   if (VOICE_SCENE && url.pathname === "/api/voice-companion/settings") {
     return json({ enabled: true, backend: "api", monthlyCapUsd: 20, keySource: "file", keyEnvironment: "OPENAI_API_KEY", month: "2026-10", usageUsd: 0.4, reservedUsd: 0, incomplete: false, uncertainSession: false });
@@ -1937,6 +1964,8 @@ function VoiceFullSheet() {
     </MobileSheet>
   );
 }
-createRoot(document.getElementById("root")!).render(new URLSearchParams(location.search).has("switch-receipts")
+createRoot(document.getElementById("root")!).render(WORKSPACE_PARAMS.get("scenario") === "workspaces-team" ? <TeamPage initialTab="workspaces" initialCreate={WORKSPACE_PARAMS.has("create")} />
+  : WORKSPACE_PARAMS.get("scenario") === "workspaces-page" ? <WorkspacePage id={FIXTURE_WORKSPACE_IDS[(WORKSPACE_PARAMS.get("page") ?? "client") as keyof typeof FIXTURE_WORKSPACE_IDS]} />
+  : new URLSearchParams(location.search).has("switch-receipts")
   ? <SwitchReceiptFixture /> : new URLSearchParams(location.search).has("scroll-history")
   ? <ScrollHistoryFixture /> : VOICE_SCENE ? <><Viewer /><VoiceFullSheet /></> : <Viewer />);

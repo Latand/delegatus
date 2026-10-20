@@ -25,6 +25,8 @@ import { MobileAccountsScreen, MobileBarTitle, MobileShell, type MobileShellHost
 import { topScreen, useMobileNav, useMobileNavStore, type MobileSheetName } from "./mobile/mobileNav";
 import { OverviewKanban, type OverviewPhoneDoors } from "./OverviewKanban";
 import { buildProjectSummaries } from "./projectModel";
+import type { WorkspaceRailState } from "./team/WorkspaceSwitch";
+import { workspaceScope } from "./team/workspaceFilter";
 import { overviewWorkingTotal, workingAgentCounts } from "./workingAgents";
 
 const noop = () => {};
@@ -74,6 +76,9 @@ interface Props {
       it pushes the conversation's screen over the Overview and puts the
       conversation on its own project's board, which draws that screen. */
   onOpenConversation?: (file: FileEntry) => void;
+  /** A team install's workspaces (docs/design/workspaces.md §13.4): the board
+      shows the chosen workspace's projects. Absent, it shows them all. */
+  workspace?: WorkspaceRailState;
 }
 
 const NO_TASKS: readonly BoardTask[] = [];
@@ -89,7 +94,7 @@ const NO_FLOWS: Flow[] = [];
  * that used to live here was a second, smaller board beside the real one, and
  * the rail already lists the projects it listed.
  */
-export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {}, pipelines, workflows, archivedProjects, tasks = NO_TASKS, flows = NO_FLOWS, loaded = true, cached = false, placesKnown = loaded, now, needsYouCounts, catalogFailures = 0, onSelectProject, onOpenSearch, mobileShell = null, onOpenConversation }: Props) {
+export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {}, pipelines, workflows, archivedProjects, tasks = NO_TASKS, flows = NO_FLOWS, loaded = true, cached = false, placesKnown = loaded, now, needsYouCounts, catalogFailures = 0, onSelectProject, onOpenSearch, mobileShell = null, onOpenConversation, workspace }: Props) {
   const { t, locale } = useLocale();
   const isMobile = useIsMobile();
   const mobileNav = useMobileNavStore();
@@ -100,10 +105,14 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
   const reach = useServerReach();
   const reconnecting = reach.kind === "reconnecting";
   const degraded = catalogFailures > 0;
-  const allSummaries = useMemo(
+  const scope = useMemo(() => (workspace ? workspaceScope(workspace.view, workspace.chosen) : null), [workspace]);
+  const everySummary = useMemo(
     () => buildProjectSummaries(files, now, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouCounts, workingAgentCounts(files, now)),
     [files, now, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouCounts],
   );
+  const allSummaries = useMemo(() => (scope ? everySummary.filter((summary) => scope.has(summary.project)) : everySummary), [everySummary, scope]);
+  /* The tasks of the projects shown; the board narrows them again by project. */
+  const scopedTasks = useMemo(() => (scope ? tasks.filter((task) => scope.has(task.project)) : tasks), [tasks, scope]);
   const summaries = useMemo(
     () => allSummaries.filter((summary) => !archivedProjects.has(summary.project)),
     [allSummaries, archivedProjects],
@@ -190,7 +199,7 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
           projects={projects}
           displayNames={names}
           files={files}
-          tasks={tasks}
+          tasks={scopedTasks}
           flows={flows}
           pipelines={pipelines}
           loaded={loaded || cached}
@@ -200,6 +209,10 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
           phone={phoneDoors}
           lead={!isMobile && noSeatEver ? <OrchestratorBand phone={false} /> : null}
         />
+      ) : scope && everySummary.length && !allSummaries.length ? (
+        /* A workspace with nothing in it yet; the installation has projects,
+           so this is no first run. */
+        <div data-testid="overview-workspace-empty" className="mt-[14vh] px-4 text-center text-[12px] text-muted">{t("workspaces.page.empty")}</div>
       ) : degraded || allSummaries.length ? null : !loaded ? (
         /* Not answered yet (#2071): the shape of the board, never the first
            run, which is a claim that nothing exists. */
@@ -275,7 +288,9 @@ export function OverviewBoard({ files, projectCatalog, projectDisplayNames = {},
         screen="board"
         /* The board under the title is narrowed to live work, for good
            (#1820): the bar says so once, where a project names its state. */
-        title={<MobileBarTitle meta={cached && !loaded ? t("dash.updating") : projects.length ? t("mobile2.overview.workingNow") : undefined}>{t("rail.overview")}</MobileBarTitle>}
+        /* With workspaces, the line above names the one shown and takes the
+           place of «working now»: the bar holds two lines. */
+        title={<MobileBarTitle meta={cached && !loaded ? t("dash.updating") : projects.length && !mobileShell?.workspaceEyebrow ? t("mobile2.overview.workingNow") : undefined} eyebrow={mobileShell?.workspaceEyebrow}>{t("rail.overview")}</MobileBarTitle>}
         titleLabel={t("mobile2.bar.switchProject")}
         titleOpens={mobileShell ? "projects" : undefined}
         host={mobileShell}
