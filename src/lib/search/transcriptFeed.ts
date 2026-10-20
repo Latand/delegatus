@@ -68,11 +68,18 @@ async function productionRun(
   if (complete) {
     const { maybeCollectStructuredUserMetadata } = await import("@/lib/selection/structuredUserMetadataRetention");
     const { scanRootEntries } = await import("@/lib/scanner/roots");
-    const { codexSessionRoots } = await import("@/lib/accounts/codex");
+    const { codexSessionRootInventory } = await import("@/lib/accounts/codex");
     const { join, dirname } = await import("node:path");
+    const retentionRoots = () => {
+      const codexRoots = codexSessionRootInventory().roots;
+      return [...scanRootEntries().map(([, root]) => root),
+        ...codexRoots.map(root => join(dirname(root), "archived_sessions"))].sort();
+    };
+    const rootsAtCensus = retentionRoots();
     await maybeCollectStructuredUserMetadata({ sources, complete, listedAt }, {
-      roots: () => [...scanRootEntries().map(([, root]) => root),
-        ...codexSessionRoots().map(root => join(dirname(root), "archived_sessions"))],
+      roots: rootsAtCensus,
+      rootsComplete: () => codexSessionRootInventory().complete,
+      rootsCurrent: () => JSON.stringify(retentionRoots()) === JSON.stringify(rootsAtCensus),
       current: () => state().generation === generation,
     });
   }

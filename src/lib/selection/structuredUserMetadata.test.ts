@@ -1,8 +1,12 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
+import fsDefault from "node:fs";
+import * as fsNamed from "node:fs";
 import * as io from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { persistStructuredUserMetadata, readStructuredUserMetadata, type StructuredUserMetadata } from "./structuredUserMetadata";
+import { withFileTransaction } from "@/lib/state/fileTransaction";
+import { collectStructuredUserMetadata } from "./structuredUserMetadataRetention";
 
 let restore: (() => void) | undefined;
 afterEach(() => { restore?.(); restore = undefined; });
@@ -45,6 +49,43 @@ test("a held file sync yields to the caller and snapshots metadata before waitin
   } finally { release(); }
   const ref = await pending;
   expect(readStructuredUserMetadata(ref).origin).toEqual({ kind: "agent", role: "reviewer" });
+}));
+
+test("publication lock admission uses no synchronous filesystem calls and yields while held", async () => isolated(async root => {
+  let entered!: () => void, release!: () => void;
+  const ready = new Promise<void>(resolve => { entered = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const owner = withFileTransaction(join(root, "structured-user-metadata-publication"), "fixture busy", async () => {
+    entered(); await held;
+  });
+  await ready;
+  const syncCalls = [
+    spyOn(fsDefault, "fsyncSync"), spyOn(fsNamed, "fsyncSync"),
+    spyOn(fsDefault, "writeFileSync"), spyOn(fsNamed, "writeFileSync"),
+    spyOn(fsDefault, "readdirSync"), spyOn(fsNamed, "readdirSync"),
+    spyOn(fsDefault, "readFileSync"), spyOn(fsNamed, "readFileSync"),
+    spyOn(fsDefault, "statSync"), spyOn(fsNamed, "statSync"),
+    spyOn(fsDefault, "existsSync"), spyOn(fsNamed, "existsSync"),
+    spyOn(fsDefault, "openSync"), spyOn(fsNamed, "openSync"),
+  ];
+  let settled = false;
+  const pending = persistStructuredUserMetadata(record()).then(value => { settled = true; return value; });
+  let ref: string;
+  try {
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(settled).toBeFalse();
+    expect(syncCalls.every(call => call.mock.calls.length === 0)).toBeTrue();
+    release();
+    ref = await pending;
+    expect(await persistStructuredUserMetadata(record())).toBe(ref);
+    await collectStructuredUserMetadata({ complete: true, listedAt: Date.now(), sources: [] });
+    expect(syncCalls.every(call => call.mock.calls.length === 0)).toBeTrue();
+  } finally {
+    release();
+    for (const call of syncCalls) call.mockRestore();
+  }
+  expect(readStructuredUserMetadata(ref)).toEqual(record());
+  await owner;
 }));
 
 test("lost directory-sync acknowledgement refuses then retries with the same identity after restart", async () => isolated(async root => {

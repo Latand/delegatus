@@ -28,8 +28,12 @@ The background transcript feed owns retention. A complete, successfully indexed
 inventory can attempt collection at most once per day; its checkpoint survives
 restart. Discovery also walks retained scanner roots and Codex archived-session
 directories, preserving copies outside the board window and deduplicated
-catalog. Per-source reference projections are validated against file identity,
-size, mtime and ctime, and only changed sources are streamed again. Native queue
+catalog. A degraded Codex account registry makes discovery incomplete, so the
+fallback default-account view cannot authorize deletion. Per-source reference
+projections are validated against file identity, size, mtime and ctime, and only
+changed sources are streamed again. Source and retained-directory identities
+are rechecked after publication admission and around each unlink; if they change
+at that boundary, the in-flight metadata link is restored. Native queue
 inputs in the runtime journal protect their references even before a rollout
 contains them. The journal is opened read-only with no busy wait; missing schema,
 contention, unreadable sources, changed sources and exceeded discovery bounds

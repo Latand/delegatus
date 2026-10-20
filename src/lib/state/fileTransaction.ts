@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 
 import { recordBlockingWait } from "@/lib/blockingWaits";
@@ -58,6 +59,22 @@ export class StoreBusyBeforeAdmissionError extends FileTransactionBusyError {
     this.name = "StoreBusyBeforeAdmissionError";
     if (options && "cause" in options) this.cause = options.cause;
   }
+}
+
+async function processIdentityAsync(pid: number): Promise<string | null> {
+  if (process.platform !== "linux") return null;
+  try {
+    const stat = await fsp.readFile(`/proc/${pid}/stat`, "utf8");
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/);
+    const startTicks = fields[19];
+    return startTicks ? `${pid}:${startTicks}` : null;
+  } catch { return null; }
+}
+
+function pidAliveAsyncSafe(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
 }
 
 /**
@@ -220,11 +237,74 @@ export async function withFileTransaction<T>(filePath: string, busyMessage: stri
   const startedAt = performance.now();
   let waited = false;
   let admittedAt: number | undefined;
-  const ticket = enqueue(filePath);
+  const lockPath = `${filePath}.write-lock`;
+  const queuePath = `${filePath}.write-locks`;
+  await fsp.mkdir(queuePath, { recursive: true, mode: 0o700 });
+  const owner: LockOwner = { pid: process.pid, startIdentity: await processIdentityAsync(process.pid), token: crypto.randomUUID() };
+  const ticketPath = path.join(queuePath, `${String(Date.now()).padStart(16, "0")}-${process.pid}-${crypto.randomUUID()}.json`);
+  const ticket = { lockPath, queuePath, owner, ticketPath };
+  const ticketHandle = await fsp.open(ticketPath, "wx", 0o600);
+  try {
+    await ticketHandle.writeFile(JSON.stringify(owner));
+    await ticketHandle.close();
+  } catch (error) {
+    await ticketHandle.close().catch(() => undefined);
+    await fsp.rm(ticketPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
+
+  const ownerIsStaleAsync = async (ownerPath: string): Promise<boolean> => {
+    try {
+      const previous = JSON.parse(await fsp.readFile(ownerPath, "utf8")) as { pid?: unknown; startIdentity?: unknown };
+      if (typeof previous.pid === "number" && Number.isInteger(previous.pid) && previous.pid > 0) {
+        if (!pidAliveAsyncSafe(previous.pid)) return true;
+        const expected = typeof previous.startIdentity === "string" ? previous.startIdentity : null;
+        if (expected !== null) {
+          const actual = await processIdentityAsync(previous.pid);
+          return actual !== null && actual !== expected;
+        }
+        return false;
+      }
+      return Date.now() - (await fsp.stat(ownerPath)).mtimeMs > LOCK_STALE_MS;
+    } catch {
+      try { return Date.now() - (await fsp.stat(ownerPath)).mtimeMs > LOCK_STALE_MS; }
+      catch { return false; }
+    }
+  };
+  const removeOwnedAsync = async (ownerPath: string, token: string) => {
+    try {
+      const value = JSON.parse(await fsp.readFile(ownerPath, "utf8")) as { token?: unknown };
+      if (value.token === token) await fsp.rm(ownerPath, { force: true });
+    } catch { /* The owner exited or another contender recovered its stale record. */ }
+  };
+  const firstLiveTicketAsync = async (): Promise<string | null> => {
+    const entries = (await fsp.readdir(queuePath)).filter(name => name.endsWith(".json")).sort();
+    for (const entry of entries) {
+      const candidate = path.join(queuePath, entry);
+      if (await ownerIsStaleAsync(candidate)) await fsp.rm(candidate, { force: true });
+      else {
+        try { await fsp.access(candidate); return candidate; }
+        catch { /* Removed after the directory read. */ }
+      }
+    }
+    return null;
+  };
+  const acquireAsync = async (): Promise<import("node:fs/promises").FileHandle | null> => {
+    if (await firstLiveTicketAsync() !== ticketPath) return null;
+    let handle: import("node:fs/promises").FileHandle;
+    try { handle = await fsp.open(lockPath, "wx", 0o600); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      if (await ownerIsStaleAsync(lockPath)) await fsp.rm(lockPath, { force: true });
+      return null;
+    }
+    try { await handle.writeFile(JSON.stringify(owner)); await handle.sync(); return handle; }
+    catch (error) { await handle.close(); await fsp.rm(lockPath, { force: true }); throw error; }
+  };
   try {
     for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
-      const descriptor = tryAcquire(ticket);
-      if (descriptor === null) {
+      const handle = await acquireAsync();
+      if (handle === null) {
         waited = true;
         await new Promise<void>((resolve) => setTimeout(resolve, LOCK_WAIT_MS));
         continue;
@@ -236,12 +316,13 @@ export async function withFileTransaction<T>(filePath: string, busyMessage: stri
         // writer can run. Only an asynchronous body holds across a microtask.
         return result && typeof (result as Promise<T>).then === "function" ? await result : result;
       } finally {
-        release(ticket, descriptor);
+        await handle.close();
+        await removeOwnedAsync(lockPath, owner.token);
       }
     }
     throw new FileTransactionBusyError(busyMessage);
   } finally {
-    removeIfOwned(ticket.ticketPath, ticket.owner.token);
+    await removeOwnedAsync(ticket.ticketPath, owner.token);
     if (waited) recordBlockingWait({ site: "file-transaction", synchronous: false,
       durationMs: (admittedAt ?? performance.now()) - startedAt, subject: "file-transaction", refused: admittedAt === undefined });
   }

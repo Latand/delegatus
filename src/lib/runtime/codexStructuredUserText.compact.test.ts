@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import fsDefault from "node:fs";
 import * as fs from "node:fs";
 import { mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -34,15 +35,17 @@ afterEach(() => {
 });
 
 test("delivery encoding yields before durable publication and never uses synchronous persistence", async () => {
-  const sync = spyOn(fs, "fsyncSync");
+  const syncDefault = spyOn(fsDefault, "fsyncSync");
+  const syncNamed = spyOn(fs, "fsyncSync");
   try {
     const pending = encode("async fixture", undefined, selected, { kind: "operator" }, dedup("async"));
     expect(pending).toBeInstanceOf(Promise);
     const wire = await pending;
-    expect(sync).not.toHaveBeenCalled();
+    expect(syncDefault).not.toHaveBeenCalled();
+    expect(syncNamed).not.toHaveBeenCalled();
     expect(decode(wire).selectedContext).toEqual(selected);
     expect(await encode("async fixture", undefined, selected, { kind: "operator" }, dedup("async"))).toBe(wire);
-  } finally { sync.mockRestore(); }
+  } finally { syncDefault.mockRestore(); syncNamed.mockRestore(); }
 });
 
 test("production delivery markers fit 96 characters with selected, empty, absent and agent contexts", async () => {

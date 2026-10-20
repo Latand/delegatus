@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { encodeCodexStructuredUserText, decodeCodexStructuredUserText } from "@/lib/runtime/codexStructuredUserText.server";
 import { collectStructuredUserMetadata, maybeCollectStructuredUserMetadata } from "./structuredUserMetadataRetention";
+import { withFileTransaction } from "@/lib/state/fileTransaction";
 import { structuredUserReferenceKey, decodeCodexStructuredUserText as decodeWire } from "@/lib/runtime/codexStructuredUserText";
 
 async function fixture(work: (root: string) => Promise<void>) {
@@ -104,6 +105,169 @@ test("a transcript changed during discovery refuses collection before deletion",
     ] })).rejects.toThrow("changed");
     expect(decodeCodexStructuredUserText(wire).contentDigest).toBe("f".repeat(64));
   } finally { stream.mockRestore(); }
+}));
+
+test("a source append after census and before unlink preserves its metadata", async () => fixture(async root => {
+  const wire = await encodeCodexStructuredUserText("late reference fixture", "7".repeat(64));
+  await age(root);
+  const source = join(root, "late-reference.jsonl");
+  await writeFile(source, "initial");
+  const metadataDir = join(root, "structured-user-metadata");
+  const original = io.stat;
+  let changed = false;
+  const statSpy = spyOn(io, "stat").mockImplementation((async (path: string) => {
+    const result = await original(path);
+    if (!changed && String(path).startsWith(metadataDir) && String(path).endsWith(".json")) {
+      changed = true;
+      await writeFile(source, wire, { flag: "a" });
+    }
+    return result;
+  }) as typeof io.stat);
+  try {
+    await expect(collectStructuredUserMetadata({ complete: true, listedAt, sources: [
+      { path: source, size: 7, mtimeMs: 0, engine: "codex", project: "repo-fixture" },
+    ] })).rejects.toThrow("changed");
+    expect(changed).toBeTrue();
+    expect(decodeCodexStructuredUserText(wire).contentDigest).toBe("7".repeat(64));
+  } finally { statSpy.mockRestore(); }
+}));
+
+test("a source append at unlink is detected and the metadata link is restored", async () => fixture(async root => {
+  const wire = await encodeCodexStructuredUserText("unlink boundary fixture", "3".repeat(64));
+  await age(root);
+  const source = join(root, "unlink-boundary.jsonl");
+  await writeFile(source, "initial");
+  const metadataDir = join(root, "structured-user-metadata");
+  const original = io.unlink;
+  let changed = false;
+  const unlinkSpy = spyOn(io, "unlink").mockImplementation(async (...args) => {
+    if (!changed && String(args[0]).startsWith(metadataDir) && String(args[0]).endsWith(".json")) {
+      changed = true;
+      await writeFile(source, wire, { flag: "a" });
+    }
+    return original(...args);
+  });
+  try {
+    await expect(collectStructuredUserMetadata({ complete: true, listedAt, sources: [
+      { path: source, size: 7, mtimeMs: 0, engine: "codex", project: "repo-fixture" },
+    ] })).rejects.toThrow("changed");
+    expect(changed).toBeTrue();
+    expect(decodeCodexStructuredUserText(wire).contentDigest).toBe("3".repeat(64));
+  } finally { unlinkSpy.mockRestore(); }
+}));
+
+test("a rollout added beneath a retained root after census preserves its metadata", async () => fixture(async root => {
+  const wire = await encodeCodexStructuredUserText("new rollout fixture", "4".repeat(64));
+  await age(root);
+  const archive = join(root, "archive-root");
+  await mkdir(archive);
+  const metadataDir = join(root, "structured-user-metadata");
+  const original = io.stat;
+  let added = false;
+  const statSpy = spyOn(io, "stat").mockImplementation((async (path: string) => {
+    const result = await original(path);
+    if (!added && String(path).startsWith(metadataDir) && String(path).endsWith(".json")) {
+      added = true;
+      await writeFile(join(archive, "new-rollout.jsonl"), wire);
+    }
+    return result;
+  }) as typeof io.stat);
+  try {
+    await expect(collectStructuredUserMetadata({ complete: true, listedAt, sources: [] }, { roots: [archive] }))
+      .rejects.toThrow("root inventory changed");
+    expect(added).toBeTrue();
+    expect(decodeCodexStructuredUserText(wire).contentDigest).toBe("4".repeat(64));
+  } finally { statSpy.mockRestore(); }
+}));
+
+test("degraded root discovery preserves metadata and a repaired inventory can collect", async () => fixture(async root => {
+  const wire = await encodeCodexStructuredUserText("managed account fixture", "8".repeat(64));
+  await age(root);
+  const source = join(root, "managed-account-rollout.jsonl");
+  await writeFile(source, wire);
+  const info = await stat(source);
+  const feed = { complete: true, listedAt, sources: [
+    { path: source, size: info.size, mtimeMs: info.mtimeMs, engine: "codex" as const, project: "repo-fixture" },
+  ] };
+  expect(await collectStructuredUserMetadata(feed, { rootsComplete: () => false })).toEqual({ removed: 0, complete: false });
+  expect(decodeCodexStructuredUserText(wire).text).toBe("managed account fixture");
+  expect((await collectStructuredUserMetadata(feed, { rootsComplete: () => true })).removed).toBe(0);
+  expect(decodeCodexStructuredUserText(wire).text).toBe("managed account fixture");
+}));
+
+test("a corrupted managed-account registry keeps its rollout metadata across process restart", async () => fixture(async root => {
+  const previousCodexHome = process.env.LLV_CODEX_HOME;
+  process.env.LLV_CODEX_HOME = join(root, "codex-home");
+  try {
+    const accounts = await import("@/lib/accounts/codex");
+    const accountStore = await import("@/lib/accounts/accountsStoreFixture");
+    const account = accounts.createManagedCodexAccount("Retention rollout owner");
+    const registry = accountStore.persistedAccountRegistry("codex");
+    const wire = await encodeCodexStructuredUserText("survives degraded discovery", "5".repeat(64));
+    const source = join(account.sessionsDir, "rollout.jsonl");
+    await mkdir(account.sessionsDir, { recursive: true });
+    await writeFile(source, wire);
+    await age(root);
+    accountStore.seedAccountRegistry("codex", { version: 2, active: "default", accounts: [] });
+
+    const codexUrl = new URL("../accounts/codex.ts", import.meta.url).href;
+    const retentionUrl = new URL("./structuredUserMetadataRetention.ts", import.meta.url).href;
+    const child = Bun.spawn([process.execPath, "-e", `
+      const codex = await import(${JSON.stringify(codexUrl)});
+      const retention = await import(${JSON.stringify(retentionUrl)});
+      const inventory = codex.codexSessionRootInventory();
+      const result = await retention.collectStructuredUserMetadata(${JSON.stringify({ complete: true, listedAt, sources: [] })}, {
+        roots: inventory.roots, rootsComplete: () => inventory.complete,
+      });
+      console.log(JSON.stringify({ complete: inventory.complete, result }));
+    `], { env: { ...process.env, LLV_STATE_DIR: root }, stdout: "pipe", stderr: "pipe" });
+    const [output, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect({ code, parsed: JSON.parse(output.trim()) }).toEqual({ code: 0,
+      parsed: { complete: false, result: { removed: 0, complete: false } } });
+    expect(error).toContain("registry has an unsupported shape");
+    expect(decodeCodexStructuredUserText(wire).text).toBe("survives degraded discovery");
+
+    accountStore.seedAccountRegistry("codex", registry);
+    const repaired = accounts.codexSessionRootInventory();
+    expect(repaired.complete).toBeTrue();
+    expect((await collectStructuredUserMetadata({ complete: true, listedAt, sources: [] }, {
+      roots: repaired.roots, rootsComplete: () => repaired.complete,
+    })).removed).toBe(0);
+    expect(decodeCodexStructuredUserText(wire).contentDigest).toBe("5".repeat(64));
+  } finally {
+    if (previousCodexHome === undefined) delete process.env.LLV_CODEX_HOME;
+    else process.env.LLV_CODEX_HOME = previousCodexHome;
+  }
+}));
+
+test("a source changed while publication admission is held refuses deletion", async () => fixture(async root => {
+  const wire = await encodeCodexStructuredUserText("admission race fixture", "6".repeat(64));
+  await age(root);
+  const source = join(root, "admission-race.jsonl");
+  await writeFile(source, "initial");
+  const lock = join(root, "structured-user-metadata-publication");
+  let entered!: () => void, release!: () => void, census!: () => void;
+  const acquired = new Promise<void>(resolve => { entered = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const checked = new Promise<void>(resolve => { census = resolve; });
+  let checks = 0;
+  const holder = withFileTransaction(lock, "fixture busy", async () => { entered(); await held; });
+  await acquired;
+  let collection: ReturnType<typeof collectStructuredUserMetadata> | undefined;
+  try {
+    const info = await stat(source);
+    collection = collectStructuredUserMetadata({ complete: true, listedAt, sources: [
+      { path: source, size: info.size, mtimeMs: info.mtimeMs, engine: "codex", project: "repo-fixture" },
+    ] }, { current: () => { checks++; if (checks === 2) census(); return true; } });
+    await checked;
+    await writeFile(source, wire, { flag: "a" });
+    release();
+    await expect(collection).rejects.toThrow("changed");
+    expect(checks).toBeGreaterThan(0);
+    expect(decodeCodexStructuredUserText(wire).contentDigest).toBe("6".repeat(64));
+  } finally {
+    release(); await collection?.catch(() => undefined); await holder;
+  }
 }));
 
 test("collection cannot delete a record whose retry is awaiting file sync", async () => fixture(async root => {

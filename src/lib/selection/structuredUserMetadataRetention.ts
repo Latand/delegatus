@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { mkdir, open, opendir, readFile, realpath, rename, stat, unlink } from "node:fs/promises";
+import { link, mkdir, open, opendir, readFile, realpath, rename, stat, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { statePath } from "@/lib/configDir";
 import type { TranscriptIndexFeed } from "@/lib/search/transcriptFeed";
@@ -62,16 +62,17 @@ async function sourceReferences(path: string, cacheDir: string): Promise<SourceI
   return value;
 }
 
-async function walk(root: string, paths: Set<string>, directories: Set<string>): Promise<void> {
+async function walk(root: string, paths: Set<string>, directories: Set<string>, directorySources: Map<string, Identity>): Promise<void> {
   let canonical: string;
   try { canonical = await realpath(root); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error; }
   if (directories.has(canonical)) return;
   directories.add(canonical);
+  directorySources.set(canonical, identity(await stat(canonical)));
   for await (const entry of await opendir(canonical)) {
     const path = join(canonical, entry.name);
     const info = entry.isSymbolicLink() ? await stat(path) : null;
-    if (entry.isDirectory() || info?.isDirectory()) await walk(path, paths, directories);
+    if (entry.isDirectory() || info?.isDirectory()) await walk(path, paths, directories, directorySources);
     else if (entry.name.endsWith(".jsonl") && (entry.isFile() || info?.isFile())) paths.add(path);
     if (paths.size > MAX_REFS || directories.size > MAX_REFS) throw new Error("retained inventory exceeds its bound");
   }
@@ -112,6 +113,10 @@ async function queuedReferences(refs: Set<string>): Promise<void> {
 export interface MetadataRetentionOptions {
   /** Full retained roots include copies outside the board's deduplicated window. */
   roots?: readonly string[] | (() => readonly string[]);
+  /** False means a root provider could only return a degraded fallback. */
+  rootsComplete?: () => boolean;
+  /** The root set itself must remain unchanged while a destructive pass runs. */
+  rootsCurrent?: () => boolean;
   current?: () => boolean;
 }
 
@@ -125,8 +130,10 @@ export async function collectStructuredUserMetadata(feed: TranscriptIndexFeed, o
     const paths = new Set(feed.sources.map(source => source.path));
     if (paths.size > MAX_REFS) throw new Error("retained inventory exceeds its bound");
     const directories = new Set<string>();
+    const directorySources = new Map<string, Identity>();
+    if (options.rootsComplete?.() === false) return { removed: 0, complete: false };
     const roots = typeof options.roots === "function" ? options.roots() : options.roots ?? [];
-    for (const root of roots) await walk(root, paths, directories);
+    for (const root of roots) await walk(root, paths, directories, directorySources);
     const cache = statePath("structured-user-reference-index");
     await mkdir(cache, { recursive: true, mode: 0o700 });
     const refs = new Set<string>();
@@ -138,8 +145,19 @@ export async function collectStructuredUserMetadata(feed: TranscriptIndexFeed, o
       if (refs.size > MAX_REFS) throw new Error("metadata reference inventory exceeds its bound");
     }
     await queuedReferences(refs);
+    const assertCensusCurrent = async () => {
+      if (options.current?.() === false || options.rootsComplete?.() === false || options.rootsCurrent?.() === false) {
+        throw new Error("metadata reference inventory was superseded");
+      }
+      for (const [sourcePath, before] of sources) {
+        if (!same(before, await stat(sourcePath))) throw new Error("metadata reference inventory changed");
+      }
+      for (const [directoryPath, before] of directorySources) {
+        if (!same(before, await stat(directoryPath))) throw new Error("metadata root inventory changed");
+      }
+    };
     // Validate the complete discovery before the first destructive effect.
-    for (const [path, before] of sources) if (!same(before, await stat(path))) throw new Error("metadata reference inventory changed");
+    await assertCensusCurrent();
     if (options.current?.() === false) return { removed: 0, complete: false };
     const cutoff = (feed.listedAt ?? Date.now()) - GRACE_MS;
     const directory = statePath("structured-user-metadata");
@@ -154,10 +172,22 @@ export async function collectStructuredUserMetadata(feed: TranscriptIndexFeed, o
       if (refs.has(ref)) continue;
       const path = join(directory, entry.name);
       await withFileTransaction(join(directory, "..", "structured-user-metadata-publication"), "metadata collection is busy", async () => {
-        if (options.current?.() === false) throw new Error("metadata reference inventory was superseded");
+        // Publication admission can wait. Revalidate sources and root authority
+        // inside the lock, immediately before each destructive operation.
+        await assertCensusCurrent();
         const current = await stat(path);
         if (current.mtimeMs >= cutoff) return;
-        await unlink(path);
+        await assertCensusCurrent();
+        const recovery = `${path}.${randomUUID()}.retention-recovery`;
+        await link(path, recovery);
+        try {
+          await unlink(path);
+          try { await assertCensusCurrent(); }
+          catch (error) {
+            await link(recovery, path);
+            throw error;
+          }
+        } finally { await unlink(recovery).catch(error => { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }); }
         removed++;
       });
       if (removed >= 256) break;

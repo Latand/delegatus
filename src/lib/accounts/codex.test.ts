@@ -12,7 +12,7 @@ const OLD_HOME = process.env.LLV_CODEX_HOME;
 process.env.LLV_STATE_DIR = path.join(SANDBOX, "state");
 process.env.LLV_CODEX_HOME = path.join(SANDBOX, "legacy-codex");
 
-const { CorruptCodexAccountsError, LOGIN_STARTUP_GRACE_MS, activeCodexAccountId, cleanupOrphanedCodexHomes, codexAccountsRoot, codexLoginPaneStatus, codexSessionRoots, createManagedCodexAccount, listCodexAccounts, removeManagedCodexAccount, setActiveCodexAccount } = await import("./codex");
+const { CorruptCodexAccountsError, LOGIN_STARTUP_GRACE_MS, activeCodexAccountId, cleanupOrphanedCodexHomes, codexAccountsRoot, codexLoginPaneStatus, codexSessionRoots, codexSessionRootInventory, createManagedCodexAccount, listCodexAccounts, removeManagedCodexAccount, setActiveCodexAccount } = await import("./codex");
 const { agentRegistry, normalizeRegistry, closeAgentRegistryForTests } = await import("@/lib/agent/registry");
 const { pathAllowed } = await import("@/lib/scanner/roots");
 const { recoverInterruptedCodexAccountRemovals } = await import("./codex");
@@ -77,6 +77,18 @@ test("a registry the store cannot read survives rejected mutations", () => {
   expect(() => setActiveCodexAccount("default")).toThrow(CorruptCodexAccountsError);
   expect(persistedAccountState()).toBe(corrupt);
   expect(listCodexAccounts().map((account) => account.id)).toEqual(["default"]);
+});
+
+test("Codex retention root inventory marks default-account fallback as incomplete", () => {
+  const account = createManagedCodexAccount("Retained rollout owner");
+  const complete = codexSessionRootInventory();
+  expect(complete.complete).toBeTrue();
+  expect(complete.roots).toContain(account.sessionsDir);
+
+  seedAccountRegistry("codex", { version: 2, active: "default", accounts: [] });
+  const degraded = codexSessionRootInventory();
+  expect(degraded.complete).toBeFalse();
+  expect(degraded.roots).not.toContain(account.sessionsDir);
 });
 
 test("a syntactically valid registry with an unsafe account is also read-only", () => {
