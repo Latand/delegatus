@@ -336,6 +336,32 @@ test("duplicate rejected title rows and valid-key collisions import with distinc
   expect(readSessionTitles(file).some(row => row.key === "path:/after-restart")).toBe(true);
 });
 
+test("reimport after a rollback title edit keeps each rejected occurrence exactly once", () => {
+  const rejected = "null";
+  fs.writeFileSync(file, `{"version":1,"titles":[${rejected},{"key":"path:/healthy","title":"Healthy","revision":1,"updatedAt":"t0"}]}`);
+  expect(sessionTitleStore.importLegacy(file).state).toBe("imported");
+  sessionTitleStore.checkpointRollbackMirror(file);
+
+  // Model a retained release editing the rollback JSON: it appends its healthy
+  // title while preserving the rejected bytes already moved behind valid rows.
+  for (const [key, title, updatedAt] of [
+    ["path:/new", "New", "t1"],
+    ["path:/newer", "Newer", "t2"],
+  ]) {
+    const rollback = JSON.parse(fs.readFileSync(file, "utf8")) as { version: number; titles: unknown[] };
+    rollback.titles.splice(rollback.titles.length - 1, 0, { key, title, revision: 1, updatedAt });
+    fs.writeFileSync(file, JSON.stringify(rollback));
+    expect(sessionTitleStore.importLegacy(file).state).toBe("already-imported");
+    sessionTitleStore.checkpointRollbackMirror(file);
+    expect(sessionTitleStore.read(file).preserved.map(record => record.json)).toEqual([rejected]);
+  }
+
+  const document = sessionTitleStore.read(file);
+  expect(document.preserved.map(record => record.json)).toEqual([rejected]);
+  expect(fs.readFileSync(file, "utf8").match(/null/g)).toHaveLength(1);
+  expect(readSessionTitles(file).map(record => record.key)).toEqual(["path:/healthy", "path:/new", "path:/newer"]);
+});
+
 test("read consumers degrade to no overrides on a corrupt store", () => {
   fs.writeFileSync(file, "garbage");
   expect(loadSessionTitles(file)).toEqual([]);

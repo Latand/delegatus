@@ -85,12 +85,17 @@ function parseTitlesDocument(raw: unknown, sourceText?: string): TitleDocument {
   const bytes = jsonArrayRecordBytes(text, "titles");
   const logicalKeys = new Set(records.map(record => record.key));
   const rowKeys = new Set<string>();
+  let rejectedIndex = 0;
   const preserved = file.titles.flatMap((record, index) => {
     if (isRecord(record)) return [];
+    // The rollback serializer places healthy titles first and preserved rows
+    // last. Key by occurrence within the rejected rows so moving a rejected
+    // value past healthy titles does not mint a second SQLite row on reimport.
+    const occurrence = rejectedIndex++;
     const ownKey = record && typeof record === "object" ? (record as { key?: unknown }).key : undefined;
     const key = typeof ownKey === "string" && ownKey ? ownKey : registryRecordKey(record);
     reportRegistryRecord("session-titles", { id: key });
-    let rowKey = `preserved:${index}`;
+    let rowKey = `preserved:${occurrence}`;
     while (logicalKeys.has(rowKey) || rowKeys.has(rowKey)) rowKey += ":";
     rowKeys.add(rowKey);
     return [{ key, rowKey, json: bytes[index]! }];
