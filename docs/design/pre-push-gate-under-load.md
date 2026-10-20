@@ -181,9 +181,10 @@ cascades, the false refusal and the hidden cost (E2).
 
    The full implementation rehearsal exposed another existing limit: the
    72-hour missing-reset simulation took 99.7 s and failed its explicit 90 s
-   timeout after the split. Its timeout is 150 s in
-   `engine.providerReset.part2.test.ts`; its assertions and the 300 s file
-   deadline are retained. The earlier 300 s file expirations hid this cost.
+   timeout after the split. The full-hook protocol later hit its 150 s limit,
+   reported at 160.9 s under load; filtered retries passed. Its timeout is
+   240 s in `engine.providerReset.part2.test.ts`. Its assertions and the 300 s
+   file deadline are retained. The earlier file expirations hid this cost.
 
    The full-hook protocol also exposed the existing 60 s timeout on the real
    Git suffix-custody cases, which create 256 or 257 commits. A case timed out
