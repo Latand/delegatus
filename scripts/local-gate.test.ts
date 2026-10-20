@@ -568,7 +568,7 @@ test("scope uses executed import closure and the workflow test lists", () => {
   expect(host.codexVersions).toEqual(workflow.jobs["native-queue-campaign"]!.strategy.matrix.codex);
   expect(host.codexVersions).toContain("0.162.1");
   expect(plan("pre-push", ["src/runtime-host/main.ts"], host).filter(step => step.codex).map(step => step.codex))
-    .toEqual(host.codexVersions);
+    .toEqual([...host.codexVersions]);
   const native = discover(root, "HEAD", ["src/lib/runtime/nativeCodexQueue.ts"]);
   expect(native.native).toBeFalse();
   const linux = discover(root, "HEAD", ["src/lib/proc/index.ts"]);
