@@ -1,5 +1,6 @@
-import { expect, test, harness, create, tickPipelines, loadPipelines, savePipelines, failedReceipt, frozenWallClock, forbiddenSleep, fs, path } from "./engine.fixture";
+import { expect, test, harness, create, tickPipelines, loadPipelines, savePipelines, failedReceipt, frozenWallClock, forbiddenSleep, fs, path, defaultPipelinePorts, AgentRegistry, setAgentRegistryForTests, crypto } from "./engine.fixture";
 import { SEND_LOST_REASON, SEND_UNVERIFIED_REASON } from "@/lib/runtime/sendSettlement";
+import { RuntimeJournal } from "@/runtime-host/journal";
 
 test("a fenced first message relaunches automatically and succeeds", async () => {
   const h = harness();
@@ -37,6 +38,125 @@ test("a fenced first message relaunches automatically and succeeds", async () =>
   await tickPipelines([h.finish("/codex/stage-1.jsonl", "pass")], h.ports);
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.state).toBe("passed");
 });
+
+test("production adapters resume their persisted retry claim after a controller restart", async () => {
+  const inheritedRoot = process.env.LLV_FENCED_PROD_RESTART_ROOT;
+  if (inheritedRoot) {
+    const root = inheritedRoot;
+    const lane = JSON.parse(fs.readFileSync(path.join(root, "lane.json"), "utf8"));
+    savePipelines([lane]);
+    const h = harness();
+    const registry = new AgentRegistry(path.join(root, "agent-registry.json"));
+    const journal = new RuntimeJournal(path.join(root, "runtime-journal.sqlite"), {
+      structuredHosts: true, now: () => Date.parse("2026-10-20T12:00:00Z"),
+    });
+    try {
+      setAgentRegistryForTests(registry);
+      const production = defaultPipelinePorts({ spawnRecoveryClient: () => ({
+        operationStatus: async (id: string) => journal.currentRetryResult(id),
+      } as never) });
+      h.ports.spawnReceipt = production.spawnReceipt;
+      h.ports.claimSpawnRetry = production.claimSpawnRetry;
+      h.ports.fencedFirstMessageRetrySafe = production.fencedFirstMessageRetrySafe;
+      h.ports.stopStageAgent = async () => ({ outcome: "not-running" });
+      h.ports.scheduleTick = () => {};
+      h.ports.now = () => "2026-10-20T12:00:00.000Z";
+
+      await tickPipelines([], h.ports);
+      expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "pending", fencedMessageRetries: 1 });
+      h.ports.now = () => "2026-10-20T12:00:01.000Z";
+      await tickPipelines([], h.ports);
+      const recovered = loadPipelines()[0]!;
+      expect(h.spawnInputs).toHaveLength(1);
+      expect(recovered.runs[0]!.attempts[0]).toMatchObject({ state: "running", launchId: "launch-1",
+        retiredLaunches: [{ error: SEND_LOST_REASON }] });
+      fs.writeFileSync(path.join(root, "result.json"), JSON.stringify({ state: recovered.state,
+        attempt: recovered.runs[0]!.attempts[0], spawnCount: h.spawnInputs.length,
+        retryClaim: registry.spawnReceipt(recovered.runs[0]!.attempts[0]!.retiredLaunches![0]!.launchId!)?.retryClaim }));
+      console.log("production retry claim recovered after controller process restart");
+    } finally {
+      journal.close();
+      registry.close();
+      setAgentRegistryForTests(null);
+    }
+    return;
+  }
+
+  const h = harness();
+  const stages = [{ id: "build", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "Build", next: null }] as const;
+  const pipeline = await create(h.ports, stages as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+
+  const root = fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "fenced-production-"));
+  const registryPath = path.join(root, "agent-registry.json");
+  const journalPath = path.join(root, "runtime-journal.sqlite");
+  const registry = new AgentRegistry(registryPath);
+  const journal = new RuntimeJournal(journalPath, { structuredHosts: true, now: () => Date.parse("2026-10-20T12:00:00Z") });
+  let storesOpen = true;
+  try {
+    const begun = registry.beginSpawnRequest({ engine: "codex", cwd: root, transport: "structured", role: "builder",
+      launchProfile: { title: "Fenced production fixture" },
+      clientAttemptId: "fenced-production-launch", conversationId: `conversation_${crypto.randomUUID()}` });
+    if (begun.kind !== "created") throw new Error("failed to reserve the production-adapter fixture launch");
+    const artifactPath = path.join(root, "stage.jsonl");
+    fs.writeFileSync(artifactPath, "");
+    const key = { engine: "codex" as const, sessionId: crypto.randomUUID() };
+    expect(registry.stageStructuredSpawn(begun.receipt.launchId, { key, artifactPath, cwd: root,
+      accountId: "account-a", launchProfile: begun.receipt.launchProfile, status: "dead", host: null,
+      structuredHost: null, claimEpoch: 1, claimOwner: null, pendingAction: null }).kind).toBe("settled");
+    expect(registry.failStructuredSpawn(begun.receipt.launchId, SEND_LOST_REASON).claimed).toBe(true);
+
+    const operationId = `spawn_message_${begun.receipt.launchId}`;
+    journal.append({ scope: { type: "session", id: begun.receipt.conversationId }, kind: "session-status", payload: {
+      conversationId: begun.receipt.conversationId, sessionKey: key, hostKind: "codex-app-server", host: "hosted",
+      turn: "idle", provenance: "structured", capabilities: { steer: true, structuredAttention: true },
+    } });
+    journal.executeOperation({ kind: "send", operationId, idempotencyKey: `spawn_${begun.receipt.launchId}`,
+      conversationId: begun.receipt.conversationId, text: "Build", policy: "queue" });
+    journal.transitionOperation(operationId, "failed", { reason: SEND_LOST_REASON }, { fromStatuses: ["queued"] });
+    const lane = loadPipelines().find(item => item.id === pipeline.id)!;
+    const attempt = lane.runs[0]!.attempts[0]!;
+    const stageId = lane.cursor!.stageId!;
+    attempt.state = "spawning";
+    attempt.error = null;
+    attempt.launchId = begun.receipt.launchId;
+    attempt.conversationId = begun.receipt.conversationId;
+    attempt.sessionId = null;
+    attempt.agentPath = null;
+    attempt.paneId = null;
+    lane.state = "running";
+    lane.stateDetail = null;
+    lane.cursor!.state = "spawning";
+    savePipelines([lane]);
+
+    const claimId = `${pipeline.id}:${stageId}:${begun.receipt.launchId}`;
+    expect(registry.claimFailedSpawnForRetry(begun.receipt.launchId, claimId).kind).toBe("claimed");
+    fs.writeFileSync(path.join(root, "lane.json"), JSON.stringify(lane));
+    registry.close();
+    journal.close();
+    storesOpen = false;
+    const childRoot = path.join(root, "child");
+    for (const name of ["home", "config", "tmp", "state"]) fs.mkdirSync(path.join(childRoot, name), { recursive: true });
+    const child = Bun.spawn([process.execPath, "test", import.meta.filename, "--test-name-pattern",
+      "production adapters resume their persisted retry claim after a controller restart"], {
+      env: { ...process.env, HOME: path.join(childRoot, "home"), XDG_CONFIG_HOME: path.join(childRoot, "config"),
+        TMPDIR: path.join(childRoot, "tmp"), LLV_STATE_DIR: path.join(childRoot, "state"),
+        LLV_FENCED_PROD_RESTART_ROOT: root },
+      stdout: "pipe", stderr: "pipe", signal: AbortSignal.timeout(60_000),
+    });
+    const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    expect({ code, stderr }).toMatchObject({ code: 0 });
+    expect(stdout).toContain("production retry claim recovered after controller process restart");
+    const result = JSON.parse(fs.readFileSync(path.join(root, "result.json"), "utf8"));
+    expect(result).toMatchObject({ state: "running", spawnCount: 1,
+      attempt: { state: "running", fencedMessageRetries: 1, retiredLaunches: [{ launchId: begun.receipt.launchId }] },
+      retryClaim: { claimId } });
+  } finally {
+    if (storesOpen) { journal.close(); registry.close(); }
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}, 120_000);
 
 test("fenced first-message retries exhaust their persisted bound", async () => {
   const inherited = process.env.LLV_FENCED_CAP_INPUT;

@@ -246,6 +246,10 @@ export type PipelineSpawnReceipt = PipelineStageSpawn & {
   roleMemoryRetrySafe?: boolean;
   /** The reserved session is still this conversation's current generation. */
   currentGeneration?: boolean;
+  /** Generation identity checked independently from the retry-claim fence. */
+  generationMatches?: boolean;
+  /** Persisted retry owner, used to resume this controller's idempotent claim. */
+  retryClaimId?: string | null;
   /** The artifact path the launch reserved, whether or not the identity fence
       publishes it (#1750). Read for one purpose only — whether a transcript
       exists on disk — which is what decides that an unverified first delivery
@@ -1477,13 +1481,19 @@ const ADOPTION_MEMBERSHIPS: RegistryRowProjector<"memberships", RegistryFile["me
 
 /** A retained generation can use an id from the transcript filename. Its
  * path and the original native entry must agree on this launch. */
-function stageLaunchGenerationMatches(receipt: RegistryFile["receipts"][string] | null,
+function stageLaunchGenerationIdentityMatches(receipt: RegistryFile["receipts"][string] | null,
   generation: { engine: string; path: string } | null | undefined,
   entry: Pick<AgentRegistryEntry, "artifactPath" | "structuredHostOperationId"> | null | undefined): boolean {
-  if (!receipt?.key || !receipt.artifactPath || receipt.retryClaim) return false;
+  if (!receipt?.key || !receipt.artifactPath) return false;
   if (!generation || !entry || generation.engine !== receipt.key.engine || generation.path !== receipt.artifactPath
     || entry.artifactPath !== receipt.artifactPath) return false;
   return !entry.structuredHostOperationId || entry.structuredHostOperationId === receipt.launchId;
+}
+
+function stageLaunchGenerationMatches(receipt: RegistryFile["receipts"][string] | null,
+  generation: { engine: string; path: string } | null | undefined,
+  entry: Pick<AgentRegistryEntry, "artifactPath" | "structuredHostOperationId"> | null | undefined): boolean {
+  return !receipt?.retryClaim && stageLaunchGenerationIdentityMatches(receipt, generation, entry);
 }
 
 export function defaultPipelinePorts(
@@ -1681,6 +1691,8 @@ export function defaultPipelinePorts(
           && (!evidence.entry.structuredHost?.process || processIdentityStatus(evidence.entry.structuredHost.process) === "dead")
           && !(evidence.entry.structuredTerminationSurvivors ?? []).some(process => processIdentityStatus(process) !== "dead"),
         currentGeneration: stageLaunchGenerationMatches(receipt, evidence.generation, evidence.entry),
+        generationMatches: stageLaunchGenerationIdentityMatches(receipt, evidence.generation, evidence.entry),
+        retryClaimId: receipt.retryClaim?.claimId ?? null,
       };
     },
     recoverStagedLaunch: (launchId, eligible) => withViewerOperation("pipelines.evidence", async () => {
@@ -10097,6 +10109,7 @@ async function deferRetiredLaunchRetry(
 ): Promise<"waiting" | "exhausted" | "settled" | "delivered"> {
   const failure = receipt.error ?? `stage spawn cannot recover from receipt state ${receipt.state}`;
   const fencedFirstMessage = failure === SEND_LOST_REASON;
+  const claimId = `${pipeline.id}:${stage.id}:${receipt.launchId}`;
   const eligible = () => {
     const current = findPipelineRecord(pipeline.id);
     const a = current && currentAttempt(current, stage.id);
@@ -10105,7 +10118,9 @@ async function deferRetiredLaunchRetry(
       && a?.n === attempt.n && a.launchId === receipt.launchId && a.conversationId === receipt.conversationId
       && !a.report && !a.verdict && !a.completedAt && !a.historical && !openRuntimeSwitch(a)
       && launch?.state === "failed" && launch.launchId === receipt.launchId && launch.conversationId === receipt.conversationId
-      && launch.error === failure && launch.currentGeneration !== false
+      && launch.error === failure
+      && (launch.currentGeneration !== false
+        || launch.retryClaimId === claimId && launch.generationMatches === true)
       && !pipelineSurvivorRefusal(current);
   };
   const fencedRetrySafe = async () => eligible()
@@ -10136,7 +10151,7 @@ async function deferRetiredLaunchRetry(
   const neverBegan = receipt.neverBegan === true;
   const originalError = receipt.error;
   let claim: Awaited<ReturnType<PipelinePorts["claimSpawnRetry"]>>;
-  try { claim = await ports.claimSpawnRetry(receipt.launchId, `${pipeline.id}:${stage.id}:${receipt.launchId}`); }
+  try { claim = await ports.claimSpawnRetry(receipt.launchId, claimId); }
   catch (error) {
     if (!(error instanceof RegistryWriterBusyError)) throw error;
     if (bookControllerWaitRound(attempt, since, now, ports,
