@@ -2164,7 +2164,7 @@ function cutChainKit(f: Awaited<ReturnType<typeof providerRecoveryHarness>>, eng
     if (engine === "claude") records.push({ type: "user", timestamp: at(), origin: { kind: "task-notification" }, turnOrigin: "task_notification", promptSource: "system", message: { content: "<task-notification>done</task-notification>" } });
     else {
       const { encodeCodexStructuredUserText } = await import("@/lib/runtime/codexStructuredUserText.server");
-      records.push({ type: "event_msg", timestamp: at(), payload: { type: "user_message", message: encodeCodexStructuredUserText("Continue the interrupted turn from the transcript.", undefined, null, { kind: "agent", role: "startup-recovery" } as never) } });
+      records.push({ type: "event_msg", timestamp: at(), payload: { type: "user_message", message: await encodeCodexStructuredUserText("Continue the interrupted turn from the transcript.", undefined, null, { kind: "agent", role: "startup-recovery" } as never) } });
     }
   };
   const output = (busy = false) => records.push(engine === "claude"
