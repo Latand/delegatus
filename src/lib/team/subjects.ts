@@ -1,4 +1,4 @@
-import { agentRegistry, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
+import { agentRegistry } from "@/lib/agent/registry";
 import { UNRESOLVED_PROJECT } from "@/lib/projects/identity";
 import { resolveProjectAttribution } from "@/lib/session/projectResolution";
 
@@ -21,10 +21,10 @@ export interface ConversationSubject {
 
 export function conversationSubject(reference: { conversationId?: string | null; path?: string | null }): ConversationSubject | null {
   try {
-    const lookup = readOnlyConversationLookupFromSnapshot(agentRegistry().readOnlySnapshot());
+    const registry = agentRegistry();
     const id = reference.conversationId?.trim() ?? "";
-    const byId = id.startsWith("conversation_") ? lookup.conversation(id as `conversation_${string}`) : null;
-    const conversation = byId ?? (reference.path ? lookup.conversationForPath(reference.path) : null);
+    const byId = id.startsWith("conversation_") ? registry.conversation(id as `conversation_${string}`) : null;
+    const conversation = byId ?? (reference.path ? registry.conversationForPath(reference.path) : null);
     if (!conversation) return null;
     const generation = conversation.generations.at(-1);
     const profile = generation?.launchProfile as { title?: unknown; role?: unknown; cwd?: string; project?: string } | undefined;
