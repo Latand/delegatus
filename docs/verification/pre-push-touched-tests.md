@@ -626,7 +626,7 @@ Each attempt runs the real pre-push entry point in a scratch clone with its own 
 | Side | Qualifying runs | Current sample P90 (s) | File expirations | Refusals | NEW lines |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | before | 1 | 1166.6 | 5 | 1 | 0 |
-| after | 5 | 508.2 | 0 | 0 | 0 |
+| after | 6 | 508.2 | 0 | 0 | 0 |
 
 The sample P90 is provisional until all runs complete. An incomplete baseline or runner error is a refusal even when it emits no NEW assertion line.
 
@@ -646,6 +646,10 @@ The sample P90 is provisional until all runs complete. An incomplete baseline or
 | after-205 | after | 2 | 19.51 / 25.41 / 34.94 | 45.6 | 476.4 | yes | 0 | 0 |
 | after-06 | after | 3 | 24.21 / 35.52 / 45.57 | 76.3 | 521.6 | outlier | 0 | 0 |
 | after-106 | after | 3 | 18.91 / 30.17 / 36.57 | 107.6 | 487.0 | outlier | 0 | 0 |
+| after-206 | after | 3 | 13.62 / 33.46 / 51.23 | 1.2 | 449.9 | outlier | 0 | 0 |
+| after-306 | after | 3 | 19.85 / 27.60 / 32.79 | 77.6 | 414.9 | yes | 0 | 0 |
+| before-02 | before | 2 | 14.88 / 20.78 / 42.33 | 3.2 | 1124.8 | outlier | 4 | 1 |
+| before-102 | before | 2 | 12.16 / 19.46 / 30.93 | 37.3 | 879.5 | outlier | 1 | 1 |
 
 The ten split families retain all 1,078 registered cases, including their names, arguments and assertion bodies. The preserved calibration and JUnit inventory established that partition before the campaign. The measured timeout exceptions are described in `docs/design/pre-push-gate-under-load.md#2-fix`.
 
@@ -655,5 +659,8 @@ The resumed campaign began with three qualifying after-runs and one before-run. 
 | --- | ---: | ---: | ---: |
 | batch-01 | 3 | 1 | 0 |
 | batch-02 | 4 | 1 | 0 |
+| batch-03 | 4 | 1 | 0 |
+
+Two before-runs fell below the required load band as their remaining files and baseline work used fewer CPUs. Observed test CPU usage averaged at least 3.78 CPUs in `before-02`, against 7.04 in `after-306`. Future before-runs use a four-CPU foreground estimate for initial load padding; after-runs retain eight. New records include `paddingForegroundCpuEstimate`; earlier records used eight. The real gate retains its eight head workers and existing quotas, deadlines and verdict rules. Every earlier qualifier and outlier stays in the sample.
 
 The high-load `after-05` outlier captured two existing 15-second explicit test timeouts in `engine.providerReset.part3.test.ts`; filtered retries passed and the comparator classified the occurrences as flaky. The 30/10 sample and the two controls remain incomplete.

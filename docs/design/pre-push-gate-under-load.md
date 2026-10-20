@@ -287,12 +287,24 @@ Run one hook at a time, with nothing else of yours on the machine.
 
 - At admission, when `pre-push: CPU admission for publication checks` gives
   way to the first step, read the 1-minute load as `a`.
-- Start `n = max(0, round((27 − 8 − a) / 2))` sibling scopes:
+- Estimate the foreground test CPUs as `f = 8` for after-runs and `f = 4`
+  for before-runs. Start `n = max(0, round((27 − f − a) / 2))` sibling scopes:
   `systemd-run --user --scope --slice=delegatus-agents.slice -p CPUWeight=100 -p MemoryMax=256M`,
   two spinning processes each.
 - Stop them by their recorded unit names at the verdict.
 - Sample load every 2 s. A run counts only if its median load during execution
   is 25–30. Record every other run too, but repeat it.
+
+The campaign initially used eight for both foreground estimates. During
+resumption, two completed before-runs fell below the load band (medians
+20.78 and 19.46) as their long files and baseline work left fewer workers
+active. Sampled test CPU usage averaged at least 3.78 CPUs in the first of
+those before-runs, against 7.04 in its following after-run. The remaining
+before-runs use the rounded four-CPU estimate for load padding. Record that
+estimate with the requested scopes in each new run. Retain the earlier
+qualifying runs and every outlier. The gate still uses eight head workers;
+its source, quotas, deadlines and verdict rules are unchanged by this
+measurement refinement.
 
 **Order.** Do 30 after-runs, cycling through the three branches, and one
 before-run after every third after-run: 10 before-runs, alternating so both
@@ -320,8 +332,10 @@ admission, so the 40 runs need about 12 hours.
 - P90 of complete-gate time (27th of the 30, sorted) is under 600 s. Outer
   admission is reported beside it and excluded, as the gate's budgets exclude
   it; it measures the depth of the fenced CPU queue.
-- No after-run on an unchanged branch reports a NEW failure. Every NEW that a
-  completed before-run reports also appears in the after-runs of that branch.
+- No after-run on an unchanged branch reports a NEW failure. Genuine branch
+  assertion failures must still refuse on the after side. Trace before-only
+  runner expirations and timeout cascades to their raw logs as false refusals;
+  the fixed gate should complete those files and assertions.
 - Two controls run on the after side at load 25–30 and must refuse: an engine
   test with a broken assertion, and an engine test that never resolves (it
   must fail at 60 s).
