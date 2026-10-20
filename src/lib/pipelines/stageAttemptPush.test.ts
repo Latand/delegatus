@@ -203,6 +203,89 @@ test.each((["accepted", "accepted replacement", "published"] as const).flatMap(p
   }
 });
 
+test.each(["another worktree", "hooks off", "missing receipt"] as const)(
+  "a replacement cannot hide an unproved divergent starting prefix (%s)", async origin => {
+    const f = await fixture();
+    const lostLaunch = `stage-proof-divergent-lost-${nextFixture}`;
+    const childLaunch = `stage-proof-divergent-child-${nextFixture}`;
+    try {
+      const accepted = await f.commit("accepted stage output");
+      f.pipeline.lastPassedCommit = accepted;
+      await fs.rm(path.join(f.receipt, "commits", accepted));
+      await f.own("reset", "--hard", f.pipeline.baseRef);
+
+      let divergent: string;
+      if (origin === "another worktree") {
+        const foreign = path.join(f.root, "divergent-worktree");
+        await f.own("worktree", "add", "--detach", foreign, f.pipeline.baseRef);
+        await f.git(foreign, "commit", "--allow-empty", "-m", "divergent prelaunch rewrite");
+        divergent = await f.git(foreign, "rev-parse", "HEAD");
+        await f.own("fetch", foreign, divergent);
+        await f.own("reset", "--hard", divergent);
+      } else {
+        const args = ["commit", "--allow-empty", "-m", "divergent prelaunch rewrite"];
+        const made = await realExec("git", origin === "hooks off" ? ["-c", "core.hooksPath=", ...args] : args,
+          f.lane, f.env);
+        expect(made.code, made.stderr).toBe(0);
+        divergent = await f.own("rev-parse", "HEAD");
+        if (origin === "missing receipt") await fs.rm(path.join(f.receipt, "commits", divergent));
+      }
+
+      const lostStartedAt = "2026-10-16T09:30:00.000Z";
+      Object.assign(f.env, await prepareStageGitGuard(lostLaunch, f.lane, realExec, lostStartedAt));
+      const lost = { ...f.attempt, n: 1, launchId: lostLaunch, startedAt: lostStartedAt, completedAt: "2026-10-16T09:45:00.000Z",
+        state: "failed", agentPath: "/stage/divergent-lost.jsonl", restartRecovery: { bootId: "lost-host",
+          requestedAt: "2026-10-16T09:45:00.000Z", lastRecordAt: null, replacementAttempt: 2 } } as PipelineStageAttempt;
+      const childStartedAt = "2026-10-16T10:00:00.000Z";
+      Object.assign(f.env, await prepareStageGitGuard(childLaunch, f.lane, realExec, childStartedAt));
+      const child = { ...f.attempt, n: 2, launchId: childLaunch, startedAt: childStartedAt, completedAt: NOW,
+        state: "passed", agentPath: "/stage/divergent-child.jsonl",
+        restartContext: { previousAttempt: 1, transcriptPath: lost.agentPath, cause: "host-lost" } } as PipelineStageAttempt;
+      await f.own("merge", "--no-ff", "-m", "restore accepted history", accepted);
+      const head = await f.commit("replacement output");
+      const pushed = await realExec("git", ["push", "--no-verify", "origin", "HEAD:refs/heads/pipeline/proof"], f.lane, f.env);
+      expect(pushed.code, pushed.stderr).toBe(0);
+      f.pipeline.runs = [{ stageId: "build", attempts: [lost, child] }] as never;
+      expect(await settleStageAttemptPush(f.pipeline, child, realExec, NOW)).toMatchObject({ ok: false });
+      expect(await f.own("rev-parse", "HEAD")).toBe(head);
+    } finally {
+      await fs.rm(stageGitReceiptDirectory(lostLaunch), { recursive: true, force: true });
+      await fs.rm(stageGitReceiptDirectory(childLaunch), { recursive: true, force: true });
+      await f.close();
+    }
+  });
+
+test("four host-loss attempts preserve their receipt ancestry", async () => {
+  const f = await fixture();
+  const attempts: PipelineStageAttempt[] = [];
+  const launches: string[] = [];
+  try {
+    for (let n = 1; n <= 4; n += 1) {
+      const launchId = n === 1 ? f.attempt.launchId! : `stage-proof-chain-${nextFixture}-${n}`;
+      const startedAt = n === 1 ? START : `2026-10-16T${String(8 + n).padStart(2, "0")}:00:00.000Z`;
+      if (n > 1) {
+        launches.push(launchId);
+        Object.assign(f.env, await prepareStageGitGuard(launchId, f.lane, realExec, startedAt));
+      }
+      const attempt = { ...f.attempt, n, launchId, startedAt, completedAt: `2026-10-16T${String(8 + n).padStart(2, "0")}:30:00.000Z`,
+        state: n === 4 ? "passed" : "failed", agentPath: `/stage/chain-${n}.jsonl`,
+        ...(n === 1 ? {} : { restartContext: { previousAttempt: n - 1, transcriptPath: attempts[n - 2]!.agentPath, cause: "host-lost" } })
+      } as PipelineStageAttempt;
+      if (n < 4) attempt.restartRecovery = { bootId: `lost-host-${n}`, requestedAt: attempt.completedAt!, lastRecordAt: null,
+        replacementAttempt: n + 1 };
+      attempts.push(attempt);
+      await f.commit(`attempt ${n} output`);
+    }
+    const head = await f.own("rev-parse", "HEAD");
+    f.pipeline.runs = [{ stageId: "build", attempts }] as never;
+    await f.push();
+    expect(await settleStageAttemptPush(f.pipeline, attempts[3]!, realExec, NOW)).toEqual({ ok: true, sha: head });
+  } finally {
+    for (const launchId of launches) await fs.rm(stageGitReceiptDirectory(launchId), { recursive: true, force: true });
+    await f.close();
+  }
+});
+
 test.each([1, 3])("A: main fast-forward plus %i own commits settles after an in-worktree push", async count => {
   const f = await fixture();
   try {

@@ -199,10 +199,26 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
     // A later start is a boundary to verify, never evidence of who made its prefix.
     const directories = directory ? [directory] : [];
     let anchor = start.head;
+    let lineageCursor = start.head;
+    const replacementStarts = new Set<string>();
     const run = pipeline.runs?.find(run => run.attempts.some(item => item.launchId === attempt.launchId));
     const attempts = new Map(run?.attempts.map(item => [item.n, item]));
     let child = attempt;
     let acceptedProofBoundary: string | null = null;
+    for (const prior of run?.attempts ?? []) {
+      if (prior.n >= attempt.n || prior.verdict?.status !== "pass" || !prior.launchId || !prior.startedAt) continue;
+      const priorDirectory = stageGitReceiptDirectory(prior.launchId);
+      if (directories.includes(priorDirectory) || await stageAttemptPushRefusal(prior.launchId) !== null) continue;
+      const priorRaw = await smallFile(path.join(priorDirectory, "start.json"));
+      if (priorRaw === null) continue;
+      const priorStart = JSON.parse(priorRaw);
+      if (priorStart.launchId !== prior.launchId || priorStart.worktree !== pipeline.worktreeDir
+        || !/^[0-9a-f]{40}$/.test(priorStart.head ?? "")
+        || !Number.isFinite(Date.parse(priorStart.startedAt)) || !Number.isFinite(Date.parse(prior.startedAt))
+        || Date.parse(priorStart.startedAt) < Date.parse(prior.startedAt) || Date.parse(priorStart.startedAt) > Date.parse(now)) continue;
+      directories.push(priorDirectory);
+      replacementStarts.add(priorStart.head);
+    }
     for (;;) {
       const decision = child.decisionAnswerId ? pipeline.decisionAnswers?.find(answer => answer.clientRequestId === child.decisionAnswerId
         && answer.stageId === run?.stageId && answer.nextAttempt === child.n
@@ -218,13 +234,16 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       const parentDirectory = stageGitReceiptDirectory(parent.launchId);
       const parentRaw = await smallFile(path.join(parentDirectory, "start.json"));
       const parentStart = parentRaw ? JSON.parse(parentRaw) : null;
+      const parentRefusal = await stageAttemptPushRefusal(parent.launchId);
       if (!parentStart || parentStart.launchId !== parent.launchId || parentStart.worktree !== pipeline.worktreeDir
         || !/^[0-9a-f]{40}$/.test(parentStart.head ?? "") || !parent.startedAt
         || !Number.isFinite(Date.parse(parentStart.startedAt)) || !Number.isFinite(Date.parse(parent.startedAt))
         || Date.parse(parentStart.startedAt) < Date.parse(parent.startedAt) || Date.parse(parentStart.startedAt) > Date.parse(now)
-        || await stageAttemptPushRefusal(parent.launchId) !== null) return refuse("the replaced attempt's creation receipts are unavailable or invalid");
-      if ((await exec("git", ["merge-base", "--is-ancestor", parentStart.head, anchor], pipeline.worktreeDir)).code !== 0)
+        || (parentRefusal !== null && !(decision && parent.verdict?.status === "pass"))) return refuse("the replaced attempt's creation receipts are unavailable or invalid");
+      if ((await exec("git", ["merge-base", "--is-ancestor", parentStart.head, lineageCursor], pipeline.worktreeDir)).code !== 0)
         return refuse("the replacement dropped its starting history");
+      lineageCursor = parentStart.head;
+      replacementStarts.add(parentStart.head);
       directories.push(parentDirectory);
       const acceptedBoundaries = [pipeline.lastPassedCommit, pipeline.publishedCommit]
         .filter((sha): sha is string => typeof sha === "string" && /^[0-9a-f]{40}$/.test(sha));
@@ -333,8 +352,7 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       if (fetched.code !== 0) throw new StagePushRemoteUnavailable();
       return baseTip = sha;
     };
-    const verifiedSuffix = async (target: string): Promise<string | null> => {
-      const from = repair?.acceptedHead ?? anchor;
+    const verifiedSuffix = async (target: string, from = repair?.acceptedHead ?? anchor): Promise<string | null> => {
       if (target === from) return null;
       if (target === tip && integrationBase !== null) return null;
       let suffixAnchor = from;
@@ -389,6 +407,14 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       }
       return null;
     };
+    if (directories.length > 1) {
+      // Every replacement start is history the new attempt inherited. Prove
+      // its unaccepted prefix independently so a later merge cannot hide it.
+      for (const prefix of new Set([start.head, ...replacementStarts])) {
+        const error = await verifiedSuffix(prefix, pipeline.baseRef);
+        if (error) return refuse(error);
+      }
+    }
     if (publishedPrefix) {
       const error = await verifiedSuffix(publishedPrefix);
       if (error) return refuse(error);
