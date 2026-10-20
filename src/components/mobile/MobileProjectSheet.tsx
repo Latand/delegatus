@@ -11,11 +11,13 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import type { Workflow } from "@/lib/workflows/types";
 
 import { buildProjectSummaries, OVERVIEW, partitionCrownedSummaries, type ProjectSummary } from "../projectModel";
+import { MobileWorkspaceSwitch, MoveLabel, WorkspaceDot, workspaceErrorText, type WorkspaceCounts, type WorkspaceRailState } from "../team/WorkspaceSwitch";
+import { groupAll, workspaceScope } from "../team/workspaceFilter";
 import { workingAgentCounts } from "../workingAgents";
 import { ResourcesFooter } from "../ResourcesFooter";
 import { BoardRowsSkeleton } from "../skeletons";
 import { fmtAge } from "../utils";
-import { MobileSheet, MobileSheetDivider, MobileSheetRow } from "./MobileSheet";
+import { MobileSheet, MobileSheetDivider, MobileSheetRow, MobileSheetSection } from "./MobileSheet";
 
 /*
  * The project switcher (docs/design/mobile-v2/README.md §3.1, §4.1): the
@@ -46,6 +48,9 @@ export interface MobileProjectSheetProps {
   onSelect: (project: string) => void;
   onCreateProject?: CreateProject;
   onClose: () => void;
+  /** A team install's workspaces (docs/design/workspaces.md §13.5 P2, P3).
+      Absent, the sheet is exactly what it was. */
+  workspace?: WorkspaceRailState;
 }
 
 const EMPTY_CROWNS: ReadonlySet<string> = new Set();
@@ -66,15 +71,41 @@ export function MobileProjectSheet({
   onSelect,
   onCreateProject,
   onClose,
+  workspace,
 }: MobileProjectSheetProps) {
   const { t } = useLocale();
   const summaries = useMemo(
     () => buildProjectSummaries(files, now, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouCounts, workingAgentCounts(files, now)),
     [files, now, workflows, projectCatalog, pipelines, projectDisplayNames, needsYouCounts],
   );
-  const active = useMemo(() => summaries.filter((summary) => !archivedProjects.has(summary.project)), [summaries, archivedProjects]);
-  const archived = useMemo(() => summaries.filter((summary) => archivedProjects.has(summary.project)), [summaries, archivedProjects]);
+  /* A chosen workspace narrows the list before the crowned, rest and archive
+     split, as the rail does. */
+  const scope = useMemo(() => (workspace ? workspaceScope(workspace.view, workspace.chosen) : null), [workspace]);
+  const scoped = useMemo(() => (scope ? summaries.filter((summary) => scope.has(summary.project)) : summaries), [summaries, scope]);
+  const active = useMemo(() => scoped.filter((summary) => !archivedProjects.has(summary.project)), [scoped, archivedProjects]);
+  const archived = useMemo(() => scoped.filter((summary) => archivedProjects.has(summary.project)), [scoped, archivedProjects]);
   const { crowned, rest } = useMemo(() => partitionCrownedSummaries(active, crownedProjects), [active, crownedProjects]);
+  const counts = useMemo<WorkspaceCounts | null>(() => (workspace ? {
+    all: summaries.length,
+    byWorkspace: new Map(groupAll(summaries, workspace.view).flatMap((section) => (section.workspace ? [[section.workspace.id, section.rows.length] as const] : []))),
+  } : null), [summaries, workspace]);
+  /* In All every project stands under its own workspace, a crowned one first
+     with its crown, so each heading counts what the switcher counts (§13.5 P3). */
+  const sections = useMemo(() => (workspace && !scope ? groupAll([...crowned, ...rest], workspace.view) : null), [workspace, scope, crowned, rest]);
+  const [switchOpen, setSwitchOpen] = useState(false);
+  const [moving, setMoving] = useState<string | null>(null);
+  const [moveError, setMoveError] = useState<{ project: string; text: string } | null>(null);
+  const owner = Boolean(workspace?.view.canManage);
+  const move = (project: string, workspaceId: string) => {
+    if (!workspace) return;
+    setMoving(null);
+    setMoveError(null);
+    void workspace.place(project, workspaceId).then((result) => {
+      if (!result.ok) setMoveError({ project, text: workspaceErrorText(t, result.code) });
+    });
+  };
+  /* While the switcher is open over a chosen workspace, its rows stand in for the list. */
+  const listHidden = switchOpen && scope !== null;
   /* A first run (the catalog answered with no project at all) opens the create
      form itself: the only reason to have opened this sheet is what that form
      does (the rail's own rule, issue #1162). */
@@ -82,7 +113,8 @@ export function MobileProjectSheet({
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(firstRun && Boolean(onCreateProject));
 
-  const row = (summary: ProjectSummary, quiet = false) => {
+  /* `marks` false: an Unassigned row whose Move control takes the marks' place, as the rail's row does (§13.5 D3). */
+  const row = (summary: ProjectSummary, quiet = false, marks = true) => {
     const current = summary.project === selected;
     const isCrowned = crownedProjects.has(summary.project);
     return (
@@ -97,7 +129,7 @@ export function MobileProjectSheet({
           <>
             {/* Working is the green ● count the rail row, the board header and
                 its columns draw, whichever row is selected. */}
-            {summary.liveCount ? (
+            {!marks ? null : summary.liveCount ? (
               <span data-mobile2-working="" className="inline-flex items-center gap-1 font-bold tabular-nums text-success">
                 <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-success motion-reduce:animate-none" aria-hidden />
                 {t("mobile2.projects.live", { count: summary.liveCount })}
@@ -107,7 +139,7 @@ export function MobileProjectSheet({
                 {summary.smt ? t("mobile2.projects.quietSince", { age: fmtAge(summary.smt) }) : t("mobile2.projects.quiet")}
               </span>
             )}
-            {summary.attentionCount ? (
+            {marks && summary.attentionCount ? (
               <Badge tone="warning">
                 <TriangleAlert className="h-[11px] w-[11px]" aria-hidden /> {summary.attentionCount}
               </Badge>
@@ -120,6 +152,42 @@ export function MobileProjectSheet({
     );
   };
 
+  /* An Unassigned row for the owner: the row, then its Move control, and under
+     them the workspaces it can go to while Move is pressed (P3). */
+  const movableRow = (summary: ProjectSummary) => (
+    <div key={summary.project} data-mobile2-movable={summary.project}>
+      <div className="flex items-center">
+        <div className="min-w-0 flex-1">{row(summary, false, false)}</div>
+        <button
+          type="button"
+          data-mobile2-move=""
+          aria-expanded={moving === summary.project}
+          aria-label={t("workspaces.moveProject", { name: summary.displayName })}
+          onClick={() => setMoving((value) => (value === summary.project ? null : summary.project))}
+          className={`mr-3 inline-flex min-h-11 shrink-0 items-center gap-1 rounded-[8px] border px-3 text-label font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${moving === summary.project ? "border-accent/45 bg-accent/10 text-accent" : "border-border bg-card text-secondary"}`}
+        >
+          <MoveLabel />
+        </button>
+      </div>
+      {moving === summary.project && workspace ? (
+        <div data-mobile2-move-list="" className="pl-6">
+          <MobileSheetSection>{t("workspaces.moveTo")}</MobileSheetSection>
+          {workspace.view.workspaces.map((target) => (
+            <MobileSheetRow
+              key={target.id}
+              icon={<span className="flex h-[18px] w-[18px] items-center justify-center"><WorkspaceDot color={target.color} size={12} /></span>}
+              label={target.name}
+              attrs={{ "data-mobile2-move-to": target.id }}
+              trailing={<ChevronRight className="h-4 w-4" aria-hidden />}
+              onSelect={() => move(summary.project, target.id)}
+            />
+          ))}
+        </div>
+      ) : null}
+      {moveError?.project === summary.project ? <p role="alert" className="px-4 pb-2 text-label font-semibold text-danger">{moveError.text}</p> : null}
+    </div>
+  );
+
   return (
     /* The phone has no rail, so the rail's resources block rides at the foot of
        the sheet that stands in for it: memory pressure, the agent hosts and
@@ -130,6 +198,17 @@ export function MobileProjectSheet({
       onClose={onClose}
       footer={<div className="-mx-4 min-w-0 flex-1"><ResourcesFooter /></div>}
     >
+      {workspace && counts ? (
+        <>
+          <MobileWorkspaceSwitch
+            state={{ ...workspace, choose: (next) => { setSwitchOpen(false); workspace.choose(next); } }}
+            counts={counts}
+            expanded={switchOpen}
+            onToggle={() => setSwitchOpen((value) => !value)}
+          />
+          <MobileSheetDivider />
+        </>
+      ) : null}
       <MobileSheetRow
         icon={<Layers className="h-[18px] w-[18px]" aria-hidden />}
         label={t("mobile2.projects.overview")}
@@ -144,8 +223,19 @@ export function MobileProjectSheet({
         onSelect={() => onSelect(OVERVIEW)}
       />
       <MobileSheetDivider />
-      {crowned.map((summary) => row(summary))}
-      {rest.map((summary) => row(summary))}
+      {listHidden || sections ? null : crowned.map((summary) => row(summary))}
+      {listHidden ? null : sections ? sections.map((section) => (
+        <div key={section.workspace?.id ?? "unassigned"} data-mobile2-workspace-section={section.workspace?.id ?? "unassigned"}>
+          <MobileSheetSection count={section.rows.length}>
+            {section.workspace ? <WorkspaceDot color={section.workspace.color} size={8} /> : null}
+            <span className="min-w-0 truncate">{section.workspace ? section.workspace.name : t("workspaces.unassigned")}</span>
+          </MobileSheetSection>
+          {section.rows.map((summary) => (!section.workspace && owner ? movableRow(summary) : row(summary)))}
+        </div>
+      )) : rest.map((summary) => row(summary))}
+      {scope && !listHidden && loaded && !active.length && !archived.length ? (
+        <div data-mobile2-workspace-empty="" className="px-4 py-3 text-ui text-muted">{t("workspaces.page.empty")}</div>
+      ) : null}
       {!loaded && !summaries.length ? <BoardRowsSkeleton variant="list" rows={4} className="flex-none" /> : null}
       {catalogFailures > 0 && !summaries.length ? <div className="px-4 py-3 text-ui font-semibold text-danger">{t("catalog.unreachable")}</div> : null}
       <MobileSheetDivider />
