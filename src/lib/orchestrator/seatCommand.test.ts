@@ -1815,8 +1815,12 @@ async function seatIncumbent(mandate: string, clientRequestId: string): Promise<
 
 /* The task-list pointer leaves room for history. Required mandate rules
    (#2518) consume the same bounded envelope: keep a fitting history and drop
-   an oversized one, while preserving both reporting and cross-project rules. */
-test.each([{ historyBytes: 900, dropped: false }, { historyBytes: 2_000, dropped: true }])("a default mandate rotation preserves required rules with $historyBytes bytes of history", async ({ historyBytes, dropped }) => {
+   an oversized one, while preserving both reporting and cross-project rules.
+   v58's maintenance practice (536 bytes, the operator, 2026-10-20) takes the
+   same bytes from this room: the largest history the default mandate keeps
+   fell from 1 150–1 199 bytes to 600–649 (measured in steps of 50), so the
+   fitting case is 500 bytes and a 900-byte history is now dropped. */
+test.each([{ historyBytes: 500, dropped: false }, { historyBytes: 900, dropped: true }, { historyBytes: 2_000, dropped: true }])("a default mandate rotation preserves required rules with $historyBytes bytes of history", async ({ historyBytes, dropped }) => {
   await seatIncumbent(stackedMandate(ORCHESTRATOR_SYSTEM_PROMPT, 1), "req_00002301");
   const prompts: string[] = [];
   const { deps } = dependencies({
