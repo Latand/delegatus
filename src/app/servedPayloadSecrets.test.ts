@@ -39,6 +39,7 @@ const built = fs.existsSync(path.join(BUILD_DIR, "BUILD_ID"));
 const CREDENTIAL_SHAPE = /[A-Za-z0-9_-]{43}/;
 
 const START_TIMEOUT_MS = 45_000;
+const RESPONSE_TIMEOUT_MS = 5_000;
 
 let server: ReturnType<typeof Bun.spawn> | null = null;
 let origin = "";
@@ -51,6 +52,31 @@ let capturedOutput = "";
 let spawnCapability = "";
 /** A key saved where the OpenRouter reader reads it, so «Keys» has a value it must not hand to the wrong caller. */
 const SAVED_KEY = ["sk", "or", "v1", "0".repeat(64)].join("-");
+
+/** Log coverage without printing bodies or credential values on a refusal. */
+async function readPayload(route: string, init: RequestInit = {}, status = 200, contentType = "application/json") {
+  const response = await fetch(`${origin}${route}`, {
+    ...init,
+    // Next redirects RSC requests to the URL carrying its cache-busting hash.
+    redirect: "follow",
+    signal: AbortSignal.timeout(RESPONSE_TIMEOUT_MS),
+  });
+  const body = await response.text();
+  const bytes = Buffer.byteLength(body);
+  const kind = new Headers(init.headers).get("rsc") === "1" ? "RSC" : "HTTP";
+  console.info(`[served-payload] ${init.method ?? "GET"} ${route} ${kind}: status=${response.status} bytes=${bytes}`);
+  expect(new URL(response.url).origin).toBe(origin);
+  expect(response.status).toBe(status);
+  expect(bytes).toBeGreaterThan(0);
+  expect(response.headers.get("content-type")).toContain(contentType);
+  return { response, body };
+}
+
+function assertNoCredentials(body: string): void {
+  if (!spawnCapability) throw new Error("the built server did not create its agent capability");
+  if (body.includes(spawnCapability)) throw new Error("served payload contains the agent capability");
+  if (body.includes(SAVED_KEY)) throw new Error("served payload contains the saved API key");
+}
 
 async function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -108,12 +134,18 @@ beforeAll(async () => {
   server = Bun.spawn([runtime, "--bun", "node_modules/.bin/next", "start", "--hostname", "127.0.0.1", "--port", String(port)], {
     cwd: process.cwd(),
     env: {
-      ...process.env,
+      /* Match the production runtime verifier: ambient test mode, credentials,
+         aliases and host endpoints must not reach the server. TMPDIR contains
+         HOME, config and state, including inside an operator-shaped stage root. */
+      PATH: process.env.PATH,
+      NODE_ENV: "production",
+      NEXT_TELEMETRY_DISABLED: "1",
       PORT: String(port),
       LLV_STATE_DIR: stateDir,
       HOME: sandbox,
       XDG_CONFIG_HOME: path.join(sandbox, ".config"),
-      TMPDIR: path.join(sandbox, "tmp"),
+      TMPDIR: sandbox,
+      LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1",
       /* The channel the rejected ceremony wrote its key to. Opened here so the
          assertion below can prove it stays silent. */
       LLV_OPERATOR_KEY_FD: "3",
@@ -122,10 +154,14 @@ beforeAll(async () => {
   });
 
   const deadline = Date.now() + START_TIMEOUT_MS;
+  let readyStatus: number | undefined;
   while (Date.now() < deadline) {
+    if (server.exitCode !== null) break;
     try {
-      const probe = await fetch(origin, { redirect: "manual" });
-      if (probe.status > 0) break;
+      const probe = await fetch(origin, { redirect: "manual", signal: AbortSignal.timeout(RESPONSE_TIMEOUT_MS) });
+      await probe.arrayBuffer();
+      readyStatus = probe.status;
+      break;
     } catch {
       await Bun.sleep(200);
     }
@@ -141,13 +177,17 @@ beforeAll(async () => {
     await readAvailable(server.stdout as ReadableStream<Uint8Array>, 1_000),
     await readAvailable(server.stderr as ReadableStream<Uint8Array>, 1_000),
   ].join("\n");
+  if (readyStatus !== 200) {
+    throw new Error(`built server readiness: GET / expected 200, received ${readyStatus ?? "no response"}`);
+  }
 
   const capabilityFile = path.join(stateDir, "operator-spawn-capability");
   spawnCapability = fs.existsSync(capabilityFile) ? fs.readFileSync(capabilityFile, "utf8").trim() : "";
-});
+}, START_TIMEOUT_MS + RESPONSE_TIMEOUT_MS + 5_000);
 
-afterAll(() => {
+afterAll(async () => {
   server?.kill();
+  await server?.exited;
   if (sandbox) fs.rmSync(sandbox, { recursive: true, force: true });
 });
 
@@ -177,39 +217,36 @@ test("neither stdout nor stderr carries the agent capability", () => {
      read. The one credential-shaped value that still exists must not appear there. */
   expect(spawnCapability).toMatch(/^[A-Za-z0-9_-]{43}$/);
   expect(capturedOutput).not.toContain(spawnCapability);
+  expect(capturedOutput).not.toContain(SAVED_KEY);
 });
 
 test("an anonymously fetched document carries no credential and asks for none", async () => {
-  const response = await fetch(origin, { headers: { accept: "text/html" } });
-  const html = await response.text();
+  const { body: html } = await readPayload("/", { headers: { accept: "text/html" } }, 200, "text/html");
 
   /* Status first, and this is the third version of the mistake in the header: an
      error page contains none of the ceremony below either, so a server that 500s
      every route passes every assertion in this file. It says nothing about a
      credential — it says the document was never served. */
-  expect(response.status).toBe(200);
-  expect(html.length).toBeGreaterThan(0);
   /* The round-7 fragment name, the round-8 storage key, the round-9 prop, and the
      header an agent identifies itself with: a served document that mentions any of
      them is a document expecting a credential to arrive. */
   for (const ceremony of ["llv-operator", "llv.operator.capability", "operatorCredential", "x-viewer-spawn-capability"]) {
     expect(html).not.toContain(ceremony);
   }
-  expect(html).not.toContain(spawnCapability);
+  assertNoCredentials(html);
 });
 
 test("the RSC flight payload carries no credential either", async () => {
   /* Where the round-7 leak actually lived: a prop handed to a client component is
      serialized here, never into the static markup this file once inspected. */
-  const response = await fetch(origin, {
+  const { body: flight } = await readPayload("/", {
     headers: { rsc: "1", "next-router-state-tree": "%5B%22%22%2C%7B%7D%5D", accept: "text/x-component" },
-  });
-  const flight = await response.text();
+  }, 200, "text/x-component");
 
   for (const ceremony of ["llv-operator", "operatorCredential", "x-viewer-spawn-capability"]) {
     expect(flight).not.toContain(ceremony);
   }
-  expect(flight).not.toContain(spawnCapability);
+  assertNoCredentials(flight);
 });
 
 test("no build artifact carries the per-process agent capability", () => {
@@ -231,37 +268,35 @@ test("the built «Keys» routes answer the list without a value, and a value onl
      Without a build there is no server to ask; «the production build exists» above is the test that fails for it. */
   if (!built) return;
   const page = { origin, "sec-fetch-site": "same-origin", "content-type": "application/json" };
-  const plain = await fetch(`${origin}/api/keys`);
-  expect(plain.status).toBe(200);
-  const plainText = await plain.text();
-  expect(plainText).not.toContain(SAVED_KEY);
+  const { body: plainText } = await readPayload("/api/keys");
+  assertNoCredentials(plainText);
   expect(JSON.parse(plainText)).toMatchObject({ owner: false, keys: expect.arrayContaining([{ id: "openrouter", variable: "OPENROUTER_API_KEY", source: "file", masked: null }]) });
-  const listed = await fetch(`${origin}/api/keys`, { headers: page });
-  const listedText = await listed.text();
-  expect(listedText).not.toContain(SAVED_KEY);
+  const { body: listedText } = await readPayload("/api/keys", { headers: page });
+  assertNoCredentials(listedText);
   expect(listedText).toContain("sk-or-v1-••••••••0000");
   /* An agent naming itself, and a plain request with no browser stamp, are refused the value. */
   for (const headers of [{ ...page, "x-llv-spawn-capability": spawnCapability }, { "content-type": "application/json" }]) {
-    const refused = await fetch(`${origin}/api/keys/openrouter/reveal`, { method: "POST", headers, body: "{}" });
-    expect(refused.status).toBe(403);
-    expect(await refused.text()).not.toContain(SAVED_KEY);
+    const { body } = await readPayload("/api/keys/openrouter/reveal", { method: "POST", headers, body: "{}" }, 403);
+    assertNoCredentials(body);
   }
-  const revealed = await fetch(`${origin}/api/keys/openrouter/reveal`, { method: "POST", headers: page, body: JSON.stringify({ purpose: "reveal" }) });
-  expect(revealed.status).toBe(200);
+  const { response: revealed, body } = await readPayload("/api/keys/openrouter/reveal", { method: "POST", headers: page, body: JSON.stringify({ purpose: "reveal" }) });
   expect(revealed.headers.get("cache-control")).toBe("no-store");
-  expect(await revealed.json()).toEqual({ value: SAVED_KEY });
+  expect(JSON.parse(body)).toEqual({ value: SAVED_KEY });
+  /* A secret planted on disk and deliberately served to its owner is also a
+     live negative control for the scanner used on anonymous HTML and RSC. */
+  expect(() => assertNoCredentials(body)).toThrow("served payload contains the saved API key");
 });
 
 test("the retired legacy orchestrator route is absent from the real build", async () => {
   /* PRD #976 decision 6 removes the global entry completely. The production
      artifact proves that both former verbs now resolve to no route. */
-  const designate = await fetch(`${origin}/api/orchestrator`, {
+  const { body: designate } = await readPayload("/api/orchestrator", {
     method: "POST",
     headers: { "content-type": "application/json", origin, "sec-fetch-site": "same-origin" },
     body: JSON.stringify({ conversationId: "conversation_served_payload_legacy", path: null }),
-  });
-  expect(designate.status).toBe(404);
+  }, 404, "text/html");
+  assertNoCredentials(designate);
 
-  const status = await fetch(`${origin}/api/orchestrator`, { headers: { origin, "sec-fetch-site": "same-origin" } });
-  expect(status.status).toBe(404);
+  const { body: status } = await readPayload("/api/orchestrator", { headers: { origin, "sec-fetch-site": "same-origin" } }, 404, "text/html");
+  assertNoCredentials(status);
 });

@@ -77,7 +77,7 @@ for (const engine of ["claude", "codex"] as const) for (const { state, change } 
   const turn = "fixture-human-turn";
   if (engine === "claude") new FileClaudeDeliveryLedger().recordQueued(session, { id: turn, text: prompt, origin: { kind: "operator" } }, "queued-next-turn");
   const input = { hook_event_name: "UserPromptSubmit", session_id: session, cwd: root,
-    ["prompt"]: engine === "codex" ? encodeCodexStructuredUserText(prompt, undefined, null, { kind: "operator" }, deliveryDedupToken(delivery.command.operationId)) : prompt,
+    ["prompt"]: engine === "codex" ? await encodeCodexStructuredUserText(prompt, undefined, null, { kind: "operator" }, deliveryDedupToken(delivery.command.operationId)) : prompt,
     ...(engine === "claude" ? { delegatus_delivery_id: turn } : {}) };
   const request = new Request("http://localhost/api/memory/inject", { headers: { "x-llv-spawn-capability": capability,
     "x-llv-memory-hook": "00000000-0000-0000-0000-000000000000", "x-llv-memory-deadline": String(Date.now() + 1500) } });
@@ -158,7 +158,7 @@ for (const mode of ["delayed input", "delayed body", "delayed confirmation", "co
     } }));
     return Response.json({ block });
   } });
-  const prompt = encodeCodexStructuredUserText("Update widget parser", undefined, null, { kind: "operator" }, crypto.createHash("sha256").update("output-boundary").digest("hex"));
+  const prompt = await encodeCodexStructuredUserText("Update widget parser", undefined, null, { kind: "operator" }, crypto.createHash("sha256").update("output-boundary").digest("hex"));
   const session = crypto.randomUUID(), transcript = path.join(root, session + ".jsonl");
   const input = { hook_event_name: "UserPromptSubmit", session_id: session, cwd: root, prompt };
   try {
@@ -224,7 +224,7 @@ for (const engine of ["claude", "codex"] as const) for (const prompt of ["Procee
     await memoryIndex().refresh([{ path: source, engine: engine === "claude" ? "codex" : "claude", sourceKind: engine === "claude" ? "codex_summary" : "claude_memory", project }]);
     const deliveryId = crypto.randomUUID();
     const wirePrompt = engine === "codex"
-      ? encodeCodexStructuredUserText(prompt, undefined, null, { kind: "operator" }, crypto.createHash("sha256").update(deliveryId).digest("hex"))
+      ? await encodeCodexStructuredUserText(prompt, undefined, null, { kind: "operator" }, crypto.createHash("sha256").update(deliveryId).digest("hex"))
       : prompt;
     if (engine === "claude") new FileClaudeDeliveryLedger().recordQueued(session, { id: deliveryId, text: prompt, origin: { kind: "operator" } }, "queued-next-turn");
     let calls = 0;
@@ -361,14 +361,14 @@ test("Codex hook resolves durable authorship and abstains on machine and unknown
   const request = new Request("http://localhost/api/memory/inject", { headers: { "x-llv-spawn-capability": capability } });
   const input = { hook_event_name: "UserPromptSubmit", session_id: crypto.randomUUID(), cwd: root };
   expect(await offerForHook(request, { ...input, prompt: "Update widget parser" })).toBe("");
-  const wire = (kind: "agent" | "operator", id: string) => encodeCodexStructuredUserText("Update widget parser", undefined, null, { kind }, crypto.createHash("sha256").update(id).digest("hex"));
+  const wire = async (kind: "agent" | "operator", id: string) => await encodeCodexStructuredUserText("Update widget parser", undefined, null, { kind }, crypto.createHash("sha256").update(id).digest("hex"));
   const skipped = memoryIndex().injectionActivity().skipped;
-  expect(await offerForHook(request, { ...input, prompt: wire("agent", "machine") })).toBe(""); expect(calls).toBe(0);
+  expect(await offerForHook(request, { ...input, prompt: await wire("agent", "machine") })).toBe(""); expect(calls).toBe(0);
   expect(memoryIndex().injectionActivity().skipped).toBe(skipped);
-  expect(await offerForHook(request, { ...input, prompt: wire("operator", "operator") })).toContain("Delegatus shared memory");
+  expect(await offerForHook(request, { ...input, prompt: await wire("operator", "operator") })).toContain("Delegatus shared memory");
   expect(calls).toBe(1);
   expect(memoryIndex().turnOffers(receipt.conversationId)).toMatchObject([{ score: .8 }]);
-  expect(await offerForHook(request, { ...input, prompt: wire("operator", "operator") })).toBe(""); expect(calls).toBe(1);
+  expect(await offerForHook(request, { ...input, prompt: await wire("operator", "operator") })).toBe(""); expect(calls).toBe(1);
 });
 
 for (const engine of ["claude", "codex"] as const) for (const mode of ["followup", "relay"] as const) for (const contended of [false, true]) for (const queued of ["different", "identical", "unowned", "racing before journal", "racing after journal"] as const) test(`${engine} native tmux ${mode} ${contended ? "contended" : "unlocked"} ${queued} queued input preserves delivery authorship`, async () => {
@@ -565,7 +565,7 @@ const send = () => deliverConversationMessage({ path: mode === "relay" ? child :
     // Losing machine authorship keeps identical native text ambiguous, while
     // independently authored structured operator input remains eligible.
     const deliveryId = crypto.randomUUID();
-    const typed = engine === "codex" ? encodeCodexStructuredUserText(prompt, undefined, null, { kind: "operator" }, crypto.createHash("sha256").update(deliveryId).digest("hex")) : prompt;
+    const typed = engine === "codex" ? await encodeCodexStructuredUserText(prompt, undefined, null, { kind: "operator" }, crypto.createHash("sha256").update(deliveryId).digest("hex")) : prompt;
     if (engine === "claude") new FileClaudeDeliveryLedger().recordQueued(session, { id: deliveryId, text: prompt, origin: { kind: "operator" } }, "queued-next-turn");
     expect(await offerForHook(request, { ...input, prompt: typed, ...(engine === "claude" ? { delegatus_delivery_id: deliveryId } : {}) })).toContain("Delegatus shared memory");
     expect(calls).toBe(1);
@@ -626,7 +626,7 @@ for (const mode of ["unproven authorship", "expired deadline", "agent delivery",
       structuredContent(prompt, []).contentDigest, { origin: { kind: "agent" } });
   }
   setSharedMemoryEnabled(projectInfoFromCwd(root)!.project, true);
-  const submittedPrompt = mode === "agent delivery" ? encodeCodexStructuredUserText(prompt, undefined, null, { kind: "agent" },
+  const submittedPrompt = mode === "agent delivery" ? await encodeCodexStructuredUserText(prompt, undefined, null, { kind: "agent" },
     crypto.createHash("sha256").update("fixture-agent-turn").digest("hex")) : prompt;
   const input = { prompt: submittedPrompt, hook_event_name: "UserPromptSubmit", session_id: session, cwd: root, turn_id: "fixture-native-turn" };
   const request = new Request("http://localhost/api/memory/inject", { headers: {
@@ -755,7 +755,7 @@ for (const oldKey of ["directory", "local repository", "path", "alias", "unlinke
       accountId: null, status: "live", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
     const stageCapability = registry.rotateSpawnCapabilityForReceipt(stage.receipt.launchId);
     const stageRequest = new Request("http://localhost/api/memory/inject", { headers: { "x-llv-spawn-capability": stageCapability } });
-    const stageText = encodeCodexStructuredUserText(stagePrompt, undefined, null, { kind: "operator" }, messageTextDigest("synthetic-stage-start"));
+    const stageText = await encodeCodexStructuredUserText(stagePrompt, undefined, null, { kind: "operator" }, messageTextDigest("synthetic-stage-start"));
     const beforeStage = memoryIndex().injectionActivity();
     expect(await offerForHook(stageRequest, { hook_event_name: "UserPromptSubmit", session_id: stageSession, cwd: root, prompt: stageText })).toBe("");
     expect(memoryIndex().lastTurn(project)).toBe("delivered");
@@ -786,7 +786,7 @@ for (const oldKey of ["directory", "local repository", "path", "alias", "unlinke
     // A real subsequent operator submission may repeat the launch's words.
     const human = registry.holdDelivery(stage.receipt.conversationId, stagePrompt, "synthetic-human-stage-turn", "text", [],
       structuredContent(stagePrompt, []).contentDigest, { origin: { kind: "operator" } });
-    const humanText = encodeCodexStructuredUserText(stagePrompt, undefined, null, { kind: "operator" }, deliveryDedupToken(human.command.operationId));
+    const humanText = await encodeCodexStructuredUserText(stagePrompt, undefined, null, { kind: "operator" }, deliveryDedupToken(human.command.operationId));
     delete process.env.OPENROUTER_API_KEY;
     expect(await offerForHook(stageRequest, { hook_event_name: "UserPromptSubmit", session_id: stageSession, cwd: root, prompt: humanText })).toBe("");
     expect(memoryIndex().lastTurn(project)).toBe("noKey");

@@ -167,7 +167,7 @@ async function refusal(run: Promise<unknown>): Promise<McpToolRefusal> {
 test("compact delivery handles reach get_conversation and conversation_messages through production bindings", async () => {
   const { injected, control, counts } = harness();
   const bindings = viewerMcpBindings(undefined, control, injected);
-  const wire = encodeCodexStructuredUserText("Inspect the selected card", undefined, selectedRef(), { kind: "operator" }, "c".repeat(64));
+  const wire = await encodeCodexStructuredUserText("Inspect the selected card", undefined, selectedRef(), { kind: "operator" }, "c".repeat(64));
   const selectedContext = `ctx=${decodeCodexStructuredUserText(wire).metadataRef!}`;
   const result = await bindings.get_conversation({ clientRequestId: "compact-get", selectedContext, tailLines: 2 });
   expect(result).toMatchObject({ conversationId: SELECTED_ID, selectedContext: { conversationId: SELECTED_ID } });

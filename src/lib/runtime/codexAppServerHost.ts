@@ -1842,7 +1842,7 @@ export class CodexAppServerHost implements EngineHost {
         if (version.images.length && this.imageInputSupport !== "supported") throw new StructuredSendRefusedError("image input capability is unavailable");
         return [
           ...version.images.map(image => ({ type: "localImage" as const, path: this.resolveImagePath(image) })),
-          { type: "text", text: encodeCodexStructuredUserText(version.text,
+          { type: "text", text: await encodeCodexStructuredUserText(version.text,
             version.images.length ? version.contentDigest : undefined, version.selectedContext, version.origin ?? { kind: "operator" },
             codexDeliveryDedup(nativeQueueDeliveryKey(entry.entryId, version.revision))) },
         ];
@@ -1978,10 +1978,15 @@ export class CodexAppServerHost implements EngineHost {
     if (this.hasBlockingAttention()) throw new StructuredSendRefusedError("blocking attention must be answered before steering");
     const input = [
       ...normalized.content.images.map(image => ({ type: "localImage", path: this.resolveImagePath(image) })),
-      { type: "text", text: encodeCodexStructuredUserText(normalized.content.text,
+      { type: "text", text: await encodeCodexStructuredUserText(normalized.content.text,
         normalized.content.images.length > 0 ? normalized.contentDigest : undefined,
         normalized.selectedContext, normalized.origin, codexDeliveryDedup(normalized.id)) },
     ];
+    if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
+      throw new StructuredSendRefusedError("stale-generation");
+    }
+    if (this.activeTurnId !== currentTurn) throw new StructuredSendRefusedError("stale-turn");
+    if (this.hasBlockingAttention()) throw new StructuredSendRefusedError("blocking attention must be answered before steering");
     authorizeDispatch?.();
     const result = await this.rpc("turn/steer", {
       threadId: this.identity.threadId, expectedTurnId: currentTurn, input, clientUserMessageId: entry.id,
@@ -2068,7 +2073,7 @@ export class CodexAppServerHost implements EngineHost {
       ...normalized.content.images.map((image) => ({ type: "localImage", path: this.resolveImagePath(image) })),
       {
         type: "text",
-        text: encodeCodexStructuredUserText(
+        text: await encodeCodexStructuredUserText(
           normalized.content.text,
           normalized.content.images.length > 0 ? normalized.contentDigest : undefined,
           /* Persist the selected card before dispatch; the rollout carries
@@ -2080,6 +2085,10 @@ export class CodexAppServerHost implements EngineHost {
         ),
       },
     ];
+    if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
+      throw new StructuredSendRefusedError("stale-generation");
+    }
+    if (this.activeTurnId !== currentTurn) throw new StructuredSendRefusedError("stale-turn");
     authorizeDispatch?.();
     if (currentTurn) {
       if (this.hasBlockingAttention()) throw new StructuredSendRefusedError("blocking attention must be answered before steering");
@@ -2342,7 +2351,7 @@ export class CodexAppServerHost implements EngineHost {
            selected-card reference, and — through `dedup` — is findable in the
            rollout by the scan above. That marker is the whole idempotency
            story here, because the engine supplies none. */
-        text: encodeCodexStructuredUserText(
+        text: await encodeCodexStructuredUserText(
           request.text,
           undefined,
           request.selectedContext,
@@ -2351,6 +2360,10 @@ export class CodexAppServerHost implements EngineHost {
         ),
       }],
     }];
+    if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
+      throw new StructuredInjectError("stale-generation", "refused");
+    }
+    if (this.activeTurnId !== turnAtActuation) throw new StructuredInjectError("stale-turn", "refused");
     try {
       await this.rpc("thread/inject_items", { threadId: this.identity.threadId, items });
     } catch (error) {

@@ -2,9 +2,11 @@
 
 `deploy_exact_sha` persists its seat, requested revision and original request
 key before sending the control request. Admission can finish while the caller
-times out. A reconnect error therefore answers `outcome_unknown`, with
-`retryable:false` and `deployment_status` as the next read. The MCP receipt
-stays open so a replay of the original key can obtain the admitted deployment.
+times out. After a reconnect error, the same call reconciles the original key
+and returns the accepted deployment id when admission is proven. If recovery
+cannot prove admission, it answers `outcome_unknown`, with `retryable:false`
+and `deployment_status` as the next read. That MCP receipt stays open so a
+replay of the original key can obtain the admitted deployment.
 Legacy stored `tool_failed` reconnect errors also take this recovery path.
 Admission retains responsibility for serializing deployments and checking
 idempotency; a changed payload under the same MCP key remains a conflict. A

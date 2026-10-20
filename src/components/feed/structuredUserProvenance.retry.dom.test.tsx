@@ -6,7 +6,7 @@ import { Window } from "happy-dom";
 import { installActEnv } from "@/test-helpers/actEnv";
 import type { DeliveredMessageProvenance } from "@/lib/runtime/messageOrigin";
 import { structuredUserReference } from "@/lib/runtime/codexStructuredUserText";
-import * as metadataAction from "@/lib/selection/structuredUserMetadataAction";
+import * as metadataAction from "./structuredUserProvenanceClient";
 import type { FeedEntry } from "./parse";
 import { setStructuredUserRetryScheduleForTests, useStructuredUserProvenance } from "./structuredUserProvenance";
 

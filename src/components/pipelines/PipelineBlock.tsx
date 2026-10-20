@@ -375,9 +375,21 @@ function AnswerReport({ pipeline, answers, names, nameOf }: {
     cut the lane's title. */
 function UnreviewedNote({ pipeline }: { pipeline: Pipeline }) {
   const { t } = useLocale();
+  // Retained legacy follow-up receipts survive as unknown store fields.
+  // Current lanes create no such tasks.
+  const receipt = (pipeline as Pipeline & { reviewBudgetSpent?: { followUp?: { taskId?: unknown; title?: unknown } } }).reviewBudgetSpent?.followUp;
+  const followUp = typeof receipt?.taskId === "string" && receipt.taskId.trim()
+    && typeof receipt.title === "string" && receipt.title.trim() ? { taskId: receipt.taskId, title: receipt.title } : null;
   const unreviewed = pipelineCompletedUnreviewed(pipeline);
-  if (!unreviewed) return null;
-  return <p className="pb-unreviewed" data-pipeline-unreviewed={pipeline.id}>{t("pipelineBlock.unreviewedFix", { count: unreviewed.findings })}</p>;
+  if (!unreviewed && !followUp) return null;
+  return <>
+    {unreviewed ? <p className="pb-unreviewed" data-pipeline-unreviewed={pipeline.id}>{t("pipelineBlock.unreviewedFix", { count: unreviewed.findings })}</p> : null}
+    {followUp ? <p className="pb-unreviewed"><button type="button" className="inline-flex min-h-11 items-center text-left text-accent underline underline-offset-2" data-pipeline-follow-up={followUp.taskId}
+      onClick={(event) => {
+        event.stopPropagation();
+        window.dispatchEvent(new CustomEvent("llv:mcp-navigate", { detail: { kind: "task", id: followUp.taskId } }));
+      }}>{followUp.title}</button></p> : null}
+  </>;
 }
 
 /** The task a lane row speaks about: the one it sits on, else the first it
