@@ -26,6 +26,17 @@ export interface StreamMuxDeps {
   setTimeout(run: () => void, ms: number): unknown;
   clearTimeout(timer: unknown): void;
   randomId(): string;
+  /** The page came back (see `resume`), before its streams hear that they were cut. */
+  resumed?(): void;
+}
+
+/** The streams of a page, and what the page's lifecycle does to them. */
+export interface StreamMux {
+  open(url: string): EventStream;
+  /** The page went into the back/forward cache, was unloaded or was frozen: its connection is let go. */
+  suspend(): void;
+  /** The page is back: every stream it still has is told it was cut, and is opened again. */
+  resume(): void;
 }
 
 /* What an EventSource waits before it reopens a stream that ended. */
@@ -55,13 +66,14 @@ const OWN_EVENTS = new Set(["open", "error"]);
  * reader the control request is refused to), each stream becomes a plain
  * EventSource: the page works as it did before, on its own connections.
  */
-export function createStreamMux(deps: StreamMuxDeps): { open(url: string): EventStream } {
+export function createStreamMux(deps: StreamMuxDeps): StreamMux {
   let physical: EventStream | null = null;
   let connectionId = "";
   let ready = false;
   let failures = 0;
   let probing = false;
   let direct = false;
+  let suspended = false;
   let nextChannel = 0;
   let outbox: MuxOp[] = [];
   let sending = false;
@@ -139,9 +151,16 @@ export function createStreamMux(deps: StreamMuxDeps): { open(url: string): Event
       return this.lastEventId ? { op: "open", id: this.id, url: this.url, lastEventId: this.lastEventId } : { op: "open", id: this.id, url: this.url };
     }
 
+    /** The page let its connections go: this stream holds none, and waits for the page to come back. */
+    release(): void {
+      this.clearRetry();
+      this.native?.close();
+      this.native = null;
+    }
+
     /** The stream on a connection of its own. */
     attach(): void {
-      if (this.closed || this.native) return;
+      if (this.closed || this.native || suspended) return;
       this.clearRetry();
       const native = deps.createEventSource(this.url);
       this.native = native;
@@ -289,7 +308,7 @@ export function createStreamMux(deps: StreamMuxDeps): { open(url: string): Event
   /** Brings the connection up for the streams that wait for it: at once the first time, after a growing
       pause once it has failed, so a reader that reopens its stream from the error cannot spin. */
   function scheduleConnect(): void {
-    if (direct || physical || reconnectTimer !== null || channels.size === 0) return;
+    if (direct || suspended || physical || reconnectTimer !== null || channels.size === 0) return;
     if (failures === 0) {
       connect();
       return;
@@ -351,7 +370,34 @@ export function createStreamMux(deps: StreamMuxDeps): { open(url: string): Event
     }, LINGER_MS);
   }
 
+  /* A page the browser keeps in its back/forward cache, or freezes, still holds whatever it had open, and
+     on plain HTTP that is one of the six connections every tab of the host shares: a few pages left that
+     way and the next document waits behind them (#1958). So the page lets its connection go as it leaves,
+     and only the streams' readers and their state stay. */
+  function suspend(): void {
+    if (suspended) return;
+    suspended = true;
+    reconnectTimer = clear(reconnectTimer);
+    lingerTimer = clear(lingerTimer);
+    drop();
+    for (const channel of channels.values()) channel.release();
+  }
+
+  /* Back from the cache: whatever happened while the page was away was not read, so every stream says
+     `error`, as one whose connection broke does, and is opened again on a new connection. */
+  function resume(): void {
+    if (!suspended) return;
+    suspended = false;
+    failures = 0;
+    try { deps.resumed?.(); } catch { /* a listener's own failure */ }
+    for (const channel of [...channels.values()]) channel.interrupted();
+    if (direct) for (const channel of [...channels.values()]) channel.attach();
+    else scheduleConnect();
+  }
+
   return {
+    suspend,
+    resume,
     open(url) {
       const channel = new Channel(String(++nextChannel), url);
       channels.set(channel.id, channel);
@@ -370,7 +416,42 @@ function randomConnectionId(): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-let shared: ReturnType<typeof createStreamMux> | null = null;
+let shared: StreamMux | null = null;
+const resumeListeners = new Set<() => void>();
+
+/**
+ * Called when a page that let its streams go comes back, before those streams
+ * are told they were cut: a reader that would rather open its stream afresh
+ * than hear `error` closes it here.
+ */
+export function onStreamsResume(listener: () => void): () => void {
+  resumeListeners.add(listener);
+  return () => { resumeListeners.delete(listener); };
+}
+
+/** Runs the listeners of `onStreamsResume`; the page's mux calls it as it resumes. */
+export function streamsResumed(): void {
+  for (const listener of [...resumeListeners]) {
+    try { listener(); } catch { /* a listener's own failure */ }
+  }
+}
+
+/**
+ * The page's lifecycle, as the mux needs it. `pagehide` comes before the
+ * back/forward cache and before an unload; `pageshow` with `persisted` is the
+ * page restored from that cache. `freeze` and `resume` (on the document) are
+ * a page the browser stops and starts again. A tab that is merely hidden
+ * keeps its streams: a desktop board in the background still chimes from
+ * them (src/lib/client/hiddenTraffic.ts).
+ */
+export function followPageLifecycle(mux: Pick<StreamMux, "suspend" | "resume">, page: EventTarget, doc: EventTarget): void {
+  page.addEventListener("pagehide", () => mux.suspend());
+  page.addEventListener("pageshow", (event) => {
+    if ((event as Event & { persisted?: boolean }).persisted) mux.resume();
+  });
+  doc.addEventListener("freeze", () => mux.suspend());
+  doc.addEventListener("resume", () => mux.resume());
+}
 
 /**
  * Whether this page takes its streams over one connection. Only the app's own
@@ -386,12 +467,16 @@ function multiplexed(): boolean {
 /** A server-sent event stream of this app: `new EventSource(url)` to its reader, whatever carries it. */
 export function openEventStream(url: string): EventStream {
   if (!multiplexed()) return new EventSource(url) as unknown as EventStream;
-  shared ??= createStreamMux({
-    createEventSource: (target) => new EventSource(target) as unknown as EventStream,
-    fetch: (target, init) => fetch(target, { ...init, cache: "no-store" }),
-    setTimeout: (run, ms) => setTimeout(run, ms),
-    clearTimeout: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
-    randomId: randomConnectionId,
-  });
+  if (!shared) {
+    shared = createStreamMux({
+      createEventSource: (target) => new EventSource(target) as unknown as EventStream,
+      fetch: (target, init) => fetch(target, { ...init, cache: "no-store" }),
+      setTimeout: (run, ms) => setTimeout(run, ms),
+      clearTimeout: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
+      randomId: randomConnectionId,
+      resumed: streamsResumed,
+    });
+    followPageLifecycle(shared, window, document);
+  }
   return shared.open(url);
 }

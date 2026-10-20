@@ -284,6 +284,69 @@ function gather(over: Parameters<typeof sources>[0], state: SeatTickProjectState
   return gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, sources(over));
 }
 
+test("gather and refresh retain explicit work and its blocker for the reminder composer", async () => {
+  const hold = { kind: "external", note: "waiting for the upstream release", since: new Date(NOW - DAY_MS).toISOString(), by: "agent" };
+  const task = boardCard({ chosen: true, status: "inbox", hold });
+  const ports = sources({ tasks: [task], pipelines: [] });
+  const gathered = await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  for (const observed of [gathered, refreshSeatTickInput(gathered, ports)]) {
+    expect(observed.tasks[0]).toMatchObject({ accepted: true, hold, waitingSince: task.createdAt });
+    expect(seatTickDecision(observed).verdict.kind).toBe("quiet");
+  }
+  delete task.hold;
+  const refreshed = refreshSeatTickInput(gathered, ports);
+  expect(seatTickDecision(refreshed).verdict.kind).toBe("wake");
+});
+
+test("accepted work is owned only by an open lane, including a hidden open lane", async () => {
+  const task = boardCard({ chosen: true, status: "assigned", assignments: [{ state: "linked", path: null }] });
+  const predecessor = lane({ state: "completed", closedAt: new Date(NOW - DAY_MS).toISOString(), taskIds: [task.id] });
+  const ports = sources({ tasks: [task], pipelines: [predecessor] });
+  const gathered = await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  expect(gathered.tasks[0]!.owned).toBe(false);
+  expect(seatTickDecision(gathered).verdict.kind).toBe("wake");
+  predecessor.state = "running";
+  predecessor.closedAt = null;
+  predecessor.hiddenAt = new Date(NOW).toISOString();
+  const fresh = refreshSeatTickInput(gathered, ports);
+  expect(fresh.tasks[0]!.owned).toBe(true);
+  expect(seatTickDecision(fresh).verdict.kind).toBe("quiet");
+});
+
+test("pause account conditions use fresh cached quota once per engine and refresh after recovery", async () => {
+  const pausedAt = new Date(NOW - 4 * DAY_MS).toISOString();
+  const condition = { kind: "account-usage", engine: "codex", accountId: "fixture", window: "weekly", belowPercent: 80 };
+  const pipelines = ["paused-first", "paused-second"].map(id => lane({ id, state: "paused", pausedAt,
+    pause: { reason: "wait for quota recovery", resumeCondition: condition,
+      actor: { kind: "agent", role: "orchestrator", conversationId: CONVERSATION } } }));
+  const ports = sources({ pipelines });
+  const registry = ports.registry();
+  let reads = 0;
+  const observation = { engine: "codex", accountId: "fixture", authenticated: true,
+    observedAt: new Date(NOW).toISOString(), authCheckedAt: new Date(NOW).toISOString(),
+    provenance: { source: "live" }, limits: { weekly: { usedPercent: 90, resetsAt: null } } };
+  ports.registry = () => ({ ...registry, quotaObservations: () => { reads++; return [observation]; } }) as never;
+  const gathered = await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  expect(reads).toBe(1);
+  expect(gathered.pipelines.every(pipeline => pipeline.pauseConditionMet === false)).toBe(true);
+  expect(seatTickDecision(gathered).verdict.kind).toBe("quiet");
+  observation.limits.weekly.usedPercent = 79;
+  const recovered = refreshSeatTickInput(gathered, ports);
+  expect(reads).toBe(2);
+  expect(recovered.pipelines.every(pipeline => pipeline.pauseConditionMet === true)).toBe(true);
+  expect(seatTickDecision(recovered).verdict.kind).toBe("wake");
+  observation.observedAt = pausedAt;
+  expect(seatTickDecision(refreshSeatTickInput(recovered, ports)).verdict.kind).toBe("quiet");
+  observation.observedAt = new Date(NOW).toISOString();
+  observation.limits.weekly.usedPercent = 80;
+  expect(seatTickDecision(refreshSeatTickInput(recovered, ports)).verdict.kind).toBe("quiet");
+  observation.limits.weekly.usedPercent = 79;
+  observation.engine = "claude";
+  expect(seatTickDecision(refreshSeatTickInput(recovered, ports)).verdict.kind).toBe("quiet");
+  ports.registry = () => ({ ...registry, quotaObservations: () => { throw new Error("cached quota unavailable"); } }) as never;
+  expect(seatTickDecision(refreshSeatTickInput(recovered, ports)).verdict.kind).toBe("quiet");
+});
+
 test("an unrotated seat's next gather reads changed machine and project worker limits", async () => {
   const { setMachineWorkerLimit, setProjectWorkerLimit } = await import("@/lib/operator/workerLimit");
   const ports = sources({});
