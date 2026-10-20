@@ -1,18 +1,21 @@
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setSystemTime, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import sharp from "sharp";
 import { updateRelayStore } from "@/lib/externalRelay/store";
-import { destinationRelay } from "@/lib/externalRelay/ownerDestination.fixture";
+import { destinationRelay, destinationTarget } from "@/lib/externalRelay/ownerDestination.fixture";
 import * as bot from "@/lib/telegram/bot/service";
 import { TelegramBotStore } from "@/lib/telegram/bot/store";
 import { FakeBotTransport, fakeBotToken, ok, refused, unreachable } from "@/lib/telegram/bot/fakeTransport";
 import { createBotApiTransport } from "@/lib/telegram/bot/transport";
-import { publishPOST } from "./http";
+import { publishPOST, resendTelegramPOST } from "./http";
 import { NextRequest } from "next/server";
 import { saveTasks, loadTasks } from "@/lib/tasks/store";
-import { roundDirectory, storedMediaPath, prototypeRoot } from "./store";
+import { findPrototypeRound, roundDirectory, storedMediaPath, prototypeRoot } from "./store";
+import { clearSeatRoundsForTests } from "./seatRounds";
+import { prototypeWorld, type PrototypeWorld } from "./world";
+import { criticLane } from "./criticGate.fixture";
 import { telegramRound, telegramTask } from "./telegram.fixture";
 import { prototypeSlides, renderPrototypeTelegram, postPrototypeReviewToTelegram } from "./telegramPost";
 import { telegramPostSignals } from "./telegramPostSignals";
@@ -45,6 +48,95 @@ async function connected(publicationTarget?: bot.TelegramBotDependencies["public
   restores.push(() => factory.mockRestore());
   return { service, transport, store };
 }
+
+describe("pipeline and seat Telegram destinations", () => {
+  const seat: PrototypeWorld = { ...prototypeWorld,
+    caller: () => ({ conversationId: "conversation_seat", project: "project-a" }),
+    stage: () => null, orchestrator: () => "conversation_seat" };
+  const stage: PrototypeWorld = { ...seat,
+    caller: () => ({ conversationId: "conversation_stage", project: "project-a" }),
+    stage: () => ({ taskIds: ["task-prototype"], project: "project-a",
+      source: { conversationId: "conversation_stage", pipelineId: "prototype-lane", stageId: "publish", attempt: 1 } }),
+    pipeline: () => criticLane() };
+  const request = (body: unknown) => new NextRequest("http://localhost/api/prototype-reviews", {
+    method: "POST", headers: { host: "localhost" }, body: JSON.stringify(body) });
+  const form = (key: string) => ({ clientRequestId: key, title: "Review", questions: telegramRound().questions });
+  const pairing = () => destinationRelay([
+    { ...destinationTarget("hosted"), answered_by: "service" },
+    destinationTarget("owner", true),
+    { ...destinationTarget("unconfigured"), answered_by: "service", engine: null, model: null },
+  ]);
+  beforeEach(() => {
+    setSystemTime(new Date("2026-10-20T11:00:00Z"));
+    saveTasks([telegramTask([])]);
+    clearSeatRoundsForTests();
+    updateRelayStore(s => ({ ...s, relays: [pairing()] }));
+  });
+  afterEach(() => { setSystemTime(); });
+  async function sender() {
+    const fixture = await connected();
+    fixture.transport.handlers.getChat = () => ok({ id: 41, type: "private", first_name: "Owner" });
+    let messageId = 10;
+    fixture.transport.handlers.sendRichMessage = () => ok({ message_id: messageId++, date: 1 });
+    fixture.transport.handlers.sendPoll = () => ok({ message_id: messageId++, date: 1 });
+    return fixture;
+  }
+  async function publish(world: PrototypeWorld, input: ReturnType<typeof form> & Record<string, unknown>) {
+    const response = await publishPOST(request(input), world);
+    expect(response.status).toBe(200);
+    const { taskId, reviewId } = await response.json();
+    return findPrototypeRound(taskId, reviewId)!;
+  }
+  test("a stage carousel and seat forms with and without a task reach the same owner", async () => {
+    const { service, transport } = await sender();
+    const root = await fs.mkdtemp(path.join(process.env.HOME!, "stage-review-")); roots.push(root);
+    const image = path.join(root, "frame.png");
+    await sharp({ create: { width: 40, height: 40, channels: 3, background: "white" } }).png().toFile(image);
+    const round = await publish(stage, { ...form("stage-carousel"), variants: [{ number: 1, name: "Compact",
+      description: "Keeps controls together.", frames: [{ path: image, caption: "Layout" }] }] });
+    expect(round.source).toEqual({ conversationId: "conversation_stage", pipelineId: "prototype-lane", stageId: "publish", attempt: 1 });
+    expect(round.telegramPost?.state).toBe("sent");
+    expect((await publish(seat, form("seat-form"))).telegramPost?.state).toBe("sent");
+    expect((await publish(seat, { ...form("seat-task-form"), taskId: "task-prototype" })).telegramPost?.state).toBe("sent");
+    await service.waitForReviewPolls();
+    expect(transport.callsOf("sendRichMessage").map(call => call.params.chat_id)).toEqual([41, 41, 41]);
+    expect((transport.callsOf("sendRichMessage")[0]!.params.rich_message as { media: unknown[] }).media).toHaveLength(1);
+  });
+  test("stage and seat resend a stage review after its target returns, with replay sending once", async () => {
+    const { service, transport } = await sender();
+    updateRelayStore(s => ({ ...s, relays: [destinationRelay([])] }));
+    const round = await publish(stage, form("initially-no-target"));
+    expect(round.telegramPost).toMatchObject({ state: "failed", reason: "no_target" });
+    updateRelayStore(s => ({ ...s, relays: [pairing()] }));
+    for (const [caller, world] of [["stage", stage], ["seat", seat]] as const) {
+      const body = { reviewId: round.id, clientRequestId: `resend-${caller}` };
+      for (let replay = 0; replay < 2; replay++) {
+        const response = await resendTelegramPOST(request(body), world);
+        expect(response.status).toBe(200);
+        expect((await response.json()).telegramPost).toMatchObject({ state: "sent" });
+      }
+      await service.waitForReviewPolls();
+    }
+    expect(transport.callsOf("sendRichMessage").map(call => call.params.chat_id)).toEqual([41, 41]);
+  });
+  test("genuinely missing, disabled or service-only targets report no_target for both callers and resend", async () => {
+    const { transport } = await sender();
+    const targets = [[], [{ ...destinationTarget("disabled"), enabled: false }],
+      [{ ...destinationTarget("hosted"), answered_by: "service" as const }]];
+    for (const [index, absent] of targets.entries()) {
+      updateRelayStore(s => ({ ...s, relays: [destinationRelay(absent)] }));
+      for (const [caller, world] of [["stage", stage], ["seat", seat]] as const) {
+        const round = await publish(world, form(`no-target-${index}-${caller}`));
+        expect(round.telegramPost).toMatchObject({ state: "failed", reason: "no_target" });
+        const response = await resendTelegramPOST(request({ reviewId: round.id, clientRequestId: `missing-${index}-${caller}` }), seat);
+        expect(response.status).toBe(200);
+        expect((await response.json()).telegramPost).toMatchObject({ state: "failed", reason: "no_target" });
+      }
+    }
+    expect(transport.callsOf("getChat")).toHaveLength(0);
+    expect(transport.callsOf("sendRichMessage")).toHaveLength(0);
+  });
+});
 
 test("rich rendering labels slides, recommendations and bounded copy buttons and escapes input", () => {
   const round = telegramRound(); round.title = 'Layout <tg-button type="url">';
