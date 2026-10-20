@@ -924,6 +924,9 @@ async function captureShots(repoRoot: string, baseUrl: string, layout: Layout, c
       await page.evaluate(() => {
         for (const animation of document.getAnimations()) animation.pause();
       });
+      /* A phone's overlay scrollbar takes no room and the print never draws
+         it, so the screen frame drops its thumb too, leaving the layout as is. */
+      if (shot.viewport.width < 600) await page.addStyleTag({ content: "* { scrollbar-width: none !important; }" });
       await page.waitForTimeout(300);
 
       const text = await page.evaluate(() => document.body.innerText);
