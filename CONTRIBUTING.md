@@ -494,3 +494,12 @@ After this workflow switch, a merge already waiting on a removed check name
 may need to be re-armed once. Main's branch protection requires exactly three
 checks, `privacy-publication`, `privacy-tracker-audit` and `runtime-gate`, with
 strict updates enabled.
+
+## Running selected tests
+
+Use `bun run test <explicit test files>` through `scripts/gate-slot.sh`, with
+private HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR and a closed
+LLV_VIEWER_CONTROL_URL. The package command passes a 60-second default timeout
+to every file. Bun ignores a `[test] timeout` key, and a preload timeout reaches
+only its first file on the pinned runtime. Explicit per-test timeouts still
+apply. The pre-push comparator and merger pass the same CLI timeout.

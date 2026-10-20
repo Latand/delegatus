@@ -44,7 +44,7 @@
     "privacy:github-audit": "LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE=scripts/privacy-known-value-fingerprints.json bun scripts/privacy-github-audit.ts",
     "privacy:placeholders": "bun scripts/generate-privacy-placeholders.ts",
     "telegram:provision": "node bin/provision-telegram-connector.mjs",
-    "test": "bun test"
+    "test": "bun test --timeout=60000"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.31.0",

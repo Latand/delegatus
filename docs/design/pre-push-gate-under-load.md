@@ -20,7 +20,7 @@ change touched a test's own cost.
 | | |
 | --- | --- |
 | Cause | Two limits sit at the cost of the tests themselves. (a) The heaviest engine files are single-threaded and need 207–296 s of CPU. `engine.providerReset` uses 98% of the 300 s file budget at load 19 and at load 27. (b) Many engine tests take 5–14 s under load against bun's default 5 s per-test timeout. A timed-out test keeps running and breaks every test after it in the file. That cascade does two things: it pulls the gate into baseline, diagnostic and confirmation runs, and it ends two more heavy files early, which hides their real cost. Under load it can even refuse unchanged main (E2). Lifting only the timeout (E3) uncovers that hidden cost: four files expire at 300 s and the run hits its 900 s deadline. Quotas never throttled (at most 0.1 s per test file), and the work slice used 4.6–9.4 of its 18 CPUs. |
-| Fix | (1) A 60 s default per-test timeout in `bunfig.toml`, and 60 s for the three explicit 30 s timeouts whose tests reached 20.7–30 s. (2) Split the ten engine files whose head run exceeds half the 300 s budget into parts of at most 150 s. (3) The per-file line marks a file that exceeds half its budget. The budgets, the eight head workers, admission and the verdict rules stay as they are. |
+| Fix | (1) A 60 s default per-test timeout in the shared test command and gate callers, and 60 s for the three explicit 30 s timeouts whose tests reached 20.7–30 s. (2) Split the ten engine files whose head run exceeds half the 300 s budget into parts of at most 150 s. (3) The per-file line marks a file that exceeds half its budget. The budgets, the eight head workers, admission and the verdict rules stay as they are. |
 | Proof | 30 after-runs and 10 before-runs of the real pre-push hook on the same lane branches at load 25–30 (§3). |
 
 ## 1. Measured root cause
@@ -164,8 +164,14 @@ E2 and E3 together show that neither change works alone. The timeout without
 the split expires four files (E3). The split without the timeout keeps the
 cascades, the false refusal and the hidden cost (E2).
 
-1. **Per-test timeout 60 s.** Add `timeout = 60000` under `[test]` in
-   `bunfig.toml`. Raise to `60_000` the three explicit `30_000` timeouts whose
+1. **Per-test timeout 60 s.** Pass `--timeout=60000` in the comparator, all
+   three merger call paths, and the package test command. Multi-file platform
+   CI and direct runs use `bun run test <explicit files>`. The implementation
+   rehearsal found that Bun 1.4.0 ignores `[test] timeout = 60000`: the two
+   provider-chain files still timed out at 5000 ms. A preload calling
+   `setDefaultTimeout` also loses its override after the first file
+   ([upstream report](https://github.com/oven-sh/bun/issues/45192)). The CLI flag
+   applies to every file and retains explicit per-test timeouts. Raise to `60_000` the three explicit `30_000` timeouts whose
    tests reached most of that limit in E3:
    - `src/lib/pipelines/engine.providerBudgetOutput.fixture.ts:97`: up to
      25.6 s, and one test timed out;
@@ -173,9 +179,9 @@ cascades, the false refusal and the hidden cost (E2).
    - `engine.controllerPass.test.ts:86`: 20.7 s, a test that holds a real
      20 s job.
 
-   The `bunfig.toml` setting covers the gate's head and base samples, its
+   The CLI flag covers the gate's head and base samples, its
    reruns, the merger's own `bun test` calls
-   (`scripts/merge-batch.ts:358,669,709`), CI and agents' direct runs, so a
+   (`scripts/merge-batch.ts:358,669,709`), CI and the direct package command, so a
    test passes or fails the same way everywhere.
    Other explicit timeouts stay unless the protocol shows one tripping. Sizing:
    the worst test on the default took 13.9 s and the worst on an explicit
@@ -186,13 +192,17 @@ cascades, the false refusal and the hidden cost (E2).
 2. **Split every engine file whose head run exceeds 150 s** (half the file
    budget) into parts of at most 150 s, balanced by the per-test times in a
    full run's JUnit reports:
-   - three parts each: `engine.providerReset`, `engine.providerBudgetPoolOutput`,
-     `engine.ports`, `engine.providerBudgetChains`;
-   - two parts each: `engine.providerBudgetOutput`, `engine.succession`,
-     `engine.providerChains`, `engine.recoveryAuthority`, `engine.recovery`,
-     `engine.recoveryAdmission`.
+   - three parts each: `engine.providerReset`, `engine.providerBudgetOutput`,
+     `engine.providerBudgetPoolOutput`, `engine.ports`,
+     `engine.providerBudgetChains`, `engine.succession`;
+   - two parts each: `engine.providerChains`, `engine.recoveryAuthority`,
+     `engine.recovery`, `engine.recoveryAdmission`.
 
-   The two provider-output files split through a second (engine) parameter of
+   The implementation calibration ran the original cases with the effective
+   timeout. It measured 304–308 s for both output files and 370 s for
+   succession, so those three files each need three parts for the 150 s target.
+
+   The two provider-output files split through engine and activity parameters of
    `registerProviderOutputBudgetCases`. Every part keeps the `engine.` prefix,
    so an `engine.ts` change still selects it. The parts' JUnit totals must
    equal the original file's (same names, same count). A replay of E3's head
@@ -212,7 +222,7 @@ flaky rules; privacy, types and lint.
 Both gates get the same logic. Delegatus's publication and an agent's own push
 both run `.githooks/pre-push` → `scripts/local-gate.ts` →
 `scripts/local-gate-tests.ts` from the checkout being pushed, and `bun test`
-reads that checkout's `bunfig.toml`. A branch picks up the fix when it merges
+uses that checkout's comparator command. A branch picks up the fix when it merges
 main. Until then, its publication runs the old hook. Lanes that edit one of the
 split files will have a merge conflict to carry into the parts. The only open
 PR that touches the gate's files (#2926: `scripts/gate-slot.sh`,
@@ -245,9 +255,12 @@ keep it, because it exercises the baseline path.
 - After: the same branch merged with M1, with `origin/main` = M1.
 
 Each side lives in its own scratch clone. Its `origin` is a local bare repo
-holding only that main, so the hook's fetch cannot move it. Make the merge
-commits as `Delegatus <noreply@delegatus.invalid>`, the lane identity, so
-privacy judges them as it judges lane commits. Never push them anywhere.
+with `main` pinned to that side, so the hook's fetch cannot move it. The stage
+forbids scratch commits: compute each merged tree with `git merge-tree`, check
+out the existing main revision detached, and export the merged tree into its
+index and working tree with `git read-tree --reset -u`. The hook includes both
+staged and working-tree changes. Record the captured lane SHA, main SHA and
+merged tree hash. No measurement creates a commit or pushes a ref.
 
 **Command.** Run the real hook from the clone root:
 `bun scripts/local-gate.ts pre-push`, with private HOME, XDG_CONFIG_HOME,

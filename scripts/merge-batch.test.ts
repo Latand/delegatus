@@ -1447,6 +1447,7 @@ for (const shape of ["pre-existing", "bundled-only", "file-error", "new-failure"
       // fixture tests in the enclosing test service, as the other real samplers do.
       if (args[2] !== "bun" || args[3] !== "test") return successfulCommand(args);
       expect(args.slice(0, 2)).toEqual(["/bin/bash", GATE_SLOT]);
+      expect(args).toContain("--timeout=60000");
       const files = args.slice(4).filter(arg => /\.test\.ts$/.test(arg));
       expect(files).toHaveLength(1);
       expect(env!.LLV_VIEWER_CONTROL_URL).toBe("http://127.0.0.1:9");
