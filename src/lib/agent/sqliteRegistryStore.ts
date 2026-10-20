@@ -1835,15 +1835,47 @@ export class SqliteAgentRegistryStore {
       if (value !== null) input[field] = parseSqliteJson(value, this.db);
     }
     yield;
-    const file = performanceSpans.sync("registry.prepare.normalize", () => this.normalizePartial(input));
-    yield;
     const storedOwners = input.deliveryOperationOwners as Record<string, { deliveryId?: string } | null>;
-    for (const [key,storedOwner] of Object.entries(storedOwners)) {
-      if (storedOwner?.deliveryId && !Object.hasOwn(input.heldDeliveries as object,storedOwner.deliveryId)) {
-        const owner = this.loadOwnerInTransaction(key);
-        if (owner) file.deliveryOperationOwners[key] = owner;
+    const ownerIds = new Set(Object.keys(storedOwners));
+    const owners = input.deliveryOperationOwners;
+    input.deliveryOperationOwners = {};
+    const file = performanceSpans.sync("registry.prepare.normalize", () => this.normalizePartial(input));
+    input.deliveryOperationOwners = owners;
+    yield;
+    /* Operation-owner history can be much larger than the other hot rows.
+       Normalize it in bounded batches, with only each batch's referenced
+       deliveries present for the cross-row defaults. */
+    const ownerBatch: Record<string, unknown> = {};
+    const flushOwners = () => {
+      if (!Object.keys(ownerBatch).length) return;
+      const deliveries: Record<string, unknown> = {};
+      for (const raw of Object.values(ownerBatch)) {
+        const deliveryId = (raw as { deliveryId?: string } | null)?.deliveryId;
+        if (deliveryId && Object.hasOwn(input.heldDeliveries as object, deliveryId)) {
+          deliveries[deliveryId] = (input.heldDeliveries as Record<string, unknown>)[deliveryId];
+        }
       }
+      const partial = this.normalizePartial({ version: 2, entries: {}, receipts: {}, heldDeliveries: deliveries,
+        deliveryOperationOwners: { ...ownerBatch } });
+      Object.assign(file.deliveryOperationOwners, partial.deliveryOperationOwners);
+      for (const key of Object.keys(ownerBatch)) delete ownerBatch[key];
+    };
+    let ownerBatchSize = 0;
+    for (const key of ownerIds) {
+      let storedOwner = storedOwners[key];
+      if (storedOwner?.deliveryId && !Object.hasOwn(input.heldDeliveries as object, storedOwner.deliveryId)) {
+        storedOwner = this.loadOwnerInTransaction(key) ?? storedOwner;
+      }
+      ownerBatch[key] = storedOwner;
+      ownerBatchSize++;
+      if (ownerBatchSize < 64) { yield; continue; }
+      performanceSpans.sync("registry.prepare.normalize", flushOwners, ownerBatchSize);
+      ownerBatchSize = 0;
       yield;
+    }
+    if (ownerBatchSize) {
+      performanceSpans.sync("registry.prepare.normalize", flushOwners, ownerBatchSize);
+      for (let index = 0; index < ownerBatchSize; index++) yield;
     }
     this.resetHotGrants();
     for (const collection of READER_GRANT_COLLECTIONS) {

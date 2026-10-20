@@ -219,6 +219,31 @@ test("deferred cold-key initialization moves the first session view onto coopera
   expect(yielded).toBe(true);
 });
 
+test("hot operation owners normalize in bounded batches and retain hydrated values", async () => {
+  const { open } = fixture();
+  const reader = open();
+  const template = Object.values(reader.readOnlySnapshot().file.deliveryOperationOwners)[0]!;
+  reader.mutate(file => {
+    for (let index = 0; index < 128; index++) {
+      const operationId = `batch-owner-${index}`;
+      file.deliveryOperationOwners[operationId] = {
+        ...template,
+        deliveryId: `batch-missing-delivery-${index}`,
+        requestDigest: `batch-digest-${index}`,
+        command: { ...template.command, operationId },
+      };
+    }
+  }, false);
+  const started = performance.now();
+  const prepared = await reader.prepareReadOnlySnapshot();
+  const normalized = performanceSpans.snapshot(started).records.filter(record =>
+    record.kind === "sync" && performanceSites[record.site] === "registry.prepare.normalize");
+  expect(normalized.reduce((count, record) => count + record.count, 0)).toBeGreaterThanOrEqual(3);
+  expect(normalized.reduce((rows, record) => rows + record.rows, 0)).toBe(129);
+  expect(Object.keys(prepared.file.deliveryOperationOwners).filter(id => id.startsWith("batch-owner-")).length).toBe(128);
+  expect(prepared.file.deliveryOperationOwners["batch-owner-127"]?.command.operationId).toBe("batch-owner-127");
+});
+
 test("cooperative cold headers use an iterator and retain ordered rows after restart", async () => {
   const { open, filename, kept } = fixture();
   const store = open();

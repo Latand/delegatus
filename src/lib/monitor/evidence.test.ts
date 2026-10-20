@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -42,6 +42,24 @@ describe("evidence projection", () => {
     const projection = evidenceFromPipelineCooperatively(source, async () => { yields++; });
     expect(await projection).toEqual(evidenceFromPipelines([source])[0]);
     expect(yields).toBeGreaterThan(1);
+  });
+
+  test("large projections yield at fixed chunk boundaries when the clock does not advance", async () => {
+    const spec = `${"\n".repeat(256 * 1024)}Meaningful title #123 ${"x".repeat(256 * 1024)}`;
+    const source = pipeline({ task: "", spec });
+    const clock = spyOn(performance, "now").mockReturnValue(42);
+    let turns = 0;
+    try {
+      const actual = await evidenceFromPipelineCooperatively(source, async () => {
+        turns++;
+        await new Promise<void>(resolve => setImmediate(resolve));
+      });
+      expect(actual).toEqual(evidenceFromPipelines([source])[0]);
+      expect(actual.title).toStartWith("Meaningful title #123");
+      expect(turns).toBeGreaterThanOrEqual(2);
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   test("cooperative projection keeps the first meaningful title beyond the former scan limit", async () => {
