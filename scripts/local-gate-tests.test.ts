@@ -846,24 +846,24 @@ test("the shared retry deadline blocks before another child starts", async () =>
   } finally { clock?.mockRestore(); }
 });
 
-test.each(["green", "new failure", "incomplete"] as const)("six head files rendezvous before the seventh starts and retain its verdict: %s", outcome => {
+test.each(["green", "new failure", "incomplete"] as const)("eight head files rendezvous before the ninth starts and retain its verdict: %s", outcome => {
   const f = fixture(source(true));
   const markers = path.join(f.dir, "rendezvous"); mkdirSync(markers);
-  const files = ["one", "two", "three", "four", "five", "six", "seven"].map((word, index) => `${index}-${word}.test.ts`);
-  for (const [index, file] of files.slice(0, 6).entries()) writeFileSync(path.join(f.dir, file), `
+  const files = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine"].map((word, index) => `${index}-${word}.test.ts`);
+  for (const [index, file] of files.slice(0, 8).entries()) writeFileSync(path.join(f.dir, file), `
 import { test, expect } from "bun:test";
 import { readdirSync, writeFileSync, readFileSync, renameSync } from "node:fs";
-test("six concurrent roots", async () => {
+test("eight concurrent roots", async () => {
   const markers = ${JSON.stringify(markers)}, index = ${index};
   writeFileSync(markers + "/" + index + ".next", process.env.HOME!);
   renameSync(markers + "/" + index + ".next", markers + "/" + index + ".root");
   const until = Date.now() + 8000;
-  while (readdirSync(markers).filter(f => f.endsWith(".root")).length < 6 && Date.now() < until) await Bun.sleep(20);
+  while (readdirSync(markers).filter(f => f.endsWith(".root")).length < 8 && Date.now() < until) await Bun.sleep(20);
   const roots = readdirSync(markers).filter(f => f.endsWith(".root")).map(f => readFileSync(markers + "/" + f, "utf8"));
-  expect(new Set(roots).size).toBe(6);
+  expect(new Set(roots).size).toBe(8);
   writeFileSync(markers + "/" + index + ".done", "done");
 }, 10000);`);
-  const last = files[6]!;
+  const last = files[8]!;
   writeFileSync(path.join(f.dir, last), 'import { test, expect } from "bun:test"; test("last verdict", () => expect(true).toBe(true));');
   f.git("add", ...files); f.git("commit", "-m", "parallel baseline");
   const base = f.git("rev-parse", "HEAD");

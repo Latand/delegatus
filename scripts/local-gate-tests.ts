@@ -37,10 +37,10 @@ const mergeObservedSites = (first: readonly TestSite[], retry: readonly TestSite
 const digest = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 const RUN_BUDGET_MS = 15 * 60 * 1000;
 const FILE_BUDGET_MS = 5 * 60 * 1000;
-// Use the same six-file ceiling as paired confirmations (three per side).
-// Engine selections need room for the baseline and retries inside the owning
-// runner's fifteen minutes after the full head sample has finished.
-const HEAD_FILE_WORKERS = 6;
+// Engine selections took eleven minutes at six workers, leaving no room for
+// confirmations after a slow full-file baseline. Bound head work to eight owned
+// runners in the shared CPU work slice; baseline and retries retain three.
+const HEAD_FILE_WORKERS = 8;
 export const FLAKY_RERUNS = 3;
 export const FLAKY_BUDGET_MS = 5 * 60 * 1000;
 const RUNNER_ERROR = "<runner error> ";
