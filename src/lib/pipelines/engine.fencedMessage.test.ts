@@ -178,7 +178,7 @@ test.each(["journal-read", "retry-claim", "host-stop"] as const)("new ownership 
   } });
   h.ports.claimSpawnRetry = async () => {
     if (seam === "retry-claim") receipt.currentGeneration = false;
-    return "claimed";
+    return "claimed" as const;
   };
   h.ports.stopStageAgent = async () => {
     if (seam === "host-stop") receipt.error = SEND_UNVERIFIED_REASON;
