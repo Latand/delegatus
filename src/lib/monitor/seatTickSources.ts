@@ -2247,6 +2247,7 @@ async function childWork(
       projected = classify(page, child.rowKey);
     }
     const previousInput = child.input;
+    const previousResolvedGeneration = child.resolvedGeneration ?? null;
     const previousGeneration = child.generationIndex;
     const edge = page.file.lineageEdges[child.rowKey];
     if (!projected || !edge || edge.parentConversationId !== child.owner || edge.evidence.launchId !== child.launchId) {
@@ -2278,16 +2279,11 @@ async function childWork(
     const read = readChildLedger(path.join(statePath("structured-host-events"), `${encodeURIComponent(generation.id)}.jsonl`), source.cursor, budget);
     source.cursor = read.cursor;
     const latestGeneration = generations.at(-1);
-    const latestSource = latestGeneration
-      ? generation === latestGeneration ? source : accounting.source(child, conversation!.engine, latestGeneration.id)
-      : null;
-    const latestCursor = latestGeneration
-      ? generation === latestGeneration ? read.cursor : latestSource?.cursor ?? null
-      : null;
-    const validatedLatestSettlement = latestCursor !== null && latestCursor.gap === null
-      && latestCursor.atEnd && latestCursor.activeTurn === null && latestCursor.settledThrough > 0;
+    const validatedLatestSettlement = read.cursor.gap === null
+      && read.cursor.atEnd && read.cursor.activeTurn === null && read.cursor.settledThrough > 0;
     if (validatedLatestSettlement && latestGeneration === generation
       && (projected.turn === "idle" || projected.turn === "terminal" || (!projected.hosted && projected.turn === "unknown"))) {
+      child.resolvedGeneration = generation.id;
       child.input = { ...child.input, status: "terminal", outcome: "finished", terminalAt: child.input.terminalAt ?? child.input.lastRecordAt ?? null };
     }
     const lost = !projected.hosted && child.input.transcript === "unresolvable"
@@ -2297,11 +2293,13 @@ async function childWork(
       && generation === latestGeneration && read.cursor.gap === null && read.cursor.atEnd
       && read.cursor.activeTurn !== null;
     const retainedLatestSettlement = latestGeneration !== generation && projected.turn === "unknown" && !projected.hosted
-      && child.input.status !== "running" && validatedLatestSettlement;
+      && previousResolvedGeneration === latestGeneration?.id && previousInput.status === "terminal"
+      && previousInput.outcome !== null;
     if (lost || abandonedActiveTurn) {
+      child.resolvedGeneration = generation.id;
       child.input = { ...child.input, status: "terminal", outcome: "failed", terminalAt: child.input.terminalAt ?? child.input.lastRecordAt ?? child.input.spawnedAt ?? null };
     } else if (retainedLatestSettlement) {
-      child.input = { ...child.input, status: "terminal", outcome: "finished", terminalAt: child.input.terminalAt ?? child.input.lastRecordAt ?? null };
+      child.input = { ...child.input, status: "terminal", outcome: previousInput.outcome, terminalAt: previousInput.terminalAt };
     }
     unplaced();
     bytesLeft -= read.bytes;

@@ -21,6 +21,8 @@ export type AccountingOwner = Base & { kind: "owner"; conversationId: string; ep
     `runningKey` its ticket in the running window while it runs; each is the
     row's own pointer, so a ticket moves in one keyed transaction. */
 export type AccountingChild = Base & { kind: "child"; identity: string; rowKey: string; owner: string; launchId: string; input: SeatTickChildInput; generationIndex: number; runningKey: string | null; pollKey: string | null;
+  /** Latest generation whose terminal placement was proven by its ledger. */
+  resolvedGeneration?: string | null;
   /** The seat epoch whose landed wake last took an outcome of this child
       (#1749). Kept on the CHILD rather than on the outcome because an outcome
       identity is one turn of one ledger generation: a fresh cursor over the
@@ -185,6 +187,7 @@ function decodeAccountingRow(raw: unknown): AccountingRow | null {
     }
     case "child": return string(row.identity) && string(row.rowKey) && string(row.owner) && string(row.launchId) && childInput(row.input)
       && integer(row.generationIndex) && nullableString(row.runningKey) && (row.pollKey === undefined || nullableString(row.pollKey))
+      && (row.resolvedGeneration === undefined || nullableString(row.resolvedGeneration))
       && (row.harvestedEpoch === undefined || integer(row.harvestedEpoch))
       ? { ...row, pollKey: row.pollKey ?? null } : null;
     case "source": return string(row.identity) && string(row.child) && string(row.engine) && string(row.generation)
