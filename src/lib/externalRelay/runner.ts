@@ -1,4 +1,5 @@
 import { hasInboundMedia, prepareInboundMedia, writeInboundAgentInput } from "./mediaInput";
+import { isInboundImage } from "./mediaInputValidation";
 import { validateAnswerComposition } from "./composition";
 import { answerCapabilities, checkedAnswerV2, checkedRoundV2, withAnswerParts, answerFiles, type AnswerDrop } from "./answerV2";
 import { stageGeneratedAttachments, uploadAnswerAttachments, type StagedAttachment } from "./attachments";
@@ -805,7 +806,7 @@ export async function runClaimedRequest(
           account: selectedAccount(),
           ["prompt"]: agentPrompt,
           ...(inputFile ? { inputFile } : {}),
-          ...(inbound?.files.length ? { inputImages: inbound.files.filter(file => file.mime_type.startsWith("image/")).map(file => file.path) } : {}),
+          ...(inbound?.files.length ? { inputImages: inbound.files.filter(file => isInboundImage(file.mime_type)).map(file => file.path) } : {}),
           schema: withAnswerParts(loop ? (final ? (loop.sawUnknown ? replyAnswerSchema : loop.actionSent ? answerSchema : handoffAnswerSchema) : roundSchema(loop.tools, { handoff: !loop.actionSent }))
             : ownerTools ? (ownerTools.sawUnknown ? replyAnswerSchema : ownerTools.actionSent ? answerSchema : offersHandoff(request) ? handoffAnswerSchema : answerSchema)
               : offersHandoff(request) ? handoffAnswerSchema : answerSchema, caps!),

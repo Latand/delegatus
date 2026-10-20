@@ -13,6 +13,8 @@ import { atomicWrite, setShared, writePeers, type Link } from "@/lib/links/state
 import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import { recordProjectRemote } from "@/lib/projects/aliases";
 import { DeliveryAdmissionRefusedError } from "@/lib/deliveryAdmission";
+import { RoleMemoryChanged } from "@/lib/memory/privacy";
+import { roleMemoryCollection, roleMemoryRevisionToken } from "@/lib/memory/roleStore";
 import { blockingWaitDiagnostics, resetBlockingWaitsForTests } from "@/lib/blockingWaits";
 import type { RuntimeHostClient } from "./client";
 import { advanceConversationMigration, drainHeldDeliveries } from "@/lib/accounts/migration/coordinator";
@@ -619,6 +621,64 @@ for (const writerRefused of [false, true]) test(`owner relay authorization lost 
       expect(result && "transportUncertain" in result).toBe(false);
     }
   } finally { spy.mockRestore(); writer.mockRestore(); registry.close(); }
+});
+
+test("a role-memory revision conflict during first-message claim stays retryable", async () => {
+  const cwd = fs.mkdtempSync(path.join(sandbox, "role-memory-first-prompt-"));
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const artifactPath = path.join(cwd, "session.jsonl");
+  const memory = roleMemoryCollection(true)!;
+  memory.boundedPatch(1, tx => tx.put({
+    kind: "rule", id: "r:first-prompt-claim-race", scope: "machine", rule: "old filtered prompt rule",
+    why: "", state: "active", hints: [], source: { project: "fixture", pipelineId: "fixture", stageId: "build",
+      attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_fixture" },
+    createdAt: "2026-10-20T00:00:00Z", changedAt: "2026-10-20T00:00:00Z",
+  }));
+  const revision = roleMemoryRevisionToken();
+  const conversation = registry.ensureConversation("codex", artifactPath, "default");
+  const generation = conversation.generations.at(-1)!;
+  registry.upsert({ key: { engine: "codex", sessionId: generation.id }, artifactPath, cwd, accountId: "default",
+    status: "idle", host: null,
+    structuredHost: { kind: "codex-app-server", endpoint: "stdio:privacy-fixture", process: { pid: 101, startIdentity: "privacy-fixture" },
+      eventCursor: 1, protocolVersion: "v2", writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [] },
+    claimEpoch: 1, claimOwner: "structured-host:privacy-fixture", pendingAction: null });
+  let commands = 0;
+  let claimCompleted = false;
+  const claim = registry.beginDeliveryAttemptOffLoop.bind(registry);
+  const claimed = spyOn(registry, "beginDeliveryAttemptOffLoop").mockImplementation(async (...args) => {
+    const result = await claim(...args);
+    memory.boundedPatch(1, tx => tx.put({
+      kind: "rule", id: "r:first-prompt-claim-race", scope: "machine", rule: "new filtered prompt rule",
+      why: "", state: "active", hints: [], source: { project: "fixture", pipelineId: "fixture", stageId: "build",
+        attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_fixture" },
+      createdAt: "2026-10-20T00:00:00Z", changedAt: "2026-10-20T00:00:01Z",
+    }));
+    claimCompleted = true;
+    return result;
+  });
+  const client = { readSession: async () => ({ conversationId: conversation.id, artifactPath,
+    sessionKey: { engine: "codex", sessionId: generation.id }, hostKind: "codex-app-server", host: "hosted", turn: "idle",
+    capabilities: { steer: true, structuredAttention: true } }),
+    command: async () => { commands++; throw new Error("privacy-conflicted prompt reached the host"); },
+  } as unknown as RuntimeHostClient;
+  try {
+    const result = await enqueueStructuredMessage({ path: artifactPath, conversationId: conversation.id,
+      clientMessageId: "role-memory-first-prompt", operationId: "role-memory-first-prompt", text: "Filtered stage prompt",
+      roleMemoryRevision: revision,
+    }, { registry: () => registry, client: () => client, enabled: () => true, kick: () => {},
+      authorizeDispatch: () => { if (roleMemoryRevisionToken() !== revision) throw new RoleMemoryChanged(); } });
+    expect(claimed).toHaveBeenCalled();
+    expect(commands).toBe(0);
+    expect(result).toMatchObject({ ok: false, status: 409, error: "Role-memory privacy changed; retrying before dispatch" });
+    expect(claimCompleted).toBe(true);
+    expect(Object.values(registry.snapshot().heldDeliveries)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ state: "failed", text: "" }),
+    ]));
+  } finally {
+    claimed.mockRestore();
+    memory.boundedPatch(1, tx => tx.delete("r:first-prompt-claim-race"));
+    registry.close();
+  }
 });
 
 test("recovery fences a revoked owner's retained first prompt even while cancellation writes are refused", async () => {

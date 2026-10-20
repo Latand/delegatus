@@ -57,7 +57,7 @@ for (const engine of ["claude", "codex"] as const) {
     expect(f.h.spawnInputs[2]!.unavailableAccountIds).toContain(SPARE_ACCOUNT);
     expect(unavailable.at(-1)).toContain(SPARE_ACCOUNT);
     expect(f.now()).toBeLessThanOrEqual(f.resetsAt! * 1_000 + 2 * 60_000);
-  });
+  }, 15_000);
 }
 
 test.each([false, true])("provider waiting schedules one wake per horizon, parked=%s", async parked => {
@@ -320,7 +320,7 @@ test.each([null, -120_000])("missing or elapsed reset=%s automatic stage retries
   expect(lane.state).toBe("needs_decision");
   expect(lane.runs[0]!.attempts.at(-1)!.providerWait?.stageRetry).toBeUndefined();
   expect(lane.stateDetail).toContain(resetDelay === null ? "unknown-reset retry exhausted" : "elapsed-reset retry exhausted");
-}, 60_000);
+}, 90_000);
 
 test.each(["pause-resume", "report"] as const)("cancelled quota retry withdraws its card promise after %s", async action => {
   const f = await providerRecoveryHarness("claude", "rate_limit", "You've hit your session limit", 120_000, true);

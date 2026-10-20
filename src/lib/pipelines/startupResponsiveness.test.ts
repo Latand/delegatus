@@ -4,9 +4,13 @@ import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createInterface } from "node:readline";
+import { once } from "node:events";
+import { spawn } from "node:child_process";
 
 import { buildPipeline, loadPipelinesForStartup, loadPipelinesForStartupAsync, loadPipelineOwnershipForStartupAsync, pipelineRegistryHealth, pipelineRegistryHealthAsync, savePipelines, withPipelineMutation, withPipelineStartupAdmission } from "./store";
-import { createViewerLoopMonitor, withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { StateLockDeferredError, stateLockProcessKind, stateLockWaitsInFlight, waitForStateLock } from "@/lib/state/lockWait";
+import { createViewerLoopMonitor } from "@/lib/viewerLoopMonitor";
 
 const original = process.env.LLV_STATE_DIR;
 const roots: string[] = [];
@@ -84,20 +88,26 @@ test("durable hold measurement includes time before the first await continuation
   const lines: unknown[][] = [];
   const warn = console.warn;
   console.warn = (...args) => { lines.push(args); };
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const pending = withPipelineStartupAdmission(async () => { entered.resolve(); await release.promise; return true; }, "reconciling structured hosts", held => { heldMs = held; });
   try {
-    const pending = withViewerOperation("pipelines.startup-admission", () => withPipelineMutation(() => true, held => { heldMs = held; }));
-    // Store opening may itself yield. Observe durable acquisition independently
-    // before blocking the continuation that will release it.
-    for (let turn = 0; turn < 20 && !stateLeaseHoldsInFlight().some(held => held.collection === "pipelines"); turn++) await Promise.resolve();
+    await entered.promise;
     expect(stateLeaseHoldsInFlight().some(held => held.collection === "pipelines")).toBe(true);
     Bun.sleepSync(1100);
+    release.resolve();
     expect(await pending).toBeTrue();
     expect(heldMs).toBeGreaterThan(1000);
-    expect(lines).toContainEqual(["[state lease-hold]", expect.objectContaining({ collection: "pipelines", operation: "pipelines.mutation", heldMs: expect.any(Number) })]);
-  } finally { console.warn = warn; }
+    expect(lines).toContainEqual(["[state lease-hold]", expect.objectContaining({ collection: "pipelines", operation: "pipelines.startup-admission", heldMs: expect.any(Number) })]);
+    const warning = lines.map(([message]) => String(message))
+      .find(message => message.startsWith("[structured hosts] state lease exceeded budget "))!;
+    expect(warning).toBeDefined();
+    expect(warning).not.toMatch(/[\r\n]/);
+    expect(JSON.parse(warning.slice("[structured hosts] state lease exceeded budget ".length)))
+      .toMatchObject({ pid: process.pid, role: process.env.LLV_STATE_OWNER ?? stateLockProcessKind(), phase: "reconciling structured hosts" });
+  } finally { release.resolve(); await pending; console.warn = warn; }
 });
 
-test.each([false, true])("a foreign commit and a new owner invalidate prepared evidence before admission (compact=%s)", async compact => {
+test.each([false, true])("a foreign commit refreshes prepared evidence within the original admission (compact=%s)", async compact => {
   const { row } = fixture();
   let release!: () => void, entered!: () => void;
   const ready = new Promise<void>(resolve => { entered = resolve; });
@@ -108,11 +118,18 @@ test.each([false, true])("a foreign commit and a new owner invalidate prepared e
     await persist([...records, newOwner]);
   });
   await ready;
-  const reader = withPipelineStartupAdmission(async available => available, undefined, undefined, compact);
-  try { await new Promise(resolve => setTimeout(resolve, 40)); }
+  let calls = 0;
+  const reader = withPipelineStartupAdmission(async available => {
+    calls++;
+    expect(available).toBeTrue();
+    expect((compact ? await loadPipelineOwnershipForStartupAsync() : loadPipelinesForStartup()).map(record => record.id)).toContain("new-owner");
+    return available;
+  }, undefined, undefined, compact);
+  try { await waitingAdmission(); }
   finally { release(); }
   await writer;
-  expect(await reader).toBeFalse();
+  expect(await reader).toBeTrue();
+  expect(calls).toBe(1);
   expect(await withPipelineStartupAdmission(async available => {
     expect(available).toBeTrue();
     expect((compact ? await loadPipelineOwnershipForStartupAsync() : loadPipelinesForStartup()).map(record => record.id)).toContain("new-owner");
@@ -272,3 +289,176 @@ test("compact ownership preserves unknown owners, duplicate detection and indepe
     await expect(pipelineRegistryHealthAsync()).rejects.toThrow("contradictory identities");
   } finally { db.close(); }
 });
+
+async function waitingAdmission() {
+  const deadline = performance.now() + 5000;
+  while (!stateLockWaitsInFlight().some(wait => ["pipelines.startup-admission", "state.lease"].includes(wait.callSite) && wait.attempts > 1)) {
+    if (performance.now() >= deadline) throw new Error("reader never reached contended admission");
+    await new Promise<void>(resolve => setImmediate(resolve));
+  }
+}
+
+test("an admitted typed refusal is not replayed or converted to unavailable", async () => {
+  fixture();
+  let calls = 0;
+  const refusal = new StateLockDeferredError("synthetic.callback");
+  await expect(withPipelineStartupAdmission(async () => { calls++; throw refusal; })).rejects.toBe(refusal);
+  expect(calls).toBe(1);
+});
+
+test("a typed lease observer failure cannot replay an admitted callback", async () => {
+  fixture();
+  let effects = 0;
+  const refusal = new StateLockDeferredError("synthetic.observer");
+  await expect(withPipelineStartupAdmission(async () => { effects++; }, "startup evidence", () => { throw refusal; })).rejects.toBe(refusal);
+  expect(effects).toBe(1);
+});
+
+test("an admitted callback's other resource wait gets its own admission", async () => {
+  fixture();
+  let effects = 0, attempts = 0;
+  await withPipelineStartupAdmission(async available => {
+    expect(available).toBeTrue(); effects++;
+    expect(stateLockWaitsInFlight().some(wait => wait.callSite === "pipelines.startup-admission")).toBeFalse();
+    await waitForStateLock("synthetic.registry", () => {
+      if (++attempts === 1) throw new StateLockDeferredError("synthetic.registry");
+    });
+  });
+  expect(effects).toBe(1);
+  expect(attempts).toBe(2);
+});
+
+test.each([["deadline", "mutation"], ["cancel", "mutation"], ["deadline", "admission"], ["cancel", "admission"]] as const)("startup admission stops at its %s behind a held %s without invoking a writer", async (mode, holder) => {
+  fixture();
+  const saved = process.env.LLV_PIPELINE_LOCK_WAIT_MS;
+  process.env.LLV_PIPELINE_LOCK_WAIT_MS = mode === "deadline" ? "200" : "5000";
+  const held = Promise.withResolvers<void>();
+  const ready = Promise.withResolvers<void>();
+  const hold = async () => { ready.resolve(); await held.promise; };
+  const owner = holder === "mutation" ? withPipelineMutation(hold) : withPipelineStartupAdmission(hold);
+  await ready.promise;
+  const abort = new AbortController();
+  let admitted = 0, refused = 0;
+  const reader = withPipelineStartupAdmission(async available => {
+    if (available) admitted++; else refused++;
+    return available;
+  }, "reconciling structured hosts", undefined, true, { signal: abort.signal });
+  // Observe rejections immediately while the handshake is pending.
+  const result = reader.then(value => ({ value, error: null }), error => ({ value: null, error }));
+  try {
+    await waitingAdmission();
+    if (mode === "cancel") abort.abort(new Error("retired during admission"));
+    const outcome = await result;
+    expect(admitted).toBe(0);
+    expect(refused).toBe(mode === "deadline" ? 1 : 0);
+    if (mode === "cancel") expect(outcome.error?.message).toBe("retired during admission");
+    else expect(outcome.value).toBeFalse();
+  } finally {
+    held.resolve(); await owner; await result;
+    if (saved === undefined) delete process.env.LLV_PIPELINE_LOCK_WAIT_MS; else process.env.LLV_PIPELINE_LOCK_WAIT_MS = saved;
+  }
+  expect(await withPipelineStartupAdmission(async available => available)).toBeTrue();
+});
+
+
+const DEADLINE_FIXTURE = path.join(import.meta.dir, "fixtures/startupAdmissionDeadline.ts");
+
+function assertAdmissionBudget(elapsedMs: number, budgetMs: number): void {
+  const toleranceMs = 300;
+  if (elapsedMs > budgetMs + toleranceMs) {
+    throw new Error(`startup admission exceeded ${budgetMs} ms budget plus ${toleranceMs} ms tolerance: ${Math.round(elapsedMs)} ms`);
+  }
+}
+
+async function runDeadlineFixture(mode: "deadline" | "sync-block" | "cold-legacy" | "cold-sqlite" | "cold-cancel", actualWaitMs: number, parentDeadlineMs: number) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-admission-child-"));
+  const childHome = path.join(root, "home"), childConfig = path.join(root, "config"), childTmp = path.join(root, "tmp");
+  for (const directory of [childHome, childConfig, childTmp]) fs.mkdirSync(directory, { recursive: true });
+  const child = spawn(process.execPath, [DEADLINE_FIXTURE, mode, root, String(actualWaitMs)], {
+    env: { ...process.env, HOME: childHome, XDG_CONFIG_HOME: childConfig, TMPDIR: childTmp,
+      LLV_STATE_DIR: path.join(root, "state"), LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let output = "";
+  const ready = Promise.withResolvers<void>();
+  const report = Promise.withResolvers<Record<string, number | boolean>>();
+  const lines = createInterface({ input: child.stdout });
+  lines.on("line", line => {
+    if (line === "READY") ready.resolve();
+    else {
+      output += `${line}\n`;
+      try { report.resolve(JSON.parse(line) as Record<string, number | boolean>); }
+      catch { /* Preserve diagnostics for the parent assertion below. */ }
+    }
+  });
+  const errors: string[] = [];
+  child.stderr.setEncoding("utf8").on("data", chunk => { errors.push(String(chunk)); });
+  let watchdog: ReturnType<typeof setTimeout> | undefined;
+  let readyTimer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([ready.promise, once(child, "exit").then(([code]) => { throw new Error(`fixture exited ${code} before readiness: ${errors.join("")}`); }),
+      new Promise<never>((_, reject) => { readyTimer = setTimeout(() => reject(new Error("fixture readiness handshake timed out")), 30_000); })]);
+    if (readyTimer) clearTimeout(readyTimer);
+    const start = performance.now();
+    const result = await Promise.race([
+      report.promise.then(value => ({ kind: "report" as const, value })),
+      new Promise<{ kind: "watchdog" }>(resolve => { watchdog = setTimeout(() => resolve({ kind: "watchdog" }), parentDeadlineMs); }),
+    ]);
+    return { result, elapsedMs: performance.now() - start, output, errors, child };
+  } finally {
+    if (readyTimer) clearTimeout(readyTimer);
+    if (watchdog) clearTimeout(watchdog);
+    lines.close();
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGTERM");
+      const force = setTimeout(() => child.kill("SIGKILL"), 500);
+      await once(child, "exit");
+      clearTimeout(force);
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test("repeated evidence invalidation spends the configured deadline across a process boundary", async () => {
+  const result = await runDeadlineFixture("deadline", 500, 3_000);
+  expect(result.result.kind).toBe("report");
+  if (result.result.kind !== "report") throw new Error(`parent watchdog expired: ${result.errors.join("")}`);
+  const elapsedMs = Number(result.result.value.elapsedMs);
+  expect(() => assertAdmissionBudget(elapsedMs, 500)).not.toThrow();
+  expect(result.result.value.invalidations).toBeGreaterThan(1);
+  expect(result.result.value.admitted).toBe(false);
+  expect(result.result.value.refused).toBe(true);
+  expect(result.result.value.recovered).toBe(true);
+}, 10_000);
+
+test.each(["cold-legacy", "cold-sqlite"] as const)("cold %s evidence refuses within its admission budget and recovers", async mode => {
+  const result = await runDeadlineFixture(mode, 50, 15_000);
+  expect(result.result.kind).toBe("report");
+  if (result.result.kind !== "report") throw new Error(`cold preparation exceeded parent watchdog: ${result.errors.join("")}`);
+  expect(result.result.value.admitted).toBe(false);
+  expect(result.result.value.recovered).toMatchObject({ available: true });
+  expect(Number(result.result.value.elapsedMs)).toBeLessThanOrEqual(350);
+  if (mode === "cold-legacy") expect(result.result.value.storeInitialized).toBe(false);
+}, 30_000);
+
+test("cancellation interrupts cold evidence preparation and a later admission recovers", async () => {
+  const result = await runDeadlineFixture("cold-cancel", 5_000, 15_000);
+  expect(result.result.kind).toBe("report");
+  if (result.result.kind !== "report") throw new Error(`cancelled preparation exceeded parent watchdog: ${result.errors.join("")}`);
+  expect(result.result.value.cancelled).toBe(true);
+  expect(result.result.value.admitted).toBe(false);
+  expect(result.result.value.recovered).toMatchObject({ available: true });
+  expect(Number(result.result.value.elapsedMs)).toBeLessThan(1_000);
+}, 30_000);
+
+test("the parent rejects a fourfold admission overrun and remains responsive to a blocked child", async () => {
+  const overrun = await runDeadlineFixture("deadline", 2_000, 3_000);
+  expect(overrun.result.kind).toBe("report");
+  if (overrun.result.kind !== "report") throw new Error(`overrun fixture exceeded parent watchdog: ${overrun.errors.join("")}`);
+  const overrunMs = Number(overrun.result.value.elapsedMs);
+  expect(() => assertAdmissionBudget(overrunMs, 500)).toThrow("startup admission exceeded 500 ms budget");
+
+  const blocked = await runDeadlineFixture("sync-block", 500, 800);
+  expect(blocked.result.kind).toBe("watchdog");
+  expect(blocked.elapsedMs).toBeLessThan(1_200);
+}, 10_000);

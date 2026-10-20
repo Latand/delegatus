@@ -29,8 +29,19 @@ export function stateLockDeferral(error: unknown): StateLockDeferredError | null
   return null;
 }
 
-type Wait = { start: number; deadline: number; attempts: number; maxSliceMs: number; backoffMs: number; synchronousSleepMs?: number; callSite: string; reason: string; subject?: string };
+type Wait = { start: number; deadline: number; attempts: number; maxSliceMs: number; backoffMs: number; synchronousSleepMs?: number; callSite: string; reason: string; subject?: string; completed?: boolean };
 const admission = new AsyncLocalStorage<Wait>();
+/** An admitted callback owns its effects and any later resource admissions.
+ * Do not inherit the acquisition retry context into that work. */
+export function outsideStateLockWait<T>(operation: () => T): T {
+  const wait = admission.getStore();
+  if (wait && !wait.completed) {
+    wait.completed = true;
+    active.delete(wait);
+    record(wait, "success", false);
+  }
+  return admission.exit(operation);
+}
 const active = new Set<Wait>();
 export const STATE_LOCK_WAIT_MS = 30_000;
 const totals = { completed: 0, refused: 0, totalMs: 0, maxMs: 0, buckets: [0, 0, 0, 0, 0] };
@@ -141,7 +152,7 @@ export async function waitForStateLock<T>(callSite: string, operation: () => T |
     attempts: 0, maxSliceMs: 0, backoffMs: 0, callSite, reason: "sqlite", subject: options.subject };
   active.add(wait);
   // Emit an in-flight observation even if the process never finishes its wait.
-  const timer = setTimeout(() => { if (wait.attempts) record(wait, "waiting", false); }, 51);
+  const timer = setTimeout(() => { if (wait.attempts && !wait.completed) record(wait, "waiting", false); }, 51);
   timer.unref();
   let outcome = "error";
   try {
@@ -167,6 +178,6 @@ export async function waitForStateLock<T>(callSite: string, operation: () => T |
     clearTimeout(timer);
     active.delete(wait);
     if (options.signal?.aborted) outcome = "cancelled";
-    record(wait, outcome, false);
+    if (!wait.completed) record(wait, outcome, false);
   }
 }

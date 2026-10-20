@@ -349,6 +349,8 @@ export interface HeldDeliveryCommand {
       admitted after it began, and reads this to tell a continuation of its
       original cohort from a fresh start. Outside the request digest. */
   cohortAt?: string;
+  /** Privacy revision checked when a pipeline's first message is dispatched. */
+  roleMemoryRevision?: string;
 }
 
 export interface HeldDeliveryCommandInput {
@@ -359,6 +361,7 @@ export interface HeldDeliveryCommandInput {
   onlyIfIdle?: HeldDeliveryCommand["onlyIfIdle"];
   origin?: MessageOrigin;
   cohortAt?: string;
+  roleMemoryRevision?: string;
 }
 
 export interface HeldDelivery {

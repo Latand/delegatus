@@ -2527,13 +2527,15 @@ function canonicalHeldDeliveryCommand(
   const origin = parseMessageOrigin(value?.origin);
   if (origin) command.origin = origin;
   if (typeof value?.cohortAt === "string" && Number.isFinite(Date.parse(value.cohortAt))) command.cohortAt = value.cohortAt;
+  if (typeof value?.roleMemoryRevision === "string" && /^[a-f0-9]{64}$/.test(value.roleMemoryRevision)
+    && command.operationId.startsWith("spawn_message_")) command.roleMemoryRevision = value.roleMemoryRevision;
   return command;
 }
 
 function heldDeliveryRequestDigest(
   conversationId: ViewerConversationId,
   text: string,
-  command: Pick<HeldDeliveryCommand, "kind" | "policy" | "turnId" | "onlyIfIdle">,
+  command: Pick<HeldDeliveryCommand, "kind" | "policy" | "turnId" | "onlyIfIdle" | "roleMemoryRevision">,
 ): string {
   const turnFence = command.turnId === undefined
     ? ["absent"]
@@ -2546,6 +2548,7 @@ function heldDeliveryRequestDigest(
     command.policy,
     turnFence,
     ...(command.onlyIfIdle ? [["idle", command.onlyIfIdle.revision, command.onlyIfIdle.writerClaim]] : []),
+    ...(command.roleMemoryRevision ? [["role-memory-revision", command.roleMemoryRevision]] : []),
   ])).digest("hex");
 }
 
@@ -6036,7 +6039,7 @@ export class AgentRegistry {
   spawnEvidence(launchId: string): {
     receipt: SpawnReceipt | null;
     generation: { engine: AgentEngine; id: string; path: string } | null;
-    entry: Pick<AgentRegistryEntry, "artifactPath" | "structuredHostOperationId"> | null;
+    entry: Pick<AgentRegistryEntry, "artifactPath" | "structuredHostOperationId" | "status" | "claimOwner" | "structuredHost" | "structuredTerminationSurvivors"> | null;
     structured: boolean;
   } {
     return this.readKeyed(file => {
@@ -6048,7 +6051,9 @@ export class AgentRegistry {
       return {
         receipt: clone(receipt),
         generation: conversation && generation ? { engine: conversation.engine, id: generation.id, path: generation.path } : null,
-        entry: entry ? { artifactPath: entry.artifactPath, structuredHostOperationId: entry.structuredHostOperationId } : null,
+        entry: entry ? { artifactPath: entry.artifactPath, structuredHostOperationId: entry.structuredHostOperationId,
+          status: entry.status, claimOwner: entry.claimOwner, structuredHost: entry.structuredHost,
+          structuredTerminationSurvivors: entry.structuredTerminationSurvivors } : null,
         structured: !!entry?.structuredHost || typeof entry?.structuredHostOperationId === "string",
       };
     });
