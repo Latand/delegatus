@@ -29,6 +29,8 @@ const { pipelineCorpus } = await import("./fixtures/corpus");
 const { savePipelines, findPipelineRecord } = await import("./store");
 const { defaultPipelinePorts, patchPipeline, tickPipelines } = await import("./engine");
 const { realExec } = await import("@/lib/workflows/provision");
+const { prepareStageGitGuard, stageGitReceiptDirectory } = await import("@/lib/git/stageAttemptGuard");
+const { agentPublicationIdentityEnv } = await import("@/lib/git/agentPublicationIdentity");
 const { registerPipelineTick } = await import("./controllerSignal");
 let restore = registerPipelineTick(async () => {});
 afterAll(() => {
@@ -116,6 +118,50 @@ function fixture() {
     tick: async () => { for (let n = 0; n < 3; n++) await tickPipelines([], ports); },
     cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
+
+for (const suffix of ["proved", "unrecorded", "divergent"] as const) test(`publish without acceptedSha retries a custody-parked stage (${suffix})`, async () => {
+  const h = fixture();
+  const launchId = `parked-successor-${suffix}`;
+  try {
+    h.git("push", "-q", "origin", `${h.passed}:refs/heads/${h.lane.branch}`);
+    const attempt = h.lane.runs[0]!.attempts[0]!;
+    const now = "2026-10-20T10:00:00.000Z";
+    attempt.startedAt = now; attempt.completedAt = null; attempt.launchId = launchId;
+    attempt.state = "needs_decision";
+    const guard = await prepareStageGitGuard(launchId, h.repo, realExec, now);
+    const identity = agentPublicationIdentityEnv({ ...process.env, ...guard });
+    const made = await realExec("git", ["commit", "--allow-empty", "-m", "passed successor output"], h.repo,
+      { ...identity, ...guard, GIT_AUTHOR_DATE: now, GIT_COMMITTER_DATE: now });
+    expect(made.code, made.stderr).toBe(0);
+    const head = h.git("rev-parse", "HEAD");
+    if (suffix === "unrecorded") fs.unlinkSync(path.join(stageGitReceiptDirectory(launchId), "commits", head));
+    if (suffix === "divergent") {
+      h.git("checkout", "-q", "--detach", h.passed);
+      h.git("commit", "-q", "--allow-empty", "-m", "foreign delivery output");
+      h.git("push", "-q", "origin", `HEAD:refs/heads/${h.lane.branch}`);
+      h.git("checkout", "-q", h.lane.branch);
+    }
+    const tip = h.git("ls-remote", "origin", `refs/heads/${h.lane.branch}`).split(/\s+/)[0];
+    h.lane.baseRef = h.head; h.lane.lastPassedCommit = h.head;
+    h.lane.stateDetail = `settling the stage push: commit ${tip} does not descend from the pipeline base; both tips are preserved`;
+    savePipelines([h.lane]);
+    const ports = { ...h.ports, now: () => "2026-10-20T11:00:00.000Z" };
+    expect((await patchPipeline(h.lane.id, { action: "publish" }, ports)).error).toBeUndefined();
+    for (let n = 0; n < 3; n++) await tickPipelines([], ports);
+    if (suffix === "proved") {
+      expect(h.current()).toMatchObject({ lastPassedCommit: head, publishedCommit: head, state: "completed" });
+      expect(h.pushes()).toBe(1);
+    } else {
+      expect(h.current().state).toBe("needs_decision");
+      expect(h.current().stateDetail).toContain("settling the stage push:");
+      expect(h.current().lastPassedCommit).toBe(h.head);
+      expect(h.pushes()).toBe(0);
+      expect(h.git("ls-remote", "origin", `refs/heads/${h.lane.branch}`).split(/\s+/)[0]).toBe(tip);
+    }
+    expect(h.current().runs[0]!.attempts).toHaveLength(1);
+    expect(h.git("rev-parse", "HEAD")).toBe(head);
+  } finally { h.cleanup(); fs.rmSync(stageGitReceiptDirectory(launchId), { recursive: true, force: true }); }
+});
 
 for (const alreadyRemote of [false, true]) test(`parked publication accepts a clean merge descendant and advances (already remote: ${alreadyRemote})`, async () => {
   const h = fixture();
