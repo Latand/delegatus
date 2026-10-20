@@ -43,7 +43,8 @@ test("a retried message that parks again keeps its attention entry and clock (#1
   fs.writeFileSync(transcriptPath, "\n");
   const previousState = process.env.LLV_STATE_DIR;
   process.env.LLV_STATE_DIR = path.join(directory, "state");
-  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"), () => false);
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"), () => false, undefined,
+    { now: () => Date.parse("2026-10-01T00:00:00Z") });
   setAgentRegistryForTests(registry);
   try {
     const conversation = registry.ensureConversation("codex", transcriptPath, "default");
@@ -93,6 +94,18 @@ test("a retried message that parks again keeps its attention entry and clock (#1
       file,
       admittedSeconds + 10 * 60,
     )).toBe("message delivery");
+
+    // The real owed-delivery projection keeps its original age after retry.
+    // Its own clock expires cached attention, without requiring a new poll.
+    expect(attentionExpiries([file])).toContain(admittedSeconds + 24 * 3600);
+    expect(attentionId(file, admittedSeconds + 24 * 3600)).toBeNull();
+    registry.recordDeliveryOutcome(held.id, "failed", "delivery-discarded", "unverified");
+    const settledResponse = await buildFilesResponse(new Request("http://127.0.0.1/api/files"), {
+      listFilesWithProjectCatalog: async () => ({ files: [scannedFile(transcriptPath)], projectCatalog: [], complete: true }),
+    });
+    const settledFile = (await settledResponse.json() as { files: FileEntry[] }).files[0]!;
+    expect(settledFile.stuckDelivery).toBeUndefined();
+    expect(attentionId(settledFile, admittedSeconds + 10 * 60)).toBeNull();
 
     /* A long blocked turn also looks generically stalled. The message's
        explicit Retry/Discard decision stays the attention owner. */

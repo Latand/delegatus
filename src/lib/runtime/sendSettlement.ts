@@ -473,7 +473,9 @@ export function journalVerdict(
   if (status === "failed" || status === "rejected") {
     return {
       state: "failed",
-      disposition: "lost",
+      // A discarded uncertain attempt may already have reached the engine.
+      // Recovery must retain that duplicate risk before registry projection.
+      disposition: reason === SEND_DISCARDED_REASON ? "unverified" : "lost",
       reason: reason === SEND_DISCARDED_REASON || reason === SEND_SEAT_REVOKED_REASON ? reason : SEND_LOST_REASON,
     };
   }
@@ -481,6 +483,23 @@ export function journalVerdict(
     return { state: "failed", disposition: "unverified", reason: SEND_UNVERIFIED_REASON };
   }
   return null;
+}
+
+/** Canonical evidence acknowledges the original operation without sending it.
+    The journal's transaction decides whether acknowledgement or discard won;
+    a stale status read cannot make that decision in the Viewer. */
+export async function confirmJournalDelivery(client: RuntimeHostClient, operationId: string): Promise<{
+  operationId: string; verdict: JournalVerdict;
+} | null> {
+  let result;
+  try {
+    result = await client.transitionOperation(operationId, "delivered", {}, { confirmedDelivery: true, awaitProjection: true });
+  } catch {
+    result = await client.operationStatus(operationId, { currentRetryLeaf: true });
+  }
+  const verdict = journalVerdict(result?.receipt.status ?? null, result?.receipt.reason);
+  return result && verdict && (verdict.state === "delivered" || result.receipt.reason === SEND_DISCARDED_REASON)
+    ? { operationId: result.operationId, verdict } : null;
 }
 
 /**
@@ -889,6 +908,7 @@ async function settleSendReceipt(
   const snapshot = registry.readOnlySnapshot();
   const projected = sendReceiptFor(snapshot, operationId);
   if (!projected || projected.state === "delivered") return projected;
+  const client = ports.client === undefined ? runtimeHostClient() : ports.client;
   // A terminal unknown is a fence against replay, not a denial of a later
   // canonical acknowledgement. Keep explicit cancellation and proven loss.
   const mayConfirm = projected.state === "in-flight"
@@ -901,12 +921,23 @@ async function settleSendReceipt(
     ? await readEvidenceWithin(() => confirmedSend(snapshot, operationId, true), readMs, "host delivery evidence is unavailable")
     : null;
   if (confirmed?.readable && confirmed.value) {
+    if (client) {
+      const decision = await readEvidenceWithin(() => confirmJournalDelivery(client, operationId), readMs,
+        "canonical delivery acknowledgement is unavailable");
+      if (!decision.readable || !decision.value) return projected;
+      const settled = await settleProjection(registry, operationId, projected, decision.value.verdict, "delivery-journal");
+      const durable = sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId);
+      if (durable && durable.state !== "in-flight" && durable.state === settled.state && durable.reason === settled.reason) {
+        try { await client.acknowledgeTerminalProjection?.([decision.value.operationId]); }
+        catch { /* The retained receipt remains owed for the controller's repair. */ }
+      }
+      return settled;
+    }
     return settleProjection(registry, operationId, projected, {
       state: "delivered", disposition: "delivered", reason: null,
     }, "delivery-record");
   }
   if (projected.state !== "in-flight") return projected;
-  const client = ports.client === undefined ? runtimeHostClient() : ports.client;
   /* The journal read, keeping whether it happened at all. A socket that is not
      there is the runtime host being unreachable, which is the same answer as a
      read that threw: nothing was asked, so nothing was learned. */
@@ -1005,6 +1036,12 @@ async function settleProjection(
     }
     const reconciled = sendReceiptFor(registry.readOnlySnapshot(), operationId);
     if (reconciled) return { ...reconciled, evidence };
+  }
+  if (verdict.reason === SEND_DISCARDED_REASON && projected.conversationId?.startsWith("conversation_")) {
+    const written = await registry.recordDeliveryOutcomeForOperationOffLoop(
+      projected.conversationId as ViewerConversationId, operationId, "failed", SEND_DISCARDED_REASON, "unverified");
+    if (!written) return projected;
+    return sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId) ?? projected;
   }
   const delivery = deliveryForOperation(file, operationId);
   if (delivery && (SETTLEABLE_DELIVERY_STATES.has(delivery.state)

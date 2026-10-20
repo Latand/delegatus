@@ -2103,6 +2103,44 @@ test("a Codex canonical user turn settles started delivery even when the Viewer 
   } finally { active.close(); }
 });
 
+test("a committed discard wins a late canonical acknowledgement before its registry projection", async () => {
+  const active = fixture("discard-canonical-race", { now: () => Date.parse("2026-10-01T00:00:00Z") });
+  const { handleRuntimeDiscard } = await import("./http");
+  const text = "check the retained delivery";
+  const { operationId, deliveryId } = acceptSend(active, { text, operationId: "discard-canonical-operation", clientMessageId: "discard-canonical-key" });
+  active.journal.transitionOperation(operationId, "delivering");
+  active.journal.transitionOperation(operationId, "uncertain");
+  active.registry.recordDeliveryOutcome(deliveryId, "failed", SEND_UNVERIFIED_REASON, "unverified");
+  const wire = encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken(operationId));
+  fs.writeFileSync(active.transcriptPath, JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: wire } }) + "\n");
+  let entered!: () => void;
+  const committed = new Promise<void>(resolve => { entered = resolve; });
+  let release!: () => void;
+  const acknowledgement = new Promise<void>(resolve => { release = resolve; });
+  active.client.claimDeliveryAction = async (...args) => {
+    const result = active.journal.claimDeliveryAction(...args);
+    entered();
+    await acknowledgement;
+    return result;
+  };
+  const discarding = handleRuntimeDiscard(new NextRequest("http://127.0.0.1/api/runtime/operations/discard-canonical-operation", {
+    method: "DELETE", headers: { host: "127.0.0.1" },
+  }), operationId, { enabled: () => true, client: () => active.client, registry: () => active.registry, kick: () => {} });
+  try {
+    await committed;
+    expect(await resolveSendReceipt(operationId, { registry: active.registry, client: active.client }))
+      .toMatchObject({ state: "failed", reason: "delivery-discarded", duplicateRisk: true });
+    release();
+    expect((await discarding).status).toBe(200);
+    expect(active.journal.operationResult(operationId)?.receipt).toMatchObject({ status: "failed", reason: "delivery-discarded" });
+    expect(sendReceiptFor(active.registry.readOnlySnapshot(), operationId)).toMatchObject({ state: "failed", reason: "delivery-discarded" });
+  } finally {
+    release();
+    await discarding;
+    active.close();
+  }
+});
+
 test("equal text under another key and an assistant answer prove nothing about this send", async () => {
   const active = fixture("wrong-key-codex");
   try {
@@ -2299,7 +2337,9 @@ test("an explicit status recovery with late canonical delivery never rearms the 
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ receipt: { status: "delivered", resend: "not-needed" } });
     expect(active.journal.effectBatch(100)).toEqual([]);
-    expect(active.journal.operationResult(operationId)?.receipt.status).toBe("uncertain");
+    // Canonical acknowledgement now arbitrates in the journal before its
+    // projection, so both durable records agree without rearming any effect.
+    expect(active.journal.operationResult(operationId)?.receipt.status).toBe("delivered");
   } finally { active.close(); }
 });
 
@@ -2333,7 +2373,7 @@ test("late canonical delivery remains observable after seat rotation", async () 
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ receipt: { status: "delivered", resend: "not-needed" } });
     expect(active.journal.effectBatch(100)).toEqual([]);
-    expect(active.journal.operationResult(operationId)?.receipt.status).toBe("uncertain");
+    expect(active.journal.operationResult(operationId)?.receipt.status).toBe("delivered");
     expect(Object.keys(active.registry.readOnlySnapshot().deliveryOperationOwners)).toEqual([operationId]);
   } finally { active.close(); }
 });
@@ -2375,7 +2415,7 @@ test("a late canonical acknowledgement corrects the progress record that ended u
 
     /* Nothing was rearmed or sent again. */
     expect(active.journal.effectBatch(100)).toEqual(effectsBefore);
-    expect(active.journal.operationResult(operationId)?.receipt.status).toBe("uncertain");
+    expect(active.journal.operationResult(operationId)?.receipt.status).toBe("delivered");
     expect(ledger.load(active.generationId)).toHaveLength(queuedBefore);
 
     progress.close();
