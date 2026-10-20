@@ -3447,8 +3447,14 @@ describe("ClaudeStreamBrokerHost", () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-failure-claim-"));
     const registry = new AgentRegistry(path.join(directory, "agent-registry.json"));
     const ledger = new RecordingDeliveryLedger();
-    const child = new FakeClaude(ledger, true);
+    // Hold the close notification after KILL to check that sending a signal
+    // alone cannot release the writer claim.
+    const child = new FakeClaude(ledger, true, true);
+    const killed = Promise.withResolvers<void>();
+    const signalTargets: number[] = [];
+    const startIdentity = "5150:owned";
     const host = await ClaudeStreamBrokerHost.start({
+      sessionId: "00000000-0000-0000-0000-000000000000",
       cwd: "/repo",
       deliveryLedger: ledger,
       eventStore: new MemoryEventStore(),
@@ -3456,6 +3462,16 @@ describe("ClaudeStreamBrokerHost", () => {
       readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
       readTranscript: () => [],
       spawnProcess: fakeSpawn(child, {}),
+      processIdentity: () => startIdentity,
+      // This in-memory child has no kernel process tree. Keep both probes
+      // and signals independent of whichever real process has the fake PID.
+      captureProcessTree: () => ({ identities: [], unresolved: [] }),
+      signalProcess: (pid, signal) => {
+        if (Math.abs(pid) !== child.pid) throw new Error("unexpected fixture signal target");
+        signalTargets.push(pid);
+        child.kill(signal);
+        if (signal === "SIGKILL") killed.resolve();
+      },
     });
     const key = { engine: "claude" as const, sessionId: host.identity.sessionId };
     registry.upsert({
@@ -3480,16 +3496,37 @@ describe("ClaudeStreamBrokerHost", () => {
       claimOwner: "failure-owner",
       pendingAction: null,
     });
-    await bindClaudeHostPersistence(registry, key, host, "failure-owner", 1);
-    child.stdout.write("malformed\n");
-    await Bun.sleep(20);
-    expect(child.signals).toEqual(["SIGTERM", "SIGKILL"]);
-    expect(registry.snapshot().entries[`claude:${host.identity.sessionId}`]).toMatchObject({
-      status: "dead",
-      claimOwner: null,
-      structuredHost: { process: null, endpoint: "stdio:released" },
-    });
-    await host.release();
+    const persistence = await bindClaudeHostPersistence(registry, key, host, "failure-owner", 1);
+    try {
+      child.stdout.write("malformed\n");
+      await killed.promise;
+      await persistence.flush();
+      expect(child.signals).toEqual(["SIGTERM", "SIGKILL"]);
+      const target = process.platform === "win32" ? child.pid : -child.pid;
+      expect(signalTargets).toEqual([target, target]);
+      expect(registry.snapshot().entries[`claude:${host.identity.sessionId}`]).toMatchObject({
+        status: "dead",
+        claimOwner: "failure-owner",
+        structuredHost: { process: { pid: child.pid, startIdentity } },
+      });
+
+      child.emit("close", 0, "SIGKILL");
+      // The close event queues the terminal checkpoint. Await its commit
+      // before inspecting the claim, independently of timer and I/O latency.
+      await persistence.flush();
+      expect(await host.health()).toMatchObject({ status: "dead", pid: null, endpoint: "stdio:released" });
+      expect(registry.snapshot().entries[`claude:${host.identity.sessionId}`]).toMatchObject({
+        status: "dead",
+        claimOwner: null,
+        structuredHost: { process: null, endpoint: "stdio:released" },
+      });
+    } finally {
+      if ((await host.health()).pid !== null) child.emit("close", 0, "SIGKILL");
+      await host.release();
+      await persistence();
+      registry.close();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   test("shutdown ledger failure still releases its writer claim", async () => {
