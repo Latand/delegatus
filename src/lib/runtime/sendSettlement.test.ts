@@ -2111,7 +2111,7 @@ test("a committed discard wins a late canonical acknowledgement before its regis
   active.journal.transitionOperation(operationId, "delivering");
   active.journal.transitionOperation(operationId, "uncertain");
   active.registry.recordDeliveryOutcome(deliveryId, "failed", SEND_UNVERIFIED_REASON, "unverified");
-  const wire = encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken(operationId));
+  const wire = await encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken(operationId));
   fs.writeFileSync(active.transcriptPath, JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: wire } }) + "\n");
   let entered!: () => void;
   const committed = new Promise<void>(resolve => { entered = resolve; });
@@ -2151,7 +2151,7 @@ test("original-key recovery follows the journal winner while canonical evidence 
   active.journal.transitionOperation(operationId, "delivering");
   active.journal.transitionOperation(operationId, "uncertain");
   active.registry.recordDeliveryOutcome(deliveryId, "failed", SEND_UNVERIFIED_REASON, "unverified");
-  const wire = encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken(operationId));
+  const wire = await encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken(operationId));
   fs.writeFileSync(active.transcriptPath, JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: wire } }) + "\n");
 
   let entered!: () => void;
@@ -2213,7 +2213,7 @@ test("original-key recovery keeps canonical delivery when acknowledgement won fi
     active.journal.transitionOperation(operationId, "uncertain");
     active.registry.recordDeliveryOutcome(deliveryId, "failed", SEND_UNVERIFIED_REASON, "unverified");
     active.journal.transitionOperation(operationId, "delivered", {}, { confirmedDelivery: true });
-    const wire = encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken(operationId));
+    const wire = await encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken(operationId));
     fs.writeFileSync(active.transcriptPath, JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: wire } }) + "\n");
 
     const beforeProjection = await resolveOriginalSend({ conversationId: active.conversationId, clientMessageId: "ack-canonical-key" }, {
@@ -2248,7 +2248,7 @@ test("original-key recovery cannot report canonical delivery when journal arbitr
     active.journal.transitionOperation(operationId, "delivering");
     active.journal.transitionOperation(operationId, "uncertain");
     active.registry.recordDeliveryOutcome(deliveryId, "failed", SEND_UNVERIFIED_REASON, "unverified");
-    const wire = encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken(operationId));
+    const wire = await encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken(operationId));
     fs.writeFileSync(active.transcriptPath, JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: wire } }) + "\n");
     const unavailable = { ...active.client, transitionOperation: async () => { throw new Error("journal arbitration unavailable"); },
       operationStatus: async () => { throw new Error("journal status unavailable"); } } as RuntimeHostClient;

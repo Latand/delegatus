@@ -302,7 +302,7 @@ test("startup projects a committed discard before a late canonical acknowledgeme
   journal.transitionOperation(operationId, "uncertain");
   registry.recordDeliveryOutcome(held.id, "failed", "delivery observation unknown", "unverified");
   journal.claimDeliveryAction(operationId, "discard");
-  const wire = encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken(operationId));
+  const wire = await encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken(operationId));
   fs.writeFileSync(path.join(directory, "startup-discard.jsonl"), JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: wire } }) + "\n");
   try {
     const { confirmedSend } = await import("./confirmedSend");
