@@ -1,3 +1,4 @@
+import { worktreeMapStore, readProjectDocument } from "./persistence";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -5,7 +6,7 @@ import { migrateBoardProjects } from "@/lib/board/store";
 import { lifecycleEventId, lifecycleJournalPath, readLifecycleJournal } from "@/lib/lifecycle/journal";
 import { operatorSafeSummary } from "@/lib/lifecycle/vocabulary";
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
-import { withFileTransactionSync } from "@/lib/state/fileTransaction";
+import { withFileTransactionAttempt } from "@/lib/state/fileTransaction";
 import { readWorktreeRecoveries, worktreeRecoveryCollection, type WorktreeRecoveryRow } from "./worktreeRecoveryStore";
 import { stateDir, statePath } from "@/lib/configDir";
 import { canonicalProject, projectAliasSnapshot, projectAliasesCanAccept } from "@/lib/projects/aliases";
@@ -223,11 +224,7 @@ function readRecoveryPlan(project?: string, files?: Record<string, CatalogFile>)
     files = catalog.files;
   }
   projectAliasSnapshot({ strict: true });
-  let map: Record<string, WorktreeMapping> = {};
-  try { map = JSON.parse(fs.readFileSync(statePath("worktree-map.json"), "utf8")); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-  if (!map || typeof map !== "object" || Array.isArray(map)
-    || Object.values(map).some(item => !item || typeof item.repo !== "string" || typeof item.worktree !== "string")) throw new Error("Worktree map is unreadable");
+  const map: Record<string, WorktreeMapping> = { ...readProjectDocument(worktreeMapStore, "worktree-map.json") };
   for (const row of readWorktreeRecoveries()) {
     if (map[row.cwd] && map[row.cwd]!.repo !== row.repo) throw new Error("Worktree recovery conflicts with a recorded mapping");
     map[row.cwd] = { repo: row.repo, worktree: row.worktree };
@@ -251,9 +248,9 @@ export function recoverWorktreeProjects(trigger: "startup" | "rescan", files?: R
   if (!report.folded.length) return report;
   // Journal, alias and mapping writers serialize with this commit. A
   // failure to merge any board aborts the entire batch, including its evidence.
-  return withFileTransactionSync(statePath("worktree-map.json"), "worktree recovery is busy", () =>
-    withFileTransactionSync(statePath("project-aliases.json"), "project aliases are busy", () =>
-      withFileTransactionSync(lifecycleJournalPath(), "lifecycle journal is busy", () => {
+  return withFileTransactionAttempt(statePath("worktree-map.json"), "worktree recovery is busy", () =>
+    withFileTransactionAttempt(statePath("project-aliases.json"), "project aliases are busy", () =>
+      withFileTransactionAttempt(lifecycleJournalPath(), "lifecycle journal is busy", () => {
         const confirmed = readRecoveryPlan(project, files);
         confirmed.dryRun = false;
         if (!confirmed.folded.length) return confirmed;

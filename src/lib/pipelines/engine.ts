@@ -59,6 +59,7 @@ import { forEachCooperatively, yieldToRuntime } from "@/lib/cooperative";
 import { transcriptAllowed } from "@/lib/agent/spawnParent";
 import { sessionKeyFromTranscript, sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { headCwd } from "@/lib/agent/transcript";
+import { hasUserAuthoredMessage } from "@/lib/session/reader";
 import { MAX_FLOW_NOTE_LENGTH, closeFlow, createFlowFromRequest, isRecoverableLegacyRelayFailurePause, patchFlow, type PreparedFlowGit } from "@/lib/flows/commands";
 import { resolveFlowMergeIdentity } from "@/lib/flows/git";
 import { lastAssistantMessage, readFindingsFile } from "@/lib/flows/findings";
@@ -135,7 +136,8 @@ import { resolveStageTestGuidance } from "./testGuidance";
 import { PIPELINE_ROLE_IDS, pipelineRoleLookup, resolvePipelineRole, stageRuntimeIsExplicit, validatePipelineRoleParams, type PipelineRoleLookup } from "./roles";
 import { isReadOnlyLockedRole } from "@/lib/roles/locks";
 import { stageMemoryForLaunch } from "@/lib/memory/roleStage";
-import { withoutStoredLessonsAsync } from "@/lib/memory/privacy";
+import { ROLE_MEMORY_CHANGED_MESSAGE, roleMemoryRevisionToken, storedLessonRevision } from "@/lib/memory/roleStore";
+import { RoleMemoryChanged, withCurrentRoleMemory, withoutStoredLessonsAsync } from "@/lib/memory/privacy";
 import { isReviewGate, launchSizingRefusal, reviewGateRefusal, type Briefer, type LaunchRuntime } from "@/lib/roles/sizing";
 import { conversationRuntime } from "@/lib/agent/conversationRuntime";
 import { normalizeStageOutputPath } from "./stageAccess";
@@ -236,6 +238,9 @@ export type PipelineSpawnReceipt = PipelineStageSpawn & {
   staged?: boolean;
   /** Membership failed before dispatch, with no host or conversation generation. */
   neverBegan?: boolean;
+  /** Exact pre-dispatch role-memory refusal, no user-authored transcript, and every recorded
+      host owner proven gone by the registry evidence read. */
+  roleMemoryRetrySafe?: boolean;
   /** The reserved session is still this conversation's current generation. */
   currentGeneration?: boolean;
   /** The artifact path the launch reserved, whether or not the identity fence
@@ -300,7 +305,10 @@ export interface PipelinePorts {
         gate): its launch profile carries the mark, so the shared-memory hook
         and the engine's own memory stay off for it on every resume too. */
     cleanMemory?: boolean;
-  }, onReserved: (reservation: PipelineStageLaunchReservation) => void | Promise<void>): Promise<PipelineStageSpawn>;
+  }, onReserved: (reservation: PipelineStageLaunchReservation) => void | Promise<void>,
+    /** Recompose private file handoffs from original inputs if memory changed.
+        This callback belongs to one call and is never persisted. */
+    preparePrompt?: () => Promise<string>): Promise<PipelineStageSpawn>;
   spawnReceipt(launchId: string): PipelineSpawnReceipt | null;
   /** Fresh keyed state at an asynchronous retry boundary. */
   spawnReceiptState?(launchId: string): PipelineSpawnReceipt["state"] | null;
@@ -682,10 +690,11 @@ async function parentIdentity(parentPath: string | null): Promise<{
 async function spawnPipelineAgent(
   input: Parameters<PipelinePorts["spawnAgent"]>[0],
   onReserved: (reservation: PipelineStageLaunchReservation) => void | Promise<void>,
+  preparePrompt?: () => Promise<string>,
 ): Promise<PipelineStageSpawn> {
   /* The message carries the stage prompt, with any quoted private rule
      withheld. The engine renders its selector into its instruction channel. */
-  const message = await withoutStoredLessonsAsync(input.prompt);
+  // Filter after the reservation and Git setup, immediately before dispatch.
   /* #1279's seam. An unbound project takes the same branch it always took —
      the active account — so nothing changes for a project nobody configured.
      A bound one draws from its allowed set only: a stage naming an account
@@ -843,14 +852,21 @@ async function spawnPipelineAgent(
     throw new Error(unavailable);
   }
   let guardedAccount: typeof account;
+  let message: string;
+  let roleMemoryRevision = "";
   try {
     const guard = await performanceSpans.wait("pipeline.git-guard-prepare", () =>
       prepareStageGitGuard(begun.receipt.launchId, input.cwd, realExec, new Date().toISOString()));
     guardedAccount = { ...account, env: { ...account.env, ...guard } };
     // The same reservation callback rechecks durable activation after setup
     // yielded. A pause or ownership change still prevents native dispatch.
-    await onReserved({ launchId: begun.receipt.launchId, conversationId: begun.receipt.conversationId,
-      accountId: begun.receipt.accountId ?? account.accountId });
+    message = await withCurrentRoleMemory(async () => {
+      const filtered = await withoutStoredLessonsAsync(preparePrompt ? await preparePrompt() : input.prompt);
+      roleMemoryRevision = roleMemoryRevisionToken();
+      await onReserved({ launchId: begun.receipt.launchId, conversationId: begun.receipt.conversationId,
+        accountId: begun.receipt.accountId ?? account.accountId });
+      return filtered;
+    });
   } catch (error) {
     await registry.failStructuredSpawnOffLoop(begun.receipt.launchId, "stage Git guard preparation or activation recheck failed before dispatch");
     throw error;
@@ -863,10 +879,13 @@ async function spawnPipelineAgent(
       spec,
       account: guardedAccount,
       "prompt": message,
+      ...(preparePrompt ? { preparePrompt } : {}),
+      roleMemoryRevision,
       registry,
       client,
     });
   } catch (error) {
+    if (error instanceof Error && error.message === ROLE_MEMORY_CHANGED_MESSAGE) throw new RoleMemoryChanged();
     if (isRuntimeHostTransportFailure(error)) throw new Error(unavailable, { cause: error });
     throw error;
   }
@@ -1571,14 +1590,14 @@ export function defaultPipelinePorts(
     },
     accountLabel: (engine, accountId) => (engine === "claude" ? listClaudeAccounts() : listCodexAccounts())
       .find((candidate) => candidate.id === accountId)?.label ?? accountId,
-    spawnAgent: async (input, onReserved) => {
+    spawnAgent: async (input, onReserved, preparePrompt) => {
       /* Invalidated on BOTH paths (#1750): a spawn that throws is exactly when
          the receipt it just failed has to be readable, and a projection
          captured before the launch was reserved answers `null` for it. Six
          production lanes parked on a transient runtime-host failure whose
          retry the engine could not reach for want of that one read. */
       try {
-        return await spawnPipelineAgent(input, onReserved);
+        return await spawnPipelineAgent(input, onReserved, preparePrompt);
       } finally {
         invalidateRegistryProjection();
       }
@@ -1646,6 +1665,15 @@ export function defaultPipelinePorts(
         neverBegan: receipt.state === "failed" && !receipt.rejection && receipt.membershipAdmitted === false
           && !receipt.key && !receipt.pane && !receipt.verifiedHost && !receipt.artifactPath
           && !evidence.generation,
+        roleMemoryRetrySafe: receipt.state === "failed" && !receipt.rejection
+          && receipt.error === ROLE_MEMORY_CHANGED_MESSAGE && receipt.key !== null && receipt.artifactPath !== null
+          && evidence.generation?.path === receipt.artifactPath && evidence.entry?.artifactPath === receipt.artifactPath
+          && (!evidence.entry.structuredHostOperationId || evidence.entry.structuredHostOperationId === receipt.launchId)
+          && !hasUserAuthoredMessage(receipt.artifactPath, receipt.engine)
+          && (evidence.entry.status === "dead" || evidence.entry.status === "unhosted")
+          && evidence.entry.claimOwner === null
+          && (!evidence.entry.structuredHost?.process || processIdentityStatus(evidence.entry.structuredHost.process) === "dead")
+          && !(evidence.entry.structuredTerminationSurvivors ?? []).some(process => processIdentityStatus(process) !== "dead"),
         currentGeneration: stageLaunchGenerationMatches(receipt, evidence.generation, evidence.entry),
       };
     },
@@ -4174,6 +4202,15 @@ function passedStagePublicationPark(pipeline: Pipeline, attempt: PipelineStageAt
         || detail?.startsWith("the accepted head cannot be verified before completion:") === true)));
 }
 
+/** Custody can refuse a pass before its head is accepted or completedAt is
+ * recorded. A guarded answer may retire that attempt for a fresh repair. */
+function passedStageCustodyPark(pipeline: Pipeline, attempt: PipelineStageAttempt | null): boolean {
+  const detail = pipeline.stateDetail;
+  return pipeline.cursor?.state === "committing" && attempt?.state === "needs_decision"
+    && attempt.verdict?.status === "pass" && (detail?.startsWith("settling the stage push:") === true
+      || detail?.startsWith("stage push refused:") === true);
+}
+
 function awaitingPassedPublication(pipeline: Pipeline): boolean {
   const attempt = pipeline.cursor ? currentAttempt(pipeline, pipeline.cursor.stageId) : null;
   return pipeline.cursor?.state === "committing" && attempt?.verdict?.status === "pass"
@@ -6376,6 +6413,13 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
               current.definition = null;
               if (live.cursor?.stageId === run.stageId) live.cursor.state = "pending";
             }
+            // The activation's captured cursor may still say spawning after a
+            // privacy retry was checkpointed. Without launch evidence, keep
+            // that durable wait eligible for the next controller tick.
+            if (current.roleMemoryWait && !current.launchId && !current.conversationId && !current.agentPath && !current.paneId) {
+              current.state = "pending";
+              if (live.cursor?.stageId === run.stageId) live.cursor.state = "pending";
+            }
             delete current.activation;
             await persist([live]);
           });
@@ -6400,6 +6444,18 @@ function restartStagePrompt(prompt: string, attempt: PipelineStageAttempt): stri
   return `${prompt}\n\nThis is a fresh attempt because stage attempt ${context.previousAttempt} ${context.cause ? INTERRUPTION_WORDS[context.cause].handover : "was interrupted"}.${report} Continue the same stage input${context.transcriptPath ? ` and use its transcript for reference: ${context.transcriptPath}` : "; it was cut before it wrote a transcript, so check the worktree for anything it left"}.`;
 }
 
+function nextRoleMemoryWait(attempt: PipelineStageAttempt, ports: PipelinePorts): NonNullable<PipelineStageAttempt["roleMemoryWait"]> {
+  const prior = attempt.roleMemoryFailures;
+  const failures = Math.min(1_000_000, (Number.isSafeInteger(prior) && prior! >= 0 ? prior! : 0) + 1);
+  attempt.roleMemoryFailures = failures;
+  const delayMs = Math.min(30_000, 250 * 2 ** Math.min(failures - 1, 7));
+  return {
+    revision: storedLessonRevision(),
+    observations: 0,
+    retryAfter: new Date(unixMs(ports.now()) + delayMs).toISOString(),
+  };
+}
+
 async function spawnRunStage(
   pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
   spawnInput: Parameters<PipelinePorts["spawnAgent"]>[0], activationNow: string,
@@ -6407,7 +6463,52 @@ async function spawnRunStage(
   prepareInput = false,
 ): Promise<void> {
   const recoveringReservation = attempt.activation?.replay === true;
+  let roleMemoryWaitReady = false;
   try {
+    if (attempt.roleMemoryWait) {
+      if (attempt.roleMemoryWait.ready === true) {
+        roleMemoryWaitReady = true;
+      } else {
+        const revision = storedLessonRevision();
+        const wait = attempt.roleMemoryWait;
+        const failureCount = Number.isSafeInteger(attempt.roleMemoryFailures) && attempt.roleMemoryFailures! >= 0
+          ? attempt.roleMemoryFailures! : 0;
+        if (failureCount !== attempt.roleMemoryFailures) attempt.roleMemoryFailures = failureCount;
+        const retryAt = typeof wait.retryAfter === "string" ? Date.parse(wait.retryAfter) : Number.NaN;
+        const validSchedule = Number.isFinite(retryAt) && failureCount > 0;
+        const resetObservation = typeof wait.revision !== "string" || revision !== wait.revision
+          || !Number.isSafeInteger(wait.observations) || wait.observations < 0 || wait.observations >= 2;
+        if (resetObservation) {
+          attempt.roleMemoryWait = { revision, observations: 0, retryAfter: validSchedule ? wait.retryAfter : ports.now() };
+        }
+        const currentWait = attempt.roleMemoryWait;
+        const delay = validSchedule ? Math.max(0, retryAt - unixMs(ports.now())) : 0;
+        if (delay > 0) {
+          attempt.state = "pending";
+          setCursorState(pipeline, stage.id, "pending");
+          pipeline.stateDetail = "stage spawn deferred: waiting before the next role-memory privacy attempt";
+          await persist();
+          ports.scheduleTick?.(delay);
+          return;
+        }
+        if (revision === currentWait.revision && !resetObservation) {
+          currentWait.observations += 1;
+        } else {
+          currentWait.revision = revision;
+          currentWait.observations = 0;
+        }
+        if (currentWait.observations < 2) {
+          attempt.state = "pending";
+          setCursorState(pipeline, stage.id, "pending");
+          pipeline.stateDetail = "stage spawn deferred: waiting for stable role memory";
+          await persist();
+          ports.scheduleTick?.(250);
+          return;
+        }
+        currentWait.ready = true;
+        roleMemoryWaitReady = true;
+      }
+    }
     if (recoveringReservation && attempt.launchId && attempt.conversationId) {
       const nativeTurn = await attemptTurnTranscript(pipeline, stage.id, attempt, ports);
       if (nativeTurn?.operationConflict) {
@@ -6432,9 +6533,15 @@ async function spawnRunStage(
     /* Carry the text-free role-memory selector through every spawn. Clean
        stages carry only their clean mark. */
     const memory = stageMemoryForLaunch(pipeline, stage, attempt.effectiveRole.roleId ?? null);
+    const bound = attemptStage(stage, attempt);
+    const previousOutput = attempt.activatedBy ? attempt.input ?? "" : attempt.input ?? normalizedOutput(pipeline);
+    const reserve = Buffer.byteLength(restartStagePrompt("", attempt), "utf8");
+    let inputRevision: string | null = null;
+    const preparePrompt = async () => {
+      if (inputRevision !== null && storedLessonRevision() === inputRevision) return spawnInput.prompt;
+      return restartStagePrompt(await composeStageInput(pipeline, bound, attempt.effectiveRole, previousOutput, pipeline.worktreeDir, ports.exec, reserve), attempt);
+    };
     if (attempt.activation?.prepareInput || prepareInput) {
-      const bound = attemptStage(stage, attempt);
-      const previousOutput = attempt.activatedBy ? attempt.input ?? "" : attempt.input ?? normalizedOutput(pipeline);
       if (restartStagePrompt(renderStagePrompt(pipeline, bound, attempt.effectiveRole, previousOutput, effectiveWorkerLimit(pipeline.project).value, resolveStageTestGuidance()), attempt) !== spawnInput.prompt) throw new ActivationSuperseded();
       const expected = JSON.stringify(pipeline);
       const abort = new AbortController();
@@ -6448,7 +6555,7 @@ async function spawnRunStage(
         return await ports.exec(command, args, cwd, env, { ...options, signal: abort.signal });
       };
       try {
-        const reserve = Buffer.byteLength(restartStagePrompt("", attempt), "utf8");
+        inputRevision = storedLessonRevision();
         const prompt = restartStagePrompt(await composeStageInput(pipeline, bound, attempt.effectiveRole, previousOutput, pipeline.worktreeDir, exec, reserve), attempt);
         revalidate();
         if (abort.signal.aborted) throw new ActivationSuperseded();
@@ -6514,7 +6621,7 @@ async function spawnRunStage(
              recorded before the agent is actuated. */
           adoptPipelineFallbackTask(pipeline, tasksForBinding());
           await persist();
-        });
+        }, preparePrompt);
         break;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -6588,8 +6695,32 @@ async function spawnRunStage(
     }
     if (!spawned) throw new Error("stage spawn failed without a result");
     const replayReceipt = ports.spawnReceipt(spawned.launchId);
-    if (recoveringReservation && replayReceipt?.state === "failed" && replayReceipt.neverBegan
+    if (recoveringReservation && replayReceipt?.state === "failed" && (replayReceipt.neverBegan || replayReceipt.roleMemoryRetrySafe)
       && replayReceipt.conversationId === attempt.conversationId) {
+      if (replayReceipt.error === ROLE_MEMORY_CHANGED_MESSAGE) {
+        if (await ports.claimSpawnRetry(replayReceipt.launchId, `${pipeline.id}:${stage.id}:${replayReceipt.launchId}`) !== "claimed") {
+          throw new RoleMemoryChanged();
+        }
+        const current = ports.spawnReceipt(replayReceipt.launchId);
+        if (!current || current.state !== "failed" || (!current.neverBegan && !current.roleMemoryRetrySafe) || current.transcript
+          || current.launchId !== replayReceipt.launchId || current.error !== replayReceipt.error
+          || current.conversationId !== attempt.conversationId) throw new RoleMemoryChanged();
+        attempt.retiredLaunches = [...attempt.retiredLaunches ?? [], {
+          launchId: current.launchId, conversationId: current.conversationId, error: current.error, retiredAt: ports.now(),
+        }].slice(-RETIRED_LAUNCH_LIMIT);
+        attempt.launchId = null;
+        attempt.conversationId = null;
+        if (attempt.activation) attempt.activation.phase = "settled";
+        delete attempt.activation;
+        attempt.roleMemoryWait = nextRoleMemoryWait(attempt, ports);
+        attempt.state = "pending";
+        attempt.error = null;
+        setCursorState(pipeline, stage.id, "pending");
+        pipeline.stateDetail = "stage spawn deferred: role memory changed during recovery; retrying automatically";
+        await persist();
+        ports.scheduleTick?.(250);
+        return;
+      }
       const now = ports.now();
       const result = await deferRetiredLaunchRetry(pipeline, stage, attempt, replayReceipt, activationNow, now, ports);
       if (result === "waiting") {
@@ -6638,12 +6769,53 @@ async function spawnRunStage(
       } else attempt.effectiveRole.serviceTier = spawned.serviceTier;
     }
     attempt.state = "running";
+    if (roleMemoryWaitReady) {
+      delete attempt.roleMemoryWait;
+      delete attempt.roleMemoryFailures;
+    }
     await clearEngineTaskNote(pipeline);
     setCursorState(pipeline, stage.id, "running");
     if (pipeline.stateDetail?.startsWith("rate limited until ")
       || pipeline.stateDetail?.startsWith("stage spawn deferred: ")) pipeline.stateDetail = null;
   } catch (error) {
     if (error instanceof ActivationSuperseded) throw error;
+    if (error instanceof RoleMemoryChanged) {
+      // No message was sent. Retire only our affirmatively failed, unstarted
+      // reservation; uncertain delivery continues through ordinary recovery.
+      if (attempt.launchId) {
+        const receipt = ports.spawnReceipt(attempt.launchId);
+        if (!receipt || receipt.state !== "failed" || (!receipt.neverBegan && !receipt.roleMemoryRetrySafe) || receipt.transcript
+          || receipt.conversationId !== attempt.conversationId) {
+          await park(pipeline, "role-memory privacy changed before dispatch, but the original host termination is unconfirmed; original launch retained", attempt);
+          return;
+        }
+        if (await ports.claimSpawnRetry(receipt.launchId, `${pipeline.id}:${stage.id}:${receipt.launchId}`) !== "claimed") {
+          await park(pipeline, "role-memory privacy changed before dispatch, but another recovery owns the original launch; original launch retained", attempt);
+          return;
+        }
+        const current = ports.spawnReceipt(receipt.launchId);
+        if (!current || current.state !== "failed" || (!current.neverBegan && !current.roleMemoryRetrySafe) || current.transcript
+          || current.launchId !== receipt.launchId || current.error !== receipt.error
+          || current.conversationId !== attempt.conversationId) {
+          await park(pipeline, "role-memory privacy changed before dispatch, but the original host termination could not be reverified; original launch retained", attempt);
+          return;
+        }
+        attempt.retiredLaunches = [...attempt.retiredLaunches ?? [], {
+          launchId: receipt.launchId, conversationId: receipt.conversationId, error: error.message, retiredAt: ports.now(),
+        }].slice(-RETIRED_LAUNCH_LIMIT);
+        attempt.launchId = null;
+        attempt.conversationId = null;
+      }
+      attempt.state = "pending";
+      attempt.error = null;
+      attempt.roleMemoryWait = nextRoleMemoryWait(attempt, ports);
+      delete attempt.activation;
+      setCursorState(pipeline, stage.id, "pending");
+      pipeline.stateDetail = "stage spawn deferred: role memory is changing; retrying automatically";
+      await persist();
+      ports.scheduleTick?.(250);
+      return;
+    }
     if (error instanceof PipelineAdmissionHeld) {
       if (attempt.activation) throw error;
       // The legacy executor also waits at account admission. Its last call
@@ -6961,9 +7133,9 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
       const outside: PipelinePorts = { ...ports,
         exec: async (...args) => { await dispatchCheckpoint(); return await ports.exec(...args); },
         stopStageAgent: async (...args) => { await dispatchCheckpoint(); return await ports.stopStageAgent(...args); },
-        spawnAgent: async (input, onReserved) => {
+        spawnAgent: async (input, onReserved, preparePrompt) => {
           await dispatchCheckpoint();
-          return await ports.spawnAgent(input, async reservation => { await onReserved?.(reservation); await dispatchCheckpoint(); });
+          return await ports.spawnAgent(input, async reservation => { await onReserved?.(reservation); await dispatchCheckpoint(); }, preparePrompt);
         },
         ...(ports.recoverStagedLaunch ? { recoverStagedLaunch: async (launchId: string, eligible: () => boolean) => {
           await dispatchCheckpoint();
@@ -12797,8 +12969,9 @@ async function resolveDecision(
   const attempt = stage ? currentAttempt(pipeline, stage.id) : null;
   const budgetRefusal = terminalBudgetDecisionRefusal(attempt);
   if (budgetRefusal) return budgetRefusal;
-  const publicationDecision = pipeline.state === "needs_decision" && passedStagePublicationPark(pipeline, attempt);
-  if (stage?.kind !== "run" || !attempt || !attempt.completedAt || (!publicationDecision
+  const custodyDecision = pipeline.state === "needs_decision" && passedStageCustodyPark(pipeline, attempt);
+  const publicationDecision = pipeline.state === "needs_decision" && (passedStagePublicationPark(pipeline, attempt) || custodyDecision);
+  if (stage?.kind !== "run" || !attempt || (!attempt.completedAt && !custodyDecision) || (!publicationDecision
     && (attempt.state !== "needs_decision" || attempt.verdict?.status !== "needs_decision"))) {
     return { error: "resolve-decision requires a run attempt settled with a needs_decision verdict", status: 409 };
   }
@@ -12843,7 +13016,10 @@ async function resolveDecision(
     question: publicationDecision ? pipeline.stateDetail! : attempt.output ?? attempt.report?.summary ?? "", answer: req.answer,
     actor: structuredClone(actor!), at: ports.now(),
   };
-  // Keep the settled attempt, its report and worktree untouched. A fresh identity owns the continuation.
+  // Custody refused before completion. Retire it only after the producer checks
+  // above, so its decision successor can follow the durable receipt lineage.
+  if (custodyDecision) attempt.completedAt ??= decision.at;
+  // Keep the original report and worktree. A fresh identity owns the continuation.
   setCursorState(pipeline, stage.id, "pending");
   pipeline.cursor!.input = renderDecisionInput(attempt.input, decision);
   recordHandLaunch(pipeline, actor, decision.at);
@@ -13318,7 +13494,8 @@ export async function patchPipeline(
     const snapshot = findPipelineRecord(id);
     const snapshotStage = snapshot ? currentStage(snapshot) : null;
     const snapshotAttempt = snapshot && snapshotStage ? currentAttempt(snapshot, snapshotStage.id) : null;
-    if (snapshot && snapshotAttempt && snapshot.state === "needs_decision" && passedStagePublicationPark(snapshot, snapshotAttempt)) {
+    if (snapshot && snapshotAttempt && snapshot.state === "needs_decision"
+      && (passedStagePublicationPark(snapshot, snapshotAttempt) || passedStageCustodyPark(snapshot, snapshotAttempt))) {
       const worker = publicationRepairWorker(snapshot, snapshotAttempt) ?? { stage: snapshotStage!, attempt: snapshotAttempt };
       if (worker.attempt.conversationId) {
         const conversationId = worker.attempt.conversationId;

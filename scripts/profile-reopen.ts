@@ -401,14 +401,11 @@ function sampleFor(surface: Surface, target: Seeded, origin: string, timeoutMs: 
   });
 }
 
-/** Leave the app document, closing the log streams it opened first: their
-    sockets are what the NEXT document would otherwise queue behind. */
+/** Leave the app document as a reader does. Nothing is closed for it: the
+    page lets its stream connection go on `pagehide` itself, and a document
+    that kept it would leave the next one queued behind it (#1958), which is
+    what this profile has to show if it comes back. */
 async function leavePage(cdp: Cdp): Promise<void> {
-  try {
-    await cdp.evaluate("(window.__net && window.__net.closeStreams ? window.__net.closeStreams() : 0)");
-  } catch {
-    /* already on about:blank, or the document went away under the call */
-  }
   await navigate(cdp, "about:blank");
 }
 

@@ -4,6 +4,7 @@ import { expect, test, setSystemTime } from "bun:test";
 
 import type { DeliveryReceipt, EngineHost, HostState, QueueEntry, RuntimeEvent } from "./engineHost";
 import { DeliveryProgressStore } from "./deliveryProgress";
+import { cancelDeliveryWakeForKick, DeliveryWake } from "./deliveryWake";
 import { DELIVERY_WAIT_REASONS } from "./deliveryWaitReason";
 import {
   StructuredDeliveryQueue,
@@ -161,6 +162,53 @@ test("every wait reason has a sentence in both interface languages", () => {
     expect(en[`delivery.wait.${reason}` as keyof typeof en]).toBeTruthy();
     expect(uk[`delivery.wait.${reason}` as keyof typeof uk]).toBeTruthy();
   }
+});
+
+test("an observer during listing backoff preserves the accepted retry deadline", async () => {
+  const time = clock(0);
+  let timerId = 0;
+  const timers = new Map<number, { at: number; work: () => void }>();
+  const queueRef: { current: StructuredDeliveryQueue | null } = { current: null };
+  const wake = new DeliveryWake(() => { void queueRef.current?.drain(); }, {
+    now: time.now,
+    set: (work, delay) => { const id = ++timerId; timers.set(id, { at: time.now() + delay, work }); return id as unknown as ReturnType<typeof setTimeout>; },
+    clear: id => { timers.delete(id as unknown as number); },
+  });
+  const journal = fakeJournal();
+  let listings = 0;
+  const port = journal.port({
+    effects: async () => { listings++; throw new Error("effect listing refused"); },
+    progress: new DeliveryProgressStore(null, time.now),
+  });
+  const queue = new StructuredDeliveryQueue(port, () => null, undefined, () => wake.schedule(1_000), undefined, undefined, undefined, undefined,
+    { now: time.now });
+  queueRef.current = queue;
+
+  await expect(queue.drain()).rejects.toThrow("effect listing refused");
+  expect(listings).toBe(1);
+  expect(queue.canStartPass()).toBe(false);
+
+  // The controller's initial retry is due at t=25. Running it finds the queue
+  // still in listing backoff and accepts the next wake for t=1,025.
+  expect(wake.schedule(25)).toBe(true);
+  time.advance(25);
+  const [retry] = [...timers.entries()];
+  expect(retry?.[1].at).toBe(25);
+  timers.delete(retry![0]);
+  retry![1].work();
+  expect([...timers.values()].map(timer => timer.at)).toEqual([1_025]);
+  time.advance(900);
+
+  // A non-fresh observer cannot start a pass during backoff, so it must leave
+  // the accepted wake in place. drain() asks for another retry, which must not
+  // move the earlier deadline.
+  cancelDeliveryWakeForKick(wake, false, queue.canStartPass());
+  await queue.drain();
+  expect(listings).toBe(1);
+  expect([...timers.values()].map(timer => timer.at)).toEqual([1_025]);
+
+  cancelDeliveryWakeForKick(wake, true, queue.canStartPass());
+  expect(timers.size).toBe(0);
 });
 
 test("a hanging target holds only its own conversation: another delivers within its pass budget and the hung send is never repeated", async () => {

@@ -141,21 +141,20 @@ export function clearRuntimeHostRollbackIntent(filename = runtimeHostRollbackInt
   clearDurableFile(filename);
 }
 
-/** A shared release record proves the current process generation only when
-    dockerd injected the same immutable identity into this container. Legacy
-    predecessors carry none of these values and therefore cannot claim a
-    successor record written while they were still serving. */
+/** Dockerd injects this container's immutable identity at creation. The shared
+    release target can still name the predecessor at successor boot, or name a
+    later staged release, so it cannot identify the running process. Legacy
+    predecessors without a complete identity remain untracked. */
 export function currentRuntimeHostGeneration(
   environment: NodeJS.ProcessEnv = process.env,
-  record: RuntimeHostReleaseRecord | null = readRuntimeHostRelease(),
 ): { image: string | null; revision: string | null } {
-  if (!record
-    || environment[RUNTIME_HOST_IMAGE_ENV] !== record.image
-    || environment[RUNTIME_HOST_REVISION_ENV] !== record.revision
-    || environment[RUNTIME_HOST_CONTAINER_ENV] !== record.container) {
+  const image = environment[RUNTIME_HOST_IMAGE_ENV];
+  const revision = environment[RUNTIME_HOST_REVISION_ENV];
+  const container = environment[RUNTIME_HOST_CONTAINER_ENV];
+  if (!image || !revision || !container || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(container)) {
     return { image: null, revision: null };
   }
-  return { image: record.image, revision: record.revision };
+  return { image, revision };
 }
 
 function writeDurableJson(filename: string, value: unknown): void {

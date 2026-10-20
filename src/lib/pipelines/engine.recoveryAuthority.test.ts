@@ -83,7 +83,7 @@ test.each([
   f.advance(1000);
   const recordedAt = f.h.ports.now();
   const message = scenario === "legacy-marker" ? "<!-- llv:structured-user origin=agent sender=reviewer -->\nReviewer finished"
-    : encodeCodexStructuredUserText("Reviewer finished", undefined, null, { kind: "agent", role: "reviewer" });
+    : await encodeCodexStructuredUserText("Reviewer finished", undefined, null, { kind: "agent", role: "reviewer" });
   fs.appendFileSync(file, [
     { type: "event_msg", timestamp: recordedAt, payload: { type: "user_message", message } },
     { type: "event_msg", timestamp: recordedAt, payload: { type: "task_started" } },
@@ -323,7 +323,7 @@ test.each(["restart", "provider"].flatMap(recovery => [false, true].flatMap(oper
     journal.transitionOperation("composer-stop", "interrupted");
     fs.appendFileSync(file, [
       { type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "user_message", message:
-        encodeCodexStructuredUserText("Reviewer finished", undefined, null, { kind: "agent", role: "reviewer" }) } },
+        await encodeCodexStructuredUserText("Reviewer finished", undefined, null, { kind: "agent", role: "reviewer" }) } },
       { type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "task_started" } },
       { type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "turn_aborted" } },
       { type: "response_item", timestamp: f.h.ports.now(), payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Turn aborted" }], internal_chat_message_metadata_passthrough: { content_item_kinds: ["generic.turn_aborted"] } } },
@@ -378,7 +378,7 @@ test.each(["dead", "idle"].flatMap(host => ["turn_aborted", "usage_limit_exceede
   f.advance(1000);
   fs.appendFileSync(file, [
     { type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "user_message", message:
-      encodeCodexStructuredUserText("Reviewer finished", undefined, null, { kind: "agent", role: "reviewer" }) } },
+      await encodeCodexStructuredUserText("Reviewer finished", undefined, null, { kind: "agent", role: "reviewer" }) } },
     { type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "task_started" } },
   ].map(record => JSON.stringify(record)).join("\n") + "\n");
   const evidence = await f.h.ports.durableTurnEvidence("codex", "/codex/stage-1.jsonl");
@@ -533,7 +533,7 @@ test.each([false, true])("post-stop authority lookup fences a delivered prompt (
     if (stopped && !appended) {
       appended = true;
       fs.appendFileSync(file, JSON.stringify({ type: "event_msg", timestamp: recordedAt, payload: { type: "user_message", message: operator
-        ? "Wait for my review" : encodeCodexStructuredUserText("Reviewer finished", undefined, null, { kind: "agent", role: "reviewer" }) } }) + "\n");
+        ? "Wait for my review" : await encodeCodexStructuredUserText("Reviewer finished", undefined, null, { kind: "agent", role: "reviewer" }) } }) + "\n");
     }
     return false;
   };
@@ -675,7 +675,7 @@ test("a reviewer completion notice after a deploy abort keeps provider recovery 
   await tickPipelines([], f.h.ports);
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.providerWait!.condition.kind).toBe("turn_cut");
   f.advance(52_000);
-  const text = encodeCodexStructuredUserText("Agent finished: review interrupted", undefined, null, { kind: "agent", role: "reviewer" });
+  const text = await encodeCodexStructuredUserText("Agent finished: review interrupted", undefined, null, { kind: "agent", role: "reviewer" });
   fs.appendFileSync(file, [
     { type: "event_msg", timestamp: f.h.ports.now(), payload: { type: "task_started" } },
     { type: "response_item", timestamp: f.h.ports.now(), payload: { type: "message", role: "user", content: [{ type: "input_text", text }] } },
@@ -711,7 +711,7 @@ test.each(["automatic", "operator-before", "operator-during", "operator-stop", "
   expect(parked.runs[0]!.attempts[0]!.state).toBe("needs_decision");
   expect(parked.runs[0]!.attempts[0]!.providerWait?.stageRetry).toBeDefined();
   f.advance(1_000);
-  const automatic = encodeCodexStructuredUserText("Review completed", undefined, null, { kind: "agent", role: "reviewer" });
+  const automatic = await encodeCodexStructuredUserText("Review completed", undefined, null, { kind: "agent", role: "reviewer" });
   const append = (type: string, extra: Record<string, unknown> = {}) => fs.appendFileSync(file,
     JSON.stringify({ type: "event_msg", timestamp: f.h.ports.now(), payload: { type, ...extra } }) + "\n");
   append("user_message", { message: automatic });
@@ -763,7 +763,7 @@ test.each(["turn_cut", "auth_required", "quota-fallback", "transient"].flatMap(k
   expect(parked.runs[0]!.attempts[0]!.providerWait?.stageRetry).toBeUndefined();
   f.advance(1_000);
   const prompt = activity.startsWith("operator") && activity !== "operator-during" ? "Wait for my review"
-    : encodeCodexStructuredUserText("Review completed", undefined, null, { kind: "agent", role: "reviewer" });
+    : await encodeCodexStructuredUserText("Review completed", undefined, null, { kind: "agent", role: "reviewer" });
   const append = (type: string, extra: Record<string, unknown> = {}) => fs.appendFileSync(file,
     JSON.stringify({ type: "event_msg", timestamp: f.h.ports.now(), payload: { type, ...extra } }) + "\n");
   append("user_message", { message: prompt });

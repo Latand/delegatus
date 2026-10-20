@@ -199,10 +199,26 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
     // A later start is a boundary to verify, never evidence of who made its prefix.
     const directories = directory ? [directory] : [];
     let anchor = start.head;
+    let lineageCursor = start.head;
+    const replacementStarts = new Set<string>();
     const run = pipeline.runs?.find(run => run.attempts.some(item => item.launchId === attempt.launchId));
     const attempts = new Map(run?.attempts.map(item => [item.n, item]));
     let child = attempt;
     let acceptedProofBoundary: string | null = null;
+    for (const prior of run?.attempts ?? []) {
+      if (prior.n >= attempt.n || !prior.launchId || !prior.startedAt) continue;
+      const priorDirectory = stageGitReceiptDirectory(prior.launchId);
+      if (directories.includes(priorDirectory) || await stageAttemptPushRefusal(prior.launchId) !== null) continue;
+      const priorRaw = await smallFile(path.join(priorDirectory, "start.json"));
+      if (priorRaw === null) continue;
+      const priorStart = JSON.parse(priorRaw);
+      if (priorStart.launchId !== prior.launchId || priorStart.worktree !== pipeline.worktreeDir
+        || !/^[0-9a-f]{40}$/.test(priorStart.head ?? "")
+        || !Number.isFinite(Date.parse(priorStart.startedAt)) || !Number.isFinite(Date.parse(prior.startedAt))
+        || Date.parse(priorStart.startedAt) < Date.parse(prior.startedAt) || Date.parse(priorStart.startedAt) > Date.parse(now)) continue;
+      directories.push(priorDirectory);
+      replacementStarts.add(priorStart.head);
+    }
     for (;;) {
       const decision = child.decisionAnswerId ? pipeline.decisionAnswers?.find(answer => answer.clientRequestId === child.decisionAnswerId
         && answer.stageId === run?.stageId && answer.nextAttempt === child.n
@@ -218,18 +234,25 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       const parentDirectory = stageGitReceiptDirectory(parent.launchId);
       const parentRaw = await smallFile(path.join(parentDirectory, "start.json"));
       const parentStart = parentRaw ? JSON.parse(parentRaw) : null;
+      const parentRefusal = await stageAttemptPushRefusal(parent.launchId);
       if (!parentStart || parentStart.launchId !== parent.launchId || parentStart.worktree !== pipeline.worktreeDir
         || !/^[0-9a-f]{40}$/.test(parentStart.head ?? "") || !parent.startedAt
         || !Number.isFinite(Date.parse(parentStart.startedAt)) || !Number.isFinite(Date.parse(parent.startedAt))
         || Date.parse(parentStart.startedAt) < Date.parse(parent.startedAt) || Date.parse(parentStart.startedAt) > Date.parse(now)
-        || await stageAttemptPushRefusal(parent.launchId) !== null) return refuse("the replaced attempt's creation receipts are unavailable or invalid");
-      if ((await exec("git", ["merge-base", "--is-ancestor", parentStart.head, anchor], pipeline.worktreeDir)).code !== 0)
+        || (parentRefusal !== null && !(decision && parent.verdict?.status === "pass"))) return refuse("the replaced attempt's creation receipts are unavailable or invalid");
+      if ((await exec("git", ["merge-base", "--is-ancestor", parentStart.head, lineageCursor], pipeline.worktreeDir)).code !== 0)
         return refuse("the replacement dropped its starting history");
+      lineageCursor = parentStart.head;
+      replacementStarts.add(parentStart.head);
       directories.push(parentDirectory);
-      const acceptedBoundary = pipeline.lastPassedCommit;
-      const boundaryIsValid = parent.verdict?.status === "pass" && /^[0-9a-f]{40}$/.test(acceptedBoundary)
-        && (await exec("git", ["merge-base", "--is-ancestor", acceptedBoundary, start.head], pipeline.worktreeDir)).code === 0;
-      if (decision && boundaryIsValid) acceptedProofBoundary = acceptedBoundary;
+      const acceptedBoundaries = [pipeline.lastPassedCommit, pipeline.publishedCommit]
+        .filter((sha): sha is string => typeof sha === "string" && /^[0-9a-f]{40}$/.test(sha));
+      for (const boundary of acceptedBoundaries) {
+        if ((await exec("git", ["merge-base", "--is-ancestor", boundary, parentStart.head], pipeline.worktreeDir)).code === 0) {
+          acceptedProofBoundary = boundary;
+          break;
+        }
+      }
       anchor = acceptedProofBoundary ?? parentStart.head;
       child = parent;
     }
@@ -271,6 +294,11 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
         return refuse("the recorded push candidate was not confirmed on the delivery remote");
       }
     }
+    // Only accepted or durably published history, or a delivery tip whose
+    // commits are independently verified, may bypass repeated receipt checks.
+    const publishedPrefix = tip && (await exec("git", ["merge-base", "--is-ancestor", tip, start.head], pipeline.worktreeDir)).code === 0 ? tip : null;
+    const historyPrefixes = new Set([pipeline.lastPassedCommit, pipeline.publishedCommit]
+      .filter((sha): sha is string => typeof sha === "string" && /^[0-9a-f]{40}$/.test(sha)));
     let nativeCreated: Set<string> | undefined;
     const nativeCreation = async (sha: string): Promise<boolean> => {
       // Every existing start receipt, including a versionless one, requires
@@ -324,13 +352,17 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       if (fetched.code !== 0) throw new StagePushRemoteUnavailable();
       return baseTip = sha;
     };
-    const verifiedSuffix = async (target: string): Promise<string | null> => {
-      const from = repair?.acceptedHead ?? anchor;
+    const verifiedSuffix = async (target: string, from = repair?.acceptedHead ?? anchor): Promise<string | null> => {
       if (target === from) return null;
       if (target === tip && integrationBase !== null) return null;
       let suffixAnchor = from;
       if ((await exec("git", ["merge-base", "--is-ancestor", suffixAnchor, target], pipeline.worktreeDir)).code !== 0) {
-        if (repair || directories.length > 1) return `commit ${target} dropped accepted replacement history`;
+        if (repair || directories.length > 1) {
+          for (const prefix of historyPrefixes) {
+            if ((await exec("git", ["merge-base", "--is-ancestor", target, prefix], pipeline.worktreeDir)).code === 0) return null;
+          }
+          return `commit ${target} dropped accepted replacement history`;
+        }
         // Local history rewrites still pass through the existing accepted-
         // content reconciliation in the stage committer. Prove their native
         // creation here; pushed adoption below retains its stricter ancestry.
@@ -340,10 +372,16 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       }
       // Bound each read, not the number of commits a real stage may create.
       for (let offset = 0; ; offset += 128) {
-        const log = await exec("git", ["rev-list", "--topo-order", "--max-count=128", `--skip=${offset}`, `${suffixAnchor}..${target}`], pipeline.worktreeDir);
+        const log = await exec("git", ["rev-list", "--topo-order", "--max-count=128", `--skip=${offset}`, `${suffixAnchor}..${target}`,
+          ...[...historyPrefixes].map(sha => `^${sha}`)], pipeline.worktreeDir);
         if (log.code !== 0) return `commit ${target} has unreadable ancestry`;
         const commits = log.stdout.trim().split("\n").filter(Boolean);
-        if (offset === 0 && !commits.length) return `commit ${target} has no readable suffix evidence`;
+        if (offset === 0 && !commits.length) {
+          for (const prefix of historyPrefixes) {
+            if ((await exec("git", ["merge-base", "--is-ancestor", target, prefix], pipeline.worktreeDir)).code === 0) return null;
+          }
+          return `commit ${target} has no readable suffix evidence`;
+        }
         for (const sha of commits) {
           if (!/^[0-9a-f]{40}$/.test(sha)) return `commit ${target} has malformed ancestry evidence`;
           let created = false;
@@ -369,6 +407,20 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       }
       return null;
     };
+    if (attempt.n > 1 || directories.length > 1) {
+      // A retry can inherit history without a restartContext edge. Prove the
+      // current start and each replacement start independently so a later
+      // merge cannot hide an unaccepted prefix.
+      for (const prefix of new Set([start.head, ...replacementStarts])) {
+        const error = await verifiedSuffix(prefix, pipeline.baseRef);
+        if (error) return refuse(error);
+      }
+    }
+    if (publishedPrefix) {
+      const error = await verifiedSuffix(publishedPrefix);
+      if (error) return refuse(error);
+      historyPrefixes.add(publishedPrefix);
+    }
     if (repair || directories.length > 1) {
       // Replacements retain the head they were launched on, even when a
       // rewritten commit has a new receipt under the replacement's identity.
@@ -396,17 +448,20 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       // A remote behind the attempt's start is normal before publication. The
       // lane's own ancestry cannot prove an imported remote commit belongs to
       // this attempt.
-      const known = await exec("git", ["merge-base", "--is-ancestor", tip, start.head], pipeline.worktreeDir);
-      if (known.code === 0) {
-        const error = await verifiedSuffix(head);
-        return error ? refuse(error) : null;
-      }
       // A push can bypass pre-push (and legacy launches had no hook). Matching
       // tips still need creation proof for every commit before adoption.
       const error = await verifiedSuffix(tip);
       if (error) return refuse(error);
     }
     if (pushed !== null && pushed !== `${ref}\n${expectedUrl}\n`) return refuse("the push receipt names another delivery target");
+    if (publishedPrefix) {
+      const error = await verifiedSuffix(head);
+      if (error) return refuse(error);
+      if (await remoteHead() !== tip) return refuse("the remote tip raced the attempt proof");
+      const current = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
+      if (current.code !== 0 || current.stdout.trim() !== head) return refuse("the lane head raced the attempt proof");
+      return null;
+    }
     if (head !== start.head && head !== tip) {
       if ((await exec("git", ["merge-base", "--is-ancestor", tip, head], pipeline.worktreeDir)).code !== 0)
         return refuse(`commit ${head} moved away from the proved remote tip ${tip}`);

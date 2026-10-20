@@ -638,6 +638,16 @@ export const NETWORK_PROBE = String.raw`
         entry.ids = ids;
       } catch (error) { entry.idsError = String(error); }
     }
+    if (url.includes('/api/streams') && init && typeof init.body === 'string') {
+      try {
+        const body = JSON.parse(init.body);
+        for (const op of body.ops || []) {
+          const key = String(body.c) + '/' + String(op.id);
+          if (op.op === 'open' && String(op.url).startsWith('/api/logs/stream')) channels[key] = track(op.url);
+          else delete channels[key];
+        }
+      } catch (error) { entry.opsError = String(error); }
+    }
     const settle = (response) => {
       entry.end = round(performance.now());
       const length = response && response.headers ? response.headers.get('content-length') : null;
@@ -668,37 +678,19 @@ export const NETWORK_PROBE = String.raw`
     };
     return realFetch.call(this, input, init).then(settle, (error) => { entry.end = round(performance.now()); throw error; });
   };
-  const sources = [];
-  /* Every stream this document opened, closed on demand. A driven sequence of
-     documents otherwise leaves one never-ending stream per document holding a
-     socket, and Chrome allows six per origin over HTTP/1.1: the next document
-     then waits ~57 s for one to be freed, which is a property of the DRIVER,
-     not of a reopen. A real reader never opens twelve documents in a minute.
-     (The Viewer's stream never ending is real, and is #1958.) */
-  net.closeStreams = () => {
-    let closed = 0;
-    for (const source of sources) {
-      try { source.close(); closed += 1; } catch (error) { /* already gone */ }
-    }
-    sources.length = 0;
-    return closed;
-  };
-  const RealEventSource = window.EventSource;
-  if (RealEventSource) {
-    const Patched = function (url, config) {
-      const source = new RealEventSource(url, config);
-      sources.push(source);
-      const record = { url: String(url).slice(0, 160), open: round(performance.now()), connected: null, firstChunkAt: null, chunks: 0, bytes: 0, paths: {} };
-      if (net.streams.length < 500) net.streams.push(record);
-      const ids = {};
-      try {
-        const subs = JSON.parse(decodeURIComponent(String(url).split('subs=')[1] || '[]'));
-        for (const sub of subs) ids[String(sub.id)] = sub.path;
-      } catch (error) { record.subsError = String(error); }
-      source.addEventListener('open', () => { record.connected = round(performance.now()); });
-      source.addEventListener('chunk', (event) => {
+  /* One record per log stream the page opened, whatever carried it. */
+  const track = (url) => {
+    const record = { url: String(url).slice(0, 160), open: round(performance.now()), connected: null, firstChunkAt: null, chunks: 0, bytes: 0, paths: {} };
+    if (net.streams.length < 500) net.streams.push(record);
+    const ids = {};
+    try {
+      const subs = JSON.parse(decodeURIComponent(String(url).split('subs=')[1] || '[]'));
+      for (const sub of subs) ids[String(sub.id)] = sub.path;
+    } catch (error) { record.subsError = String(error); }
+    return {
+      connected: () => { if (record.connected === null) record.connected = round(performance.now()); },
+      chunk: (data) => {
         const at = round(performance.now());
-        const data = event.data || '';
         /* The subscriber id only. Parsing a 768 kB payload here would BE the
            measurement; its length is the payload size we want to report. */
         const id = /^\{"id":"([^"]{1,12})"/.exec(data);
@@ -711,7 +703,40 @@ export const NETWORK_PROBE = String.raw`
           if (!seen) record.paths[path] = { at: at, bytes: data.length, chunks: 1 };
           else { seen.bytes += data.length; seen.chunks += 1; }
         }
-      });
+      },
+    };
+  };
+  /* On plain HTTP the app carries every stream of the page as a channel of
+     one /api/streams connection (src/lib/streamMux): a POST names the route
+     a channel opens, and its events arrive as 'e' frames on the connection,
+     the channel id and the source event's name on the first data line. A
+     probe that listened for 'chunk' on the connection itself saw no bytes at
+     all, and rejected every cold sample as painted from a cache. */
+  const channels = {};
+  const RealEventSource = window.EventSource;
+  if (RealEventSource) {
+    const Patched = function (url, config) {
+      const source = new RealEventSource(url, config);
+      const connection = /\/api\/streams\?c=([A-Za-z0-9_-]+)/.exec(String(url));
+      if (connection) {
+        const prefix = connection[1] + '/';
+        source.addEventListener('up', (event) => {
+          try { const stream = channels[prefix + JSON.parse(event.data)]; if (stream) stream.connected(); } catch (error) { /* not a frame */ }
+        });
+        source.addEventListener('e', (event) => {
+          const data = event.data || '';
+          const cut = data.indexOf('\n');
+          if (cut === -1) return;
+          let head;
+          try { head = JSON.parse(data.slice(0, cut)); } catch (error) { return; }
+          const stream = channels[prefix + head[0]];
+          if (stream && head[1] === 'chunk') stream.chunk(data.slice(cut + 1));
+        });
+        return source;
+      }
+      const stream = track(url);
+      source.addEventListener('open', () => stream.connected());
+      source.addEventListener('chunk', (event) => stream.chunk(event.data || ''));
       return source;
     };
     Patched.prototype = RealEventSource.prototype;

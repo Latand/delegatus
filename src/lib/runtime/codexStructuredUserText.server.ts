@@ -5,13 +5,13 @@ import { decodeCodexStructuredUserText as decode, encodeCodexStructuredUserText 
 
 /** All Codex delivery paths persist their metadata before exposing the marker
  * to the engine. The pure codec remains usable by the browser. */
-export function encodeCodexStructuredUserText(
+export async function encodeCodexStructuredUserText(
   text: string,
   contentDigest?: string,
   selectedContext?: SelectedContextRef | null,
   origin?: MessageOrigin | null,
   deliveryDedup?: string | null,
-): string {
+): Promise<string> {
   const metadata = {
     version: 1 as const,
     contentDigest: contentDigest ?? null,
@@ -19,7 +19,7 @@ export function encodeCodexStructuredUserText(
     origin: parseMessageOrigin(origin),
     ...(deliveryDedup && /^[a-f0-9]{64}$/.test(deliveryDedup) ? { deliveryDedup } : {}),
   };
-  const ref = persistStructuredUserMetadata(metadata);
+  const ref = await persistStructuredUserMetadata(metadata);
   return encode(text, ref, metadata.origin);
 }
 

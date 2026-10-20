@@ -11,6 +11,8 @@ const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts"
 const { captureProcessIdentity } = await import("@/lib/processIdentity");
 const { adoptCodexRegistryHosts } = await import("@/lib/runtime/registry");
 const { RuntimeHostUnavailableError } = await import("@/lib/runtime/client");
+const { roleMemoryCollection } = await import("@/lib/memory/roleStore");
+const { shutdownTaskPageWorker } = await import("@/lib/links/taskPageWorker");
 const { recoverStagedStructuredLaunch, spawnStructuredConversation, stagedLaunchRecovery, STAGED_RECOVERY_BUDGET_MS } = await import("@/lib/runtime/structuredSpawn");
 const { createPipelineFromRequest, defaultPipelinePorts, patchPipeline, tickPipelines } = await import("./engine");
 const { loadPipelines, savePipelines } = await import("./store");
@@ -20,19 +22,23 @@ type RuntimeHostClient = import("@/lib/runtime/client").RuntimeHostClient;
 type RuntimeOperationResult = import("@/lib/runtime/contracts").RuntimeOperationResult;
 
 registerPipelineTick(async () => {});
-afterAll(() => fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true }));
+afterAll(async () => {
+  await shutdownTaskPageWorker();
+  fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
+});
 
 const HEAD = "a".repeat(40);
 
-async function fixture(unstaged = false, admissionRestarts = 0, sqliteMode: "off" | "sqlite" = "off") {
+async function fixture(unstaged = false, admissionRestarts = 0, sqliteMode: "off" | "sqlite" = "off", privacyConflict = false) {
   savePipelines([]);
   const root = fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "launch-"));
   const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode });
   setAgentRegistryForTests(registry);
   let clock = Date.parse("2026-10-19T12:00:00Z");
-  let unavailable = true;
+  let unavailable = !privacyConflict;
   let starts = 0;
   let messages = 0;
+  const deliveredPrompts: string[] = [];
   let probes = 0;
   let launchId = "";
   let artifactPath = "";
@@ -71,7 +77,7 @@ async function fixture(unstaged = false, admissionRestarts = 0, sqliteMode: "off
     },
     preflightRepo: (repoDir) => ({ ok: true, repoDir, gitCommonDir: path.join(repoDir, ".git"), worktreeParent: path.dirname(repoDir) }),
     roleLookup: () => ({ engine: "codex", model: "gpt-6.1-sol", effort: "high", access: "read-write", promptScaffold: "Builder guidance" }),
-    spawnAgent: async (input, reserve) => {
+    spawnAgent: async (input, reserve, preparePrompt) => {
       const profile = emptyLaunchProfile({ cwd: root });
       const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd: root, transport: "structured", launchProfile: profile, memberships: [input.membership] });
       if (begun.kind !== "created") throw new Error("fixture launch was not created");
@@ -86,7 +92,8 @@ async function fixture(unstaged = false, admissionRestarts = 0, sqliteMode: "off
       }
       artifactPath = path.join(root, `${starts + 1}.jsonl`);
       const threadId = randomUUID();
-      const response = await spawnStructuredConversation({ engine: "codex", receipt: begun.receipt, registry, client, prompt: "Build",
+      const response = await spawnStructuredConversation({ engine: "codex", receipt: begun.receipt, registry, client, prompt: input.prompt,
+        preparePrompt: privacyConflict ? async () => "Build with [learned rule]" : preparePrompt,
         spec: { engine: "codex", command: "codex", cwd: root, windowName: "fixture", launchProfile: profile },
         account: { engine: "codex", accountId: "account-a", kind: "managed", home: root, transcriptRoot: root, env: { NODE_ENV: "test" } },
       }, {
@@ -100,14 +107,25 @@ async function fixture(unstaged = false, admissionRestarts = 0, sqliteMode: "off
         },
         bindHost: async (store, key, _host, owner, epoch) => {
           const entry = store.readOnlySnapshot().entries[`codex:${key.sessionId}`]!;
-          store.setStructuredHostClaimed(key, { ...entry.structuredHost!, process: captureProcessIdentity(process.pid) }, "idle", owner, epoch);
+          store.setStructuredHostClaimed(key, { ...entry.structuredHost!, process: captureProcessIdentity(privacyConflict ? 2_147_483_647 : process.pid) }, "idle", owner, epoch);
           return () => {};
         },
         publishHost: async () => {
           if (unavailable) throw new RuntimeHostUnavailableError("runtime host is unavailable");
           return async () => {};
         },
-        deliverFirst: async () => {
+        deliverFirst: async delivery => {
+          if (privacyConflict && starts === 1) {
+            roleMemoryCollection(true)!.boundedPatch(1, tx => tx.put({
+              kind: "rule", id: "retry-after-staged-role-memory-conflict", scope: "machine",
+              rule: "Preserve the current privacy filtered launch prompt", why: "", state: "active", hints: [],
+              source: { project: "fixture", pipelineId: "fixture", stageId: "build", attempt: 1, roleId: "builder",
+                fixRound: false, conversationId: begun.receipt.conversationId },
+              createdAt: "2026-10-20T00:00:00Z", changedAt: "2026-10-20T00:00:01Z",
+            }));
+          }
+          await delivery.authorize?.();
+          deliveredPrompts.push(delivery.prompt);
           messages++;
           record(`spawn_message_${launchId}`, begun.receipt.conversationId, "delivered");
           fs.writeFileSync(artifactPath, JSON.stringify({ type: "session_meta", payload: { id: threadId } }) + "\n");
@@ -173,8 +191,32 @@ async function fixture(unstaged = false, admissionRestarts = 0, sqliteMode: "off
   };
   return { registry, client, ports, original, attempt, park, loseHost,
     advance: (ms: number) => { clock += ms; }, restore: () => { unavailable = false; },
-    starts: () => starts, messages: () => messages, probes: () => probes };
+    starts: () => starts, messages: () => messages, probes: () => probes, deliveredPrompts };
 }
+
+test("a failed staged role-memory launch retries after privacy stabilizes", async () => {
+  const f = await fixture(false, 0, "off", true);
+  try {
+    expect(f.attempt().state).toBe("pending");
+    expect(f.messages()).toBe(0);
+    expect(f.registry.readOnlySnapshot().receipts[f.original.launchId]).toMatchObject({
+      state: "failed", error: "Role-memory privacy changed; retrying before dispatch", key: expect.any(Object),
+    });
+    for (let n = 0; n < 12 && f.messages() === 0; n++) {
+      f.advance(61_000);
+      await tickPipelines([], f.ports);
+    }
+    expect(f.messages()).toBe(1);
+    expect(f.starts()).toBe(2);
+    expect(f.attempt().state).toBe("running");
+    expect(f.deliveredPrompts).toHaveLength(1);
+    expect(f.deliveredPrompts[0]).not.toContain("Preserve the current privacy filtered launch prompt");
+    expect(f.deliveredPrompts[0]).toBe("Build with [learned rule]");
+  } finally {
+    roleMemoryCollection(true)?.boundedPatch(1, tx => tx.delete("r:retry-after-staged-role-memory-conflict"));
+    setAgentRegistryForTests(null);
+  }
+});
 
 test("a stage launch interrupted before its first message recovers after the runtime host returns", async () => {
   const f = await fixture();

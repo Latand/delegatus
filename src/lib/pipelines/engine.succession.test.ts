@@ -1598,7 +1598,7 @@ for (const engine of ["claude", "codex"] as const) {
       const { persistStructuredUserMetadata } = await import("@/lib/selection/structuredUserMetadata");
       const { structuredContentDigest } = await import("@/lib/runtime/structuredContent");
       const { encodeCodexStructuredUserText } = await import("@/lib/runtime/codexStructuredUserText");
-      const ref = persistStructuredUserMetadata({ version: 1, contentDigest: structuredContentDigest({ text, images: [] }), selectedContext: null, origin });
+      const ref = await persistStructuredUserMetadata({ version: 1, contentDigest: structuredContentDigest({ text, images: [] }), selectedContext: null, origin });
       records = [{ type: "event_msg", timestamp: promptAt, payload: { type: "user_message", message: encodeCodexStructuredUserText(text, ref) } },
         { type: "event_msg", timestamp: promptAt, payload: { type: "task_started" } }];
     }
@@ -1745,7 +1745,7 @@ for (const engine of ["claude", "codex"] as const) {
       const { persistStructuredUserMetadata } = await import("@/lib/selection/structuredUserMetadata");
       const { structuredContentDigest } = await import("@/lib/runtime/structuredContent");
       const { encodeCodexStructuredUserText } = await import("@/lib/runtime/codexStructuredUserText");
-      const ref = persistStructuredUserMetadata({ version: 1, contentDigest: structuredContentDigest({ text, images: [] }), selectedContext: null, origin });
+      const ref = await persistStructuredUserMetadata({ version: 1, contentDigest: structuredContentDigest({ text, images: [] }), selectedContext: null, origin });
       records = [{ type: "event_msg", timestamp: promptAt, payload: { type: "user_message", message: encodeCodexStructuredUserText(text, ref) } },
         { type: "event_msg", timestamp: promptAt, payload: { type: "task_started" } }];
     }
@@ -1909,7 +1909,7 @@ for (const engine of ["claude", "codex"] as const) {
         const { persistStructuredUserMetadata } = await import("@/lib/selection/structuredUserMetadata");
         const { encodeCodexStructuredUserText } = await import("@/lib/runtime/codexStructuredUserText");
         const { structuredContentDigest } = await import("@/lib/runtime/structuredContent");
-        const ref = persistStructuredUserMetadata({ version: 1, contentDigest: structuredContentDigest({ text, images: [] }), selectedContext: null,
+        const ref = await persistStructuredUserMetadata({ version: 1, contentDigest: structuredContentDigest({ text, images: [] }), selectedContext: null,
           origin: author === "pipeline" ? { kind: "agent", role: "pipeline" } : { kind: "operator" } });
         prompt = { type: "event_msg", timestamp: new Date(promptTime).toISOString(), payload: { type: "user_message", message: encodeCodexStructuredUserText(text, ref) } };
       }
@@ -2040,7 +2040,7 @@ for (const parked of [false, true]) {
       f.advance(1_000);
       const { encodeCodexStructuredUserText } = await import("@/lib/runtime/codexStructuredUserText.server");
       const automatic = author === "pipeline" || author === "startup-recovery";
-      const wire = encodeCodexStructuredUserText("Continue the same stage", undefined, null,
+      const wire = await encodeCodexStructuredUserText("Continue the same stage", undefined, null,
         { kind: "agent", role: author === "startup-recovery" ? author : "pipeline" });
       const text = author === "operator" ? "Wait for my answer" : wire;
       const prompt = shape === "user_message" ? { type: "event_msg", payload: { type: "user_message", message: text } }

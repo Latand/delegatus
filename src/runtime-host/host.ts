@@ -1,4 +1,6 @@
 import { performanceSpans } from "@/lib/performanceSpans";
+import { runtimeDataCorruptionCode } from "@/lib/runtime/dataCorruption";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { canonicalNativeQueueProof, type NativeQueueCompactedProof, type NativeQueueTransition } from "@/lib/runtime/nativeQueueContracts";
 import { isStructuredHostKind, parseRuntimeScope, RUNTIME_RECEIPT_STATUSES, RuntimeIdempotencyConflictError, type RuntimeEvent, type RuntimeEventInput, type RuntimeOperationCommand, type RuntimeOperationReceipt, type RuntimeReceiptStatus, type RuntimeSocketRequest, type RuntimeSocketResponse, type RuntimeTransitionDetails } from "@/lib/runtime/contracts";
 import { structuredHostsEnabled } from "@/lib/runtime/flags";
@@ -211,10 +213,11 @@ export class RuntimeHost {
         if (action !== "discard" && action !== "retry") {
           throw new Error("runtime delivery action is invalid");
         }
-        result = this.journal.claimDeliveryAction(
+        result = await withViewerOperation("runtime.rpc", () => this.journal.claimDeliveryActionAsync(
           String(request.params?.operationId ?? ""),
           action,
-        );
+          options.signal,
+        ));
       } else if (request.method === "operation-retry") {
         if (!this.structuredHosts) throw new Error("structured hosts are disabled");
         const nextIdempotencyKey = request.params?.nextIdempotencyKey;
@@ -272,7 +275,7 @@ export class RuntimeHost {
           || !proof) throw new Error("native queue compacted proof is invalid");
         result = this.journal.nativeQueueSettleCompacted({ conversationId: params.conversationId, entryId: params.entryId,
           binding: { threadId: binding.threadId, accountId: binding.accountId }, proof });
-      } else if (request.method === "operation-transition") {
+      } else if (request.method === "operation-transition" || request.method === "operation-confirm-delivery") {
         if (!this.structuredHosts) throw new Error("structured hosts are disabled");
         const status = request.params?.status;
         if (status !== "queued"
@@ -299,6 +302,10 @@ export class RuntimeHost {
           throw new Error("runtime retirement claim is invalid");
         }
         const awaitProjection = request.params?.awaitProjection;
+        const confirmedDelivery = request.method === "operation-confirm-delivery" ? true : request.params?.confirmedDelivery;
+        if (confirmedDelivery !== undefined && (typeof confirmedDelivery !== "boolean" || (confirmedDelivery && status !== "delivered"))) {
+          throw new Error("runtime confirmed delivery flag is invalid");
+        }
         if (awaitProjection !== undefined && typeof awaitProjection !== "boolean") {
           throw new Error("runtime operation projection retention flag is invalid");
         }
@@ -307,7 +314,7 @@ export class RuntimeHost {
             || !RUNTIME_RECEIPT_STATUSES.includes(candidate as RuntimeReceiptStatus)))) {
           throw new Error("runtime operation transition fence is invalid");
         }
-        result = this.journal.transitionOperation(
+        result = await withViewerOperation("runtime.rpc", () => this.journal.transitionOperationAsync(
           String(request.params?.operationId ?? ""),
           status as Exclude<RuntimeReceiptStatus, "pending">,
           details && typeof details === "object" ? details as RuntimeTransitionDetails : {},
@@ -315,15 +322,18 @@ export class RuntimeHost {
             ...(fromStatuses ? { fromStatuses: fromStatuses as RuntimeReceiptStatus[] } : {}),
             ...(retirementClaim ? { retirementClaim } : {}),
             ...(awaitProjection === true ? { awaitProjection: true } : {}),
+            ...(confirmedDelivery === true ? { confirmedDelivery: true } : {}),
           },
-        );
+          options.signal,
+        ));
       } else if (request.method === "operation-projection-ack") {
         if (!this.structuredHosts) throw new Error("structured hosts are disabled");
         const operationIds = request.params?.operationIds;
         if (!Array.isArray(operationIds) || operationIds.some((operationId) => typeof operationId !== "string" || !operationId)) {
           throw new Error("runtime projection acknowledgement ids are invalid");
         }
-        result = this.journal.acknowledgeTerminalProjection(operationIds as string[]);
+        result = await withViewerOperation("runtime.rpc", () =>
+          this.journal.acknowledgeTerminalProjectionAsync(operationIds as string[], options.signal));
       } else if (request.method === "viewer-deployment-request") {
         if (!this.deployments) throw new Error("viewer deployments are disabled");
         result = await this.deployments.requestViewerDeployment({
@@ -355,11 +365,12 @@ export class RuntimeHost {
       } else throw new Error("runtime request method is unsupported");
       return { id: request.id, ok: true, result };
     } catch (error) {
+      const code = error instanceof RuntimeIdempotencyConflictError ? error.code : runtimeDataCorruptionCode(error);
       return {
         id: request.id,
         ok: false,
         error: error instanceof Error ? error.message : "runtime request failed",
-        ...(error instanceof RuntimeIdempotencyConflictError ? { code: error.code } : {}),
+        ...(code ? { code } : {}),
       };
     }
   }

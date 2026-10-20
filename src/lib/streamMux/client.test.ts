@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { createStreamMux, type EventStream, type StreamEvent, type StreamMuxDeps } from "./client";
+import { createStreamMux, followPageLifecycle, type EventStream, type StreamEvent, type StreamMuxDeps } from "./client";
 import { encodeMuxEvent, createSseParser, type MuxOp } from "./protocol";
 
 /** An EventSource under the test's hand. */
@@ -28,7 +28,7 @@ class FakeSource implements EventStream {
   fail(): void { this.onerror?.({ data: "" }); }
 }
 
-function harness() {
+function harness(options: { resumed?: () => void } = {}) {
   const sources: FakeSource[] = [];
   const posts: Array<{ c: string; ops: MuxOp[] }> = [];
   const timers: Array<{ id: number; run: () => void; at: number }> = [];
@@ -71,6 +71,7 @@ function harness() {
       if (index !== -1) timers.splice(index, 1);
     },
     randomId: () => `connection-${String(++nextId).padStart(8, "0")}`,
+    resumed: options.resumed,
   };
   const settle = async () => {
     for (let index = 0; index < 8; index += 1) await Promise.resolve();
@@ -472,4 +473,113 @@ test("a page whose connection worked keeps reconnecting while the route is still
   expect(h.posts.at(-1)).toEqual({ c: "connection-00000007", ops: [{ op: "open", id: "1", url: "/api/self-update/events" }] });
   h.physical()[6]!.carry("1", "state", "back");
   expect(seen.at(-1)).toBe("state back");
+});
+
+test("a page that leaves lets its connection go, and its streams are opened again when it comes back", async () => {
+  const h = harness();
+  const runtime = watch(h.mux.open("/api/runtime/stream?after=40"));
+  const update = watch(h.mux.open("/api/self-update/events"), ["state"]);
+  const gone = h.mux.open("/api/logs/stream?subs=x");
+  h.physical()[0]!.say("ready", "{}");
+  await h.settle();
+  h.physical()[0]!.carry("1", "message", "{\"seq\":41}", "41");
+  /* A stream that ended waits to be reopened when the page leaves. */
+  h.physical()[0]!.say("end", JSON.stringify(["2", 0]));
+  h.posts.length = 0;
+
+  h.mux.suspend();
+  expect(h.physical()[0]!.closed).toBe(true);
+  /* Away for a while: nothing is reopened, retried or asked for, and a stream closed meanwhile says nothing. */
+  gone.close();
+  await h.advance(120_000);
+  expect(h.sources).toHaveLength(1);
+  expect(h.posts).toEqual([]);
+  expect(runtime).toEqual(["message {\"seq\":41} #41"]);
+  expect(update).toEqual(["error"]);
+
+  h.mux.resume();
+  expect(runtime).toEqual(["message {\"seq\":41} #41", "error"]);
+  expect(update).toEqual(["error", "error"]);
+  expect(h.physical()).toHaveLength(2);
+  h.physical()[1]!.say("ready", "{}");
+  await h.settle();
+  expect(h.posts).toEqual([{
+    c: "connection-00000002",
+    ops: [
+      { op: "open", id: "1", url: "/api/runtime/stream?after=40", lastEventId: "41" },
+      { op: "open", id: "2", url: "/api/self-update/events" },
+    ],
+  }]);
+  h.physical()[1]!.carry("2", "state", "back");
+  expect(update.at(-1)).toBe("state back");
+  /* Coming back once more, or leaving twice, changes nothing. */
+  h.mux.resume();
+  expect(h.physical()).toHaveLength(2);
+});
+
+test("a page that comes back runs its resume listener first; a stream closed there hears no error", async () => {
+  let reader: EventStream | null = null;
+  const order: string[] = [];
+  const h = harness({ resumed: () => { order.push("resumed"); reader?.close(); } });
+  reader = h.mux.open("/api/logs/stream?subs=x");
+  reader.onerror = () => order.push("logs error");
+  const kept = h.mux.open("/api/self-update/events");
+  kept.onerror = () => order.push("update error");
+  h.physical()[0]!.say("ready", "{}");
+  await h.settle();
+  h.mux.suspend();
+  h.mux.suspend();
+  h.posts.length = 0;
+
+  h.mux.resume();
+  expect(order).toEqual(["resumed", "update error"]);
+  h.physical()[1]!.say("ready", "{}");
+  await h.settle();
+  expect(h.posts).toEqual([{ c: "connection-00000002", ops: [{ op: "open", id: "2", url: "/api/self-update/events" }] }]);
+});
+
+test("a page that reads its streams the plain way closes them as it leaves and opens them again as it returns", async () => {
+  const h = harness();
+  const seen = watch(h.mux.open("/api/runtime/stream?after=0"), ["heartbeat"]);
+  h.posts.length = 0;
+  h.answers.push(403);
+  h.physical()[0]!.say("ready", "{}");
+  await h.settle();
+  expect(h.plain()).toHaveLength(1);
+
+  h.mux.suspend();
+  expect(h.plain()[0]!.closed).toBe(true);
+  /* Opened while the page is away: it waits for the page too. */
+  h.mux.open("/api/self-update/events");
+  await h.advance(60_000);
+  expect(h.plain()).toHaveLength(1);
+
+  h.mux.resume();
+  expect(seen).toEqual(["error"]);
+  expect(h.plain().map((source) => [source.url, source.closed])).toEqual([
+    ["/api/runtime/stream?after=0", true],
+    ["/api/runtime/stream?after=0", false],
+    ["/api/self-update/events", false],
+  ]);
+  h.plain()[1]!.say("heartbeat", "{}");
+  expect(seen).toEqual(["error", "heartbeat {}"]);
+  expect(h.physical()).toHaveLength(1);
+});
+
+test("the page lifecycle suspends the streams on pagehide and freeze, and resumes them only from the cache or a freeze", () => {
+  const calls: string[] = [];
+  const page = new EventTarget();
+  const doc = new EventTarget();
+  followPageLifecycle({ suspend: () => calls.push("suspend"), resume: () => calls.push("resume") }, page, doc);
+  const transition = (type: string, persisted: boolean) => Object.assign(new Event(type), { persisted });
+
+  /* A first load's pageshow is not a return. */
+  page.dispatchEvent(transition("pageshow", false));
+  page.dispatchEvent(transition("pagehide", true));
+  page.dispatchEvent(transition("pageshow", true));
+  doc.dispatchEvent(new Event("freeze"));
+  doc.dispatchEvent(new Event("resume"));
+  /* Merely hidden is not leaving. */
+  doc.dispatchEvent(new Event("visibilitychange"));
+  expect(calls).toEqual(["suspend", "resume", "suspend", "resume"]);
 });

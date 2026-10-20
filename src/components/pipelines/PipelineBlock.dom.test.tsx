@@ -18,7 +18,7 @@ const dom = new Window({ url: "http://localhost/", width: 1440, height: 900 });
 const G = globalThis as Record<string, unknown>;
 const OVERRIDES: Record<string, unknown> = {
   window: dom, document: dom.document, navigator: dom.navigator, Node: dom.Node, HTMLElement: dom.HTMLElement,
-  Event: dom.Event, MouseEvent: dom.MouseEvent, KeyboardEvent: dom.KeyboardEvent, localStorage: dom.localStorage,
+  Event: dom.Event, CustomEvent: dom.CustomEvent, MouseEvent: dom.MouseEvent, KeyboardEvent: dom.KeyboardEvent, localStorage: dom.localStorage,
   ResizeObserver: undefined,
   requestAnimationFrame: (cb: (t: number) => void) => setTimeout(() => cb(0), 0) as unknown as number,
   cancelAnimationFrame: (id: number) => clearTimeout(id),
@@ -99,6 +99,35 @@ const click = (element: Element | null | undefined) => {
   flushSync(() => (element as HTMLElement).click());
 };
 const texts = (host: Element, selector: string) => [...host.querySelectorAll(selector)].map((node) => node.textContent);
+
+test("historical follow-up receipts open their task from desktop rows and phone screens", () => {
+  const opened: unknown[] = [];
+  const listen = (event: Event) => opened.push((event as CustomEvent).detail);
+  window.addEventListener("llv:mcp-navigate", listen);
+  try {
+    for (const lang of ["en", "uk"] as const) for (const density of ["task", "screen"] as const) {
+      setLocale(lang);
+      const pipeline = Object.assign(searchPipeline(), { reviewBudgetSpent: {
+        stageId: "verify", attempt: 2, findings: 1, head: "a".repeat(40), at: iso(60),
+        followUp: { taskId: "task-follow-up", title: "Repair retained findings", at: iso(60) },
+      } });
+      const host = mount(<PipelineBlock summary={summarizePipeline(pipeline)} density={density} nowMs={NOW_MS} />);
+      const link = host.querySelector<HTMLButtonElement>("[data-pipeline-follow-up]");
+      expect(link?.textContent).toBe("Repair retained findings");
+      expect(link?.disabled).toBe(false);
+      click(link);
+      expect(opened.at(-1)).toEqual({ kind: "task", id: "task-follow-up" });
+    }
+    for (const receipt of [undefined, {}, { followUp: {} }, { followUp: { taskId: "", title: "Missing id" } }, { followUp: { taskId: "task-follow-up", title: 42 } }]) {
+      const pipeline = Object.assign(searchPipeline(), { reviewBudgetSpent: receipt });
+      const host = mount(<PipelineBlock summary={summarizePipeline(pipeline)} density="task" nowMs={NOW_MS} />);
+      expect(host.querySelector("[data-pipeline-follow-up]")).toBeNull();
+    }
+  } finally {
+    window.removeEventListener("llv:mcp-navigate", listen);
+    setLocale("en");
+  }
+});
 
 test.each(["card", "task", "screen"] as const)("%s lanes show their disk wait and clear it after recovery", density => {
   const detail = "waiting for disk space: temp has 0.50 GiB free (needs 2.00 GiB); retries automatically";

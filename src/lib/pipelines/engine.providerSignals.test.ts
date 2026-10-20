@@ -101,7 +101,7 @@ for (const engine of ["claude", "codex"] as const) {
       const text = "Continue the same stage";
       const at = f.h.ports.now();
       if (engine === "claude") records.push({ type: "user", uuid: `continued-${shape}`, timestamp: at, message: { content: text } });
-      else records.push({ type: "event_msg", timestamp: at, payload: { type: "user_message", message: (await import("@/lib/runtime/codexStructuredUserText.server")).encodeCodexStructuredUserText(text, undefined, null, { kind: "agent", role: "pipeline" }) } },
+      else records.push({ type: "event_msg", timestamp: at, payload: { type: "user_message", message: await (await import("@/lib/runtime/codexStructuredUserText.server")).encodeCodexStructuredUserText(text, undefined, null, { kind: "agent", role: "pipeline" }) } },
         { type: "event_msg", timestamp: at, payload: { type: "task_started" } });
       if (shape !== "open") {
         f.advance(1_000);

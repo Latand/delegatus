@@ -274,10 +274,24 @@ On Unix the sandbox lives under `/var/tmp`, including when a pipeline inherits
 a `TMPDIR` under the operator's scratch tree. Browser tests keep their rendered
 capture drivers and are not selected by the hook.
 
-Touched tests run the branch first, up to four explicit head files at once, each
+Touched tests run the branch first, up to eight explicit head files at once, each
 in its own owned process and isolated roots. A green branch skips the baseline
 entirely. For a red branch, only failing files run on the merge base, filtered
-to failing assertions; runner diagnostics need the whole file. The three verdicts read as follows.
+to failing assertions; runner diagnostics need the whole file. Both kinds share
+one three-worker baseline pool, with the filter chosen per file.
+
+The publisher and direct hook share `src/lib/pipelines/gateBudget.ts`.
+Changes to `src/lib/pipelines/engine.ts` and its `engine.*.ts` siblings,
+`src/lib/pipelines/git.ts` or `src/lib/pipelines/parkedPublication.test.ts`
+reserve 25 minutes for the push and 24 for its hook. Other changes retain 15
+and 14 minutes. The publisher applies this rule
+to repositories using `scripts/local-gate-tests.ts`; other repositories keep
+their existing 15-minute limit. An unreadable diff in an opted-in repository
+reserves the larger bounded window. All checks still owe a verdict, and an
+explicit caller deadline takes precedence. File, phase and paired-confirmation
+budgets remain unchanged.
+
+The three verdicts read as follows.
 `PRE-EXISTING`: the assertion failed the initial sample on both sides. It is
 classified on those two samples, runs no further, and permits the push.
 `FLAKY`: the assertion failed the initial head sample, passed the initial base
@@ -371,16 +385,18 @@ stage, a branch that only trails `origin/main`) runs privacy with
 `.txt` files skips types. Any other changed file keeps every scoped check.
 The native Codex phase runs the files that start the Codex executable once per
 supported version (`verify-native-codex-runtime.ts --engine-only`) and the rest
-once (`--shared-only`), all three at the same time. Local publication gives the
-shared selection its merge base through `LLV_GATE_COMPARE_BASE`; it uses the
+once (`--shared-only`), with those checks running concurrently. Local publication
+gives the shared selection its merge base through `LLV_GATE_COMPARE_BASE`; it uses the
 same isolated comparator and bounded retries as touched tests. Hosted shared
 verification keeps its absolute verdict. Both modes isolate every file's
 roots and preserve nested service CPU placement and admission accounting.
 A caller that kills the
 push at a limit of its own hands the hook a Unix-millisecond deadline in
 `LLV_GATE_PUSH_DEADLINE`; the controller's publication sets it a minute before
-its fifteen-minute limit. The fetch of `origin/main`, a cold-cache Bun or Codex
-install and every step use that execution deadline. CPU queue waits extend it,
+the selected 15- or 25-minute push limit. With a supplied deadline, the fetch
+of `origin/main`, a cold-cache Bun or Codex install and every step use it.
+A direct hook derives the same default after planning when no caller supplied
+one; its initial fetch and planning precede that default. CPU queue waits extend it,
 including waits during installation and earlier steps; once the remaining
 execution budget is spent, nothing starts. A stopped step takes with it every process
 that inherited its environment and every scope `gate-slot.sh` gave it; one that
