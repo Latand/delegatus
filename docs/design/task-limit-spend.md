@@ -431,6 +431,9 @@ Common to all three:
   12 px in `--color-claude-mark` / `--color-codex-mark`: Claude's spark and
   Codex's disc differ in shape, so colour never carries the engine alone.
   Amber stays reserved for trust (a lower bound), as on the Activity page.
+- Providers keep one fixed order everywhere, Claude then Codex: on the face,
+  in the popover and on the phone's task screen. Each mark keeps its slot from
+  card to card; ordering by size would swap them within one column.
 - The popover opens the way `CardStateDot` does (hover, focus or tap; Escape
   closes; `TooltipBubble`, `src/components/kanban/CardStateLine.tsx:24-65`).
   No pill, no new row type, no glass.
@@ -471,10 +474,14 @@ Common to all three:
 
 - Where: the end of the card's state line (`CardStateLine`), where the
   priority mark sits, beside the status dot that line already has.
-- Face: per provider the engine mark and a 10 px quarter-filled circle:
-  empty below 1 %, a quarter from 1 to 4 %, half from 5 to 14 %, three
-  quarters from 15 to 29 %, full from 30 %. No digits on the face. The fill
-  steps differ by shape, so they read without colour.
+- Face: per provider the engine mark and a 15 × 8 px bar of four cells:
+  none filled below 1 %, one from 1 to 4 %, two from 5 to 14 %, three from
+  15 to 29 %, four from 30 %. No digits on the face. The steps differ by
+  count, so they read without colour, and a bar never reads as the round
+  engine mark or the status dot.
+- Popover account lines put the task's figure in a fixed slot, its sign (<, ≥)
+  right-aligned in a cell of its own, so «задача» and the digits start at one
+  x on every line; each provider's block stands apart from the next.
 - Popover: the numbers of variant 1, and one thin bar per account in the
   sidebar's window-line style (`src/components/LimitRow.tsx:14-35`): the
   account's week used so far in muted ink, the task's part in the engine's
@@ -485,12 +492,15 @@ Common to all three:
 
 ### 7.3 Варіант 3 з 3 — на ланцюжку лейну
 
-- Where: the end of each lane's chain row (`PipelineBlock`, the `aside` slot
-  of the closed card, `KanbanCard.tsx:686-697`, and each lane row of the open
-  card), after the PR link: `PR #3048 · ✳3% ◉2%`. The closed card's row keeps
-  its «+2 лейни» aside; the task total is in the popover, and on the open card
-  in the foot only when the card holds two or more lanes or agents outside a
-  lane.
+- Where: each lane's aside line (`PipelineBlock`'s `pb-aside`,
+  `src/components/pipelines/PipelineBlock.tsx:649`, filled by the closed card
+  at `KanbanCard.tsx:686-697`, and each lane row of the open card), right
+  under the PR link: `✳ ≈3% ◉ ≈2%`. The chain row itself stays as it is
+  without figures, so the chain folds no further and PR links keep one right
+  edge down a column. A finished card puts its figures at the end of its state
+  line. A lane with no figure yet has no aside line. The task total is in the
+  popover, and on the open card in the foot only when the card holds two or
+  more lanes or agents outside a lane.
 - Popover, per lane and provider: the provider's total, then its stages
   ranked by their share of it, at most three and the rest in one line. For the
   lane of §1.5: «✳ Claude ≈3% тижня: build-ui 53%, review-ui 22%, fix-ui 18%,
@@ -498,10 +508,11 @@ Common to all three:
   fix-data 4%»; then the accuracy line. Shares keep the ranking readable where
   each stage alone is under one point, and they claim no more precision than
   the total has. It answers which stage spent the limit.
-- Phone: the face's lane row (`PipelineBlock density="card"`) carries the same
-  figures passively; the lane screen lists stages with their figures.
-- Risk the critic should measure: the chain row is the fullest row on a
-  280 px card, and the figures may push the PR link to a second line.
+- Phone: the face's lane block (`PipelineBlock density="card"`) carries the
+  same aside line passively; the task screen's «Ліміти» section lists stages
+  with their figures.
+- Cost: one more row on each running card that has figures. Putting them on
+  the chain row instead moved the PR link and folded the chain.
 
 ## 8. Questions for the operator (publish stage)
 

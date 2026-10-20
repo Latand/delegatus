@@ -79,11 +79,9 @@ body { font-family: var(--font-sans); }
 .spend-p[data-kind="floor"] .scale { color: var(--color-warning); }
 .spend-p .scale-floor { font-weight: 600; color: var(--color-warning); margin-right: -1px; }
 
-/* Variant 3: after the lane's PR on its chain row. A finished card has no
-   moving lane: its figures sit at the end of the state line (above), so its
-   PR keeps the place it has on every finished card. */
-.pblock .spend { margin-left: 2px; }
-.pblock .spend-sep { color: var(--color-muted); }
+/* Variant 3: in the lane's aside line (PipelineBlock's pb-aside), right under
+   its PR, so the chain row keeps its stages and the PR its place. A finished
+   card has no moving lane: its figures sit at the end of the state line. */
 
 /* Done cards sit on the quiet surface; Codex's cut-out follows it. */
 .kb .card.done .spend, [data-phone-card][class*="bg-quiet"] .spend { --engine-mark-cut: var(--surface-quiet); }
@@ -95,7 +93,11 @@ body { font-family: var(--font-sans); }
 .spend[role="button"]:is(:hover, :focus-visible) > .spend-pop, .spend-pop[data-open] { display: block; }
 .spend-pop .pop-title { display: block; font-weight: 600; margin-bottom: 4px; }
 .spend-pop .pop-row { display: flex; align-items: flex-start; gap: 5px; }
-.spend-pop .pop-row + .pop-row, .spend-pop .pop-block + .pop-block { margin-top: 4px; }
+.spend-pop .pop-row + .pop-row { margin-top: 4px; }
+/* Variant 2: a provider's block (headline, account lines, note) stands apart
+   from the next one by more than its own 18 px lines do. */
+.spend-pop .pop-block { display: block; }
+.spend-pop :is(.pop-row, .pop-block) + .pop-block, .spend-pop .pop-block + .pop-row { margin-top: 8px; }
 .spend-pop .pop-row > [data-engine-mark] { margin-top: 2px; }
 .spend-pop .pop-main { min-width: 0; }
 .spend-pop .pop-main b { font-weight: 600; }
@@ -110,6 +112,11 @@ body { font-family: var(--font-sans); }
 .spend-pop .meter-label { flex: 1 0 auto; color: var(--color-secondary); white-space: nowrap; }
 .spend-pop .meter-value { flex: none; color: var(--color-muted); font-variant-numeric: tabular-nums; }
 .spend-pop .meter-value b { color: var(--color-primary); font-weight: 600; }
+/* The task's figure in a fixed slot: its sign (<, ≥) right-aligned in a cell
+   of its own, so «задача» and the digits start at one x on every line. */
+:is(.spend-pop, .phone-spend) .meter-sign { display: inline-block; width: 0.7em; text-align: right; }
+:is(.spend-pop, .phone-spend) .meter-sign:empty::before { content: "\00a0"; }
+:is(.spend-pop, .phone-spend) .meter-num { display: inline-block; min-width: 2.6em; text-align: left; }
 .spend-pop:has(.meter) { max-width: 320px; }
 .spend-pop .meter-bar { position: relative; display: block; flex: none; width: 44px; height: 4px; overflow: hidden; border-radius: 999px; background: var(--surface-sunken); }
 .spend-pop .meter-bar .week { position: absolute; inset: 0 auto 0 0; background: var(--border-strong); }
