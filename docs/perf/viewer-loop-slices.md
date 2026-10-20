@@ -88,33 +88,34 @@ behavior is covered by the existing API tests, with no speed claim here.
 
 ## Independent review follow-up
 
-The follow-up comparison is [the raw review record](../../evidence/perf/viewer-loop-slices-review.json),
-completed at 09:44:44Z on the same Bun 1.4.0, package lock, synthetic corpus,
-three alternating repeats, and one request at a time. Its `before` arm is the
-then-current branch; `after` contains the review fixes. Both arms used 804
-pipelines with 89,807,612 bytes in the supported `spec` field, 1,200 tasks,
-3,500 memory entries / 1,699,912 bytes, and 53,299 registry rows /
-218,442,053 bytes. The registry digest matches. There were no synthetic
-agents. The host load averages ranged from 15.73 to 20.67 while the Viewer
-cgroup was limited to 3 CPUs and 8 GiB. These wall timings include any
-scheduling delay and the raw record preserves each request's measured load.
+The regenerated comparison is [the raw review record](../../evidence/perf/viewer-loop-slices-review.json),
+completed at 11:35:11Z on Bun 1.4.0, with three alternating repeats and one
+request at a time. Its `before` arm is the base export; `after` is the committed
+fix source, identified by its digest in the record. Both arms used the same
+804 pipelines / 89,848,013 bytes, 603 open lanes, 201 own settled lanes, active
+seat, 1,200 tasks, 3,500 memory entries / 1,699,912 bytes, and 53,299 registry
+rows / 218,547,668 bytes. The registry corpus digest matches. There were no
+synthetic agents. The tightest cgroup limit was 3 CPUs and 8 GiB; observed host
+load averages ranged from 18.13 to 28.01. Wall timings include scheduling
+delay, and each request records its load.
 
 | Cause and final slice | Before: sampled / exclusive s; gap p95/max ms | After: sampled / exclusive s; gap p95/max ms | Loop work and scale |
 | --- | --- | --- | --- |
-| Memory refresh: `src/lib/memory/service.ts:39` | 0.032 / n/a; 0.09 / 10.48 | 0.023 / n/a; 0.12 / 8.41 | The parent hands refresh to the existing helper, so the request has no exclusive synchronous operation span to sum. The worker still scans changed sources and indexes entries; that cost scales with source bytes and entries. |
-| Seat projection and hashing: `src/lib/monitor/seatTickSources.ts:2475`, `:2563`; own lanes `:976` | 0.492 / 0.238; 16.26 / 42.16 | 0.498 / 0.245; 30.17 / 66.57 | The old evidence pass synchronously revisited populated specs and attempts. Current preparation refreshes immutable-row evidence in cooperative slices; lane selection keeps the newest 20 during traversal before projecting review details. The measured input has 804 lanes, populated `spec`, and 6,000 attempts on the selected lane. The largest named projection span after the fix was 42.40 ms. |
-| Auto-merge sweep: `src/lib/forge/autoMerge.ts:745` | 0.722 / 0.014; 32.00 / 281.72 | 0.699 / 0.013; 26.25 / 316.05 | The old prefix filter/map and admission scan ran before the first yield; each repository queue was sorted before selecting its head. Current prune, admission, and queue passes yield during traversal, keeping each repository's oldest eligible lane as they go. |
-| Registry cold and warm preparation: `src/lib/agent/sqliteRegistryStore.ts:1754`, `:1956`, `:2005`, `:2537` | Cold 4.144 / 5.056; 13.01 / 111.24; warm 4.663 / 4.763; 14.12 / 313.92 | Cold 4.692 / 5.773; 10.18 / 92.03; warm 5.439 / 5.700; 9.63 / 329.83 | Former synchronous journal/header/projection drains now iterate and yield through `registry.prepare.slice` and `registry.headers`, with an 8 ms target. The row fetch/decode batch is capped at 16. Three warm peer archives were applied to one prepared reader. Largest named `registry.prepare.slice` spans were 92.97 ms cold and 94.72 ms warm; these are measured wall spans under the host load above. |
-| Cold session target: `src/lib/agent/registry.ts:11493`, `src/app/api/session/route.ts:19` | 5.234 / 0.375; 16.41 / 241.98 | 0.063 / 0.039; 13.16 / 42.12 | The old facade constructor drained all cold keys synchronously and retained a 5 s busy timeout. The current request opens with async state-lock admission and zero-timeout SQLite access, then resolves the conversation through keyed rows without a full cold-key scan. |
+| Memory refresh: `src/lib/memory/service.ts:39` | 1.642 / 2.350; 825.63 / 826.54 | 0.024 / n/a; 1.13 / 20.94 | The Viewer dispatches refresh to its helper. The request has no exclusive synchronous span; helper work still scales with changed source bytes and entries. |
+| Seat projection and hashing: `src/lib/monitor/seatTickSources.ts:2457`, `:2472-2483`, `:2606`; own lanes `:1000` | 1.387 / n/a; 310.99 / 351.98 | 0.539 / 0.475; 28.51 / 48.29 | The corpus has 603 open lanes, 201 own settled lanes and 6,000 attempts on one selected lane. First request replaces the frozen source during preparation and verifies populated spec output; two stable repeats exercise the warm projection. Candidate samples 0.463 s in named projection and 0.012 s hashing across three runs; 1,270 detailed spans (79.48 ms) overflowed the bounded 1,024-record recorder and are explicitly counted in the raw record. |
+| Auto-merge sweep: `src/lib/forge/autoMerge.ts:745` | 7.835 / 5.042; 3,561.42 / 3,862.29 | 0.548 / 0.367; 45.88 / 139.73 | The old prefix filter/map and admission scan ran before the first yield; repository queues were sorted before selecting a head. Current prune, admission and queue passes yield during traversal. Six tail mutations per request. |
+| Registry cold preparation: `src/lib/agent/sqliteRegistryStore.ts:1572`, `:1576` | 4.047 / 4.935; 35.46 / 192.11 | 5.812 / 7.472; 11.95 / 153.51 | Preparation iterates and yields through `registry.prepare.slice` and `registry.headers`; the batch cap is 16. CPU rises as cooperative iteration and instrumentation replace whole-result drains. |
+| Registry warm refresh: `src/lib/agent/sqliteRegistryStore.ts:1572`, `:1576` | 1.506 / 1.023; 627.08 / 744.08 | 6.343 / 7.277; 16.31 / 341.61 | Three peer archives invalidate the prepared view. Current preparation keeps loop gaps lower while doing more CPU work and retaining the old view's lazy reader until its last user releases it. |
+| Cold session target: `src/lib/agent/registry.ts`, `src/app/api/session/route.ts:19` | 3.793 / 4.496; 1,521.80 / 1,932.61 | 0.080 / 0.051; 12.87 / 85.91 | The old facade constructor drained cold keys synchronously. Current reads use async admission and keyed rows without a full cold-key scan. |
 
-This follow-up measures the actual seat evidence projection and attempt history,
-three warm archive invalidations on one prepared reader, the auto-merge prefix
-and eligible queue, and the cold session facade through its first answer. Every
-request retained its operation attribution: 0 unresolved samples and 0 dropped
-spans across 36 requests. The record includes per-request load, source and
-bundle digests, sampled time, exclusive spans, timer gaps and longest named
-slices. The earlier comparison above remains the original before/after record;
-this table supplies the independent review cases it did not exercise.
+This follow-up measures the seat evidence projection and attempt history, three
+warm archive invalidations, the auto-merge queue and cold session facade. All
+36 requests had zero unresolved profiler samples. The seat projection generated
+more than the recorder's bounded 1,024-span ring; dropped span count and summed
+duration are preserved in the raw record, and the longest named spans remain
+available. The record also keeps per-request load, source and bundle digests,
+CPU, exclusive spans, timer gaps and longest slices. The earlier comparison
+above remains the original record; this table replaces its former follow-up.
 
 The paired `before` source identifies the handed synchronous slices: the warm
 registry called `preparedReader.readOnlySnapshot()` at

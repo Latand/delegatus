@@ -67,11 +67,13 @@ fs.mkdirSync(path.dirname(memoryFile), { recursive: true });
 const memoryText = "v1\n## User preferences\n" + Array.from({ length: 3500 }, (_, i) =>
   `- Preserve synthetic receipt ${i}. ${"Check the persisted evidence. ".repeat(15)}`).join("\n");
 let iteration = 0;
+let seatSourceReplaced = false;
 const sources = {
   prepareRead: async () => { await loadPipelinesForListAsync(); }, now: () => NOW,
   settings: () => defaultSeatTickSettings("fixture"), seatFor: () => ({ active: { conversationId: "benchmark-seat", seatEpoch: 1, path: null, designatedAt: new Date(NOW).toISOString(), turn: "idle", activity: null }, pending: null, history: [] }), activeSeats: () => ["fixture"],
   pipelines: () => sourcePipelines, archivedPipelines: () => [], tasks: () => tasks,
   registry: () => ({
+    seatTickConversation: () => null,
     pageSeatChildren: () => ({ file: { entries: {}, receipts: {}, lineageEdges: {}, memberships: {}, conversations: {}, conversationAliases: {} },
       keys: [], after: null, complete: true, evidenceGap: false }),
     readOnlySnapshot: () => ({ entries: {}, receipts: {}, lineageEdges: {}, memberships: {}, conversations: {}, conversationAliases: {} }),
@@ -124,14 +126,19 @@ const cases = {
   },
   seat: async () => {
     const input = await gatherSeatTickInput("fixture", emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, sources);
-    setImmediate(() => {
-      sourcePipelines = Object.freeze(sourcePipelines.map((pipeline, index) => index === 0
-        ? Object.freeze({ ...pipeline, task: "", spec: `replacement spec projection #654321\n${"Evidence changed. ".repeat(1200)}` }) : pipeline));
-    });
+    const replacedDuringPreparation = !seatSourceReplaced;
+    if (replacedDuringPreparation) {
+      seatSourceReplaced = true;
+      setImmediate(() => {
+        sourcePipelines = Object.freeze(sourcePipelines.map((pipeline, index) => index === 0
+          ? Object.freeze({ ...pipeline, task: "", spec: `replacement spec projection #654321\n${"Evidence changed. ".repeat(1200)}` }) : pipeline));
+      });
+    }
     const refreshed = await refreshSeatTickEvidence(input, sources);
     return { pipelines: refreshed.pipelines.length, ownLanes: refreshed.ownLanes.length,
       specTitle: refreshed.pipelines[0]?.title ?? null,
-      specProjected: refreshed.pipelines[0]?.title.startsWith("replacement spec projection") ?? false };
+      specProjected: refreshed.pipelines[0]?.title.startsWith("replacement spec projection") ?? false,
+      replacedDuringPreparation };
   },
   merge: async () => {
     for (let i = 0; i < 6; i++) await ports.mutate(pipelines[pipelines.length - 1 - i]!.id, row => { row.stateDetail = `sample-${++iteration}`; return true; });
@@ -201,7 +208,8 @@ const server = Bun.serve({
       gaps.sort((a, b) => a - b);
       return Response.json({ name, elapsed: performance.now() - start, profiledSyncMs: traces.filter(trace => trace.frames.length > 0).length, unresolvedSamples: traces.filter(trace => !trace.frames.length).length, cpu: process.cpuUsage(cpu), load: os.loadavg(),
         gapP95: gaps[Math.floor(gaps.length * .95)] ?? 0, gapMax: gaps.at(-1) ?? 0,
-        exclusiveMs, spansDropped: spans.dropped, top: [...frames].sort((a, b) => b[1] - a[1]).slice(0, 18),
+        exclusiveMs, spansDropped: spans.dropped, spansDroppedMs: spans.droppedMs,
+        top: [...frames].sort((a, b) => b[1] - a[1]).slice(0, 18),
         longestSlices: sync.toSorted((a, b) => b.maxMs - a.maxMs).slice(0, 8).map(span => ({ site: performanceSites[span.site], maxMs: span.maxMs })),
         ...(name === "memory" || name === "session" || name === "seat" ? { answer } : {}) });
     } finally { clearInterval(timer); }
