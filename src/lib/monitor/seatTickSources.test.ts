@@ -2109,7 +2109,7 @@ function childGather(fixture: Omit<ChildRegistry, "spawn">, over: Parameters<typ
 
 /** A production SQLite layout with fixed identities and clocks for recovery
  * regressions. The JSON seed is normalized by the production reader. */
-function replayChildren(name: string, cases: { title: string; unobserved?: boolean; host?: "dead" | "live"; ledger?: boolean; admissionOwned?: boolean }[]) {
+function replayChildren(name: string, cases: { title: string; unobserved?: boolean; host?: "dead" | "live"; ledger?: boolean | "partial"; generations?: number; admissionOwned?: boolean }[]) {
   const dir = fs.mkdtempSync(path.join(SANDBOX, `${name}-`));
   const cwd = path.join(dir, "repo");
   fs.mkdirSync(cwd);
@@ -2125,19 +2125,23 @@ function replayChildren(name: string, cases: { title: string; unobserved?: boole
   const workers = cases.map((options, index) => {
     const id = `conversation_${name}_${index}`;
     const launchId = `${name}-launch-${index}`;
-    const digest = createHash("sha256").update(`${name}/${index}`).digest("hex");
-    const generation = `${digest.slice(0, 8)}-${digest.slice(8, 12)}-${digest.slice(12, 16)}-${digest.slice(16, 20)}-${digest.slice(20, 32)}`;
-    const childPath = path.join(SESSIONS, `${generation}.jsonl`);
-    fs.writeFileSync(childPath, "");
-    fs.utimesSync(childPath, NOW / 1000 - 60, NOW / 1000 - 60);
-    const key = sessionKeyFromTranscript("claude", childPath)!;
+    const generations = Array.from({ length: options.generations ?? 1 }, (_, generationIndex) => {
+      const digest = createHash("sha256").update(`${name}/${index}/${generationIndex}`).digest("hex");
+      const id = `${digest.slice(0, 8)}-${digest.slice(8, 12)}-${digest.slice(12, 16)}-${digest.slice(16, 20)}-${digest.slice(20, 32)}`;
+      const transcriptPath = path.join(SESSIONS, `${id}.jsonl`);
+      fs.writeFileSync(transcriptPath, "");
+      fs.utimesSync(transcriptPath, NOW / 1000 - 60, NOW / 1000 - 60);
+      return { id, path: transcriptPath, key: sessionKeyFromTranscript("claude", transcriptPath)! };
+    });
+    const latest = generations.at(-1)!;
+    const { id: generation, path: childPath, key } = latest;
     const profile = emptyLaunchProfile({ cwd, title: options.title });
     const seed = normalizeRegistry({ version: 2, entries: {}, receipts: {
       [launchId]: { launchId, conversationId: id, engine: "claude", cwd, createdAt,
         state: options.unobserved ? "starting" : "completed", transport: "structured", launchProfile: profile,
         admissionOwner: options.admissionOwned ? { pid: 42, startIdentity: null } : null,
         artifactPath: options.unobserved ? null : childPath, key: options.unobserved ? null : key },
-    }, conversations: options.unobserved ? {} : { [id]: conversation(id, [{ id: generation, path: childPath, accountId: null, launchProfile: profile, host: null, createdAt }]) } });
+    }, conversations: options.unobserved ? {} : { [id]: conversation(id, generations.map((item) => ({ id: item.id, path: item.path, accountId: null, launchProfile: profile, host: null, createdAt }))) } });
     Object.assign(file.receipts, seed.receipts);
     Object.assign(file.conversations, seed.conversations);
     if (options.host) file.entries[`claude:${generation}`] = { key, artifactPath: childPath, cwd, accountId: null,
@@ -2147,10 +2151,15 @@ function replayChildren(name: string, cases: { title: string; unobserved?: boole
       source: "viewer-spawn", kind: "spawn", role: null, reviewsConversationId: null, createdAt, evidence: { launchId, clientAttemptId: null } };
     if (options.ledger) {
       const ledger = new FileRuntimeEventStore(statePath("structured-host-events"));
-      ledger.append(generation, { kind: "turn-started", turnId: "turn-one", seq: 1 });
-      ledger.append(generation, { kind: "turn-ended", turnId: "turn-one", status: "completed", seq: 2 });
+      for (const [generationIndex, item] of generations.entries()) {
+        ledger.append(item.id, { kind: "turn-started", turnId: `turn-${generationIndex}-one`, seq: 1 });
+        ledger.append(item.id, { kind: "turn-ended", turnId: `turn-${generationIndex}-one`, status: "completed", seq: 2 });
+        if (options.ledger === "partial" && generationIndex === generations.length - 1) {
+          ledger.append(item.id, { kind: "turn-started", turnId: "abandoned-turn", seq: 3 });
+        }
+      }
     }
-    return { id, launchId, path: childPath, generation };
+    return { id, launchId, path: childPath, generation, generations: generations.map((item) => item.id) };
   });
   const store = new SqliteAgentRegistryStore(filename, { normalize: normalizeRegistry, initialSnapshot: file });
   store.close();
@@ -2274,6 +2283,47 @@ test("a lost transcript and ledger resolve once while retained outcomes stay owe
   const again = await childGather(fixture, {}, lost.state);
   expect(again.childrenUnavailable).toBeNull();
   expect(accounting.ready(10)).toHaveLength(2);
+});
+
+test("a hostless partial ledger names its abandoned turn and keeps earlier and later outcomes", async () => {
+  const fixture = replayChildren("partial-ledger", [{ title: "host died during second turn", host: "dead", ledger: "partial" }]);
+  const worker = fixture.workers[0]!;
+  fs.unlinkSync(worker.path);
+  let input = await childGather(fixture);
+  const accounting = new SeatTickAccounting(input.state.accounting!.filename, fixture.project);
+  expect(input.childrenUnavailable).toBeNull();
+  expect(accounting.ready(10).map(row => row.input.outcome)).toEqual(["finished", "failed"]);
+  for (let tick = 0; tick < 2; tick += 1) {
+    input = await childGather(fixture, {}, input.state);
+    expect(input.childrenUnavailable).toBeNull();
+  }
+  expect(accounting.ready(10).map(row => row.input.outcome)).toEqual(["finished", "failed"]);
+  const ledger = new FileRuntimeEventStore(statePath("structured-host-events"));
+  ledger.append(worker.generation, { kind: "turn-ended", turnId: "abandoned-turn", status: "interrupted", seq: 4 });
+  input = await childGather(fixture, {}, input.state);
+  expect(input.childrenUnavailable).toBeNull();
+  expect(accounting.ready(10).map(row => row.input.outcome)).toEqual(["finished", "failed", "failed"]);
+});
+
+test("a proven latest-generation completion stays placed through historical polls and acknowledgment", async () => {
+  const fixture = replayChildren("historical-generations", [{ title: "two completed generations", host: "dead", ledger: true, generations: 2 }]);
+  let input = await childGather(fixture);
+  const accounting = new SeatTickAccounting(input.state.accounting!.filename, fixture.project);
+  input = await childGather(fixture, {}, input.state);
+  expect(input.childrenUnavailable).toBeNull();
+  expect(input.children.some(child => child.status === "terminal" && child.outcome === "finished")).toBe(true);
+  const outcomes = accounting.ready(10);
+  expect(outcomes).toHaveLength(2);
+  const wake = { clientMessageId: "harvest-both-generations", conversationId: fixture.seatId, seatEpoch: 7,
+    operationId: null, commit: { proposal: false, reasons: [], fingerprint: "two-generations", eventsThrough: 0, children: outcomes.map(row => row.identity) } };
+  expect(accounting.prepare(accounting.readState(), wake)).toBe(true);
+  expect(accounting.settle(wake.clientMessageId, { ...accounting.readState(), lastWakeAt: new Date(fixture.now).toISOString() }, "landed")).toBe(true);
+  for (let tick = 0; tick < 4; tick += 1) {
+    input = await childGather(fixture, {}, input.state);
+    expect(input.childrenUnavailable).toBeNull();
+    expect(input.children.some(child => child.status === "unknown")).toBe(false);
+  }
+  expect(accounting.ready(10)).toEqual([]);
 });
 
 test("retained structured custody keeps a completed child running until the registry clears it", async () => {

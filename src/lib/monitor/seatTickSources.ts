@@ -2277,15 +2277,32 @@ async function childWork(
     const budget = Math.min(bytesLeft, CHILD_LEDGER_BYTES);
     const read = readChildLedger(path.join(statePath("structured-host-events"), `${encodeURIComponent(generation.id)}.jsonl`), source.cursor, budget);
     source.cursor = read.cursor;
-    if (read.cursor.gap === null && read.cursor.atEnd && read.cursor.activeTurn === null && read.cursor.settledThrough > 0
-      && generation === generations.at(-1)
+    const latestGeneration = generations.at(-1);
+    const latestSource = latestGeneration
+      ? generation === latestGeneration ? source : accounting.source(child, conversation!.engine, latestGeneration.id)
+      : null;
+    const latestCursor = latestGeneration
+      ? generation === latestGeneration ? read.cursor : latestSource?.cursor ?? null
+      : null;
+    const validatedLatestSettlement = latestCursor !== null && latestCursor.gap === null
+      && latestCursor.atEnd && latestCursor.activeTurn === null && latestCursor.settledThrough > 0;
+    if (validatedLatestSettlement && latestGeneration === generation
       && (projected.turn === "idle" || projected.turn === "terminal" || (!projected.hosted && projected.turn === "unknown"))) {
       child.input = { ...child.input, status: "terminal", outcome: "finished", terminalAt: child.input.terminalAt ?? child.input.lastRecordAt ?? null };
     }
     const lost = !projected.hosted && child.input.transcript === "unresolvable"
       && generation === generations.at(-1)
       && ((read.cursor.identity === null && read.cursor.gap === null) || read.cursor.gap === "ledger-missing");
-    if (lost) child.input = { ...child.input, status: "terminal", outcome: "failed", terminalAt: child.input.terminalAt ?? child.input.spawnedAt ?? null };
+    const abandonedActiveTurn = !projected.hosted && child.input.transcript === "unresolvable"
+      && generation === latestGeneration && read.cursor.gap === null && read.cursor.atEnd
+      && read.cursor.activeTurn !== null;
+    const retainedLatestSettlement = latestGeneration !== generation && projected.turn === "unknown" && !projected.hosted
+      && child.input.status !== "running" && validatedLatestSettlement;
+    if (lost || abandonedActiveTurn) {
+      child.input = { ...child.input, status: "terminal", outcome: "failed", terminalAt: child.input.terminalAt ?? child.input.lastRecordAt ?? child.input.spawnedAt ?? null };
+    } else if (retainedLatestSettlement) {
+      child.input = { ...child.input, status: "terminal", outcome: "finished", terminalAt: child.input.terminalAt ?? child.input.lastRecordAt ?? null };
+    }
     unplaced();
     bytesLeft -= read.bytes;
     // A vanished host and both records gone have a named failure receipt.
@@ -2297,7 +2314,7 @@ async function childWork(
     if (child.input.status === "terminal" && read.bytes === 0 && read.outcomes.length === 0 && read.cursor.atEnd
       && child.generationIndex === previousGeneration && JSON.stringify(previousCursor) === JSON.stringify(read.cursor)
       && JSON.stringify(previousInput) === JSON.stringify(child.input)) coldVisits.push(child);
-    else accounting.ingest(child, source, read.outcomes, lost ? "host-gone-no-transcript" : false, cut ? "head" : "tail");
+    else accounting.ingest(child, source, read.outcomes, lost || abandonedActiveTurn ? "host-gone-no-transcript" : false, cut ? "head" : "tail");
     if (cut && projected.turn !== "busy") gaps.add("ledger-pending");
   };
 

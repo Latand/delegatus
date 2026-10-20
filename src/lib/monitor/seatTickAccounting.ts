@@ -539,11 +539,11 @@ export class SeatTickAccounting {
       }
       // Resolution receipts use their own identity; a later recovered turn
       // still becomes owed under its original engine/generation/turn tuple.
-      const tuples = failure ? [[child.launchId, failure === true ? "pre-execution-failure" : failure, ...(failure !== true && source ? [source.generation] : [])]] : outcomes.map((event) => [source!.engine, source!.generation, event.turnId]);
-      tuples.forEach((tuple, index) => {
+      const settled = outcomes.map((event) => ({ tuple: [source!.engine, source!.generation, event.turnId], result: event.status === "completed" ? "finished" as const : "failed" as const, endOffset: event.endOffset }));
+      const resolution = failure ? [{ tuple: [child.launchId, failure === true ? "pre-execution-failure" : failure, ...(failure !== true && source ? [source.generation] : [])], result: "failed" as const, endOffset: null }] : [];
+      for (const { tuple, result, endOffset } of [...settled, ...resolution]) {
         const identity = outcomeIdentity(tuple);
         const id = key("outcome", this.project, identity);
-        const result = failure || outcomes[index]!.status !== "completed" ? "failed" : "finished";
         const existing = tx.get(id);
         if (existing) {
           if (existing.kind !== "outcome" || JSON.stringify(existing.tuple) !== JSON.stringify(tuple)) throw new Error("outcome identity collision");
@@ -555,8 +555,8 @@ export class SeatTickAccounting {
         const readyKey = key("ready", this.project, String(row.sequence + 1).padStart(16, "0"));
         this.ticket(tx, row, "ready", id);
         tx.put({ ...this.base("outcome", identity), kind: "outcome", identity, child: child.key, tuple, input, status: "owed", landingKey: null, readyKey,
-          gap: legacy && (failure || !source?.legacyBoundary || outcomes[index]!.endOffset <= source.legacyBoundary.bytes) ? "legacy-delivery-ambiguous" : null });
-      });
+          gap: legacy && (endOffset === null || !source?.legacyBoundary || endOffset <= source.legacyBoundary.bytes) ? "legacy-delivery-ambiguous" : null });
+      }
       if (source) tx.put(source);
       this.trackRunning(tx, row, child);
       tx.delete(child.pollKey!);
