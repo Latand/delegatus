@@ -96,11 +96,14 @@ export function evidenceFromPipelines(pipelines: readonly PipelineSummary[]): Ev
 
 /** Project a single pipeline without scanning a very large specification in
     one event-loop turn. The overlap preserves references split across chunks. */
-export async function evidenceFromPipelineCooperatively(pipeline: PipelineSummary): Promise<EvidenceItem> {
+export async function evidenceFromPipelineCooperatively(
+  pipeline: PipelineSummary,
+  yieldControl: () => Promise<void> = yieldToRuntime,
+): Promise<EvidenceItem> {
   const references = new Set<number>();
   const texts = [pipeline.task, pipeline.spec ?? ""];
   for (const text of texts) {
-    let offset = 0, sliceStarted = performance.now();
+    let offset = 0;
     while (offset < text.length) {
       const end = Math.min(text.length, offset + 256 * 1024);
       const start = Math.max(0, offset - 8);
@@ -112,14 +115,33 @@ export async function evidenceFromPipelineCooperatively(pipeline: PipelineSummar
         if (Number.isSafeInteger(value) && value > 0) references.add(value);
       }
       offset = end;
-      if (offset < text.length && performance.now() - sliceStarted >= 8) {
-        await yieldToRuntime();
-        sliceStarted = performance.now();
-      }
+      if (offset < text.length) await yieldControl();
     }
   }
   const taskTitle = firstLine(pipeline.task);
-  const title = taskTitle || firstLine((pipeline.spec ?? "").slice(0, 8192));
+  const spec = pipeline.spec ?? "";
+  let specTitle = "";
+  let line = "";
+  for (let offset = 0; offset < spec.length && !specTitle;) {
+    const end = Math.min(spec.length, offset + 4096);
+    const candidate = spec.slice(offset,end);
+    let lineStart = 0;
+    for (let index = 0; index < candidate.length; index++) {
+      if (candidate[index] !== "\n") continue;
+      line += candidate.slice(lineStart,index);
+      if (line.trim()) { specTitle = line; break; }
+      line = "";
+      lineStart = index + 1;
+    }
+    if (!specTitle) {
+      line += candidate.slice(lineStart);
+      if (end === spec.length && line.trim()) specTitle = line;
+    }
+    if (specTitle) break;
+    offset = end;
+    if (offset < spec.length) await yieldControl();
+  }
+  const title = taskTitle || redactBounded(specTitle, TITLE_LIMIT);
   return {
     kind: "pipeline", id: pipeline.id, title, project: pipeline.project || null,
     state: pipelineState(pipeline.state), owner: `pipeline ${pipeline.id}`,

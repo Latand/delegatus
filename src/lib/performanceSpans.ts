@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 export const performanceSites = [
   "state.write-wait", "state.sql-next", "state.json", "pipeline.validate", "pipeline.revive", "pipeline.identity",
   "pipeline.copy", "pipeline.yield", "pipeline.evidence", "pipeline.shared", "pipeline.refused",
-  "registry.snapshot", "registry.headers", "registry.claims", "registry.row", "registry.keyed", "registry.prepare.slice", "registry.prepare.index", "registry.prepare.open",
+  "registry.snapshot", "registry.headers", "registry.claims", "registry.row", "registry.keyed", "registry.prepare.slice", "registry.prepare.normalize", "registry.prepare.index", "registry.prepare.open",
   "runtime.collect", "runtime.stringify", "runtime.parse", "runtime.handler", "runtime.commit",
   "rpc.dispatch", "rpc.connect", "rpc.send", "rpc.receive", "rpc.first-byte", "rpc.frame", "rpc.finish", "rpc.deadline",
   "files.scan", "files.key", "files.queue", "files.worker", "files.clone", "files.delta", "files.encode",

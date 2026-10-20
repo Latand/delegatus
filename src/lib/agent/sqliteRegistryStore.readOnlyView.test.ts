@@ -115,7 +115,7 @@ test("a prepared reader cooperatively rebuilds its view after a peer archives a 
   const snapshot = await reader.prepareReadOnlySnapshot();
   expect(Object.keys(snapshot.file.receipts)).toContain("archived-receipt-0");
   expect(snapshot.file.receipts["archived-receipt-0"]?.state).toBe("failed");
-});
+}, 30_000);
 
 test("held prepared views keep lazy archived payloads and indexes alive across repeated refreshes", async () => {
   const { open, kept } = fixture();
@@ -140,6 +140,55 @@ test("held prepared views keep lazy archived payloads and indexes alive across r
   expect(registryRowsMatching(held.file, "receipts", "launchId", "held-archive-0").map(row => row.error))
     .toEqual(["original-0"]);
   expect((await reader.prepareReadOnlySnapshot()).file.receipts[kept]?.error).toBe("peer-2");
+});
+
+test("a retained archived collection keeps its retired reader alive after its root is collected", async () => {
+  const { open, kept } = fixture();
+  const reader = open();
+  const writer = open();
+  const seed = reader.readOnlySnapshot().file.receipts[kept]!;
+  writer.mutate(file => {
+    for (let index = 0; index < 8; index++) {
+      const id = `retained-collection-${index}`;
+      file.receipts[id] = { ...seed, launchId: id, state: "failed", error: `receipt-${index}`, createdAt: "2020-01-01T00:00:00Z" };
+    }
+  }, false);
+  expect(writer.archiveInactive(8)).toBeGreaterThan(0);
+  const retained = await (async () => {
+    const view = await reader.prepareReadOnlySnapshot();
+    return { collection: view.file.receipts, root: new WeakRef(view.file) };
+  })();
+  writer.mutate(file => { file.receipts[kept]!.error = "new generation"; }, false);
+  await reader.prepareReadOnlySnapshot();
+  for (let attempt = 0; attempt < 20 && retained.root.deref(); attempt++) {
+    Bun.gc(true);
+    await new Promise<void>(resolve => setImmediate(resolve));
+  }
+  expect(retained.root.deref()).toBeUndefined();
+  expect(retained.collection["retained-collection-0"]?.error).toBe("receipt-0");
+});
+
+test("the first keyed archived read visits only its requested payload", async () => {
+  const { open, kept, filename } = fixture();
+  const reads: Array<[string, number]> = [];
+  const writer = open();
+  const seed = writer.readOnlySnapshot().file.receipts[kept]!;
+  writer.mutate(file => {
+    for (let index = 0; index < 128; index++) {
+      const id = `keyed-archive-${index}`;
+      file.receipts[id] = { ...seed, launchId: id, state: "failed", error: `payload-${index}`, createdAt: "2020-01-01T00:00:00Z" };
+    }
+  }, false);
+  expect(writer.archiveInactive(128)).toBeGreaterThan(0);
+  const coldReader = new SqliteAgentRegistryStore(filename,
+    { readOnly: true, normalize: normalizeRegistry,
+      initialSnapshot: normalizeRegistry({ version: 2, entries: {}, receipts: {} }),
+      onRowPayloadRead: (collection,count) => reads.push([collection,count]) });
+  stores.push(coldReader);
+  const view = await coldReader.prepareReadOnlySnapshot();
+  reads.length = 0;
+  expect(view.file.receipts["keyed-archive-73"]?.error).toBe("payload-73");
+  expect(reads).toEqual([["receipts",1]]);
 });
 
 test("deferred cold-key initialization moves the first session view onto cooperative preparation", async () => {

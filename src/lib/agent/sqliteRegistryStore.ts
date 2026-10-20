@@ -1614,8 +1614,10 @@ export class SqliteAgentRegistryStore {
               signal?.throwIfAborted();
               if (this.closed) throw new Error("registry closed during preparation");
               const started = performance.now();
+              let stepsInSlice = 0;
               performanceSpans.sync("registry.prepare.slice", () => {
-                do { next = steps.next(); } while (!next.done && performance.now() - started < 8);
+                do { next = steps.next(); stepsInSlice++; }
+                while (!next.done && stepsInSlice < 128 && performance.now() - started < 8);
               });
               if (!next.done) await yieldToRuntime();
             }
@@ -1660,7 +1662,7 @@ export class SqliteAgentRegistryStore {
                 // lifetime to the view; the finalizer closes it after the last
                 // caller releases that immutable view.
                 previousReader.readOnlyCache = null;
-                retiredPreparedReaderFinalizer.register(previousView.file, previousReader);
+                registerRetiredPreparedReader(previousView.file, previousReader);
               } else previousReader.close();
             }
             return current;
@@ -1833,7 +1835,7 @@ export class SqliteAgentRegistryStore {
       if (value !== null) input[field] = parseSqliteJson(value, this.db);
     }
     yield;
-    const file = this.normalizePartial(input);
+    const file = performanceSpans.sync("registry.prepare.normalize", () => this.normalizePartial(input));
     yield;
     const storedOwners = input.deliveryOperationOwners as Record<string, { deliveryId?: string } | null>;
     for (const [key,storedOwner] of Object.entries(storedOwners)) {
@@ -1841,6 +1843,7 @@ export class SqliteAgentRegistryStore {
         const owner = this.loadOwnerInTransaction(key);
         if (owner) file.deliveryOperationOwners[key] = owner;
       }
+      yield;
     }
     this.resetHotGrants();
     for (const collection of READER_GRANT_COLLECTIONS) {
@@ -2434,13 +2437,29 @@ export class SqliteAgentRegistryStore {
     let merged: Record<string, unknown> | undefined;
     return () => {
       if (merged) return merged;
-      const descriptors: Record<string, PropertyDescriptor> = Object.create(null);
-      for (const key of order) {
-        const accessor = archived.get(key);
-        if (accessor) descriptors[key] = accessor;
-        else if (Object.hasOwn(rows, key)) descriptors[key] = { enumerable: true, value: rows[key] };
-      }
-      return merged = Object.preventExtensions(Object.create(Object.prototype, descriptors)) as Record<string, unknown>;
+      /* A keyed read must stay keyed even when the collection has thousands
+         of archived rows. Enumerate only when the caller explicitly requests
+         keys or descriptors. */
+      return merged = new Proxy({} as Record<string, unknown>, {
+        get: (target, property, receiver) => {
+          if (typeof property !== "string") return Reflect.get(target,property,receiver);
+          const descriptor = archived.get(property);
+          if (descriptor) return descriptor.get ? descriptor.get.call(merged) : descriptor.value;
+          return Object.hasOwn(rows,property) ? rows[property] : Reflect.get(target,property,receiver);
+        },
+        has: (target, property) => (typeof property === "string" && (archived.has(property) || Object.hasOwn(rows,property))) || Reflect.has(target,property),
+        ownKeys: () => order.filter(key => archived.has(key) || Object.hasOwn(rows,key)),
+        getOwnPropertyDescriptor: (_target, property) => {
+          if (typeof property !== "string") return undefined;
+          const descriptor = archived.get(property);
+          if (descriptor) return { configurable: true, enumerable: descriptor.enumerable ?? true, get: descriptor.get };
+          if (Object.hasOwn(rows,property)) return { configurable: true, enumerable: true, writable: false, value: rows[property] };
+          return undefined;
+        },
+        set: () => false,
+        defineProperty: () => false,
+        deleteProperty: () => false,
+      });
     };
   }
 
@@ -4742,9 +4761,20 @@ export class SqliteAgentRegistryStore {
   }
 }
 
-const retiredPreparedReaderFinalizer = new FinalizationRegistry<SqliteAgentRegistryStore>((reader) => {
-  reader.close();
+const retiredPreparedReaderFinalizer = new FinalizationRegistry<{ reader: SqliteAgentRegistryStore; remaining: number }>((lease) => {
+  lease.remaining--;
+  if (lease.remaining === 0) lease.reader.close();
 });
+
+function registerRetiredPreparedReader(file: RegistryFile, reader: SqliteAgentRegistryStore): void {
+  const targets = new Set<object>([file]);
+  for (const key of Reflect.ownKeys(file)) {
+    const value = Reflect.get(file,key);
+    if (value && typeof value === "object") targets.add(value);
+  }
+  const lease = { reader, remaining: targets.size };
+  for (const target of targets) retiredPreparedReaderFinalizer.register(target,lease);
+}
 
 /** Whether a registry store already holds a committed import, read without
     creating, migrating or importing anything. A missing file is `false`. */
