@@ -67,6 +67,64 @@ import { readClaudeCredentials } from "@/lib/accounts/claudeCredentials";
 const browserTest = browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1");
 const LAUNCH: LaunchOptions = { headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) };
 
+describe("legacy review follow-up navigation", () => {
+  browserTest("retained follow-up tasks open from desktop and phone in both languages and themes", async () => {
+    const out = path.resolve(".artifacts/legacy-review-follow-up");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 390]) {
+        const phone = width === 390;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=review-stops`, { width, height: 900 }, theme, lang, "reduce", phone);
+        try {
+          const source = phone ? '[data-phone-card="task:t-stop-once"]' : '[data-kanban-board] .card[data-id="task:t-stop-once"]';
+          await page.locator(source).waitFor();
+          const title = lang === "en" ? "Repair retained review findings" : "Виправити збережені зауваження рев’ю";
+          await page.evaluate(({ title }) => {
+            const evidence = (window as unknown as { evidence: { storedPipeline(id: string): Pipeline } }).evidence;
+            Object.assign(evidence.storedPipeline("p-stop-once"), { reviewBudgetSpent: {
+              stageId: "review", attempt: 3, findings: 1, head: "a".repeat(40), at: "2026-10-01T00:00:00.000Z",
+              followUp: { taskId: "t-stop-done", title, at: "2026-10-01T00:00:00.000Z" },
+            } });
+            window.dispatchEvent(new Event("llv:pipelines-changed"));
+          }, { title });
+          if (phone) await page.locator(source).click();
+          else await page.evaluate(() => window.dispatchEvent(new CustomEvent("llv:mcp-navigate", { detail: { kind: "task", id: "t-stop-once" } })));
+          const link = page.locator('[data-pipeline-follow-up="t-stop-done"]').filter({ visible: true }).first();
+          await link.waitFor({ timeout: 10_000 });
+          expect(await link.innerText()).toBe(title);
+          expect(await link.isEnabled()).toBe(true);
+          await link.scrollIntoViewIfNeeded();
+          const box = await link.boundingBox();
+          expect(box).not.toBeNull();
+          expect(box!.x).toBeGreaterThanOrEqual(0);
+          expect(box!.x + box!.width).toBeLessThanOrEqual(width);
+          expect(box!.y).toBeGreaterThanOrEqual(0);
+          expect(box!.y + box!.height).toBeLessThanOrEqual(900);
+          if (phone) expect(box!.height).toBeGreaterThanOrEqual(44);
+          const frame = `${lang}-${theme}-${width}.png`;
+          await page.screenshot({ path: path.join(out, frame) });
+          await link.click();
+          if (phone) await page.locator('[data-phone-task-ended]').click();
+          const target = page.locator(phone ? '[data-phone-task-lane="p-stop-done"]' : '[data-kanban-board] .card[data-id="task:t-stop-done"]');
+          await target.waitFor({ timeout: 10_000 });
+          await page.screenshot({ path: path.join(out, `opened-${frame}`) });
+          expect(pageErrors).toEqual([]);
+          readings.push({ lang, theme, width, title, box, frame, target: "t-stop-done" });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/legacy-review-follow-up", { recursive: true });
+      const sourceDigests = Object.fromEntries(["src/components/pipelines/PipelineBlock.tsx", "src/components/kanban/kanbanBoard.browser.test.tsx"]
+        .map(file => [file, createHash("sha256").update(fs.readFileSync(file)).digest("hex")]));
+      fs.writeFileSync("evidence/legacy-review-follow-up/rendered.json", JSON.stringify({ capturedAt: new Date().toISOString(),
+        command: "LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chromium> bun test src/components/kanban/kanbanBoard.browser.test.tsx --test-name-pattern 'legacy review follow-up navigation' (isolated roots, scripts/gate-slot.sh)",
+        sourceDigests, readings }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});
+
 describe("managed MCP catalog failure", () => {
   browserTest("cause and retry guidance in the Updates panel", async () => {
     const before = process.env.LLV_MCP_CATALOG_BEFORE === "1";
