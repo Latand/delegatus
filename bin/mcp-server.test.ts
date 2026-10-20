@@ -143,7 +143,7 @@ interface TestRpcResponse {
 }
 
 function stdioSession(command: string, launcher: string, root: string, env: Record<string, string>) {
-  const process = spawn(command, [launcher], { cwd: root, env: { ...globalThis.process.env, ...env, LLV_BUN_EXECUTABLE: globalThis.process.execPath }, stdio: ["pipe", "pipe", "pipe"] });
+  const process = spawn(command, [launcher], { cwd: root, env: { ...globalThis.process.env, ...env, LLV_BUN_EXECUTABLE: env.LLV_BUN_EXECUTABLE ?? globalThis.process.execPath }, stdio: ["pipe", "pipe", "pipe"] });
   let buffer = "";
   const messages: TestRpcResponse[] = [];
   const waiting = new Set<() => void>();
@@ -307,11 +307,11 @@ test("self-update pointer selects the installed MCP bundle and falls back only a
   const { root, launcher, stateDir, pointer, release, env } = fixture;
   const installed = release("first", "process.stdout.write('release\\n');");
   const run = () => launchFrom(root, launcher, env, "", "bun");
-  expect(await run()).toMatchObject({ exitCode: 0, stdout: "checkout:none\n", stderr: "" });
+  expect(await run()).toMatchObject({ exitCode: 0, stdout: "checkout:none\n", stderr: expect.stringContaining("[mcp lifecycle]") });
   fs.writeFileSync(pointer, "{invalid json");
-  expect(await run()).toMatchObject({ exitCode: 0, stdout: "checkout:none\n", stderr: "" });
+  expect(await run()).toMatchObject({ exitCode: 0, stdout: "checkout:none\n", stderr: expect.stringContaining("[mcp lifecycle]") });
   fs.writeFileSync(pointer, JSON.stringify(installed));
-  expect(await run()).toMatchObject({ exitCode: 0, stdout: "release\n", stderr: "" });
+  expect(await run()).toMatchObject({ exitCode: 0, stdout: "release\n", stderr: expect.stringContaining("[mcp lifecycle]") });
 
   const revision = "7".repeat(40);
   const releaseId = `deploy-${revision}`;
@@ -323,15 +323,15 @@ test("self-update pointer selects the installed MCP bundle and falls back only a
     revision, image: "viewer:managed", container: "viewer-managed", endpoint: "http://127.0.0.1:1",
     mcpRuntime: { source: "managed", revision, releaseId, artifactDigest: createHash("sha256").update(managedBundle).digest("hex"), stagedAt: "2026-07-23T08:00:00.000Z" },
   }));
-  expect(await run()).toMatchObject({ exitCode: 0, stdout: `managed:${revision}\n`, stderr: "" });
+  expect(await run()).toMatchObject({ exitCode: 0, stdout: `managed:${revision}\n`, stderr: expect.stringContaining("[mcp lifecycle]") });
   fs.writeFileSync(path.join(stateDir, "viewer-release.json"), JSON.stringify({
     revision, image: "viewer:managed", container: "viewer-managed", endpoint: "http://127.0.0.1:1",
   }));
-  expect(await run()).toMatchObject({ exitCode: 0, stdout: `checkout:${revision}\n`, stderr: "" });
+  expect(await run()).toMatchObject({ exitCode: 0, stdout: `checkout:${revision}\n`, stderr: expect.stringContaining("[mcp lifecycle]") });
 
   fs.unlinkSync(path.join(stateDir, "viewer-release.json"));
   git(root, "commit", "--allow-empty", "-m", "checkout moved");
-  expect(await run()).toMatchObject({ exitCode: 0, stdout: "checkout:none\n", stderr: "" });
+  expect(await run()).toMatchObject({ exitCode: 0, stdout: "checkout:none\n", stderr: expect.stringContaining("[mcp lifecycle]") });
 }, 15_000);
 
 test("one MCP session starts the next installed release when the self-update pointer changes", async () => {
@@ -458,7 +458,7 @@ test("fresh Claude and Codex hosts load the exact MCP runtime named by the promo
       LLV_STATE_DIR: stateDir,
       LLV_VIEWER_DEPLOY_TARGET: targetFile,
     }, `${host}-initialize\n`, "bun");
-    expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+    expect(result).toMatchObject({ exitCode: 0, stderr: expect.stringContaining("[mcp lifecycle]") });
     const [runtime, handshake] = result.stdout.trim().split("\n");
     expect(JSON.parse(runtime!)).toEqual({
       revision: candidateRevision,
@@ -784,7 +784,7 @@ test("the installed MCP launcher selects Bun for Bun-only Viewer configuration a
   ];
   for (const env of configurations) {
     const result = await launchInstalled(env);
-    expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+    expect(result).toMatchObject({ exitCode: 0, stderr: expect.stringContaining("[mcp lifecycle]") });
     const [runtime, handshake] = result.stdout.trim().split("\n");
     expect(JSON.parse(runtime!)).toMatchObject({ bun: expect.any(String) });
     expect(handshake).toBe("initialize-handshake");
@@ -876,7 +876,7 @@ test("the installed MCP launcher forwards escalating signals until its Bun child
   child.kill("SIGTERM");
   const exitCode = await child.exited;
   const stderr = await new Response(child.stderr).text();
-  expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
+  expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: expect.stringContaining("[mcp lifecycle]") });
   expect(fs.readFileSync(signalPath, "utf8")).toBe("SIGINT\nSIGTERM\n");
 }, 15_000);
 
@@ -1033,3 +1033,107 @@ test("one stdio MCP session keeps its tools through endpoint loss and a newly pu
     reader.releaseLock();
   }
 }, 20_000);
+
+for (const teardown of ["release", "eof", "timeout"]) {
+const runDrainTest = teardown === "eof" ? test.skipIf(process.platform === "win32") : test;
+runDrainTest(`launcher drains an admitted call before ${teardown} teardown`, async () => {
+  const fixture = selfUpdateFixture(`
+    import fs from "node:fs";
+    import { createInterface } from "node:readline";
+    createInterface({ input: process.stdin }).on("line", async line => {
+      const request = JSON.parse(line);
+      if (request.id == null) return;
+      if (request.method === "tools/call") {
+        fs.writeFileSync(process.env.LLV_TEST_STARTED, "ready");
+        while (!fs.existsSync(process.env.LLV_TEST_RELEASE)) await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      const result = request.method === "initialize"
+        ? { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "viewer", version: "1" } }
+        : { content: [{ type: "text", text: "committed" }] };
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }) + "\\n");
+    });
+  `);
+  const started = path.join(fixture.root, "started"), release = path.join(fixture.root, "release");
+  const runtime = teardown === "release" ? process.execPath : Bun.which("node")!;
+  const timerArmed = path.join(fixture.root, "shutdown-timer-armed");
+  const timerAdvanced = path.join(fixture.root, "shutdown-timer-advanced");
+  const preload = path.join(fixture.root, "controlled-timers.mjs");
+  if (teardown !== "release") fs.writeFileSync(preload, `
+    import fs from "node:fs";
+    const originalSetTimeout = globalThis.setTimeout;
+    const originalClearTimeout = globalThis.clearTimeout;
+    const controlled = new Set();
+    let stdinEnded = false;
+    process.stdin.once("end", () => { stdinEnded = true; });
+    globalThis.setTimeout = (callback, delay, ...args) => {
+      if (process.argv[1] === ${JSON.stringify(fixture.launcher)} && stdinEnded
+        && delay === Number(process.env.LLV_TEST_DRAIN_DELAY)
+        && !fs.existsSync(${JSON.stringify(release)})) {
+        const timer = { callback, args, cancelled: false };
+        controlled.add(timer);
+        fs.writeFileSync(${JSON.stringify(timerArmed)}, String(delay));
+        return timer;
+      }
+      return originalSetTimeout(callback, delay, ...args);
+    };
+    globalThis.clearTimeout = timer => {
+      if (controlled.has(timer)) { timer.cancelled = true; controlled.delete(timer); return; }
+      return originalClearTimeout(timer);
+    };
+    process.on("SIGUSR2", () => {
+      fs.writeFileSync(${JSON.stringify(timerAdvanced)}, "advanced");
+      for (const timer of controlled) if (!timer.cancelled) timer.callback(...timer.args);
+      controlled.clear();
+    });
+  `);
+  const session = stdioSession(runtime, fixture.launcher, fixture.root, {
+    ...fixture.env, TMPDIR: fixture.root, LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1",
+    LLV_TEST_STARTED: started, LLV_TEST_RELEASE: release,
+    ...(teardown !== "release" ? {
+      NODE_OPTIONS: `--import=${preload}`, LLV_BUN_EXECUTABLE: process.execPath,
+      LLV_TEST_DRAIN_DELAY: teardown === "timeout" ? "35000" : "1000",
+    } : {}),
+  });
+  let diagnostics = "";
+  session.process.stderr?.on("data", chunk => { diagnostics += String(chunk); });
+  const until = async (ready: () => boolean) => {
+    const deadline = Date.now() + 5000;
+    while (!ready() && Date.now() < deadline) await Bun.sleep(10);
+    expect(ready()).toBe(true);
+  };
+  try {
+    try { await session.call(1, "initialize"); }
+    catch (error) { throw new Error(`${String(error)}\n${diagnostics}`); }
+    session.process.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "hold", arguments: {} } }) + "\n");
+    const admitted = session.responseFor(2, 40_000);
+    await until(() => fs.existsSync(started));
+    if (teardown === "release") {
+      const second = fixture.release("next", mcpBundle("next"));
+      fs.writeFileSync(fixture.pointer, JSON.stringify(second));
+      expect((await session.call(3, "tools/list")).result?.isError ?? true).toBe(true);
+    } else {
+      session.process.stdin.end();
+      if (teardown === "timeout") {
+        await until(() => fs.existsSync(timerArmed));
+        expect(fs.readFileSync(timerArmed, "utf8")).toBe("35000");
+        process.kill(session.process.pid!, "SIGUSR2");
+        await until(() => fs.existsSync(timerAdvanced));
+        expect((await admitted).result.content[0].text).toContain("did not drain before shutdown deadline");
+        return;
+      }
+      await until(() => diagnostics.includes('"reason":"stdio-eof"'));
+      if (fs.existsSync(timerArmed)) {
+        process.kill(session.process.pid!, "SIGUSR2");
+        await until(() => fs.existsSync(timerAdvanced));
+      }
+      expect(fs.existsSync(timerArmed)).toBe(false);
+    }
+    fs.writeFileSync(release, "go");
+    expect((await admitted).result.content[0].text).toBe("committed");
+  } finally {
+    fs.writeFileSync(release, "go");
+    session.process.stdin.end();
+    if (session.process.exitCode === null) await new Promise<void>(resolve => session.process.once("close", () => resolve()));
+  }
+}, 45_000);
+}

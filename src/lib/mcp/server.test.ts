@@ -23,6 +23,7 @@ import {
   openAsyncMcpReceiptStore,
   createViewerMcpServer,
   validRequestBinding,
+  requestDigest,
   createMcpToolService,
   type McpToolBindings,
   type McpReceiptStore,
@@ -217,7 +218,7 @@ describe("MCP tool service", () => {
       result: { ok: boolean; replayed: boolean; code?: string; ownerIndex?: number };
     });
     const winners = results.filter(({ result }) => result.ok);
-    const contenders = results.filter(({ result }) => result.code === "call_interrupted");
+    const contenders = results.filter(({ result }) => result.code === "outcome_unknown");
     expect(winners).toHaveLength(1);
     expect(winners[0]).toMatchObject({ index: ownerIndex, result: { replayed: false, ownerIndex } });
     expect(contenders).toHaveLength(19);
@@ -454,8 +455,8 @@ describe("MCP tool service", () => {
 
     expect(await createMcpToolService(bindings, secondStore).callTool("send_message", args)).toMatchObject({
       ok: false,
-      code: "call_interrupted",
-      retryable: true,
+      code: "outcome_unknown",
+      retryable: false,
       replayed: true,
     });
     expect(bindingCalls).toBe(1);
@@ -597,7 +598,7 @@ describe("MCP tool service", () => {
   /* The skip is a bounded-read affordance. `pruneBoundedReceipts` sweeps an
      unsettled claim only for retention='bounded', so leaving a durable mutation
      claim open would strand a permanent result_json IS NULL row and answer that
-     clientRequestId with `call_interrupted` forever. */
+     clientRequestId with an unresolved outcome forever. */
   test("an abandoned durable mutation still settles its claim", async () => {
     const completed: string[] = [];
     const store: McpReceiptStore = {
@@ -671,7 +672,7 @@ describe("MCP tool service", () => {
     expect(replay).toMatchObject({ report: legacyReport });
   });
 
-  test("a receipt left pending across process restart becomes a structured retryable error", async () => {
+  test("a live unfinished claim is uncertain and never promises an executable retry", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-receipts-"));
     scratch.push(directory);
     const receiptPath = path.join(directory, "receipts.json");
@@ -692,9 +693,10 @@ describe("MCP tool service", () => {
       toolName: "send_message",
       clientRequestId: "request-restart",
       replayed: true,
-      error: "The previous MCP process ended before this call completed",
-      code: "call_interrupted",
-      retryable: true,
+      error: expect.stringContaining("execution is uncertain"),
+      details: { outcome: "unknown", nextAction: "original-key-lookup", evidence: "mcp-receipt" },
+      code: "outcome_unknown",
+      retryable: false,
     });
 
     release();
@@ -725,7 +727,7 @@ describe("MCP tool service", () => {
         expect(result).toMatchObject({ ok: true, operationId: `operation_${action}` });
         expect(completed).toEqual([result]);
       } else {
-        expect(result).toMatchObject({ ok: false, code: "call_interrupted", replayed: true });
+        expect(result).toMatchObject({ ok: false, code: "outcome_unknown", replayed: true });
         expect(completed).toEqual([]);
       }
     }
@@ -753,7 +755,7 @@ describe("MCP tool service", () => {
         expect(result).toMatchObject({ ok: true, pipelineId: "pipeline_fixture" });
         expect(completed).toEqual([result]);
       } else {
-        expect(result).toMatchObject({ ok: false, code: "call_interrupted", replayed: true });
+        expect(result).toMatchObject({ ok: false, code: "outcome_unknown", replayed: true });
         expect(completed).toEqual([]);
       }
     }
@@ -1853,7 +1855,7 @@ describe("MCP tool service", () => {
     const restarted = createMcpToolService(bindings, new FileMcpReceiptStore(receiptPath));
     expect(await restarted.callTool("conversation_action", args)).toMatchObject({
       ok: false,
-      code: "call_interrupted",
+      code: "outcome_unknown",
       replayed: true,
     });
     expect(await restarted.callTool("conversation_action", { ...args, action: "kill" })).toMatchObject({
@@ -2909,9 +2911,12 @@ describe("original-key recovery (#1490)", () => {
 
   test("a legacy claim without a binding discloses its result only when downstream evidence establishes ownership", async () => {
     const store = new MemoryMcpReceiptStore();
-    const bindings = Object.fromEntries(MCP_TOOL_NAMES.map((toolName) => [toolName, async () => ({ operationId: "op_legacy" })])) as unknown as McpToolBindings;
-    /* The row as a pre-#1490 server wrote it: no binding, no stage. */
-    await createMcpToolService(bindings, store).callTool("send_message", SEND);
+    /* Seed the row a pre-#1490 server wrote, without today's custody fields. */
+    const digest = requestDigest("send_message", SEND);
+    store.claim("send_message:recover-1", digest, "durable");
+    store.complete("send_message:recover-1", digest, {
+      ok: true, toolName: "send_message", clientRequestId: "recover-1", replayed: false, operationId: "op_legacy",
+    });
     expect(await store.lookup("send_message:recover-1")).toMatchObject({ binding: null, stage: "settled" });
 
     const unowned = recoveryHarness(OWNER, store, {
