@@ -82,6 +82,9 @@ li + li { margin-top: 4px; }
   background: var(--accent); color: #12121a; font-weight: 750; font-size: 0.95rem; line-height: 1;
 }
 .num.alt { background: var(--brand); color: var(--on-brand); }
+/* Step cards take the colour of the timeline lane the step sits on. */
+.num.vo { background: var(--info); }
+.num.be { background: var(--warning); }
 .tag {
   display: inline-block; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.04em;
   padding: 2px 7px; border-radius: 6px; border: 1px solid currentColor; line-height: 1.3;
@@ -122,11 +125,11 @@ li + li { margin-top: 4px; }
 .note + .note { margin-top: 10px; }
 .note .h { font-weight: 700; display: block; margin-bottom: 2px; }
 
-/* Arrow sprites are drawn pointing right; .v turns them to point down. On a phone
-   every diagram is one column, so horizontal links turn too. */
+/* Arrow sprites are drawn pointing right; .v turns them to point down. Below
+   1000px the components map is one column, so horizontal links turn too. */
 .arr { width: 44px; height: 18px; flex: none; color: var(--muted); }
 .link.v .arr { transform: rotate(90deg); width: 30px; }
-@media (max-width: 700px) {
+@media (max-width: 1000px) {
   .link .arr { transform: rotate(90deg); width: 30px; }
 }
 
@@ -185,7 +188,9 @@ li + li { margin-top: 4px; }
 @media (max-width: 1100px) {
   .map .br ul { columns: 1; }
 }
-@media (max-width: 700px) {
+/* One column below 1000px: the link cards in the middle column get too narrow.
+   The source order puts every link between the two blocks it names. */
+@media (max-width: 1000px) {
   .map { grid-template-columns: 1fr; grid-template-areas: none; }
   .map > * { grid-area: auto !important; }
 }
@@ -193,8 +198,8 @@ li + li { margin-top: 4px; }
 /* ── Frame 2: timeline ─────────────────────────────────────────────────── */
 .timeline {
   display: grid;
-  grid-template-columns: 170px repeat(8, 1fr);
-  grid-template-rows: auto minmax(64px, auto) auto minmax(64px, auto) minmax(64px, auto) auto;
+  grid-template-columns: 170px repeat(9, 1fr);
+  grid-template-rows: auto minmax(64px, auto) auto minmax(64px, auto) minmax(56px, auto) minmax(56px, auto) auto;
   gap: 8px 6px;
   position: relative;
   background: var(--well);
@@ -224,16 +229,17 @@ li + li { margin-top: 4px; }
 .bar.be .num { background: var(--warning); }
 .bar.cut { border-right: 4px solid var(--danger); }
 .bar .cutmark { margin-left: auto; color: var(--danger); font-weight: 750; white-space: nowrap; }
-.bar.mic { background: transparent; border: 1px dashed color-mix(in oklch, var(--brand) 45%, transparent); color: var(--secondary); font-size: 0.85rem; padding: 2px 10px; min-height: 0; }
+.bar.mic { background: transparent; border: 1px dashed color-mix(in oklch, var(--brand) 45%, transparent); color: var(--secondary); font-size: 0.85rem; padding: 2px 10px; min-height: 0; justify-content: space-between; }
+.bar.mic span { white-space: nowrap; }
 .band {
-  grid-row: 2 / 6; z-index: 0;
+  grid-row: 2 / 7; z-index: 0;
   background: color-mix(in oklch, var(--danger) 14%, transparent);
   border: 1px dashed color-mix(in oklch, var(--danger) 60%, transparent);
   border-radius: var(--radius-control);
   margin: -4px -3px;
 }
 .band.duplex { background: color-mix(in oklch, var(--info) 10%, transparent); border-color: color-mix(in oklch, var(--info) 50%, transparent); }
-.bandlabel { grid-row: 6; font-size: 0.85rem; font-weight: 700; text-align: center; align-self: start; }
+.bandlabel { grid-row: 7; font-size: 0.85rem; font-weight: 700; text-align: center; align-self: start; }
 .bandlabel.cutl { color: var(--danger); }
 .bandlabel.dupl { color: var(--info); }
 @media (max-width: 1100px) {
@@ -241,10 +247,13 @@ li + li { margin-top: 4px; }
   .bar .say, .bar .cutmark { display: none; }
 }
 @media (max-width: 700px) {
-  .timeline { grid-template-columns: 62px repeat(8, 1fr); gap: 6px 3px; padding: 8px; grid-template-rows: auto minmax(44px, auto) auto minmax(44px, auto) minmax(44px, auto) auto; }
+  .timeline { grid-template-columns: 62px repeat(9, 1fr); gap: 6px 3px; padding: 8px; grid-template-rows: auto minmax(44px, auto) auto minmax(44px, auto) minmax(40px, auto) minmax(40px, auto) auto; }
   .timeline .lane { font-size: 0.82rem; }
   .timeline .lane small { display: none; }
-  .bar.mic { font-size: 0.75rem; padding: 2px 4px; }
+  .bar.mic { font-size: 0.75rem; padding: 2px 4px; line-height: 1.2; }
+  /* Each half of the label wraps word by word, so it ends clear of the interruption band. */
+  .bar.mic span { white-space: normal; width: min-content; }
+  .bar.mic span + span { text-align: right; }
   .bandlabel { font-size: 0.8rem; }
 }
 
@@ -298,7 +307,9 @@ li + li { margin-top: 4px; }
   .chain .arrbox { max-width: none; flex-direction: row; }
   .chain .arrbox .arr { transform: rotate(90deg); width: 30px; }
 }
-.flag { display: inline-block; font-size: 0.8rem; font-weight: 750; padding: 3px 9px; border-radius: 999px; background: var(--success); color: #0b1a10; vertical-align: middle; margin-left: 8px; }
+/* A title with a status badge wraps as a row: the badge starts at the title's left edge when it wraps. */
+.frame h1.flagged { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.flag { display: inline-block; font-size: 0.8rem; font-weight: 750; padding: 3px 9px; border-radius: 999px; background: var(--success); color: #0b1a10; }
 .flag.no { background: var(--danger-soft); color: var(--danger); border: 1px solid var(--danger); }
 .flag.maybe { background: var(--warning-soft); color: var(--warning); border: 1px solid var(--warning); }
 
