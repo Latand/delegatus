@@ -122,19 +122,42 @@ describe("pipeline and seat Telegram destinations", () => {
   test("genuinely missing, disabled or service-only targets report no_target for both callers and resend", async () => {
     const { transport } = await sender();
     const targets = [[], [{ ...destinationTarget("disabled"), enabled: false }],
-      [{ ...destinationTarget("hosted"), answered_by: "service" as const }]];
+      [{ ...destinationTarget("hosted"), answered_by: "service" as const }],
+      [{ ...destinationTarget("disabled-owner"), enabled: false }, { ...destinationTarget("hosted"), answered_by: "service" as const }]];
+    const details = ["no_destination", "destination_disabled", "service_only", "not_answered_by_owner"] as const;
     for (const [index, absent] of targets.entries()) {
       updateRelayStore(s => ({ ...s, relays: [destinationRelay(absent)] }));
       for (const [caller, world] of [["stage", stage], ["seat", seat]] as const) {
         const round = await publish(world, form(`no-target-${index}-${caller}`));
-        expect(round.telegramPost).toMatchObject({ state: "failed", reason: "no_target" });
+        const expected = { state: "failed", reason: "no_target", destinationDetail: details[index] } as const;
+        expect(round.telegramPost).toEqual({ ...expected, key: round.id, at: "2026-10-20T11:00:00.000Z" });
         const response = await resendTelegramPOST(request({ reviewId: round.id, clientRequestId: `missing-${index}-${caller}` }), seat);
         expect(response.status).toBe(200);
-        expect((await response.json()).telegramPost).toMatchObject({ state: "failed", reason: "no_target" });
+        expect((await response.json()).telegramPost).toEqual({ ...expected, key: `${round.id}:resend:missing-${index}-${caller}`, at: "2026-10-20T11:00:00.000Z" });
+        expect(findPrototypeRound(round.taskId, round.id)!.telegramPost).toMatchObject(expected);
       }
     }
     expect(transport.callsOf("getChat")).toHaveLength(0);
     expect(transport.callsOf("sendRichMessage")).toHaveLength(0);
+  });
+  test("a refusal records the selection that refused even if the destination returns before recording", async () => {
+    const { service, transport } = await sender();
+    const send = service.sendOwnerReview.bind(service);
+    const refusal = spyOn(service, "sendOwnerReview").mockImplementation(async (...args) => {
+      const result = await send(...args);
+      updateRelayStore(s => ({ ...s, relays: [pairing()] }));
+      return result;
+    });
+    try {
+      updateRelayStore(s => ({ ...s, relays: [destinationRelay([])] }));
+      const round = await publish(stage, form("refusal-snapshot"));
+      expect(round.telegramPost).toMatchObject({ state: "failed", reason: "no_target", destinationDetail: "no_destination" });
+      const response = await resendTelegramPOST(request({ reviewId: round.id, clientRequestId: "recovered-snapshot" }), stage);
+      expect((await response.json()).telegramPost).toMatchObject({ state: "sent" });
+      expect(findPrototypeRound(round.taskId, round.id)!.telegramPost).not.toHaveProperty("destinationDetail");
+      await service.waitForReviewPolls();
+      expect(transport.callsOf("sendRichMessage")).toHaveLength(1);
+    } finally { refusal.mockRestore(); }
   });
 });
 
