@@ -73,6 +73,35 @@ test("B: a controller-created replacement link proves a completed parent without
   } finally { if (childLaunch) await fs.rm(stageGitReceiptDirectory(childLaunch), { recursive: true, force: true }); await f.close(); }
 });
 
+test("review safety: manual silent retry preserves predecessor commit custody", async () => {
+  const f = await fixture();
+  let childLaunch: string | null = null;
+  try {
+    const parent = { ...f.attempt, n: 1, state: "failed", completedAt: NOW, agentPath: "/stage/silent.jsonl" } as PipelineStageAttempt;
+    await f.own("-c", "core.hooksPath=/dev/null", "commit", "--allow-empty", "-m", "unreceipted predecessor");
+
+    childLaunch = `stage-proof-manual-silent-retry-${nextFixture}`;
+    await fs.rm(stageGitReceiptDirectory(childLaunch), { recursive: true, force: true });
+    Object.assign(f.env, await prepareStageGitGuard(childLaunch, f.lane, realExec, START));
+    const child = { ...f.attempt, n: 2, launchId: childLaunch, startedAt: START, completedAt: NOW, state: "passed",
+      agentPath: "/stage/manual-retry.jsonl", restartContext: { previousAttempt: 1, transcriptPath: parent.agentPath } } as PipelineStageAttempt;
+    const head = await f.commit("manual retry output");
+    f.pipeline.runs = [{ stageId: "build", attempts: [parent, child] }] as never;
+    await f.push();
+
+    expect(await settleStageAttemptPush(f.pipeline, child, realExec, NOW)).toMatchObject({
+      ok: false, error: expect.stringContaining("was not created in the attempt worktree"),
+    });
+    const unlinked = structuredClone(f.pipeline);
+    delete unlinked.runs![0]!.attempts[1]!.restartContext;
+    expect(await settleStageAttemptPush(unlinked, unlinked.runs![0]!.attempts[1]!, realExec, NOW))
+      .toEqual({ ok: true, sha: head });
+  } finally {
+    if (childLaunch) await fs.rm(stageGitReceiptDirectory(childLaunch), { recursive: true, force: true });
+    await f.close();
+  }
+});
+
 test.each([1, 3])("A: main fast-forward plus %i own commits settles after an in-worktree push", async count => {
   const f = await fixture();
   try {

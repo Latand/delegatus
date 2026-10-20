@@ -34,7 +34,7 @@ async function fixture(unstaged = false, admissionRestarts = 0, sqliteMode: "off
   const root = fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "launch-"));
   const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode });
   setAgentRegistryForTests(registry);
-  let clock = Date.now();
+  let clock = Date.parse("2026-10-19T12:00:00Z");
   let unavailable = !privacyConflict;
   let starts = 0;
   let messages = 0;
@@ -544,5 +544,33 @@ test.each(["uncertain", "delivered", "transcript", "unverified", "survivor", "re
     expect(result.error).toContain("path-pending");
     expect(f.registry.readOnlySnapshot().receipts[f.original.launchId]?.retryClaim).toBeUndefined();
     expect(f.starts()).toBe(1);
+  } finally { setAgentRegistryForTests(null); }
+});
+
+
+test("a live owner gets a real first recovery check after controller downtime", async () => {
+  const f = await fixture();
+  try {
+    f.advance(STAGED_RECOVERY_BUDGET_MS + 1_000);
+    await tickPipelines([], f.ports);
+    expect(f.probes()).toBeGreaterThan(0);
+    const recovery = stagedLaunchRecovery(f.registry.readOnlySnapshot().receipts[f.original.launchId]);
+    expect(recovery?.checks).toBeGreaterThan(0);
+    expect(recovery?.stopped).not.toBe(true);
+    expect(loadPipelines()[0]!.stateDetail).not.toContain("after 0 checks");
+  } finally { setAgentRegistryForTests(null); }
+});
+
+
+test("an exhausted path-pending reservation with no host is automatically replaced", async () => {
+  const f = await fixture(true);
+  try {
+    f.ports.failStoppedStageLaunch = (...args) => defaultPipelinePorts().failStoppedStageLaunch!(...args);
+    f.advance(61_000); await tickPipelines([], f.ports);
+    f.advance(STAGED_RECOVERY_BUDGET_MS); await tickPipelines([], f.ports);
+    const lane = loadPipelines()[0]!;
+    expect(lane.runs[0]!.attempts).toHaveLength(2);
+    expect(lane.runs[0]!.attempts[0]!.state).toBe("failed");
+    expect(f.registry.spawnReceipt(f.original.launchId)?.state).toBe("failed");
   } finally { setAgentRegistryForTests(null); }
 });

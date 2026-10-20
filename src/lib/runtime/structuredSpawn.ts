@@ -2319,6 +2319,18 @@ const stagedStore = process as typeof process & {
 const stagedContinuations = stagedStore.__llvStagedContinuations ??= new Map<string, StagedContinuation>();
 const stagedRecoveryWork = stagedStore.__llvStagedRecoveryWork ??= new Map<string, Promise<SpawnReceipt>>();
 
+/** Drop only the in-memory continuation whose exact launch has durably failed.
+ * This also closes the receipt-settlement handoff where the failure committed
+ * before the pipeline could finish replacing its attempt. */
+export function releaseFailedStagedLaunchContinuation(
+  launchId: string, conversationId: string, registry: AgentRegistry,
+): boolean {
+  const receipt = registry.spawnReceipt(launchId);
+  if (receipt?.state !== "failed" || receipt.conversationId !== conversationId) return false;
+  stagedContinuations.delete(launchId);
+  return true;
+}
+
 /** One probe per wake. No sleep, new host, retry operation, or new message id.
  * Only the process holding the staged host can publish or dispatch. Other
  * controllers adopt the completed receipt without actuating this launch. */
@@ -2394,7 +2406,7 @@ export async function recoverStagedStructuredLaunch(
     }
     // Downtime before the first probe is not sixteen failed checks. Start its
     // bounded observation window once, persisted before the first I/O.
-    if (!ownsHost && recovery.checks === 0 && now() - recovery.startedAt >= STAGED_RECOVERY_BUDGET_MS) {
+    if (recovery.checks === 0 && now() - recovery.startedAt >= STAGED_RECOVERY_BUDGET_MS) {
       recovery = { ...recovery, startedAt: now() };
     }
     let observedError = receipt.error;
