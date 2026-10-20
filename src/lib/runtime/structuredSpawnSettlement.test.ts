@@ -114,6 +114,26 @@ test.each(["unhosted", "hosted"] as const)("uncertain initial delivery retains u
   expect(f.commands()).toBe(1);
 });
 
+test.each(["replay", "startup", "periodic"] as const)("uncertain settlement preserves a live registering writer through %s reconciliation", async pass => {
+  const f = fixture("unverified", true);
+  await f.admitAndFail();
+  f.journal().append({ scope: { type: "session", id: f.receipt.conversationId }, kind: "session-status", payload: {
+    conversationId: f.receipt.conversationId, sessionKey: f.key, artifactPath: f.artifactPath, cwd: f.root,
+    hostKind: "codex-app-server", host: "registering", turn: "unknown", activeTurnId: null, provenance: "structured",
+  } });
+  const before = f.journal().readSession({ conversationId: f.receipt.conversationId })!;
+  const beforeEntry = f.registry.spawnRecoverySnapshot([f.receipt.launchId]).entries[`codex:${f.key.sessionId}`]!;
+  const run = pass === "replay" ? () => reconcileStructuredSpawnReplay(f.receipt.launchId, f.registry, f.client)
+    : pass === "startup" ? () => recoverPendingStructuredSpawns(f.registry, f.client)
+      : () => terminalizeStaleStructuredSpawns(f.registry, f.client, { now: () => now });
+  await run();
+  expect(f.journal().operationResult(f.receipt.launchId)?.receipt.status).toBe("uncertain");
+  expect(f.journal().readSession({ conversationId: f.receipt.conversationId }))
+    .toMatchObject({ host: "registering", turn: "unknown", sessionKey: before.sessionKey });
+  expect(f.registry.spawnRecoverySnapshot([f.receipt.launchId]).entries[`codex:${f.key.sessionId}`]).toEqual(beforeEntry);
+  expect(f.commands()).toBe(1);
+});
+
 test("a live writer keeps a lost first prompt from becoming a failed agent", async () => {
   const f = fixture("lost", true);
   await f.admitAndFail();
@@ -198,6 +218,36 @@ test("an unavailable operation read retains the durable repair obligation", asyn
   f.client.operationStatus = read;
   await terminalizeStaleStructuredSpawns(f.restart(), f.client, { now: () => now });
   expect(f.journal().operationResult(f.receipt.launchId)?.receipt.status).toBe("failed");
+});
+
+test("a delivering first-prompt retry keeps a failed launch uncertain", async () => {
+  const f = fixture("lost");
+  await f.admitAndFail();
+  const messageId = `spawn_message_${f.receipt.launchId}`;
+  const read = f.client.operationStatus;
+  f.client.operationStatus = async (id, options) => {
+    if (id !== messageId) return read(id, options);
+    const operation = await read(f.receipt.launchId);
+    if (!operation) return null;
+    return { ...operation, receipt: { ...operation.receipt, operationId: messageId, kind: "send", status: "delivering" } };
+  };
+  await reconcileStructuredSpawnReplay(f.receipt.launchId, f.registry, f.client);
+  expect(f.journal().operationResult(f.receipt.launchId)?.receipt.status).toBe("uncertain");
+  expect((await f.client.operationStatus(messageId))?.receipt.status).toBe("delivering");
+  expect(f.commands()).toBe(1);
+});
+
+test("an unavailable first-prompt operation read keeps a failed launch uncertain", async () => {
+  const f = fixture("lost");
+  await f.admitAndFail();
+  const read = f.client.operationStatus;
+  f.client.operationStatus = async (id, options) => {
+    if (id === `spawn_message_${f.receipt.launchId}`) throw new Error("first-prompt evidence unavailable");
+    return read(id, options);
+  };
+  await reconcileStructuredSpawnReplay(f.receipt.launchId, f.registry, f.client);
+  expect(f.journal().operationResult(f.receipt.launchId)?.receipt.status).toBe("uncertain");
+  expect(f.commands()).toBe(1);
 });
 
 test("periodic reconciliation finds a queued spawn after failure reporting was already handled", async () => {

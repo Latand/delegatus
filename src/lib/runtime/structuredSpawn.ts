@@ -596,6 +596,7 @@ async function settleTerminalStructuredSpawnOperation(
   message: RuntimeOperationResult | null,
   runtime: Pick<RuntimeSnapshot, "sessions"> | null,
   assertActive: () => void,
+  messageEvidenceAvailable = true,
 ): Promise<void> {
   assertActive();
   const fresh = registry.spawnRecoverySnapshot([launchId]);
@@ -613,8 +614,8 @@ async function settleTerminalStructuredSpawnOperation(
     row.conversationId === receipt.conversationId && row.attempts > 0 && matchingOwner?.terminalDisposition !== "lost");
   const entry = receipt.key ? fresh.entries[sessionKeyId(receipt.key)] : null;
   const session = runtime?.sessions.find(candidate => candidate.conversationId === receipt.conversationId);
-  const uncertain = runtime === null || operation.receipt.status === "delivering"
-    || message?.receipt.status === "uncertain" || message?.receipt.status === "interrupted"
+  const uncertain = !messageEvidenceAvailable || runtime === null || operation.receipt.status === "delivering"
+    || message?.receipt.status === "delivering" || message?.receipt.status === "uncertain" || message?.receipt.status === "interrupted"
     || (message !== null && INITIAL_MESSAGE_DELIVERED.has(message.receipt.status))
     || (matchingOwner !== null && matchingOwner.terminalDisposition !== "lost")
     || attemptedWithoutLossProof
@@ -689,8 +690,12 @@ export async function reconcileStructuredSpawnReplay(
     return { ...current, initialMessage: "failed" };
   }
   let spawnStatusAvailable = true;
+  let initialMessageStatusAvailable = true;
   const [initialOperation, spawnOperation, runtime] = await Promise.all([
-    evidenceOrNull(client.operationStatus(`spawn_message_${launchId}`, { currentRetryLeaf: true })),
+    evidenceOrNull(client.operationStatus(`spawn_message_${launchId}`, { currentRetryLeaf: true }).catch(error => {
+      initialMessageStatusAvailable = false;
+      throw error;
+    })),
     evidenceOrNull(client.operationStatus(launchId, { currentRetryLeaf: true }).catch(error => {
       spawnStatusAvailable = false;
       throw error;
@@ -796,7 +801,8 @@ export async function reconcileStructuredSpawnReplay(
   }
   if (current.state === "failed") {
     if (!spawnStatusAvailable) throw new RuntimeHostUnavailableError("structured spawn operation evidence is unavailable");
-    await settleTerminalStructuredSpawnOperation(launchId, registry, client, spawnOperation, operation, runtime, assertActive);
+    await settleTerminalStructuredSpawnOperation(launchId, registry, client, spawnOperation, operation, runtime, assertActive,
+      initialMessageStatusAvailable);
     const receipt = registry.spawnRecoverySnapshot([launchId]).receipts[launchId] ?? current;
     return { ...receipt, initialMessage: receipt.state === "completed" ? "delivered" : "failed" };
   }

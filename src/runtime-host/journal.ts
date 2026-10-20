@@ -2935,7 +2935,7 @@ export class RuntimeJournal {
     }
     if (command.kind === "spawn"
       && !command.sessionId
-      && (receipt.status === "failed" || receipt.status === "rejected" || receipt.status === "uncertain")) {
+      && (receipt.status === "failed" || receipt.status === "rejected")) {
       /* A fresh spawn placeholder session only ever leaves "registering"
          through the launcher's own hosted projection. When the launch fails
          first, the terminal receipt is the durable truth and must retire the
