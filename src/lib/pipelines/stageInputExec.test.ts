@@ -52,7 +52,7 @@ test("stage input cancellation stops owned children and the shared deadline prev
       });
       ( ${JSON.stringify(cancelBy)} === "deadline" ? deadline : activation).abort();
       const cancelled = await result;
-      process.stdout.write(JSON.stringify({ code: cancelled.code, stderr: cancelled.stderr }));
+      process.stdout.write(JSON.stringify({ code: cancelled.code, signal: cancelled.signal, stderr: cancelled.stderr }));
     `;
     const child = spawnSync(process.execPath, ["--eval", program], {
       cwd: path.resolve(import.meta.dir, "../../.."),
@@ -61,7 +61,7 @@ test("stage input cancellation stops owned children and the shared deadline prev
     });
     expect(child.error).toBeUndefined();
     expect(child.status).toBe(0);
-    expect(JSON.parse(child.stdout)).toMatchObject({ code: null, stderr: "command cancelled" });
+    expect(JSON.parse(child.stdout)).toMatchObject({ code: null, signal: "SIGKILL", stderr: "command cancelled" });
   };
 
   await runOwnedGitChild("deadline");
