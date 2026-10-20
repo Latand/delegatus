@@ -15,8 +15,9 @@ import { decodeCodexStructuredUserText } from "./codexStructuredUserText.server"
 
 const binary = process.env.NATIVE_CODEX_QUEUE_TEST_BINARY;
 
-for (const scenario of ["sampling", "busy-tool", "ended-before", "dropped-after", "idle", "compact"] as const) {
+for (const scenario of ["sampling", "busy-tool", "ended-before", "dropped-after", "dropped-after-delayed", "landed-before-interrupt", "idle", "compact"] as const) {
   test.skipIf(!binary)(`real Codex steer delivery: ${scenario}`, async () => {
+    const droppedAfter = scenario === "dropped-after" || scenario === "dropped-after-delayed";
     // Short private roots also keep Codex's own Unix socket paths within bounds.
     const base = fs.mkdtempSync(path.join(os.tmpdir(), "s-"));
     const env: NodeJS.ProcessEnv = { PATH: "/usr/bin:/bin", LANG: "C.UTF-8", NODE_ENV: "test" };
@@ -52,11 +53,13 @@ enabled = false
 [features]
 apps = false
 plugins = false
-${scenario === "dropped-after" ? "instant_interrupt = false" : ""}
+${droppedAfter ? "instant_interrupt = false" : ""}
 `);
     const requests: Array<{method: string; params: Record<string, unknown>}> = [];
     const errors: string[] = [];
     const diagnostics: string[] = [];
+    const completedInputs = new Set<string>();
+    const completedTurns = new Set<string>();
     let heldEnd: string | null = null;
     let holdEnd = scenario === "ended-before";
     const spawnProcess = (_command: string, args: string[]) => {
@@ -75,6 +78,10 @@ ${scenario === "dropped-after" ? "instant_interrupt = false" : ""}
       const outbound = createInterface({ input: child.stdout });
       outbound.on("line", line => {
         const message = JSON.parse(line); const method = methods.get(message.id);
+        if (message.method === "item/completed" && message.params?.item?.type === "userMessage") {
+          completedInputs.add(message.params.item.clientId);
+        }
+        if (message.method === "turn/completed") completedTurns.add(message.params.turn.id);
         if (method === "account/read") message.result = { account: {type: "chatgpt", planType: "fixture"}, requiresOpenaiAuth: false };
         if (method === "model/list") message.result = { data: [{id: "fixture-model", model: "fixture-model", isDefault: true, inputModalities: ["text"]}] };
         const frame = JSON.stringify(message) + "\n";
@@ -95,12 +102,12 @@ ${scenario === "dropped-after" ? "instant_interrupt = false" : ""}
       }}) as ChildProcessWithoutNullStreams;
     };
     let host: CodexAppServerHost | undefined;
-    const journal = new RuntimeJournal(path.join(base, "journal.sqlite"), { structuredHosts: true });
+    let journal = new RuntimeJournal(path.join(base, "journal.sqlite"), { structuredHosts: true });
     const states: Array<{id: string; status: string; reason?: string | null}> = [];
     async function until(predicate: () => boolean | Promise<boolean>) {
       const deadline = Date.now() + 30_000;
       while (!await predicate()) {
-        if (Date.now() > deadline) throw new Error(`fixture deadline for ${predicate}\nstates=${JSON.stringify(states)}\nrequests=${JSON.stringify(requests.map(r => r.method))}\nhealth=${JSON.stringify(await host?.health())}\n${diagnostics.join("")}`);
+        if (Date.now() > deadline) throw new Error(`fixture deadline for ${predicate}\nstates=${JSON.stringify(states)}\nrequests=${JSON.stringify(requests.map(r => r.method))}\ncompletedInputs=${JSON.stringify([...completedInputs])}\ncompletedTurns=${JSON.stringify([...completedTurns])}\nhealth=${JSON.stringify(await host?.health())}\n${diagnostics.join("")}`);
         await new Promise(resolve => setTimeout(resolve, 10));
       }
     }
@@ -151,8 +158,10 @@ ${scenario === "dropped-after" ? "instant_interrupt = false" : ""}
       };
       if (scenario !== "idle") { await admit("opening"); await until(() => provider.length === 1); }
       let originalTurn = (await host.health()).activeTurnRef;
-      if (scenario === "busy-tool") {
+      if (scenario === "busy-tool" || droppedAfter) {
         startTool();
+        // Hold a real tool across steer acceptance. A held provider response
+        // alone can race with Codex recording the input before interruption.
         await until(() => fs.existsSync(path.join(cwd, "tool-running")));
       }
       if (scenario === "ended-before") { complete(0); await until(() => heldEnd !== null); }
@@ -170,8 +179,10 @@ ${scenario === "dropped-after" ? "instant_interrupt = false" : ""}
       } else {
         await admit("supplement");
       }
-      if (scenario === "sampling" || scenario === "busy-tool") {
-        expect(journal.operationResult("supplement")!.receipt.status).toBe("delivering");
+      const landsInOriginalTurn = scenario === "sampling" || scenario === "busy-tool" || scenario === "landed-before-interrupt";
+      let droppedAfterLandedInOriginalTurn = false;
+      if (landsInOriginalTurn) {
+        if (scenario !== "landed-before-interrupt") expect(journal.operationResult("supplement")!.receipt.status).toBe("delivering");
         expect(requests.filter(r => r.method === "turn/start")).toHaveLength(1);
         expect(requests.filter(r => r.method === "turn/interrupt")).toHaveLength(0);
         if (scenario === "busy-tool") fs.writeFileSync(path.join(cwd, "tool-release"), "release");
@@ -180,25 +191,53 @@ ${scenario === "dropped-after" ? "instant_interrupt = false" : ""}
         expect(provider[1]!.body).toContain("agent supplementary note");
         expect((await host.health()).activeTurnRef).toBe(originalTurn);
       }
-      if (scenario === "dropped-after") {
-        // Newer CLIs preempt sampling on steer by default. This case disables
-        // that feature so the explicit interrupt drops genuinely pending input.
-        // The sampling case above continues to exercise the CLI's defaults.
-        expect(provider).toHaveLength(1);
-        expect(journal.operationResult("supplement")!.receipt.status).toBe("delivering");
+      if (droppedAfter || scenario === "landed-before-interrupt") {
+        if (droppedAfter) {
+          if (scenario === "dropped-after-delayed") {
+            // Reproduce the CLI resuming after exec_command's 10-second yield
+            // while its shell still waits for tool-release. The observed
+            // protocol outcome below decides whether the steer landed.
+            await new Promise(resolve => setTimeout(resolve, 11_000));
+          }
+        } else {
+          // Pin the consumed-input outcome seen in CI before issuing the
+          // interrupt. Its receipt must stay delivered.
+          await until(() => completedInputs.has("supplement"));
+          await until(() => journal.operationResult("supplement")!.receipt.status === "delivered");
+        }
         await publish();
         journal.executeOperation(parseRuntimeCommand("interrupt", { conversationId, operationId: "interrupt-fixture", idempotencyKey: "interrupt-fixture", turnId: originalTurn }));
         await queue.drain();
-        await until(() => states.some(s => s.id === "supplement" && s.status === "queued" && s.reason === "steer-dropped"));
+        await until(() => completedTurns.has(originalTurn!));
+        await until(() => journal.operationResult("interrupt-fixture")!.receipt.status === "interrupted");
+        if (droppedAfter) {
+          // A tool command may yield control back to Codex before the fixture
+          // releases it. In that ordering Codex can consume the steer while
+          // the original turn is still active. Settle from the observed
+          // protocol outcome instead of assuming the steer was dropped.
+          await until(() => completedInputs.has("supplement")
+            || states.some(s => s.id === "supplement" && s.status === "queued" && s.reason === "steer-dropped"));
+          const wasDropped = states.some(s => s.id === "supplement" && s.status === "queued" && s.reason === "steer-dropped");
+          if (!wasDropped) {
+            droppedAfterLandedInOriginalTurn = true;
+            await until(() => journal.operationResult("supplement")!.receipt.status === "delivered");
+            expect(states.some(s => s.id === "supplement" && s.status === "queued")).toBe(false);
+          }
+        } else {
+          expect(states.some(s => s.id === "supplement" && s.status === "queued")).toBe(false);
+        }
       }
       await until(async () => { await queue.drain(); return journal.operationResult("supplement")!.receipt.status === "delivered"; });
       const receipt = journal.operationResult("supplement")!.receipt;
-      if (scenario === "sampling" || scenario === "busy-tool") expect(receipt.turnId).toBe(originalTurn);
+      if (landsInOriginalTurn || droppedAfterLandedInOriginalTurn) expect(receipt.turnId).toBe(originalTurn);
       if (scenario === "ended-before") expect(states).toContainEqual({id: "supplement", status: "queued", reason: expect.stringMatching(/steer-refused: .*no active turn/)});
       const supplementRequests = requests.filter(r => r.params.clientUserMessageId === "supplement");
       expect(supplementRequests.filter(r => r.method === "turn/steer")).toHaveLength(scenario === "idle" ? 0 : 1);
-      expect(supplementRequests.filter(r => r.method === "turn/start")).toHaveLength(scenario === "sampling" || scenario === "busy-tool" ? 0 : 1);
+      expect(supplementRequests.filter(r => r.method === "turn/start")).toHaveLength(landsInOriginalTurn || droppedAfterLandedInOriginalTurn ? 0 : 1);
       expect(journal.nativeQueueRead(conversationId)).toEqual([]);
+      journal.close();
+      journal = new RuntimeJournal(path.join(base, "journal.sqlite"), { structuredHosts: true });
+      expect(journal.operationResult("supplement")!.receipt).toEqual(receipt);
       // Replay the original admitted identity: terminal receipt, no second write.
       await admit("supplement");
       expect(requests.filter(r => r.params.clientUserMessageId === "supplement")).toHaveLength(supplementRequests.length);
