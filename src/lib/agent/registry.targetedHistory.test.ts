@@ -48,9 +48,12 @@ test("staging a conversation capability leaves unrelated retained receipts unrea
   } finally { f.close(); }
 });
 
-test("an absent original-send key reads only its recipient's retained delivery rows", () => {
+test("an absent original-send key reads only its recipient's retained delivery rows", async () => {
   const f = fixture();
   try {
+    // The production startup path prepares recovery indexes before a keyed
+    // send lookup can use the compound message/recipient selector.
+    await f.registry.prepareRecoveryIndexes();
     expect(lookupOriginalSend(f.registry.readOnlySnapshot(), {
       conversationId: f.receipt.conversationId, clientMessageId: "absent-original-key",
     })).toEqual({ kind: "absent" });

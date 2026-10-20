@@ -98,7 +98,7 @@ import {
 } from "./registryBackendIdentity";
 import {
   SqliteAgentRegistryStore,
-  registryRowsMatching, registryKeysMatching, registryHasLookupIndex, registryConversationsForPath, registryHasPathIndex,
+  registryRowsMatching, registryKeysMatching, registryKeysMatchingBounded, registryHasLookupIndex, registryConversationsForPath, registryHasPathIndex,
   registryConversationsForEntryKey, registryHasEntryKeyIndex,
   sqliteRegistryStoreImported,
   type RegistryDeliveryCompactionChanges,
@@ -2589,6 +2589,36 @@ export function conversationRegistryEntries<C extends "heldDeliveries" | "delive
   const rows = file[collection] as Record<string, RegistryFile[C][string]>;
   return registryKeysMatching(file, collection, "conversationId", conversationIdentities(file, id))
     .flatMap((key) => rows[key] ? [[key, rows[key]!] as [string, RegistryFile[C][string]]] : []);
+}
+
+/** Recovery hydrates only this message key and recipient. The bound refuses
+ * ambiguous or hostile histories before any command bodies are decoded. */
+export const DELIVERY_KEY_ROW_LIMIT = 256;
+export function deliveryRegistryEntriesForKey<C extends "heldDeliveries" | "deliveryOperationOwners">(
+  file: RegistryFile, collection: C, clientMessageId: string, recipients?: readonly string[],
+): Array<[string, RegistryFile[C][string]]> {
+  return withViewerOperation("registry.delivery-key", () => performanceSpans.sync("registry.delivery-key", () => {
+    const filters: { field: "clientMessageId" | "conversationId"; value: string | readonly string[] }[] = [
+      { field: "clientMessageId", value: clientMessageId },
+    ];
+    if (recipients) {
+      const identities = [...new Set(recipients.flatMap(id => conversationIdentities(file, id as ViewerConversationId)))];
+      if (identities.length === 0) return [];
+      filters.push({ field: "conversationId", value: identities });
+    }
+    const keys = registryKeysMatchingBounded(file, collection, filters, DELIVERY_KEY_ROW_LIMIT + 1);
+    if (keys.length > DELIVERY_KEY_ROW_LIMIT) throw new Error("delivery key recovery exceeds its row budget");
+    const rows = file[collection] as Record<string, RegistryFile[C][string]>;
+    return keys.flatMap(key => rows[key] ? [[key, rows[key]!] as [string, RegistryFile[C][string]]] : []);
+  }));
+}
+
+export interface ConversationAuthorityFacts {
+  id: string;
+  superseded: boolean;
+  hasGeneration: boolean;
+  project: string | null;
+  directories: string[];
 }
 
 function heldDeliveryRequestDigests(
@@ -8986,8 +9016,9 @@ export class AgentRegistry {
     }, options);
   }
 
+  /** Alias resolution needs no conversation payload or grant normalization. */
   canonicalConversationId(id: ViewerConversationId): ViewerConversationId {
-    return this.readKeyed(file => resolveConversationAlias(file, id));
+    return this.readKeyed(file => resolveConversationAlias(file, id), { skipColdKeyInitialization: true });
   }
 
   /** Records the terminal predecessor → successor edge (issue #383) outside
@@ -9056,6 +9087,18 @@ export class AgentRegistry {
       const conversation = file.conversations[resolveConversationAlias(file, id)];
       return conversation ? clone(conversation) : null;
     });
+  }
+
+  conversationAuthorityFacts(id: string): ConversationAuthorityFacts | null {
+    return withViewerOperation("orchestrator.authority", () => performanceSpans.sync("authority.facts", () => {
+      if (this.sqliteStore && (this.sqliteMode === "sqlite" || this.sqliteMode === "read")) return this.sqliteStore.conversationAuthorityFacts(id);
+      return this.readKeyed(file => {
+        const conversation = file.conversations[resolveConversationAlias(file, id as ViewerConversationId)];
+        return conversation ? { id: conversation.id, superseded: conversation.supersededBy !== null,
+          hasGeneration: conversation.generations.length > 0, project: conversation.projectOwnership?.project ?? null,
+          directories: conversation.generations.toReversed().flatMap(g => g.launchProfile?.cwd ? [g.launchProfile.cwd] : []) } : null;
+      });
+    }));
   }
 
   launchProfileForPath(artifactPath: string): LaunchProfile | null {

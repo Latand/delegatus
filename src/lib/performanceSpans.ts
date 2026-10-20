@@ -16,7 +16,7 @@ export const performanceSites = [
   "http.dispatch", "http.response-ready",
   "pipeline.git-guard-prepare", "pipeline.attempt-push-proof", "pipeline.pull-request",
   "orchestrator.seat-stat", "orchestrator.seat-read", "orchestrator.seat-parse", "orchestrator.seat-index",
-  "registry.writer-snapshot",
+  "registry.writer-snapshot", "registry.delivery-key", "relay.select", "authority.facts", "memory.delivery-evidence",
   "scanner.ipc-frame", "scanner.ipc-decode", "scanner.publication", "scanner.cache-encode", "scanner.cache-persist",
   "transcript.feed", "transcript.index", "memory.discovery", "memory.refresh",
   "http.render", "privacy.compile", "privacy.match", "privacy.worker",
