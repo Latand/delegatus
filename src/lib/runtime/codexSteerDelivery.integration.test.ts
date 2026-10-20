@@ -15,8 +15,9 @@ import { decodeCodexStructuredUserText } from "./codexStructuredUserText.server"
 
 const binary = process.env.NATIVE_CODEX_QUEUE_TEST_BINARY;
 
-for (const scenario of ["sampling", "busy-tool", "ended-before", "dropped-after", "landed-before-interrupt", "idle", "compact"] as const) {
+for (const scenario of ["sampling", "busy-tool", "ended-before", "dropped-after", "dropped-after-delayed", "landed-before-interrupt", "idle", "compact"] as const) {
   test.skipIf(!binary)(`real Codex steer delivery: ${scenario}`, async () => {
+    const droppedAfter = scenario === "dropped-after" || scenario === "dropped-after-delayed";
     // Short private roots also keep Codex's own Unix socket paths within bounds.
     const base = fs.mkdtempSync(path.join(os.tmpdir(), "s-"));
     const env: NodeJS.ProcessEnv = { PATH: "/usr/bin:/bin", LANG: "C.UTF-8", NODE_ENV: "test" };
@@ -52,7 +53,7 @@ enabled = false
 [features]
 apps = false
 plugins = false
-${scenario === "dropped-after" ? "instant_interrupt = false" : ""}
+${droppedAfter ? "instant_interrupt = false" : ""}
 `);
     const requests: Array<{method: string; params: Record<string, unknown>}> = [];
     const errors: string[] = [];
@@ -157,7 +158,7 @@ ${scenario === "dropped-after" ? "instant_interrupt = false" : ""}
       };
       if (scenario !== "idle") { await admit("opening"); await until(() => provider.length === 1); }
       let originalTurn = (await host.health()).activeTurnRef;
-      if (scenario === "busy-tool" || scenario === "dropped-after") {
+      if (scenario === "busy-tool" || droppedAfter) {
         startTool();
         // Hold a real tool across steer acceptance. A held provider response
         // alone can race with Codex recording the input before interruption.
@@ -179,6 +180,7 @@ ${scenario === "dropped-after" ? "instant_interrupt = false" : ""}
         await admit("supplement");
       }
       const landsInOriginalTurn = scenario === "sampling" || scenario === "busy-tool" || scenario === "landed-before-interrupt";
+      let droppedAfterLandedInOriginalTurn = false;
       if (landsInOriginalTurn) {
         if (scenario !== "landed-before-interrupt") expect(journal.operationResult("supplement")!.receipt.status).toBe("delivering");
         expect(requests.filter(r => r.method === "turn/start")).toHaveLength(1);
@@ -189,11 +191,16 @@ ${scenario === "dropped-after" ? "instant_interrupt = false" : ""}
         expect(provider[1]!.body).toContain("agent supplementary note");
         expect((await host.health()).activeTurnRef).toBe(originalTurn);
       }
-      if (scenario === "dropped-after" || scenario === "landed-before-interrupt") {
-        if (scenario === "dropped-after") {
+      if (droppedAfter || scenario === "landed-before-interrupt") {
+        if (droppedAfter) {
           expect(provider).toHaveLength(1);
           expect(completedInputs.has("supplement")).toBe(false);
           expect(journal.operationResult("supplement")!.receipt.status).toBe("delivering");
+          if (scenario === "dropped-after-delayed") {
+            // Reproduce the CLI resuming after exec_command's 10-second yield
+            // while its shell still waits for tool-release.
+            await new Promise(resolve => setTimeout(resolve, 11_000));
+          }
         } else {
           // Pin the consumed-input outcome seen in CI before issuing the
           // interrupt. Its receipt must stay delivered.
@@ -205,19 +212,30 @@ ${scenario === "dropped-after" ? "instant_interrupt = false" : ""}
         await queue.drain();
         await until(() => completedTurns.has(originalTurn!));
         await until(() => journal.operationResult("interrupt-fixture")!.receipt.status === "interrupted");
-        if (scenario === "dropped-after") {
-          await until(() => states.some(s => s.id === "supplement" && s.status === "queued" && s.reason === "steer-dropped"));
+        if (droppedAfter) {
+          // A tool command may yield control back to Codex before the fixture
+          // releases it. In that ordering Codex can consume the steer while
+          // the original turn is still active. Settle from the observed
+          // protocol outcome instead of assuming the steer was dropped.
+          await until(() => completedInputs.has("supplement")
+            || states.some(s => s.id === "supplement" && s.status === "queued" && s.reason === "steer-dropped"));
+          const wasDropped = states.some(s => s.id === "supplement" && s.status === "queued" && s.reason === "steer-dropped");
+          if (!wasDropped) {
+            droppedAfterLandedInOriginalTurn = true;
+            await until(() => journal.operationResult("supplement")!.receipt.status === "delivered");
+            expect(states.some(s => s.id === "supplement" && s.status === "queued")).toBe(false);
+          }
         } else {
           expect(states.some(s => s.id === "supplement" && s.status === "queued")).toBe(false);
         }
       }
       await until(async () => { await queue.drain(); return journal.operationResult("supplement")!.receipt.status === "delivered"; });
       const receipt = journal.operationResult("supplement")!.receipt;
-      if (landsInOriginalTurn) expect(receipt.turnId).toBe(originalTurn);
+      if (landsInOriginalTurn || droppedAfterLandedInOriginalTurn) expect(receipt.turnId).toBe(originalTurn);
       if (scenario === "ended-before") expect(states).toContainEqual({id: "supplement", status: "queued", reason: expect.stringMatching(/steer-refused: .*no active turn/)});
       const supplementRequests = requests.filter(r => r.params.clientUserMessageId === "supplement");
       expect(supplementRequests.filter(r => r.method === "turn/steer")).toHaveLength(scenario === "idle" ? 0 : 1);
-      expect(supplementRequests.filter(r => r.method === "turn/start")).toHaveLength(landsInOriginalTurn ? 0 : 1);
+      expect(supplementRequests.filter(r => r.method === "turn/start")).toHaveLength(landsInOriginalTurn || droppedAfterLandedInOriginalTurn ? 0 : 1);
       expect(journal.nativeQueueRead(conversationId)).toEqual([]);
       journal.close();
       journal = new RuntimeJournal(path.join(base, "journal.sqlite"), { structuredHosts: true });
