@@ -58,7 +58,7 @@ test.each([256, 257])("attempt Git custody accepts every proved suffix commit (%
     expect(settled.lastPassedCommit).toBe(fixed);
     expect(settled.cursor?.stageId).toBe("review");
   } finally { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); }
-}, 60000);
+}, 120_000);
 
 
 

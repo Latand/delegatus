@@ -185,6 +185,14 @@ cascades, the false refusal and the hidden cost (E2).
    `engine.providerReset.part2.test.ts`; its assertions and the 300 s file
    deadline are retained. The earlier 300 s file expirations hid this cost.
 
+   The full-hook protocol also exposed the existing 60 s timeout on the real
+   Git suffix-custody cases, which create 256 or 257 commits. A case timed out
+   at 60.0 s, continued writing, and produced a between-tests assertion error;
+   its filtered retries passed. These cases use 120 s in
+   `engine.ports.part3.test.ts`. The shared default stays at 60 s and the file
+   deadline stays at 300 s. Measurements restart on this final revision; the
+   earlier trials remain diagnostic evidence.
+
    The CLI flag covers the gate's head and base samples, its
    reruns, the merger's own `bun test` calls
    (`scripts/merge-batch.ts:358,669,709`), CI and the direct package command, so a
@@ -227,10 +235,11 @@ flaky rules; privacy, types and lint.
 
 Both gates get the same logic. Delegatus's publication and an agent's own push
 both run `.githooks/pre-push` → `scripts/local-gate.ts` →
-`scripts/local-gate-tests.ts` from the checkout being pushed, and `bun test`
-uses that checkout's comparator command. A branch picks up the fix when it merges
-main. Until then, its publication runs the old hook. Lanes that edit one of the
-split files will have a merge conflict to carry into the parts. The only open
+`scripts/local-gate-tests.ts` from the checkout being pushed. The comparator
+passes `--timeout=60000` to head, base and retry samples. A branch picks up the
+fix when it merges main. Until then, its publication runs the old hook. Lanes
+that edit one of the split files will have a merge conflict to carry into the
+parts. The only open
 PR that touches the gate's files (#2926: `scripts/gate-slot.sh`,
 `scripts/owned-runner.ts`) changes neither the runner command nor these tests.
 

@@ -440,7 +440,7 @@ they neither contend on another build's `.next/lock` nor consume its output.
 The hook labels CPU admission for publication checks and prints its measured
 queue wait, excluded from the execution budget.
 
-Run an individual test as `bash scripts/gate-slot.sh bun test <file>` with an
+Run an individual test as `bash scripts/gate-slot.sh bun run test <file>` with an
 isolated home, config, state and temporary root. The preload registers real
 Node and Bun children before spawn returns, checks for survivors, and reaps
 them before deleting its temporary root. Direct and nested Linux test runners
