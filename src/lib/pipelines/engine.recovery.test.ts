@@ -1918,91 +1918,21 @@ test("a staged launch whose agent is working is adopted when spawn recovery spen
   expect(f.starts()).toBe(1);
 });
 
-test("a live stage host whose first message is still queued keeps the attempt watched, and a lost host parks as before", async () => {
-  const host = await stageHostChild();
-  try {
-    const f = await aliveStagedLaunch({ hostProcess: host.process, nativeTranscript: true });
-    productionHostSeams(f);
-    const scheduled: number[] = [];
-    f.h.ports.scheduleTick = (delay) => { scheduled.push(delay); };
-    f.advance(10 * 60_000);
-    await f.wake();
-    let pipeline = loadPipelines()[0]!;
-    expect(pipeline.state).toBe("running");
-    expect(f.attempt()).toMatchObject({ state: "spawning", error: null, completedAt: null });
-    expect(pipeline.stateDetail).toMatch(new RegExp(`^the stage host \\(pid ${host.process.pid}\\) is alive and has not answered its first message yet; spawn recovery spent its 10-minute budget after \\d+ checks and keeps watching, next check at \\S+$`));
-    expect(scheduled.at(-1)).toBe(30_000);
-    // Still alive on later ticks: the detail stays one bounded line.
-    await f.wake();
-    expect(loadPipelines()[0]!.stateDetail!.length).toBeLessThan(200);
-
-    await host.end();
-    await f.wake();
-    pipeline = loadPipelines()[0]!;
-    expect(pipeline).toMatchObject({ state: "needs_decision", stateDetail: expect.stringMatching(/^stage spawn recovery stopped: runtime host recovery exhausted after \d+ checks/) });
-    expect(f.attempt().state).toBe("needs_decision");
-    expect(f.messages()).toBe(1);
-    expect(f.starts()).toBe(1);
-  } finally {
-    setAgentRegistryForTests(null);
-    await host.end();
-  }
-});
-
-test("a launch whose recorded host process has exited and whose transcript holds no turn settles as before, however long it waits", async () => {
+test("a launch whose recorded host exited without a transcript is replaced after its recovery budget", async () => {
   const host = await stageHostChild();
   await host.end();
   try {
     const f = await aliveStagedLaunch({ hostProcess: host.process, nativeTranscript: true });
     productionHostSeams(f);
+    f.h.ports.stopStageAgent = (target, options) => defaultPipelinePorts().stopStageAgent(target, options);
     f.advance(24 * 60 * 60_000);
-    for (let tick = 0; tick < 3; tick++) await f.wake();
+    await f.wake();
     const pipeline = loadPipelines()[0]!;
-    expect(pipeline).toMatchObject({ state: "needs_decision", stateDetail: expect.stringMatching(/^stage spawn recovery stopped: runtime host recovery exhausted after \d+ checks/) });
-    expect(f.attempt().state).toBe("needs_decision");
-    expect(f.messages()).toBe(1);
-    expect(f.starts()).toBe(1);
+    expect(pipeline.runs[0]!.attempts).toHaveLength(2);
+    expect(f.attempt().state).toBe("failed");
+    expect(f.registry.spawnReceipt(f.attempt().launchId!)?.state).toBe("failed");
   } finally {
     setAgentRegistryForTests(null);
-  }
-});
-
-test("an unpublished launch whose host is verified alive survives the tick that spends its recovery budget", async () => {
-  const host = await stageHostChild();
-  try {
-    const f = await stagedRecoveryHarness("timeout", { hostProcess: host.process, nativeTranscript: true });
-    productionHostSeams(f);
-    const scheduled: number[] = [];
-    f.h.ports.scheduleTick = (delay) => { scheduled.push(delay); };
-    await tickPipelines([], f.h.ports);
-    expect(f.registry.readOnlySnapshot().receipts[f.launchId()]?.state).toBe("path-pending");
-    f.advance(10 * 60_000);
-    await f.wake();
-    expect(f.registry.readOnlySnapshot().receipts[f.launchId()]?.state).toBe("path-pending");
-    const pipeline = loadPipelines()[0]!;
-    expect(pipeline).toMatchObject({ state: "running", cursor: { stageId: "build", state: "spawning" } });
-    expect(pipeline.stateDetail).toStartWith(`the stage host (pid ${host.process.pid}) is alive`);
-    expect(f.attempt()).toMatchObject({ n: 1, state: "spawning", error: null, completedAt: null, launchId: f.launchId() });
-    expect(scheduled.at(-1)).toBe(30_000);
-    await f.wake();
-    expect(f.attempt()).toMatchObject({ state: "spawning", completedAt: null });
-    expect(f.starts()).toBe(1);
-    expect(f.messages()).toBe(0);
-
-    // The same launch once its host is gone terminalizes as before.
-    await host.end();
-    const receipt = f.registry.readOnlySnapshot().receipts[f.launchId()]!;
-    const writer = f.registry.readOnlySnapshot().entries[`codex:${receipt.key!.sessionId}`]!;
-    expect(f.registry.setStructuredHostClaimed(receipt.key!, { ...writer.structuredHost!, process: null },
-      "dead", writer.claimOwner!, writer.claimEpoch, true)).toMatchObject({ status: "dead", claimOwner: null });
-    await f.wake();
-    expect(f.registry.readOnlySnapshot().receipts[f.launchId()]?.state).toBe("failed");
-    expect(f.attempt()).toMatchObject({ state: "failed", error: expect.stringMatching(/^stage launch never started: runtime host recovery exhausted/) });
-    expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: expect.stringContaining("use retry-stage") });
-    expect(f.starts()).toBe(1);
-  } finally {
-    setAgentRegistryForTests(null);
-    await host.end();
   }
 });
 

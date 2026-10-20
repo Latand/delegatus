@@ -141,6 +141,20 @@ A terminal parser miss starts up to three durable evaluations. Identical evidenc
 
 A stage spawn that fails after it reserved a launch consults the launch receipt before anything else. When the runtime host was unreachable or the account mutation lock was busy and the receipt has settled `failed` (the spawn layer's own retry-safe verdict), the engine claims that receipt for retry, retires the launch onto the attempt's `retiredLaunches`, and re-activates the same attempt on a bounded wall-clock wait with backoff: 30 seconds for a busy account, 10 minutes for an unreachable runtime host. While it waits the pipeline reads `stage spawn deferred: … ; retry at <time>`; exhaustion parks with the rounds, the seconds spent and the last failure. One wait keeps the largest budget any of its rounds asked for, so a busy-lock sighting a minute into a runtime-host outage does not end the host's ten minutes early, and every spawn call of the attempt, immediate handshake retries and retired launches included, consumes its own launch identity, counted before the call is made so that a call a restart interrupts keeps its identity away from the retry that follows. An attempt the engine before this count left waiting or mid-spawn resumes past every identity that engine could have spent: its booked rounds plus one activation's three calls. A receipt in any other state is a launch whose fate the engine cannot vouch for: nothing is re-dispatched, the attempt parks, and a receipt that completes after all is adopted by the next tick. A failed receipt that had staged a session identity for a read-write stage is not re-dispatched either, because the engine host may have edited the worktree before it was killed: the attempt parks naming `retry-stage`, whose reset runs first. A spawn a restart interrupted takes the same rule, with the budget starting at the recovering process's first sighting; a wait persisted from before the restart keeps its own start and its exhaustion still counts every round.
 
+A staged launch with no native turn gets a ten-minute recovery window, with at
+most 16 checks and persisted backoff. If controller downtime consumes the window
+before any check runs, the first real check opens a fresh window. At exhaustion,
+Delegatus stops the silent host through its recorded
+process identity, settles the original launch and its held first delivery, and
+reserves one fresh attempt in the same worktree. Metadata alone is not a native
+turn. A working native turn is adopted; changed or unreadable ownership retains
+the original attempt. The replacement limit is recorded in attempt history and
+survives controller restarts. If that replacement also stays silent, Delegatus
+stops it and parks with a reason naming `retry-stage`. That action also accepts
+an exhausted `spawning` attempt or an older spawn-recovery park with a
+`path-pending` receipt; it preserves the worktree when replacing the silent
+launch. Other retries keep the reset behavior described above.
+
 Run stages use Delegatus spawn receipts and conversation lineage. Stage zero descends from `src` when supplied. Later stages descend from the latest completed stage session. Each attempt persists its launch id, Delegatus conversation id, transcript path, native session id, pane id, output, verdict, and timestamps. Pausing holds coordinator transitions while preserving the active session for inspection and resume.
 
 A task spawn reserves its linked draft pipeline after task admission and before pane actuation. The draft keeps a `task-spawn` creation intent keyed by task id and launch id, plus the reserved Delegatus conversation id. Transcript settlement fills the creator path through the same idempotent ensure operation. Controller recovery can fill the path from the conversation registry when the route process stops after launch settlement. Replays reuse the receipt and the task's linked draft, preserving one pane and one active pipeline.
