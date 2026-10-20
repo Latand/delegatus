@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Варіант 1 · Як голосовий режим працює сьогодні</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="a-r" viewBox="0 0 44 18"><path d="M3 9H39" stroke="currentColor" stroke-width="2.5" fill="none"/><path d="M32 3L40 9L32 15" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="a-l" viewBox="0 0 44 18"><path d="M5 9H41" stroke="currentColor" stroke-width="2.5" fill="none"/><path d="M12 3L4 9L12 15" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="a-b" viewBox="0 0 44 18"><path d="M5 9H39" stroke="currentColor" stroke-width="2.5" fill="none"/><path d="M12 3L4 9L12 15M32 3L40 9L32 15" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  </defs>
+</svg>
+
+<!-- Frame 1: components map (docs/design/voice-mode-explained.md §0, §3) -->
+<section class="frame" data-frame="1" data-caption="1-komponenty">
+  <div class="kicker">Варіант 1 · Як голос працює сьогодні · кадр 1 з 3</div>
+  <h1>1. Хто з ким говорить під час голосового дзвінка</h1>
+  <p class="lede">Голосовий Delegatus на типовому бекенді <b>API</b>. <b>Звук</b> іде напряму між браузером і OpenAI.
+    <b>Увесь текст</b> (транскрипт, інструменти, відповіді, звіти) проходить через сервер Delegatus. Цифри — це зв'язки між блоками.</p>
+
+  <div class="map">
+    <div class="node op">
+      <h3>Оператор</h3>
+      <div class="sub">говорить і слухає</div>
+    </div>
+
+    <div class="link audio v l1">
+      <span class="num">1</span><svg class="arr"><use href="#a-b"/></svg>
+      <span class="body"><span class="ends">Оператор <svg class="ia"><use href="#a-b"/></svg> Браузер</span><span class="what">мікрофон і динамік</span></span>
+    </div>
+
+    <div class="node br">
+      <h3>Браузер — вкладка Delegatus</h3>
+      <ul>
+        <li><b>мікрофон</b> з придушенням луни й шуму</li>
+        <li><b>відтворює голос</b> і рухає рот персонажа</li>
+        <li>кожні <b>0,5 с</b> питає сервер про новий текст</li>
+      </ul>
+    </div>
+
+    <div class="link audio v l2">
+      <span class="num">2</span><svg class="arr"><use href="#a-b"/></svg>
+      <span class="body"><span class="ends">Браузер <svg class="ia"><use href="#a-b"/></svg> OpenAI <span class="tag t-audio">ЗВУК</span></span>
+        <span class="what">WebRTC, в обидва боки. Сервер Delegatus звуку не отримує.</span></span>
+    </div>
+
+    <div class="link text v l3">
+      <span class="num">3</span><svg class="arr"><use href="#a-b"/></svg>
+      <span class="body"><span class="ends">Браузер <svg class="ia"><use href="#a-b"/></svg> Delegatus <span class="tag t-text">ТЕКСТ</span></span>
+        <span class="what">HTTP кожні 0,5 с: транскрипт, звіти, вартість</span></span>
+    </div>
+
+    <div class="node vendor oa">
+      <h3>OpenAI · GPT-Live</h3>
+      <div class="inner">
+        <h4>Мовна модель <code>gpt-live-1</code></h4>
+        <p>Слухає й говорить <b>одночасно</b>. Інструментів не має: коли треба щось дізнатися чи зробити, подає сигнал <b>«делегування»</b>.</p>
+      </div>
+      <div class="inner">
+        <h4>Бекенд-модель <code>gpt-6-luna</code></h4>
+        <p>Отримує запит від Delegatus і вирішує, які інструменти викликати.</p>
+      </div>
+    </div>
+
+    <div class="links mid">
+      <div class="link text">
+        <span class="num">4</span><svg class="arr"><use href="#a-b"/></svg>
+        <span class="body"><span class="ends">Мовна модель <svg class="ia"><use href="#a-b"/></svg> Delegatus <span class="tag t-text">ПОДІЇ</span></span>
+          <span class="what">окремий WebSocket: сигнали делегування й транскрипт сюди; відповіді й звіти для голосу назад</span></span>
+      </div>
+      <div class="link tool">
+        <span class="num">5</span><svg class="arr"><use href="#a-b"/></svg>
+        <span class="body"><span class="ends">Бекенд-модель <svg class="ia"><use href="#a-b"/></svg> Delegatus <span class="tag t-tool">ІНСТРУМЕНТИ</span></span>
+          <span class="what">запит: розмова + 21 інструмент; назад: виклики інструментів і готова відповідь (до 4 раундів)</span></span>
+      </div>
+    </div>
+
+    <div class="node viewer vw">
+      <h3>Сервер Delegatus</h3>
+      <div class="sub">процес Viewer</div>
+      <ul>
+        <li>веде дзвінок і <b>повний запис</b> розмови</li>
+        <li><b>сам виконує</b> всі 21 інструмент</li>
+        <li>читання дошки — <b>той самий код</b>, що в MCP <code>viewer</code></li>
+        <li>стежить за бюджетом і тайм-аутами</li>
+      </ul>
+    </div>
+
+    <div class="links l67">
+      <div class="link text v">
+        <span class="num">6</span><svg class="arr"><use href="#a-r"/></svg>
+        <span class="body"><span class="ends">Delegatus <svg class="ia"><use href="#a-r"/></svg> Оркестратор <span class="tag t-text">ДОРУЧЕННЯ</span></span>
+          <span class="what">«передай оркестратору»: текст іде в його розмову</span></span>
+      </div>
+      <div class="link report v">
+        <span class="num">7</span><svg class="arr"><use href="#a-l"/></svg>
+        <span class="body"><span class="ends">Оркестратор <svg class="ia"><use href="#a-r"/></svg> Delegatus <span class="tag t-report">ЗВІТ</span></span>
+          <span class="what"><code>bridge_report</code> через свій MCP <code>viewer</code>; голос зачитує звіт</span></span>
+      </div>
+    </div>
+
+    <div class="node orc">
+      <h3>Оркестратор проєкту</h3>
+      <div class="sub">агент Claude або Codex, працює з дошкою</div>
+    </div>
+
+    <div class="nt">
+      <div class="note">
+        <span class="h">Голос не підключений до жодного MCP-сервера</span>
+        Його 21 інструмент вшитий у код Delegatus. Новий інструмент сьогодні — це зміна коду, перезбірка й перезапуск.
+      </div>
+      <div class="note info">
+        <span class="h">Бекенд Codex (вибір у налаштуваннях голосу)</span>
+        Замість 4 і 5 Delegatus запускає на кожен дзвінок процес <code>codex app-server</code>, і платить тариф ChatGPT. Звук, судячи з коду, так само йде зв'язком 2.
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Frame 2: one realtime turn (§6, §7, sequence S2) -->
+<section class="frame" data-frame="2" data-caption="2-odyn-khid">
+  <div class="kicker">Варіант 1 · Як голос працює сьогодні · кадр 2 з 3</div>
+  <h1>2. Один обмін репліками: дуплекс і перебивання</h1>
+  <p class="lede">Голос <b>слухає, навіть коли говорить</b> — це і є повний дуплекс. Перебити його можна просто голосом: він замовкає сам.
+    Робота, яку він уже доручив бекенду, при цьому <b>не скасовується</b>.</p>
+
+  <div class="timeline">
+    <div class="axis" style="grid-column:2/-1"><span>час</span><svg viewBox="0 0 400 14" preserveAspectRatio="none"><path d="M0 7H392M384 2L394 7L384 12" stroke="currentColor" stroke-width="2" fill="none"/></svg></div>
+
+    <div class="lane" style="grid-row:2">Оператор<small>мікрофон</small></div>
+    <div class="bar op" style="grid-row:2;grid-column:2/4"><span class="num">1</span><span class="say">«Що відкрито на дошці?»</span></div>
+    <div class="bar op" style="grid-row:2;grid-column:7/8"><span class="num">6</span><span class="say">«Стривай, лише пайплайни»</span></div>
+    <div class="bar mic" style="grid-row:3;grid-column:2/-1">мікрофон відкритий увесь дзвінок</div>
+
+    <div class="lane" style="grid-row:4">Голос<small>мовна модель</small></div>
+    <div class="bar vo" style="grid-row:4;grid-column:4/5"><span class="num">2</span><span class="say">«Секунду»</span></div>
+    <div class="bar vo cut" style="grid-row:4;grid-column:6/8"><span class="num">5</span><span class="say">читає відповідь</span><span class="cutmark">замовк</span></div>
+    <div class="bar vo" style="grid-row:4;grid-column:9/10"><span class="num">8</span><span class="say">«Добре…»</span></div>
+
+    <div class="lane" style="grid-row:5">Delegatus<small>+ бекенд-модель</small></div>
+    <div class="bar be" style="grid-row:5;grid-column:4/6"><span class="num">3</span><span class="num">4</span><span class="say">делегування №1: інструменти</span></div>
+    <div class="bar be" style="grid-row:5;grid-column:8/9"><span class="num">7</span><span class="say">делегування №2</span></div>
+
+    <div class="band" style="grid-column:7/8"></div>
+    <div class="bandlabel cutl" style="grid-column:6/9">звучать обоє <svg class="ia"><use href="#a-r"/></svg> голос замовкає</div>
+  </div>
+
+  <h2>Крок за кроком</h2>
+  <div class="steps">
+    <div class="step"><span class="num alt">1</span><div><span class="who">Оператор</span><p>Питає: «Що відкрито на дошці?». Мікрофон відкритий увесь дзвінок.</p></div></div>
+    <div class="step"><span class="num">2</span><div><span class="who">Голос</span><p>Коротко відповідає «Секунду, гляну» і весь цей час далі слухає.</p></div></div>
+    <div class="step"><span class="num">3</span><div><span class="who">Голос <svg class="ia"><use href="#a-r"/></svg> Delegatus</span><p>Подає сигнал <b>делегування №1</b>. Самого питання в сигналі немає: Delegatus бере його зі свого запису розмови.</p></div></div>
+    <div class="step"><span class="num">4</span><div><span class="who">Delegatus <svg class="ia"><use href="#a-b"/></svg> бекенд-модель</span><p>Delegatus надсилає розмову і 21 інструмент. Модель просить <code>list_tasks</code>, <code>list_pipelines</code>; Delegatus виконує їх у себе й повертає результат.</p></div></div>
+    <div class="step"><span class="num">5</span><div><span class="who">Delegatus <svg class="ia"><use href="#a-r"/></svg> Голос</span><p>Передає готову відповідь №1. Голос переказує її своїми словами.</p></div></div>
+    <div class="step"><span class="num alt">6</span><div><span class="who">Оператор перебиває</span><p>«Стривай, лише пайплайни». Голос замовкає й слухає. Це вирішує сама мовна модель за інструкцією в підказці: браузер звук не глушить, окремого налаштування черговості (VAD) немає.</p></div></div>
+    <div class="step"><span class="num">7</span><div><span class="who">Голос <svg class="ia"><use href="#a-r"/></svg> Delegatus <svg class="ia"><use href="#a-r"/></svg> бекенд</span><p>Новий сигнал <b>делегування №2</b>, нові виклики інструментів, відповідь №2.</p><p>Робота, почата до перебивання, доходить до кінця; голос сам вирішує, чи її озвучувати.</p></div></div>
+    <div class="step"><span class="num">8</span><div><span class="who">Голос</span><p>«Добре, лише пайплайни: …»</p></div></div>
+  </div>
+</section>
+
+<!-- Frame 3: how messages combine (§8) -->
+<section class="frame" data-frame="3" data-caption="3-povidomlennia">
+  <div class="kicker">Варіант 1 · Як голос працює сьогодні · кадр 3 з 3</div>
+  <h1>3. Як складаються повідомлення в одному дзвінку</h1>
+  <p class="lede">Голос і бекенд-модель бачать <b>різні частини</b> розмови. Delegatus записує все, крім самого звуку,
+    і з цього запису збирає кожен запит до бекенду. Рядки йдуть у порядку дзвінка.</p>
+
+  <div class="stream">
+    <div class="hd first"></div>
+    <div class="hd">Що з'являється</div>
+    <div class="hd">Що з цим робить голос (мовна модель)</div>
+    <div class="hd">Що бачить бекенд-модель (API)</div>
+
+    <div class="n"><span class="num">0</span></div>
+    <div class="what"><b>На старті дзвінка</b><span class="ex">пам'ять попередніх дзвінків, список проєктів</span></div>
+    <div class="see"><span class="lbl">Голос:</span>отримує в інструкціях</div>
+    <div class="see"><span class="lbl">Бекенд:</span>пам'ять окремим повідомленням, проєкти в кожному запиті</div>
+
+    <div class="n row-alt"><span class="num alt">1</span></div>
+    <div class="what row-alt"><b>Мова оператора</b> <span class="tag t-audio">ЗВУК</span><span class="ex">«Що відкрито на дошці?»</span></div>
+    <div class="see row-alt"><span class="lbl">Голос:</span>чує напряму, через WebRTC</div>
+    <div class="see row-alt"><span class="lbl">Бекенд:</span>рядок транскрипту «Operator: …»</div>
+
+    <div class="n"><span class="num">2</span></div>
+    <div class="what"><b>Відповідь голосу</b> <span class="tag t-audio">ЗВУК</span><span class="ex">«Секунду, гляну»</span></div>
+    <div class="see"><span class="lbl">Голос:</span>це його власна мова</div>
+    <div class="see"><span class="lbl">Бекенд:</span>рядок транскрипту «Delegatus: …»</div>
+
+    <div class="n row-alt"><span class="num">3</span></div>
+    <div class="what row-alt"><b>Сигнал делегування №1</b> <span class="tag t-text">ПОДІЯ</span><span class="ex">тексту запиту в ньому немає</span></div>
+    <div class="see row-alt"><span class="lbl">Голос:</span>подає його й чекає</div>
+    <div class="see row-alt"><span class="lbl">Бекенд:</span>Delegatus збирає запит: розмова (до 12 000 символів) і останній хід оператора</div>
+
+    <div class="n"><span class="num">4</span></div>
+    <div class="what"><b>Виклик інструменту й результат</b> <span class="tag t-tool">ІНСТРУМЕНТ</span><span class="ex"><code>list_pipelines</code> <svg class="ia"><use href="#a-r"/></svg> рядки дошки</span></div>
+    <div class="see"><span class="lbl">Голос:</span><span class="tag t-no">НЕ БАЧИТЬ</span></div>
+    <div class="see"><span class="lbl">Бекенд:</span>бачить; Delegatus виконує виклик, до 4 раундів</div>
+
+    <div class="n row-alt"><span class="num">5</span></div>
+    <div class="what row-alt"><b>Відповідь на делегування №1</b> <span class="tag t-text">ТЕКСТ</span><span class="ex">з номером делегування, до 500 токенів</span></div>
+    <div class="see row-alt"><span class="lbl">Голос:</span>переказує своїми словами</div>
+    <div class="see row-alt"><span class="lbl">Бекенд:</span>у наступних запитах, серед останніх 6 читань</div>
+
+    <div class="n"><span class="num">6</span></div>
+    <div class="what"><b>Звіт оркестратора</b> <span class="tag t-report">ЗВІТ</span><span class="ex"><code>bridge_report</code>, частинами до 500 байт, без номера делегування</span></div>
+    <div class="see"><span class="lbl">Голос:</span>зачитує вголос</div>
+    <div class="see"><span class="lbl">Бекенд:</span>бачить, що доручення ще чекають звіту; сам звіт читає інструментом</div>
+
+    <div class="n row-alt"><span class="num alt">7</span></div>
+    <div class="what row-alt"><b>Перемикання проєкту на екрані</b> <span class="tag t-text">ТЕКСТ</span><span class="ex">новий проєкт у фокусі</span></div>
+    <div class="see row-alt"><span class="lbl">Голос:</span>отримує додаткову інструкцію; вона може перервати мову</div>
+    <div class="see row-alt"><span class="lbl">Бекенд:</span>новий проєкт у наступних запитах</div>
+  </div>
+
+  <h2>Три місця, де живе розмова</h2>
+  <div class="places">
+    <div class="node vendor"><h3><span class="num">А</span>У мовній моделі</h3>
+      <p>В OpenAI: інструкції, звук, власна мова голосу й усі вставки. До 128 000 токенів. Delegatus цього не читає.</p></div>
+    <div class="node viewer"><h3><span class="num">Б</span>Запис дзвінка в Delegatus</h3>
+      <p>Усе, крім звуку: транскрипт, делегування, виклики інструментів, відповіді, звіти.</p></div>
+    <div class="node"><h3><span class="num">В</span>Запит бекенду</h3>
+      <p>На API збирається заново із запису Б для кожного делегування. На Codex — тимчасовий потік, що пам'ятає сам.</p></div>
+  </div>
+</section>
+</body>
+</html>
