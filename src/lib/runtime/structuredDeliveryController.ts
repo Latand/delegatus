@@ -48,7 +48,7 @@ import { readEvidence } from "./evidence";
 import { StructuredDispatchDeferredError, StructuredSendRefusedError, type EngineHost, type HostState } from "./engineHost";
 import { StructuredDeliveryQueue, type StructuredDeliveryQueueTiming } from "./structuredDeliveryQueue";
 import { deliveryProgressStore, type DeliveryProgressSink, type DeliveryProgressStore } from "./deliveryProgress";
-import { DeliveryWake } from "./deliveryWake";
+import { cancelDeliveryWakeForKick, DeliveryWake } from "./deliveryWake";
 import { DeliveryEffectPages } from "./deliveryEffectPages";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { applyStructuredReconfigure, type StructuredReconfigureDependencies } from "./structuredReconfigure";
@@ -1982,10 +1982,11 @@ export async function bindStructuredDeliveryQueue(
   state.activeRegistry = registry;
   setStructuredDeliveryKick((freshAdmission = false) => {
     if (stopped) return;
-    /* An explicit kick supersedes a delayed retry wake. Otherwise a route
-       control can settle every pending effect while the old one-second timer
-       still schedules a redundant pass after that settlement. */
-    drainWake.cancel();
+    /* A fresh admission always owns its own pass. An observer kick cancels the
+       pending wake only when the queue can start a pass; during listing
+       backoff, drain() will refuse the pass and its retrySoon callback must not
+       replace the earlier accepted deadline. */
+    cancelDeliveryWakeForKick(drainWake, freshAdmission, queue.canStartPass());
     return drainWithRetry(true, freshAdmission);
   });
   state.stopActive = () => {
