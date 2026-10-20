@@ -6,7 +6,8 @@ import { Database } from "bun:sqlite";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { lookupOriginalSend } from "@/lib/runtime/sendSettlement";
 import { DELIVERY_KEY_ROW_LIMIT, deliveryRegistryEntriesForKey, normalizeRegistry } from "./registry";
-import { registryKeysMatching, SqliteAgentRegistryStore } from "./sqliteRegistryStore";
+import { registryKeysMatching, registryKeysMatchingBounded, SqliteAgentRegistryStore } from "./sqliteRegistryStore";
+import { memoryDeliveryEvidence } from "@/lib/memory/deliveryEvidence";
 
 const roots: string[] = [];
 const stores: SqliteAgentRegistryStore[] = [];
@@ -93,6 +94,37 @@ test("recovery refuses an over-budget key before decoding and still refuses afte
       .toThrow("row budget");
     expect(f.decoded()).toBe(0);
   }
+});
+
+test("recipient intersection and relay refusal stop at bounded indexed headers", async () => {
+  const f = fixture(20_000); const store = f.open();
+  await store.prepareRecoveryIndexes();
+  while (store.archiveInactive(10_000) > 0) { /* archive the complete retained fixture */ }
+  await store.prepareReadOnlySnapshot();
+  const view = store.readOnlySnapshot().file;
+  f.reset();
+
+  const db = new Database(f.filename, { readonly: true });
+  try {
+    const plan = db.query<{ detail: string }, (string | number)[]>(`EXPLAIN QUERY PLAN
+      SELECT row_key FROM registry_rows
+      WHERE collection=? AND json_extract(value_json,'$.clientMessageId') IN (?)
+        AND json_extract(value_json,'$.conversationId') IN (?)
+      ORDER BY row_order LIMIT ?`).all("deliveryOperationOwners", "selected-key", "conversation_old", DELIVERY_KEY_ROW_LIMIT + 1);
+    expect(plan.some(row => row.detail.includes("registry_lookup_clientMessageId_deliveryOperationOwners"))).toBe(true);
+    expect(plan.some(row => row.detail.startsWith("SCAN"))).toBe(false);
+  } finally { db.close(); }
+
+  expect(deliveryRegistryEntriesForKey(view, "deliveryOperationOwners", "absent", ["conversation_target"])).toEqual([]);
+  expect(f.decoded()).toBe(0);
+  expect(deliveryRegistryEntriesForKey(view, "deliveryOperationOwners", "selected-key", ["conversation_target"]).map(([key]) => key))
+    .toEqual(["operation-00000"]);
+  expect(f.decoded()).toBe(1);
+
+  f.reset();
+  expect(registryKeysMatchingBounded(view, "deliveryOperationOwners", [], 257)).toHaveLength(257);
+  expect(memoryDeliveryEvidence(view, "conversation_target", true)).toBeNull();
+  expect(f.decoded()).toBe(0);
 });
 
 test("message-key selectors seek scoped hot and archive indexes for duplicate and multiple bindings", async () => {

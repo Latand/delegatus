@@ -114,12 +114,15 @@ const ROW_COLLECTION_KEYS: ReadonlySet<string> = new Set(ROW_COLLECTIONS);
 /** The rows whose MCP grant lists a complete load decides from other rows. */
 const READER_GRANT_COLLECTIONS: ReadonlySet<RowCollection> = new Set(["entries", "receipts", "conversations"]);
 type LookupValue = string | readonly string[];
-type LookupField = "clientMessageId" | "launchId" | "parentConversationId" | "launchProfile.parentConversationId" | "pendingSpawnCapability.operationId" | "conversationId" | "artifactPath" | "command.operationId" | "deliveryId" | "alias" | "clientAttemptId" | "spawnCapabilityDigest" | "pendingSpawnCapability.digest" | "state" | "status" | "key.sessionId" | "requestDigest" | "supersedes.conversationId" | "structuredHost.kind";
+export type RegistryKeyFilter = { field: "clientMessageId" | "launchId" | "parentConversationId" | "launchProfile.parentConversationId" | "pendingSpawnCapability.operationId" | "conversationId" | "artifactPath" | "command.operationId" | "deliveryId" | "alias" | "clientAttemptId" | "spawnCapabilityDigest" | "pendingSpawnCapability.digest" | "state" | "status" | "key.sessionId" | "requestDigest" | "supersedes.conversationId" | "structuredHost.kind"; value: LookupValue };
+type LookupField = RegistryKeyFilter["field"];
 const LOOKUP_PATHS: Record<LookupField, string> = { clientMessageId: "$.clientMessageId", launchId: "$.launchId", parentConversationId: "$.parentConversationId", "launchProfile.parentConversationId": "$.launchProfile.parentConversationId", "pendingSpawnCapability.operationId": "$.pendingSpawnCapability.operationId", conversationId: "$.conversationId", artifactPath: "$.artifactPath", "command.operationId": "$.command.operationId", deliveryId: "$.deliveryId", alias: "$", clientAttemptId: "$.clientAttemptId", spawnCapabilityDigest: "$.spawnCapabilityDigest", "pendingSpawnCapability.digest": "$.pendingSpawnCapability.digest", state: "$.state", status: "$.status", "key.sessionId": "$.key.sessionId", requestDigest: "$.requestDigest", "supersedes.conversationId": "$.supersedes.conversationId", "structuredHost.kind": "$.structuredHost.kind" };
 type KeyedReader = (collection: RowCollection, field: LookupField, value: LookupValue) => string[];
+type BoundedKeyReader = (collection: RowCollection, filters: readonly { field: LookupField; value: LookupValue }[], limit: number) => string[];
 type ProjectionReader = (collection: RowCollection, projector: RegistryRowProjector<RowCollection, unknown>) => Array<[string, unknown]>;
 interface RegistryFileReaders {
   keyed: WeakMap<object, KeyedReader>;
+  bounded: WeakMap<object, BoundedKeyReader>;
   path: WeakMap<object, (path: string) => string[]>;
   entryKey: WeakMap<RegistryFile, (entryKey: string) => string[]>;
   coldKey: WeakMap<RegistryFile, (collection: RowCollection) => ReadonlySet<string> | undefined>;
@@ -138,9 +141,10 @@ interface RegistryFileReaders {
    registry itself does. */
 const readerState = process as typeof process & { __llvRegistryFileReaders?: RegistryFileReaders };
 const fileReaders = readerState.__llvRegistryFileReaders ??= {
-  keyed: new WeakMap(), path: new WeakMap(), entryKey: new WeakMap(), coldKey: new WeakMap(), endedOwner: new WeakMap(), projection: new WeakMap(), liveness: new WeakMap(),
+  keyed: new WeakMap(), bounded: new WeakMap(), path: new WeakMap(), entryKey: new WeakMap(), coldKey: new WeakMap(), endedOwner: new WeakMap(), projection: new WeakMap(), liveness: new WeakMap(),
 };
 const keyedReaders = fileReaders.keyed;
+const boundedReaders = fileReaders.bounded;
 const pathReaders = fileReaders.path;
 const entryKeyReaders = fileReaders.entryKey;
 const coldKeyReaders = fileReaders.coldKey;
@@ -256,6 +260,8 @@ class RegistryReaderViews {
     const frozen = this.own(Object.freeze(view)) as unknown as RegistryFile;
     const keyed = keyedReaders.get(file);
     if (keyed) keyedReaders.set(frozen, keyed);
+    const bounded = boundedReaders.get(file);
+    if (bounded) boundedReaders.set(frozen, bounded);
     const paths = pathReaders.get(file);
     if (paths) pathReaders.set(frozen, paths);
     const entryKeys = entryKeyReaders.get(file);
@@ -331,6 +337,33 @@ export function registryHasLookupIndex(file: object): boolean {
 
 export function registryKeysMatching<C extends RowCollection>(file: Pick<RegistryFile, C>, collection: C, field: LookupField, value: LookupValue): string[] {
   return keyedReaders.get(file)?.(collection, field, value) ?? Object.entries(file[collection] ?? {}).filter(([, row]) => (typeof value === "string" ? [value] : value).includes(lookupValue(row, field) as string)).map(([key]) => key);
+}
+
+/** Select at most `limit` row keys before creating a result array or reading
+ * payloads. Indexed snapshots apply all filters and the limit in SQLite. */
+export function registryKeysMatchingBounded<C extends RowCollection>(
+  file: Pick<RegistryFile, C>, collection: C, filters: readonly RegistryKeyFilter[], limit: number,
+): string[] {
+  if (!Number.isInteger(limit) || limit < 0) throw new Error("registry key selection limit must be a non-negative integer");
+  if (limit === 0) return [];
+  const reader = boundedReaders.get(file);
+  if (reader) return reader(collection, filters, limit);
+  const values = filters.map(filter => typeof filter.value === "string" ? [filter.value] : filter.value);
+  const matches = (row: unknown) => filters.every((filter, index) => values[index]!.includes(lookupValue(row, filter.field) as string));
+  const rows = file[collection] as Record<string, unknown>;
+  const keys: string[] = [];
+  if (filters.length === 0) {
+    for (const key in rows) {
+      keys.push(key);
+      if (keys.length >= limit) break;
+    }
+    return keys;
+  }
+  for (const key in rows) {
+    if (matches(rows[key])) keys.push(key);
+    if (keys.length >= limit) break;
+  }
+  return keys;
 }
 
 function lookupValue(row: unknown, field: LookupField): unknown {
@@ -2912,6 +2945,31 @@ export class SqliteAgentRegistryStore {
     const pinnedDeliveries = this.changesReady ? this.pinnedRowKeys(file, "heldDeliveries", coldGrantChangeId, identity) : null;
     const pinnedOwners = this.changesReady ? this.pinnedRowKeys(file, "deliveryOperationOwners", coldGrantChangeId, identity) : null;
     const pinnedEntries = this.changesReady ? this.pinnedRowKeys(file, "entries", coldGrantChangeId, identity) : null;
+    boundedReaders.set(file, (collection, filters, limit) => {
+      const holds = (row: unknown) => filters.every(filter => {
+        const values = typeof filter.value === "string" ? [filter.value] : filter.value;
+        return values.includes(lookupValue(row, filter.field) as string);
+      });
+      const current = this.matchingRowKeysBounded(collection, filters, limit);
+      const last = this.changeId();
+      if (last === coldGrantChangeId && databaseFileIdentity(this.filename) === identity) return current;
+      const first = this.db.query<{ seq: number }, []>("SELECT COALESCE(MIN(seq),0) AS seq FROM registry_changes").get()!.seq;
+      if (last < coldGrantChangeId || first > coldGrantChangeId + 1 || databaseFileIdentity(this.filename) !== identity) {
+        throw new DatabaseReplacedError("registry view changed beyond its bounded selection journal; request a fresh snapshot");
+      }
+      // A full capped current result already proves refusal, even if some
+      // current rows were changed after this immutable view was captured.
+      if (current.length >= limit) return current;
+      const changed = this.db.query<{ row_key: string }, [number, string, number]>(
+        "SELECT DISTINCT row_key FROM registry_changes WHERE seq>? AND collection=? ORDER BY row_key LIMIT ?",
+      ).all(coldGrantChangeId, collection, limit + 1);
+      if (changed.length > limit) throw new DatabaseReplacedError("registry view changed beyond its bounded selection journal; request a fresh snapshot");
+      const changedKeys = new Set(changed.map(row => row.row_key));
+      const rows = file[collection] as Record<string, unknown>;
+      const keys = current.filter(key => !changedKeys.has(key));
+      for (const { row_key: key } of changed) if (rows[key] && holds(rows[key])) keys.push(key);
+      return keys.slice(0, limit);
+    });
     keyedReaders.set(file,(collection,field,value) => {
       const values = typeof value === "string" ? [value] : value;
       if (!values.length) return [];
@@ -3119,6 +3177,26 @@ export class SqliteAgentRegistryStore {
           WHERE collection=? AND json_extract(value_json,'${jsonPath}') IN (?) ORDER BY row_order`)
         .all(collection, value));
     return rows.sort((a, b) => a.row_order - b.row_order).map(row => row.row_key);
+  }
+
+  /** A bounded indexed selection used where even counting retained rows must
+   * stop at the caller's refusal threshold. It reads row keys only. */
+  private matchingRowKeysBounded(collection: RowCollection, filters: readonly RegistryKeyFilter[], limit: number): string[] {
+    if (limit <= 0) return [];
+    const clauses = filters.map(({ field, value }) => {
+      const values = typeof value === "string" ? [value] : [...new Set(value)];
+      return { field, values };
+    }).filter(filter => filter.values.length);
+    if (filters.length !== clauses.length) return [];
+    const indexedBy = clauses.length
+      ? `registry_lookup_${clauses[0]!.field.replaceAll(".", "_")}` + (clauses[0]!.field === "clientMessageId" ? `_${collection}` : "")
+      : "registry_rows_collection_order";
+    const where = ["collection=?", ...clauses.map(filter =>
+      `json_extract(value_json,'${LOOKUP_PATHS[filter.field]}') IN (${filter.values.map(() => "?").join(",")})`)].join(" AND ");
+    const args: (string | number)[] = [collection, ...clauses.flatMap(filter => filter.values)];
+    const tableHint = clauses.length ? "" : ` INDEXED BY ${indexedBy}`;
+    return this.db.query<{ row_key: string }, (string | number)[]>(`SELECT row_key FROM registry_rows${tableHint}
+      WHERE ${where} ORDER BY row_order LIMIT ?`).all(...args, limit).map(row => row.row_key);
   }
 
   /** Diagnostic attribution needs one client id, including a conserving
@@ -4190,6 +4268,7 @@ export class SqliteAgentRegistryStore {
       decideGrants();
       return row;
     };
+    boundedReaders.set(file, (collection, filters, limit) => this.matchingRowKeysBounded(collection, filters, limit));
     keyedReaders.set(file, (collection, field, value) => {
       const values = typeof value === "string" ? [value] : value;
       if (values.length === 0) return [];

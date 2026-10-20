@@ -98,7 +98,7 @@ import {
 } from "./registryBackendIdentity";
 import {
   SqliteAgentRegistryStore,
-  registryRowsMatching, registryKeysMatching, registryHasLookupIndex, registryConversationsForPath, registryHasPathIndex,
+  registryRowsMatching, registryKeysMatching, registryKeysMatchingBounded, registryHasLookupIndex, registryConversationsForPath, registryHasPathIndex,
   registryConversationsForEntryKey, registryHasEntryKeyIndex,
   sqliteRegistryStoreImported,
   type RegistryDeliveryCompactionChanges,
@@ -2598,12 +2598,17 @@ export function deliveryRegistryEntriesForKey<C extends "heldDeliveries" | "deli
   file: RegistryFile, collection: C, clientMessageId: string, recipients?: readonly string[],
 ): Array<[string, RegistryFile[C][string]]> {
   return withViewerOperation("registry.delivery-key", () => performanceSpans.sync("registry.delivery-key", () => {
-    let keys = registryKeysMatching(file, collection, "clientMessageId", clientMessageId);
+    const filters: { field: "clientMessageId" | "conversationId"; value: string | readonly string[] }[] = [
+      { field: "clientMessageId", value: clientMessageId },
+    ];
     if (recipients) {
+      const matchingKeys = registryKeysMatchingBounded(file, collection, filters, DELIVERY_KEY_ROW_LIMIT + 1);
+      if (matchingKeys.length === 0) return [];
       const identities = [...new Set(recipients.flatMap(id => conversationIdentities(file, id as ViewerConversationId)))];
-      const allowed = new Set(registryKeysMatching(file, collection, "conversationId", identities));
-      keys = keys.filter(key => allowed.has(key));
+      if (identities.length === 0) return [];
+      filters.push({ field: "conversationId", value: identities });
     }
+    const keys = registryKeysMatchingBounded(file, collection, filters, DELIVERY_KEY_ROW_LIMIT + 1);
     if (keys.length > DELIVERY_KEY_ROW_LIMIT) throw new Error("delivery key recovery exceeds its row budget");
     const rows = file[collection] as Record<string, RegistryFile[C][string]>;
     return keys.flatMap(key => rows[key] ? [[key, rows[key]!] as [string, RegistryFile[C][string]]] : []);
