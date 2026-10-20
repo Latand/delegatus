@@ -846,30 +846,81 @@ test("the shared retry deadline blocks before another child starts", async () =>
   } finally { clock?.mockRestore(); }
 });
 
-test("four head files rendezvous concurrently before the fifth starts, with distinct roots", async () => {
+test.each(["green", "new failure", "incomplete"] as const)("six head files rendezvous before the seventh starts and retain its verdict: %s", outcome => {
   const f = fixture(source(true));
   const markers = path.join(f.dir, "rendezvous"); mkdirSync(markers);
-  const files = ["one", "two", "three", "four", "five"].map((word, index) => `${index}-${word}.test.ts`);
-  for (const [index, file] of files.entries()) writeFileSync(path.join(f.dir, file), `
+  const files = ["one", "two", "three", "four", "five", "six", "seven"].map((word, index) => `${index}-${word}.test.ts`);
+  for (const [index, file] of files.slice(0, 6).entries()) writeFileSync(path.join(f.dir, file), `
 import { test, expect } from "bun:test";
-import { readdirSync, writeFileSync, readFileSync } from "node:fs";
-test("four concurrent roots", async () => {
+import { readdirSync, writeFileSync, readFileSync, renameSync } from "node:fs";
+test("six concurrent roots", async () => {
   const markers = ${JSON.stringify(markers)}, index = ${index};
-  if (index === 4) expect(readdirSync(markers).filter(f => f.endsWith(".done")).length).toBeGreaterThan(0);
-  writeFileSync(markers + "/" + index + ".root", process.env.HOME!);
-  if (index < 4) {
-    const until = Date.now() + 8000;
-    while (readdirSync(markers).filter(f => f.endsWith(".root") && f !== "4.root").length < 4 && Date.now() < until) await Bun.sleep(20);
-    const roots = readdirSync(markers).filter(f => f.endsWith(".root") && f !== "4.root").map(f => readFileSync(markers + "/" + f, "utf8"));
-    expect(new Set(roots).size).toBe(4);
-  }
+  writeFileSync(markers + "/" + index + ".next", process.env.HOME!);
+  renameSync(markers + "/" + index + ".next", markers + "/" + index + ".root");
+  const until = Date.now() + 8000;
+  while (readdirSync(markers).filter(f => f.endsWith(".root")).length < 6 && Date.now() < until) await Bun.sleep(20);
+  const roots = readdirSync(markers).filter(f => f.endsWith(".root")).map(f => readFileSync(markers + "/" + f, "utf8"));
+  expect(new Set(roots).size).toBe(6);
   writeFileSync(markers + "/" + index + ".done", "done");
 }, 10000);`);
-  const result = await f.run(files);
-  expect(result.introduced).toHaveLength(0);
-  expect(result.flaky).toHaveLength(0);
-  expect(f.logs.join("\n")).toContain("green head; no baseline checkout");
-}, 20_000);
+  const last = files[6]!;
+  writeFileSync(path.join(f.dir, last), 'import { test, expect } from "bun:test"; test("last verdict", () => expect(true).toBe(true));');
+  f.git("add", ...files); f.git("commit", "-m", "parallel baseline");
+  const base = f.git("rev-parse", "HEAD");
+  writeFileSync(path.join(f.dir, last), outcome === "incomplete" ? "process.exit(0);" : `
+import { test, expect } from "bun:test";
+import { readdirSync } from "node:fs";
+test("last verdict", () => {
+  expect(readdirSync(${JSON.stringify(markers)}).filter(f => f.endsWith(".done")).length).toBeGreaterThan(0);
+  expect(${outcome === "green"}).toBe(true);
+});`);
+  // Restart the real comparator: worker bounds and verdicts owe fresh evidence.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    rmSync(markers, { recursive: true }); mkdirSync(markers);
+    const result = cliAt(f, base, files);
+    expect(result.status, result.stdout + result.stderr).toBe(outcome === "green" ? 0 : 1);
+    expect(result.stdout).not.toContain("FLAKY");
+    if (outcome === "green") expect(result.stdout).toContain("green head; no baseline checkout");
+    else {
+      expect(result.stdout).toContain(`NEW ${last}: ${outcome === "incomplete" ? "<runner error>" : "last verdict"}`);
+      expect(result.stdout).toContain("1 new failures, 0 pre-existing failures, 0 fixed, 0 removed/skipped, 0 flaky");
+      if (outcome === "new failure") expect(result.stdout).toContain("flaky confirmation 3 rounds per side (maximum 3)");
+    }
+  }
+}, 60_000);
+
+test("full-file and filtered baseline samples rendezvous in one bounded pool", () => {
+  const f = fixture(source(true));
+  const markers = path.join(f.dir, "baseline-rendezvous"); mkdirSync(markers);
+  const files = ["whole.test.ts", "filtered.test.ts"];
+  const rendezvous = (own: string, peer: string) => `
+  writeFileSync(${JSON.stringify(path.join(markers, own + ".next"))}, process.env.HOME!);
+  renameSync(${JSON.stringify(path.join(markers, own + ".next"))}, ${JSON.stringify(path.join(markers, own))});
+  const until = Date.now() + 8000;
+  while (!existsSync(${JSON.stringify(path.join(markers, peer))}) && Date.now() < until) await Bun.sleep(20);
+  expect(existsSync(${JSON.stringify(path.join(markers, peer))})).toBe(true);
+  expect(readFileSync(${JSON.stringify(path.join(markers, peer))}, "utf8")).not.toBe(process.env.HOME);`;
+  const imports = 'import { test, expect } from "bun:test"; import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";';
+  writeFileSync(path.join(f.dir, files[0]!), `${imports}
+test("whole baseline", async () => { ${rendezvous("whole", "filtered")} }, 10000);`);
+  writeFileSync(path.join(f.dir, files[1]!), `${imports}
+test("selected assertion", async () => { ${rendezvous("filtered", "whole")} }, 10000);
+test("unselected baseline assertion", () => { throw new Error("must stay filtered"); });`);
+  f.git("add", ...files); f.git("commit", "-m", "mixed baseline samples");
+  const base = f.git("rev-parse", "HEAD");
+  writeFileSync(path.join(f.dir, files[0]!), "process.exit(0);");
+  writeFileSync(path.join(f.dir, files[1]!), 'import { test, expect } from "bun:test"; test("selected assertion", () => expect(false).toBe(true));');
+  for (let attempt = 0; attempt < 2; attempt++) {
+    rmSync(markers, { recursive: true }); mkdirSync(markers);
+    const result = cliAt(f, base, files);
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stdout).toContain("NEW whole.test.ts: <runner error>");
+    expect(result.stdout).toContain("NEW filtered.test.ts: selected assertion");
+    expect(result.stdout).toContain("2 new failures, 0 pre-existing failures, 0 fixed, 0 removed/skipped, 0 flaky");
+    expect(result.stdout).toContain("flaky confirmation 3 rounds per side (maximum 3)");
+    expect(result.stdout).not.toContain("unselected baseline assertion");
+  }
+});
 
 test("a red branch with an incomplete main sample fails closed", async () => {
   const f = fixture("process.exit(0);");
