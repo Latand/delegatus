@@ -1178,6 +1178,13 @@ export function stateReadonlyConnectionCountForTests(): number {
 
 type StateReadonlyReader = { filename: string; db: Database };
 const stateReadonlyReaderOwner = globalThis as typeof globalThis & { __llvStateReadonlyReader?: StateReadonlyReader };
+
+/** Release the test process's shared reader before removing its state root. */
+export function resetStateReadonlyReaderForTests(): void {
+  stateReadonlyReaderOwner.__llvStateReadonlyReader?.db.close();
+  stateReadonlyReaderOwner.__llvStateReadonlyReader = undefined;
+}
+
 /** Shared metadata and controller statements finish synchronously. No transaction or iterator is
  * held over a yield, so all compiled consumers can share this one connection.
  * Switching directories closes the previous handle; replacement is guarded by

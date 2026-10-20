@@ -5,6 +5,7 @@ import path from "node:path";
 import { assertStateStartupMutation, isOperatorOwnedDirectory, ownsStateStartupMutation } from "@/lib/stateOwnership";
 
 import { FileTransactionBusyError, withFileTransactionSync, withFileTransactionAttempt } from "./fileTransaction";
+import { fsyncPath as fsyncDirectory } from "./durableJson";
 import { assertStateMutationAllowed, stateMutationRefusal } from "./stateMutationBarrier";
 import { hotStateSqliteWriterReady, hotStateWriterRevision, readHotStateReleaseTarget } from "./hotStateAuthority";
 import {
@@ -141,11 +142,6 @@ export function lazyReconcileAllowed(legacyPath: string, databasePath = legacyDa
 
 function sha256(bytes: Buffer): string {
   return crypto.createHash("sha256").update(bytes).digest("hex");
-}
-
-function fsyncDirectory(directory: string): void {
-  const descriptor = fs.openSync(directory, "r");
-  try { fs.fsyncSync(descriptor); } finally { fs.closeSync(descriptor); }
 }
 
 function stamp(): string {
