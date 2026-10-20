@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { storedLessonRevision, RoleMemoryRefusal } from "@/lib/memory/roleStore";
-import { withoutStoredLessonsAsync } from "@/lib/memory/privacy";
+import { withCurrentRoleMemory, withoutStoredLessonsAsync } from "@/lib/memory/privacy";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 
 import { prepareControllerArtifactDirectory, protectExistingControllerArtifacts } from "./controllerArtifacts";
@@ -27,6 +27,13 @@ export async function composeStageInput(
   worktreeDir: string = pipeline.worktreeDir,
   exec: ExecPort = realExec,
   reserveBytes = 0,
+): Promise<string> {
+  return withCurrentRoleMemory(() => composeCurrentStageInput(pipeline, stage, role, previousOutput, worktreeDir, exec, reserveBytes));
+}
+
+async function composeCurrentStageInput(
+  pipeline: Pipeline, stage: PipelineStage, role: EffectivePipelineRole, previousOutput: string,
+  worktreeDir: string, exec: ExecPort, reserveBytes: number,
 ): Promise<string> {
   const revision = storedLessonRevision();
   const assertPrivacy = () => {

@@ -25,6 +25,9 @@ import { CpuContainmentUnavailable, wrapWorkCommand } from "@/lib/runtime/cpuPla
 import { isCpuPressureDetail, machineCpuPressureGate, machineCpuPressurePollMs, waitForCpuPressure } from "@/lib/runtime/cpuPressure";
 import { lessonPublicationEnv, RoleMemoryRefusal } from "@/lib/memory/roleStore";
 import { CONTROLLER_ARTIFACT_GIT_PATHS, CONTROLLER_ARTIFACT_PATHSPECS, protectExistingControllerArtifacts } from "./controllerArtifacts";
+import { DEFAULT_PUBLICATION_PUSH_MS, PIPELINE_PUBLICATION_PUSH_MS, publicationHookDeadline, publicationPushBudgetMs } from "./gateBudget";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { performanceSpans } from "@/lib/performanceSpans";
 
 export type PreservedProvisionRef = { ref: string; sha: string; unpublishedCommits: number };
 export type PipelineGitResult = ({ ok: true; sha: string; baseBranch?: string } | { ok: false; error: string }) & {
@@ -1583,11 +1586,6 @@ export function publicationFailureCause(failure: PipelinePublicationFailure): st
   return `git push was refused (${status}${tests})${last ? `: ${last.slice(0, 160)}` : ""}`;
 }
 
-/** What a publication's push may take, its repository hook included. */
-const PUBLICATION_PUSH_TIMEOUT_MS = 900_000;
-/** Left after the hook's deadline for git to send the pack. */
-const PUBLICATION_PACK_MARGIN_MS = 60_000;
-
 /** The hook's line for a decisive check its push budget stopped before a
     verdict (NO_VERDICT_PREFIX in scripts/local-gate.ts): the push was
     interrupted, it was not refused. */
@@ -1633,12 +1631,32 @@ export function pipelinePublicationHookEnv(source: NodeJS.ProcessEnv = process.e
 
 /** Tracked files the accepted head changes against the base branch as this
     worktree last fetched it. Null when the comparison cannot be made. */
-async function publicationChangedFiles(pipeline: Pipeline, acceptedSha: string, exec: ExecPort): Promise<number | null> {
-  const base = await exec("git", ["merge-base", acceptedSha, `refs/remotes/origin/${pipeline.baseBranch || DEFAULT_PIPELINE_BASE_BRANCH}`], pipeline.worktreeDir);
+async function publicationChangedPaths(pipeline: Pipeline, acceptedSha: string, exec: ExecPort,
+  baseBranch = pipeline.baseBranch || DEFAULT_PIPELINE_BASE_BRANCH): Promise<string[] | null> {
+  const base = await exec("git", ["merge-base", acceptedSha, `refs/remotes/origin/${baseBranch}`], pipeline.worktreeDir);
   const from = base.code === 0 && /^[0-9a-f]{40}$/i.test(base.stdout.trim()) ? base.stdout.trim() : null;
   if (!from) return null;
-  const diff = await exec("git", ["diff", "--no-renames", "--name-only", from, acceptedSha], pipeline.worktreeDir);
-  return diff.code === 0 ? diff.stdout.split("\n").filter(Boolean).length : null;
+  const diff = await exec("git", ["diff", "--no-renames", "--name-only", "-z", from, acceptedSha], pipeline.worktreeDir);
+  return diff.code === 0 && (!diff.stdout || diff.stdout.endsWith("\0")) ? diff.stdout.split("\0").filter(Boolean) : null;
+}
+
+/** Only repositories using this comparator opt into its measured budget.
+ * Read metadata asynchronously, then recheck the accepted head before push.
+ * Unknown scope reserves the larger finite budget; the hook still must judge
+ * every selected check. Its base is origin/main, including on custom lanes. */
+async function publicationBudget(pipeline: Pipeline, acceptedSha: string, exec: ExecPort): Promise<{ ms: number; recheck: boolean }> {
+  return withViewerOperation("pipelines.evidence", () => performanceSpans.wait("controller.git-wait", async () => {
+    try {
+      if (!(await fs.promises.stat(path.join(pipeline.worktreeDir, "scripts/local-gate-tests.ts"))).isFile()) {
+        return { ms: DEFAULT_PUBLICATION_PUSH_MS, recheck: false };
+      }
+    } catch (error) {
+      if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return { ms: DEFAULT_PUBLICATION_PUSH_MS, recheck: false };
+      return { ms: PIPELINE_PUBLICATION_PUSH_MS, recheck: true };
+    }
+    const changed = await publicationChangedPaths(pipeline, acceptedSha, exec, DEFAULT_PIPELINE_BASE_BRANCH);
+    return { ms: publicationPushBudgetMs(changed), recheck: true };
+  }));
 }
 
 const REMOTE_READ_TIMEOUT = "5s";
@@ -1947,8 +1965,8 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         publishedSha: request.publishedSha === reservation.pipeline.publishedCommit ? request.publishedSha : null }));
       // A refusal of a head that changes nothing cannot be the stage's doing.
       if (failureEvidence && !result.ok) {
-        const changed = await publicationChangedFiles(reservation.pipeline, request.acceptedSha, fencedExec);
-        if (changed !== null) failureEvidence = { ...failureEvidence, changedFiles: changed };
+        const changed = await publicationChangedPaths(reservation.pipeline, request.acceptedSha, fencedExec);
+        if (changed !== null) failureEvidence = { ...failureEvidence, changedFiles: changed.length };
       }
     }
     catch (error) { result = writeStarted
@@ -2154,6 +2172,12 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
      or is refused; any other push is the one it always was. The App's
      variables are spread over the hook environment, which removes the
      Viewer's own settings first. */
+  const budget = await publicationBudget(pipeline, acceptedSha, exec);
+  if (budget.recheck) {
+    const current = await currentPipelineBranchHead(pipeline, exec);
+    if (!current.ok) return current;
+    if (current.sha !== acceptedSha) return { ok: false, error: "the pipeline revision changed while planning its publication budget; nothing was published" };
+  }
   /* Role memory's stored lessons are known values for the publication privacy
      gate, which refuses a push that carries one. Memory that cannot be read
      cannot be checked, so nothing is pushed. */
@@ -2165,8 +2189,8 @@ async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, re
      limit for git to send the pack, so it ends with its own verdict or with
      a named missing one instead of being killed (scripts/local-gate.ts). */
   const pushEnv = { ...pipelinePublicationHookEnv(), ...lessons, ...engineForgeWriteEnv(),
-    LLV_GATE_PUSH_DEADLINE: String(Date.now() + PUBLICATION_PUSH_TIMEOUT_MS - PUBLICATION_PACK_MARGIN_MS) };
-  const push = (await exec("git", ["push", pipeline.delivery?.target.remote || "origin", `${acceptedSha}:${pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`}`], pipeline.worktreeDir, pushEnv, { timeoutMs: PUBLICATION_PUSH_TIMEOUT_MS }));
+    LLV_GATE_PUSH_DEADLINE: String(publicationHookDeadline(budget.ms, Date.now())) };
+  const push = (await exec("git", ["push", pipeline.delivery?.target.remote || "origin", `${acceptedSha}:${pipeline.delivery?.target.branch || `refs/heads/${pipeline.branch}`}`], pipeline.worktreeDir, pushEnv, { timeoutMs: budget.ms }));
   if (push.code === null) return { ok: true, sha: acceptedSha, remote: "unreachable", uncertain: true, detail: "remote write was interrupted; reconcile its outcome" };
   if (push.code !== 0) return failure("publishing the pipeline branch", push);
   const confirm = (await readRemotePipelineBranch(pipeline, exec, "confirming the published pipeline branch"));

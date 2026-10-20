@@ -1644,6 +1644,16 @@ function boardFingerprint(fingerprint: string): string {
   return fingerprint.split(".")[0] ?? fingerprint;
 }
 
+function digestFingerprint(input: SeatTickCheckInput): string {
+  return input.digestFingerprint ?? boardFingerprint(input.changeFingerprint);
+}
+
+function withPullRequestFingerprint(fingerprint: string, source: string): string {
+  const targetParts = splitFingerprint(fingerprint);
+  const sourceParts = splitFingerprint(source);
+  return targetParts && sourceParts ? `${targetParts.board}.${sourceParts.pullRequests}` : fingerprint;
+}
+
 export function seatTickCatchUp(input: Pick<SeatTickCheckInput, "state" | "now" | "settings" | "seat">) {
   const from = input.state.unreachableSince ? input.state.unreachableBacklogSince ?? input.state.unreachableSince : null;
   if (!from || input.now - Date.parse(from) <= input.settings.wakeIntervalMs) return null;
@@ -1680,17 +1690,39 @@ function reportLedger(input: SeatTickCheckInput, state: SeatTickProjectState): S
   let reportSeenAt = state.reportSeenAt ?? null;
   // Without a prior board observation, establish a baseline. Signal-only
   // wakes cannot turn an unknown baseline into evidence of board movement.
-  let reportFingerprint = state.reportFingerprint ?? state.checkFingerprint ?? boardFingerprint(input.changeFingerprint);
+  const observed = digestFingerprint(input);
+  // Old ledger rows compared timestamp-sensitive board hashes. Establish a
+  // material baseline on upgrade without inventing an unreported change.
+  const upgrading = !!input.digestFingerprint && !state.checkFingerprint?.startsWith("digest-v1:");
+  const priorParts = state.checkFingerprint ? splitFingerprint(state.checkFingerprint) : null;
+  const observedParts = splitFingerprint(observed);
+  // A gated or failed read is not an empty PR set. Carry forward the last
+  // verified PR portion while still advancing the board portion each check.
+  const current = observedParts?.pullRequests === FINGERPRINT_UNREAD && priorParts
+    && priorParts.pullRequests !== FINGERPRINT_UNREAD
+    ? withPullRequestFingerprint(observed, state.checkFingerprint!)
+    : observed;
+  const previous = upgrading ? current : state.checkFingerprint;
+  let reportFingerprint = upgrading ? current : state.reportFingerprint ?? previous ?? current;
   if (reports.lastReportAt && (!reportSeenAt || instant(reports.lastReportAt) > instant(reportSeenAt))) {
     reportSeenAt = reports.lastReportAt;
-    reportFingerprint = state.checkFingerprint ?? boardFingerprint(input.changeFingerprint);
+    reportFingerprint = previous ?? current;
+  }
+  // The first verified PR read after an unread baseline makes that one half
+  // comparable. Keep the report's board half so intervening task and lane
+  // changes remain owed.
+  const reportParts = splitFingerprint(reportFingerprint);
+  const currentParts = splitFingerprint(current);
+  if (reportParts?.pullRequests === FINGERPRINT_UNREAD && currentParts
+    && currentParts.pullRequests !== FINGERPRINT_UNREAD) {
+    reportFingerprint = withPullRequestFingerprint(reportFingerprint, current);
   }
   return {
     ...state,
     reportsOwed: owed,
     reportSeenAt,
     reportFingerprint,
-    checkFingerprint: boardFingerprint(input.changeFingerprint),
+    checkFingerprint: current,
   };
 }
 
@@ -1780,7 +1812,7 @@ export function seatTickReportLines(
   // An outcome report already calls for this turn's status. Avoid a second
   // digest obligation and reserve the bounded tail for outstanding keys.
   if (owed.length === 0 && items.length > 0 && reasons.some((reason) => reason.kind === "interval") && quietForInterval
-    && boardFingerprint(input.changeFingerprint) !== (state.reportFingerprint ?? null)) {
+    && seatTickBoardMoved(state.reportFingerprint ?? null, digestFingerprint(input))) {
     const since = reports.lastReportAt ? `no report since ${clock(reports.lastReportAt)}` : "no report yet";
     lines.push(`Digest due${language}: ${since} and the board moved. File one status report (key digest:${new Date(input.now).toISOString().slice(0, 16)}) with the whole state: in progress, next, needs a decision.`);
   }

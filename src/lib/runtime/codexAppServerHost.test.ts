@@ -6207,17 +6207,29 @@ test("Codex transport confirmation waits for delayed native provenance before re
   const server = new FakeAppServer();
   server.threadPath = file;
   const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: new FileRuntimeEventStore(), spawnProcess: fakeSpawn(server) });
-  const nativeAppend = new Promise<void>(resolve => setTimeout(() => {
-    const request = server.requests.find(row => row.method === "turn/start")!;
+  let sendSettled = false;
+  let sendOutcome: Promise<{ ok: true } | { ok: false; error: unknown }> | undefined;
+  try {
+    sendOutcome = host.send({ id: "late-native-write", text: "Continue interrupted work", origin: { kind: "agent", role: "startup-recovery" } })
+      .then(() => ({ ok: true as const }), error => ({ ok: false as const, error }))
+      .then(outcome => { sendSettled = true; return outcome; });
+    await waitForCondition(() => server.requests.some(row => row.method === "turn/start"), "Codex turn/start request was not observed");
+    const request = server.requests.find(row => row.method === "turn/start");
+    if (!request) throw new Error("Codex turn/start request disappeared after readiness");
     const wire = (request.params as { input: Array<{ text: string }> }).input[0]!.text;
+    const outcome = await sendOutcome;
+    if (!outcome.ok) throw outcome.error;
     fs.appendFileSync(file, JSON.stringify({ type: "event_msg", timestamp: "2026-10-05T16:01:00Z",
       payload: { type: "user_message", message: wire } }) + "\n");
-    resolve();
-  }, 20));
-  try {
-    await host.send({ id: "late-native-write", text: "Continue interrupted work", origin: { kind: "agent", role: "startup-recovery" } });
-    await nativeAppend;
-  } finally { await host.release(); }
+  } finally {
+    if (sendOutcome && !sendSettled) {
+      await host.release();
+      await sendOutcome;
+    } else {
+      await sendOutcome;
+      await host.release();
+    }
+  }
   expect((await durableStageTurnEvidence("codex", file))?.prompts).toEqual([{ ts: Date.parse("2026-10-05T16:01:00Z"), origin: "pipeline" }]);
 });
 

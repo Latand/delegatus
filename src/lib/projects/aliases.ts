@@ -1,11 +1,9 @@
-import crypto from "node:crypto";
+import { projectAliasStore, projectRemoteStore, worktreeMapStore, readProjectDocument } from "./persistence";
 import fs from "node:fs";
-import path from "node:path";
 
 import { readWorktreeRecoveries } from "./worktreeRecoveryStore";
 
 import { statePath } from "@/lib/configDir";
-import { withFileTransactionSync } from "@/lib/state/fileTransaction";
 import { readStateCollectionRows } from "@/lib/state/sqliteStateStore";
 import {
   isRepositoryProjectId,
@@ -40,62 +38,16 @@ export interface DurableProjectAliasCandidates {
   remoteMoves: RemoteProjectMove[];
 }
 
-interface ProjectAliasFile extends ProjectAliasSnapshot {
-  schemaVersion: 1;
-}
-
-type AliasCache = {
-  file: string;
-  mtimeMs: number;
-  size: number;
-  snapshot: ProjectAliasSnapshot;
-};
-
-let cache: AliasCache | null = null;
-
-function aliasesFile(): string {
-  return statePath("project-aliases.json");
-}
-
-function stringRecord(value: unknown): Record<string, string> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const entries = Object.entries(value);
-  return entries.every(([key, item]) => Boolean(key.trim()) && typeof item === "string" && Boolean(item.trim()))
-    ? Object.fromEntries(entries)
-    : null;
-}
-
-function readLegacySnapshot(requireComplete = false): ProjectAliasSnapshot {
-  const file = aliasesFile();
-  let stat: fs.Stats;
-  try {
-    stat = fs.statSync(file);
-  } catch (error) {
-    if (requireComplete && (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    cache = { file, mtimeMs: -1, size: -1, snapshot: { aliases: {}, displayNames: {} } };
-    return cache.snapshot;
-  }
-  if (!requireComplete && cache && cache.file === file && cache.mtimeMs === stat.mtimeMs && cache.size === stat.size) {
-    return cache.snapshot;
-  }
-  try {
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as Partial<ProjectAliasFile>;
-    const aliases = parsed.schemaVersion === 1 ? stringRecord(parsed.aliases) : null;
-    const displayNames = parsed.schemaVersion === 1 ? stringRecord(parsed.displayNames) : null;
-    if (requireComplete && (!aliases || !displayNames)) throw new Error("Project aliases are unreadable");
-    const snapshot = aliases && displayNames ? { aliases, displayNames } : { aliases: {}, displayNames: {} };
-    cache = { file, mtimeMs: stat.mtimeMs, size: stat.size, snapshot };
-    return snapshot;
-  } catch (error) {
-    if (requireComplete) throw error;
-    const snapshot = { aliases: {}, displayNames: {} };
-    cache = { file, mtimeMs: stat.mtimeMs, size: stat.size, snapshot };
-    return snapshot;
-  }
+function aliasesFile(): string { return statePath("project-aliases.json"); }
+function readLegacySnapshot(_requireComplete = false): ProjectAliasSnapshot {
+  return readProjectDocument(projectAliasStore, "project-aliases.json");
 }
 
 function readSnapshot(requireComplete = false): ProjectAliasSnapshot {
-  const legacy = readLegacySnapshot(requireComplete);
+  return withRecoveredAliases(readLegacySnapshot(requireComplete));
+}
+
+function withRecoveredAliases(legacy: ProjectAliasSnapshot): ProjectAliasSnapshot {
   const recovered = readWorktreeRecoveries();
   if (!recovered.length) return legacy;
   const aliases = { ...legacy.aliases };
@@ -150,7 +102,7 @@ function readObject(filename: string): Record<string, unknown> | null {
 }
 
 function storedWorktreeRepositories(): ReadonlyMap<string, string> {
-  const stored = readObject("worktree-map.json");
+  const stored = readProjectDocument(worktreeMapStore, "worktree-map.json");
   if (!stored) return new Map();
   const repositories = new Map<string, string>();
   for (const [cwd, value] of Object.entries(stored)) {
@@ -310,8 +262,8 @@ export function durableProjectAliasCandidates(): DurableProjectAliasCandidates {
 
 function mergeRegistrations(
   registrations: readonly ProjectAliasRegistration[],
+  current = readSnapshot(),
 ): ProjectAliasSnapshot | null {
-  const current = readSnapshot();
   const aliases = { ...current.aliases };
   const displayNames = { ...current.displayNames };
   for (const registration of registrations) {
@@ -332,37 +284,13 @@ export function projectAliasesCanAccept(registrations: readonly ProjectAliasRegi
 }
 
 export function persistProjectAliases(registrations: readonly ProjectAliasRegistration[]): boolean {
-  if (registrations.length === 0) return true;
+  if (!registrations.length) return true;
   try {
-    return withFileTransactionSync(aliasesFile(), "project aliases are busy", () => persistProjectAliasesUnlocked(registrations));
+    return projectAliasStore.mutate(aliasesFile(), current => {
+      const merged = mergeRegistrations(registrations, withRecoveredAliases(current));
+      return { next: merged ?? undefined, result: merged !== null };
+    });
   } catch { return false; }
-}
-
-function persistProjectAliasesUnlocked(registrations: readonly ProjectAliasRegistration[]): boolean {
-  if (registrations.length === 0) return true;
-  const merged = mergeRegistrations(registrations);
-  if (!merged) return false;
-  const file = aliasesFile();
-  const temporary = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.${crypto.randomUUID()}.tmp`);
-  try {
-    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(
-      temporary,
-      JSON.stringify({ schemaVersion: 1, ...merged } satisfies ProjectAliasFile, null, 2) + "\n",
-      { encoding: "utf8", mode: 0o600 },
-    );
-    fs.renameSync(temporary, file);
-    cache = null;
-    readSnapshot();
-    return true;
-  } catch {
-    try {
-      fs.rmSync(temporary, { force: true });
-    } catch {
-      // A later catalog pass retries the alias publication.
-    }
-    return false;
-  }
 }
 
 /* ── The remote ledger (rename-delegatus.md §2.3) ──────────────────────────
@@ -371,44 +299,9 @@ function persistProjectAliasesUnlocked(registrations: readonly ProjectAliasRegis
    the remote behind every repository id it has seen, and a later rename can
    be checked against the forge from the old remote this ledger still holds. */
 
-interface ProjectRemoteFile {
-  schemaVersion: 1;
-  remotes: Record<string, string>;
-}
-
-type RemoteCache = { file: string; mtimeMs: number; size: number; remotes: Record<string, string> };
-
-let remoteCache: RemoteCache | null = null;
-
-function remotesFile(): string {
-  return statePath("project-remotes.json");
-}
-
-function readRemotes(requireComplete = false): Record<string, string> {
-  const file = remotesFile();
-  let stat: fs.Stats;
-  try {
-    stat = fs.statSync(file);
-  } catch (error) {
-    if (requireComplete && (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    remoteCache = { file, mtimeMs: -1, size: -1, remotes: {} };
-    return remoteCache.remotes;
-  }
-  if (!requireComplete && remoteCache && remoteCache.file === file && remoteCache.mtimeMs === stat.mtimeMs && remoteCache.size === stat.size) {
-    return remoteCache.remotes;
-  }
-  let remotes: Record<string, string> = {};
-  try {
-    const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as Partial<ProjectRemoteFile>;
-    const valid = parsed.schemaVersion === 1 ? stringRecord(parsed.remotes) : null;
-    if (requireComplete && !valid) throw new Error("Project remotes are unreadable");
-    remotes = valid ?? {};
-  } catch (error) {
-    if (requireComplete) throw error;
-    remotes = {};
-  }
-  remoteCache = { file, mtimeMs: stat.mtimeMs, size: stat.size, remotes };
-  return remotes;
+function remotesFile(): string { return statePath("project-remotes.json"); }
+function readRemotes(_requireComplete = false): Record<string, string> {
+  return readProjectDocument(projectRemoteStore, "project-remotes.json");
 }
 
 /** Whether an identity names a remote (as opposed to a repository with no
@@ -429,35 +322,17 @@ export function recordedProjectRemotes(options: { strict?: boolean } = {}): Read
 
 /**
  * Remember the remote behind a repository id. Writes only when the entry is
- * missing or changed, with the same temp-file-and-rename as the alias map; a
- * failed write is retried by the next identity that asks.
+ * missing or changed in a keyed SQLite transaction. A failed write is retried
+ * by the next identity that asks.
  */
 export function recordProjectRemote(identity: Pick<RepositoryProjectIdentity, "project" | "canonicalRemote">): void {
   if (!isRepositoryProjectId(identity.project) || !isRemoteRepositoryIdentity(identity)) return;
-  const current = readRemotes();
-  if (current[identity.project] === identity.canonicalRemote) return;
-  const file = remotesFile();
-  const temporary = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.${crypto.randomUUID()}.tmp`);
+  if (readRemotes()[identity.project] === identity.canonicalRemote) return;
   try {
-    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-    const remotes = { ...current, [identity.project]: identity.canonicalRemote };
-    fs.writeFileSync(
-      temporary,
-      JSON.stringify({ schemaVersion: 1, remotes } satisfies ProjectRemoteFile, null, 2) + "\n",
-      { encoding: "utf8", mode: 0o600 },
-    );
-    fs.renameSync(temporary, file);
-    remoteCache = null;
-  } catch {
-    try {
-      fs.rmSync(temporary, { force: true });
-    } catch {
-      // The next identity resolution retries the ledger entry.
-    }
-  }
+    projectRemoteStore.patchRows(remotesFile(), 2, tx => {
+      if (tx.get(identity.project)?.value !== identity.canonicalRemote) tx.put({ key: identity.project, value: identity.canonicalRemote });
+    });
+  } catch { /* The next identity resolution retries the ledger entry. */ }
 }
 
-export function resetProjectAliasesForTests(): void {
-  cache = null;
-  remoteCache = null;
-}
+export function resetProjectAliasesForTests(): void { /* Reads use shared revision-keyed caches. */ }

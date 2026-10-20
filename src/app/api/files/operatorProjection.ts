@@ -70,9 +70,6 @@ const PERSISTED_PROJECTION_META_FILE = "files-response-cache.json";
 const PERSISTED_PROJECTION_BODY_PREFIX = "files-response-cache-";
 const PERSISTED_PROJECTION_KEY_PREFIX = "persisted:";
 const PROJECTION_STATE_FILES = [
-  "project-aliases.json",
-  "project-curation.json",
-  "worktree-map.json",
   "reaper-state.json",
   /* A state database fallback or a refused backup (#1870 slice 10) shows in
      `systemHealth.storage` on the next poll, not after some other store moves. */
@@ -208,6 +205,10 @@ function projectionBaseKey(
     pinOverlayPaths: scan.pinOverlayPaths ?? [],
     stores: [
       ...PROJECTION_STATE_FILES.map(stateFileSignature),
+      hotStateSignature("project_aliases", "project-aliases.json"),
+      hotStateSignature("project_curation", "project-curation.json"),
+      hotStateSignature("worktree_map", "worktree-map.json"),
+      hotStateSignature("session_titles", "session-titles.json"),
       hotStateSignature("tasks", "tasks.json"),
       hotStateSignature("flows", "flows.json"),
       hotStateSignature("pipelines", "pipelines.json"),
