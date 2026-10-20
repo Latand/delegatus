@@ -195,6 +195,7 @@ import type {
   PipelineTerminalReap,
   PipelineUnconfirmedHost,
   PipelineUnresolvedTermination,
+  PipelineAttemptState,
 } from "./types";
 import { PIPELINE_FAIL_EDGE_EXHAUSTIONS } from "./types";
 import { fencedBlocks, MAX_OUTPUT_CHARS, normalizeStageCompletion, parseStageVerdict, stageVerdictProse, stageVerdictRejectionReason, verdictRoutesAsFail, type ParsedStageVerdict, type StageCompletionInput } from "./verdict";
@@ -369,6 +370,10 @@ export interface PipelinePorts {
   /** What still runs, with no stream, for any registry row of these
       conversations, or null when nothing does (#2790). */
   stageHostTreeStillRunning?(conversationIds: readonly string[]): string | null;
+  /** Stops a settled earlier stage agent whose recorded processes still run in
+      the worktree a new attempt is waiting for, by those recorded identities
+      only. `deferred` while its host is in a turn. */
+  stopSettledStageWriter?(target: PipelineStageHostRef, operationId: string): Promise<PipelineStageStopResult>;
   /** Monotonic milliseconds, kept apart from `now()` so a teardown budget can be
       bounded independently of the ISO timestamps written to the record. */
   monotonicNow(): number;
@@ -993,6 +998,12 @@ type StageHostProbe = {
 
 const PRIOR_WRITER_WAIT_PREFIX = "waiting for an earlier stage agent to stop before a new attempt starts in its worktree: ";
 const PRIOR_WRITER_WAIT_MS = 5_000;
+/* A settled earlier attempt's agent gets this many automatic stops, at least
+   PRIOR_WRITER_WAIT_MS apart; each one escalates from SIGTERM to SIGKILL inside
+   its own bounded ladder. Then the lane parks and says so. */
+const PRIOR_WRITER_STOP_TRIES = 3;
+const PRIOR_WRITER_PARK_PREFIX = "an earlier stage agent could not be stopped before a new attempt starts in its worktree: ";
+const SETTLED_ATTEMPT_STATES: ReadonlySet<PipelineAttemptState> = new Set(["passed", "failed", "needs_decision", "skipped"]);
 
 /** Whether a process a host stop captured onto this row may still run: alive,
     or not provably gone (#2790). */
@@ -1252,6 +1263,45 @@ export async function retirePipelineStageAgent(
   } catch {
     return { outcome: "deferred" };
   }
+}
+
+/** Whether a stage host is in a turn: its processes are an agent at work, and
+    no automatic stop of a settled stage may touch them. A row whose engine is
+    gone has no turn left, whatever its turn words still say. */
+function settledStageHostBusy(entry: AgentRegistryEntry, engineAlive: boolean): boolean {
+  if (!engineAlive) return false;
+  return entry.status === "live" || entry.status === "starting" || entry.status === "handoff"
+    || entry.structuredHost?.activeTurnRef != null || (entry.structuredHost?.pendingAttention.length ?? 0) > 0;
+}
+
+/**
+ * Ends what a settled stage attempt's agent still runs in the lane's worktree
+ * (lane 376bce9c, 2026-10-20). An idle-host retirement captured its tree and
+ * was refused before its first signal; the engine, the MCP server and its
+ * child kept running, and the next attempt waited an hour on them until the
+ * seat killed the conversation by hand. This is that kill, sent by the engine:
+ * the runtime's kill operation where a runtime host answers, the recorded
+ * identities otherwise. Either way only the processes the registry recorded
+ * for this conversation are signalled, through the identity-fenced ladder
+ * that escalates from SIGTERM to SIGKILL; a process whose identity cannot be
+ * proven is never signalled. A host in a turn is left alone (`deferred`).
+ */
+export async function stopSettledPipelineStageWriter(
+  target: PipelineStageHostRef,
+  probes: StageStopProbes = {},
+): Promise<PipelineStageStopResult> {
+  try {
+    const probe = await stageHostProbe(target);
+    if (!probe || !probe.resident()) return { outcome: "not-running" };
+    const entry = agentRegistry().readOnlySnapshot().entries[sessionKeyId(probe.key)];
+    const { structuredHostProcessAlive } = await import("@/lib/runtime/structuredRecovery");
+    if (entry && settledStageHostBusy(entry, structuredHostProcessAlive(entry.structuredHost?.process ?? null))) {
+      return { outcome: "deferred" };
+    }
+  } catch (error) {
+    return { outcome: "failed", error: error instanceof Error ? error.message : String(error) };
+  }
+  return stopPipelineStageAgent(target, { ...probes, automatic: true });
 }
 
 /** Why this process could not use the runtime command channel; every report
@@ -1952,6 +2002,9 @@ export function defaultPipelinePorts(
       return changed && stopped.outcome === "failed" ? null : stopped;
     },
     stopStagePane: (target) => stopPipelineStagePane(target),
+    stopSettledStageWriter: (target, operationId) => withViewerOperation("pipelines.prior-writer-stop", () =>
+      performanceSpans.wait("pipeline.prior-writer-stop", () =>
+        stopSettledPipelineStageWriter(target, { operationId, termination: dependencies.termination }))),
     stageHostTreeStillRunning: (conversationIds) => {
       const current = registry.readOnlySnapshot();
       for (const id of conversationIds) {
@@ -7494,6 +7547,70 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
   return true;
 }
 
+/**
+ * The launch gate's answer to an earlier attempt's agent that still runs in
+ * the worktree (#2790): null once nothing does, `{ detail }` while the launch
+ * waits, `{ park, detail }` once the bounded stops are spent.
+ *
+ * An attempt still at work keeps the launch waiting, as it always did. A
+ * settled one (passed, failed, parked or skipped) has no work left in this
+ * lane, so what it still runs is stopped here, by its recorded identities,
+ * at most PRIOR_WRITER_STOP_TRIES times PRIOR_WRITER_WAIT_MS apart. The tries
+ * live on the waiting attempt, so a restart neither resets nor repeats them,
+ * and each try keeps its own operation key, so a retry after a lost answer
+ * replays that try instead of sending another.
+ */
+async function endSettledPriorWriters(
+  pipeline: Pipeline,
+  waitingStageId: string,
+  attempt: PipelineStageAttempt,
+  priorAttempts: ReadonlyArray<{ stageId: string; candidate: PipelineStageAttempt }>,
+  ports: PipelinePorts,
+  persist: () => void | Promise<void>,
+): Promise<{ detail: string; park?: true } | null> {
+  let waiting: string | null = null;
+  /* A conversation an unsettled attempt still names, the waiting one included,
+     is that attempt's agent and never this gate's to stop. */
+  const live = new Set([attempt, ...priorAttempts.map(({ candidate }) => candidate)]
+    .filter(candidate => candidate.conversationId && !SETTLED_ATTEMPT_STATES.has(candidate.state))
+    .map(candidate => candidate.conversationId!));
+  for (const { stageId, candidate } of priorAttempts) {
+    const conversationId = candidate.conversationId!;
+    const running = ports.stageHostTreeStillRunning?.([conversationId]);
+    if (!running) continue;
+    if (live.has(conversationId) || !ports.stopSettledStageWriter) {
+      waiting ??= running;
+      continue;
+    }
+    const record = attempt.priorWriterStop?.conversationId === conversationId ? attempt.priorWriterStop : null;
+    const tries = record?.tries ?? 0;
+    const spent = (stopped: number, error: string | null) => `${running}; ${stopped} automatic stop${stopped === 1 ? "" : "s"} by their recorded identities (SIGTERM, then SIGKILL) left them running${error ? ` (last: ${error})` : ""}; stop those processes, then retry the stage`;
+    if (tries >= PRIOR_WRITER_STOP_TRIES) return { park: true, detail: `${PRIOR_WRITER_PARK_PREFIX}${spent(tries, record?.error ?? null)}` };
+    if (record && unixMs(ports.now()) - unixMs(record.lastAt) < PRIOR_WRITER_WAIT_MS) {
+      waiting ??= `${running}; automatic stop ${tries} of ${PRIOR_WRITER_STOP_TRIES} left them running, next at ${new Date(unixMs(record.lastAt) + PRIOR_WRITER_WAIT_MS).toISOString()}`;
+      continue;
+    }
+    const target: PipelineStageHostRef = { stageId, attempt: candidate.n, conversationId, launchId: candidate.launchId ?? null,
+      agentPath: candidate.agentPath ?? null, paneId: null };
+    const stopped = await ports.stopSettledStageWriter(target, `prior-writer-stop:${pipeline.id}:${waitingStageId}:${attempt.n}:${conversationId}:${tries + 1}`);
+    const still = ports.stageHostTreeStillRunning?.([conversationId]);
+    if (!still) {
+      delete attempt.priorWriterStop;
+      continue;
+    }
+    if (stopped.outcome === "deferred") {
+      waiting ??= `${still}; its agent is in a turn, so it is left to finish`;
+      continue;
+    }
+    const error = "error" in stopped ? stopped.error : "detail" in stopped && stopped.detail ? stopped.detail : `the stop answered ${stopped.outcome}`;
+    attempt.priorWriterStop = { conversationId, tries: tries + 1, lastAt: ports.now(), error };
+    await persist();
+    if (tries + 1 >= PRIOR_WRITER_STOP_TRIES) return { park: true, detail: `${PRIOR_WRITER_PARK_PREFIX}${spent(tries + 1, error)}` };
+    waiting ??= `${still}; automatic stop ${tries + 1} of ${PRIOR_WRITER_STOP_TRIES} left them running (${error})`;
+  }
+  return waiting === null ? null : { detail: waiting };
+}
+
 async function tickRunStage(
   pipeline: Pipeline,
   stage: PipelineStage,
@@ -7667,19 +7784,27 @@ async function tickRunStage(
        stream is gone while its engine, or a process a stop captured from its
        tree, may still run holds this launch until a stop proves it gone; the
        terminal reap and the interrupted-turn recovery are what end it. */
-    const priorWriter = ports.stageHostTreeStillRunning?.(pipeline.runs.flatMap(run => run.attempts)
-      .filter(candidate => candidate !== attempt && candidate.conversationId)
-      .map(candidate => candidate.conversationId!));
-    if (priorWriter) {
-      const detail = `${PRIOR_WRITER_WAIT_PREFIX}${priorWriter}`;
-      if (pipeline.stateDetail !== detail) {
-        pipeline.stateDetail = detail;
+    const priorAttempts = pipeline.runs.flatMap(run => run.attempts.map(candidate => ({ stageId: run.stageId, candidate })))
+      .filter(({ candidate }) => candidate !== attempt && candidate.conversationId);
+    if (ports.stageHostTreeStillRunning?.(priorAttempts.map(({ candidate }) => candidate.conversationId!))) {
+      const held = await endSettledPriorWriters(pipeline, stage.id, attempt, priorAttempts, ports, persist);
+      if (held?.park) {
+        await park(pipeline, held.detail, attempt);
         await persist();
+        return;
       }
-      ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline));
-      ports.scheduleTick?.(PRIOR_WRITER_WAIT_MS);
-      return;
+      if (held) {
+        const detail = `${PRIOR_WRITER_WAIT_PREFIX}${held.detail}`;
+        if (pipeline.stateDetail !== detail) {
+          pipeline.stateDetail = detail;
+          await persist();
+        }
+        ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline));
+        ports.scheduleTick?.(PRIOR_WRITER_WAIT_MS);
+        return;
+      }
     }
+    if (attempt.priorWriterStop) delete attempt.priorWriterStop;
     if (pipeline.stateDetail?.startsWith(PRIOR_WRITER_WAIT_PREFIX)) pipeline.stateDetail = null;
     // Consume CPU admission only once the other launch gates allow a start.
     if (await holdStageLaunch(pipeline, ports, persist)) return;

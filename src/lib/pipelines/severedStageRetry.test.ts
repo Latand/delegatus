@@ -31,12 +31,12 @@ const { procBackend } = await import("@/lib/proc");
 const { captureProcessIdentity, processIdentityStatus } = await import("@/lib/processIdentity");
 const { RuntimeJournal } = await import("@/runtime-host/journal");
 const { bindStructuredDeliveryQueue } = await import("@/lib/runtime/structuredDeliveryController");
-const { dispatchStructuredControl } = await import("@/lib/runtime/structuredControls");
+const { dispatchStructuredControl, RUNTIME_HOST_UNAVAILABLE_CODE } = await import("@/lib/runtime/structuredControls");
 const { conversationTurnLiveness, LIVENESS_CPU_PROGRESS_WINDOW_MS } = await import("@/lib/runtime/liveness");
 const { ClaudeStreamBrokerHost } = await import("@/lib/runtime/claudeStreamBrokerHost");
 const { bindClaudeHostPersistence, claudeHostColumns } = await import("@/lib/runtime/registry");
 const { orphanWriterTree } = await import("@/lib/runtime/fixtures/orphanWriterTree");
-const { createPipelineFromRequest, defaultPipelinePorts, patchPipeline, stopPipelineStageAgent, tickPipelines } = await import("./engine");
+const { createPipelineFromRequest, defaultPipelinePorts, patchPipeline, reportStageCompletion, stopPipelineStageAgent, stopSettledPipelineStageWriter, tickPipelines } = await import("./engine");
 const { loadPipelines, savePipelines } = await import("./store");
 const { registerPipelineTick } = await import("./controllerSignal");
 type PipelinePorts = import("./engine").PipelinePorts;
@@ -786,14 +786,16 @@ test("a captured writer that outlives every ladder holds the stage: no replaceme
 /* #2790: the launch itself is the last fence. A replacement reserved by a
    path that read the old host as gone (here a stop that answers
    `not-running`) still finds the process a stop captured from that host's
-   tree on its registry row, and waits for it to be gone before it starts an
-   agent in the same worktree. */
+   tree on its registry row, and starts no agent in the same worktree until
+   it is gone. The earlier attempt is settled, so the gate ends that process
+   itself, by its recorded identity, instead of waiting on a manual kill. */
 test("a new attempt does not launch while a process captured from the earlier attempt's host may still run (#2790)", async () => {
   const stage = severedStage();
   const captured = Bun.spawn(["sleep", "300"], { stdout: "ignore", stderr: "ignore" });
   const capturedIdentity = captureProcessIdentity(captured.pid);
   try {
     const spawns: string[] = [];
+    const capturedAtReplacement: string[] = [];
     let interrupted: "dead" | null = null;
     const base = stagePorts(stage, spawns) as PipelinePorts & { advanceWallClock(ms: number): void };
     const ports: PipelinePorts = {
@@ -802,8 +804,13 @@ test("a new attempt does not launch while a process captured from the earlier at
       restartRecoveryBootStartedAt: () => Date.now() - 60 * 60_000,
       stopInterruptedStageAgent: undefined,
       stageHostTreeStillRunning: defaultPipelinePorts().stageHostTreeStillRunning,
+      stopSettledStageWriter: defaultPipelinePorts().stopSettledStageWriter,
       cpuPressureHold: () => null,
       conversationOperatorStopped: async () => false,
+      spawnAgent: async (input, onReserved) => {
+        if (spawns.length > 0) capturedAtReplacement.push(processIdentityStatus(capturedIdentity));
+        return base.spawnAgent(input, onReserved);
+      },
     };
     savePipelines([]);
     const created = await createPipelineFromRequest({
@@ -826,19 +833,229 @@ test("a new attempt does not launch while a process captured from the earlier at
     await tickPipelines([], ports);
     await tickPipelines([], ports);
     await tickPipelines([], ports);
-    const held = loadPipelines()[0]!;
-    expect(spawns).toHaveLength(1);
-    expect(held.runs[0]!.attempts.at(-1)).toMatchObject({ n: 2, state: "pending" });
-    expect(held.stateDetail).toBe(`waiting for an earlier stage agent to stop before a new attempt starts in its worktree: ${stage.conversationId}: process ${captured.pid} captured from its stopped host may still be running`);
-
-    captured.kill("SIGKILL");
-    await captured.exited;
-    await tickPipelines([], ports);
+    const replaced = loadPipelines()[0]!;
+    expect(replaced.runs[0]!.attempts[0]).toMatchObject({ n: 1, state: "failed" });
     expect(spawns).toHaveLength(2);
-    expect(loadPipelines()[0]!.stateDetail ?? "").not.toContain("waiting for an earlier stage agent");
+    expect(capturedAtReplacement).toEqual(["dead"]);
+    expect(await Promise.race([captured.exited.then(() => "exited"), Bun.sleep(2_000).then(() => "running")])).toBe("exited");
+    expect(replaced.runs[0]!.attempts.at(-1)).toMatchObject({ n: 2, state: "running", launchId: "replacement-1" });
+    expect(replaced.stateDetail ?? "").not.toContain("waiting for an earlier stage agent");
   } finally {
     stage.child.kill();
     try { captured.kill("SIGKILL"); } catch { /* gone */ }
     await Promise.all([stage.child.exited, captured.exited]);
+  }
+}, 30_000);
+
+/**
+ * Lane 376bce9c, 2026-10-20: the fix stage passed and its host went idle. An
+ * automatic retirement of that idle host captured its tree (the engine and
+ * its two MCP children) onto the registry row, was then refused before its
+ * first signal and left the capture behind. Nothing ever signalled the three
+ * processes, so the review attempt that followed waited about an hour on
+ * "processes … captured from its stopped host may still be running" until
+ * the seat killed the conversation by hand.
+ *
+ * Here the row is real, the processes are real children of this test, and
+ * the capture is written exactly as the refused retirement wrote it. The
+ * earlier stage passed through the engine's own completion path.
+ */
+async function passedStageWithCapturedTree(spawns: string[], stop: (ports: PipelinePorts) => PipelinePorts["stopSettledStageWriter"]) {
+  const stage = severedStage();
+  const helper = Bun.spawn(["sleep", "300"], { stdout: "ignore", stderr: "ignore" });
+  const helperIdentity = captureProcessIdentity(helper.pid);
+  const rowKey = `claude:${stage.key.sessionId}`;
+  /* The turn ends after the report it carries. */
+  const turnEnd = { text: "Done.", ts: Date.now() + 60_000 };
+  let ended = false;
+  const base = stagePorts(stage, spawns) as PipelinePorts & { advanceWallClock(ms: number): void };
+  const ports = {
+    ...base,
+    roleLookup: (roleId: string) => roleId === "builder" || roleId === "reviewer"
+      ? { engine: "claude" as const, model: "opus", effort: "xhigh", access: "read-write" as const, promptScaffold: "Guidance" }
+      : null,
+    /* The stage commits on the lane's own branch. */
+    exec: (command: string, args: string[], ...rest: unknown[]) => args[0] === "branch"
+      ? { code: 0, stdout: `${loadPipelines()[0]?.branch ?? ""}\n`, stderr: "" }
+      : (base.exec as (...all: unknown[]) => ReturnType<PipelinePorts["exec"]>)(command, args, ...rest),
+    stageHostTreeStillRunning: defaultPipelinePorts().stageHostTreeStillRunning,
+    conversationTurnInterrupted: async () => null,
+    conversationOperatorStopped: async () => false,
+    durableTurnEvidence: async (engine: "claude" | "codex", transcriptPath: string, ...rest: unknown[]) => ended && transcriptPath === stage.transcript
+      ? { turn: "terminal" as const, message: turnEnd, lastRecordAt: turnEnd.ts }
+      : await (base.durableTurnEvidence as (...args: unknown[]) => Promise<unknown>)(engine, transcriptPath, ...rest) as never,
+    lastMessage: (item: { path: string }) => ended && item.path === stage.transcript ? turnEnd : null,
+  } as PipelinePorts & { advanceWallClock(ms: number): void };
+  ports.stopSettledStageWriter = stop(ports);
+  savePipelines([]);
+  const created = await createPipelineFromRequest({
+    task: "Fix, then review", spec: "AC1", repoDir: stage.worktreeDir, src: stage.transcript, publication: "internal",
+    stages: [
+      { id: "fix", kind: "run", role: { roleId: "builder" }, access: "read-write", ["prompt"]: "Fix it", next: "review" },
+      { id: "review", kind: "run", role: { roleId: "reviewer" }, access: "read-only", ["prompt"]: "Review it", next: null },
+    ],
+  } as never, ports);
+  if (!created.pipeline) throw new Error(created.error ?? "pipeline creation was unavailable");
+  await tickPipelines([], ports);
+  await tickPipelines([], ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "running", conversationId: stage.conversationId });
+
+  /* The stage reports and its turn ends; the host stays up, idle. */
+  expect((await reportStageCompletion({ verdict: "pass", summary: "Fixed." },
+    { kind: "agent", role: "builder", conversationId: stage.conversationId }, ports)).error).toBeUndefined();
+  stage.registry.upsert({ ...stage.registry.readOnlySnapshot().entries[rowKey]!, status: "idle" });
+  ended = true;
+
+  /* The refused retirement's leftover: the whole tree, root included, captured
+     on the live row and never signalled. */
+  const root = stage.registry.readOnlySnapshot().entries[rowKey]!.structuredHost!.process!;
+  expect(stage.registry.recordStructuredTerminationSurvivors(stage.key, root, [root, helperIdentity])).toBe(true);
+  /* The transcript entry a scan hands the tick once the turn has ended. */
+  const endedTurn = {
+    path: stage.transcript, root: "claude-projects", name: path.basename(stage.transcript), project: "fixture", title: "fix",
+    engine: "claude", kind: "session", fmt: "claude", parent: null, mtime: turnEnd.ts, size: 10, activity: "idle", proc: null, pid: null,
+    model: null, pendingQuestion: null, waitingInput: null,
+  } as unknown as Parameters<typeof tickPipelines>[0][number];
+  return {
+    stage, helper, helperIdentity, root, ports, rowKey, endedTurn,
+    alive: () => [processIdentityStatus(root), processIdentityStatus(helperIdentity)],
+    cleanup: async () => {
+      stage.child.kill();
+      try { helper.kill("SIGKILL"); } catch { /* gone */ }
+      await Promise.all([stage.child.exited, helper.exited]);
+    },
+  };
+}
+
+test("a passed stage's idle host whose captured tree keeps running is stopped by its recorded identities, and the next stage starts with no manual kill", async () => {
+  const spawns: string[] = [];
+  const journalDir = fs.mkdtempSync(path.join(isolated, "prior-writer-runtime-"));
+  const journal = new RuntimeJournal(path.join(journalDir, "runtime.sqlite"), { structuredHosts: true });
+  const client = runtimeJournalClient(journal);
+  let fixture: Awaited<ReturnType<typeof passedStageWithCapturedTree>> | null = null;
+  const aliveAtReplacement: string[][] = [];
+  try {
+    fixture = await passedStageWithCapturedTree(spawns, () => (target, operationId) => stopSettledPipelineStageWriter(target, {
+      operationId,
+      client,
+      /* The production control channel: a runtime kill operation, executed by
+         the delivery controller bound below. */
+      action: async ({ conversationId, transcriptPath, action }) => await dispatchStructuredControl({
+        path: transcriptPath, conversationId, action,
+      }, { registry: fixture!.stage.registry, client, enabled: () => true })
+        ?? { status: 409, body: { error: "structured control was unavailable" } },
+    }));
+    const { ports } = fixture;
+    const spawn = ports.spawnAgent;
+    ports.spawnAgent = async (input, onReserved) => {
+      if (spawns.length > 0) aliveAtReplacement.push(fixture!.alive());
+      return spawn(input, onReserved);
+    };
+    await bindStructuredDeliveryQueue([], { registry: fixture.stage.registry, client });
+
+    /* Settle the fix stage; the review stage is next. */
+    for (let tick = 0; tick < 4 && spawns.length < 2; tick += 1) {
+      await tickPipelines([fixture.endedTurn], ports);
+      ports.advanceWallClock(10_000);
+    }
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "passed" });
+    expect(loadPipelines()[0]!.stateDetail ?? "").not.toContain("waiting for an earlier stage agent");
+    expect(spawns).toHaveLength(2);
+    expect(aliveAtReplacement).toEqual([["dead", "dead"]]);
+    expect(fixture.alive()).toEqual(["dead", "dead"]);
+    const lane = loadPipelines()[0]!;
+    expect(lane.runs[1]!.attempts[0]).toMatchObject({ n: 1, state: "running", launchId: "replacement-1" });
+    expect(lane.runs[1]!.attempts[0]!.priorWriterStop).toBeUndefined();
+  } finally {
+    await fixture?.cleanup();
+    await bindStructuredDeliveryQueue([], { registry: fixture?.stage.registry, client: null });
+    journal.close();
+  }
+}, 30_000);
+
+test("captured processes that outlive every bounded stop park the lane with a reason the seat can act on", async () => {
+  const spawns: string[] = [];
+  let fixture: Awaited<ReturnType<typeof passedStageWithCapturedTree>> | null = null;
+  const sent: Array<[number, string]> = [];
+  try {
+    fixture = await passedStageWithCapturedTree(spawns, () => (target, operationId) => stopSettledPipelineStageWriter(target, {
+      operationId,
+      client: null,
+      /* No runtime host answers, so the stop falls to the recorded identities;
+         every signal it sends is observed and none lands. */
+      action: async () => ({ status: 503, body: { ok: false, code: RUNTIME_HOST_UNAVAILABLE_CODE, error: "structured runtime host is unavailable" } }),
+      termination: { signal: (pid, signal) => { sent.push([pid, signal]); }, graceMs: 20, deadlineMs: 80 },
+    }));
+    const { ports } = fixture;
+    /* The fix stage settles, then the first stop. */
+    for (let tick = 0; tick < 4 && !loadPipelines()[0]!.runs[1]?.attempts[0]?.priorWriterStop; tick += 1) {
+      await tickPipelines([fixture.endedTurn], ports);
+    }
+    const first = loadPipelines()[0]!;
+    expect(first.state).toBe("running");
+    expect(first.runs[1]!.attempts[0]).toMatchObject({ state: "pending", priorWriterStop: { conversationId: fixture.stage.conversationId, tries: 1 } });
+    expect(first.stateDetail).toContain("; automatic stop 1 of 3 left them running (");
+    /* The stored count spaces the next stop: an early tick sends nothing. */
+    const afterFirst = sent.length;
+    await tickPipelines([fixture.endedTurn], ports);
+    expect(sent).toHaveLength(afterFirst);
+    expect(loadPipelines()[0]!.runs[1]!.attempts[0]!.priorWriterStop?.tries).toBe(1);
+    for (let tick = 0; tick < 8 && loadPipelines()[0]!.state !== "needs_decision"; tick += 1) {
+      ports.advanceWallClock(10_000);
+      await tickPipelines([fixture.endedTurn], ports);
+    }
+    const parked = loadPipelines()[0]!;
+    expect(spawns).toHaveLength(1);
+    expect(fixture.alive()).toEqual(["alive", "alive"]);
+    expect(parked.state).toBe("needs_decision");
+    expect(parked.runs[1]!.attempts[0]).toMatchObject({ state: "needs_decision", priorWriterStop: { tries: 3 } });
+    expect(parked.stateDetail).toStartWith(`an earlier stage agent could not be stopped before a new attempt starts in its worktree: ${fixture.stage.conversationId}: processes ${fixture.root.pid}, ${fixture.helperIdentity.pid} captured from its stopped host may still be running; 3 automatic stops by their recorded identities (SIGTERM, then SIGKILL) left them running`);
+    expect(parked.stateDetail).toContain("stop those processes, then retry the stage");
+    /* Each stop escalated, and only the recorded identities were signalled. */
+    expect(new Set(sent.map(([, signal]) => signal))).toEqual(new Set(["SIGTERM", "SIGKILL"]));
+    const recorded = new Set([fixture.root.pid, fixture.helperIdentity.pid, -fixture.root.pid]);
+    expect(sent.every(([pid]) => recorded.has(pid))).toBe(true);
+
+    /* Parked is final until someone acts: further ticks send nothing more. */
+    const signalled = sent.length;
+    await tickPipelines([], ports);
+    expect(sent).toHaveLength(signalled);
+  } finally {
+    await fixture?.cleanup();
+  }
+}, 30_000);
+
+test("a settled stage's host that is in a turn is never signalled: the next attempt waits and says why", async () => {
+  const spawns: string[] = [];
+  let fixture: Awaited<ReturnType<typeof passedStageWithCapturedTree>> | null = null;
+  const actions: string[] = [];
+  const sent: number[] = [];
+  try {
+    fixture = await passedStageWithCapturedTree(spawns, () => (target, operationId) => stopSettledPipelineStageWriter(target, {
+      operationId,
+      client: null,
+      action: async ({ action }) => { actions.push(action); return { status: 503, body: { ok: false, code: RUNTIME_HOST_UNAVAILABLE_CODE } }; },
+      termination: { signal: (pid) => { sent.push(pid); }, graceMs: 20, deadlineMs: 80 },
+    }));
+    const { ports, stage, rowKey } = fixture;
+    /* Someone wrote to the passed agent and its turn is open. */
+    const entry = stage.registry.readOnlySnapshot().entries[rowKey]!;
+    stage.registry.upsert({ ...entry, status: "live", structuredHost: { ...entry.structuredHost!, activeTurnRef: "operator-turn" } });
+    for (let tick = 0; tick < 6; tick += 1) {
+      await tickPipelines([fixture.endedTurn], ports);
+      ports.advanceWallClock(10 * 60_000);
+    }
+    const lane = loadPipelines()[0]!;
+    expect(lane.runs[0]!.attempts[0]).toMatchObject({ state: "passed" });
+    expect(spawns).toHaveLength(1);
+    expect(actions).toEqual([]);
+    expect(sent).toEqual([]);
+    expect(fixture.alive()).toEqual(["alive", "alive"]);
+    expect(lane.state).toBe("running");
+    expect(lane.runs[1]!.attempts[0]).toMatchObject({ state: "pending" });
+    expect(lane.runs[1]!.attempts[0]!.priorWriterStop).toBeUndefined();
+    expect(lane.stateDetail).toBe(`waiting for an earlier stage agent to stop before a new attempt starts in its worktree: ${stage.conversationId}: processes ${fixture.root.pid}, ${fixture.helperIdentity.pid} captured from its stopped host may still be running; its agent is in a turn, so it is left to finish`);
+  } finally {
+    await fixture?.cleanup();
   }
 }, 30_000);
