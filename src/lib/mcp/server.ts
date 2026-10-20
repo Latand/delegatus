@@ -668,6 +668,7 @@ export interface McpRequestBinding extends McpRequestBindingInput {
   owner: ProcessIdentity;
   /** Local bindings use only process custody; this grants no caller authority. */
   localDispatch?: true;
+  claimGeneration?: string;
   claimedAt: string;
 }
 
@@ -808,7 +809,9 @@ export class MemoryMcpReceiptStore implements McpRecoveryReceiptStore {
 
   release(key: string, digest: string, unadmittedBinding?: McpRequestBinding): boolean {
     const receipt = this.receipts.get(key);
-    if (!receipt || receipt.digest !== digest || receipt.result || (dispatchedReceipt(receipt)
+    if (!receipt || receipt.digest !== digest || receipt.result
+      || (unadmittedBinding?.localDispatch === true && JSON.stringify(receipt.binding) !== JSON.stringify(unadmittedBinding))
+      || (dispatchedReceipt(receipt)
       && (!unadmittedBinding || JSON.stringify(receipt.binding) !== JSON.stringify(unadmittedBinding)))) return false;
     this.receipts.delete(key);
     return true;
@@ -978,6 +981,7 @@ export function validRequestBinding(value: unknown, toolName?: McpToolName, requ
   if (!isRecord(owner) || typeof owner.pid !== "number" || !nullableString(owner.startIdentity)
     || (owner.bootEpoch !== undefined && !nullableString(owner.bootEpoch))) return false;
   if (value.localDispatch !== undefined && value.localDispatch !== true) return false;
+  if (value.claimGeneration !== undefined && (typeof value.claimGeneration !== "string" || !value.claimGeneration)) return false;
   return true;
 }
 
@@ -1689,7 +1693,9 @@ export class FileMcpReceiptStore implements McpRecoveryReceiptStore {
     return withFileLock(this.filePath, () => {
       const state = readReceiptFile(this.filePath);
       const receipt = state.mutationReceipts[key] ?? state.readReceipts[key];
-      if (!receipt || receipt.digest !== digest || receipt.result || (dispatchedReceipt(receipt)
+      if (!receipt || receipt.digest !== digest || receipt.result
+        || (unadmittedBinding?.localDispatch === true && JSON.stringify(receipt.binding) !== JSON.stringify(unadmittedBinding))
+        || (dispatchedReceipt(receipt)
         && (!unadmittedBinding || JSON.stringify(receipt.binding) !== JSON.stringify(unadmittedBinding)))) return false;
       delete state.mutationReceipts[key];
       delete state.readReceipts[key];
@@ -1921,6 +1927,7 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
       `).get(key);
       const releasable = Boolean(receipt) && receipt!.digest === digest
         && receipt!.result_json === null && receipt!.recovery_result_json === null
+        && (unadmittedBinding?.localDispatch !== true || receipt!.binding_json === JSON.stringify(unadmittedBinding))
         && (receipt!.stage !== "dispatching" || (!!unadmittedBinding && receipt!.binding_json === JSON.stringify(unadmittedBinding)));
       if (releasable) this.db.query<unknown, [string]>("DELETE FROM mcp_receipts WHERE receipt_key = ?").run(key);
       this.db.exec("COMMIT");
@@ -3300,6 +3307,7 @@ export function createMcpToolService(
         const localStore = retention === "durable" && supportsMcpRecovery(receipts) && !interruptedCallIsRecoverable(typedTool, effectiveArgs) ? receipts : null;
         const localBinding: McpRequestBinding | undefined = localStore ? {
           version: 1, toolName: typedTool, clientRequestId: requestId, localDispatch: true,
+          claimGeneration: crypto.randomUUID(),
           caller: { kind: "unidentified", conversationId: null, project: null },
           target: { project: null, identity: null }, downstreamKey: key,
           owner: captureProcessIdentity(process.pid), claimedAt: new Date().toISOString(),
@@ -3312,7 +3320,10 @@ export function createMcpToolService(
             } else {
               const current = await localStore.lookup(key);
               if (!current) pendingLocalReleases.delete(key);
-              else if (current.result) {
+              else if (current.digest !== pendingRelease.digest) {
+                pendingLocalReleases.delete(key);
+                return failure(typedTool, requestId, "idempotency_conflict", "clientRequestId was already used with different arguments", false, true);
+              } else if (current.result) {
                 pendingLocalReleases.delete(key);
                 return { ...current.result, replayed: true };
               } else if (current.digest === digest && current.binding
@@ -3395,11 +3406,19 @@ export function createMcpToolService(
             try {
               const current = await localStore.lookup(key);
               if (!current) {
+                pendingLocalReleases.delete(key);
                 return failure(typedTool, requestId, "not_executed",
                   "The dispatch marker was not committed and no binding ran. Retry with the same clientRequestId.",
                   true, false, { outcome: "not-executed", evidence: "dispatch-refused", nextAction: "retry-same-key" });
               }
-              if (current.result) return { ...current.result, replayed: true };
+              if (current.digest !== digest) {
+                pendingLocalReleases.delete(key);
+                return failure(typedTool, requestId, "idempotency_conflict", "clientRequestId was already used with different arguments", false, true);
+              }
+              if (current.result) {
+                pendingLocalReleases.delete(key);
+                return { ...current.result, replayed: true };
+              }
             } catch { /* Unavailable evidence stays unknown. */ }
             return recoveryAnswer(typedTool, requestId, {
               outcome: "unknown", evidence: "mcp-receipt",
@@ -3409,7 +3428,15 @@ export function createMcpToolService(
           }
           if (!dispatchMarked) {
             const current = await localStore.lookup(key);
-            if (current?.result) return { ...current.result, replayed: true };
+            if (current && current.digest !== digest) {
+              pendingLocalReleases.delete(key);
+              return failure(typedTool, requestId, "idempotency_conflict", "clientRequestId was already used with different arguments", false, true);
+            }
+            if (current?.result) {
+              pendingLocalReleases.delete(key);
+              return { ...current.result, replayed: true };
+            }
+            if (!current) pendingLocalReleases.delete(key);
             return recoveryAnswer(typedTool, requestId, {
               outcome: "unknown", evidence: "mcp-receipt", reason: "the claim changed before local dispatch", ids: {},
             }, true);

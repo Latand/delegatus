@@ -1054,11 +1054,11 @@ runDrainTest(`launcher drains an admitted call before ${teardown} teardown`, asy
     });
   `);
   const started = path.join(fixture.root, "started"), release = path.join(fixture.root, "release");
-  const runtime = teardown === "eof" ? Bun.which("node")! : process.execPath;
+  const runtime = teardown === "release" ? process.execPath : Bun.which("node")!;
   const timerArmed = path.join(fixture.root, "shutdown-timer-armed");
   const timerAdvanced = path.join(fixture.root, "shutdown-timer-advanced");
   const preload = path.join(fixture.root, "controlled-timers.mjs");
-  if (teardown === "eof") fs.writeFileSync(preload, `
+  if (teardown !== "release") fs.writeFileSync(preload, `
     import fs from "node:fs";
     const originalSetTimeout = globalThis.setTimeout;
     const originalClearTimeout = globalThis.clearTimeout;
@@ -1066,11 +1066,12 @@ runDrainTest(`launcher drains an admitted call before ${teardown} teardown`, asy
     let stdinEnded = false;
     process.stdin.once("end", () => { stdinEnded = true; });
     globalThis.setTimeout = (callback, delay, ...args) => {
-      if (process.argv[1] === ${JSON.stringify(fixture.launcher)} && stdinEnded && delay === 1000
+      if (process.argv[1] === ${JSON.stringify(fixture.launcher)} && stdinEnded
+        && delay === Number(process.env.LLV_TEST_DRAIN_DELAY)
         && !fs.existsSync(${JSON.stringify(release)})) {
         const timer = { callback, args, cancelled: false };
         controlled.add(timer);
-        fs.writeFileSync(${JSON.stringify(timerArmed)}, "armed");
+        fs.writeFileSync(${JSON.stringify(timerArmed)}, String(delay));
         return timer;
       }
       return originalSetTimeout(callback, delay, ...args);
@@ -1080,15 +1081,18 @@ runDrainTest(`launcher drains an admitted call before ${teardown} teardown`, asy
       return originalClearTimeout(timer);
     };
     process.on("SIGUSR2", () => {
+      fs.writeFileSync(${JSON.stringify(timerAdvanced)}, "advanced");
       for (const timer of controlled) if (!timer.cancelled) timer.callback(...timer.args);
       controlled.clear();
-      fs.writeFileSync(${JSON.stringify(timerAdvanced)}, "advanced");
     });
   `);
   const session = stdioSession(runtime, fixture.launcher, fixture.root, {
     ...fixture.env, TMPDIR: fixture.root, LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1",
     LLV_TEST_STARTED: started, LLV_TEST_RELEASE: release,
-    ...(teardown === "eof" ? { NODE_OPTIONS: `--import=${preload}`, LLV_BUN_EXECUTABLE: process.execPath } : {}),
+    ...(teardown !== "release" ? {
+      NODE_OPTIONS: `--import=${preload}`, LLV_BUN_EXECUTABLE: process.execPath,
+      LLV_TEST_DRAIN_DELAY: teardown === "timeout" ? "35000" : "1000",
+    } : {}),
   });
   let diagnostics = "";
   session.process.stderr?.on("data", chunk => { diagnostics += String(chunk); });
@@ -1110,6 +1114,10 @@ runDrainTest(`launcher drains an admitted call before ${teardown} teardown`, asy
     } else {
       session.process.stdin.end();
       if (teardown === "timeout") {
+        await until(() => fs.existsSync(timerArmed));
+        expect(fs.readFileSync(timerArmed, "utf8")).toBe("35000");
+        process.kill(session.process.pid!, "SIGUSR2");
+        await until(() => fs.existsSync(timerAdvanced));
         expect((await admitted).result.content[0].text).toContain("did not drain before shutdown deadline");
         return;
       }
