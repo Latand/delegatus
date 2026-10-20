@@ -2591,6 +2591,33 @@ export function conversationRegistryEntries<C extends "heldDeliveries" | "delive
     .flatMap((key) => rows[key] ? [[key, rows[key]!] as [string, RegistryFile[C][string]]] : []);
 }
 
+/** Recovery hydrates only this message key and recipient. The bound refuses
+ * ambiguous or hostile histories before any command bodies are decoded. */
+export const DELIVERY_KEY_ROW_LIMIT = 256;
+export function deliveryRegistryEntriesForKey<C extends "heldDeliveries" | "deliveryOperationOwners">(
+  file: RegistryFile, collection: C, clientMessageId: string, recipients?: readonly string[],
+): Array<[string, RegistryFile[C][string]]> {
+  return withViewerOperation("registry.delivery-key", () => performanceSpans.sync("registry.delivery-key", () => {
+    let keys = registryKeysMatching(file, collection, "clientMessageId", clientMessageId);
+    if (recipients) {
+      const identities = [...new Set(recipients.flatMap(id => conversationIdentities(file, id as ViewerConversationId)))];
+      const allowed = new Set(registryKeysMatching(file, collection, "conversationId", identities));
+      keys = keys.filter(key => allowed.has(key));
+    }
+    if (keys.length > DELIVERY_KEY_ROW_LIMIT) throw new Error("delivery key recovery exceeds its row budget");
+    const rows = file[collection] as Record<string, RegistryFile[C][string]>;
+    return keys.flatMap(key => rows[key] ? [[key, rows[key]!] as [string, RegistryFile[C][string]]] : []);
+  }));
+}
+
+export interface ConversationAuthorityFacts {
+  id: string;
+  superseded: boolean;
+  hasGeneration: boolean;
+  project: string | null;
+  directories: string[];
+}
+
 function heldDeliveryRequestDigests(
   file: RegistryFile,
   conversationId: ViewerConversationId,
@@ -8986,8 +9013,9 @@ export class AgentRegistry {
     }, options);
   }
 
+  /** Alias resolution needs no conversation payload or grant normalization. */
   canonicalConversationId(id: ViewerConversationId): ViewerConversationId {
-    return this.readKeyed(file => resolveConversationAlias(file, id));
+    return this.readKeyed(file => resolveConversationAlias(file, id), { skipColdKeyInitialization: true });
   }
 
   /** Records the terminal predecessor → successor edge (issue #383) outside
@@ -9056,6 +9084,18 @@ export class AgentRegistry {
       const conversation = file.conversations[resolveConversationAlias(file, id)];
       return conversation ? clone(conversation) : null;
     });
+  }
+
+  conversationAuthorityFacts(id: string): ConversationAuthorityFacts | null {
+    return withViewerOperation("orchestrator.authority", () => performanceSpans.sync("authority.facts", () => {
+      if (this.sqliteStore && (this.sqliteMode === "sqlite" || this.sqliteMode === "read")) return this.sqliteStore.conversationAuthorityFacts(id);
+      return this.readKeyed(file => {
+        const conversation = file.conversations[resolveConversationAlias(file, id as ViewerConversationId)];
+        return conversation ? { id: conversation.id, superseded: conversation.supersededBy !== null,
+          hasGeneration: conversation.generations.length > 0, project: conversation.projectOwnership?.project ?? null,
+          directories: conversation.generations.toReversed().flatMap(g => g.launchProfile?.cwd ? [g.launchProfile.cwd] : []) } : null;
+      });
+    }));
   }
 
   launchProfileForPath(artifactPath: string): LaunchProfile | null {

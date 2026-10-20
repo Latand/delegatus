@@ -19,7 +19,7 @@ import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 
 import { reboundAssembledMcpGrants, rowClaimsBeyondBaselineGrant, type McpGrantPolicy } from "./mcpAllowlist";
 import { identityMaterializationFence } from "./identityMaterialization";
-import type { AgentRegistryEntry, RegistryFile, SeatChildrenAnchor, SeatChildrenPage, SnapshotSpawnProjection, SnapshotTitleConversationProjection } from "./registry";
+import type { AgentRegistryEntry, ConversationAuthorityFacts, RegistryFile, SeatChildrenAnchor, SeatChildrenPage, SnapshotSpawnProjection, SnapshotTitleConversationProjection } from "./registry";
 import { sessionKeyId } from "./sessionKey";
 import { archiveCandidates, archiveInactiveRegistryRows, installRegistryArchive } from "./registryArchive";
 
@@ -64,6 +64,7 @@ const registryFailureRepairIndexes = declaredIndexes([
 ]);
 
 const DEFERRED_LOOKUP_INDEXES = new Set([
+  "clientMessageId",
   "launchId", "requestDigest", "supersedes.conversationId", "structuredHost.kind",
   "parentConversationId", "launchProfile.parentConversationId", "pendingSpawnCapability.operationId",
 ]);
@@ -113,8 +114,8 @@ const ROW_COLLECTION_KEYS: ReadonlySet<string> = new Set(ROW_COLLECTIONS);
 /** The rows whose MCP grant lists a complete load decides from other rows. */
 const READER_GRANT_COLLECTIONS: ReadonlySet<RowCollection> = new Set(["entries", "receipts", "conversations"]);
 type LookupValue = string | readonly string[];
-type LookupField = "launchId" | "parentConversationId" | "launchProfile.parentConversationId" | "pendingSpawnCapability.operationId" | "conversationId" | "artifactPath" | "command.operationId" | "deliveryId" | "alias" | "clientAttemptId" | "spawnCapabilityDigest" | "pendingSpawnCapability.digest" | "state" | "status" | "key.sessionId" | "requestDigest" | "supersedes.conversationId" | "structuredHost.kind";
-const LOOKUP_PATHS: Record<LookupField, string> = { launchId: "$.launchId", parentConversationId: "$.parentConversationId", "launchProfile.parentConversationId": "$.launchProfile.parentConversationId", "pendingSpawnCapability.operationId": "$.pendingSpawnCapability.operationId", conversationId: "$.conversationId", artifactPath: "$.artifactPath", "command.operationId": "$.command.operationId", deliveryId: "$.deliveryId", alias: "$", clientAttemptId: "$.clientAttemptId", spawnCapabilityDigest: "$.spawnCapabilityDigest", "pendingSpawnCapability.digest": "$.pendingSpawnCapability.digest", state: "$.state", status: "$.status", "key.sessionId": "$.key.sessionId", requestDigest: "$.requestDigest", "supersedes.conversationId": "$.supersedes.conversationId", "structuredHost.kind": "$.structuredHost.kind" };
+type LookupField = "clientMessageId" | "launchId" | "parentConversationId" | "launchProfile.parentConversationId" | "pendingSpawnCapability.operationId" | "conversationId" | "artifactPath" | "command.operationId" | "deliveryId" | "alias" | "clientAttemptId" | "spawnCapabilityDigest" | "pendingSpawnCapability.digest" | "state" | "status" | "key.sessionId" | "requestDigest" | "supersedes.conversationId" | "structuredHost.kind";
+const LOOKUP_PATHS: Record<LookupField, string> = { clientMessageId: "$.clientMessageId", launchId: "$.launchId", parentConversationId: "$.parentConversationId", "launchProfile.parentConversationId": "$.launchProfile.parentConversationId", "pendingSpawnCapability.operationId": "$.pendingSpawnCapability.operationId", conversationId: "$.conversationId", artifactPath: "$.artifactPath", "command.operationId": "$.command.operationId", deliveryId: "$.deliveryId", alias: "$", clientAttemptId: "$.clientAttemptId", spawnCapabilityDigest: "$.spawnCapabilityDigest", "pendingSpawnCapability.digest": "$.pendingSpawnCapability.digest", state: "$.state", status: "$.status", "key.sessionId": "$.key.sessionId", requestDigest: "$.requestDigest", "supersedes.conversationId": "$.supersedes.conversationId", "structuredHost.kind": "$.structuredHost.kind" };
 type KeyedReader = (collection: RowCollection, field: LookupField, value: LookupValue) => string[];
 type ProjectionReader = (collection: RowCollection, projector: RegistryRowProjector<RowCollection, unknown>) => Array<[string, unknown]>;
 interface RegistryFileReaders {
@@ -1680,6 +1681,10 @@ export class SqliteAgentRegistryStore {
   async prepareRecoveryIndexes(signal?: AbortSignal): Promise<void> {
     if (this.options.readOnly || this.options.allowArchiveMigration === false) return;
     for (const [name, table, field, collection] of [
+      ...["heldDeliveries", "deliveryOperationOwners"].flatMap(collection => [
+        [`registry_lookup_clientMessageId_${collection}`, "registry_rows", "clientMessageId", collection],
+        [`registry_archive_clientMessageId_${collection}`, "registry_archive", "clientMessageId", collection],
+      ]),
       ["registry_lookup_launchId", "registry_rows", "launchId", "receipts"],
       ["registry_archive_launchId", "registry_archive", "launchId", "receipts"],
       ["registry_lookup_parentConversationId", "registry_rows", "parentConversationId", "receipts"],
@@ -2905,6 +2910,7 @@ export class SqliteAgentRegistryStore {
     this.coldGrantCursor = { changeId: coldGrantChangeId,stamp: snapshot.stamp };
     const pinnedReceipts = this.changesReady ? this.pinnedRowKeys(file, "receipts", coldGrantChangeId, identity, this.collectionOrders.get("receipts")?.orders) : null;
     const pinnedDeliveries = this.changesReady ? this.pinnedRowKeys(file, "heldDeliveries", coldGrantChangeId, identity) : null;
+    const pinnedOwners = this.changesReady ? this.pinnedRowKeys(file, "deliveryOperationOwners", coldGrantChangeId, identity) : null;
     const pinnedEntries = this.changesReady ? this.pinnedRowKeys(file, "entries", coldGrantChangeId, identity) : null;
     keyedReaders.set(file,(collection,field,value) => {
       const values = typeof value === "string" ? [value] : value;
@@ -2918,9 +2924,13 @@ export class SqliteAgentRegistryStore {
         const holds = (receipt: RegistryFile["receipts"][string]) => values.includes(lookupValue(receipt, field) as string);
         return pinnedReceipts ? pinnedReceipts(indexed, holds) : Object.keys(file.receipts).filter(key => holds(file.receipts[key]!));
       }
-      if (collection === "heldDeliveries" && field === "conversationId") {
-        const holds = (delivery: RegistryFile["heldDeliveries"][string]) => values.includes(delivery.conversationId);
+      if (collection === "heldDeliveries" && (field === "conversationId" || field === "clientMessageId")) {
+        const holds = (delivery: RegistryFile["heldDeliveries"][string]) => values.includes(lookupValue(delivery, field) as string);
         return pinnedDeliveries ? pinnedDeliveries(indexed, holds) : Object.keys(file.heldDeliveries).filter(key => holds(file.heldDeliveries[key]!));
+      }
+      if (collection === "deliveryOperationOwners" && (field === "conversationId" || field === "clientMessageId")) {
+        const holds = (owner: RegistryFile["deliveryOperationOwners"][string]) => values.includes(lookupValue(owner, field) as string);
+        return pinnedOwners ? pinnedOwners(indexed, holds) : Object.keys(file.deliveryOperationOwners).filter(key => holds(file.deliveryOperationOwners[key]!));
       }
       return indexed();
     });
@@ -3092,7 +3102,7 @@ export class SqliteAgentRegistryStore {
     const distinct = [...new Set(values)];
     if (!distinct.length) return [];
     const jsonPath = LOOKUP_PATHS[field];
-    const mapped = this.changesReady && (collection === "receipts" || collection === "entries" && field === "structuredHost.kind")
+    const mapped = this.changesReady && (collection === "receipts" || field === "clientMessageId" || collection === "entries" && field === "structuredHost.kind")
       && this.db.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE name='registry_records'")
         .get()?.sql.includes("a.collection=c.collection AND a.row_key=c.row_key");
     // With multiple IN bindings plus ORDER BY, SQLite can prefer collection
@@ -3486,6 +3496,36 @@ export class SqliteAgentRegistryStore {
       current = next;
     }
     return current;
+  }
+
+  /** Read scalar authority facts at one SQLite read cut. No retained command,
+   * launch profile or MCP grant list is decoded by an authorization decision. */
+  conversationAuthorityFacts(id: string): ConversationAuthorityFacts | null {
+    const timeout = this.db.query<{ timeout: number }, []>("PRAGMA busy_timeout").get()!.timeout;
+    this.db.exec("PRAGMA busy_timeout=0");
+    try { return stateLockAttempt("orchestrator.authority", () => {
+      const ownsTransaction = !this.db.inTransaction;
+      if (ownsTransaction) this.db.exec("BEGIN");
+      try {
+        const canonical = this.workerConversationId(id);
+        const row = this.db.query<{ superseded: string | null; generations: number | null; project: string | null }, [string]>(
+          `SELECT json_extract(value_json,'$.supersededBy') AS superseded,
+            json_array_length(value_json,'$.generations') AS generations,
+            json_extract(value_json,'$.projectOwnership.project') AS project
+            FROM ${this.recordsSource} WHERE collection='conversations' AND row_key=?`).get(canonical);
+        const directories = row ? this.db.query<{ cwd: string | null }, [string]>(
+          `SELECT json_extract(g.value,'$.launchProfile.cwd') AS cwd FROM ${this.recordsSource} r,
+            json_each(r.value_json,'$.generations') g
+            WHERE r.collection='conversations' AND r.row_key=? ORDER BY CAST(g.key AS INTEGER) DESC`).all(canonical)
+          .flatMap(g => typeof g.cwd === "string" && g.cwd ? [g.cwd] : []) : [];
+        if (ownsTransaction) this.db.exec("COMMIT");
+        return row ? { id: canonical, superseded: row.superseded != null, hasGeneration: (row.generations ?? 0) > 0,
+          project: row.project, directories } : null;
+      } catch (error) {
+        try { if (ownsTransaction) this.db.exec("ROLLBACK"); } catch { /* No open transaction. */ }
+        throw error;
+      }
+    }); } finally { this.db.exec(`PRAGMA busy_timeout=${timeout}`); }
   }
 
   workerSeatContexts(ids: readonly string[]): Map<string, { conversationId: string; directories: string[] }> {

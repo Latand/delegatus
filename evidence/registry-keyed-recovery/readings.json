@@ -1,0 +1,1895 @@
+{
+  "comparisonBase": "8ff233dc84c38a0cce605d6e914ce75de3f92b6e",
+  "candidateSourceDigest": {
+    "src/lib/agent/registry.ts": "78f5cb3acf8a5a32c9285837a1f75a99a9e52599028b168667de701f37a77fff",
+    "src/lib/agent/sqliteRegistryStore.ts": "7823121f2e474dd61e56e10b4b54a22c1a9ce4acdc3921f7f7f824f8ff2a886b",
+    "src/lib/memory/controller.ts": "bc64fb8a7d27d7f83cbbb2de55c0d0962f697b178bee4521e6594942419639aa",
+    "src/lib/orchestrator/authority.ts": "71c48ff002e88e9129ae8a03b957b47f5d8aaba4147cefe843693a17af0e946f",
+    "src/lib/orchestrator/managerAuthoritySources.ts": "e27356cc66da0a85de55accc45bae4cf4130c068ebb4994a3eebe0b110c97ed4",
+    "src/lib/orchestrator/relay.ts": "e02bb42445390762ff2ad49222c644392bb4e7eb81c3adfe0c5ec3626103caf9",
+    "src/lib/performanceSpans.ts": "8ce37cfe32e97e6ecefd09bca046ad2b85cb11bfb464ea714a672e1d1bd1c030",
+    "src/lib/runtime/sendSettlement.ts": "cc60c8e02e9d1404a4ef452677e93d9b67ad065fdc1d721ded612d5e41bdd39c",
+    "src/lib/viewerLoopMonitor.ts": "3d51cd0215a8bd47907860f86dd87b7641e7b2f515e78c58a04f8a4c37681786",
+    "scripts/profile-registry-reads.ts": "e6fe18cb912246384353c9e627a1980bc28bb38c0ebf06fd107cf827075710d4",
+    "src/lib/memory/deliveryEvidence.ts": "6e2c0a0c5d357bb3855d27045e3b3748789c6d99211badb831ba0e8ad85e2a6a"
+  },
+  "corpus": {
+    "capturedAt": "2026-10-20T17:53:58.702816+00:00",
+    "files": {
+      "agent-registry.sqlite": {
+        "bytes": 648175616,
+        "sha256": "bad7fadab1544abaf95bf38aaaf277f97e536cf5cead0919fc075f7075a305f2"
+      },
+      "state.sqlite": {
+        "bytes": 254484480,
+        "sha256": "a7f9016322c444c569bab18bdf63add5d83fbab6d0cb72320285ee4db7ef7011"
+      }
+    }
+  },
+  "interpreter": "1.4.0",
+  "command": "bun scripts/profile-registry-reads.ts --routes",
+  "cadence": {
+    "pollsPerMinute": 6,
+    "gapThresholdMs": 500
+  },
+  "notes": [
+    "Private registry and state databases were copied once with read-only VACUUM INTO. Every arm started from identical copies, isolated HOME/config/state/temp and a closed Viewer control URL.",
+    "Base run 2 omitted the optional route pass; Home and saved summary were sampled three times in each of the other arms.",
+    "Host load varies with other work and is recorded per sample. Available CPU affinity was three CPUs in every arm. Decode counts and bytes are the deterministic comparison.",
+    "The first authority sample includes state initialization and may omit low-ranked attribution rows; warm and polling samples have complete attribution.",
+    "The polling loop is an actual one-minute window; gap share sums timer gaps exceeding 500 ms. No production latency or deployment improvement is claimed."
+  ],
+  "runs": [
+    {
+      "arm": "base-1",
+      "samples": [
+        {
+          "name": "relay",
+          "run": 1,
+          "durationMs": 952.4498309999999,
+          "cpuMs": 1212.123,
+          "load": [
+            11,
+            15.53,
+            19.64
+          ],
+          "registryCalls": 23028,
+          "registryBytes": 143921727,
+          "allDecodedBytes": 143921727,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 138168,
+          "bytesPerMinuteAtSix": 863530362
+        },
+        {
+          "name": "relay",
+          "run": 2,
+          "durationMs": 631.3405190000003,
+          "cpuMs": 785.934,
+          "load": [
+            10.84,
+            15.42,
+            19.58
+          ],
+          "registryCalls": 14137,
+          "registryBytes": 134666033,
+          "allDecodedBytes": 134666033,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 84822,
+          "bytesPerMinuteAtSix": 807996198
+        },
+        {
+          "name": "relay",
+          "run": 3,
+          "durationMs": 650.19184,
+          "cpuMs": 815.198,
+          "load": [
+            10.84,
+            15.42,
+            19.58
+          ],
+          "registryCalls": 14137,
+          "registryBytes": 134666033,
+          "allDecodedBytes": 134666033,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 84822,
+          "bytesPerMinuteAtSix": 807996198
+        },
+        {
+          "name": "authority",
+          "run": 1,
+          "durationMs": 206.3500200000003,
+          "cpuMs": 266.033,
+          "load": [
+            10.84,
+            15.42,
+            19.58
+          ],
+          "registryCalls": 734,
+          "registryBytes": 1213524,
+          "allDecodedBytes": 1462417,
+          "attributionOmitted": 3,
+          "callsPerMinuteAtSix": 4404,
+          "bytesPerMinuteAtSix": 7281144
+        },
+        {
+          "name": "authority",
+          "run": 2,
+          "durationMs": 129.6274229999999,
+          "cpuMs": 149.47,
+          "load": [
+            10.84,
+            15.42,
+            19.58
+          ],
+          "registryCalls": 728,
+          "registryBytes": 1193942,
+          "allDecodedBytes": 1193942,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 4368,
+          "bytesPerMinuteAtSix": 7163652
+        },
+        {
+          "name": "authority",
+          "run": 3,
+          "durationMs": 141.42943300000024,
+          "cpuMs": 207.185,
+          "load": [
+            10.84,
+            15.42,
+            19.58
+          ],
+          "registryCalls": 728,
+          "registryBytes": 1193942,
+          "allDecodedBytes": 1193942,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 4368,
+          "bytesPerMinuteAtSix": 7163652
+        },
+        {
+          "name": "poll-relay",
+          "run": 1,
+          "durationMs": 736.9179350000004,
+          "cpuMs": 839.96,
+          "load": [
+            10.84,
+            15.42,
+            19.58
+          ],
+          "registryCalls": 14137,
+          "registryBytes": 134666033,
+          "allDecodedBytes": 134666033,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 84822,
+          "bytesPerMinuteAtSix": 807996198
+        },
+        {
+          "name": "poll-authority",
+          "run": 1,
+          "durationMs": 114.8982219999998,
+          "cpuMs": 131.682,
+          "load": [
+            10.84,
+            15.42,
+            19.58
+          ],
+          "registryCalls": 728,
+          "registryBytes": 1193942,
+          "allDecodedBytes": 1193942,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 4368,
+          "bytesPerMinuteAtSix": 7163652
+        },
+        {
+          "name": "poll-relay",
+          "run": 2,
+          "durationMs": 748.190364,
+          "cpuMs": 865.311,
+          "load": [
+            10.39,
+            15.18,
+            19.45
+          ],
+          "registryCalls": 14137,
+          "registryBytes": 134666033,
+          "allDecodedBytes": 134666033,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 84822,
+          "bytesPerMinuteAtSix": 807996198
+        },
+        {
+          "name": "poll-authority",
+          "run": 2,
+          "durationMs": 106.76339899999948,
+          "cpuMs": 118.882,
+          "load": [
+            10.39,
+            15.18,
+            19.45
+          ],
+          "registryCalls": 728,
+          "registryBytes": 1193942,
+          "allDecodedBytes": 1193942,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 4368,
+          "bytesPerMinuteAtSix": 7163652
+        },
+        {
+          "name": "poll-relay",
+          "run": 3,
+          "durationMs": 746.3857219999991,
+          "cpuMs": 838.784,
+          "load": [
+            9.96,
+            14.92,
+            19.33
+          ],
+          "registryCalls": 14137,
+          "registryBytes": 134666033,
+          "allDecodedBytes": 134666033,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 84822,
+          "bytesPerMinuteAtSix": 807996198
+        },
+        {
+          "name": "poll-authority",
+          "run": 3,
+          "durationMs": 121.10830100000021,
+          "cpuMs": 156.879,
+          "load": [
+            9.96,
+            14.92,
+            19.33
+          ],
+          "registryCalls": 728,
+          "registryBytes": 1193942,
+          "allDecodedBytes": 1193942,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 4368,
+          "bytesPerMinuteAtSix": 7163652
+        },
+        {
+          "name": "poll-relay",
+          "run": 4,
+          "durationMs": 706.4946080000009,
+          "cpuMs": 789.996,
+          "load": [
+            9.82,
+            14.73,
+            19.22
+          ],
+          "registryCalls": 14137,
+          "registryBytes": 134666033,
+          "allDecodedBytes": 134666033,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 84822,
+          "bytesPerMinuteAtSix": 807996198
+        },
+        {
+          "name": "poll-authority",
+          "run": 4,
+          "durationMs": 118.25159099999291,
+          "cpuMs": 129.125,
+          "load": [
+            9.82,
+            14.73,
+            19.22
+          ],
+          "registryCalls": 728,
+          "registryBytes": 1193942,
+          "allDecodedBytes": 1193942,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 4368,
+          "bytesPerMinuteAtSix": 7163652
+        },
+        {
+          "name": "poll-relay",
+          "run": 5,
+          "durationMs": 691.4917649999988,
+          "cpuMs": 824.768,
+          "load": [
+            9.54,
+            14.51,
+            19.09
+          ],
+          "registryCalls": 14137,
+          "registryBytes": 134666033,
+          "allDecodedBytes": 134666033,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 84822,
+          "bytesPerMinuteAtSix": 807996198
+        },
+        {
+          "name": "poll-authority",
+          "run": 5,
+          "durationMs": 108.4426569999996,
+          "cpuMs": 155.339,
+          "load": [
+            9.54,
+            14.51,
+            19.09
+          ],
+          "registryCalls": 728,
+          "registryBytes": 1193942,
+          "allDecodedBytes": 1193942,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 4368,
+          "bytesPerMinuteAtSix": 7163652
+        },
+        {
+          "name": "poll-relay",
+          "run": 6,
+          "durationMs": 705.3916309999986,
+          "cpuMs": 782.716,
+          "load": [
+            9.66,
+            14.37,
+            19
+          ],
+          "registryCalls": 14137,
+          "registryBytes": 134666033,
+          "allDecodedBytes": 134666033,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 84822,
+          "bytesPerMinuteAtSix": 807996198
+        },
+        {
+          "name": "poll-authority",
+          "run": 6,
+          "durationMs": 131.30853899999784,
+          "cpuMs": 139.807,
+          "load": [
+            9.66,
+            14.37,
+            19
+          ],
+          "registryCalls": 728,
+          "registryBytes": 1193942,
+          "allDecodedBytes": 1193942,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 4368,
+          "bytesPerMinuteAtSix": 7163652
+        },
+        {
+          "name": "poll-loop",
+          "windowMs": 59999.65598,
+          "gapMs": 5032.649726999995,
+          "maxGapMs": 863.6118070000011,
+          "gapShare": 0.08387797637835714,
+          "thresholdMs": 500,
+          "corpus": [
+            {
+              "collection": "conversations",
+              "rows": 9257,
+              "bytes": 14610533
+            },
+            {
+              "collection": "deliveryOperationOwners",
+              "rows": 14147,
+              "bytes": 134706885
+            },
+            {
+              "collection": "entries",
+              "rows": 8105,
+              "bytes": 9452812
+            },
+            {
+              "collection": "heldDeliveries",
+              "rows": 8887,
+              "bytes": 9244086
+            },
+            {
+              "collection": "lineageEdges",
+              "rows": 7884,
+              "bytes": 7246605
+            },
+            {
+              "collection": "memberships",
+              "rows": 6722,
+              "bytes": 2172753
+            },
+            {
+              "collection": "migrationIntents",
+              "rows": 57,
+              "bytes": 21096
+            },
+            {
+              "collection": "pendingSupersedence",
+              "rows": 3,
+              "bytes": 660
+            },
+            {
+              "collection": "receipts",
+              "rows": 8562,
+              "bytes": 57201694
+            }
+          ],
+          "cpus": 3
+        },
+        {
+          "name": "summary-bootstrap",
+          "run": 1,
+          "durationMs": 58.80806400000438,
+          "cpuMs": 64.246,
+          "load": [
+            9.18,
+            14.11,
+            18.87
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "summary-bootstrap",
+          "run": 2,
+          "durationMs": 0.35417600000073435,
+          "cpuMs": 0.353,
+          "load": [
+            9.18,
+            14.11,
+            18.87
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "summary-bootstrap",
+          "run": 3,
+          "durationMs": 0.10350499999913154,
+          "cpuMs": 0.103,
+          "load": [
+            9.18,
+            14.11,
+            18.87
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "home-html",
+          "run": 1,
+          "durationMs": 7.172256000005291,
+          "cpuMs": 11.807,
+          "load": [
+            9.18,
+            14.11,
+            18.87
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "home-html",
+          "run": 2,
+          "durationMs": 1.2261819999985164,
+          "cpuMs": 2.251,
+          "load": [
+            9.18,
+            14.11,
+            18.87
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "home-html",
+          "run": 3,
+          "durationMs": 1.083770999997796,
+          "cpuMs": 3.207,
+          "load": [
+            9.18,
+            14.11,
+            18.87
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        }
+      ],
+      "completedAtFromArtifactMtime": "2026-10-20T17:55:22.542562+00:00"
+    },
+    {
+      "arm": "head-1",
+      "samples": [
+        {
+          "name": "relay",
+          "run": 1,
+          "durationMs": 34.0899559999998,
+          "cpuMs": 61.992,
+          "load": [
+            7.48,
+            10.8,
+            16.71
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "relay",
+          "run": 2,
+          "durationMs": 37.32312499999989,
+          "cpuMs": 52.16,
+          "load": [
+            7.48,
+            10.8,
+            16.71
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "relay",
+          "run": 3,
+          "durationMs": 33.81388900000002,
+          "cpuMs": 35.982,
+          "load": [
+            7.48,
+            10.8,
+            16.71
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "authority",
+          "run": 1,
+          "durationMs": 48.18030499999986,
+          "cpuMs": 61.841,
+          "load": [
+            7.48,
+            10.8,
+            16.71
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 248893,
+          "attributionOmitted": 8,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "authority",
+          "run": 2,
+          "durationMs": 21.16332199999988,
+          "cpuMs": 29.788,
+          "load": [
+            7.48,
+            10.8,
+            16.71
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "authority",
+          "run": 3,
+          "durationMs": 21.220687999999882,
+          "cpuMs": 29.286,
+          "load": [
+            7.48,
+            10.8,
+            16.71
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "poll-relay",
+          "run": 1,
+          "durationMs": 31.90592400000014,
+          "cpuMs": 37.308,
+          "load": [
+            7.48,
+            10.8,
+            16.71
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "poll-authority",
+          "run": 1,
+          "durationMs": 22.44695700000011,
+          "cpuMs": 36.535,
+          "load": [
+            7.48,
+            10.8,
+            16.71
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "poll-relay",
+          "run": 2,
+          "durationMs": 52.71913500000119,
+          "cpuMs": 56.759,
+          "load": [
+            7.71,
+            10.74,
+            16.63
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "poll-authority",
+          "run": 2,
+          "durationMs": 33.62326600000051,
+          "cpuMs": 36.68,
+          "load": [
+            7.71,
+            10.74,
+            16.63
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "poll-relay",
+          "run": 3,
+          "durationMs": 48.02283199999874,
+          "cpuMs": 53.987,
+          "load": [
+            8.63,
+            10.83,
+            16.6
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "poll-authority",
+          "run": 3,
+          "durationMs": 38.47203199999785,
+          "cpuMs": 51.698,
+          "load": [
+            8.63,
+            10.83,
+            16.6
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "poll-relay",
+          "run": 4,
+          "durationMs": 68.02329199999804,
+          "cpuMs": 69.241,
+          "load": [
+            9.61,
+            10.97,
+            16.58
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "poll-authority",
+          "run": 4,
+          "durationMs": 47.92571500000486,
+          "cpuMs": 61.364,
+          "load": [
+            9.61,
+            10.97,
+            16.58
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "poll-relay",
+          "run": 5,
+          "durationMs": 56.22205699999904,
+          "cpuMs": 64.986,
+          "load": [
+            10.05,
+            11.02,
+            16.54
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "poll-authority",
+          "run": 5,
+          "durationMs": 43.93251800000144,
+          "cpuMs": 47.272,
+          "load": [
+            10.05,
+            11.02,
+            16.54
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "poll-relay",
+          "run": 6,
+          "durationMs": 35.69356300000072,
+          "cpuMs": 37.69,
+          "load": [
+            10.72,
+            11.13,
+            16.51
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "poll-authority",
+          "run": 6,
+          "durationMs": 22.375397999996494,
+          "cpuMs": 36.586,
+          "load": [
+            10.72,
+            11.13,
+            16.51
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "poll-loop",
+          "windowMs": 59999.884143,
+          "gapMs": 0,
+          "maxGapMs": 110.06353600000148,
+          "gapShare": 0,
+          "thresholdMs": 500,
+          "corpus": [
+            {
+              "collection": "conversations",
+              "rows": 9257,
+              "bytes": 14610533
+            },
+            {
+              "collection": "deliveryOperationOwners",
+              "rows": 14147,
+              "bytes": 134706885
+            },
+            {
+              "collection": "entries",
+              "rows": 8105,
+              "bytes": 9452812
+            },
+            {
+              "collection": "heldDeliveries",
+              "rows": 8887,
+              "bytes": 9244086
+            },
+            {
+              "collection": "lineageEdges",
+              "rows": 7884,
+              "bytes": 7246605
+            },
+            {
+              "collection": "memberships",
+              "rows": 6722,
+              "bytes": 2172753
+            },
+            {
+              "collection": "migrationIntents",
+              "rows": 57,
+              "bytes": 21096
+            },
+            {
+              "collection": "pendingSupersedence",
+              "rows": 3,
+              "bytes": 660
+            },
+            {
+              "collection": "receipts",
+              "rows": 8562,
+              "bytes": 57201694
+            }
+          ],
+          "cpus": 3
+        },
+        {
+          "name": "summary-bootstrap",
+          "run": 1,
+          "durationMs": 49.09850599999481,
+          "cpuMs": 54.677,
+          "load": [
+            12.17,
+            11.44,
+            16.56
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "summary-bootstrap",
+          "run": 2,
+          "durationMs": 0.20318499999848427,
+          "cpuMs": 0.203,
+          "load": [
+            12.17,
+            11.44,
+            16.56
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "summary-bootstrap",
+          "run": 3,
+          "durationMs": 0.0713160000013886,
+          "cpuMs": 0.071,
+          "load": [
+            12.17,
+            11.44,
+            16.56
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "home-html",
+          "run": 1,
+          "durationMs": 5.5193339999968885,
+          "cpuMs": 10.32,
+          "load": [
+            12.17,
+            11.44,
+            16.56
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "home-html",
+          "run": 2,
+          "durationMs": 1.0285619999995106,
+          "cpuMs": 1.865,
+          "load": [
+            12.17,
+            11.44,
+            16.56
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "home-html",
+          "run": 3,
+          "durationMs": 0.7064459999965038,
+          "cpuMs": 0.884,
+          "load": [
+            12.17,
+            11.44,
+            16.56
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        }
+      ],
+      "completedAtFromArtifactMtime": "2026-10-20T17:59:22.373730+00:00"
+    },
+    {
+      "arm": "base-2",
+      "samples": [
+        {
+          "name": "relay",
+          "run": 1,
+          "durationMs": 917.2403549999997,
+          "cpuMs": 1235.718,
+          "load": [
+            6.83,
+            12.01,
+            17.68
+          ],
+          "registryCalls": 23028,
+          "registryBytes": 143921727,
+          "allDecodedBytes": 143921727,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 138168,
+          "bytesPerMinuteAtSix": 863530362
+        },
+        {
+          "name": "relay",
+          "run": 2,
+          "durationMs": 752.5706599999999,
+          "cpuMs": 872.259,
+          "load": [
+            6.83,
+            12.01,
+            17.68
+          ],
+          "registryCalls": 14137,
+          "registryBytes": 134666033,
+          "allDecodedBytes": 134666033,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 84822,
+          "bytesPerMinuteAtSix": 807996198
+        },
+        {
+          "name": "relay",
+          "run": 3,
+          "durationMs": 736.1165700000001,
+          "cpuMs": 810.407,
+          "load": [
+            6.83,
+            12.01,
+            17.68
+          ],
+          "registryCalls": 14137,
+          "registryBytes": 134666033,
+          "allDecodedBytes": 134666033,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 84822,
+          "bytesPerMinuteAtSix": 807996198
+        },
+        {
+          "name": "authority",
+          "run": 1,
+          "durationMs": 255.36335800000006,
+          "cpuMs": 402.512,
+          "load": [
+            6.83,
+            12.01,
+            17.68
+          ],
+          "registryCalls": 734,
+          "registryBytes": 1213524,
+          "allDecodedBytes": 1462417,
+          "attributionOmitted": 3,
+          "callsPerMinuteAtSix": 4404,
+          "bytesPerMinuteAtSix": 7281144
+        },
+        {
+          "name": "authority",
+          "run": 2,
+          "durationMs": 140.74778999999944,
+          "cpuMs": 169.971,
+          "load": [
+            6.83,
+            12.01,
+            17.68
+          ],
+          "registryCalls": 728,
+          "registryBytes": 1193942,
+          "allDecodedBytes": 1193942,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 4368,
+          "bytesPerMinuteAtSix": 7163652
+        },
+        {
+          "name": "authority",
+          "run": 3,
+          "durationMs": 106.92003699999987,
+          "cpuMs": 124.098,
+          "load": [
+            7,
+            11.96,
+            17.63
+          ],
+          "registryCalls": 728,
+          "registryBytes": 1193942,
+          "allDecodedBytes": 1193942,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 4368,
+          "bytesPerMinuteAtSix": 7163652
+        },
+        {
+          "name": "poll-relay",
+          "run": 1,
+          "durationMs": 635.2785999999996,
+          "cpuMs": 740.388,
+          "load": [
+            7,
+            11.96,
+            17.63
+          ],
+          "registryCalls": 14137,
+          "registryBytes": 134666033,
+          "allDecodedBytes": 134666033,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 84822,
+          "bytesPerMinuteAtSix": 807996198
+        },
+        {
+          "name": "poll-authority",
+          "run": 1,
+          "durationMs": 123.81102099999953,
+          "cpuMs": 149.573,
+          "load": [
+            7,
+            11.96,
+            17.63
+          ],
+          "registryCalls": 728,
+          "registryBytes": 1193942,
+          "allDecodedBytes": 1193942,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 4368,
+          "bytesPerMinuteAtSix": 7163652
+        },
+        {
+          "name": "poll-relay",
+          "run": 2,
+          "durationMs": 604.7616579999994,
+          "cpuMs": 694.846,
+          "load": [
+            6.61,
+            11.71,
+            17.49
+          ],
+          "registryCalls": 14137,
+          "registryBytes": 134666033,
+          "allDecodedBytes": 134666033,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 84822,
+          "bytesPerMinuteAtSix": 807996198
+        },
+        {
+          "name": "poll-authority",
+          "run": 2,
+          "durationMs": 257.6251549999997,
+          "cpuMs": 285.258,
+          "load": [
+            6.61,
+            11.71,
+            17.49
+          ],
+          "registryCalls": 728,
+          "registryBytes": 1193942,
+          "allDecodedBytes": 1193942,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 4368,
+          "bytesPerMinuteAtSix": 7163652
+        },
+        {
+          "name": "poll-relay",
+          "run": 3,
+          "durationMs": 655.577104,
+          "cpuMs": 765.242,
+          "load": [
+            6.21,
+            11.46,
+            17.34
+          ],
+          "registryCalls": 14137,
+          "registryBytes": 134666033,
+          "allDecodedBytes": 134666033,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 84822,
+          "bytesPerMinuteAtSix": 807996198
+        },
+        {
+          "name": "poll-authority",
+          "run": 3,
+          "durationMs": 103.60408900000039,
+          "cpuMs": 129.787,
+          "load": [
+            6.21,
+            11.46,
+            17.34
+          ],
+          "registryCalls": 728,
+          "registryBytes": 1193942,
+          "allDecodedBytes": 1193942,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 4368,
+          "bytesPerMinuteAtSix": 7163652
+        },
+        {
+          "name": "poll-relay",
+          "run": 4,
+          "durationMs": 794.334057,
+          "cpuMs": 893.256,
+          "load": [
+            6.5,
+            11.35,
+            17.24
+          ],
+          "registryCalls": 14137,
+          "registryBytes": 134666033,
+          "allDecodedBytes": 134666033,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 84822,
+          "bytesPerMinuteAtSix": 807996198
+        },
+        {
+          "name": "poll-authority",
+          "run": 4,
+          "durationMs": 121.73508900000161,
+          "cpuMs": 138.115,
+          "load": [
+            6.5,
+            11.35,
+            17.24
+          ],
+          "registryCalls": 728,
+          "registryBytes": 1193942,
+          "allDecodedBytes": 1193942,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 4368,
+          "bytesPerMinuteAtSix": 7163652
+        },
+        {
+          "name": "poll-relay",
+          "run": 5,
+          "durationMs": 965.4222650000011,
+          "cpuMs": 1105.246,
+          "load": [
+            6.82,
+            11.25,
+            17.15
+          ],
+          "registryCalls": 14137,
+          "registryBytes": 134666033,
+          "allDecodedBytes": 134666033,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 84822,
+          "bytesPerMinuteAtSix": 807996198
+        },
+        {
+          "name": "poll-authority",
+          "run": 5,
+          "durationMs": 120.45062899999903,
+          "cpuMs": 182.206,
+          "load": [
+            6.82,
+            11.25,
+            17.15
+          ],
+          "registryCalls": 728,
+          "registryBytes": 1193942,
+          "allDecodedBytes": 1193942,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 4368,
+          "bytesPerMinuteAtSix": 7163652
+        },
+        {
+          "name": "poll-relay",
+          "run": 6,
+          "durationMs": 826.042008999997,
+          "cpuMs": 925.734,
+          "load": [
+            7.31,
+            11.21,
+            17.07
+          ],
+          "registryCalls": 14137,
+          "registryBytes": 134666033,
+          "allDecodedBytes": 134666033,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 84822,
+          "bytesPerMinuteAtSix": 807996198
+        },
+        {
+          "name": "poll-authority",
+          "run": 6,
+          "durationMs": 202.22607499999867,
+          "cpuMs": 216.798,
+          "load": [
+            7.31,
+            11.21,
+            17.07
+          ],
+          "registryCalls": 728,
+          "registryBytes": 1193942,
+          "allDecodedBytes": 1193942,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 4368,
+          "bytesPerMinuteAtSix": 7163652
+        },
+        {
+          "name": "poll-loop",
+          "windowMs": 59999.344224,
+          "gapMs": 5413.846280000006,
+          "maxGapMs": 1086.429302000004,
+          "gapShare": 0.09023175753035054,
+          "thresholdMs": 500,
+          "corpus": [
+            {
+              "collection": "conversations",
+              "rows": 9257,
+              "bytes": 14610533
+            },
+            {
+              "collection": "deliveryOperationOwners",
+              "rows": 14147,
+              "bytes": 134706885
+            },
+            {
+              "collection": "entries",
+              "rows": 8105,
+              "bytes": 9452812
+            },
+            {
+              "collection": "heldDeliveries",
+              "rows": 8887,
+              "bytes": 9244086
+            },
+            {
+              "collection": "lineageEdges",
+              "rows": 7884,
+              "bytes": 7246605
+            },
+            {
+              "collection": "memberships",
+              "rows": 6722,
+              "bytes": 2172753
+            },
+            {
+              "collection": "migrationIntents",
+              "rows": 57,
+              "bytes": 21096
+            },
+            {
+              "collection": "pendingSupersedence",
+              "rows": 3,
+              "bytes": 660
+            },
+            {
+              "collection": "receipts",
+              "rows": 8562,
+              "bytes": 57201694
+            }
+          ],
+          "cpus": 3
+        }
+      ],
+      "completedAtFromArtifactMtime": "2026-10-20T17:57:54.934940+00:00"
+    },
+    {
+      "arm": "head-2",
+      "samples": [
+        {
+          "name": "relay",
+          "run": 1,
+          "durationMs": 56.425428999999895,
+          "cpuMs": 89.91,
+          "load": [
+            12.4,
+            11.5,
+            16.55
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "relay",
+          "run": 2,
+          "durationMs": 49.429483999999775,
+          "cpuMs": 56.72,
+          "load": [
+            12.4,
+            11.5,
+            16.55
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "relay",
+          "run": 3,
+          "durationMs": 54.613789,
+          "cpuMs": 57.483,
+          "load": [
+            12.4,
+            11.5,
+            16.55
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "authority",
+          "run": 1,
+          "durationMs": 116.98449099999971,
+          "cpuMs": 147.224,
+          "load": [
+            12.4,
+            11.5,
+            16.55
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 248893,
+          "attributionOmitted": 8,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "authority",
+          "run": 2,
+          "durationMs": 59.63419300000032,
+          "cpuMs": 73.295,
+          "load": [
+            12.4,
+            11.5,
+            16.55
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "authority",
+          "run": 3,
+          "durationMs": 51.76976700000023,
+          "cpuMs": 62.087,
+          "load": [
+            12.4,
+            11.5,
+            16.55
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "poll-relay",
+          "run": 1,
+          "durationMs": 64.1560730000001,
+          "cpuMs": 71.792,
+          "load": [
+            12.4,
+            11.5,
+            16.55
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "poll-authority",
+          "run": 1,
+          "durationMs": 42.99110000000019,
+          "cpuMs": 63.053,
+          "load": [
+            12.4,
+            11.5,
+            16.55
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "poll-relay",
+          "run": 2,
+          "durationMs": 33.890456000000995,
+          "cpuMs": 38.317,
+          "load": [
+            12.03,
+            11.45,
+            16.48
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "poll-authority",
+          "run": 2,
+          "durationMs": 21.958106000000043,
+          "cpuMs": 24.901,
+          "load": [
+            12.03,
+            11.45,
+            16.48
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "poll-relay",
+          "run": 3,
+          "durationMs": 34.04728900000191,
+          "cpuMs": 37.334,
+          "load": [
+            11.65,
+            11.39,
+            16.4
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "poll-authority",
+          "run": 3,
+          "durationMs": 21.410101999998005,
+          "cpuMs": 23.954,
+          "load": [
+            11.65,
+            11.39,
+            16.4
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "poll-relay",
+          "run": 4,
+          "durationMs": 48.14611999999761,
+          "cpuMs": 57.024,
+          "load": [
+            11.84,
+            11.44,
+            16.37
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "poll-authority",
+          "run": 4,
+          "durationMs": 30.28767499999958,
+          "cpuMs": 46.479,
+          "load": [
+            11.84,
+            11.44,
+            16.37
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "poll-relay",
+          "run": 5,
+          "durationMs": 42.40531899999769,
+          "cpuMs": 53.908,
+          "load": [
+            11.57,
+            11.39,
+            16.3
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "poll-authority",
+          "run": 5,
+          "durationMs": 51.361800999999105,
+          "cpuMs": 50.356,
+          "load": [
+            11.57,
+            11.39,
+            16.3
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "poll-relay",
+          "run": 6,
+          "durationMs": 63.766373999998905,
+          "cpuMs": 65.334,
+          "load": [
+            11.1,
+            11.3,
+            16.21
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "poll-authority",
+          "run": 6,
+          "durationMs": 57.531747000000905,
+          "cpuMs": 61.793,
+          "load": [
+            11.1,
+            11.3,
+            16.21
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "poll-loop",
+          "windowMs": 59999.471651,
+          "gapMs": 0,
+          "maxGapMs": 114.97319299999799,
+          "gapShare": 0,
+          "thresholdMs": 500,
+          "corpus": [
+            {
+              "collection": "conversations",
+              "rows": 9257,
+              "bytes": 14610533
+            },
+            {
+              "collection": "deliveryOperationOwners",
+              "rows": 14147,
+              "bytes": 134706885
+            },
+            {
+              "collection": "entries",
+              "rows": 8105,
+              "bytes": 9452812
+            },
+            {
+              "collection": "heldDeliveries",
+              "rows": 8887,
+              "bytes": 9244086
+            },
+            {
+              "collection": "lineageEdges",
+              "rows": 7884,
+              "bytes": 7246605
+            },
+            {
+              "collection": "memberships",
+              "rows": 6722,
+              "bytes": 2172753
+            },
+            {
+              "collection": "migrationIntents",
+              "rows": 57,
+              "bytes": 21096
+            },
+            {
+              "collection": "pendingSupersedence",
+              "rows": 3,
+              "bytes": 660
+            },
+            {
+              "collection": "receipts",
+              "rows": 8562,
+              "bytes": 57201694
+            }
+          ],
+          "cpus": 3
+        },
+        {
+          "name": "summary-bootstrap",
+          "run": 1,
+          "durationMs": 77.18040800000017,
+          "cpuMs": 180.959,
+          "load": [
+            10.95,
+            11.26,
+            16.15
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "summary-bootstrap",
+          "run": 2,
+          "durationMs": 0.6216690000001108,
+          "cpuMs": 0.622,
+          "load": [
+            10.95,
+            11.26,
+            16.15
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "summary-bootstrap",
+          "run": 3,
+          "durationMs": 0.21155300000100397,
+          "cpuMs": 0.212,
+          "load": [
+            10.95,
+            11.26,
+            16.15
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "home-html",
+          "run": 1,
+          "durationMs": 10.618063000001712,
+          "cpuMs": 15.871,
+          "load": [
+            10.95,
+            11.26,
+            16.15
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "home-html",
+          "run": 2,
+          "durationMs": 1.9327980000016396,
+          "cpuMs": 2.418,
+          "load": [
+            10.95,
+            11.26,
+            16.15
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        },
+        {
+          "name": "home-html",
+          "run": 3,
+          "durationMs": 1.7097700000012992,
+          "cpuMs": 3.912,
+          "load": [
+            10.95,
+            11.26,
+            16.15
+          ],
+          "registryCalls": 0,
+          "registryBytes": 0,
+          "allDecodedBytes": 0,
+          "attributionOmitted": 0,
+          "callsPerMinuteAtSix": 0,
+          "bytesPerMinuteAtSix": 0
+        }
+      ],
+      "completedAtFromArtifactMtime": "2026-10-20T18:00:26.046306+00:00"
+    }
+  ],
+  "verification": {
+    "isolated": true,
+    "runner": "deployed scripts/gate-slot.sh from 6b2bc7b3e8f2",
+    "touchedTests": {
+      "command": [
+        "bun",
+        "scripts/local-gate-tests.ts",
+        "--base",
+        "origin/main",
+        "src/lib/agent/deliveryKeyReads.test.ts",
+        "src/lib/agent/registry.admission.test.ts",
+        "src/lib/agent/registry.backendResolution.test.ts",
+        "src/lib/agent/registry.deliveryCompaction.test.ts",
+        "src/lib/agent/registry.deliveryRead.test.ts",
+        "src/lib/agent/registry.engineNative.test.ts",
+        "src/lib/agent/registry.migrationBinding.test.ts",
+        "src/lib/agent/registry.projectOwnership.test.ts",
+        "src/lib/agent/registry.reseat.test.ts",
+        "src/lib/agent/registry.retentionRead.test.ts",
+        "src/lib/agent/registry.servingWriters.test.ts",
+        "src/lib/agent/registry.spawnCapabilityHandover.test.ts",
+        "src/lib/agent/registry.sqlite.test.ts",
+        "src/lib/agent/registry.sqliteOnly.test.ts",
+        "src/lib/agent/registry.targetedHistory.test.ts",
+        "src/lib/agent/registry.test.ts",
+        "src/lib/agent/registry.writerWait.test.ts",
+        "src/lib/agent/sqliteRegistryStore.archivedOwner.test.ts",
+        "src/lib/agent/sqliteRegistryStore.history.test.ts",
+        "src/lib/agent/sqliteRegistryStore.keyedWrites.test.ts",
+        "src/lib/agent/sqliteRegistryStore.readOnlyView.test.ts",
+        "src/lib/agent/sqliteRegistryStore.refresh.test.ts",
+        "src/lib/memory/controller.test.ts",
+        "src/lib/memory/deliveryEvidence.test.ts",
+        "src/lib/orchestrator/authority.test.ts",
+        "src/lib/orchestrator/relay.test.ts",
+        "src/lib/performanceSpans.test.ts",
+        "src/lib/runtime/sendSettlement.test.ts",
+        "src/lib/viewerLoopMonitor.test.ts"
+      ],
+      "comparisonBase": "8ff233dc84c38a0cce605d6e914ce75de3f92b6e",
+      "files": 29,
+      "exit": 0,
+      "newFailures": 0,
+      "preExistingFailures": 6,
+      "flaky": 1,
+      "removedOrSkipped": 0
+    },
+    "types": {
+      "command": [
+        "bun",
+        "node_modules/typescript/bin/tsc",
+        "--noEmit"
+      ],
+      "exit": 0
+    },
+    "lint": {
+      "command": "bun scripts/eslint-changes.ts --base f335de6508611981c819eb33e01d7af650753b04 <changed source paths>",
+      "exit": 0,
+      "newErrors": 0,
+      "baseErrors": 0
+    },
+    "privacy": {
+      "command": [
+        "bun",
+        "run",
+        "privacy:check"
+      ],
+      "exit": 0,
+      "result": "PRIVACY GATE: PASS"
+    },
+    "loopMonitor": "src/lib/viewerLoopMonitor.test.ts passed, including loop-gap and performance-summary records",
+    "baseMovement": "The later comparison base adds a publication change in four pipeline files; these files do not overlap the implementation."
+  }
+}
