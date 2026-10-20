@@ -1715,7 +1715,7 @@ const pipelines: Pipeline[] = [
 if (CPU_QUEUE) {
   Object.assign(searchVer2, { activity: "idle", proc: null, pid: null, authoritativeTurn: { state: "terminal", source: "lifecycle", terminalAt: iso(5 * MIN) }, lastTurn: { startedAt: (now - 400) * 1_000, endedAt: (now - 300) * 1_000 } });
   const waiting = pipelines.find(p => p.id === "p-search")!;
-  waiting.stateDetail = `Waiting for the CPU queue · ${SCENARIO === "cpu-queue-stalled" ? "7th · stalled for 62 min" : "2nd · up to 7 min"} · Viewer publication: owner; owner viewer, epoch 1`;
+  waiting.stateDetail = `Waiting for the CPU queue · ${SCENARIO === "cpu-queue-stalled" ? "7th · stalled for 62 min" : "2nd · up to 7 min"} · high priority · Viewer publication: owner; owner viewer, epoch 1`;
   waiting.cursor = { stageId: "verify", state: "pending", input: null, activatedBy: null };
   waiting.runs.find(r => r.stageId === "verify")!.attempts = [attempt(3, "pending", null, { startedAt: null })] as Pipeline["runs"][number]["attempts"];
 }

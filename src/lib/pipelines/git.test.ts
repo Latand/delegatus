@@ -1,3 +1,4 @@
+import { cpuPriorityFromEnv } from "../runtime/cpuPriority";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { CONTROLLER_ARTIFACT_GIT_PATHS, CONTROLLER_ARTIFACT_PATHSPECS } from "./controllerArtifacts";
 import crypto from "node:crypto";
@@ -3223,6 +3224,7 @@ test("the publication's dependency install and its push run without the Viewer's
     fs.writeFileSync(path.join(box.subject.worktreeDir, "package.json"), "{}\n");
     fs.writeFileSync(path.join(box.subject.worktreeDir, "bun.lock"), "{}\n");
     const head = (await box.commit("stage.txt", "stage work\n"));
+    box.subject.taskIds = ["priority-task-a", "priority-task-b"];
     Object.assign(process.env, settings);
     const seen = new Map<string, Record<string, string | undefined>>();
     const exec: ExecPort = (command, args, cwd, env, options) => {
@@ -3233,7 +3235,10 @@ test("the publication's dependency install and its push run without the Viewer's
     };
     expect(await publishPipelineBranch(box.subject, exec, { acceptedSha: head })).toEqual({ ok: true, sha: head, remote: "published" });
     expect([...seen.keys()].sort()).toEqual(["install", "push"]);
-    for (const env of seen.values()) for (const key of Object.keys(settings)) expect(env[key]).toBeUndefined();
+    for (const env of seen.values()) {
+      for (const key of Object.keys(settings)) expect(env[key]).toBeUndefined();
+      expect(cpuPriorityFromEnv(env)).toEqual({ database: path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), taskIds: ["priority-task-a", "priority-task-b"] });
+    }
   } finally {
     for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
     fs.rmSync(box.root, { recursive: true, force: true });

@@ -24,6 +24,8 @@ import { publicationDeadlineOnly } from "./publication";
 import type { Pipeline, PipelinePublicationFailure, PipelinePublicationResult } from "./types";
 import { pathIsDeclaredOutput } from "./stageAccess";
 import { CpuContainmentUnavailable, wrapWorkCommand } from "@/lib/runtime/cpuPlacement";
+import { cpuPriorityEnv } from "@/lib/runtime/cpuPriority";
+import { instanceCpuPrioritySource } from "@/lib/runtime/cpuAdmissionScope";
 import { isCpuPressureDetail, machineCpuPressureGate, machineCpuPressurePollMs, waitForCpuPressure } from "@/lib/runtime/cpuPressure";
 import { lessonPublicationEnv, RoleMemoryRefusal } from "@/lib/memory/roleStore";
 import { CONTROLLER_ARTIFACT_GIT_PATHS, CONTROLLER_ARTIFACT_PATHSPECS, protectExistingControllerArtifacts } from "./controllerArtifacts";
@@ -800,7 +802,7 @@ async function commitStageTree(pipeline: Pipeline, parent: string, tree: string,
   const marker = `Delegatus-Stage-Settlement: ${crypto.randomUUID()}`;
   await beforeCommit?.();
   const commit = await exec("git", ["commit", ...[...messages, marker].flatMap(message => ["-m", message])], cwd,
-    pipelineLiteralGitEnv(controllerCommitIdentityEnv()), { timeoutMs: STAGE_COMMIT_TIMEOUT_MS });
+    pipelineLiteralGitEnv({ ...controllerCommitIdentityEnv(), ...cpuPriorityEnv(instanceCpuPrioritySource(pipeline.taskIds)) }), { timeoutMs: STAGE_COMMIT_TIMEOUT_MS });
   if (commit.code !== 0) {
     const current = await exec("git", ["rev-parse", "HEAD"], cwd);
     if (current.code === 0 && current.stdout.trim() !== parent) return changed();
@@ -1886,7 +1888,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       let shown: Promise<void> = Promise.resolve();
       let replaced: { detail: string | null } | null = null;
       const admitted = await waitForCpuPressure(machineCpuPressureGate(), { subject: PUBLICATION_INSTALL_SUBJECT, signal: abort.signal,
-        pollMs: machineCpuPressurePollMs(),
+        pollMs: machineCpuPressurePollMs(), priority: instanceCpuPrioritySource(pipeline.taskIds),
         onReason: (reason) => {
           replaced ??= { detail: findPipelineRecord(pipeline.id)?.stateDetail ?? null };
           shown = shown.then(() => showInstallHold(reason, null));
@@ -1924,7 +1926,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       if (preparingDependencies && !await waitForPublicationInstall()) return { code: null, stdout: "", stderr: "publication superseded" };
       if (command === "git" && args[0] === "push") writeStarted = true;
       const started = performance.now();
-      const executed = await exec(launch.command, launch.args, cwd, pipelineLiteralGitEnv(env), { ...options, signal: abort.signal, inheritFd: descriptor });
+      const executed = await exec(launch.command, launch.args, cwd, pipelineLiteralGitEnv({ ...env, ...cpuPriorityEnv(instanceCpuPrioritySource(pipeline.taskIds)) }), { ...options, signal: abort.signal, inheritFd: descriptor });
       if (executed.code !== 0 && ((command === "git" && args[0] === "push") || preparingDependencies)) {
         // Redact the whole output before taking its tail; clipping first can
         // remove the prefix that identifies a secret to the shared redactor.
