@@ -1477,6 +1477,8 @@ test("a kill cancels an automatic delivery retry and fails the send retryably", 
   });
   const journal = new RuntimeJournal(path.join(directory, "events.sqlite"), { structuredHosts: true });
   const baseClient = runtimeJournalClient(journal);
+  const sendOperationId = "operation-send-before-kill";
+  const killOperationId = "operation-kill-during-auto-retry";
   let effectBatchCalls = 0;
   const client = {
     ...baseClient,
@@ -1552,7 +1554,8 @@ test("a kill cancels an automatic delivery retry and fails the send retryably", 
       process: processFixture.identity,
     });
     await bindStructuredDeliveryQueue([{ key, host: processFixture.bind(host) }], { registry, client, recover });
-    const sendOperationId = "operation-send-before-kill";
+    // Join startup's observation while there is no send for it to retry.
+    await kickStructuredDeliveryQueue(true);
     journal.executeOperation({
       kind: "send",
       operationId: sendOperationId,
@@ -1562,7 +1565,8 @@ test("a kill cancels an automatic delivery retry and fails the send retryably", 
       policy: "steer-if-active",
     });
 
-    await kickStructuredDeliveryQueue();
+    // Match the route's fresh-admission kick.
+    await kickStructuredDeliveryQueue(true);
 
     expect(sendCount).toBe(2);
     expect(journal.operationResult(sendOperationId)?.receipt).toMatchObject({
@@ -1571,7 +1575,6 @@ test("a kill cancels an automatic delivery retry and fails the send retryably", 
       reason: "delivery-auto-retry",
     });
 
-    const killOperationId = "operation-kill-during-auto-retry";
     journal.executeOperation({
       kind: "kill",
       operationId: killOperationId,
@@ -1581,10 +1584,12 @@ test("a kill cancels an automatic delivery retry and fails the send retryably", 
     });
 
     await kickStructuredDeliveryQueue();
-    /* The terminal transitions request one coalesced observation pass. Let that
-       immediate pass finish, then prove the cancelled one-second auto-retry
-       never wakes the queue again. */
-    await Bun.sleep(100);
+    /* The explicit kill kick observes its retained boundary, with no pending
+       send or kill left to execute.
+       Wait for the durable terminal transitions without issuing another kick:
+       another kick would cancel the retry wake this quietness window measures. */
+    await waitForCondition(() => journal.operationResult(killOperationId)?.receipt.status === "delivered"
+      && journal.operationResult(sendOperationId)?.receipt.status === "failed");
     const effectBatchCallsAfterKill = effectBatchCalls;
     await Bun.sleep(1_100);
 

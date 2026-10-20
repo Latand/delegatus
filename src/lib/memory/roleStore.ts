@@ -1,3 +1,4 @@
+import { projectStoreSignature } from "@/lib/projects/persistence";
 import crypto from "node:crypto";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -555,7 +556,7 @@ function projectViewContext(project: string, now: number): {
   // File settings can change independently of SQLite.
   // A relocated settings store has its own SQLite authority.
   const settingsDatabase = path.join(path.dirname(settingsFile), "state.sqlite");
-  const guard = `${roleViewVersion()}:${settingsDatabase === file ? "" : stateDatabaseSignature(settingsDatabase)}:${[path.join(path.dirname(file), "project-aliases.json"), path.join(path.dirname(file), "memory-source.json"), settingsFile].map(fileStamp).join("|")}:${process.env.LLV_ROLE_MEMORY}`;
+  const guard = `${roleViewVersion()}:${settingsDatabase === file ? "" : stateDatabaseSignature(settingsDatabase)}:${[projectStoreSignature("project-aliases.json", path.dirname(file)), ...[path.join(path.dirname(file), "memory-source.json"), settingsFile].map(fileStamp)].join("|")}:${process.env.LLV_ROLE_MEMORY}`;
   const memo = projectViews.get(memoKey);
   if (memo?.guard === guard && now >= memo.from && now < memo.until) {
     projectViews.delete(memoKey); projectViews.set(memoKey, memo);

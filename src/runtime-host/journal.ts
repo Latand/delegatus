@@ -1,4 +1,6 @@
 import { dirname } from "node:path";
+import { RuntimeDataCorruptionError } from "@/lib/runtime/dataCorruption";
+import { MIGRATION_DELIVERY_CANCELLATION_PREFIX } from "@/lib/accounts/migration/intentLiveness";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { runtimeIdleKillMatches } from "@/lib/runtime/contracts";
@@ -53,6 +55,7 @@ import {
   type RuntimeSessionRead,
   type RuntimeSnapshot,
   type RuntimeTransitionOptions,
+  type RuntimeTransitionDetails,
   type ViewerDeploymentOwner,
   type ViewerDeploymentReceipt,
   type ViewerDeploymentStatus,
@@ -80,7 +83,7 @@ function nativeQueueReceipt(entry: NativeQueueRecord): NonNullable<RuntimeOperat
     dispatchedRevision: entry.dispatchedRevision, profilePolicy: entry.profilePolicy };
 }
 
-export class RuntimeJournalFault extends Error {}
+export class RuntimeJournalFault extends RuntimeDataCorruptionError {}
 
 export const RUNTIME_SNAPSHOT_INACTIVE_SESSION_LIMIT = 128;
 export const RUNTIME_SNAPSHOT_TERMINAL_DEPLOYMENT_LIMIT = 50;
@@ -528,6 +531,8 @@ export class RuntimeJournal {
       this.migrateOperationIdempotencyScope();
       this.migrateOperationOrphanedSince();
       this.migrateOperationProjectionPending();
+      this.db.exec(`CREATE INDEX IF NOT EXISTS operations_retry_parent
+        ON operations(json_extract(receipt_json, '$.retryOfOperationId'), event_seq DESC)`);
       this.migrateLegacyEvents();
       this.migrateEntityUpdatedAt();
       this.retainLegacyStopAdmissions();
@@ -907,6 +912,30 @@ export class RuntimeJournal {
     this.assertHealthy();
     if (!this.structuredHosts) throw new Error("structured hosts are disabled");
     this.db.exec("BEGIN IMMEDIATE");
+    return this.claimDeliveryActionInTransaction(operationId, action);
+  }
+
+  async claimDeliveryActionAsync(operationId: string, action: RuntimeDeliveryAction, signal?: AbortSignal): Promise<RuntimeDeliveryActionClaim> {
+    this.assertHealthy();
+    if (!this.structuredHosts) throw new Error("structured hosts are disabled");
+    return this.deliveryTransaction("runtime.delivery-action", () => this.claimDeliveryActionInTransaction(operationId, action), signal);
+  }
+
+  /** Only admission retries. Once BEGIN succeeds, the callback commits or
+      rolls back synchronously, before another request can use this connection. */
+  private async deliveryTransaction<T>(label: string, write: () => T, signal?: AbortSignal): Promise<T> {
+    return waitForStateLock(label, () => {
+      this.db.exec("PRAGMA busy_timeout = 0");
+      try {
+        stateLockAttempt(label, () => this.db.exec("BEGIN IMMEDIATE"), "runtime delivery journal");
+        return write();
+      } finally {
+        this.db.exec(`PRAGMA busy_timeout = ${RUNTIME_JOURNAL_BUSY_TIMEOUT_MS}`);
+      }
+    }, { waitMs: RUNTIME_JOURNAL_BUSY_TIMEOUT_MS, subject: "runtime delivery journal", signal });
+  }
+
+  private claimDeliveryActionInTransaction(operationId: string, action: RuntimeDeliveryAction): RuntimeDeliveryActionClaim {
     try {
       const row = this.db.query<{ request_json: string; receipt_json: string }, [string]>(
         "SELECT request_json, receipt_json FROM operations WHERE operation_id = ?",
@@ -919,18 +948,36 @@ export class RuntimeJournal {
         throw new Error(`runtime operation does not support ${action}`);
       }
       const recorded = this.recordedDeliveryActionInTransaction(operationId, receipt);
-      if (recorded) {
-        this.db.exec("COMMIT");
-        return recorded;
-      }
       // A host refusal can leave an unverified failure in the Viewer. Either
       // operator action still needs this same durable retry/discard fence.
       const actionStatuses: readonly RuntimeReceiptStatus[] = ["pending", "queued", "failed", "uncertain", "rejected"];
-      if (!actionStatuses.includes(receipt.status)) {
+      if (!recorded && !actionStatuses.includes(receipt.status)) {
         throw new Error(`runtime delivery cannot ${action} after its outcome is resolved`);
       }
-      const claimed = this.acquireDeliveryActionInTransaction(operationId, action, receipt);
+      const claimed = recorded ?? this.acquireDeliveryActionInTransaction(operationId, action, receipt);
+      /* The action and its terminal receipt are one durable decision. A claim
+         alone left a queued effect executable and an uncertain receipt unable
+         to recover the discard after the Viewer died before projection. Repair
+         older claim-only winners through this same transaction on replay. */
+      if (claimed.winner === "discard"
+        && !(receipt.status === "failed" && receipt.reason === RUNTIME_DELIVERY_DISCARDED_REASON)) {
+        const next: RuntimeOperationReceipt = { ...receipt, status: "failed", reason: RUNTIME_DELIVERY_DISCARDED_REASON,
+          at: new Date(this.now()).toISOString(), revision: receipt.revision + 1,
+          ...(receipt.presentationRevision !== undefined ? { presentationRevision: receipt.presentationRevision + 1 } : {}) };
+        const event = this.appendInTransaction(normalizeRuntimeEventInput({
+          scope: { type: "operation", id: operationId }, kind: "receipt", operationId,
+          producer: { kind: "runtime-effect", eventKey: `operation:${operationId}:receipt:${receipt.revision + 1}:failed`, hostEpoch: Number(this.meta("host_epoch")) },
+          payload: next as unknown as Record<string, unknown>,
+        }));
+        const committed = { ...next, revision: event.revision };
+        this.upsertEntity("operation", operationId, event.revision, committed, event.seq);
+        this.appendCompletionConsequences(command, committed, operationId);
+        this.db.query("UPDATE operations SET receipt_json = ?, event_seq = ?, projection_pending = COALESCE(projection_pending, ?) WHERE operation_id = ?")
+          .run(stableJson(committed), event.seq, this.now(), operationId);
+        this.db.query("UPDATE outbox SET state = 'completed', payload_json = '{}' WHERE id = ?").run(`effect:${operationId}`);
+      }
       this.db.exec("COMMIT");
+      if (claimed.winner === "discard") this.notifyWaiters();
       return claimed;
     } catch (error) {
       try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
@@ -983,26 +1030,23 @@ export class RuntimeJournal {
 
   currentRetryResult(operationId: string): RuntimeOperationResult | null {
     this.assertHealthy();
-    const rows = this.db.query<{ operation_id: string; receipt_json: string }, []>(
-      "SELECT operation_id, receipt_json FROM operations ORDER BY event_seq",
-    ).all();
-    const byOperationId = new Map<string, RuntimeOperationReceipt>();
-    const byParent = new Map<string, string>();
-    for (const row of rows) {
-      const receipt = JSON.parse(row.receipt_json) as RuntimeOperationReceipt;
-      byOperationId.set(row.operation_id, receipt);
-      if (receipt.retryOfOperationId) byParent.set(receipt.retryOfOperationId, row.operation_id);
-    }
     let currentOperationId = operationId;
-    let receipt = byOperationId.get(currentOperationId);
-    if (!receipt) return null;
+    const original = this.db.query<{ operation_id: string; receipt_json: string }, [string]>(
+      "SELECT operation_id, receipt_json FROM operations WHERE operation_id = ?",
+    ).get(currentOperationId);
+    if (!original) return null;
+    let receipt = JSON.parse(original.receipt_json) as RuntimeOperationReceipt;
     const seen = new Set<string>();
     while (!seen.has(currentOperationId)) {
       seen.add(currentOperationId);
-      const child = byParent.get(currentOperationId);
+      const child = this.db.query<{ operation_id: string; receipt_json: string }, [string]>(
+        `SELECT operation_id, receipt_json FROM operations
+          WHERE json_extract(receipt_json, '$.retryOfOperationId') = ?
+          ORDER BY event_seq DESC LIMIT 1`,
+      ).get(currentOperationId);
       if (!child) break;
-      currentOperationId = child;
-      receipt = byOperationId.get(child)!;
+      currentOperationId = child.operation_id;
+      receipt = JSON.parse(child.receipt_json) as RuntimeOperationReceipt;
     }
     return { operationId: currentOperationId, receipt, replayed: currentOperationId !== operationId };
   }
@@ -1024,11 +1068,45 @@ export class RuntimeJournal {
   ): RuntimeOperationResult {
     this.assertHealthy();
     this.db.exec("BEGIN IMMEDIATE");
+    return this.transitionOperationInTransaction(operationId, status, details, options, nativeTransition);
+  }
+
+  async transitionOperationAsync(
+    operationId: string,
+    status: Exclude<RuntimeReceiptStatus, "pending">,
+    details: RuntimeTransitionDetails = {},
+    options: RuntimeTransitionOptions = {},
+    signal?: AbortSignal,
+  ): Promise<RuntimeOperationResult> {
+    this.assertHealthy();
+    return this.deliveryTransaction("runtime.delivery-transition",
+      () => this.transitionOperationInTransaction(operationId, status, details, options), signal);
+  }
+
+  private transitionOperationInTransaction(
+    operationId: string,
+    status: Exclude<RuntimeReceiptStatus, "pending">,
+    details: RuntimeTransitionDetails = {},
+    options: RuntimeTransitionOptions = {},
+    nativeTransition?: NativeQueueTransition,
+  ): RuntimeOperationResult {
     try {
       const row = this.db.query<{ request_json: string; receipt_json: string }, [string]>("SELECT request_json, receipt_json FROM operations WHERE operation_id = ?").get(operationId);
       if (!row) throw new Error("runtime operation is unknown");
       const previous = JSON.parse(row.receipt_json) as RuntimeOperationReceipt;
       const command = JSON.parse(row.request_json) as RuntimeOperationCommand;
+      const confirming = options.confirmedDelivery === true;
+      if (confirming) {
+        if (status !== "delivered" || (command.kind !== "send" && command.kind !== "steer")) {
+          throw new Error("confirmed delivery requires a delivered message");
+        }
+        if (this.recordedDeliveryActionInTransaction(operationId, previous)?.winner === "discard") {
+          throw new Error("runtime delivery discard already won; acknowledgement refused");
+        }
+        if (previous.status === "failed" && previous.reason?.startsWith(MIGRATION_DELIVERY_CANCELLATION_PREFIX)) {
+          throw new Error("runtime delivery cancellation already won; acknowledgement refused");
+        }
+      }
       // Dead executors can be recovered; deadlines and health failures cannot
       // release a barrier underneath a live signal ladder.
       const automaticKill = command.kind === "kill" && !!command.onlyIfIdle;
@@ -1105,7 +1183,7 @@ export class RuntimeJournal {
           || (this.structuredHosts && previous.status === "pending"));
       const beginning = (previous.status === "pending" || previous.status === "queued")
         && (status === "delivering" || (command.kind === "reconfigure" && status === "applying"));
-      const completing = discarding || ((previous.status === "pending" || previous.status === "queued"
+      const completing = discarding || (confirming && (previous.status === "uncertain" || previous.status === "failed")) || ((previous.status === "pending" || previous.status === "queued"
         || previous.status === "delivering" || previous.status === "applying")
         && status !== "delivering" && status !== "applying" && status !== "queued");
       const nativeProgress = !!nativeCommand && nativeTransition
@@ -1174,7 +1252,7 @@ export class RuntimeJournal {
          COALESCE, so a later transition can never silently release an
          obligation an earlier one took. */
       this.db.query("UPDATE operations SET receipt_json = ?, event_seq = ?, projection_pending = COALESCE(?, projection_pending) WHERE operation_id = ?")
-        .run(stableJson(committed), event.seq, completing && options.awaitProjection === true ? this.now() : null, operationId);
+        .run(stableJson(committed), event.seq, completing && (options.awaitProjection === true || discarding) ? this.now() : null, operationId);
       if (completing || nativeTransition?.phase === "acknowledged" || nativeTransition?.phase === "observed-queued" || nativeTransition?.phase === "proven") this.db.query("UPDATE outbox SET state = 'completed', payload_json = '{}' WHERE id = ?").run(`effect:${operationId}`);
       if (killBoundary) {
         this.retainStopBoundary(command, committed, killBoundary.event_seq);
@@ -2097,6 +2175,7 @@ export class RuntimeJournal {
   }
 
   effectBatch(limit = 100, kinds?: readonly string[], afterEventSeq = 0): Array<RuntimeEffect & { eventSeq: number }> {
+    this.assertHealthy();
     if (kinds?.length === 0) return [];
     if (!Number.isSafeInteger(afterEventSeq) || afterEventSeq < 0) throw new Error("runtime effect cursor is invalid");
     const stateFilter = kinds?.some(kind => kind === "runtime.kill-boundary" || kind === "runtime.interrupt-boundary" || kind === "runtime.stop-boundary")
@@ -2121,7 +2200,16 @@ export class RuntimeJournal {
        LIMIT ?`,
     ).all(...(kinds ?? []), afterEventSeq, limit);
     return rows.map((row) => {
-      const payload = JSON.parse(row.payload_json) as Record<string, unknown>;
+      let payload: Record<string, unknown>;
+      try {
+        const parsed: unknown = JSON.parse(row.payload_json);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("invalid object");
+        payload = parsed as Record<string, unknown>;
+      } catch {
+        // Keep the original row for repair, and never copy its private bytes
+        // into a socket reply or a startup diagnostic.
+        throw new RuntimeDataCorruptionError("runtime delivery queue record is corrupt; repair or restore the runtime journal");
+      }
       if (row.kind === "runtime.answer") payload.resolution = this.decryptSecret(payload.resolution);
       return { id: row.id, kind: row.kind, payload, eventSeq: row.event_seq };
     });
@@ -2149,6 +2237,22 @@ export class RuntimeJournal {
       `UPDATE operations SET projection_pending = NULL
        WHERE projection_pending IS NOT NULL AND operation_id IN (${operationIds.map(() => "?").join(", ")})`,
     ).run(...operationIds).changes;
+  }
+
+  async acknowledgeTerminalProjectionAsync(operationIds: readonly string[], signal?: AbortSignal): Promise<number> {
+    this.assertHealthy();
+    const ids = [...operationIds];
+    if (ids.length === 0) return 0;
+    return this.deliveryTransaction("runtime.delivery-projection", () => {
+      try {
+        const acknowledged = this.acknowledgeTerminalProjection(ids);
+        this.db.exec("COMMIT");
+        return acknowledged;
+      } catch (error) {
+        try { this.db.exec("ROLLBACK"); } catch { /* transaction already closed */ }
+        throw error;
+      }
+    }, signal);
   }
 
   /** The receipts compaction is holding for an unacknowledged projection, newest
@@ -2935,7 +3039,7 @@ export class RuntimeJournal {
     }
     if (command.kind === "spawn"
       && !command.sessionId
-      && (receipt.status === "failed" || receipt.status === "rejected" || receipt.status === "uncertain")) {
+      && (receipt.status === "failed" || receipt.status === "rejected")) {
       /* A fresh spawn placeholder session only ever leaves "registering"
          through the launcher's own hosted projection. When the launch fails
          first, the terminal receipt is the durable truth and must retire the

@@ -1,3 +1,4 @@
+import { worktreeMapStore } from "@/lib/projects/persistence";
 import { createHash } from "node:crypto";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
@@ -171,7 +172,7 @@ test("a completed squash-merged lane releases its checkout and retains its local
   expect(branchExists(root, "pipeline/aaaa")).toBe(true);
   expect(fs.existsSync(root)).toBe(true);
   /* The resolution was on disk before the directory went. */
-  const map = JSON.parse(fs.readFileSync(path.join(process.env.LLV_STATE_DIR!, "worktree-map.json"), "utf8")) as Record<string, { repo: string }>;
+  const map = worktreeMapStore.read(path.join(process.env.LLV_STATE_DIR!, "worktree-map.json")) as Record<string, { repo: string }>;
   expect(map[dir]?.repo).toBe(fs.realpathSync(root));
 });
 
@@ -2046,7 +2047,7 @@ for (const idle of [false, true]) test.skipIf(process.platform !== "linux")(`hos
     expect(calls.some(args => args[0] === "worktree" && args[1] === "remove" && !args.includes("--force"))).toBe(true);
     expect(calls.some(args => args[0] === "worktree" && args[1] === "list")).toBe(true);
     expect(fs.existsSync(actual)).toBe(false);
-    const map = JSON.parse(fs.readFileSync(path.join(process.env.LLV_STATE_DIR!, "worktree-map.json"), "utf8"));
+    const map = worktreeMapStore.read(path.join(process.env.LLV_STATE_DIR!, "worktree-map.json"));
     expect(map[canonical].repo).toBe(root);
     expect(map[canonical].worktree).toBe("checkout");
   } finally { await view.close(); for (const patch of patches.reverse()) patch.mockRestore(); }
