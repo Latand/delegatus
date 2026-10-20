@@ -1,4 +1,7 @@
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { performanceSpans } from "@/lib/performanceSpans";
+import { yieldToRuntime } from "@/lib/cooperative";
+import { withControllerPipelineScope } from "@/lib/pipelines/controllerScope";
 import os from "node:os";
 import { refreshAdmission, refreshRequest, refreshReservation, type RefreshLineage, type RefreshOptions } from "./autoRefresh";
 import { realExec } from "@/lib/workflows/provision";
@@ -6,7 +9,7 @@ import { realExec } from "@/lib/workflows/provision";
 import { githubRunner, type GithubRunner } from "@/lib/monitor/githubEvidence";
 import { ForgeAppWriteRefused, forgeAppWriter, forgeWriter, type ForgeAppWriter } from "./appWrite";
 import { failEdgeExhaustion } from "@/lib/pipelines/failEdgeBudget";
-import { withPipelineMutation } from "@/lib/pipelines/store";
+import { loadPipelinesForList, loadPipelinesForListAsync, withPipelineMutation } from "@/lib/pipelines/store";
 import { openPipelinesOnTask } from "@/lib/pipelines/taskFinish";
 import { PIPELINE_MERGE_LIVE_STATES, type Pipeline, type PipelineMerge, type PipelineMergeMethod, type PipelineStage } from "@/lib/pipelines/types";
 import { mergeOnReviewSetting, type MergeOnReviewSetting } from "@/lib/projects/settings";
@@ -61,6 +64,8 @@ export interface AutoMergePorts {
       sent; in any other repository it is `run`. `run` itself only reads. */
   write: ForgeAppWriter;
   loadPipelines: () => readonly Pipeline[];
+  /** Fill the shared immutable view cooperatively before synchronous lookups. */
+  prepareRead?: () => Promise<void>;
   /** Applies `change` to the live record under the pipeline lock and persists
       it when `change` answers true. False when the record is gone or unchanged. */
   mutate: (pipelineId: string, change: (pipeline: Pipeline) => boolean) => Promise<boolean>;
@@ -720,6 +725,18 @@ function notAdmitted(ports: AutoMergePorts, id: string, reason: string): void {
   ports.log?.(`[auto merge] ${id}: not admitted: ${reason}`);
 }
 
+/** A sweep may visit retained lanes, but never drains them in one loop turn. */
+async function* mergeRows<T>(rows: Iterable<T>) {
+  let started = performance.now(), count = 0;
+  for (const row of rows) {
+    if (++count > 8 || performance.now() - started >= 8) {
+      await yieldToRuntime();
+      started = performance.now(); count = 1;
+    }
+    yield row;
+  }
+}
+
 /**
  * One pass: queue every eligible lane still missing a record, cancel what only waits
  * under a setting turned off, note merges someone else made, and take one step
@@ -727,13 +744,24 @@ function notAdmitted(ports: AutoMergePorts, id: string, reason: string): void {
  */
 export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
   return withViewerOperation("forge.auto-merge", async () => {
+  await ports.prepareRead?.();
   const now = ports.now();
-  const pipelines = ports.loadPipelines();
-  const pending = new Set(pipelines.filter(pipeline => pipeline.state === "completed" && !pipeline.merge).map(pipeline => pipeline.id));
-  for (const id of admissionReasons.keys()) if (!pending.has(id)) admissionReasons.delete(id);
-  for (const pipeline of pipelines) {
-    if (pipeline.state !== "completed") continue;
-    if (pipeline.hiddenAt) {
+  const pipelines = performanceSpans.sync("forge.auto-merge.read", ports.loadPipelines);
+  const pending = new Set<string>();
+  for await (const pipeline of mergeRows(pipelines)) {
+    performanceSpans.sync("forge.auto-merge.prune", () => {
+      if (pipeline.state === "completed" && !pipeline.merge) pending.add(pipeline.id);
+    });
+  }
+  for await (const id of mergeRows(admissionReasons.keys())) {
+    performanceSpans.sync("forge.auto-merge.prune", () => { if (!pending.has(id)) admissionReasons.delete(id); });
+  }
+  for await (const pipeline of mergeRows(pipelines)) {
+    const { completed, hidden } = performanceSpans.sync("forge.auto-merge.admit", () => ({
+      completed: pipeline.state === "completed", hidden: Boolean(pipeline.hiddenAt),
+    }), 1);
+    if (!completed) continue;
+    if (hidden) {
       if (!pipeline.merge) notAdmitted(ports, pipeline.id, "lane is hidden");
       continue;
     }
@@ -838,21 +866,20 @@ export async function sweepAutoMerge(ports: AutoMergePorts): Promise<void> {
     }
   }
   /* One lane at a time per repository, in completion order (§4.4 rule 5). */
-  const queues = new Map<string, Pipeline[]>();
-  for (const pipeline of ports.loadPipelines()) {
-    const merge = pipeline.merge;
-    if (pipeline.state !== "completed" || !merge || !PIPELINE_MERGE_LIVE_STATES.has(merge.state)) continue;
-    // A delegated record reflects the successor; only that successor can act
-    // on the head its resolution review judged.
-    if (merge.refresh?.pipelineId) continue;
-    const queue = queues.get(merge.repository) ?? [];
-    queue.push(pipeline);
-    queues.set(merge.repository, queue);
+  const queueHeads = new Map<string, Pipeline>();
+  for await (const pipeline of mergeRows(performanceSpans.sync("forge.auto-merge.read", ports.loadPipelines))) {
+    performanceSpans.sync("forge.auto-merge.queue", () => {
+      const merge = pipeline.merge;
+      if (pipeline.state !== "completed" || !merge || !PIPELINE_MERGE_LIVE_STATES.has(merge.state) || merge.refresh?.pipelineId) return;
+      const held = queueHeads.get(merge.repository);
+      if (!held || merge.requestedAt.localeCompare(held.merge!.requestedAt) < 0
+        || (merge.requestedAt === held.merge!.requestedAt && pipeline.id.localeCompare(held.id) < 0)) {
+        queueHeads.set(merge.repository, pipeline);
+      }
+    }, 1);
   }
-  for (const queue of queues.values()) {
-    queue.sort((a, b) => a.merge!.requestedAt.localeCompare(b.merge!.requestedAt) || a.id.localeCompare(b.id));
-    const head = queue[0]!;
-    const due = Date.parse(head.merge!.nextReadAt ?? "");
+  for await (const head of mergeRows(queueHeads.values())) {
+    const due = performanceSpans.sync("forge.auto-merge.queue", () => Date.parse(head.merge!.nextReadAt ?? ""), 1);
     if (Number.isFinite(due) && due > now) continue;
     try {
       await stepLane(head, ports);
@@ -978,9 +1005,10 @@ const sameList = (left: readonly string[], right: readonly string[]) => left.len
 export async function sweepTaskFinishes(ports: AutoMergePorts): Promise<void> {
   return withViewerOperation("forge.auto-merge", async () => {
   if (!ports.finishTask) return;
-  const pipelines = ports.loadPipelines();
+  await ports.prepareRead?.();
+  const pipelines = performanceSpans.sync("forge.auto-merge.read", ports.loadPipelines);
   const now = ports.now();
-  for (const pipeline of pipelines) {
+  for await (const pipeline of mergeRows(pipelines)) {
     const marked = unfinishedMarkedTasks(pipeline);
     const finished = marked.length > 0 && laneFinishedForTasks(pipeline, ports);
     /* A wait whose lane no longer finishes the task (unmarked, reopened
@@ -1049,12 +1077,19 @@ export function productionAutoMergePorts(overrides: Partial<AutoMergePorts> & Pi
     now: Date.now,
     run,
     write: forgeWriter(run, forgeAppWriter(os.tmpdir(), GH_TIMEOUT_MS)),
-    mutate: (pipelineId, change) => withPipelineMutation(async (pipelines, persist) => {
+    prepareRead: overrides.loadPipelines === loadPipelinesForList ? async () => { await loadPipelinesForListAsync(); } : undefined,
+    mutate: async (pipelineId, change) => {
+      const changed = await withControllerPipelineScope([pipelineId], () => withPipelineMutation(async (pipelines, persist) => {
       const pipeline = pipelines.find((candidate) => candidate.id === pipelineId);
-      if (!pipeline || !change(pipeline)) return false;
+      if (!pipeline || !performanceSpans.sync("forge.auto-merge.step", () => change(pipeline))) return false;
       await persist();
       return true;
-    }),
+      }));
+      // Promise continuations can otherwise take every due lane's lease before
+      // the loop gets a timer opportunity. No lease spans this yield.
+      await yieldToRuntime();
+      return changed;
+    },
     setting: mergeOnReviewSetting,
     pullRequestOf: lanePullRequest,
     cachedState: (repository, number) => forgeCacheView().repository(repository)?.pr(number)?.state ?? null,

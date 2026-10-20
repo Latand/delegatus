@@ -1,5 +1,5 @@
 import { liveRootSession } from "@/lib/root/adopt";
-import { StateLockDeferredError, stateLockDeferral, waitForStateLock } from "@/lib/state/lockWait";
+import { StateLockDeferredError, stateLockAttempt, stateLockDeferral, waitForStateLock } from "@/lib/state/lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { normalizeHostMemory, type HostMemoryState } from "@/lib/runtime/agentMemoryState";
@@ -4446,6 +4446,9 @@ export interface AgentRegistryStorageOptions {
       sets it: a reader that guesses wrong opens a store the writer does not
       own. See {@link resolveRegistryBackend}. */
   resolveBackendIdentity?: boolean;
+  /** First session lookup opens under async admission and prepares the SQLite
+      cold-key projection cooperatively. */
+  deferColdKeyInitialization?: boolean;
   /** Grant bound for the MCP origin rebound (issue #739). Production omits it;
       a test supplies a policy that HAS a grantable connector, since the shipped
       bound has none and an empty bound proves nothing about the origin rule. */
@@ -4724,6 +4727,7 @@ export class AgentRegistry {
     const mayRunStartupMaintenance = mayRunStateStartupMutation(path.dirname(this.filename));
     const openStore = () => new SqliteAgentRegistryStore(sqliteFilename, {
       allowArchiveMigration: mayRunStartupMaintenance,
+      deferColdKeyInitialization: storage.deferColdKeyInitialization,
       /* Lazy: an initialised store never reads the JSON (#1870). */
       initialSnapshot: () => readFile(filename, storage.mcpGrantPolicy),
       verifyImport: (source, imported) => verifyRegistryImport(source, imported, storage.onRegistryImportVerify),
@@ -5737,9 +5741,9 @@ export class AgentRegistry {
     return this.readOnlySnapshot();
   }
 
-  private readKeyed<T>(reader: (file: RegistryFile) => T): T {
-    return performanceSpans.sync("registry.keyed", () => this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
-      ? this.sqliteStore.read(reader) : reader(this.readOnlySnapshot()));
+  private readKeyed<T>(reader: (file: RegistryFile) => T, options: { skipColdKeyInitialization?: boolean } = {}): T {
+    return withViewerOperation("registry.read", () => performanceSpans.sync("registry.keyed", () => this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
+      ? this.sqliteStore.read(reader, options) : reader(this.readOnlySnapshot())));
   }
 
   /** Retention evidence for one pending runtime effect. SQLite selectors run
@@ -8965,6 +8969,23 @@ export class AgentRegistry {
     });
   }
 
+  /** One request's aliases, conversation and staged-path receipts, under the
+      same keyed read transaction. No lookup or lazy registry row escapes it. */
+  sessionTarget(
+    conversationId: string | null,
+    fallbackPath: string,
+    options: { skipColdKeyInitialization?: boolean } = {},
+  ): { path: string; unavailable: boolean } {
+    return this.readKeyed(file => {
+      const lookup = readOnlyConversationLookupFromSnapshot(file);
+      const fence = identityMaterializationFence(file);
+      const conversation = conversationId?.startsWith("conversation_") ? lookup.conversation(conversationId as ViewerConversationId) : null;
+      const materialized = conversation ? fence.pathForConversation(conversation.id) : null;
+      const path = materialized ?? fallbackPath;
+      return { path, unavailable: Boolean(conversation && !materialized || path && !fence.allowsPath(path)) };
+    }, options);
+  }
+
   canonicalConversationId(id: ViewerConversationId): ViewerConversationId {
     return this.readKeyed(file => resolveConversationAlias(file, id));
   }
@@ -11489,8 +11510,28 @@ const registryProcessState = process as typeof process & {
 };
 
 export function agentRegistry(): AgentRegistry {
-  registryProcessState.__llvAgentRegistry ??= new AgentRegistry(undefined, undefined, undefined, { resolveBackendIdentity: true });
+  registryProcessState.__llvAgentRegistry ??= withViewerOperation("registry.prepare", () => performanceSpans.sync("registry.prepare.open", () =>
+    new AgentRegistry(undefined, undefined, undefined, { resolveBackendIdentity: true, deferColdKeyInitialization: true })));
   return registryProcessState.__llvAgentRegistry;
+}
+
+/** Open the cold session facade and answer from keyed rows. The one admitted
+    read bypasses the full cold-key index and snapshot preparation; uncached row
+    parsing keeps archived values out of the hot row cache. */
+export async function readAgentSessionTarget(
+  conversationId: string | null,
+  fallbackPath: string,
+  signal?: AbortSignal,
+): Promise<{ path: string; unavailable: boolean }> {
+  return waitForStateLock("registry.session.read", () => {
+    const registry = stateLockAttempt("registry.session.open", () => {
+      registryProcessState.__llvAgentRegistry ??= withViewerOperation("registry.prepare", () => performanceSpans.sync("registry.prepare.open", () =>
+        new AgentRegistry(undefined, undefined, undefined, { resolveBackendIdentity: true, deferColdKeyInitialization: true })));
+      return registryProcessState.__llvAgentRegistry;
+    });
+    return stateLockAttempt("registry.session.read", () => registry.sessionTarget(conversationId, fallbackPath,
+      { skipColdKeyInitialization: true }));
+  }, { signal });
 }
 
 export function setAgentRegistryForTests(value: AgentRegistry | null): void {
