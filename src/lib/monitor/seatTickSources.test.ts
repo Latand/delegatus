@@ -1930,7 +1930,7 @@ test("a timed-out Codex wake retains canonical transcript confirmation", async (
   const held = registry.holdDelivery(conversation.id, text, key, "text", [], null, { kind: "send", policy: "queue" });
   registry.beginDeliveryAttempt(held.id, conversation.generations[0]!.id);
   registry.recordDeliveryOutcome(held.id, "failed", "Codex delivery confirmation timed out; outcome is uncertain", "unverified");
-  const wire = encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken(held.command.operationId));
+  const wire = await encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken(held.command.operationId));
   fs.writeFileSync(transcript, JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: wire } }) + "\n");
   const previousSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
   process.env.LLV_RUNTIME_HOST_SOCKET = "";
