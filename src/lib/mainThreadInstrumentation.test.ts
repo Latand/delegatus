@@ -134,6 +134,9 @@ test.each([
     const h = harness();
     const entry = bind(expressions(file, name)[0]!, {
       withViewerOperation: h.operation,
+      performanceSpans: { sync: (_site: string, work: () => unknown) => work() },
+      mergeRows: async function* (rows: unknown[]) { yield* rows; },
+      admissionReasons: new Map(),
       readForgeCache: () => ({ data: { repositories: {} }, error: null }),
       forgeCacheFile: () => "fixture", pendingForgeNudges: () => new Map(),
       collectDemand: bind(expressions("src/lib/forge/sweep.ts", "collectDemand")[0]!, {}),

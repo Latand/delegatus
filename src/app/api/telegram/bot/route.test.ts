@@ -115,6 +115,29 @@ test("agent media route uses the caller capability and topic link for an album",
   expect(transport.callsOf("sendMediaGroup")[0]!.params.message_thread_id).toBe(5);
 });
 
+test.each(["send_media", "send_document"])("%s names the outside file and allowed roots relative to the host home", async (op) => {
+  await connected();
+  service.setChat(String(TEAM.id), "team-reports", true);
+  fs.mkdirSync(HOME, { recursive: true });
+  const outside = path.join(HOME, "outside.jpg");
+  fs.writeFileSync(outside, await sharp({ create: { width: 1, height: 1, channels: 3, background: { r: 12, g: 34, b: 56 } } }).jpeg().toBuffer());
+  const check = async (roots: string) => {
+    const response = await agentRoute.POST(request("/api/telegram/bot/agent", {
+      method: "POST", headers: AGENT,
+      body: { op, clientRequestId: `${op}-${roots}`, chat: "team-reports", images: [{ path: outside, caption: "" }], document: { path: outside } },
+    }));
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({
+      error: `${op === "send_media" ? "photo 1: " : ""}$HOME/outside.jpg is outside the allowed document roots (${roots}); write the file under one of them`,
+      code: "document_outside_roots", retryable: false,
+    });
+  };
+  await check("$HOME/handoff");
+  service.setDocumentRoots([path.join(HOME, "reports"), path.join(HOME, "exports")]);
+  await check("$HOME/reports, $HOME/exports");
+  expect(transport.calls.filter(call => call.method.startsWith("send"))).toHaveLength(0);
+});
+
 test("agent send resolves a public topic link and forwards message_thread_id", async () => {
   await connected();
   transport.script("getUpdates", ok([{ update_id: 3, my_chat_member: { chat: { ...TEAM, username: "public_reports", is_forum: true }, date: 3, new_chat_member: { status: "administrator" } } }]));
