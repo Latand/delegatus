@@ -248,11 +248,11 @@ for (const initial of ["queued", "uncertain"] as const) test(`HTTP discard relea
     journal.transitionOperation(operationId, "uncertain");
   }
   const host = new RuntimeHost(journal);
-  let reasonAtAcknowledgement: string | null = null;
+  const reasonsAtAcknowledgement: (string | null)[] = [];
   const endpoint = testEndpoint(directory, "projected");
   const server = serveRuntimeHost(endpoint, { handle: (request, options) => {
     if (request.method === "operation-projection-ack") {
-      reasonAtAcknowledgement = registry.readOnlySnapshot().heldDeliveries[held.id]?.error ?? null;
+      reasonsAtAcknowledgement.push(registry.readOnlySnapshot().heldDeliveries[held.id]?.error ?? null);
     }
     return host.handle(request, options);
   } });
@@ -263,7 +263,7 @@ for (const initial of ["queued", "uncertain"] as const) test(`HTTP discard relea
       method: "DELETE", headers: { host: "127.0.0.1" },
     }), operationId, { enabled: () => true, registry: () => registry, client: () => client, kick: () => {} });
     expect(response.status).toBe(200);
-    expect(reasonAtAcknowledgement).toBe("delivery-discarded");
+    expect(reasonsAtAcknowledgement).toEqual(["delivery-discarded"]);
     expect(journal.unprojectedTerminalOperationIds()).toEqual([]);
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()));
