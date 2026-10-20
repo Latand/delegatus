@@ -1,3 +1,4 @@
+import { worktreeMapStore, readProjectDocument, projectStoreSignature } from "@/lib/projects/persistence";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -9,7 +10,6 @@ import { projectForCwd, projectRootForCwd } from "./describe";
 
 const PROJECT_STATE_FILES = [
   "project-catalog.json",
-  "worktree-map.json",
 ] as const;
 const PROJECT_DIRECTORY_CACHE_MS = 10_000;
 
@@ -32,6 +32,7 @@ function projectStateIdentity(directory: string): string {
       return `${name}:missing`;
     }
   });
+  files.push(projectStoreSignature("worktree-map.json", directory));
   const database = path.join(directory, "state.sqlite");
   for (const [collection, legacy] of [["flows", "flows.json"], ["pipelines", "pipelines.json"], ["workflows", "workflows.json"]] as const) {
     const revision = readStateCollectionRevision(database, collection);
@@ -90,7 +91,7 @@ function projectPathsFromState(directory: string): string[] {
     if (!Array.isArray(values)) continue;
     for (const value of values) recordPaths(value, fields, paths);
   }
-  const worktrees = readObject(path.join(directory, "worktree-map.json"));
+  const worktrees = readProjectDocument(worktreeMapStore, "worktree-map.json", directory);
   if (worktrees) {
     for (const [cwd, value] of Object.entries(worktrees)) {
       paths.add(cwd);
