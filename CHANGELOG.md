@@ -8,6 +8,124 @@ guarantees for the 1.x series.
 
 ## [Unreleased]
 
+## [1.15.0] — 2026-10-20
+
+### Added
+- **The orchestrator is reminded about work that waits.** A task you chose
+  that sits in Inbox or Assigned for an hour with no open lane and no
+  stated hold is named in the seat's wake with how long it has waited. A
+  pause can carry its reason and a condition to resume on: a date, or an
+  account's session or weekly usage falling below a percentage
+  (`pipeline_action` pause with `reason` and `resumeCondition`). The wake
+  names the pause once its condition holds, or 24 hours after an agent
+  paused without one; it never resumes a lane by itself, and your own
+  pauses stay quiet. Each reminder repeats at most once a day ([#3096]).
+- **Relay requests can carry documents of any type.** When the relay
+  service offers it, a member can send any document up to 20 MiB (four
+  files, 40 MiB in total). The agent receives it under its original file
+  name with its reported type and size. Without that offer the existing
+  list of accepted types stays in force ([#3127]).
+- **Delegatus memory can replace the engines' own memory, through the API
+  for now.** `PUT /api/memory/source` with `delegatus` was refused until
+  now. It now imports the notes Claude and Codex kept: the curator adopts,
+  drops or defers them in batches of up to 40 parts. Once every note the
+  engines load at start has been handled, engine memory is off from each
+  conversation's next engine start, and the switch becomes final when the
+  Claude processes started earlier have retired and their last notes are
+  imported. Undoing an import pass reports it as undone, or as partly
+  undone with the number of rules kept because they were edited since. The
+  Settings row for this switch comes in a later release ([#3101]).
+
+### Changed
+- **Searching conversations from an agent answers in time.**
+  `list_conversations` with a search query reads a persisted index and
+  rereads only the conversations that changed. On a busy install 5 of 11
+  searches ran out of the 12-second MCP read budget; on the same local data
+  the median answer fell from 3.1 s to 0.15 s ([#3104]).
+- **Agent registry writes no longer hold the Viewer.** The remaining
+  registry writes made while serving requests wait for their lock
+  asynchronously: with the lock held for 180 ms by another process, the
+  Viewer was held for about 184 ms before and about 10 ms after ([#3093]).
+- **More state lives in the state database.** Push subscriptions and the
+  sent-notification history, review-loop and workflow presets, role
+  presets, the spawn nesting limit, the root lineage and Telegram reports
+  and registrations ([#3098]), then project aliases, crowned and manual
+  projects, the worktree map, session titles and the recorded project
+  remotes ([#3108]) are stored in `state.sqlite`. Each JSON file is
+  imported on first start and a copy is kept; a write commits only its own
+  rows, so a crash can no longer leave a file half-written. An earlier
+  release that takes over again finds its files written back.
+- **Review budgets stay as started.** Converting an older review lane can
+  no longer raise the limit of a review gate that already started; the
+  refusal suggests a limit that is allowed. A follow-up task such a lane
+  recorded opens from its pipeline card ([#3120]).
+- **Who sent each Codex message loads reliably.** The conversation view
+  asks for those records in small batches and retries a failed batch after
+  1.5, 4 and 10 seconds. Records that no retained conversation or queued
+  message refers to are removed at most once a day ([#3114]).
+
+### Fixed
+- **Reopening a conversation is quick again.** Pages Chrome kept in its
+  back/forward cache held their log stream open; a few of them used up the
+  browser's six connections and the next page waited up to about 40 s. A
+  cached page now lets its stream go and resumes it where it left off when
+  you come back ([#3113]).
+- **Deploys report what happened.** `deploy_exact_sha` no longer answers
+  an admitted deploy as failed when its reply was lost: it says the
+  outcome is unknown and points to `deployment_status`. A request for the
+  revision already deploying joins that deploy, and the seat that asked is
+  woken when it settles ([#3100]). A repeated request returns the
+  reconciled deployment id in its first reply, a release hands over once
+  even when its release records are missing or stale, and a reviewer whose
+  attempt already settled is no longer reported as stalled ([#3111]).
+- **Stages recover by themselves.** A stage whose agent never answers its
+  first message is stopped after ten minutes and replaced once; if the
+  replacement stays silent too, the lane parks naming `retry-stage`
+  ([#3107]). A stage replaced after a host loss keeps the commits the lost
+  attempt made, and a parked publication accepts a `resolve-decision`
+  answer ([#3105]). A launch rereads role memory that changed under it
+  instead of parking on «role memory could not be read or filtered»
+  ([#3095]).
+- **A failed agent launch no longer leaves a spawn queued.** Startup and
+  the periodic check settle such launches, including older ones, without
+  starting anything again ([#3121]).
+- **A stuck message delivery ends once.** Cancelling it and a late
+  acknowledgement can no longer both win, nothing is sent twice after a
+  restart, and its attention item expires 24 hours after the message was
+  admitted ([#3119]).
+- **A settled delivery is not retried later.** When a kill or another
+  event settles queued delivery work, its delayed automatic retry is
+  cancelled. While the queue is backing off after a failed read, such an
+  event keeps the retry time already set ([#3122]).
+- **The seat digest is due only after a real change.** Notes, details and
+  report timestamps on tasks no longer make one due ([#3116]).
+- **The warning «pipeline registry unreadable: admission authority is
+  unavailable» no longer repeats** for every agent host while the pipeline
+  store is briefly busy; startup waits for the store and adopts those
+  lanes later. In a reproduction it appeared 70 times on first start and 3
+  times on restart before, and never after ([#3124]).
+
+### Maintainer notes
+- Pre-push touched-test comparison reaches a verdict within its deadline
+  at normal load, and a pipeline publication that changes the pipeline
+  engine, `git.ts` or `parkedPublication.test.ts` gets 25 minutes for its
+  push, other changes 15 ([#3106], [#3123]).
+- Every pull request runs the complete isolated README capture seed and
+  checks each picture's frame layout in the required runtime job
+  ([#3103]).
+- `scripts/release-verify.ts` reads Docker image manifests with
+  `docker manifest inspect` when `docker buildx imagetools` is missing
+  ([#3109]).
+- The served-payload secret check runs against the built production
+  server ([#3112]).
+- Native Codex CI covers the Codex CLI version installed on this machine
+  beside the pinned protocol versions ([#3115]).
+- Test repairs: the Claude protocol-failure reap test and the Codex
+  «dropped-after» steering test on 0.162.1 and 0.163.0 wait on lifecycle
+  events instead of timing ([#3117], [#3118]).
+- The 1.14.0 changelog, version and README pictures reached main after
+  that release was tagged ([#3102]).
+
 ## [1.14.0] — 2026-10-19
 
 ### Added
@@ -3913,7 +4031,8 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 - Implement→review flows with fresh headless reviewer rounds.
 - Remote access over Tailscale behind a token gate.
 
-[Unreleased]: https://github.com/Latand/delegatus/compare/v1.14.0...HEAD
+[Unreleased]: https://github.com/Latand/delegatus/compare/v1.15.0...HEAD
+[1.15.0]: https://github.com/Latand/delegatus/compare/v1.14.0...v1.15.0
 [1.14.0]: https://github.com/Latand/delegatus/compare/v1.13.0...v1.14.0
 [1.13.0]: https://github.com/Latand/delegatus/compare/v1.12.0...v1.13.0
 [1.12.0]: https://github.com/Latand/delegatus/compare/v1.11.0...v1.12.0
@@ -4638,3 +4757,32 @@ Initial public release, packaged as `agent-log-viewer` with a `bunx` CLI.
 [#3092]: https://github.com/Latand/delegatus/pull/3092
 [#3097]: https://github.com/Latand/delegatus/pull/3097
 [#3099]: https://github.com/Latand/delegatus/pull/3099
+[#3093]: https://github.com/Latand/delegatus/pull/3093
+[#3095]: https://github.com/Latand/delegatus/pull/3095
+[#3096]: https://github.com/Latand/delegatus/pull/3096
+[#3098]: https://github.com/Latand/delegatus/pull/3098
+[#3100]: https://github.com/Latand/delegatus/pull/3100
+[#3101]: https://github.com/Latand/delegatus/pull/3101
+[#3102]: https://github.com/Latand/delegatus/pull/3102
+[#3103]: https://github.com/Latand/delegatus/pull/3103
+[#3104]: https://github.com/Latand/delegatus/pull/3104
+[#3105]: https://github.com/Latand/delegatus/pull/3105
+[#3106]: https://github.com/Latand/delegatus/pull/3106
+[#3107]: https://github.com/Latand/delegatus/pull/3107
+[#3108]: https://github.com/Latand/delegatus/pull/3108
+[#3109]: https://github.com/Latand/delegatus/pull/3109
+[#3111]: https://github.com/Latand/delegatus/pull/3111
+[#3112]: https://github.com/Latand/delegatus/pull/3112
+[#3113]: https://github.com/Latand/delegatus/pull/3113
+[#3114]: https://github.com/Latand/delegatus/pull/3114
+[#3115]: https://github.com/Latand/delegatus/pull/3115
+[#3116]: https://github.com/Latand/delegatus/pull/3116
+[#3117]: https://github.com/Latand/delegatus/pull/3117
+[#3118]: https://github.com/Latand/delegatus/pull/3118
+[#3119]: https://github.com/Latand/delegatus/pull/3119
+[#3120]: https://github.com/Latand/delegatus/pull/3120
+[#3121]: https://github.com/Latand/delegatus/pull/3121
+[#3122]: https://github.com/Latand/delegatus/pull/3122
+[#3123]: https://github.com/Latand/delegatus/pull/3123
+[#3124]: https://github.com/Latand/delegatus/pull/3124
+[#3127]: https://github.com/Latand/delegatus/pull/3127
