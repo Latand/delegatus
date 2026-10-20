@@ -1,4 +1,4 @@
-import { nativeProcessId, signalDomain, signalAgentDomain, spawnManagedEngine } from "./agentSignalSandbox";
+import { nativeProcessId, signalDomain, signalAgentDomain, signalBoundaryOff, spawnManagedEngine } from "./agentSignalSandbox";
 import { memoryField, memoryKillText } from "./agentMemoryState";
 import type { AgentMemoryCell } from "./agentMemory";
 import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from "node:child_process";
@@ -741,6 +741,7 @@ export class CopilotAcpHost implements EngineHost {
       pid,
       processStartIdentity: pid ? this.processIdentity(pid) : null,
       ...(signalDomain(this.child) ? { signalDomain: signalDomain(this.child) } : {}),
+      ...(signalBoundaryOff(this.child) ? { signalBoundary: signalBoundaryOff(this.child) } : {}),
       eventCursor: this.cursor,
       protocolVersion: this.protocolVersion,
       activeTurnRef: this.running?.turnId ?? null,

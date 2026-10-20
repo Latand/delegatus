@@ -11,7 +11,7 @@ import { materializeStructuredHostAccess, type StructuredHostAccessMaterializati
 import type { EngineHost } from "./engineHost";
 import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
 import { launchDetached, reviewerCommand, headlessRuns, type BuiltHeadlessCommand } from "@/lib/agent/headless";
-import { headlessFixtureTransport, setHeadlessSpawnForTests, signalDomain, spawnManagedEngine } from "./agentSignalSandbox";
+import { headlessFixtureTransport, setHeadlessSpawnForTests, signalBoundaryOff, signalDomain, spawnManagedEngine } from "./agentSignalSandbox";
 import { registerSignalFixtureMcp } from "./agentSignalSandbox.fixture";
 import { CodexSocketTransport } from "./codexSocketTransport";
 import { setCodexFeatureReaderForTest } from "@/lib/agent/codexSpawnPolicy";
@@ -165,19 +165,26 @@ test.skipIf(!enabled || !process.env.LLV_CODEX_BINARY).each(profiles)("real stru
   }
 }, 90_000);
 
-test.skipIf(!enabled)("a missing sandbox dependency stays explicit over the persistent socket launch", async () => {
+test.skipIf(!enabled)("a missing sandbox dependency launches the persistent socket engine unprotected and reports it", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "socket-preflight-"));
   const tools = path.join(root, "tools"); fs.mkdirSync(tools);
   fs.symlinkSync(fs.realpathSync(Bun.which("python3")!), path.join(tools, "python3"));
   const env = { ...process.env, HOME: root, TMPDIR: root, XDG_CONFIG_HOME: path.join(root, "config"),
     LLV_STATE_DIR: path.join(root, "state"), PATH: tools, LLV_GATE_SLOT_LEASE: undefined };
+  const marker = path.join(root, "engine-ran");
+  let launched: Awaited<ReturnType<typeof spawnManagedEngine>> | undefined;
   try {
-    await expect(CodexSocketTransport.launch("/bin/sleep", ["60"], { env, detached: true }, undefined,
-      (command, args, options, base) => spawnManagedEngine(command, args, options, null, undefined, env, base)))
-      .rejects.toThrow("required host dependency is missing: bwrap");
-    expect(fs.readdirSync(root)).toEqual(["tools"]);
+    // The engine runs, and fails only because a shell is no Codex listener.
+    await expect(CodexSocketTransport.launch("/bin/sh", ["-c", `printf ran > '${marker}'; exec /bin/sleep 60`], { env, detached: true }, undefined,
+      async (command, args, options, base) => (launched = await spawnManagedEngine(command, args, options, null, undefined, env, base))))
+      .rejects.toThrow("listener did not start");
+    expect(fs.readFileSync(marker, "utf8")).toBe("ran");
+    expect(signalBoundaryOff(launched!)).toEqual({ state: "off", reason: "required host dependency is missing: bwrap" });
+    expect(signalDomain(launched!)).toBeUndefined();
+    expect(launched!.exitCode !== null || launched!.signalCode !== null).toBeTrue();
+    expect(fs.readdirSync(root).sort()).toEqual(["engine-ran", "tools"]);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
-});
+}, 20_000);
 
 test.skipIf(!enabled)("a failed protected socket listener start reaps its monitor and namespace", async () => {
   let domain: AgentSignalDomain | undefined;

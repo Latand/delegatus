@@ -34,12 +34,14 @@ Runtime tools are split by coupling. The image owns stable runtimes: Node 22, Bu
 
 Host developer CLIs run through `nsenter` shims in `/usr/local/bin`, ahead of mounted user bins in `PATH`. The shims enter the host mount, PID and cgroup namespaces, use the caller uid/gid, preserve host-visible cwd values, and fall back to `$HOME` for container-only paths such as `/app`. They execute the exact host paths: `claude`, `codex`, `copilot`, and `bun` from `$HOME/.bun/bin`; `uv` from `$HOME/.local/bin`; `just`, `tmux` and `tailscale` from `/usr/bin`. A `docker` wrapper enters the host namespaces the same way and runs `/usr/bin/docker`. `LLV_DOCKER_NSENTER_SHIMS=1` also makes direct Claude/Codex resolver calls, and the Setup guide's phone step, choose `/usr/local/bin` shims. The image contains the app, Node dependencies, the local transcription helper script, and the prebuilt `.next` output.
 
-Managed agent launches establish their signal namespace after this host
-transition and UID/GID drop. The host must provide `bwrap`, Python 3,
+Managed agent launches establish their signal boundary after this host
+transition and UID/GID drop, where the host supports it: `bwrap`, Python 3,
 util-linux, unprivileged user namespaces and a systemd user manager with
 delegated cpu, memory and pids controllers. Each launch checks the actual
-service context. Namespace failure refuses the launch before the native engine
-executes. The launcher is copied into a cache beneath the mounted home, so the
+service context. Where the boundary cannot be established, the engine launches
+without it and the launch reports the boundary off with the cause. Docker and
+the shared tmux server stay reachable from a boundary, as does the systemd user
+manager. The launcher is copied into a cache beneath the mounted home, so the
 host executes the same policy as the Viewer release. Container services retain
 their `bun-container` interpreter.
 

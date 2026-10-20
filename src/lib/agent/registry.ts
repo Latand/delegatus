@@ -1,4 +1,4 @@
-import { agentSignalDomainAlive, normalizeAgentSignalDomain, type AgentSignalDomain } from "@/lib/runtime/agentSignalSandbox";
+import { agentSignalDomainAlive, normalizeAgentSignalDomain, normalizeSignalBoundaryOff, type AgentSignalDomain, type SignalBoundaryOff } from "@/lib/runtime/agentSignalSandbox";
 import { liveRootSession } from "@/lib/root/adopt";
 import { StateLockDeferredError, waitForStateLock } from "@/lib/state/lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
@@ -143,6 +143,8 @@ export interface TmuxHostEvidence {
 
 export interface StructuredHostColumns {
   signalDomain?: AgentSignalDomain;
+  /** Why this host's engine runs without the signal boundary, if it does. */
+  signalBoundary?: SignalBoundaryOff;
   memory?: HostMemoryState;
   /** Why the recorded host ended (#2790); kept with the terminal row. */
   ended?: HostEndCause;
@@ -2195,6 +2197,7 @@ function normalizeStructuredHost(value: unknown): StructuredHostColumns | null {
   return {
     kind: host.kind,
     ...(signalDomain ? { signalDomain } : {}),
+    ...(normalizeSignalBoundaryOff(host.signalBoundary) ? { signalBoundary: normalizeSignalBoundaryOff(host.signalBoundary)! } : {}),
     endpoint: typeof host.endpoint === "string" ? host.endpoint : "",
     process: processIdentity,
     eventCursor: eventCursor === undefined ? 0 : eventCursor as number,

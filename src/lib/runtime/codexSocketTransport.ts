@@ -10,9 +10,9 @@ import { procBackend } from "@/lib/proc";
 import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
 import { signalProcessGroup } from "@/lib/processGroup";
 import type { ProcessIdentity } from "@/lib/agent/registry";
-import { bindSignalDomain, nativeProcessId, signalAgentDomain, signalDomain, type AgentSignalDomain } from "./agentSignalSandbox";
+import { bindSignalDomain, nativeProcessId, normalizeSignalBoundaryOff, recordSignalBoundaryOff, signalAgentDomain, signalBoundaryOff, signalDomain, type AgentSignalDomain, type SignalBoundaryOff } from "./agentSignalSandbox";
 
-export interface CodexSocketOwner { endpoint: string; process: ProcessIdentity; signalDomain?: AgentSignalDomain }
+export interface CodexSocketOwner { endpoint: string; process: ProcessIdentity; signalDomain?: AgentSignalDomain; signalBoundary?: SignalBoundaryOff }
 export type CodexTransport = Pick<ChildProcessWithoutNullStreams, "pid" | "stdin" | "stdout" | "stderr" | "kill"> & EventEmitter;
 const prefix = "codex-unix:";
 
@@ -87,7 +87,7 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
     if (owner.signalDomain) {
       if (owner.signalDomain.native.startIdentity !== owner.process.startIdentity || owner.signalDomain.native.bootEpoch !== owner.process.bootEpoch) throw new Error("Codex callback signal identity changed");
       bindSignalDomain(transport, owner.signalDomain);
-    }
+    } else if (normalizeSignalBoundaryOff(owner.signalBoundary)) recordSignalBoundaryOff(transport, owner.signalBoundary!);
     try { await transport.connect(); }
     catch (error) { transport.disconnect(); throw error; }
     if (!verifiedCodexSocketOwner(owner)) { transport.disconnect(); throw new Error("Codex callback owner changed while connecting"); }
@@ -136,7 +136,7 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
     const identity = pid ? procBackend.processIdentity(pid) : null;
     try {
       if (!pid || !identity) throw failure ?? new Error("Codex callback process identity is unavailable");
-      const owner = { endpoint: prefix + file, process: captureProcessIdentity(pid, undefined, identity), signalDomain: signalDomain(child) };
+      const owner = { endpoint: prefix + file, process: captureProcessIdentity(pid, undefined, identity), signalDomain: signalDomain(child), signalBoundary: signalBoundaryOff(child) };
       const deadline = Date.now() + 10_000;
       while (!verifiedCodexSocketOwner(owner)) {
         if (failure || child.exitCode !== null || child.signalCode !== null || Date.now() >= deadline) throw failure ?? new Error("Codex callback listener did not start or its ownership could not be verified");

@@ -74,6 +74,7 @@ export function codexHostColumns(state: HostState, writerClaimEpoch: number): St
     pendingAttention: state.pendingAttention,
     ...(state.memory ? { memory: state.memory } : {}),
     ...(state.signalDomain ? { signalDomain: state.signalDomain } : {}),
+    ...(state.signalBoundary ? { signalBoundary: state.signalBoundary } : {}),
     activeFlags: state.activeFlags,
   };
 }
@@ -93,6 +94,7 @@ export function claudeHostColumns(state: HostState, writerClaimEpoch: number): S
     ...(state.providerRetry ? { providerRetry: state.providerRetry } : {}),
     ...(state.memory ? { memory: state.memory } : {}),
     ...(state.signalDomain ? { signalDomain: state.signalDomain } : {}),
+    ...(state.signalBoundary ? { signalBoundary: state.signalBoundary } : {}),
     ...(state.ended ? { ended: state.ended } : {}),
     activeFlags: state.activeFlags,
   };
@@ -110,6 +112,7 @@ export function copilotHostColumns(state: HostState, writerClaimEpoch: number): 
     pendingAttention: state.pendingAttention,
     ...(state.memory ? { memory: state.memory } : {}),
     ...(state.signalDomain ? { signalDomain: state.signalDomain } : {}),
+    ...(state.signalBoundary ? { signalBoundary: state.signalBoundary } : {}),
     activeFlags: state.activeFlags,
   };
 }
@@ -164,6 +167,7 @@ function sameMaterialHostState(left: HostState, right: HostState): boolean {
     && left.pid === right.pid
     && left.processStartIdentity === right.processStartIdentity
     && isDeepStrictEqual(left.signalDomain, right.signalDomain)
+    && isDeepStrictEqual(left.signalBoundary, right.signalBoundary)
     && left.protocolVersion === right.protocolVersion
     && left.activeTurnRef === right.activeTurnRef
     && sameStrings(left.pendingAttention, right.pendingAttention)
@@ -839,7 +843,7 @@ export async function adoptCodexRegistryHosts(
         const current = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
         if (!current?.structuredHost || !candidate(current)) return;
         const socketOwner = current.structuredHost.process && verifiedCodexSocketOwner({ endpoint: current.structuredHost.endpoint, process: current.structuredHost.process })
-          ? { endpoint: current.structuredHost.endpoint, process: current.structuredHost.process, signalDomain: current.structuredHost.signalDomain } : undefined;
+          ? { endpoint: current.structuredHost.endpoint, process: current.structuredHost.process, signalDomain: current.structuredHost.signalDomain, signalBoundary: current.structuredHost.signalBoundary } : undefined;
         let claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, entry.key, owner, { allowUnhosted: true, reconnectCodex: socketOwner }))));
         if (!claimed && !socketOwner) {
           const current = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];

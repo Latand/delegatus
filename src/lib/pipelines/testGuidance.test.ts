@@ -29,7 +29,7 @@ test("standalone assembly finds the install and quotes its wrapper for another c
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("npm\ntest\n--\nsrc/example.test.ts\n");
     fs.unlinkSync(path.join(install, "scripts", "owned-runner.ts"));
-    expect(() => resolveStageTestGuidance(standalone)).toThrow("Gate wrapper unavailable");
+    expect(resolveStageTestGuidance(standalone)).toContain("Gate wrapper unavailable");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -47,16 +47,27 @@ test("packed tooling resolves without source files and the container bridge publ
     fs.writeFileSync(path.join(scripts, "gate-slot.sh"), "# LLV_SIGNAL_SANDBOX");
     for (const name of ["owned-runner.ts", "cpu-admission.ts", "test-child-guardian.ts"]) fs.writeFileSync(path.join(scripts, name), "// runSandboxGate");
     delete process.env.LLV_DOCKER_NSENTER_SHIMS;
-    expect(resolveSignalTooling(root).gate).toBe(path.join(scripts, "gate-slot.sh"));
+    expect(resolveSignalTooling(root).gate).toBe(fs.realpathSync(path.join(scripts, "gate-slot.sh")));
     process.env.LLV_DOCKER_NSENTER_SHIMS = "1";
     const tooling = resolveSignalTooling(root);
     expect(tooling.gate).toStartWith(path.join(os.homedir(), ".cache/delegatus/signal-tooling/"));
     expect(fs.readFileSync(tooling.launcher, "utf8")).toBe("# packed launcher");
     expect(resolveSignalTooling(root)).toEqual(tooling);
     fs.unlinkSync(path.join(scripts, "test-child-guardian.ts"));
-    expect(() => resolveStageTestGuidance(root)).toThrow("Gate wrapper unavailable");
+    expect(resolveStageTestGuidance(root)).toContain("Gate wrapper unavailable");
+    expect(() => resolveSignalTooling(root)).toThrow("Gate wrapper unavailable");
   } finally {
     if (previous === undefined) delete process.env.LLV_DOCKER_NSENTER_SHIMS; else process.env.LLV_DOCKER_NSENTER_SHIMS = previous;
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("an install without resolvable gate tooling composes the fallback brief", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "unresolved-gate-guidance-"));
+  try {
+    const guidance = resolveStageTestGuidance(root);
+    expect(guidance).toStartWith("Gate wrapper unavailable: installed Delegatus gate tooling could not be resolved.");
+    expect(guidance).toContain("Run heavy checks one at a time directly and report that shared gate containment was unavailable");
+    expect(guidance).not.toContain("never bypass it");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

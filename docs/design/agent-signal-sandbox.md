@@ -6,6 +6,10 @@ Source: operator's pinned requirement, 2026-10-15, “Agents can only signal the
 
 The design-stage record is retained below. The implementation and its
 measurements appear in [Implementation, 2026-10-15](#implementation-2026-10-15).
+The operator's 2026-10-20 decision governs availability: a launch is never
+refused for a missing boundary. Where the boundary cannot be established, the
+engine starts as it did before and the launch reports the boundary off. See
+[Boundary availability and known gaps](#boundary-availability-and-known-gaps-2026-10-20).
 
 ## Decision
 
@@ -29,9 +33,11 @@ PR #2729 merged on 2026-10-11 at `20a2d09641ee9ff54cf2deab0ce18836f92b597b`. It 
 
 Project-scoped and cross-project transcript/memory searches covered “1794 signal sandbox,” “PID namespace seccomp,” “signal sandbox,” “kill pkill sandbox” and “process cleanup.” Opened prior discussions confirmed the September finding that scaffold prose provides no technical enforcement, and the October PR author's explicit separation of the OS work. No completed agent signal sandbox was found. The existing resource collector does use namespaces; its code was checked before reusing the idea. Its host-process observation profile must not be copied unchanged into an agent.
 
-The guarantee is kernel signal confinement for managed local execution. `kill`, `tgkill`, queued signals, process-group signalling and pidfd signalling must not reach a process in an ancestor or sibling domain. A host PID supplied inside a namespace is interpreted in that namespace; a numerical collision can only designate a local process. Process-list utilities see the private `/proc`.
+Where the boundary is established, managed local execution gets kernel signal confinement. `kill`, `tgkill`, queued signals, process-group signalling and pidfd signalling must not reach a process in an ancestor or sibling domain. A host PID supplied inside a namespace is interpreted in that namespace; a numerical collision can only designate a local process. Process-list utilities see the private `/proc`.
 
 This is not a complete hostile-code isolation policy. Existing filesystem permissions, credentials, network access and explicitly authorized external control services retain their authority. Asking a remote service to perform an operation is a separate authorization boundary. In particular, do not introduce a generic host-command escape for gates. The normal gate execution path is part of this design and must remain confined. The Viewer, runtime host, shared tmux server, operator shells and manually launched agents receive no new restrictions.
+
+Known gaps, accepted by the operator on 2026-10-20. The systemd user manager stays reachable from every domain: `systemd-run --user --wait /bin/kill`, `systemctl --user kill` and a `systemd-run --user --scope` escape can still stop or move a foreign process of the same user. The manager is not masked. Docker and the shared tmux server are allowed services; a domain can ask either to act on processes outside it. These are authorized external control services in the sense above.
 
 ## Source baseline and spawn map
 
@@ -200,7 +206,7 @@ Structured and headless engines retain their pipe/file transport. For an interac
 
 The adapter must prove readiness before delivering the first prompt: correct UID, distinct PID namespace, private normal proc mount, no capabilities, `no_new_privs`, and captured host identities. Close unintended inherited namespace FDs, sockets and pidfds. Preserve intentional native protocol descriptors. The native engine does not run as PID 1; use Bubblewrap's default reaper. Its [version 0.9.0 source](https://raw.githubusercontent.com/containers/bubblewrap/v0.9.0/bubblewrap.c) reports the namespace child PID through `--info-fd` / `--json-status-fd`; that PID must be distinguished from the engine process.
 
-A missing binary, forbidden namespace creation or incomplete setup refuses the new managed launch with the specific capability failure. Never silently downgrade to hooks. Preflight must run in the actual deployed service context, including AppArmor/container settings, since the measured interactive host context may differ on another installation. Installation checks name `bwrap` as a host dependency and verify it before rollout.
+A missing binary, forbidden namespace creation or incomplete setup never refuses the launch (operator decision, 2026-10-20). The engine then starts through the launch path that existed before this boundary, under the memory and CPU wrapper only, and the launch records the boundary as off with the specific capability failure. The decision runs in the actual deployed service context, including AppArmor/container settings, since the measured interactive host context may differ on another installation. The launch hooks stay in force either way.
 
 ### Identity, adoption and cleanup
 
@@ -222,12 +228,12 @@ This is required work in the same implementation, before enabling enforcement:
 2. Add a namespace-aware path to `scripts/gate-slot.sh` and `scripts/owned-runner.ts`. It starts the workload locally in a fresh bounded leaf, inside the invocation's existing user/PID namespaces. Prove membership and limits before releasing a blocked child to exec. Maintain queue waits, execution budget accounting, cancellation, owner-death monitoring and an independent deadline guardian. Use the owned leaf to account for detached descendants. Teardown can address only verified members of that newly created leaf/domain. Linux's portable, uncontained fallback remains forbidden.
 3. Keep gate supervisors in the same user namespace as their workload. Further user-namespace entry is unnecessary for gate containment and complicates inherited leases. Never ask the user systemd manager to execute a workload outside the domain. The manager creates the outer resource scope before confinement only.
 4. Preserve host PID/start/boot identities in the machine-wide admission queue. `scripts/cpu-admission.ts` and `cpuAdmission.ts:186` currently use process identities for stale-owner removal. Give this reader an explicit read-only original-proc mount under the owned launch scratch directory. Translate its own PID through that mount; keep normal process and signal readers on private `/proc`. Never globally switch `procBackend` to host proc, and never enqueue a namespace-local PID.
-5. Preserve kernel proof of inherited slot ownership. `cpuAdmission.ts:27` currently checks the owner's FD 9, inode/device and FLOCK WRITE record. Inside one user namespace, adapt the PID addressing while retaining these checks. **Do not accept a lease from an ancestor user namespace merely because its PID/stat is readable.** Start ordinary agent domains before their first gate-slot acquisition. If a managed-engine launch is requested under a held external gate lease, refuse that unsupported cross-boundary nesting explicitly before engine execution; do not wait for another slot while retaining one. Integration fixtures use isolated lock/queue roots and exercise real nested gates after entry. Supporting a future cross-boundary lease handoff would require a separately proved descriptor-transfer design.
+5. Preserve kernel proof of inherited slot ownership. `cpuAdmission.ts:27` currently checks the owner's FD 9, inode/device and FLOCK WRITE record. Inside one user namespace, adapt the PID addressing while retaining these checks. **Do not accept a lease from an ancestor user namespace merely because its PID/stat is readable.** Start ordinary agent domains before their first gate-slot acquisition. If a managed-engine launch is requested under a held external gate lease, launch it without the boundary and report that, since the lease cannot cross a user namespace; do not wait for another slot while retaining one. Integration fixtures use isolated lock/queue roots and exercise real nested gates after entry. Supporting a future cross-boundary lease handoff would require a separately proved descriptor-transfer design.
 6. Exercise old unsandboxed and new sandboxed queue clients together against an isolated shared queue. A refused/unknown proc observation cannot delete another owner's ticket. Verify mutual exclusion and nested lease reuse, including CLI subprocesses that close extra FDs. Validate cgroup path readers with the production mount placement. Environment markers select an implementation path; kernel identity/mount checks establish containment.
 
 The combined experiment proves namespace and delegated-limit primitives. It does not prove this complete gate integration. Treat its tests as release blockers; CPU-off, unbounded portable execution, machine-local PID collisions and manager-created workers are unacceptable shortcuts.
 
-`src/lib/pipelines/testGuidance.ts` resolves the installed release's gate scripts and embeds their real path in the stage prompt. Enable protected launches only with namespace-aware installed tooling and update this capability check alongside the wrapper. A checkout-local edit alone cannot repair an older wrapper named in a prompt. Protected stages must never receive the current missing-tooling suggestion to execute heavy tests directly. Where agent resource limits are disabled, the signal boundary still applies; gate execution independently requires its bounded delegated subtree.
+`src/lib/pipelines/testGuidance.ts` resolves the installed release's gate scripts and embeds their real path in the stage prompt. Enable protected launches only with namespace-aware installed tooling and update this capability check alongside the wrapper. A checkout-local edit alone cannot repair an older wrapper named in a prompt. When the installed tooling cannot be resolved, stage composition keeps the earlier fallback brief, which tells the stage to run heavy tests directly and report that gate containment was unavailable. Where agent resource limits are disabled, the signal boundary still applies; gate execution independently requires its bounded delegated subtree.
 
 ### Existing lanes and rollout
 
@@ -237,7 +243,7 @@ The account-switch lane (identifier ending `e38e0604`) touches retirement, deliv
 
 Roll out new domains for newly started native processes after synthetic and real-engine checks pass. Existing active hosts keep their recorded policy and may finish under an explicit legacy status. Do not restart the operator's conversations to retrofit namespaces or claim they are protected. Resume/adopt must distinguish a native session resumed in a new protected process from adoption of an already running legacy process. Rollback preserves running-domain ownership metadata or refuses adoption safely; an older normalizer must not silently discard the identities and leak the process tree.
 
-Linux enforcement is the qualified target. Unsupported platforms must report their actual capability instead of claiming protection. Container-host bridging and the declared `bwrap` dependency are installation checks, not reasons to change machine privileges during this stage.
+Linux enforcement is the qualified target. Other platforms launch as before and report the boundary off instead of claiming protection. Container-host bridging and the declared `bwrap` dependency are installation checks, not reasons to change machine privileges during this stage.
 
 ## Test and release plan
 
@@ -253,7 +259,7 @@ All automated tests use explicit files, isolated HOME/config/temp/state, and the
 | Identity and lifetime | Registry serialization/normalization, host-PID mapping, PID reuse, unknown identity, normal exit, cancellation, deadline, OOM, monitor crash and forced init death. Detached descendants vanish on owned teardown; unrelated fixtures survive. Viewer restart/headless survival and runtime-host succession preserve intended ownership. |
 | Admission and gates | Old/new clients contend in an isolated shared FIFO/lock directory. No false stale deletion, duplicate slot or leaked lease. Nested gates reuse a proved same-domain lease; cross-boundary nesting refuses promptly. A hanging/ignoring/detaching worker is removed by the owned deadline. Read back effective CPU/memory values. |
 | Integration fences | Account/runtime switch during active tools, MCP server exit/reparent, Viewer transport requests, captured cleanup after writer transfer, and container-to-host launch. No access to the operator's live stores. |
-| Capability failures | Missing `bwrap`, disabled userns, denied mounts, unavailable delegation, unreadable identity, malformed metadata and incompatible rollback all produce named refusals with no unconfined engine left running. |
+| Capability failures | Missing `bwrap`, disabled userns, denied mounts, unavailable delegation, a non-Linux platform, a root user and a held gate lease each start the engine once, without the boundary, and report the named cause. Malformed metadata and incompatible rollback still refuse adoption. |
 | Performance | At least 30 repeated launches for each native engine/profile, baseline versus protected median/p95, sustained representative build/test workload, idle helper memory and bounded parallel load. Proposed review threshold: investigate >50 ms median added launch cost or >5% sustained slowdown; never bypass protection to meet it. |
 
 The existing `src/lib/agent/processCleanupPolicy.native.test.ts:17` starts its “own” stand-in in the harness, outside the native CLI. For this OS layer it becomes a **foreign** fixture. The positive fixture must be created by the sandboxed engine. Extend hook tests separately; their original policy contract stays intact.
@@ -274,7 +280,7 @@ The design covers current structured hosts, state sandboxing, scopes and both re
 
 - Kernel upgrade solely to obtain Landlock ABI 6. Re-evaluate when the supported platform gains it independently; do not create two active enforcement backends now.
 - A seccomp signal broker, per-agent host UIDs, privileged cgroup/LSM helpers or a new native supervisor library. The installed namespace primitive already supplies the core restriction.
-- Cross-user-namespace gate-slot lease transfer. Current normal launch order can acquire gate slots after entry; unsupported nesting receives a clear refusal. Add transfer only for a demonstrated caller that needs it.
+- Cross-user-namespace gate-slot lease transfer. Current normal launch order can acquire gate slots after entry; a managed launch under a held lease runs without the boundary and reports it. Add transfer only for a demonstrated caller that needs it.
 - A complete filesystem, credential, network and external-control-service sandbox. That requires a separate authority model and compatibility contract.
 - Changes to MCP writer transport/lifetime or account-switch retirement policy owned by the named lanes.
 - Non-Linux signal enforcement and paid qualification of additional native engines.
@@ -346,9 +352,8 @@ memory and task limits and stays in the same slice. The outer pane shell
 remains outside the writable invocation subtree. Generic command windows
 retain their existing shell behavior. The npm package bundles the namespace-aware gate scripts under
 `dist/gate`; source releases use `scripts`. Both use one installed-tooling
-capability check. Incomplete tooling refuses stage composition and managed
-launches. Linux is the qualified target; other platforms report managed
-launches as unavailable.
+capability check. Incomplete tooling composes the earlier fallback stage brief
+and launches without the boundary (see the 2026-10-20 section below).
 
 The focused test files are `agentSignalSandbox.test.ts`,
 `agentSignalSandbox.integration.test.ts`, `agentSignalSandbox.native.test.ts`,
@@ -540,3 +545,42 @@ The completed focused replay has forty passing cases and no failures.
 After integrating the subsequent main commits, including #3094's private
 runtime build tree and worker cap, types passed and all forty cases passed
 again on `84fe47ad6`.
+
+## Boundary availability and known gaps, 2026-10-20
+
+The operator decided on 2026-10-20 that a launch is never refused for a
+missing boundary. Each launch makes one capability decision.
+
+- The Viewer side rules out a non-Linux platform, a held gate slot lease, the
+  root user, a missing `python3` and unresolvable launcher tooling. The engine
+  then starts through the earlier launch path, under the memory and CPU
+  wrapper only.
+- The launcher proves the host facts: `bwrap` and `systemd-run`, a user
+  manager that accepts a delegated scope, writable delegated cpu, memory and
+  pids controllers, and namespace readiness within its budget. Any failure
+  before its receipt is published ends the partial namespace and replaces the
+  launcher with the engine in the same process. The engine has not run before
+  that point, so it runs exactly once.
+- A launch from inside an existing domain keeps that domain's PID namespace,
+  scope and context, and is reported as such.
+
+An unprotected launch records why. Structured hosts publish
+`signalBoundary: { state: "off", reason }` in their host state and registry
+row, and a reconnected Codex socket keeps it. Headless runs write the cause to
+their own stderr file, and terminal panes print it. The Viewer log names every
+unprotected launch.
+
+The exec barrier derives both sides' waits from `SIGNAL_READINESS_MS` and
+`SIGNAL_ACK_MS` in `src/lib/runtime/agentSignalSandbox.ts`, passed to the
+launcher in its environment. The launcher falls back after the readiness
+budget. The Viewer waits for a receipt for readiness plus acknowledgement. The
+namespace waits for its exec signal one acknowledgement budget longer still,
+so a receipt the Viewer accepts is always executed.
+
+Stage composition keeps the earlier fallback brief when installed gate tooling
+cannot be resolved.
+
+Known gaps, accepted by the operator: the systemd user manager stays reachable
+from every domain (`systemd-run --user --wait /bin/kill`,
+`systemctl --user kill`, and a `--scope` escape). Docker and the shared tmux
+server are allowed services. None of these is masked.

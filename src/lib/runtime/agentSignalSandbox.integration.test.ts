@@ -5,7 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { once } from "node:events";
 import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
-import { spawnSignalSandbox, spawnHeadlessSignalSandbox, spawnManagedEngine, signalDomain, signalAgentDomain, resolveSignalTooling, normalizeAgentSignalDomain } from "./agentSignalSandbox";
+import { spawnSignalSandbox, spawnHeadlessSignalSandbox, spawnManagedEngine, signalDomain, signalAgentDomain, signalBoundaryOff, resolveSignalTooling, normalizeAgentSignalDomain,
+  SIGNAL_ACK_MS, SIGNAL_READINESS_MS } from "./agentSignalSandbox";
 import { CopilotAcpHost } from "./copilotAcpHost";
 import { FileRuntimeEventStore } from "./eventStore";
 import { AgentMemoryCell, GIB } from "./agentMemory";
@@ -88,7 +89,7 @@ async function close(child: ChildProcess): Promise<void> {
 
 const proof = String.raw`
 import ctypes, errno, json, os, platform, signal, subprocess, sys, time
-foreign, port, marker = int(sys.argv[1]), sys.argv[2], sys.argv[3]
+foreign, port, marker, name = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
 context=json.loads(os.environ['LLV_SIGNAL_SANDBOX'])
 assert os.getpid()>1 and os.readlink('/proc/self/ns/pid')==context['pidNamespace']
 assert not os.path.exists('/proc/'+str(foreign))
@@ -113,8 +114,9 @@ try:
     assert libc.setns(fd,0)==-1 and ctypes.get_errno()==errno.EPERM
     os.close(fd)
 except PermissionError: pass
-for command in [['/bin/kill','-TERM',str(foreign)], ['pkill','-TERM','-P',str(foreign)],
-                ['killall','-TERM','foreign-signal'],['fuser','-k','-n','tcp',port]]:
+# The harness runs the name-matching commands unconfined as controls.
+for command in [['/bin/kill','-TERM',str(foreign)], ['pkill','-TERM','-x',name],
+                ['killall','-TERM',name],['fuser','-k','-n','tcp',port]]:
     result=subprocess.run(command,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
     assert result.returncode!=0, command
 own=subprocess.Popen(['/bin/sleep','30'])
@@ -155,16 +157,22 @@ while True: time.sleep(1)
 kernelTest("production signal domain refuses foreign syscalls and utilities, stops own children and reaps detached descendants", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-domain-"));
   const env = fixtureEnv(root);
-  const executable = path.join(root, "foreign-signal");
-  fs.copyFileSync("/bin/sleep", executable); fs.chmodSync(executable, 0o700);
-  const foreign = spawn(executable, ["60"], { detached: true, stdio: "ignore", env });
+  // Unique command names: a name match can reach only this harness's fixtures.
+  const unique = () => crypto.randomUUID().replaceAll("-", "").slice(0, 10);
+  const fixture = (prefix: string) => {
+    const file = path.join(root, `${prefix}${unique()}`);
+    fs.copyFileSync("/bin/sleep", file); fs.chmodSync(file, 0o700);
+    return { name: path.basename(file), child: spawn(file, ["60"], { detached: true, stdio: "ignore", env }) };
+  };
+  const target = fixture("fsig-");
+  const foreign = target.child;
   const foreignIdentity = captureProcessIdentity(foreign.pid!);
   process.kill(foreign.pid!, 0);
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("foreign alive") });
   const marker = path.join(root, "detached.pid");
   let child: ChildProcess | undefined;
   try {
-    child = await spawnSignalSandbox("python3", ["-c", proof, String(foreign.pid), String(server.port), marker], { env, stdio: ["pipe", "pipe", "pipe"], detached: true });
+    child = await spawnSignalSandbox("python3", ["-c", proof, String(foreign.pid), String(server.port), marker, target.name], { env, stdio: ["pipe", "pipe", "pipe"], detached: true });
     let diagnostic = "";
     child.stderr!.on("data", chunk => { diagnostic += String(chunk); });
     const output = new Promise<string>(resolve => child!.stdout!.once("data", data => resolve(String(data))));
@@ -174,6 +182,19 @@ kernelTest("production signal domain refuses foreign syscalls and utilities, sto
     expect(receipt.refused).toHaveLength(6);
     expect(processIdentityStatus(foreignIdentity)).toBe("alive");
     expect(await (await fetch(`http://127.0.0.1:${server.port}`)).text()).toBe("foreign alive");
+    // Unconfined controls: the same commands outside the domain do signal a
+    // disposable fixture, so their refusals above come from the boundary.
+    for (const command of [["pkill", "-TERM", "-x"], ["killall", "-TERM"]]) {
+      const control = fixture("csig-");
+      try {
+        const controlIdentity = captureProcessIdentity(control.child.pid!);
+        const result = spawnSync(command[0]!, [...command.slice(1), control.name], { encoding: "utf8", timeout: 5_000 });
+        expect(result.status, `${command[0]}: ${result.stderr}`).toBe(0);
+        await once(control.child, "close");
+        expect(processIdentityStatus(controlIdentity)).toBe("dead");
+      } finally { await close(control.child); }
+    }
+    expect(processIdentityStatus(foreignIdentity)).toBe("alive");
     const domain = signalDomain(child)!;
     expect(domain.native.pid).not.toBe(child.pid);
     expect(domain.init.pid).not.toBe(domain.native.pid);
@@ -396,18 +417,66 @@ const memory=new Uint8Array(256*1024*1024);for(let i=0;i<memory.length;i+=4096)m
   } finally { if (child) await close(child); cell.close(); await close(foreign); fs.rmSync(root, { recursive: true, force: true }); }
 }, 15_000);
 
-kernelTest("setup failure and an inherited external lease prevent engine execution", async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-refusal-"));
-  const marker = path.join(root, "engine-ran");
+kernelTest("a scope without delegated controllers launches the engine unprotected and reports it", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-no-delegation-"));
+  const marker = path.join(root, "engine");
+  const unit = `delegatus-signal-fixture-${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}.scope`;
+  // The launcher is handed a declared scope that systemd did not delegate.
+  const start = ((command: string, argv: string[], options: Parameters<typeof spawn>[2]) => spawn("systemd-run",
+    ["--user", "--scope", "--quiet", "--collect", `--unit=${unit}`, "-p", "Delegate=no", "--", command, ...argv], options)) as typeof spawn;
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
   try {
-    const env = fixtureEnv(root);
-    await expect(spawnSignalSandbox("/usr/bin/touch", [marker], { env: { ...env, LLV_GATE_SLOT_LEASE: "external" } })).rejects.toThrow("cross-user-namespace");
-    const bin = path.join(root, "bin"); fs.mkdirSync(bin);
-    fs.symlinkSync("/usr/bin/python3", path.join(bin, "python3"));
-    await expect(spawnSignalSandbox("/usr/bin/touch", [marker], { env: { ...env, PATH: bin } })).rejects.toThrow("missing: bwrap");
-    expect(fs.existsSync(marker)).toBeFalse();
-  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    const child = await spawnSignalSandbox("/bin/sh", ["-c", `printf ran > '${marker}'`], { env: fixtureEnv(root), stdio: ["pipe", "pipe", "pipe"] }, start, unit);
+    let errors = ""; child.stderr!.on("data", chunk => { errors += chunk; });
+    if (child.exitCode === null && child.signalCode === null) await once(child, "close");
+    expect(child.exitCode, errors).toBe(0);
+    expect(fs.readFileSync(marker, "utf8")).toBe("ran");
+    expect(signalDomain(child)).toBeUndefined();
+    expect(signalBoundaryOff(child)?.reason).toBe("invocation cgroup delegation lacks cpu, memory or pids");
+  } finally { warn.mockRestore(); fs.rmSync(root, { recursive: true, force: true }); }
 }, 20_000);
+
+kernelTest.each(["inherited context", "read-only cgroup"] as const)("a launch from inside a domain runs its engine: %s", async mode => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-nested-"));
+  const marker = path.join(root, "inner-engine");
+  const launcher = resolveSignalTooling().launcher;
+  // Without the context marker the nested launcher reaches the domain's
+  // read-only /sys and reports that instead.
+  const prefix = mode === "inherited context" ? [] : ["env", "-u", "LLV_SIGNAL_SANDBOX"];
+  let child: ChildProcess | undefined;
+  try {
+    child = await spawnSignalSandbox(prefix[0] ?? "python3", [...prefix.slice(1), ...(prefix.length ? ["python3"] : []), launcher, "--automatic", "--",
+      "/bin/sh", "-c", `printf ran > '${marker}'`], { env: fixtureEnv(root), stdio: ["pipe", "pipe", "pipe"] });
+    expect(signalDomain(child)).toBeDefined();
+    let errors = ""; child.stderr!.on("data", chunk => { errors += chunk; }); child.stdout!.resume();
+    if (child.exitCode === null && child.signalCode === null) await once(child, "close");
+    expect(child.exitCode, errors).toBe(0);
+    expect(fs.readFileSync(marker, "utf8")).toBe("ran");
+    expect(errors).toContain("boundary off, running unprotected:");
+    if (mode === "inherited context") expect(errors).toContain("inside an existing agent signal domain");
+  } finally { if (child) await close(child); fs.rmSync(root, { recursive: true, force: true }); }
+}, 30_000);
+
+kernelTest("the namespace waits for an acknowledgement as long as the Viewer may still give it", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-exec-barrier-"));
+  const directory = fs.mkdtempSync(path.join(root, "invocation-"));
+  const receipt = path.join(directory, "ready.json"), marker = path.join(root, "engine");
+  const child = spawn("python3", [resolveSignalTooling().launcher, "--receipt", receipt, "--", "/bin/sh", "-c", `printf ran > '${marker}'`],
+    { env: { ...fixtureEnv(root), LLV_SIGNAL_READINESS_MS: String(SIGNAL_READINESS_MS), LLV_SIGNAL_ACK_MS: String(SIGNAL_ACK_MS) }, stdio: ["ignore", "ignore", "pipe"] });
+  let errors = ""; child.stderr.on("data", chunk => { errors += chunk; });
+  try {
+    const end = Date.now() + SIGNAL_READINESS_MS;
+    while (!fs.existsSync(receipt) && child.exitCode === null && Date.now() < end) await Bun.sleep(10);
+    expect(normalizeAgentSignalDomain(JSON.parse(fs.readFileSync(receipt, "utf8")))!.directory).toBe(fs.realpathSync(directory));
+    // Later than the namespace's former 10 s wait, within the Viewer's budget.
+    await Bun.sleep(11_000);
+    expect(child.exitCode, errors).toBeNull();
+    fs.writeFileSync(path.join(directory, "exec.json"), "true");
+    await once(child, "close");
+    expect(child.exitCode, errors).toBe(0);
+    expect(fs.readFileSync(marker, "utf8")).toBe("ran");
+  } finally { await close(child); fs.rmSync(root, { recursive: true, force: true }); }
+}, 30_000);
 
 kernelTest.each(["native-exit", "monitor-death", "init-death"])("owned namespace descendants end after %s", async mode => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-lifetime-"));

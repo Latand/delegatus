@@ -1,4 +1,4 @@
-import { nativeProcessId, signalDomain, signalAgentDomain, spawnManagedEngine } from "./agentSignalSandbox";
+import { nativeProcessId, signalDomain, signalAgentDomain, signalBoundaryOff, spawnManagedEngine } from "./agentSignalSandbox";
 import { engineMemoryOff } from "@/lib/memory/source";
 import { CodexSocketTransport, type CodexTransport, type CodexSocketOwner } from "./codexSocketTransport";
 import { codexOperatorQuestionPolicy } from "@/lib/agent/operatorQuestionPolicy";
@@ -3076,6 +3076,7 @@ export class CodexAppServerHost implements EngineHost {
       pid,
       processStartIdentity,
       ...(signalDomain(this.child) ? { signalDomain: signalDomain(this.child) } : {}),
+      ...(signalBoundaryOff(this.child) ? { signalBoundary: signalBoundaryOff(this.child) } : {}),
       eventCursor: this.cursor,
       protocolVersion: this.protocolVersion,
       activeTurnRef: this.activeTurnId,

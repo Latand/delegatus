@@ -19,9 +19,22 @@ export interface AgentSignalDomain {
   retired?: true;
 }
 
+/** A launch that runs without the boundary records why. Hosts publish it
+ * beside their registry row; the launch itself is never refused for it. */
+export interface SignalBoundaryOff { state: "off"; reason: string }
+
+/** Both sides of the exec barrier derive their waits from these budgets. The
+ * launcher falls back to an unprotected exec when its namespace is not ready
+ * within the readiness budget. The Viewer waits for a receipt for readiness
+ * plus acknowledgement; the namespace waits for its exec signal longer still. */
+export const SIGNAL_READINESS_MS = 10_000;
+export const SIGNAL_ACK_MS = 15_000;
+const BOUNDARY_REASON_MAX_CHARS = 500;
+
 type SignalDomainHandle = { pid?: number };
 const domains = new WeakMap<SignalDomainHandle, AgentSignalDomain>();
 const pendingReceipts = new WeakMap<SignalDomainHandle, string>();
+const boundaryOff = new WeakMap<SignalDomainHandle, SignalBoundaryOff>();
 const pause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 let fixtureHeadlessSpawn: typeof spawn | null = null;
 /** Test preload supplies a transport for protocol fixtures; native
@@ -37,10 +50,65 @@ export async function spawnManagedEngine(command: string, args: string[], option
   memory: AgentMemoryCell | null | undefined, injected?: EngineSpawn, sourceEnv = options.env ?? process.env,
   transportSpawn?: EngineSpawn): Promise<ChildProcessWithoutNullStreams> {
   if (injected) return (memory?.wrapSpawn(injected) ?? injected)(command, args, options);
-  if (sourceEnv.LLV_GATE_SLOT_LEASE) throw new Error("agent signal sandbox unavailable: cross-user-namespace gate lease transfer is unsupported");
   const base = memory?.wrapSpawn(transportSpawn) ?? transportSpawn ?? ((cmd, argv, opts) => spawn(cmd, argv, { ...opts, stdio: ["pipe", "pipe", "pipe"] }));
   const scope = memory && (memory.plan.mechanism === "scope" || memory.plan.cpu) ? memory.plan.unit : null;
-  return await spawnSignalSandbox(command, args, { ...options, stdio: ["pipe", "pipe", "pipe"] }, base as typeof spawn, scope) as ChildProcessWithoutNullStreams;
+  const capabilityEnv = sourceEnv.LLV_GATE_SLOT_LEASE ? { ...(options.env ?? process.env), LLV_GATE_SLOT_LEASE: sourceEnv.LLV_GATE_SLOT_LEASE } : undefined;
+  return await spawnSignalSandbox(command, args, { ...options, stdio: ["pipe", "pipe", "pipe"] }, base as typeof spawn, scope, capabilityEnv) as ChildProcessWithoutNullStreams;
+}
+
+/** Why this handle's engine runs without the boundary, if it does. */
+export function signalBoundaryOff(child: SignalDomainHandle): SignalBoundaryOff | undefined {
+  if (pendingReceipts.has(child)) {
+    try { signalDomain(child); } catch { /* A refused receipt is reported by its cleanup caller. */ }
+  }
+  const off = boundaryOff.get(child);
+  return off ? { ...off } : undefined;
+}
+
+/** Carries a launch's boundary status to a transport or a reconnected handle. */
+export function recordSignalBoundaryOff(child: SignalDomainHandle, value: SignalBoundaryOff | string, launch?: string): void {
+  const reason = (typeof value === "string" ? value : value.reason).slice(0, BOUNDARY_REASON_MAX_CHARS) || "the boundary could not be established";
+  boundaryOff.set(child, { state: "off", reason });
+  if (launch) console.warn(`[signal-sandbox] ${launch} launch runs without the agent signal boundary: ${reason}`);
+}
+
+/** Reject malformed persisted boundary status. */
+export function normalizeSignalBoundaryOff(value: unknown): SignalBoundaryOff | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const off = value as Partial<SignalBoundaryOff>;
+  return off.state === "off" && typeof off.reason === "string" && off.reason
+    ? { state: "off", reason: off.reason.slice(0, BOUNDARY_REASON_MAX_CHARS) } : undefined;
+}
+
+function onPath(binary: string, searchPath: string | undefined): boolean {
+  return (searchPath ?? "").split(path.delimiter).some(directory => {
+    if (!directory) return false;
+    try { fs.accessSync(path.join(directory, binary), fs.constants.X_OK); return true; } catch { return false; }
+  });
+}
+
+/** One capability decision per launch. This side rules out what it can see;
+ * the launcher proves the host facts and falls back the same way. */
+function signalLauncher(env: NodeJS.ProcessEnv, bridged: boolean): { launcher: string } | { off: string } {
+  if (process.platform !== "linux") return { off: `Linux namespaces are unavailable on ${process.platform}` };
+  if (env.LLV_GATE_SLOT_LEASE) return { off: "an inherited gate slot lease cannot cross a user namespace" };
+  if (process.getuid?.() === 0) return { off: "managed signal domains require a non-root user" };
+  if (!bridged && !onPath("python3", env.PATH)) return { off: "required host dependency is missing: python3" };
+  try { return { launcher: launcherFile() }; }
+  catch (error) { return { off: error instanceof Error ? error.message : String(error) }; }
+}
+
+function launcherEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return { ...env, LLV_SIGNAL_READINESS_MS: String(SIGNAL_READINESS_MS), LLV_SIGNAL_ACK_MS: String(SIGNAL_ACK_MS) };
+}
+
+type SignalReceipt = { domain: AgentSignalDomain } | { off: string };
+function readReceipt(file: string): SignalReceipt {
+  const value = JSON.parse(fs.readFileSync(file, "utf8"));
+  if (value?.policyVersion === 1 && value.boundary === "off") {
+    return { off: typeof value.reason === "string" && value.reason ? value.reason : "the launcher could not establish the boundary" };
+  }
+  return { domain: normalizeAgentSignalDomain(value)! };
 }
 
 /** Reject malformed persisted authority. */
@@ -108,7 +176,15 @@ export function signalDomain(child: SignalDomainHandle): AgentSignalDomain | und
   const receipt = pendingReceipts.get(child);
   if (receipt && fs.existsSync(receipt)) {
     try {
-      const domain = normalizeAgentSignalDomain(JSON.parse(fs.readFileSync(receipt, "utf8")))!;
+      const parsed = readReceipt(receipt);
+      if ("off" in parsed) {
+        // The launcher already executed the engine in its own place.
+        pendingReceipts.delete(child);
+        recordSignalBoundaryOff(child, parsed.off, "headless");
+        fs.rmSync(path.dirname(receipt), { recursive: true, force: true });
+        return undefined;
+      }
+      const domain = parsed.domain;
       if (domain.monitor.pid !== child.pid) throw new Error("agent signal sandbox monitor identity does not match its handle");
       domains.set(child, domain); pendingReceipts.delete(child);
     } catch (error) {
@@ -143,15 +219,25 @@ export function signalAgentDomain(child: SignalDomainHandle, signal: NodeJS.Sign
  * the independent monitor for the run's entire lifetime. */
 export function spawnHeadlessSignalSandbox(command: string, args: string[], options: SpawnOptions,
   start: typeof spawn = spawn, scope?: string | null): ChildProcess {
-  if (process.platform !== "linux") throw new Error("agent signal sandbox unavailable: Linux namespaces are required");
-  const launcher = launcherFile();
+  const bridged = process.env.LLV_DOCKER_NSENTER_SHIMS === "1" || options.env?.LLV_DOCKER_NSENTER_SHIMS === "1";
+  const decision = signalLauncher(options.env ?? process.env, bridged);
+  if ("off" in decision) {
+    const child = start(command, args, options);
+    recordSignalBoundaryOff(child, decision.off, "headless");
+    return child;
+  }
+  const { launcher } = decision;
   const directory = fs.realpathSync(fs.mkdtempSync(path.join(options.env?.TMPDIR || os.tmpdir(), "delegatus-signal-")));
   const receipt = path.join(directory, "ready.json");
-  const env: NodeJS.ProcessEnv = { ...(options.env ?? process.env), LLV_SIGNAL_LAUNCHER: launcher, LLV_SIGNAL_RECEIPT: receipt, LLV_SIGNAL_AUTOMATIC: "1" };
-  const bridged = process.env.LLV_DOCKER_NSENTER_SHIMS === "1" || env.LLV_DOCKER_NSENTER_SHIMS === "1";
+  const env: NodeJS.ProcessEnv = { ...launcherEnv(options.env ?? process.env), LLV_SIGNAL_LAUNCHER: launcher, LLV_SIGNAL_RECEIPT: receipt, LLV_SIGNAL_AUTOMATIC: "1" };
   const child = bridged ? start(command, args, { ...options, env })
     : start("python3", [launcher, "--automatic", "--receipt", receipt, ...(scope ? ["--scope", scope] : []), "--", command, ...args], { ...options, env });
   pendingReceipts.set(child, receipt);
+  // The launcher's fallback line is in the run's own stderr from its start.
+  // Its receipt is read at cleanup, or here, which removes its scratch.
+  child.once("close", () => {
+    try { signalDomain(child); } catch (error) { console.error("headless signal sandbox receipt refused", error); }
+  });
   return child;
 }
 
@@ -174,10 +260,15 @@ function launcherFile(): string {
   return file;
 }
 
-export function terminalSignalSandboxCommand(command: string): string {
-  if (process.platform !== "linux") throw new Error("agent signal sandbox unavailable: Linux namespaces are required");
+/** An unavailable boundary leaves the pane command as it was. */
+export function terminalSignalSandboxCommand(command: string, env: NodeJS.ProcessEnv = process.env): string {
+  const decision = signalLauncher(env, env.LLV_DOCKER_NSENTER_SHIMS === "1");
+  if ("off" in decision) {
+    console.warn(`[signal-sandbox] terminal launch runs without the agent signal boundary: ${decision.off}`);
+    return command;
+  }
   const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-  return `python3 ${quote(launcherFile())} --terminal -- /bin/sh -c ${quote(command)}`;
+  return `python3 ${quote(decision.launcher)} --terminal -- /bin/sh -c ${quote(command)}`;
 }
 
 /** Source releases and packed releases use the same capability check. */
@@ -236,16 +327,21 @@ function cacheHostTooling(launcher: string, scripts: string): { launcher: string
 /** The resource wrapper remains outside the namespace. An injected spawn is
  * the host tests' protocol seam; production callers always use this adapter. */
 export async function spawnSignalSandbox(command: string, args: string[], options: SpawnOptions,
-  start: typeof spawn = spawn, scope?: string | null): Promise<ChildProcess> {
-  if (process.platform !== "linux") throw new Error("agent signal sandbox unavailable: Linux namespaces are required");
-  if (options.env?.LLV_GATE_SLOT_LEASE) throw new Error("agent signal sandbox unavailable: cross-user-namespace gate lease transfer is unsupported");
-  const launcher = launcherFile();
+  start: typeof spawn = spawn, scope?: string | null, capabilityEnv = options.env ?? process.env): Promise<ChildProcess> {
+  const bridged = process.env.LLV_DOCKER_NSENTER_SHIMS === "1" || options.env?.LLV_DOCKER_NSENTER_SHIMS === "1";
+  const decision = signalLauncher(capabilityEnv, bridged);
+  if ("off" in decision) {
+    // Main's launch path: the engine under its memory and CPU wrapper only.
+    const child = start(command, args, options);
+    recordSignalBoundaryOff(child, decision.off, "managed");
+    return child;
+  }
+  const { launcher } = decision;
   const directory = fs.realpathSync(fs.mkdtempSync(path.join(options.env?.TMPDIR || os.tmpdir(), "delegatus-signal-")));
   const receipt = path.join(directory, "ready.json");
   const diagnosticFile = options.env?.LLV_SIGNAL_IGNORE_NATIVE_STDIO === "1" ? `${directory}.stderr` : undefined;
-  const env: NodeJS.ProcessEnv = { ...(options.env ?? process.env), LLV_SIGNAL_LAUNCHER: launcher, LLV_SIGNAL_RECEIPT: receipt,
+  const env: NodeJS.ProcessEnv = { ...launcherEnv(options.env ?? process.env), LLV_SIGNAL_LAUNCHER: launcher, LLV_SIGNAL_RECEIPT: receipt,
     ...(diagnosticFile ? { LLV_SIGNAL_DIAGNOSTIC: diagnosticFile } : {}) };
-  const bridged = process.env.LLV_DOCKER_NSENTER_SHIMS === "1" || env.LLV_DOCKER_NSENTER_SHIMS === "1";
   const child = bridged ? start(command, args, { ...options, env })
     : start("python3", [launcher, "--receipt", receipt, ...(scope ? ["--scope", scope] : []), "--", command, ...args], { ...options, env });
   let stderr = "", failure: Error | undefined, closed = false;
@@ -253,12 +349,21 @@ export async function spawnSignalSandbox(command: string, args: string[], option
   child.stderr?.on("data", diagnostic);
   child.once("error", error => { failure = error; });
   child.once("close", () => { closed = true; });
-  const deadline = Date.now() + 15_000;
+  // The launcher reports an unprotected fallback before its readiness budget
+  // ends. Only a launcher that cannot run at all reaches this deadline.
+  const deadline = Date.now() + SIGNAL_READINESS_MS + SIGNAL_ACK_MS;
   try {
     for (;;) {
       if (failure) throw failure;
       if (fs.existsSync(receipt)) {
-        const domain = normalizeAgentSignalDomain(JSON.parse(fs.readFileSync(receipt, "utf8")))!;
+        const parsed = readReceipt(receipt);
+        if ("off" in parsed) {
+          // The launcher has executed the engine in its own place.
+          recordSignalBoundaryOff(child, parsed.off, "managed");
+          fs.rmSync(directory, { recursive: true, force: true });
+          return child;
+        }
+        const domain = parsed.domain;
         if (domain.monitor.pid !== child.pid || domain.directory !== directory || !agentSignalDomainAlive(domain)) throw new Error("agent signal sandbox unavailable: launch identity could not be verified");
         domains.set(child, domain);
         fs.writeFileSync(path.join(directory, "exec.json"), "true", { mode: 0o600 });

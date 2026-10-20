@@ -44,23 +44,26 @@ you already use.
 - For pull requests and merging: an `origin` on GitHub, and the GitHub
   CLI (`gh`) signed in. Without a GitHub pull request, pipelines end without
   a merge, and a stopped merge names a signed-out `gh` as its reason.
-- Linux with Bubblewrap (`bwrap`), Python 3, util-linux, unprivileged user/PID
-  namespaces and a systemd user manager delegating the cpu, memory and pids
-  cgroup v2 controllers. Managed launches verify these capabilities before
-  executing the engine. [Platforms](#platforms) has the details.
+- Linux or macOS. Linux is the main platform and macOS works. Native
+  Windows runs Delegatus with Claude Code only; use WSL 2 for Codex, the MCP
+  server and the rest. [Platforms](#platforms) has the details.
 
 ### Platforms
 
-Linux is the qualified platform for new managed agents. The kernel signal
-boundary is mandatory; missing namespace or delegation support refuses a
-launch with its cause. This applies with CPU or memory placement disabled too.
+Delegatus is built for Linux and also runs on macOS and Windows.
 
-macOS and Windows retain their process viewing backends. New managed launches
-there report that Linux namespace support is required. Existing conversations
-can still be read. WSL 2 needs systemd and the Linux capabilities listed above.
+On Linux, each managed agent runs inside a signal boundary where it is
+available: its own kill, pkill, killall or fuser reaches only processes it
+started. The boundary needs Bubblewrap (`bwrap`), Python 3, util-linux,
+unprivileged user and PID namespaces, and a systemd user manager that
+delegates the cpu, memory and pids cgroup controllers. Where any of these is missing, and on macOS and Windows,
+agents launch without the boundary and the launch reports it as off with the
+cause. A missing boundary never stops a launch. Known gaps: an agent can still
+reach the systemd user manager, Docker and the shared tmux server, which can
+act on other processes of the same user.
 
-The macOS backend uses `ps` and `lsof` in place of `/proc`.
-The native Windows backend recognizes Claude Code; install Claude with its
+macOS works through a backend that uses `ps` and `lsof` in place of `/proc`.
+Native Windows runs Delegatus with Claude Code; install Claude with its
 native installer so a `claude.exe` is on `PATH`. Codex, managed accounts,
 local dictation, the MCP server and `--tailscale` are missing there, so run
 under WSL 2 if you need them. Windows also has no open-file scan, so

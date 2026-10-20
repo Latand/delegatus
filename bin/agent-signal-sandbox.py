@@ -15,6 +15,19 @@ import time
 import uuid
 
 POLICY = 1
+# The Viewer passes its own budgets; a terminal launch has no Viewer waiting.
+READINESS = int(os.environ.get("LLV_SIGNAL_READINESS_MS") or 10_000) / 1000
+ACK = int(os.environ.get("LLV_SIGNAL_ACK_MS") or 15_000) / 1000
+LAUNCH_ENV = ("LLV_SIGNAL_LAUNCHER", "LLV_SIGNAL_RECEIPT", "LLV_SIGNAL_AUTOMATIC", "LLV_SIGNAL_DIAGNOSTIC",
+              "LLV_SIGNAL_IGNORE_NATIVE_STDIO", "LLV_SIGNAL_READINESS_MS", "LLV_SIGNAL_ACK_MS")
+
+
+class Unavailable(Exception):
+    """The boundary cannot be established and the engine has not executed."""
+
+
+class Committed(Exception):
+    """The receipt was published; the engine may run and is never relaunched."""
 
 
 def read(file):
@@ -55,8 +68,8 @@ def group():
     return next(line[3:] for line in read("/proc/self/cgroup").splitlines() if line.startswith("0::"))
 
 
-def wait_file(file, child=None, timeout=10):
-    end = time.monotonic() + timeout
+def wait_file(file, child=None, end=None):
+    end = end if end is not None else time.monotonic() + READINESS
     while time.monotonic() < end:
         if Path(file).exists():
             try:
@@ -90,73 +103,154 @@ def inner(directory, command):
     if status["NSpid"].split() != [str(os.getpid())]:
         raise RuntimeError("normal proc is not private")
     atomic(directory / "inner.json", ready)
-    wait_file(directory / "exec.json")
+    # The Viewer acknowledges a receipt up to readiness plus ACK after it
+    # started; this side started later and waits one ACK beyond that.
+    wait_file(directory / "exec.json", end=time.monotonic() + READINESS + 2 * ACK)
     os.environ["LLV_SIGNAL_SANDBOX"] = read(directory / "context.json")
+    execute(command)
+
+
+def execute(command):
     # Socket engines outlive their Viewer and inherit no Viewer pipes. Only
     # pre-exec setup writes the owned diagnostic file; native output is ignored.
     if os.environ.get("LLV_SIGNAL_IGNORE_NATIVE_STDIO") == "1":
         with open(os.devnull, "r+b", buffering=0) as null:
             for descriptor in (0, 1, 2):
                 os.dup2(null.fileno(), descriptor)
-    for name in ("LLV_SIGNAL_LAUNCHER", "LLV_SIGNAL_RECEIPT", "LLV_SIGNAL_AUTOMATIC", "LLV_SIGNAL_DIAGNOSTIC", "LLV_SIGNAL_IGNORE_NATIVE_STDIO"):
+    for name in LAUNCH_ENV:
         os.environ.pop(name, None)
     os.execvp(command[0], command)
 
 
+def unprotected(options, command, reason):
+    """Run the engine as main does and report that the boundary is off."""
+    reason = str(reason)[:500] or "the boundary could not be established"
+    if options.receipt:
+        Path(options.receipt).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        atomic(options.receipt, {"policyVersion": POLICY, "boundary": "off", "reason": reason})
+    if options.terminal or options.automatic or not options.receipt:
+        # Terminal panes and headless logs carry the report; structured hosts
+        # record the receipt instead of engine stderr.
+        print(f"agent signal sandbox: boundary off, running unprotected: {reason}", file=sys.stderr, flush=True)
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGWINCH):
+        signal.signal(sig, signal.SIG_DFL)
+    try:
+        execute(command)
+    except OSError as error:
+        print(f"agent engine could not start: {error}", file=sys.stderr, flush=True)
+        os._exit(127)
+
+
+def nested_domain():
+    """An engine launched from inside a domain stays inside that domain."""
+    try:
+        context = json.loads(os.environ.get("LLV_SIGNAL_SANDBOX") or "null")
+        return bool(context) and os.readlink("/proc/self/ns/pid") != context["hostPidNamespace"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+
+
 def launch(options, command):
     if os.getuid() == 0:
-        raise RuntimeError("managed signal domains require the original non-root user")
+        return unprotected(options, command, "managed signal domains require a non-root user")
     if os.environ.get("LLV_GATE_SLOT_LEASE"):
-        raise RuntimeError("cross-user-namespace gate lease transfer is unsupported; launch before acquiring a gate slot")
+        return unprotected(options, command, "an inherited gate slot lease cannot cross a user namespace")
+    if nested_domain():
+        # Its PID namespace, scope and context still bind this engine.
+        return unprotected(options, command, "launched inside an existing agent signal domain, whose boundary still applies")
     for binary in ("bwrap", "python3", "systemd-run"):
         if not shutil.which(binary):
-            raise RuntimeError(f"required host dependency is missing: {binary}")
+            return unprotected(options, command, f"required host dependency is missing: {binary}")
     if not options.scope:
-        unit = f"delegatus-signal-{uuid.uuid4().hex}.scope"
-        version = subprocess.check_output(["systemd-run", "--version"], text=True).split()[1]
-        parent_unit = Path(group()).name
-        resource_args = []
-        if options.terminal and re.fullmatch(r"delegatus-agent-[a-z]+-pane-[a-f0-9-]{12}\.scope", parent_unit):
-            parent = Path("/sys/fs/cgroup" + group())
-            quota, period = read(parent / "cpu.max").split()
-            resource_args = [f"--slice={parent.parent.name}", "-p", f"CPUWeight={read(parent / 'cpu.weight').strip()}"]
-            if quota != "max":
-                resource_args += ["-p", f"CPUQuota={int(quota) * 100 / int(period)}%", "-p", f"CPUQuotaPeriodSec={int(period)}us"]
-            for file, property_name in (("memory.max", "MemoryMax"), ("memory.swap.max", "MemorySwapMax"), ("pids.max", "TasksMax")):
-                value = read(parent / file).strip()
-                if value != "max":
-                    resource_args += ["-p", f"{property_name}={value}"]
-        argv = ["systemd-run", "--user", "--scope", "--quiet", "--collect",
-                *(["--expand-environment=no"] if int(version) >= 254 else []),
-                f"--unit={unit}", "-p", "Delegate=yes",
-                *resource_args,
-                # A regression fixture cannot outlive the admitted test run.
-                # Ordinary headless launches remain independent of the Viewer.
-                *(["-p", f"BindsTo={parent_unit}", "-p", f"After={parent_unit}"]
-                  if re.fullmatch(r"delegatus-gate-[a-f0-9-]+\.service", parent_unit) else []),
-                "--", sys.executable,
-                str(Path(__file__).resolve()), "--scope", unit]
-        if options.receipt:
-            argv += ["--receipt", options.receipt]
-        if options.terminal:
-            argv += ["--terminal"]
-        if options.automatic:
-            argv += ["--automatic"]
-        os.execvp(argv[0], argv + ["--"] + command)
-    owned_group = group()
-    if Path(owned_group).name != options.scope:
-        raise RuntimeError("launcher did not enter its declared invocation scope")
-    root = Path("/sys/fs/cgroup" + owned_group)
-    leaf = root / "agent"
-    leaf.mkdir()
-    (leaf / "cgroup.procs").write_text(str(os.getpid()))
-    available = (root / "cgroup.controllers").read_text().split()
-    if not all(control in available for control in ("cpu", "memory", "pids")):
-        raise RuntimeError("invocation cgroup delegation lacks cpu, memory or pids")
-    (root / "cgroup.subtree_control").write_text("+cpu +memory +pids")
-    directory = (Path(options.receipt).parent if options.receipt else Path(tempfile.mkdtemp(prefix="delegatus-signal-"))).resolve()
+        try:
+            argv = scope_command(options)
+        except Exception as error:
+            return unprotected(options, command, f"transient scope is unavailable: {error}")
+        try:
+            os.execvp(argv[0], argv + ["--"] + command)
+        except OSError as error:
+            return unprotected(options, command, f"transient scope could not start: {error}")
+    try:
+        return protected(options, command)
+    except Unavailable as error:
+        return unprotected(options, command, error)
+
+
+def scope_command(options):
+    version = subprocess.check_output(["systemd-run", "--version"], text=True, timeout=5).split()[1]
+    expand = ["--expand-environment=no"] if int(version) >= 254 else []
+    # systemd-run replaces this process, so a manager that refuses the scope
+    # would end the launch without the engine. Probe the same request first.
+    probe = subprocess.run(["systemd-run", "--user", "--scope", "--quiet", "--collect", *expand, "-p", "Delegate=yes", "--", "true"],
+                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=5)
+    if probe.returncode != 0:
+        raise RuntimeError(probe.stderr.strip()[-300:] or f"systemd-run exited {probe.returncode}")
+    unit = f"delegatus-signal-{uuid.uuid4().hex}.scope"
+    parent_unit = Path(group()).name
+    resource_args = []
+    if options.terminal and re.fullmatch(r"delegatus-agent-[a-z]+-pane-[a-f0-9-]{12}\.scope", parent_unit):
+        parent = Path("/sys/fs/cgroup" + group())
+        quota, period = read(parent / "cpu.max").split()
+        resource_args = [f"--slice={parent.parent.name}", "-p", f"CPUWeight={read(parent / 'cpu.weight').strip()}"]
+        if quota != "max":
+            resource_args += ["-p", f"CPUQuota={int(quota) * 100 / int(period)}%", "-p", f"CPUQuotaPeriodSec={int(period)}us"]
+        for file, property_name in (("memory.max", "MemoryMax"), ("memory.swap.max", "MemorySwapMax"), ("pids.max", "TasksMax")):
+            value = read(parent / file).strip()
+            if value != "max":
+                resource_args += ["-p", f"{property_name}={value}"]
+    argv = ["systemd-run", "--user", "--scope", "--quiet", "--collect", *expand,
+            f"--unit={unit}", "-p", "Delegate=yes",
+            *resource_args,
+            # A regression fixture cannot outlive the admitted test run.
+            # Ordinary headless launches remain independent of the Viewer.
+            *(["-p", f"BindsTo={parent_unit}", "-p", f"After={parent_unit}"]
+              if re.fullmatch(r"delegatus-gate-[a-f0-9-]+\.service", parent_unit) else []),
+            "--", sys.executable,
+            str(Path(__file__).resolve()), "--scope", unit]
+    if options.receipt:
+        argv += ["--receipt", options.receipt]
+    if options.terminal:
+        argv += ["--terminal"]
+    if options.automatic:
+        argv += ["--automatic"]
+    return argv
+
+
+def protected(options, command):
+    """Every failure before the receipt is published leaves the engine
+    unexecuted and is reported as Unavailable; nothing is refused."""
+    try:
+        owned_group = group()
+        if Path(owned_group).name != options.scope:
+            raise RuntimeError("launcher did not enter its declared invocation scope")
+        root = Path("/sys/fs/cgroup" + owned_group)
+        leaf = root / "agent"
+        # A read-only or foreign cgroup (EROFS, EACCES) is reported here.
+        leaf.mkdir()
+        (leaf / "cgroup.procs").write_text(str(os.getpid()))
+        available = (root / "cgroup.controllers").read_text().split()
+        if not all(control in available for control in ("cpu", "memory", "pids")):
+            raise RuntimeError("invocation cgroup delegation lacks cpu, memory or pids")
+        (root / "cgroup.subtree_control").write_text("+cpu +memory +pids")
+        directory = (Path(options.receipt).parent if options.receipt else Path(tempfile.mkdtemp(prefix="delegatus-signal-"))).resolve()
+        return domain(options, command, owned_group, root, directory)
+    except (Unavailable, Committed):
+        raise
+    except Exception as error:
+        raise Unavailable(error) from error
+
+
+def domain(options, command, owned_group, root, directory):
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     directory.chmod(0o700)
+    try:
+        return namespace(options, command, owned_group, root, directory)
+    finally:
+        # Scratch belongs only to this invocation and is removed after reap.
+        shutil.rmtree(directory, ignore_errors=True)
+
+
+def namespace(options, command, owned_group, root, directory):
     (directory / "proc").mkdir(exist_ok=True)
     # Native filesystem sandboxes keep /sys read-only. This alias exposes only
     # the delegated invocation subtree through their writable temporary root.
@@ -192,6 +286,7 @@ def launch(options, command):
     os.close(info)
     init = native = terminal = None
     stopping = None
+    published = False
     def stop(sig, _frame):
         nonlocal stopping
         stopping = stopping or time.monotonic()
@@ -200,8 +295,9 @@ def launch(options, command):
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGWINCH, lambda _sig, _frame: send(terminal, signal.SIGWINCH))
     try:
-        ready = wait_file(directory / "inner.json", child)
-        data = wait_file(directory / "bwrap.json", child)
+        end = time.monotonic() + READINESS
+        ready = wait_file(directory / "inner.json", child, end)
+        data = wait_file(directory / "bwrap.json", child, end)
         init = identity(data["child-pid"], epoch)
         native = identity(ready["pid"], epoch)
         if options.terminal:
@@ -219,6 +315,7 @@ def launch(options, command):
                    "scope": owned_group, "directory": str(directory)}
         if options.receipt:
             atomic(options.receipt, receipt)
+        published = True
         if not options.receipt or options.automatic:
             atomic(directory / "exec.json", True)
         while child.poll() is None:
@@ -226,14 +323,20 @@ def launch(options, command):
                 send(init, signal.SIGKILL)
             time.sleep(0.02)
         return child.returncode if child.returncode >= 0 else 128 - child.returncode
+    except Exception as error:
+        if published:
+            raise Committed(error) from error
+        failure = error
     finally:
         if child.poll() is None:
             send(init, signal.SIGKILL)
             child.kill()
-        child.wait()
         # The manager removes the invocation scope after its final member exits.
-        # Scratch belongs only to this invocation and is removed after reap.
-        shutil.rmtree(directory)
+        child.wait()
+    # The namespace never received its exec signal, so the engine never ran.
+    if stopping:
+        return 143
+    raise Unavailable(failure)
 
 
 def main():

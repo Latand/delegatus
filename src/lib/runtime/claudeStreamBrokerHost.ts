@@ -1,4 +1,4 @@
-import { nativeProcessId, signalDomain, signalAgentDomain, spawnManagedEngine } from "./agentSignalSandbox";
+import { nativeProcessId, signalDomain, signalAgentDomain, signalBoundaryOff, spawnManagedEngine } from "./agentSignalSandbox";
 import { memoryField, memoryKillText } from "./agentMemoryState";
 import { CLAUDE_CHILD_EXITED, claudeHostEndText, HOST_END_REASON_MAX_CHARS, type HostEndCause } from "./hostEndCause";
 import type { AgentMemoryCell } from "./agentMemory";
@@ -1305,6 +1305,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       pid,
       processStartIdentity: pid ? this.processIdentity(pid) : null,
       ...(signalDomain(this.child) ? { signalDomain: signalDomain(this.child) } : {}),
+      ...(signalBoundaryOff(this.child) ? { signalBoundary: signalBoundaryOff(this.child) } : {}),
       eventCursor: this.cursor,
       protocolVersion: this.protocolVersion,
       activeTurnRef: this.activeTurnId,
