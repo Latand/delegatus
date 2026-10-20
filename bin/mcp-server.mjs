@@ -14,6 +14,7 @@ import { createInterface } from "node:readline";
 
 import { appDirIn } from "./appDir.mjs";
 import { mcpProcessIdentity, watchMcpOwner } from "./mcp-lifetime.mjs";
+import { installMcpLifecycle, logMcpLifecycle } from "./mcp-lifecycle.mjs";
 import {
   cliRuntimeHostConfig,
   discardUnsupportedApiCredentials,
@@ -21,6 +22,7 @@ import {
   viewerServerBunRuntime,
 } from "./server-runtime.mjs";
 
+installMcpLifecycle("mcp-launcher");
 discardUnsupportedApiCredentials();
 import { installedRelease, isGitCheckout, selfUpdatePaths } from "./self-update-supervisor.mjs";
 
@@ -189,6 +191,8 @@ let initializationTimer = null;
 const PROTOCOL_PROBE_INTERVAL_MS = 30_000;
 const PROTOCOL_PROBE_TIMEOUT_MS = 10_000;
 const CHILD_SHUTDOWN_GRACE_MS = 1_000;
+const CALL_DRAIN_GRACE_MS = 35_000;
+let drainTimer = null;
 // Keep ownership until exit, including children displaced by a release change.
 const ownedChildren = new Map();
 
@@ -210,7 +214,20 @@ function stopChild(current, signal = null) {
   }
 }
 
+function pendingClaimDiagnostics() {
+  return [...pending.values()].filter(request => request.method === "tools/call").map(request => {
+    const tool = typeof request.params?.name === "string" ? request.params.name : "unknown";
+    const key = typeof request.params?.arguments?.clientRequestId === "string" ? request.params.arguments.clientRequestId : "unkeyed";
+    return { claim: createHash("sha256").update(`${tool}:${key}`).digest("hex") };
+  });
+}
+
 function shutdown(signal = null) {
+  if (closing) {
+    if (signal) for (const current of ownedChildren.keys()) stopChild(current, signal);
+    return;
+  }
+  logMcpLifecycle(signal ? "signal" : "stdio-eof", { signal, pendingCalls: pending.size, pendingClaims: pendingClaimDiagnostics() });
   closing = true;
   stopWatchingOwner?.();
   clearInterval(heartbeatTimer);
@@ -218,7 +235,13 @@ function shutdown(signal = null) {
   if (restartTimer) clearTimeout(restartTimer);
   if (initializationTimer) clearTimeout(initializationTimer);
   if (protocolProbe) clearTimeout(protocolProbe.timer);
-  for (const current of ownedChildren.keys()) stopChild(current, signal);
+  // Let admitted calls answer before EOF reaches the child. Its own deadlines
+  // bound work; owner death still enforces containment through the preload.
+  if (!pending.size) for (const current of ownedChildren.keys()) stopChild(current, signal);
+  else drainTimer = setTimeout(() => {
+    logMcpLifecycle("drain-deadline", { pendingCalls: pending.size, pendingClaims: pendingClaimDiagnostics() });
+    if (child) disconnect(child, "Viewer MCP calls did not drain before shutdown deadline");
+  }, CALL_DRAIN_GRACE_MS);
   finishShutdown();
 }
 
@@ -245,7 +268,7 @@ function transportFailure(result, protocolError) {
 }
 
 function probeProtocol(current) {
-  if (child !== current || !ready || protocolProbe) return;
+  if (child !== current || !ready || protocolProbe || closing) return;
   const id = `llv-probe-${process.pid}-${Date.now()}`;
   const timer = setTimeout(() => {
     disconnect(current, "Viewer MCP child stopped responding");
@@ -288,12 +311,14 @@ function scheduleRestart() {
 }
 function finishShutdown() {
   if (!closing || ownedChildren.size) return;
+  if (drainTimer) clearTimeout(drainTimer);
   input.close();
   process.stdin.destroy();
   process.stdout.end();
 }
 function disconnect(current, detail, planned = false) {
   if (child !== current) return;
+  logMcpLifecycle("child-disconnect", { childPid: current.pid, childRole: "mcp-stdio", detail, planned, pendingCalls: pending.size, pendingClaims: pendingClaimDiagnostics() });
   stopChild(current, "SIGTERM");
   if (protocolProbe) clearTimeout(protocolProbe.timer);
   protocolProbe = null;
@@ -347,7 +372,10 @@ function start(selected) {
     disconnect(current, `Viewer MCP child could not start: ${error.message}`);
     finishShutdown();
   });
-  current.once("exit", () => {
+  current.once("exit", (code, signal) => {
+    logMcpLifecycle("child-exit", { childPid: current.pid, childRole: "mcp-stdio", code, signal,
+      pendingCalls: child === current ? pending.size : 0,
+      pendingClaims: child === current ? pendingClaimDiagnostics() : [] });
     forget();
     disconnect(current, "Viewer MCP child exited");
     finishShutdown();
@@ -410,6 +438,7 @@ function start(selected) {
       }
     }
     process.stdout.write(`${line}\n`);
+    if (closing && !pending.size) for (const owned of ownedChildren.keys()) stopChild(owned);
   });
   if (!protocolProbeTimer) {
     protocolProbeTimer = setInterval(() => { if (child) probeProtocol(child); }, PROTOCOL_PROBE_INTERVAL_MS);
@@ -422,6 +451,7 @@ function ensureChild() {
   let selected;
   try { selected = selectedRuntime(); }
   catch (error) {
+    if (child && pending.size) return { message: "Viewer MCP release target is unreadable; admitted calls are draining" };
     if (child) {
       const old = child;
       disconnect(old, "Viewer MCP release target is unreadable");
@@ -430,6 +460,7 @@ function ensureChild() {
   }
   const key = `${selected.root}\0${selected.revision}`;
   if (child && childKey !== key) {
+    if (pending.size) return { message: "Viewer MCP release changed; admitted calls are draining" };
     const old = child;
     disconnect(old, "Viewer MCP release changed", true);
     nextStartAt = 0;
@@ -494,7 +525,7 @@ const input = createInterface({ input: process.stdin }).on("line", (line) => {
 });
 for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => shutdown(signal));
 let stopWatchingOwner;
-stopWatchingOwner = watchMcpOwner(() => shutdown("SIGTERM"));
+stopWatchingOwner = watchMcpOwner(() => { logMcpLifecycle("parent-exit", { pendingCalls: pending.size }); shutdown("SIGTERM"); });
 process.on("beforeExit", () => {
   if (!heartbeatPath) return;
   try {

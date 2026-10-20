@@ -1,3 +1,5 @@
+import { captureProcessIdentity, processIdentityProvenDead, type ProcessIdentity } from "@/lib/processIdentity";
+import { trackMcpClaim, installMcpLifecycle, logMcpLifecycle, drainMcpClaims } from "../../../bin/mcp-lifecycle.mjs";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
 import { blockingWaitRole } from "@/lib/blockingWaits";
 import { shortIdsInAnswer, shortenHashesInText } from "@/lib/shortIds";
@@ -663,7 +665,9 @@ export interface McpRequestBinding extends McpRequestBindingInput {
   clientRequestId: string;
   /** The process that holds the claim, so a `claimed` row whose owner is gone
       can be closed as never dispatched instead of waiting forever. */
-  owner: { pid: number; startIdentity: string | null };
+  owner: ProcessIdentity;
+  /** Local bindings use only process custody; this grants no caller authority. */
+  localDispatch?: true;
   claimedAt: string;
 }
 
@@ -739,6 +743,14 @@ function dispatchedReceipt(receipt: Receipt): boolean {
   return receipt.stage === "dispatching";
 }
 
+/** Reclaim only affirmative zero-dispatch evidence, under the claim lock.
+    A legacy row, a living/unverifiable owner or a dispatch marker is uncertain. */
+function reclaimLocalClaim(receipt: Pick<McpReceiptRecord, "binding" | "stage" | "result"> | Receipt, binding?: McpRequestBinding): boolean {
+  return binding?.localDispatch === true && receipt.binding?.localDispatch === true
+    && receipt.stage === "claimed" && !receipt.result
+    && processIdentityProvenDead(receipt.binding.owner);
+}
+
 function recordOf(receipt: Receipt): McpReceiptRecord {
   return {
     digest: receipt.digest,
@@ -779,7 +791,7 @@ export class MemoryMcpReceiptStore implements McpRecoveryReceiptStore {
   claim(key: string, digest: string, _retention?: ReceiptRetention, binding?: McpRequestBinding, beforeClaim?: () => void): ReceiptClaim {
     beforeClaim?.();
     const receipt = this.receipts.get(key);
-    if (!receipt) {
+    if (!receipt || receipt.digest === digest && reclaimLocalClaim(receipt, binding)) {
       this.receipts.set(key, { digest, ...(binding ? { binding, stage: "claimed" } : {}) });
       return { kind: "fresh" };
     }
@@ -963,7 +975,9 @@ export function validRequestBinding(value: unknown, toolName?: McpToolName, requ
         || caller.predecessors.length > 32
         || caller.predecessors.some((predecessor) => typeof predecessor !== "string" || !/^conversation_[A-Za-z0-9_-]{1,128}$/.test(predecessor))))) return false;
   if (!isRecord(target) || !nullableString(target.project) || !nullableString(target.identity)) return false;
-  if (!isRecord(owner) || typeof owner.pid !== "number" || !nullableString(owner.startIdentity)) return false;
+  if (!isRecord(owner) || typeof owner.pid !== "number" || !nullableString(owner.startIdentity)
+    || (owner.bootEpoch !== undefined && !nullableString(owner.bootEpoch))) return false;
+  if (value.localDispatch !== undefined && value.localDispatch !== true) return false;
   return true;
 }
 
@@ -1639,7 +1653,7 @@ export class FileMcpReceiptStore implements McpRecoveryReceiptStore {
       beforeClaim?.();
       const state = readReceiptFile(this.filePath);
       const receipt = state.mutationReceipts[key] ?? state.readReceipts[key];
-      if (receipt) {
+      if (receipt && !(receipt.digest === digest && reclaimLocalClaim(receipt, binding))) {
         const record = recordOf(receipt);
         if (receipt.digest !== digest) return { kind: "conflict", record };
         return receipt.result ? { kind: "replay", result: receipt.result, record } : { kind: "pending", record };
@@ -1839,6 +1853,15 @@ export class SqliteMcpReceiptStore implements McpRecoveryReceiptStore {
       const now = this.now();
       this.pruneBoundedReceipts(now);
       const receipt = this.selectRow(key);
+      if (receipt && binding?.localDispatch === true && receipt.digest === digest
+        && receipt.stage === "claimed" && receipt.result_json === null
+        && reclaimLocalClaim(this.recordOfRow(key, receipt), binding)) {
+        const bindingJson = JSON.stringify(binding);
+        this.db.query("UPDATE mcp_receipts SET binding_json = ?, claimed_at = ?, storage_bytes = ? WHERE receipt_key = ?")
+          .run(bindingJson, now, this.storageBytes(key, digest, null, bindingJson), key);
+        this.db.exec("COMMIT");
+        return { kind: "fresh" };
+      }
       if (receipt) {
         this.db.exec("COMMIT");
         const record = this.recordOfRow(key, receipt);
@@ -2770,6 +2793,8 @@ export function createMcpToolService(
       const canonicalArgs = bindings[typedTool].canonicalizeReceiptArgs?.(digestArgs) ?? digestArgs;
       const digest = requestDigest(typedTool, canonicalArgs);
       const key = receiptKey(typedTool, requestId, scope);
+      const finishReceipt = trackMcpClaim(key, digest);
+      try {
       /* A recoverable mutation never joins an in-process duplicate: who is
          calling is decided first, and every later call under the key — in
          this process or another — is answered from the durable record. */
@@ -3255,7 +3280,8 @@ export function createMcpToolService(
               }, false);
             }
           }
-          if (!existing) {
+          if (!existing || existing.digest === digest && existing.stage === "claimed"
+            && existing.binding?.localDispatch === true && processIdentityProvenDead(existing.binding.owner)) {
             try {
               await measure("caller", () => prepare(effectiveArgs));
             } catch (error) {
@@ -3267,15 +3293,34 @@ export function createMcpToolService(
             }
           }
         }
-        const claim = await measure("claim", () => receipts.claim(key, digest, retention));
+        const localStore = retention === "durable" && supportsMcpRecovery(receipts) && !interruptedCallIsRecoverable(typedTool, effectiveArgs) ? receipts : null;
+        const localBinding: McpRequestBinding | undefined = localStore ? {
+          version: 1, toolName: typedTool, clientRequestId: requestId, localDispatch: true,
+          caller: { kind: "unidentified", conversationId: null, project: null },
+          target: { project: null, identity: null }, downstreamKey: key,
+          owner: captureProcessIdentity(process.pid), claimedAt: new Date().toISOString(),
+        } : undefined;
+        const claim = await measure("claim", () => receipts.claim(key, digest, retention, localBinding));
         if (claim.kind === "conflict") {
           outcome = "conflict";
           return failure(toolName, requestId, "idempotency_conflict", "clientRequestId was already used with different arguments", false, true);
         }
+        const interruptedAnswer = () => {
+          const read = typedTool === "update_task" ? "get_task" : typedTool === "create_task" ? "list_tasks" : "original-key-lookup";
+          return failure(toolName, requestId, "outcome_unknown",
+            `The previous call has no committed operation receipt; execution is uncertain. Read ${read} to resolve its outcome and retain the original clientRequestId.`,
+            false, true, { outcome: "unknown", nextAction: read, evidence: "mcp-receipt" });
+        };
         if (claim.kind === "pending" && !interruptedCallIsRecoverable(typedTool, effectiveArgs)) {
           outcome = "pending";
           unfinishedAgeMs = claim.unfinishedAgeMs;
-          return failure(toolName, requestId, "call_interrupted", "The previous MCP process ended before this call completed", true, true);
+          return interruptedAnswer();
+        }
+        // Historical interruption answers establish no execution outcome, even
+        // when an older adapter persisted the answer itself.
+        if (claim.kind === "replay" && !claim.result.ok && claim.result.code === "call_interrupted") {
+          outcome = "pending";
+          return interruptedAnswer();
         }
         // Earlier clients settled transport timeouts as retryable failures.
         // The Viewer publication lock and payload digest make recovery safe.
@@ -3293,6 +3338,13 @@ export function createMcpToolService(
           phaseDurations.replay = performance.now() - replayStartedAt;
           outcome = "replay";
           return replayed;
+        }
+        if (localStore && !await localStore.markDispatching(key, digest)) {
+          const current = await localStore.lookup(key);
+          if (current?.result) return { ...current.result, replayed: true };
+          return recoveryAnswer(typedTool, requestId, {
+            outcome: "unknown", evidence: "mcp-receipt", reason: "the claim changed before local dispatch", ids: {},
+          }, true);
         }
         let settled: McpToolResult;
         let unadmitted = false;
@@ -3377,14 +3429,14 @@ export function createMcpToolService(
            would burn the clientRequestId on an answer nobody received, so the
            obvious retry would replay a stale timeout forever. The claim is left
            unsettled instead, which is what "the previous call did not finish"
-           already means: a retry gets `call_interrupted`, retryable, and the
+           already means: a retry reports an uncertain outcome until the
            bounded lease sweeps the row so the id comes back.
 
            Bounded reads only. `pruneBoundedReceipts` deletes an unsettled claim
            exclusively for `retention = 'bounded'` — durable mutation claims never
            enter that expiry path by design — so skipping the write for a
            mutating tool would strand a permanent `result_json IS NULL` row and
-           make its clientRequestId answer `call_interrupted` forever. A mutation
+           make its clientRequestId remain uncertain forever. A mutation
            that was abandoned still settles, as it did before.
 
            Every outcome that produced a real answer still writes, so idempotent
@@ -3400,7 +3452,7 @@ export function createMcpToolService(
            nothing and this answer still stands for the caller. */
         if (unadmitted && receipts.release) {
           const releaseStartedAt = performance.now();
-          await receipts.release(key, digest);
+          await receipts.release(key, digest, localBinding);
           phaseDurations.completion = performance.now() - releaseStartedAt;
           return settled;
         }
@@ -3415,6 +3467,7 @@ export function createMcpToolService(
       } finally {
         if (inFlight.get(key)?.result === result) inFlight.delete(key);
       }
+      } finally { finishReceipt(); }
       } finally {
         const totalMs = performance.now() - callStartedAt;
         if (totalMs >= 2_000) {
@@ -3428,7 +3481,12 @@ export function createMcpToolService(
       }
     },
   };
-  return withMcpPageCursors({ callTool: (tool, args, context) => runWithMcpCallerResolution(() => service.callTool(tool, args, context)) });
+  return withMcpPageCursors({ callTool: async (tool, args, context) => {
+    const finish = (MCP_TOOL_NAMES as readonly string[]).includes(tool)
+      ? trackMcpClaim(`${tool}:${clientRequestId(args) ?? "unkeyed"}`) : () => {};
+    try { return await runWithMcpCallerResolution(() => service.callTool(tool, args, context)); }
+    finally { finish(); }
+  } });
 }
 
 /**
@@ -4768,6 +4826,7 @@ export function createViewerMcpServer(service: McpToolService, tools: readonly M
         })(),
         reason: "MCP tool deadline exceeded",
       });
+      const finishClaim = trackMcpClaim(`${toolName}:${clientRequestId(args as McpToolArgs) ?? "unkeyed"}`);
       try {
         const call = () => service.callTool(toolName, args as McpToolArgs, {
           signal: deadline.signal,
@@ -4783,6 +4842,7 @@ export function createViewerMcpServer(service: McpToolService, tools: readonly M
         const result = await (httpCaller ? runAsMcpHttpCaller(httpCaller, call) : call());
         return response(result);
       } finally {
+        finishClaim();
         deadline.release();
       }
     });
@@ -4940,24 +5000,52 @@ export function withMcpDispatchTurns(service: McpToolService): McpToolService {
 }
 
 export async function startViewerMcpServer(): Promise<void> {
+  installMcpLifecycle("mcp-stdio");
   const { admittedMcpHealthProbe, MCP_HEALTH_PROBE_CAPABILITY_ENV } = await import("./healthProbeAdmission");
   const healthProbeCapability = process.env[MCP_HEALTH_PROBE_CAPABILITY_ENV];
   delete process.env[MCP_HEALTH_PROBE_CAPABILITY_ENV];
   const hostHealthProbe = await admittedMcpHealthProbe(healthProbeCapability);
   const service = await createProductionViewerMcpService(hostHealthProbe, true);
-  const server = hostHealthProbe
-    ? createViewerMcpHealthProbeServer(service)
-    : createViewerMcpServer(service);
+  await serveViewerMcpStdio(service, hostHealthProbe);
+}
+
+/** Dedicated stdio entry lifetime, also used by process-level rehearsals. */
+export async function serveViewerMcpStdio(service: McpToolService, healthProbe = false): Promise<void> {
+  installMcpLifecycle("mcp-stdio");
+  let shuttingDown = false;
+  const admittedService: McpToolService = { callTool: (tool, args, context) => shuttingDown
+    ? Promise.resolve(failure(tool, clientRequestId(args), "not_executed", "MCP is draining; retry the original clientRequestId", true, false,
+      { outcome: "not-executed", nextAction: "retry-same-key" }))
+    : service.callTool(tool, args, context) };
+  const server = healthProbe
+    ? createViewerMcpHealthProbeServer(admittedService)
+    : createViewerMcpServer(admittedService);
   const transport = new StdioServerTransport();
   // The SDK does not close its transport on EOF. A dead client (including a
   // killed launcher) must not leave domain timers or in-flight reads resident.
   // This entry point owns a dedicated stdio process, never the Viewer server.
-  process.stdin.once("end", () => {
-    setTimeout(() => process.exit(0), 1_000);
-    void server.close().then(
-      () => process.exit(0),
-      (error: unknown) => { console.error("MCP shutdown failed", error); process.exit(1); },
-    );
-  });
+  const shutdown = async (reason: string, signal?: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logMcpLifecycle(reason, { signal });
+    const timer = setTimeout(() => { logMcpLifecycle("drain-deadline"); process.exit(1); }, 35_000);
+    // Closing the SDK first cancels requests that may still be committing.
+    // Drain receipt writes before transport teardown and process exit.
+    await drainMcpClaims();
+    // Let the SDK enqueue the answer returned by the last completed handler,
+    // then flush stdout before exit (including backpressured large receipts).
+    await new Promise<void>(resolve => setImmediate(resolve));
+    await server.close();
+    await new Promise<void>(resolve => process.stdout.end(resolve));
+    clearTimeout(timer);
+    process.exit(0);
+  };
+  const end = (reason: string, signal?: string) => {
+    void shutdown(reason, signal).catch(() => { logMcpLifecycle("shutdown-failed"); process.exit(1); });
+  };
+  process.stdin.once("end", () => end("stdio-eof"));
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.on(signal, () => end("signal", signal));
+  }
   await server.connect(transport);
 }
