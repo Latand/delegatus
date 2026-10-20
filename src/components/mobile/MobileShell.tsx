@@ -95,6 +95,9 @@ export interface MobileShellHost {
   arrival: ReactNode;
   /** The sheet for a name the host owns; null for one it does not. */
   renderSheet: (name: MobileSheetName, close: () => void) => ReactNode;
+  /** The current workspace, for the line above a board's title
+      (docs/design/workspaces.md §13.5 P1); absent without workspaces. */
+  workspaceEyebrow?: ReactNode;
 }
 
 export type SheetRenderer = (name: MobileSheetName, close: () => void) => ReactNode;
@@ -393,13 +396,23 @@ export function ReachLine({ reach }: { reach: ServerReach }) {
 /** A static bar title: the board's project name, a screen's name. `meta` is a
     second, smaller line under it (a board confirming a cached answer says
     «updating…»); while the server is being reconnected that line is the
-    reconnecting one, on every screen that titles itself this way. */
-export function MobileBarTitle({ children, meta }: { children: ReactNode; meta?: ReactNode }) {
+    reconnecting one, on every screen that titles itself this way. `eyebrow`
+    is a small line above the name (the current workspace); the bar holds two
+    lines at most, so it gives way to either line under the name. */
+export function MobileBarTitle({ children, meta, eyebrow }: { children: ReactNode; meta?: ReactNode; eyebrow?: ReactNode }) {
   const reach = useServerReach();
   const line = reach.kind === "reconnecting"
     ? <ReachLine reach={reach} />
     : meta ? <span data-mobile2-title-meta className="min-w-0 truncate text-label font-normal leading-tight text-muted">{meta}</span> : null;
   const name = <span data-mobile2-title-text className="min-w-0 truncate text-title font-semibold leading-tight text-primary">{children}</span>;
+  if (!line && eyebrow) {
+    return (
+      <span className="flex min-w-0 flex-col">
+        <span data-mobile2-title-eyebrow className="flex min-w-0 items-center gap-1 text-label font-normal leading-tight text-muted">{eyebrow}</span>
+        {name}
+      </span>
+    );
+  }
   if (!line) return name;
   return (
     <span className="flex min-w-0 flex-col">

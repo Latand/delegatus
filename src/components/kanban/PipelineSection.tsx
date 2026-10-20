@@ -146,7 +146,7 @@ export function GraphEditLine({ edit }: { edit: PipelineGraphEdit }) {
 export function pipelineProgress(t: TFunction, summary: KanbanPipeline, nameOf: (stage: PipelineStage) => string): string {
   const { pipeline, chips } = summary;
   const cpuWait = parseCpuQueueDetail(pipeline.stateDetail);
-  if (cpuWait) return t(cpuWait.stalled ? "kanban.progress.cpuQueueStalled" : "kanban.progress.cpuQueue", { position: cpuWait.position, ordinal: ordinal(cpuWait.position), minutes: cpuWait.minutes });
+  if (cpuWait) return t(cpuWait.stalled ? "kanban.progress.cpuQueueStalled" : "kanban.progress.cpuQueue", { position: cpuWait.position, ordinal: ordinal(cpuWait.position), minutes: cpuWait.minutes, priority: t(`kanban.priority.${cpuWait.priority ?? "normal"}`) });
   if (pipeline.state === "provisioning") return t("kanban.progress.provisioning");
   /* #1938: the spent review budget, with its verdict and both heads. */
   const review = pipelineReviewHeads(t, pipeline);
