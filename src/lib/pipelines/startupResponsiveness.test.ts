@@ -1,9 +1,12 @@
-import { SqliteStateCollection, stateLeaseHoldsInFlight } from "@/lib/state/sqliteStateStore";
-import { afterEach, expect, spyOn, test } from "bun:test";
+import { stateLeaseHoldsInFlight } from "@/lib/state/sqliteStateStore";
+import { afterEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createInterface } from "node:readline";
+import { once } from "node:events";
+import { spawn } from "node:child_process";
 
 import { buildPipeline, loadPipelinesForStartup, loadPipelinesForStartupAsync, loadPipelineOwnershipForStartupAsync, pipelineRegistryHealth, pipelineRegistryHealthAsync, savePipelines, withPipelineMutation, withPipelineStartupAdmission } from "./store";
 import { StateLockDeferredError, stateLockWaitsInFlight, waitForStateLock } from "@/lib/state/lockWait";
@@ -353,33 +356,84 @@ test.each([["deadline", "mutation"], ["cancel", "mutation"], ["deadline", "admis
 });
 
 
-test("repeated evidence invalidation spends one deadline and recovers after churn ends", async () => {
-  const { root } = fixture();
-  const saved = process.env.LLV_PIPELINE_LOCK_WAIT_MS;
-  process.env.LLV_PIPELINE_LOCK_WAIT_MS = "500";
-  const db = new Database(path.join(root, "state.sqlite"));
-  const originalAdmit = SqliteStateCollection.prototype.admit;
-  let invalidations = 0, admitted = 0, refused = 0;
-  const admission = spyOn(SqliteStateCollection.prototype, "admit").mockImplementation(function<R>(this: SqliteStateCollection<unknown>, operation: () => R | Promise<R>, waitMs?: number, observe?: (ms: number) => void): Promise<R> {
-    return originalAdmit.call(this, () => {
-      db.query("UPDATE state_collections SET revision=revision+1 WHERE collection='pipelines'").run();
-      invalidations++;
-      return operation();
-    }, waitMs, observe) as Promise<R>;
-  });
-  try {
-    const start = performance.now();
-    expect(await withPipelineStartupAdmission(async available => {
-      if (available) admitted++; else refused++;
-      return available;
-    }, "reconciling structured hosts", undefined, true)).toBeFalse();
-    expect(performance.now() - start).toBeLessThan(5000);
-    expect(invalidations).toBeGreaterThan(1);
-    expect(admitted).toBe(0);
-    expect(refused).toBe(1);
-  } finally {
-    admission.mockRestore(); db.close();
-    if (saved === undefined) delete process.env.LLV_PIPELINE_LOCK_WAIT_MS; else process.env.LLV_PIPELINE_LOCK_WAIT_MS = saved;
+const DEADLINE_FIXTURE = path.join(import.meta.dir, "fixtures/startupAdmissionDeadline.ts");
+
+function assertAdmissionBudget(elapsedMs: number, budgetMs: number): void {
+  const toleranceMs = 300;
+  if (elapsedMs > budgetMs + toleranceMs) {
+    throw new Error(`startup admission exceeded ${budgetMs} ms budget plus ${toleranceMs} ms tolerance: ${Math.round(elapsedMs)} ms`);
   }
-  expect(await withPipelineStartupAdmission(async available => available)).toBeTrue();
-});
+}
+
+async function runDeadlineFixture(mode: "deadline" | "sync-block", actualWaitMs: number, parentDeadlineMs: number) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-admission-child-"));
+  const childHome = path.join(root, "home"), childConfig = path.join(root, "config"), childTmp = path.join(root, "tmp");
+  for (const directory of [childHome, childConfig, childTmp]) fs.mkdirSync(directory, { recursive: true });
+  const child = spawn(process.execPath, [DEADLINE_FIXTURE, mode, root, String(actualWaitMs)], {
+    env: { ...process.env, HOME: childHome, XDG_CONFIG_HOME: childConfig, TMPDIR: childTmp,
+      LLV_STATE_DIR: path.join(root, "state"), LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let output = "";
+  const ready = Promise.withResolvers<void>();
+  const report = Promise.withResolvers<Record<string, number | boolean>>();
+  const lines = createInterface({ input: child.stdout });
+  lines.on("line", line => {
+    if (line === "READY") ready.resolve();
+    else {
+      output += `${line}\n`;
+      try { report.resolve(JSON.parse(line) as Record<string, number | boolean>); }
+      catch { /* Preserve diagnostics for the parent assertion below. */ }
+    }
+  });
+  const errors: string[] = [];
+  child.stderr.setEncoding("utf8").on("data", chunk => { errors.push(String(chunk)); });
+  let watchdog: ReturnType<typeof setTimeout> | undefined;
+  let readyTimer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([ready.promise, once(child, "exit").then(([code]) => { throw new Error(`fixture exited ${code} before readiness: ${errors.join("")}`); }),
+      new Promise<never>((_, reject) => { readyTimer = setTimeout(() => reject(new Error("fixture readiness handshake timed out")), 8_000); })]);
+    if (readyTimer) clearTimeout(readyTimer);
+    const start = performance.now();
+    const result = await Promise.race([
+      report.promise.then(value => ({ kind: "report" as const, value })),
+      new Promise<{ kind: "watchdog" }>(resolve => { watchdog = setTimeout(() => resolve({ kind: "watchdog" }), parentDeadlineMs); }),
+    ]);
+    return { result, elapsedMs: performance.now() - start, output, errors, child };
+  } finally {
+    if (readyTimer) clearTimeout(readyTimer);
+    if (watchdog) clearTimeout(watchdog);
+    lines.close();
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGTERM");
+      const force = setTimeout(() => child.kill("SIGKILL"), 500);
+      await once(child, "exit");
+      clearTimeout(force);
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test("repeated evidence invalidation spends the configured deadline across a process boundary", async () => {
+  const result = await runDeadlineFixture("deadline", 500, 3_000);
+  expect(result.result.kind).toBe("report");
+  if (result.result.kind !== "report") throw new Error(`parent watchdog expired: ${result.errors.join("")}`);
+  const elapsedMs = Number(result.result.value.elapsedMs);
+  expect(() => assertAdmissionBudget(elapsedMs, 500)).not.toThrow();
+  expect(result.result.value.invalidations).toBeGreaterThan(1);
+  expect(result.result.value.admitted).toBe(false);
+  expect(result.result.value.refused).toBe(true);
+  expect(result.result.value.recovered).toBe(true);
+}, 10_000);
+
+test("the parent rejects a fourfold admission overrun and remains responsive to a blocked child", async () => {
+  const overrun = await runDeadlineFixture("deadline", 2_000, 3_000);
+  expect(overrun.result.kind).toBe("report");
+  if (overrun.result.kind !== "report") throw new Error(`overrun fixture exceeded parent watchdog: ${overrun.errors.join("")}`);
+  const overrunMs = Number(overrun.result.value.elapsedMs);
+  expect(() => assertAdmissionBudget(overrunMs, 500)).toThrow("startup admission exceeded 500 ms budget");
+
+  const blocked = await runDeadlineFixture("sync-block", 500, 800);
+  expect(blocked.result.kind).toBe("watchdog");
+  expect(blocked.elapsedMs).toBeLessThan(1_200);
+}, 10_000);
