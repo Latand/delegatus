@@ -44,22 +44,12 @@ export function withPresenceGuard(present: () => ReadonlySet<string>, goneError:
   return (path) => (present().has(path) ? runner(path) : Promise.resolve({ ok: false, error: goneError }));
 }
 
-export function canBulkMessage(node: SchemeNode): boolean {
-  void node;
-  return true;
-}
-
 export function canBulkInterrupt(node: SchemeNode): boolean {
   return node.file.pid !== null;
 }
 
 export function canBulkKill(node: SchemeNode): boolean {
   return node.isRoot;
-}
-
-export function canBulkRemove(node: SchemeNode): boolean {
-  void node;
-  return true;
 }
 
 export function canBulkFlow(node: SchemeNode, flowsByImpl: ReadonlyMap<string, Flow>): boolean {

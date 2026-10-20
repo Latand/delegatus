@@ -4,7 +4,7 @@ import type { Flow } from "@/lib/flows/types";
 import type { BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
-import { classifyWorker, shouldCollapseWorker } from "@/components/scheme/workerCollapse";
+import { flowIdForPath, shouldCollapseWorker } from "@/components/scheme/workerCollapse";
 
 import { claimedReviewerPaths, foldClaimedReviewers } from "./flowModel";
 import { directReviewFlows, isDirectReviewFlow, splitDirectReviewGroups } from "./directReviewGroups";
@@ -493,7 +493,7 @@ describe("directReviewFlows", () => {
     const projected = directReviewFlows({ files: [builder, done, live], flows: [], tasks: [] });
     const context = { flows: projected, pipelineStagePaths: new Set<string>(), pinnedPaths: new Set<string>() };
 
-    expect(classifyWorker(done, context)).toBe("flow-reviewer");
+    expect(flowIdForPath(done, projected)).toBe(projected[0]!.id);
     /* A verdict round folds immediately; the live latest never collapses. */
     expect(shouldCollapseWorker(done, context)).toBe(true);
     expect(shouldCollapseWorker(live, context)).toBe(false);
@@ -519,7 +519,7 @@ describe("splitDirectReviewGroups (terminal review-history stacks)", () => {
     /* History reviewers stay claimed by the FULL group list (never a
        standalone card) and collapse into a worker stack keyed by the group. */
     expect(claimedReviewerPaths(groups).has("/r-done")).toBe(true);
-    expect(classifyWorker(terminalReviewer, { flows: groups, pipelineStagePaths: new Set() })).toBe("flow-reviewer");
+    expect(flowIdForPath(terminalReviewer, groups)).toBe(history[0]!.id);
     expect(shouldCollapseWorker(terminalReviewer, {
       flows: groups,
       pipelineStagePaths: new Set(),
