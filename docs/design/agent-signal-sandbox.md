@@ -563,6 +563,17 @@ missing boundary. Each launch makes one capability decision.
   that point, so it runs exactly once.
 - A launch from inside an existing domain keeps that domain's PID namespace,
   scope and context, and is reported as such.
+- Behind the Docker bridge the launcher runs in the host mount namespace,
+  which shares the mounted home with the container and not its temporary root.
+  The receipt and the namespace scratch beside it therefore stay under the
+  launch's `TMPDIR` only when that lies beneath the home, such as a stage's
+  scratch, and otherwise live under `$HOME/.cache/delegatus/signal-runs`.
+  Without the bridge they stay under the launch's `TMPDIR`. A scratch the
+  Viewer cannot create is one more reason the boundary is off.
+- A host shim that finds no `/usr/bin/python3` writes the off receipt itself
+  and executes the engine. A pane command checks `python3` and the launcher in
+  the tmux server's environment and otherwise prints the boundary off and runs
+  the command under `/bin/sh` as the launcher would.
 
 An unprotected launch records why. Structured hosts publish
 `signalBoundary: { state: "off", reason }` in their host state and registry

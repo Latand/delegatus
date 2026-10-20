@@ -216,7 +216,6 @@ test.skipIf(process.env.LLV_SIGNAL_SANDBOX_KERNEL_TEST !== "1" || !process.env.L
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "signal-container-")));
   const home = path.join(root, "home"); fs.mkdirSync(path.join(home, ".bun/bin"), { recursive: true });
   fs.symlinkSync(fs.realpathSync(process.execPath), path.join(home, ".bun/bin/bun"));
-  const temporary = path.join(root, "tmp"); fs.mkdirSync(temporary);
   const domainFile = path.join(root, "domain.json");
   const proofFile = path.join(root, "proof");
   const foreign = spawn("/bin/sleep", ["60"], { stdio: "ignore" });
@@ -241,7 +240,7 @@ finally {if(child.exitCode===null&&child.signalCode===null)signalAgentDomain(chi
 `;
   const create = spawnSync("docker", ["create", "--privileged", "--pid=host", "--network=host", "--user", `${process.getuid!()}:${process.getgid!()}`,
     "--mount", `type=bind,source=${root},target=${root}`, "--workdir", "/app",
-    "-e", `HOME=${home}`, "-e", `TMPDIR=${temporary}`, "-e", `XDG_CONFIG_HOME=${root}/config`, "-e", `LLV_STATE_DIR=${root}/state`,
+    "-e", `HOME=${home}`, "-e", `XDG_CONFIG_HOME=${root}/config`, "-e", `LLV_STATE_DIR=${root}/state`,
     "-e", `XDG_RUNTIME_DIR=${process.env.XDG_RUNTIME_DIR}`, "-e", `DBUS_SESSION_BUS_ADDRESS=${process.env.DBUS_SESSION_BUS_ADDRESS}`,
     "-e", `PATH=/usr/local/bin:${home}/.bun/bin:/usr/bin:/bin`, "-e", "LLV_DOCKER_NSENTER_SHIMS=1",
     "-e", `LLV_GATE_LOCK_DIR=${root}/slots`, "-e", "LLV_GATE_SLOTS=1", "-e", "LLV_GATE_MEM=64M", "-e", "DELEGATUS_CPU_PRESSURE=off",

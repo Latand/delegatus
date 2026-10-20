@@ -98,6 +98,26 @@ function signalLauncher(env: NodeJS.ProcessEnv, bridged: boolean): { launcher: s
   catch (error) { return { off: error instanceof Error ? error.message : String(error) }; }
 }
 
+/** The receipt and the namespace scratch beside it. Behind the Docker bridge
+ * the launcher runs in the host mount namespace, which shares the mounted home
+ * with the container and not its temporary root: a launch keeps a TMPDIR under
+ * that home, such as a stage's scratch, and otherwise uses a cache there. A
+ * Viewer-side setup failure is one more reason the boundary is off. */
+function prepareLaunch(capabilityEnv: NodeJS.ProcessEnv, env: NodeJS.ProcessEnv, bridged: boolean): { launcher: string; directory: string } | { off: string } {
+  const decision = signalLauncher(capabilityEnv, bridged);
+  if ("off" in decision) return decision;
+  try {
+    const temporary = env.TMPDIR || os.tmpdir(), home = os.homedir();
+    const relative = path.relative(home, path.resolve(temporary));
+    const shared = !bridged || (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative));
+    const parent = shared ? temporary : path.join(home, ".cache/delegatus/signal-runs");
+    if (!shared) fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
+    return { launcher: decision.launcher, directory: fs.realpathSync(fs.mkdtempSync(path.join(parent, "delegatus-signal-"))) };
+  } catch (error) {
+    return { off: `launch scratch is unavailable: ${error instanceof Error ? error.message : String(error)}` };
+  }
+}
+
 function launcherEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return { ...env, LLV_SIGNAL_READINESS_MS: String(SIGNAL_READINESS_MS), LLV_SIGNAL_ACK_MS: String(SIGNAL_ACK_MS) };
 }
@@ -220,14 +240,13 @@ export function signalAgentDomain(child: SignalDomainHandle, signal: NodeJS.Sign
 export function spawnHeadlessSignalSandbox(command: string, args: string[], options: SpawnOptions,
   start: typeof spawn = spawn, scope?: string | null): ChildProcess {
   const bridged = process.env.LLV_DOCKER_NSENTER_SHIMS === "1" || options.env?.LLV_DOCKER_NSENTER_SHIMS === "1";
-  const decision = signalLauncher(options.env ?? process.env, bridged);
-  if ("off" in decision) {
+  const prepared = prepareLaunch(options.env ?? process.env, options.env ?? process.env, bridged);
+  if ("off" in prepared) {
     const child = start(command, args, options);
-    recordSignalBoundaryOff(child, decision.off, "headless");
+    recordSignalBoundaryOff(child, prepared.off, "headless");
     return child;
   }
-  const { launcher } = decision;
-  const directory = fs.realpathSync(fs.mkdtempSync(path.join(options.env?.TMPDIR || os.tmpdir(), "delegatus-signal-")));
+  const { launcher, directory } = prepared;
   const receipt = path.join(directory, "ready.json");
   const env: NodeJS.ProcessEnv = { ...launcherEnv(options.env ?? process.env), LLV_SIGNAL_LAUNCHER: launcher, LLV_SIGNAL_RECEIPT: receipt, LLV_SIGNAL_AUTOMATIC: "1" };
   const child = bridged ? start(command, args, { ...options, env })
@@ -260,8 +279,15 @@ function launcherFile(): string {
   return file;
 }
 
+// Typed into an interactive shell, so it avoids history expansion's "!".
+const TERMINAL_ENTRY = 'if command -v python3 >/dev/null 2>&1; then '
+  + 'if [ -r "$1" ]; then exec python3 "$1" --terminal -- /bin/sh -c "$2"; fi; reason="the launcher is unreadable from the pane"; '
+  + 'else reason="required host dependency is missing: python3"; fi; '
+  + 'echo "agent signal sandbox: boundary off, running unprotected: $reason" >&2; exec /bin/sh -c "$2"';
+
 /** An unavailable boundary leaves the pane command as it was. The pane runs
- * in the tmux server's environment, so the launcher there judges a lease. */
+ * in the tmux server's environment, so the launcher there judges a lease, and
+ * a pane without python3 or the launcher runs the command unprotected. */
 export function terminalSignalSandboxCommand(command: string, env: NodeJS.ProcessEnv = process.env): string {
   const decision = signalLauncher({ ...env, LLV_GATE_SLOT_LEASE: undefined }, env.LLV_DOCKER_NSENTER_SHIMS === "1");
   if ("off" in decision) {
@@ -269,7 +295,7 @@ export function terminalSignalSandboxCommand(command: string, env: NodeJS.Proces
     return command;
   }
   const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-  return `python3 ${quote(decision.launcher)} --terminal -- /bin/sh -c ${quote(command)}`;
+  return `/bin/sh -c ${quote(TERMINAL_ENTRY)} sh ${quote(decision.launcher)} ${quote(command)}`;
 }
 
 /** Source releases and packed releases use the same capability check. */
@@ -330,15 +356,14 @@ function cacheHostTooling(launcher: string, scripts: string): { launcher: string
 export async function spawnSignalSandbox(command: string, args: string[], options: SpawnOptions,
   start: typeof spawn = spawn, scope?: string | null, capabilityEnv = options.env ?? process.env): Promise<ChildProcess> {
   const bridged = process.env.LLV_DOCKER_NSENTER_SHIMS === "1" || options.env?.LLV_DOCKER_NSENTER_SHIMS === "1";
-  const decision = signalLauncher(capabilityEnv, bridged);
-  if ("off" in decision) {
+  const prepared = prepareLaunch(capabilityEnv, options.env ?? process.env, bridged);
+  if ("off" in prepared) {
     // Main's launch path: the engine under its memory and CPU wrapper only.
     const child = start(command, args, options);
-    recordSignalBoundaryOff(child, decision.off, "managed");
+    recordSignalBoundaryOff(child, prepared.off, "managed");
     return child;
   }
-  const { launcher } = decision;
-  const directory = fs.realpathSync(fs.mkdtempSync(path.join(options.env?.TMPDIR || os.tmpdir(), "delegatus-signal-")));
+  const { launcher, directory } = prepared;
   const receipt = path.join(directory, "ready.json");
   const diagnosticFile = options.env?.LLV_SIGNAL_IGNORE_NATIVE_STDIO === "1" ? `${directory}.stderr` : undefined;
   const env: NodeJS.ProcessEnv = { ...launcherEnv(options.env ?? process.env), LLV_SIGNAL_LAUNCHER: launcher, LLV_SIGNAL_RECEIPT: receipt,

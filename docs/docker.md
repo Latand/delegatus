@@ -42,7 +42,10 @@ service context. Where the boundary cannot be established, the engine launches
 without it and the launch reports the boundary off with the cause. Docker and
 the shared tmux server stay reachable from a boundary, as does the systemd user
 manager. The launcher is copied into a cache beneath the mounted home, so the
-host executes the same policy as the Viewer release. Container services retain
+host executes the same policy as the Viewer release. Its receipt and scratch
+stay beneath the mounted home, which both sides see: in a stage's scratch, or
+otherwise under `$HOME/.cache/delegatus/signal-runs`. A host without
+`/usr/bin/python3` launches the engine unprotected. Container services retain
 their `bun-container` interpreter.
 
 The shims use `nsenter --no-fork` with Compose's shared host PID namespace.

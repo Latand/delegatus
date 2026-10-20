@@ -1,5 +1,5 @@
 import { expect, spyOn, test } from "bun:test";
-import type { ChildProcess } from "node:child_process";
+import { spawnSync, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
@@ -137,7 +137,7 @@ test.each([
     }
     // A pane's lease belongs to the tmux server's environment; its launcher judges it.
     const pane = terminalSignalSandboxCommand("exec claude", fallbackEnv(root, extra));
-    if ("LLV_GATE_SLOT_LEASE" in extra) expect(pane).toMatch(/^python3 '.+' --terminal -- \/bin\/sh -c 'exec claude'$/);
+    if ("LLV_GATE_SLOT_LEASE" in extra) expect(pane).toMatch(/^\/bin\/sh -c '.+' sh '.+' 'exec claude'$/);
     else expect(pane).toBe("exec claude");
     expect(warn.mock.calls.filter(call => String(call[0]).includes("without the agent signal boundary"))).toHaveLength("LLV_GATE_SLOT_LEASE" in extra ? 3 : 4);
   } finally {
@@ -166,6 +166,169 @@ test.skipIf(process.platform !== "linux")("a host without Bubblewrap runs the en
     expect(launched.headlessErrors).toContain("boundary off, running unprotected: required host dependency is missing: bwrap");
     // Fallback receipts and their scratch are removed once read.
     expect(fs.readdirSync(root).filter(name => name.startsWith("delegatus-signal-"))).toEqual([]);
+  } finally { warn.mockRestore(); fs.rmSync(root, { recursive: true, force: true }); }
+}, 20_000);
+
+test.skipIf(process.platform !== "linux")("a launch scratch the Viewer cannot create launches every adapter unprotected", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-no-scratch-"));
+  const marker = path.join(root, "engine");
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const launched = await launchEach(fallbackEnv(root, { TMPDIR: path.join(root, "missing", "tmp") }), marker);
+    expect(launched.codes).toEqual([0, 0, 0]);
+    expectEnginesRan(marker);
+    for (const child of [launched.structured, launched.managed, launched.headless]) {
+      expect(child.spawnargs[0]).toBe("/bin/sh");
+      expect(signalBoundaryOff(child)?.reason).toStartWith("launch scratch is unavailable: ");
+      expect(signalDomain(child)).toBeUndefined();
+    }
+  } finally { warn.mockRestore(); fs.rmSync(root, { recursive: true, force: true }); }
+}, 20_000);
+
+/** Run a pane command as an interactive shell would: what follows it still runs. */
+function runPane(command: string, env: NodeJS.ProcessEnv) {
+  const result = spawnSync("/bin/sh", ["-c", `${command}; printf 'status=%s' "$?"`], { env, encoding: "utf8", timeout: 15_000 });
+  return { stdout: result.stdout, stderr: result.stderr };
+}
+
+test.skipIf(process.platform !== "linux")("a pane without python3 or without Bubblewrap runs its command once and prints the boundary off", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-pane-off-"));
+  const marker = path.join(root, "engine");
+  const empty = path.join(root, "empty"), pythonOnly = path.join(root, "python-only");
+  fs.mkdirSync(empty); fs.mkdirSync(pythonOnly);
+  fs.symlinkSync(Bun.which("python3")!, path.join(pythonOnly, "python3"));
+  try {
+    // The Viewer sees python3; the tmux server's environment decides the rest.
+    const pane = terminalSignalSandboxCommand(`printf ran >> '${marker}'; exit 7`, fallbackEnv(root));
+    expect(pane).toStartWith("/bin/sh -c ");
+    for (const [bin, reason] of [[empty, "required host dependency is missing: python3"], [pythonOnly, "required host dependency is missing: bwrap"]]) {
+      fs.rmSync(marker, { force: true });
+      const result = runPane(pane, fallbackEnv(root, { PATH: bin }));
+      expect(fs.readFileSync(marker, "utf8")).toBe("ran");
+      expect(result.stdout).toBe("status=7");
+      expect(result.stderr).toContain(`agent signal sandbox: boundary off, running unprotected: ${reason}`);
+    }
+    fs.rmSync(marker, { force: true });
+    const unreadable = pane.replace(/ sh '[^']+' /, ` sh '${path.join(root, "absent.py")}' `);
+    const result = runPane(unreadable, fallbackEnv(root, { PATH: pythonOnly }));
+    expect(fs.readFileSync(marker, "utf8")).toBe("ran");
+    expect(result.stdout).toBe("status=7");
+    expect(result.stderr).toContain("boundary off, running unprotected: the launcher is unreadable from the pane");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+const ENTER_HOST = 'nsenter -t 1 -m -p -C --no-fork -- /usr/bin/setpriv --reuid="\\$uid" --regid="\\$gid" --groups="\\$groups" --';
+
+/** The Dockerfile's host CLI shim, written into the fixture with its host
+ * entry replaced by the fixture's own and, optionally, its python3 moved. */
+function bridgeShim(root: string, python = "/usr/bin/python3"): string {
+  const bin = path.join(root, "bridge-bin"); fs.mkdirSync(bin, { recursive: true });
+  const source = fs.readFileSync(path.resolve("Dockerfile"), "utf8").match(/make_nsenter_shim\(\) \{[\s\S]*?\n\}/)![0];
+  for (const part of [ENTER_HOST, '"/usr/local/bin/$name"', "/usr/bin/python3"]) expect(source).toContain(part);
+  const fixture = source.replace(ENTER_HOST, '"\\$FIXTURE_ENTER"').replaceAll('"/usr/local/bin/$name"', `"${bin}/$name"`).replaceAll("/usr/bin/python3", python);
+  const made = spawnSync("bash", ["-c", `${fixture}\nmake_nsenter_shim engine /bin/sh`], { encoding: "utf8" });
+  expect(made.status, made.stderr).toBe(0);
+  return path.join(bin, "engine");
+}
+
+const signalRuns = path.join(os.homedir(), ".cache/delegatus/signal-runs");
+const runEntries = () => { try { return fs.readdirSync(signalRuns); } catch { return []; } };
+const userNamespaceMounts = process.platform === "linux" && spawnSync("unshare", ["-r", "-m", "true"], { stdio: "ignore", timeout: 5_000 }).status === 0;
+const tempOutsideHome = path.relative(os.homedir(), os.tmpdir()).startsWith("..");
+/** A host entry that records each receipt path it is handed before entering. */
+function recordingEnter(root: string): { enter: string; receipts: () => string[] } {
+  const enter = path.join(root, "enter"), file = path.join(root, "receipts");
+  fs.writeFileSync(enter, `#!/bin/sh\nprintf '%s\\n' "$LLV_SIGNAL_RECEIPT" >> '${file}'\nexec "$@"\n`, { mode: 0o700 });
+  return { enter, receipts: () => fs.readFileSync(file, "utf8").trim().split("\n") };
+}
+
+/** The whole stream. Bun discards a pipe nobody read once its process has
+ * exited, so engines wait for a barrier until every reader is attached. */
+function readAll(stream: NodeJS.ReadableStream & { readableEnded?: boolean }): Promise<string> {
+  if (stream.readableEnded) throw new Error("stream ended before it was read");
+  return new Promise(resolve => { let text = ""; stream.on("data", chunk => { text += chunk; }); stream.once("end", () => resolve(text)); });
+}
+
+/** Each bridged adapter launches the shim, whose engine appends its marker
+ * and records any launch variable it was left. */
+async function launchBridged(shim: string, env: NodeJS.ProcessEnv, marker: string) {
+  const script = (name: string) => ["-c", `while [ ! -e '${marker}.go' ]; do sleep 0.01; done; env | grep '^LLV_SIGNAL_' >> '${marker}.${name}.env'; printf ran >> '${marker}.${name}'; echo visible`];
+  const structured = await spawnSignalSandbox(shim, script("structured"), { env, stdio: ["pipe", "pipe", "pipe"], detached: true });
+  const output = readAll(structured.stdout!);
+  const socket = await spawnSignalSandbox(shim, script("socket"), { env: { ...env, LLV_SIGNAL_IGNORE_NATIVE_STDIO: "1" }, stdio: ["ignore", "pipe", "pipe"], detached: true });
+  const socketOutput = readAll(socket.stdout!);
+  const headless = spawnHeadlessSignalSandbox(shim, script("headless"), { env, detached: true, stdio: ["ignore", "ignore", "pipe"] });
+  const headlessErrors = readAll(headless.stderr!);
+  fs.writeFileSync(`${marker}.go`, "");
+  const codes = await Promise.all([exited(structured), exited(socket), exited(headless)]);
+  for (const name of ["structured", "socket", "headless"]) {
+    expect(fs.readFileSync(`${marker}.${name}`, "utf8")).toBe("ran");
+    expect(fs.existsSync(`${marker}.${name}.env`) ? fs.readFileSync(`${marker}.${name}.env`, "utf8") : "").toBe("");
+  }
+  return { structured, socket, headless, codes, output: await output, socketOutput: await socketOutput, headlessErrors: await headlessErrors };
+}
+
+test.skipIf(process.platform !== "linux" || !tempOutsideHome)("a bridged host without python3 runs every engine once and reports the boundary off", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-bridge-python-"));
+  const { enter, receipts } = recordingEnter(root);
+  const before = runEntries();
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const shim = bridgeShim(root, path.join(root, "absent", "python3"));
+    const launched = await launchBridged(shim, fallbackEnv(root, { LLV_DOCKER_NSENTER_SHIMS: "1", FIXTURE_ENTER: enter }), path.join(root, "engine"));
+    expect(launched.codes).toEqual([0, 0, 0]);
+    for (const child of [launched.structured, launched.socket, launched.headless]) {
+      expect(child.spawnargs[0]).toBe(shim);
+      expect(signalBoundaryOff(child)?.reason).toBe("required host dependency is missing: python3");
+      expect(signalDomain(child)).toBeUndefined();
+    }
+    expect(launched.output).toBe("visible\n");
+    // Socket engines keep no Viewer pipes, as through the launcher.
+    expect(launched.socketOutput).toBe("");
+    expect(launched.headlessErrors).toContain("agent signal sandbox: boundary off, running unprotected: required host dependency is missing: python3");
+    // A TMPDIR outside the shared home is never handed across the bridge.
+    expect(receipts()).toHaveLength(3);
+    for (const receipt of receipts()) expect(receipt).toStartWith(fs.realpathSync(signalRuns) + path.sep);
+    expect(runEntries()).toEqual(before);
+  } finally { warn.mockRestore(); fs.rmSync(root, { recursive: true, force: true }); }
+}, 20_000);
+
+test.skipIf(process.platform !== "linux")("a bridged launch keeps a TMPDIR that lies under the shared home", async () => {
+  const root = fs.mkdtempSync(path.join(os.homedir(), "signal-bridge-home-tmp-"));
+  const { enter, receipts } = recordingEnter(root);
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const shim = bridgeShim(root, path.join(root, "absent", "python3"));
+    const launched = await launchBridged(shim, fallbackEnv(root, { LLV_DOCKER_NSENTER_SHIMS: "1", FIXTURE_ENTER: enter, TMPDIR: root }), path.join(root, "engine"));
+    expect(launched.codes).toEqual([0, 0, 0]);
+    expect(receipts()).toHaveLength(3);
+    for (const receipt of receipts()) expect(receipt).toStartWith(fs.realpathSync(root) + path.sep);
+    expect(fs.readdirSync(root).filter(name => name.startsWith("delegatus-signal-"))).toEqual([]);
+  } finally { warn.mockRestore(); fs.rmSync(root, { recursive: true, force: true }); }
+}, 20_000);
+
+test.skipIf(!userNamespaceMounts || !tempOutsideHome || !fs.existsSync("/usr/bin/python3"))("a bridged launcher that cannot see the Viewer's temporary root still answers through the shared home", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-bridge-tmp-"));
+  // The host side of the bridge: a private mount namespace in which the
+  // Viewer's temporary root is an unrelated empty filesystem.
+  const hidden = path.join(root, "viewer-tmp"); fs.mkdirSync(hidden);
+  const enter = path.join(root, "enter");
+  fs.writeFileSync(enter, `#!/bin/sh\nexec unshare -r -m /bin/sh -c 'mount -t tmpfs fixture "$FIXTURE_HIDDEN" && exec "$@"' sh "$@"\n`, { mode: 0o700 });
+  const before = runEntries();
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const shim = bridgeShim(root);
+    const launched = await launchBridged(shim, fallbackEnv(root, { LLV_DOCKER_NSENTER_SHIMS: "1", FIXTURE_ENTER: enter, FIXTURE_HIDDEN: hidden, TMPDIR: hidden }),
+      path.join(root, "engine"));
+    expect(launched.codes).toEqual([0, 0, 0]);
+    for (const child of [launched.structured, launched.socket, launched.headless]) {
+      // The fixture's host side maps the caller to root, which the launcher declines.
+      expect(signalBoundaryOff(child)?.reason).toBe("managed signal domains require a non-root user");
+      expect(signalDomain(child)).toBeUndefined();
+    }
+    expect(launched.headlessErrors).toContain("boundary off, running unprotected: managed signal domains require a non-root user");
+    expect(fs.readdirSync(hidden)).toEqual([]);
+    expect(runEntries()).toEqual(before);
   } finally { warn.mockRestore(); fs.rmSync(root, { recursive: true, force: true }); }
 }, 20_000);
 
