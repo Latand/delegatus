@@ -927,7 +927,7 @@ export class StructuredDeliveryQueue {
     if (this.retirementExecutor.retired) return Promise.resolve();
     // Fresh admitted work owns a new wake, even when an older listing failed.
     // Preserve the failure budget; a successful pass still resets it below.
-    if (!options.freshAdmission && !this.passRetry.ready()) { this.retrySoon(); return Promise.resolve(); }
+    if (!options.freshAdmission && !this.canStartPass()) { this.retrySoon(); return Promise.resolve(); }
     if (this.activeDrain) {
       /* A watchdog pass is a safety net: one already running covers it. */
       if (options.safety) return this.activeDrain;
@@ -941,6 +941,11 @@ export class StructuredDeliveryQueue {
       if (this.retirementExecutor.pendingClaims.size === 0) retirementExecutors.delete(this.executorId);
     });
     return this.activeDrain;
+  }
+
+  /** Whether an observer kick can replace an already scheduled retry wake. */
+  canStartPass(): boolean {
+    return this.passRetry.ready(this.timing.now());
   }
 
   retire(): void {
@@ -969,13 +974,13 @@ export class StructuredDeliveryQueue {
         await this.drainPass(safety && first);
         first = false;
         if (this.port.takeEffectsReadFailure?.()) {
-          this.passRetry.fail();
+          this.passRetry.fail(this.timing.now());
           this.retrySoon();
           break;
         }
         this.passRetry.reset();
       } catch (error) {
-        this.passRetry.fail();
+        this.passRetry.fail(this.timing.now());
         this.lastPassError = failureReason(error);
         throw error;
       }
