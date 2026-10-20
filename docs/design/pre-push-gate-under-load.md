@@ -179,6 +179,12 @@ cascades, the false refusal and the hidden cost (E2).
    - `engine.controllerPass.test.ts:86`: 20.7 s, a test that holds a real
      20 s job.
 
+   The full implementation rehearsal exposed another existing limit: the
+   72-hour missing-reset simulation took 99.7 s and failed its explicit 90 s
+   timeout after the split. Its timeout is 150 s in
+   `engine.providerReset.part2.test.ts`; its assertions and the 300 s file
+   deadline are retained. The earlier 300 s file expirations hid this cost.
+
    The CLI flag covers the gate's head and base samples, its
    reruns, the merger's own `bun test` calls
    (`scripts/merge-batch.ts:358,669,709`), CI and the direct package command, so a

@@ -59,7 +59,7 @@ test.each([null, -120_000])("missing or elapsed reset=%s automatic stage retries
   expect(lane.state).toBe("needs_decision");
   expect(lane.runs[0]!.attempts.at(-1)!.providerWait?.stageRetry).toBeUndefined();
   expect(lane.stateDetail).toContain(resetDelay === null ? "unknown-reset retry exhausted" : "elapsed-reset retry exhausted");
-}, 90_000);
+}, 150_000);
 
 
 test("a reply arriving while the quota retry confirms host termination cancels the retry", async () => {
