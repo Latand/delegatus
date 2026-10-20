@@ -1,0 +1,324 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-20T04:27:16.373349+00:00",
+  "test": {
+    "file": "src/lib/runtime/structuredDelivery.integration.test.ts",
+    "name": "a kill cancels an automatic delivery retry and fails the send retryably"
+  },
+  "baselineRevision": "720aa48c5537cba0a25c00b65b59504437378886",
+  "sourceSha256": {
+    "baseline": "068605fc9e9f0ca4d18bc566e7b98d8a7d34e9717a93ae8d43b5268dd13b79ed",
+    "fixed": "1439b481c7536116ae25e89dfc2199bbdcbc3bacce7f56ab168a88c963dc72f2"
+  },
+  "classification": "Test ordering assumptions",
+  "cause": [
+    "A startup observation can already be waiting in the controller when the send is admitted. It can drain that send in addition to the route kick, producing four send calls instead of two.",
+    "The scheduled observation after the kill has no 100 ms completion guarantee. Sampling before it reads the retained kill boundary produces an additional effect read during the asserted quiet interval.",
+    "The route-kick error printed immediately before the CI failure belongs to the preceding test; the kill case reproduces alone."
+  ],
+  "fix": [
+    "Join startup through a fresh-admission kick before admitting any send.",
+    "Use the same fresh-admission kick as the production message route.",
+    "Wait for an effect read containing only retained kill boundaries after the kill is delivered and the send has failed, then join that drain before sampling quietness."
+  ],
+  "preserved": {
+    "existingAssertions": "All original assertions retained unchanged",
+    "testTimeoutMs": 5000,
+    "quietObservationMs": 1100,
+    "productSourceChanged": false
+  },
+  "ciEvidence": {
+    "run": 39364747843,
+    "attempt": 1,
+    "version": "0.154.0",
+    "expectedEffectReads": 4,
+    "observedEffectReads": 5
+  },
+  "conditions": {
+    "runtime": "Bun 1.4.0 (34cbb9a40)",
+    "matrixSource": ".github/workflows/bun-runtime.yml native-codex-versions",
+    "invocation": [
+      "bun",
+      "test",
+      "--preload",
+      "<scratch>/pressure.ts",
+      "src/lib/runtime/structuredDelivery.integration.test.ts",
+      "-t",
+      "a kill cancels an automatic delivery retry and fails the send retryably"
+    ],
+    "ownership": "Every batch runs sequentially through the required installed gate-slot.sh and each test process uses its owned runner.",
+    "sampling": "Fresh process and roots for every sample; five baseline and twenty fixed samples per version and condition. All results are process exit verdicts and named test outcomes.",
+    "isolation": [
+      "HOME",
+      "TMPDIR",
+      "XDG_CONFIG_HOME",
+      "XDG_CACHE_HOME",
+      "XDG_DATA_HOME",
+      "LLV_STATE_DIR",
+      "CODEX_HOME",
+      "CLAUDE_CONFIG_DIR"
+    ],
+    "controlUrl": "http://127.0.0.1:1",
+    "normal": "No injected CPU workers; default affinity on the shared machine.",
+    "pressure": "Two Python busy-loop workers on CPU 0, each acknowledged ready before testing. A preload pins the actual owned test process to CPU 0 with taskset and verifies Cpus_allowed_list from procfs. Only these owned workers are terminated afterward.",
+    "codex": "Each executable answers its matrix version to --version and is supplied through NATIVE_CODEX_QUEUE_TEST_BINARY, LLV_CODEX_HISTORY_CLI and LLV_CODEX_BINARY. This shared contract exercises fake engine hosts.",
+    "exports": "Baseline and fixed source exports share a dependency graph with byte-identical manifests, Bun lockfile and patches."
+  },
+  "matrix": [
+    {
+      "codex": "0.154.0",
+      "normal": {
+        "before": {
+          "passes": 2,
+          "runs": 5,
+          "failures": {
+            "sendCount expected 2, received 4": 0,
+            "effectBatchCalls expected 4, received 5": 3
+          }
+        },
+        "after": {
+          "passes": 20,
+          "runs": 20,
+          "consecutive": true,
+          "pressureAffinityVerified": null
+        }
+      },
+      "pressure": {
+        "before": {
+          "passes": 1,
+          "runs": 5,
+          "failures": {
+            "sendCount expected 2, received 4": 2,
+            "effectBatchCalls expected 4, received 5": 2
+          }
+        },
+        "after": {
+          "passes": 20,
+          "runs": 20,
+          "consecutive": true,
+          "pressureAffinityVerified": true
+        }
+      }
+    },
+    {
+      "codex": "0.159.0",
+      "normal": {
+        "before": {
+          "passes": 3,
+          "runs": 5,
+          "failures": {
+            "sendCount expected 2, received 4": 0,
+            "effectBatchCalls expected 4, received 5": 2
+          }
+        },
+        "after": {
+          "passes": 20,
+          "runs": 20,
+          "consecutive": true,
+          "pressureAffinityVerified": null
+        }
+      },
+      "pressure": {
+        "before": {
+          "passes": 0,
+          "runs": 5,
+          "failures": {
+            "sendCount expected 2, received 4": 2,
+            "effectBatchCalls expected 4, received 5": 3
+          }
+        },
+        "after": {
+          "passes": 20,
+          "runs": 20,
+          "consecutive": true,
+          "pressureAffinityVerified": true
+        }
+      }
+    },
+    {
+      "codex": "0.162.1",
+      "normal": {
+        "before": {
+          "passes": 4,
+          "runs": 5,
+          "failures": {
+            "sendCount expected 2, received 4": 1,
+            "effectBatchCalls expected 4, received 5": 0
+          }
+        },
+        "after": {
+          "passes": 20,
+          "runs": 20,
+          "consecutive": true,
+          "pressureAffinityVerified": null
+        }
+      },
+      "pressure": {
+        "before": {
+          "passes": 0,
+          "runs": 5,
+          "failures": {
+            "sendCount expected 2, received 4": 4,
+            "effectBatchCalls expected 4, received 5": 1
+          }
+        },
+        "after": {
+          "passes": 20,
+          "runs": 20,
+          "consecutive": true,
+          "pressureAffinityVerified": true
+        }
+      }
+    },
+    {
+      "codex": "0.163.0",
+      "normal": {
+        "before": {
+          "passes": 4,
+          "runs": 5,
+          "failures": {
+            "sendCount expected 2, received 4": 0,
+            "effectBatchCalls expected 4, received 5": 1
+          }
+        },
+        "after": {
+          "passes": 20,
+          "runs": 20,
+          "consecutive": true,
+          "pressureAffinityVerified": null
+        }
+      },
+      "pressure": {
+        "before": {
+          "passes": 0,
+          "runs": 5,
+          "failures": {
+            "sendCount expected 2, received 4": 4,
+            "effectBatchCalls expected 4, received 5": 1
+          }
+        },
+        "after": {
+          "passes": 20,
+          "runs": 20,
+          "consecutive": true,
+          "pressureAffinityVerified": true
+        }
+      }
+    }
+  ],
+  "negativeControl": {
+    "change": "In a scratch export only, the DeliveryWake callback schedules an additional callback one second later.",
+    "expected": "The retained effectBatchCalls equality assertion fails, proving recurring wakes are still detected.",
+    "exit": 1
+  },
+  "checks": [
+    {
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/structuredDelivery.integration.test.ts",
+        "-t",
+        "a kill cancels an automatic delivery retry and fails the send retryably"
+      ],
+      "name": "repeated-wake-negative",
+      "exit": 1,
+      "seconds": 2.972,
+      "bunSummary": [
+        "0 pass",
+        "1 fail",
+        "7 expect() calls"
+      ]
+    },
+    {
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/structuredDelivery.integration.test.ts"
+      ],
+      "name": "base-full",
+      "exit": 0,
+      "seconds": 23.537,
+      "bunSummary": [
+        "66 pass",
+        "0 fail",
+        "543 expect() calls"
+      ]
+    },
+    {
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/structuredDelivery.integration.test.ts"
+      ],
+      "name": "final-full",
+      "exit": 0,
+      "seconds": 24.838,
+      "bunSummary": [
+        "66 pass",
+        "0 fail",
+        "543 expect() calls"
+      ]
+    },
+    {
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/structuredDeliveryController.test.ts"
+      ],
+      "name": "controller",
+      "exit": 0,
+      "seconds": 1.425,
+      "bunSummary": [
+        "8 pass",
+        "0 fail",
+        "27 expect() calls"
+      ]
+    },
+    {
+      "command": [
+        "bun",
+        "test",
+        "src/lib/runtime/deliveryWake.test.ts"
+      ],
+      "name": "wake",
+      "exit": 0,
+      "seconds": 0.673,
+      "bunSummary": [
+        "3 pass",
+        "0 fail",
+        "9 expect() calls"
+      ]
+    },
+    {
+      "command": [
+        "bun",
+        "x",
+        "tsc",
+        "--noEmit",
+        "--incremental",
+        "false"
+      ],
+      "name": "types",
+      "exit": 0,
+      "seconds": 214.502,
+      "bunSummary": []
+    },
+    {
+      "command": [
+        "bun",
+        "node_modules/eslint/bin/eslint.js",
+        "src/lib/runtime/structuredDelivery.integration.test.ts"
+      ],
+      "name": "lint",
+      "exit": 0,
+      "seconds": 4.973,
+      "bunSummary": []
+    }
+  ],
+  "publication": "The pipeline owns publication and runs the repository pre-push gate.",
+  "history": {
+    "priorFixedDelayRevision": "955395780",
+    "inventory": "docs/verification/main-test-recovery.md#srclibruntimestructureddeliveryintegrationtestts",
+    "observation": "The earlier repair added a 100 ms wait. The retained main-test inventory also lists this kill/retry case as an unresolved follow-up."
+  }
+}
