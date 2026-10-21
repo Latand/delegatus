@@ -179,6 +179,7 @@ class InjectAppServer extends EventEmitter {
     }
     if (method === "modelProvider/capabilities/read") return this.respond(message.id, { webSearch: false, imageGeneration: false });
     if (method === "config/read") return this.respond(message.id, { config: { mcp_servers: {}, developer_instructions: this.accountInstructions } });
+    if (method === "mcpServerStatus/list") return this.respond(message.id, { data: [{ name: "viewer", tools: { stage_report: {} } }], nextCursor: null });
     if (method === "thread/start" || method === "thread/resume") {
       return this.respond(message.id, { thread: { id: this.threadId, path: this.rolloutPath, turns: [] } });
     }
