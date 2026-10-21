@@ -385,6 +385,40 @@ test("every settled cycle starts the spawn completion-notice sweep, and a sweep 
 });
 
 
+test("a failed scan still starts independent sweeps and a later tick recovers", async () => {
+  const failure = new Error("fixture scan failure");
+  const sweeps: string[] = [];
+  const heartbeats: FlowPipelineControllerHeartbeat[] = [];
+  let scans = 0;
+  let flows = 0;
+  const controller = new FlowPipelineController({
+    now: () => 1_000,
+    tickPipelines: async () => ({ changed: false }),
+    scan: async () => {
+      if (++scans === 1) throw failure;
+      return { files: [], complete: true };
+    },
+    tickFlows: async () => { flows++; return { changed: false }; },
+    sweepForgeLinks: () => { sweeps.push("forge"); },
+    sweepAutoMerge: () => { sweeps.push("merge"); },
+    sweepSpawnNotices: () => { sweeps.push("notice"); },
+    publishHeartbeat: (heartbeat) => { heartbeats.push(heartbeat); },
+    log: () => {},
+  }, { maxPasses: 2 });
+
+  await expect(controller.tick()).rejects.toBe(failure);
+  expect(sweeps).toEqual(["forge", "merge", "notice"]);
+  expect(flows).toBe(0);
+  expect(heartbeats.at(-1)).toMatchObject({ phase: "scan", state: "failed" });
+  expect(controller.idle()).toBe(true);
+
+  await controller.tick();
+  expect(scans).toBe(2);
+  expect(flows).toBe(0);
+  expect(sweeps).toEqual(["forge", "merge", "notice", "forge", "merge", "notice"]);
+  expect(heartbeats.at(-1)).toMatchObject({ phase: "idle", state: "idle" });
+});
+
 test("one failed cycle settles before trailing success, with one phase failure", async () => {
   let reject!: (error: Error) => void;
   let release!: () => void;
