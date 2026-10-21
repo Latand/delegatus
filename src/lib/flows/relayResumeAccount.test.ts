@@ -159,6 +159,21 @@ test("a legacy relay resumes the implementer on the account the work is recorded
   expect(command).not.toContain(routed.home);
 });
 
+test.each([
+  { sandbox: "full" as const, permissionMode: "bypassPermissions", expected: "--dangerously-skip-permissions" },
+  { sandbox: "restricted" as const, permissionMode: "auto", expected: "'--permission-mode' 'auto'" },
+])("a legacy relay keeps the implementer's $sandbox mode and read-only repository policy", async ({ sandbox, permissionMode, expected }) => {
+  const { transcript, homes } = sharedStoreMachine(sandbox === "full" ? "000000000101" : "000000000102");
+  const owner = claude.listClaudeAccounts().find((item) => item.home === homes[0])!;
+  agentRegistry().ensureConversation("claude", transcript, owner.id);
+  agentRegistry().reconcileConversations([{ engine: "claude", path: transcript, accountId: owner.id,
+    launchProfile: { ...agentRegistry().launchProfileForPath(transcript)!, permissionMode, readOnly: true, sandbox },
+    turn: { state: "idle", source: "empty", terminalAt: null }, observedAt: "2026-10-21T00:00:00.000Z" }]);
+  const command = await relaySpecFor(transcript);
+  expect(command).toContain(expected);
+  expect(command).not.toContain("'--permission-mode' 'plan'");
+});
+
 test("a legacy relay for work recorded on the routed account is unchanged", async () => {
   const { transcript, homes } = sharedStoreMachine("bbbbbbbbbbbb");
   const accounts = claude.listClaudeAccounts().filter((item) => homes.includes(item.home));

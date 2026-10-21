@@ -40,6 +40,7 @@ import { newRuleId, roleMemoryCollection, roleScope } from "@/lib/memory/roleSto
 import { defaultSeatTickSources } from "@/lib/monitor/seatTickSources";
 import { defaultSeatTickSettings } from "@/lib/monitor/seatTickSettings";
 import { emptySeatTickState } from "@/lib/monitor/types";
+import { FileRuntimeEventStore } from "./eventStore";
 import { writeSeatTickState } from "@/lib/monitor/seatTickState";
 
 type UnsequencedEvent = RuntimeEvent extends infer Event
@@ -968,6 +969,48 @@ function runtimeClient(journal: RuntimeJournal): RuntimeHostClient {
     transitionOperation: async (operationId, status, details) => journal.transitionOperation(operationId, status, details),
   } as RuntimeHostClient;
 }
+
+test("a real host's empty Viewer catalog persists as a failed launch card without delivering work", async () => {
+  const cwd = fs.mkdtempSync(path.join(sandbox, "mcp-launch-card-"));
+  const engine = path.join(cwd, "engine.mjs");
+  const inputs = path.join(cwd, "inputs.jsonl");
+  fs.writeFileSync(engine, `
+    import fs from "node:fs";
+    import { createInterface } from "node:readline";
+    createInterface({ input: process.stdin }).on("line", line => {
+      fs.appendFileSync(${JSON.stringify(inputs)}, line + "\\n");
+      const message = JSON.parse(line);
+      if (typeof message.id !== "number") return;
+      const result = message.method === "initialize" ? { userAgent: "fixture" }
+        : message.method === "account/read" ? { account: { type: "chatgpt", planType: "pro" } }
+        : message.method === "config/read" ? { config: { mcp_servers: {} } }
+        : message.method === "thread/start" ? { thread: { id: "mcp-launch-card", path: null } }
+        : message.method === "mcpServerStatus/list" ? { data: [{ name: "viewer", runtimeStatus: "failed", tools: {}, toolsError: "Viewer release target is missing" }], nextCursor: null }
+        : { data: [] };
+      console.log(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+    });
+  `);
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal = new RuntimeJournal(path.join(cwd, "runtime.sqlite"), { structuredHosts: true });
+  const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd, transport: "structured", accountId: "test-account" });
+  if (begun.kind !== "created") throw new Error("fixture admission failed");
+  try {
+    await expect(spawnStructuredConversation({ engine: "codex", receipt: begun.receipt,
+      spec: { command: "codex", cwd, windowName: "mcp-launch-card", engine: "codex", transcript: path.join(cwd, "session.jsonl") },
+      account: { engine: "codex", accountId: "test-account", kind: "managed", home: cwd, transcriptRoot: cwd, env: { NODE_ENV: "test" } },
+      "prompt": "Synthetic launch fixture instruction", registry, client: runtimeClient(journal),
+    }, { startHost: async () => CodexAppServerHost.start({ cwd, readProtocolVersion: () => "0.162.1",
+      eventStore: new FileRuntimeEventStore(path.join(cwd, "events")),
+      spawnProcess: (_command, _args, options) => spawn(process.execPath, [engine], options),
+    }), deliverFirst: async () => { throw new Error("work admitted without MCP verification"); } })).rejects.toThrow("Viewer MCP launch failed");
+    const reopened = new AgentRegistry(registry.filename, undefined, undefined, { sqliteMode: "off" });
+    const card = spawnResponseForReceipt(reopened.snapshot().receipts[begun.receipt.launchId]!);
+    expect(card.state).toBe("failed");
+    expect(card.launched).toBe(false);
+    expect(card.error).toContain("Viewer release target is missing");
+    expect(fs.readFileSync(inputs, "utf8")).not.toContain('"turn/start"');
+  } finally { journal.close(); }
+});
 
 test.each(["stdio", "http"] as const)("the launch receipt records the Codex host's effective MCP transport: %s", async transport => {
   const id = crypto.randomUUID();
