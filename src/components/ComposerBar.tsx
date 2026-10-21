@@ -494,9 +494,9 @@ export function ComposerBar({
   const sendControl = (
     <span
       ref={sendAnchorRef}
-      /* On the phone this span is the tools row's flex item, so the free
-         space is its to take (#2148): Send ends the row at the thumb's edge. */
-      className={`relative inline-flex shrink-0${isMobile ? " ml-auto" : ""}`}
+      /* On the phone this span ends the tools row's actions group, which
+         holds the row's right edge (#2148, #1484): Send sits at the thumb. */
+      className="relative inline-flex shrink-0"
       onContextMenu={(event) => {
         if (!hasSendMenu || dictationRecording || slotActs) return;
         event.preventDefault();
@@ -624,16 +624,25 @@ export function ComposerBar({
     </>
   );
 
-  /* The phone's tools row, INSIDE the box under the field: chip, attach,
-      dictate, send slot (§2 rule 8, the §4.2 sketch). Recording takes the chip
-      and the picker off the row so the meter has the width it needs. */
+  /* The phone's tools row, INSIDE the box under the field (§2 rule 8, the
+      §4.2 sketch): the settings (model/effort chip, Context toggle) hold the
+      left edge and the actions (attach, voice call, dictate, send slot) the
+      right one as one group, where attach and dictate used to sit beside the
+      chip with Send alone at the right (#1484). The settings group is the one
+      that yields width: the chip truncates its own label. Recording takes the
+      chip and the picker off the row so the meter has the width it needs;
+      the actions stay right. */
   const unitTools = (
     <div data-mobile2-tools className="flex min-h-11 items-center gap-0.5">
-      {dictationRecording ? null : leftSlot}
-      {dictationRecording ? null : picker}
-      {voiceControl}
-      {dictationRecording ? micControl : <span className={micHit}>{micControl}</span>}
-      {sendControl}
+      {dictationRecording || !leftSlot ? null : (
+        <div data-mobile2-tools-settings className="flex min-w-0 items-center gap-0.5">{leftSlot}</div>
+      )}
+      <div data-mobile2-tools-actions className="ml-auto flex shrink-0 items-center gap-0.5">
+        {dictationRecording ? null : picker}
+        {voiceControl}
+        {dictationRecording ? micControl : <span className={micHit}>{micControl}</span>}
+        {sendControl}
+      </div>
     </div>
   );
 
