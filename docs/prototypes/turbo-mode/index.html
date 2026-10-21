@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="uk" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Турбо-режим · прототип</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="panel.css">
+<style>
+  .index { max-width: 720px; margin: 0 auto; padding: 24px 16px; display: flex; flex-direction: column; gap: 16px; }
+  .index h1 { font-size: var(--text-title); font-weight: 700; }
+  .index h2 { font-size: var(--text-body); font-weight: 700; }
+  .index p, .index li { font-size: var(--text-ui); line-height: 1.5; color: var(--color-secondary); }
+  .index a { color: var(--color-accent); }
+  .index section { display: flex; flex-direction: column; gap: 4px; padding-top: 12px; border-top: 1px solid var(--color-border); }
+</style>
+</head>
+<body>
+<main class="index">
+<h1>Турбо-режим: три варіанти кнопки біля «Повної автономії»</h1>
+<p>Статичний прототип до docs/design/turbo-mode.md (розділи 2.3 і 6). Панель тікера зібрано за розміткою SeatTickBody.tsx і токенами продукту; проєкт, акаунти, час і кількість розмов вигадані. Кожна сторінка без параметрів відкривається в режимі історії: натисніть кнопку, підтвердьте, і вона пройде перемикання → увімкнено. Параметри <code>?state=off|hover|focus|dialog|switching|on|ending|disabled&amp;theme=light|dark</code> показують один стан. Вужче за 640 px панель стає нижнім аркушем, як на телефоні.</p>
+<section>
+<h2><a href="variant-1.html">Варіант 1 · «Форсаж»</a></h2>
+<p>Широкий перемикач із соплом на повзунку. Вимкнено: синій запальник чекає праворуч. Увімкнено: повзунок їде праворуч, за ним горить полум’я форсажу (синій біля сопла, жовтий, червоний на кінці, з ударними ромбами), іскри — по одній на перемкнену розмову; що менше часу лишилось, то коротше полум’я.</p>
+</section>
+<section>
+<h2><a href="variant-2.html">Варіант 2 · «Тахометр»</a></h2>
+<p>Кнопка зі шкалою обертів і словом «Турбо». Вимкнено: стрілка на холостих. Наведення: стрілка підскакує. Увімкнено: стрілка в червоній зоні, червоний сектор повільно пульсує, поділки шкали світяться по одній на перемкнену розмову; наприкінці стрілка відходить до середини.</p>
+</section>
+<section>
+<h2><a href="variant-3.html">Варіант 3 · «Червона кнопка»</a></h2>
+<p>Кругла червона кнопка під прозорою кришкою зі смугастою облямівкою. Наведення: кришка піднімається. Натиск: кришка відкидається й відкривається підтвердження. Увімкнено: кришка відкинута, кнопка світиться, смуги повзуть; повторне натискання вимикає турбо.</p>
+</section>
+<p>Підтвердження спільне для всіх трьох; кожен варіант ставить свою іконку в заголовок і на кнопку «Увімкнути турбо».</p>
+</main>
+</body>
+</html>
