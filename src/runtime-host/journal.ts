@@ -1,4 +1,6 @@
-import { dirname } from "node:path";
+import { basename, dirname } from "node:path";
+import { assertStateStartupMutation } from "@/lib/stateOwnership";
+import { IncompatibleSchemaError, schemaCompileFailure } from "@/lib/state/schemaCompatibility";
 import { RuntimeDataCorruptionError } from "@/lib/runtime/dataCorruption";
 import { MIGRATION_DELIVERY_CANCELLATION_PREFIX } from "@/lib/accounts/migration/intentLiveness";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
@@ -110,7 +112,14 @@ export const RUNTIME_UNPROJECTED_RECEIPT_RETENTION_LIMIT = 512;
 
 // This expression is shared by the index and both keyset query forms. SQLite
 // maintains it for old-host writes too, so a rollback needs no metadata repair.
-export const DEPLOYMENT_LIST_STARTED_AT = "COALESCE(CAST(round(unixepoch(json_extract(state_json, '$.createdAt'), 'subsec') * 1000) AS INTEGER), CAST(round(unixepoch(json_extract(state_json, '$.updatedAt'), 'subsec') * 1000) AS INTEGER), -8640000000000000)";
+// Milliseconds come from julianday(): the 'subsec' modifier is SQLite 3.42 and
+// macOS 13 ships 3.39, where it yields NULL and every row would sort as the
+// fallback. Both read the same millisecond Julian day, so the values are equal.
+// The index carries a new name because its expression changed; the previous
+// `deployment_list_recent` stays on SQLite 3.42+ for older hosts that name it.
+// On 3.39 its stored keys can disagree with the now-NULL expression, so it is
+// removed at startup before any entity changes.
+export const DEPLOYMENT_LIST_STARTED_AT = "COALESCE(CAST(round((julianday(json_extract(state_json, '$.createdAt')) - 2440587.5) * 86400000) AS INTEGER), CAST(round((julianday(json_extract(state_json, '$.updatedAt')) - 2440587.5) * 86400000) AS INTEGER), -8640000000000000)";
 
 export type RuntimeRegistryConversationRetentionState = "current" | "dead" | "superseded";
 
@@ -385,9 +394,11 @@ export interface RuntimeJournalOptions {
 /** How long an open or a write waits for another connection's lock. */
 export const RUNTIME_JOURNAL_BUSY_TIMEOUT_MS = 5000;
 
-/* A lock that outlasts the busy wait is named as one; any other open failure
-   passes through unchanged. */
-function runtimeJournalOpenRefusal(error: unknown): unknown {
+/* Lock and schema refusals name their cause; other errors pass through. */
+function runtimeJournalOpenRefusal(error: unknown, filename: string): unknown {
+  if (error instanceof IncompatibleSchemaError) return error;
+  const failure = schemaCompileFailure(error);
+  if (failure) return new IncompatibleSchemaError(basename(filename), failure, { cause: error });
   const code = (error as { code?: unknown } | null)?.code;
   if (typeof code !== "string" || !code.startsWith("SQLITE_BUSY")) return error;
   return Object.assign(
@@ -402,7 +413,7 @@ const journalDeploymentIndexes = declaredIndexes([
 ]);
 
 const journalEventIndexes = declaredIndexes([
-  `CREATE INDEX IF NOT EXISTS deployment_list_recent ON entities(${DEPLOYMENT_LIST_STARTED_AT} DESC, id DESC) WHERE kind = 'deployment'`,
+  `CREATE INDEX IF NOT EXISTS deployment_list_started ON entities(${DEPLOYMENT_LIST_STARTED_AT} DESC, id DESC) WHERE kind = 'deployment'`,
   `CREATE UNIQUE INDEX IF NOT EXISTS events_event_id ON events(event_id)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS events_scope_revision ON events(scope, revision)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS events_producer_key ON events(producer_kind, producer_key) WHERE producer_key IS NOT NULL`,
@@ -442,7 +453,7 @@ export class RuntimeJournal {
       return journal;
     } catch (error) {
       journal.close();
-      throw runtimeJournalOpenRefusal(error);
+      throw runtimeJournalOpenRefusal(error, filename);
     }
   }
 
@@ -478,6 +489,13 @@ export class RuntimeJournal {
          peer's lock must not be replaced by a later statement's outcome. */
       journalDeploymentIndexes.assertRepairAuthority(this.db, dirname(filename));
       journalEventIndexes.assertRepairAuthority(this.db, dirname(filename));
+      if (this.db.query("SELECT 1 FROM sqlite_master WHERE type='index' AND name='deployment_list_recent'").get()) {
+        const version = this.db.query<{ version: string }, []>("SELECT sqlite_version() AS version").get()!.version.split(".").map(Number);
+        if (version[0] === 3 && version[1]! < 42) {
+          assertStateStartupMutation(dirname(filename), "runtime journal date-index compatibility");
+          this.db.exec("DROP INDEX IF EXISTS deployment_list_recent");
+        }
+      }
       for (const statement of [
         `CREATE TABLE IF NOT EXISTS journal_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
         `CREATE TABLE IF NOT EXISTS events (
@@ -550,11 +568,11 @@ export class RuntimeJournal {
       this.initialization = this.initialize();
     } catch (error) {
       this.db.close();
-      throw runtimeJournalOpenRefusal(error);
+      throw runtimeJournalOpenRefusal(error, filename);
     }
     if (!options[cooperativeOpen]) {
       try { while (!this.initialization.next().done) { /* synchronous compatibility */ } }
-      catch (error) { this.close(); throw runtimeJournalOpenRefusal(error); }
+      catch (error) { this.close(); throw runtimeJournalOpenRefusal(error, filename); }
     }
   }
 
@@ -1759,7 +1777,7 @@ export class RuntimeJournal {
     )` : "state_json";
     const rows = this.db.query<{ id: string; started_at: number; value: string }, [number, number, string, number] | [number]>(`
       SELECT id, ${DEPLOYMENT_LIST_STARTED_AT} AS started_at, ${projection} AS value
-      FROM entities INDEXED BY deployment_list_recent WHERE kind = 'deployment'
+      FROM entities INDEXED BY deployment_list_started WHERE kind = 'deployment'
       ${cursor ? `AND ${DEPLOYMENT_LIST_STARTED_AT} <= ? AND (${DEPLOYMENT_LIST_STARTED_AT}, id) < (?, ?)` : ""}
       ORDER BY ${DEPLOYMENT_LIST_STARTED_AT} DESC, id DESC LIMIT ?
     `).all(...(cursor ? [cursor[0], cursor[0], cursor[1], limit + 1] as [number, number, string, number] : [limit + 1] as [number]));
