@@ -276,7 +276,8 @@ test("every persistent index declaration has a reopen fixture", () => {
   ];
   const sourceRoot = path.resolve(import.meta.dir, "../..");
   const declarations = [...new Bun.Glob("**/*.ts").scanSync(sourceRoot)].filter(file =>
-    !file.includes(".test.") && /CREATE (?:UNIQUE )?INDEX /.test(fs.readFileSync(path.join(sourceRoot, file), "utf8")));
+    !/\.(?:test|fixture|seedChild|sqliteChild)\./.test(file)
+    && /CREATE (?:UNIQUE )?INDEX /.test(fs.readFileSync(path.join(sourceRoot, file), "utf8")));
   expect(declarations.sort()).toEqual(covered.sort());
 });
 
