@@ -519,8 +519,10 @@ export type ConversationCwdStatus = { held: string[]; deferred: string[] };
 const isConversationCwdStatus = (value: readonly string[] | ConversationCwdStatus): value is ConversationCwdStatus =>
   !Array.isArray(value);
 
-/** Kernel probes per guard read, on the leased sweep worker. Each page contains
-    whole entries whose combined owner count fits this bound; the selected page
+/** Kernel probes per guard read, on the leased sweep worker. Pages split the
+    distinct unproven owner identities, so a page probes at most this many even
+    when one identity is shared by many entries; each identity is probed once
+    per read and every entry that names it reuses the verdict. The selected page
     comes from the sweep clock, so a worker restart cannot reset progress. */
 export const CONVERSATION_PROCESS_PROBE_LIMIT = 4096;
 
@@ -581,6 +583,15 @@ export function conversationCwdStatus(
   identitiesToProbe.forEach((key, index) => ownerPageByIdentity.set(key, Math.floor(index / CONVERSATION_PROCESS_PROBE_LIMIT)));
   const pageCount = Math.max(1, Math.ceil(identitiesToProbe.length / CONVERSATION_PROCESS_PROBE_LIMIT));
   const selectedPage = Math.floor(now / WORKTREE_SWEEP_INTERVAL_MS) % pageCount;
+  // Live and unverified verdicts are reused too: a live writer's claimOwner can
+  // be shared by many entries.
+  const verdicts = new Map<string, boolean>();
+  const dead = (identity: Readonly<ProcessIdentity>) => {
+    const proof = identityProofKey(identity);
+    let verdict = verdicts.get(proof);
+    if (verdict === undefined) verdicts.set(proof, verdict = provenDead(identity));
+    return verdict;
+  };
   for (const [key, entry] of entries) {
     if (!entry?.cwd) continue;
     const { owners, survivors, unreadableClaim } = ownersFor(entry);
@@ -599,7 +610,7 @@ export function conversationCwdStatus(
     const unknownOwners = identities.filter(identity => !cachedProofSet.has(identityProofKey(identity)));
     const selectedOwners = unknownOwners.filter(identity => ownerPageByIdentity.get(identityProofKey(identity)) === selectedPage);
     if (unknownOwners.some(identity => ownerPageByIdentity.get(identityProofKey(identity)) !== selectedPage)) deferred.add(entry.cwd);
-    if (selectedOwners.some(identity => !provenDead(identity))) {
+    if (selectedOwners.some(identity => !dead(identity))) {
       held.add(entry.cwd);
       continue;
     }

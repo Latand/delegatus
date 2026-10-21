@@ -1040,6 +1040,41 @@ test("unreadable claim remains held without letting readable peers exceed the pr
   expect(result.held).toContain(caseDir);
 });
 
+test("a live owner shared by many settled entries is probed once per pass and keeps every checkout", () => {
+  const { registry } = finishedRegistryConversation(caseDir);
+  const snapshot = registry.readOnlySnapshot();
+  const template = Object.values(snapshot.entries)[0]!;
+  const conversation = Object.values(snapshot.conversations)[0]!;
+  const entries: typeof snapshot.entries = {};
+  const conversations: typeof snapshot.conversations = {};
+  const shared = { pid: 75999, startIdentity: "shared-live", bootEpoch: "fixture-boot" };
+  for (let index = 0; index <= CONVERSATION_PROCESS_PROBE_LIMIT; index++) {
+    const generationId = `claimed-generation-${String(index).padStart(5, "0")}`;
+    const key = `${conversation.engine}:${generationId}`;
+    entries[key] = { ...template, key: key as unknown as typeof template.key,
+      cwd: path.join(caseDir, `claimed-${String(index).padStart(5, "0")}`), status: "idle",
+      claimOwner: `structured-host:${JSON.stringify(shared)}`,
+      structuredHost: { ...template.structuredHost!, process: { pid: 75000 + index,
+        startIdentity: `claimed-${index}`, bootEpoch: "fixture-boot" } }, structuredTerminationSurvivors: [] };
+    conversations[`claimed-conversation-${index}`] = { ...conversation,
+      id: `claimed-conversation-${index}` as typeof conversation.id,
+      turn: { ...conversation.turn, state: "idle" },
+      generations: conversation.generations.map((generation, generationIndex) => generationIndex === conversation.generations.length - 1
+        ? { ...generation, id: generationId } : generation) };
+  }
+  const cwds = Object.values(entries).map(entry => entry.cwd).sort();
+  for (let pass = 0; pass < 4; pass++) {
+    const probed: string[] = [];
+    const result = conversationCwdStatus({ entries, conversations }, pass * WORKTREE_SWEEP_INTERVAL_MS, identity => {
+      probed.push(JSON.stringify(identity));
+      return identity.startIdentity !== shared.startIdentity;
+    });
+    expect(probed.length).toBeLessThanOrEqual(CONVERSATION_PROCESS_PROBE_LIMIT);
+    expect(new Set(probed).size).toBe(probed.length);
+    expect([...result.held, ...result.deferred].sort()).toEqual(cwds);
+  }
+});
+
 test("proof-page deferrals preserve a finished lane's retention clock until proofs converge, and fresh activity restarts it", async () => {
   const root = repository();
   const { dir, tip } = lane(root, path.join(caseDir, "zz-proof-target"), "pipeline/proof-target");
