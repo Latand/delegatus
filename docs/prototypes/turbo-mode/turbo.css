@@ -17,7 +17,7 @@
 .cap-head { font-weight: 600; color: var(--color-primary); }
 .caption-muted .cap-head { color: var(--color-secondary); }
 .status-mark { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 14px; height: 12px; position: relative; }
-.dock-mark { display: inline-flex; }
+.dock-mark { display: inline-flex; margin-right: 2px; }
 .dock-mark .status-mark { margin: 0; }
 .dlg-icon { position: relative; display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 28px; height: 20px; margin-top: -1px; }
 .phone .dlg-icon { width: 32px; height: 24px; margin-right: 4px; }
@@ -113,7 +113,10 @@
   font-size: var(--text-ui); font-weight: 600; color: var(--color-secondary); outline: none;
   transition: border-color .2s, background-color .2s;
 }
-.phone .t2 { height: 44px; padding: 0 14px 0 8px; font-size: var(--text-body); gap: 8px; }
+/* The phone row already says «Турбо» at its left, like every row in the
+   sheet, so the chip there is the gauge alone. */
+.phone .t2 { height: 44px; min-width: 64px; justify-content: center; padding: 0 12px; font-size: var(--text-body); }
+.phone .t2-word { display: none; }
 .t2-gauge { width: 34px; height: 21px; overflow: visible; }
 .phone .t2-gauge { width: 40px; height: 25px; }
 .t2-gauge .g-tick, .mark-gauge .g-tick, .dlg-gauge .g-tick, .btn-gauge .g-tick { stroke: var(--color-strong); stroke-width: 2; stroke-linecap: round; }
@@ -123,21 +126,33 @@
 .g-needle { stroke: var(--color-primary); stroke-width: 1.8; stroke-linecap: round; transform-box: view-box; transform-origin: 16px 17px; transform: rotate(var(--needle, -72deg)); transition: transform .6s cubic-bezier(.3,1.6,.5,1); }
 .g-hub { fill: var(--color-primary); }
 .t2:hover:not(:disabled), .t2.sim-hover { border-color: color-mix(in oklab, var(--color-codex) 55%, transparent); color: var(--color-primary); }
-.t2:hover:not(:disabled) .g-needle, .t2.sim-hover .g-needle { --needle: -58deg; }
+/* hover: the engine revs and holds while the pointer stays — the needle
+   climbs to mid-scale in Codex blue and the first four ticks light */
+.t2:hover:not(:disabled) .g-needle, .t2.sim-hover .g-needle { --needle: 18deg; stroke: var(--color-codex); }
+.t2:hover:not(:disabled) .g-hub, .t2.sim-hover .g-hub { fill: var(--color-codex); }
+.t2:hover:not(:disabled) .g-tick:nth-of-type(-n+4), .t2.sim-hover .g-tick:nth-of-type(-n+4) { stroke: var(--color-codex); }
 .t2:focus-visible, .t2.sim-focus { box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-accent) 40%, transparent); color: var(--color-primary); }
 /* dialog open: revving, the needle half way */
 .t2[data-turbo="dialog"] { border-color: var(--color-codex); color: var(--color-primary); }
-.t2[data-turbo="dialog"] .g-needle { --needle: -10deg; }
-/* on: needle in the red, the red sector lit */
-.t2[aria-pressed="true"] { border-color: var(--color-codex); background: var(--color-codex-soft); color: var(--color-primary); }
-.t2[aria-pressed="true"] .g-needle { --needle: 64deg; stroke: var(--color-danger); }
-.t2[aria-pressed="true"] .g-hub { fill: var(--color-danger); }
-.t2[aria-pressed="true"] .g-red { stroke: var(--color-danger); animation: turbo-pulse 2.4s ease-in-out infinite; }
+.t2[data-turbo="dialog"] .g-needle { --needle: 34deg; }
+/* on: the chip runs hot — a solid red face with a glow, the dial drawn in
+   the face's ink, the needle pinned in the red sector. Off is a quiet
+   outlined chip, so the two differ in fill and shape at a glance. */
+.t2[aria-pressed="true"] {
+  border-color: var(--color-danger); background: var(--color-danger); color: var(--color-on-brand);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-danger) 22%, transparent), 0 0 12px color-mix(in oklab, var(--color-danger) 55%, transparent);
+}
+.t2[aria-pressed="true"] .t2-word { text-transform: uppercase; letter-spacing: .06em; font-weight: 700; }
+.t2[aria-pressed="true"] .g-tick { stroke: color-mix(in oklab, var(--color-on-brand) 45%, transparent); }
+.t2[aria-pressed="true"] .g-tick.is-lit, .t2[aria-pressed="true"] .g-tick.is-lit.is-red { stroke: var(--color-on-brand); }
+.t2[aria-pressed="true"] .g-needle { --needle: 64deg; stroke: var(--color-on-brand); stroke-width: 2.2; }
+.t2[aria-pressed="true"] .g-hub { fill: var(--color-on-brand); }
+.t2[aria-pressed="true"] .g-red { stroke: var(--color-crown); stroke-width: 3; animation: turbo-pulse 2.4s ease-in-out infinite; }
 @keyframes turbo-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
 /* ending soon: the needle drifts back toward the middle */
-.t2[data-turbo="ending"] .g-needle { --needle: 22deg; stroke: var(--color-primary); }
-.t2[data-turbo="ending"] .g-hub { fill: var(--color-primary); }
-.t2[data-turbo="ending"] .g-red { animation: none; stroke: color-mix(in oklab, var(--color-danger) 55%, transparent); }
+.t2[data-turbo="ending"] { box-shadow: none; }
+.t2[data-turbo="ending"] .g-needle { --needle: 22deg; }
+.t2[data-turbo="ending"] .g-red { animation: none; stroke: color-mix(in oklab, var(--color-crown) 55%, transparent); }
 @keyframes turbo-shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-2px); } 75% { transform: translateX(2px); } }
 .t2.is-confirmed { animation: turbo-shake .18s ease-in-out 2; }
 .t2:disabled { opacity: .5; }
@@ -159,8 +174,6 @@
 .t3-wrap { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .t3-cap { font-size: var(--text-label); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--color-muted); }
 .phone .t3-wrap .t3-cap { display: none; }
-.phone .turbo-row-2 .turbo-head { display: none; }
-.phone .turbo-row-2 { justify-content: flex-start; }
 .t3 { display: inline-flex; flex-shrink: 0; border-radius: var(--radius-control); outline: none; }
 .phone .t3 { min-height: 44px; align-items: center; }
 .t3-plate {
@@ -203,15 +216,24 @@
 }
 .t3[aria-pressed="true"] .t3-lip { animation: turbo-shift 3s linear infinite; }
 .t3-wrap[data-turbo="switching"] .t3-cap, .t3-wrap[data-turbo="on"] .t3-cap, .t3-wrap[data-turbo="ending"] .t3-cap { color: var(--color-danger); }
-/* ending soon: the glow blinks once a minute; the frame shows the dim beat */
-.t3[data-turbo="ending"] .t3-dome { box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-danger) 18%, transparent); filter: saturate(.7); }
+/* ending soon: the cover starts to come down over the button — half of the
+   dome is under it — and the button cools to an unlit red with no glow; the
+   stripes stop. */
+.t3[data-turbo="ending"] .t3-cover { transform: scaleY(.55); border-color: color-mix(in oklab, var(--color-primary) 30%, transparent); }
+.t3[data-turbo="ending"] .t3-lip { top: auto; height: 7px; border-radius: 0 0 var(--radius-control) var(--radius-control); background-size: 16px 7px; animation: none; transform: scaleY(1.8); transform-origin: 50% 100%; }
+.t3[data-turbo="ending"] .t3-dome {
+  background: radial-gradient(circle at 38% 32%, color-mix(in oklab, var(--color-danger) 45%, #fff) 0 14%, var(--color-danger) 52%, color-mix(in oklab, var(--color-danger) 70%, #000) 100%);
+  box-shadow: 0 2px 0 color-mix(in oklab, var(--color-danger) 55%, #000); transform: none;
+}
 .t3:disabled { opacity: .5; }
-.mark-3 { width: 12px; height: 12px; }
-.mark-3 .mark-dome, .dlg-icon-3 .mark-dome { position: absolute; left: 1px; right: 1px; bottom: 0; height: 10px; border-radius: 999px; background: var(--color-danger); box-shadow: 0 0 5px color-mix(in oklab, var(--color-danger) 60%, transparent); }
-.mark-3 .mark-cover, .dlg-icon-3 .mark-cover { position: absolute; left: 0; right: 0; top: -2px; height: 3px; border-radius: 2px; background: repeating-linear-gradient(135deg, var(--color-crown) 0 2px, var(--hazard-ink) 2px 4px); }
-.dlg-icon-3, .phone .dlg-icon-3 { width: 20px; height: 20px; }
-.dlg-icon-3 .mark-dome { left: 2px; right: 2px; height: 16px; }
-.dlg-icon-3 .mark-cover { top: -1px; height: 4px; background-size: 8px 4px; }
+/* The mark: the launch button seen from the side — a red half-dome on a
+   hazard-striped base — so it never reads as a round status light. */
+.mark-3 { width: 18px; height: 13px; }
+.mark-3 .mark-dome, .dlg-icon-3 .mark-dome { position: absolute; left: 4px; right: 4px; top: 0; height: 8px; border-radius: 999px 999px 0 0; background: var(--color-danger); }
+.mark-3 .mark-cover, .dlg-icon-3 .mark-cover { position: absolute; left: 0; right: 0; bottom: 0; height: 5px; border-radius: 1px; background: repeating-linear-gradient(135deg, var(--color-crown) 0 2px, var(--hazard-ink) 2px 4px); box-shadow: 0 0 0 1px color-mix(in oklab, var(--color-primary) 25%, transparent); }
+.dlg-icon-3, .phone .dlg-icon-3 { width: 24px; height: 20px; }
+.dlg-icon-3 .mark-dome { left: 5px; right: 5px; top: 1px; height: 12px; }
+.dlg-icon-3 .mark-cover { height: 6px; background: repeating-linear-gradient(135deg, var(--color-crown) 0 3px, var(--hazard-ink) 3px 6px); }
 .btn-icon-3 { width: 12px; height: 12px; border-radius: 999px; background: var(--color-danger); box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-on-brand) 70%, transparent); }
 
 @media (prefers-reduced-motion: reduce) {

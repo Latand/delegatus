@@ -694,15 +694,21 @@ rehearsal.
 
 All three sit in the Full autonomy section of the seat tick body
 (`SeatTickBody.tsx`, `SeatTickAutonomy`) in the desktop popover, the dock and
-the phone sheet. They use the product's tokens: `--color-codex` (Turbo is
+the phone sheet. That section moves up to sit right under the status block,
+above the wakes section: the desktop popover is capped at 70vh
+(`SeatTickChip.tsx`), and under the wakes the Turbo row and its caption fell
+past that edge at 1280×800 and wholly out of view at 1000×700 (question 8).
+They use the product's tokens: `--color-codex` (Turbo is
 Codex-only), `--color-warning` and `--color-danger` for heat, and `--tick-3`
 stays autonomy's violet. Each concept has off, hover/focus, dialog,
 switching (progress), on, ending soon (under 10 minutes left) and disabled
 states, plus a reduced-motion version. Disabled is greyed out, with its
 reason as a caption (§2.3). Every frame prints its variant number
 («Варіант 1», «Варіант 2», «Варіант 3»). Ukrainian copy as in §2.3. When on,
-the status block gets one line, «Турбо · до 14:00 · лишилось 1 год 50 хв ·
-перемкнено 5 з 7», and the board's seat tick chip gets a small mark in the
+the status block gets one line that states each fact once: «Турбо до 14:00»;
+while the sweep runs, «Турбо до 14:00 · перемикаю розмови: 2 з 7»; in the last
+10 minutes, «Турбо до 14:00 · лишилось 8 хв». The count disappears once every
+conversation is switched. The board's seat tick chip gets a small mark in the
 concept's icon.
 
 **Варіант 1 «Форсаж»: a switch with an afterburner.** A wide switch, 64×28
@@ -723,10 +729,15 @@ switched conversation. Reduced motion: a static gradient and no sparks.
 gauge icon (ticks, a red sector, a needle) and the label «Турбо», 32 px high
 on desktop and 44 px on the phone, to the right of the Full autonomy toggle.
 On the phone it moves to its own row. Off: the needle rests at idle. Hover:
-the needle revs up about 10° and settles. Confirming: the needle sweeps into
+the needle revs to mid-scale in `--color-codex` and holds there, with the
+first four ticks lit, for as long as the pointer stays. Confirming: the needle sweeps into
 the red with an overshoot (600 ms) and the chip shakes twice by 2 px. On: the
-needle stays in the red and the red sector pulses slowly (2.4 s); the time
-left stays in the status line only. Switching: tick marks light up one per
+chip runs hot, a solid `--color-danger` face with a glow and the label in
+capitals, the dial drawn in the face's ink, the needle pinned in the red and
+the sector pulsing slowly (2.4 s), so off (an outlined chip) and on differ in
+fill and shape at a glance; the time left stays in the status line only. On
+the phone the row carries «Турбо» at its left like every other row, and the
+chip shows the gauge alone. Switching: tick marks light up one per
 switched conversation. Ending soon: the needle drifts back toward the middle
 of the scale. Reduced motion: the needle is placed without a sweep and nothing
 shakes. A button with `aria-pressed`, and `aria-haspopup="dialog"` while off.
@@ -742,7 +753,10 @@ and the dialog opens; «Скасувати» closes the cover again. Confirming:
 button presses in (scale 0.92 → 1) and lights up with a soft glow, and the
 hazard stripes start to crawl (a 3 s marquee). On: the cover stays open and
 the button stays lit; pressing the lit button turns Turbo off and closes the
-cover. Ending soon: the glow blinks once a minute. Reduced motion: the cover
+cover. Ending soon: the cover starts to come down, half over the
+dome, and the button cools to an unlit red with no glow; the stripes stop.
+The dock mark is the button seen from the side, a red half-dome on a striped
+base, so it never reads as a status light beside the health dot. Reduced motion: the cover
 is shown open or closed without rotation, and the glow and stripes are
 static. A button with `aria-pressed`.
 
@@ -788,3 +802,9 @@ the dialog title.
    setting, dialog and notice first using today's restart switch at one at a
    time, and the in-place switch second. The first slice would bring back the
    slow, restart-based switching the requirement warns about.
+8. **Where in the seat tick panel should Full autonomy and Turbo sit?**
+   Recommended: **right under the status block**, above the wakes section, as
+   the prototype shows. The desktop popover is capped at 70 % of the window
+   height, and below the wakes section the Turbo row falls past that edge on
+   a laptop screen. Alternative: keep the section under the wakes, where it
+   is today, and Turbo is reached by scrolling the panel.

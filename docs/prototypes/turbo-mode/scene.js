@@ -31,9 +31,9 @@
 
   /* ── Facts the frames show ────────────────────────────────────────────── */
   const TURBO = {
-    switching: { left: "1 год 58 хв", done: 2 },
-    on: { left: "1 год 50 хв", done: 7 },
-    ending: { left: "8 хв", done: 7 },
+    switching: { done: 2 },
+    on: { done: 7 },
+    ending: { done: 7, left: "8 хв" },
   };
   const TOTAL = 7;
   const isOn = (s) => s === "switching" || s === "on" || s === "ending";
@@ -133,13 +133,20 @@
     return `<p id="turbo-about" class="caption" data-turbo-about><b class="cap-head">Турбо:</b> агенти Codex працюють на найшвидшій швидкості свого акаунта. Ліміти витрачаються швидше.</p>`;
   }
 
+  /* One line, one fact each: the end time always; while the sweep runs, its
+     own verb and count; in the last 10 minutes, the time left. */
   function turboStatus(s) {
     if (!isOn(s)) return "";
     const t = TURBO[s];
-    return `<div class="status-line" data-turbo-status>${miniMark()}<span>Турбо · до 14:00 · лишилось ${t.left} · перемкнено ${t.done} з ${TOTAL}</span></div>`;
+    const extra = s === "switching" ? ` · перемикаю розмови: ${t.done} з ${TOTAL}` : s === "ending" ? ` · лишилось ${t.left}` : "";
+    return `<div class="status-line" data-turbo-status>${miniMark()}<span>Турбо до 14:00${extra}</span></div>`;
   }
 
   /* ── The seat tick body ───────────────────────────────────────────────── */
+  /* Full autonomy, with Turbo beside it, sits right under the status block
+     here; the product has it under the wakes section. The desktop popover is
+     capped at 70vh (SeatTickChip.tsx), and under the wakes the Turbo row fell
+     below that edge at 1280×800 and 1000×700 (docs/design/turbo-mode.md §6). */
   function body(s) {
     const p = phone();
     const autonomyRow = p
@@ -162,6 +169,7 @@
         <p class="status-detail">Останнє пробудження ${s === "ending" ? "13:04 · наступне 14:04" : "12:04 · наступне 13:04"}</p>
         ${turboStatus(s)}
       </div>
+      <div class="section" data-seat-tick-autonomy-section>${autonomyRow}</div>
       <div class="section">
         <div class="row"><p class="section-head">Пробудження оркестратора</p>
           <button type="button" role="switch" aria-checked="true" aria-label="Вимкнути пробудження оркестратора" class="toggle ring"><span></span></button></div>
@@ -171,7 +179,6 @@
           <span class="caption caption-muted">Агент отримує ці вказівки на кожне пробудження. Тут редагуються рядки оператора; нижче — усі рядки з авторами й датами запису. Ліміт 500 символів охоплює рядки всіх авторів. Для зміни розкладу потрібні вказівки. Скидання розкладу та завершення строку дії зберігають їх.</span></label>
         <ul class="lines"><li><div class="meta">Оператор · 21.10.2026, 11:58:12</div><p>Доведи лінії турбо-режиму й витрати лімітів до злиття; о 18:00 зупинись.</p></li></ul>
       </div>
-      <div class="section" data-seat-tick-autonomy-section>${autonomyRow}</div>
     </div>`;
   }
 
