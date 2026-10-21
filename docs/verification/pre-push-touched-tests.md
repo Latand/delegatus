@@ -650,6 +650,7 @@ The sample P90 is provisional until all runs complete. An incomplete baseline or
 | after-306 | after | 3 | 19.85 / 27.60 / 32.79 | 77.6 | 414.9 | yes | 0 | 0 |
 | before-02 | before | 2 | 14.88 / 20.78 / 42.33 | 3.2 | 1124.8 | outlier | 4 | 1 |
 | before-102 | before | 2 | 12.16 / 19.46 / 30.93 | 37.3 | 879.5 | outlier | 1 | 1 |
+| before-202 | before | 2 | 7.39 / 31.94 / 41.28 | 1.3 | 967.3 | outlier | 1 | 1 |
 
 The ten split families retain all 1,078 registered cases, including their names, arguments and assertion bodies. The preserved calibration and JUnit inventory established that partition before the campaign. The measured timeout exceptions are described in `docs/design/pre-push-gate-under-load.md#2-fix`.
 
@@ -660,7 +661,10 @@ The resumed campaign began with three qualifying after-runs and one before-run. 
 | batch-01 | 3 | 1 | 0 |
 | batch-02 | 4 | 1 | 0 |
 | batch-03 | 4 | 1 | 0 |
+| batch-04 | 1 | 0 | 0 |
 
 Two before-runs fell below the required load band as their remaining files and baseline work used fewer CPUs. Observed test CPU usage averaged at least 3.78 CPUs in `before-02`, against 7.04 in `after-306`. Future before-runs use a four-CPU foreground estimate for initial load padding; after-runs retain eight. New records include `paddingForegroundCpuEstimate`; earlier records used eight. The real gate retains its eight head workers and existing quotas, deadlines and verdict rules. Every earlier qualifier and outlier stays in the sample.
+
+Static padding still produced an above-band before-run (`before-202`, median 31.94). Future attempts on both sides use the two-second load samples to adjust only their own padding scopes every 30 seconds, with at most twelve requested active scopes. A load above 30 removes one scope; above 35 removes up to two. Below 25 adds one scope after the first 90 seconds and after pending stops finish. Start and stop requests are recorded per run. The gate continues during asynchronous stop requests, and all owned launcher and stop-command handles settle at cleanup. Each new invocation follows a separate three-minute cooldown. All method epochs retain the same qualifying load band and frozen test inputs.
 
 The high-load `after-05` outlier captured two existing 15-second explicit test timeouts in `engine.providerReset.part3.test.ts`; filtered retries passed and the comparator classified the occurrences as flaky. The 30/10 sample and the two controls remain incomplete.

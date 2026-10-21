@@ -282,6 +282,10 @@ merged tree hash. No measurement creates a commit or pushes a ref.
 `bun scripts/local-gate.ts pre-push`, with private HOME, XDG_CONFIG_HOME,
 TMPDIR and LLV_STATE_DIR and `LLV_VIEWER_CONTROL_URL=http://127.0.0.1:1`.
 Run one hook at a time, with nothing else of yours on the machine.
+Between attempts, allow a three-minute cooldown after owned cleanup so the
+next ambient one-minute load reading can settle after the preceding workers
+and load scopes. Record the cooldown separately from each hook invocation.
+Check the pause flag throughout that interval and again before dispatch.
 
 **Load.** Load must be 25–30 for a run to count.
 
@@ -292,6 +296,14 @@ Run one hook at a time, with nothing else of yours on the machine.
   `systemd-run --user --scope --slice=delegatus-agents.slice -p CPUWeight=100 -p MemoryMax=256M`,
   two spinning processes each.
 - Stop them by their recorded unit names at the verdict.
+- Keep the added load within the measured band as foreground work changes:
+  every 30 s, request one fewer owned load scope above load 30, or up to two
+  fewer above 35. Below 25, add one scope after the first 90 s, up to twelve
+  requested active scopes. Await pending stops before adding another scope.
+  Record every start and stop request, with its time, sampled load and active
+  scope count. Stop requests run asynchronously; the hook and two-second
+  sampler continue. Await all owned launcher and stop-command handles at
+  cleanup. This controller acts only on load scopes this run created.
 - Sample load every 2 s. A run counts only if its median load during execution
   is 25–30. Record every other run too, but repeat it.
 
@@ -305,6 +317,10 @@ estimate with the requested scopes in each new run. Retain the earlier
 qualifying runs and every outlier. The gate still uses eight head workers;
 its source, quotas, deadlines and verdict rules are unchanged by this
 measurement refinement.
+The subsequent static-padding before-run had median load 31.94, so future
+attempts use the sampled-load controller above on both sides. Keep these
+method epochs and their driver hashes in the evidence. Qualification remains
+the same 25–30 median band for every epoch; no prior qualifier is removed.
 
 **Order.** Do 30 after-runs, cycling through the three branches, and one
 before-run after every third after-run: 10 before-runs, alternating so both
