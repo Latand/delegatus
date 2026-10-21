@@ -124,11 +124,17 @@ svg { display: block; }
 /* ── Modal (AttachTerminalDialog.tsx) and the phone sheet (MobileSheet.tsx) */
 .scrim { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgb(0 0 0 / .4); z-index: 50; }
 .dialog {
-  display: flex; flex-direction: column; gap: 12px; width: 100%; max-width: 440px; max-height: 85vh; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 12px; width: 100%; max-width: 720px; max-height: 85vh; overflow: hidden;
   border-radius: var(--radius-surface); border: 1px solid var(--color-border); background: var(--color-card);
   padding: 16px; box-shadow: var(--shadow-2);
 }
-.dialog-title { display: flex; align-items: flex-start; gap: 8px; }
+.dialog-title { display: flex; flex-shrink: 0; align-items: flex-start; gap: 8px; }
+/* The body scrolls between the pinned title and buttons, if a window is ever
+   too short for it; at 1000x700 and up it fits whole. */
+.dialog-scroll { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; gap: 12px; overflow-y: auto; }
+.dialog-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+.dialog-col { display: flex; min-width: 0; flex-direction: column; gap: 12px; }
+.phone .dialog-cols { display: flex; flex-direction: column; gap: 12px; }
 .dialog-title h2 { font-size: var(--text-body); font-weight: 700; color: var(--color-primary); line-height: 1.35; }
 .dialog-lead { font-size: var(--text-ui); line-height: 1.45; color: var(--color-primary); }
 .dialog-block { display: flex; flex-direction: column; gap: 2px; }
@@ -144,7 +150,7 @@ svg { display: block; }
 .account-usage { font-size: var(--text-caption); color: var(--color-secondary); font-variant-numeric: tabular-nums; }
 .account-tier { font-size: var(--text-caption); line-height: 15px; color: var(--color-primary); }
 .account-shared { font-size: var(--text-caption); line-height: 15px; color: var(--color-muted); }
-.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 2px; }
+.dialog-actions { display: flex; flex-shrink: 0; justify-content: flex-end; gap: 8px; padding-top: 2px; }
 .phone .dialog-actions { justify-content: stretch; }
 .phone .dialog-actions .btn { flex: 1; }
 
@@ -180,3 +186,25 @@ svg { display: block; }
 .story-bar { position: fixed; left: 16px; top: 52px; z-index: 90; display: flex; flex-wrap: wrap; gap: 6px; max-width: 760px; }
 .story-bar a { font-size: var(--text-ui); padding: 2px 8px; border-radius: var(--radius-control); border: 1px solid var(--color-border); background: var(--color-card); color: var(--color-accent); text-decoration: none; }
 .phone .story-bar { top: auto; bottom: 8px; left: 8px; right: 8px; z-index: 30; }
+
+/* ── The paid-credit approval (design §2.3): its own box under the accounts,
+   the account list's shape in the warning tone, with the product's native
+   checkbox (size-4, size-6 on the phone, as SeatTickRelease's ask). Ticked,
+   it turns to the danger tone, because from then on Turbo may spend money. */
+.account-credit { font-size: var(--text-caption); line-height: 15px; color: var(--color-secondary); }
+.account-credit.is-paid { color: var(--color-danger); font-weight: 600; }
+.credits {
+  display: flex; flex-direction: column; gap: 4px; padding: 8px 10px;
+  border-radius: var(--radius-control); border: 1px solid var(--color-warning); background: var(--color-warning-soft);
+}
+.credits.is-on { border-color: var(--color-danger); background: var(--color-danger-soft); }
+.credits-opt { display: flex; align-items: center; gap: 8px; min-height: 24px; cursor: pointer; }
+.credits-opt input { width: 16px; height: 16px; flex-shrink: 0; margin: 0; }
+.phone .credits-opt { min-height: 44px; }
+.phone .credits-opt input { width: 24px; height: 24px; }
+.credits-title { font-size: var(--text-ui); font-weight: 700; color: var(--color-primary); }
+.credits-text { font-size: var(--text-caption); line-height: 16px; color: var(--color-primary); }
+.credits-muted { color: var(--color-secondary); }
+.credits-list { list-style: none; display: flex; flex-direction: column; gap: 1px; font-size: var(--text-caption); line-height: 16px; color: var(--color-primary); }
+.credits-list li::before { content: "· "; color: var(--color-secondary); }
+.cap-head.cap-paid { color: var(--color-danger); }

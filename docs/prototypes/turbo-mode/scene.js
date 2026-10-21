@@ -7,6 +7,7 @@
  *
  *   ?state=off|hover|focus|dialog|switching|on|ending|disabled
  *   &theme=light|dark
+ *   &credits=off|on   (the separate paid-credit approval; off by default)
  *
  * Without ?state the page opens in story mode: a bar of links to every state,
  * and the control works — press it, confirm, and it runs switching → on.
@@ -24,6 +25,9 @@
   const story = !params.has("state");
   let state = params.get("state") || "off";
   const theme = params.get("theme") || "light";
+  /* The paid-credit approval (design §2.3, §2.13): a separate opt-in, off
+     unless the operator ticks it. In the on states it is what was confirmed. */
+  let credits = params.get("credits") === "on";
   document.documentElement.dataset.theme = theme;
   document.documentElement.lang = "uk";
   const phone = () => window.innerWidth < 640;
@@ -36,6 +40,18 @@
     ending: { done: 7, left: "8 хв" },
   };
   const TOTAL = 7;
+  /* The project's allowed Codex accounts. `balance` is the paid-credit balance
+     Delegatus reads per account (creditGuard.ts PaidCredits); null = none. */
+  const ACCOUNTS = [
+    { name: "Акаунт A", plan: "promax", usage: "тиждень 36 % · скидання 27.10",
+      tier: "Ultrafast для GPT-6.1 Sol і GPT-6 Astra, Fast для інших", paidTier: "Ultrafast і Fast", balance: "412" },
+    { name: "Акаунт B", plan: "pro", usage: "тиждень 58 % · скидання 25.10",
+      tier: "Fast для всіх моделей", paidTier: "Fast", balance: "75", shared: "Його також використовують ще 2 проєкти" },
+    { name: "Акаунт C", plan: "prolite", usage: "тиждень 12 % · скидання 28.10",
+      tier: "Fast для всіх моделей", paidTier: "", balance: null },
+  ];
+  const PAYERS = ACCOUNTS.filter((a) => a.balance);
+  const payerNames = () => PAYERS.map((a) => a.name.replace("Акаунт ", "")).join(" і ");
   const isOn = (s) => s === "switching" || s === "on" || s === "ending";
 
   /* ── Variant icons ────────────────────────────────────────────────────── */
@@ -128,7 +144,10 @@
       return `<p id="turbo-about" class="caption caption-muted" data-turbo-about><b class="cap-head">Турбо недоступне:</b> дозволені акаунти Codex не мають швидших рівнів.</p>`;
     }
     if (isOn(s)) {
-      return `<p id="turbo-about" class="caption" data-turbo-about><b class="cap-head">Турбо:</b> вимкнути можна будь-коли, розмови повернуть попередню швидкість із наступного ходу.</p>`;
+      const outcome = credits
+        ? `<b class="cap-head cap-paid">Турбо з кредитами:</b> після ліміту акаунти ${payerNames()} платять кредитами.`
+        : `<b class="cap-head">Турбо без кредитів:</b> лише включені ліміти акаунтів.`;
+      return `<p id="turbo-about" class="caption" data-turbo-about data-turbo-credits-outcome="${credits ? "on" : "off"}">${outcome} Вимкнути можна будь-коли, розмови повернуть попередню швидкість із наступного ходу.</p>`;
     }
     return `<p id="turbo-about" class="caption" data-turbo-about><b class="cap-head">Турбо:</b> агенти Codex працюють на найшвидшій швидкості свого акаунта. Ліміти витрачаються швидше.</p>`;
   }
@@ -188,8 +207,37 @@
     if (V === 2) return `<span class="dlg-icon dlg-icon-2" aria-hidden="true">${gaugeSvg("dlg-gauge", TOTAL)}</span>`;
     return `<span class="dlg-icon dlg-icon-3" aria-hidden="true"><span class="mark-cover"></span><span class="mark-dome"></span></span>`;
   }
+  /* Each row names its tier, then what the credit approval means for it as it
+     stands: no credits, or credits after the included limit. */
+  function accountRow(a) {
+    const outcome = !a.balance
+      ? `<span class="account-credit" data-account-credit="none">Кредитів немає</span>`
+      : credits
+        ? `<span class="account-credit is-paid" data-account-credit="paid">З кредитами: після ліміту платить кредитами з балансу</span>`
+        : `<span class="account-credit" data-account-credit="free">Без кредитів: турбо лише до 90 % ліміту</span>`;
+    return `<li><div class="account-top"><span class="account-name">${a.name} <span class="account-plan">· ${a.plan}</span></span><span class="account-usage">${a.usage}</span></div>
+      <span class="account-tier">${a.tier}</span>${outcome}${a.shared ? `<span class="account-shared">${a.shared}</span>` : ""}</li>`;
+  }
+  /* The separate approval: its own box, its own checkbox, never ticked by the
+     main confirm. It says it is paid and who pays, with the tier each pays for. */
+  function creditsBlock() {
+    return `<div class="dialog-block">
+        <p class="dialog-block-head">Платні кредити</p>
+        <div class="credits${credits ? " is-on" : ""}" data-turbo-credits>
+          <label class="credits-opt"><input type="checkbox" data-turbo-credits-toggle aria-describedby="turbo-credits-about"${credits ? " checked" : ""}>
+            <span class="credits-title">Дозволити платні кредити</span></label>
+          <p id="turbo-credits-about" class="credits-text">Це платно. Коли включений ліміт скінчиться, турбо продовжить за кредити з балансу акаунта, до кінця турбо. Витрачатимуть кредити:</p>
+          <ul class="credits-list">${PAYERS.map((a) => `<li><b>${a.name}</b> · ${a.paidTier} · баланс ${a.balance}</li>`).join("")}</ul>
+          <p class="credits-text credits-muted">Без позначки турбо не витрачає жодного кредиту. Інші проєкти на цих акаунтах кредитів не отримують.</p>
+        </div>
+      </div>`;
+  }
+  /* Two columns on desktop: what changes and the accounts on the left, the
+     credit approval and the duration on the right, so the approval sits apart
+     from the confirm and the whole dialog fits a 1000x700 window. One column
+     on the phone sheet. */
   function dialogContent() {
-    return `
+    return `<div class="dialog-cols"><div class="dialog-col">
       <div class="dialog-block">
         <p class="dialog-block-head">Зараз</p>
         <p class="dialog-text">Перейдуть на нову швидкість 7 розмов Codex: 3 етапи ліній і 4 агенти. Ті, що працюють, завершать поточний крок, зупиняться й одразу продовжать швидше.</p>
@@ -200,19 +248,15 @@
       </div>
       <div class="dialog-block">
         <p class="dialog-block-head">Дозволені акаунти Codex</p>
-        <ul class="accounts">
-          <li><div class="account-top"><span class="account-name">Акаунт A <span class="account-plan">· promax</span></span><span class="account-usage">тиждень 36 % · скидання 27.10</span></div>
-            <span class="account-tier">Ultrafast для GPT-6.1 Sol і GPT-6 Astra, Fast для інших</span></li>
-          <li><div class="account-top"><span class="account-name">Акаунт B <span class="account-plan">· pro</span></span><span class="account-usage">тиждень 58 % · скидання 25.10</span></div>
-            <span class="account-tier">Fast для всіх моделей</span>
-            <span class="account-shared">Його також використовують ще 2 проєкти</span></li>
-          <li><div class="account-top"><span class="account-name">Акаунт C <span class="account-plan">· prolite</span></span><span class="account-usage">тиждень 12 % · скидання 28.10</span></div>
-            <span class="account-tier">Fast для всіх моделей</span></li>
-        </ul>
+        <ul class="accounts">${ACCOUNTS.map(accountRow).join("")}</ul>
       </div>
+      </div><div class="dialog-col">
+      ${creditsBlock()}
       <p class="dialog-note">Claude не змінюється: швидкий режим Claude оплачується окремо, з usage credits.</p>
       <label class="field"><span class="field-label">Тривалість</span>
-        <select class="control" data-turbo-duration><option>1 год</option><option selected>2 год</option><option>4 год</option><option>8 год</option><option>До вимкнення</option></select></label>`;
+        <select class="control" data-turbo-duration><option>1 год</option><option selected>2 год</option><option>4 год</option><option>8 год</option><option${credits ? " disabled" : ""}>До вимкнення</option></select>
+        ${credits ? '<span class="caption caption-muted" data-turbo-duration-note>З кредитами турбо має строк: від 1 до 8 год.</span>' : ""}</label>
+      </div></div>`;
   }
   function dialogButtons() {
     return `<button type="button" class="btn btn-quiet sim-focus" data-turbo-cancel>Скасувати</button>
@@ -229,8 +273,8 @@
     return `<div class="scrim" role="presentation" data-turbo-scrim>
       <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="turbo-title" aria-describedby="turbo-lead">
         <div class="dialog-title">${dialogTitleIcon()}<div><h2 id="turbo-title">Увімкнути турбо?</h2></div></div>
-        <p id="turbo-lead" class="dialog-lead">${LEAD}</p>
-        ${dialogContent()}
+        <div class="dialog-scroll"><p id="turbo-lead" class="dialog-lead">${LEAD}</p>
+        ${dialogContent()}</div>
         <div class="dialog-actions">${dialogButtons()}</div>
       </div>
     </div>`;
@@ -249,7 +293,7 @@
 
   /* ── The dock switch, with Turbo's mark beside the health dot ─────────── */
   function dockSwitch(s) {
-    return `<span class="tick-switch" role="slider" aria-label="Активність тікера оркестратора" aria-valuetext="щогодини, типово${isOn(s) ? ". Турбо до 14:00" : ""}">
+    return `<span class="tick-switch" role="slider" aria-label="Активність тікера оркестратора" aria-valuetext="щогодини, типово${isOn(s) ? `. Турбо до 14:00, ${credits ? "з кредитами" : "без кредитів"}` : ""}">
       <span class="tick-track"><span class="tick-fill"></span>
         <span class="tick-notch" style="left:25px"></span><span class="tick-notch" style="left:45px"></span><span class="tick-notch" style="left:85px"></span>
         <span class="tick-thumb">1 год</span></span>
@@ -258,11 +302,12 @@
   }
 
   function tag(s) {
-    return `<p class="frame-tag" data-frame-tag>Варіант ${V} · «${NAMES[V]}» · ${STATE_WORDS[s]}</p>`;
+    const paid = s === "dialog" || isOn(s) ? (credits ? " · кредити дозволено" : " · без кредитів") : "";
+    return `<p class="frame-tag" data-frame-tag>Варіант ${V} · «${NAMES[V]}» · ${STATE_WORDS[s]}${paid}</p>`;
   }
   function storyBar() {
     if (!story) return "";
-    return `<nav class="story-bar">${Object.keys(STATE_WORDS).map((k) => `<a href="?state=${k}&theme=${theme}">${STATE_WORDS[k]}</a>`).join("")}
+    return `<nav class="story-bar"${state === "dialog" ? " inert" : ""}>${Object.keys(STATE_WORDS).map((k) => `<a href="?state=${k}&theme=${theme}&credits=${credits ? "on" : "off"}">${STATE_WORDS[k]}</a>`).join("")}
       <a href="?theme=${theme === "dark" ? "light" : "dark"}">${theme === "dark" ? "світла тема" : "темна тема"}</a><a href="index.html">усі варіанти</a></nav>`;
   }
 
@@ -311,16 +356,18 @@
   function wire() {
     if (!story) return;
     const ctl = document.querySelector("[data-turbo-control]");
-    ctl?.addEventListener("click", () => { state = isOn(state) ? "off" : "dialog"; render(); });
-    for (const q of ["[data-turbo-cancel]", "[data-turbo-close]"]) document.querySelector(q)?.addEventListener("click", () => { state = "off"; render(); });
+    ctl?.addEventListener("click", () => { if (isOn(state)) { state = "off"; credits = false; } else state = "dialog"; render(); });
+    for (const q of ["[data-turbo-cancel]", "[data-turbo-close]"]) document.querySelector(q)?.addEventListener("click", () => { state = "off"; credits = false; render(); });
     document.querySelector("[data-turbo-confirm]")?.addEventListener("click", () => {
       state = "switching"; render();
       setTimeout(() => { if (state === "switching") { state = "on"; render(); } }, 2400);
     });
-    document.querySelector("[data-turbo-scrim]")?.addEventListener("click", (e) => { if (e.target === e.currentTarget) { state = "off"; render(); } });
+    const tick = document.querySelector("[data-turbo-credits-toggle]");
+    tick?.addEventListener("change", () => { credits = tick.checked; render(); document.querySelector("[data-turbo-credits-toggle]")?.focus(); });
+    document.querySelector("[data-turbo-scrim]")?.addEventListener("click", (e) => { if (e.target === e.currentTarget) { state = "off"; credits = false; render(); } });
     if (state === "dialog") document.querySelector("[data-turbo-cancel]")?.focus();
   }
-  document.addEventListener("keydown", (e) => { if (story && e.key === "Escape" && state === "dialog") { state = "off"; render(); } });
+  document.addEventListener("keydown", (e) => { if (story && e.key === "Escape" && state === "dialog") { state = "off"; credits = false; render(); } });
   window.addEventListener("resize", () => { if (document.body.classList.contains("phone") !== phone()) render(); });
   render();
 })();

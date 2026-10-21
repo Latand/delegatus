@@ -27,6 +27,11 @@ agents only, so this public document paraphrases it:
   everything.
 - **R8.** The orchestrator looks at which pipelines are worth moving to the
   new speed, for example their next stages.
+- **R9.** (Added at about 11:38 UTC the same day, by chat.) Where Turbo uses
+  Codex, spending paid credits needs its own approval, because that costs
+  money. The orchestrator relayed it as: a separate, explicit approval that
+  says the spending is paid and names the accounts that would spend credits;
+  without it Turbo uses only what costs no credits.
 
 The pinned specification adds: define what Turbo off does, whether Turbo
 expires, and which accounts count as allowed. It also asks that live stage
@@ -74,6 +79,17 @@ included only if its fast mode is part of the plan.
 9. **Turbo off** puts every conversation Turbo switched back on its previous
    tier from its next turn, with no cut. Stage definitions Turbo changed get
    their previous tier back. The seat gets an "off" notice.
+10. **Paid credits need a separate approval (R9), off by default.** No tier
+    is paid by itself: Fast and Ultrafast draw on the plan's included usage
+    first, and an account spends purchased credits only after that runs out,
+    and only if it holds credits (§1.2). Without the approval, Turbo never
+    spends a credit: on an account that holds credits it raises tiers only up
+    to 90 % of the session or weekly window and then returns that account's
+    conversations to their previous tier. With the approval, a checkbox in its
+    own box in the dialog that names the paying accounts and their tiers, those
+    accounts keep their Turbo tier after the included usage and pay from their
+    balance until the episode ends. The approval covers only this project and
+    only this episode, and only the operator can give it (§2.2, §2.3).
 
 ## 1. Facts (observed 2026-10-21; times UTC)
 
@@ -217,7 +233,13 @@ come from `account_limits` (observed 09:48Z). No account's `config.toml` sets
   whole at 3,150.
 - **Credit guard.** A Codex account with paid credits stops taking work once
   a session or weekly window reaches 99 % (`src/lib/accounts/creditGuard.ts:19`,
-  `:26`).
+  `:26`). So today Delegatus never lets Codex work run on into purchased
+  credits on purpose.
+- **Paid credits per account.** Delegatus reads each Codex account's paid
+  balance from its rate-limit snapshot as `{ hasCredits, balance, unlimited }`
+  (`PaidCredits`, `creditGuard.ts:4`, parsed at `:11`); `balance` is the
+  provider's string. That is all the dialog needs to name the accounts that
+  could spend credits.
 - **Seat channel.** `sendMessageToOrchestrator`
   (`src/lib/mcp/bindings.ts:5438`) posts to `/api/orchestrator/message`. That
   route picks the current seat at delivery time
@@ -336,7 +358,14 @@ interface TurboSetting {
   setBy: SeatTickSettingsActor;
   why: string | null;
   /** What the confirmation showed: allowed accounts and the tier each model gets. */
-  plan: { accountId: string; tiers: Record<string, "ultrafast" | "priority"> }[];
+  plan: { accountId: string; tiers: Record<string, "ultrafast" | "priority">; hadCredits: boolean }[];
+  /** The separate paid-credit approval (§2.2). Off unless the operator ticked it. */
+  credits: {
+    approved: boolean;
+    accounts: string[];         // the accounts the dialog named as paying
+    approvedAt: string | null;
+    withdrawnAt: string | null; withdrawnBy: SeatTickSettingsActor | null; withdrawnWhy: string | null;
+  };
   /** One row per conversation Turbo touched; at most 200, newest kept. */
   switches: TurboSwitch[];
   noticeOn?: { key: string; deliveredAt?: string };
@@ -354,17 +383,21 @@ interface TurboSwitch {
 ```
 
 - **Authority** copies `changeAutonomy`. Only the operator (gateway actor)
-  enables or extends Turbo. The project's seat may shorten it or turn it off,
+  enables or extends Turbo, and only the operator approves paid credits; the
+  seat may withdraw that approval, with a `why`, and never give it. The project's seat may shorten it or turn it off,
   with a `why`. Workers and other projects are refused. Expiry is evaluated on
   every read, so a stopped Viewer cannot keep a past deadline alive.
 - **Durations:** 1, 2, 4 or 8 hours, or "until turned off". Default 2 h
-  (question 1). Turbo needs no seat wakes: the switch is server-side, and the
+  (question 1). With paid credits approved, "until turned off" is not offered
+  and an extension asks for the approval again (question 9). Turbo needs no seat wakes: the switch is server-side, and the
   seat notice is a message, which wakes the seat by itself.
 - **History:** the last 5 ended episodes are kept for Details.
 - **API:** `seat_tick_settings` and the panel's settings route gain
-  `turbo: { enabled, hours?, why? }`. A read carries `turbo.preview` for the
-  dialog: allowed accounts, the tier each would get, current weekly usage,
-  and the number of live Codex conversations that would switch. It also
+  `turbo: { enabled, hours?, credits?, why? }`. `credits: true` is refused
+  unless the request also enables or extends Turbo from the operator. A read
+  carries `turbo.preview` for the dialog: allowed accounts, the tier each
+  would get, current weekly usage, each account's paid balance, and the
+  number of live Codex conversations that would switch. It also
   carries `turbo.progress` while a sweep runs.
 
 ### 2.2 Allowed accounts and the tier each gets
@@ -379,6 +412,27 @@ interface TurboSwitch {
   beside `codexModelServiceTiers`, which reads only `service_tiers[].id`.
 - **Order** for "already fast enough": `flex` < `default` < `priority` <
   `ultrafast`. Turbo only raises a tier and leaves unknown ids alone.
+- **Credit rule (R9).** No tier is paid by itself: OpenAI's pages say Fast
+  and Ultrafast draw on included usage first, and on Pro \$500 Ultrafast
+  turns to credits "after that allowance runs out" (§1.2). Credits are spent
+  only by an account that holds them (`PaidCredits.hasCredits` or
+  `unlimited`; an account whose reading is missing or stale counts as holding
+  them). So:
+
+  | approval | account holds credits | what Turbo does on it |
+  |---|---|---|
+  | off (default) | no | fastest tier until the plan's limit; it cannot spend credits |
+  | off (default) | yes | fastest tier up to 90 % of the session or weekly window, then its Turbo conversations return to their previous tier from their next turn and it gets no new Turbo tier until the window resets |
+  | on | no | as without approval: nothing to pay with |
+  | on | yes, and named in the dialog | fastest tier, and after the included usage it keeps that tier and pays from its balance at the vendor's credit rate (Fast 2x, Ultrafast 6x Standard, §1.2), until the episode ends or the approval is withdrawn |
+
+  The 90 % margin exists because at 8x the usage rate one long turn can cross
+  the existing guard's last 1 %. With the approval, the credit guard
+  (`creditGuard.ts`) stops blocking the named accounts **for this project's
+  conversations only** while the episode lasts. Other projects on the same
+  account (account B serves two) still stop at 99 %. An account that gains
+  credits after the dialog is not covered: the approval names accounts, and
+  only those pay.
 - **Turbo never moves a conversation to another account** (question 3). It
   changes only the speed on the account the work already runs on. Moving
   work to account A for `ultrafast` would take the account-migration path,
@@ -399,21 +453,45 @@ confirmation. Text is Ukrainian in `uk.ts`, with English in `en.ts`:
 - **Далі:** «Які наступні етапи ліній пришвидшити, вирішить оркестратор.»
 - **Дозволені акаунти Codex** (one row each): label, plan, the tier in the
   catalog's own words («Ultrafast для GPT-6.1 Sol і GPT-6 Astra, Fast для
-  інших»), this week's usage and its reset («тиждень 36 % · скидання 27.10»).
-  An account bound to other projects too says «його також використовують ще
-  2 проєкти».
+  інших»), this week's usage and its reset («тиждень 36 % · скидання 27.10»),
+  and what the credit approval means for it as the checkbox stands: «Без
+  кредитів: турбо лише до 90 % ліміту», «З кредитами: після ліміту платить
+  кредитами з балансу» or «Кредитів немає». An account bound to other
+  projects too says «Його також використовують ще 2 проєкти».
+- **Платні кредити**, the separate approval (R9), in its own box in the
+  warning colour, apart from the buttons: an unticked checkbox «Дозволити
+  платні кредити»; «Це платно. Коли включений ліміт скінчиться, турбо
+  продовжить за кредити з балансу акаунта, до кінця турбо. Витрачатимуть
+  кредити:» and one line per account that holds credits, with the tier it
+  would pay for and its balance («Акаунт A · Ultrafast і Fast · баланс 412»);
+  then «Без позначки турбо не витрачає жодного кредиту. Інші проєкти на цих
+  акаунтах кредитів не отримують.» Ticked, the box turns to the danger colour.
+  The main button never ticks it. When no allowed account holds credits, the
+  box shows only «Жоден дозволений акаунт не має кредитів» and no checkbox.
 - «Claude не змінюється: швидкий режим Claude оплачується окремо, з usage
   credits.»
 - «Тривалість»: 1 год / 2 год / 4 год / 8 год / До вимкнення.
 - Buttons «Скасувати» (initial focus) and «Увімкнути турбо».
-- Modal: the background is inert and Escape cancels. On a phone the dialog
-  is a bottom sheet over the seat tick sheet.
+- Layout: on desktop two columns, what changes and the accounts on the left,
+  the credit box, the Claude line and the duration on the right, with the
+  title and buttons pinned; it fits a 1000×700 window whole. On a phone it is
+  one column in a bottom sheet over the seat tick sheet, with the buttons
+  pinned below the scrolling body.
+- Modal: the background is inert and Escape cancels. Cancelling also clears
+  the credit checkbox, so the next opening starts unticked.
 - **Disabled control**, with the reason as its caption, when no allowed
   account offers a faster tier («Дозволені акаунти Codex не мають швидших
   рівнів») or no Codex account is allowed or connected.
 
 The dialog shows only data Delegatus holds: catalog names and descriptions,
 usage, binding. It hard-codes no vendor multiplier (deferred).
+
+While Turbo is on, the caption under the control names the outcome first:
+«**Турбо без кредитів:** лише включені ліміти акаунтів.» or «**Турбо з
+кредитами:** після ліміту акаунти A і B платять кредитами.» (the head in the
+danger colour), then «Вимкнути можна будь-коли, розмови повернуть попередню
+швидкість із наступного ходу.» The dock chip's accessible value adds «без
+кредитів» or «з кредитами».
 
 After the operator confirms, the control shows the on state at once and the
 save runs in the background. A failed save rolls the control back to off and
@@ -427,20 +505,25 @@ and the monitor note are never written to: they have authorship and a
 500-character limit, and an overlay disappears by itself when Turbo ends.
 
 - The first wake of an episode (and the first after a change or a seat
-  rotation) gets the full text. Drafted and measured at 467 characters:
-  "Turbo on until <until> (operator). Allowed Codex accounts may spend limits
+  rotation) gets the full text. Drafted and measured with `<until>` as
+  written, 534 characters without the credit approval: "Turbo on until
+  <until> (operator). Allowed Codex accounts may spend included limits
   faster: each runs its fastest catalog tier (account A: ultrafast on
-  gpt-6.1-sol/gpt-6-astra, priority otherwise; accounts B, C: priority).
-  Delegatus switches live Codex conversations itself. You decide upcoming
-  Codex stages and new Codex launches: set serviceTier (override-stage, no
-  applyNow; spawn/create). Accounts, bindings, worker limits, credit guard and
-  Claude unchanged." In the product the account labels are the real ones;
-  this document uses A/B/C.
-- Later wakes get a pointer, measured at 130 characters: "Turbo on until
-  <until>; fastest tier per allowed Codex account; seat_tick_settings turbo
-  has the table and progress."
+  gpt-6.1-sol/gpt-6-astra, priority otherwise; accounts B, C: priority). Paid
+  credits: not approved; Delegatus ends Turbo on a credit-holding account at
+  90 %. Delegatus switches live Codex conversations itself. You decide
+  upcoming Codex stages and new Codex launches: set serviceTier
+  (override-stage, no applyNow; spawn/create). Accounts, bindings, worker
+  limits and Claude unchanged." With the approval, the credit sentence reads
+  "Paid credits: approved for accounts A, B on this project until <until>."
+  (520 characters in all). In the product the account labels are the real
+  ones; this document uses A/B/C.
+- Later wakes get a pointer, measured at 133 characters: "Turbo on until
+  <until>, no paid credits; fastest tier per allowed Codex account;
+  seat_tick_settings turbo has the table and progress." With the approval,
+  "paid credits approved (A, B)" replaces "no paid credits" (146).
 - **Budget.** The 4,000-character wake, with today's 3,001–3,150 characters
-  under a full autonomy overlay (§1.4), has room for the 467. The overlay
+  under a full autonomy overlay (§1.4), has room for the 534. The overlay
   reserves its space ahead of agenda truncation, as autonomy's does. The
   build's report tests compose a wake with both full overlays and a full
   agenda and assert it stays within 4,000 characters, with agenda items cut
@@ -454,8 +537,8 @@ and the monitor note are never written to: they have authorship and a
 When Turbo turns on, the server posts one notice through the
 project-addressed channel (`/api/orchestrator/message`, current seat at
 delivery). Its idempotency key is `turbo:<startedAt>:on`. It is agent-facing,
-in English, and carries the same facts as the full overlay, plus the
-conversation count and "progress: seat_tick_settings → turbo". On off or
+in English, and carries the same facts as the full overlay, the credit
+approval included, plus the conversation count and "progress: seat_tick_settings → turbo". On off or
 expiry a second notice (`…:off`) says Turbo ended and that Delegatus is
 returning the conversations it switched. It also asks the seat to put back
 any upcoming stages it sped up for Turbo, as listed in its own decisions.
@@ -571,6 +654,10 @@ Delegatus adds no launch-time default (question 4).
 - Stage definitions Turbo changed get `from` back through `override-stage`
   (no `applyNow`), guarded by the stage digest. A stage the seat changed
   again meanwhile keeps the seat's value.
+- The credit approval ends with the episode: the guard blocks the named
+  accounts again from that moment. A withdrawn approval (operator or seat)
+  ends it the same way while Turbo stays on, and the accounts fall back to the
+  no-credit row of §2.2.
 - The overlay stops on the next wake, the `…:off` notice is sent, and the
   episode moves to history.
 
@@ -578,10 +665,10 @@ Delegatus adds no launch-time default (question 4).
 
 - **Full autonomy:** the two are independent. Each has its own switch,
   status line and overlay. Turbo grants only the tier permission (§2.4).
-- **Credit guard:** unchanged, at 99 %. The sweep skips accounts the guard
-  has stopped. For an account holding paid credits, question 5 proposes a
-  90 % Turbo margin, because at 8x the usage rate one long turn can cross the
-  last 1 %.
+- **Credit guard:** unchanged at 99 % for everything except the accounts a
+  credit approval names, and for those only for this project's conversations
+  during the episode (§2.2). Without an approval, Turbo adds its own 90 %
+  margin on credit-holding accounts, below the guard.
 - **Role-default and explicit tiers:** Turbo raises them while it is on and
   restores `from` afterwards. `fast` and `serviceTier` validation is
   unchanged.
@@ -590,7 +677,8 @@ Delegatus adds no launch-time default (question 4).
   existing host-start check refuses a tier the target lacks, and the
   migration says so.
 - **Other projects:** Turbo is per project. Account B also serves two other
-  projects, and the dialog says so (§2.3).
+  projects, and the dialog says so (§2.3). A credit approval on this project
+  never lets another project's work spend credits.
 
 ### 2.11 Claude
 
@@ -599,7 +687,8 @@ dialog says why in one line (§2.3).
 
 ### 2.12 What Turbo never does
 
-It never changes bindings, accounts, worker limits or role mappings. It
+It never changes bindings, accounts, worker limits or role mappings, and it
+never spends a paid credit without the separate approval. It
 never writes any `config.toml`, never moves a conversation to another
 account, never kills a running command, never cuts the seat's turn, and
 never sends a switch through the restart path without a person asking.
@@ -625,6 +714,14 @@ TMPDIR and `LLV_STATE_DIR`, with the control URL on a closed port:
 - `report.test.ts`: full overlay and pointer; a composed wake with both full
   overlays stays within 4,000 characters.
 - `codexServiceTiers.test.ts`: `fastestTier` for the A/B/C catalog shapes.
+- credit rule tests: without approval a credit-holding account stops being
+  raised at 90 % and its conversations are queued back; an account with a
+  missing or stale credit reading counts as holding credits; with approval the
+  guard admits only the named accounts and only this project's conversations,
+  another project on the same account still stops at 99 %; the approval ends
+  with the episode and on withdrawal; `credits: true` from the seat, or
+  without an enable or extend, is refused; "until turned off" is refused with
+  credits.
 - `codexAppServerHost.test.ts`, using the fixture app-server:
   `thread/settings/update` is sent with the tier; `boundary` waits for an
   in-progress `commandExecution` item to complete, then interrupts; `none`
@@ -636,13 +733,16 @@ TMPDIR and `LLV_STATE_DIR`, with the control URL on a closed port:
 - queue tests: never more than 3 in flight, 2 s spacing, the 120 s deadline,
   resume after restart from stored rows, every skip class in §2.6, revert on
   off.
-- `SeatTickBody` DOM test: dialog content, optimistic on with rollback,
-  immediate off, the disabled reason.
+- `SeatTickBody` DOM test: dialog content, the credit checkbox unticked on
+  every opening and untouched by the confirm button, the paying accounts
+  listed, the on caption's «без кредитів» / «з кредитами», optimistic on with
+  rollback, immediate off, the disabled reason.
 - **Rendered evidence** through the existing kanban board driver
   (`src/components/kanban/kanbanBoard.browser.test.tsx`), as the
   full-autonomy case did: board header popover and `OrchestratorDock`
   (440 and 360 px) at 1440 px, the phone at 390 px, light and dark, en and
-  uk, in the states off, dialog, switching, on, ending soon and disabled. No
+  uk, in the states off, dialog, switching, on, ending soon and disabled, with
+  the credit approval off and on. No
   new driver.
 - The probe in §1.5 becomes a credential-free fixture case in the host test.
   The fixture checks the requests the app-server sends and needs no network.
@@ -667,6 +767,7 @@ rehearsal.
 | R6 | running work stops, switches, resumes automatically | §2.6 |
 | R7 | no lag | §2.7, and no process restarts (§1.5, §1.6) |
 | R8 | the orchestrator picks the next stages worth switching | §2.8 |
+| R9 | separate approval for paid credits, naming the paying accounts | §2.2 (credit rule), §2.3 (the box), question 9 |
 | pinned | off behaviour, expiry, allowed accounts | §2.9, §2.1, §2.2 |
 
 ## 5. Deferred — not currently justified
@@ -761,7 +862,9 @@ is shown open or closed without rotation, and the glow and stripes are
 static. A button with `aria-pressed`.
 
 The confirmation dialog (§2.3) is shared; each variant puts its own icon in
-the dialog title.
+the dialog title. Its credit box and the on-state caption («Турбо без
+кредитів» / «Турбо з кредитами») are the same in all three variants; the
+prototype's `credits=off|on` parameter shows either.
 
 ## 7. Open questions, with recommended answers
 
@@ -785,12 +888,13 @@ the dialog title.
    the existing `serviceTier`, as asked. Alternative: Delegatus gives every new
    Codex launch the fastest tier while Turbo is on, and the orchestrator opts
    stages out.
-5. **Should accounts with purchased credits get an earlier stop under Turbo?**
-   Recommended: **yes**. On an account holding paid credits, Turbo stops
-   raising tiers at 90 % of the session or weekly window and returns that
-   account's Turbo conversations to their previous tier from their next turn. The existing
-   99 % guard stays. On Pro \$500, Ultrafast spends credits once the included
-   usage runs out. Alternative: keep only the 99 % guard.
+5. **Without the credit approval, where should Turbo stop on an account
+   that holds credits?** Recommended: **at 90 %** of the session or weekly
+   window: Turbo stops raising tiers there and returns that account's Turbo
+   conversations to their previous tier from their next turn; the existing
+   99 % guard stays. At 8x the usage rate one long turn can cross the last
+   1 %, and that 1 % is where credits begin. Alternative: rely on the 99 %
+   guard alone.
 6. **Is Turbo Codex-only?** Recommended: **yes**. On your plans, Claude
    Code's fast mode draws on usage credits even while plan usage remains
    (Anthropic's fast mode page, read 2026-10-21). Alternative: a separate Claude fast mode
@@ -808,3 +912,12 @@ the dialog title.
    height, and below the wakes section the Turbo row falls past that edge on
    a laptop screen. Alternative: keep the section under the wakes, where it
    is today, and Turbo is reached by scrolling the panel.
+9. **How far does an approval to spend paid credits reach?** Recommended:
+   **the accounts the dialog named, this project's conversations only, this
+   episode only, and a finite duration** (1–8 h; «До вимкнення» is not
+   offered with credits). Extending Turbo asks again; the seat may withdraw
+   the approval and never give it. The amount is bounded by time, because the
+   balance Delegatus reads is the provider's own string and no per-account
+   spend counter exists yet. Alternatives: a credit cap per account (needs a
+   reliable balance reading and a spend counter, deferred); or let the
+   approval last as long as Turbo, «До вимкнення» included.
