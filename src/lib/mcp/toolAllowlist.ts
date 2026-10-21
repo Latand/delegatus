@@ -26,9 +26,9 @@ import type { McpToolArgs, McpToolName } from "./server";
  *    action retains conversation_action's existing cross-project reach.
  *
  *  - MAINTENANCE WRITES. A durably recorded maintainer writes task metadata
- *    only. Its boundary refuses other mutations; ordinary sessions retain B+.
+ *    and inert voice-tool proposals. Its boundary refuses other mutations.
  *  - REPORTER WRITES. An issue reporter reads evidence and stores a scrubbed
- *    issue preview. Its boundary refuses other operator-facing mutations.
+ *    issue preview; every agent may also propose voice tools without executing them.
  *
  * The exact-SHA deploy contract, idempotency keys, typed-target validation,
  * receipts and redaction are all enforced in their own layers and are
@@ -254,8 +254,9 @@ const MUTATING_TOOL_READ_FIELDS: Partial<Record<McpToolName, readonly string[]>>
     dismiss_attention: ["target", "undo", "reason"],
 };
 
-/** Maintenance changes only task metadata. New mutating tools fail closed. */
+/** Maintenance changes task metadata and inert proposals. New mutations fail closed. */
 export function permitMaintainerTool(tool: McpToolName, args: McpToolArgs): McpToolVerdict {
+  if (voiceToolsProposalOrRead(tool, args)) return ALLOWED;
   if (tool === "backfill_worktree_projects" && args.dryRun !== false) return ALLOWED;
   if (["create_task", "update_task", "agent_activity", "lifecycle_events"].includes(tool)) return ALLOWED;
   if (tool === "account_project_binding" && (args.action === undefined || args.action === "list")) return ALLOWED;
@@ -264,10 +265,11 @@ export function permitMaintainerTool(tool: McpToolName, args: McpToolArgs): McpT
   return { allowed: false, code: "maintainer_tool_refused", error: `A board maintenance run writes the board only through create_task and update_task; ${tool} would start, stop, send or change something else, so Delegatus refused it. Put what you wanted done on your attention list.` };
 }
 
-/** #2518: reporter evidence reads may keep internal poll/cursor receipts,
-    but the only operator-facing write is a report preview. This
+/** #2518: reporter evidence reads may keep internal poll/cursor receipts;
+    operator-facing writes are a report preview and inert voice-tool proposals. This
     boundary runs before receipt replay, recovery or downstream dispatch. */
 export function permitIssueReporterTool(tool: McpToolName, args: McpToolArgs): McpToolVerdict {
+  if (voiceToolsProposalOrRead(tool, args)) return ALLOWED;
   if (tool === "issue_report" && (args.action === "hints" || args.action === "preview" || args.action === "show")) return ALLOWED;
   if (tool === "pipeline_action" && args.action === "preview") return ALLOWED;
   if (tool === "agent_activity" || tool === "lifecycle_events") return ALLOWED;
@@ -290,12 +292,18 @@ export function permitNeedsYouRead(
   return { allowed: false, error: "Needs-you reads require the operator, this project's designated seat or its maintenance run" };
 }
 
-/** The curator's only domain write is its checked pass; poll receipts are reads. */
+/** The curator writes its checked pass and inert proposals; poll receipts are reads. */
 export function permitCuratorTool(tool: McpToolName, args: McpToolArgs): McpToolVerdict {
+  if (voiceToolsProposalOrRead(tool, args)) return ALLOWED;
   if (tool === "curate_rules" || tool === "agent_activity" || tool === "lifecycle_events") return ALLOWED;
   if (tool === "account_project_binding" && (args.action === undefined || args.action === "list")) return ALLOWED;
   if (tool === "backfill_worktree_projects" && args.dryRun !== false) return ALLOWED;
   const fields = MUTATING_TOOL_READ_FIELDS[tool];
   if (fields && !fields.some(field => args[field] !== undefined)) return ALLOWED;
   return { allowed: false, code: "curator_write_refused", error: `A curator changes memory only through curate_rules; ${tool} would change something else.` };
+}
+
+/** The operator permits every agent to propose; execution still needs their click. */
+function voiceToolsProposalOrRead(tool: McpToolName, args: McpToolArgs): boolean {
+  return tool === "voice_tools" && ["list", "status", "propose"].includes(String(args.action));
 }
