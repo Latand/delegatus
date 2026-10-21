@@ -131,12 +131,23 @@ out of automatic schema recovery. See also
   one search project-name ambiguity case. The index failures have the same
   diagnostic differences on both revisions.
 
-The unmodified local pre-push gate stops at native Codex exit 69 before the
-fixture command runs: its isolated environment drops `LLV_SIGNAL_SANDBOX`.
-The same native gate command, fixture executable and isolation reproduce exit
-69 on base `4df56467`. The gate cancels its other lanes, so this is not a
-completed publication-gate verdict. The separate Viewer check above uses the
-existing one-line marker-forwarding fix from PR #3164 in its scratch verifier;
-the stage's two shared verification scripts remain unchanged. A normal local
-publication requires that prerequisite in `scripts/verify-native-codex-runtime.ts`
-and `scripts/verify-viewer-runtime.ts`.
+The first unmodified pre-push attempt stopped at native Codex exit 69 before
+dispatch because its isolated environment dropped `LLV_SIGNAL_SANDBOX`.
+The same command, fixture and isolation reproduced exit 69 on base `4df56467`.
+The two marker-forwarding lines from PR #3164 are now included in
+`scripts/verify-native-codex-runtime.ts` and `scripts/verify-viewer-runtime.ts`.
+
+The full gate on source revision `344ac85b7` passes with exit 0, using
+`bash scripts/gate-slot.sh bun scripts/local-gate.ts pre-push` in a committed
+scratch export. The gate creates isolated homes, config, temp and state roots
+and pins Viewer control to a closed loopback port. Touched tests report zero
+new failures, seven pre-existing failures and three intermittent assertions.
+Types, changed-file lint, publication privacy, Linux checks, runtime verdict
+tests, shared native contracts and all four supported Codex versions pass.
+The production Viewer build, MCP size budgets, built Viewer runtime check,
+runtime-host succession rehearsal and runtime negative controls also pass.
+
+Two earlier continuation attempts stopped before that completed verdict:
+one hit the unchanged queue test's 10 ms deadline (a fresh isolated base/head
+control passed on both), and one could not complete a comparator base rerun.
+The successful full run retains its normal comparison and refusal rules.
