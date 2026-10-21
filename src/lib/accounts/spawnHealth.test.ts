@@ -853,6 +853,7 @@ async function rejectedAdmission(outcome: typeof rejectionOutcomes[number], fail
   const { AgentRegistry } = await import("@/lib/agent/registry");
   const { clearAccountTestState } = await import("./accountsStoreFixture");
   clearAccountTestState(process.env.LLV_STATE_DIR!);
+  setSubscriptionApiConsent(true);
   const { resetLegacyDocumentStoresForTests } = await import("@/lib/state/legacyDocumentStore");
   resetLegacyDocumentStoresForTests();
   const pin = createManagedClaudeAccount("Rejected refresh pin");
@@ -930,6 +931,7 @@ async function rejectedAdmission(outcome: typeof rejectionOutcomes[number], fail
     if (previousTransport === undefined) delete process.env.LLV_SPAWN_TRANSPORT; else process.env.LLV_SPAWN_TRANSPORT = previousTransport;
     if (previousSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET; else process.env.LLV_RUNTIME_HOST_SOCKET = previousSocket;
     clearAccountTestState(process.env.LLV_STATE_DIR!);
+    setSubscriptionApiConsent(true);
   });
   try {
     if (outcome.includes("queued") && !outcome.startsWith("successful refresh")) {
@@ -982,6 +984,7 @@ for (const change of ["rotation", "removal", "unreadable", "probe unreadable"] a
   const { AgentRegistry } = await import("@/lib/agent/registry");
   const { clearAccountTestState } = await import("./accountsStoreFixture");
   clearAccountTestState(process.env.LLV_STATE_DIR!);
+  setSubscriptionApiConsent(true);
   const pin = createManagedClaudeAccount("Keychain probe fixture");
   let credential: ReturnType<typeof store.readClaudeCredentials> = { state: "present", source: "keychain", document: {
     claudeAiOauth: { ["access" + "Token"]: crypto.randomUUID(), expiresAt: Date.now() + 60_000 },
@@ -1015,6 +1018,7 @@ for (const change of ["rotation", "removal", "unreadable", "probe unreadable"] a
     if (previousTransport === undefined) delete process.env.LLV_SPAWN_TRANSPORT; else process.env.LLV_SPAWN_TRANSPORT = previousTransport;
     if (previousSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET; else process.env.LLV_RUNTIME_HOST_SOCKET = previousSocket;
     clearAccountTestState(process.env.LLV_STATE_DIR!);
+    setSubscriptionApiConsent(true);
   });
   providerReply = async () => {
     let entered!: () => void;
