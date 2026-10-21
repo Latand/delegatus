@@ -626,7 +626,7 @@ Each attempt runs the real pre-push entry point in a scratch clone with its own 
 | Side | Qualifying runs | Current sample P90 (s) | File expirations | Refusals | NEW lines |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | before | 3 | 1166.6 | 5 | 2 | 0 |
-| after | 9 | 508.2 | 0 | 0 | 0 |
+| after | 11 | 476.4 | 0 | 0 | 0 |
 
 The sample P90 is provisional until all runs complete. An incomplete baseline or runner error is a refusal even when it emits no NEW assertion line.
 
@@ -656,8 +656,11 @@ The sample P90 is provisional until all runs complete. An incomplete baseline or
 | after-08 | after | 2 | 7.75 / 28.16 / 35.83 | 1.0 | 384.6 | yes | 0 | 0 |
 | after-09 | after | 3 | 8.50 / 27.80 / 31.06 | 1.2 | 400.5 | yes | 0 | 0 |
 | before-03 | before | 3 | 7.94 / 26.40 / 39.11 | 1.0 | 783.4 | yes | 0 | 0 |
+| after-10 | after | 1 | 3.80 / 27.75 / 34.06 | 7.0 | 395.7 | yes | 0 | 0 |
+| after-11 | after | 2 | 6.23 / 28.78 / 31.83 | 1.1 | 435.1 | yes | 0 | 0 |
+| after-12 | after | 3 | 11.62 / 39.60 / 69.29 | 9.1 | 546.9 | outlier | 0 | 0 |
 
-The ten split families retain all 1,078 registered cases, including their names, arguments and assertion bodies. The preserved calibration and JUnit inventory established that partition before the campaign. The measured timeout exceptions are described in `docs/design/pre-push-gate-under-load.md#2-fix`.
+The ten split families retain all 1,078 registered cases, including their names, parameter values and assertion bodies. The preserved calibration and JUnit inventory established that partition before the campaign. The measured timeout exceptions are described in `docs/design/pre-push-gate-under-load.md#2-fix`.
 
 The resumed campaign began with three qualifying after-runs and one before-run. No test or verdict rule changed during resumption. Batches retain every attempted load condition and stop between attempts. Complete-gate time includes the driver’s owned cleanup after hook exit.
 
@@ -669,9 +672,12 @@ The resumed campaign began with three qualifying after-runs and one before-run. 
 | batch-04 | 1 | 0 | 0 |
 | batch-05 | 4 | 3 | 1 |
 | batch-06 | 1 | 0 | 1 |
+| batch-07 | 3 | 2 | 0 |
 
 Two before-runs fell below the required load band as their remaining files and baseline work used fewer CPUs. Observed test CPU usage averaged at least 3.78 CPUs in `before-02`, against 7.04 in `after-306`. Future before-runs use a four-CPU foreground estimate for initial load padding; after-runs retain eight. New records include `paddingForegroundCpuEstimate`; earlier records used eight. The real gate retains its eight head workers and existing quotas, deadlines and verdict rules. Every earlier qualifier and outlier stays in the sample.
 
 Static padding still produced an above-band before-run (`before-202`, median 31.94). Future attempts on both sides use the two-second load samples to adjust only their own padding scopes every 30 seconds, with at most twelve requested active scopes. A load above 30 removes one scope; above 35 removes up to two. Below 25 adds one scope after the first 90 seconds and after pending stops finish. Start and stop requests are recorded per run. The gate continues during asynchronous stop requests, and all owned launcher and stop-command handles settle at cleanup. Each new invocation follows a separate three-minute cooldown. All method epochs retain the same qualifying load band and frozen test inputs.
+
+The separate merged-source engine comparison passed on `b68b4fb6c5b1`: 46 explicit engine files, 425.9 s including admission, exit 0, zero NEW failures. Its command, source digest and log digest are recorded in `integratedEngineComparison`. Other final project checks remain outstanding.
 
 The high-load `after-05` outlier captured two existing 15-second explicit test timeouts in `engine.providerReset.part3.test.ts`; filtered retries passed and the comparator classified the occurrences as flaky. The 30/10 sample and the two controls remain incomplete.
