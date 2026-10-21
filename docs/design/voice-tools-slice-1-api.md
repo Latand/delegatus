@@ -2,8 +2,8 @@
 
 This slice implements the registry, write-only secrets, operator approval,
 MCP management and isolated catalog probes from option A in
-`voice-extensible-tools.md`. The settings section and its rendered evidence
-belong to the following UI stage. Voice calls remain on their existing tools.
+`voice-extensible-tools.md`, and the Tools section of the voice settings.
+Voice calls remain on their existing tools.
 
 ## Authority and execution
 
@@ -82,3 +82,22 @@ bounded at 16 MiB.
 The monitor sites are `voice-tools.catalog`, `voice-tools.spawn` and
 `voice-tools.call` (reserved for the later dispatch slice). No performance
 improvement is claimed by this slice.
+
+## Settings section
+
+`src/components/voiceCompanion/VoiceToolsSetting.tsx` is the Tools section of
+the existing voice settings dialog, below call memory. It lists each server
+(waiting ones first) with what will run: the command and arguments or the URL,
+the folder, environment or header names without values, and the pinned file
+with its hash. It also shows each secret reference as saved or needed, with a
+password field that sends a value once and never shows it again; the last dry
+run and its reason in plain words; the catalog's tools with checkboxes, marked
+as reading only or acting; the per-server «ask before acting» switch; and Run
+dry run, Approve, Reject, Turn off and Remove by state. Every press carries the
+digest shown. A refusal reads under the control pressed, and a stale digest
+rereads the view. On an approved server, a change to the operator's own
+choices (a tool, the switch) moves the pinned digest, so the same press
+approves the new digest; a refused approval leaves the server waiting, with
+the reason shown. Strings ship in English and Ukrainian. Rendered evidence
+comes from the kanban browser driver's «voice tools settings» case
+(`evidence/voice-companion/voice-tools.json`); frames are never committed.

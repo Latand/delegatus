@@ -220,6 +220,62 @@ const voiceSettings = {
   lastSession: { usd: 0.4, seconds: 471, endedAt: Date.UTC(2026, 9, 10), incomplete: false },
   month: "2026-10", usageUsd: Number(new URLSearchParams(location.search).get("usage") ?? 0), reservedUsd: 0, incomplete: false,
 };
+/* `&voicetools=<state>`: the voice settings' Tools section (docs/design/voice-extensible-tools.md §4.8 item 1) over
+   the record `/api/voice-tools` answers, kept in memory so a press changes it as the route does: `empty`, `pending`
+   (a server waits with a secret still needed and no dry run), `review` (its dry run passed and the operator is
+   choosing tools), `failed` (a local script's dry run timed out), `approved` and `approved-ask` (approved with
+   «ask before acting» off and on), and `long` (every operator-visible field at its schema maximum). */
+const VOICE_TOOLS = new URLSearchParams(location.search).get("voicetools");
+type FixtureVoiceTool = Record<string, unknown> & { state: string; digest: string; askBeforeActing: boolean; tools: Record<string, { enabled: boolean; acts: boolean }>;
+  missingSecrets: string[]; secretRefs: string[]; catalog: { digest: string; fetchedAt: string; tools: Array<{ name: string; description: string; annotations?: { readOnlyHint?: boolean } }> } | null;
+  lastDryRun: { code: string; at: string; digest: string } | null };
+const voiceToolsState = { revision: 7, servers: {} as Record<string, FixtureVoiceTool> };
+const voiceToolDigest = (seed: number) => `sha256:${seed.toString(16).padStart(64, "0")}`;
+const voiceToolAt = (minutesAgo: number) => new Date((VOICE_LOADED - minutesAgo * 60) * 1000).toISOString();
+const spotifyCatalog = () => ({ digest: voiceToolDigest(901), fetchedAt: voiceToolAt(4), tools: [
+  { name: "search", description: L("Search Spotify for tracks, albums, artists and playlists.", "Шукати в Spotify треки, альбоми, виконавців і плейлисти."), annotations: { readOnlyHint: true } },
+  { name: "now_playing", description: L("Read what is playing on the active device.", "Прочитати, що грає на активному пристрої."), annotations: { readOnlyHint: true } },
+  { name: "play", description: L("Start or resume playback of a track, album or playlist.", "Почати або продовжити відтворення треку, альбому чи плейлиста.") },
+  { name: "pause", description: L("Pause playback on the active device.", "Призупинити відтворення на активному пристрої.") },
+  { name: "skip", description: L("Skip to the next track.", "Перейти до наступного треку.") },
+] });
+function seedVoiceTools() {
+  const spotify = (over: Partial<FixtureVoiceTool>): FixtureVoiceTool => ({
+    title: "Spotify", capability: L("Music: play, pause, skip and search the operator's Spotify.", "Музика: вмикати, ставити на паузу, перемикати й шукати у Spotify оператора."),
+    transport: { type: "stdio", command: "uv", args: ["tool", "run", "spotify-mcp-example"], cwd: null, envNames: ["SPOTIFY_CLIENT_ID", "SPOTIFY_REDIRECT_URI"] },
+    entryFile: null, private: false, askBeforeActing: false, callTimeoutMs: 15_000, generation: 6, owner: "installation", audience: ["voice"], state: "pending",
+    proposedBy: { kind: "conversation", conversationId: "conv_fixture_orchestrator", at: voiceToolAt(12) }, approval: null, tools: {}, catalog: null, lastDryRun: null,
+    digest: voiceToolDigest(1), missingSecrets: [], secretRefs: ["spotify-client-id"], ...over,
+  });
+  const chosen = { search: { enabled: true, acts: false }, now_playing: { enabled: true, acts: false }, play: { enabled: true, acts: true }, pause: { enabled: false, acts: true }, skip: { enabled: false, acts: true } };
+  const ok = { code: "OK", at: voiceToolAt(4), digest: voiceToolDigest(501) };
+  if (VOICE_TOOLS === "pending") voiceToolsState.servers.spotify = spotify({ missingSecrets: ["spotify-client-id"] });
+  if (VOICE_TOOLS === "review") voiceToolsState.servers.spotify = spotify({ catalog: spotifyCatalog(), lastDryRun: ok, tools: { ...chosen, play: { enabled: false, acts: true } } });
+  if (VOICE_TOOLS === "approved" || VOICE_TOOLS === "approved-ask") voiceToolsState.servers.spotify = spotify({ state: "enabled", catalog: spotifyCatalog(), lastDryRun: ok, tools: chosen,
+    askBeforeActing: VOICE_TOOLS === "approved-ask", approval: { by: "operator", at: voiceToolAt(2), digest: voiceToolDigest(1) } });
+  if (VOICE_TOOLS === "failed") voiceToolsState.servers.notes = {
+    title: L("Notes", "Нотатки"), capability: L("Reads and appends to the operator's plain-text notes folder.", "Читає й доповнює теку текстових нотаток оператора."),
+    transport: { type: "stdio", command: "bun", args: ["run", "/srv/delegatus/mcp-servers/notes/server.ts", "--notes", "/srv/notes"], cwd: "/srv/delegatus/mcp-servers/notes", envNames: ["NOTES_FORMAT"] },
+    entryFile: { path: "/srv/delegatus/mcp-servers/notes/server.ts", sha256: "4f9c1d2e8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d" },
+    private: true, askBeforeActing: false, callTimeoutMs: 15_000, generation: 7, owner: "installation", audience: ["voice"], state: "pending",
+    proposedBy: { kind: "conversation", conversationId: "conv_fixture_worker", at: voiceToolAt(30) }, approval: null, tools: {}, catalog: null,
+    lastDryRun: { code: "TIMEOUT", at: voiceToolAt(3), digest: voiceToolDigest(502) }, digest: voiceToolDigest(2), missingSecrets: [], secretRefs: [],
+  };
+  if (VOICE_TOOLS === "long") voiceToolsState.servers.a234567890123456789012_x = {
+    title: "T".repeat(60) + " " + "Т".repeat(59), capability: L("A capability sentence at its full length of one hundred sixty characters, so this row shows how the longest one the schema admits wraps inside the settings dialog.", "Речення можливостей на повну довжину в сто шістдесят символів, щоб цей рядок показав, як найдовше речення, яке допускає схема, переноситься всередині вікна налаштувань.").slice(0, 160),
+    transport: { type: "http", url: `https://mcp.example.test/${"segment/".repeat(40)}endpoint`, headerNames: ["Authorization", "X-Workspace-Identifier-With-A-Long-Name", "X-Request-Source"] },
+    entryFile: null, private: false, askBeforeActing: true, callTimeoutMs: 60_000, generation: 9, owner: "installation", audience: ["voice"], state: "changed",
+    proposedBy: { kind: "operator", conversationId: null, at: voiceToolAt(90) }, approval: null,
+    tools: { ["t".repeat(128)]: { enabled: true, acts: true }, read_status: { enabled: false, acts: false } },
+    catalog: { digest: voiceToolDigest(903), fetchedAt: voiceToolAt(5), tools: [
+      { name: "t".repeat(128), description: "D".repeat(1024) },
+      { name: "read_status", description: L("Read the workspace status.", "Прочитати стан робочого простору."), annotations: { readOnlyHint: true } },
+    ] },
+    lastDryRun: { code: "OK", at: voiceToolAt(5), digest: voiceToolDigest(503) }, digest: voiceToolDigest(3),
+    missingSecrets: ["workspace-token-with-the-longest-reference-name-allowed-by-the-schema-x".slice(0, 64)], secretRefs: ["workspace-token-with-the-longest-reference-name-allowed-by-the-schema-x".slice(0, 64)],
+  };
+}
+if (VOICE && VOICE_TOOLS) seedVoiceTools();
 const VOICE_RELAY_UUID = "engine_message_voice_delegation";
 const VOICE_INTERNAL_UUID = "engine_message_reviewer_relay";
 const voiceInternalText = () => L("Review of the retry banner is done: approved on the fifth pass.", "Рев’ю банера повтору завершено: схвалено з п’ятого проходу.");
@@ -4623,6 +4679,34 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (method === "PUT" && SETTINGS_REFUSE) return json({ code: "COMPANION_UNAVAILABLE" }, 503);
     if (method === "PUT") { const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>; voice.settingsWrites.push(body); Object.assign(voiceSettings, body); }
     return json(voiceSettings);
+  }
+  /* The Tools section's route, as `/api/voice-tools` answers: the view on a read and after each write, and a fixed
+     code on a refusal. A dry run of the timed-out script times out again; the Spotify server's passes. */
+  if (VOICE && url.pathname === "/api/voice-tools") {
+    if (method === "POST") {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { action: string; name?: string; digest?: string; tools?: FixtureVoiceTool["tools"]; askBeforeActing?: boolean; secrets?: Record<string, string> };
+      const server = body.name ? voiceToolsState.servers[body.name] : undefined;
+      voiceToolsState.revision += 1;
+      const next = voiceToolDigest(voiceToolsState.revision * 10);
+      if (body.action === "secrets") {
+        for (const entry of Object.values(voiceToolsState.servers)) entry.missingSecrets = entry.missingSecrets.filter(ref => !Object.hasOwn(body.secrets ?? {}, ref));
+      } else if (!server) return json({ code: "SERVER_NOT_FOUND" }, 409);
+      else if (server.digest !== body.digest) return json({ code: "STALE_APPROVAL" }, 409);
+      else if (body.action === "dry-run") {
+        server.lastDryRun = { code: body.name === "notes" ? "TIMEOUT" : "OK", at: voiceToolAt(0), digest: voiceToolDigest(504) };
+        if (body.name !== "notes") { server.catalog = spotifyCatalog(); server.tools = Object.fromEntries(server.catalog.tools.map(tool => [tool.name, server.tools[tool.name] ?? { enabled: false, acts: tool.annotations?.readOnlyHint !== true }])); }
+        server.digest = next;
+      } else if (body.action === "configure") {
+        if (body.tools) server.tools = body.tools;
+        if (body.askBeforeActing !== undefined) server.askBeforeActing = body.askBeforeActing;
+        server.digest = next; server.state = "pending"; server.approval = null;
+      } else if (body.action === "approve") {
+        if (server.lastDryRun?.code !== "OK") return json({ code: "DRY_RUN_REQUIRED" }, 409);
+        server.state = "enabled"; server.approval = { by: "operator", at: voiceToolAt(0), digest: server.digest };
+      } else if (body.action === "remove") delete voiceToolsState.servers[body.name!];
+      else { server.state = body.action === "reject" ? "rejected" : "disabled"; server.approval = null; server.digest = next; }
+    }
+    return json({ version: 1, revision: voiceToolsState.revision, servers: voiceToolsState.servers });
   }
   if (VOICE && url.pathname === "/api/voice-companion/session" && method === "POST" && voiceSettings.backend === "codex") {
     const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;

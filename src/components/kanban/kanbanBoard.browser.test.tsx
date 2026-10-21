@@ -22867,7 +22867,131 @@ describe("floating voice companion", () => {
       fs.mkdirSync("evidence/voice-companion",{ recursive:true });
       fs.writeFileSync("evidence/voice-companion/call-memory.json",JSON.stringify({ driver:"src/components/kanban/kanbanBoard.browser.test.tsx",synthetic:true,viewportBasis:"configured scene width",measurements },null,2)+"\n");
     } finally { await browser.close(); server.stop(); }
-  });
+    /* 32 page loads ran 77 s on a loaded machine before the Tools section joined the dialog: past the 90 s default once it did. */
+  }, 300_000);
+
+  /*
+   * The Tools section of the voice settings (docs/design/voice-extensible-tools.md §4.8 item 1,
+   * `&voicetools=<state>`): no servers, a pending proposal with a secret still needed, a passed
+   * dry run with tools being chosen, a failed dry run, an approval with «ask before acting» off and
+   * on, and every visible field at its schema maximum. Each state is read at 1440, 820 and 390,
+   * in both languages and themes: its defining words are whole on screen once the section is
+   * scrolled to, no text range leaves the dialog or the window, the page never scrolls sideways,
+   * and every control is at least 24 px tall (44 on the phone). Approving a chosen tool and
+   * flipping «ask before acting» on an approved server are pressed for real (a tap on the phone).
+   * Frames go to `$LLV_VOICE_TOOLS_OUT` (default `.artifacts/voice-tools`), never committed.
+   */
+  browserTest("voice tools settings render every state on desktop and phone", async () => {
+    const out = path.resolve(process.env.LLV_VOICE_TOOLS_OUT ?? ".artifacts/voice-tools");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const failures: string[] = [];
+    const measurements: unknown[] = [];
+    /* Each state's defining words: those of a row's head once the row is scrolled to, then those of its foot once
+       its action row is. A row taller than the phone's dialog is read in these two frames. */
+    const defining: Record<string, (lang: "en" | "uk") => { head: string[]; foot: string[] }> = {
+      empty: lang => ({ head: [translate(lang, "voiceCompanion.tools.empty")], foot: [] }),
+      pending: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example", "SPOTIFY_CLIENT_ID, SPOTIFY_REDIRECT_URI"],
+        foot: [translate(lang, "voiceCompanion.tools.secretNeeded"), translate(lang, "voiceCompanion.tools.dryRun.none"), translate(lang, "voiceCompanion.tools.action.dryRun"), translate(lang, "voiceCompanion.tools.action.reject")] }),
+      review: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example"],
+        foot: ["skip", translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.approve")] }),
+      failed: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "--notes", "/srv/delegatus/mcp-servers/notes/server.ts"],
+        foot: [translate(lang, "voiceCompanion.tools.dryRun.TIMEOUT"), translate(lang, "voiceCompanion.tools.action.dryRun")] }),
+      approved: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.enabled"), "spotify-mcp-example"],
+        foot: [translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.disable"), translate(lang, "voiceCompanion.tools.action.remove")] }),
+      "approved-ask": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.enabled"), "spotify-mcp-example"],
+        foot: [translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.disable"), translate(lang, "voiceCompanion.tools.action.remove")] }),
+      long: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.changed"), "a234567890123456789012_x"],
+        foot: [translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.reject")] }),
+    };
+    try {
+      for (const width of [1440, 820, 390]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const state of Object.keys(defining)) {
+        const label = `${width}-${lang}-${scheme}-${state}`;
+        const phone = width === 390;
+        const { context, page, pageErrors } = await openVoice(browser, server.base, `&mount=product&backend=codex&voicetools=${state}`, { viewport: { width, height: 844 }, lang, scheme, product: true, phone, motion: "reduce" });
+        try {
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-voice-companion-settings")));
+          const section = page.locator("[data-voice-tools]");
+          await section.waitFor();
+          await page.waitForFunction(() => !document.querySelector("[data-voice-tools-status]")?.textContent?.includes("…"));
+          const row = page.locator("[data-voice-tool-server]").first();
+          for (const part of ["head", "foot"] as const) {
+            const words = defining[state](lang)[part];
+            if (!words.length) continue;
+            if (state === "empty") await section.scrollIntoViewIfNeeded();
+            /* The head: the row's top at the dialog's top. The foot: its action row at the dialog's bottom. */
+            else await page.evaluate(([selector, top]) => document.querySelector(selector)!.scrollIntoView({ block: top ? "start" : "end" }), [part === "head" ? "[data-voice-tool-server]" : "[data-voice-tool-actions]", part === "head"] as const);
+            await page.screenshot({ path: path.join(out, `${label}-${part}.png`) });
+            const read = await page.evaluate(({ words, phone }) => {
+              const dialog = document.querySelector<HTMLElement>("[data-voice-companion-settings]")!;
+              const box = dialog.getBoundingClientRect();
+              const section = document.querySelector<HTMLElement>("[data-voice-tools]")!;
+              const inside = (rect: DOMRect) => rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5 && rect.right <= innerWidth + 0.5;
+              const walker = document.createTreeWalker(section, NodeFilter.SHOW_TEXT);
+              let outside = 0;
+              for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                if (!node.textContent?.trim()) continue;
+                const range = document.createRange(); range.selectNodeContents(node);
+                for (const rect of range.getClientRects()) if (rect.width > 0 && !inside(rect)) outside++;
+              }
+              /* Each defining phrase: every text range of it inside the dialog's visible box and the window; a short word on one line. */
+              const shown = words.map(word => {
+                const all = document.createTreeWalker(section, NodeFilter.SHOW_TEXT);
+                for (let node = all.nextNode(); node; node = all.nextNode()) {
+                  const at = node.textContent?.indexOf(word) ?? -1;
+                  if (at < 0) continue;
+                  const range = document.createRange(); range.setStart(node, at); range.setEnd(node, at + word.length);
+                  const rects = [...range.getClientRects()].filter(rect => rect.width > 0);
+                  return rects.length > 0 && rects.every(rect => rect.top >= Math.max(0, box.top) - 0.5 && rect.bottom <= Math.min(innerHeight, box.bottom) + 0.5 && inside(rect))
+                    && (word.includes(" ") || word.length > 32 || new Set(rects.map(rect => Math.round(rect.top))).size === 1);
+                }
+                return false;
+              });
+              const small = [...section.querySelectorAll<HTMLElement>("button, input, [role=switch]")].filter(control => {
+                const rect = (control.closest("label") ?? control).getBoundingClientRect();
+                return rect.height < (phone ? 44 : 24) - 0.5;
+              }).map(control => control.outerHTML.slice(0, 80));
+              return { viewportOverflow: document.documentElement.scrollWidth > innerWidth + 1, dialogOverflow: dialog.scrollWidth > dialog.clientWidth + 1, outside, shown, small,
+                background: getComputedStyle(dialog).backgroundColor, rows: section.querySelectorAll("[data-voice-tool-server]").length };
+            }, { words, phone });
+            measurements.push({ label: `${label}-${part}`, ...read });
+            if (read.viewportOverflow || read.dialogOverflow) failures.push(`${label}: scrolls sideways`);
+            if (read.outside) failures.push(`${label}: ${read.outside} text box(es) outside the dialog`);
+            read.shown.forEach((whole, at) => { if (!whole) failures.push(`${label}-${part}: «${words[at]}» is not whole on screen`); });
+            if (read.small.length) failures.push(`${label}: small targets ${read.small.join(" | ")}`);
+          }
+          expect(await row.count()).toBe(state === "empty" ? 0 : 1);
+          if (state === "approved" || state === "approved-ask") {
+            const ask = page.locator("[data-voice-tool-ask]");
+            expect(await ask.isChecked()).toBe(state === "approved-ask");
+            if (lang === "en" && scheme === "light") {
+              if (phone) await ask.tap(); else await ask.click();
+              await page.waitForFunction(checked => (document.querySelector("[data-voice-tool-ask]") as HTMLInputElement | null)?.checked === checked && !(document.querySelector("[data-voice-tool-ask]") as HTMLInputElement).disabled, state !== "approved-ask");
+              expect(await page.locator("[data-voice-tool-state]").getAttribute("data-voice-tool-state")).toBe("enabled");
+              await page.locator("[data-voice-tool-actions]").evaluate(element => element.scrollIntoView({ block: "end" }));
+              await page.screenshot({ path: path.join(out, `${label}-flipped.png`) });
+            }
+          }
+          if (state === "review" && lang === "en" && scheme === "light") {
+            const play = page.locator("[data-voice-tool='play'] input");
+            if (phone) await play.tap(); else await play.click();
+            await page.waitForFunction(() => (document.querySelector("[data-voice-tool='play'] input") as HTMLInputElement | null)?.checked === true && !(document.querySelector("[data-voice-tool='play'] input") as HTMLInputElement).disabled);
+            const approve = page.locator("[data-voice-tool-action='approve']");
+            await approve.scrollIntoViewIfNeeded();
+            if (phone) await approve.tap(); else await approve.click();
+            await page.waitForSelector("[data-voice-tool-state='enabled']");
+            await page.locator("[data-voice-tool-server]").evaluate(element => element.scrollIntoView({ block: "start" }));
+            await page.screenshot({ path: path.join(out, `${label}-approved.png`) });
+          }
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/voice-companion", { recursive: true });
+      fs.writeFileSync("evidence/voice-companion/voice-tools.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", synthetic: true, viewportBasis: "configured scene width", failures, measurements }, null, 2) + "\n");
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 900_000);
 
   /*
    * Audit B24: a press on a voice setting flips at once, and a refusal brings it
