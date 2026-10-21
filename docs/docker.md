@@ -32,7 +32,26 @@ The Docker image is built on Node 22, pins Bun 1.4.0, and builds the Next.js app
 
 Runtime tools are split by coupling. The image owns stable runtimes: Node 22, Bun 1.4.0 (`bun-container`), Git, GitHub CLI, OpenSSH client, curl, CA certificates, Python 3, util-linux, and a faster-whisper venv at `/opt/llv-whisper-venv`. Compose mounts the full host home at its original path, so SSH keys, Git config, GitHub CLI auth, Claude/Codex state, app cache, Hugging Face cache, and workspace roots line up with host paths.
 
-Host developer CLIs run through `nsenter` shims in `/usr/local/bin`, ahead of mounted user bins in `PATH`. The shims enter the host mount and PID namespaces, use the caller uid/gid, preserve host-visible cwd values, and fall back to `$HOME` for container-only paths such as `/app`. They execute the exact host paths: `claude`, `codex`, `copilot`, and `bun` from `$HOME/.bun/bin`; `uv` from `$HOME/.local/bin`; `just`, `tmux` and `tailscale` from `/usr/bin`. A `docker` wrapper enters the host namespaces the same way and runs `/usr/bin/docker`. `LLV_DOCKER_NSENTER_SHIMS=1` also makes direct Claude/Codex resolver calls, and the Setup guide's phone step, choose `/usr/local/bin` shims. The image contains the app, Node dependencies, the local transcription helper script, and the prebuilt `.next` output.
+Host developer CLIs run through `nsenter` shims in `/usr/local/bin`, ahead of mounted user bins in `PATH`. The shims enter the host mount, PID and cgroup namespaces, use the caller uid/gid, preserve host-visible cwd values, and fall back to `$HOME` for container-only paths such as `/app`. They execute the exact host paths: `claude`, `codex`, `copilot`, and `bun` from `$HOME/.bun/bin`; `uv` from `$HOME/.local/bin`; `just`, `tmux` and `tailscale` from `/usr/bin`. A `docker` wrapper enters the host namespaces the same way and runs `/usr/bin/docker`. `LLV_DOCKER_NSENTER_SHIMS=1` also makes direct Claude/Codex resolver calls, and the Setup guide's phone step, choose `/usr/local/bin` shims. The image contains the app, Node dependencies, the local transcription helper script, and the prebuilt `.next` output.
+
+Managed agent launches establish their signal boundary after this host
+transition and UID/GID drop, where the host supports it: `bwrap`, Python 3,
+util-linux, unprivileged user namespaces and a systemd user manager with
+delegated cpu, memory and pids controllers. Each launch checks the actual
+service context. Where the boundary cannot be established, the engine launches
+without it and the launch reports the boundary off with the cause. Docker and
+the shared tmux server stay reachable from a boundary, as does the systemd user
+manager. The launcher is copied into a cache beneath the mounted home, so the
+host executes the same policy as the Viewer release. Its receipt and scratch
+stay beneath the mounted home, which both sides see: in a stage's scratch, or
+otherwise under `$HOME/.cache/delegatus/signal-runs`. A host without
+`/usr/bin/python3` launches the engine unprotected. Container services retain
+their `bun-container` interpreter.
+
+The shims use `nsenter --no-fork` with Compose's shared host PID namespace.
+The managed child handle therefore remains the launcher through the host
+transition and UID drop. Entering the host cgroup namespace also keeps
+membership paths aligned with the host cgroup mount.
 
 ## Production instance
 

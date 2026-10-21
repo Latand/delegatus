@@ -1,3 +1,4 @@
+import { nativeProcessId, signalDomain, signalAgentDomain, signalBoundaryOff, spawnManagedEngine } from "./agentSignalSandbox";
 import { memoryField, memoryKillText } from "./agentMemoryState";
 import { CLAUDE_CHILD_EXITED, claudeHostEndText, HOST_END_REASON_MAX_CHARS, type HostEndCause } from "./hostEndCause";
 import type { AgentMemoryCell } from "./agentMemory";
@@ -744,7 +745,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     this.processIdentity = options.processIdentity ?? ((pid) => procBackend.processIdentity(pid));
     this.captureProcessTree = options.captureProcessTree ?? ((root) => captureProcessTree(root));
     this.terminationCaptureRetryMs = Math.max(0, options.terminationCaptureRetryMs ?? DEFAULT_TERMINATION_CAPTURE_RETRY_MS);
-    this.childStartIdentity = child.pid ? this.processIdentity(child.pid) : null;
+    this.childStartIdentity = nativeProcessId(child) ? this.processIdentity(nativeProcessId(child)!) : null;
     this.releaseCleanup = options.releaseCleanup ?? null;
     this.cursor = options.initialEventCursor ?? 0;
     this.protocolVersion = auth.version ?? null;
@@ -930,15 +931,13 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     const appended = [options.cleanMemory ? "" : options.appendSystemPrompt, telegram.unavailable ? TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE : ""].filter(Boolean).join("\n\n");
     if (appended) args.push("--append-system-prompt", appended);
     if (options.tools) args.push("--tools", options.tools.join(","));
-    const spawnProcess = options.memoryCell?.wrapSpawn(options.spawnProcess) ?? options.spawnProcess ?? ((command, childArgs, spawnOptions) =>
-      spawn(command, childArgs, { ...spawnOptions, stdio: ["pipe", "pipe", "pipe"] }));
     let child: ChildProcessWithoutNullStreams;
     try {
-      child = spawnProcess(binary, args, {
+      child = await spawnManagedEngine(binary, args, {
         cwd: options.cwd,
         env: telegram.env,
         detached: true,
-      });
+      }, options.memoryCell, options.spawnProcess, options.env ?? process.env);
     } catch (error) {
       relay?.close();
       options.releaseCleanup?.();
@@ -1273,7 +1272,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       authorized. The kernel identity is checked here and again inside the
       synchronous signal boundary. */
   async releaseIfOwned(expected: Readonly<ProcessIdentity>): Promise<boolean> {
-    const pid = this.child.pid;
+    const pid = nativeProcessId(this.child);
     if (this.released || this.releasing || this.releasePromise !== null
       || !pid || expected.startIdentity === null
       || pid !== expected.pid
@@ -1294,7 +1293,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   }
 
   private currentState(): HostState {
-    const pid = this.reaped || this.released ? null : this.child.pid ?? null;
+    const pid = this.reaped || this.released ? null : nativeProcessId(this.child) ?? null;
     const status: HostState["status"] = this.dead ? "dead"
       : this.released ? "unhosted"
       : this.attentions.size ? "attention"
@@ -1306,6 +1305,8 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       endpoint: pid ? `stdio:${pid}` : "stdio:released",
       pid,
       processStartIdentity: pid ? this.processIdentity(pid) : null,
+      ...(signalDomain(this.child) ? { signalDomain: signalDomain(this.child) } : {}),
+      ...(signalBoundaryOff(this.child) ? { signalBoundary: signalBoundaryOff(this.child) } : {}),
       eventCursor: this.cursor,
       protocolVersion: this.protocolVersion,
       activeTurnRef: this.activeTurnId,
@@ -1704,7 +1705,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
            with an unreapable child wedges the session's terminal receipt
            forever. The recorded exit evidence is authoritative: when the
            leader is gone, destroy our pipe ends and settle the reap. */
-        const leaderExited = this.child.pid === undefined
+        const leaderExited = nativeProcessId(this.child) === undefined
           || (this.child.exitCode ?? null) !== null
           || (this.child.signalCode ?? null) !== null;
         if (!leaderExited) {
@@ -1790,7 +1791,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   private releaseFenceHolds(): boolean {
     const expected = this.releaseFence;
     if (!expected) return true;
-    const pid = this.child.pid;
+    const pid = nativeProcessId(this.child);
     return Boolean(pid) && expected.startIdentity !== null
       && pid === expected.pid
       && this.childStartIdentity === expected.startIdentity
@@ -1801,7 +1802,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
     // The memory cell owns fatal OOM cleanup through its unit or verified tree.
     if (this.memoryCell?.fatalMemoryExit) return true;
     if (!this.releaseFenceHolds()) return false;
-    return signalDetachedProcessGroup(this.child, signal, this.signalProcess);
+    return signalAgentDomain(this.child, signal) ?? signalDetachedProcessGroup(this.child, signal, this.signalProcess);
   }
 
   /** Hands the child's process tree to the termination listener before the
@@ -1812,7 +1813,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       sends nothing (#2790). */
   private async captureTerminationTree(): Promise<boolean> {
     const listener = this.terminationCapture;
-    const pid = this.child.pid;
+    const pid = nativeProcessId(this.child);
     if (!listener || this.treeCaptured || !pid) return true;
     let capture: ProcessTreeCapture;
     try { capture = this.captureProcessTree(pid); } catch { return false; }

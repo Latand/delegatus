@@ -6,8 +6,9 @@ import type { Database } from "bun:sqlite";
 import { readCpuPriority, type CpuPrioritySource } from "./cpuPriority";
 import type { TaskPriority } from "../tasks/types";
 
-import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../processIdentity";
+import { processIdentityStatus, type ProcessIdentity, type ProcessIdentityStatus } from "../processIdentity";
 import { procBackend } from "../proc";
+import { cpuOwnerIdentity, cpuOwnerStatus, cpuOwnerExited, signalSandboxContext } from "./signalSandboxContext";
 
 export const CPU_QUEUE_MAX_WAIT_MS = 10 * 60_000;
 export const CPU_QUEUE_SPACING_MS = 2_000;
@@ -33,20 +34,25 @@ export function inheritedCpuSlot(env = process.env): CpuSlotLease | null {
     const lease = JSON.parse(env.LLV_GATE_SLOT_LEASE ?? "null") as CpuSlotLease | null;
     if (!lease || typeof lease.slot !== "string" || !path.isAbsolute(lease.slot) || !lease.owner || !Number.isSafeInteger(lease.owner.pid) || lease.owner.pid < 1) return null;
     const match = /^llv-heavy-gate\.slot([1-9]\d*)\.lock$/.exec(path.basename(lease.slot));
-    if (!match || Number(match[1]) > Number(env.LLV_GATE_SLOTS ?? 6) || path.dirname(lease.slot) !== path.resolve(env.LLV_GATE_LOCK_DIR ?? "/var/tmp")) return null;
-    if (processIdentityStatus(lease.owner) !== "alive") return null;
-    const descriptor = path.join("/proc", String(lease.owner.pid), "fd", "9");
+    if (!match || Number(match[1]) > Number(env.LLV_GATE_SLOTS ?? 6)
+      || fs.realpathSync(path.dirname(lease.slot)) !== fs.realpathSync(env.LLV_GATE_LOCK_DIR ?? "/var/tmp")) return null;
+    const context = signalSandboxContext(env);
+    const proc = context?.hostProc ?? "/proc";
+    if (cpuOwnerStatus(lease.owner, env) !== "alive") return null;
+    // An ancestor namespace's readable PID is insufficient lease authority.
+    if (context && fs.readlinkSync(path.join(proc, String(lease.owner.pid), "ns/user")) !== context.userNamespace) return null;
+    const descriptor = path.join(proc, String(lease.owner.pid), "fd", "9");
     const file = fs.statSync(lease.slot, { bigint: true }), fd = fs.statSync(descriptor, { bigint: true });
-    const info = fs.readFileSync(path.join("/proc", String(lease.owner.pid), "fdinfo", "9"), "utf8");
+    const info = fs.readFileSync(path.join(proc, String(lease.owner.pid), "fdinfo", "9"), "utf8");
     const inode = /^ino:\s+(\d+)$/m.exec(info)?.[1];
     if (file.dev !== fd.dev || file.ino !== fd.ino || !inode || BigInt(inode) !== file.ino || !/^lock:.*\bFLOCK\b.*\bWRITE\b/m.test(info)) return null;
-    return processIdentityStatus(lease.owner) === "alive" && !procBackend.processExited(lease.owner.pid) ? lease : null;
+    return cpuOwnerStatus(lease.owner, env) === "alive" && !cpuOwnerExited(lease.owner, env) ? lease : null;
   } catch { return null; }
 }
 export function cpuSlotForOwner(owner: ProcessIdentity, env = process.env): CpuSlotLease | null {
   if (process.platform !== "linux") return null;
   try {
-    const slot = fs.readlinkSync(path.join("/proc", String(owner.pid), "fd", "9"));
+    const slot = fs.readlinkSync(path.join(signalSandboxContext(env)?.hostProc ?? "/proc", String(owner.pid), "fd", "9"));
     return inheritedCpuSlot({ ...env, LLV_GATE_SLOT_LEASE: JSON.stringify({ owner, slot }) });
   } catch { return null; }
 }
@@ -116,7 +122,10 @@ export function cpuAdmissionFile(isolatedStateDir?: string | null): string {
  * - a removed ticket leaves nothing behind (`tickets_gone`). */
 export class CpuAdmissionQueue {
   private readonly db: Database;
-  constructor(file: string, private readonly now = Date.now, private readonly spacingMs = CPU_QUEUE_SPACING_MS, private readonly maxWaitMs = CPU_QUEUE_MAX_WAIT_MS, private readonly unpolledMs = CPU_QUEUE_UNPOLLED_MS) {
+  constructor(file: string, private readonly now = Date.now, private readonly spacingMs = CPU_QUEUE_SPACING_MS, private readonly maxWaitMs = CPU_QUEUE_MAX_WAIT_MS, private readonly unpolledMs = CPU_QUEUE_UNPOLLED_MS,
+    private readonly observer: { status(identity: ProcessIdentity): ProcessIdentityStatus; exited(identity: ProcessIdentity): boolean } = {
+      status: processIdentityStatus, exited: identity => procBackend.processExited(identity.pid),
+    }) {
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
     if (!sqlite?.Database) throw new Error("CPU admission requires the supported Bun runtime");
@@ -241,7 +250,7 @@ export class CpuAdmissionQueue {
       this.db.query("UPDATE tickets SET polled = ? WHERE owner IS NULL AND polled IS NULL").run(now);
       for (const row of this.db.query<Ticket, []>("SELECT * FROM tickets WHERE owner IS NOT NULL").all()) {
         const identity = parseSqliteJson(row.owner!, this.db) as ProcessIdentity;
-        if (processIdentityStatus(identity) === "dead" || procBackend.processExited(identity.pid)) this.cancel(row.key);
+        if (this.observer.status(identity) === "dead" || this.observer.exited(identity)) this.cancel(row.key);
       }
       // The insert is the poll: tickets_poll stamps an existing row with `now`.
       this.db.query("INSERT OR IGNORE INTO tickets (key, since, owner) VALUES (?, ?, ?)").run(key, now, owner ? JSON.stringify(owner) : null);
@@ -313,8 +322,9 @@ export function machineCpuAdmissionQueue(isolatedStateDir?: string | null): CpuA
   const file = cpuAdmissionFile(isolatedStateDir);
   if (globals[queueSymbol]?.file !== file) {
     globals[queueSymbol]?.queue.close();
-    globals[queueSymbol] = { file, queue: new CpuAdmissionQueue(file) };
+    globals[queueSymbol] = { file, queue: new CpuAdmissionQueue(file, Date.now, CPU_QUEUE_SPACING_MS, CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_UNPOLLED_MS,
+      { status: cpuOwnerStatus, exited: cpuOwnerExited }) };
   }
   return globals[queueSymbol]!.queue;
 }
-export function cpuCommandOwner(): ProcessIdentity { return captureProcessIdentity(process.pid); }
+export function cpuCommandOwner(): ProcessIdentity { return cpuOwnerIdentity(process.pid); }

@@ -1,0 +1,754 @@
+{
+  "measuredOn": "2026-10-15",
+  "environment": {
+    "kernel": "Linux 6.8.0-139-generic x86_64",
+    "runtime": "Bun 1.4.0",
+    "systemd": 255,
+    "bubblewrap": "0.9.0"
+  },
+  "isolation": "Every workload ran through the installed owned runner with isolated home, config, temporary and state roots. Queue time is excluded.",
+  "performance": [
+    {
+      "engine": "codex",
+      "profile": "full",
+      "samplesPerMode": 30,
+      "cpuPercent": 200,
+      "memoryBytes": 2147483648,
+      "baseline": {
+        "medianMs": 533.854,
+        "p95Ms": 888.674
+      },
+      "protected": {
+        "medianMs": 652.958,
+        "p95Ms": 787.234
+      },
+      "addedMedianMs": 119.104,
+      "idleHelperRssMedianKiB": 19056
+    },
+    {
+      "engine": "codex",
+      "profile": "restricted",
+      "samplesPerMode": 30,
+      "cpuPercent": 200,
+      "memoryBytes": 2147483648,
+      "baseline": {
+        "medianMs": 524.176,
+        "p95Ms": 775.52
+      },
+      "protected": {
+        "medianMs": 638.531,
+        "p95Ms": 758.1
+      },
+      "addedMedianMs": 114.355,
+      "idleHelperRssMedianKiB": 19068
+    },
+    {
+      "engine": "codex",
+      "profile": "read-only",
+      "samplesPerMode": 30,
+      "cpuPercent": 200,
+      "memoryBytes": 2147483648,
+      "baseline": {
+        "medianMs": 487.69,
+        "p95Ms": 741.792
+      },
+      "protected": {
+        "medianMs": 611.825,
+        "p95Ms": 1298.164
+      },
+      "addedMedianMs": 124.135,
+      "idleHelperRssMedianKiB": 19092
+    },
+    {
+      "workload": "gate bundle plus CPU admission tests",
+      "samplesPerMode": 3,
+      "baselineMedianMs": 607.894,
+      "protectedMedianMs": 663.887,
+      "slowdownPercent": 9.211
+    },
+    {
+      "workload": "four parallel protected gates",
+      "slots": 2,
+      "completed": 4,
+      "maximumActive": 2,
+      "wallMs": 15649.967
+    },
+    {
+      "engine": "claude",
+      "profile": "full",
+      "samplesPerMode": 30,
+      "cpuPercent": 200,
+      "memoryBytes": 2147483648,
+      "baseline": {
+        "medianMs": 891.009,
+        "p95Ms": 1137.99
+      },
+      "protected": {
+        "medianMs": 1023.195,
+        "p95Ms": 1192.683
+      },
+      "addedMedianMs": 132.186,
+      "idleHelperRssMedianKiB": 19048
+    },
+    {
+      "engine": "claude",
+      "profile": "restricted",
+      "samplesPerMode": 30,
+      "cpuPercent": 200,
+      "memoryBytes": 2147483648,
+      "baseline": {
+        "medianMs": 852.913,
+        "p95Ms": 1071.376
+      },
+      "protected": {
+        "medianMs": 912.201,
+        "p95Ms": 1201.065
+      },
+      "addedMedianMs": 59.289,
+      "idleHelperRssMedianKiB": 19056
+    },
+    {
+      "engine": "claude",
+      "profile": "read-only",
+      "samplesPerMode": 30,
+      "cpuPercent": 200,
+      "memoryBytes": 2147483648,
+      "baseline": {
+        "medianMs": 933.605,
+        "p95Ms": 1185.695
+      },
+      "protected": {
+        "medianMs": 1025.07,
+        "p95Ms": 1298.808
+      },
+      "addedMedianMs": 91.464,
+      "idleHelperRssMedianKiB": 19048
+    },
+    {
+      "workload": "full TypeScript check",
+      "samplesPerMode": 1,
+      "baselineMedianMs": 138830.083,
+      "protectedMedianMs": 133639.492,
+      "slowdownPercent": -3.739
+    }
+  ],
+  "performanceInterpretation": [
+    "Launch samples alternate baseline and protected mode, with the same engine, profile and resource limits; 30 samples per mode for every engine/profile.",
+    "Added launch medians of 59\u2013132 ms exceed the proposed 50 ms investigation threshold. The shared launcher adds two Python startups, delegation, Bubblewrap setup and readiness checks before native execution.",
+    "The short gate workload shows 9.211% overhead. One full TypeScript pair showed no sustained slowdown; a single pair does not establish a speedup or a statistical performance bound.",
+    "Protection remains enabled in every protected sample. Native model responses use loopback providers."
+  ],
+  "historicalRollback": {
+    "oldRevision": "77fc690eac3880cce9507d365d47e5bc0e152354",
+    "oldMethodsRefused": [
+      "setStructuredHost",
+      "upsert",
+      "claimStructuredHost",
+      "terminateStructuredHost",
+      "markUnhosted"
+    ],
+    "currentAuthorityRetained": true,
+    "livingSupervisorRetirementRefused": true
+  },
+  "verification": {
+    "kernel": {
+      "file": "src/lib/runtime/agentSignalSandbox.integration.test.ts",
+      "passesPerRun": 11,
+      "consecutiveRuns": 3,
+      "foreignFixtureSurvived": true,
+      "registryOrphanStopRetiredDomain": true
+    },
+    "containerBridge": {
+      "file": "src/lib/runtime/agentSignalSandbox.integration.test.ts",
+      "cases": [
+        "completion",
+        "interruption"
+      ],
+      "passed": 2,
+      "assertions": 14,
+      "hostUidDrop": true,
+      "bundledGatePassed": true,
+      "allRecordedDomainProcessesReaped": true
+    },
+    "gates": {
+      "file": "src/lib/runtime/sandboxGateRunner.integration.test.ts",
+      "passed": 7,
+      "assertions": 33,
+      "postMergePassed": true
+    },
+    "nativeEngines": {
+      "file": "src/lib/runtime/agentSignalSandbox.native.test.ts",
+      "profiles": [
+        "full",
+        "restricted",
+        "read-only"
+      ],
+      "engines": [
+        "codex",
+        "claude"
+      ],
+      "freshAndResumed": true,
+      "headlessBothEngines": true,
+      "passed": 6,
+      "assertions": 65
+    },
+    "terminal": {
+      "files": [
+        "src/lib/runtime/agentSignalSandbox.terminal.test.ts",
+        "src/lib/runtime/cpuPlacement.scope.test.ts"
+      ],
+      "rawInputControllingTtyResizeInterruptExitStatusPassed": true,
+      "scopePlacementPassed": true,
+      "hostPidPaneLookupPassed": true
+    },
+    "postMerge": {
+      "typecheck": "pass",
+      "registryPersistenceAndDockerContracts": {
+        "passed": 30,
+        "assertions": 137
+      },
+      "hostRehearsal": {
+        "runtime": "Bun 1.4.0",
+        "successionMs": 506,
+        "listenerAnswers": 27,
+        "listenerPolls": 27,
+        "socketAnswers": 27,
+        "socketPolls": 27,
+        "windowMs": 15000
+      }
+    },
+    "imageHostRehearsal": {
+      "runtime": "Bun 1.4.0 via bun-container",
+      "successionMs": 521,
+      "listenerAnswers": 27,
+      "listenerPolls": 27,
+      "socketAnswers": 27,
+      "socketPolls": 27,
+      "windowMs": 15000
+    },
+    "viewerRuntime": {
+      "runtime": "Bun 1.4.0",
+      "loadedServerModules": 25,
+      "rootHttpStatus": 200
+    },
+    "publication": {
+      "localPrivacyWithCommittedFingerprints": "pass",
+      "changedFileLint": "pass",
+      "whitespace": "pass"
+    },
+    "resumedAttempt": {
+      "isolation": "Fresh HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR through the installed owned runner; explicit test file paths.",
+      "unitPassed": 9,
+      "kernelPassed": 11,
+      "gatePassed": 7,
+      "nativeProfilePassed": 6,
+      "terminalPassed": 1,
+      "containerCasesSkipped": 2,
+      "containerSkipReason": "No image selected for this replay; earlier built-image results retained.",
+      "mcpReceiptCompatibility": "failed"
+    }
+  },
+  "compatibilityBlocker": {
+    "status": "resolved-by-viewer-routing",
+    "boundary": "stdio MCP mutation receipts shared across private PID namespaces",
+    "productionSources": [
+      "src/lib/mcp/server.ts"
+    ],
+    "probe": "A live namespace-local owner claims a receipt in an isolated SQLite store; an outer production tool-service caller attempts recoveryOnly for that same receipt.",
+    "reproductions": 2,
+    "observed": {
+      "privateOwnerAlive": true,
+      "persistedOwnerWasPrivate": true,
+      "outerRecoveryCode": "not_executed",
+      "dispatchDeniedForStillLivingOwner": true
+    },
+    "requiredBehavior": "Recovery retains a living owner and leaves its dispatch claim intact.",
+    "resolution": "Integrated #2930 from current main. Ordinary stdio calls forward to the Viewer before opening bindings or receipts; no MCP writer behavior was changed.",
+    "verification": {
+      "file": "src/lib/runtime/agentSignalSandbox.mcp.integration.test.ts",
+      "passed": 2,
+      "assertions": 34,
+      "heldStages": [
+        "claimed",
+        "dispatching"
+      ],
+      "receiptOwnerIsViewer": true,
+      "privatePidPersisted": false,
+      "recoveryClosesLivingClaim": false,
+      "originalDispatchesOnce": true
+    }
+  },
+  "continuation": {
+    "measuredOn": "2026-10-19",
+    "nativeMeasurementSource": {
+      "algorithm": "sha256 of sorted repository-relative paths and binary SHA-256 digests",
+      "scope": "all tracked src, bin, scripts and patches plus Dockerfile, lockfile, package and compiler/Next configuration",
+      "files": 4848,
+      "digest": "6ab40f48c644ffa038abc64fa8075614d383e44c3b57689f54f8c601b95984a2",
+      "revision": "352aba2cd3d4a1ebdc1075c3d79dc6a4a193466e"
+    },
+    "nativeBinaries": {
+      "codex": {
+        "sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+        "version": "0.163.0"
+      },
+      "claude": {
+        "sha256": "60d7eb7f12fbb28a52533fe8be5884097403562aa02dc73991a021c7067e29a5",
+        "version": "2.1.302"
+      }
+    },
+    "performance": [
+      {
+        "engine": "codex",
+        "profile": "full",
+        "samplesPerMode": 30,
+        "cpuPercent": 200,
+        "memoryBytes": 2147483648,
+        "baseline": {
+          "medianMs": 456.674,
+          "p95Ms": 691.179
+        },
+        "protected": {
+          "medianMs": 578.286,
+          "p95Ms": 728.305
+        },
+        "addedMedianMs": 121.612,
+        "idleHelperRssMedianKiB": 19132
+      },
+      {
+        "engine": "codex",
+        "profile": "restricted",
+        "samplesPerMode": 30,
+        "cpuPercent": 200,
+        "memoryBytes": 2147483648,
+        "baseline": {
+          "medianMs": 488.25,
+          "p95Ms": 897.21
+        },
+        "protected": {
+          "medianMs": 595.661,
+          "p95Ms": 1653.506
+        },
+        "addedMedianMs": 107.411,
+        "idleHelperRssMedianKiB": 19128
+      },
+      {
+        "engine": "codex",
+        "profile": "read-only",
+        "samplesPerMode": 30,
+        "cpuPercent": 200,
+        "memoryBytes": 2147483648,
+        "baseline": {
+          "medianMs": 474.873,
+          "p95Ms": 649.357
+        },
+        "protected": {
+          "medianMs": 601.087,
+          "p95Ms": 881.2
+        },
+        "addedMedianMs": 126.214,
+        "idleHelperRssMedianKiB": 19116
+      },
+      {
+        "workload": "gate bundle plus CPU admission tests",
+        "samplesPerMode": 3,
+        "baselineMedianMs": 703.178,
+        "protectedMedianMs": 744.108,
+        "slowdownPercent": 5.821
+      },
+      {
+        "workload": "four parallel protected gates",
+        "slots": 2,
+        "completed": 4,
+        "maximumActive": 2,
+        "wallMs": 15754.153
+      },
+      {
+        "engine": "claude",
+        "profile": "full",
+        "samplesPerMode": 30,
+        "cpuPercent": 200,
+        "memoryBytes": 2147483648,
+        "baseline": {
+          "medianMs": 836.672,
+          "p95Ms": 981.975
+        },
+        "protected": {
+          "medianMs": 956.135,
+          "p95Ms": 1112.668
+        },
+        "addedMedianMs": 119.463,
+        "idleHelperRssMedianKiB": 19132
+      },
+      {
+        "engine": "claude",
+        "profile": "restricted",
+        "samplesPerMode": 30,
+        "cpuPercent": 200,
+        "memoryBytes": 2147483648,
+        "baseline": {
+          "medianMs": 766.519,
+          "p95Ms": 1017.766
+        },
+        "protected": {
+          "medianMs": 867.484,
+          "p95Ms": 1283.756
+        },
+        "addedMedianMs": 100.965,
+        "idleHelperRssMedianKiB": 19104
+      },
+      {
+        "engine": "claude",
+        "profile": "read-only",
+        "samplesPerMode": 30,
+        "cpuPercent": 200,
+        "memoryBytes": 2147483648,
+        "baseline": {
+          "medianMs": 824.794,
+          "p95Ms": 1025.176
+        },
+        "protected": {
+          "medianMs": 938.357,
+          "p95Ms": 1164.76
+        },
+        "addedMedianMs": 113.563,
+        "idleHelperRssMedianKiB": 19096
+      }
+    ],
+    "initialQualification": {
+      "sourceRevision": "352aba2cd3d4a1ebdc1075c3d79dc6a4a193466e",
+      "metadataPassed": 9,
+      "kernelPassed": 12,
+      "mcpPassed": 2,
+      "gatePassed": 7,
+      "nativePassed": 9,
+      "terminalPassed": 1,
+      "cpuScopePassed": 12,
+      "behaviorPassed": 52,
+      "performancePassed": 7
+    },
+    "performanceNotes": [
+      "Every profile alternates 30 retained baseline/protected pairs after two discarded warmup pairs, with matching 200% CPU and 2 GiB limits.",
+      "Both Codex modes use the persistent socket transport. Claude uses the real checkout-local stdio MCP entry and a loopback Messages provider.",
+      "Added launch medians of 101\u2013126 ms exceed the investigation threshold; the protected path includes two Python interpreter starts, scope/delegation setup, Bubblewrap and kernel readiness checks.",
+      "The short build/test workload showed 5.821% overhead. The sustained TypeScript pair is recorded separately."
+    ],
+    "finalValidationSource": {
+      "algorithm": "sha256 of compact JSON array of [repository-relative path, file SHA-256], sorted by path",
+      "scope": "all tracked src, bin, scripts and patches plus Dockerfile, lockfile, package and compiler/Next configuration",
+      "files": 4852,
+      "digest": "20002fc2cd63ec7d305201fd6fcf3a1629750698619a8be59d5ee3524ed5492a",
+      "baseRevision": "1445c1fd8be8ca9788b35d69831ab7eb45742315",
+      "mergedMainRevision": "1d45cbd6841ada98b4e0c0fccd40c327ab838e86"
+    },
+    "finalQualification": {
+      "metadataPassed": 9,
+      "kernelPassed": 12,
+      "mcpPassed": 2,
+      "gatePassed": 7,
+      "nativePassed": 9,
+      "nativeAssertions": 107,
+      "terminalPassed": 1,
+      "behaviorPassed": 40,
+      "containerCasesExcludedFromThisRun": 2,
+      "missingRolloutRetainsDomainRoot": true,
+      "liveSocketPeerStillAnswersAfterThreadRetirement": true
+    },
+    "sustainedPerformance": {
+      "cpuPercent": 200,
+      "memoryBytes": 8589934592,
+      "initialPair": {
+        "workload": "full TypeScript check",
+        "samplesPerMode": 1,
+        "baselineMedianMs": 184125.381876,
+        "protectedMedianMs": 196667.375726,
+        "slowdownPercent": 6.811659382434554
+      },
+      "reverseRepeat": [
+        {
+          "workload": "full TypeScript sample",
+          "protectedRun": true,
+          "elapsedMs": 265632.53493900003,
+          "commands": [
+            {
+              "cpuTimeMicros": {
+                "user": 310179614,
+                "system": 5370547,
+                "total": 315550161
+              },
+              "contextSwitches": {
+                "voluntary": 66923,
+                "involuntary": 75697
+              },
+              "maxRSSBytes": 5983563776
+            }
+          ],
+          "cpuStatDeltas": [
+            {
+              "usage_usec": 315580540,
+              "user_usec": 310206472,
+              "system_usec": 5374068,
+              "core_sched.force_idle_usec": 0,
+              "nr_periods": 0,
+              "nr_throttled": 0,
+              "throttled_usec": 0,
+              "nr_bursts": 0,
+              "burst_usec": 0
+            },
+            {
+              "usage_usec": 315580540,
+              "user_usec": 310206472,
+              "system_usec": 5374068,
+              "core_sched.force_idle_usec": 0,
+              "nr_periods": 13282,
+              "nr_throttled": 1282,
+              "throttled_usec": 51891627,
+              "nr_bursts": 0,
+              "burst_usec": 0
+            }
+          ],
+          "effectiveCpuPercent": 200,
+          "effectiveMemoryBytes": 8589934592
+        },
+        {
+          "workload": "full TypeScript sample",
+          "protectedRun": false,
+          "elapsedMs": 280261.937501,
+          "commands": [
+            {
+              "cpuTimeMicros": {
+                "user": 329287160,
+                "system": 5371352,
+                "total": 334658512
+              },
+              "contextSwitches": {
+                "voluntary": 62712,
+                "involuntary": 67374
+              },
+              "maxRSSBytes": 5982765056
+            }
+          ],
+          "cpuStatDeltas": [
+            {
+              "usage_usec": 336125976,
+              "user_usec": 330374578,
+              "system_usec": 5751399,
+              "core_sched.force_idle_usec": 0,
+              "nr_periods": 14013,
+              "nr_throttled": 1406,
+              "throttled_usec": 65715251,
+              "nr_bursts": 0,
+              "burst_usec": 0
+            },
+            {
+              "usage_usec": 336125976,
+              "user_usec": 330374578,
+              "system_usec": 5751399,
+              "core_sched.force_idle_usec": 0,
+              "nr_periods": 14013,
+              "nr_throttled": 0,
+              "throttled_usec": 0,
+              "nr_bursts": 0,
+              "burst_usec": 0
+            }
+          ],
+          "effectiveCpuPercent": 200,
+          "effectiveMemoryBytes": 8589934592
+        },
+        {
+          "workload": "full TypeScript check",
+          "samplesPerMode": 1,
+          "reversed": true,
+          "baselineMedianMs": 280261.937501,
+          "protectedMedianMs": 265632.53493900003,
+          "slowdownPercent": -5.219903456190078
+        }
+      ],
+      "interpretation": "The initial pair showed 6.812% slowdown. The reverse-order repeat showed -5.220%, with lower protected CPU time and throttling. These single pairs do not establish a consistent sustained penalty, a speedup or a statistical performance bound."
+    },
+    "imageQualification": {
+      "checkedAt": "2026-10-19T07:19:05.707Z",
+      "image": "sha256:c737eed08ff53db3f00c5546fb75561e8c8a03679a093e1f31ee6b4b394877f5",
+      "containerBridgePassed": 2,
+      "rehearsal": {
+        "checkedAt": "2026-10-19T07:19:05.707Z",
+        "runtime": "bun 1.4.0",
+        "succession": {
+          "predecessorReadyMs": 519,
+          "successorTookOverMs": 1011,
+          "completed": true
+        },
+        "listener": {
+          "windowMs": 15000,
+          "polls": 27,
+          "answered": 27,
+          "abandoned": 13
+        },
+        "socket": {
+          "polls": 27,
+          "answered": 27,
+          "abandoned": 13
+        },
+        "recovery": {
+          "retained": {
+            "image": "agent-log-viewer:rehearsal-aaaaaaaaaaaa",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "container": "llv-runtime-host-aaaaaaaaaaaa-8da5b43f3b8c"
+          },
+          "failed": {
+            "image": "delegatus:rehearsal-dddddddddddd",
+            "revision": "dddddddddddddddddddddddddddddddddddddddd",
+            "container": "delegatus-runtime-host-dddddddddddd-f2708ccc4718"
+          },
+          "docker": [
+            "container inspect delegatus-runtime-host-dddddddddddd-f2708ccc4718",
+            "container update --restart no delegatus-runtime-host-dddddddddddd-f2708ccc4718",
+            "container stop --time 40 delegatus-runtime-host-dddddddddddd-f2708ccc4718",
+            "container rm -f delegatus-runtime-host-dddddddddddd-f2708ccc4718"
+          ]
+        },
+        "ok": true
+      },
+      "note": "Earlier continuation image qualification; the final local pre-push gate re-verifies the working tree under the pin."
+    }
+  },
+  "publicationRepair": {
+    "measuredOn": "2026-10-19",
+    "source": "525e9eb77",
+    "base": "9cda615537b3ef39a444cb6f8c80e2329d2f2599",
+    "buildComparison": {
+      "command": "bun run build",
+      "isolation": "Separate source exports, private HOME/config/temp/state, one admitted owned runner.",
+      "heldLock": {
+        "baseExit": 1,
+        "branchExit": 1,
+        "diagnostic": "Another next build process is already running",
+        "lockReleasedBeforeCleanBuild": true
+      },
+      "clean": {
+        "baseExit": 0,
+        "baseSeconds": 286.64,
+        "branchExit": 0,
+        "branchSeconds": 381.21
+      },
+      "interpretation": "The retained diagnostic is reproducible under a held Next lock on both trees. Both clean builds passed; no branch-specific build defect was reproduced."
+    },
+    "focused": {
+      "metadata": {
+        "pass": 9,
+        "fail": 0
+      },
+      "kernel": {
+        "pass": 12,
+        "skip": 2,
+        "fail": 0
+      },
+      "viewerReceiptRecovery": {
+        "pass": 2,
+        "assertions": 34,
+        "fail": 0,
+        "heldStages": [
+          "claimed",
+          "dispatching"
+        ],
+        "privatePidPersisted": false,
+        "livingOwnerMarkedNotExecuted": false,
+        "effectsPerReleasedRequest": 1
+      },
+      "gateRunner": {
+        "pass": 7,
+        "fail": 0
+      },
+      "nativeEngines": {
+        "pass": 9,
+        "fail": 0,
+        "assertions": 107,
+        "profiles": [
+          "full",
+          "restricted",
+          "read-only"
+        ],
+        "engines": [
+          "Codex",
+          "Claude"
+        ],
+        "freshAndResumed": true,
+        "headless": true,
+        "persistentSocketAdoptionAndCleanup": true
+      },
+      "terminal": {
+        "pass": 1,
+        "fail": 0,
+        "assertions": 6,
+        "binary": "tmux",
+        "controllingTty": true,
+        "rawInput": true,
+        "resize": true,
+        "interrupt": true,
+        "exitStatus": true
+      },
+      "totalPassed": 40
+    },
+    "fixtureNotes": [
+      "The first lock helper lacked Next native-binding initialization; it was corrected before either build was judged.",
+      "An initial native test run hit the existing Unix socket path limit under the long stage scratch path. Short aliases to the same owned scratch are used for native and terminal qualification. The rerun passed all nine native cases and the terminal case; the aliases were removed after use.",
+      "The two container cases were not enabled in this host replay; prior image qualification remains recorded separately."
+    ],
+    "finalIntegratedMain": "12e2fae5ecefb7f5445744b33851615f0c58d231",
+    "finalFocusedSource": "84fe47ad6",
+    "postRefreshTypecheck": {
+      "command": "bun node_modules/typescript/bin/tsc --noEmit",
+      "exit": 0
+    },
+    "postRefreshFocused": {
+      "pass": 40,
+      "fail": 0,
+      "containerCasesNotEnabled": 2
+    }
+  },
+  "boundaryAvailability": {
+    "date": "2026-10-20",
+    "decision": "Operator decision of 2026-10-20: a launch is never refused for a missing boundary; it starts unprotected and reports the boundary off.",
+    "headSources": "1b96b0cbd",
+    "baseSources": "90557a90a",
+    "procedure": "Explicit-path bun test through the installed gate-slot.sh with fresh HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR per run and LLV_VIEWER_CONTROL_URL on a closed port. Base runs used an export of the base sources with this round's test files.",
+    "head": {
+      "src/lib/runtime/agentSignalSandbox.test.ts + src/lib/pipelines/testGuidance.test.ts + src/lib/pipelines/prompts.test.ts": {
+        "pass": 40,
+        "fail": 0
+      },
+      "src/lib/runtime/agentSignalSandbox.integration.test.ts (LLV_SIGNAL_SANDBOX_KERNEL_TEST=1)": {
+        "pass": 15,
+        "skip": 2,
+        "fail": 0,
+        "skipped": "built-image cases"
+      }
+    },
+    "base": {
+      "unit": {
+        "pass": 9,
+        "fail": 13,
+        "failing": [
+          "non-Linux, gate lease, root and missing python3 launches",
+          "missing Bubblewrap fallback",
+          "structured host boundary status",
+          "registry round trip for three engines",
+          "boundary status normalization",
+          "three gate-guidance cases"
+        ]
+      },
+      "kernel": {
+        "pass": 11,
+        "skip": 2,
+        "fail": 4,
+        "failing": [
+          "scope without delegated controllers",
+          "nested launch with inherited context",
+          "nested launch reaching read-only cgroup",
+          "exec acknowledgement after 11 s"
+        ]
+      }
+    },
+    "pkillControl": "The proof matches a uniquely named foreign fixture with pkill -x and killall; the same commands run unconfined against separate disposable fixtures succeed and end them."
+  }
+}

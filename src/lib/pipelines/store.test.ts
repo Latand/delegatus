@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { isEffectiveRole, archiveSettledPipelines, buildPipeline, checkpointPipelineRollbackMirrorsForDemotion, findPipelineRecord, loadPipelinesForStartup, loadPipelinesForRetirement, pipelineGraphError, loadArchivedPipelines, loadArchivedPipelinesForOwnership, archivedPipelinesRevision, loadPipelines, PIPELINES_SCHEMA_VERSION, savePipelines, withPipelineMutation, withPipelineStartupAdmission } from "./store";
+import { isEffectiveRole, archiveSettledPipelines, buildPipeline, checkpointPipelineRollbackMirrorsForDemotion, findPipelineRecord, loadPipelinesForStartup, loadPipelinesForRetirement, pipelineGraphError, loadArchivedPipelines, loadArchivedPipelinesForOwnership, archivedPipelinesRevision, loadPipelines, PIPELINES_SCHEMA_VERSION, savePipelines, withPipelineMutation, withPipelineStartupAdmission, pipelineTaskBindingSource } from "./store";
 import type { Pipeline, PipelineStage } from "./types";
 import { createPipelineWithDelivery, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, withDeliveryMutation } from "./store";
 import { stageVerdictFrom } from "./verdict";
@@ -20,6 +20,18 @@ test("a one-stage merger pipeline accepts its role and persists the effective re
     srcPath: null, srcConversationId: null, now: "2026-10-02T00:00:00.000Z" });
   expect(pipeline.stages[0]!.effectiveRole).toEqual(effectiveRole);
 });
+
+test("pipeline task binding feed reports bounded persisted membership changes", async () => isolatedDelivery(() => {
+  const pipeline=buildPipeline({id:"binding-feed",task:"Binding feed",project:"fixture",repoDir:"/repo",stages:[],srcPath:null,srcConversationId:null,now:"2026-10-01T00:00:00.000Z",state:"draft"});
+  pipeline.taskIds=["task-a"];
+  savePipelines([pipeline]);
+  const source=pipelineTaskBindingSource(),revision=source.revision();
+  pipeline.taskIds=["task-b"];
+  savePipelines([pipeline]);
+  const page=source.changesAfter(revision,"",10);
+  expect(page.entries).toHaveLength(1);
+  expect(source.parse(page.entries[0]!.valueJson!).taskIds).toEqual(["task-b"]);
+}));
 
 const deliveryTarget = { repository: "repo-delivery-fixture", remote: "", branch: "refs/heads/review-target", pr: 637, rejectedHead: "a".repeat(40) };
 function deliveryFixture(id: string): Pipeline {

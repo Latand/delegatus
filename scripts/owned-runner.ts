@@ -10,13 +10,19 @@ import { stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
 import { admitPortableTestRunner } from "../src/lib/testing/portableTestAdmission";
 import { cpuBudgetTimer, cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
 import { cpuSlotForOwner, inheritedCpuSlot } from "../src/lib/runtime/cpuAdmission";
+import { runSandboxGate, guardSandboxGate } from "../src/lib/runtime/sandboxGateRunner";
+import { signalSandboxContext } from "../src/lib/runtime/signalSandboxContext";
 
 type Launch = { command: string[]; cwd: string; env: NodeJS.ProcessEnv; owner: ProcessIdentity; parent?: ProcessIdentity; unit: string; timeoutMs: number };
 const args = process.argv.slice(2);
 const timeoutMs = Number(process.env.LLV_OWNED_RUN_TIMEOUT_MS ?? 900_000);
 if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error("owned runner needs a positive finite deadline");
 
-if (args[0] === "--budget") {
+if (args[0] === "--namespace-guardian") {
+  await guardSandboxGate(args[1]!);
+} else if (args[0] === "--namespace") {
+  await runSandboxGate(args.slice(1), timeoutMs, import.meta.path);
+} else if (args[0] === "--budget") {
   const allowance = Number(args[1]), command = args.slice(2);
   if (!Number.isFinite(allowance) || allowance <= 0 || !command.length) throw new Error("owned runner budget needs a finite allowance and a command");
   const budget = cpuWaitBudget(process.env);
@@ -116,6 +122,7 @@ if (args[0] === "--budget") {
   process.on("SIGINT", () => finish(130));
 } else {
   if (!args.length) throw new Error("usage: owned-runner.ts command [args...]");
+  if (signalSandboxContext()) await runSandboxGate(args, timeoutMs, import.meta.path);
   const unit = `delegatus-gate-${randomUUID()}.service`;
   const owner = captureProcessIdentity(process.pid);
   if (!owner.startIdentity || !owner.bootEpoch) throw new Error("owned runner has no verifiable start identity");
