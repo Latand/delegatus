@@ -72,6 +72,6 @@ function scrubOwnerText(text: string): string {
     .replace(/file:\/\/[^\s<>"'`]+/gi, "[path]")
     .replace(/(?<![\w:])(?:[A-Za-z]:[\\/]|\\\\)[^\r\n<>"'`]+/g, "[path]")
     .replace(/(?<![\w:/])~(?:[A-Za-z0-9_-]+)?\/(?:\\ |[^\s<>"'`])+/g, "[path]")
-    .replace(/(?<![\w:/])\/(?:home|Users|root|tmp|var|etc|opt|private|mnt|srv|proc)(?=\/|[\s<>"'`]|$)(?:\\ |[^\s<>"'`])*/g, "[path]")
-    .replace(/(?<![\w:/])\/(?:\\ |[^/\s<>"'`])+\/(?:\\ |[^\s<>"'`])+/g, "[path]");
+    .replace(/(?<![\w:/])\/+?(?:home|Users|root|tmp|var|etc|opt|private|mnt|srv|proc)(?=\/|[\s<>"'`.,;:!?)}]|$)(?:\/(?:\\ |[^\s<>"'`,;:!?)}])*)*/g, "[path]")
+    .replace(/(?<![\w:/])\/+?(?:\\ |[^/\s<>"'`,;:!?)}])+\/(?:\\ |[^\s<>"'`,;:!?)}])+/g, "[path]");
 }

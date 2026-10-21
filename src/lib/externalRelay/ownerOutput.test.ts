@@ -9,6 +9,7 @@ test.each([
   ["quoted command", "Received «/ai а так працюєш?»"],
   ["code command", "Try `/q` or \"/ai\"."],
   ["root prefixes", "/tmpbot /etcetera /homework /UsersBot /private_chat /home_password /rootSecret"],
+  ["known roots with suffix-like names", "/etcetera /tmpcache /privateer"],
   ["fractions and ratios", "1/2 3/4 16:9 1 / 2 /3"],
   ["ordinary prose", "Hello! Так, працюю. input/output and/or"],
   ["web links", "https://example.test/docs/work http://example.test/help"],
@@ -29,6 +30,17 @@ test.each([
   ["deep POSIX path", posix("workspace", "relay-fixture", "note.txt")],
   ["escaped space", String.raw`~/relay\ fixture/note.txt`],
   ["POSIX escaped space", String.raw`/workspace/relay\ fixture/note.txt`],
+  ...[2, 3, 4].flatMap(count => {
+    const path = `${"/".repeat(count)}workspace/private-note.txt`;
+    return [
+      [`${count} leading slashes`, path],
+      [`${count} leading slashes in code`, `Use \`${path}\` here.`],
+    ];
+  }),
+  ["known root before comma", "Path: /tmp, done."],
+  ["known root before semicolon", "Path: /etc; done."],
+  ["known root before closing parenthesis", "Path: (/var) done."],
+  ["known root in shell command", "cat /etc; printf done"],
   ["file URI", "file:///workspace/relay-fixture/note.txt"],
   ["remote file URI", "file://fixture-host/share/note.txt"],
   ["drive path", String.raw`C:\relay-fixture\note.txt`],
@@ -41,6 +53,15 @@ test.each([
   expect(output).not.toContain(text);
   expect(output).toMatch(/\[path\]|~|…/);
   expect(output).toStartWith("Location: ");
+});
+
+test.each([
+  ["comma prose", "Path: /tmp, done.", "Path: [path], done."],
+  ["semicolon prose", "Path: /etc; done.", "Path: [path]; done."],
+  ["closing parenthesis", "Path: (/var) done.", "Path: ([path]) done."],
+  ["shell separator", "cat /etc; printf done", "cat [path]; printf done"],
+])("owner output redacts a punctuated root in %s", (_name, input, expected) => {
+  expect(scrubOwnerOutput(input)).toBe(expected);
 });
 
 test.each([
