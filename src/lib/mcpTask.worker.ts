@@ -9,13 +9,13 @@ import path from "node:path";
 import type { TaskExecutorRequest } from "./mcp/taskExecutor";
 import type { TaskChannelResponse } from "./mcp/taskChannel";
 import type { TaskChannelAdmission } from "./mcp/taskChannelServer";
-import { identifyCallerWhenReady, logCallerIdentificationError } from "./mcp/callerIdentification";
 
 installMcpLifecycle("mcp-task-worker");
 if (!process.env.LLV_STATE_DIR) throw new Error("task executor needs an explicit state directory");
 // App Router modules capture this global when they load. A standalone executor
 // has no Next server bootstrap to install it before the compiled binding graph.
 (globalThis as typeof globalThis & { AsyncLocalStorage?: typeof AsyncLocalStorage }).AsyncLocalStorage ??= AsyncLocalStorage;
+const { identifyCallerWhenReady, logCallerIdentificationError } = await import("./mcp/callerIdentification");
 const { runAsMcpHttpCaller } = await import("./mcp/callerContext");
 const { TASK_EXECUTOR_FRAME_BYTES, TASK_EXECUTOR_HTTP_FRAME_BYTES, TASK_EXECUTOR_TOOLS } = await import("./mcp/taskExecutor");
 const { createProductionViewerMcpService, createViewerMcpServer, mcpTextResultClient, MCP_HTTP_CLIENT_ID } = await import("./mcp/server");
