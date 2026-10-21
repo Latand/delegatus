@@ -16,8 +16,8 @@ import { ComposerBar, composerSlotKind, type ComposerSendSlot } from "./Composer
  * that stack — pill row, status row, live-tail pill — above the keyboard and
  * asked for one unit, so the assertions move with the design:
  *
- *  - one box, the field on top and ONE tools row inside it: chip, attach,
- *    dictate, send slot;
+ *  - one box, the field on top and ONE tools row inside it: the chip at the
+ *    left edge, attach, dictate and the send slot at the right edge (#1484);
  *  - no row under the box and no disclosure to find;
  *  - every control a real 44 px box, not a 32 px one with a pseudo-element (the
  *    capture's hit gate reads bounding boxes);
@@ -139,8 +139,41 @@ test("the tools row reserves 44 px and every control in it is a real 44 px box",
   }
   /* MicButton's own idle face is that 32 px control and lives outside this
      lane, so the unit sizes it from its wrapper instead. */
-  const micWrap = [...tools.children].find((child) => child.className.includes("[&>span>button]:h-11"));
+  const micWrap = [...tools.querySelectorAll("span")].find((child) => child.className.includes("[&>span>button]:h-11"));
   expect(micWrap).toBeTruthy();
+  flushSync(() => root.unmount());
+});
+
+test("settings hold the row's left edge and the actions its right edge (#1484)", () => {
+  mobile = true;
+  const { host, root } = mount(<Harness />);
+  const tools = host.querySelector("[data-mobile2-tools]")!;
+  const settings = tools.querySelector("[data-mobile2-tools-settings]")!;
+  const actions = tools.querySelector("[data-mobile2-tools-actions]")!;
+  /* Two groups, settings first, nothing else on the row. */
+  expect([...tools.children]).toEqual([settings, actions]);
+  expect(settings.querySelector('[data-testid="left-marker"]')).toBeTruthy();
+  for (const action of ['button[aria-label="Add images"]', "[data-mobile2-send]", 'button[aria-label="Dictate"]']) {
+    expect(actions.querySelector(action)).toBeTruthy();
+    expect(settings.querySelector(action)).toBeNull();
+  }
+  /* The actions are pushed to the right edge and never shrink; the settings
+     group is the one that yields width (the chip truncates its label). */
+  expect(actions.className.split(" ")).toEqual(expect.arrayContaining(["ml-auto", "shrink-0"]));
+  expect(settings.className.split(" ")).toContain("min-w-0");
+  expect(tools.className.split(" ")).not.toContain("flex-wrap");
+  flushSync(() => root.unmount());
+});
+
+test("with no settings to show, the actions still sit at the right edge", () => {
+  mobile = true;
+  const { host, root } = mount(<Harness leftSlot={null} />);
+  const tools = host.querySelector("[data-mobile2-tools]")!;
+  expect(tools.querySelector("[data-mobile2-tools-settings]")).toBeNull();
+  const actions = tools.querySelector("[data-mobile2-tools-actions]")!;
+  expect([...tools.children]).toEqual([actions]);
+  expect(actions.className.split(" ")).toContain("ml-auto");
+  expect(actions.querySelector("[data-mobile2-send]")).toBeTruthy();
   flushSync(() => root.unmount());
 });
 
