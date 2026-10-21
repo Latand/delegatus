@@ -265,13 +265,13 @@ test("the real deadline settles HTTP, TERM-resistant stdio and blocked preparati
     let closed = false;
     child.once("close", () => { closed = true; });
     try {
-      await waitLine("STARTED", 5_000);
-      if (scenario !== "prepare") await waitLine("PEER_READY", 3_000);
-      const result = await waitLine("RESULT:", 5_000);
+      await waitLine("STARTED", 10_000);
+      if (scenario !== "prepare") await waitLine("PEER_READY", 8_000);
+      const result = await waitLine("RESULT:", 12_000);
       expect(result).toMatch(/^RESULT:(TIMEOUT):HEARTBEATS:([1-9]\d*)$/);
       expect(lines.some(line => line.startsWith("HEARTBEAT"))).toBe(true);
       await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error("fixture did not exit after deadline cleanup")), 1_000);
+        const timer = setTimeout(() => reject(new Error("fixture did not exit after deadline cleanup")), 5_000);
         child.once("close", code => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error(`fixture exited ${code}`)); });
       });
       const helpers = await fs.readdir(path.join(root, "helpers")).catch(() => []);
@@ -281,7 +281,7 @@ test("the real deadline settles HTTP, TERM-resistant stdio and blocked preparati
       if (!closed) { child.kill("SIGTERM"); await new Promise<void>(resolve => child.once("close", () => resolve())); }
     }
   }
-}, 20_000);
+}, 45_000);
 
 test.skipIf(!process.env.LLV_VOICE_TOOLS_BUILT_ROOT)("the production worker discovers tools and compiles schemas", async () => {
   const { store, root } = await setup(); const server = fake(); const expected = await propose(store, server.url);

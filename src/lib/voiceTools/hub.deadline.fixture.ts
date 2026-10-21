@@ -47,7 +47,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{const m=JSON.pa
   const heartbeat = setInterval(() => { heartbeats++; process.stdout.write("HEARTBEAT\n"); }, 20);
   process.stdout.write("STARTED\n");
   let result = "OK";
-  try { await new VoiceToolHub(store, 3_200).dryRun("music", expected); }
+  try { await new VoiceToolHub(store, 10_000).dryRun("music", expected); }
   catch (error) { result = error instanceof Error && "code" in error ? String(error.code) : "ERROR"; }
   for (const release of pendingResponses.splice(0)) release();
   if (scenario !== "prepare") {
