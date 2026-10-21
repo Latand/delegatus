@@ -10,8 +10,9 @@ import { procBackend } from "@/lib/proc";
 import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
 import { signalProcessGroup } from "@/lib/processGroup";
 import type { ProcessIdentity } from "@/lib/agent/registry";
+import { bindSignalDomain, nativeProcessId, normalizeSignalBoundaryOff, recordSignalBoundaryOff, signalAgentDomain, signalBoundaryOff, signalDomain, type AgentSignalDomain, type SignalBoundaryOff } from "./agentSignalSandbox";
 
-export interface CodexSocketOwner { endpoint: string; process: ProcessIdentity }
+export interface CodexSocketOwner { endpoint: string; process: ProcessIdentity; signalDomain?: AgentSignalDomain; signalBoundary?: SignalBoundaryOff }
 export type CodexTransport = Pick<ChildProcessWithoutNullStreams, "pid" | "stdin" | "stdout" | "stderr" | "kill"> & EventEmitter;
 const prefix = "codex-unix:";
 
@@ -83,6 +84,10 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
   static async reconnect(owner: CodexSocketOwner): Promise<CodexSocketTransport> {
     if (!verifiedCodexSocketOwner(owner)) throw new Error("Codex callback owner cannot be verified");
     const transport = new CodexSocketTransport(owner);
+    if (owner.signalDomain) {
+      if (owner.signalDomain.native.startIdentity !== owner.process.startIdentity || owner.signalDomain.native.bootEpoch !== owner.process.bootEpoch) throw new Error("Codex callback signal identity changed");
+      bindSignalDomain(transport, owner.signalDomain);
+    } else if (normalizeSignalBoundaryOff(owner.signalBoundary)) recordSignalBoundaryOff(transport, owner.signalBoundary!);
     try { await transport.connect(); }
     catch (error) { transport.disconnect(); throw error; }
     if (!verifiedCodexSocketOwner(owner)) { transport.disconnect(); throw new Error("Codex callback owner changed while connecting"); }
@@ -95,6 +100,8 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
 
   static async launch(command: string, args: string[], options: SpawnOptionsWithoutStdio,
     wrap?: (base: (command: string, args: string[], options: SpawnOptionsWithoutStdio) => ChildProcessWithoutNullStreams) => (command: string, args: string[], options: SpawnOptionsWithoutStdio) => ChildProcessWithoutNullStreams,
+    launch?: (command: string, args: string[], options: SpawnOptionsWithoutStdio,
+      base: (command: string, args: string[], options: SpawnOptionsWithoutStdio) => ChildProcessWithoutNullStreams) => Promise<ChildProcessWithoutNullStreams>,
   ): Promise<CodexSocketTransport> {
     const root = path.join(process.env.HOME ?? os.homedir(), ".cache", "delegatus", "s");
     fs.mkdirSync(root, { recursive: true, mode: 0o700 });
@@ -103,7 +110,11 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
     fs.chmodSync(directory, 0o700);
     const file = path.join(directory, "rpc.sock");
     const base = (binary: string, argv: string[], env: SpawnOptionsWithoutStdio): ChildProcessWithoutNullStreams => {
-      const child = spawn(binary, argv, { ...env, stdio: "ignore" });
+      const diagnostic = env.env?.LLV_SIGNAL_DIAGNOSTIC;
+      const fd = diagnostic ? fs.openSync(diagnostic, "ax", 0o600) : undefined;
+      let child: ReturnType<typeof spawn>;
+      try { child = spawn(binary, argv, { ...env, stdio: ["ignore", "ignore", fd ?? "ignore"] }); }
+      finally { if (fd !== undefined) fs.closeSync(fd); }
       const streams = { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() };
       // Bun exposes read-only stream properties. The memory-cell adapter needs
       // stream handles, while the native process itself keeps no Viewer pipes.
@@ -114,14 +125,18 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
       } }) as ChildProcessWithoutNullStreams;
     };
     let child: ChildProcessWithoutNullStreams;
-    try { child = (wrap ? wrap(base) : base)(command, [...args, "--listen", `unix://${file}`], options); }
+    try { child = launch ? await launch(command, [...args, "--listen", `unix://${file}`],
+      { ...options, env: { ...(options.env ?? process.env), LLV_SIGNAL_IGNORE_NATIVE_STDIO: "1" } }, base)
+      : (wrap ? wrap(base) : base)(command, [...args, "--listen", `unix://${file}`], options); }
     catch (error) { fs.rmdirSync(directory); throw error; }
     let failure: Error | undefined;
     child.on("error", error => { failure = error; });
-    const identity = child.pid ? procBackend.processIdentity(child.pid) : null;
+    const monitorIdentity = child.pid ? procBackend.processIdentity(child.pid) : null;
+    const pid = nativeProcessId(child);
+    const identity = pid ? procBackend.processIdentity(pid) : null;
     try {
-      if (!child.pid || !identity) throw failure ?? new Error("Codex callback process identity is unavailable");
-      const owner = { endpoint: prefix + file, process: captureProcessIdentity(child.pid, undefined, identity) };
+      if (!pid || !identity) throw failure ?? new Error("Codex callback process identity is unavailable");
+      const owner = { endpoint: prefix + file, process: captureProcessIdentity(pid, undefined, identity), signalDomain: signalDomain(child), signalBoundary: signalBoundaryOff(child) };
       const deadline = Date.now() + 10_000;
       while (!verifiedCodexSocketOwner(owner)) {
         if (failure || child.exitCode !== null || child.signalCode !== null || Date.now() >= deadline) throw failure ?? new Error("Codex callback listener did not start or its ownership could not be verified");
@@ -132,9 +147,17 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
       child.unref();
       return transport;
     } catch (error) {
-      if (child.pid && child.exitCode === null && child.signalCode === null && (!identity || procBackend.processIdentity(child.pid) === identity)) {
-        signalProcessGroup(child.pid, "SIGKILL", process.kill);
-        await new Promise<void>(resolve => { if (child.exitCode !== null || child.signalCode !== null) resolve(); else child.once("close", () => resolve()); });
+      if (child.pid && child.exitCode === null && child.signalCode === null && (!monitorIdentity || procBackend.processIdentity(child.pid) === monitorIdentity)) {
+        const stopped = new Promise<void>(resolve => { if (child.exitCode !== null || child.signalCode !== null) resolve(); else child.once("close", () => resolve()); });
+        const signalled = signalAgentDomain(child, "SIGKILL");
+        if (signalled === undefined) signalProcessGroup(child.pid, "SIGKILL", process.kill);
+        else if (!signalled) throw new Error("Codex callback setup cleanup identity could not be verified", { cause: error });
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([stopped, new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(() => reject(new Error("Codex callback setup cleanup did not settle", { cause: error })), 3_000);
+          })]);
+        } finally { if (timer) clearTimeout(timer); }
       }
       fs.rmSync(directory, { recursive: true, force: true });
       throw error;

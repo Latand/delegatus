@@ -61,6 +61,9 @@ verified_exec() {
 # checks the kernel's controls before it execs the command in place.
 if [[ ${1:-} == --in-cpu-scope ]]; then shift; verified_exec "$@"; fi
 run() {
+  if [[ -n ${LLV_SIGNAL_SANDBOX:-} ]]; then
+    exec "${LLV_GATE_BUN:-bun}" "$(dirname "${BASH_SOURCE[0]}")/owned-runner.ts" --namespace "$@"
+  fi
   if cpu_applies; then
     user_manager || refuse "no reachable systemd user manager"
     systemctl --user set-property --runtime "$slice" CPUWeight=100 "CPUQuota=${aggregate}%" CPUQuotaPeriodSec=20ms >/dev/null 2>&1 \
@@ -81,7 +84,10 @@ mkdir -p "$lock_dir"
 admission="$(dirname "${BASH_SOURCE[0]}")/cpu-admission.ts"
 # A nested command continues an already admitted job. The helper validates
 # the parent start identity and its kernel-held slot before reusing it.
-if "${LLV_GATE_BUN:-bun}" "$admission" --reuse-slot; then run "$@"; fi
+reuse_code=0
+"${LLV_GATE_BUN:-bun}" "$admission" --reuse-slot || reuse_code=$?
+if [[ $reuse_code == 0 ]]; then run "$@"; fi
+if [[ $reuse_code != 75 ]]; then exit "$reuse_code"; fi
 # MSYS/Cygwin shell PIDs differ from the Windows PIDs the native Bun helper
 # probes. The shell's virtual proc file supplies its native PID.
 owner_pid=$$

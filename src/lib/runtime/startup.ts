@@ -2322,7 +2322,7 @@ async function adoptStructuredHostsPass(
         const current = startupSnapshot(registry).entries[sessionKeyId(entry.key)];
         if (!current || !shouldAdopt(current)) return null;
         const socketOwner = current.structuredHost?.process && verifiedCodexSocketOwner({ endpoint: current.structuredHost.endpoint, process: current.structuredHost.process })
-          ? { endpoint: current.structuredHost.endpoint, process: current.structuredHost.process } : undefined;
+          ? { endpoint: current.structuredHost.endpoint, process: current.structuredHost.process, signalDomain: current.structuredHost.signalDomain, signalBoundary: current.structuredHost.signalBoundary } : undefined;
         return (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, entry.key, owner, { allowUnhosted: true, reconnectCodex: socketOwner })));
       }, "claiming startup host");
     const codexCandidateCount = adoptionCandidates.filter((entry) => entry.key.engine === "codex").length;
