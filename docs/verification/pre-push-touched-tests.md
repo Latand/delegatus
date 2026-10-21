@@ -625,8 +625,8 @@ Each attempt runs the real pre-push entry point in a scratch clone with its own 
 
 | Side | Qualifying runs | Current sample P90 (s) | File expirations | Refusals | NEW lines |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| before | 3 | 1166.6 | 5 | 2 | 0 |
-| after | 11 | 476.4 | 0 | 0 | 0 |
+| before | 4 | 1166.6 | 5 | 3 | 0 |
+| after | 13 | 495.0 | 0 | 0 | 0 |
 
 The sample P90 is provisional until all runs complete. An incomplete baseline or runner error is a refusal even when it emits no NEW assertion line.
 
@@ -659,6 +659,9 @@ The sample P90 is provisional until all runs complete. An incomplete baseline or
 | after-10 | after | 1 | 3.80 / 27.75 / 34.06 | 7.0 | 395.7 | yes | 0 | 0 |
 | after-11 | after | 2 | 6.23 / 28.78 / 31.83 | 1.1 | 435.1 | yes | 0 | 0 |
 | after-12 | after | 3 | 11.62 / 39.60 / 69.29 | 9.1 | 546.9 | outlier | 0 | 0 |
+| after-112 | after | 3 | 12.41 / 26.44 / 32.09 | 1.2 | 379.7 | yes | 0 | 0 |
+| before-04 | before | 1 | 9.22 / 28.25 / 37.94 | 1.2 | 916.4 | yes | 0 | 1 |
+| after-13 | after | 1 | 6.42 / 27.97 / 59.52 | 3.1 | 495.0 | yes | 0 | 0 |
 
 The ten split families retain all 1,078 registered cases, including their names, parameter values and assertion bodies. The preserved calibration and JUnit inventory established that partition before the campaign. The measured timeout exceptions are described in `docs/design/pre-push-gate-under-load.md#2-fix`.
 
@@ -673,6 +676,7 @@ The resumed campaign began with three qualifying after-runs and one before-run. 
 | batch-05 | 4 | 3 | 1 |
 | batch-06 | 1 | 0 | 1 |
 | batch-07 | 3 | 2 | 0 |
+| batch-08 | 3 | 2 | 1 |
 
 Two before-runs fell below the required load band as their remaining files and baseline work used fewer CPUs. Observed test CPU usage averaged at least 3.78 CPUs in `before-02`, against 7.04 in `after-306`. Future before-runs use a four-CPU foreground estimate for initial load padding; after-runs retain eight. New records include `paddingForegroundCpuEstimate`; earlier records used eight. The real gate retains its eight head workers and existing quotas, deadlines and verdict rules. Every earlier qualifier and outlier stays in the sample.
 
