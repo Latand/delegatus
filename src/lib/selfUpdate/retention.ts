@@ -21,6 +21,7 @@ export type RetentionInputs = {
 export type RetentionReport = {
   at: string; removed: { dir: string; sha: string; bytes: number }[];
   cursor?: { age: number; dir: string };
+  recoveryCursor?: string;
   reclaimedCacheBytes: number; kept: { dir: string; reason: string; bytes: number }[]; errors: string[];
 };
 export type RetentionPorts = {
@@ -66,9 +67,13 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
   fs.mkdirSync(path.dirname(reportFile), { recursive: true });
   const previousTrash = fs.readdirSync(path.dirname(reportFile)).sort();
   let cursor: RetentionReport["cursor"];
+  let recoveryCursor: string | undefined;
   try {
-    const previous = JSON.parse(fs.readFileSync(reportFile, "utf8")).cursor;
+    const previousReport = JSON.parse(fs.readFileSync(reportFile, "utf8"));
+    const previous = previousReport.cursor;
     if (Number.isFinite(previous?.age) && typeof previous?.dir === "string" && path.dirname(previous.dir) === path.resolve(record.releasesDir)) cursor = previous;
+    if (typeof previousReport.recoveryCursor === "string" && /^(cache|package|release-output)-trash-.*\.json$/.test(previousReport.recoveryCursor))
+      recoveryCursor = previousReport.recoveryCursor;
   } catch { /* A first pass, or an older report with no cursor. */ }
   const mounts = ports.mountPoints ?? mountPointsUnder;
   const read = async () => ports.current?.() ?? { record, inputs };
@@ -128,8 +133,9 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
     return null;
   };
   const freshProtection = async (candidate: Candidate, recovering = false) => {
+    const current = await read();
     const processes = await scan();
-    return protect(candidate, await read(), processes, recovering);
+    return protect(candidate, current, processes, recovering);
   };
   try {
     const processes = await scan();
@@ -208,9 +214,10 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
           const bytesBefore = await bytesOf(cache);
           const journal = path.join(path.dirname(reportFile), `cache-trash-${randomUUID()}.json`);
           const inUse = async (trash: string) => {
+            const current = await read();
             const fresh = await scan();
             return heldByProcess(trash, fresh) || heldByProcess(cache, fresh)
-              || ((await read()).inputs.inFlight ?? []).some(dir => under(dir, candidate.dir));
+              || (current.inputs.inFlight ?? []).some(dir => under(dir, candidate.dir));
           };
           if (await inUse(cache) || mounts(candidate.dir).length || fs.realpathSync(cache) !== cache || identity(candidate.dir) !== candidate.identity
             || inspectTree(cache, { git: true, mounts: mounts(cache) }).hold) continue;
@@ -314,10 +321,12 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
           }
           const journal = path.join(path.dirname(reportFile), `package-trash-${randomUUID()}.json`);
           if (!await removeTreeViaTrash(candidate.dir, { journal, context: { sha: candidate.sha }, held: async trash => {
-            const activeProcesses = await scan(); const current = await read();
+            const current = await read(); const activeProcesses = await scan();
             const reason = protect({ dir: candidate.dir, sha: candidate.sha, age: candidate.age, locked: candidate.locked, identity: candidate.identity }, current, activeProcesses, true);
             if (reason) report.kept.push({ dir: candidate.dir, reason, bytes: 0 });
-            return !!reason || heldByProcess(trash, activeProcesses)
+            const processHeld = heldByProcess(trash, activeProcesses);
+            if (processHeld && !reason) report.kept.push({ dir: candidate.dir, reason: "process", bytes: 0 });
+            return !!reason || processHeld
               || !!inspectTree(trash, { git: true, mounts: mounts(trash) }).hold;
           }, validate: trash => !inspectTree(trash, { git: true, mounts: mounts(trash) }).hold, remove: ports.removeTree })) continue;
         }
@@ -327,11 +336,16 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
     }
     // Recover only intents whose original path belongs to this releases root.
     let recovered = 0;
-    for (const file of previousTrash) {
+    const recoveryFiles = previousTrash.filter(file => /^(cache|package|release-output)-trash-.*\.json$/.test(file));
+    const afterRecoveryCursor = (file: string) => recoveryCursor !== undefined && file > recoveryCursor;
+    const recoveryWindow = recoveryCursor
+      ? [...recoveryFiles.filter(afterRecoveryCursor), ...recoveryFiles.filter(file => !afterRecoveryCursor(file))]
+      : recoveryFiles;
+    for (const file of recoveryWindow) {
       if (recovered >= maxCandidates || now() >= deadline) break;
-      if (!/^(cache|package|release-output)-trash-.*\.json$/.test(file)) continue;
       const journal = path.join(path.dirname(reportFile), file);
       recovered++;
+      report.recoveryCursor = file;
       try {
         const row = JSON.parse(fs.readFileSync(journal, "utf8"));
         const packageTrash = file.startsWith("package-");
@@ -351,15 +365,20 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
           if (!candidate || mounts(candidate.dir).length || identity(candidate.dir) !== candidate.identity) continue;
         }
         const held = async (trash: string) => {
+          const current = await read();
           const processes = await scan();
-          if (heldByProcess(trash, processes) || heldByProcess(row.directory, processes)) return true;
+          const processHeld = heldByProcess(trash, processes) || heldByProcess(row.directory, processes);
+          if (processHeld) {
+            if (packageTrash) report.kept.push({ dir: row.directory, reason: "process", bytes: 0 });
+            return true;
+          }
           if (outputCandidate) {
-            const reason = protect(outputCandidate, await read(), processes, true);
+            const reason = protect(outputCandidate, current, processes, true);
             if (reason) report.kept.push({ dir: outputCandidate.dir, reason, bytes: 0 });
             return !!reason;
           }
-          if (!packageTrash) return ((await read()).inputs.inFlight ?? []).some(dir => under(row.directory, dir));
-          const reason = protect({ dir: row.directory, sha: row.context?.sha ?? "", age: 0, locked: false, identity: row.identity }, await read(), processes, true);
+          if (!packageTrash) return (current.inputs.inFlight ?? []).some(dir => under(row.directory, dir));
+          const reason = protect({ dir: row.directory, sha: row.context?.sha ?? "", age: 0, locked: false, identity: row.identity }, current, processes, true);
           if (reason) report.kept.push({ dir: row.directory, reason, bytes: 0 });
           return !!reason;
         };

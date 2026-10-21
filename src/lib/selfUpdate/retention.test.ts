@@ -349,6 +349,61 @@ test("a process acquired after an earlier removal still protects a later release
   expect(children.at(-1)!.signalCode).toBeNull();
 }, 30_000);
 
+test("recovery advances past four held journals on a later pass", async () => {
+  const h = fixture(0); h.record.checkout = null; h.ports.maxCandidates = 4;
+  const dirs = Array.from({ length: 5 }, (_, index) => path.join(h.record.releasesDir, `npm-2.0.${index}`));
+  fs.writeFileSync(h.record.releasePointer, JSON.stringify({ dir: dirs[0] }));
+  const journals: string[] = [];
+  for (const dir of dirs) {
+    fs.mkdirSync(dir); fs.writeFileSync(path.join(dir, "package.json"), "{}"); fs.utimesSync(dir, 1, 1);
+    const journal = path.join(path.dirname(h.ports.reportFile!), `package-trash-${String(journals.length).padStart(3, "0")}.json`);
+    await expect(removeTreeViaTrash(dir, { journal, held: () => false, remove: async () => { throw new Error("interrupted"); } })).rejects.toThrow("interrupted");
+    journals.push(journal);
+  }
+  const heldTrash = new Set(journals.slice(0, 4).map(file => JSON.parse(fs.readFileSync(file, "utf8")).trash as string));
+  h.ports.scan = () => ({ ...EMPTY, processes: [...heldTrash].map((entry, index) => ({ pid: index + 100, namespace: EMPTY.ownNamespace, stamped: false, paths: [entry] })) });
+  const first = await h.run();
+  expect(first.removed).toEqual([]);
+  expect(JSON.parse(fs.readFileSync(h.ports.reportFile!, "utf8")).recoveryCursor).toBe(path.basename(journals[3]!));
+  const second = await h.run();
+  expect(second.errors).toEqual([]);
+  expect(second.removed).toContainEqual(expect.objectContaining({ dir: dirs[4] }));
+  expect(fs.existsSync(dirs[4]!)).toBeFalse();
+  for (const journal of journals.slice(0, 4)) expect(fs.existsSync(journal)).toBeTrue();
+}, 30_000);
+
+test("a process entering a recovered trash tree during owner IPC prevents replay deletion", async () => {
+  const h = fixture(0); h.record.checkout = null;
+  const dir = path.join(h.record.releasesDir, "npm-4.0.0"); fs.mkdirSync(dir); fs.writeFileSync(path.join(dir, "package.json"), "{}");
+  fs.writeFileSync(h.record.releasePointer, JSON.stringify({ dir: path.join(h.record.releasesDir, "npm-0.0.0") }));
+  const journal = path.join(path.dirname(h.ports.reportFile!), "package-trash-recovery-race.json");
+  await expect(removeTreeViaTrash(dir, { journal, held: () => false, remove: async () => { throw new Error("interrupted"); } })).rejects.toThrow("interrupted");
+  const trash = JSON.parse(fs.readFileSync(journal, "utf8")).trash as string;
+  h.ports.scan = scanProcesses;
+  const originalCurrent = h.ports.current;
+  let reads = 0; let child: ChildProcess | undefined;
+  h.ports.current = async () => {
+    if (++reads === 2) {
+      const holder = spawn(process.execPath, ["-e", "process.stdout.write('ready'); setInterval(() => {}, 1000)"], {
+        cwd: trash, env: { PATH: process.env.PATH, NODE_ENV: "test", HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+          TMPDIR: process.env.TMPDIR, LLV_STATE_DIR: process.env.LLV_STATE_DIR, LLV_VIEWER_CONTROL_URL: process.env.LLV_VIEWER_CONTROL_URL },
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      child = holder; children.push(holder);
+      await new Promise<void>((resolve, reject) => {
+        holder.once("error", reject); holder.stdout!.once("data", () => resolve());
+        holder.once("exit", () => reject(new Error("holder exited before readiness")));
+      });
+    }
+    return originalCurrent?.() ?? { record: h.record, inputs: h.inputs };
+  };
+  const report = await h.run();
+  expect(report.errors).toEqual([]);
+  expect(fs.existsSync(trash)).toBeTrue(); expect(fs.existsSync(journal)).toBeTrue();
+  expect(report.kept).toContainEqual(expect.objectContaining({ dir, reason: "process" }));
+  expect(child?.exitCode).toBeNull(); expect(child?.signalCode).toBeNull();
+}, 30_000);
+
 test("recent and newest-K releases are kept; K follows LLV_SELF_UPDATE_KEEP_RELEASES", async () => {
   const h = fixture(); h.ports.env = { LLV_SELF_UPDATE_KEEP_RELEASES: "1" };
   fs.utimesSync(path.join(h.dirs[1]!, ".next/BUILD_ID"), new Date(h.now), new Date(h.now));

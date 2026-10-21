@@ -2,6 +2,7 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { spawn } from "node:child_process";
 import { runRetentionPass } from "./retentionPass";
 import type { LauncherRecord } from "./launcher";
 import type { RetentionInputs } from "./retention";
@@ -69,6 +70,51 @@ test.skipIf(process.platform !== "linux")("a pass reads fresh owner inputs acros
     expect(report.kept).toContainEqual(expect.objectContaining({ dir: h.dirs[1], reason: "in-flight" }));
     expect(fs.existsSync(h.dirs[1]!)).toBeTrue(); h.ended();
   } finally { release(); await running; }
+}, 30_000);
+
+test.skipIf(process.platform !== "linux")("a process entering quarantined trash during owner IPC restores its release", async () => {
+  const h = fixture(4);
+  h.options.env.LLV_SELF_UPDATE_KEEP_RELEASES = "1";
+  const target = h.dirs[1]!;
+  const proc = path.join(h.root, "proc");
+  let child: import("node:child_process").ChildProcess | undefined;
+  const current = async () => {
+    if (!fs.existsSync(target)) {
+      const trash = fs.readdirSync(h.record.releasesDir).map(name => path.join(h.record.releasesDir, name))
+        .find(directory => path.basename(directory).startsWith(`.delegatus-trash-${path.basename(target)}-`));
+      if (trash && !child) {
+        const holder = spawn(process.execPath, ["-e", "process.stdout.write('ready'); setInterval(() => {}, 1000)"], {
+          cwd: trash, env: { PATH: process.env.PATH, NODE_ENV: "test", HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+            TMPDIR: process.env.TMPDIR, LLV_STATE_DIR: process.env.LLV_STATE_DIR, LLV_VIEWER_CONTROL_URL: process.env.LLV_VIEWER_CONTROL_URL },
+          stdio: ["ignore", "pipe", "ignore"],
+        });
+        child = holder;
+        await new Promise<void>((resolve, reject) => {
+          holder.once("error", reject); holder.stdout!.once("data", () => resolve());
+          holder.once("exit", () => reject(new Error("holder exited before readiness")));
+        });
+        const base = path.join(proc, String(holder.pid));
+        fs.mkdirSync(path.join(base, "ns"), { recursive: true }); fs.mkdirSync(path.join(base, "fd"));
+        fs.symlinkSync("mnt:[fixture]", path.join(base, "ns/mnt")); fs.symlinkSync(trash, path.join(base, "cwd"));
+        fs.symlinkSync(process.execPath, path.join(base, "exe")); fs.symlinkSync("/", path.join(base, "root"));
+        fs.writeFileSync(path.join(base, "stat"), `${holder.pid} (worker) S 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 42`);
+        for (const file of ["cmdline", "maps", "environ"]) fs.writeFileSync(path.join(base, file), "");
+      }
+    }
+    return { record: h.record, inputs: h.inputs };
+  };
+  try {
+    const report = await runRetentionPass(h.record, h.inputs, { ...h.options, current });
+    expect(report.errors).toEqual([]);
+    expect(fs.existsSync(target)).toBeTrue();
+    expect(report.removed.some(row => row.dir === target)).toBeFalse();
+    expect(report.kept).toContainEqual(expect.objectContaining({ dir: target, reason: "process" }));
+    expect(child?.exitCode).toBeNull(); expect(child?.signalCode).toBeNull();
+  } finally {
+    if (child && child.exitCode === null && child.signalCode === null) {
+      const exited = new Promise<void>(resolve => child!.once("exit", () => resolve())); child.kill("SIGKILL"); await exited;
+    }
+  }
 }, 30_000);
 
 test.skipIf(process.platform !== "linux").each(["abort", "deadline"])("%s ends a ready pass and pre-aborted work never dispatches", async kind => {
