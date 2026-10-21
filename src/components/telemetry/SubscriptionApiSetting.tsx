@@ -2,6 +2,12 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocale } from "@/lib/i18n";
 
+async function readConsent(): Promise<boolean> {
+  const response = await fetch("/api/subscription-api-consent", { cache: "no-store", signal: AbortSignal.timeout(8000) });
+  if (!response.ok) throw Error();
+  const body = await response.json(); if (typeof body.enabled !== "boolean") throw Error();
+  return body.enabled;
+}
 export function SubscriptionApiSetting() {
   const { t } = useLocale();
   const [enabled, setEnabled] = useState<boolean | null>(null);
@@ -10,10 +16,8 @@ export function SubscriptionApiSetting() {
   const pending = useRef(false);
   useEffect(() => {
     let disposed = false;
-    fetch("/api/subscription-api-consent").then(async response => {
-      if (!response.ok) throw Error();
-      const body = await response.json(); if (typeof body.enabled !== "boolean") throw Error();
-      if (!disposed) setEnabled(body.enabled);
+    readConsent().then(value => {
+      if (!disposed) setEnabled(value);
     }).catch(() => { if (!disposed) setError(true); });
     return () => { disposed = true; };
   }, []);
@@ -21,11 +25,16 @@ export function SubscriptionApiSetting() {
     if (pending.current || enabled === null) return;
     pending.current = true; setSaving(true); setError(false);
     try {
-      const response = await fetch("/api/subscription-api-consent", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: next }) });
+      const response = await fetch("/api/subscription-api-consent", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: next }), signal: AbortSignal.timeout(8000) });
       if (!response.ok) throw Error();
       const body = await response.json(); if (typeof body.enabled !== "boolean") throw Error();
       setEnabled(body.enabled);
-    } catch { setError(true); }
+    } catch {
+      setError(true);
+      // A lost acknowledgement can follow a durable write. Read the choice
+      // before offering another change, including a subsequent revocation.
+      try { setEnabled(await readConsent()); } catch { setEnabled(null); }
+    }
     finally { pending.current = false; setSaving(false); }
   };
   return <section data-subscription-api="" className="mt-5 border-t border-border pt-4">

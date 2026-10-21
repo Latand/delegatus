@@ -37,3 +37,21 @@ test("an unreadable setting cannot be enabled", async () => {
   expect(document.querySelector<HTMLInputElement>('[role="switch"]')!.disabled).toBe(true);
   expect(document.querySelector('[role="alert"]')).not.toBeNull();
 });
+test("a committed consent with a lost acknowledgement is read back and can be revoked", async () => {
+  let stored = false; let loseReply = true;
+  globalThis.fetch = (async (_url, init) => {
+    if (init?.method === "PUT") {
+      stored = JSON.parse(String(init.body)).enabled;
+      if (loseReply) { loseReply = false; throw Error("reply lost"); }
+    }
+    return Response.json({ enabled: stored });
+  }) as unknown as typeof fetch;
+  const host = document.createElement("div"); document.body.append(host); root = createRoot(host);
+  await act(async () => { root!.render(<SubscriptionApiSetting />); });
+  const toggle = document.querySelector<HTMLInputElement>('[role="switch"]')!;
+  await act(async () => { toggle.click(); });
+  expect(stored).toBe(true); expect(toggle.checked).toBe(true);
+  expect(document.querySelector('[role="alert"]')).not.toBeNull();
+  await act(async () => { toggle.click(); });
+  expect(stored).toBe(false); expect(toggle.checked).toBe(false);
+});
