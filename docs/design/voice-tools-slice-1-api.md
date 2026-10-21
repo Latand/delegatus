@@ -161,3 +161,14 @@ server stays approved under the new digest; a refusal changes nothing, puts the
 control back and shows the reason under it. Strings ship in English and Ukrainian. Rendered evidence
 comes from the kanban browser driver's «voice tools settings» case
 (`evidence/voice-companion/voice-tools.json`); frames are never committed.
+
+
+## Package launch verification
+
+`src/lib/voiceTools/hub.test.ts` covers the store, hub and real probe worker,
+including proposal refusal, approved-record reload, PATH/global-bin shadowing,
+registry entry selection and installer deadline cleanup. Set
+`LLV_VOICE_REGISTRY_NETWORK_TEST=1` to additionally install the pinned public
+npm and PyPI control packages through the real launchers. Run this suite
+through `scripts/gate-slot.sh` with isolated HOME, XDG_CONFIG_HOME, TMPDIR and
+LLV_STATE_DIR, and LLV_VIEWER_CONTROL_URL on a closed port.

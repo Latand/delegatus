@@ -481,6 +481,12 @@ if (process.argv.includes('install')) {
   const manifest = JSON.parse(await fs.readFile('package.json', 'utf8'));
   const name = Object.keys(manifest.dependencies)[0];
   if (name === 'failed-install') process.exit(1);
+  if (name === 'hanging-install') {
+    process.on('SIGTERM', () => {});
+    setInterval(() => {}, 1000);
+    await fetch(process.env.READY_URL);
+    await new Promise(() => {});
+  }
   const dir = path.join(process.cwd(), 'node_modules', ...name.split('/'));
   await fs.mkdir(dir, {recursive:true});
   await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({name, bin:name === 'escaped-bin' ? '../../escape.mjs' : name === 'missing-bin' ? undefined : 'server.mjs'}));
@@ -623,10 +629,38 @@ test.skipIf(process.platform === "win32")("registry controls discover and approv
 }, 20_000);
 
 
+test.skipIf(process.platform === "win32")("the hub deadline reaps a TERM-resistant package installer before any entry runs", async () => {
+  const { root, store } = await setup();
+  const ready = barrier();
+  const listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { ready.release(); return new Response("ready"); } });
+  listeners.push(listener);
+  const bin = path.join(root, "bin"); await fs.mkdir(bin);
+  const marker = path.join(root, "launches");
+  await writeRegistryLauncher(path.join(bin, "bun"), marker);
+  const previous = process.env.PATH;
+  let expire!: () => void;
+  const hub = new VoiceToolHub(store, 20_000, (callback, milliseconds) => { if (milliseconds === 17_000) expire = callback; return () => {}; });
+  try {
+    process.env.PATH = [bin, previous].join(path.delimiter);
+    await store.propose({ name: "music", title: "Music", capability: "Search", transport: { type: "stdio", command: "bun", args: ["x", "hanging-install"],
+      env: { READY_URL: { value: `http://127.0.0.1:${listener.port}/ready` } } } }, actor);
+    const pending = dryRunView(store, hub);
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([ready.promise, new Promise<never>((_, reject) => { watchdog = setTimeout(() => reject(new Error("installer did not start")), 10_000); })]);
+    } finally { clearTimeout(watchdog); expire(); await pending; }
+    const shown = await pending;
+    expect(shown.lastDryRun?.code).toBe("TIMEOUT");
+    expect((await fs.readFile(marker, "utf8")).trim().split("\n")).toHaveLength(1);
+    expect(await fs.readdir(path.join(root, "helpers"))).toEqual([]);
+    expect(await fs.readdir(path.join(root, "voice-tools-runs"))).toEqual([]);
+  } finally { if (previous === undefined) delete process.env.PATH; else process.env.PATH = previous; }
+}, 20_000);
+
 test.skipIf(process.env.LLV_VOICE_REGISTRY_NETWORK_TEST !== "1")("public registry controls install, discover and approve with the real launchers", async () => {
   for (const [command, args] of [
     ["bun", ["x", "@modelcontextprotocol/server-memory@2025.8.4"]],
-    ["uv", ["tool", "run", "mcp-server-time==2025.8.4"]],
+    ["uv", ["tool", "run", "mcp-server-time==2026.10.19"]],
   ] as ["bun" | "uv", string[]][]) {
     const { store, root } = await setup();
     await store.propose({ name: "music", title: "Music", capability: "Search", transport: { type: "stdio", command, args } }, actor);
