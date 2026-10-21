@@ -2445,3 +2445,210 @@ test("a newer runtime selection or failed-switch hold appearing during release k
     expect(released).toBe(false);
   }
 });
+
+/* Turbo (docs/design/turbo-mode.md §2.6): a tier-only applyNow on a Codex
+   stage changes the live thread's tier in place: no interrupt-and-restart, no
+   reconfigure executor, and a continuation only when a turn was actually cut. */
+async function inPlaceHarness() {
+  const { listCodexAccounts } = await import("@/lib/accounts/codex");
+  for (const account of listCodexAccounts()) {
+    fs.mkdirSync(account.home, { recursive: true });
+    fs.writeFileSync(path.join(account.home, "models_cache.json"), JSON.stringify({ models: ["gpt-6.1-sol", "gpt-6-astra"].map(slug => ({ slug, service_tiers: [{ id: "priority" }, { id: "ultrafast" }] })) }));
+  }
+  const h = switchHarness();
+  h.ports.roleLookup = () => ({ engine: "codex", model: "gpt-6.1-sol", effort: "high", access: "read-only", promptScaffold: "Stage guidance" });
+  let seat = { engine: "codex" as const, model: "gpt-6.1-sol", effort: "high", serviceTier: null as string | null, accountId: "default", sessionId: "session-1", agentPath: STAGE_TRANSCRIPT };
+  h.ports.conversationGeneration = () => seat;
+  const tierCalls: Array<{ conversationId: string; operationId: string; serviceTier: string | null; cut: string }> = [];
+  let answer: "cut" | "armed" | "none" = "none";
+  let cutState: "armed" | "cut" | "turn-ended" | "cancelled" | "host-gone" | "unknown" = "armed";
+  let refuse: string | null = null;
+  const cancelled: string[] = [];
+  h.ports.runtimeSwitchTier = async (conversationId, operationId, serviceTier, cut) => {
+    tierCalls.push({ conversationId, operationId, serviceTier, cut });
+    if (refuse) throw new Error(refuse);
+    seat = { ...seat, serviceTier };
+    return { cut: answer, appliedTier: serviceTier };
+  };
+  h.ports.runtimeSwitchTierCut = () => cutState;
+  h.ports.cancelRuntimeSwitchTierCut = (_id, key) => { cancelled.push(key); };
+  const lane = await runningStage(h);
+  const request = (body: Record<string, unknown> = {}) => patchPipeline(lane.id, { action: "override-stage", stageId: "plan", serviceTier: "ultrafast", applyNow: true,
+    expectedAttempt: 1, expectedConversationId: STAGE_CONVERSATION, ...body }, h.ports, { kind: "operator" });
+  return { ...h, lane, tierCalls, cancelled, request,
+    answer: (value: typeof answer) => { answer = value; }, cutState: (value: typeof cutState) => { cutState = value; }, refuse: (value: string | null) => { refuse = value; } };
+}
+
+test("in-place: a persisted cut intent recovers the interrupted turn before issuing another native switch", async () => {
+  const h = await inPlaceHarness();
+  await h.request();
+  const lane = loadPipelines()[0]!;
+  const record = lane.runs[0]!.attempts[0]!.runtimeSwitches![0]!;
+  Object.assign(record, { phase: "cutting", cutTurnId: "turn-cut", appliedServiceTier: "ultrafast" });
+  savePipelines([lane]);
+  const generation = h.ports.conversationGeneration!;
+  h.ports.conversationGeneration = (...args) => ({ ...generation(...args)!, serviceTier: "ultrafast" });
+  h.ports.runtimeSwitchTierCut = (_conversation, _operation, turnId) => turnId === "turn-cut" ? "cut" : "unknown";
+  h.ports.runtimeSwitchTier = async () => { throw new Error("must reconcile the saved cut first"); };
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(h.continuations).toHaveLength(1);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches![0]!.phase).toBe("committed");
+});
+
+test("in-place: an idle Codex stage takes the tier for its next turn; nothing is cut, restarted or continued", async () => {
+  const h = await inPlaceHarness();
+  const chosen = await h.request({ turbo: "turbo:2026-10-21T12:00:00.000Z" });
+  expect(chosen.error).toBeUndefined();
+  expect(chosen.runtimeSwitch).toMatchObject({ mode: "fork", inPlace: true, cut: "boundary", turbo: "turbo:2026-10-21T12:00:00.000Z", to: { serviceTier: "ultrafast", accountId: "default" } });
+  expect(chosen.graphEdit?.summary).toContain("(Turbo turbo:2026-10-21T12:00:00.000Z)");
+  await tickPipelines([], h.ports);
+  const after = loadPipelines()[0]!;
+  const attempt = after.runs[0]!.attempts[0]!;
+  expect(attempt.runtimeSwitches![0]).toMatchObject({ phase: "committed", tierCut: "none" });
+  expect(attempt.effectiveRole.serviceTier).toBe("ultrafast");
+  expect(after.stages.find(stage => stage.id === "plan")!.serviceTier).toBe("ultrafast");
+  expect(h.tierCalls).toEqual([{ conversationId: STAGE_CONVERSATION, operationId: expect.stringMatching(/^pswitch-.*-tier$/), serviceTier: "ultrafast", cut: "boundary" }]);
+  expect(h.operations.size).toBe(0);
+  expect(h.continuations).toHaveLength(0);
+  expect(attempt.n).toBe(1); expect(h.spawnCount()).toBe(1);
+});
+
+test("in-place: a cut turn is continued exactly once on the same attempt", async () => {
+  const h = await inPlaceHarness();
+  h.answer("cut");
+  expect((await h.request()).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  const attempt = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  expect(attempt.runtimeSwitches![0]).toMatchObject({ phase: "committed", tierCut: "cut" });
+  expect(h.continuations).toHaveLength(1);
+  expect(h.operations.size).toBe(0);
+  expect(attempt.effectiveRole.serviceTier).toBe("ultrafast");
+  expect(h.spawnCount()).toBe(1);
+});
+
+test("in-place: Turbo keeps the conversation's account when the automatic selector prefers another", async () => {
+  const h = await inPlaceHarness();
+  h.ports.allowedAccountIds = () => ["default", "other"];
+  h.ports.resolveProjectSpawn = (_engine, request) => ({ kind: "available", account: { accountId: request.requestedId ?? "other" } } as never);
+  const chosen = await h.request({ turbo: "turbo:2026-10-21T12:00:00.000Z", applyNowCut: "boundary" });
+  expect(chosen.error).toBeUndefined();
+  expect(chosen.runtimeSwitch).toMatchObject({ inPlace: true, to: { accountId: "default" } });
+  await tickPipelines([], h.ports);
+  expect(h.tierCalls).toHaveLength(1);
+  expect(h.spawnCount()).toBe(1);
+});
+
+test("in-place: Turbo does not adopt another actor's open switch even when its tier matches", async () => {
+  const h = await inPlaceHarness();
+  expect((await h.request()).error).toBeUndefined();
+  const turbo = await h.request({ turbo: "turbo:2026-10-21T12:00:00.000Z", applyNowCut: "boundary" });
+  expect(turbo.status).toBe(409);
+  expect(turbo.error).toContain("another runtime switch");
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches).toHaveLength(1);
+});
+
+test("in-place: Turbo clears the thread tier on revert even when the role now defaults to priority", async () => {
+  const h = await inPlaceHarness();
+  expect((await h.request({ turbo: "turbo:2026-10-21T12:00:00.000Z", applyNowCut: "boundary" })).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  h.ports.roleLookup = () => ({ engine: "codex", model: "gpt-6.1-sol", effort: "high", serviceTier: "priority", access: "read-only", promptScaffold: "Stage guidance" });
+  h.ports.resolveProjectSpawn = () => { throw new Error("paid-credit approval ended; no capacity remains"); };
+  const returned = await h.request({ serviceTier: null, applyNowCut: "none", turbo: "turbo:2026-10-21T12:00:00.000Z" });
+  expect(returned.error).toBeUndefined();
+  expect(returned.runtimeSwitch?.to.serviceTier).toBeNull();
+  await tickPipelines([], h.ports);
+  expect(h.tierCalls.at(-1)).toMatchObject({ serviceTier: null, cut: "none" });
+  expect(h.continuations).toHaveLength(0);
+});
+
+test("in-place: an armed cut waits for the tool call, then continues; a turn that ends first is not continued", async () => {
+  const h = await inPlaceHarness();
+  h.answer("armed");
+  expect((await h.request()).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches![0]).toMatchObject({ phase: "switching", tierCut: "armed" });
+  await tickPipelines([], h.ports);
+  expect(h.continuations).toHaveLength(0);
+  h.cutState("cut");
+  await tickPipelines([], h.ports); await tickPipelines([], h.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches![0]).toMatchObject({ phase: "committed", tierCut: "cut" });
+  expect(h.continuations).toHaveLength(1);
+
+  const ended = await inPlaceHarness();
+  ended.answer("armed");
+  expect((await ended.request()).error).toBeUndefined();
+  await tickPipelines([], ended.ports);
+  ended.cutState("turn-ended");
+  await tickPipelines([], ended.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches![0]).toMatchObject({ phase: "committed", tierCut: "turn-ended" });
+  expect(ended.continuations).toHaveLength(0);
+
+  // A restart that lost the arm commits the tier without a continuation; the budget cancels a stuck arm.
+  const lost = await inPlaceHarness();
+  lost.answer("armed");
+  expect((await lost.request()).error).toBeUndefined();
+  await tickPipelines([], lost.ports);
+  lost.advance(11 * 60_000);
+  await tickPipelines([], lost.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches![0]).toMatchObject({ phase: "committed", tierCut: "cancelled" });
+  expect(lost.cancelled).toHaveLength(1);
+  expect(lost.continuations).toHaveLength(0);
+});
+
+test("in-place: Turbo's revert asks for no cut; a refusal fails the switch without a restart", async () => {
+  const h = await inPlaceHarness();
+  expect((await h.request({ serviceTier: null, applyNowCut: "none" })).error).toBeUndefined();
+  // Already default: nothing to switch.
+  expect(h.tierCalls).toHaveLength(0);
+  expect((await h.request({ applyNowCut: "none" })).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  expect(h.tierCalls.at(-1)).toMatchObject({ serviceTier: "ultrafast", cut: "none" });
+
+  const refused = await inPlaceHarness();
+  refused.refuse("this conversation's host cannot change its speed in place");
+  expect((await refused.request()).error).toBeUndefined();
+  await tickPipelines([], refused.ports);
+  const attempt = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  expect(attempt.runtimeSwitches![0]!.phase).toBe("failed");
+  expect(attempt.runtimeSwitches![0]!.outcome).toContain("keeps its speed");
+  expect(attempt.state).toBe("running");
+  expect(refused.operations.size).toBe(0); expect(refused.continuations).toHaveLength(0);
+  expect(refused.spawnCount()).toBe(1);
+});
+
+test("in-place: expiry awaits cancellation before committing an armed cut as withdrawn", async () => {
+  const h = await inPlaceHarness();
+  h.answer("armed");
+  expect((await h.request()).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  h.advance(11 * 60_000);
+  const pipeline = loadPipelines()[0]!;
+  const stage = pipeline.stages.find(item => item.id === "plan")!;
+  const attempt = pipeline.runs[0]!.attempts[0]!;
+  let enter!: () => void;
+  let release!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const events: string[] = [];
+  h.ports.cancelRuntimeSwitchTierCut = async () => { events.push("cancel-entered"); enter(); await held; events.push("cancelled"); };
+  const { driveRuntimeSwitch } = await import("./runtimeSwitch");
+  const work = driveRuntimeSwitch(pipeline, stage, attempt, h.ports, () => {
+    if (attempt.runtimeSwitches!.at(-1)!.phase === "committed") events.push("committed");
+  }, async () => { throw new Error("a tier switch never spawns a successor"); });
+  await entered;
+  release();
+  await work;
+  expect(events).toEqual(["cancel-entered", "cancelled", "committed"]);
+  expect(h.continuations).toHaveLength(0);
+});
+
+test("in-place applies only to a tier-only change; a model change still forks", async () => {
+  const h = await inPlaceHarness();
+  const fork = await h.request({ model: "gpt-6-astra" });
+  expect(fork.runtimeSwitch?.mode).toBe("fork");
+  expect(fork.runtimeSwitch?.inPlace).toBeUndefined();
+  const other = await inPlaceHarness();
+  expect((await other.request({ model: "gpt-6-astra", applyNowCut: "none" })).status).toBe(400);
+});

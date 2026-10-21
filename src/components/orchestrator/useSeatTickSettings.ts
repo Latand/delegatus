@@ -27,6 +27,8 @@ export const SEAT_TICK_POLL_MS = 60_000;
     the `seat_tick_settings` tool's own argument is. */
 export interface SeatTickChange {
   autonomy?: { enabled?: boolean; hours?: number | null };
+  /** Turbo (docs/design/turbo-mode.md): saved on its own, at once, never with the panel's Save. */
+  turbo?: Record<string, unknown>;
   release?: { enabled?: boolean; askBeforePublish?: boolean; minChanges?: number | string | null; minGapHours?: number | string | null; hold?: string | null };
   autoRotate?: { enabled?: boolean; thresholdPercent?: number | string | null };
   enabled?: boolean;
@@ -77,7 +79,7 @@ export interface SeatTickSettingsRead {
   error: string | null;
   /** Which group of the form the refusal in `error` belongs to: the one whose
       Save was pressed, so it is shown beside the fields to correct. */
-  errorScope: "tick" | "maintenance" | "autoRotate";
+  errorScope: "tick" | "maintenance" | "autoRotate" | "turbo";
   refresh: () => Promise<void>;
   /** True when the record now holds the change. False when it does not, and
       also, sending nothing, when another save is still in flight. */
@@ -212,7 +214,7 @@ export function useSeatTickSettings(project: string, enabled: boolean): SeatTick
   const [failed, setFailed] = useState(false);
   const [pending, setPending] = useState<{ project: string; answer: SeatTickSettingsAnswer } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [errorScope, setErrorScope] = useState<"tick" | "maintenance" | "autoRotate">("tick");
+  const [errorScope, setErrorScope] = useState<"tick" | "maintenance" | "autoRotate" | "turbo">("tick");
   /* One save at a time: two in flight would race to decide which read-back is
      the record, and the loser would put a superseded reading on screen. */
   const inFlight = useRef(false);
@@ -262,7 +264,8 @@ export function useSeatTickSettings(project: string, enabled: boolean): SeatTick
   const write = useCallback(async (change: SeatTickChange): Promise<boolean> => {
     inFlight.current = true;
     setError(null);
-    setErrorScope(Object.keys(change).length > 0 && Object.keys(change).every((key) => key === "autoRotate") ? "autoRotate" : Object.keys(change).length > 0 && Object.keys(change).every((key) => key === "maintenance") ? "maintenance" : "tick");
+    const only = (scope: string) => Object.keys(change).length > 0 && Object.keys(change).every((key) => key === scope);
+    setErrorScope(only("turbo") ? "turbo" : Object.keys(change).length > 0 && Object.keys(change).every((key) => key === "autoRotate") ? "autoRotate" : Object.keys(change).length > 0 && Object.keys(change).every((key) => key === "maintenance") ? "maintenance" : "tick");
     const before = readings.get(project) ?? null;
     if (before) setPending({ project, answer: optimistic(before, change) });
     try {

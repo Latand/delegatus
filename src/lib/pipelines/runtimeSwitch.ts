@@ -67,7 +67,8 @@ export function requestRuntimeSwitchRetry(pipeline: Pipeline, attempt: PipelineS
 }
 /** Receipt-free native controls already proved the selected profile current. */
 export async function runtimeSwitchReconfigureOutcome(record: PipelineRuntimeSwitch, ports: PipelinePorts) {
-  return record.reconfigureNoop ? { state: "applied" as const }
+  /* An in-place tier switch has no reconfigure operation: the live thread took the tier. */
+  return record.reconfigureNoop || record.inPlace ? { state: "applied" as const }
     : await ports.runtimeSwitchOutcome?.(record.from.conversationId, switchOperationKey(record, "reconfigure"));
 }
 export function currentRuntimeSeat(attempt: PipelineStageAttempt): PipelineRuntimeSeat {
@@ -261,6 +262,54 @@ export async function driveRuntimeSwitch(
       }
       if ((ports.engineReadiness?.(record.to.engine, pipeline.project) ?? "connected") !== "connected") { await settle("failed", "target engine is unavailable; stage stays on its runtime"); return; }
       record.phase = "cutting"; await persist();
+    }
+    if (record.inPlace && (record.phase === "cutting" || record.phase === "switching")) {
+      /* Turbo's tier-only switch (docs/design/turbo-mode.md §2.6): the live
+         thread takes the tier for its next turn and nothing restarts. A
+         running turn is cut only at a tool boundary, then continued once. */
+      const conversationId = record.from.conversationId;
+      const tierKey = switchOperationKey(record, "tier");
+      const commitInPlace = async (how: NonNullable<PipelineRuntimeSwitch["tierCut"]>) => {
+        record.tierCut = how; record.continuedAt ??= now;
+        delete attempt.effectiveRole.preferredServiceTier; delete attempt.effectiveRole.serviceTierSource;
+        attempt.effectiveRole.serviceTier = (record.appliedServiceTier === undefined ? record.to.serviceTier : record.appliedServiceTier) ?? undefined;
+        attempt.runtimeAccountPin = record.to.accountPinned ? record.to.accountId : null;
+        await settle("committed", `service tier ${record.to.serviceTier ?? "default"} applies from the next turn; the running turn was not cut`);
+      };
+      if (record.phase === "cutting" && record.cutTurnId) {
+        const recovered = await ports.runtimeSwitchTierCut?.(conversationId, tierKey, record.cutTurnId) ?? "unknown";
+        if (recovered === "cut") { record.tierCut = "cut"; record.cutAt = now; record.phase = "continuing"; await persist(); await resume(continueKey); return; }
+        if (recovered === "turn-ended" || recovered === "cancelled") { await commitInPlace(recovered); return; }
+        if (!expired) { record.phase = "switching"; await persist(); ports.scheduleTick?.(1000); return; }
+        await settle("failed", "the native cut outcome could not be recovered before its deadline"); return;
+      }
+      if (record.phase === "cutting") {
+        if (!ports.runtimeSwitchTier) throw new Error("in-place tier switch unavailable");
+        let result: Awaited<ReturnType<NonNullable<PipelinePorts["runtimeSwitchTier"]>>>;
+        try { result = await ports.runtimeSwitchTier(conversationId, tierKey, record.to.serviceTier, record.cut ?? "boundary", {
+          project: pipeline.project, episode: record.turbo ?? "", expected: { accountId: record.from.accountId, model: record.from.model },
+          beforeCut: async turnId => { record.cutTurnId = turnId; record.appliedServiceTier = record.to.serviceTier; await persist(); },
+        }); }
+        catch (error) { await settle("failed", `in-place tier switch refused; the stage keeps its speed: ${String(error)}`); return; }
+        record.appliedServiceTier = result.appliedTier;
+        if (result.cut === "none") { await commitInPlace("none"); return; }
+        record.tierCut = result.cut;
+        if (result.cut === "armed") {
+          record.phase = "switching"; pipeline.stateDetail = "speed set; the running tool call finishes first"; await persist(); ports.scheduleTick?.(1000); return;
+        }
+        record.cutAt = now; record.phase = "continuing"; await persist(); await resume(continueKey); return;
+      }
+      const state = await ports.runtimeSwitchTierCut?.(conversationId, tierKey, record.cutTurnId) ?? "unknown";
+      if (state === "armed") {
+        if (expired) { await ports.cancelRuntimeSwitchTierCut?.(conversationId, tierKey); await commitInPlace("cancelled"); }
+        else { await persist(); ports.scheduleTick?.(1000); }
+        return;
+      }
+      if (state === "cut") { record.tierCut = "cut"; record.cutAt = now; record.phase = "continuing"; await persist(); await resume(continueKey); return; }
+      if (state === "unknown" && record.cutTurnId && !expired) { await persist(); ports.scheduleTick?.(1000); return; }
+      /* The turn ended on its own, the cut was withdrawn or a restart lost it: the tier stands for the next turn. */
+      await commitInPlace(state);
+      return;
     }
     if (record.phase === "cutting") {
       if (record.mode === "fork") {

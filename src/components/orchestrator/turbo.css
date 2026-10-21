@@ -1,0 +1,91 @@
+/* Turbo's «Форсаж» switch (docs/design/turbo-mode.md §6, variant 1; ported
+   from docs/prototypes/turbo-mode/turbo.css). Product tokens only: Turbo is
+   Codex-only, so the cool end is --color-codex; the heat runs through
+   --color-crown to --color-danger. --tick-3 stays Full autonomy's violet. */
+
+.turbo-switch { position: relative; display: inline-flex; align-items: center; flex-shrink: 0; border-radius: 999px; outline: none; }
+.turbo-switch[data-turbo-surface="mobile"] { min-height: 44px; }
+.turbo-track {
+  position: relative; display: block; width: 64px; height: 28px; border-radius: 999px; overflow: hidden;
+  border: 1px solid var(--color-border); background: var(--color-sunken);
+  transition: border-color .2s, background-color .2s;
+}
+.turbo-switch[data-turbo-surface="mobile"] .turbo-track { width: 80px; height: 36px; }
+.turbo-thumb {
+  position: absolute; top: 2px; left: 2px; width: 22px; height: 22px; border-radius: 999px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--color-card); box-shadow: var(--shadow-1);
+  transition: left .32s cubic-bezier(.2,0,0,1), box-shadow .2s;
+}
+.turbo-switch[data-turbo-surface="mobile"] .turbo-thumb { width: 30px; height: 30px; }
+.turbo-nozzle { width: 16px; height: 16px; }
+.turbo-switch[data-turbo-surface="mobile"] .turbo-nozzle { width: 22px; height: 22px; }
+.turbo-nozzle circle, .turbo-mark-nozzle circle, .turbo-dlg-nozzle circle { fill: none; stroke: var(--color-muted); stroke-width: 1.5; }
+/* The pilot light: a small blue flame waiting on the right, where the afterburner is lit from. */
+.turbo-pilot {
+  position: absolute; top: 50%; right: 10px; width: 6px; height: 6px; margin-top: -3px; border-radius: 999px;
+  background: color-mix(in oklab, var(--color-codex) 45%, transparent);
+  transition: opacity .2s, box-shadow .2s;
+}
+.turbo-switch[data-turbo-surface="mobile"] .turbo-pilot { right: 14px; width: 8px; height: 8px; margin-top: -4px; }
+.turbo-flame { position: absolute; top: 2px; bottom: 2px; left: 1px; width: 0; height: calc(100% - 4px); transform-origin: right center; opacity: 0; }
+.turbo-sparks { position: absolute; inset: 0; pointer-events: none; }
+.turbo-sparks i { position: absolute; width: 4px; height: 4px; border-radius: 999px; background: var(--glyph-sol); opacity: 0; }
+
+/* hover and focus: the nozzle wakes and the pilot glows */
+.turbo-switch:hover:not(:disabled) .turbo-track { border-color: color-mix(in oklab, var(--color-codex) 55%, transparent); }
+.turbo-switch:hover:not(:disabled) .turbo-nozzle circle { stroke: var(--color-codex); }
+.turbo-switch:hover:not(:disabled) .turbo-pilot {
+  background: var(--color-codex);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-codex) 22%, transparent), 0 0 8px var(--color-codex);
+}
+.turbo-switch:focus-visible .turbo-track { box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-accent) 40%, transparent); }
+
+/* the dialog is open: the nozzle is armed */
+.turbo-switch[data-turbo="dialog"] .turbo-nozzle circle { stroke: var(--color-codex); }
+.turbo-switch[data-turbo="dialog"] .turbo-pilot { background: var(--color-codex); box-shadow: 0 0 8px var(--color-codex); }
+
+/* on: the thumb at the right, a flame trail behind it */
+.turbo-switch[aria-checked="true"] .turbo-track { border-color: var(--color-codex); background: color-mix(in oklab, var(--color-danger) 10%, var(--color-sunken)); }
+.turbo-switch[aria-checked="true"] .turbo-thumb { left: 40px; box-shadow: var(--shadow-1), 0 0 0 2px color-mix(in oklab, var(--color-codex) 35%, transparent); }
+.turbo-switch[data-turbo-surface="mobile"][aria-checked="true"] .turbo-thumb { left: 48px; }
+.turbo-switch[aria-checked="true"] .turbo-nz-1 { stroke: var(--color-codex); }
+.turbo-switch[aria-checked="true"] .turbo-nz-2 { stroke: var(--color-crown); }
+.turbo-switch[aria-checked="true"] .turbo-nz-3 { stroke: var(--color-danger); fill: var(--color-crown); }
+.turbo-switch[aria-checked="true"] .turbo-pilot { opacity: 0; }
+.turbo-switch[aria-checked="true"] .turbo-flame { width: 49px; opacity: 1; animation: turbo-flicker 1.2s ease-in-out infinite; }
+.turbo-switch[data-turbo-surface="mobile"][aria-checked="true"] .turbo-flame { width: 63px; }
+/* ending soon: the flame shortens */
+.turbo-switch[data-turbo="ending"] .turbo-flame { transform: scaleX(.38); animation: none; }
+/* switching: sparks pop from the nozzle while conversations switch */
+.turbo-switch[data-turbo="switching"] .turbo-sparks i { opacity: 1; animation: turbo-spark .9s ease-out infinite; }
+.turbo-switch[data-turbo="switching"] .turbo-sparks i:nth-child(1) { left: 32px; top: 3px; }
+.turbo-switch[data-turbo="switching"] .turbo-sparks i:nth-child(2) { left: 25px; top: 12px; width: 3px; height: 3px; animation-delay: .3s; }
+.turbo-switch[data-turbo="switching"] .turbo-sparks i:nth-child(3) { left: 33px; top: 20px; width: 3px; height: 3px; background: var(--color-danger); animation-delay: .6s; }
+.turbo-switch[data-turbo-surface="mobile"][data-turbo="switching"] .turbo-sparks i:nth-child(1) { left: 38px; top: 4px; }
+.turbo-switch[data-turbo-surface="mobile"][data-turbo="switching"] .turbo-sparks i:nth-child(2) { left: 30px; top: 16px; }
+.turbo-switch[data-turbo-surface="mobile"][data-turbo="switching"] .turbo-sparks i:nth-child(3) { left: 39px; top: 27px; }
+.turbo-switch:disabled { opacity: .5; cursor: not-allowed; }
+
+@keyframes turbo-flicker {
+  0%, 100% { transform: scaleX(1) scaleY(1); }
+  30% { transform: scaleX(.93) scaleY(1.06); }
+  60% { transform: scaleX(1.03) scaleY(.94); }
+}
+@keyframes turbo-spark { 0% { transform: translate(0, 0); opacity: 1; } 100% { transform: translate(-6px, 0); opacity: .2; } }
+
+/* The mark: a small flame leaving a nozzle, in the status line and on the dock chip. */
+.turbo-mark { position: relative; display: inline-flex; flex-shrink: 0; width: 18px; height: 12px; margin-top: 2px; }
+.turbo-mark-flame { position: absolute; left: 0; top: 2px; width: 12px; height: 8px; }
+.turbo-mark-nozzle { position: absolute; right: 0; top: 0; width: 10px; height: 12px; }
+.turbo-mark-nozzle circle { stroke: var(--color-codex); stroke-width: 2.2; }
+.turbo-dlg-icon { position: relative; display: inline-flex; flex-shrink: 0; width: 28px; height: 20px; }
+.turbo-dlg-flame { position: absolute; left: 0; top: 4px; width: 20px; height: 12px; }
+.turbo-dlg-nozzle { position: absolute; right: 0; top: 1px; width: 16px; height: 18px; }
+.turbo-dlg-nozzle circle { stroke: var(--color-codex); }
+.turbo-btn-flame { width: 16px; height: 12px; flex-shrink: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .turbo-flame, .turbo-thumb { animation: none !important; transition: none !important; }
+  .turbo-switch[data-turbo="switching"] .turbo-sparks i { opacity: 0; animation: none; }
+}

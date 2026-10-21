@@ -1,6 +1,7 @@
 import { changeRelease, normalizeRelease, type ReleaseSetting, type ReleaseSettingChange } from "@/lib/release/settings";
 import fs from "node:fs";
 import { autonomyActive, changeAutonomy, endedAutonomy, type AutonomySetting, type AutonomyChange, type AutonomyDecisionInput } from "./autonomy";
+import { changeTurbo, endedTurbo, TURBO_HISTORY_LIMIT, TURBO_SWITCH_LIMIT, type TurboChange, type TurboChangeContext, type TurboSetting } from "./turbo";
 
 import { statePath } from "@/lib/configDir";
 import { ROTATION_THRESHOLD_FRACTION } from "@/lib/orchestrator/contextPolicy";
@@ -105,6 +106,9 @@ export interface AutoRotateSetting {
 export interface SeatTickSettings {
   autonomy?: AutonomySetting | null;
   autonomyHistory?: AutonomySetting[];
+  /** Turbo mode (docs/design/turbo-mode.md), independent of autonomy and of the wakes. */
+  turbo?: TurboSetting | null;
+  turboHistory?: TurboSetting[];
   release?: ReleaseSetting | null;
   autoRotate?: AutoRotateSetting | null;
   maintenance?: BoardMaintenanceSetting | null;
@@ -137,6 +141,8 @@ export interface SeatTickSettings {
 export interface EffectiveSeatTickSettings {
   autonomy?: AutonomySetting | null;
   autonomyHistory?: AutonomySetting[];
+  turbo?: TurboSetting | null;
+  turboHistory?: TurboSetting[];
   release?: ReleaseSetting | null;
   autoRotate?: AutoRotateSetting | null;
   maintenance: { enabled: boolean; intervalHours: number; intervalMs: number };
@@ -176,6 +182,7 @@ export interface EffectiveSeatTickSettings {
 
 export interface SeatTickSettingsChange {
   autonomy?: AutonomyChange;
+  turbo?: TurboChange;
   autonomyDecision?: AutonomyDecisionInput;
   release?: ReleaseSettingChange;
   autoRotate?: { enabled?: boolean; thresholdPercent?: number | string | null; why?: string | null };
@@ -259,6 +266,8 @@ function normalizeRow(project: string, value: unknown): SeatTickSettings {
     project,
     ...(normalizeAutonomy(raw.autonomy) ? { autonomy: normalizeAutonomy(raw.autonomy) } : {}),
     ...(Array.isArray(raw.autonomyHistory) ? { autonomyHistory: raw.autonomyHistory.map(normalizeAutonomy).filter((entry): entry is AutonomySetting => entry !== null) } : {}),
+    ...(normalizeTurbo(raw.turbo) ? { turbo: normalizeTurbo(raw.turbo) } : {}),
+    ...(Array.isArray(raw.turboHistory) ? { turboHistory: raw.turboHistory.map(normalizeTurbo).filter((entry): entry is TurboSetting => entry !== null).slice(-TURBO_HISTORY_LIMIT) } : {}),
     ...(normalizeRelease(raw.release) ? { release: normalizeRelease(raw.release) } : {}),
     ...(normalizeAutoRotate(raw.autoRotate) ? { autoRotate: normalizeAutoRotate(raw.autoRotate) } : {}),
     ...(normalizeMaintenance(raw.curation) ? { curation: normalizeMaintenance(raw.curation) } : {}),
@@ -291,6 +300,20 @@ function normalizeAutonomy(value: unknown): AutonomySetting | null {
   if (!actor || typeof raw.enabled !== "boolean" || !isoOrNull(raw.startedAt) || !isoOrNull(raw.updatedAt)
     || (raw.until !== null && !isoOrNull(raw.until))) return null;
   return { ...raw, setBy: actor, decisions: Array.isArray(raw.decisions) ? raw.decisions : [] };
+}
+
+/** A row written by a newer or older release still loads; a malformed one reads as off. */
+function normalizeTurbo(value: unknown): TurboSetting | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as TurboSetting;
+  const actor = normalizeActor(raw.setBy);
+  if (!actor || typeof raw.enabled !== "boolean" || !isoOrNull(raw.startedAt) || !isoOrNull(raw.updatedAt)
+    || (raw.until !== null && !isoOrNull(raw.until))) return null;
+  const credits = raw.credits && typeof raw.credits === "object" && typeof raw.credits.approved === "boolean" && Array.isArray(raw.credits.accounts)
+    ? { ...raw.credits, accounts: raw.credits.accounts.filter((id): id is string => typeof id === "string"), withdrawnBy: raw.credits.withdrawnBy ? normalizeActor(raw.credits.withdrawnBy) : null }
+    : { approved: false, accounts: [], approvedAt: null, withdrawnAt: null, withdrawnBy: null, withdrawnWhy: null };
+  return { ...raw, setBy: actor, credits, plan: Array.isArray(raw.plan) ? raw.plan : [],
+    switches: Array.isArray(raw.switches) ? raw.switches.filter(row => row && typeof row === "object" && typeof row.conversationId === "string").slice(-TURBO_SWITCH_LIMIT) : [] };
 }
 
 function normalizeAutoRotate(value: unknown): AutoRotateSetting | null {
@@ -423,6 +446,7 @@ export function effectiveSeatTickSettings(
     return {
       release: settings.release, curation: effectiveCurationSetting(settings), curationSetting: settings.curation, maintenance, maintenanceSetting: settings.maintenance, autoRotate: settings.autoRotate,
       autonomy: endedAutonomy(settings.autonomy, nowMs), autonomyHistory: settings.autonomyHistory,
+      turbo: endedTurbo(settings.turbo, nowMs), turboHistory: settings.turboHistory,
       enabled: true,
       wakeIntervalMs: defaultWakeIntervalMs,
       reason: settings.reason,
@@ -441,6 +465,7 @@ export function effectiveSeatTickSettings(
   return {
     release: settings.release, curation: effectiveCurationSetting(settings), curationSetting: settings.curation, maintenance, maintenanceSetting: settings.maintenance, autoRotate: settings.autoRotate,
     autonomy: endedAutonomy(settings.autonomy, nowMs), autonomyHistory: settings.autonomyHistory,
+    turbo: endedTurbo(settings.turbo, nowMs), turboHistory: settings.turboHistory,
     enabled: settings.enabled,
     wakeIntervalMs: settings.wakeIntervalMinutes === null
       ? defaultWakeIntervalMs
@@ -471,11 +496,11 @@ export function effectiveSeatTickSettings(
  */
 export function seatTickSettingsAfterLapse(
   project: string,
-  lapsed: Pick<EffectiveSeatTickSettings, "reason" | "monitorPrompt" | "updatedAt" | "setBy"> & Partial<Pick<EffectiveSeatTickSettings, "instructionLines" | "maintenanceSetting" | "curationSetting" | "autoRotate" | "release" | "autonomy" | "autonomyHistory">>,
+  lapsed: Pick<EffectiveSeatTickSettings, "reason" | "monitorPrompt" | "updatedAt" | "setBy"> & Partial<Pick<EffectiveSeatTickSettings, "instructionLines" | "maintenanceSetting" | "curationSetting" | "autoRotate" | "release" | "autonomy" | "autonomyHistory" | "turbo" | "turboHistory">>,
 ): SeatTickSettings {
   const restored = defaultSeatTickSettings(project);
-  if (!lapsed.reason && !lapsed.monitorPrompt && !lapsed.maintenanceSetting && !lapsed.curationSetting && !lapsed.autoRotate && !lapsed.release && !lapsed.autonomy && !lapsed.autonomyHistory?.length) return restored;
-  return { ...restored, ...(lapsed.curationSetting ? { curation: lapsed.curationSetting } : {}), ...(lapsed.autonomy ? { autonomy: lapsed.autonomy } : {}), ...(lapsed.autonomyHistory ? { autonomyHistory: lapsed.autonomyHistory } : {}), ...(lapsed.release ? { release: lapsed.release } : {}), ...(lapsed.maintenanceSetting ? { maintenance: lapsed.maintenanceSetting } : {}), ...(lapsed.autoRotate ? { autoRotate: lapsed.autoRotate } : {}), reason: lapsed.reason, ...(lapsed.instructionLines ? { instructionLines: lapsed.instructionLines } : {}), monitorPrompt: lapsed.monitorPrompt, updatedAt: lapsed.updatedAt, setBy: lapsed.setBy };
+  if (!lapsed.reason && !lapsed.monitorPrompt && !lapsed.maintenanceSetting && !lapsed.curationSetting && !lapsed.autoRotate && !lapsed.release && !lapsed.autonomy && !lapsed.autonomyHistory?.length && !lapsed.turbo && !lapsed.turboHistory?.length) return restored;
+  return { ...restored, ...(lapsed.curationSetting ? { curation: lapsed.curationSetting } : {}), ...(lapsed.autonomy ? { autonomy: lapsed.autonomy } : {}), ...(lapsed.autonomyHistory ? { autonomyHistory: lapsed.autonomyHistory } : {}), ...(lapsed.turbo ? { turbo: lapsed.turbo } : {}), ...(lapsed.turboHistory ? { turboHistory: lapsed.turboHistory } : {}), ...(lapsed.release ? { release: lapsed.release } : {}), ...(lapsed.maintenanceSetting ? { maintenance: lapsed.maintenanceSetting } : {}), ...(lapsed.autoRotate ? { autoRotate: lapsed.autoRotate } : {}), reason: lapsed.reason, ...(lapsed.instructionLines ? { instructionLines: lapsed.instructionLines } : {}), monitorPrompt: lapsed.monitorPrompt, updatedAt: lapsed.updatedAt, setBy: lapsed.setBy };
 }
 
 export type SeatTickSettingsChangeResult =
@@ -495,13 +520,13 @@ export type SeatTickSettingsChangeResult =
 export function applySeatTickSettingsChange(
   current: SeatTickSettings,
   change: SeatTickSettingsChange,
-  context: { at: string; actor: SeatTickSettingsActor; instructionActor?: SeatTickSettingsActor },
+  context: { at: string; actor: SeatTickSettingsActor; instructionActor?: SeatTickSettingsActor; turbo?: TurboChangeContext },
 ): SeatTickSettingsChangeResult {
-  if (change.autonomy !== undefined || change.autonomyDecision !== undefined) {
+  if (change.autonomy !== undefined || change.autonomyDecision !== undefined || change.turbo !== undefined) {
     const effective = effectiveSeatTickSettings(current, Date.parse(context.at), 60 * 60_000);
     if (effective.lapsed) current = seatTickSettingsAfterLapse(current.project, effective);
   }
-  const touched = ["enabled", "wakeIntervalMinutes", "reason", "clearUnknownInstructions", "replaceOtherInstructions", "monitorPrompt", "until", "maintenance", "curation", "autoRotate", "release", "autonomy", "autonomyDecision"].filter((key) => Object.hasOwn(change, key));
+  const touched = ["enabled", "wakeIntervalMinutes", "reason", "clearUnknownInstructions", "replaceOtherInstructions", "monitorPrompt", "until", "maintenance", "curation", "autoRotate", "release", "autonomy", "autonomyDecision", "turbo"].filter((key) => Object.hasOwn(change, key));
   if (touched.length === 0) return { ok: false, error: "a tick settings change needs at least one field" };
 
   if (Object.hasOwn(change, "clearUnknownInstructions")) {
@@ -666,6 +691,18 @@ export function applySeatTickSettingsChange(
     try { autonomy = changeAutonomy(autonomy, { enabled: false, why: change.reason ?? current.reason ?? "Wakes turned off" }, context, current.project, false); }
     catch (error) { return { ok: false, error: (error as Error).message }; }
   }
+  let turbo = endedTurbo(current.turbo, Date.parse(context.at));
+  const turboHistory = [...(current.turboHistory ?? [])];
+  if (Object.hasOwn(change, "turbo")) {
+    try {
+      const next = changeTurbo(turbo, change.turbo!, context, current.project);
+      if (turbo && next?.startedAt !== turbo.startedAt) turboHistory.push(turbo);
+      if (turboHistory.slice(0, -TURBO_HISTORY_LIMIT).some(episode => episode.switches.some(row => ["applying", "switched", "armed", "reverting"].includes(row.state) || row.state === "failed" && row.startedAt))) {
+        return { ok: false, error: "a previous Turbo run is still returning conversations; wait for it before starting another run" };
+      }
+      turbo = next;
+    } catch (error) { return { ok: false, error: (error as Error).message }; }
+  }
   if (change.autonomyDecision !== undefined) {
     const d = change.autonomyDecision;
     if (context.actor.kind !== "manager" || context.actor.project !== current.project) return { ok: false, error: "only this project's seat records autonomous decisions" };
@@ -683,6 +720,8 @@ export function applySeatTickSettingsChange(
   const next: SeatTickSettings = {
     ...(autonomy ? { autonomy } : {}),
     ...(autonomyHistory.length ? { autonomyHistory } : {}),
+    ...(turbo ? { turbo } : {}),
+    ...(turboHistory.length ? { turboHistory: turboHistory.slice(-TURBO_HISTORY_LIMIT) } : {}),
     ...(release ? { release } : {}),
     project: current.project,
     ...(maintenance ? { maintenance } : {}),
@@ -745,7 +784,7 @@ export function markAutonomyReported(project: string, startedAt: string, at: str
 }
 
 /** Apply against the locked row so an extension cannot overwrite a decision or an end report. */
-export function changeSeatTickSettings(project: string, change: SeatTickSettingsChange, context: { at: string; actor: SeatTickSettingsActor; instructionActor?: SeatTickSettingsActor }, filePath = seatTickSettingsPath()): SeatTickSettingsChangeResult {
+export function changeSeatTickSettings(project: string, change: SeatTickSettingsChange, context: { at: string; actor: SeatTickSettingsActor; instructionActor?: SeatTickSettingsActor; turbo?: TurboChangeContext }, filePath = seatTickSettingsPath()): SeatTickSettingsChangeResult {
   return settingsStore.mutate(filePath, file => {
     const result = applySeatTickSettingsChange(file.projects[project] ?? defaultSeatTickSettings(project), change, context);
     return { next: result.ok ? { ...file, projects: { ...file.projects, [project]: result.settings } } : file, result };
@@ -780,4 +819,35 @@ export function markAutonomyDecisionReview(project: string, startedAt: string, i
     const next = { ...current, ...(current.autonomy ? { autonomy: mark(current.autonomy) } : {}), ...(current.autonomyHistory ? { autonomyHistory: current.autonomyHistory.map(mark) } : {}) };
     return { next: { ...file, projects: { ...file.projects, [project]: next } }, result: undefined };
   });
+}
+
+/**
+ * Merge a sweep step into the episode it belongs to, under the store lock, so
+ * a concurrent settings edit is never overwritten. A step for an episode that
+ * is no longer current changes nothing and answers null.
+ */
+export function updateTurboEpisode(project: string, startedAt: string, update: (episode: TurboSetting) => TurboSetting, filePath = seatTickSettingsPath()): TurboSetting | null {
+  return settingsStore.patchRows(filePath, 2, tx => {
+    const key = projectKey(project);
+    const held = tx.get(key);
+    if (!held) return null;
+    const current = held.value as SeatTickSettings;
+    if (current.turbo?.startedAt === startedAt) {
+      const turbo = update(current.turbo);
+      tx.put({ key, value: { ...current, turbo } });
+      return turbo;
+    }
+    const index = current.turboHistory?.findIndex(episode => episode.startedAt === startedAt) ?? -1;
+    if (index < 0) return null;
+    const turboHistory = [...current.turboHistory!];
+    turboHistory[index] = update(turboHistory[index]!);
+    tx.put({ key, value: { ...current, turboHistory } });
+    return turboHistory[index]!;
+  });
+}
+
+/** The sweep and credit guard read just their project's row on recurring passes. */
+export function readTurboSettings(project: string, filePath = seatTickSettingsPath()): Pick<SeatTickSettings, "turbo" | "turboHistory"> {
+  const row = settingsStore.readRow(filePath, projectKey(project))?.value as SeatTickSettings | undefined;
+  return { turbo: row?.turbo, turboHistory: row?.turboHistory };
 }

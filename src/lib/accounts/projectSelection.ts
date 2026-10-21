@@ -1,5 +1,6 @@
 import { selectHeadlessAccount } from "./headlessSelection";
 import { creditGuardBlock } from "./creditGuard";
+import { turboCreditExemptFor } from "./turboCreditExemption";
 import type { DurableQuotaObservation } from "./migration/contracts";
 import {
   allowedAccountIdsForProject,
@@ -190,7 +191,11 @@ export interface ProjectAccountSelectionInput {
 export function selectProjectAccount(input: ProjectAccountSelectionInput): ProjectAccountSelection {
   const allowed = input.engine === "copilot" ? null : allowedAccountIdsForProject(input.project, input.engine, input.bindings);
   const requestedId = input.requestedId?.trim() || null;
-  const guarded = (id: string) => creditGuardBlock(input.engine, input.observations.find(item => item.accountId === id)?.limits);
+  /* Turbo's paid-credit approval names accounts for this project only. */
+  const guarded = (id: string) => {
+    const block = creditGuardBlock(input.engine, input.observations.find(item => item.accountId === id)?.limits);
+    return block && !turboCreditExemptFor(input.project, id, input.now) ? block : null;
+  };
   const requestedGuard = requestedId && guarded(requestedId);
   if (requestedGuard) return { kind: "exhausted", ...requestedGuard, allowedAccountIds: [requestedId!] };
   if (requestedId && allowed !== null && !allowed.includes(requestedId)) {
@@ -224,6 +229,7 @@ export function selectProjectAccount(input: ProjectAccountSelectionInput): Proje
     [...(input.excludedIds ?? [])],
     input.now,
     input.model,
+    id => input.engine === "codex" && turboCreditExemptFor(input.project, id, input.now),
   );
   if (selected.kind === "available") return selected;
   const consulted = requestedId ? [requestedId] : allowed ?? permitted.map((account) => account.id);
@@ -266,7 +272,8 @@ export interface AutomaticAccountTargetInput {
 export function admitAutomaticAccountTarget(input: AutomaticAccountTargetInput): ProjectAccountSelection {
   const allowed = allowedAccountIdsForProject(input.project, input.engine, input.bindings);
   const targetId = input.targetId.trim();
-  const guarded = creditGuardBlock(input.engine, input.observations.find(item => item.accountId === targetId)?.limits);
+  const blocked = creditGuardBlock(input.engine, input.observations.find(item => item.accountId === targetId)?.limits);
+  const guarded = blocked && !turboCreditExemptFor(input.project, targetId, input.now) ? blocked : null;
   if (guarded) return { kind: "exhausted", ...guarded, allowedAccountIds: allowed ?? [targetId] };
   if (allowed === null) {
     /* An UNBOUND project, which is every project until somebody configures one.
@@ -292,6 +299,7 @@ export function admitAutomaticAccountTarget(input: AutomaticAccountTargetInput):
     [],
     input.now,
     input.model,
+    id => input.engine === "codex" && turboCreditExemptFor(input.project, id, input.now),
   );
   if (selected.kind === "available") return { kind: "available", accountId: targetId };
   return selected.kind === "exhausted"

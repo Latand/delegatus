@@ -77,6 +77,7 @@ import { readHostTurnRecord } from "@/lib/runtime/eventStore";
 import { restartCutEvidenceUnresolved } from "@/lib/runtime/restartCutHold";
 import { conversationTurnLiveness, outstandingDeliverySince, readHostProcessEvidence, type TurnLivenessDependencies } from "@/lib/runtime/liveness";
 import { structuredDeliveryPublicationState } from "@/lib/runtime/structuredDeliveryController";
+import { tierCutState as tierCutStateSync } from "@/lib/runtime/tierSwitch";
 import { DELIVERY_UNVERIFIED_BY_EARLIER_EXECUTOR } from "@/lib/runtime/structuredDeliveryQueue";
 import { enqueueStructuredMessage, idleContinuationDeliveryRetryable } from "@/lib/runtime/structuredMessageDelivery";
 import { delegatusMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
@@ -457,6 +458,11 @@ export interface PipelinePorts {
   }): Promise<boolean>;
   /** Enrolls this stage's existing conversation in ordinary account migration. */
   runtimeSwitchControl?(conversationId: string, path: string, action: "interrupt" | "reconfigure", operationId: string, target: PipelineRuntimeSwitch["to"]): Promise<"already-current" | void>;
+  /** In-place tier switch on the live host (Turbo): sets the thread's tier and records it on the conversation. */
+  runtimeSwitchTier?(conversationId: string, operationId: string, serviceTier: string | null, cut: "boundary" | "none", turbo?: { project: string; episode: string; expected?: { accountId: string | null; model: string | null }; beforeCut?: (turnId: string) => Promise<void> }): Promise<{ cut: "cut" | "armed" | "none"; appliedTier: string | null }>;
+  /** Where an armed in-place cut stands; `unknown` after a restart lost it. */
+  runtimeSwitchTierCut?(conversationId: string, operationId: string, turnId?: string): "armed" | "cut" | "turn-ended" | "cancelled" | "host-gone" | "unknown" | Promise<"armed" | "cut" | "turn-ended" | "cancelled" | "host-gone" | "unknown">;
+  cancelRuntimeSwitchTierCut?(conversationId: string, operationId: string): void | Promise<void>;
   runtimeSwitchOutcome?(conversationId: string, operationId: string): Promise<{ state: "pending" | "applied" | "failed" | "superseded"; error?: string }>;
   cancelRuntimeSwitch?(conversationId: string, operationId: string): Promise<void>;
   runtimeSwitchDelivery?(conversationId: string, clientMessageId: string): RuntimeSwitchDelivery | Promise<RuntimeSwitchDelivery>;
@@ -2168,6 +2174,24 @@ export function defaultPipelinePorts(
           fast: target.engine === "codex" ? !!target.serviceTier && !["default", "standard"].includes(target.serviceTier) : null,
           ...(target.accountId ? { accountId: target.accountId } : {}) } } : {}) });
       return runtimeSwitchControlAcknowledgement(result);
+    },
+    runtimeSwitchTier: async (conversationId, operationId, serviceTier, cut, turbo) => {
+      const { switchConversationTier } = await import("@/lib/runtime/tierSwitch");
+      const { authorizeTurboTier } = await import("@/lib/monitor/turboRuntime");
+      return await switchConversationTier(conversationId, operationId, serviceTier, cut, {
+        ...(turbo?.expected ? { expected: turbo.expected } : {}),
+        ...(turbo?.beforeCut ? { beforeCut: turbo.beforeCut } : {}),
+        ...(turbo?.episode && cut !== "none" ? { authorizeDispatch: () => authorizeTurboTier(turbo.project, turbo.episode, conversationId) } : {}),
+      });
+    },
+    runtimeSwitchTierCut: async (conversationId, operationId, turnId) => {
+      const { structuredDeliveryHostForConversation } = await import("@/lib/runtime/structuredDeliveryController");
+      const state = tierCutStateSync(operationId, structuredDeliveryHostForConversation(conversationId), turnId);
+      return state === "none" ? "turn-ended" : state;
+    },
+    cancelRuntimeSwitchTierCut: async (conversationId, operationId) => {
+      const { cancelTierCut } = await import("@/lib/runtime/tierSwitch");
+      await cancelTierCut(conversationId, operationId);
     },
     runtimeSwitchOutcome: async (conversationId, operationId) => {
       const current = registry.conversation(conversationId as ViewerConversationId)?.reconfigure;
@@ -7228,7 +7252,7 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
         if (pool && (!account.accountId || !pool.includes(account.accountId))) {
           const subject = record.rollback || account === record.from ? "source account" : "target account";
           let reason = `runtime switch ${subject} is no longer allowed; stage continuation is fenced`;
-          if (!record.rollback && account === record.to && record.mode === "fork" && ports.cancelRuntimeSwitch) {
+          if (!record.rollback && account === record.to && record.mode === "fork" && !record.inPlace && ports.cancelRuntimeSwitch) {
             try {
               const sourcePool = ports.allowedAccountIds?.(pipeline.project, record.from.engine);
               if (sourcePool && (!record.from.accountId || !sourcePool.includes(record.from.accountId))) {
@@ -14442,6 +14466,7 @@ export async function patchPipeline(
           return { error: "the stage's running attempt changed since this runtime was chosen; read the stage again before choosing", status: 409, code: "STAGE_CHANGED", field: seenAttempt ? "expectedConversationId" : "expectedAttempt" };
         }
         if (req.role !== undefined || req.prompt !== undefined || req.access !== undefined) return { error: "role, prompt and access apply from the next attempt; send a separate override-stage", status: 400 };
+        if (req.applyNowCut !== undefined && req.applyNowCut !== "boundary" && req.applyNowCut !== "none") return { error: "applyNowCut must be boundary or none", status: 400 };
         const parkedSource = pipeline.state === "needs_decision" && live?.state === "needs_decision" && !live.report
           && (pendingRuntimeSwitchRetry(live) || live.providerWait?.condition.kind === "usage_limit" || !!live.conversationId && (ports.runtimeSwitchSourceUnavailable?.(live.conversationId)
             || await ports.conversationTurnInterrupted?.(live.conversationId) === "dead"));
@@ -14571,11 +14596,12 @@ export async function patchPipeline(
         const allowed = (id: string | null) => !!id && (read.pool === null || read.pool.includes(id));
         const nativeGeneration = ports.conversationGeneration?.(live.conversationId) ?? null;
         const generation = nativeGeneration?.engine === engine ? nativeGeneration : engine === live.effectiveRole.engine ? currentRuntimeSeat(live) : null;
-        const model = target.effectiveRole.model ?? generation?.model;
-        const effort = target.effectiveRole.effort ?? generation?.effort;
+        const turboTierOnly = typeof req.turbo === "string" && req.applyNowCut !== undefined && req.model === undefined && req.effort === undefined && req.engine === undefined && req.account === undefined;
+        const model = turboTierOnly ? generation?.model ?? target.effectiveRole.model : target.effectiveRole.model ?? generation?.model;
+        const effort = turboTierOnly ? generation?.effort ?? target.effectiveRole.effort : target.effectiveRole.effort ?? generation?.effort;
         if (!model || !effort) return { error: "apply now requires a resolved model and effort; select them explicitly", status: 400 };
         const preferredId = generation?.accountId ?? null;
-        const serviceTier = target.effectiveRole.serviceTier ?? null;
+        const serviceTier = turboTierOnly && req.serviceTier === null ? null : target.effectiveRole.serviceTier ?? null;
         const offers = engine === "codex" && serviceTier ? tierOffers(listCodexAccounts(), model, serviceTier) : null;
         // A pool offering the tier does not prove the preferred account offers it.
         const unavailableIds = [
@@ -14584,8 +14610,10 @@ export async function patchPipeline(
         ];
         let migrationTarget: AccountContext | undefined;
         let accountId = target.account ?? (allowed(preferredId) ? preferredId : null);
-        if (ports.resolveProjectSpawn) {
-          const resolution = ports.resolveProjectSpawn(engine, { project: pipeline.project, model, requestedId: target.account, preferredId, unavailableIds });
+        /* Returning a tier changes no account and dispatches no turn. Capacity
+           admission must not prevent undo after the paid approval ends. */
+        if (ports.resolveProjectSpawn && !(turboTierOnly && req.applyNowCut === "none")) {
+          const resolution = ports.resolveProjectSpawn(engine, { project: pipeline.project, model, requestedId: turboTierOnly ? preferredId : target.account, preferredId, unavailableIds });
           if (resolution.kind !== "available" || !allowed(resolution.account.accountId)) return { error: "no allowed target account is available", status: 409 };
           accountId = resolution.account.accountId;
           migrationTarget = resolution.account;
@@ -14594,6 +14622,7 @@ export async function patchPipeline(
         const to = { engine, model, effort,
           serviceTier, accountId, accountPinned: !!target.account };
         const open = pendingRuntimeSwitchRetry(live) ?? openRuntimeSwitch(live);
+        if (open && typeof req.turbo === "string" && open.turbo !== req.turbo) return { error: "another runtime switch is in progress", status: 409, code: "RUNTIME_SWITCH_IN_PROGRESS" };
         if (open) return runtimeTargetsEqual(open.to, to) && open.to.accountPinned === to.accountPinned ? { pipeline, runtimeSwitch: open, replayed: true }
           : { error: "another runtime switch is in progress", status: 409, code: "RUNTIME_SWITCH_IN_PROGRESS" };
         if (runtimeTargetsEqual(nativeGeneration ?? currentRuntimeSeat(live), to)) {
@@ -14621,8 +14650,16 @@ export async function patchPipeline(
           }
         }
         const seq = (live.runtimeSwitches?.at(-1)?.seq ?? 0) + 1;
+        const source = nativeGeneration ?? currentRuntimeSeat(live);
+        /* Only the Codex tier changes and the live host can take it: no restart (Turbo, §2.6). */
+        const inPlace = engine === "codex" && engine === live.effectiveRole.engine && source.engine === engine
+          && source.model === to.model && source.effort === to.effort && source.accountId === to.accountId
+          && !!ports.runtimeSwitchTier;
+        if (req.applyNowCut !== undefined && !inPlace) return { error: "applyNowCut applies only to a tier-only change of a running Codex stage", status: 400 };
         runtimeSwitch = { id: `${pipeline.id}:${target.id}:${live.n}:${seq}`, seq, requestedAt: ports.now(), actor: actor!,
           mode: engine === live.effectiveRole.engine ? "fork" : "handoff", phase: "requested",
+          ...(inPlace ? { inPlace: true as const, cut: req.applyNowCut ?? "boundary" } : {}),
+          ...(typeof req.turbo === "string" && req.turbo ? { turbo: req.turbo.slice(0, 80) } : {}),
           from: { ...(nativeGeneration ?? currentRuntimeSeat(live)), conversationId: live.conversationId, launchId: live.launchId, sessionId: nativeGeneration?.sessionId ?? live.sessionId, agentPath: nativeGeneration?.agentPath ?? live.agentPath }, to };
         live.runtimeSwitches = [...(live.runtimeSwitches ?? []).slice(-7), runtimeSwitch];
       }
@@ -14643,7 +14680,7 @@ export async function patchPipeline(
         action: "override-stage",
         stageId: target.id,
         ...reach,
-        summary: `changed ${changed.join(", ")} of stage ${target.id}${reach.effect === "pending-next-attempt" ? `; applies from attempt ${reach.appliesFromAttempt}` : ""}`,
+        summary: `changed ${changed.join(", ")} of stage ${target.id}${reach.effect === "pending-next-attempt" ? `; applies from attempt ${reach.appliesFromAttempt}` : ""}${typeof req.turbo === "string" && req.turbo ? ` (Turbo ${req.turbo.slice(0, 80)})` : ""}`,
       });
       if (runtimeSwitch && live) {
         graphEdit.runtimeSwitch = { attempt: live.n, id: runtimeSwitch.id };

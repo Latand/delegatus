@@ -1,5 +1,6 @@
 import { seatTickInstructionSections, type SeatTickInstructionLine } from "./seatTickInstructions";
 import { autonomyMandate, type AutonomySetting } from "./autonomy";
+import { turboMandate, type TurboSetting } from "./turbo";
 import { createHash } from "node:crypto";
 import { MAX_STRUCTURED_TEXT_BYTES } from "@/lib/runtime/structuredContent";
 
@@ -239,6 +240,9 @@ export function seatTickWakeMessage(input: {
   compactCatchUpTimeBase?: string;
   autonomy?: AutonomySetting | null;
   autonomyUnchanged?: boolean;
+  /** Turbo's overlay (docs/design/turbo-mode.md §2.4); `turboUnchanged` sends the pointer. */
+  turbo?: TurboSetting | null;
+  turboUnchanged?: boolean;
   issues?: readonly ProposalIssue[];
   now?: number;
   project: string;
@@ -329,8 +333,10 @@ export function seatTickWakeMessage(input: {
   const autonomyNote = autonomy.length && input.monitorPrompt
     ? ["", `Standing monitor note (${input.monitorPrompt.length} chars): seat_tick_settings verbose:true reads it.`]
     : null;
+  const turbo = turboMandate(input.turbo, input.now ?? Date.now(), input.turboUnchanged);
   const reserved = [
     ...autonomy,
+    ...turbo,
     ...snapshotSection(input.snapshotAt, !!input.workers),
     ...(input.reportLines && input.reportLines.length > 0 ? ["", compactLedger ? "Reports:" : "Bridge reports:", ...input.reportLines.map((line) => `- ${line}`)] : []),
     ...seatTickInstructionSections({ reason: input.operatorInstructions ?? null, instructionLines: input.instructionLines }),

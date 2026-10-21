@@ -921,3 +921,55 @@ prototype's `credits=off|on` parameter shows either.
    spend counter exists yet. Alternatives: a credit cap per account (needs a
    reliable balance reading and a spend counter, deferred); or let the
    approval last as long as Turbo, «До вимкнення» included.
+
+## 8. As built
+
+The build follows sections 2 and 6 with the operator's decisions of
+2026-10-21 (variant 1 «Форсаж», Codex only, 2 h default with 1, 2, 4, 8 h and
+«until off», paid credits 1–8 h only). Where it differs from the text above:
+
+- **The in-place stage switch is a flag on a fork record.** A tier-only
+  `applyNow` on a running Codex stage writes `mode: "fork"` with
+  `inPlace: true`, `cut` and `tierCut` (`src/lib/pipelines/types.ts`), and
+  never a new `mode` value. A release that predates Turbo still validates the
+  pipeline record and finishes an open switch through its own restart path, so
+  a rollback cannot make the pipeline registry unreadable.
+- **The live switch** is `CodexAppServerHost.setTier`
+  (`src/lib/runtime/codexAppServerHost.ts`), reached through
+  `src/lib/runtime/tierSwitch.ts`, which also records the tier on the
+  conversation's launch profile so a resume keeps it. `applyNowCut: "none"` is
+  how Turbo's revert asks a stage for no cut.
+- **Spawned conversations** are switched by the sweep on the host directly,
+  and a cut one gets one queued continuation under the key
+  `turbo:<startedAt>:<conversation>:continue`. An explicit tier on the
+  conversation reconfigure and the «Повторити» row in Details are deferred: a
+  failed row keeps its reason and is not retried through the restart path.
+- **Paid credits are approved only from the operator's own browser.** The
+  settings route refuses `credits: true` from anything else, and the
+  `seat_tick_settings` tool refuses it outright; the seat may still withdraw an
+  approval with a why.
+- **A change the seat makes through the tool** reaches the sweep at the
+  Viewer's next seat tick pass (at most five minutes); the panel's own changes
+  start it at once.
+- **The sweep runs only in the release that owns Viewer traffic**, because
+  only that release holds the hosts.
+- **Restoration keeps its durable work until it succeeds.** A lost switch
+  acknowledgement is reconciled against the recorded live tier, and a refused
+  return stays pending across restart. The native tier echo is retained when it
+  differs from the requested tier. Queued switches check the credit margin
+  again after waiting; armed cuts recheck the episode before interrupting.
+  The native turn identity is durable before a cut is sent; recovery reads
+  the restored turn history to continue an interrupted turn under the same
+  delivery key. A return also restores a saved profile when its native host
+  has not been reattached yet, so its next resume uses the previous tier.
+- **Recurring state work reads and patches one project's row**, using the
+  existing bounded store interface and asynchronous lock admission. A missing
+  or stale usage reading holds acceleration without paid-credit approval.
+- **A Turbo stage switch pins its selection to the conversation's current
+  account**, while preserving the stage's account-pin setting. A return can
+  clear the native tier even when the role's default has changed meanwhile.
+- **Notices** are tried at most 20 times each; an episode with no seat to tell
+  is still returned and closed.
+- **Known limit:** an older release normalizes the settings row without the
+  `turbo` field. Rolling back while Turbo is on drops the episode record, and
+  the conversations it sped up keep their tier until they are switched again.

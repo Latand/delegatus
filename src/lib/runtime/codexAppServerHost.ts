@@ -75,6 +75,10 @@ import type {
   RuntimeEvent,
   RuntimeInjectOutcome,
   RuntimeInjectRequest,
+  RuntimeTierCut,
+  RuntimeTierOutcome,
+  RuntimeTierRequest,
+  TierCapableHost,
 } from "./engineHost";
 import {
   normalizeQueueEntry,
@@ -477,7 +481,11 @@ const MUTATING_RPC_METHODS = new Set([
   "thread/realtime/stop",
   "thread/inject_items",
   "thread/compact/start",
+  "thread/settings/update",
 ]);
+/** Items whose run a tier cut waits for: a tier only affects inference, so a
+    running command, patch or tool call is never killed for one. */
+const TIER_CUT_TOOL_ITEMS: ReadonlySet<string> = new Set(["commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall", "webSearch"]);
 
 function record(value: unknown): JsonObject | null {
   return value && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : null;
@@ -1262,7 +1270,7 @@ function threadStatus(value: unknown): ThreadStatus | null {
 }
 
 /** One app-server connection with durable callbacks and event replay. */
-export class CodexAppServerHost implements EngineHost {
+export class CodexAppServerHost implements EngineHost, TierCapableHost {
   readonly identity: CodexThreadIdentity;
 
   private readonly child: CodexTransport;
@@ -1313,6 +1321,13 @@ export class CodexAppServerHost implements EngineHost {
     promise: Promise<DeliveryReceipt>;
   }>();
   private readonly pendingCompactions = new Map<string, PendingCompaction>();
+  /** Tool items in progress, by item id, with their turn: a boundary tier cut waits for them. */
+  private readonly openToolItems = new Map<string, string>();
+  private armedTierCut: { operationId: string; turnId: string; authorizeDispatch?: () => void; interrupting?: boolean; resolve: (cut: RuntimeTierCut) => void } | null = null;
+  private tierTail: Promise<unknown> = Promise.resolve();
+  private tierRequests = 0;
+  private readonly tierOutcomes = new Map<string, { tier: string | null; cut: string; outcome: RuntimeTierOutcome }>();
+  private echoedServiceTier: { tier: string | null } | null = null;
   private readonly realtimeDeliveries = new Map<string, RealtimeDeliveryState>();
   private readonly voiceStreams = new Map<string, VoiceStreamState>();
   /* KEYED BY VARIANT, because a thread has one identity PER VARIANT and not one
@@ -2438,6 +2453,117 @@ export class CodexAppServerHost implements EngineHost {
   }
 
   /**
+   * Turbo's live tier switch (docs/design/turbo-mode.md §2.6). The tier is
+   * re-checked against this host's own live catalog before anything is sent,
+   * then `thread/settings/update` moves the thread's next turn to it. Nothing
+   * restarts. The cut follows the request: a turn awaiting an answer is never
+   * cut, and `boundary` waits for every running tool item to finish.
+   */
+  async setTier(request: RuntimeTierRequest): Promise<RuntimeTierOutcome> {
+    if (this.tierRequests >= 8) throw new Error("Codex tier switch queue is full");
+    this.tierRequests++;
+    const work = this.tierTail.catch(() => undefined).then(async () => {
+      request.authorizeDispatch?.();
+      const previous = this.tierOutcomes.get(request.operationId);
+      if (previous) {
+        if (previous.tier !== request.serviceTier || previous.cut !== request.cut) throw new Error("tier operation id already names another request");
+        return previous.outcome;
+      }
+      const outcome = await this.applyTier(request);
+      this.tierOutcomes.set(request.operationId, { tier: request.serviceTier, cut: request.cut, outcome });
+      while (this.tierOutcomes.size > 64) this.tierOutcomes.delete(this.tierOutcomes.keys().next().value!);
+      return outcome;
+    });
+    this.tierTail = work;
+    try { return await work; } finally { this.tierRequests--; }
+  }
+
+  private async applyTier(request: RuntimeTierRequest): Promise<RuntimeTierOutcome> {
+    if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
+      throw new Error("Codex app-server host is unavailable");
+    }
+    if (request.serviceTier !== null) assertCatalogOffersTier(this.modelCatalog, this.currentImageModel(), request.serviceTier);
+    if (this.armedTierCut && this.armedTierCut.operationId !== request.operationId) this.settleArmedTierCut("cancelled");
+    this.echoedServiceTier = null;
+    await this.rpc("thread/settings/update", { threadId: this.identity.threadId, serviceTier: request.serviceTier }, this.requestTimeoutMs, true);
+    if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
+      throw new Error("Codex app-server host is unavailable");
+    }
+    const echoed = this.echoedServiceTier as { tier: string | null } | null;
+    const outcome = { appliedTier: echoed ? echoed.tier : request.serviceTier, echoed: !!echoed };
+    if (outcome.appliedTier !== request.serviceTier) return { ...outcome, cut: "none", reason: "the native tier differs from the requested tier; no turn was interrupted" };
+    try { request.authorizeDispatch?.(); }
+    catch { return { ...outcome, cut: "none", reason: "the switch authority ended; no turn was interrupted" }; }
+    const turnId = this.activeTurnId;
+    if (request.cut === "none") return { ...outcome, cut: "none" };
+    if (!turnId) return { ...outcome, cut: "none", reason: "no turn is running" };
+    if (this.hasBlockingAttention()) return { ...outcome, cut: "none", reason: "the turn is waiting for an answer" };
+    await request.beforeCut?.(turnId);
+    try { request.authorizeDispatch?.(); }
+    catch { return { ...outcome, cut: "none", reason: "the switch authority ended before the cut" }; }
+    if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()
+      || this.activeTurnId !== turnId || this.hasBlockingAttention()) return { ...outcome, cut: "none" };
+    const busy = [...this.openToolItems.values()].some(itemTurn => itemTurn === turnId);
+    if (request.cut === "now" || !busy) {
+      await this.rpc("turn/interrupt", { threadId: this.identity.threadId, turnId }, this.requestTimeoutMs, true);
+      return { ...outcome, cut: "cut" };
+    }
+    if (this.armedTierCut?.operationId === request.operationId && this.armedTierCut.turnId === turnId) {
+      return { ...outcome, cut: "armed", settled: this.armedSettled! };
+    }
+    let resolve!: (cut: RuntimeTierCut) => void;
+    const settled = new Promise<RuntimeTierCut>(done => { resolve = done; });
+    this.armedTierCut = { operationId: request.operationId, turnId, resolve, authorizeDispatch: request.authorizeDispatch };
+    this.armedSettled = settled;
+    return { ...outcome, cut: "armed", settled };
+  }
+
+  /** Withdraw a cut that has not happened; the tier stays set for the next turn. */
+  cancelArmedTierCut(operationId: string): boolean {
+    if (this.armedTierCut?.operationId !== operationId) return false;
+    this.settleArmedTierCut("cancelled");
+    return true;
+  }
+
+  /** Reconstructed native history survives a Viewer restart and lost RPC acknowledgement. */
+  tierCutEvidence(turnId: string): RuntimeTierCut | "armed" | "unknown" {
+    if (this.activeTurnId === turnId) return "armed";
+    const terminal = this.events.findLast(event => event.kind === "turn-ended" && event.turnId === turnId);
+    if (terminal && this.events.some(event => event.kind === "turn-started" && event.seq > terminal.seq)) return "turn-ended";
+    return terminal?.kind === "turn-ended" ? terminal.status === "interrupted" ? "cut" : "turn-ended" : "unknown";
+  }
+
+  private armedSettled: Promise<RuntimeTierCut> | null = null;
+
+  private settleArmedTierCut(result: RuntimeTierCut): void {
+    const armed = this.armedTierCut;
+    if (!armed) return;
+    this.armedTierCut = null;
+    this.armedSettled = null;
+    armed.resolve(result);
+  }
+
+  private observeToolItem(item: unknown, phase: "started" | "completed", turnId: string | null): void {
+    const value = record(item);
+    const id = stringField(value, "id");
+    const type = stringField(value, "type");
+    if (!id || !type || !TIER_CUT_TOOL_ITEMS.has(type)) return;
+    if (phase === "started" && turnId) this.openToolItems.set(id, turnId);
+    if (phase !== "completed") return;
+    this.openToolItems.delete(id);
+    const armed = this.armedTierCut;
+    if (!armed || armed.turnId !== this.activeTurnId || this.hasBlockingAttention()
+      || [...this.openToolItems.values()].some(itemTurn => itemTurn === armed.turnId)) return;
+    if (armed.interrupting || this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) return;
+    try { armed.authorizeDispatch?.(); } catch { this.settleArmedTierCut("cancelled"); return; }
+    /* The boundary: the tool finished and the next inference has not begun. */
+    armed.interrupting = true;
+    void this.rpc("turn/interrupt", { threadId: this.identity.threadId, turnId: armed.turnId }, this.requestTimeoutMs, true)
+      .then(() => { if (this.armedTierCut === armed) this.settleArmedTierCut("cut"); })
+      .catch(() => { if (this.armedTierCut === armed) this.settleArmedTierCut("cancelled"); });
+  }
+
+  /**
    * Manual context compaction as an engine control (#862). It travels the
    * app-server control channel — `thread/compact/start` for the thread this
    * host owns — so there is no path by which it becomes a user turn: no
@@ -3146,6 +3272,7 @@ export class CodexAppServerHost implements EngineHost {
   }
 
   async release(): Promise<void> {
+    this.settleArmedTierCut("host-gone");
     await this.releaseTransport();
     await this.persistenceFlush?.();
   }
@@ -4384,6 +4511,7 @@ export class CodexAppServerHost implements EngineHost {
          compact control. It is read after the emit so the durable event ledger
          carries the evidence before any receipt terminalizes on it. */
       if (record(params.item)?.type === "contextCompaction") this.acceptCompactionItem(params.item, phase);
+      this.observeToolItem(params.item, phase, eventTurnId);
       return;
     }
     if (method === "turn/completed" && turnId) {
@@ -4407,6 +4535,18 @@ export class CodexAppServerHost implements EngineHost {
       }
       this.emit({ kind: "turn-ended", turnId, status });
       this.settlePendingCompactionsFromTerminalTurn(turn, status);
+      for (const [itemId, itemTurn] of this.openToolItems) if (itemTurn === turnId) this.openToolItems.delete(itemId);
+      /* Only this host's own boundary interrupt counts as the cut: a turn the
+         operator stopped, or one that finished, owes no continuation. */
+      if (this.armedTierCut?.turnId === turnId) this.settleArmedTierCut(this.armedTierCut.interrupting ? "cut" : "turn-ended");
+      return;
+    }
+    if (method === "thread/settings/updated") {
+      if (stringField(params, "threadId") === this.identity.threadId) {
+        const settings = record(params.threadSettings);
+        const tier = settings?.serviceTier;
+        if (tier === null || typeof tier === "string") this.echoedServiceTier = { tier };
+      }
       return;
     }
     if (method === "account/rateLimits/updated") {
@@ -4433,6 +4573,7 @@ export class CodexAppServerHost implements EngineHost {
     this.rejectPendingAnswers(error);
     this.rejectPendingDeliveries(error);
     this.rejectPendingCompactions(error);
+    this.settleArmedTierCut("host-gone");
     this.attentions.clear();
     for (const request of this.pending.values()) {
       clearTimeout(request.timer);
