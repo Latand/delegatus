@@ -43,8 +43,7 @@ import { sampleAnswer, sampleMemory } from "@/lib/memory/profile.fixture";
 import { createProfileService } from "@/lib/memory/profileService";
 import type { MemoryProfileView, ProfileRow } from "@/lib/memory/profileTypes";
 import type { RoleMemoryProjectView } from "@/lib/memory/roleTypes";
-import { directProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profileModel";
-import { readClaudeCredentials } from "@/lib/accounts/claudeCredentials";
+import { prepareProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profileModel";
 
 /*
  * The one rendered-evidence driver for the kanban board. Every case here runs
@@ -1002,16 +1001,66 @@ describe("CPU admission queue", () => {
   }, 120_000);
 });
 
+describe("subscription API consent", () => {
+  browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1")("consent is reviewable in both languages and themes", async () => {
+    const out = path.resolve(".artifacts/subscription-api"); fs.mkdirSync(out, { recursive: true });
+    let enabled = false;
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/telemetry": { enabled: false, locked: false, noticeDismissed: true },
+      "/api/subscription-api-consent": async (request: Request) => {
+        if (request.method === "PUT") enabled = (await request.json()).enabled;
+        return Response.json({ version: 1, enabled, source: "operator" });
+      },
+    });
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const phone of [false, true]) {
+        enabled = false;
+        const viewport = phone ? { width: 390, height: 844 } : { width: 1000, height: 700 };
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-settings&header=1`, viewport, theme, lang, "reduce", phone);
+        try {
+          await page.locator(phone ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]").click();
+          await page.locator(phone ? '[data-mobile2-menu-row="ping"]' : "[data-rail-menu-ping]").click();
+          const section = page.locator("[data-subscription-api]"); await section.waitFor();
+          const toggle = section.getByRole("switch");
+          await toggle.waitFor({ state: "visible" });
+          expect(await toggle.isChecked()).toBe(false);
+          const geometry = await section.evaluate(element => {
+            const panel = element.closest("[data-telemetry-settings]")!;
+            const button = element.querySelector("input")!;
+            const label = button.closest("label")!;
+            const box = label.getBoundingClientRect(), edge = panel.getBoundingClientRect();
+            return { visible: box.top >= edge.top && box.bottom <= edge.bottom, overflow: element.scrollWidth > element.clientWidth, scrolls: panel.scrollHeight > panel.clientHeight };
+          });
+          expect(geometry.visible).toBe(true); expect(geometry.overflow).toBe(false);
+          expect(await section.innerText()).toContain("api.anthropic.com/api/oauth/usage");
+          await page.screenshot({ path: path.join(out, `${phone ? "phone" : "desktop"}-${lang}-${theme}.png`) });
+          await toggle.click();
+          await page.waitForFunction(() => document.querySelector<HTMLInputElement>('[data-subscription-api] input')?.checked === true);
+          await toggle.click();
+          await page.waitForFunction(() => document.querySelector<HTMLInputElement>('[data-subscription-api] input')?.checked === false);
+          expect(pageErrors).toEqual([]);
+          readings.push({ lang, theme, viewport, ...geometry });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/subscription-api", { recursive: true });
+      const sources = ["src/components/telemetry/SubscriptionApiSetting.tsx", "src/components/telemetry/TelemetrySettings.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts"];
+      fs.writeFileSync("evidence/subscription-api/readings.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx",
+        revision: process.env.LLV_EVIDENCE_REVISION ?? "working-tree", recordedAt: new Date().toISOString(),
+        command: "LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<browser> bun test src/components/kanban/kanbanBoard.browser.test.tsx -t 'subscription API consent'",
+        sources: Object.fromEntries(sources.map(source => [source, createHash("sha256").update(fs.readFileSync(source)).digest("hex")])), readings }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});
+
 describe("memory profile", () => {
-  browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1" && !!process.env.MEMORY_PROFILE_BENCHMARK)("direct-call timings reach the visible page", async () => {
+  browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1" && !!process.env.MEMORY_PROFILE_BENCHMARK)("CLI timings reach the visible page", async () => {
     // Explicit private input is supplied only for an opt-in local timing run. No source text is captured.
-    const input = JSON.parse(fs.readFileSync(process.env.MEMORY_PROFILE_BENCHMARK!, "utf8")) as { rules: RoleMemoryProjectView; credentialHome: string };
-    const credentials = readClaudeCredentials(input.credentialHome);
-    const token = credentials.state === "present" ? credentials.document.claudeAiOauth?.accessToken : null;
-    if (typeof token !== "string") throw Error("benchmark credential unavailable");
+    const input = JSON.parse(fs.readFileSync(process.env.MEMORY_PROFILE_BENCHMARK!, "utf8")) as { rules: RoleMemoryProjectView };
     const out = path.resolve(".artifacts/memory-profile"); fs.mkdirSync(out, { recursive: true });
     const rows = new Map<string, ProfileRow>();
-    const service = createProfileService({ rules: () => input.rules, read: (_, locale) => structuredClone(rows.get(locale) ?? null), write: row => rows.set(row.locale, structuredClone(row)), model: MEMORY_PROFILE_MODEL, prepare: async () => directProfileCaller(token, MEMORY_PROFILE_MODEL) });
+    const service = createProfileService({ rules: () => input.rules, read: (_, locale) => structuredClone(rows.get(locale) ?? null), write: row => rows.set(row.locale, structuredClone(row)), model: MEMORY_PROFILE_MODEL, prepare: prepareProfileCaller });
     const server = await serveEvidenceFixture(out, undefined, {
       "/api/role-memory": () => Response.json(input.rules),
       "/api/role-memory/profile": async (request: Request) => {
@@ -7320,7 +7369,7 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
             await page.keyboard.press("Escape");
             if (await page.locator(PANEL).count() || !await page.evaluate(() => document.activeElement?.hasAttribute("data-rail-menu"))) failures.push(`${tag}: Escape from the keys page did not close the menu onto ⋯`);
             await page.keyboard.press("Enter");
-            /* Once per frame: «Install ping» opens the product's dialog, which keeps the ping alone. */
+            /* Once per frame: «Install ping» opens the product's dialog, which keeps the install ping and subscription API consent. */
             await page.locator("[data-rail-menu-settings]").click();
             await page.locator("[data-rail-menu-ping]").click();
             const dialog = page.locator("[data-telemetry-settings]");

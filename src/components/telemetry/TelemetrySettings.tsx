@@ -4,6 +4,7 @@ import { Z } from "@/components/layers";
 import { useEffect, useRef, useState } from "react";
 import { useLocale } from "@/lib/i18n";
 import { telemetryNotice } from "../../../bin/telemetry-notice.mjs";
+import { SubscriptionApiSetting } from "./SubscriptionApiSetting";
 export const openTelemetrySettings = () => window.dispatchEvent(new Event("delegatus:open-settings"));
 type Status = { enabled: boolean; locked: boolean; noticeDismissed: boolean };
 /* The install ping's dialog, behind «Install ping» on the header menu's
@@ -61,6 +62,7 @@ export function TelemetrySettingsHost() {
         </label>}
         {status?.locked && <p className="mt-3 text-[13px] text-muted">{t("telemetry.locked")}</p>}
         {error && <p role="alert" className="mt-3 text-sm">{t("telemetry.error")}</p>}
+        <SubscriptionApiSetting />
       </section>
     </div>}
   </>, document.body);

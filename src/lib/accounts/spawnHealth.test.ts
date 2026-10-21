@@ -1,3 +1,5 @@
+import * as headlessCli from "@/lib/agent/claudeHeadless";
+import { setSubscriptionApiConsent } from "@/lib/accounts/subscriptionApiConsent";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -16,6 +18,9 @@ const PREVIOUS_FETCH = globalThis.fetch;
 let providerReads = 0;
 let providerReply: (() => Response | Promise<Response>) | null = null;
 process.env.LLV_STATE_DIR = path.join(STATE_SANDBOX, "state");
+setSubscriptionApiConsent(true);
+const cliFallback = spyOn(headlessCli, "runHeadlessClaudeOnce").mockResolvedValue({ status: "failed", records: [] });
+
 process.env.LLV_CLAUDE_HOME = path.join(STATE_SANDBOX, "legacy-claude");
 globalThis.fetch = (async () => {
   providerReads += 1;
@@ -66,6 +71,7 @@ function admissionCleanup(settle: () => Promise<void>, restore: () => void) {
 function removeStateDir() {
   closeAgentRegistryForTests();
   fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
+  setSubscriptionApiConsent(true);
 }
 const homes: string[] = [];
 const current = () => ({ kind: "admissible", basis: "current", stale: false, retryAt: null } as const);
@@ -83,6 +89,7 @@ afterEach(async () => {
 });
 
 afterAll(() => {
+  cliFallback.mockRestore();
   if (PREVIOUS_STATE === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = PREVIOUS_STATE;
   if (PREVIOUS_HOME === undefined) delete process.env.LLV_CLAUDE_HOME;
