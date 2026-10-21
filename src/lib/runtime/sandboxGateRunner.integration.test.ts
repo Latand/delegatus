@@ -3,7 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { once } from "node:events";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { Database } from "bun:sqlite";
 import { spawnSignalSandbox, signalAgentDomain, signalDomain } from "./agentSignalSandbox";
 import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
@@ -12,17 +13,21 @@ const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 const gate = path.resolve("scripts/gate-slot.sh");
 const kernelTest = process.env.LLV_SIGNAL_SANDBOX_KERNEL_TEST === "1" ? test : test.skip;
 
-kernelTest("a bounded gate and a nested gate stay in the signal domain and reuse one kernel-held slot", async () => {
+kernelTest("a gate service and a nested gate service stay in the signal domain and reuse one kernel-held slot", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "namespace-gates-"));
+  // CPU placement on a slice of this test's own, never the live work slice.
+  const slice = `llvgatetest${randomBytes(6).toString("hex")}.slice`;
   const env: NodeJS.ProcessEnv = { ...process.env, HOME: root, TMPDIR: root, XDG_CONFIG_HOME: path.join(root, "config"), LLV_STATE_DIR: path.join(root, "state"),
-    LLV_GATE_LOCK_DIR: path.join(root, "slots"), LLV_GATE_SLOTS: "1", LLV_GATE_MEM: "64M", DELEGATUS_WORK_SCOPE_CPU_QUOTA: "100%", DELEGATUS_CPU_PRESSURE: "off", LLV_OWNED_RUN_TIMEOUT_MS: "10000" };
+    LLV_GATE_LOCK_DIR: path.join(root, "slots"), LLV_GATE_SLOTS: "1", LLV_GATE_MEM: "64M", DELEGATUS_AGENT_CPU: "auto", LLV_GATE_SLICE: slice,
+    DELEGATUS_WORK_CPU_QUOTA: "200", DELEGATUS_WORK_SCOPE_CPU_QUOTA: "100%", DELEGATUS_CPU_PRESSURE: "off", LLV_OWNED_RUN_TIMEOUT_MS: "10000" };
   delete env.LLV_GATE_SLOT_LEASE;
   const file = path.join(root, "report.py");
   fs.writeFileSync(file, String.raw`
 import json,os,subprocess
 context=json.loads(os.environ['LLV_SIGNAL_SANDBOX'])
 group=open('/proc/self/cgroup').read().strip()[3:]
-base='/sys/fs/cgroup'+os.path.dirname(group)
+assert '/delegatus-gate-' in group and group.endswith('.service'),group
+base='/sys/fs/cgroup'+group
 lease=json.loads(os.environ['LLV_GATE_SLOT_LEASE'])
 assert lease['owner']['pid']>1 and lease['owner']['bootEpoch']==context['hostEpoch']
 assert os.readlink('/proc/self/ns/pid')==context['pidNamespace']
@@ -49,42 +54,50 @@ print(json.dumps({'bounded':True,'nested':True,'crossLeaseRefused':True,'group':
   } finally {
     if (child.exitCode === null && child.signalCode === null) { signalAgentDomain(child, "SIGKILL"); await once(child, "close"); }
     fs.rmSync(root, { recursive: true, force: true });
+    spawnSync("systemctl", ["--user", "revert", slice], { stdio: "ignore" });
+    spawnSync("systemctl", ["--user", "stop", slice], { stdio: "ignore" });
   }
 }, 30_000);
 
-kernelTest.each(["deadline", "owner-death", "stopped-runner", "nested-deadline", "cgroup-rename-attempt"])("namespace gate reaps a detached workload on %s before its engine exits", async mode => {
+kernelTest.each(["deadline", "owner-death", "stopped-runner", "nested-deadline", "cgroup-rename-attempt"])("a namespaced caller's gate reaps a detached workload on %s before its engine exits", async mode => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "namespace-gate-stop-"));
-  const marker = path.join(root, "worker.pid"), ready = path.join(root, "returned");
+  const marker = path.join(root, "worker.pid"), ready = path.join(root, "returned"), ownerFile = path.join(root, "owner.pid");
   const script = path.join(root, "worker.py");
   fs.writeFileSync(script, String.raw`
 import json,os,signal,subprocess,time
 context=json.loads(os.environ['LLV_SIGNAL_SANDBOX'])
 if os.environ['WORKER_MODE']=='cgroup-rename-attempt':
-    group=open('/proc/self/cgroup').read().strip()[3:]
-    original=context['cgroupRoot']+os.path.dirname(group)[len(context['scope']):]
-    try: os.rename(original,original+'-moved')
-    except PermissionError: pass  # Some kernels reserve cgroup rename to the initial user namespace.
+    group='/sys/fs/cgroup'+open('/proc/self/cgroup').read().strip()[3:]
+    try: os.rename(group,group+'-moved')
+    except OSError: pass  # The gate service's cgroup is read-only inside the domain.
 code='import os,time;open('+repr(os.environ['WORKER_PID_FILE'])+",'w').write(os.readlink("+repr(context['hostProc']+'/self')+'));time.sleep(60)'
 subprocess.Popen(['python3','-c',code],start_new_session=True)
 while not os.path.exists(os.environ['WORKER_PID_FILE']): time.sleep(.01)
-if os.environ['WORKER_MODE']=='owner-death': os.kill(os.getppid(),signal.SIGKILL)
-if os.environ['WORKER_MODE']=='stopped-runner': os.kill(os.getppid(),signal.SIGSTOP)
+# The gate's owner is the caller's runner, recorded by the caller's shell; the
+# worker's own parent is the service's entry, outside this namespace.
+if os.environ['WORKER_MODE'] in ('owner-death','stopped-runner'):
+    while not os.path.exists(os.environ['OWNER_FILE']): time.sleep(.01)
+    owner=int(open(os.environ['OWNER_FILE']).read())
+    os.kill(owner,signal.SIGKILL if os.environ['WORKER_MODE']=='owner-death' else signal.SIGSTOP)
 while True: time.sleep(1)
 `);
   const env: NodeJS.ProcessEnv = { ...process.env, HOME: root, TMPDIR: root, XDG_CONFIG_HOME: path.join(root, "config"), LLV_STATE_DIR: path.join(root, "state"),
     LLV_GATE_LOCK_DIR: path.join(root, "slots"), LLV_GATE_SLOTS: "1", LLV_GATE_MEM: "64M", DELEGATUS_CPU_PRESSURE: "off", LLV_OWNED_RUN_TIMEOUT_MS: "1000",
-    WORKER_PID_FILE: marker, WORKER_MODE: mode };
+    WORKER_PID_FILE: marker, WORKER_MODE: mode, OWNER_FILE: ownerFile };
   delete env.LLV_GATE_SLOT_LEASE;
   const invocation = mode === "nested-deadline" ? `bash ${quote(gate)} python3 ${quote(script)}` : `python3 ${quote(script)}`;
-  const child = await spawnSignalSandbox("bash", ["-c", `bash ${quote(gate)} bash -c ${quote(invocation)}; printf returned > ${quote(ready)}; read -r done`], { env, stdio: ["pipe", "pipe", "pipe"] });
+  const child = await spawnSignalSandbox("bash", ["-c", `bash ${quote(gate)} bash -c ${quote(invocation)} & printf %s $! > ${quote(ownerFile)}; wait $!; printf returned > ${quote(ready)}; read -r done`], { env, stdio: ["pipe", "pipe", "pipe"] });
   let errors = ""; child.stderr!.on("data", chunk => { errors += String(chunk); });
   try {
     const deadline = Date.now() + 10_000;
     while (!fs.existsSync(marker) && Date.now() < deadline) await Bun.sleep(10);
     expect(fs.existsSync(marker), errors).toBeTrue();
     const worker = captureProcessIdentity(Number(fs.readFileSync(marker, "utf8")));
-    while (!fs.existsSync(ready) && Date.now() < deadline) await Bun.sleep(10);
-    expect(fs.existsSync(ready), errors).toBeTrue();
+    // A stopped runner cannot return; the service's own deadline still reaps.
+    if (mode !== "stopped-runner") {
+      while (!fs.existsSync(ready) && Date.now() < deadline) await Bun.sleep(10);
+      expect(fs.existsSync(ready), errors).toBeTrue();
+    }
     while (processIdentityStatus(worker) === "alive" && Date.now() < deadline) await Bun.sleep(10);
     expect(processIdentityStatus(worker), errors).toBe("dead");
     expect(child.exitCode).toBeNull();

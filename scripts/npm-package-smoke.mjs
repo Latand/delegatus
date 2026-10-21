@@ -6,6 +6,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createInterface } from "node:readline";
 
 import { cliRuntimeHostConfig } from "../bin/server-runtime.mjs";
 import { runtimeHostStartIdentity } from "../bin/self-update-supervisor.mjs";
@@ -150,10 +151,12 @@ async function availablePort() {
 function probe(port, pathname) {
   return new Promise((resolve) => {
     const request = http.get({ hostname: "127.0.0.1", port, path: pathname, timeout: 5_000 }, (response) => {
-      response.resume();
+      let bytes = 0;
+      response.on("data", chunk => { bytes += chunk.length; });
       response.once("end", () => resolve({
         status: response.statusCode ?? 0,
         headers: response.headers,
+        bytes,
       }));
     });
     request.once("timeout", () => {
@@ -384,6 +387,7 @@ function scrubOutput(output, tempDirectory) {
 }
 
 export async function stop(child, termMs = 500, timeoutMs = 2_000) {
+  if (!child.pid) return;
   if (child.exitCode !== null || child.signalCode !== null) return;
   const exited = new Promise((resolve) => child.once("exit", resolve));
   child.kill("SIGTERM");
@@ -398,8 +402,94 @@ export async function stop(child, termMs = 500, timeoutMs = 2_000) {
   } finally { clearTimeout(forced); clearTimeout(deadline); }
 }
 
+// Tracing cannot discover public URLs or file-based launcher dependencies.
+// Compare every runtime input, including ambient audio and the service worker.
+export async function auditStandaloneAssets(sourceRoot, packageRoot) {
+  let checked = 0;
+  async function compare(source, destination, label) {
+    const entries = await readdir(source, { withFileTypes: true });
+    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      const relative = `${label}/${entry.name}`;
+      if (entry.isDirectory()) await compare(path.join(source, entry.name), path.join(destination, entry.name), relative);
+      else {
+        const expected = await readFile(path.join(source, entry.name));
+        let actual;
+        try { actual = await readFile(path.join(destination, entry.name)); }
+        catch { throw new Error(`standalone runtime asset missing: ${relative}`); }
+        if (!actual.equals(expected)) throw new Error(`standalone runtime asset differs: ${relative}`);
+        checked++;
+      }
+    }
+  }
+  const standalone = path.join(packageRoot, "dist", "standalone");
+  await compare(path.join(sourceRoot, "public"), path.join(standalone, "public"), "public");
+  await compare(path.join(packageRoot, "bin"), path.join(standalone, "bin"), "bin");
+  await compare(path.join(packageRoot, "vendor"), path.join(standalone, "vendor"), "vendor");
+  await compare(path.join(packageRoot, "dist", "gate"), path.join(standalone, "dist", "gate"), "dist/gate");
+  for (const bundle of ["mcp-server.mjs", "runtime-host.mjs"]) {
+    if (!(await readFile(path.join(packageRoot, "dist", bundle))).equals(await readFile(path.join(standalone, "dist", bundle)))) {
+      throw new Error(`standalone runtime bundle differs: dist/${bundle}`);
+    }
+    checked++;
+  }
+  return checked;
+}
+
+// Exercise the stdio launcher selected by the real spawned-agent resolver.
+// Keep stdin open until tools/list answers: EOF starts the launcher's drain.
+export async function smokeMcp(command, args, options, timeoutMs = startupTimeoutMs) {
+  const child = spawn(command, args, { ...options, stdio: ["pipe", "pipe", "pipe"] });
+  let stderr = "";
+  child.stderr.on("data", chunk => { stderr = (stderr + chunk).slice(-outputLimitBytes); });
+  const lines = createInterface({ input: child.stdout });
+  let timer;
+  try {
+    return await new Promise((resolve, reject) => {
+      let initialized = false;
+      const fail = detail => reject(new Error(`MCP smoke ${detail}${stderr ? `: ${stderr}` : ""}`));
+      child.once("error", error => fail(error.message));
+      child.once("exit", (code, signal) => fail(`exited before tools/list (${signal ?? code})`));
+      child.stdin.on("error", error => fail(error.message));
+      timer = setTimeout(() => fail("timed out waiting for tools/list"), timeoutMs);
+      const send = message => child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`);
+      lines.on("line", line => {
+        let message;
+        try { message = JSON.parse(line); } catch { fail("received non-JSON stdout"); return; }
+        if (message.id !== 1 && message.id !== 2) return;
+        if (message.error) { fail(`request ${message.id} failed: ${JSON.stringify(message.error)}`); return; }
+        if (message.id === 1) {
+          if (initialized) { fail("received duplicate initialize result"); return; }
+          if (!message.result?.serverInfo || !message.result?.protocolVersion) { fail("received invalid initialize result"); return; }
+          initialized = true;
+          send({ method: "notifications/initialized" });
+          send({ id: 2, method: "tools/list", params: {} });
+        } else {
+          if (!initialized) { fail("received tools/list before initialize"); return; }
+          const tools = message.result?.tools;
+          if (!Array.isArray(tools) || !tools.length || tools.some(tool => typeof tool.name !== "string" || !tool.name)) {
+            fail("tools/list returned no valid tools"); return;
+          }
+          resolve(tools.length);
+        }
+      });
+      send({ id: 1, method: "initialize", params: {
+        protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "package-smoke", version: "1.0.0" },
+      } });
+    });
+  } finally {
+    clearTimeout(timer);
+    lines.close();
+    child.stdin.end();
+    await stop(child, 2_000, 5_000);
+  }
+}
+
 async function main() {
-  if (!existsSync(standaloneServer)) {
+  const mcpAssetsOnly = process.argv.includes("--mcp-assets");
+  const tarballArgument = process.argv[process.argv.indexOf("--mcp-assets") + 1];
+  const suppliedTarball = mcpAssetsOnly && tarballArgument ? path.resolve(tarballArgument) : null;
+  if (!suppliedTarball && !existsSync(standaloneServer)) {
+    if (mcpAssetsOnly) throw new Error("npm package smoke requires a standalone build; run node scripts/prepack.mjs first.");
     console.log("SKIP npm package smoke: run node scripts/prepack.mjs first.");
     return;
   }
@@ -428,7 +518,7 @@ async function main() {
       mkdir(path.join(homeDirectory, ".claude"), { recursive: true }),
     ]);
 
-    const packOutput = await command("npm", [
+    const packOutput = suppliedTarball ? "" : await command("npm", [
       "pack",
       "--ignore-scripts",
       "--pack-destination",
@@ -443,11 +533,14 @@ async function main() {
       },
     });
     console.log("npm package smoke: packed current standalone output.");
-    const tarballs = (await readdir(packageDirectory)).filter((name) => name.endsWith(".tgz"));
+    const tarballs = suppliedTarball ? [suppliedTarball] : (await readdir(packageDirectory)).filter((name) => name.endsWith(".tgz"));
     if (tarballs.length !== 1) throw new Error(`npm pack produced ${tarballs.length} tarballs: ${packOutput}`);
-    await command("tar", ["-xzf", path.join(packageDirectory, tarballs[0]), "-C", extractDirectory]);
-
-    const extractedPackage = path.join(extractDirectory, "package");
+    const tarball = suppliedTarball ?? path.join(packageDirectory, tarballs[0]);
+    await command("npm", ["install", "--prefix", extractDirectory, "--ignore-scripts", "--no-audit", "--no-fund", tarball], {
+      env: { PATH: process.env.PATH, HOME: homeDirectory, npm_config_cache: path.join(tempDirectory, "npm-cache") },
+      timeout: 180_000,
+    });
+    const extractedPackage = path.join(extractDirectory, "node_modules", "delegatus-cli");
     if (existsSync(path.join(extractedPackage, "src"))) throw new Error("packed package unexpectedly contains src/");
     const runtimePath = pathWithoutBunContainer(process.env.PATH);
     if (!runtimePath) throw new Error("smoke PATH is empty after removing bun-container");
@@ -468,6 +561,7 @@ async function main() {
       HOME: homeDirectory,
       XDG_CONFIG_HOME: configDirectory,
       LLV_STATE_DIR: stateDirectory,
+      LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1",
       LLV_BUN_EXECUTABLE: bunRuntime,
       LLV_CODEX_BINARY: fakeCodex,
       LLV_CODEX_HOME: path.join(homeDirectory, ".codex"),
@@ -475,6 +569,15 @@ async function main() {
       TMPDIR: runtimeTempDirectory,
       NODE_ENV: "production",
     };
+    const standalone = path.join(extractedPackage, "dist", "standalone");
+    const entry = JSON.parse(await command(bunRuntime, ["-e", `
+      const { viewerMcpServerEntry } = await import(process.argv[1]);
+      console.log(JSON.stringify(viewerMcpServerEntry(process.argv[2], process.env)));
+    `, path.join(root, "src/lib/agent/spawnPolicy.ts"), standalone], { cwd: root, env: runtimeEnvironment }));
+    const toolCount = await smokeMcp(bunRuntime, entry.args, { cwd: standalone, env: { ...runtimeEnvironment, ...entry.env } });
+    console.log(`npm package smoke: spawned-agent stdio initialize + tools/list returned ${toolCount} tools.`);
+    const assetCount = await auditStandaloneAssets(root, extractedPackage);
+    console.log(`npm package smoke: ${assetCount} standalone runtime assets match their inputs.`);
     let output = "";
     const collect = (chunk) => {
       output = `${output}${chunk}`;
@@ -500,6 +603,12 @@ async function main() {
     const safeOutput = () => scrubOutput(output, tempDirectory);
     await waitForOk(port, "/api/files", server, safeOutput);
     console.log("npm package smoke: /api/files returned 200.");
+    const cue = await probe(port, "/audio/cues/launch.mp3");
+    if (cue.status !== 200 || !(cue.bytes > 0) || cue.bytes !== Number(cue.headers["content-length"]) || !String(cue.headers["content-type"]).startsWith("audio/")) {
+      throw new Error(`packed audio cue failed: status ${cue.status}, type ${cue.headers["content-type"]}`);
+    }
+    console.log("npm package smoke: /audio/cues/launch.mp3 returned audio bytes.");
+    if (mcpAssetsOnly) return;
     const resourceResponse = await waitForOk(port, "/api/resources", server, safeOutput);
     assertHealthyResourceDiagnostic(resourceResponse.headers["x-llv-resource-phases"]);
     console.log("npm package smoke: /api/resources returned a healthy worker diagnostic; observing worker health.");

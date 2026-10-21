@@ -469,3 +469,35 @@ test("the launcher resolves to an absolute executable file on the Viewer's PATH,
     expect(await resolveExecutable("uv", ["relative", plain, real].join(path.delimiter))).toBeNull();
   } finally { process.chdir(previous); }
 });
+
+test.skipIf(process.platform === "win32")("the real probe worker refuses non-registry package targets before spawning the launcher", async () => {
+  const { root } = await setup();
+  const home = path.join(root, "home"), runDir = path.join(root, "run");
+  await fs.mkdir(home); await fs.mkdir(runDir);
+  const config = path.join(root, "config.toml"); await fs.writeFile(config, "");
+  const marker = path.join(root, "launcher-ran");
+  const executable = path.join(root, "launcher");
+  await fs.writeFile(executable, `#!${process.execPath}\nawait Bun.write(${JSON.stringify(marker)}, JSON.stringify(process.argv.slice(2)));\n${pinnedServer("'Registry'")}`, { mode: 0o755 });
+  const cases: ["bun" | "uv", string[], "OK" | "START_FAILED"][] = [
+    ["bun", ["x", "name@file:/abs"], "START_FAILED"], ["bun", ["x", "/abs"], "START_FAILED"],
+    ["uv", ["tool", "run", "/abs"], "START_FAILED"], ["uv", ["tool", "run", "n @ file:///abs"], "START_FAILED"],
+    ["bun", ["x", "git+file:/abs"], "START_FAILED"], ["uv", ["tool", "run", "git+file:/abs"], "START_FAILED"],
+    ["bun", ["x", "@tools/music@1.2.3", "--stdio"], "OK"], ["uv", ["tool", "run", "music==1.2.3", "--stdio"], "OK"],
+  ];
+  for (const [command, args, expected] of cases) {
+    await fs.rm(marker, { force: true });
+    // Bypass every proposal and store check: this exercises the production spawn boundary itself.
+    const server = { transport: { type: "stdio", command, args, cwd: null, env: {} }, entryFile: null };
+    const child = spawn(process.execPath, [path.join(import.meta.dir, "probe.worker.ts")],
+      { cwd: process.cwd(), env: voiceToolEnvironment(home, process.env), stdio: ["pipe", "pipe", "ignore"] });
+    let output = "";
+    child.stdout.setEncoding("utf8"); child.stdout.on("data", chunk => { output += chunk; });
+    const closed = new Promise<void>(resolve => child.once("close", () => resolve()));
+    child.stdin.end(JSON.stringify({ name: "music", server, secrets: {}, home, launch: { executable, config, runDir } }));
+    const watchdog = setTimeout(() => child.kill("SIGKILL"), 10_000);
+    try { await closed; } finally { clearTimeout(watchdog); }
+    expect(JSON.parse(output).code).toBe(expected);
+    if (expected === "START_FAILED") expect(await absent(marker)).toBe(true);
+    else expect(JSON.parse(await fs.readFile(marker, "utf8"))).toEqual(command === "bun" ? [`--config=${config}`, ...args] : ["tool", "run", "--no-config", ...args.slice(2)]);
+  }
+}, 30_000);

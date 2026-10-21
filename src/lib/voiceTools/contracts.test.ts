@@ -3,7 +3,7 @@ import Ajv from "ajv";
 import { approvalDigest, boundedDescription, digest, proposalSchema, secretsSchema, toolName, validateCatalog, type VoiceToolServer } from "./contracts";
 
 const tool = (name = "search") => ({ name, description: "Search", inputSchema: { type: "object", properties: {} } });
-const base = (): VoiceToolServer => ({ ...proposalSchema.parse({ name: "music", title: "Music", capability: "Play music", transport: { type: "stdio", command: "bun", args: ["run", "server.ts"], env: { LABEL: { value: "music" }, TOKEN: { secretRef: "music-token" } } } }),
+const base = (): VoiceToolServer => ({ ...proposalSchema.parse({ name: "music", title: "Music", capability: "Play music", transport: { type: "stdio", command: "bun", args: ["run", "/scripts/server.ts"], env: { LABEL: { value: "music" }, TOKEN: { secretRef: "music-token" } } }, entryFile: { path: "/scripts/server.ts", sha256: "a".repeat(64) } }),
   generation: 1, owner: "installation", audience: ["voice"], state: "pending", proposedBy: { kind: "conversation", conversationId: null, at: "2026-01-01T00:00:00Z" }, approval: null,
   tools: { search: { enabled: true, acts: false } }, catalog: { digest: digest([tool()]), fetchedAt: "2026-01-01T00:00:00Z", tools: [tool()] }, lastDryRun: null });
 
@@ -98,4 +98,39 @@ test("vault accounting bounds serialized UTF-8 after JSON escaping", () => {
   expect(secretsSchema.safeParse({ music: "synthetic-voice-credential" }).success).toBe(true);
   expect(secretsSchema.safeParse(Object.fromEntries(Array.from({ length: 256 }, (_, i) => [`secret${i}`, "\0".repeat(8192)]))).success).toBe(false);
   expect(secretsSchema.safeParse(Object.fromEntries(Array.from({ length: 256 }, (_, i) => [`secret${i}`, "🎵".repeat(4096)]))).success).toBe(false);
+});
+
+test("package launches accept only registry names and optional versions", () => {
+  const proposal = (command: "bun" | "uv", target: string) => ({ name: "music", title: "Music", capability: "Search",
+    transport: { type: "stdio", command, args: command === "bun" ? ["x", target] : ["tool", "run", target] } });
+  for (const [command, target] of [
+    ["bun", "name@file:/abs"], ["bun", "/abs"], ["uv", "/abs"], ["uv", "n @ file:///abs"],
+    ["bun", "git+file:/abs"], ["uv", "git+file:/abs"],
+  ] as const) expect(proposalSchema.safeParse(proposal(command, target)).success).toBe(false);
+  for (const target of ["file:/abs", "link:/abs", "workspace:*", "git+https://example.invalid/repo", "git://example.invalid/repo",
+    "https://example.invalid/pkg.tgz", "http://example.invalid/pkg.tgz", "./pkg", "../pkg", "~/pkg", "C:\\pkg", "pkg\\bin",
+    "name @ https://example.invalid/pkg.tgz", "name@https://example.invalid/pkg.tgz", "name@npm:other", "repo/pkg", "--from", "pkg\n"]) {
+    for (const command of ["bun", "uv"] as const) expect(proposalSchema.safeParse(proposal(command, target)).success).toBe(false);
+  }
+  const prerelease = ["@tools/music-mcp", "2.0.0-beta.1+build.2"].join("@");
+  for (const target of ["music-mcp", "@tools/music-mcp", "music-mcp@1.2.3", prerelease, "music-mcp@latest", "music-mcp@next"])
+    expect(proposalSchema.safeParse(proposal("bun", target)).success).toBe(true);
+  for (const target of ["music-mcp", "Music_MCP", "m", "music.mcp==1.2.3", "music-mcp==1!2.0rc1.post2.dev3+linux.1"])
+    expect(proposalSchema.safeParse(proposal("uv", target)).success).toBe(true);
+});
+
+
+test("package targets refuse bare archives, incomplete versions and launcher options", () => {
+  const proposal = (command: "bun" | "uv", args: string[]) => ({ name: "music", title: "Music", capability: "Search", transport: { type: "stdio", command, args } });
+  for (const target of ["pkg.tgz", "pkg.tar.gz", "pkg.tar", "pkg.zip", "pkg.whl"])
+    for (const command of ["bun", "uv"] as const)
+      expect(proposalSchema.safeParse(proposal(command, command === "bun" ? ["x", target] : ["tool", "run", target])).success).toBe(false);
+  for (const target of ["music@", "music@1.2", "music@^1.2.3", "music@1.2.3-01", "music@1.2.3-1.01", "a".repeat(215)])
+    expect(proposalSchema.safeParse(proposal("bun", ["x", target])).success).toBe(false);
+  for (const target of ["music==", "music>=1.0", "music==1.*", "music[extra]", "music;os_name=='posix'", "music==file:/abs"])
+    expect(proposalSchema.safeParse(proposal("uv", ["tool", "run", target])).success).toBe(false);
+  expect(proposalSchema.safeParse(proposal("bun", ["x", "--package", "/abs"])).success).toBe(false);
+  expect(proposalSchema.safeParse(proposal("uv", ["tool", "run", "--from", "/abs"])).success).toBe(false);
+  expect(proposalSchema.safeParse(proposal("bun", ["run", "/abs"])).success).toBe(false);
+  expect(proposalSchema.safeParse({ ...proposal("bun", ["run", "/abs"]), entryFile: { path: "/abs", sha256: "a".repeat(64) } }).success).toBe(true);
 });

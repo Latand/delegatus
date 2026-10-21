@@ -225,8 +225,8 @@ Preserve each caller's existing lifetime contract. In particular, headless work 
 This is required work in the same implementation, before enabling enforcement:
 
 1. Extend the outer per-agent scope to delegate only its own subtree. Move the launcher into an `agent` leaf before enabling cpu/memory/pids controllers. Preserve existing ancestor quotas and memory policy. The measured 64 MiB leaf is a probe setting, not a proposed production default.
-2. Add a namespace-aware path to `scripts/gate-slot.sh` and `scripts/owned-runner.ts`. It starts the workload locally in a fresh bounded leaf, inside the invocation's existing user/PID namespaces. Prove membership and limits before releasing a blocked child to exec. Maintain queue waits, execution budget accounting, cancellation, owner-death monitoring and an independent deadline guardian. Use the owned leaf to account for detached descendants. Teardown can address only verified members of that newly created leaf/domain. Linux's portable, uncontained fallback remains forbidden.
-3. Keep gate supervisors in the same user namespace as their workload. Further user-namespace entry is unnecessary for gate containment and complicates inherited leases. Never ask the user systemd manager to execute a workload outside the domain. The manager creates the outer resource scope before confinement only.
+2. *(Superseded on 2026-10-21 by [Gate service entry](#gate-service-entry-2026-10-21): the leaf sat under the agent's own memory cap.)* Add a namespace-aware path to `scripts/gate-slot.sh` and `scripts/owned-runner.ts`. It starts the workload locally in a fresh bounded leaf, inside the invocation's existing user/PID namespaces. Prove membership and limits before releasing a blocked child to exec. Maintain queue waits, execution budget accounting, cancellation, owner-death monitoring and an independent deadline guardian. Use the owned leaf to account for detached descendants. Teardown can address only verified members of that newly created leaf/domain. Linux's portable, uncontained fallback remains forbidden.
+3. *(Superseded on 2026-10-21, same section: the workload stays in the domain, its supervisor is the gate service.)* Keep gate supervisors in the same user namespace as their workload. Further user-namespace entry is unnecessary for gate containment and complicates inherited leases. Never ask the user systemd manager to execute a workload outside the domain. The manager creates the outer resource scope before confinement only.
 4. Preserve host PID/start/boot identities in the machine-wide admission queue. `scripts/cpu-admission.ts` and `cpuAdmission.ts:186` currently use process identities for stale-owner removal. Give this reader an explicit read-only original-proc mount under the owned launch scratch directory. Translate its own PID through that mount; keep normal process and signal readers on private `/proc`. Never globally switch `procBackend` to host proc, and never enqueue a namespace-local PID.
 5. Preserve kernel proof of inherited slot ownership. `cpuAdmission.ts:27` currently checks the owner's FD 9, inode/device and FLOCK WRITE record. Inside one user namespace, adapt the PID addressing while retaining these checks. **Do not accept a lease from an ancestor user namespace merely because its PID/stat is readable.** Start ordinary agent domains before their first gate-slot acquisition. If a managed-engine launch is requested under a held external gate lease, launch it without the boundary and report that, since the lease cannot cross a user namespace; do not wait for another slot while retaining one. Integration fixtures use isolated lock/queue roots and exercise real nested gates after entry. Supporting a future cross-boundary lease handoff would require a separately proved descriptor-transfer design.
 6. Exercise old unsandboxed and new sandboxed queue clients together against an isolated shared queue. A refused/unknown proc observation cannot delete another owner's ticket. Verify mutual exclusion and nested lease reuse, including CLI subprocesses that close extra FDs. Validate cgroup path readers with the production mount placement. Environment markers select an implementation path; kernel identity/mount checks establish containment.
@@ -340,6 +340,8 @@ Gate writes use this alias. The original cgroup-relative paths remain readable
 at `/sys/fs/cgroup`. The exec barrier is a FIFO, avoiding the socket-backed
 extra-stdio pipe that restricted Codex refused.
 
+Since 2026-10-21 this leaf is only the fallback for a domain without a
+reachable user manager; see [Gate service entry](#gate-service-entry-2026-10-21).
 Each gate creates a bounded cgroup root with its workload in `work`. Nested
 gates are descendants of that root, so outer cancellation includes every nested
 workload. Supervisors and independent deadline guardians stay outside their
@@ -616,3 +618,48 @@ Known gaps, accepted by the operator: the systemd user manager stays reachable
 from every domain (`systemd-run --user --wait /bin/kill`,
 `systemctl --user kill`, and a `--scope` escape). Docker and the shared tmux
 server are allowed services. None of these is masked.
+
+## Gate service entry, 2026-10-21
+
+The bounded leaf of the 2026-10-15 implementation is a child of the agent's
+own scope, so its `memory.max` of 8G never applied: the agent's ceiling did. A
+stage agent's scope is typically 4 GiB. A whole-project `tsc` through the
+gate was OOM-killed there twice, and OOM kills in agent scopes doubled after
+the signal sandbox shipped. Through the gate service the same check peaked at
+7.5 GiB of cgroup memory, page cache included.
+
+Inside a domain, `scripts/gate-slot.sh` now takes the same route as any other
+caller: CPU admission, then `scripts/owned-runner.ts`, which asks the user
+manager for a `delegatus-gate-<id>.service` in `delegatus-agents-work.slice`
+with `MemoryMax=${LLV_GATE_MEM:-8G}` and the work scope's CPU quota. The
+command does not run on the host. The service's first child is a
+single-threaded Python step (`src/lib/runtime/sandboxGateEntry.ts`) that opens
+the recorded caller's user, PID and mount namespaces, checks that the caller is
+still the process it recorded, enters each user namespace from the outside in
+(Bubblewrap nests the caller's user namespace inside the one that owns its PID
+and mount namespaces) and each other namespace right after its owner, sets
+`no_new_privs`, forks into the caller's PID namespace and executes there. The
+command and its descendants see and signal only the caller's namespace, keep
+no capabilities, and are bounded and stopped by the service's cgroup. Every
+refusal comes before the fork and exits 69 with its reason; the command then
+does not run anywhere.
+
+The owner identity the service watches is the caller's runner translated to
+host PIDs through the read-only original proc mount, as CPU admission already
+does; a supervising identity inherited in `LLV_OWNED_RUN_PARENT_IDENTITY` is
+translated by its PID in the caller's namespace and its kernel start time.
+When either dies the service ends and the manager stops its whole cgroup. A
+caller in a PID namespace that dropped `LLV_SIGNAL_SANDBOX` is refused with
+that reason instead of being judged dead. The entry adds a `gate` record to the
+command's `LLV_SIGNAL_SANDBOX`: its service cgroup and the entry process, which
+`signalSandboxContext.ts` accepts in place of the delegated scope and the
+namespace init, so gates nested in a gate keep working and reuse its slot.
+
+Only when no user manager is reachable does the gate fall back to the bounded
+leaf above. `gate-slot.sh` then says so on stderr, and the runner names the
+effective memory cap of the agent's scope when that is below the gate's.
+
+`scripts/gate-slot.namespace.integration.test.ts` drives this through a real
+namespaced caller: inside a domain it builds one with the launcher's Bubblewrap
+arguments in a leaf of its own scope with a 96 MiB cap; on a host it uses the
+launcher itself, under `LLV_SIGNAL_SANDBOX_KERNEL_TEST=1`.

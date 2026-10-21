@@ -62,8 +62,33 @@ test("a delegated caller proposes through the real registration, binding and con
     const launchAttempt = await client.callTool({ name: "voice_tools", arguments: { action: "propose", clientRequestId: "launch-refused", proposal: { ...proposal, name: "swapped",
       transport: { type: "stdio", command: "bun", args: ["x", "harmless-mcp"], env: { PATH: { value: "/srv/agent/bin" }, LD_PRELOAD: { value: "/srv/agent/x.so" } } } } } });
     expect(launchAttempt.isError).toBe(true);
-    expect(JSON.stringify(launchAttempt)).toContain("proposal.transport.env");
+    expect(JSON.stringify(launchAttempt)).toContain("INVALID_PROPOSAL");
+    for (const [index, transport] of [
+      { type: "stdio", command: "bun", args: ["x", "name@file:/abs"] },
+      { type: "stdio", command: "bun", args: ["x", "/abs"] },
+      { type: "stdio", command: "uv", args: ["tool", "run", "/abs"] },
+      { type: "stdio", command: "uv", args: ["tool", "run", "n @ file:///abs"] },
+      { type: "stdio", command: "bun", args: ["x", "git+file:/abs"] },
+      { type: "stdio", command: "uv", args: ["tool", "run", "git+file:/abs"] },
+    ].entries()) {
+      const invalid = { ...proposal, name: "invalid", transport };
+      const viaSdk = await client.callTool({ name: "voice_tools", arguments: { action: "propose", clientRequestId: `invalid-sdk-${index}`, proposal: invalid } });
+      expect(viaSdk.isError).toBe(true);
+      expect(JSON.stringify(viaSdk)).toContain("INVALID_PROPOSAL");
+      const direct = await service.callTool("voice_tools", { action: "propose", clientRequestId: `invalid-direct-${index}`, proposal: invalid });
+      expect(direct.ok).toBe(false);
+      expect(JSON.stringify(direct)).toContain("INVALID_PROPOSAL");
+    }
     expect(await fs.readFile(path.join(root, "state/voice-tools.json"), "utf8")).toBe(before);
+    for (const command of ["bun", "uv"]) {
+      const valid = { ...proposal, name: `registry_${command}`, transport: { type: "stdio", command,
+        args: command === "bun" ? ["x", "@tools/music@1.2.3"] : ["tool", "run", "music==1.2.3"] } };
+      const accepted = await client.callTool({ name: "voice_tools", arguments: { action: "propose", proposal: valid, clientRequestId: `registry-${command}` } });
+      expect(accepted.isError).not.toBe(true);
+      const stored = JSON.parse(await fs.readFile(path.join(root, "state/voice-tools.json"), "utf8"));
+      expect(stored.servers[valid.name].state).toBe("pending");
+      expect(stored.servers[valid.name].lastDryRun).toBeNull();
+    }
   } finally { await client.close(); await server.close(); }
 });
 

@@ -11,6 +11,53 @@ rejected before execution. While the child is absent, `tools/list`
 uses the last successful list and `tools/call` returns an MCP tool result with
 `isError: true` and a retry instruction. The agent's MCP connection stays open.
 
+## Startup discovery
+
+The launching installation owns `LLV_STATE_DIR`, `XDG_CONFIG_HOME` and its
+release target in the generated Viewer entry. A registered server's environment
+cannot replace those pins. A direct launcher invoked from the agent's
+`llv-spawn-sandbox` root recovers the installation from `LLV_STRUCTURED_HOST`.
+An explicit state directory outside that sandbox remains authoritative, so
+isolated tests and standalone clients keep their chosen roots. The stamp
+selects a directory; the launch capability remains the caller's identity.
+Linux and macOS temp prefixes use the same path-segment rule.
+
+A missing explicitly configured release target or runtime entry fails startup
+with the selected state directory and missing path. An empty first tool catalog
+is an MCP protocol error with state and release context. Stdio discovery checks
+a presented launch capability through the Viewer's existing authenticated HTTP
+initialize path before forwarding initialize or tools/list to the SDK. Unknown,
+malformed and rotated capabilities produce protocol errors. Legacy clients
+without a launch capability keep native attribution, and the admitted runtime
+health probe keeps its existing probe contract.
+
+Managed Claude hosts initialize the CLI control channel and wait for its
+`mcp_status` Viewer entry to leave `pending`, under one request deadline. Codex
+hosts inspect the opened thread's `mcpServerStatus/list`, selecting Viewer
+alone when the CLI supports that filter and following at most 32 pages under one
+request deadline. Both require Viewer tools before returning a host or recovering
+queued work. A failure follows the existing durable launch-failure path to the
+card and releases the owned child. Attaching to an already owned Codex socket
+retains that socket's existing thread policy.
+
+The macOS user report motivated these guards. Its exact generated definition
+and protocol exchange remain unobserved. The separate SQLite schema startup
+failure can prevent Viewer availability; it does not change MCP configuration
+precedence or environment assembly. These changes make an unavailable Viewer
+visible during capability discovery. They claim no throughput improvement.
+
+Regressions live in `bin/mcp-server.test.ts`,
+`src/lib/agent/spawnPolicy.test.ts`, `src/lib/mcp/startup.test.ts`, the Claude
+and Codex host tests, and `src/lib/runtime/structuredSpawn.integration.test.ts`.
+The native Claude discovery case in
+`src/lib/runtime/claudeStreamBrokerHost.integration.test.ts` runs with
+`LLV_CLAUDE_MCP_STARTUP_TEST=1`; it uses an isolated account home, a local MCP
+fixture and no model turn. Run explicit test paths through `scripts/gate-slot.sh`
+with private HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR and the Viewer
+control URL on a closed port.
+
+## Connected session health
+
 For stdio seats with a launch capability, the launcher refreshes a private
 record under `state/mcp-runtime/sessions/` every 30 seconds. The filename is
 the SHA-256 digest of the capability; the record contains no credential. After

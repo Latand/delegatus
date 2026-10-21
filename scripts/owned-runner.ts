@@ -4,16 +4,20 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "../src/lib/processIdentity";
+import { captureProcessIdentity, processIdentityStatus, systemBootEpoch, type ProcessIdentity } from "../src/lib/processIdentity";
 import { procBackend } from "../src/lib/proc";
 import { stopFixtureProcess } from "../src/lib/testing/fixtureProcess";
 import { admitPortableTestRunner } from "../src/lib/testing/portableTestAdmission";
 import { cpuBudgetTimer, cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
 import { cpuSlotForOwner, inheritedCpuSlot } from "../src/lib/runtime/cpuAdmission";
 import { runSandboxGate, guardSandboxGate } from "../src/lib/runtime/sandboxGateRunner";
-import { signalSandboxContext } from "../src/lib/runtime/signalSandboxContext";
+import { cpuOwnerIdentity, hostProcessIdentity, signalSandboxContext } from "../src/lib/runtime/signalSandboxContext";
+import { sandboxGateEntryCommand } from "../src/lib/runtime/sandboxGateEntry";
 
-type Launch = { command: string[]; cwd: string; env: NodeJS.ProcessEnv; owner: ProcessIdentity; parent?: ProcessIdentity; unit: string; timeoutMs: number };
+/** `namespace` marks a caller inside an agent signal domain. Its identities
+ * are translated to the host, where the service checks them, and the service
+ * runs the command inside the owner's namespaces. */
+type Launch = { command: string[]; cwd: string; env: NodeJS.ProcessEnv; owner: ProcessIdentity; parent?: ProcessIdentity; unit: string; timeoutMs: number; namespace?: true };
 const args = process.argv.slice(2);
 const timeoutMs = Number(process.env.LLV_OWNED_RUN_TIMEOUT_MS ?? 900_000);
 if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error("owned runner needs a positive finite deadline");
@@ -78,17 +82,28 @@ if (args[0] === "--namespace-guardian") {
   const launch: Launch = JSON.parse(fs.readFileSync(file, "utf8"));
   fs.unlinkSync(file);
   fs.rmdirSync(path.dirname(file));
+  // An identity recorded in another PID namespace can never be proven alive
+  // here; without this check its owner looks dead and the command ends at once.
+  if (launch.owner.bootEpoch !== systemBootEpoch()) {
+    console.error("gate-slot: the caller runs in a PID namespace this gate service cannot see. Run gate-slot with the LLV_SIGNAL_SANDBOX its agent was launched with; the command did not run.");
+    process.exit(69);
+  }
+  // This process reads the host's kernel; the namespace marker is the command's.
+  const hostEnv = { ...launch.env };
+  delete hostEnv.LLV_SIGNAL_SANDBOX;
   const notifySocket = process.env.NOTIFY_SOCKET;
-  process.env = { ...launch.env, NOTIFY_SOCKET: notifySocket };
+  process.env = { ...hostEnv, NOTIFY_SOCKET: notifySocket };
   const budget = cpuWaitBudget(launch.env);
-  const slot = inheritedCpuSlot(launch.env) ?? cpuSlotForOwner(launch.owner, launch.env);
+  const slot = inheritedCpuSlot(hostEnv) ?? cpuSlotForOwner(launch.owner, hostEnv);
   if (slot) budget.env.LLV_GATE_SLOT_LEASE = JSON.stringify(slot);
   const cgroup = fs.readFileSync("/proc/self/cgroup", "utf8").split("\n").find(line => line.startsWith("0::"))?.slice(3);
   if (!cgroup?.endsWith(`/${launch.unit}`)) throw new Error("owned runner was not admitted to its declared service cgroup");
   const members = () => fs.readFileSync(path.join("/sys/fs/cgroup", cgroup, "cgroup.procs"), "utf8").trim().split(/\s+/).map(Number).filter(pid => pid > 0 && pid !== process.pid && !procBackend.processExited(pid));
   // exec preserves the shell's kernel start identity and binds the admission
   // token to this command's PID. A nested test cannot reuse its parent's token.
-  const child = spawn("/bin/bash", ["-c", 'export LLV_OWNED_TEST_RUNNER_PID=$$; exec "$@"', "owned-command", ...launch.command], { cwd: launch.cwd, env: { ...budget.env, LLV_OWNED_TEST_RUN_CGROUP: cgroup }, stdio: "inherit" });
+  const shell = ["/bin/bash", "-c", 'export LLV_OWNED_TEST_RUNNER_PID=$$; exec "$@"', "owned-command", ...launch.command];
+  const argv = launch.namespace ? sandboxGateEntryCommand(launch.owner, launch.cwd, shell) : shell;
+  const child = spawn(argv[0]!, argv.slice(1), { cwd: launch.cwd, env: { ...budget.env, LLV_OWNED_TEST_RUN_CGROUP: cgroup }, stdio: "inherit" });
   // Capture before any await; systemd owns every fork in the cgroup from birth.
   const identity = child.pid ? captureProcessIdentity(child.pid) : null;
   let settled = false;
@@ -122,15 +137,24 @@ if (args[0] === "--namespace-guardian") {
   process.on("SIGINT", () => finish(130));
 } else {
   if (!args.length) throw new Error("usage: owned-runner.ts command [args...]");
-  if (signalSandboxContext()) await runSandboxGate(args, timeoutMs, import.meta.path);
+  const sandbox = signalSandboxContext();
+  if (sandbox && spawnSync("systemctl", ["--user", "show-environment"], { stdio: "ignore", timeout: 5_000 }).status !== 0) {
+    console.error("owned runner: no reachable systemd user manager, so no gate service; the command runs in a bounded leaf of this agent's own scope instead");
+    await runSandboxGate(args, timeoutMs, import.meta.path);
+  }
   const unit = `delegatus-gate-${randomUUID()}.service`;
-  const owner = captureProcessIdentity(process.pid);
+  // The service checks both identities from the host PID namespace.
+  const owner = sandbox ? cpuOwnerIdentity(process.pid) : captureProcessIdentity(process.pid);
   if (!owner.startIdentity || !owner.bootEpoch) throw new Error("owned runner has no verifiable start identity");
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "delegatus-owned-run-"));
   fs.chmodSync(directory, 0o700);
   const file = path.join(directory, "launch.json");
-  const parent = process.env.LLV_OWNED_RUN_PARENT_IDENTITY ? JSON.parse(process.env.LLV_OWNED_RUN_PARENT_IDENTITY) as ProcessIdentity : undefined;
-  fs.writeFileSync(file, JSON.stringify({ command: args, cwd: process.cwd(), env: process.env, owner, parent, unit, timeoutMs } satisfies Launch), { mode: 0o600 });
+  let parent = process.env.LLV_OWNED_RUN_PARENT_IDENTITY ? JSON.parse(process.env.LLV_OWNED_RUN_PARENT_IDENTITY) as ProcessIdentity : undefined;
+  if (parent && sandbox) {
+    try { parent = hostProcessIdentity(parent); }
+    catch (error) { throw new Error(`owned runner cannot verify its supervising process from the gate service: ${(error as Error).message}`); }
+  }
+  fs.writeFileSync(file, JSON.stringify({ command: args, cwd: process.cwd(), env: process.env, owner, parent, unit, timeoutMs, ...(sandbox ? { namespace: true as const } : {}) } satisfies Launch), { mode: 0o600 });
   const cpu = process.env.LLV_OWNED_RUN_CPU_SLICE ? [`--slice=${process.env.LLV_OWNED_RUN_CPU_SLICE}`, "-p", "CPUWeight=100", "-p", `CPUQuota=${process.env.LLV_OWNED_RUN_CPU_QUOTA}%`, "-p", "CPUQuotaPeriodSec=20ms"] : [];
   const service = spawn("systemd-run", [...cpu, "--user", "--quiet", "--wait", "--pipe", "--collect", `--unit=${unit}`, "--service-type=exec", "-p", "KillMode=control-group", "-p", "TimeoutStopSec=2s", "-p", "WatchdogSec=60s", "-p", "NotifyAccess=all", "-p", `MemoryMax=${process.env.LLV_GATE_MEM ?? "8G"}`, "--", process.execPath, import.meta.path, "--service", file], { stdio: "inherit" });
   const close = new Promise<number>(resolve => {

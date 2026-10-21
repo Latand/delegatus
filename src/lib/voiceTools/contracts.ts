@@ -36,7 +36,8 @@ export const proposalSchema = z.object({
   entryFile: z.object({ path: text(4096), sha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict().nullable().default(null),
   private: z.boolean().default(false), askBeforeActing: z.boolean().default(false),
   callTimeoutMs: z.number().int().min(5000).max(60_000).default(15_000),
-}).strict();
+}).strict().refine(config => config.transport.type !== "stdio" || config.entryFile !== null || packageLaunch(config.transport),
+  { path: ["transport", "args"], message: "Use a registry package name with an optional version, or pin a local entryFile." });
 export type VoiceToolProposal = z.infer<typeof proposalSchema>;
 export type Tool = { name: string; description: string; inputSchema: Record<string, unknown>; annotations?: Record<string, unknown> };
 export type Catalog = { digest: string; fetchedAt: string; tools: Tool[] };
@@ -77,11 +78,22 @@ export function probeDigest(name: string, server: VoiceToolServer): string {
 export function literalValues(entries: Record<string, { value: string } | { secretRef: string }>): Record<string, string> {
   return Object.fromEntries(Object.entries(entries).flatMap(([name, entry]) => "value" in entry ? [[name, entry.value]] : []).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
 }
-/** `bun x <pkg>` and `uv tool run <pkg>`: the launcher resolves the package, so it runs from a fresh empty folder. */
+// Deliberately admit registry references only. A colon, slash outside an npm scope,
+// URL, path, alias, extras or dependency marker must never choose unpinned code.
+const npmRegistryPackage = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*(?:@(?:[a-zA-Z_-][a-zA-Z0-9._-]*|(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?))?$/;
+const pythonRegistryPackage = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?(?:==v?(?:[0-9]+!)?[0-9]+(?:\.[0-9]+)*(?:[-_.]?(?:alpha|a|beta|b|preview|pre|c|rc)[-_.]?[0-9]*)?(?:-[0-9]+|[-_.]?(?:post|rev|r)[-_.]?[0-9]*)?(?:[-_.]?dev[-_.]?[0-9]*)?(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?)?$/i;
+/** Checked by proposal/persisted-record validation and again by the probe before spawn. */
 export function packageLaunch(transport: { command: "bun" | "uv"; args: string[] }): boolean {
   const args = transport.args;
-  return transport.command === "bun" ? args[0] === "x" && !!args[1] && !args[1].startsWith("-")
-    : args[0] === "tool" && args[1] === "run" && !!args[2] && !args[2].startsWith("-");
+  const target = transport.command === "bun" ? args[0] === "x" && args[1]
+    : args[0] === "tool" && args[1] === "run" && args[2];
+  if (!target || /\s/.test(target)) return false;
+  const versionAt = transport.command === "bun" ? target.indexOf("@", 1) : target.indexOf("==");
+  const name = versionAt < 0 ? target : target.slice(0, versionAt);
+  if (transport.command === "bun" && name.length > 214) return false;
+  // A bare archive filename can also look like a registry name.
+  if (/\.(?:tgz|tar(?:\.gz)?|zip|whl)$/i.test(name)) return false;
+  return transport.command === "bun" ? npmRegistryPackage.test(target) : pythonRegistryPackage.test(target);
 }
 export function secretReferences(server: VoiceToolServer): string[] {
   const entries = server.transport.type === "stdio" ? server.transport.env : server.transport.headers;

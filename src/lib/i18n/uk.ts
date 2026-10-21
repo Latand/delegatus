@@ -1920,6 +1920,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "decisions.openPrototypes": "Відкрити прототипи",
   "decisions.thumbAria": "Варіант {n}, {name}: відкрити прототипи",
   "decisions.expandAria": "Відкрити «{title}»",
+  "decisions.collapseAria": "Згорнути «{title}»",
   "decisions.inColumn": "Відповісти в колонці «Рішення»",
   "decisions.answeredAt": "Відповідь · {time}",
   "decisions.state.sent": "доставлено",

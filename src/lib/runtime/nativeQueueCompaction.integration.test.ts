@@ -197,6 +197,16 @@ test.skipIf(!binary)("real Codex: a compacted historical entry converges from ca
   });
   await new Promise<void>(resolve => backend.listen(0, "127.0.0.1", resolve));
   const address = backend.address(); if (!address || typeof address === "string") throw new Error("fixture bind failed");
+  const mcp = path.join(base, "viewer.mjs");
+  fs.writeFileSync(mcp, `import { createInterface } from "node:readline";
+    createInterface({ input: process.stdin }).on("line", line => {
+      const request = JSON.parse(line);
+      if (request.id === undefined) return;
+      const result = request.method === "initialize"
+        ? { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "viewer", version: "1" } }
+        : request.method === "tools/list" ? { tools: [{ name: "fixture_check", inputSchema: { type: "object" } }] } : {};
+      console.log(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }));
+    });`);
   fs.writeFileSync(path.join(env.CODEX_HOME!, "config.toml"), `model = "fixture-model"
 model_provider = "fixture"
 approval_policy = "never"
@@ -213,6 +223,9 @@ enabled = false
 [features]
 apps = false
 plugins = false
+[mcp_servers.viewer]
+command = ${JSON.stringify(process.execPath)}
+args = ${JSON.stringify([mcp])}
 `);
   const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
   let hideCanonicalClient: string | null = null;

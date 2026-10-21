@@ -44,6 +44,9 @@ async function body(req: NextRequest): Promise<unknown> {
   } finally { await reader.cancel().catch(() => undefined); }
 }
 function failure(code: string, status = 409) { return NextResponse.json({ code }, { status, headers: { "Cache-Control": "no-store" } }); }
+function invalidBody(error: z.ZodError) {
+  return failure(error.issues.some(issue => issue.path[0] === "proposal") ? "INVALID_PROPOSAL" : "INVALID_REQUEST", 400);
+}
 export function voiceToolsFailure(error: unknown) {
   const code = error instanceof VoiceToolsError ? error.code : "VOICE_TOOLS_UNAVAILABLE";
   return failure(code, code === "OPERATOR_REQUIRED" ? 403 : code.startsWith("INVALID") ? 400 : 409);
@@ -61,7 +64,7 @@ export async function changeVoiceTools(req: NextRequest) {
   const rejection = voiceToolsOperator(req); if (rejection) return rejection;
   try {
     const parsed = browserSchema.safeParse(await body(req));
-    if (!parsed.success) return failure("INVALID_REQUEST", 400);
+    if (!parsed.success) return invalidBody(parsed.error);
     // Reading the body can await a disconnected or newly revoked member.
     const recheck = voiceToolsOperator(req); if (recheck) return recheck;
     const input = parsed.data;
@@ -81,7 +84,7 @@ export async function mcpVoiceTools(req: NextRequest) {
   if (claim.claim !== "valid" || claim.service !== "mcp") return failure("MCP_REQUIRED", 403);
   try {
     const parsed = mcpSchema.safeParse(await body(req));
-    if (!parsed.success) return failure("INVALID_REQUEST", 400);
+    if (!parsed.success) return invalidBody(parsed.error);
     const input = parsed.data;
     const hub = voiceToolHub();
     if (input.action === "propose") {

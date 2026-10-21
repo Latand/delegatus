@@ -1,0 +1,2218 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "readings": {
+    "fold-1440-uk-light-expanded": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rows": [
+        {
+          "id": "pr_dddddddddddddddddddddddddddddddd",
+          "expanded": "false",
+          "label": "Відкрити «Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту»",
+          "text": "Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту",
+          "x": 1016,
+          "y": 508,
+          "w": 335,
+          "h": 44,
+          "inside": true,
+          "truncated": true,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Відкрити «Вікно підтвердження оновлення»",
+          "text": "Вікно підтвердження оновлення",
+          "x": 1016,
+          "y": 560,
+          "w": 335,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": {
+        "review": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "ariaExpanded": "true",
+        "label": "Згорнути «Акаунт для нічних лейнів Codex»",
+        "header": {
+          "x": 1017,
+          "y": 184,
+          "w": 333,
+          "h": 34
+        },
+        "title": "Акаунт для нічних лейнів Codex",
+        "titleWhole": true,
+        "timeApart": true,
+        "markApart": true,
+        "markInside": true,
+        "uncovered": true
+      },
+      "focused": "BODY",
+      "horizontalOverflow": false
+    },
+    "fold-1440-uk-light-collapsed": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "",
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "expanded": "false",
+          "label": "Відкрити «Акаунт для нічних лейнів Codex»",
+          "text": "Акаунт для нічних лейнів Codex",
+          "x": 1016,
+          "y": 183,
+          "w": 335,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        },
+        {
+          "id": "pr_dddddddddddddddddddddddddddddddd",
+          "expanded": "false",
+          "label": "Відкрити «Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту»",
+          "text": "Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту",
+          "x": 1016,
+          "y": 235,
+          "w": 335,
+          "h": 44,
+          "inside": true,
+          "truncated": true,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Відкрити «Вікно підтвердження оновлення»",
+          "text": "Вікно підтвердження оновлення",
+          "x": 1016,
+          "y": 287,
+          "w": 335,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": null,
+      "focused": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "horizontalOverflow": false
+    },
+    "fold-1440-uk-light-keyboard": {
+      "reopened": "fold:pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "refolded": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "fold-1440-uk-light-long": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "pr_dddddddddddddddddddddddddddddddd",
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "expanded": "false",
+          "label": "Відкрити «Акаунт для нічних лейнів Codex»",
+          "text": "Акаунт для нічних лейнів Codex",
+          "x": 1016,
+          "y": 183,
+          "w": 335,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Відкрити «Вікно підтвердження оновлення»",
+          "text": "Вікно підтвердження оновлення",
+          "x": 1016,
+          "y": 861,
+          "w": 335,
+          "h": 44,
+          "inside": false,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": {
+        "review": "pr_dddddddddddddddddddddddddddddddd",
+        "ariaExpanded": "true",
+        "label": "Згорнути «Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту»",
+        "header": {
+          "x": 1017,
+          "y": 236,
+          "w": 333,
+          "h": 68
+        },
+        "title": "Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту",
+        "titleWhole": true,
+        "timeApart": true,
+        "markApart": true,
+        "markInside": true,
+        "uncovered": true
+      },
+      "focused": "fold:pr_dddddddddddddddddddddddddddddddd",
+      "horizontalOverflow": false
+    },
+    "fold-1440-uk-light-requested": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "pr_dddddddddddddddddddddddddddddddd",
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "expanded": "false",
+          "label": "Відкрити «Акаунт для нічних лейнів Codex»",
+          "text": "Акаунт для нічних лейнів Codex",
+          "x": 1016,
+          "y": 119,
+          "w": 335,
+          "h": 44,
+          "inside": false,
+          "truncated": false,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Відкрити «Вікно підтвердження оновлення»",
+          "text": "Вікно підтвердження оновлення",
+          "x": 1016,
+          "y": 797,
+          "w": 335,
+          "h": 44,
+          "inside": false,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": {
+        "review": "pr_dddddddddddddddddddddddddddddddd",
+        "ariaExpanded": "true",
+        "label": "Згорнути «Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту»",
+        "header": {
+          "x": 1017,
+          "y": 172,
+          "w": 333,
+          "h": 68
+        },
+        "title": "Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту",
+        "titleWhole": true,
+        "timeApart": true,
+        "markApart": true,
+        "markInside": true,
+        "uncovered": true
+      },
+      "focused": "BUTTON",
+      "horizontalOverflow": false
+    },
+    "fold-1440-uk-dark-expanded": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rows": [
+        {
+          "id": "pr_dddddddddddddddddddddddddddddddd",
+          "expanded": "false",
+          "label": "Відкрити «Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту»",
+          "text": "Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту",
+          "x": 1016,
+          "y": 508,
+          "w": 335,
+          "h": 44,
+          "inside": true,
+          "truncated": true,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Відкрити «Вікно підтвердження оновлення»",
+          "text": "Вікно підтвердження оновлення",
+          "x": 1016,
+          "y": 560,
+          "w": 335,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": {
+        "review": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "ariaExpanded": "true",
+        "label": "Згорнути «Акаунт для нічних лейнів Codex»",
+        "header": {
+          "x": 1017,
+          "y": 184,
+          "w": 333,
+          "h": 34
+        },
+        "title": "Акаунт для нічних лейнів Codex",
+        "titleWhole": true,
+        "timeApart": true,
+        "markApart": true,
+        "markInside": true,
+        "uncovered": true
+      },
+      "focused": "BODY",
+      "horizontalOverflow": false
+    },
+    "fold-1440-uk-dark-collapsed": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "",
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "expanded": "false",
+          "label": "Відкрити «Акаунт для нічних лейнів Codex»",
+          "text": "Акаунт для нічних лейнів Codex",
+          "x": 1016,
+          "y": 183,
+          "w": 335,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        },
+        {
+          "id": "pr_dddddddddddddddddddddddddddddddd",
+          "expanded": "false",
+          "label": "Відкрити «Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту»",
+          "text": "Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту",
+          "x": 1016,
+          "y": 235,
+          "w": 335,
+          "h": 44,
+          "inside": true,
+          "truncated": true,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Відкрити «Вікно підтвердження оновлення»",
+          "text": "Вікно підтвердження оновлення",
+          "x": 1016,
+          "y": 287,
+          "w": 335,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": null,
+      "focused": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "horizontalOverflow": false
+    },
+    "fold-1440-uk-dark-keyboard": {
+      "reopened": "fold:pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "refolded": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "fold-1440-uk-dark-long": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "pr_dddddddddddddddddddddddddddddddd",
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "expanded": "false",
+          "label": "Відкрити «Акаунт для нічних лейнів Codex»",
+          "text": "Акаунт для нічних лейнів Codex",
+          "x": 1016,
+          "y": 183,
+          "w": 335,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Відкрити «Вікно підтвердження оновлення»",
+          "text": "Вікно підтвердження оновлення",
+          "x": 1016,
+          "y": 861,
+          "w": 335,
+          "h": 44,
+          "inside": false,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": {
+        "review": "pr_dddddddddddddddddddddddddddddddd",
+        "ariaExpanded": "true",
+        "label": "Згорнути «Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту»",
+        "header": {
+          "x": 1017,
+          "y": 236,
+          "w": 333,
+          "h": 68
+        },
+        "title": "Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту",
+        "titleWhole": true,
+        "timeApart": true,
+        "markApart": true,
+        "markInside": true,
+        "uncovered": true
+      },
+      "focused": "fold:pr_dddddddddddddddddddddddddddddddd",
+      "horizontalOverflow": false
+    },
+    "fold-1440-uk-dark-requested": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "pr_dddddddddddddddddddddddddddddddd",
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "expanded": "false",
+          "label": "Відкрити «Акаунт для нічних лейнів Codex»",
+          "text": "Акаунт для нічних лейнів Codex",
+          "x": 1016,
+          "y": 119,
+          "w": 335,
+          "h": 44,
+          "inside": false,
+          "truncated": false,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Відкрити «Вікно підтвердження оновлення»",
+          "text": "Вікно підтвердження оновлення",
+          "x": 1016,
+          "y": 797,
+          "w": 335,
+          "h": 44,
+          "inside": false,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": {
+        "review": "pr_dddddddddddddddddddddddddddddddd",
+        "ariaExpanded": "true",
+        "label": "Згорнути «Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту»",
+        "header": {
+          "x": 1017,
+          "y": 172,
+          "w": 333,
+          "h": 68
+        },
+        "title": "Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту",
+        "titleWhole": true,
+        "timeApart": true,
+        "markApart": true,
+        "markInside": true,
+        "uncovered": true
+      },
+      "focused": "BUTTON",
+      "horizontalOverflow": false
+    },
+    "fold-1440-en-light-expanded": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rows": [
+        {
+          "id": "pr_dddddddddddddddddddddddddddddddd",
+          "expanded": "false",
+          "label": "Open «Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project»",
+          "text": "Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project",
+          "x": 1016,
+          "y": 508,
+          "w": 335,
+          "h": 44,
+          "inside": true,
+          "truncated": true,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Open «Update confirmation window»",
+          "text": "Update confirmation window",
+          "x": 1016,
+          "y": 560,
+          "w": 335,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": {
+        "review": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "ariaExpanded": "true",
+        "label": "Collapse «Account for the night Codex lanes»",
+        "header": {
+          "x": 1017,
+          "y": 184,
+          "w": 333,
+          "h": 34
+        },
+        "title": "Account for the night Codex lanes",
+        "titleWhole": true,
+        "timeApart": true,
+        "markApart": true,
+        "markInside": true,
+        "uncovered": true
+      },
+      "focused": "BODY",
+      "horizontalOverflow": false
+    },
+    "fold-1440-en-light-collapsed": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "",
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "expanded": "false",
+          "label": "Open «Account for the night Codex lanes»",
+          "text": "Account for the night Codex lanes",
+          "x": 1016,
+          "y": 183,
+          "w": 335,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        },
+        {
+          "id": "pr_dddddddddddddddddddddddddddddddd",
+          "expanded": "false",
+          "label": "Open «Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project»",
+          "text": "Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project",
+          "x": 1016,
+          "y": 235,
+          "w": 335,
+          "h": 44,
+          "inside": true,
+          "truncated": true,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Open «Update confirmation window»",
+          "text": "Update confirmation window",
+          "x": 1016,
+          "y": 287,
+          "w": 335,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": null,
+      "focused": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "horizontalOverflow": false
+    },
+    "fold-1440-en-light-keyboard": {
+      "reopened": "fold:pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "refolded": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "fold-1440-en-light-long": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "pr_dddddddddddddddddddddddddddddddd",
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "expanded": "false",
+          "label": "Open «Account for the night Codex lanes»",
+          "text": "Account for the night Codex lanes",
+          "x": 1016,
+          "y": 183,
+          "w": 335,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Open «Update confirmation window»",
+          "text": "Update confirmation window",
+          "x": 1016,
+          "y": 861,
+          "w": 335,
+          "h": 44,
+          "inside": false,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": {
+        "review": "pr_dddddddddddddddddddddddddddddddd",
+        "ariaExpanded": "true",
+        "label": "Collapse «Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project»",
+        "header": {
+          "x": 1017,
+          "y": 236,
+          "w": 333,
+          "h": 68
+        },
+        "title": "Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project",
+        "titleWhole": true,
+        "timeApart": true,
+        "markApart": true,
+        "markInside": true,
+        "uncovered": true
+      },
+      "focused": "fold:pr_dddddddddddddddddddddddddddddddd",
+      "horizontalOverflow": false
+    },
+    "fold-1440-en-light-requested": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "pr_dddddddddddddddddddddddddddddddd",
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "expanded": "false",
+          "label": "Open «Account for the night Codex lanes»",
+          "text": "Account for the night Codex lanes",
+          "x": 1016,
+          "y": 119,
+          "w": 335,
+          "h": 44,
+          "inside": false,
+          "truncated": false,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Open «Update confirmation window»",
+          "text": "Update confirmation window",
+          "x": 1016,
+          "y": 797,
+          "w": 335,
+          "h": 44,
+          "inside": false,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": {
+        "review": "pr_dddddddddddddddddddddddddddddddd",
+        "ariaExpanded": "true",
+        "label": "Collapse «Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project»",
+        "header": {
+          "x": 1017,
+          "y": 172,
+          "w": 333,
+          "h": 68
+        },
+        "title": "Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project",
+        "titleWhole": true,
+        "timeApart": true,
+        "markApart": true,
+        "markInside": true,
+        "uncovered": true
+      },
+      "focused": "BUTTON",
+      "horizontalOverflow": false
+    },
+    "fold-1440-en-dark-expanded": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rows": [
+        {
+          "id": "pr_dddddddddddddddddddddddddddddddd",
+          "expanded": "false",
+          "label": "Open «Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project»",
+          "text": "Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project",
+          "x": 1016,
+          "y": 508,
+          "w": 335,
+          "h": 44,
+          "inside": true,
+          "truncated": true,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Open «Update confirmation window»",
+          "text": "Update confirmation window",
+          "x": 1016,
+          "y": 560,
+          "w": 335,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": {
+        "review": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "ariaExpanded": "true",
+        "label": "Collapse «Account for the night Codex lanes»",
+        "header": {
+          "x": 1017,
+          "y": 184,
+          "w": 333,
+          "h": 34
+        },
+        "title": "Account for the night Codex lanes",
+        "titleWhole": true,
+        "timeApart": true,
+        "markApart": true,
+        "markInside": true,
+        "uncovered": true
+      },
+      "focused": "BODY",
+      "horizontalOverflow": false
+    },
+    "fold-1440-en-dark-collapsed": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "",
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "expanded": "false",
+          "label": "Open «Account for the night Codex lanes»",
+          "text": "Account for the night Codex lanes",
+          "x": 1016,
+          "y": 183,
+          "w": 335,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        },
+        {
+          "id": "pr_dddddddddddddddddddddddddddddddd",
+          "expanded": "false",
+          "label": "Open «Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project»",
+          "text": "Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project",
+          "x": 1016,
+          "y": 235,
+          "w": 335,
+          "h": 44,
+          "inside": true,
+          "truncated": true,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Open «Update confirmation window»",
+          "text": "Update confirmation window",
+          "x": 1016,
+          "y": 287,
+          "w": 335,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": null,
+      "focused": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "horizontalOverflow": false
+    },
+    "fold-1440-en-dark-keyboard": {
+      "reopened": "fold:pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "refolded": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "fold-1440-en-dark-long": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "pr_dddddddddddddddddddddddddddddddd",
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "expanded": "false",
+          "label": "Open «Account for the night Codex lanes»",
+          "text": "Account for the night Codex lanes",
+          "x": 1016,
+          "y": 183,
+          "w": 335,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Open «Update confirmation window»",
+          "text": "Update confirmation window",
+          "x": 1016,
+          "y": 861,
+          "w": 335,
+          "h": 44,
+          "inside": false,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": {
+        "review": "pr_dddddddddddddddddddddddddddddddd",
+        "ariaExpanded": "true",
+        "label": "Collapse «Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project»",
+        "header": {
+          "x": 1017,
+          "y": 236,
+          "w": 333,
+          "h": 68
+        },
+        "title": "Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project",
+        "titleWhole": true,
+        "timeApart": true,
+        "markApart": true,
+        "markInside": true,
+        "uncovered": true
+      },
+      "focused": "fold:pr_dddddddddddddddddddddddddddddddd",
+      "horizontalOverflow": false
+    },
+    "fold-1440-en-dark-requested": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "pr_dddddddddddddddddddddddddddddddd",
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "expanded": "false",
+          "label": "Open «Account for the night Codex lanes»",
+          "text": "Account for the night Codex lanes",
+          "x": 1016,
+          "y": 119,
+          "w": 335,
+          "h": 44,
+          "inside": false,
+          "truncated": false,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Open «Update confirmation window»",
+          "text": "Update confirmation window",
+          "x": 1016,
+          "y": 797,
+          "w": 335,
+          "h": 44,
+          "inside": false,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": {
+        "review": "pr_dddddddddddddddddddddddddddddddd",
+        "ariaExpanded": "true",
+        "label": "Collapse «Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project»",
+        "header": {
+          "x": 1017,
+          "y": 172,
+          "w": 333,
+          "h": 68
+        },
+        "title": "Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project",
+        "titleWhole": true,
+        "timeApart": true,
+        "markApart": true,
+        "markInside": true,
+        "uncovered": true
+      },
+      "focused": "BUTTON",
+      "horizontalOverflow": false
+    },
+    "fold-1000-uk-light-expanded": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rows": [
+        {
+          "id": "pr_dddddddddddddddddddddddddddddddd",
+          "expanded": "false",
+          "label": "Відкрити «Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту»",
+          "text": "Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту",
+          "x": 273,
+          "y": 484,
+          "w": 702,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Відкрити «Вікно підтвердження оновлення»",
+          "text": "Вікно підтвердження оновлення",
+          "x": 273,
+          "y": 536,
+          "w": 702,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": {
+        "review": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "ariaExpanded": "true",
+        "label": "Згорнути «Акаунт для нічних лейнів Codex»",
+        "header": {
+          "x": 274,
+          "y": 184,
+          "w": 700,
+          "h": 34
+        },
+        "title": "Акаунт для нічних лейнів Codex",
+        "titleWhole": true,
+        "timeApart": true,
+        "markApart": true,
+        "markInside": true,
+        "uncovered": true
+      },
+      "focused": "BODY",
+      "horizontalOverflow": false
+    },
+    "fold-1000-uk-light-collapsed": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "",
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "expanded": "false",
+          "label": "Відкрити «Акаунт для нічних лейнів Codex»",
+          "text": "Акаунт для нічних лейнів Codex",
+          "x": 273,
+          "y": 183,
+          "w": 702,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        },
+        {
+          "id": "pr_dddddddddddddddddddddddddddddddd",
+          "expanded": "false",
+          "label": "Відкрити «Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту»",
+          "text": "Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту",
+          "x": 273,
+          "y": 235,
+          "w": 702,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Відкрити «Вікно підтвердження оновлення»",
+          "text": "Вікно підтвердження оновлення",
+          "x": 273,
+          "y": 287,
+          "w": 702,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": null,
+      "focused": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "horizontalOverflow": false
+    },
+    "fold-1000-uk-light-keyboard": {
+      "reopened": "fold:pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "refolded": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "fold-1000-uk-light-long": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "pr_dddddddddddddddddddddddddddddddd",
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "expanded": "false",
+          "label": "Відкрити «Акаунт для нічних лейнів Codex»",
+          "text": "Акаунт для нічних лейнів Codex",
+          "x": 273,
+          "y": 183,
+          "w": 702,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Відкрити «Вікно підтвердження оновлення»",
+          "text": "Вікно підтвердження оновлення",
+          "x": 273,
+          "y": 633,
+          "w": 702,
+          "h": 44,
+          "inside": false,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": {
+        "review": "pr_dddddddddddddddddddddddddddddddd",
+        "ariaExpanded": "true",
+        "label": "Згорнути «Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту»",
+        "header": {
+          "x": 274,
+          "y": 236,
+          "w": 700,
+          "h": 51
+        },
+        "title": "Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту",
+        "titleWhole": true,
+        "timeApart": true,
+        "markApart": true,
+        "markInside": true,
+        "uncovered": true
+      },
+      "focused": "fold:pr_dddddddddddddddddddddddddddddddd",
+      "horizontalOverflow": false
+    },
+    "fold-1000-uk-dark-expanded": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rows": [
+        {
+          "id": "pr_dddddddddddddddddddddddddddddddd",
+          "expanded": "false",
+          "label": "Відкрити «Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту»",
+          "text": "Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту",
+          "x": 273,
+          "y": 484,
+          "w": 702,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Відкрити «Вікно підтвердження оновлення»",
+          "text": "Вікно підтвердження оновлення",
+          "x": 273,
+          "y": 536,
+          "w": 702,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": {
+        "review": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "ariaExpanded": "true",
+        "label": "Згорнути «Акаунт для нічних лейнів Codex»",
+        "header": {
+          "x": 274,
+          "y": 184,
+          "w": 700,
+          "h": 34
+        },
+        "title": "Акаунт для нічних лейнів Codex",
+        "titleWhole": true,
+        "timeApart": true,
+        "markApart": true,
+        "markInside": true,
+        "uncovered": true
+      },
+      "focused": "BODY",
+      "horizontalOverflow": false
+    },
+    "fold-1000-uk-dark-collapsed": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "",
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "expanded": "false",
+          "label": "Відкрити «Акаунт для нічних лейнів Codex»",
+          "text": "Акаунт для нічних лейнів Codex",
+          "x": 273,
+          "y": 183,
+          "w": 702,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        },
+        {
+          "id": "pr_dddddddddddddddddddddddddddddddd",
+          "expanded": "false",
+          "label": "Відкрити «Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту»",
+          "text": "Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту",
+          "x": 273,
+          "y": 235,
+          "w": 702,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Відкрити «Вікно підтвердження оновлення»",
+          "text": "Вікно підтвердження оновлення",
+          "x": 273,
+          "y": 287,
+          "w": 702,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": null,
+      "focused": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "horizontalOverflow": false
+    },
+    "fold-1000-uk-dark-keyboard": {
+      "reopened": "fold:pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "refolded": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "fold-1000-uk-dark-long": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "pr_dddddddddddddddddddddddddddddddd",
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "expanded": "false",
+          "label": "Відкрити «Акаунт для нічних лейнів Codex»",
+          "text": "Акаунт для нічних лейнів Codex",
+          "x": 273,
+          "y": 183,
+          "w": 702,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Відкрити «Вікно підтвердження оновлення»",
+          "text": "Вікно підтвердження оновлення",
+          "x": 273,
+          "y": 633,
+          "w": 702,
+          "h": 44,
+          "inside": false,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": {
+        "review": "pr_dddddddddddddddddddddddddddddddd",
+        "ariaExpanded": "true",
+        "label": "Згорнути «Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту»",
+        "header": {
+          "x": 274,
+          "y": 236,
+          "w": 700,
+          "h": 51
+        },
+        "title": "Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту",
+        "titleWhole": true,
+        "timeApart": true,
+        "markApart": true,
+        "markInside": true,
+        "uncovered": true
+      },
+      "focused": "fold:pr_dddddddddddddddddddddddddddddddd",
+      "horizontalOverflow": false
+    },
+    "fold-1000-en-light-expanded": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rows": [
+        {
+          "id": "pr_dddddddddddddddddddddddddddddddd",
+          "expanded": "false",
+          "label": "Open «Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project»",
+          "text": "Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project",
+          "x": 273,
+          "y": 484,
+          "w": 702,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Open «Update confirmation window»",
+          "text": "Update confirmation window",
+          "x": 273,
+          "y": 536,
+          "w": 702,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": {
+        "review": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "ariaExpanded": "true",
+        "label": "Collapse «Account for the night Codex lanes»",
+        "header": {
+          "x": 274,
+          "y": 184,
+          "w": 700,
+          "h": 34
+        },
+        "title": "Account for the night Codex lanes",
+        "titleWhole": true,
+        "timeApart": true,
+        "markApart": true,
+        "markInside": true,
+        "uncovered": true
+      },
+      "focused": "BODY",
+      "horizontalOverflow": false
+    },
+    "fold-1000-en-light-collapsed": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "",
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "expanded": "false",
+          "label": "Open «Account for the night Codex lanes»",
+          "text": "Account for the night Codex lanes",
+          "x": 273,
+          "y": 183,
+          "w": 702,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        },
+        {
+          "id": "pr_dddddddddddddddddddddddddddddddd",
+          "expanded": "false",
+          "label": "Open «Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project»",
+          "text": "Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project",
+          "x": 273,
+          "y": 235,
+          "w": 702,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Open «Update confirmation window»",
+          "text": "Update confirmation window",
+          "x": 273,
+          "y": 287,
+          "w": 702,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": null,
+      "focused": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "horizontalOverflow": false
+    },
+    "fold-1000-en-light-keyboard": {
+      "reopened": "fold:pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "refolded": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "fold-1000-en-light-long": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "pr_dddddddddddddddddddddddddddddddd",
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "expanded": "false",
+          "label": "Open «Account for the night Codex lanes»",
+          "text": "Account for the night Codex lanes",
+          "x": 273,
+          "y": 183,
+          "w": 702,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Open «Update confirmation window»",
+          "text": "Update confirmation window",
+          "x": 273,
+          "y": 633,
+          "w": 702,
+          "h": 44,
+          "inside": false,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": {
+        "review": "pr_dddddddddddddddddddddddddddddddd",
+        "ariaExpanded": "true",
+        "label": "Collapse «Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project»",
+        "header": {
+          "x": 274,
+          "y": 236,
+          "w": 700,
+          "h": 51
+        },
+        "title": "Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project",
+        "titleWhole": true,
+        "timeApart": true,
+        "markApart": true,
+        "markInside": true,
+        "uncovered": true
+      },
+      "focused": "fold:pr_dddddddddddddddddddddddddddddddd",
+      "horizontalOverflow": false
+    },
+    "fold-1000-en-dark-expanded": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rows": [
+        {
+          "id": "pr_dddddddddddddddddddddddddddddddd",
+          "expanded": "false",
+          "label": "Open «Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project»",
+          "text": "Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project",
+          "x": 273,
+          "y": 484,
+          "w": 702,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Open «Update confirmation window»",
+          "text": "Update confirmation window",
+          "x": 273,
+          "y": 536,
+          "w": 702,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": {
+        "review": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "ariaExpanded": "true",
+        "label": "Collapse «Account for the night Codex lanes»",
+        "header": {
+          "x": 274,
+          "y": 184,
+          "w": 700,
+          "h": 34
+        },
+        "title": "Account for the night Codex lanes",
+        "titleWhole": true,
+        "timeApart": true,
+        "markApart": true,
+        "markInside": true,
+        "uncovered": true
+      },
+      "focused": "BODY",
+      "horizontalOverflow": false
+    },
+    "fold-1000-en-dark-collapsed": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "",
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "expanded": "false",
+          "label": "Open «Account for the night Codex lanes»",
+          "text": "Account for the night Codex lanes",
+          "x": 273,
+          "y": 183,
+          "w": 702,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        },
+        {
+          "id": "pr_dddddddddddddddddddddddddddddddd",
+          "expanded": "false",
+          "label": "Open «Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project»",
+          "text": "Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project",
+          "x": 273,
+          "y": 235,
+          "w": 702,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Open «Update confirmation window»",
+          "text": "Update confirmation window",
+          "x": 273,
+          "y": 287,
+          "w": 702,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": null,
+      "focused": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "horizontalOverflow": false
+    },
+    "fold-1000-en-dark-keyboard": {
+      "reopened": "fold:pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "refolded": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "fold-1000-en-dark-long": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "pr_dddddddddddddddddddddddddddddddd",
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "expanded": "false",
+          "label": "Open «Account for the night Codex lanes»",
+          "text": "Account for the night Codex lanes",
+          "x": 273,
+          "y": 183,
+          "w": 702,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Open «Update confirmation window»",
+          "text": "Update confirmation window",
+          "x": 273,
+          "y": 633,
+          "w": 702,
+          "h": 44,
+          "inside": false,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": {
+        "review": "pr_dddddddddddddddddddddddddddddddd",
+        "ariaExpanded": "true",
+        "label": "Collapse «Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project»",
+        "header": {
+          "x": 274,
+          "y": 236,
+          "w": 700,
+          "h": 51
+        },
+        "title": "Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project",
+        "titleWhole": true,
+        "timeApart": true,
+        "markApart": true,
+        "markInside": true,
+        "uncovered": true
+      },
+      "focused": "fold:pr_dddddddddddddddddddddddddddddddd",
+      "horizontalOverflow": false
+    },
+    "fold-390-uk-light-expanded": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rows": [
+        {
+          "id": "pr_dddddddddddddddddddddddddddddddd",
+          "expanded": "false",
+          "label": "Відкрити «Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту»",
+          "text": "Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту",
+          "x": 12,
+          "y": 722,
+          "w": 366,
+          "h": 44,
+          "inside": true,
+          "truncated": true,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Відкрити «Вікно підтвердження оновлення»",
+          "text": "Вікно підтвердження оновлення",
+          "x": 12,
+          "y": 774,
+          "w": 366,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": {
+        "review": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "ariaExpanded": "true",
+        "label": "Згорнути «Акаунт для нічних лейнів Codex»",
+        "header": {
+          "x": 13,
+          "y": 344,
+          "w": 364,
+          "h": 44
+        },
+        "title": "Акаунт для нічних лейнів Codex",
+        "titleWhole": true,
+        "timeApart": true,
+        "markApart": true,
+        "markInside": true,
+        "uncovered": true
+      },
+      "focused": "DIV",
+      "horizontalOverflow": false
+    },
+    "fold-390-uk-light-collapsed": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "",
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "expanded": "false",
+          "label": "Відкрити «Акаунт для нічних лейнів Codex»",
+          "text": "Акаунт для нічних лейнів Codex",
+          "x": 12,
+          "y": 670,
+          "w": 366,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        },
+        {
+          "id": "pr_dddddddddddddddddddddddddddddddd",
+          "expanded": "false",
+          "label": "Відкрити «Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту»",
+          "text": "Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту",
+          "x": 12,
+          "y": 722,
+          "w": 366,
+          "h": 44,
+          "inside": true,
+          "truncated": true,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Відкрити «Вікно підтвердження оновлення»",
+          "text": "Вікно підтвердження оновлення",
+          "x": 12,
+          "y": 774,
+          "w": 366,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": null,
+      "focused": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "horizontalOverflow": false
+    },
+    "fold-390-uk-light-keyboard": {
+      "reopened": "fold:pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "refolded": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "fold-390-uk-light-long": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "pr_dddddddddddddddddddddddddddddddd",
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "expanded": "false",
+          "label": "Відкрити «Акаунт для нічних лейнів Codex»",
+          "text": "Акаунт для нічних лейнів Codex",
+          "x": 12,
+          "y": 220,
+          "w": 366,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Відкрити «Вікно підтвердження оновлення»",
+          "text": "Вікно підтвердження оновлення",
+          "x": 12,
+          "y": 979,
+          "w": 366,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": {
+        "review": "pr_dddddddddddddddddddddddddddddddd",
+        "ariaExpanded": "true",
+        "label": "Згорнути «Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту»",
+        "header": {
+          "x": 13,
+          "y": 273,
+          "w": 364,
+          "h": 70
+        },
+        "title": "Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту",
+        "titleWhole": true,
+        "timeApart": true,
+        "markApart": true,
+        "markInside": true,
+        "uncovered": true
+      },
+      "focused": "fold:pr_dddddddddddddddddddddddddddddddd",
+      "horizontalOverflow": false
+    },
+    "fold-390-uk-dark-expanded": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rows": [
+        {
+          "id": "pr_dddddddddddddddddddddddddddddddd",
+          "expanded": "false",
+          "label": "Відкрити «Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту»",
+          "text": "Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту",
+          "x": 12,
+          "y": 722,
+          "w": 366,
+          "h": 44,
+          "inside": true,
+          "truncated": true,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Відкрити «Вікно підтвердження оновлення»",
+          "text": "Вікно підтвердження оновлення",
+          "x": 12,
+          "y": 774,
+          "w": 366,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": {
+        "review": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "ariaExpanded": "true",
+        "label": "Згорнути «Акаунт для нічних лейнів Codex»",
+        "header": {
+          "x": 13,
+          "y": 344,
+          "w": 364,
+          "h": 44
+        },
+        "title": "Акаунт для нічних лейнів Codex",
+        "titleWhole": true,
+        "timeApart": true,
+        "markApart": true,
+        "markInside": true,
+        "uncovered": true
+      },
+      "focused": "DIV",
+      "horizontalOverflow": false
+    },
+    "fold-390-uk-dark-collapsed": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "",
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "expanded": "false",
+          "label": "Відкрити «Акаунт для нічних лейнів Codex»",
+          "text": "Акаунт для нічних лейнів Codex",
+          "x": 12,
+          "y": 670,
+          "w": 366,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        },
+        {
+          "id": "pr_dddddddddddddddddddddddddddddddd",
+          "expanded": "false",
+          "label": "Відкрити «Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту»",
+          "text": "Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту",
+          "x": 12,
+          "y": 722,
+          "w": 366,
+          "h": 44,
+          "inside": true,
+          "truncated": true,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Відкрити «Вікно підтвердження оновлення»",
+          "text": "Вікно підтвердження оновлення",
+          "x": 12,
+          "y": 774,
+          "w": 366,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": null,
+      "focused": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "horizontalOverflow": false
+    },
+    "fold-390-uk-dark-keyboard": {
+      "reopened": "fold:pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "refolded": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "fold-390-uk-dark-long": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "pr_dddddddddddddddddddddddddddddddd",
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "expanded": "false",
+          "label": "Відкрити «Акаунт для нічних лейнів Codex»",
+          "text": "Акаунт для нічних лейнів Codex",
+          "x": 12,
+          "y": 220,
+          "w": 366,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Відкрити «Вікно підтвердження оновлення»",
+          "text": "Вікно підтвердження оновлення",
+          "x": 12,
+          "y": 979,
+          "w": 366,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": {
+        "review": "pr_dddddddddddddddddddddddddddddddd",
+        "ariaExpanded": "true",
+        "label": "Згорнути «Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту»",
+        "header": {
+          "x": 13,
+          "y": 273,
+          "w": 364,
+          "h": 70
+        },
+        "title": "Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту",
+        "titleWhole": true,
+        "timeApart": true,
+        "markApart": true,
+        "markInside": true,
+        "uncovered": true
+      },
+      "focused": "fold:pr_dddddddddddddddddddddddddddddddd",
+      "horizontalOverflow": false
+    },
+    "fold-390-en-light-expanded": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rows": [
+        {
+          "id": "pr_dddddddddddddddddddddddddddddddd",
+          "expanded": "false",
+          "label": "Open «Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project»",
+          "text": "Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project",
+          "x": 12,
+          "y": 722,
+          "w": 366,
+          "h": 44,
+          "inside": true,
+          "truncated": true,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Open «Update confirmation window»",
+          "text": "Update confirmation window",
+          "x": 12,
+          "y": 774,
+          "w": 366,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": {
+        "review": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "ariaExpanded": "true",
+        "label": "Collapse «Account for the night Codex lanes»",
+        "header": {
+          "x": 13,
+          "y": 368,
+          "w": 364,
+          "h": 44
+        },
+        "title": "Account for the night Codex lanes",
+        "titleWhole": true,
+        "timeApart": true,
+        "markApart": true,
+        "markInside": true,
+        "uncovered": true
+      },
+      "focused": "DIV",
+      "horizontalOverflow": false
+    },
+    "fold-390-en-light-collapsed": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "",
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "expanded": "false",
+          "label": "Open «Account for the night Codex lanes»",
+          "text": "Account for the night Codex lanes",
+          "x": 12,
+          "y": 670,
+          "w": 366,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        },
+        {
+          "id": "pr_dddddddddddddddddddddddddddddddd",
+          "expanded": "false",
+          "label": "Open «Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project»",
+          "text": "Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project",
+          "x": 12,
+          "y": 722,
+          "w": 366,
+          "h": 44,
+          "inside": true,
+          "truncated": true,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Open «Update confirmation window»",
+          "text": "Update confirmation window",
+          "x": 12,
+          "y": 774,
+          "w": 366,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": null,
+      "focused": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "horizontalOverflow": false
+    },
+    "fold-390-en-light-keyboard": {
+      "reopened": "fold:pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "refolded": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "fold-390-en-light-long": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "pr_dddddddddddddddddddddddddddddddd",
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "expanded": "false",
+          "label": "Open «Account for the night Codex lanes»",
+          "text": "Account for the night Codex lanes",
+          "x": 12,
+          "y": 220,
+          "w": 366,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Open «Update confirmation window»",
+          "text": "Update confirmation window",
+          "x": 12,
+          "y": 955,
+          "w": 366,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": {
+        "review": "pr_dddddddddddddddddddddddddddddddd",
+        "ariaExpanded": "true",
+        "label": "Collapse «Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project»",
+        "header": {
+          "x": 13,
+          "y": 273,
+          "w": 364,
+          "h": 70
+        },
+        "title": "Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project",
+        "titleWhole": true,
+        "timeApart": true,
+        "markApart": true,
+        "markInside": true,
+        "uncovered": true
+      },
+      "focused": "fold:pr_dddddddddddddddddddddddddddddddd",
+      "horizontalOverflow": false
+    },
+    "fold-390-en-dark-expanded": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "rows": [
+        {
+          "id": "pr_dddddddddddddddddddddddddddddddd",
+          "expanded": "false",
+          "label": "Open «Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project»",
+          "text": "Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project",
+          "x": 12,
+          "y": 722,
+          "w": 366,
+          "h": 44,
+          "inside": true,
+          "truncated": true,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Open «Update confirmation window»",
+          "text": "Update confirmation window",
+          "x": 12,
+          "y": 774,
+          "w": 366,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": {
+        "review": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "ariaExpanded": "true",
+        "label": "Collapse «Account for the night Codex lanes»",
+        "header": {
+          "x": 13,
+          "y": 368,
+          "w": 364,
+          "h": 44
+        },
+        "title": "Account for the night Codex lanes",
+        "titleWhole": true,
+        "timeApart": true,
+        "markApart": true,
+        "markInside": true,
+        "uncovered": true
+      },
+      "focused": "DIV",
+      "horizontalOverflow": false
+    },
+    "fold-390-en-dark-collapsed": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "",
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "expanded": "false",
+          "label": "Open «Account for the night Codex lanes»",
+          "text": "Account for the night Codex lanes",
+          "x": 12,
+          "y": 670,
+          "w": 366,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        },
+        {
+          "id": "pr_dddddddddddddddddddddddddddddddd",
+          "expanded": "false",
+          "label": "Open «Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project»",
+          "text": "Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project",
+          "x": 12,
+          "y": 722,
+          "w": 366,
+          "h": 44,
+          "inside": true,
+          "truncated": true,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Open «Update confirmation window»",
+          "text": "Update confirmation window",
+          "x": 12,
+          "y": 774,
+          "w": 366,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": null,
+      "focused": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "horizontalOverflow": false
+    },
+    "fold-390-en-dark-keyboard": {
+      "reopened": "fold:pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "refolded": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "fold-390-en-dark-long": {
+      "order": [
+        "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "pr_dddddddddddddddddddddddddddddddd",
+        "pr_cccccccccccccccccccccccccccccccc"
+      ],
+      "expanded": "pr_dddddddddddddddddddddddddddddddd",
+      "rows": [
+        {
+          "id": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "expanded": "false",
+          "label": "Open «Account for the night Codex lanes»",
+          "text": "Account for the night Codex lanes",
+          "x": 12,
+          "y": 220,
+          "w": 366,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        },
+        {
+          "id": "pr_cccccccccccccccccccccccccccccccc",
+          "expanded": "false",
+          "label": "Open «Update confirmation window»",
+          "text": "Update confirmation window",
+          "x": 12,
+          "y": 955,
+          "w": 366,
+          "h": 44,
+          "inside": true,
+          "truncated": false,
+          "titleInside": true
+        }
+      ],
+      "open": {
+        "review": "pr_dddddddddddddddddddddddddddddddd",
+        "ariaExpanded": "true",
+        "label": "Collapse «Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project»",
+        "header": {
+          "x": 13,
+          "y": 273,
+          "w": 364,
+          "h": 70
+        },
+        "title": "Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project",
+        "titleWhole": true,
+        "timeApart": true,
+        "markApart": true,
+        "markInside": true,
+        "uncovered": true
+      },
+      "focused": "fold:pr_dddddddddddddddddddddddddddddddd",
+      "horizontalOverflow": false
+    }
+  },
+  "failures": []
+}

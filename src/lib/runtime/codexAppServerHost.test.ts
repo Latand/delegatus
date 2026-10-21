@@ -495,6 +495,9 @@ class FakeAppServer extends EventEmitter {
   readonly pid = 4242;
   readonly requests: Array<Record<string, unknown>> = [];
   readonly signals: NodeJS.Signals[] = [];
+  viewerStatus: unknown[] = [{ name: "viewer", tools: { stage_report: {} } }];
+  requireViewerThread = false;
+  beforeViewerStatus: (() => void) | null = null;
   hookHome: string | null = null;
   hookDelayMs: number | null = 0;
   hookTrustDelayMs: number | null = 0;
@@ -613,6 +616,11 @@ class FakeAppServer extends EventEmitter {
     }
     if (typeof message.id !== "number") return;
     const method = message.method;
+    if (method === "mcpServerStatus/list") {
+      this.beforeViewerStatus?.();
+      const scoped = !this.requireViewerThread || (message.params as Record<string, unknown>)?.threadId === this.threadId;
+      return this.respond(message.id, { data: scoped ? this.viewerStatus : [{ name: "viewer", tools: { global_only: {} } }], nextCursor: null });
+    }
     if (typeof method === "string" && this.ignoredMethods.includes(method)) return;
     if (method === "initialize") return this.respond(message.id, { userAgent: this.userAgent });
     if (method === "hooks/list" && this.hookHome) {
@@ -881,6 +889,78 @@ function fakeSpawn(server: FakeAppServer, captured?: { args?: string[]; options?
     return server as unknown as ChildProcessWithoutNullStreams;
   };
 }
+
+test("Codex refuses fresh and adopted launches with missing or empty Viewer tools before queue recovery", async () => {
+  for (const resume of [false, true]) for (const status of [[], [{ name: "viewer", tools: {} }]]) {
+    const child = new FakeAppServer();
+    child.viewerStatus = status;
+    const options = { cwd: "/repo", readProtocolVersion: () => "0.162.1", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(child) };
+    let host: CodexAppServerHost | null = null;
+    const error = await (resume ? CodexAppServerHost.adopt("thread-149", options) : CodexAppServerHost.start(options))
+      .then(value => { host = value; return null; }, reason => reason);
+    try {
+      expect(String(error)).toContain("Viewer MCP launch failed");
+      expect(child.requests.some(request => request.method === "thread/queue/start" || request.method === "turn/start")).toBe(false);
+    } finally { if (host) await (host as CodexAppServerHost).release(); }
+  }
+});
+
+test("Codex rejects its failed Viewer runtime status even with a cached catalog and retains toolsError", async () => {
+  const cases = [
+    { name: "viewer", runtimeStatus: "failed", tools: { stage_report: {} }, toolsError: null },
+    { name: "viewer", runtimeStatus: "failed", tools: {}, toolsError: "Viewer release target is missing" },
+  ];
+  for (const viewer of cases) {
+    const child = new FakeAppServer();
+    child.viewerStatus = [viewer];
+    const outcome = await CodexAppServerHost.start({ cwd: "/repo", readProtocolVersion: () => "0.162.1",
+      eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(child) }).then(
+      value => ({ host: value, error: null as unknown }), reason => ({ host: null, error: reason as unknown }));
+    try {
+      expect(String(outcome.error)).toContain("Viewer MCP launch failed");
+      expect(String(outcome.error)).toContain(viewer.toolsError ?? "failed");
+      expect(child.requests.some(request => request.method === "thread/queue/start" || request.method === "turn/start")).toBe(false);
+    } finally { if (outcome.host) await outcome.host.release(); }
+  }
+});
+
+test("Codex admits a cached Viewer catalog while its runtime connection is starting", async () => {
+  const child = new FakeAppServer();
+  child.viewerStatus = [{ name: "viewer", runtimeStatus: "starting", tools: { stage_report: {} }, toolsError: null }];
+  const host = await CodexAppServerHost.start({ cwd: "/repo", readProtocolVersion: () => "0.162.1",
+    eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(child) });
+  try {
+    expect((await host.health()).status).toBe("idle");
+    expect(child.requests.some(request => request.method === "thread/queue/start" || request.method === "turn/start")).toBe(false);
+  } finally { await host.release(); }
+});
+
+test("Codex verifies Viewer tools from the opened thread", async () => {
+  const child = new FakeAppServer();
+  child.requireViewerThread = true;
+  child.viewerStatus = [{ name: "viewer", tools: {} }];
+  let host: CodexAppServerHost | null = null;
+  const error = await CodexAppServerHost.start({ cwd: "/repo", readProtocolVersion: () => "0.162.1",
+    eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(child) })
+    .then(value => { host = value; return null; }, reason => reason);
+  try { expect(String(error)).toContain("viewer has no tools"); }
+  finally { if (host) await (host as CodexAppServerHost).release(); }
+});
+
+test("Codex drains resume notifications before awaiting Viewer discovery", async () => {
+  const child = new FakeAppServer();
+  child.beforeViewerStatus = () => {
+    for (let frame = 0; frame < 20; frame++) child.notify("thread/status/changed", {
+      threadId: "thread-149", status: { type: "idle", activeFlags: [] }, padding: "x".repeat(256 * 1024),
+    });
+  };
+  const host = await CodexAppServerHost.adopt("thread-149", { cwd: "/repo", readProtocolVersion: () => "0.162.1",
+    eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(child) });
+  try {
+    expect((await host.health()).status).toBe("idle");
+    expect(child.requests.some(request => request.method === "turn/start" || request.method === "thread/queue/start")).toBe(false);
+  } finally { await host.release(); }
+});
 
 async function waitForCondition(predicate: () => boolean | Promise<boolean>, message: string, timeoutMs = 5_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -2537,7 +2617,7 @@ describe("CodexAppServerHost", () => {
           viewer: {
             command: "bun",
             args: ["bin/mcp-server.mjs"],
-            env: { LLV_STATE_DIR: "fixture-state" },
+            env: { LLV_STATE_DIR: process.env.LLV_STATE_DIR },
             enabled: true,
             default_tools_approval_mode: "approve",
           },

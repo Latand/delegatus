@@ -1614,11 +1614,11 @@ test("a tmux resume rebuilds the command with the conversation's stored MCP gran
      a resource identifier, and every lookup here is overridden anyway. */
   const pathname = path.join(SANDBOX, "resume-grant-fixture.jsonl");
   fs.writeFileSync(pathname, "");
-  const stored = emptyLaunchProfile({ allowSubagents: true, plugins: ["computer-use"] });
+  const stored = emptyLaunchProfile({ allowSubagents: true, plugins: ["computer-use"], readOnly: true, sandbox: "full", permissionMode: "never" });
   /* Written past the profile helper on purpose: this stands for the grant a
      conversation carries, whatever the bound of the day admits. */
   const profile = { ...stored, mcpServers: ["viewer", "granted-connector"] };
-  const options: { mcpServers?: readonly string[] }[] = [];
+  const options: ResumeSpecOptions[] = [];
 
   const outcome = await resumeConversation(pathname, {
     pathAllowed: () => true,
@@ -1630,7 +1630,7 @@ test("a tmux resume rebuilds the command with the conversation's stored MCP gran
     listFiles: async () => [{ root: "codex-sessions", path: pathname, project: "p", mtime: 0, size: 0 } as unknown as FileEntry],
     // Liveness is injected so the case never reads this machine's processes.
     liveOwnership: () => null,
-    resumeSpecFor: (_root: string, _path: string, given: { mcpServers?: readonly string[] }) => {
+    resumeSpecFor: (_root: string, _path: string, given: ResumeSpecOptions) => {
       options.push(given);
       return { command: "resume", transcript: pathname, launchProfile: profile };
     },
@@ -1641,7 +1641,7 @@ test("a tmux resume rebuilds the command with the conversation's stored MCP gran
   /* The grant travels with the resume: omitting it relaunched the session on
      the Viewer baseline while the durable profile still claimed it (#739). */
   expect(options).toHaveLength(1);
-  expect(options[0]!.mcpServers).toEqual(["viewer", "granted-connector"]);
+  expect(options[0]!).toMatchObject({ mcpServers: ["viewer", "granted-connector"], readOnly: true, sandbox: "full", permissionMode: "never" });
 });
 
 test("a resume that cannot build a command names the failing condition (issue #935)", async () => {
@@ -1732,13 +1732,16 @@ test("message-triggered relaunches carry the stored MCP grant on both the direct
   for (const [sessionId, pathname] of [[branchId, branchPath], [rootId, rootPath]] as const) {
     registry.upsert({
       key: { engine: "codex", sessionId }, artifactPath: pathname, cwd: SANDBOX, accountId: "account",
-      launchProfile: emptyLaunchProfile({ cwd: SANDBOX, mcpServers: ["viewer"] }), status: "dead",
+      launchProfile: emptyLaunchProfile({ cwd: SANDBOX, mcpServers: ["viewer"], permissionMode: sessionId === branchId ? "never" : "on-request", readOnly: true, sandbox: sessionId === branchId ? "full" : "restricted" }), status: "dead",
       host: null, claimEpoch: 0, claimOwner: null, pendingAction: null,
     });
     /* The durable profile a relaunch reads hangs off the conversation, so the
        session needs one — an entry row alone is not what it looks up. */
-    const conversation = registry.ensureConversation("codex", pathname, "account");
-    registry.updateConversationLaunchProfile(conversation.id, { model: "gpt-5.6-sol", effort: "high", fast: false });
+    registry.ensureConversation("codex", pathname, "account");
+    registry.reconcileConversations([{ engine: "codex", path: pathname, accountId: "account",
+      launchProfile: emptyLaunchProfile({ cwd: SANDBOX, model: "gpt-5.6-sol", effort: "high", fast: false,
+        permissionMode: sessionId === branchId ? "never" : "on-request", readOnly: true, sandbox: sessionId === branchId ? "full" : "restricted" }),
+      turn: { state: "idle", source: "empty", terminalAt: null }, observedAt: "2026-10-21T00:00:00.000Z" }]);
   }
   const fileEntry = (pathname: string, parent: string | null): FileEntry => ({
     path: pathname, root: "codex-sessions", name: path.basename(pathname), project: "viewer",
@@ -1746,13 +1749,13 @@ test("message-triggered relaunches carry the stored MCP grant on both the direct
     activity: "idle", proc: null, pid: null, model: "gpt-5.6-sol", effort: "high", fast: false,
     pendingQuestion: null, waitingInput: null,
   });
-  const seen: { path: string; mcpServers?: readonly string[] }[] = [];
+  const seen: ({ path: string } & ResumeSpecOptions)[] = [];
   const overrides = (resumable: (pathname: string) => boolean) => ({
     pathAllowed: () => true,
     listFiles: async () => [fileEntry(branchPath, rootPath), fileEntry(rootPath, null)],
     livePaneHost: async () => null,
-    resumeSpecFor: (_root: string, pathname: string, given: { mcpServers?: readonly string[] }) => {
-      seen.push({ path: pathname, mcpServers: given.mcpServers });
+    resumeSpecFor: (_root: string, pathname: string, given: ResumeSpecOptions) => {
+      seen.push({ path: pathname, mcpServers: given.mcpServers, permissionMode: given.permissionMode, readOnly: given.readOnly, sandbox: given.sandbox });
       return resumable(pathname)
         ? { command: "codex resume", cwd: SANDBOX, windowName: "codex-resume", engine: "codex" }
         : null;
@@ -1764,7 +1767,7 @@ test("message-triggered relaunches carry the stored MCP grant on both the direct
      rather than the command falling back to the baseline (#739). */
   const direct = await deliverConversationMessage({ path: branchPath, text: "reopen", images: [] } as never, overrides(() => true) as never);
   expect(direct).toMatchObject({ ok: true });
-  expect(seen).toEqual([{ path: branchPath, mcpServers: ["viewer"] }]);
+  expect(seen).toEqual([{ path: branchPath, mcpServers: ["viewer"], permissionMode: "never", readOnly: true, sandbox: "full" }]);
 
   /* A branch that cannot be resumed relays through its root, whose own grant
      must reach the root's command on the same terms. */
@@ -1775,8 +1778,8 @@ test("message-triggered relaunches carry the stored MCP grant on both the direct
   );
   expect(relayed).toMatchObject({ ok: true });
   expect(seen).toEqual([
-    { path: branchPath, mcpServers: ["viewer"] },
-    { path: rootPath, mcpServers: ["viewer"] },
+    { path: branchPath, mcpServers: ["viewer"], permissionMode: "never", readOnly: true, sandbox: "full" },
+    { path: rootPath, mcpServers: ["viewer"], permissionMode: "on-request", readOnly: true, sandbox: "restricted" },
   ]);
 });
 

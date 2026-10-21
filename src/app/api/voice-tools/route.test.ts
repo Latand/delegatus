@@ -22,6 +22,36 @@ function request(method: string, body?: unknown, headers: Record<string, string>
 }
 const proposal = { name: "music", title: "Music", capability: "Search music", transport: { type: "http", url: "https://example.invalid/mcp", headers: { Authorization: { secretRef: "music-token" } } } };
 
+test("both proposal routes return INVALID_PROPOSAL for non-registry package targets", async () => {
+  const before = await (await GET(request("GET"))).json();
+  const approvedService = internalServiceHeaders("mcp");
+  for (const transport of [
+    { type: "stdio", command: "bun", args: ["x", "name@file:/abs"] },
+    { type: "stdio", command: "bun", args: ["x", "/abs"] },
+    { type: "stdio", command: "uv", args: ["tool", "run", "/abs"] },
+    { type: "stdio", command: "uv", args: ["tool", "run", "n @ file:///abs"] },
+    { type: "stdio", command: "bun", args: ["x", "git+file:/abs"] },
+    { type: "stdio", command: "uv", args: ["tool", "run", "git+file:/abs"] },
+  ]) {
+    const invalid = { ...proposal, name: "invalid", transport };
+    const browser = await POST(request("POST", { action: "propose", proposal: invalid }));
+    expect(browser.status).toBe(400);
+    expect(await browser.json()).toEqual({ code: "INVALID_PROPOSAL" });
+    const mcp = await proposalPOST(request("POST", { action: "propose", proposal: invalid, clientRequestId: "invalid-package", conversationId: "conversation_worker" }, approvedService));
+    expect(mcp.status).toBe(400);
+    expect(await mcp.json()).toEqual({ code: "INVALID_PROPOSAL" });
+  }
+  expect(await (await GET(request("GET"))).json()).toEqual(before);
+  for (const command of ["bun", "uv"]) {
+    const transport = { type: "stdio", command, args: command === "bun" ? ["x", "@tools/music@1.2.3"] : ["tool", "run", "music==1.2.3"] };
+    const valid = { ...proposal, name: `registry_${command}`, transport };
+    expect((await POST(request("POST", { action: "propose", proposal: valid }))).status).toBe(200);
+    expect((await proposalPOST(request("POST", { action: "propose", proposal: valid, clientRequestId: `registry-${command}`, conversationId: "conversation_worker" }, approvedService))).status).toBe(200);
+    const view = await (await GET(request("GET"))).json();
+    expect((await POST(request("POST", { action: "remove", name: valid.name, digest: view.servers[valid.name].digest }))).status).toBe(200);
+  }
+});
+
 test("browser API separates operator actions from MCP proposals and never echoes credentials", async () => {
   expect((await GET(request("GET"))).status).toBe(200);
   for (const headers of [{ "sec-fetch-site": "cross-site" }, { "sec-fetch-site": "none" }, { "x-llv-spawn-capability": "invalid-agent-claim" }, internalServiceHeaders("mcp")]) {

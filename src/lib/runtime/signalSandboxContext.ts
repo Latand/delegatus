@@ -14,6 +14,10 @@ export interface SignalSandboxContext {
   cgroupRoot: string;
   pidNamespace: string;
   userNamespace: string;
+  /** Set by a gate service that moved its command into this namespace
+   * (`sandboxGateEntry.ts`): the service's cgroup and the host process that
+   * entered the namespace for it. */
+  gate?: { cgroup: string; entry: string };
 }
 
 /** Markers select the path; kernel proc mounts, namespace membership and the
@@ -34,24 +38,34 @@ export function signalSandboxContext(env = process.env): SignalSandboxContext | 
       || fs.statSync(value.cgroupRoot, { bigint: true }).ino !== fs.statSync(`/sys/fs/cgroup${value.scope}`, { bigint: true }).ino
       || fs.statSync(value.cgroupRoot, { bigint: true }).dev !== fs.statSync(`/sys/fs/cgroup${value.scope}`, { bigint: true }).dev
       || link("/proc/self/ns/pid") === value.hostPidNamespace
-      || !fs.readFileSync("/proc/self/cgroup", "utf8").split("\n").some(line => line.startsWith(`0::${value.scope}/`))) throw new Error("kernel proof mismatch");
+      || !fs.readFileSync("/proc/self/cgroup", "utf8").split("\n").some(line => line.startsWith(`0::${value.scope}/`) || inGate(value.gate, line))) throw new Error("kernel proof mismatch");
     const hostPid = Number(link(path.join(value.hostProc, "self")));
     const outerStatus = fs.readFileSync(path.join(value.hostProc, "self/status"), "utf8");
     const pids = /^NSpid:\s+(.+)$/m.exec(outerStatus)?.[1]?.trim().split(/\s+/).map(Number);
     if (!pids || pids.length < 2 || pids[0] !== hostPid || pids.at(-1) !== process.pid
       || `${value.init.pid}:${fields(value.hostProc, value.init.pid)[19]}` !== value.init.startIdentity) throw new Error("ancestor proc proof mismatch");
     // Native tool sandboxes may add a further PID/user namespace. The kernel
-    // parent chain must still terminate at this invocation's recorded init.
+    // parent chain must still terminate at this invocation's recorded init,
+    // or, for a gate service's command, at the process that entered for it.
+    const gated = fs.readFileSync("/proc/self/cgroup", "utf8").split("\n").some(line => inGate(value.gate, line));
     let ancestor = hostPid, found = false;
     for (let depth = 0; depth < 256 && ancestor > 1; depth++) {
-      if (ancestor === value.init.pid) { found = true; break; }
-      ancestor = Number(fields(value.hostProc, ancestor)[1]);
+      const stat = fields(value.hostProc, ancestor);
+      if (ancestor === value.init.pid || (gated && `${ancestor}:${stat[19]}` === value.gate!.entry)) { found = true; break; }
+      ancestor = Number(stat[1]);
     }
     if (!found) throw new Error("process is outside the invocation's namespace init");
     return { ...value, pidNamespace: link("/proc/self/ns/pid"), userNamespace: link("/proc/self/ns/user") };
   } catch {
     throw new Error("agent signal sandbox unavailable: namespace or delegated-cgroup proof is missing");
   }
+}
+
+/** A gate service's own cgroup, never a path inside the delegated scope. */
+function inGate(gate: SignalSandboxContext["gate"], line: string): boolean {
+  if (!gate || typeof gate.cgroup !== "string" || typeof gate.entry !== "string" || gate.cgroup.includes("..")
+    || !/^\/.+\/delegatus-gate-[0-9a-f-]+\.service$/.test(gate.cgroup)) return false;
+  return line === `0::${gate.cgroup}` || line.startsWith(`0::${gate.cgroup}/`);
 }
 
 function fields(root: string, pid: number): string[] {
@@ -67,6 +81,33 @@ export function cpuOwnerIdentity(localPid: number, env = process.env): ProcessId
     : localPid === process.ppid ? Number(/^PPid:\s+(\d+)$/m.exec(status)?.[1]) : NaN;
   if (!Number.isSafeInteger(hostPid) || hostPid <= 1) throw new Error("CPU admission cannot translate its local owner PID");
   return { pid: hostPid, startIdentity: `${hostPid}:${fields(context.hostProc, hostPid)[19]}`, bootEpoch: context.hostEpoch };
+}
+
+/** The host identity of a process recorded in this namespace, such as a
+ * supervisor identity a gate inherits. One already recorded on the host is
+ * returned as it is; a local one is found by its PID in this namespace and its
+ * kernel start time, which no namespace changes. */
+export function hostProcessIdentity(local: ProcessIdentity, env = process.env): ProcessIdentity {
+  const context = signalSandboxContext(env);
+  if (!context || local.bootEpoch === context.hostEpoch) return local;
+  if (local.pid === process.pid || local.pid === process.ppid) {
+    if (captureProcessIdentity(local.pid).startIdentity !== local.startIdentity) throw new Error("the recorded process has ended");
+    return cpuOwnerIdentity(local.pid, env);
+  }
+  const start = /^\d+:(\d+)$/.exec(local.startIdentity ?? "")?.[1];
+  if (local.bootEpoch !== systemBootEpoch() || !start || captureProcessIdentity(local.pid).startIdentity !== local.startIdentity) {
+    throw new Error("the recorded process has ended or belongs to another PID namespace");
+  }
+  for (const name of fs.readdirSync(context.hostProc)) {
+    if (!/^\d+$/.test(name)) continue;
+    try {
+      if (fs.readlinkSync(path.join(context.hostProc, name, "ns/pid")) !== context.pidNamespace
+        || fields(context.hostProc, Number(name))[19] !== start) continue;
+      const nspid = /^NSpid:\s+(.+)$/m.exec(fs.readFileSync(path.join(context.hostProc, name, "status"), "utf8"))?.[1]?.trim().split(/\s+/);
+      if (Number(nspid?.at(-1)) === local.pid) return { pid: Number(name), startIdentity: `${name}:${start}`, bootEpoch: context.hostEpoch };
+    } catch { /* Processes of other users and exited ones cannot be the recorded one. */ }
+  }
+  throw new Error("the recorded process is not visible on the host");
 }
 
 export function cpuOwnerStatus(identity: ProcessIdentity, env = process.env): ProcessIdentityStatus {

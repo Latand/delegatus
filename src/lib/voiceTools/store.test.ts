@@ -319,3 +319,22 @@ test("a package launch runs from a fresh folder, so a proposed folder for it is 
   }
   expect((await store.view()).servers).toEqual({});
 });
+
+test("approved non-registry package records fail a fresh load even with a matching approval digest", async () => {
+  const { store, root } = await setup();
+  await store.propose({ ...proposal(), transport: { type: "stdio", command: "bun", args: ["x", "music-mcp@1.2.3"] } }, actor);
+  await catalog(store);
+  await store.operatorChange("music", (await server(store)).digest, "approve");
+  const approved = JSON.parse(await fs.readFile(store.file, "utf8"));
+  expect((await server(new VoiceToolsStore(root))).state).toBe("enabled");
+  for (const [command, args] of [
+    ["bun", ["x", "name@file:/abs"]], ["bun", ["x", "/abs"]], ["uv", ["tool", "run", "/abs"]],
+    ["uv", ["tool", "run", "n @ file:///abs"]], ["bun", ["x", "git+file:/abs"]], ["uv", ["tool", "run", "git+file:/abs"]],
+  ] as const) {
+    const raw = structuredClone(approved);
+    raw.servers.music.transport = { type: "stdio", command, args: [...args], cwd: null, env: {} };
+    raw.servers.music.approval.digest = approvalDigest("music", raw.servers.music);
+    await fs.writeFile(store.file, JSON.stringify(raw));
+    await expect(new VoiceToolsStore(root).view()).rejects.toThrow("REGISTRY_UNAVAILABLE");
+  }
+});

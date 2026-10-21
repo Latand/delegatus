@@ -47,7 +47,9 @@ client-safe view type is `VoiceToolsView` in `src/lib/voiceTools/contracts.ts`
 | `secrets` | `secrets`, a mapping of reference names to values |
 
 Success returns the same view as GET. Failures contain a fixed `code`, never
-an exception, peer stderr or credential. A stale digest returns
+an exception, peer stderr or credential. An invalid proposal returns HTTP 400
+with `INVALID_PROPOSAL` on both browser and MCP routes; the MCP tool returns
+the same code, including calls rejected before the binding. A stale digest returns
 `STALE_APPROVAL`; refresh the view before another click. Approval requires a
 successful matching dry run. Every selected tool entry is
 `{ enabled: boolean, acts: boolean }`; newly discovered tools start unselected,
@@ -104,7 +106,17 @@ a folder may choose what runs before the pinned entry:
 - a package launch (`bun x`, `uv tool run --no-config`) runs in the run's
   empty folder, because `bun x` prefers a binary under `node_modules/.bin` of
   its folder and every parent. A package launch with a proposed `cwd` is
-  refused. HTTP redirects are refused. Incoming
+  refused. The package target must be an npm registry name (optionally scoped)
+  with an optional `@semver` or `@tag`, or a Python registry name with an
+  optional `==version`. Paths, bare archives, `file:`, `link:`, `workspace:`,
+  git references, URLs, npm aliases and Python `name @ URL` forms are refused.
+  The proposal schema and persisted-record loader enforce this restriction;
+  an approved record carrying such a target fails the load with
+  `REGISTRY_UNAVAILABLE`. The probe checks the target again before spawning,
+  returning `START_FAILED` for an invalid target. A local program requires an
+  `entryFile` pin and the explicit file launch described above.
+
+HTTP redirects are refused. Incoming
 wire data is capped at 2 MiB, catalogs at 128 tools, schema JSON at 8 KiB and
 10 levels, and descriptions at 1 KiB of UTF-8. Schema compilation runs in the
 helper. Approval caps enabled servers at 16, selections at 32 tools and extra

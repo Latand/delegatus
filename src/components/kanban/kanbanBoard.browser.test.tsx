@@ -30936,6 +30936,7 @@ describe("operator decision forms: the «Рішення» column beside the seat
   const OUT = path.resolve(process.env.OPERATOR_DECISIONS_PNG_DIR ?? ".artifacts/operator-decisions");
   const SEAT_ASK = `pr_${"d".repeat(32)}`;
   const LANE_ROUND = `pr_${"c".repeat(32)}`;
+  const SEAT_SECOND = `pr_${"e".repeat(32)}`;
   browserTest("question skip: inline card and feed record at desktop and 390 in both languages", async () => {
     const out = path.resolve(process.env.QUESTION_SKIP_CARD_PNG_DIR ?? ".artifacts/operator-decisions/question-skip"); fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
@@ -31032,6 +31033,10 @@ describe("operator decision forms: the «Рішення» column beside the seat
           try {
             await page.waitForSelector('[data-decision-column="decisions"] [data-decision-list="3"]', { timeout: 30_000 });
             await page.waitForSelector("[data-decision-pointer-open]", { timeout: 30_000 });
+            /* The newest question stands open first; the lane's older round opens from its row. */
+            const newest = await page.locator('[data-decision-column] [data-decision-card="open"]').getAttribute("data-decision-review");
+            if (newest !== SEAT_SECOND) fail(`the column opened ${newest} first, expected the newest`);
+            await page.locator(`[data-decision-column] [data-decision-row="${LANE_ROUND}"]`).click();
             await page.mouse.move(0, 0);
             await page.waitForTimeout(600);
             const lane = await readForm(page, "[data-decision-column]");
@@ -31088,12 +31093,16 @@ describe("operator decision forms: the «Рішення» column beside the seat
             if (strip?.trim() !== t("decisions.waiting", { count: 3 })) fail(`the line reads «${strip}»`);
             await page.locator("[data-decision-strip]").click();
             await page.waitForSelector('[data-decision-column="decisions"] [data-decision-list="3"]', { timeout: 10_000 });
+            /* The lane's round, with its two thumbnails, opens from its row under the newest question. */
+            await page.locator(`[data-decision-column] [data-decision-row="${LANE_ROUND}"]`).click();
+            await page.waitForSelector(`[data-decision-column] [data-decision-card="open"][data-decision-review="${LANE_ROUND}"]`, { timeout: 10_000 });
+            await page.mouse.move(0, 0);
             await page.waitForTimeout(400);
             const column = await readForm(page, "[data-decision-column]");
             const composer = await page.evaluate(() => Boolean(document.querySelector("[data-orchestrator-panel] textarea")));
             readings[`${label}-open`] = { ...column, composer };
             await page.screenshot({ path: path.join(OUT, `${label}-open.png`) });
-            if (!column.sendReachable || column.minOptionHeight < 36 || column.titleCut || column.horizontalOverflow || column.thumbsOverlap || !composer) fail(`the column in place reads ${JSON.stringify({ ...column, composer })}`);
+            if (column.review !== LANE_ROUND || column.thumbs.length !== 2 || !column.sendReachable || column.minOptionHeight < 36 || column.titleCut || column.horizontalOverflow || column.thumbsOverlap || !composer) fail(`the column in place reads ${JSON.stringify({ ...column, composer })}`);
             if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
           } catch (error) {
             fail(error instanceof Error ? error.message.split("\n")[0]! : String(error));
@@ -31119,12 +31128,14 @@ describe("operator decision forms: the «Рішення» column beside the seat
             if (line.height < 44 || line.text !== t("decisions.waiting", { count: 3 })) fail(`the line reads ${JSON.stringify(line)}`);
             await page.locator("[data-decision-strip]").click();
             await page.waitForSelector('[data-mobile2-sheet="decisions"] [data-decision-list="3"]', { timeout: 10_000 });
+            await page.locator(`[data-mobile2-sheet="decisions"] [data-decision-row="${LANE_ROUND}"]`).click();
+            await page.waitForSelector(`[data-mobile2-sheet="decisions"] [data-decision-card="open"][data-decision-review="${LANE_ROUND}"]`, { timeout: 10_000 });
             await page.waitForTimeout(500);
             const sheet = await readForm(page, '[data-mobile2-sheet="decisions"]');
             const tabs = await page.locator('[data-mobile2-sheet="decisions"] [data-decision-tab]').count();
             readings[`${label}-sheet`] = { ...sheet, tabs };
             await page.screenshot({ path: path.join(OUT, `${label}-sheet.png`) });
-            if (tabs !== 2 || !sheet.sendReachable || sheet.minOptionHeight < 44 || sheet.titleCut || sheet.horizontalOverflow || sheet.thumbsOverlap) fail(`the sheet reads ${JSON.stringify({ ...sheet, tabs })}`);
+            if (tabs !== 2 || sheet.review !== LANE_ROUND || sheet.thumbs.length !== 2 || !sheet.sendReachable || sheet.minOptionHeight < 44 || sheet.titleCut || sheet.horizontalOverflow || sheet.thumbsOverlap) fail(`the sheet reads ${JSON.stringify({ ...sheet, tabs })}`);
             await page.locator('[data-mobile2-sheet="decisions"] [data-decision-tab="reports"]').click();
             await page.waitForSelector('[data-mobile2-sheet="decisions"] [data-report-log]', { timeout: 10_000 });
             await page.screenshot({ path: path.join(OUT, `${label}-reports.png`) });
@@ -31141,6 +31152,159 @@ describe("operator decision forms: the «Рішення» column beside the seat
     }
     fs.mkdirSync("evidence/operator-decisions", { recursive: true });
     fs.writeFileSync("evidence/operator-decisions/column.json", `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 900_000);
+
+  /*
+   * The open form folds and the newest decision comes first, over
+   * `&decisions=long` (the first seat question carries a ninety-character
+   * title): at 1440 in the column beside the chat, at 1000 in the transcript's
+   * place, and at 390 in the phone's sheet, uk and en, light and dark. Each
+   * frame reads the list newest first with the newest form open; a press on its
+   * header folds it, every row reads folded, the keyboard lands on the folded
+   * row, and nothing is answered; Enter opens it again and Space folds it. The
+   * long-titled form, opened from its row, keeps its title whole and its time
+   * and fold mark clear of it. At 1440 the feed's pointer opens its own form in
+   * the folded column.
+   *
+   *   CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "folds back to its row"
+   *
+   * Readings go to `evidence/operator-decisions/fold.json`; frames to
+   * OPERATOR_DECISIONS_PNG_DIR or `.artifacts/operator-decisions/`, never committed.
+   */
+  browserTest("the open form folds back to its row and the newest decision is listed first at 1440, 1000 and 390", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(path.join(OUT, "bundle-root-fold"));
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const ORDER = [SEAT_SECOND, SEAT_ASK, LANE_ROUND];
+    /* The list as drawn: its order, which form stands open, each row whole, the open header's parts apart. */
+    const readFold = (page: Page, scope: string) => page.evaluate((root) => {
+      const within = document.querySelector<HTMLElement>(root);
+      const list = within?.querySelector<HTMLElement>("[data-decision-list]") ?? null;
+      const frame = list?.getBoundingClientRect();
+      const box = (rect: DOMRect) => ({ x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) });
+      const apart = (a: DOMRect, b: DOMRect) => a.right <= b.left + 0.5 || b.right <= a.left + 0.5 || a.bottom <= b.top + 0.5 || b.bottom <= a.top + 0.5;
+      const textRects = (node: Element) => { const range = document.createRange(); range.selectNodeContents(node); return [...range.getClientRects()]; };
+      const rows = [...list?.querySelectorAll<HTMLElement>("[data-decision-row]") ?? []].map((row) => {
+        const rect = row.getBoundingClientRect();
+        /* A folded title ends in «…» by design: its box stays inside the row and its line is whole in height. */
+        const title = row.querySelector<HTMLElement>("span.flex-1");
+        const span = title?.getBoundingClientRect();
+        const lines = title ? new Set(textRects(title).map((part) => Math.round(part.top))).size : 0;
+        return { id: row.dataset.decisionRow, expanded: row.getAttribute("aria-expanded"), label: row.getAttribute("aria-label"), text: title?.textContent ?? "", ...box(rect),
+          inside: Boolean(frame && rect.top >= frame.top - 0.5 && rect.bottom <= frame.bottom + 0.5 && rect.left >= frame.left - 0.5 && rect.right <= frame.right + 0.5),
+          truncated: title ? title.scrollWidth > title.clientWidth + 0.5 : null,
+          titleInside: Boolean(span && lines === 1 && span.left >= rect.left && span.right <= rect.right + 0.5 && span.top >= rect.top && span.bottom <= rect.bottom + 0.5) };
+      });
+      const card = list?.querySelector<HTMLElement>("[data-decision-card]") ?? null;
+      const fold = card?.querySelector<HTMLElement>("[data-decision-collapse]") ?? null;
+      const header = fold?.getBoundingClientRect();
+      const title = card?.querySelector<HTMLElement>("[data-decision-title]") ?? null;
+      const time = fold?.querySelector("time")?.getBoundingClientRect();
+      const mark = fold?.querySelector("svg:last-child")?.getBoundingClientRect();
+      const titleRects = title ? textRects(title) : [];
+      const hit = header ? document.elementFromPoint(header.left + header.width / 2, header.top + Math.min(header.height / 2, 12)) : null;
+      return {
+        order: [...list?.querySelectorAll<HTMLElement>("[data-decision-row], [data-decision-card]") ?? []].map((node) => node.dataset.decisionRow ?? node.dataset.decisionReview),
+        expanded: list?.dataset.decisionExpanded ?? null,
+        rows,
+        open: card && fold && header ? {
+          review: card.dataset.decisionReview, ariaExpanded: fold.getAttribute("aria-expanded"), label: fold.getAttribute("aria-label"), header: box(header),
+          title: title?.textContent ?? "", titleWhole: titleRects.length > 0 && titleRects.every((part) => part.right <= header.right + 0.5 && part.bottom <= header.bottom + 0.5),
+          timeApart: Boolean(time && titleRects.every((part) => apart(part, time))), markApart: Boolean(mark && time && apart(mark, time) && titleRects.every((part) => apart(part, mark))),
+          markInside: Boolean(mark && mark.right <= header.right + 0.5 && mark.top >= header.top), uncovered: Boolean(hit && fold.contains(hit)),
+        } : null,
+        focused: (document.activeElement as HTMLElement | null)?.dataset.decisionRow ?? ((document.activeElement as HTMLElement | null)?.hasAttribute("data-decision-collapse") ? `fold:${document.activeElement!.closest<HTMLElement>("[data-decision-review]")?.dataset.decisionReview}` : document.activeElement?.tagName ?? null),
+        horizontalOverflow: document.documentElement.scrollWidth > innerWidth,
+      };
+    }, scope);
+    try {
+      for (const width of [1440, 1000, 390] as const) for (const lang of ["uk", "en"] as const) for (const scheme of ["light", "dark"] as const) {
+        const t = (key: string, vars?: Record<string, string | number>) => translate(lang, key as never, vars);
+        const phone = width === 390;
+        const label = `fold-${width}-${lang}-${scheme}`;
+        const fail = (text: string) => failures.push(`${label}: ${text}`);
+        const scope = phone ? '[data-mobile2-sheet="decisions"]' : '[data-decision-column="decisions"]';
+        const titles: Record<string, string> = {
+          [SEAT_SECOND]: lang === "uk" ? "Акаунт для нічних лейнів Codex" : "Account for the night Codex lanes",
+          [SEAT_ASK]: lang === "uk" ? "Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту" : "Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project",
+          [LANE_ROUND]: lang === "uk" ? "Вікно підтвердження оновлення" : "Update confirmation window",
+        };
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?decisions=long`, phone ? { width: 390, height: 844 } : { width, height: 900 }, scheme, lang, "reduce", phone);
+        const shot = (state: string) => page.screenshot({ path: path.join(OUT, `${label}-${state}.png`) });
+        try {
+          if (phone) {
+            await page.click("[data-mobile2-seat-open]", { timeout: 30_000 });
+            await page.locator("[data-decision-strip]").click({ timeout: 30_000 });
+          } else if (width === 1000) await page.locator('[data-orchestrator-panel] [data-decision-strip="3"]').click({ timeout: 30_000 });
+          await page.waitForSelector(`${scope} [data-decision-list="3"]`, { timeout: 30_000 });
+          await page.mouse.move(0, 0);
+          await page.waitForTimeout(500);
+          /* Newest first, and the newest stands open. */
+          const first = await readFold(page, scope);
+          readings[`${label}-expanded`] = first;
+          await shot("expanded");
+          if (JSON.stringify(first.order) !== JSON.stringify(ORDER) || first.expanded !== SEAT_SECOND) fail(`the list opens ${JSON.stringify({ order: first.order, expanded: first.expanded })}`);
+          if (!first.open || first.open.ariaExpanded !== "true" || first.open.label !== t("decisions.collapseAria", { title: titles[SEAT_SECOND]! }) || !first.open.titleWhole || !first.open.timeApart || !first.open.markApart || !first.open.markInside || !first.open.uncovered || (phone && first.open.header.h < 44)) fail(`the open header reads ${JSON.stringify(first.open)}`);
+          /* A press on the header's title folds it; nothing is answered. */
+          await page.locator(`${scope} [data-decision-review="${SEAT_SECOND}"] [data-decision-title]`).click();
+          await page.waitForSelector(`${scope} [data-decision-card]`, { state: "detached", timeout: 5_000 });
+          const folded = await readFold(page, scope);
+          readings[`${label}-collapsed`] = folded;
+          await shot("collapsed");
+          const posts = await page.evaluate(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts.length);
+          if (JSON.stringify(folded.rows.map((row) => row.id)) !== JSON.stringify(ORDER) || folded.expanded !== "" || folded.open || posts) fail(`folded, the list reads ${JSON.stringify({ ...folded, posts })}`);
+          for (const row of folded.rows) {
+            if (row.expanded !== "false" || row.label !== t("decisions.expandAria", { title: titles[row.id!]! }) || row.text !== titles[row.id!] || !row.inside || !row.titleInside || row.h < 44) fail(`the row of ${row.id} reads ${JSON.stringify(row)}`);
+          }
+          if (folded.focused !== SEAT_SECOND) fail(`the keyboard landed on ${folded.focused}`);
+          if (folded.horizontalOverflow) fail("the folded list scrolls sideways");
+          /* The keyboard: Enter opens the folded row, Space folds it again. */
+          await page.keyboard.press("Enter");
+          await page.waitForSelector(`${scope} [data-decision-card="open"][data-decision-review="${SEAT_SECOND}"]`, { timeout: 5_000 });
+          const reopened = await readFold(page, scope);
+          if (reopened.focused !== `fold:${SEAT_SECOND}`) fail(`after Enter the keyboard is on ${reopened.focused}`);
+          await page.keyboard.press("Space");
+          await page.waitForSelector(`${scope} [data-decision-card]`, { state: "detached", timeout: 5_000 });
+          readings[`${label}-keyboard`] = { reopened: reopened.focused, refolded: (await readFold(page, scope)).focused };
+          /* The long-titled form opens from its row: its title whole, its time and fold mark clear of it. */
+          await page.locator(`${scope} [data-decision-row="${SEAT_ASK}"]`).click();
+          await page.waitForSelector(`${scope} [data-decision-card="open"][data-decision-review="${SEAT_ASK}"]`, { timeout: 5_000 });
+          await page.locator(`${scope} [data-decision-review="${SEAT_ASK}"] [data-decision-collapse]`).scrollIntoViewIfNeeded();
+          await page.waitForTimeout(300);
+          const long = await readFold(page, scope);
+          readings[`${label}-long`] = long;
+          await shot("long-open");
+          if (!long.open || long.open.review !== SEAT_ASK || long.open.title !== titles[SEAT_ASK] || !long.open.titleWhole || !long.open.timeApart || !long.open.markApart || !long.open.markInside || long.horizontalOverflow) fail(`the long form's header reads ${JSON.stringify(long.open)}`);
+          /* A request from the feed opens its form in the folded column. */
+          if (width === 1440) {
+            await page.locator(`${scope} [data-decision-review="${SEAT_ASK}"] [data-decision-collapse]`).click();
+            await page.waitForSelector(`${scope} [data-decision-card]`, { state: "detached", timeout: 5_000 });
+            await page.locator("[data-decision-pointer-open]").click();
+            await page.waitForSelector(`${scope} [data-decision-card="open"][data-decision-review="${SEAT_ASK}"]`, { timeout: 5_000 });
+            await page.waitForTimeout(300);
+            const requested = await readFold(page, scope);
+            readings[`${label}-requested`] = requested;
+            await shot("requested");
+            if (requested.expanded !== SEAT_ASK) fail(`the pointer opened ${requested.expanded}`);
+          }
+          const sent = await page.evaluate(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts.length);
+          if (sent) fail(`${sent} answers were posted while folding`);
+          if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          fail(error instanceof Error ? error.message.split("\n")[0]! : String(error));
+          await shot("failed").catch(() => {});
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/operator-decisions", { recursive: true });
+    fs.writeFileSync("evidence/operator-decisions/fold.json", `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings, failures }, null, 2)}\n`);
     if (failures.length) throw new Error(failures.join("\n"));
   }, 900_000);
 
@@ -31195,6 +31359,8 @@ describe("operator decision forms: the «Рішення» column beside the seat
           try {
             if (!phone) await page.waitForSelector("[data-decision-pointer-open]", { timeout: 30_000 });
             await openList(page);
+            await page.locator(`${scope} [data-decision-row="${LANE_ROUND}"]`).click();
+            await page.waitForSelector(`${scope} [data-decision-card="open"][data-decision-review="${LANE_ROUND}"]`);
             const lane = await readParts(page, scope);
             if (!lane.source || !lane.source.whole || /[…]|\.\.\./.test(lane.source.text) || /\d+\s*(variant|варіант)/i.test(lane.source.text) || !lane.source.text.includes("Restore search results") && !lane.source.text.includes("Відновити")) fail(`the lane's source line reads ${JSON.stringify(lane.source)}`);
             if (lane.horizontalOverflow) fail("the lane's round scrolls sideways");
@@ -31281,7 +31447,6 @@ describe("operator decision forms: the «Рішення» column beside the seat
    * the next read of the board takes its row and its count away as well.
    * Readings go to `evidence/operator-decisions/mirror.json`.
    */
-  const SEAT_SECOND = `pr_${"e".repeat(32)}`;
   const waitingCount = (page: Page, phone: boolean) => page.evaluate((onPhone) => onPhone
     ? Number(document.querySelector<HTMLElement>("[data-mobile2-attention-count]")?.dataset.mobile2AttentionCount ?? "0")
     : Number((document.querySelector("[data-attention-count] .tabular-nums")?.textContent ?? document.querySelector("[data-needs-you-title]")?.textContent?.match(/\d+\s*$/)?.[0] ?? "0")), phone);
@@ -31430,7 +31595,9 @@ describe("operator decision forms: the «Рішення» column beside the seat
             await page.locator("[data-decision-strip]").click({ timeout: 30_000 });
           }
           await page.waitForSelector(`${scope} [data-decision-list="3"]`, { timeout: 30_000 });
-          await page.locator(`${scope} [data-decision-row="${SEAT_SECOND}"]`).click();
+          /* The newest round stands open first; a row is pressed only where it is folded. */
+          const folded = page.locator(`${scope} [data-decision-row="${SEAT_SECOND}"]`);
+          if (await folded.count()) await folded.click();
           const card = `${scope} [data-decision-card="open"][data-decision-review="${SEAT_SECOND}"]`;
           await page.waitForSelector(card, { timeout: 10_000 });
           await page.locator(`${card} [data-prototype-option="account:1"]`).click();
@@ -33430,6 +33597,9 @@ describe("operator decision forms: rejecting the task's prototype variants", () 
             await page.locator("[data-mobile2-seat-open]").click();
             await page.locator("[data-decision-strip]").click();
           }
+          const lane = page.locator(`[data-decision-row="pr_${"c".repeat(32)}"]`);
+          await lane.waitFor({ timeout: 30_000 });
+          await lane.click();
           const card = page.locator('[data-decision-card="open"]');
           await card.waitFor({ timeout: 30_000 });
           const reject = card.locator("[data-decision-reject]");
@@ -34617,6 +34787,8 @@ describe("saved decision delivery", () => {
             const folded = column.locator(`[data-decision-row="${id}"]`);
             if (await folded.count()) await folded.click();
             await column.locator(`[data-decision-review="${id}"] [data-decision-retry]`).click();
+            /* The delivered record leaves and the newest left opens in its place: wait, or the next row turns under the press. */
+            await column.locator(`[data-decision-review="${id}"], [data-decision-row="${id}"]`).first().waitFor({ state: "detached" });
           }
           await column.locator("[data-decision-list-empty]").waitFor();
           await column.locator("[data-decision-tab-count]").waitFor({ state: "hidden" });
