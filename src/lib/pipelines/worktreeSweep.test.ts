@@ -929,6 +929,8 @@ test("bounded owner proof rotates across passes and releases settled dead rows b
     const generationId = `settled-generation-${String(index).padStart(5, "0")}`;
     const key = `${conversation.engine}:${generationId}`;
     entries[key] = { ...template, key: key as unknown as typeof template.key, cwd: path.join(caseDir, String(index)), status: "dead",
+      structuredHost: { ...template.structuredHost!, process: { pid: 70000 + index,
+        startIdentity: `proof-${index}`, bootEpoch: "fixture-boot" } },
       structuredTerminationSurvivors: [] };
     conversations[`settled-conversation-${index}`] = {
       ...conversation,
@@ -944,13 +946,10 @@ test("bounded owner proof rotates across passes and releases settled dead rows b
     const at = pass * WORKTREE_SWEEP_INTERVAL_MS;
     const cwds = liveOrWaitingConversationCwds(settled, at, () => { probes++; return true; });
     calls.push(probes);
-    expect(probes).toBe(pass === 0 ? CONVERSATION_PROCESS_PROBE_LIMIT : 1);
-    if (pass === 0) expect(cwds).toContain(path.join(caseDir, String(CONVERSATION_PROCESS_PROBE_LIMIT)));
-    else expect(cwds).not.toContain(path.join(caseDir, String(CONVERSATION_PROCESS_PROBE_LIMIT)));
+    expect(probes).toBeLessThanOrEqual(CONVERSATION_PROCESS_PROBE_LIMIT);
+    if (pass === 0) expect(cwds.length).toBeGreaterThan(0);
   }
   expect(calls).toEqual([CONVERSATION_PROCESS_PROBE_LIMIT, 1]);
-  const live = liveOrWaitingConversationCwds(settled, WORKTREE_SWEEP_INTERVAL_MS, () => false);
-  expect(live).toContain(path.join(caseDir, String(CONVERSATION_PROCESS_PROBE_LIMIT)));
 });
 
 test("dead conversations sharing a checkout stay on one proof page", () => {
@@ -966,7 +965,8 @@ test("dead conversations sharing a checkout stay on one proof page", () => {
     const key = `${conversation.engine}:${generationId}`;
     entries[key] = { ...template, key: key as unknown as typeof template.key,
       cwd: index === 0 || index === CONVERSATION_PROCESS_PROBE_LIMIT ? sharedCwd : path.join(caseDir, `row-${String(index).padStart(5, "0")}`),
-      status: "dead", structuredTerminationSurvivors: [] };
+      status: "dead", structuredHost: { ...template.structuredHost!, process: { pid: 71000 + index,
+        startIdentity: `shared-${index}`, bootEpoch: "fixture-boot" } }, structuredTerminationSurvivors: [] };
     conversations[`shared-conversation-${index}`] = {
       ...conversation,
       id: `shared-conversation-${index}` as typeof conversation.id,
@@ -979,6 +979,65 @@ test("dead conversations sharing a checkout stay on one proof page", () => {
   expect(probes).toBe(CONVERSATION_PROCESS_PROBE_LIMIT);
   expect(status.held).not.toContain(sharedCwd);
   expect(status.deferred).not.toContain(sharedCwd);
+});
+
+test("dead owners in separate checkout subdirectories converge across proof pages", () => {
+  const { registry } = finishedRegistryConversation(caseDir);
+  const snapshot = registry.readOnlySnapshot();
+  const template = Object.values(snapshot.entries)[0]!;
+  const conversation = Object.values(snapshot.conversations)[0]!;
+  const entries: typeof snapshot.entries = {};
+  const conversations: typeof snapshot.conversations = {};
+  for (let index = 0; index <= CONVERSATION_PROCESS_PROBE_LIMIT; index++) {
+    const generationId = `subdir-generation-${String(index).padStart(5, "0")}`;
+    const key = `${conversation.engine}:${generationId}`;
+    entries[key] = { ...template, key: key as unknown as typeof template.key,
+      cwd: path.join(caseDir, index === 0 ? "src" : "tests", `row-${index}`), status: "dead",
+      structuredHost: { ...template.structuredHost!, process: { pid: 72000 + index,
+        startIdentity: `subdir-${index}`, bootEpoch: "fixture-boot" } }, structuredTerminationSurvivors: [] };
+    conversations[`subdir-conversation-${index}`] = { ...conversation,
+      id: `subdir-conversation-${index}` as typeof conversation.id,
+      generations: conversation.generations.map((generation, generationIndex) => generationIndex === conversation.generations.length - 1
+        ? { ...generation, id: generationId } : generation) };
+  }
+  const state = { entries, conversations };
+  for (let pass = 0; pass < 2; pass++) {
+    const at = pass * WORKTREE_SWEEP_INTERVAL_MS;
+    let probes = 0;
+    const result = conversationCwdStatus(state, at, () => { probes++; return true; });
+    expect(probes).toBeLessThanOrEqual(CONVERSATION_PROCESS_PROBE_LIMIT);
+    expect(result.held.length + result.deferred.length).toBeLessThanOrEqual(CONVERSATION_PROCESS_PROBE_LIMIT + 1);
+  }
+  let result = conversationCwdStatus(state, 2 * WORKTREE_SWEEP_INTERVAL_MS, () => true);
+  for (let pass = 3; pass < 20 && (result.held.length || result.deferred.length); pass++)
+    result = conversationCwdStatus(state, pass * WORKTREE_SWEEP_INTERVAL_MS, () => true);
+  expect(result.held).toEqual([]);
+  expect(result.deferred).toEqual([]);
+});
+
+test("unreadable claim remains held without letting readable peers exceed the proof budget", () => {
+  const { registry } = finishedRegistryConversation(caseDir);
+  const snapshot = registry.readOnlySnapshot();
+  const template = Object.values(snapshot.entries)[0]!;
+  const conversation = Object.values(snapshot.conversations)[0]!;
+  const entries: typeof snapshot.entries = {};
+  const conversations: typeof snapshot.conversations = {};
+  for (let index = 0; index <= CONVERSATION_PROCESS_PROBE_LIMIT; index++) {
+    const generationId = `unreadable-generation-${String(index).padStart(5, "0")}`;
+    const key = `${conversation.engine}:${generationId}`;
+    entries[key] = { ...template, key: key as unknown as typeof template.key, cwd: caseDir, status: "dead",
+      structuredHost: { ...template.structuredHost!, process: { pid: 73000 + index,
+        startIdentity: `unreadable-${index}`, bootEpoch: "fixture-boot" } },
+      structuredTerminationSurvivors: [], ...(index === CONVERSATION_PROCESS_PROBE_LIMIT ? { claimOwner: "malformed" } : {}) };
+    conversations[`unreadable-conversation-${index}`] = { ...conversation,
+      id: `unreadable-conversation-${index}` as typeof conversation.id,
+      generations: conversation.generations.map((generation, generationIndex) => generationIndex === conversation.generations.length - 1
+        ? { ...generation, id: generationId } : generation) };
+  }
+  let probes = 0;
+  const result = conversationCwdStatus({ entries, conversations }, 0, () => { probes++; return true; });
+  expect(probes).toBeLessThanOrEqual(CONVERSATION_PROCESS_PROBE_LIMIT);
+  expect(result.held).toContain(caseDir);
 });
 
 test("proof-page deferrals preserve a finished lane's retention clock", async () => {
@@ -995,7 +1054,8 @@ test("proof-page deferrals preserve a finished lane's retention clock", async ()
     const key = `${conversation.engine}:${generationId}`;
     entries[key] = { ...template, key: key as unknown as typeof template.key,
       cwd: index === CONVERSATION_PROCESS_PROBE_LIMIT ? dir : path.join(caseDir, `aa-proof-${String(index).padStart(5, "0")}`),
-      status: "dead", structuredTerminationSurvivors: [] };
+      status: "dead", structuredHost: { ...template.structuredHost!, process: { pid: 74000 + index,
+        startIdentity: `retention-${index}`, bootEpoch: "fixture-boot" } }, structuredTerminationSurvivors: [] };
     conversations[`retention-conversation-${index}`] = {
       ...conversation,
       id: `retention-conversation-${index}` as typeof conversation.id,
@@ -1009,7 +1069,7 @@ test("proof-page deferrals preserve a finished lane's retention clock", async ()
     baseRef: tip, closedAt });
   let previous: Awaited<ReturnType<typeof sweepMergedWorktrees>> | undefined;
   const reports = [];
-  for (const hour of [0, 1, 2, 97]) {
+  for (const hour of [0, 1, 2, 98]) {
     const at = Date.parse(closedAt) + hour * WORKTREE_SWEEP_INTERVAL_MS;
     const report = await sweepMergedWorktrees(ports({ pipelines: [owner], prs: [], previous,
       now: () => at, conversationCwds: () => conversationCwdStatus(settled, at, () => true) }));

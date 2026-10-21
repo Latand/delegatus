@@ -524,6 +524,12 @@ const isConversationCwdStatus = (value: readonly string[] | ConversationCwdStatu
     comes from the sweep clock, so a worker restart cannot reset progress. */
 export const CONVERSATION_PROCESS_PROBE_LIMIT = 4096;
 
+const OWNER_PROOF_CACHE_LIMIT = 65_536;
+function ownerProofCachePath(): string { return statePath("worktree-sweep-owner-proofs.json"); }
+function identityProofKey(identity: Readonly<ProcessIdentity>): string {
+  return createHash("sha256").update(JSON.stringify(identity)).digest("hex");
+}
+
 /** A captured host tree can outlive its processes while leaving `idle` in the
     registry. Drop that hold only with dead owners and a settled turn. Unknown
     ownership, setup and runnable deliveries continue protecting their cwd. */
@@ -554,51 +560,30 @@ export function conversationCwdStatus(
     if (claimant) owners.push(claimant);
     return { owners, survivors, unreadableClaim: !!entry.claimOwner && !claimant };
   };
-  const groups = new Map<string, { cost: number; unreadableClaim: boolean }>();
+  const cacheFile = ownerProofCachePath();
+  let cachedProofs: string[] = [];
+  try {
+    const parsed = JSON.parse(fs.readFileSync(cacheFile, "utf8"));
+    if (Array.isArray(parsed)) cachedProofs = parsed.filter((item): item is string => typeof item === "string");
+  } catch { /* Missing or malformed cache is conservative: owners are reprobed. */ }
+  const cachedProofSet = new Set(cachedProofs);
+  const currentIdentities = new Set<string>();
   for (const row of entries) {
     const entry = row[1];
     if (!entry?.cwd) continue;
-    const { owners, survivors, unreadableClaim } = ownersFor(entry);
-    const cwd = path.resolve(entry.cwd);
-    const group = groups.get(cwd) ?? { cost: 0, unreadableClaim: false };
-    group.cost += unreadableClaim ? 0 : owners.length + survivors.length;
-    group.unreadableClaim ||= unreadableClaim;
-    groups.set(cwd, group);
+    const { owners, survivors } = ownersFor(entry);
+    const identities = [...owners, ...survivors];
+    for (const identity of identities) currentIdentities.add(identityProofKey(identity));
   }
-  const ownerPageByCwd = new Map<string, number>();
-  let page = 0;
-  let pageProbes = 0;
-  // `entries` is already key-sorted; Map retains each cwd group's first key,
-  // so paging keeps its established deterministic order after grouping.
-  for (const [cwd, group] of groups) {
-    if (group.unreadableClaim || group.cost === 0) continue;
-    if (group.cost > CONVERSATION_PROCESS_PROBE_LIMIT) {
-      ownerPageByCwd.set(cwd, -1);
-      continue;
-    }
-    if (pageProbes > 0 && pageProbes + group.cost > CONVERSATION_PROCESS_PROBE_LIMIT) {
-      page++;
-      pageProbes = 0;
-    }
-    ownerPageByCwd.set(cwd, page);
-    pageProbes += group.cost;
-  }
-  const pageCount = page + 1;
+  const ownerPageByIdentity = new Map<string, number>();
+  const identitiesToProbe = [...currentIdentities].filter(key => !cachedProofSet.has(key)).sort();
+  identitiesToProbe.forEach((key, index) => ownerPageByIdentity.set(key, Math.floor(index / CONVERSATION_PROCESS_PROBE_LIMIT)));
+  const pageCount = Math.max(1, Math.ceil(identitiesToProbe.length / CONVERSATION_PROCESS_PROBE_LIMIT));
   const selectedPage = Math.floor(now / WORKTREE_SWEEP_INTERVAL_MS) % pageCount;
   for (const [key, entry] of entries) {
     if (!entry?.cwd) continue;
     const { owners, survivors, unreadableClaim } = ownersFor(entry);
-    const cwd = path.resolve(entry.cwd);
-    const ownerPage = ownerPageByCwd.get(cwd);
-    if (unreadableClaim || ownerPage === -1) {
-      held.add(entry.cwd);
-      continue;
-    }
-    if (ownerPage !== undefined && ownerPage !== selectedPage) {
-      deferred.add(entry.cwd);
-      continue;
-    }
-    if (owners.some(identity => !provenDead(identity)) || survivors.some(identity => !provenDead(identity))) {
+    if (unreadableClaim) {
       held.add(entry.cwd);
       continue;
     }
@@ -608,8 +593,24 @@ export function conversationCwdStatus(
       && Number.isFinite(updated) && now - updated < PENDING_CONVERSATION_MS;
     const ended = (owners.length > 0 || survivors.length > 0) && settled.has(key) && !entry.pendingAction
       && entry.status !== "starting" && !entry.structuredHost?.activeTurnRef;
-    if ((hosted || pending) && !ended) held.add(entry.cwd);
+    if ((hosted || pending) && !ended) { held.add(entry.cwd); continue; }
+    const identities = [...owners, ...survivors];
+    const unknownOwners = identities.filter(identity => !cachedProofSet.has(identityProofKey(identity)));
+    const selectedOwners = unknownOwners.filter(identity => ownerPageByIdentity.get(identityProofKey(identity)) === selectedPage);
+    if (unknownOwners.some(identity => ownerPageByIdentity.get(identityProofKey(identity)) !== selectedPage)) deferred.add(entry.cwd);
+    if (selectedOwners.some(identity => !provenDead(identity))) {
+      held.add(entry.cwd);
+      continue;
+    }
+    for (const identity of selectedOwners) {
+      const proof = identityProofKey(identity);
+      cachedProofs.push(proof);
+      cachedProofSet.add(proof);
+    }
   }
+  const liveProofs = [...new Set(cachedProofs.filter(key => currentIdentities.has(key)))].slice(-OWNER_PROOF_CACHE_LIMIT);
+  if (liveProofs.length !== cachedProofs.length || liveProofs.some((key, index) => key !== cachedProofs[index]))
+    writeJsonDurably(cacheFile, liveProofs);
   for (const delivery of Object.values(file.heldDeliveries ?? {})) {
     /* `delivery-uncertain` was written and never confirmed; the reaper counts
        it as undelivered too. */
