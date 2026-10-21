@@ -225,6 +225,38 @@ test("an empty tools/list is a protocol error naming the selected state director
   }
 });
 
+test.each([
+  ["linux", (root: string) => path.join(root, "tmp", "llv-spawn-sandbox", ".claude", "config")],
+  ["darwin", (root: string) => path.join(root, "private", "var", "folders", "tmp", "llv-spawn-sandbox", ".claude", "config")],
+])("%s: the packaged MCP launcher preserves an explicit state beside sandboxed config", async (_layout, sandboxConfig) => {
+  const { root, launcher } = installedPackage(`
+    const { createInterface } = await import("node:readline");
+    createInterface({ input: process.stdin }).on("line", line => {
+      const request = JSON.parse(line);
+      if (request.id === undefined) return;
+      const result = request.method === "initialize"
+        ? { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: process.env.LLV_STATE_DIR, version: "1" } }
+        : { tools: [{ name: "probe", inputSchema: { type: "object" } }] };
+      console.log(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }));
+    });
+  `);
+  const explicitState = path.join(root, "isolated-state");
+  const session = stdioSession(process.execPath, launcher, root, {
+    HOME: root,
+    XDG_CONFIG_HOME: sandboxConfig(root),
+    LLV_STATE_DIR: explicitState,
+    LLV_STRUCTURED_HOST: path.join(root, "real-install", "delegatus", "state"),
+    LLV_SPAWN_CAPABILITY: "",
+    LLV_VIEWER_DEPLOY_TARGET: "",
+  });
+  try {
+    expect((await session.call(1, "initialize")).result.serverInfo.name).toBe(explicitState);
+  } finally {
+    session.process.stdin.end();
+    await new Promise<void>(resolve => session.process.once("close", () => resolve()));
+  }
+});
+
 test.each(["node", "bun"])("%s: an explicit missing release target fails initialize after startup with the state directory and missing path", async runtime => {
   const { root, launcher } = installedPackage();
   const target = path.join(root, "missing-release.json");

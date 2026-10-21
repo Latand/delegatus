@@ -13,9 +13,15 @@ function configRootForState(stateDirectory) {
  * from the structured-host stamp when an agent's ambient paths are sandboxed. */
 export function viewerMcpStateContext(env, defaultConfigRoot) {
   let configRoot = env.XDG_CONFIG_HOME?.trim() || defaultConfigRoot;
-  let stateDirectory = env.LLV_STATE_DIR?.trim() || path.join(appDirIn(configRoot), "state");
-  const sandboxed = [env.LLV_STATE_DIR, configRoot].some(value =>
-    typeof value === "string" && value.split(/[\\/]/).includes("llv-spawn-sandbox"));
+  const explicitStateDirectory = env.LLV_STATE_DIR?.trim();
+  let stateDirectory = explicitStateDirectory || path.join(appDirIn(configRoot), "state");
+  const isSpawnSandboxPath = value => typeof value === "string"
+    && value.split(/[\\/]/).includes("llv-spawn-sandbox");
+  // A sandboxed config root supplies the default state only when the caller
+  // did not explicitly select one. An explicit state inside the sandbox still
+  // needs recovery, while an isolated explicit state stays authoritative.
+  const sandboxed = isSpawnSandboxPath(explicitStateDirectory)
+    || (!explicitStateDirectory && isSpawnSandboxPath(configRoot));
   const hostState = env.LLV_STRUCTURED_HOST?.trim();
   if (sandboxed && hostState) {
     stateDirectory = hostState;
