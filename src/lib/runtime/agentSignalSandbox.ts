@@ -126,13 +126,22 @@ function launcherEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return { ...env, LLV_SIGNAL_READINESS_MS: String(SIGNAL_READINESS_MS), LLV_SIGNAL_ACK_MS: String(SIGNAL_ACK_MS) };
 }
 
-type SignalReceipt = { domain: AgentSignalDomain } | { off: string };
+/** `handle` is the process the caller started: the monitor itself, or the
+ * launcher that waits outside the transient scope the monitor runs in. */
+type SignalReceipt = { domain: AgentSignalDomain; handle: number } | { off: string };
 function readReceipt(file: string): SignalReceipt {
   const value = JSON.parse(fs.readFileSync(file, "utf8"));
   if (value?.policyVersion === 1 && value.boundary === "off") {
     return { off: typeof value.reason === "string" && value.reason ? value.reason : "the launcher could not establish the boundary" };
   }
-  return { domain: normalizeAgentSignalDomain(value)! };
+  const domain = normalizeAgentSignalDomain(value)!;
+  const launcher = value.launcher as ProcessIdentity | undefined;
+  if (launcher === undefined) return { domain, handle: domain.monitor.pid };
+  if (!Number.isSafeInteger(launcher?.pid) || launcher.pid <= 1 || launcher.bootEpoch !== domain.monitor.bootEpoch
+    || [domain.monitor, domain.bubblewrap, domain.init, domain.native].some(identity => identity.pid === launcher.pid)) {
+    throw new Error("agent signal sandbox launcher identity is contradictory");
+  }
+  return { domain, handle: launcher.pid };
 }
 
 /** Reject malformed persisted authority. */
@@ -209,7 +218,7 @@ export function signalDomain(child: SignalDomainHandle): AgentSignalDomain | und
         return undefined;
       }
       const domain = parsed.domain;
-      if (domain.monitor.pid !== child.pid) throw new Error("agent signal sandbox monitor identity does not match its handle");
+      if (parsed.handle !== child.pid) throw new Error("agent signal sandbox monitor identity does not match its handle");
       domains.set(child, domain); pendingReceipts.delete(child);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -401,7 +410,7 @@ export async function spawnSignalSandbox(command: string, args: string[], option
           return child;
         }
         const domain = parsed.domain;
-        if (domain.monitor.pid !== child.pid || domain.directory !== directory || !agentSignalDomainAlive(domain)) throw new Error("agent signal sandbox unavailable: launch identity could not be verified");
+        if (parsed.handle !== child.pid || domain.directory !== directory || !agentSignalDomainAlive(domain)) throw new Error("agent signal sandbox unavailable: launch identity could not be verified");
         domains.set(child, domain);
         fs.writeFileSync(path.join(directory, "exec.json"), "true", { mode: 0o600 });
         return child;

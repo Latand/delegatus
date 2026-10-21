@@ -195,6 +195,99 @@ test.skipIf(process.platform !== "linux")("a host without Bubblewrap runs the en
   } finally { warn.mockRestore(); fs.rmSync(root, { recursive: true, force: true }); }
 }, 20_000);
 
+/** A user manager that answers the probe and then refuses or grants the
+ * scope request itself; a granted request execs in place like systemd-run. */
+function scopeManagerBin(root: string, request: "refused" | "granted"): string {
+  const bin = path.join(root, "bin"); fs.mkdirSync(bin);
+  for (const binary of ["python3", "bwrap"]) fs.symlinkSync(Bun.which(binary) ?? "/bin/false", path.join(bin, binary));
+  fs.writeFileSync(path.join(bin, "systemd-run"), `#!/bin/sh
+printf '%s\\n' "$*" >> '${root}/systemd-run.log'
+[ "$1" = --version ] && { echo 'systemd 255'; exit 0; }
+case "$*" in *--unit=*) ;; *) exit 0 ;; esac
+${request === "refused" ? "echo 'scope request refused after successful probe' >&2; exit 1" : "while [ \"$1\" != -- ]; do shift; done; shift; exec \"$@\""}
+`, { mode: 0o755 });
+  return bin;
+}
+
+test.skipIf(process.platform !== "linux")("a scope request refused after a successful probe runs every engine once and reports the boundary off", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-scope-refused-"));
+  const marker = path.join(root, "engine");
+  const env = fallbackEnv(root, { PATH: scopeManagerBin(root, "refused") });
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const launched = await launchEach(env, marker);
+    expect(launched.codes).toEqual([0, 0, 0]);
+    expectEnginesRan(marker);
+    const reason = "transient scope request exited 1 before the launcher entered it";
+    for (const child of [launched.structured, launched.managed, launched.headless]) {
+      // The launcher outlived the refusal and replaced itself with the engine.
+      expect(child.spawnargs[0]).toBe("python3");
+      expect(signalBoundaryOff(child)?.reason).toBe(reason);
+      expect(signalDomain(child)).toBeUndefined();
+    }
+    expect(launched.headlessErrors).toContain("scope request refused after successful probe");
+    expect(launched.headlessErrors).toContain(`boundary off, running unprotected: ${reason}`);
+    const requests = fs.readFileSync(path.join(root, "systemd-run.log"), "utf8").trim().split("\n");
+    expect(requests.filter(line => line.includes("--unit="))).toHaveLength(3);
+    expect(requests.filter(line => line.endsWith("-- true"))).toHaveLength(3);
+    const pane = runPane(terminalSignalSandboxCommand(`printf ran >> '${marker}.pane'`, env), env);
+    expect(pane.stdout).toBe("status=0");
+    expect(pane.stderr).toContain(`boundary off, running unprotected: ${reason}`);
+    expect(fs.readFileSync(`${marker}.pane`, "utf8")).toBe("ran");
+    // The entry marks and the receipts' scratch are gone with their launches.
+    expect(fs.readdirSync(root).filter(name => name.startsWith("delegatus-signal-"))).toEqual([]);
+  } finally { warn.mockRestore(); fs.rmSync(root, { recursive: true, force: true }); }
+}, 30_000);
+
+test.skipIf(process.platform !== "linux")("a granted scope request leaves the engine to the launcher inside it, which runs it once", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-scope-granted-"));
+  const marker = path.join(root, "engine");
+  const env = fallbackEnv(root, { PATH: scopeManagerBin(root, "granted") });
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    // The stub grants no real scope, so the launcher inside reports that and
+    // runs the engine itself; the launcher waiting outside never runs it again.
+    const command = `printf ran >> '${marker}'; exit 7`;
+    const structured = await spawnSignalSandbox("/bin/sh", ["-c", command], { env, stdio: ["pipe", "pipe", "pipe"] });
+    let errors = ""; structured.stderr!.on("data", chunk => { errors += chunk; }); structured.stdout!.resume();
+    expect(await exited(structured), errors).toBe(7);
+    expect(fs.readFileSync(marker, "utf8")).toBe("ran");
+    expect(signalBoundaryOff(structured)?.reason).toBe("launcher did not enter its declared invocation scope");
+    const pane = runPane(terminalSignalSandboxCommand(`printf ran >> '${marker}.pane'; exit 5`, env), env);
+    expect(pane.stdout).toBe("status=5");
+    expect(pane.stderr).toContain("boundary off, running unprotected: launcher did not enter its declared invocation scope");
+    expect(fs.readFileSync(`${marker}.pane`, "utf8")).toBe("ran");
+    expect(fs.readdirSync(root).filter(name => name.startsWith("delegatus-signal-"))).toEqual([]);
+  } finally { warn.mockRestore(); fs.rmSync(root, { recursive: true, force: true }); }
+}, 30_000);
+
+test.skipIf(process.platform !== "linux").each([
+  ["names the handle as its waiting launcher", "__SELF__", null],
+  ["names no launcher, so its monitor must be the handle", null, "does not match its handle"],
+  ["names the monitor as its launcher", 51001, "launcher identity is contradictory"],
+] as const)("a protected receipt that %s", async (_name, launcherPid, refusal) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-receipt-handle-"));
+  const bin = path.join(root, "bin"); fs.mkdirSync(bin);
+  const receipt = { ...domain(), ...(launcherPid === null ? {} : { launcher: { pid: launcherPid, startIdentity: "launcher", bootEpoch: systemBootEpoch() } }) };
+  // Stands in for the launcher: publishes its receipt and keeps the handle alive.
+  fs.writeFileSync(path.join(bin, "python3"), `#!/bin/sh
+while [ "$1" != --receipt ]; do shift; done
+printf '%s' '${JSON.stringify(receipt).replace('"__SELF__"', () => `'"$$"'`)}' > "$2.new" && mv "$2.new" "$2"
+exec sleep 30
+`, { mode: 0o755 });
+  const error = spyOn(console, "error").mockImplementation(() => {});
+  const child = spawnHeadlessSignalSandbox("/bin/true", [], { env: fallbackEnv(root, { PATH: `${bin}:/usr/bin:/bin` }), stdio: "ignore" });
+  try {
+    const file = path.join(root, fs.readdirSync(root).find(name => name.startsWith("delegatus-signal-"))!, "ready.json");
+    for (const end = Date.now() + 5_000; !fs.existsSync(file) && Date.now() < end;) await Bun.sleep(10);
+    if (refusal) expect(() => signalDomain(child)).toThrow(refusal);
+    else expect(signalDomain(child)?.monitor.pid).toBe(51001);
+  } finally {
+    child.kill("SIGKILL"); await exited(child);
+    error.mockRestore(); fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test.skipIf(process.platform !== "linux")("a launch scratch the Viewer cannot create launches every adapter unprotected", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-no-scratch-"));
   const marker = path.join(root, "engine");

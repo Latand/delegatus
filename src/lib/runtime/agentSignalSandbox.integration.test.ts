@@ -334,7 +334,9 @@ kernelTest("headless receipt removal and corruption cannot throw out of the clea
     fs.writeFileSync(receipt, "{");
     const diagnostic = spyOn(console, "error").mockImplementation(() => {});
     try {
-      const run: LiveRun = { child, identity: domain.monitor.startIdentity, identityOf: pid => captureProcessIdentity(pid).startIdentity,
+      // As headless.ts records it: the handle's own identity. A launcher that
+      // requested a transient scope waits outside it, so it is not the monitor.
+      const run: LiveRun = { child, identity: captureProcessIdentity(child.pid!).startIdentity, identityOf: pid => captureProcessIdentity(pid).startIdentity,
         startedAt: Date.now(), exit: null, terminationStarted: false, timer };
       expect(() => killOwnedRun(run)).not.toThrow();
       expect(diagnostic).toHaveBeenCalled();
@@ -477,7 +479,7 @@ kernelTest("the namespace waits for an acknowledgement as long as the Viewer may
   } finally { await close(child); fs.rmSync(root, { recursive: true, force: true }); }
 }, 30_000);
 
-kernelTest.each(["native-exit", "monitor-death", "init-death"])("owned namespace descendants end after %s", async mode => {
+kernelTest.each(["native-exit", "launcher-death", "monitor-death", "init-death"])("owned namespace descendants end after %s", async mode => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-lifetime-"));
   const marker = path.join(root, "descendant.pid");
   const body = String.raw`
@@ -494,16 +496,20 @@ sys.stdin.readline()
     await once(child.stdout!, "data");
     const descendant = captureProcessIdentity(Number(fs.readFileSync(marker, "utf8")));
     const domain = signalDomain(child)!;
+    // The launcher requested the transient scope and waits outside it.
+    expect(domain.monitor.pid).not.toBe(child.pid);
     const ended = once(child, "close");
     if (mode === "native-exit") child.stdin!.end("exit\n");
-    else if (mode === "monitor-death") child.kill("SIGKILL");
+    else if (mode === "launcher-death") child.kill("SIGKILL");
+    else if (mode === "monitor-death") process.kill(domain.monitor.pid, "SIGKILL");
     else signalAgentDomain(child, "SIGKILL");
     await Promise.race([ended, Bun.sleep(5_000).then(() => { throw new Error("namespace lifetime did not settle"); })]);
     const deadline = Date.now() + 3_000;
     while (processIdentityStatus(descendant) === "alive" && Date.now() < deadline) await Bun.sleep(10);
     expect(processIdentityStatus(descendant)).toBe("dead");
     expect(processIdentityStatus(domain.native)).toBe("dead");
-    if (mode === "monitor-death") fs.rmSync(domain.directory, { recursive: true, force: true });
+    if (mode.endsWith("-death") && mode !== "init-death") fs.rmSync(domain.directory, { recursive: true, force: true });
+    if (mode === "monitor-death") expect(child.exitCode).toBe(137);
   } finally { await close(child); fs.rmSync(root, { recursive: true, force: true }); }
 }, 15_000);
 

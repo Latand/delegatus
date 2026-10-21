@@ -312,7 +312,8 @@ keep their synchronous handle API: the trusted launcher proves readiness
 before the engine can read its buffered prompt.
 
 The receipt records the outer supervisor, Bubblewrap monitor, namespace init
-and native process separately. Structured `HostState.pid` remains the native
+and native process separately, plus the launcher waiting outside a transient
+scope when there is one. Structured `HostState.pid` remains the native
 host PID. Both registry writers and normalization retain the complete domain.
 Persistent Codex socket launches use the same adapter. A reconnect retains the
 recorded domain and verifies its native process before accepting the connection.
@@ -561,6 +562,16 @@ missing boundary. Each launch makes one capability decision.
   before its receipt is published ends the partial namespace and replaces the
   launcher with the engine in the same process. The engine has not run before
   that point, so it runs exactly once.
+- A launch without a scope of its own requests a transient one in a child
+  process: a probe first, then the real request. The launcher waits outside
+  the scope. The launcher started inside it marks its entry before anything
+  else, and from then on the engine is its to run; the waiting launcher only
+  reports that child's exit status. A request the manager refuses, even after
+  a successful probe, ends that child without the mark, and the waiting
+  launcher then writes the off receipt and replaces itself with the engine.
+  A stop requested before the mark ends the launch without the engine. Its
+  receipt names the waiting launcher, which is the caller's handle, and
+  killing it ends the monitor with it.
 - A launch from inside an existing domain keeps that domain's PID namespace,
   scope and context, and is reported as such.
 - Behind the Docker bridge the launcher runs in the host mount namespace,

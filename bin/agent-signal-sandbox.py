@@ -166,10 +166,7 @@ def launch(options, command):
             argv = scope_command(options)
         except Exception as error:
             return unprotected(options, command, f"transient scope is unavailable: {error}")
-        try:
-            os.execvp(argv[0], argv + ["--"] + command)
-        except OSError as error:
-            return unprotected(options, command, f"transient scope could not start: {error}")
+        return scoped(options, command, argv)
     try:
         return protected(options, command)
     except Unavailable as error:
@@ -179,8 +176,8 @@ def launch(options, command):
 def scope_command(options):
     version = subprocess.check_output(["systemd-run", "--version"], text=True, timeout=5).split()[1]
     expand = ["--expand-environment=no"] if int(version) >= 254 else []
-    # systemd-run replaces this process, so a manager that refuses the scope
-    # would end the launch without the engine. Probe the same request first.
+    # The probe names the manager's reason for the common refusal; scoped()
+    # still survives a refusal of the real request after it.
     probe = subprocess.run(["systemd-run", "--user", "--scope", "--quiet", "--collect", *expand, "-p", "Delegate=yes", "--", "true"],
                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=5)
     if probe.returncode != 0:
@@ -214,6 +211,59 @@ def scope_command(options):
     if options.automatic:
         argv += ["--automatic"]
     return argv
+
+
+def scoped(options, command, argv):
+    """The scope request runs in a child, so this process outlives a manager
+    that refuses it. The engine runs either inside the scope, after the
+    launcher there has marked its entry, or here once that child has ended
+    without the mark; never in both places."""
+    try:
+        entry = Path(tempfile.mkdtemp(prefix="delegatus-signal-entry-"))
+    except OSError as error:
+        return unprotected(options, command, f"transient scope entry mark is unavailable: {error}")
+    marker = entry / "entered"
+    parent = os.getpid()
+    argv = argv + ["--entered", str(marker), "--parent", str(parent), "--"] + command
+    try:
+        pid = os.fork()
+    except OSError as error:
+        shutil.rmtree(entry, ignore_errors=True)
+        return unprotected(options, command, f"transient scope could not start: {error}")
+    if pid == 0:
+        try:
+            # The scoped launcher keeps this binding through systemd-run's
+            # exec, so ending this process still ends the monitor.
+            if ctypes.CDLL(None, use_errno=True).prctl(1, signal.SIGKILL, 0, 0, 0) != 0 or os.getppid() != parent:
+                os._exit(137)
+            os.execvp(argv[0], argv)
+        except BaseException as error:
+            print(f"transient scope could not start: {error}", file=sys.stderr, flush=True)
+        os._exit(127)
+    stopping = False
+    try:
+        def forward(sig, _frame):
+            nonlocal stopping
+            stopping = stopping or sig != signal.SIGWINCH
+            try:
+                os.kill(pid, sig)
+            except ProcessLookupError:
+                pass
+        signal.signal(signal.SIGTERM, forward)
+        # A terminal delivers these to the whole foreground group, the child too.
+        for sig in (signal.SIGINT, signal.SIGWINCH):
+            signal.signal(sig, signal.SIG_IGN if options.terminal else forward)
+        _, status = os.waitpid(pid, 0)
+        entered = marker.exists()
+    finally:
+        shutil.rmtree(entry, ignore_errors=True)
+    if entered:
+        # The engine was the scoped launcher's to run; its status is this launch's.
+        return os.WEXITSTATUS(status) if os.WIFEXITED(status) else 128 + os.WTERMSIG(status)
+    if stopping:
+        return 143
+    ended = f"exited {os.WEXITSTATUS(status)}" if os.WIFEXITED(status) else f"ended by signal {os.WTERMSIG(status)}"
+    return unprotected(options, command, f"transient scope request {ended} before the launcher entered it")
 
 
 def protected(options, command):
@@ -259,6 +309,8 @@ def namespace(options, command, owned_group, root, directory):
     original = os.readlink("/proc/self/ns/pid")
     epoch = f"linux:{read('/proc/sys/kernel/random/boot_id').strip()}:pidns:{original}"
     monitor = identity(os.getpid(), epoch)
+    # A launcher waiting outside the scope is the caller's handle.
+    launcher = identity(options.parent, epoch) if options.parent and os.getppid() == options.parent else None
     context = {"policyVersion": POLICY, "hostProc": str(directory / "proc"),
                "hostPidNamespace": original, "hostEpoch": epoch,
                "monitor": monitor, "scope": owned_group, "cgroupRoot": str(cgroup_alias)}
@@ -312,7 +364,7 @@ def namespace(options, command, owned_group, root, directory):
         atomic(directory / "context.json", context)
         receipt = {"policyVersion": POLICY, "monitor": monitor, "bubblewrap": bubblewrap, "init": init, "native": native,
                    "pidNamespace": ready["pidNamespace"], "userNamespace": ready["userNamespace"],
-                   "scope": owned_group, "directory": str(directory)}
+                   "scope": owned_group, "directory": str(directory), **({"launcher": launcher} if launcher else {})}
         if options.receipt:
             atomic(options.receipt, receipt)
         published = True
@@ -346,6 +398,8 @@ def main():
     parser.add_argument("--terminal", action="store_true")
     parser.add_argument("--automatic", action="store_true")
     parser.add_argument("--inner")
+    parser.add_argument("--entered")
+    parser.add_argument("--parent", type=int)
     parser.add_argument("command", nargs=argparse.REMAINDER)
     options = parser.parse_args()
     command = options.command[1:] if options.command[:1] == ["--"] else options.command
@@ -353,6 +407,9 @@ def main():
         raise RuntimeError("engine command is missing")
     if options.inner:
         inner(Path(options.inner), command)
+    if options.entered:
+        # The waiting launcher runs the engine itself unless this mark exists.
+        os.close(os.open(options.entered, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
     return launch(options, command)
 
 
