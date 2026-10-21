@@ -8,6 +8,7 @@ import { finishTreeTrash, removeTreeViaTrash, scanProcesses, type ProcessScan } 
 import type { LauncherRecord } from "./launcher";
 import { runGit } from "./git";
 import { RetentionWorker } from "./retentionWorker";
+import { retentionProcessScan } from "./retentionInspection";
 
 const DAY = 86_400_000;
 const LOOP_PROBE_INTERVAL_MS = 10;
@@ -115,16 +116,19 @@ function fixture(count = 8) {
     launcher: { pid: 42, startIdentity: "fixture" }, web: { ...processEntry }, runtimeHost: { ...processEntry }, port: 0, socket: path.join(root, "host.sock"), updatedAt: "" };
   fs.writeFileSync(record.releasePointer, JSON.stringify({ dir: dirs[0], sha: shas[0] }));
   const commands: string[][] = [];
-  const locked = new Set<string>();
-  const git: NonNullable<RetentionPorts["git"]> = async (args, cwd) => {
+  const locked = new Set<string>(); const unregistered = new Set<string>();
+  const git: NonNullable<RetentionPorts["git"]> = async (args, at) => {
     commands.push(args);
-    if (args[0] === "worktree" && args[1] === "list") return { code: 0, stderr: "", stdout: dirs.filter(dir => fs.existsSync(dir)).map(dir =>
-      `worktree ${dir}\0HEAD ${shas[dirs.indexOf(dir)]}\0${locked.has(dir) ? "locked fixture\0" : ""}\0`).join("") };
+    // A quarantined release answers Git as the release it was.
+    const cwd = path.basename(path.dirname(at)).startsWith(".delegatus-trash-") ? path.join(path.dirname(path.dirname(at)), path.basename(at)) : at;
+    // Like Git, a registration whose directory is missing stays listed as prunable until removed.
+    if (args[0] === "worktree" && args[1] === "list") return { code: 0, stderr: "", stdout: dirs.filter(dir => !unregistered.has(dir)).map(dir =>
+      `worktree ${dir}\0HEAD ${shas[dirs.indexOf(dir)]}\0${locked.has(dir) ? "locked fixture\0" : ""}${fs.existsSync(dir) ? "" : "prunable gitdir file points to non-existent location\0"}\0`).join("") };
     if (args[0] === "rev-parse") return { code: 0, stderr: "", stdout: shas[dirs.indexOf(cwd)]! };
     if (args[0] === "status") return { code: 0, stderr: "", stdout: "" };
     if (args[0] === "ls-files") return { code: 0, stderr: "", stdout: "H fixture.txt\0" };
     if (args[0] === "for-each-ref") return { code: 0, stderr: "", stdout: "refs/heads/main\n" };
-    if (args[0] === "worktree" && args[1] === "remove") { fs.rmSync(args.at(-1)!, { recursive: true, force: true }); return { code: 0, stderr: "", stdout: "" }; }
+    if (args[0] === "worktree" && args[1] === "remove") { fs.rmSync(args.at(-1)!, { recursive: true, force: true }); unregistered.add(args.at(-1)!); return { code: 0, stderr: "", stdout: "" }; }
     throw new Error(`unexpected Git command: ${args.join(" ")}`);
   };
   const inputs: RetentionInputs = {};
@@ -372,80 +376,74 @@ test("recovery advances past four held journals on a later pass", async () => {
   for (const journal of journals.slice(0, 4)) expect(fs.existsSync(journal)).toBeTrue();
 }, 30_000);
 
-test("a process entering a recovered trash tree during owner IPC prevents replay deletion", async () => {
+test("a process entering a recovered trash tree during owner IPC is refused, by either path", async () => {
   const h = fixture(0); h.record.checkout = null;
   const dir = path.join(h.record.releasesDir, "npm-4.0.0"); fs.mkdirSync(dir); fs.writeFileSync(path.join(dir, "package.json"), "{}");
   fs.writeFileSync(h.record.releasePointer, JSON.stringify({ dir: path.join(h.record.releasesDir, "npm-0.0.0") }));
   const journal = path.join(path.dirname(h.ports.reportFile!), "package-trash-recovery-race.json");
   await expect(removeTreeViaTrash(dir, { journal, held: () => false, remove: async () => { throw new Error("interrupted"); } })).rejects.toThrow("interrupted");
-  const trash = JSON.parse(fs.readFileSync(journal, "utf8")).trash as string;
-  const scanned = path.join(h.root, "recovery-trash-scanned");
+  const legacyTrash = JSON.parse(fs.readFileSync(journal, "utf8")).trash as string;
+  let gated: string | undefined;
   h.ports.scan = () => {
-    const result = scanProcesses();
-    if (fs.existsSync(trash) && !fs.existsSync(scanned)) fs.writeFileSync(scanned, "yes");
-    return result;
+    const gate = fs.readdirSync(h.record.releasesDir).find(name => name.startsWith(".delegatus-trash-npm-4.0.0-") && path.join(h.record.releasesDir, name) !== legacyTrash);
+    if (gate) gated = path.join(h.record.releasesDir, gate, "npm-4.0.0");
+    return EMPTY;
   };
+  const refusals: (string | undefined)[] = [];
   const originalCurrent = h.ports.current;
-  let child: ChildProcess | undefined;
   h.ports.current = async () => {
-    if (fs.existsSync(scanned) && !child) {
-      const holder = spawn(process.execPath, ["-e", "process.stdout.write('ready'); setInterval(() => {}, 1000)"], {
-        cwd: trash, env: { PATH: process.env.PATH, NODE_ENV: "test", HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
-          TMPDIR: process.env.TMPDIR, LLV_STATE_DIR: process.env.LLV_STATE_DIR, LLV_VIEWER_CONTROL_URL: process.env.LLV_VIEWER_CONTROL_URL },
-        stdio: ["ignore", "pipe", "ignore"],
-      });
-      child = holder; children.push(holder);
-      await new Promise<void>((resolve, reject) => {
-        holder.once("error", reject); holder.stdout!.once("data", () => resolve());
-        holder.once("exit", () => reject(new Error("holder exited before readiness")));
-      });
+    if (gated && !refusals.length) {
+      // The journal's own trash path is gone, and the gate is closed.
+      for (const cwd of [legacyTrash, gated]) {
+        const holder = spawn(process.execPath, ["-e", "process.stdout.write('ready'); setInterval(() => {}, 1000)"], {
+          cwd, env: HOLDER_ENV(), stdio: ["ignore", "pipe", "ignore"] });
+        children.push(holder);
+        await new Promise<void>((resolve, reject) => {
+          holder.once("error", error => { refusals.push((error as NodeJS.ErrnoException).code); children.splice(children.indexOf(holder), 1); resolve(); });
+          holder.stdout!.once("data", () => reject(new Error("holder entered recovered trash")));
+        });
+      }
     }
     return originalCurrent?.() ?? { record: h.record, inputs: h.inputs };
   };
   const report = await h.run();
   expect(report.errors).toEqual([]);
-  expect(fs.existsSync(trash)).toBeTrue(); expect(fs.existsSync(journal)).toBeTrue();
-  expect(report.kept).toContainEqual(expect.objectContaining({ dir, reason: "process" }));
-  expect(child?.exitCode).toBeNull(); expect(child?.signalCode).toBeNull();
+  expect(refusals).toEqual(["ENOENT", "EACCES"]);
+  expect(report.removed).toContainEqual(expect.objectContaining({ dir }));
+  expect(fs.existsSync(journal)).toBeFalse();
+  expect(fs.readdirSync(h.record.releasesDir).some(name => name.startsWith(".delegatus-trash-"))).toBeFalse();
 }, 30_000);
 
-test("a process entering cache trash during owner IPC restores the cache", async () => {
+test("a process entering cache trash during owner IPC is refused at the closed gate", async () => {
   const h = fixture();
   const cache = path.join(h.dirs[0]!, ".next/cache/webpack");
-  const scanned = path.join(h.root, "cache-trash-scanned");
-  let trash: string | undefined;
-  let child: ChildProcess | undefined;
+  let gate: string | undefined;
+  let refusal: NodeJS.ErrnoException | undefined;
   h.ports.scan = () => {
-    const result = scanProcesses();
-    const found = fs.readdirSync(path.dirname(cache)).map(name => path.join(path.dirname(cache), name))
-      .find(entry => path.basename(entry).startsWith(".delegatus-trash-webpack-"));
-    if (found) trash = found;
-    if (!fs.existsSync(cache) && trash && !fs.existsSync(scanned)) fs.writeFileSync(scanned, "yes");
-    return result;
+    const found = fs.readdirSync(path.dirname(cache)).find(name => name.startsWith(".delegatus-trash-webpack-"));
+    if (found) gate = path.join(path.dirname(cache), found);
+    return EMPTY;
   };
   const originalCurrent = h.ports.current;
   h.ports.current = async () => {
-    if (fs.existsSync(scanned) && trash && !child) {
+    if (gate && !refusal) {
       const holder = spawn(process.execPath, ["-e", "process.stdout.write('ready'); setInterval(() => {}, 1000)"], {
-        cwd: trash, env: { PATH: process.env.PATH, NODE_ENV: "test", HOME: process.env.HOME,
-          XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, TMPDIR: process.env.TMPDIR,
-          LLV_STATE_DIR: process.env.LLV_STATE_DIR, LLV_VIEWER_CONTROL_URL: process.env.LLV_VIEWER_CONTROL_URL },
-        stdio: ["ignore", "pipe", "ignore"],
+        cwd: path.join(gate, "webpack"), env: HOLDER_ENV(), stdio: ["ignore", "pipe", "ignore"],
       });
-      child = holder; children.push(holder);
+      children.push(holder);
       await new Promise<void>((resolve, reject) => {
-        holder.once("error", reject); holder.stdout!.once("data", () => resolve());
-        holder.once("exit", () => reject(new Error("holder exited before retention finished")));
+        holder.once("error", error => { refusal = error; children.splice(children.indexOf(holder), 1); resolve(); });
+        holder.stdout!.once("data", () => reject(new Error("holder entered a closed gate")));
       });
     }
     return originalCurrent?.() ?? { record: h.record, inputs: h.inputs };
   };
   const report = await h.run();
   expect(report.errors).toEqual([]);
-  expect(trash).toBeDefined();
-  expect(fs.existsSync(cache)).toBeTrue();
-  expect(child?.exitCode).toBeNull(); expect(child?.signalCode).toBeNull();
-  expect(fs.readlinkSync(`/proc/${child!.pid}/cwd`)).toBe(cache);
+  expect(refusal?.code).toBe("EACCES");
+  expect(fs.existsSync(cache)).toBeFalse();
+  expect(fs.readdirSync(path.dirname(cache)).some(name => name.startsWith(".delegatus-trash-"))).toBeFalse();
+  expect(exists(path.join(h.dirs[0]!, ".next/cache/fetch-cache/runtime"))).toBeTrue();
 }, 30_000);
 
 test("recent and newest-K releases are kept; K follows LLV_SELF_UPDATE_KEEP_RELEASES", async () => {
@@ -660,13 +658,25 @@ test("package trash replay preserves a dirty nested Git checkout", async () => {
 });
 
 test("one failed removal is reported and the next candidate is still reclaimed", async () => {
-  const h = fixture(); const run = h.ports.git!;
-  h.ports.git = async (args, cwd) => args[1] === "remove" && args.at(-1) === h.dirs[1]
-    ? { code: 1, stdout: "", stderr: "fixture removal refused" } : run(args, cwd);
+  const h = fixture(); const failing = path.basename(h.dirs[1]!);
+  h.ports.removeTree = async entry => {
+    // Removal runs from inside the quarantined tree: entries are relative.
+    if (path.basename(process.cwd()) === failing && entry !== ".next/DELEGATUS_RELEASE_READY") throw new Error("fixture removal refused");
+    await fs.promises.rm(entry, { recursive: true, force: true });
+  };
   const report = await h.run();
   expect(report.errors).toHaveLength(1);
-  expect(exists(h.dirs[1]!)).toBeTrue(); expect(exists(h.dirs[2]!)).toBeFalse();
-  expect(exists(path.join(h.dirs[1]!, ".next/DELEGATUS_RELEASE_READY"))).toBeFalse();
+  expect(exists(h.dirs[1]!)).toBeFalse(); expect(exists(h.dirs[2]!)).toBeFalse();
+  expect(report.removed.some(row => row.dir === h.dirs[1])).toBeFalse();
+  // The partial tree stays journaled behind its gate, never ready, and the next pass finishes it.
+  const gate = fs.readdirSync(h.record.releasesDir).find(name => name.startsWith(`.delegatus-trash-${failing}-`))!;
+  expect(exists(path.join(h.record.releasesDir, gate, failing, ".next/DELEGATUS_RELEASE_READY"))).toBeFalse();
+  h.ports.removeTree = undefined;
+  const resumed = await h.run();
+  expect(resumed.errors).toEqual([]);
+  expect(resumed.removed.map(row => row.dir)).toContain(h.dirs[1]);
+  expect(fs.readdirSync(h.record.releasesDir).some(name => name.startsWith(".delegatus-trash-"))).toBeFalse();
+  expect(h.commands.filter(args => args[0] === "worktree" && args[1] === "remove" && args.at(-1) === h.dirs[1])).toHaveLength(1);
 });
 
 test("retention never prunes other registrations", async () => {
@@ -734,11 +744,12 @@ test.each(["tracked-edit", "untracked-file", "unpublished-commit"])("release ret
   if (kind === "unpublished-commit") expect(h.git(["status", "--porcelain"], h.candidate)).toBe("");
 });
 
-test("a late release edit is refused by Git's final removal guard", async () => {
+test("a release edit landing after the final ref check is refused by the quarantine status check", async () => {
   const h = realReleaseFixture(); let changed = false; const git = h.ports.git!;
   h.ports.git = async (args, cwd) => {
-    if (args[0] === "worktree" && args[1] === "remove" && args.at(-1) === h.candidate) {
-      changed = true; fs.writeFileSync(path.join(h.candidate, "source.txt"), "late operator edit\n");
+    // The last Git read before the rename; the edit lands at the release path.
+    if (!changed && args[0] === "status" && path.basename(path.dirname(cwd)).startsWith(".delegatus-trash-")) {
+      changed = true; fs.writeFileSync(path.join(cwd, "source.txt"), "late operator edit\n");
     }
     return git(args, cwd);
   };
@@ -809,8 +820,32 @@ test.each(["active", "rollback", "process", "mount"] as const)("late %s protecti
 
 test("a clean disposable release still expires", async () => {
   const h = realReleaseFixture(); const report = await h.run();
+  expect(report.errors).toEqual([]);
   expect(report.removed.map(row => row.dir)).toContain(h.candidate);
   expect(fs.existsSync(h.active)).toBeTrue(); expect(fs.existsSync(h.candidate)).toBeFalse();
+  const listed = h.git(["worktree", "list", "--porcelain"]);
+  expect(listed).not.toContain(h.candidate); expect(listed).toContain(h.active); expect(listed).toContain(h.newest);
+  expect(fs.readdirSync(h.record.releasesDir).some(name => name.startsWith(".delegatus-trash-"))).toBeFalse();
+});
+
+test("an interrupted release removal finishes next pass even after its registration was pruned", async () => {
+  const h = realReleaseFixture();
+  h.ports.removeTree = async entry => {
+    // Fail only the release-level removal; its generated `.next` output goes first, from its own gate.
+    if (path.basename(process.cwd()) === path.basename(h.candidate)) throw new Error("interrupted release removal");
+    await fs.promises.rm(entry, { recursive: true, force: true });
+  };
+  const interrupted = await h.run();
+  expect(interrupted.errors).toHaveLength(1);
+  expect(fs.existsSync(h.candidate)).toBeFalse();
+  h.git(["worktree", "prune"]);
+  h.ports.removeTree = undefined;
+  const resumed = await h.run();
+  expect(resumed.errors).toEqual([]);
+  expect(resumed.removed.map(row => row.dir)).toContain(h.candidate);
+  expect(h.git(["worktree", "list", "--porcelain"])).not.toContain(h.candidate);
+  expect(fs.readdirSync(h.record.releasesDir).some(name => name.startsWith(".delegatus-trash-"))).toBeFalse();
+  expect(fs.existsSync(h.active)).toBeTrue(); expect(fs.existsSync(h.newest)).toBeTrue();
 });
 
 test("ten successive applies stay bounded by protected plus newest K", async () => {
@@ -1121,3 +1156,175 @@ test.skipIf(process.platform !== "linux")("87 keep decisions request exactly one
     const pid = Number(fs.readFileSync(path.join(h.root, "helper-pid"), "utf8")); expect(() => process.kill(pid, 0)).toThrow();
   } finally { await worker.close(); }
 }, 30_000);
+
+// Every scan point of a pass, found by a calibration run. A real proc root
+// limited to this process and the probe's holders keeps each scan cheap.
+type ScanProbe = (scan: number, location: string | null) => Promise<void>;
+function scopedProcRoot(root: string, pids: number[]) {
+  const proc = fs.mkdtempSync(path.join(root, "proc-"));
+  fs.symlinkSync("/proc/self", path.join(proc, "self"));
+  for (const pid of new Set([process.pid, ...pids])) fs.symlinkSync(`/proc/${pid}`, path.join(proc, String(pid)));
+  return proc;
+}
+function probedInspection(h: ReturnType<typeof fixture>, probe: ScanProbe, located: () => string | null) {
+  let scans = 0;
+  const inspection: NonNullable<RetentionPorts["inspection"]> = {
+    scan: async root => {
+      const proc = scopedProcRoot(h.root, children.flatMap(child => child.pid && child.exitCode === null && child.signalCode === null ? [child.pid] : []));
+      const snapshot = retentionProcessScan(root, proc);
+      fs.rmSync(proc, { recursive: true, force: true });
+      await probe(++scans, located());
+      return snapshot;
+    },
+    bytes: async () => 0, close: async () => {},
+  };
+  return { inspection, scans: () => scans };
+}
+/** The release at its path, or wherever retention quarantined it. */
+function quarantineLocator(releases: string, target: string, marker: string) {
+  return () => {
+    if (fs.existsSync(target)) return target;
+    const gate = fs.readdirSync(releases).find(name => name.startsWith(`.delegatus-trash-${path.basename(target)}-`));
+    if (!gate) return null;
+    const outer = path.join(releases, gate);
+    return fs.existsSync(path.join(outer, marker)) ? outer : path.join(outer, path.basename(target));
+  };
+}
+const HOLDER_ENV = () => ({ PATH: process.env.PATH, NODE_ENV: "test" as const, HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+  TMPDIR: process.env.TMPDIR, LLV_STATE_DIR: process.env.LLV_STATE_DIR, LLV_VIEWER_CONTROL_URL: process.env.LLV_VIEWER_CONTROL_URL });
+/** Start a real holder of `location`; resolves whether it acquired the tree. */
+async function startHolder(kind: "cwd" | "fd" | "mapped" | "module", location: string, file: string, cwd: string): Promise<ChildProcess | null> {
+  const keep = "process.stdout.write('ready'); setInterval(() => {}, 1000);";
+  const args = kind === "cwd" ? ["-e", keep]
+    : kind === "fd" ? ["-e", `globalThis.held = require("node:fs").openSync(process.env.HOLD_PATH, "r"); ${keep}`]
+      : kind === "mapped" ? ["-e", `globalThis.held = Bun.mmap(process.env.HOLD_PATH); ${keep}`]
+        : [path.join(location, "holder.js")];
+  let child: ChildProcess;
+  try {
+    child = spawn(process.execPath, args, { cwd: kind === "cwd" ? location : cwd, env: { ...HOLDER_ENV(), HOLD_PATH: path.join(location, file) },
+      stdio: ["ignore", "pipe", "ignore"] });
+  } catch { return null; }
+  children.push(child);
+  return new Promise(resolve => {
+    // A refused spawn never exits; it is no child to stop.
+    child.once("error", () => { children.splice(children.indexOf(child) >>> 0, 1); resolve(null); });
+    child.stdout!.once("data", () => resolve(child));
+    child.once("exit", () => resolve(null));
+  });
+}
+const alive = (child: ChildProcess) => child.exitCode === null && child.signalCode === null;
+async function settleChildren() {
+  for (const child of children.splice(0)) {
+    if (!alive(child)) continue;
+    const exited = new Promise<void>(resolve => child.once("exit", () => resolve())); child.kill("SIGKILL"); await exited;
+  }
+}
+
+function packageRaceFixture() {
+  const h = packageContainerFixture();
+  const servingSha = "ab".repeat(20);
+  const metadata = path.join(h.target, "node_modules/delegatus-cli/package.json");
+  fs.mkdirSync(path.dirname(metadata), { recursive: true }); fs.writeFileSync(metadata, JSON.stringify({ gitHead: servingSha }));
+  fs.writeFileSync(path.join(h.target, "holder.js"), "process.stdout.write('ready'); setInterval(() => {}, 1000);");
+  h.ports.current = () => structuredClone({ record: h.record, inputs: h.inputs });
+  h.ports.scan = undefined;
+  return { ...h, servingSha, marker: "package.json" };
+}
+function checkoutRaceFixture() {
+  const h = fixture(3); h.ports.env = { LLV_SELF_UPDATE_KEEP_RELEASES: "1" };
+  const target = h.dirs[1]!;
+  fs.writeFileSync(path.join(target, "holder.js"), "process.stdout.write('ready'); setInterval(() => {}, 1000);");
+  h.ports.current = () => structuredClone({ record: h.record, inputs: h.inputs });
+  h.ports.scan = undefined;
+  return { ...h, target, servingSha: h.shas[1]!, marker: ".next/BUILD_ID" };
+}
+type RaceFixture = ReturnType<typeof packageRaceFixture> | ReturnType<typeof checkoutRaceFixture>;
+const RACE_LAYOUTS = { package: packageRaceFixture, checkout: checkoutRaceFixture } as const;
+async function calibratedScans(layout: keyof typeof RACE_LAYOUTS) {
+  const h = RACE_LAYOUTS[layout]();
+  const probe = probedInspection(h, async () => {}, () => null); h.ports.inspection = probe.inspection;
+  const report = await h.run();
+  expect(report.errors).toEqual([]);
+  expect(report.removed.map(row => row.dir)).toContain(h.target);
+  return probe.scans();
+}
+function acquireHold(h: RaceFixture, kind: "active" | "rollback" | "serving" | "in-flight") {
+  if (kind === "active") fs.writeFileSync(h.record.releasePointer, JSON.stringify({ dir: h.target }));
+  if (kind === "rollback") h.inputs.rollbackPointers = [JSON.stringify({ dir: h.target })];
+  if (kind === "serving") h.record.web.revision = h.servingSha;
+  if (kind === "in-flight") h.inputs.inFlight = [h.target];
+}
+
+test.skipIf(process.platform !== "linux").each(["package", "checkout"] as const)(
+  "an owner hold acquired during any process scan keeps the %s release", async layout => {
+    const total = await calibratedScans(layout);
+    expect(total).toBeGreaterThan(1);
+    const removedAfterHold: string[] = [];
+    for (const kind of ["active", "rollback", "serving", "in-flight"] as const) {
+      for (let at = 1; at <= total; at++) {
+        const h = RACE_LAYOUTS[layout]();
+        let acquired = false;
+        h.ports.inspection = probedInspection(h, async (scan, where) => { if (scan === at && where) { acquired = true; acquireHold(h, kind); } },
+          quarantineLocator(h.record.releasesDir, h.target, h.marker)).inspection;
+        const report = await h.run();
+        expect(report.errors).toEqual([]);
+        if (acquired && (!fs.existsSync(path.join(h.target, h.marker)) || report.removed.some(row => row.dir === h.target)))
+          removedAfterHold.push(`${kind}@scan${at}/${total}`);
+      }
+    }
+    expect(removedAfterHold).toEqual([]);
+  }, 120_000);
+
+test.skipIf(process.platform !== "linux").each(["package", "checkout"] as const)(
+  "a real holder started after any scan snapshot is refused or keeps the %s release", async layout => {
+    const total = await calibratedScans(layout);
+    const deletedUnderHolder: string[] = [];
+    let refused = 0; let protectedByHolder = 0;
+    for (const kind of ["cwd", "fd", "mapped", "module"] as const) {
+      for (let at = 1; at <= total; at++) {
+        const h = RACE_LAYOUTS[layout]();
+        let holder: ChildProcess | null = null; let tried = false; let location: string | null = null;
+        h.ports.inspection = probedInspection(h, async (scan, where) => {
+          if (scan !== at || !where) return;
+          tried = true; location = where;
+          holder = await startHolder(kind, where, h.marker, h.root);
+        }, quarantineLocator(h.record.releasesDir, h.target, h.marker)).inspection;
+        const report = await h.run();
+        expect(report.errors).toEqual([]);
+        if (tried && holder && alive(holder) && !fs.existsSync(path.join(location!, h.marker)) && !fs.existsSync(path.join(h.target, h.marker)))
+          deletedUnderHolder.push(`${kind}@scan${at}/${total}`);
+        if (tried && holder && report.removed.some(row => row.dir === h.target)) deletedUnderHolder.push(`${kind}@scan${at}/${total}:reported`);
+        if (tried && !holder) refused++;
+        if (tried && holder && fs.existsSync(path.join(h.target, h.marker))) protectedByHolder++;
+        await settleChildren();
+      }
+    }
+    expect(deletedUnderHolder).toEqual([]);
+    // Both outcomes occur: early holders keep the release, late ones are refused.
+    expect(refused).toBeGreaterThan(0); expect(protectedByHolder).toBeGreaterThan(0);
+  }, 300_000);
+
+test.each(["package", "checkout"] as const)("a hold landing during any owner read of a removed %s release names a path already gone", async layout => {
+  // Each read replies with the state from before its hold, as an IPC reply in
+  // flight would. A release that is removed anyway must already be off its
+  // path when that hold lands, so the holder's own use fails.
+  const total = await calibratedScans(layout);
+  const holdsOnRemovedPath: string[] = [];
+  let reads = 0;
+  for (let at = 1; ; at++) {
+    const h = RACE_LAYOUTS[layout]();
+    h.ports.inspection = probedInspection(h, async () => {}, () => null).inspection;
+    let presentAtHold = false; reads = 0;
+    h.ports.current = () => {
+      const reply = structuredClone({ record: h.record, inputs: h.inputs });
+      if (++reads === at) { presentAtHold = fs.existsSync(h.target); h.inputs.inFlight = [h.target]; }
+      return reply;
+    };
+    const report = await h.run();
+    expect(report.errors).toEqual([]);
+    if (reads < at) break;
+    if (presentAtHold && report.removed.some(row => row.dir === h.target)) holdsOnRemovedPath.push(`read${at}`);
+  }
+  expect(total).toBeGreaterThan(0);
+  expect(holdsOnRemovedPath).toEqual([]);
+}, 60_000);
