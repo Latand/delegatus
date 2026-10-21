@@ -28,6 +28,14 @@ test("an over-budget generated file refuses before any inbox write", () => {
   expect(fs.existsSync(inboxFilesDir()) ? fs.readdirSync(inboxFilesDir()) : []).toEqual(before);
 });
 
+test("stored upload sizes count toward the generated text file's aggregate budget", () => {
+  const stored = { id: "a".repeat(32), bytes: 100 * 1024 * 1024, sha256: "b".repeat(64), path: "unused-upload" };
+  const file = { name: "recording.ogg", data: Buffer.alloc(0), stored };
+  expect(prepareMessageFiles("a".repeat(40_000), [file], "one-stored-file").textAttachment).toBeDefined();
+  expect(() => prepareMessageFiles("a".repeat(40_000), [file, { ...file, name: "archive.bin" }], "full-stored-batch"))
+    .toThrow("attach a text file");
+});
+
 test("the delivered marker carries a one-line excerpt of the opening words", () => {
   const text = `  Привіт,\n\tось   експорт.\n${"ї".repeat(30_000)}`;
   const prepared = prepareMessageFiles(text, [], "excerpt");

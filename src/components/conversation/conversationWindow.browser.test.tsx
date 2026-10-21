@@ -5498,3 +5498,104 @@ describe("seat inbox attribution", () => {
     } finally { await browser?.close(); served.stop(); fs.closeSync(chromeDir); fs.rmSync(chromeTmp, { recursive: true, force: true }); }
   }, 60_000);
 });
+
+
+describe("streamed composer attachments", () => {
+  browserTest("100 MiB upload progress, failure, retry and completed reference on desktop and phone", async () => {
+    const out = path.resolve(".artifacts/composer-attachments");
+    const evidence = path.resolve("evidence/composer-attachments");
+    fs.mkdirSync(out, { recursive: true }); fs.mkdirSync(evidence, { recursive: true });
+    const served = await serveEvidenceFixture(out, FIXTURE);
+    // Keep Chromium's socket path short while its files stay in this stage's
+    // own scratch root. Only Chromium uses the directory-descriptor alias.
+    const scratchFd = process.platform === "linux" && process.env.TMPDIR ? fs.openSync(process.env.TMPDIR, "r") : undefined;
+    const launch = { ...LAUNCH, ...(scratchFd !== undefined ? { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${scratchFd}` } } : {}) };
+    let browser: Browser | undefined;
+    let browserWidth = 1280;
+    const readings: Record<string, unknown> = {};
+    try {
+      browser = await chromium.launch({ ...launch, ignoreDefaultArgs: ["--hide-scrollbars"] });
+      for (const width of [1280, 390]) for (const scheme of ["light", "dark"] as const) for (const lang of ["en", "uk"] as const) {
+        if (width !== browserWidth) {
+          await browser.close(); browser = await chromium.launch(launch); browserWidth = width;
+        }
+        const name = `${width}-${scheme}-${lang}`;
+        const { context, page, pageErrors } = await openFixture(browser, `${served.base}?case=lifecycle&lang=${lang}`,
+          { width, height: width === 390 ? 844 : 700 }, scheme, lang, "no-preference", width === 390);
+        try {
+          await page.waitForSelector('input[type="file"]', { state: "attached" });
+          await page.evaluate(() => {
+            type Upload = { upload: { onprogress?: (event: { lengthComputable: boolean; loaded: number; total: number }) => void }; onerror?: () => void; onload?: () => void; responseText: string; status: number };
+            const state = window as unknown as { uploads: Upload[]; sent?: { files?: { name: string; base64: string; upload?: { bytes: number } }[] } };
+            state.uploads = [];
+            class UploadRequest {
+              upload = {}; status = 200; responseText = "";
+              open() {} setRequestHeader() {} abort() {}
+              send(file: File) {
+                if (!(file instanceof File) || file.size !== 100 * 1024 * 1024) throw new Error("expected original 100 MiB File");
+                state.uploads.push(this);
+              }
+            }
+            Object.defineProperty(window, "XMLHttpRequest", { value: UploadRequest, configurable: true });
+            const original = window.fetch;
+            window.fetch = (input, init) => {
+              if (String(input) === "/api/runtime/send" && init?.method === "POST") state.sent = JSON.parse(String(init.body));
+              return original(input, init);
+            };
+            const transfer = new DataTransfer();
+            transfer.items.add(new File([new Uint8Array(100 * 1024 * 1024)], "recording.ogg", { type: "audio/ogg" }));
+            const picker = document.querySelector<HTMLInputElement>('input[type="file"]')!;
+            picker.files = transfer.files; picker.dispatchEvent(new Event("change", { bubbles: true }));
+          });
+          await page.waitForFunction(() => (window as unknown as { uploads: unknown[] }).uploads.length === 1);
+          await page.evaluate(() => {
+            const state = window as unknown as { uploads: { upload: { onprogress: (event: unknown) => void } }[] };
+            state.uploads[0]!.upload.onprogress({ lengthComputable: true, loaded: 37, total: 100 });
+          });
+          await page.waitForSelector('[role="progressbar"][aria-valuenow="37"]');
+          await page.screenshot({ path: path.join(out, `${name}-progress.png`) });
+          const progress = await page.locator('[role="progressbar"]').boundingBox();
+          expect(progress).not.toBeNull();
+          expect(progress!.y + progress!.height).toBeLessThanOrEqual(width === 390 ? 844 : 700);
+          await page.evaluate(() => (window as unknown as { uploads: { onerror: () => void }[] }).uploads[0]!.onerror());
+          await page.waitForSelector('[data-testid="attachment-tile"][data-status="error"]');
+          await page.screenshot({ path: path.join(out, `${name}-failed.png`) });
+          await page.locator('[data-testid="attachment-tile"] button').filter({ has: page.locator('svg') }).first().evaluate((element) => {
+            // Pick by the attachment's retry label, independently of locale.
+            const tile = element.closest('[data-testid="attachment-tile"]')!;
+            const buttons = [...tile.querySelectorAll<HTMLButtonElement>("button")];
+            buttons.find(button => /retry|повтор/i.test(button.getAttribute("aria-label") ?? ""))!.click();
+          });
+          await page.waitForFunction(() => (window as unknown as { uploads: unknown[] }).uploads.length === 2);
+          await page.evaluate(() => {
+            const upload = (window as unknown as { uploads: { responseText: string; onload: () => void }[] }).uploads[1]!;
+            upload.responseText = JSON.stringify({ upload: { id: "a".repeat(32), bytes: 100 * 1024 * 1024, sha256: "b".repeat(64) } });
+            upload.onload();
+          });
+          await page.waitForSelector('[data-testid="attachment-tile"][data-status="ready"]');
+          await page.screenshot({ path: path.join(out, `${name}-ready.png`) });
+          await page.evaluate(() => {
+            const transfer = new DataTransfer();
+            transfer.items.add(new File([new Uint8Array(100 * 1024 * 1024 + 1)], "oversized.ogg", { type: "audio/ogg" }));
+            const picker = document.querySelector<HTMLInputElement>('input[type="file"]')!;
+            picker.files = transfer.files; picker.dispatchEvent(new Event("change", { bubbles: true }));
+          });
+          await page.waitForFunction(() => /oversized\.ogg[\s\S]*100 (?:MB|МБ)/.test(document.body.innerText));
+          await page.screenshot({ path: path.join(out, `${name}-oversized.png`) });
+          await page.click('button[type="submit"]');
+          await page.waitForFunction(() => Boolean((window as unknown as { sent?: unknown }).sent));
+          const sent = await page.evaluate(() => (window as unknown as { sent: { files: { base64: string; upload: { bytes: number } }[] } }).sent);
+          expect(sent.files).toHaveLength(1);
+          expect(sent.files[0]!.base64).toBe("");
+          expect(sent.files[0]!.upload.bytes).toBe(100 * 1024 * 1024);
+          readings[name] = { progressPercent: 37, progress, failureVisible: true, retryCompleted: true, oversizedRefused: true, sentBytes: sent.files[0]!.upload.bytes, pageErrors };
+          expect(pageErrors).toEqual([]);
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(evidence, "rendered.json"), JSON.stringify(readings, null, 2) + "\n");
+    } finally {
+      try { await browser?.close(); }
+      finally { served.stop(); if (scratchFd !== undefined) fs.closeSync(scratchFd); }
+    }
+  }, 120_000);
+});
