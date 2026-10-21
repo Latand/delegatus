@@ -21,6 +21,8 @@ export type AccountingOwner = Base & { kind: "owner"; conversationId: string; ep
     `runningKey` its ticket in the running window while it runs; each is the
     row's own pointer, so a ticket moves in one keyed transaction. */
 export type AccountingChild = Base & { kind: "child"; identity: string; rowKey: string; owner: string; launchId: string; input: SeatTickChildInput; generationIndex: number; runningKey: string | null; pollKey: string | null;
+  /** Latest generation whose terminal placement was proven by its ledger. */
+  resolvedGeneration?: string | null;
   /** The seat epoch whose landed wake last took an outcome of this child
       (#1749). Kept on the CHILD rather than on the outcome because an outcome
       identity is one turn of one ledger generation: a fresh cursor over the
@@ -185,6 +187,7 @@ function decodeAccountingRow(raw: unknown): AccountingRow | null {
     }
     case "child": return string(row.identity) && string(row.rowKey) && string(row.owner) && string(row.launchId) && childInput(row.input)
       && integer(row.generationIndex) && nullableString(row.runningKey) && (row.pollKey === undefined || nullableString(row.pollKey))
+      && (row.resolvedGeneration === undefined || nullableString(row.resolvedGeneration))
       && (row.harvestedEpoch === undefined || integer(row.harvestedEpoch))
       ? { ...row, pollKey: row.pollKey ?? null } : null;
     case "source": return string(row.identity) && string(row.child) && string(row.engine) && string(row.generation)
@@ -531,30 +534,32 @@ export class SeatTickAccounting {
       — the tail once its ledger was read to the end, the head when the budget
       cut the read, so the next check resumes it first. A poll another
       controller already recorded is skipped. */
-  ingest(child: AccountingChild, source: AccountingSource | null, outcomes: LedgerOutcome[], failure = false, position: TicketPosition = "tail"): void {
+  ingest(child: AccountingChild, source: AccountingSource | null, outcomes: LedgerOutcome[], failure: boolean | "launch-unmaterialized" | "host-gone-no-transcript" = false, position: TicketPosition = "tail"): void {
     this.mutate((tx, row) => {
       if (!child.pollKey || !tx.get(child.pollKey)) return;
       if (source?.cursor.identity && source.legacyBoundary?.identity !== source.cursor.identity) {
         source.legacyBoundary = { identity: source.cursor.identity, bytes: source.cursor.initialSize };
       }
-      const tuples = failure ? [[child.launchId, "pre-execution-failure"]] : outcomes.map((event) => [source!.engine, source!.generation, event.turnId]);
-      tuples.forEach((tuple, index) => {
+      // Resolution receipts use their own identity; a later recovered turn
+      // still becomes owed under its original engine/generation/turn tuple.
+      const settled = outcomes.map((event) => ({ tuple: [source!.engine, source!.generation, event.turnId], result: event.status === "completed" ? "finished" as const : "failed" as const, endOffset: event.endOffset }));
+      const resolution = failure ? [{ tuple: [child.launchId, failure === true ? "pre-execution-failure" : failure, ...(failure !== true && source ? [source.generation] : [])], result: "failed" as const, endOffset: null }] : [];
+      for (const { tuple, result, endOffset } of [...settled, ...resolution]) {
         const identity = outcomeIdentity(tuple);
         const id = key("outcome", this.project, identity);
-        const result = failure || outcomes[index]!.status !== "completed" ? "failed" : "finished";
         const existing = tx.get(id);
         if (existing) {
           if (existing.kind !== "outcome" || JSON.stringify(existing.tuple) !== JSON.stringify(tuple)) throw new Error("outcome identity collision");
           if (existing.input.outcome !== result) tx.put({ ...existing, gap: "conflicting-terminal" });
-          return;
+          continue;
         }
         const legacy = tx.get(key("legacy", this.project, child.input.conversationId));
         const input: SeatTickChildInput = { ...child.input, status: "terminal", outcome: result, outcomeId: identity };
         const readyKey = key("ready", this.project, String(row.sequence + 1).padStart(16, "0"));
         this.ticket(tx, row, "ready", id);
         tx.put({ ...this.base("outcome", identity), kind: "outcome", identity, child: child.key, tuple, input, status: "owed", landingKey: null, readyKey,
-          gap: legacy && (failure || !source?.legacyBoundary || outcomes[index]!.endOffset <= source.legacyBoundary.bytes) ? "legacy-delivery-ambiguous" : null });
-      });
+          gap: legacy && (endOffset === null || !source?.legacyBoundary || endOffset <= source.legacyBoundary.bytes) ? "legacy-delivery-ambiguous" : null });
+      }
       if (source) tx.put(source);
       this.trackRunning(tx, row, child);
       tx.delete(child.pollKey!);

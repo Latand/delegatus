@@ -52,6 +52,116 @@ function childInput(id: string, status: SeatTickChildInput["status"] = "running"
   return { conversationId: id, title: id, status, outcome: null, terminalAt: null, activity: null };
 }
 
+test("a resolved launch stays acknowledged across a process restart and a recovered turn remains owed", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seat-resolution-restart-"));
+  const filename = path.join(dir, "state.sqlite");
+  const childEnv: NodeJS.ProcessEnv = { ...process.env, LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" };
+  for (const [key, leaf] of [["HOME", "home"], ["XDG_CONFIG_HOME", "config"], ["TMPDIR", "tmp"], ["LLV_STATE_DIR", "state"]]) {
+    const folder = path.join(dir, leaf!);
+    fs.mkdirSync(folder);
+    childEnv[key!] = folder;
+  }
+  const modulePath = path.join(import.meta.dir, "seatTickAccounting.ts");
+  const run = async (recovered: boolean) => {
+    const child = Bun.spawn([process.execPath, "-e", `
+      const { SeatTickAccounting } = await import(${JSON.stringify(modulePath)});
+      const accounting = new SeatTickAccounting(${JSON.stringify(filename)}, "project");
+      const { emptySeatTickState } = await import(${JSON.stringify(path.join(import.meta.dir, "types.ts"))});
+      accounting.initialize(emptySeatTickState(), null);
+      const owner = accounting.owner("conversation_seat", 1);
+      const candidate = accounting.child("child-row", "conversation_seat", "launch-one", {
+        conversationId: "conversation_child", title: "Recovered worker", status: "terminal", outcome: "failed", terminalAt: "2026-09-05T11:00:00.000Z", activity: null,
+      });
+      accounting.discovery(owner, [{ child: candidate }]);
+      accounting.ingest(accounting.get(candidate.key), null, [], "launch-unmaterialized");
+      if (${recovered}) {
+        const held = accounting.get(candidate.key);
+        const source = accounting.source(held, "claude", "recovered-generation");
+        accounting.ingest(held, source, [{ turnId: "recovered-turn", status: "completed", seq: 2, endOffset: 100 }]);
+      }
+      console.log(JSON.stringify(accounting.ready(10).map(row => ({ id: row.identity, outcome: row.input.outcome }))));
+    `], { env: childEnv, stdout: "pipe", stderr: "pipe" });
+    try {
+      const [output, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      if (code !== 0) throw new Error(`accounting child exited ${code}: ${error}`);
+      return JSON.parse(output) as { id: string; outcome: string }[];
+    } finally { if (child.exitCode === null) { child.kill(); await child.exited; } }
+  };
+  try {
+    const first = await run(false);
+    expect(first).toHaveLength(1);
+    expect(first[0]!.outcome).toBe("failed");
+    const accounting = new SeatTickAccounting(filename, "project");
+    const wake = { clientMessageId: "resolution-landed", conversationId: CONVERSATION, seatEpoch: 1, operationId: null,
+      commit: { proposal: false, reasons: [], fingerprint: "resolution", eventsThrough: 0, children: [first[0]!.id] } };
+    expect(accounting.prepare(accounting.readState(), wake)).toBe(true);
+    expect(accounting.settle(wake.clientMessageId, { ...accounting.readState(), lastWakeAt: "2026-09-05T12:00:00.000Z" }, "landed")).toBe(true);
+    const recovered = await run(true);
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]!.outcome).toBe("finished");
+    expect(recovered[0]!.id).not.toBe(first[0]!.id);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+}, 15_000);
+
+test("replaying an existing ledger outcome still records later completions and advances its cursor", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seat-accounting-replay-outcomes-"));
+  try {
+    const accounting = new SeatTickAccounting(path.join(dir, "state.sqlite"), "project");
+    accounting.initialize(emptySeatTickState(), null);
+    const owner = accounting.owner(CONVERSATION, 1);
+    const child = accounting.child("child-row", CONVERSATION, "launch-one", childInput("conversation_child", "terminal"));
+    accounting.discovery(owner, [{ child }]);
+    const stored = accounting.get(child.key) as typeof child;
+    const source = accounting.source(stored, "claude", "generation-one");
+    source.cursor = { ...source.cursor, identity: "generation-one:1", offset: 100, initialSize: 100, atEnd: true };
+    accounting.ingest(stored, source, [{ turnId: "turn-one", status: "completed", seq: 2, endOffset: 100 }]);
+    const afterFirstPoll = accounting.get(child.key) as typeof child;
+    const firstPollKey = afterFirstPoll.pollKey;
+    const replay = accounting.get(source.key) as typeof source;
+    replay.cursor = { ...replay.cursor, identity: "generation-one:1", offset: 200, initialSize: 200, atEnd: true };
+
+    accounting.ingest(afterFirstPoll, replay, [
+      { turnId: "turn-one", status: "completed", seq: 2, endOffset: 100 },
+      { turnId: "turn-two", status: "completed", seq: 4, endOffset: 200 },
+    ]);
+
+    expect(accounting.ready(10).map((row) => row.tuple.at(-1))).toEqual(["turn-one", "turn-two"]);
+    expect((accounting.get(source.key) as typeof source).cursor.offset).toBe(200);
+    expect((accounting.get(child.key) as typeof child).pollKey).not.toBe(firstPollKey);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("repeated orphan-resolution polls account for every child within the bounded visit window", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seat-accounting-orphan-replay-"));
+  try {
+    const accounting = new SeatTickAccounting(path.join(dir, "state.sqlite"), "project");
+    accounting.initialize(emptySeatTickState(), null);
+    const owner = accounting.owner(CONVERSATION, 1);
+    const children = Array.from({ length: 63 }, (_, index) => accounting.child(
+      `child-${index.toString().padStart(2, "0")}`, CONVERSATION, `launch-${index.toString().padStart(2, "0")}`,
+      { ...childInput(`conversation_child_${index.toString().padStart(2, "0")}`, "terminal"), outcome: "failed" },
+    ));
+    accounting.discovery(owner, children.map((child) => ({ child, position: "head" as const })));
+
+    for (let tick = 0; tick < 4; tick++) {
+      const visits = accounting.pollPage(40);
+      expect(visits.length).toBeLessThanOrEqual(40);
+      for (const ticket of visits) {
+        if (ticket.kind !== "poll") continue;
+        const child = accounting.get(ticket.target);
+        if (child?.kind !== "child") throw new Error("missing child provenance");
+        accounting.ingest(child, null, [], "launch-unmaterialized");
+        expect((accounting.get(child.key) as typeof child).pollKey).not.toBe(ticket.key);
+      }
+    }
+
+    const outcomes = accounting.ready(100);
+    expect(outcomes).toHaveLength(63);
+    expect(new Set(outcomes.map((row) => row.child)).size).toBe(63);
+    expect(accounting.page("poll", 100)).toHaveLength(63);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+}, 15_000);
+
 /* Running tickets are a FIFO the check observes eight of and rotates four of,
    so every running child is observed on two consecutive checks once per cycle
    (#1465). The fixed identity-ordered eight this replaces never observed the
