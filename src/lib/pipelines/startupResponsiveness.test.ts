@@ -1,5 +1,7 @@
 import { stateLeaseHoldsInFlight } from "@/lib/state/sqliteStateStore";
-import { afterEach, expect, test } from "bun:test";
+import * as stateStore from "@/lib/state/sqliteStateStore";
+import { afterEach, expect, spyOn, test } from "bun:test";
+import { performanceSites, performanceSpans } from "@/lib/performanceSpans";
 import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
@@ -13,6 +15,7 @@ import { StateLockDeferredError, stateLockProcessKind, stateLockWaitsInFlight, w
 import { createViewerLoopMonitor } from "@/lib/viewerLoopMonitor";
 
 const original = process.env.LLV_STATE_DIR;
+
 const roots: string[] = [];
 afterEach(() => {
   if (original === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = original;
@@ -462,3 +465,268 @@ test("the parent rejects a fourfold admission overrun and remains responsive to 
   expect(blocked.result.kind).toBe("watchdog");
   expect(blocked.elapsedMs).toBeLessThan(1_200);
 }, 10_000);
+
+function retainedHistory(db: Database, row: ReturnType<typeof fixture>["row"]) {
+  const insert = db.query("INSERT INTO state_rows(collection,row_key,value_json,row_order,row_revision,controller_active) VALUES('pipelines_archive',?,?,?,1,0)");
+  for (let i = 0; i < 48; i++) {
+    const id = "retained-evidence-" + i;
+    insert.run(id, JSON.stringify({ ...row, id, worktreeDir: "/repo-pipeline-" + id, branch: "pipeline/synthetic-ownership-evidence-" + id }), i);
+  }
+}
+
+function observeEvidenceDecodes() {
+  let rows = 0;
+  performanceSpans.observeSite(site => { if (site === performanceSites.indexOf("state.json")) rows++; });
+  return { rows: () => rows, reset: () => { rows = 0; }, stop: () => performanceSpans.observeSite() };
+}
+
+test.each(["before-write", "after-write"] as const)("history evidence joining a completed read rechecks freshness (%s)", async order => {
+  const { root, row } = fixture();
+  const db = new Database(path.join(root, "state.sqlite"));
+  const originalRead = stateStore.readCompactPipelineEvidence;
+  const entered = Promise.withResolvers<void>();
+  let injected = false;
+  let afterWrite!: Promise<{ issues: unknown[] } | { error: string }>;
+  const read = spyOn(stateStore, "readCompactPipelineEvidence").mockImplementation((async (...args: Parameters<typeof originalRead>) => {
+    const result = await originalRead(...args);
+    if (!injected) {
+      injected = true;
+      // The producer checks its signature between these microtasks. Exercise
+      // both write/join orders while the completed read is still shared.
+      queueMicrotask(() => queueMicrotask(() => {
+        const join = () => pipelineRegistryHealthAsync().then(issues => ({ issues }), error => ({ error: error.message }));
+        if (order === "before-write") afterWrite = join();
+        db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines' AND row_key=?")
+          .run(JSON.stringify({ ...row, state: "future-owner" }), row.id);
+        if (order === "after-write") afterWrite = join();
+        entered.resolve();
+      }));
+    }
+    return result;
+  }) as typeof originalRead);
+  const first = pipelineRegistryHealthAsync().then(() => undefined, () => undefined);
+  try {
+    await entered.promise;
+    const result = await afterWrite;
+    // A fresh independent read is also valid if pending-entry cleanup moves.
+    if ("issues" in result) expect(result.issues).toMatchObject([{ id: row.id, reason: "unknown-but-preserved" }]);
+    else expect(result.error).toBe("pipeline evidence changed during preparation");
+    await first;
+    expect(await pipelineRegistryHealthAsync()).toMatchObject([{ id: row.id, reason: "unknown-but-preserved" }]);
+  } finally { await first; read.mockRestore(); db.close(); }
+});
+
+test.each([
+  ["health", "ownership", 1], ["ownership", "health", 1],
+  ["startup", "health", 1], ["startup", "ownership", 1],
+  ["health", "startup", 2], ["ownership", "startup", 2],
+] as const)("history evidence shares compatible modes only (%s then %s)", async (firstMode, secondMode, reads) => {
+  const { row } = fixture();
+  const ready = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const readers = {
+    health: pipelineRegistryHealthAsync,
+    ownership: loadPipelineOwnershipForStartupAsync,
+    startup: loadPipelinesForStartupAsync,
+  };
+  let snapshots = 0;
+  const originalCompact = stateStore.readCompactPipelineEvidence;
+  const originalFull = stateStore.visitStateCollectionsRows;
+  const compact = spyOn(stateStore, "readCompactPipelineEvidence").mockImplementation((async (...args: Parameters<typeof originalCompact>) => {
+    snapshots++;
+    const result = await originalCompact(...args);
+    ready.resolve(); await release.promise;
+    return result;
+  }) as typeof originalCompact);
+  const full = spyOn(stateStore, "visitStateCollectionsRows").mockImplementation(async (...args: Parameters<typeof originalFull>) => {
+    snapshots++;
+    const result = await originalFull(...args);
+    ready.resolve(); await release.promise;
+    return result;
+  });
+  const first = readers[firstMode]();
+  let second: ReturnType<typeof readers[typeof secondMode]> | undefined;
+  try {
+    await ready.promise;
+    second = readers[secondMode]();
+    release.resolve();
+    const results = await Promise.all([first, second]);
+    expect(snapshots).toBe(reads);
+    for (const [index, mode] of [firstMode, secondMode].entries()) {
+      if (mode === "health") expect(results[index]).toEqual([]);
+      else if (mode === "ownership") expect(results[index]).toMatchObject([{ id: row.id, attempts: [], survivors: [] }]);
+      else expect(results[index]).toMatchObject([{ id: row.id, task: row.task, stages: row.stages }]);
+    }
+  } finally {
+    release.resolve();
+    await Promise.allSettled([first, ...(second ? [second] : [])]);
+    compact.mockRestore(); full.mockRestore();
+  }
+});
+
+test.each(["pipelines", "pipelines_archive"] as const)("history evidence still refuses corrupt changed rows in %s", async collection => {
+  const { root, row } = fixture();
+  const db = new Database(path.join(root, "state.sqlite"));
+  try {
+    retainedHistory(db, row);
+    expect(await pipelineRegistryHealthAsync()).toEqual([]);
+    const id = collection === "pipelines" ? row.id : "retained-evidence-0";
+    const saved = db.query<{ value_json: string }, [string, string]>("SELECT value_json FROM state_rows WHERE collection=? AND row_key=?").get(collection, id)!;
+    db.query("UPDATE state_rows SET value_json='{broken' WHERE collection=? AND row_key=?").run(collection, id);
+    const results = await Promise.allSettled([pipelineRegistryHealthAsync(), loadPipelineOwnershipForStartupAsync()]);
+    for (const result of results) {
+      expect(result.status).toBe("rejected");
+      if (result.status === "rejected") expect(result.reason.message).toBe("corrupt " + collection + " SQLite row: " + id);
+    }
+    db.query("UPDATE state_rows SET value_json=? WHERE collection=? AND row_key=?").run(saved.value_json, collection, id);
+    expect(await pipelineRegistryHealthAsync()).toEqual([]);
+  } finally { db.close(); }
+});
+
+test("history evidence never joins a pending read of a replaced database", async () => {
+  const { root, row } = fixture();
+  const filename = path.join(root, "state.sqlite");
+  const replacement = path.join(root, "replacement.sqlite");
+  const db = new Database(filename);
+  try { fs.writeFileSync(replacement, db.serialize()); }
+  finally { db.close(); }
+  const copy = new Database(replacement);
+  try {
+    copy.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines' AND row_key=?")
+      .run(JSON.stringify({ ...row, state: "future-owner" }), row.id);
+  } finally { copy.close(); }
+  const ready = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const originalRead = stateStore.readCompactPipelineEvidence;
+  let snapshots = 0;
+  const read = spyOn(stateStore, "readCompactPipelineEvidence").mockImplementation((async (...args: Parameters<typeof originalRead>) => {
+    snapshots++;
+    const result = await originalRead(...args);
+    ready.resolve(); await release.promise;
+    return result;
+  }) as typeof originalRead);
+  const first = pipelineRegistryHealthAsync().then(() => "accepted", error => error.message);
+  let second: Promise<unknown> | undefined;
+  try {
+    await ready.promise;
+    fs.renameSync(filename, path.join(root, "retired.sqlite"));
+    for (const suffix of ["-wal", "-shm"]) {
+      if (fs.existsSync(filename + suffix)) fs.renameSync(filename + suffix, path.join(root, "retired.sqlite" + suffix));
+    }
+    fs.renameSync(replacement, filename);
+    second = pipelineRegistryHealthAsync();
+    release.resolve();
+    const [oldResult, newResult] = await Promise.all([first, second]);
+    expect(snapshots).toBe(2);
+    expect(oldResult).toBe("pipeline evidence changed during preparation");
+    expect(newResult).toMatchObject([{ id: row.id, reason: "unknown-but-preserved" }]);
+  } finally {
+    release.resolve(); await Promise.allSettled([first, ...(second ? [second] : [])]);
+    read.mockRestore();
+  }
+});
+
+test("history evidence never retains validation across an inode swap during identity sampling", async () => {
+  const { root, row } = fixture();
+  const filename = path.join(root, "state.sqlite");
+  const replacement = path.join(root, "replacement.sqlite");
+  const db = new Database(filename);
+  db.query("UPDATE state_rows SET value_json=json_set(value_json, '$.stateDetail', 'same-clock-change') WHERE collection='pipelines' AND row_key=?").run(row.id);
+  try { fs.writeFileSync(replacement, db.serialize()); }
+  finally { db.close(); }
+  const corrupt = new Database(replacement);
+  corrupt.query("UPDATE state_rows SET value_json='{broken' WHERE collection='pipelines' AND row_key=?").run(row.id);
+  corrupt.close();
+
+  const originalStat = fs.statSync;
+  let readerIdentityChecks = 0;
+  let swapped = false;
+  const stat = spyOn(fs, "statSync").mockImplementation(((...args: Parameters<typeof originalStat>) => {
+    const target = args[0];
+    const stack = new Error().stack ?? "";
+    if (!swapped && target === filename && stack.includes("readCompactPipelineEvidence") && !stack.includes("openCurrentDatabase")) {
+      readerIdentityChecks++;
+      if (readerIdentityChecks === 2) {
+        swapped = true;
+        fs.renameSync(filename, path.join(root, "retired.sqlite"));
+        for (const suffix of ["-wal", "-shm"]) {
+          if (fs.existsSync(filename + suffix)) fs.renameSync(filename + suffix, path.join(root, "retired.sqlite" + suffix));
+        }
+        fs.renameSync(replacement, filename);
+      }
+    }
+    return originalStat.apply(fs, args);
+  }) as typeof originalStat);
+  try {
+    await expect(pipelineRegistryHealthAsync()).rejects.toThrow("controller snapshot changed");
+    expect(swapped).toBeTrue();
+  } finally { stat.mockRestore(); }
+
+  await expect(pipelineRegistryHealthAsync()).rejects.toThrow(`corrupt pipelines SQLite row: ${row.id}`);
+});
+
+test("history evidence keeps 48 validated rows when one row changes before freshness rejection", async () => {
+  const { root, row } = fixture();
+  const db = new Database(path.join(root, "state.sqlite"));
+  retainedHistory(db, row);
+  const decodes = observeEvidenceDecodes();
+  const originalRead = stateStore.readCompactPipelineEvidence;
+  let changed = false;
+  const read = spyOn(stateStore, "readCompactPipelineEvidence").mockImplementation((async (...args: Parameters<typeof originalRead>) => {
+    const result = await originalRead(...args);
+    if (!changed) {
+      changed = true;
+      db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines' AND row_key=?")
+        .run(JSON.stringify({ ...row, state: "future-owner" }), row.id);
+    }
+    return result;
+  }) as typeof originalRead);
+  try {
+    await expect(pipelineRegistryHealthAsync()).rejects.toThrow("pipeline evidence changed during preparation");
+    expect(decodes.rows()).toBe(49);
+    decodes.reset();
+    const start = performance.now();
+    const result = await pipelineRegistryHealthAsync();
+    console.info(JSON.stringify({ case: "history-evidence-retry", retained: 48, changed: 1, callers: 1,
+      decodes: decodes.rows(), elapsedMs: performance.now() - start, load: os.loadavg() }));
+    expect(result).toMatchObject([{ id: row.id, reason: "unknown-but-preserved" }]);
+    expect(decodes.rows(), "only the changed row needs decoding after a rejected read").toBe(1);
+    db.query("UPDATE state_rows SET value_json='{broken' WHERE collection='pipelines' AND row_key=?").run(row.id);
+    await expect(pipelineRegistryHealthAsync()).rejects.toThrow("corrupt pipelines SQLite row");
+  } finally { read.mockRestore(); decodes.stop(); db.close(); }
+});
+
+test("history evidence callers across revisions hydrate once and both refuse stale data", async () => {
+  const { root, row } = fixture();
+  const db = new Database(path.join(root, "state.sqlite"));
+  retainedHistory(db, row);
+  const ready = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const decodes = observeEvidenceDecodes();
+  const originalRead = stateStore.readCompactPipelineEvidence;
+  const read = spyOn(stateStore, "readCompactPipelineEvidence").mockImplementation((async (...args: Parameters<typeof originalRead>) => {
+    const result = await originalRead(...args);
+    ready.resolve();
+    await release.promise;
+    return result;
+  }) as typeof originalRead);
+  const start = performance.now();
+  const settledFirst = pipelineRegistryHealthAsync().then(() => "accepted", error => error.message);
+  let second: Promise<string> | undefined;
+  try {
+    await ready.promise;
+    db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines' AND row_key=?")
+      .run(JSON.stringify({ ...row, state: "future-owner" }), row.id);
+    second = loadPipelineOwnershipForStartupAsync().then(() => "accepted", error => error.message);
+    release.resolve();
+    const results = await Promise.all([settledFirst, second]);
+    console.info(JSON.stringify({ case: "history-evidence-overlap", retained: 48, changed: 1, callers: 2,
+      decodes: decodes.rows(), elapsedMs: performance.now() - start, load: os.loadavg() }));
+    expect(decodes.rows(), "overlapping health and ownership reads must hydrate history once").toBe(49);
+    expect(results).toEqual(["pipeline evidence changed during preparation", "pipeline evidence changed during preparation"]);
+    decodes.reset();
+    expect(await pipelineRegistryHealthAsync()).toMatchObject([{ id: row.id, reason: "unknown-but-preserved" }]);
+    expect(decodes.rows()).toBe(1);
+  } finally {
+    release.resolve();
+    await Promise.allSettled([settledFirst, ...(second ? [second] : [])]);
+    read.mockRestore(); decodes.stop(); db.close();
+  }
+});

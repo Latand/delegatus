@@ -266,7 +266,22 @@ jobs:
           NEXT_TELEMETRY_DISABLED: "1"
           NODE_ENV: production
           NEXT_PUBLIC_RUNTIME_UI: "1"
-        run: bun run build
+        # npm's prepack builds the Viewer and the standalone runtime together.
+        run: npm pack --pack-destination "$RUNNER_TEMP"
+
+      - name: Install the packed package and discover MCP tools and audio
+        env:
+          HOME: ${{ runner.temp }}/package-home
+          XDG_CONFIG_HOME: ${{ runner.temp }}/package-config
+          LLV_STATE_DIR: ${{ runner.temp }}/package-state
+          TMPDIR: ${{ runner.temp }}/package-tmp
+          LLV_VIEWER_CONTROL_URL: http://127.0.0.1:1
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$LLV_STATE_DIR" "$TMPDIR"
+          tarballs=("$RUNNER_TEMP"/delegatus-cli-*.tgz)
+          test "${#tarballs[@]}" -eq 1
+          bash scripts/gate-slot.sh bun scripts/npm-package-smoke.mjs --mcp-assets "${tarballs[0]}"
 
       # Reuse the production build on every PR: seeded stores and rendered
       # surfaces have too many transitive dependencies for a safe path list.

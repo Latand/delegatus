@@ -4,9 +4,9 @@
     "seat-frames-1440-uk-light-form": {
       "card": {
         "x": 1016,
-        "y": 287,
+        "y": 183,
         "w": 335,
-        "h": 335
+        "h": 477
       },
       "review": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
       "rows": 2,
@@ -42,9 +42,9 @@
     "seat-frames-1440-uk-dark-form": {
       "card": {
         "x": 1016,
-        "y": 287,
+        "y": 183,
         "w": 335,
-        "h": 335
+        "h": 477
       },
       "review": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
       "rows": 2,
@@ -80,9 +80,9 @@
     "seat-frames-1440-en-light-form": {
       "card": {
         "x": 1016,
-        "y": 287,
+        "y": 183,
         "w": 335,
-        "h": 335
+        "h": 477
       },
       "review": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
       "rows": 2,
@@ -118,9 +118,9 @@
     "seat-frames-1440-en-dark-form": {
       "card": {
         "x": 1016,
-        "y": 287,
+        "y": 183,
         "w": 335,
-        "h": 335
+        "h": 477
       },
       "review": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
       "rows": 2,
@@ -156,9 +156,9 @@
     "seat-frames-390-uk-light-form": {
       "card": {
         "x": 12,
-        "y": 459,
+        "y": 220,
         "w": 366,
-        "h": 360
+        "h": 544
       },
       "review": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
       "rows": 2,
@@ -194,9 +194,9 @@
     "seat-frames-390-uk-dark-form": {
       "card": {
         "x": 12,
-        "y": 459,
+        "y": 220,
         "w": 366,
-        "h": 360
+        "h": 544
       },
       "review": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
       "rows": 2,
@@ -232,9 +232,9 @@
     "seat-frames-390-en-light-form": {
       "card": {
         "x": 12,
-        "y": 459,
+        "y": 220,
         "w": 366,
-        "h": 360
+        "h": 520
       },
       "review": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
       "rows": 2,
@@ -270,9 +270,9 @@
     "seat-frames-390-en-dark-form": {
       "card": {
         "x": 12,
-        "y": 459,
+        "y": 220,
         "w": 366,
-        "h": 360
+        "h": 520
       },
       "review": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
       "rows": 2,
