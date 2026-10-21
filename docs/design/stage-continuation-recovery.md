@@ -12,11 +12,22 @@ deliveries retain their uncertainty. Late delivery preflight also checks that
 the repair is still owed and inside its original window.
 
 After a failed or expired repair, `resolve-decision` and `retry-stage` accept
-recovery when the producer has finished or the delivery proves no dispatch.
-An active turn, live background work, another outstanding message or uncertain
-delivery continues to refuse recovery. The refusal names the delivery operation
-and its current state. Producer and receipt reads occur outside the shared
-pipeline mutation lease; revision and attempt guards still apply afterwards.
+recovery when delivery failed, the producer is gone, the producer finished, or
+an expired reservation proves no dispatch. A failed delivery can retain
+duplicate-risk evidence from an earlier dispatch; that evidence alone does
+not keep the repair pending. An active turn, live background work or another
+outstanding message still refuses recovery. Unknown producer activity with an
+uncertain delivery also refuses. The refusal names the delivery operation and
+its current state. Producer and receipt reads occur outside the shared pipeline
+mutation lease; revision, attempt and repair identity guards apply afterwards.
+
+The next controller tick refreshes parked repair records, including legacy
+records with no send key or start timestamps. Failed deliveries and gone
+producers settle the repair without another prompt or automatic publication;
+the lane stays parked for an answer. The action paths also refresh this evidence.
+An accepted decision reserves one fresh attempt and records the revision the
+caller answered, so replaying that answer preserves its reservation even when
+the evidence refresh changed the old repair record.
 
 `publicationRecovery` retains failed publication operations by accepted SHA,
 including their cause, operation identity, ownership epoch and next retry time.
