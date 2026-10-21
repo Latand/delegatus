@@ -92,9 +92,8 @@ test("static assets check Host while retaining their keyless loading behavior", 
 });
 
 test("Next's compiled matcher covers every App Router entry except the self-gated multiplexer", async () => {
-  const { getMiddlewareMatchers } = await import("next/dist/build/analysis/get-page-static-info");
-  const matchers = getMiddlewareMatchers(config.matcher, { basePath: "" });
-  const matches = (pathname: string) => matchers.some(({ regexp }) => new RegExp(regexp).test(pathname));
+  const { unstable_doesMiddlewareMatch } = await import("next/experimental/testing/server");
+  const matches = (pathname: string) => unstable_doesMiddlewareMatch({ config, nextConfig: { basePath: "" }, url: pathname });
   const app = path.join(import.meta.dir, "app");
   const routes = fs.readdirSync(app, { recursive: true })
     .filter((file): file is string => typeof file === "string")
