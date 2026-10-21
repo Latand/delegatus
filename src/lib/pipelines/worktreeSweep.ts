@@ -50,7 +50,9 @@ import { pipelineLiteralGitEnv } from "./git";
  *   one its pipeline delivered), and no pipeline or owned role layout makes it a
  *   finished lane: a checkout the operator made by hand stays.
  * - `retention` — a finished lane, or a role's temp checkout, that has not yet
- *   been settled for `FINISHED_WORKTREE_RETENTION_MS`.
+ *   been settled for `FINISHED_WORKTREE_RETENTION_MS`, or a finished pipeline
+ *   lane not yet settled for `PUSHED_WORKTREE_RETENTION_MS` whose every commit
+ *   a remote advertises.
  * - `local-only-commits` — past retention, without a merged PR containing its
  *   HEAD, and some commit of it is in no ref a remote advertises right now and
  *   HEAD is not its pipeline's base. Work that exists only here stays.
@@ -95,7 +97,11 @@ import { pipelineLiteralGitEnv } from "./git";
  * a recognized role checkout (the merger's declared batches, or owned temp
  * review exports and attribution runs), once it has been settled for the
  * retention period. Merger state and its live holders must release it first;
- * the four days also apply when its batch PR has merged. Its
+ * the four days also apply when its batch PR has merged. A pipeline lane whose
+ * every commit a remote advertises waits one hour instead (operator decision,
+ * 2026-10-21), and so does its quiet floor; one advertised-ref read per
+ * repository and pass screens these lanes, and the proof before removal reads
+ * the remote again. Its
  * HEAD must equal its pipeline's base, or every commit of it must be reachable
  * from a ref one of the repository's remotes advertises at that moment
  * (`git ls-remote`; a remote-tracking ref can outlive the branch it tracked).
@@ -136,6 +142,11 @@ const HOUR_MS = 3_600_000;
     settled before the sweep may free it without a merged PR. Merge-batch
     checkouts retain this period even after their batch PR merges. */
 export const FINISHED_WORKTREE_RETENTION_MS = 4 * 24 * HOUR_MS;
+/** How long a finished pipeline lane whose every commit a remote advertises
+    stays settled, with no write inside it, before the sweep may free it. */
+export const PUSHED_WORKTREE_RETENTION_MS = HOUR_MS;
+/** Writes this recent hold a checkout no shorter retention applies to. */
+const QUIET_FLOOR_MS = 24 * HOUR_MS;
 export const WORKTREE_SWEEP_INTERVAL_MS = HOUR_MS;
 /** Boot is busy enough; the first sweep waits for it to settle. */
 const FIRST_SWEEP_DELAY_MS = 10 * 60_000;
@@ -943,11 +954,11 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
   const measure = ports.measure ?? ((directory: string) => exclusiveBytes(accessible(directory)));
   const maxRemovals = ports.maxRemovals ?? MAX_REMOVALS_PER_SWEEP;
   const dryRun = ports.mode === "dry-run";
-  const inspect = (directory: string, git = false, afterQuarantine = false): WorktreeKeptReason | null => {
+  const inspect = (directory: string, git = false, afterQuarantine = false, quietMs = QUIET_FLOOR_MS): WorktreeKeptReason | null => {
     try {
-      const result = (ports.inspect ?? inspectTree)(accessible(directory), { git, threshold: now() - 24 * HOUR_MS,
+      const result = (ports.inspect ?? inspectTree)(accessible(directory), { git, threshold: now() - quietMs,
         mounts: (ports.mountPoints ? ports.mountPoints(directory) : mountPointsUnder(accessible(directory))), ignoreRootCtime: afterQuarantine });
-      return (result.hold === "git-checkout" ? "ignored-files" : result.hold) ?? (now() - result.newestMs < 24 * HOUR_MS ? "recent-writes" : null);
+      return (result.hold === "git-checkout" ? "ignored-files" : result.hold) ?? (now() - result.newestMs < quietMs ? "recent-writes" : null);
     } catch { return "unreadable-tree"; }
   };
   const intentsDir = statePath("worktree-sweep-removals");
@@ -1080,10 +1091,13 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
       }
       return answered ? [...tips] : null;
     };
+    /* Screening reads the advertised tips once per pass; a proof before
+       removal reads them again. */
+    let screenTips: Promise<string[] | null> | null = null;
     /** Every commit reachable from `commit` is reachable from an advertised
         tip held locally. A tip this clone never fetched proves nothing. */
-    const onRemote = async (commit: string): Promise<boolean | null> => {
-      const tips = await remoteTips();
+    const onRemote = async (commit: string, fresh: boolean): Promise<boolean | null> => {
+      const tips = await (fresh ? remoteTips() : (screenTips ??= remoteTips()));
       if (tips === null) return null;
       if (tips.length === 0) return false;
       const outside = await ports.git(["rev-list", "--ignore-missing", "--max-count=1", commit, "--not", ...tips], root);
@@ -1115,7 +1129,17 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
         ?? (previous && BUSY_REASONS.has(previous.reason) ? report.at : terminalAt) : undefined;
       const settledSince = Math.max(terminal, Date.parse(firstSettledAt ?? report.at));
       const retained = finished && now() - settledSince >= FINISHED_WORKTREE_RETENTION_MS;
+      /* Only a pipeline lane takes the hour; role and merge-batch checkouts
+         keep the four days. */
+      const hourLane = finished && owners.length > 0 && !batch.owned;
       const base = { path: worktree, ...(pipelineId ? { pipelineId } : {}), ...(firstSettledAt ? { firstSettledAt } : {}) };
+      const iso = (at: number) => new Date(at).toISOString();
+      const retentionDetail = (settled: number, why?: string) => why
+        ? `eligible after ${iso(settled + FINISHED_WORKTREE_RETENTION_MS)}; ${why}`
+        : hourLane && now() - settled < PUSHED_WORKTREE_RETENTION_MS
+          ? `eligible after ${iso(settled + PUSHED_WORKTREE_RETENTION_MS)} when clean with every commit on a remote, otherwise after ${iso(settled + FINISHED_WORKTREE_RETENTION_MS)}`
+          : `eligible after ${iso(settled + FINISHED_WORKTREE_RETENTION_MS)}`;
+      const unproven = (remote: boolean | null) => remote === null ? "no remote of the repository answered" : "a commit of HEAD is in no ref a remote advertises";
       if (initial.open.some((open) => inside(open, worktree))) {
         keep({ ...base, reason: "open-pipeline" });
         continue;
@@ -1135,8 +1159,12 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
         keep({ ...busy, ...base });
         continue;
       }
+      /* A lane past its hour is screened against the advertised refs. */
+      const screened = hourLane && now() - settledSince >= PUSHED_WORKTREE_RETENTION_MS
+        ? entry.head ? await onRemote(entry.head, false) : false : undefined;
+      const pushed = screened === true;
       /* Past retention the remote proof stands without the forge. */
-      if (repository && merged === null && !retained) {
+      if (repository && merged === null && !retained && !pushed) {
         keep({ ...base, reason: "forge-unavailable", detail: `${repository}: neither the forge cache nor gh listed its merged pull requests` });
         continue;
       }
@@ -1148,9 +1176,9 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
         const pr = byNumber.get(number);
         if (pr) prs.set(pr.number, pr);
       }
-      if ((prs.size === 0 || batch.owned) && !retained) {
+      if ((prs.size === 0 || batch.owned) && !retained && !pushed) {
         keep(finished
-          ? { ...base, reason: "retention", detail: `eligible after ${new Date(settledSince + FINISHED_WORKTREE_RETENTION_MS).toISOString()}` }
+          ? { ...base, reason: "retention", detail: retentionDetail(settledSince, screened === undefined ? undefined : unproven(screened)) }
           : { ...base, reason: "no-merged-pr", ...(repository ? {} : { detail: "no GitHub origin" }) });
         continue;
       }
@@ -1159,7 +1187,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
         keep({ ...base, reason: "holds-worktree", detail: nested });
         continue;
       }
-      const quiet = inspect(worktree);
+      const quiet = inspect(worktree, false, false, pushed ? PUSHED_WORKTREE_RETENTION_MS : QUIET_FLOOR_MS);
       if (quiet) { keep({ ...base, reason: quiet }); continue; }
       const resume = readIntent(worktree);
       const status = await ports.git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], worktree);
@@ -1184,37 +1212,45 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
         keep({ ...base, reason: "ignored-files", detail: ignored.slice(0, 5).join(", ") + (ignored.length > 5 ? `, … ${ignored.length - 5} more` : "") });
         continue;
       }
+      type Preservation = "merged-pr" | "remote-ref" | "base";
+      /** How long the lane must have been settled for this preservation. */
+      const retentionFor = (preservation: Preservation) => preservation === "base" ? FINISHED_WORKTREE_RETENTION_MS
+        : preservation === "remote-ref" ? hourLane ? PUSHED_WORKTREE_RETENTION_MS : FINISHED_WORKTREE_RETENTION_MS
+        : pushed ? PUSHED_WORKTREE_RETENTION_MS : retained ? FINISHED_WORKTREE_RETENTION_MS : 0;
       /** The merged PR whose head contains what the checkout has checked out
-          now, or why none does. */
-      const prove = async (): Promise<{ pr: MergedPullRequest | null; head: string; preservation: "merged-pr" | "remote-ref" | "base"; branch: string | null } | WorktreeKept> => {
+          now, or why none does. `fresh` reads the advertised refs again. */
+      const prove = async (fresh: boolean): Promise<{ pr: MergedPullRequest | null; head: string; preservation: Preservation; branch: string | null } | WorktreeKept> => {
         const current = await checkedOut(ports.git, worktree);
         if (!current) return { ...base, reason: "unmerged-commits", detail: "HEAD unreadable" };
         const freshOwners = ownersOf(ownershipPipelines(), worktree);
-        if (retained) {
-          if (freshOwners.some(pipelineHoldsCheckout)) return { ...base, reason: "open-pipeline" };
-          const freshSettled = Math.max(settledSince, latestTerminalTime(freshOwners));
-          if (now() - freshSettled < FINISHED_WORKTREE_RETENTION_MS)
-            return { ...base, firstSettledAt: new Date(freshSettled).toISOString(), reason: "retention", detail: `eligible after ${new Date(freshSettled + FINISHED_WORKTREE_RETENTION_MS).toISOString()}` };
-        }
+        const aged = retained || pushed;
+        if (aged && freshOwners.some(pipelineHoldsCheckout)) return { ...base, reason: "open-pipeline" };
+        const freshSettled = Math.max(settledSince, latestTerminalTime(freshOwners));
+        const settledFor = (ms: number) => now() - freshSettled >= ms;
+        const held = (why?: string): WorktreeKept => ({ ...base, firstSettledAt: iso(freshSettled), reason: "retention", detail: retentionDetail(freshSettled, why) });
+        /* A lane that ran and settled again since the pass began waits anew. */
+        const proven = (preservation: Preservation, pr: MergedPullRequest | null) => !aged || settledFor(retentionFor(preservation))
+          ? { pr, head: current.head, preservation, branch: current.branch } : held();
         let known = false;
         for (const pr of [...prs.values()].sort((a, b) => b.number - a.number)) {
           const present = await ports.git(["cat-file", "-e", `${pr.headRefOid}^{commit}`], root);
           if (present.code !== 0) continue;
           known = true;
           const ancestor = await ports.git(["merge-base", "--is-ancestor", current.head, pr.headRefOid], root);
-          if (ancestor.code === 0) return { pr, head: current.head, preservation: "merged-pr", branch: current.branch };
+          if (ancestor.code === 0) return proven("merged-pr", pr);
         }
-        if (retained) {
-          const remote = await onRemote(current.head);
-          if (remote) return { pr: null, head: current.head, preservation: "remote-ref", branch: current.branch };
-          if (freshOwners.some((owner) => owner.baseRef === current.head)) return { pr: null, head: current.head, preservation: "base", branch: current.branch };
-          return { ...base, reason: "local-only-commits", detail: remote === null
+        if (aged) {
+          const remote = await onRemote(current.head, fresh);
+          if (remote) return proven("remote-ref", null);
+          if (retained && freshOwners.some((owner) => owner.baseRef === current.head)) return proven("base", null);
+          if (!settledFor(FINISHED_WORKTREE_RETENTION_MS) && (retained || prs.size === 0)) return held(unproven(remote));
+          if (retained) return { ...base, reason: "local-only-commits", detail: remote === null
             ? "no remote of the repository answered, so its commits are not proven kept elsewhere"
             : "a commit of HEAD is in no ref a remote advertises, and HEAD is not its pipeline's base" };
         }
         return { ...base, reason: known ? "unmerged-commits" : "pr-head-unknown", detail: [...prs.keys()].map((n) => `#${n}`).join(", ") };
       };
-      let proof = await prove();
+      let proof = await prove(false);
       if ("reason" in proof) {
         keep(proof);
         continue;
@@ -1242,7 +1278,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
       try {
         /* A commit made since the status read leaves the checkout clean, so the
            removal below would not refuse it: HEAD is proven again last. */
-        proof = await prove();
+        proof = await prove(true);
         if ("reason" in proof) {
           keep(proof);
           continue;
@@ -1298,17 +1334,17 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
         const registration = registrationHold(root, worktree, worktree, accessible);
         if (registration) { keep({ ...registration, ...base }); continue; }
         if (finalIgnored.length || newlyIgnored.length) { keep({ ...base, reason: "ignored-files" }); continue; }
-        const finalQuiet = inspect(worktree);
+        const required = retentionFor(proof.preservation);
+        const finalQuiet = inspect(worktree, false, false, required === PUSHED_WORKTREE_RETENTION_MS ? required : QUIET_FLOOR_MS);
         if (finalQuiet) { keep({ ...base, reason: finalQuiet }); continue; }
         const finalBusy = heldBy(readGuards(), worktree, entry.branch);
         if (finalBusy) { keep({ ...finalBusy, ...base }); continue; }
-        if (retained) {
+        if (retained || pushed) {
           // A lane can run and settle again during any of the final Git
           // reads. Refresh its terminal clock after the last awaited read.
           const freshSettled = Math.max(settledSince, latestTerminalTime(ownersOf(ownershipPipelines(), worktree)));
-          if (now() - freshSettled < FINISHED_WORKTREE_RETENTION_MS) {
-            keep({ ...base, firstSettledAt: new Date(freshSettled).toISOString(), reason: "retention",
-              detail: `eligible after ${new Date(freshSettled + FINISHED_WORKTREE_RETENTION_MS).toISOString()}` });
+          if (now() - freshSettled < required) {
+            keep({ ...base, firstSettledAt: iso(freshSettled), reason: "retention", detail: retentionDetail(freshSettled) });
             continue;
           }
         }

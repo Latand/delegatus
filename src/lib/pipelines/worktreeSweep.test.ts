@@ -48,6 +48,7 @@ import {
   type MergedPullRequest,
   type SweptPipeline,
   type WorktreeSweepPorts,
+  type WorktreeSweepReport,
 } from "./worktreeSweep";
 
 /* Every repository here is a throwaway under the test's temp root, and the
@@ -210,7 +211,7 @@ test("a completed lane without a merged PR stays through retention, its clock st
   }));
   expect(report.removed).toEqual([]);
   expect(report.kept).toEqual([expect.objectContaining({ path: dir, reason: "retention", pipelineId: "pipe-widgets-pipeline-cccc", firstSettledAt: report.at })]);
-  expect(report.kept[0]!.detail).toBe(`eligible after ${new Date(Date.parse(report.at) + FINISHED_WORKTREE_RETENTION_MS).toISOString()}`);
+  expect(report.kept[0]!.detail).toBe(`eligible after ${new Date(Date.parse(report.at) + 3_600_000).toISOString()} when clean with every commit on a remote, otherwise after ${new Date(Date.parse(report.at) + FINISHED_WORKTREE_RETENTION_MS).toISOString()}`);
   expect(fs.existsSync(dir)).toBe(true);
   expect(branchExists(root, "pipeline/cccc")).toBe(true);
 });
@@ -2566,6 +2567,176 @@ test("a lane that settles again during measurement receives fresh retention", as
   expect(report.removed).toEqual([]);
   expect(report.kept[0]!.reason).toBe("retention");
   expect(fs.existsSync(dir)).toBe(true);
+});
+
+/* Operator decision 2026-10-21: a clean finished lane whose every commit a
+   remote advertises is freed one hour after it settles; anything else keeps
+   the four days. The clock is frozen; file times come from the stat port. */
+const HOUR = 3_600_000;
+const SETTLED = Date.parse("2026-10-10T08:00:00Z");
+const writtenAt = (at: () => number): NonNullable<WorktreeSweepPorts["inspect"]> => (dir, settings) =>
+  inspectTree(dir, { ...settings, stat: file => {
+    const stat = fs.lstatSync(file); stat.mtimeMs = at(); stat.ctimeMs = at(); return stat;
+  } });
+
+function pushedLane(name: string, push = true) {
+  const root = repository(); remoteRepository(root);
+  const branch = `pipeline/${name}`;
+  const { dir, tip } = lane(root, path.join(caseDir, `widgets-pipeline-${name}`), branch);
+  if (push) git(["push", "-q", "origin", branch], root);
+  const owner = pipeline({ repoDir: root, worktreeDir: dir, branch, state: "closed", closedAt: new Date(SETTLED).toISOString() });
+  return { root, branch, dir, tip, owner };
+}
+
+test("a clean finished lane whose commits are all on the remote is freed one hour after it settles, not before", async () => {
+  const { root, branch, dir, owner } = pushedLane("pushed");
+  const options = (at: number, previous?: WorktreeSweepReport) => ports({ pipelines: [owner], previous, now: () => at,
+    inspect: writtenAt(() => SETTLED - 10 * 60_000) });
+  const young = await sweepMergedWorktrees(options(SETTLED + HOUR - 1));
+  expect(young.removed).toEqual([]);
+  expect(young.kept).toEqual([expect.objectContaining({ path: dir, reason: "retention", firstSettledAt: owner.closedAt,
+    detail: `eligible after ${new Date(SETTLED + HOUR).toISOString()} when clean with every commit on a remote, otherwise after ${new Date(SETTLED + FINISHED_WORKTREE_RETENTION_MS).toISOString()}` })]);
+  expect(fs.existsSync(dir)).toBe(true);
+  const due = await sweepMergedWorktrees(options(SETTLED + HOUR, young));
+  expect(due.removed).toEqual([expect.objectContaining({ path: dir, pr: null, preservation: "remote-ref", branch, pipelineId: owner.id })]);
+  expect(fs.existsSync(dir)).toBe(false);
+  expect(git(["worktree", "list", "--porcelain"], root)).not.toContain(dir);
+  // The branch and its commit stay; only the checkout went.
+  expect(branchExists(root, branch)).toBe(true);
+  const map = worktreeMapStore.read(path.join(process.env.LLV_STATE_DIR!, "worktree-map.json")) as Record<string, { repo: string }>;
+  expect(map[dir]?.repo).toBe(fs.realpathSync(root));
+});
+
+test("a clean finished lane with an unpushed commit keeps the four-day retention", async () => {
+  const { root, branch, dir, tip, owner } = pushedLane("unpushed", false);
+  let previous: WorktreeSweepReport | undefined;
+  for (const at of [SETTLED + HOUR, SETTLED + 3 * 24 * HOUR, SETTLED + FINISHED_WORKTREE_RETENTION_MS - 1]) {
+    previous = await sweepMergedWorktrees(ports({ pipelines: [owner], previous, now: () => at }));
+    expect(previous.removed).toEqual([]);
+    expect(previous.kept).toEqual([expect.objectContaining({ path: dir, reason: "retention", firstSettledAt: owner.closedAt,
+      detail: `eligible after ${new Date(SETTLED + FINISHED_WORKTREE_RETENTION_MS).toISOString()}; a commit of HEAD is in no ref a remote advertises` })]);
+  }
+  const retained = await sweepMergedWorktrees(ports({ pipelines: [owner], previous, now: () => SETTLED + FINISHED_WORKTREE_RETENTION_MS }));
+  expect(retained.kept[0]!.reason).toBe("local-only-commits");
+  expect(fs.existsSync(dir)).toBe(true);
+  expect(git(["rev-parse", `refs/heads/${branch}`], root)).toBe(tip);
+});
+
+test.each(["modified", "untracked"])("a pushed finished lane with %s files is kept past the hour", async change => {
+  const { dir, owner } = pushedLane(`dirty-${change}`);
+  if (change === "modified") fs.appendFileSync(path.join(dir, "README.md"), "local edit\n");
+  else fs.writeFileSync(path.join(dir, "notes.txt"), "not committed\n");
+  const report = await sweepMergedWorktrees(ports({ pipelines: [owner], now: () => SETTLED + 2 * HOUR }));
+  expect(report.removed).toEqual([]);
+  expect(report.kept).toEqual([expect.objectContaining({ path: dir, reason: "uncommitted" })]);
+  expect(fs.existsSync(dir)).toBe(true);
+});
+
+test("past its hour a pushed lane still yields to a live process and to an open owner", async () => {
+  const { root, branch, dir, owner } = pushedLane("guarded");
+  const sleeper = spawn("sleep", ["60"], { cwd: dir, stdio: "ignore" });
+  children.push(sleeper);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const held = await sweepMergedWorktrees(ports({ pipelines: [owner], now: () => SETTLED + 2 * HOUR, scan: () => scanProcesses() }));
+  expect(held.kept).toEqual([expect.objectContaining({ path: dir, reason: "in-use", detail: `pid ${sleeper.pid}` })]);
+  sleeper.kill("SIGKILL");
+  await new Promise((resolve) => sleeper.once("exit", resolve));
+  const reopened = pipeline({ id: "guarded-rerun", repoDir: root, worktreeDir: dir, branch, state: "running" });
+  const open = await sweepMergedWorktrees(ports({ pipelines: [owner, reopened], now: () => SETTLED + 2 * HOUR }));
+  expect(open.kept).toEqual([expect.objectContaining({ path: dir, reason: "open-pipeline" })]);
+  expect(fs.existsSync(dir)).toBe(true);
+});
+
+test("a pushed finished lane whose remote cannot be read is kept: unknown is protective", async () => {
+  const { root, dir, owner } = pushedLane("unreadable-remote");
+  git(["remote", "set-url", "origin", path.join(caseDir, "no-such-remote.git")], root);
+  let previous: WorktreeSweepReport | undefined;
+  for (const at of [SETTLED + HOUR, SETTLED + 2 * HOUR]) {
+    previous = await sweepMergedWorktrees(ports({ pipelines: [owner], previous, now: () => at }));
+    expect(previous.removed).toEqual([]);
+    expect(previous.kept).toEqual([expect.objectContaining({ path: dir, reason: "retention", firstSettledAt: owner.closedAt,
+      detail: `eligible after ${new Date(SETTLED + FINISHED_WORKTREE_RETENTION_MS).toISOString()}; no remote of the repository answered` })]);
+  }
+  expect(fs.existsSync(dir)).toBe(true);
+});
+
+test("fresh activity in a pushed finished lane restarts its hour", async () => {
+  const { dir, owner } = pushedLane("active");
+  let written = SETTLED - 10 * 60_000;
+  let talking: string[] = [];
+  let previous: WorktreeSweepReport | undefined;
+  const sweep = async (at: number) => (previous = await sweepMergedWorktrees(ports({ pipelines: [owner], previous, now: () => at,
+    conversationCwds: () => talking, inspect: writtenAt(() => written) })));
+  // A conversation resumes there before the hour is up.
+  talking = [dir];
+  expect((await sweep(SETTLED + 50 * 60_000)).kept[0]).toEqual(expect.objectContaining({ reason: "live-conversation" }));
+  expect(previous!.kept[0]!.firstSettledAt).toBeUndefined();
+  talking = [];
+  const restarted = SETTLED + 70 * 60_000;
+  expect((await sweep(restarted)).kept[0]).toEqual(expect.objectContaining({ reason: "retention", firstSettledAt: new Date(restarted).toISOString() }));
+  // A write inside the checkout within the hour is activity too.
+  written = restarted + 30 * 60_000;
+  expect((await sweep(restarted + HOUR)).kept[0]).toEqual(expect.objectContaining({ reason: "recent-writes" }));
+  expect(previous!.kept[0]!.firstSettledAt).toBeUndefined();
+  const quiet = restarted + 2 * HOUR;
+  expect((await sweep(quiet)).kept[0]).toEqual(expect.objectContaining({ reason: "retention", firstSettledAt: new Date(quiet).toISOString() }));
+  expect(fs.existsSync(dir)).toBe(true);
+  expect((await sweep(quiet + HOUR)).removed).toEqual([expect.objectContaining({ path: dir, preservation: "remote-ref" })]);
+  expect(fs.existsSync(dir)).toBe(false);
+});
+
+test("a pushed lane that settles again during measurement gets a fresh hour", async () => {
+  const { dir, owner } = pushedLane("resettled-hour");
+  const at = SETTLED + 2 * HOUR;
+  const report = await sweepMergedWorktrees(ports({ pipelines: [owner], now: () => at,
+    measure: async () => { owner.closedAt = new Date(at).toISOString(); return 10; } }));
+  expect(report.removed).toEqual([]);
+  expect(report.kept[0]).toEqual(expect.objectContaining({ reason: "retention", firstSettledAt: new Date(at).toISOString(),
+    detail: `eligible after ${new Date(at + HOUR).toISOString()} when clean with every commit on a remote, otherwise after ${new Date(at + FINISHED_WORKTREE_RETENTION_MS).toISOString()}` }));
+  expect(fs.existsSync(dir)).toBe(true);
+});
+
+test("a merged lane whose branch the remote still advertises leaves after its quiet hour", async () => {
+  const { branch, dir, tip, owner } = pushedLane("merged-pushed");
+  const options = (at: number) => ports({ pipelines: [owner], prs: [merged(15, branch, tip)], now: () => at, inspect: writtenAt(() => SETTLED + HOUR) });
+  expect((await sweepMergedWorktrees(options(SETTLED + 2 * HOUR - 1))).kept).toEqual([expect.objectContaining({ path: dir, reason: "recent-writes" })]);
+  const report = await sweepMergedWorktrees(options(SETTLED + 2 * HOUR));
+  expect(report.removed).toEqual([expect.objectContaining({ path: dir, pr: { number: 15, url: merged(15, "", "").url }, preservation: "merged-pr" })]);
+  expect(fs.existsSync(dir)).toBe(false);
+});
+
+test("the hour applies only to pipeline lanes a remote advertises: role checkouts and a merged lane whose branch is gone keep their old waits", async () => {
+  const { root, branch, dir, tip, owner } = pushedLane("merged-recent");
+  git(["push", "-q", "origin", "--delete", branch], root);
+  // The squash-merged lane's commit is on no advertised ref now, so a write
+  // two hours ago still meets the merged path's one-day quiet floor.
+  const merged14 = await sweepMergedWorktrees(ports({ pipelines: [owner], prs: [merged(14, branch, tip)],
+    now: () => SETTLED + 3 * HOUR, inspect: writtenAt(() => SETTLED + HOUR) }));
+  expect(merged14.kept).toEqual([expect.objectContaining({ path: dir, reason: "recent-writes" })]);
+  expect(fs.existsSync(dir)).toBe(true);
+  const temp = path.join(caseDir, "tmp");
+  const role = path.join(temp, "llv-review-export-fixture/checkout");
+  git(["worktree", "add", "--detach", role, "main"], root);
+  const first = await sweepMergedWorktrees(ports({ repositories: [root], tempRoots: [temp], now: () => SETTLED }));
+  const later = await sweepMergedWorktrees(ports({ repositories: [root], tempRoots: [temp], previous: first, now: () => SETTLED + 2 * HOUR }));
+  expect(later.kept).toContainEqual(expect.objectContaining({ path: role, reason: "retention",
+    detail: `eligible after ${new Date(SETTLED + FINISHED_WORKTREE_RETENTION_MS).toISOString()}` }));
+  expect(fs.existsSync(role)).toBe(true);
+});
+
+test("one pass reads each repository's remote once to screen its pushed lanes", async () => {
+  const root = repository(); remoteRepository(root);
+  const owners = ["a", "b", "c", "d"].map(name => {
+    const branch = `pipeline/screen-${name}`;
+    const { dir } = lane(root, path.join(caseDir, `screen-${name}`), branch);
+    return pipeline({ repoDir: root, worktreeDir: dir, branch, state: "completed", closedAt: new Date(SETTLED).toISOString() });
+  });
+  const base = ports({});
+  let lsRemote = 0;
+  const report = await sweepMergedWorktrees(ports({ pipelines: owners, now: () => SETTLED + 2 * HOUR,
+    git: async (args, cwd) => { if (args[0] === "ls-remote") lsRemote++; return base.git(args, cwd); } }));
+  expect(report.kept.map(kept => kept.reason)).toEqual(["retention", "retention", "retention", "retention"]);
+  expect(lsRemote).toBe(1);
 });
 
 
