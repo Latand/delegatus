@@ -87,7 +87,7 @@ export interface LaunchProfile {
   plan: AgentPlan | null;
 }
 
-type DurableLaunchAccess = Pick<LaunchProfile, "readOnly" | "sandbox"> | null | undefined;
+type DurableLaunchAccess = Partial<Pick<LaunchProfile, "readOnly" | "sandbox">> | null | undefined;
 
 export function explicitLaunchProfileSandbox(profile: DurableLaunchAccess): "full" | "restricted" | null {
   return profile?.sandbox === "full" || profile?.sandbox === "restricted"
