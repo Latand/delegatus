@@ -51,6 +51,137 @@ function fixtureWorker(source: string): { directory: string; workerPath: string 
   return { directory, workerPath };
 }
 
+test.each(["state database initialization is busy", "state admission is busy at state.schema"])(
+"a scanner bootstrap busy refusal before reading stdin retries within its generation: %s", async (refusal) => {
+  const { directory, workerPath } = fixtureWorker(`
+    import fs from "node:fs";
+    const ledger = new URL("attempts", import.meta.url);
+    if (!fs.existsSync(ledger)) {
+      fs.writeFileSync(ledger, "refused");
+      console.error(${JSON.stringify(refusal)});
+      process.exitCode = 1;
+    } else {
+      process.stdin.resume();
+      process.stdin.on("end", () => console.log(JSON.stringify({ type: "complete", snapshot: { files: [], projectCatalog: [], complete: true } })));
+    }
+  `);
+  const delays: number[] = [];
+  // Fill the request pipe so the early bootstrap exit also exercises EPIPE.
+  const snapshot = await collectFileScanInWorker({ persist: false, pin: "x".repeat(256 * 1024) }, undefined, {
+    launch: { executable: process.execPath, workerPath }, cwd: directory,
+    scheduler: {
+      setTimeout: (callback, ms) => {
+        if (ms === 250 || ms === 1_000) { delays.push(ms); queueMicrotask(callback); return null; }
+        return setTimeout(callback, ms);
+      },
+      clearTimeout: (timer) => { if (timer !== null) clearTimeout(timer as ReturnType<typeof setTimeout>); },
+    },
+  });
+  expect(snapshot.complete).toBe(true);
+  expect(delays).toEqual([250]);
+});
+
+test("bootstrap retry exhaustion is capped at three launches in each real process", async () => {
+  const { directory, workerPath } = fixtureWorker(`
+    import fs from "node:fs";
+    fs.appendFileSync(new URL("attempts", import.meta.url), "attempt\\n");
+    console.error("state admission is busy at state.schema");
+    process.exitCode = 1;
+  `);
+  const parentPath = path.join(directory, "parent.ts");
+  fs.writeFileSync(parentPath, `
+    import { collectFileScanInWorker } from ${JSON.stringify(path.join(import.meta.dir, "fileScanWorker.ts"))};
+    const delays = [];
+    try {
+      await collectFileScanInWorker({ persist: false }, undefined, {
+        launch: { executable: process.execPath, workerPath: ${JSON.stringify(workerPath)} }, cwd: ${JSON.stringify(directory)},
+        scheduler: {
+          setTimeout(callback, ms) {
+            if (ms === 250 || ms === 1000) { delays.push(ms); queueMicrotask(callback); return null; }
+            return setTimeout(callback, ms);
+          },
+          clearTimeout(timer) { if (timer !== null) clearTimeout(timer); },
+        },
+      });
+      throw new Error("expected bootstrap refusal");
+    } catch (error) {
+      if (!error.message.includes("file scanner worker exited before completion")) throw error;
+      console.log(JSON.stringify(delays));
+    }
+  `);
+  for (const launches of [3, 6]) {
+    const parent = Bun.spawn([process.execPath, parentPath], {
+      cwd: path.resolve(import.meta.dir, "../../.."), stdout: "pipe", stderr: "pipe",
+    });
+    const watchdog = setTimeout(() => parent.kill("SIGKILL"), 10_000);
+    try {
+      const [stdout, stderr, code] = await Promise.all([
+        new Response(parent.stdout).text(), new Response(parent.stderr).text(), parent.exited,
+      ]);
+      expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+      expect(JSON.parse(stdout)).toEqual([250, 1_000]);
+      expect(fs.readFileSync(path.join(directory, "attempts"), "utf8").trim().split("\n")).toHaveLength(launches);
+    } finally {
+      clearTimeout(watchdog);
+      if (parent.exitCode === null) parent.kill("SIGKILL");
+      await parent.exited;
+    }
+  }
+}, 30_000);
+
+test.each(["cancel", "deadline"])("%s during bootstrap backoff prevents another worker launch and releases timers", async (stop) => {
+  const { directory, workerPath } = fixtureWorker(`
+    import fs from "node:fs";
+    fs.appendFileSync(new URL("attempts", import.meta.url), "attempt\\n");
+    console.error("state admission is busy at state.schema");
+    process.exitCode = 1;
+  `);
+  const backoff = Promise.withResolvers<void>();
+  const timers: { callback: () => void; ms: number; active: boolean }[] = [];
+  const controller = new AbortController();
+  const scan = collectFileScanInWorker({ persist: false }, undefined, {
+    launch: { executable: process.execPath, workerPath }, cwd: directory, signal: controller.signal,
+    scheduler: {
+      setTimeout: (callback, ms) => {
+        const timer = { callback, ms, active: true };
+        timers.push(timer);
+        if (ms === 250) backoff.resolve();
+        return timer;
+      },
+      clearTimeout: (timer) => { (timer as typeof timers[number]).active = false; },
+    },
+  });
+  const outcome = scan.catch(error => error);
+  await backoff.promise;
+  if (stop === "cancel") controller.abort();
+  else {
+    const deadline = timers.find(timer => timer.ms === 300_000)!;
+    deadline.active = false;
+    deadline.callback();
+  }
+  expect(await outcome).toMatchObject(stop === "cancel"
+    ? { name: "AbortError" } : { name: "DeadlineExceededError", message: "file scanner worker timed out" });
+  expect(timers.filter(timer => timer.active)).toEqual([]);
+  expect(fs.readFileSync(path.join(directory, "attempts"), "utf8")).toBe("attempt\n");
+});
+
+test.each([undefined, "resource", "complete"])("a non-bootstrap worker failure is never retried (frame: %s)", async (frame) => {
+  const { directory, workerPath } = fixtureWorker(`
+    import fs from "node:fs";
+    fs.appendFileSync(new URL("attempts", import.meta.url), "attempt\\n");
+    process.stdin.resume();
+    process.stdin.on("end", () => {
+      ${frame ? `console.log(JSON.stringify({ type: ${JSON.stringify(frame)}, snapshot: { files: [], projectCatalog: [], complete: true } }));` : ""}
+      console.error(${JSON.stringify(frame ? "state admission is busy at state.schema" : "fixture unexpected failure")});
+      process.exitCode = 1;
+    });
+  `);
+  await expect(collectFileScanInWorker({ persist: false }, undefined, {
+    launch: { executable: process.execPath, workerPath }, cwd: directory,
+  })).rejects.toThrow("file scanner worker exited before completion");
+  expect(fs.readFileSync(path.join(directory, "attempts"), "utf8")).toBe("attempt\n");
+});
+
 test("production file scans use the worker boundary and test scans stay direct", () => {
   expect(fileScanWorkerEnabled({ NODE_ENV: "production" })).toBe(true);
   expect(fileScanWorkerEnabled({ NODE_ENV: "test" })).toBe(false);

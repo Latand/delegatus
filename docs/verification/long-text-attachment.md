@@ -25,7 +25,8 @@ full, and includes all attachment paths. Images retain their original delivery
 channel. The runtime envelope guard remains in place.
 
 A generated file is additional to all five operator files; it must still fit
-the 20 MiB per-file and 40 MiB total attachment limits. A conversion that would
+the 100 MiB per-file and 200 MiB total attachment limits. Stored upload
+references count by their original byte size. A conversion that would
 exceed those limits refuses before writing, with instructions to attach a text
 file. A short message keeps its current delivery bytes and trimming behavior.
 Native history injection keeps its existing contract.

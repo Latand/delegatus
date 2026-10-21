@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { AttachmentDeliveryOutcome } from "@/lib/attachmentRetention";
 import {
-  admitInboxFilePayload, InboxFileConflictError, inboxFileBatchToken, inboxFilePaths, inboxFileText,
-  settleInboxFiles, stageInboxFiles, withInboxBatch, type InboxFileUpload, type StagedInboxFiles,
+  admitInboxFilePayloadAsync, InboxFileConflictError, inboxFileBatchToken, inboxFilePaths, inboxFileText,
+  settleInboxFiles, stageInboxFilesAsync, withInboxBatch, type InboxFileUpload, type StagedInboxFiles,
 } from "@/lib/inboxFiles";
 import { operatorBrowserRequest } from "@/lib/agent/operatorAuthority";
 import { agentRegistry, DeliveryReservationConflictError, type AgentRegistry, type DeliveryOperationOwner, type DirectAdmissionIdentity } from "@/lib/agent/registry";
@@ -131,7 +131,7 @@ export async function handleNativeQueue(request: NextRequest, dependencies: Depe
       if (payload.action !== "add" && payload.action !== "update") {
         return NextResponse.json({ error: "files can only be queued with a message or an edit of one" }, { status: 400 });
       }
-      const admitted = admitInboxFilePayload({ files: payload.files });
+      const admitted = await admitInboxFilePayloadAsync({ files: payload.files }, person);
       if (admitted.error) return NextResponse.json({ error: admitted.error.error }, { status: admitted.error.status });
       const rest: Record<string, unknown> = { ...(body as Record<string, unknown>) };
       delete rest.files;
@@ -284,7 +284,7 @@ export async function handleNativeQueue(request: NextRequest, dependencies: Depe
      can reuse a file while this one may still delete it. */
   return withInboxBatch(batch, async () => {
     let staged: StagedInboxFiles;
-    try { staged = stageInboxFiles(files, batch); }
+    try { staged = await stageInboxFilesAsync(files, batch); }
     catch (error) {
       if (error instanceof InboxFileConflictError) {
         return NextResponse.json({ error: error.message, recovery: "query or replay the original Viewer idempotency key" }, { status: 409 });
