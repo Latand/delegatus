@@ -924,6 +924,17 @@ test("Codex rejects its failed Viewer runtime status even with a cached catalog 
   }
 });
 
+test("Codex admits a cached Viewer catalog while its runtime connection is starting", async () => {
+  const child = new FakeAppServer();
+  child.viewerStatus = [{ name: "viewer", runtimeStatus: "starting", tools: { stage_report: {} }, toolsError: null }];
+  const host = await CodexAppServerHost.start({ cwd: "/repo", readProtocolVersion: () => "0.162.1",
+    eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(child) });
+  try {
+    expect((await host.health()).status).toBe("idle");
+    expect(child.requests.some(request => request.method === "thread/queue/start" || request.method === "turn/start")).toBe(false);
+  } finally { await host.release(); }
+});
+
 test("Codex verifies Viewer tools from the opened thread", async () => {
   const child = new FakeAppServer();
   child.requireViewerThread = true;

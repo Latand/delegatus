@@ -12,7 +12,7 @@ export function assertViewerMcpTools(entries: unknown, stateDirectory: string): 
   const status = viewer?.status ?? viewer?.runtimeStatus;
   const diagnostic = typeof viewer?.error === "string" ? viewer.error
     : typeof viewer?.toolsError === "string" ? viewer.toolsError : null;
-  if (viewer && available && (status === undefined || status === "connected")) return;
+  if (viewer && available && (status === undefined || status === "connected" || status === "starting")) return;
   const detail = diagnostic ?? (!viewer ? "viewer server is missing"
     : status && status !== "connected" ? `viewer server is ${status}` : "viewer has no tools");
   throw new Error(`Viewer MCP launch failed: ${detail}; state directory ${stateDirectory}`);
