@@ -15,7 +15,7 @@ afterEach(async () => { if (root) await act(async () => root!.unmount()); root =
 
 for (const locale of ["en", "uk"] as const) test(`${locale}: off is visible with exact destinations; a refused consent write stays off`, async () => {
   setLocale(locale); const writes: unknown[] = [];
-  globalThis.fetch = (async (_url, init) => {
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
     if (init?.method === "PUT") { writes.push(JSON.parse(String(init.body))); return Response.json({}, { status: 403 }); }
     return Response.json({ enabled: false, source: "default" });
   }) as unknown as typeof fetch;
@@ -39,7 +39,7 @@ test("an unreadable setting cannot be enabled", async () => {
 });
 test("a committed consent with a lost acknowledgement is read back and can be revoked", async () => {
   let stored = false; let loseReply = true;
-  globalThis.fetch = (async (_url, init) => {
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
     if (init?.method === "PUT") {
       stored = JSON.parse(String(init.body)).enabled;
       if (loseReply) { loseReply = false; throw Error("reply lost"); }

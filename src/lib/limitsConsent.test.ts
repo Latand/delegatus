@@ -62,7 +62,7 @@ test("explicit consent permits the direct fallback, and revocation before dispat
 });
 test("the direct fallback reads credentials again after the CLI wait", async () => {
   const file = isolated(true);
-  const request = spyOn(globalThis, "fetch").mockImplementation((async (_url, init) => {
+  const request = spyOn(globalThis, "fetch").mockImplementation((async (_url: unknown, init?: RequestInit) => {
     expect(new Headers(init?.headers).get("authorization")).toBe("Bearer after");
     return Response.json({ five_hour: { utilization: 17 } });
   }) as unknown as typeof fetch);
