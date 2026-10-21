@@ -343,8 +343,8 @@ const tmuxScopeTest = reachable && spawnSync("tmux", ["-V"]).status === 0 ? test
  * intentionally orphaned `setsid` child, then waits. The operator's tmux
  * server and its panes are never addressed.
  */
-tmuxScopeTest("tmux launches place the pane, the agent, its descendants and an orphan in the classified CPU scope", async () => {
-  const { spawnAgentWithPrompt } = await import("@/lib/tmux");
+tmuxScopeTest("tmux launches retain classified limits with the pane outside the private agent scope", async () => {
+  const { spawnAgentWithPrompt, panePidMap, resolveTarget } = await import("@/lib/tmux");
   const { agentRegistry } = await import("@/lib/agent/registry");
   // Unix socket names must fit even when the gate nests a long TMPDIR.
   const tmuxTmpdir = fs.mkdtempSync("/tmp/llv-cpu-tmux-");
@@ -355,15 +355,16 @@ tmuxScopeTest("tmux launches place the pane, the agent, its descendants and an o
   fs.writeFileSync(fake, [
     "#!/bin/bash",
     'out="$LLV_FAKE_CODEX_OUT"',
-    'sleep 600 & echo "$!" > "$out.descendant"',
-    '(setsid sleep 600 </dev/null >/dev/null 2>&1 & echo "$!" > "$out.orphan")',
-    'echo "$$" > "$out.agent"',
+    `python3 -c 'import json,os; c=json.loads(os.environ["LLV_SIGNAL_SANDBOX"]); open(os.environ["LLV_FAKE_CODEX_OUT"]+".descendant","w").write(os.readlink(c["hostProc"]+"/self")); os.execl("/bin/sleep","sleep","600")' &`,
+    `(setsid python3 -c 'import json,os; c=json.loads(os.environ["LLV_SIGNAL_SANDBOX"]); open(os.environ["LLV_FAKE_CODEX_OUT"]+".orphan","w").write(os.readlink(c["hostProc"]+"/self")); os.execl("/bin/sleep","sleep","600")' </dev/null >/dev/null 2>&1 &)`,
+    `python3 -c 'import json,os; c=json.loads(os.environ["LLV_SIGNAL_SANDBOX"]); print(next(x.split(":")[1].strip() for x in open(c["hostProc"]+"/self/status") if x.startswith("PPid:")))' > "$out.agent"`,
     "stty -echo",
     "printf '\\n› \\n  ? for shortcuts\\n'",
     "exec -a codex sleep 600",
   ].join("\n") + "\n", { mode: 0o700 });
   const saved = { TMUX_TMPDIR: process.env.TMUX_TMPDIR, LLV_AGENT_CPU: process.env.LLV_AGENT_CPU, LLV_AGENT_MEMORY: process.env.LLV_AGENT_MEMORY, LLV_WORK_CPU_QUOTA: process.env.LLV_WORK_CPU_QUOTA };
-  const tmuxEnv = { ...process.env, TMUX_TMPDIR: tmuxTmpdir, HOME: sandbox, SHELL: "/bin/bash" };
+  const tmuxEnv: NodeJS.ProcessEnv = { ...process.env, TMUX_TMPDIR: tmuxTmpdir, HOME: sandbox, SHELL: "/bin/bash" };
+  delete tmuxEnv.LLV_GATE_SLOT_LEASE;
   const tmux = (...args: string[]) => spawnSync("tmux", args, { env: tmuxEnv, encoding: "utf8" });
   let serverIdentity: ProcessIdentity | null = null;
   const identities: ProcessIdentity[] = [];
@@ -398,13 +399,21 @@ tmuxScopeTest("tmux launches place the pane, the agent, its descendants and an o
       const read = (suffix: string) => Number(fs.readFileSync(`${out}.${suffix}`, "utf8").trim());
       const agent = read("agent"), descendant = read("descendant"), orphan = read("orphan");
       identities.push(...[pane.panePid!, agent, descendant, orphan].map(pid => captureProcessIdentity(pid)));
-      const group = cgroupOf(pane.panePid!);
-      units.push(path.basename(group));
+      const paneGroup = cgroupOf(pane.panePid!);
+      const group = cgroupOf(agent);
+      await panePidMap(true);
+      expect(await resolveTarget(agent)).toBe(pane.display);
+      units.push(path.basename(paneGroup), path.basename(path.dirname(group)));
       expect(ppid(descendant)).toBe(agent);
       expect(ppid(orphan)).not.toBe(agent);
       for (const pid of [agent, descendant, orphan]) expect(cgroupOf(pid)).toBe(group);
-      expect(group).toMatch(/\/delegatus-agent-codex-pane-[0-9a-f-]{12}\.scope$/);
-      return group;
+      expect(paneGroup).toMatch(/\/delegatus-agent-codex-pane-[0-9a-f-]{12}\.scope$/);
+      expect(group).toMatch(/\/delegatus-signal-[0-9a-f]{32}\.scope\/agent$/);
+      expect(group.startsWith(paneGroup + "/")).toBeFalse();
+      const scope = path.dirname(group);
+      expect(control(scope, "cpu.max")).toBe(control(paneGroup, "cpu.max"));
+      expect(control(scope, "cpu.weight")).toBe(control(paneGroup, "cpu.weight"));
+      return scope;
     };
 
     // A workflow stage names its class; a pane reviewer and a tmux pipeline
