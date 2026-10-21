@@ -247,3 +247,58 @@ test("an HTTP server shows its URL and header names only, and the Ukrainian stri
     expect(host.textContent).not.toMatch(/Waiting|Approve|Dry run|Secrets/u);
   } finally { resetLocaleForTests(); localStorage.removeItem("llv_lang"); }
 });
+
+test("beside Run dry run, a command's row says the press starts the program as your OS user, in English and Ukrainian; an address's row does not", async () => {
+  const hints = { en: translate("en", "voiceCompanion.tools.dryRunHint"), uk: translate("uk", "voiceCompanion.tools.dryRunHint") };
+  expect(hints.en).toBe("Run dry run starts this program as your OS user to list its tools, so press it only for what you trust.");
+  expect(hints.uk).toBe("«Пробний запуск» запускає цю програму від імені вашого користувача ОС, щоб отримати список її інструментів, тож натискайте його лише для того, чому довіряєте.");
+  /* The approval sentence stays in the intro beside it. */
+  expect(translate("en", "voiceCompanion.tools.intro")).toContain("An approved server runs as your OS user");
+  for (const locale of ["en", "uk"] as const) {
+    routes({ spotify: spotify({ missingSecrets: [] }), remote: spotify({ title: "Remote", transport: { type: "http", url: "https://mcp.example.test/v1", headerNames: [] }, missingSecrets: [], secretRefs: [] }) });
+    if (locale === "uk") setLocale("uk");
+    try {
+      const host = await mount();
+      const row = host.querySelector<HTMLElement>("[data-voice-tool-server='spotify']")!;
+      const hint = row.querySelector<HTMLElement>("[data-voice-tool-dry-run-hint]")!;
+      expect(hint.textContent).toBe(hints[locale]);
+      expect(button(row, "dry-run")!.getAttribute("aria-describedby")).toBe(hint.id);
+      expect(row.querySelector("[data-voice-tool-actions]")!.compareDocumentPosition(hint) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      const remote = host.querySelector<HTMLElement>("[data-voice-tool-server='remote']")!;
+      expect([remote.querySelector("[data-voice-tool-dry-run-hint]"), button(remote, "dry-run")!.hasAttribute("aria-describedby")]).toEqual([null, false]);
+      /* Once approved there is no Run dry run, and no line about it. */
+      await click(button(row, "dry-run"));
+      await click(button(host.querySelector<HTMLElement>("[data-voice-tool-server='spotify']")!, "approve"));
+      const approved = host.querySelector<HTMLElement>("[data-voice-tool-server='spotify']")!;
+      expect([approved.dataset.state, approved.querySelector("[data-voice-tool-dry-run-hint]")]).toEqual(["enabled", null]);
+    } finally {
+      const { root, host } = mounted!; await act(async () => root.unmount()); host.remove(); mounted = null;
+      resetLocaleForTests(); localStorage.removeItem("llv_lang");
+    }
+  }
+});
+
+test("a refused secrets save keeps what was typed beside its reason, and the next save sends it and clears the field", async () => {
+  const { refuse, record } = routes({ spotify: spotify() });
+  const host = await mount();
+  const input = host.querySelector<HTMLInputElement>("[data-voice-tool-reference] input")!;
+  await act(async () => typeInto(input, SECRET));
+  const submit = async () => {
+    await act(async () => { host.querySelector("form")!.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true })); });
+    await act(async () => settle());
+  };
+  refuse.secrets = "OPERATOR_REQUIRED";
+  await submit();
+  const reason = host.querySelector<HTMLElement>("[data-voice-tools-refused]")!;
+  expect([reason.dataset.voiceToolsRefused, reason.textContent]).toEqual(["OPERATOR_REQUIRED", translate("en", "voiceCompanion.tools.refused.OPERATOR_REQUIRED")]);
+  expect(record.servers.spotify.missingSecrets).toEqual(["spotify-client-id"]);
+  const kept = host.querySelector<HTMLInputElement>("[data-voice-tool-reference] input")!;
+  expect([kept.value, kept.disabled, host.querySelector<HTMLButtonElement>("form button[type='submit']")!.disabled]).toEqual([SECRET, false, false]);
+  expect(host.innerHTML).not.toContain(SECRET);
+
+  await submit();
+  expect(writes()).toEqual([{ action: "secrets", secrets: { "spotify-client-id": SECRET } }, { action: "secrets", secrets: { "spotify-client-id": SECRET } }]);
+  expect(record.servers.spotify.missingSecrets).toEqual([]);
+  expect(host.querySelector<HTMLInputElement>("[data-voice-tool-reference] input")!.value).toBe("");
+  expect(host.querySelector("[data-voice-tools-refused]")).toBeNull();
+});

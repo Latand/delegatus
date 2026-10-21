@@ -2535,6 +2535,7 @@ export const en = {
   "voiceCompanion.tools.reads": "reads only",
   "voiceCompanion.tools.ask": "Ask before acting",
   "voiceCompanion.tools.askHint": "Before a tool that acts, the voice asks you first.",
+  "voiceCompanion.tools.dryRunHint": "Run dry run starts this program as your OS user to list its tools, so press it only for what you trust.",
   "voiceCompanion.tools.action.dryRun": "Run dry run",
   "voiceCompanion.tools.action.running": "Running dry run…",
   "voiceCompanion.tools.action.approve": "Approve",

@@ -224,7 +224,8 @@ const voiceSettings = {
    the record `/api/voice-tools` answers, kept in memory so a press changes it as the route does: `empty`, `pending`
    (a server waits with a secret still needed and no dry run), `review` (its dry run passed and the operator is
    choosing tools), `failed` (a local script's dry run timed out), `approved` and `approved-ask` (approved with
-   «ask before acting» off and on), `long` (every operator-visible field at its schema maximum), and two whose next
+   «ask before acting» off and on), `rejected` and `disabled` (a proposal the operator rejected, and an approved
+   server they turned off), `long` (every operator-visible field at its schema maximum), and two whose next
    press is refused: `approved-refused` (the switch's change and re-approval meet the selection bound) and
    `dry-run-busy` (the hub already runs eight dry runs). */
 const VOICE_TOOLS = new URLSearchParams(location.search).get("voicetools");
@@ -256,6 +257,8 @@ function seedVoiceTools() {
   if (VOICE_TOOLS === "pending") voiceToolsState.servers.spotify = spotify({ missingSecrets: ["spotify-client-id"] });
   if (VOICE_TOOLS === "review") voiceToolsState.servers.spotify = spotify({ catalog: spotifyCatalog(), lastDryRun: ok, tools: { ...chosen, play: { enabled: false, acts: true } } });
   if (VOICE_TOOLS === "dry-run-busy") voiceToolsState.servers.spotify = spotify({});
+  if (VOICE_TOOLS === "rejected") voiceToolsState.servers.spotify = spotify({ state: "rejected" });
+  if (VOICE_TOOLS === "disabled") voiceToolsState.servers.spotify = spotify({ state: "disabled", catalog: spotifyCatalog(), lastDryRun: ok, tools: chosen });
   if (VOICE_TOOLS === "approved" || VOICE_TOOLS === "approved-ask" || VOICE_TOOLS === "approved-refused") voiceToolsState.servers.spotify = spotify({ state: "enabled", catalog: spotifyCatalog(), lastDryRun: ok, tools: chosen,
     askBeforeActing: VOICE_TOOLS === "approved-ask", approval: { by: "operator", at: voiceToolAt(2), digest: voiceToolDigest(1) } });
   if (VOICE_TOOLS === "failed") voiceToolsState.servers.notes = {

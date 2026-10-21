@@ -76,8 +76,9 @@ export function VoiceToolsSetting() {
       return { view: answer };
     } catch { return { code: "VOICE_TOOLS_UNAVAILABLE" }; }
   };
-  const write = async (name: string, control: Control, body: Body, optimistic?: (server: Server) => Server) => {
-    if (inFlight.current) return;
+  /** Whether the route took the write. */
+  const write = async (name: string, control: Control, body: Body, optimistic?: (server: Server) => Server): Promise<boolean> => {
+    if (inFlight.current) return false;
     inFlight.current = true;
     const before = view;
     ++sequence.current;
@@ -89,11 +90,12 @@ export function VoiceToolsSetting() {
          changes it and approves the moved digest in one write, and a refusal changes nothing. */
       const wasEnabled = before !== null && Object.hasOwn(before.servers, name) && before.servers[name].state === "enabled";
       const answer = await post(body.action === "configure" && wasEnabled ? { ...body, reapprove: true } : body);
-      if ("view" in answer) { setView(answer.view); return; }
+      if ("view" in answer) { setView(answer.view); return true; }
       setRefusal({ name, control, code: answer.code });
       if (optimistic) setView(before);
       /* What the refusal judged may have moved on the server: show the current record beside the reason. */
       if (["STALE_APPROVAL", "SERVER_NOT_FOUND", "TIMEOUT", "ENTRY_CHANGED", "MISSING_SECRET"].includes(answer.code)) void read();
+      return false;
     } finally { inFlight.current = false; setWriting(null); }
   };
 
@@ -106,7 +108,7 @@ export function VoiceToolsSetting() {
     {loadError ? <button type="button" onClick={() => void read()} className="min-h-11 underline">{t("voiceCompanion.tools.retry")}</button> : null}
     {servers.length ? <ul className="mt-2 space-y-3" data-voice-tools-list="">
       {servers.map(([name, server]) => <ServerRow key={name} name={name} server={server} when={when} busy={writing !== null} writing={writing?.name === name ? writing.control : null}
-        refusal={refusal?.name === name ? refusal : null} write={(control, body, optimistic) => void write(name, control, body, optimistic)} />)}
+        refusal={refusal?.name === name ? refusal : null} write={(control, body, optimistic) => write(name, control, body, optimistic)} />)}
     </ul> : null}
   </section>;
 }
@@ -114,10 +116,10 @@ export function VoiceToolsSetting() {
 function ServerRow({ name, server, when, busy, writing, refusal, write }: {
   name: string; server: Server; when(iso: string): string; busy: boolean; writing: Control | null;
   refusal: { control: Control; code: string } | null;
-  write(control: Control, body: Body, optimistic?: (server: Server) => Server): void;
+  write(control: Control, body: Body, optimistic?: (server: Server) => Server): Promise<boolean>;
 }) {
   const { t } = useLocale();
-  const ids = { ask: useId(), askHint: useId(), tools: useId() };
+  const ids = { ask: useId(), askHint: useId(), dryRunHint: useId(), tools: useId() };
   /* Which references hold typed text. The values stay in the fields, as «Keys» keeps them, and are read once on Save. */
   const [typed, setTyped] = useState<ReadonlySet<string>>(new Set());
   const digest = server.digest;
@@ -154,10 +156,13 @@ function ServerRow({ name, server, when, busy, writing, refusal, write }: {
       event.preventDefault();
       const fields = [...event.currentTarget.querySelectorAll<HTMLInputElement>("input[data-reference]")];
       const secrets = Object.fromEntries(fields.flatMap(field => field.value && server.secretRefs.includes(field.dataset.reference!) ? [[field.dataset.reference!, field.value]] : []));
-      for (const field of fields) field.value = "";
-      setTyped(new Set());
       if (!Object.keys(secrets).length) return;
-      write("secrets", { action: "secrets", secrets });
+      /* A refused save keeps what was typed beside its reason; a saved one clears the fields. */
+      void write("secrets", { action: "secrets", secrets }).then(saved => {
+        if (!saved) return;
+        for (const field of fields) field.value = "";
+        setTyped(new Set());
+      });
     }}>
       <p className="text-[12px] font-semibold text-muted">{t("voiceCompanion.tools.secrets")}</p>
       <div className="mt-1 space-y-1.5">
@@ -194,7 +199,7 @@ function ServerRow({ name, server, when, busy, writing, refusal, write }: {
               <input type="checkbox" checked={choice.enabled} disabled={busy} className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--color-accent)] max-sm:h-5 max-sm:w-5"
                 onChange={event => {
                   const tools = { ...server.tools, [tool.name]: { ...choice, enabled: event.target.checked } };
-                  write("tools", { action: "configure", name, digest, tools }, current => ({ ...current, tools }));
+                  void write("tools", { action: "configure", name, digest, tools }, current => ({ ...current, tools }));
                 }} />
               <span className="min-w-0">
                 <span className="font-mono text-[12px] text-primary">{tool.name}</span>
@@ -213,7 +218,7 @@ function ServerRow({ name, server, when, busy, writing, refusal, write }: {
       <input type="checkbox" role="switch" data-voice-tool-ask="" aria-labelledby={ids.ask} aria-describedby={ids.askHint} checked={server.askBeforeActing} disabled={busy}
         onChange={event => {
           const askBeforeActing = event.target.checked;
-          write("ask", { action: "configure", name, digest, askBeforeActing }, current => ({ ...current, askBeforeActing }));
+          void write("ask", { action: "configure", name, digest, askBeforeActing }, current => ({ ...current, askBeforeActing }));
         }} className="h-6 w-10 shrink-0 accent-[var(--accent)]" />
     </label>
     <p id={ids.askHint} className="text-[12px] leading-snug text-muted">{t("voiceCompanion.tools.askHint")}</p>
@@ -221,15 +226,16 @@ function ServerRow({ name, server, when, busy, writing, refusal, write }: {
 
     <div className="mt-3 flex flex-wrap gap-2" data-voice-tool-actions="">
       {state !== "enabled" ? <>
-        <button type="button" data-voice-tool-action="dry-run" disabled={busy || blockedBySecrets} aria-busy={writing === "dry-run" || undefined} className={BUTTON}
-          onClick={() => write("dry-run", { action: "dry-run", name, digest })}>{t(writing === "dry-run" ? "voiceCompanion.tools.action.running" : "voiceCompanion.tools.action.dryRun")}</button>
+        <button type="button" data-voice-tool-action="dry-run" disabled={busy || blockedBySecrets} aria-busy={writing === "dry-run" || undefined} aria-describedby={transport.type === "stdio" ? ids.dryRunHint : undefined} className={BUTTON}
+          onClick={() => void write("dry-run", { action: "dry-run", name, digest })}>{t(writing === "dry-run" ? "voiceCompanion.tools.action.running" : "voiceCompanion.tools.action.dryRun")}</button>
         <button type="button" data-voice-tool-action="approve" disabled={busy || !passed || blockedBySecrets} className={PRIMARY}
-          onClick={() => write("approve", { action: "approve", name, digest })}>{t("voiceCompanion.tools.action.approve")}</button>
-      </> : <button type="button" data-voice-tool-action="disable" disabled={busy} className={BUTTON} onClick={() => write("disable", { action: "disable", name, digest })}>{t("voiceCompanion.tools.action.disable")}</button>}
+          onClick={() => void write("approve", { action: "approve", name, digest })}>{t("voiceCompanion.tools.action.approve")}</button>
+      </> : <button type="button" data-voice-tool-action="disable" disabled={busy} className={BUTTON} onClick={() => void write("disable", { action: "disable", name, digest })}>{t("voiceCompanion.tools.action.disable")}</button>}
       {state === "pending" || state === "changed"
-        ? <button type="button" data-voice-tool-action="reject" disabled={busy} className={BUTTON} onClick={() => write("reject", { action: "reject", name, digest })}>{t("voiceCompanion.tools.action.reject")}</button>
-        : <button type="button" data-voice-tool-action="remove" disabled={busy} className={BUTTON} onClick={() => write("remove", { action: "remove", name, digest })}>{t("voiceCompanion.tools.action.remove")}</button>}
+        ? <button type="button" data-voice-tool-action="reject" disabled={busy} className={BUTTON} onClick={() => void write("reject", { action: "reject", name, digest })}>{t("voiceCompanion.tools.action.reject")}</button>
+        : <button type="button" data-voice-tool-action="remove" disabled={busy} className={BUTTON} onClick={() => void write("remove", { action: "remove", name, digest })}>{t("voiceCompanion.tools.action.remove")}</button>}
     </div>
+    {state !== "enabled" && transport.type === "stdio" ? <p id={ids.dryRunHint} data-voice-tool-dry-run-hint="" className="mt-1.5 text-[12px] leading-snug text-muted">{t("voiceCompanion.tools.dryRunHint")}</p> : null}
     {reason("dry-run")}{reason("approve")}{reason("reject")}{reason("disable")}{reason("remove")}
   </li>;
 }

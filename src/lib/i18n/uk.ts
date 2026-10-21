@@ -2480,6 +2480,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "voiceCompanion.tools.reads": "лише читає",
   "voiceCompanion.tools.ask": "Питати перед дією",
   "voiceCompanion.tools.askHint": "Перед інструментом, що діє, голос спершу питає вас.",
+  "voiceCompanion.tools.dryRunHint": "«Пробний запуск» запускає цю програму від імені вашого користувача ОС, щоб отримати список її інструментів, тож натискайте його лише для того, чому довіряєте.",
   "voiceCompanion.tools.action.dryRun": "Пробний запуск",
   "voiceCompanion.tools.action.running": "Пробний запуск триває…",
   "voiceCompanion.tools.action.approve": "Схвалити",

@@ -22874,12 +22874,13 @@ describe("floating voice companion", () => {
    * The Tools section of the voice settings (docs/design/voice-extensible-tools.md §4.8 item 1,
    * `&voicetools=<state>`): no servers, a pending proposal with a secret still needed, a passed
    * dry run with tools being chosen, a failed dry run, an approval with «ask before acting» off and
-   * on, every visible field at its schema maximum, and two refused presses: «ask before acting» on an
+   * on, a rejected proposal, a server turned off, every visible field at its schema maximum, and two refused presses: «ask before acting» on an
    * approved server whose change and re-approval are refused together (the row stays approved and the
    * switch flips back) and Run dry run refused by the hub's limit. Each state is read at 1440, 820 and 390,
    * in both languages and themes: its defining words are whole on screen once the section is
    * scrolled to, no text range leaves the dialog or the window, the page never scrolls sideways,
-   * and every control is at least 24 px tall (44 on the phone). Approving a chosen tool and
+   * and every control is at least 24 px tall (44 on the phone). Wherever Run dry run starts a command,
+   * the line saying that it runs the program as the operator's OS user is whole beside it. Approving a chosen tool and
    * flipping «ask before acting» on an approved server are pressed for real (a tap on the phone).
    * Frames go to `$LLV_VOICE_TOOLS_OUT` (default `.artifacts/voice-tools`), never committed.
    */
@@ -22887,19 +22888,20 @@ describe("floating voice companion", () => {
     const out = path.resolve(process.env.LLV_VOICE_TOOLS_OUT ?? ".artifacts/voice-tools");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
-    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
     const failures: string[] = [];
     const measurements: unknown[] = [];
+    const dryRun = (lang: "en" | "uk") => [translate(lang, "voiceCompanion.tools.action.dryRun"), translate(lang, "voiceCompanion.tools.dryRunHint")];
     /* Each state's defining words: those of a row's head once the row is scrolled to, then those of its foot once
        its action row is. A row taller than the phone's dialog is read in these two frames. */
     const defining: Record<string, (lang: "en" | "uk") => { head: string[]; foot: string[] }> = {
       empty: lang => ({ head: [translate(lang, "voiceCompanion.tools.empty")], foot: [] }),
       pending: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example", "SPOTIFY_CLIENT_ID, SPOTIFY_REDIRECT_URI"],
-        foot: [translate(lang, "voiceCompanion.tools.secretNeeded"), translate(lang, "voiceCompanion.tools.dryRun.none"), translate(lang, "voiceCompanion.tools.action.dryRun"), translate(lang, "voiceCompanion.tools.action.reject")] }),
+        foot: [translate(lang, "voiceCompanion.tools.secretNeeded"), translate(lang, "voiceCompanion.tools.dryRun.none"), ...dryRun(lang), translate(lang, "voiceCompanion.tools.action.reject")] }),
       review: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example"],
-        foot: ["skip", translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.approve")] }),
+        foot: ["skip", translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.approve"), ...dryRun(lang)] }),
       failed: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "--notes", "/srv/delegatus/mcp-servers/notes/server.ts"],
-        foot: [translate(lang, "voiceCompanion.tools.dryRun.TIMEOUT"), translate(lang, "voiceCompanion.tools.action.dryRun")] }),
+        foot: [translate(lang, "voiceCompanion.tools.dryRun.TIMEOUT"), ...dryRun(lang)] }),
       approved: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.enabled"), "spotify-mcp-example"],
         foot: [translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.disable"), translate(lang, "voiceCompanion.tools.action.remove")] }),
       "approved-ask": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.enabled"), "spotify-mcp-example"],
@@ -22909,7 +22911,11 @@ describe("floating voice companion", () => {
       "approved-refused": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.enabled"), "spotify-mcp-example"],
         foot: [translate(lang, "voiceCompanion.tools.refused.SELECTION_BOUNDS"), translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.disable")] }),
       "dry-run-busy": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example"],
-        foot: [translate(lang, "voiceCompanion.tools.action.dryRun"), translate(lang, "voiceCompanion.tools.refused.dryRun.BUSY")] }),
+        foot: [...dryRun(lang), translate(lang, "voiceCompanion.tools.refused.dryRun.BUSY")] }),
+      rejected: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.rejected"), "spotify-mcp-example"],
+        foot: [...dryRun(lang), translate(lang, "voiceCompanion.tools.action.remove")] }),
+      disabled: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.disabled"), "spotify-mcp-example"],
+        foot: [translate(lang, "voiceCompanion.tools.ask"), ...dryRun(lang), translate(lang, "voiceCompanion.tools.action.approve"), translate(lang, "voiceCompanion.tools.action.remove")] }),
     };
     /* The refused states are read after their press, which every language and theme makes. */
     const refusedPress: Record<string, string> = { "approved-refused": "[data-voice-tool-ask]", "dry-run-busy": "[data-voice-tool-action='dry-run']" };
