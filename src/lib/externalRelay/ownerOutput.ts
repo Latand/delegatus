@@ -33,7 +33,18 @@ export function scrubOwnerOutput(text: string, credentials: readonly string[] = 
   // The shared structured sanitizer recognizes credential field names, decodes
   // JSON inside quoted strings, and refuses incomplete sensitive values. It
   // also shapes paths, so all credential checks must precede this call.
-  clean = scrubOwnerText(redactArchive(clean) as string);
+  // Shield home-root prefixes inside commands from its broader path shaping
+  // (for example /homework). Keep suffixes visible for sensitive field names.
+  let marker = "\uE000relay";
+  while (clean.includes(marker) || decodedCredentials.text.includes(marker)) marker += "\uE001";
+  const prefixes: string[] = [];
+  clean = clean.replace(/(?<![\w:/~])\/(?:home|Users|root)(?=[A-Za-z0-9_.@-])/g, prefix => {
+    // End in a lowercase letter, like each root, to retain camelCase boundaries.
+    return `${marker}${prefixes.push(prefix) - 1}${marker}x`;
+  });
+  clean = redactArchive(clean) as string;
+  clean = clean.replace(new RegExp(`${marker}(\\d+)${marker}x`, "g"), (_match, index: string) => prefixes[Number(index)]!);
+  clean = scrubOwnerText(clean);
   // Inspect the shared decoded view without rewriting the answer's formatting.
   // Apply every egress rule, including retained provider fingerprints, to that
   // view. A recoverable secret or undecidable encoding withholds the output.
@@ -55,9 +66,12 @@ function scrubOwnerCredentials(text: string): string {
 
 function scrubOwnerText(text: string): string {
   return scrubOwnerCredentials(text)
-    // Absolute POSIX, home-relative, file URI, drive and UNC paths, including
-    // escaped spaces. Ordinary web URLs keep their paths.
+    // Home-relative, file URI, drive and UNC paths, including escaped spaces.
+    // A POSIX path needs a known root or at least two segments: a lone /word
+    // is also a chat command. Ordinary web URLs keep their paths.
     .replace(/file:\/\/[^\s<>"'`]+/gi, "[path]")
     .replace(/(?<![\w:])(?:[A-Za-z]:[\\/]|\\\\)[^\r\n<>"'`]+/g, "[path]")
-    .replace(/(?<![\w:/])(?:~(?:[A-Za-z0-9_-]+)?\/|\/)(?:\\ |[^\s<>"'`])+/g, "[path]");
+    .replace(/(?<![\w:/])~(?:[A-Za-z0-9_-]+)?\/(?:\\ |[^\s<>"'`])+/g, "[path]")
+    .replace(/(?<![\w:/])\/(?:home|Users|root|tmp|var|etc|opt|private|mnt|srv|proc)(?=\/|[\s<>"'`]|$)(?:\\ |[^\s<>"'`])*/g, "[path]")
+    .replace(/(?<![\w:/])\/(?:\\ |[^/\s<>"'`])+\/(?:\\ |[^\s<>"'`])+/g, "[path]");
 }
