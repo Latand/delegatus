@@ -129,7 +129,14 @@ function ServerRow({ name, server, when, busy, writing, refusal, write }: {
   const passed = dryRun?.code === "OK" && server.catalog !== null;
   const blockedBySecrets = server.missingSecrets.length > 0;
   const transport = server.transport;
-  const names = (list: string[]) => list.length ? list.join(", ") : t("voiceCompanion.tools.none");
+  /* A literal variable or header shows its value, so what is approved is what runs; a secret one shows its name only.
+     As on the command line, an entry of up to 32 characters keeps to one line. */
+  const variables = (key: "voiceCompanion.tools.env" | "voiceCompanion.tools.headers", list: string[], values: Record<string, string>) => {
+    if (!list.length) return t(key, { names: t("voiceCompanion.tools.none") });
+    const [before, after = ""] = t(key, { names: "\u0000" }).split("\u0000");
+    const entries = list.map(name => Object.hasOwn(values, name) ? `${name}=${values[name]}` : t("voiceCompanion.tools.secretValue", { name }));
+    return <>{before}{entries.map((entry, at) => <Fragment key={at}>{at ? ", " : ""}<span className={entry.length <= 32 ? "whitespace-nowrap" : undefined}>{entry}</span></Fragment>)}{after}</>;
+  };
   const state = server.state;
   const tone = state === "enabled" ? "text-success" : state === "pending" || state === "changed" ? "text-warning" : "text-muted";
   const toolCount = server.catalog?.tools.length ?? 0;
@@ -146,8 +153,8 @@ function ServerRow({ name, server, when, busy, writing, refusal, write }: {
       <code className="mt-0.5 block rounded-[6px] bg-well px-2 py-1 font-mono text-[12px] leading-snug text-primary [overflow-wrap:anywhere]">{commandWords(server).map((word, at) => <Fragment key={at}>{at ? " " : ""}<span className={word.length <= 32 ? "whitespace-nowrap" : undefined}>{word}</span></Fragment>)}</code>
       <div className="mt-1 space-y-0.5 text-[12px] leading-snug text-muted">
         {transport.type === "stdio" && transport.cwd ? <p>{t("voiceCompanion.tools.folder", { path: transport.cwd })}</p> : null}
-        {transport.type === "stdio" ? <p data-voice-tool-env="">{t("voiceCompanion.tools.env", { names: names(transport.envNames) })}</p>
-          : <p data-voice-tool-headers="">{t("voiceCompanion.tools.headers", { names: names(transport.headerNames) })}</p>}
+        {transport.type === "stdio" ? <p data-voice-tool-env="" className="[overflow-wrap:anywhere]">{variables("voiceCompanion.tools.env", transport.envNames, transport.envValues)}</p>
+          : <p data-voice-tool-headers="" className="[overflow-wrap:anywhere]">{variables("voiceCompanion.tools.headers", transport.headerNames, transport.headerValues)}</p>}
         {server.entryFile ? <p data-voice-tool-entry="">{t("voiceCompanion.tools.entry", { path: server.entryFile.path, hash: `${server.entryFile.sha256.slice(0, 12)}…` })}</p> : null}
       </div>
     </div>

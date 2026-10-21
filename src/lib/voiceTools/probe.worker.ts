@@ -5,7 +5,8 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import Ajv from "ajv";
-import { digest, validateCatalog, voiceToolBounds, type VoiceToolServer } from "./contracts";
+import path from "node:path";
+import { digest, launchShapingEnv, packageLaunch, validateCatalog, voiceToolBounds, type VoiceToolServer } from "./contracts";
 import { verifyEntry } from "./entry";
 
 let received = 0;
@@ -17,6 +18,8 @@ for await (const chunk of process.stdin) {
 }
 const request = JSON.parse(Buffer.concat(input).toString("utf8")) as {
   name: string; server: VoiceToolServer; secrets: Record<string, string>; home: string;
+  /** Chosen by the Viewer (hub.ts): the launcher's absolute path, an empty Bun config and an empty folder. */
+  launch: { executable: string; config: string; runDir: string } | null;
 };
 const resolveValues = (values: Record<string, { value: string } | { secretRef: string }>): Record<string, string> =>
   Object.fromEntries(Object.entries(values).map(([key, entry]) => [key, "value" in entry ? entry.value : request.secrets[entry.secretRef]]));
@@ -35,14 +38,26 @@ class BoundedStdio implements Transport {
     if (transport.type !== "stdio") throw new Error("PROTOCOL_ERROR");
     // Recheck after connection setup and immediately before the pinned file is executed.
     await verifyEntry(request.server);
+    const launch = request.launch;
+    if (!launch || ![launch.executable, launch.config, launch.runDir].every(file => path.isAbsolute(file))) throw new Error("START_FAILED");
     const inherit = (names: string[]) => Object.fromEntries(names.flatMap(name => process.env[name] ? [[name, process.env[name]]] : []));
-    const args = transport.command === "bun" && request.server.entryFile
-      ? ["run", request.server.entryFile.path, ...transport.args.slice(2)]
-      : transport.args;
-    const child = this.child = spawn(transport.command, args, { cwd: transport.cwd ?? request.home,
-      // The proposal's variables cannot name a launch or loader variable (contracts.ts); the platform's own and the private home still win.
-      env: { NODE_ENV: "production", ...inherit(["LANG", "LC_ALL"]), ...resolveValues(transport.env), ...inherit(["PATH", "SYSTEMROOT", "WINDIR", "PATHEXT"]), XDG_CONFIG_HOME: `${request.home}/.config`, XDG_CACHE_HOME: `${request.home}/.cache`, TMPDIR: request.home,
-        HOME: request.home }, stdio: ["pipe", "pipe", "ignore"] });
+    // The proposal schema refuses launch variables (contracts.ts); a request that still carries one
+    // drops it here, and the platform's own variables and the private home win over the rest.
+    const own = Object.fromEntries(Object.entries(resolveValues(transport.env)).filter(([name]) => !launchShapingEnv.test(name)));
+    const env = { NODE_ENV: "production", ...inherit(["LANG", "LC_ALL"]), ...own, ...inherit(["PATH", "SYSTEMROOT", "WINDIR", "PATHEXT"]),
+      XDG_CONFIG_HOME: `${request.home}/.config`, XDG_CACHE_HOME: `${request.home}/.cache`, TMPDIR: request.home, HOME: request.home } as NodeJS.ProcessEnv;
+    const entry = request.server.entryFile?.path;
+    const pkg = !entry && packageLaunch(transport);
+    if (!entry && !pkg) throw new Error("START_FAILED");
+    // Nothing found from a folder may choose what runs before the pinned entry: Bun reads the
+    // Viewer's empty config and no .env file; uv neither builds a project nor reads its config, and it
+    // runs the interpreter found while virtual environments are skipped, because finding one runs it.
+    let args: string[];
+    if (transport.command === "bun") args = entry ? [`--config=${launch.config}`, "run", "--no-env-file", entry, ...transport.args.slice(2)] : [`--config=${launch.config}`, ...transport.args];
+    else if (pkg) args = ["tool", "run", "--no-config", ...transport.args.slice(2)];
+    else args = ["run", "--python", await systemPython(launch, env), "--no-project", "--no-config", "--no-env-file", entry!, ...transport.args.slice(2)];
+    // A package launcher prefers a binary under node_modules/.bin of its folder and each parent, so it starts in the empty one.
+    const child = this.child = spawn(launch.executable, args, { cwd: pkg ? launch.runDir : transport.cwd ?? request.home, env, stdio: ["pipe", "pipe", "ignore"] });
     this.closed = new Promise(resolve => { child.once("close", () => { this.onclose?.(); resolve(); }); });
     let buffer = Buffer.alloc(0);
     child.stdout!.on("data", (chunk: Buffer) => {
@@ -64,6 +79,18 @@ class BoundedStdio implements Transport {
     await new Promise<void>((resolve, reject) => child.stdin!.write(JSON.stringify(message) + "\n", error => error ? reject(new Error("START_FAILED")) : resolve()));
   }
   async close(): Promise<void> { this.child?.stdin?.end(); this.child?.kill("SIGTERM"); await this.closed; }
+}
+
+/** `uv python find --system` skips virtual environments; the answer is one absolute path. */
+async function systemPython(launch: { executable: string; runDir: string }, env: NodeJS.ProcessEnv): Promise<string> {
+  const finder = spawn(launch.executable, ["python", "find", "--system", "--no-project", "--no-config"], { cwd: launch.runDir, env, stdio: ["ignore", "pipe", "ignore"] });
+  let output = "";
+  finder.stdout!.setEncoding("utf8");
+  finder.stdout!.on("data", (chunk: string) => { output += chunk; if (output.length > 4096) finder.kill("SIGKILL"); });
+  const code = await new Promise<number | null>(resolve => { finder.once("error", () => resolve(null)); finder.once("close", resolve); });
+  const found = output.trim();
+  if (code !== 0 || !path.isAbsolute(found) || /[\r\n]/.test(found)) throw new Error("START_FAILED");
+  return found;
 }
 
 // A single response body and total incoming bytes are bounded, including SSE.

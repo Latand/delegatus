@@ -20,8 +20,8 @@ export function allowedHttpUrl(input: string): boolean {
 }
 /**
  * Variables that choose which binary, loader, interpreter, package, registry or config file a stdio
- * launch uses. The settings card shows variable names only, so a value under one of these could
- * swap what runs while the card still reads the same command; a proposal naming one is refused.
+ * launch uses. A value under one of these could swap what runs while the card still reads the
+ * same command, and a secret reference would hide even the value; a proposal naming one is refused.
  * NODE_ENV only tells the server how to behave, so a proposal may still set it.
  */
 export const launchShapingEnv = /^(?:PATH|PATHEXT|HOME|SHELL|COMSPEC|SYSTEMROOT|WINDIR|TMPDIR|TEMP|TMP|LD_\w*|DYLD_\w*|NODE_(?!ENV$)\w*|BUN_\w*|BUNFIG\w*|UV_\w*|NPM_CONFIG_\w*|YARN_\w*|PIP_\w*|PYTHON\w*|VIRTUAL_ENV|CONDA_\w*|XDG_\w*|GIT_\w*|GLIBC_TUNABLES|MALLOC_\w*|SSL_CERT_\w*|CURL_CA_BUNDLE|REQUESTS_CA_BUNDLE|(?:HTTPS?|ALL|NO)_PROXY)$/i;
@@ -52,8 +52,9 @@ export type VoiceToolServer = Omit<VoiceToolProposal, "name"> & {
 };
 export type VoiceToolsRegistry = { version: 1; revision: number; servers: Record<string, VoiceToolServer> };
 export type VoiceToolsView = { version: 1; revision: number; servers: Record<string, Omit<VoiceToolServer, "transport"> & {
-  transport: { type: "stdio"; command: "bun" | "uv"; args: string[]; cwd: string | null; envNames: string[] }
-    | { type: "http"; url: string; headerNames: string[] };
+  /* Literal values are shown so the operator approves what runs; a secret reference shows its name only. */
+  transport: { type: "stdio"; command: "bun" | "uv"; args: string[]; cwd: string | null; envNames: string[]; envValues: Record<string, string> }
+    | { type: "http"; url: string; headerNames: string[]; headerValues: Record<string, string> };
   digest: string; missingSecrets: string[]; secretRefs: string[];
 }> };
 export const emptyRegistry = (): VoiceToolsRegistry => ({ version: 1, revision: 0, servers: {} });
@@ -71,6 +72,16 @@ export function approvalDigest(name: string, server: VoiceToolServer): string {
 }
 export function probeDigest(name: string, server: VoiceToolServer): string {
   return digest({ name, transport: server.transport, entryFile: server.entryFile });
+}
+/** The literal values of a variable or header map, without secret references. */
+export function literalValues(entries: Record<string, { value: string } | { secretRef: string }>): Record<string, string> {
+  return Object.fromEntries(Object.entries(entries).flatMap(([name, entry]) => "value" in entry ? [[name, entry.value]] : []).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
+}
+/** `bun x <pkg>` and `uv tool run <pkg>`: the launcher resolves the package, so it runs from a fresh empty folder. */
+export function packageLaunch(transport: { command: "bun" | "uv"; args: string[] }): boolean {
+  const args = transport.args;
+  return transport.command === "bun" ? args[0] === "x" && !!args[1] && !args[1].startsWith("-")
+    : args[0] === "tool" && args[1] === "run" && !!args[2] && !args[2].startsWith("-");
 }
 export function secretReferences(server: VoiceToolServer): string[] {
   const entries = server.transport.type === "stdio" ? server.transport.env : server.transport.headers;

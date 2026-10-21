@@ -247,7 +247,8 @@ const spotifyCatalog = () => ({ digest: voiceToolDigest(901), fetchedAt: voiceTo
 function seedVoiceTools() {
   const spotify = (over: Partial<FixtureVoiceTool>): FixtureVoiceTool => ({
     title: "Spotify", capability: L("Music: play, pause, skip and search the operator's Spotify.", "Музика: вмикати, ставити на паузу, перемикати й шукати у Spotify оператора."),
-    transport: { type: "stdio", command: "uv", args: ["tool", "run", "spotify-mcp-example"], cwd: null, envNames: ["SPOTIFY_CLIENT_ID", "SPOTIFY_REDIRECT_URI"] },
+    transport: { type: "stdio", command: "uv", args: ["tool", "run", "spotify-mcp-example"], cwd: null, envNames: ["SPOTIFY_CLIENT_ID", "SPOTIFY_REDIRECT_URI"],
+      envValues: { SPOTIFY_REDIRECT_URI: "http://127.0.0.1:8888/callback" } },
     entryFile: null, private: false, askBeforeActing: false, callTimeoutMs: 15_000, generation: 6, owner: "installation", audience: ["voice"], state: "pending",
     proposedBy: { kind: "conversation", conversationId: "conv_fixture_orchestrator", at: voiceToolAt(12) }, approval: null, tools: {}, catalog: null, lastDryRun: null,
     digest: voiceToolDigest(1), missingSecrets: [], secretRefs: ["spotify-client-id"], ...over,
@@ -263,7 +264,7 @@ function seedVoiceTools() {
     askBeforeActing: VOICE_TOOLS === "approved-ask", approval: { by: "operator", at: voiceToolAt(2), digest: voiceToolDigest(1) } });
   if (VOICE_TOOLS === "failed") voiceToolsState.servers.notes = {
     title: L("Notes", "Нотатки"), capability: L("Reads and appends to the operator's plain-text notes folder.", "Читає й доповнює теку текстових нотаток оператора."),
-    transport: { type: "stdio", command: "bun", args: ["run", "/srv/delegatus/mcp-servers/notes/server.ts", "--notes", "/srv/notes"], cwd: "/srv/delegatus/mcp-servers/notes", envNames: ["NOTES_FORMAT"] },
+    transport: { type: "stdio", command: "bun", args: ["run", "/srv/delegatus/mcp-servers/notes/server.ts", "--notes", "/srv/notes"], cwd: "/srv/delegatus/mcp-servers/notes", envNames: ["NOTES_FORMAT"], envValues: { NOTES_FORMAT: "markdown" } },
     entryFile: { path: "/srv/delegatus/mcp-servers/notes/server.ts", sha256: "4f9c1d2e8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d" },
     private: true, askBeforeActing: false, callTimeoutMs: 15_000, generation: 7, owner: "installation", audience: ["voice"], state: "pending",
     proposedBy: { kind: "conversation", conversationId: "conv_fixture_worker", at: voiceToolAt(30) }, approval: null, tools: {}, catalog: null,
@@ -271,7 +272,8 @@ function seedVoiceTools() {
   };
   if (VOICE_TOOLS === "long") voiceToolsState.servers.a234567890123456789012_x = {
     title: "T".repeat(60) + " " + "Т".repeat(59), capability: L("A capability sentence at its full length of one hundred sixty characters, so this row shows how the longest one the schema admits wraps inside the settings dialog.", "Речення можливостей на повну довжину в сто шістдесят символів, щоб цей рядок показав, як найдовше речення, яке допускає схема, переноситься всередині вікна налаштувань.").slice(0, 160),
-    transport: { type: "http", url: `https://mcp.example.test/${"segment/".repeat(40)}endpoint`, headerNames: ["Authorization", "X-Workspace-Identifier-With-A-Long-Name", "X-Request-Source"] },
+    transport: { type: "http", url: `https://mcp.example.test/${"segment/".repeat(40)}endpoint`, headerNames: ["Authorization", "X-Request-Source", "X-Workspace-Identifier-With-A-Long-Name"],
+      headerValues: { "X-Request-Source": "delegatus-voice", "X-Workspace-Identifier-With-A-Long-Name": `workspace-${"0123456789abcdef".repeat(16)}` } },
     entryFile: null, private: false, askBeforeActing: true, callTimeoutMs: 60_000, generation: 9, owner: "installation", audience: ["voice"], state: "changed",
     proposedBy: { kind: "operator", conversationId: null, at: voiceToolAt(90) }, approval: null,
     tools: { ["t".repeat(128)]: { enabled: true, acts: true }, read_status: { enabled: false, acts: false } },

@@ -34,7 +34,7 @@ const catalog = { digest: digestOf(900), fetchedAt: AT, tools: [
 function spotify(over: Partial<Server> = {}): Server {
   return {
     title: "Spotify", capability: "Music: play and search.", entryFile: null, private: false, askBeforeActing: false, callTimeoutMs: 15_000,
-    transport: { type: "stdio", command: "uv", args: ["tool", "run", "spotify-mcp-example"], cwd: null, envNames: ["SPOTIFY_CLIENT_ID", "SPOTIFY_REDIRECT_URI"] },
+    transport: { type: "stdio", command: "uv", args: ["tool", "run", "spotify-mcp-example"], cwd: null, envNames: ["SPOTIFY_CLIENT_ID", "SPOTIFY_REDIRECT_URI"], envValues: { SPOTIFY_REDIRECT_URI: "http://127.0.0.1:8888/callback" } },
     generation: 3, owner: "installation", audience: ["voice"], state: "pending", proposedBy: { kind: "conversation", conversationId: "conv_a", at: AT },
     approval: null, tools: {}, catalog: null, lastDryRun: null, digest: digestOf(1), missingSecrets: ["spotify-client-id"], secretRefs: ["spotify-client-id"], ...over,
   };
@@ -116,14 +116,14 @@ test("no servers reads as such, and a failed read offers a retry that recovers",
 });
 
 test("a pending proposal shows what will run by name, takes its secret once and never draws it again", async () => {
-  const { record } = routes({ spotify: spotify({ transport: { type: "stdio", command: "bun", args: ["run", "/srv/tools/notes server.ts"], cwd: "/srv/tools", envNames: ["NOTES_TOKEN"] },
+  const { record } = routes({ spotify: spotify({ transport: { type: "stdio", command: "bun", args: ["run", "/srv/tools/notes server.ts"], cwd: "/srv/tools", envNames: ["NOTES_FORMAT", "NOTES_TOKEN"], envValues: { NOTES_FORMAT: "markdown" } },
     entryFile: { path: "/srv/tools/notes server.ts", sha256: "ab".repeat(32) } }) });
   const host = await mount();
   const row = host.querySelector<HTMLElement>("[data-voice-tool-server='spotify']")!;
   expect(row.dataset.state).toBe("pending");
   expect(row.querySelector("[data-voice-tool-state]")?.textContent).toBe("Waiting for approval");
   expect(row.querySelector("[data-voice-tool-runs] code")?.textContent).toBe("bun run '/srv/tools/notes server.ts'");
-  expect(row.querySelector("[data-voice-tool-env]")?.textContent).toBe("Environment: NOTES_TOKEN");
+  expect(row.querySelector("[data-voice-tool-env]")?.textContent).toBe("Environment: NOTES_FORMAT=markdown, NOTES_TOKEN (secret)");
   expect(row.querySelector("[data-voice-tool-entry]")?.textContent).toBe(`Pinned file: /srv/tools/notes server.ts · SHA-256 ${"ab".repeat(6)}…`);
   expect(row.querySelector("[data-voice-tool-dry-run]")?.textContent).toBe("Dry run: not run yet.");
   /* A needed secret holds the dry run and the approval back. */
@@ -234,14 +234,15 @@ test("a failed dry run reads its reason, and a stale digest rereads the record b
   expect(button(host, "remove")).not.toBeNull();
 });
 
-test("an HTTP server shows its URL and header names only, and the Ukrainian strings cover every visible line", async () => {
-  routes({ remote: spotify({ title: "Remote", transport: { type: "http", url: "https://mcp.example.test/v1", headerNames: ["Authorization"] }, missingSecrets: [], secretRefs: ["remote-token"] }) });
+test("an HTTP server shows its URL, a literal header's value and a secret header's name, and the Ukrainian strings cover every visible line", async () => {
+  routes({ remote: spotify({ title: "Remote", transport: { type: "http", url: "https://mcp.example.test/v1", headerNames: ["Authorization", "X-Workspace"], headerValues: { "X-Workspace": "studio-a" } },
+    missingSecrets: [], secretRefs: ["remote-token"] }) });
   setLocale("uk");
   try {
     const host = await mount();
     const row = host.querySelector<HTMLElement>("[data-voice-tool-server='remote']")!;
     expect(row.querySelector("[data-voice-tool-runs] code")?.textContent).toBe("https://mcp.example.test/v1");
-    expect(row.querySelector("[data-voice-tool-headers]")?.textContent).toBe("Заголовки: Authorization");
+    expect(row.querySelector("[data-voice-tool-headers]")?.textContent).toBe("Заголовки: Authorization (секрет), X-Workspace=studio-a");
     expect(row.textContent).toContain("Підключається до");
     expect(row.querySelector("[data-voice-tool-state]")?.textContent).toBe("Чекає на схвалення");
     expect(host.textContent).not.toMatch(/Waiting|Approve|Dry run|Secrets/u);
@@ -255,7 +256,7 @@ test("beside Run dry run, a command's row says the press starts the program as y
   /* The approval sentence stays in the intro beside it. */
   expect(translate("en", "voiceCompanion.tools.intro")).toContain("An approved server runs as your OS user");
   for (const locale of ["en", "uk"] as const) {
-    routes({ spotify: spotify({ missingSecrets: [] }), remote: spotify({ title: "Remote", transport: { type: "http", url: "https://mcp.example.test/v1", headerNames: [] }, missingSecrets: [], secretRefs: [] }) });
+    routes({ spotify: spotify({ missingSecrets: [] }), remote: spotify({ title: "Remote", transport: { type: "http", url: "https://mcp.example.test/v1", headerNames: [], headerValues: {} }, missingSecrets: [], secretRefs: [] }) });
     if (locale === "uk") setLocale("uk");
     try {
       const host = await mount();

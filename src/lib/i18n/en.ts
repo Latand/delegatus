@@ -2510,6 +2510,7 @@ export const en = {
   "voiceCompanion.tools.folder": "Folder: {path}",
   "voiceCompanion.tools.env": "Environment: {names}",
   "voiceCompanion.tools.headers": "Headers: {names}",
+  "voiceCompanion.tools.secretValue": "{name} (secret)",
   "voiceCompanion.tools.none": "none",
   "voiceCompanion.tools.entry": "Pinned file: {path} · SHA-256 {hash}",
   "voiceCompanion.tools.secrets": "Secrets",

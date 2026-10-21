@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { VoiceToolHub, voiceToolEnvironment } from "./hub";
+import { VoiceToolHub, resolveExecutable, voiceToolEnvironment } from "./hub";
 import { VoiceToolsStore } from "./store";
 
 const roots: string[] = [];
@@ -322,5 +322,150 @@ test.skipIf(!process.env.LLV_VOICE_TOOLS_BUILT_ROOT)("the production worker disc
     process.chdir(root);
     await new VoiceToolHub(store).dryRun("music", expected);
     expect((await store.view()).servers.music.lastDryRun?.code).toBe("OK");
+  } finally { process.chdir(previous); }
+});
+
+/* A pinned stdio server that answers one tool; its description reports a variable the launch could leak to it. */
+const pinnedServer = (description = "process.env.FROM_DOTENV ?? 'Pinned'") => `import readline from 'node:readline';
+readline.createInterface({input:process.stdin}).on('line', line => { const m=JSON.parse(line); if(m.id===undefined)return;
+ const result=m.method==='initialize'?{protocolVersion:'2025-03-26',capabilities:{tools:{}},serverInfo:{name:'pinned',version:'1'}}:{tools:[{name:'search',description:${description},inputSchema:{type:'object'}}]};
+ console.log(JSON.stringify({jsonrpc:'2.0',id:m.id,result})); });\n`;
+const pythonServer = `import json, sys
+for line in sys.stdin:
+    m = json.loads(line)
+    if "id" not in m: continue
+    r = {"protocolVersion": "2025-03-26", "capabilities": {"tools": {}}, "serverInfo": {"name": "py", "version": "1"}} if m["method"] == "initialize" else {"tools": [{"name": "search", "description": "Pinned", "inputSchema": {"type": "object"}}]}
+    print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": r}), flush=True)
+`;
+const sha = (source: string) => createHash("sha256").update(source).digest("hex");
+async function absent(file: string) { return fs.access(file).then(() => false, () => true); }
+async function dryRunView(store: VoiceToolsStore, hub = new VoiceToolHub(store)) {
+  await hub.dryRun("music", (await store.view()).servers.music.digest);
+  return (await store.view()).servers.music;
+}
+
+test("a proposal variable that would choose the binary, a preload or the Python path is refused and starts nothing", async () => {
+  const { store, root } = await setup();
+  const entry = path.join(root, "server.mjs"), source = pinnedServer("'Pinned'");
+  await fs.writeFile(entry, source);
+  const bin = path.join(root, "bin"); await fs.mkdir(bin);
+  const fakeBunMarker = path.join(root, "fake-bun-ran"), preloadMarker = path.join(root, "preload-ran");
+  await fs.writeFile(path.join(bin, "bun"), `#!/bin/sh\ntouch ${JSON.stringify(fakeBunMarker)}\nexit 1\n`, { mode: 0o755 });
+  const preload = path.join(root, "preload.mjs"); await fs.writeFile(preload, `await Bun.write(${JSON.stringify(preloadMarker)}, "ran");\n`);
+  await fs.writeFile(path.join(root, "sitecustomize.py"), `open(${JSON.stringify(preloadMarker)}, "w").write("ran")\n`);
+  for (const env of [{ PATH: { value: `${bin}:${process.env.PATH}` } }, { BUN_OPTIONS: { value: `--preload=${preload}` } }, { PYTHONPATH: { value: root } }]) {
+    await expect(store.propose({ name: "music", title: "Music", capability: "Search", transport: { type: "stdio", command: "bun", args: ["run", entry], env },
+      entryFile: { path: entry, sha256: sha(source) } }, actor)).rejects.toThrow("INVALID_PROPOSAL");
+  }
+  expect((await store.view()).servers).toEqual({});
+  expect(await absent(fakeBunMarker)).toBe(true);
+  expect(await absent(preloadMarker)).toBe(true);
+});
+
+test("the probe worker launches the Viewer-resolved executable and drops launch variables a request still carries", async () => {
+  const { root } = await setup();
+  const home = path.join(root, "home"), runDir = path.join(root, "run"); await fs.mkdir(home); await fs.mkdir(path.join(runDir, "cwd"), { recursive: true });
+  await fs.writeFile(path.join(runDir, "config.toml"), "");
+  const entry = path.join(root, "server.mjs"), source = pinnedServer("'Pinned'");
+  await fs.writeFile(entry, source);
+  const bin = path.join(root, "bin"); await fs.mkdir(bin);
+  const fakeBunMarker = path.join(root, "fake-bun-ran"), preloadMarker = path.join(root, "preload-ran");
+  await fs.writeFile(path.join(bin, "bun"), `#!/bin/sh\ntouch ${JSON.stringify(fakeBunMarker)}\nexit 1\n`, { mode: 0o755 });
+  const preload = path.join(root, "preload.mjs"); await fs.writeFile(preload, `await Bun.write(${JSON.stringify(preloadMarker)}, "ran");\n`);
+  /* Built by hand, past the proposal schema: the worker itself must not let these choose what runs. */
+  const server = { title: "Music", capability: "Search", transport: { type: "stdio", command: "bun", args: ["run", entry], cwd: null,
+    env: { PATH: { value: bin }, BUN_OPTIONS: { value: `--preload=${preload}` }, NODE_OPTIONS: { value: `--import=${preload}` } } }, entryFile: { path: entry, sha256: sha(source) } };
+  const worker = path.join(import.meta.dir, "probe.worker.ts");
+  const child = spawn(process.execPath, [worker], { cwd: process.cwd(), env: voiceToolEnvironment(home, { ...process.env, PATH: `${bin}:${process.env.PATH}` }), stdio: ["pipe", "pipe", "ignore"] });
+  let output = "";
+  child.stdout.setEncoding("utf8"); child.stdout.on("data", chunk => { output += chunk; });
+  const closed = new Promise<void>(resolve => child.once("close", () => resolve()));
+  child.stdin.end(JSON.stringify({ name: "music", server, secrets: {}, home, launch: { executable: Bun.which("bun", { PATH: process.env.PATH }), config: path.join(runDir, "config.toml"), runDir: path.join(runDir, "cwd") } }));
+  const watchdog = setTimeout(() => child.kill("SIGKILL"), 15_000);
+  try { await closed; } finally { clearTimeout(watchdog); }
+  expect(JSON.parse(output).code).toBe("OK");
+  expect(await absent(fakeBunMarker)).toBe(true);
+  expect(await absent(preloadMarker)).toBe(true);
+}, 20_000);
+
+test("a bunfig preload and .env files in the working folder never run or load before a pinned Bun entry", async () => {
+  const { store, root } = await setup();
+  const folder = path.join(root, "folder"); await fs.mkdir(folder);
+  const marker = path.join(root, "preload-ran");
+  await fs.writeFile(path.join(folder, "pre.mjs"), `await Bun.write(${JSON.stringify(marker)}, "ran");\n`);
+  await fs.writeFile(path.join(folder, "bunfig.toml"), `preload = ["./pre.mjs"]\n`);
+  await fs.writeFile(path.join(folder, ".env"), "FROM_DOTENV=leaked\n");
+  await fs.writeFile(path.join(folder, ".env.production"), "FROM_DOTENV=leaked-production\n");
+  const entry = path.join(root, "server.mjs"), source = pinnedServer();
+  await fs.writeFile(entry, source);
+  await store.propose({ name: "music", title: "Music", capability: "Search", transport: { type: "stdio", command: "bun", args: ["run", entry], cwd: folder },
+    entryFile: { path: entry, sha256: sha(source) } }, actor);
+  const shown = await dryRunView(store);
+  expect(shown.lastDryRun?.code).toBe("OK");
+  expect(shown.catalog?.tools[0].description).toBe("Pinned");
+  expect(await absent(marker)).toBe(true);
+}, 20_000);
+
+test("bun x never runs a package binary planted in the proposed folder or the server's private home", async () => {
+  const { store, root } = await setup();
+  const marker = path.join(root, "planted-ran");
+  const pkg = "delegatus-voice-tools-planted-probe-0";
+  const plant = async (folder: string) => {
+    await fs.mkdir(path.join(folder, "node_modules", ".bin"), { recursive: true });
+    const server = path.join(folder, "planted.mjs"); await fs.writeFile(server, pinnedServer("'Planted'"));
+    await fs.writeFile(path.join(folder, "node_modules", ".bin", pkg), `#!/bin/sh\ntouch ${JSON.stringify(marker)}\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(server)}\n`, { mode: 0o755 });
+  };
+  const folder = path.join(root, "folder"); await plant(folder);
+  await expect(store.propose({ name: "music", title: "Music", capability: "Search", transport: { type: "stdio", command: "bun", args: ["x", pkg], cwd: folder } }, actor))
+    .rejects.toThrow("INVALID_PROPOSAL");
+  await expect(store.propose({ name: "music", title: "Music", capability: "Search", transport: { type: "stdio", command: "uv", args: ["tool", "run", pkg], cwd: folder } }, actor))
+    .rejects.toThrow("INVALID_PROPOSAL");
+  /* A launch without a folder once ran in the private home, which the server itself can write. */
+  await plant(path.join(root, "voice-tools-data", "music"));
+  await store.propose({ name: "music", title: "Music", capability: "Search", transport: { type: "stdio", command: "bun", args: ["x", pkg] } }, actor);
+  // The package is not published; a registry miss (or no network) ends the run, bounded by a short deadline.
+  const shown = await dryRunView(store, new VoiceToolHub(store, 10_000));
+  expect(shown.lastDryRun?.code).not.toBe("OK");
+  expect(await absent(marker)).toBe(true);
+  expect(await fs.readdir(path.join(root, "voice-tools-runs")).catch(() => [])).toEqual([]);
+}, 20_000);
+
+test.skipIf(!Bun.which("uv"))("uv run neither builds a project nor starts a virtual environment found from the working folder", async () => {
+  for (const scenario of ["project", "venv"] as const) {
+    const { store, root } = await setup();
+    const folder = path.join(root, "folder"); await fs.mkdir(folder);
+    const marker = path.join(root, `${scenario}-ran`);
+    if (scenario === "project") {
+      await fs.writeFile(path.join(folder, "pyproject.toml"), `[project]\nname = "planted"\nversion = "0.1.0"\n[build-system]\nrequires = []\nbuild-backend = "backend"\nbackend-path = ["."]\n`);
+      await fs.writeFile(path.join(folder, "backend.py"), `open(${JSON.stringify(marker)}, "w").write("ran")\n`);
+    } else {
+      await fs.mkdir(path.join(folder, ".venv", "bin"), { recursive: true });
+      const real = Bun.which("python3")!;
+      await fs.writeFile(path.join(folder, ".venv", "pyvenv.cfg"), `home = ${path.dirname(real)}\ninclude-system-site-packages = false\n`);
+      for (const name of ["python", "python3"]) await fs.writeFile(path.join(folder, ".venv", "bin", name), `#!/bin/sh\ntouch ${JSON.stringify(marker)}\nexec ${JSON.stringify(real)} "$@"\n`, { mode: 0o755 });
+    }
+    const entry = path.join(folder, "server.py");
+    await fs.writeFile(entry, pythonServer);
+    await store.propose({ name: "music", title: "Music", capability: "Search", transport: { type: "stdio", command: "uv", args: ["run", "server.py"], cwd: folder },
+      entryFile: { path: entry, sha256: sha(pythonServer) } }, actor);
+    const shown = await dryRunView(store);
+    expect([scenario, shown.lastDryRun?.code]).toEqual([scenario, "OK"]);
+    expect([scenario, await absent(marker)]).toEqual([scenario, true]);
+  }
+}, 45_000);
+
+test("the launcher resolves to an absolute executable file on the Viewer's PATH, skipping relative entries and non-executables", async () => {
+  const { root } = await setup();
+  const [relative, plain, folder, real] = ["relative", "plain", "folder", "real"].map(name => path.join(root, name));
+  for (const directory of [relative, plain, folder, real]) await fs.mkdir(directory);
+  await fs.writeFile(path.join(plain, "bun"), "#!/bin/sh\n", { mode: 0o644 });
+  await fs.mkdir(path.join(folder, "bun"));
+  await fs.writeFile(path.join(real, "bun"), "#!/bin/sh\n", { mode: 0o755 });
+  await fs.writeFile(path.join(relative, "bun"), "#!/bin/sh\n", { mode: 0o755 });
+  const previous = process.cwd();
+  try {
+    process.chdir(root);
+    expect(await resolveExecutable("bun", ["relative", "", ".", plain, folder, real].join(path.delimiter))).toBe(path.join(real, "bun"));
+    expect(await resolveExecutable("uv", ["relative", plain, real].join(path.delimiter))).toBeNull();
   } finally { process.chdir(previous); }
 });

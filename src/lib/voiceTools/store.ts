@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { COMPANION_TOOL_REGISTRY } from "@/lib/voiceCompanion/tools";
 import { verifyEntry } from "./entry";
-import { approvalDigest, digest, emptyRegistry, probeDigest, proposalSchema, secretsSchema, secretReferences,
+import { approvalDigest, digest, emptyRegistry, literalValues, packageLaunch, probeDigest, proposalSchema, secretsSchema, secretReferences,
   selectionSchema, toolName, validateCatalog, voiceToolBounds, type ProbeResult, type Tool, type VoiceToolServer, type VoiceToolsRegistry, type VoiceToolsView } from "./contracts";
 
 export class VoiceToolsError extends Error {
@@ -36,12 +36,10 @@ function validProposal(input: unknown, defaultCwd: string) {
       if (!entry || path.resolve(cwd, entry) !== config.entryFile.path) return null;
     }
   } else if (config.transport.type === "stdio") {
-    // Package launchers are explicit; local scripts always carry an entry pin.
-    const args = config.transport.args;
-    const packageLaunch = config.transport.command === "bun"
-      ? args[0] === "x" && !!args[1] && !args[1].startsWith("-")
-      : args[0] === "tool" && args[1] === "run" && !!args[2] && !args[2].startsWith("-");
-    if (!packageLaunch) return null;
+    // Package launchers are explicit; local scripts always carry an entry pin. A launcher
+    // prefers a binary under node_modules/.bin of its folder and every parent, so a package
+    // launch runs from a fresh empty folder (hub.ts) and a proposed folder is refused.
+    if (!packageLaunch(config.transport) || config.transport.cwd) return null;
   }
   return config;
 }
@@ -166,8 +164,9 @@ export class VoiceToolsStore {
     await this.load();
     const servers = Object.fromEntries(Object.entries(this.registry.servers).map(([name, server]) => {
       const transport: VoiceToolsView["servers"][string]["transport"] = server.transport.type === "stdio"
-        ? { type: "stdio", command: server.transport.command, args: server.transport.args, cwd: server.transport.cwd, envNames: Object.keys(server.transport.env).sort() }
-        : { type: "http", url: server.transport.url, headerNames: Object.keys(server.transport.headers).sort() };
+        ? { type: "stdio", command: server.transport.command, args: server.transport.args, cwd: server.transport.cwd,
+          envNames: Object.keys(server.transport.env).sort(), envValues: literalValues(server.transport.env) }
+        : { type: "http", url: server.transport.url, headerNames: Object.keys(server.transport.headers).sort(), headerValues: literalValues(server.transport.headers) };
       return [name, { ...structuredClone(server), transport, digest: approvalDigest(name, server),
         missingSecrets: secretReferences(server).filter(ref => !hasSecret(this.secrets, ref)), secretRefs: secretReferences(server) }];
     }));

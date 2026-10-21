@@ -42,7 +42,7 @@ test("browser API separates operator actions from MCP proposals and never echoes
   expect(saved.status).toBe(200); expect(await saved.text()).not.toContain("synthetic-voice-credential");
   const status = await (await GET(request("GET"))).json();
   expect(status.servers.music.missingSecrets).toEqual([]);
-  expect(status.servers.music.transport).toEqual({ type: "http", url: "https://example.invalid/mcp", headerNames: ["Authorization"] });
+  expect(status.servers.music.transport).toEqual({ type: "http", url: "https://example.invalid/mcp", headerNames: ["Authorization"], headerValues: {} });
   expect(await fs.readFile(path.join(root, "state/voice-tools.json"), "utf8")).not.toContain("synthetic-voice-credential");
   expect((await POST(request("POST", { action: "configure", name: "music", digest: status.servers.music.digest, askBeforeActing: true }))).status).toBe(200);
   expect((await POST(request("POST", { action: "remove", name: "music", digest: status.servers.music.digest }))).status).toBe(409);

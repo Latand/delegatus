@@ -27,12 +27,14 @@ caching. Each server includes its configuration, state, approval, selected
 tools, catalog, `lastDryRun`, current `digest`, `secretRefs` and
 `missingSecrets`. Transport summaries contain:
 
-- stdio: `type`, `command`, `args`, `cwd`, `envNames`;
-- HTTP: `type`, `url`, `headerNames`.
+- stdio: `type`, `command`, `args`, `cwd`, `envNames`, `envValues`;
+- HTTP: `type`, `url`, `headerNames`, `headerValues`.
 
-Environment and header values are never returned. Secret values have no read
-endpoint. The client-safe view type is `VoiceToolsView` in
-`src/lib/voiceTools/contracts.ts` (use a type-only import).
+`envValues` and `headerValues` hold the literal values, so the operator
+approves what will run; a variable or header that names a secret reference
+appears in the names only. Secret values have no read endpoint. The
+client-safe view type is `VoiceToolsView` in `src/lib/voiceTools/contracts.ts`
+(use a type-only import).
 
 `POST /api/voice-tools` accepts these strict action bodies:
 
@@ -79,10 +81,30 @@ environment variable that chooses the launched binary, loader, interpreter,
 package, registry or config file (`PATH`, `HOME`, `TMPDIR`, `LD_*`, `DYLD_*`,
 `NODE_*` other than `NODE_ENV`, `BUN_*`, `UV_*`, `NPM_CONFIG_*`, `PIP_*`,
 `PYTHON*`, `XDG_*`, `GIT_*`, proxy and CA variables; `launchShapingEnv` in
-`contracts.ts`), as a literal or a secret reference: the settings show
-variable names only, so the command shown must be the command that runs. Such
+`contracts.ts`), as a literal or a secret reference: such a value could swap
+what runs while the command shown stays the same, and a secret reference would
+hide even the value. Such
 a proposal is refused with `INVALID_PROPOSAL`, and such a persisted record
-fails the load. HTTP redirects are refused. Incoming
+fails the load; the probe also drops any such variable a request still
+carries.
+
+The hub resolves `bun` or `uv` to an absolute file on the Viewer's own `PATH`
+and starts that file, and it gives each stdio run a fresh Viewer-owned folder
+under `voice-tools-runs/`, removed when the helper closes. Nothing found from
+a folder may choose what runs before the pinned entry:
+
+- a pinned Bun entry runs as `bun --config=<empty Viewer file> run
+  --no-env-file <entry>`, so no `bunfig.toml` preload and no `.env` file in
+  the folder takes part;
+- a pinned uv entry runs as `uv run --python <interpreter> --no-project
+  --no-config --no-env-file <entry>`. The interpreter comes from `uv python
+  find --system`, because uv otherwise starts the interpreter of a `.venv` it
+  finds in the folder or any parent, and `--no-project` stops it building a
+  `pyproject.toml` there;
+- a package launch (`bun x`, `uv tool run --no-config`) runs in the run's
+  empty folder, because `bun x` prefers a binary under `node_modules/.bin` of
+  its folder and every parent. A package launch with a proposed `cwd` is
+  refused. HTTP redirects are refused. Incoming
 wire data is capped at 2 MiB, catalogs at 128 tools, schema JSON at 8 KiB and
 10 levels, and descriptions at 1 KiB of UTF-8. Schema compilation runs in the
 helper. Approval caps enabled servers at 16, selections at 32 tools and extra
@@ -100,7 +122,8 @@ improvement is claimed by this slice.
 `src/components/voiceCompanion/VoiceToolsSetting.tsx` is the Tools section of
 the existing voice settings dialog, below call memory. It lists each server
 (waiting ones first) with what will run: the command and arguments or the URL,
-the folder, environment or header names without values, and the pinned file
+the folder, the value of each literal environment variable or header and the
+name of each secret one, and the pinned file
 with its hash. It also shows each secret reference as saved or needed, with a
 password field that sends a value once and never shows it again; the last dry
 run and its reason in plain words; the catalog's tools with checkboxes, marked

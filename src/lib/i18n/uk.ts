@@ -2455,6 +2455,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "voiceCompanion.tools.folder": "Тека: {path}",
   "voiceCompanion.tools.env": "Змінні середовища: {names}",
   "voiceCompanion.tools.headers": "Заголовки: {names}",
+  "voiceCompanion.tools.secretValue": "{name} (секрет)",
   "voiceCompanion.tools.none": "немає",
   "voiceCompanion.tools.entry": "Закріплений файл: {path} · SHA-256 {hash}",
   "voiceCompanion.tools.secrets": "Секрети",

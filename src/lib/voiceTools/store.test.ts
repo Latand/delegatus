@@ -20,14 +20,14 @@ async function catalog(store: VoiceToolsStore, count = 1, name = "music") {
   await store.recordProbe(name, (await server(store, name)).digest, { code: "OK", catalog: { digest: digest(tools), fetchedAt: at, tools } });
 }
 
-test("secret values live only in the owner-only file; public views show env/header names", async () => {
+test("secret values live only in the owner-only file; public views show a secret header by name", async () => {
   const { store, root } = await setup();
   await store.propose(proposal(), actor);
   const value = "synthetic-voice-credential";
   await store.saveSecrets({ "music-token": value });
   const view = await store.view();
   expect(JSON.stringify(view)).not.toContain(value);
-  expect(view.servers.music.transport).toEqual({ type: "http", url: "https://example.invalid/mcp", headerNames: ["Authorization"] });
+  expect(view.servers.music.transport).toEqual({ type: "http", url: "https://example.invalid/mcp", headerNames: ["Authorization"], headerValues: {} });
   expect(view.servers.music.missingSecrets).toEqual([]);
   expect((await fs.stat(path.join(root, "voice-tools-secrets.json"))).mode & 0o777).toBe(0o600);
   expect(await fs.readFile(store.file, "utf8")).not.toContain(value);
@@ -197,7 +197,7 @@ test("reserved names, relative working directories and unpinned script entries a
   await expect(store.propose({ ...proposal(), transport: { type: "stdio", command: "bun", args: ["server.ts"] } }, actor)).rejects.toThrow("INVALID_PROPOSAL");
 });
 
-test("a launch variable is refused at proposal and on load, and allowed variable names still show", async () => {
+test("a launch variable is refused at proposal and on load, and allowed variables still show", async () => {
   const { store, root } = await setup();
   const launch = (env: Record<string, unknown>) => ({ ...proposal(), transport: { type: "stdio", command: "bun", args: ["x", "harmless-mcp"], env } });
   await expect(store.propose(launch({ PATH: { value: "/srv/agent/bin" }, LD_PRELOAD: { value: "/srv/agent/x.so" }, BUN_CONFIG_REGISTRY: { value: "https://registry.example.test" } }), actor))
@@ -206,7 +206,8 @@ test("a launch variable is refused at proposal and on load, and allowed variable
   expect((await store.view()).servers).toEqual({});
   await store.propose(launch({ SPOTIFY_REDIRECT_URI: { value: "http://127.0.0.1:8888/callback" }, SPOTIFY_CLIENT_ID: { secretRef: "spotify-client-id" } }), actor);
   const shown = (await server(store)).transport;
-  expect(shown).toEqual({ type: "stdio", command: "bun", args: ["x", "harmless-mcp"], cwd: null, envNames: ["SPOTIFY_CLIENT_ID", "SPOTIFY_REDIRECT_URI"] });
+  expect(shown).toEqual({ type: "stdio", command: "bun", args: ["x", "harmless-mcp"], cwd: null, envNames: ["SPOTIFY_CLIENT_ID", "SPOTIFY_REDIRECT_URI"],
+    envValues: { SPOTIFY_REDIRECT_URI: "http://127.0.0.1:8888/callback" } });
   /* A record edited on disk to carry one fails closed on the next load. */
   const raw = JSON.parse(await fs.readFile(store.file, "utf8")); raw.servers.music.transport.env.PATH = { value: "/srv/agent/bin" };
   await fs.writeFile(store.file, JSON.stringify(raw), { mode: 0o600 });
@@ -293,4 +294,28 @@ test("persisted defaults are normalized on load and invalid catalog shapes are r
   raw.servers.music.catalog = false;
   await fs.writeFile(store.file, JSON.stringify(raw), { mode: 0o600 });
   await expect(new VoiceToolsStore(root).view()).rejects.toThrow("REGISTRY_UNAVAILABLE");
+});
+
+test("the approval view shows the value of each literal variable and header, and only the name of a secret one", async () => {
+  const { store } = await setup();
+  await store.propose({ ...proposal(), transport: { type: "stdio", command: "bun", args: ["x", "harmless-mcp"],
+    env: { NOTES_FORMAT: { value: "markdown" }, SERVER_TOKEN: { secretRef: "server-token" } } } }, actor);
+  await store.propose({ ...proposal("radio"), transport: { type: "http", url: "https://example.invalid/mcp",
+    headers: { "X-Workspace": { value: "studio-a" }, Authorization: { secretRef: "radio-token" } } } }, actor);
+  await store.saveSecrets({ "server-token": "synthetic-voice-credential", "radio-token": "synthetic-radio-credential" });
+  const view = await store.view();
+  expect(view.servers.music.transport).toEqual({ type: "stdio", command: "bun", args: ["x", "harmless-mcp"], cwd: null,
+    envNames: ["NOTES_FORMAT", "SERVER_TOKEN"], envValues: { NOTES_FORMAT: "markdown" } });
+  expect(view.servers.radio.transport).toEqual({ type: "http", url: "https://example.invalid/mcp",
+    headerNames: ["Authorization", "X-Workspace"], headerValues: { "X-Workspace": "studio-a" } });
+  expect(JSON.stringify(view)).not.toContain("synthetic-");
+});
+
+test("a package launch runs from a fresh folder, so a proposed folder for it is refused", async () => {
+  const { store } = await setup();
+  for (const args of [["x", "harmless-mcp"], ["tool", "run", "harmless-mcp"]]) {
+    await expect(store.propose({ ...proposal(), transport: { type: "stdio", command: args[0] === "x" ? "bun" : "uv", args, cwd: "/srv/agent/project" } }, actor))
+      .rejects.toThrow("INVALID_PROPOSAL");
+  }
+  expect((await store.view()).servers).toEqual({});
 });
