@@ -102,7 +102,16 @@ export interface TurboChangeContext {
 export const TURBO_HOURS = [1, 2, 4, 8] as const;
 export const TURBO_DEFAULT_HOURS = 2;
 export const TURBO_HISTORY_LIMIT = 5;
+/** Completed switch history only; unfinished work is always retained. */
 export const TURBO_SWITCH_LIMIT = 200;
+
+/** Revoking acceleration never depends on discovering accounts or their catalogs. */
+export function turboNeedsPlan(change: unknown): boolean {
+  if (!change || typeof change !== "object" || Array.isArray(change)) return false;
+  const fields = change as TurboChange;
+  return fields.enabled === true || fields.credits === true;
+}
+
 /** Without the approval, a credit-holding account stops at this share of a window. */
 export const TURBO_CREDIT_MARGIN_PERCENT = 90;
 const HOUR = 3_600_000;
@@ -227,14 +236,16 @@ export function turboAccountVerdict(setting: TurboSetting | null | undefined, ac
     : { verdict: "raise" };
 }
 
-/** Insert or replace rows by conversation, keeping the newest {@link TURBO_SWITCH_LIMIT}. */
+/** Keep every unfinished switch and the newest {@link TURBO_SWITCH_LIMIT} completed rows. */
 export function upsertTurboSwitches(rows: readonly TurboSwitch[], updates: readonly TurboSwitch[]): TurboSwitch[] {
   const next = [...rows];
   for (const update of updates) {
     const index = next.findIndex(row => row.conversationId === update.conversationId);
     if (index >= 0) next[index] = update; else next.push(update);
   }
-  return next.slice(-TURBO_SWITCH_LIMIT);
+  const pending = (row: TurboSwitch) => !["skipped", "reverted", "failed"].includes(row.state) || row.state === "failed" && !!row.startedAt;
+  let completed = next.reduce((count, row) => count + Number(!pending(row)), 0);
+  return next.filter(row => pending(row) || completed-- <= TURBO_SWITCH_LIMIT);
 }
 
 export function turboProgress(rows: readonly TurboSwitch[]) {

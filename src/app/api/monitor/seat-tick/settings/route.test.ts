@@ -124,6 +124,32 @@ test("Turbo cannot be enabled by an anonymous script even without paid credits",
   expectNothingStored();
 });
 
+test.each([{ change: { enabled: false }, active: false }, { change: { credits: false }, active: true }])("Turbo revocation ignores unreadable account bindings: %j", async ({ change, active }) => {
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(SANDBOX, "turbo-revocation-"));
+  setSystemTime(new Date("2026-10-21T12:00:00.000Z"));
+  try {
+    const { applySeatTickSettingsChange, defaultSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+    const { seedAccountSource } = await import("@/lib/accounts/accountsStoreFixture");
+    const { BINDINGS_SOURCE } = await import("@/lib/accounts/accountsStore");
+    const { allowedAccountIdsForProject } = await import("@/lib/accounts/projectBindings");
+    const seeded = applySeatTickSettingsChange(defaultSeatTickSettings(PROJECT), { turbo: { enabled: true, hours: 2, credits: true, creditAccounts: ["acct-a"] } }, {
+      at: new Date().toISOString(), actor: { kind: "gateway", project: null, conversationId: null, seatEpoch: null },
+      turbo: { allowedAccounts: ["acct-a"], plan: [{ accountId: "acct-a", label: "Account A", plan: "pro", tiers: { "gpt-6.1-sol": "priority" }, hadCredits: true }] },
+    });
+    if (!seeded.ok) throw new Error(seeded.error);
+    writeSeatTickSettings(PROJECT, seeded.settings);
+    seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [{ engine: "codex" }] });
+    expect(() => allowedAccountIdsForProject(PROJECT, "codex")).toThrow("unreadable");
+    const response = await put({ project: PROJECT, turbo: change });
+    expect(response.status).toBe(200);
+    expect((await response.json()).turbo).toMatchObject({ active, episode: { credits: { approved: false } } });
+    expect(readSeatTickSettings(PROJECT).turbo?.credits.approved).toBe(false);
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+  }
+});
+
 test("Turbo operator confirmation stores a separate finite paid approval and off withdraws it", async () => {
   const home = fs.mkdtempSync(path.join(SANDBOX, "turbo-catalog-"));
   const previous = process.env.LLV_CODEX_HOME;

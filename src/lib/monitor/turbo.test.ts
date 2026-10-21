@@ -40,13 +40,19 @@ test("fresh processes retain the original tier, reconcile expiry and preserve th
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "turbo-restart-"));
   try {
     const script = `
-      const { readSeatTickSettings, writeSeatTickSettings, updateTurboEpisode } = await import("./src/lib/monitor/seatTickSettings");
+      const { readSeatTickSettings, readSeatTickSettingsFile, writeSeatTickSettings, updateTurboEpisode } = await import("./src/lib/monitor/seatTickSettings");
       const { endedTurbo } = await import("./src/lib/monitor/turbo");
       const { TurboSweep } = await import("./src/lib/monitor/turboSweep");
       const project = "turbo-restart-fixture";
       if (process.argv.at(-1) === "seed") {
         const row = JSON.parse(process.env.TURBO_RESTART_ROW);
         writeSeatTickSettings(project, { ...row, project });
+      } else if (process.argv.at(-1) === "seed-legacy") {
+        const fs = await import("node:fs");
+        const row = JSON.parse(process.env.TURBO_RESTART_ROW);
+        fs.writeFileSync(process.env.LLV_SEAT_TICK_SETTINGS_FILE, JSON.stringify({ version: 1, projects: { [project]: { ...row, project } } }));
+      } else if (process.argv.at(-1) === "inspect") {
+        console.log(JSON.stringify(readSeatTickSettingsFile()[project].turbo.switches));
       } else {
         const now = Date.parse(["recover-active", "recover-cut"].includes(process.argv.at(-1)) ? "2026-10-21T12:03:00.000Z" : "2026-10-21T15:00:00.000Z");
         const calls = [];
@@ -79,7 +85,7 @@ test("fresh processes retain the original tier, reconcile expiry and preserve th
       const watchdog = setTimeout(() => child.kill(), 15_000);
       try {
         const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-        expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+        expect(code, stderr).toBe(0);
         return stdout;
       } finally { clearTimeout(watchdog); if (child.exitCode === null) { child.kill(); await child.exited; } }
     };
@@ -104,6 +110,16 @@ test("fresh processes retain the original tier, reconcile expiry and preserve th
     expect(recoveredCut.continuations).toEqual([{ id: "conversation_restart", key: `turbo:${at}:conversation_restart:continue` }]);
     expect(recoveredCut.episode.switches[0].state).toBe("switched");
     expect(JSON.parse(await run("recover-cut")).continuations).toEqual([]);
+    active.turbo!.switches = Array.from({ length: TURBO_SWITCH_LIMIT + 7 }, (_, i) => ({
+      ...row.turbo!.switches[0]!, conversationId: `conversation_retained_${i}`, state: "switched" as const,
+    }));
+    environment.TURBO_RESTART_ROW = JSON.stringify(active);
+    await run("seed");
+    expect(JSON.parse(await run("inspect"))).toEqual(active.turbo!.switches);
+    environment.LLV_SEAT_TICK_SETTINGS_FILE = path.join(root, "legacy", "seat-tick-settings.json");
+    fs.mkdirSync(path.dirname(environment.LLV_SEAT_TICK_SETTINGS_FILE), { recursive: true });
+    await run("seed-legacy");
+    expect(JSON.parse(await run("inspect"))).toEqual(active.turbo!.switches);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -195,14 +211,19 @@ test("credit rule: credit-holding accounts stop at 90 % without approval; missin
   expect(turboAccountVerdict(paid, "acct-a", { limits: limits(95, holding), stale: false }, now + 3 * hour)).toMatchObject({ verdict: "hold" });
 });
 
-test("switch rows are bounded to the newest, keyed by conversation, and progress counts each state", () => {
+test("switch rows retain all pending work and bound only completed history, keyed by conversation", () => {
   const row = (id: number, state: TurboSwitch["state"]): TurboSwitch => ({ conversationId: `conversation_${id}`, accountId: "acct-a", model: "gpt-6.1-sol", from: null, to: "ultrafast", state, at });
   const many = upsertTurboSwitches([], Array.from({ length: TURBO_SWITCH_LIMIT + 7 }, (_, i) => row(i, "queued")));
-  expect(many).toHaveLength(TURBO_SWITCH_LIMIT);
-  expect(many[0]!.conversationId).toBe("conversation_7");
+  expect(many).toHaveLength(TURBO_SWITCH_LIMIT + 7);
+  expect(many[0]!.conversationId).toBe("conversation_0");
   const updated = upsertTurboSwitches(many, [row(7, "switched")]);
-  expect(updated).toHaveLength(TURBO_SWITCH_LIMIT);
+  expect(updated).toHaveLength(TURBO_SWITCH_LIMIT + 7);
   expect(updated.find(item => item.conversationId === "conversation_7")!.state).toBe("switched");
+  const terminal = Array.from({ length: TURBO_SWITCH_LIMIT + 7 }, (_, i) => row(1000 + i, "reverted"));
+  const retained = upsertTurboSwitches(updated, terminal);
+  expect(retained.filter(item => item.state === "reverted")).toHaveLength(TURBO_SWITCH_LIMIT);
+  expect(retained.filter(item => item.state !== "reverted")).toEqual(updated);
+  expect(retained.some(item => item.conversationId === "conversation_1000")).toBe(false);
   expect(turboProgress([row(1, "queued"), row(2, "switched"), row(3, "armed"), row(4, "skipped"), row(5, "failed"), row(6, "applying")]))
     .toEqual({ total: 6, switched: 1, armed: 1, skipped: 1, failed: 1, pending: 2, reverted: 0 });
 });

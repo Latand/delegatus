@@ -14,7 +14,7 @@ import { decidePrototype } from "@/lib/prototypeReview/decision";
 import { deliverPrototypeDecision } from "@/lib/prototypeReview/deliveryWorker";
 import { findPrototypeRound } from "@/lib/prototypeReview/store";
 import { autonomyActive, autonomyMandate, autonomyReportKey, pendingAutonomyReports } from "@/lib/monitor/autonomy";
-import { endedTurbo, turboActive, turboMandate, turboProgress } from "@/lib/monitor/turbo";
+import { endedTurbo, turboActive, turboMandate, turboNeedsPlan, turboProgress } from "@/lib/monitor/turbo";
 import { kickTurbo, turboChangeContext } from "@/lib/monitor/turboRuntime";
 import { changeSeatTickSettings, markAutonomyReported, markAutonomyDecisionReview } from "@/lib/monitor/seatTickSettings";
 import { pipelinePublishesRemoteBranch } from "@/lib/pipelines/publication";
@@ -4771,7 +4771,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     }
     /* Paid credits spend money: the tool never approves them; the operator ticks them in the panel. */
     if ((change.turbo as { credits?: unknown } | undefined)?.credits === true) throw new Error("paid credits are approved only in the operator's Turbo dialog");
-    const context = { at: new Date().toISOString(), actor, instructionActor, ...(change.turbo !== undefined ? { turbo: turboChangeContext(project) } : {}) };
+    const context = { at: new Date().toISOString(), actor, instructionActor, ...(turboNeedsPlan(change.turbo) ? { turbo: turboChangeContext(project) } : {}) };
     const applied = dependencies.writeTickSettings || dependencies.readTickSettings
       ? applySeatTickSettingsChange(current, change, context)
       : changeSeatTickSettings(project, change, context);

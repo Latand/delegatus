@@ -11,7 +11,7 @@ import {
 } from "@/lib/monitor/seatTickSettings";
 import { seatTickSettingsAnswer, type SeatTickSettingsAnswer } from "@/lib/monitor/seatTickSettingsAnswer";
 import { kickTurbo, turboAnswer, turboChangeContext, type TurboAnswer } from "@/lib/monitor/turboRuntime";
-import type { TurboChangeContext } from "@/lib/monitor/turbo";
+import { turboNeedsPlan, type TurboChangeContext } from "@/lib/monitor/turbo";
 import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorSeatFor } from "@/lib/orchestrator/seats";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
@@ -186,7 +186,7 @@ export async function PUT(req: NextRequest): Promise<NextResponse<SeatTickSettin
       return NextResponse.json({ error: "only the operator's own browser or the identified project seat may change Turbo" }, { status: 403 });
     }
     let turbo: TurboChangeContext | undefined;
-    if (change.turbo !== undefined) {
+    if (turboNeedsPlan(change.turbo)) {
       try { turbo = turboChangeContext(project); }
       catch (error) { return NextResponse.json({ error: `the project's account bindings are unreadable: ${error instanceof Error ? error.message : "unknown"}` }, { status: 503 }); }
     }

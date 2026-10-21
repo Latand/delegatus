@@ -3272,6 +3272,38 @@ test("seat_tick_settings turns its own project's tick off indefinitely, with the
   expect(read).toMatchObject({ changed: false, effective: { enabled: false } });
 });
 
+test.each([{ change: { enabled: false }, active: false }, { change: { credits: false }, active: true }])("Turbo revocation through the seat ignores unreadable account bindings: %j", async ({ change, active }) => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-turbo-revocation-"));
+  sandboxes.push(sandbox);
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(sandbox, "state");
+  setSystemTime(new Date("2026-10-21T12:00:00.000Z"));
+  try {
+    const { applySeatTickSettingsChange, defaultSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+    const { seedAccountSource } = await import("@/lib/accounts/accountsStoreFixture");
+    const { BINDINGS_SOURCE } = await import("@/lib/accounts/accountsStore");
+    const { allowedAccountIdsForProject } = await import("@/lib/accounts/projectBindings");
+    beginOrchestratorSeatIntent({ project: "viewer", mandate: "Own the board", clientRequestId: "turbo_revoke_seed", mode: "spawn" });
+    completeOrchestratorSeatIntent({ project: "viewer", clientRequestId: "turbo_revoke_seed", conversationId: TICK_SEAT, path: null });
+    const { bindings, store } = tickSettingsBindings({ callerProject: "viewer" });
+    const seeded = applySeatTickSettingsChange(defaultSeatTickSettings("viewer"), { turbo: { enabled: true, hours: 2, credits: true, creditAccounts: ["acct-a"] } }, {
+      at: new Date().toISOString(), actor: { kind: "gateway", project: null, conversationId: null, seatEpoch: null },
+      turbo: { allowedAccounts: ["acct-a"], plan: [{ accountId: "acct-a", label: "Account A", plan: "pro", tiers: { "gpt-6.1-sol": "priority" }, hadCredits: true }] },
+    });
+    if (!seeded.ok) throw new Error(seeded.error);
+    store.set("viewer", seeded.settings);
+    seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [{ engine: "codex" }] });
+    expect(() => allowedAccountIdsForProject("viewer", "codex")).toThrow("unreadable");
+    await bindings.seat_tick_settings({ clientRequestId: "turbo_revoke", turbo: { ...change, why: "withdraw the acceleration approval" } });
+    const setting = (store.get("viewer") as import("@/lib/monitor/seatTickSettings").SeatTickSettings).turbo;
+    expect(setting?.enabled).toBe(active);
+    expect(setting?.credits.approved).toBe(false);
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+    setSystemTime();
+  }
+});
+
 /* Why the tick is mute, in the answer the seat reads when it asks (#1746). The
    seat in #1672 was enabled, on its cadence, and receiving nothing for hours;
    the fence lived in the accounting row and no surface carried it. */

@@ -1,7 +1,7 @@
 import { changeRelease, normalizeRelease, type ReleaseSetting, type ReleaseSettingChange } from "@/lib/release/settings";
 import fs from "node:fs";
 import { autonomyActive, changeAutonomy, endedAutonomy, type AutonomySetting, type AutonomyChange, type AutonomyDecisionInput } from "./autonomy";
-import { changeTurbo, endedTurbo, TURBO_HISTORY_LIMIT, TURBO_SWITCH_LIMIT, type TurboChange, type TurboChangeContext, type TurboSetting } from "./turbo";
+import { changeTurbo, endedTurbo, upsertTurboSwitches, TURBO_HISTORY_LIMIT, type TurboChange, type TurboChangeContext, type TurboSetting } from "./turbo";
 
 import { statePath } from "@/lib/configDir";
 import { ROTATION_THRESHOLD_FRACTION } from "@/lib/orchestrator/contextPolicy";
@@ -313,7 +313,7 @@ function normalizeTurbo(value: unknown): TurboSetting | null {
     ? { ...raw.credits, accounts: raw.credits.accounts.filter((id): id is string => typeof id === "string"), withdrawnBy: raw.credits.withdrawnBy ? normalizeActor(raw.credits.withdrawnBy) : null }
     : { approved: false, accounts: [], approvedAt: null, withdrawnAt: null, withdrawnBy: null, withdrawnWhy: null };
   return { ...raw, setBy: actor, credits, plan: Array.isArray(raw.plan) ? raw.plan : [],
-    switches: Array.isArray(raw.switches) ? raw.switches.filter(row => row && typeof row === "object" && typeof row.conversationId === "string").slice(-TURBO_SWITCH_LIMIT) : [] };
+    switches: Array.isArray(raw.switches) ? upsertTurboSwitches([], raw.switches.filter(row => row && typeof row === "object" && typeof row.conversationId === "string")) : [] };
 }
 
 function normalizeAutoRotate(value: unknown): AutoRotateSetting | null {
@@ -367,27 +367,32 @@ const projectKey = (project: string) => `p:${project}`;
  * configured project. `seat_tick_settings` answers a revision derived from the
  * row itself, so the row is stored exactly as it was normalized from the file.
  */
-const settingsStore = new LegacyDocumentStore<SeatTickSettingsFile>({
-  collection: "seat_tick_settings",
-  migrationId: "seat-tick-settings-json-v1",
-  busyMessage: "seat tick settings are busy",
-  parse: parseSettingsBody,
-  toRows: (file) => Object.entries(file.projects).map(([project, row]) => ({ key: projectKey(project), value: row })),
-  fromRows: (rows) => ({
-    version: SEAT_TICK_SETTINGS_SCHEMA_VERSION,
-    projects: Object.fromEntries(rows.map((row) => {
-      const settings = row.value as SeatTickSettings;
-      return [settings.project, settings] as const;
-    })),
-  }),
-  toFile: (file) => ({ ...file, projects: Object.fromEntries(Object.entries(file.projects).map(([project, row]) => [project, withInstructionLines(row)])) }),
-  readLegacy: readLegacySettingsFile,
-  error: (message, cause) => new Error(message, { cause }),
-});
+// Account selection can reach this module while the state-store graph loads.
+// Construct only on first access, after that graph has finished initializing.
+let cachedSettingsStore: LegacyDocumentStore<SeatTickSettingsFile> | undefined;
+function settingsStore(): LegacyDocumentStore<SeatTickSettingsFile> {
+  return cachedSettingsStore ??= new LegacyDocumentStore<SeatTickSettingsFile>({
+    collection: "seat_tick_settings",
+    migrationId: "seat-tick-settings-json-v1",
+    busyMessage: "seat tick settings are busy",
+    parse: parseSettingsBody,
+    toRows: (file) => Object.entries(file.projects).map(([project, row]) => ({ key: projectKey(project), value: row })),
+    fromRows: (rows) => ({
+      version: SEAT_TICK_SETTINGS_SCHEMA_VERSION,
+      projects: Object.fromEntries(rows.map((row) => {
+        const settings = row.value as SeatTickSettings;
+        return [settings.project, settings] as const;
+      })),
+    }),
+    toFile: (file) => ({ ...file, projects: Object.fromEntries(Object.entries(file.projects).map(([project, row]) => [project, withInstructionLines(row)])) }),
+    readLegacy: readLegacySettingsFile,
+    error: (message, cause) => new Error(message, { cause }),
+  });
+}
 
 /** The store's legacy import spec, for the import driver and its tests. */
 export function seatTickSettingsLegacyCollection(filePath = seatTickSettingsPath()) {
-  return settingsStore.legacyCollection(filePath);
+  return settingsStore().legacyCollection(filePath);
 }
 
 /** Import `seat-tick-settings.json` into SQLite now (the Viewer's activation). */
@@ -395,26 +400,26 @@ export function importLegacySeatTickSettings(
   filePath = seatTickSettingsPath(),
   options: { reconcile: boolean; hooks?: LegacyImportHooks } = { reconcile: true },
 ): LegacyImportOutcome {
-  return settingsStore.importLegacy(filePath, options);
+  return settingsStore().importLegacy(filePath, options);
 }
 
 /** Write `seat-tick-settings.json` from SQLite for a rollback release that predates #1870. */
 export function checkpointSeatTickSettingsRollbackMirrorForDemotion(filePath = seatTickSettingsPath()): void {
-  settingsStore.checkpointRollbackMirror(filePath);
+  settingsStore().checkpointRollbackMirror(filePath);
 }
 
 export function readSeatTickSettings(project: string, filePath = seatTickSettingsPath()): SeatTickSettings {
-  return withInstructionLines(settingsStore.read(filePath).projects[project] ?? defaultSeatTickSettings(project));
+  return withInstructionLines(settingsStore().read(filePath).projects[project] ?? defaultSeatTickSettings(project));
 }
 
 export function readSeatTickSettingsFile(filePath = seatTickSettingsPath()): Record<string, SeatTickSettings> {
-  return Object.fromEntries(Object.entries(settingsStore.read(filePath).projects).map(([project, row]) => [project, withInstructionLines(row)]));
+  return Object.fromEntries(Object.entries(settingsStore().read(filePath).projects).map(([project, row]) => [project, withInstructionLines(row)]));
 }
 
 /** Serialized read-modify-write of one project's row. Only that row is
     written, so two writers of different projects cannot clobber each other. */
 export function writeSeatTickSettings(project: string, settings: SeatTickSettings, filePath = seatTickSettingsPath()): void {
-  settingsStore.mutate(filePath, (file) => ({
+  settingsStore().mutate(filePath, (file) => ({
     next: { ...file, projects: { ...file.projects, [project]: withInstructionLines({ ...settings, project }) } },
     result: undefined,
   }));
@@ -773,7 +778,7 @@ export function applySeatTickNoteLineEdits(
 
 /** A report acknowledgement merges into the latest row, preserving concurrent edits. */
 export function markAutonomyReported(project: string, startedAt: string, at: string, filePath = seatTickSettingsPath()): void {
-  settingsStore.mutate(filePath, file => {
+  settingsStore().mutate(filePath, file => {
     const current = file.projects[project];
     if (!current) throw new Error("autonomy episode not found");
     const mark = (episode: AutonomySetting) => episode.startedAt === startedAt ? { ...endedAutonomy(episode, Date.parse(at))!, reportAt: at } : episode;
@@ -785,14 +790,14 @@ export function markAutonomyReported(project: string, startedAt: string, at: str
 
 /** Apply against the locked row so an extension cannot overwrite a decision or an end report. */
 export function changeSeatTickSettings(project: string, change: SeatTickSettingsChange, context: { at: string; actor: SeatTickSettingsActor; instructionActor?: SeatTickSettingsActor; turbo?: TurboChangeContext }, filePath = seatTickSettingsPath()): SeatTickSettingsChangeResult {
-  return settingsStore.mutate(filePath, file => {
+  return settingsStore().mutate(filePath, file => {
     const result = applySeatTickSettingsChange(file.projects[project] ?? defaultSeatTickSettings(project), change, context);
     return { next: result.ok ? { ...file, projects: { ...file.projects, [project]: result.settings } } : file, result };
   });
 }
 
 export function expireSeatAutonomy(project: string, now: number, filePath = seatTickSettingsPath()): void {
-  settingsStore.mutate(filePath, file => {
+  settingsStore().mutate(filePath, file => {
     const current = file.projects[project];
     if (!current?.autonomy?.enabled || autonomyActive(current.autonomy, now)) return { next: file, result: undefined };
     return { next: { ...file, projects: { ...file.projects, [project]: { ...current, autonomy: endedAutonomy(current.autonomy, now) } } }, result: undefined };
@@ -801,7 +806,7 @@ export function expireSeatAutonomy(project: string, now: number, filePath = seat
 
 /** Re-read under the store lock: schedule expiry must preserve intervening autonomy edits. */
 export function expireSeatSchedule(project: string, now: number, interval: number, filePath = seatTickSettingsPath()): void {
-  settingsStore.mutate(filePath, file => {
+  settingsStore().mutate(filePath, file => {
     const current = file.projects[project];
     if (!current) return { next: file, result: undefined };
     const effective = effectiveSeatTickSettings(current, now, interval);
@@ -812,7 +817,7 @@ export function expireSeatSchedule(project: string, now: number, interval: numbe
 
 /** Form settlement is independently durable; retain failed attempts and allow the same id to retry. */
 export function markAutonomyDecisionReview(project: string, startedAt: string, id: string, reviewState: "decided" | "refused", filePath = seatTickSettingsPath()): void {
-  settingsStore.mutate(filePath, file => {
+  settingsStore().mutate(filePath, file => {
     const current = file.projects[project];
     if (!current) throw new Error("autonomy episode not found");
     const mark = (episode: AutonomySetting) => episode.startedAt === startedAt ? { ...episode, decisions: episode.decisions.map(d => d.id === id ? { ...d, reviewState } : d) } : episode;
@@ -827,7 +832,7 @@ export function markAutonomyDecisionReview(project: string, startedAt: string, i
  * is no longer current changes nothing and answers null.
  */
 export function updateTurboEpisode(project: string, startedAt: string, update: (episode: TurboSetting) => TurboSetting, filePath = seatTickSettingsPath()): TurboSetting | null {
-  return settingsStore.patchRows(filePath, 2, tx => {
+  return settingsStore().patchRows(filePath, 2, tx => {
     const key = projectKey(project);
     const held = tx.get(key);
     if (!held) return null;
@@ -848,6 +853,6 @@ export function updateTurboEpisode(project: string, startedAt: string, update: (
 
 /** The sweep and credit guard read just their project's row on recurring passes. */
 export function readTurboSettings(project: string, filePath = seatTickSettingsPath()): Pick<SeatTickSettings, "turbo" | "turboHistory"> {
-  const row = settingsStore.readRow(filePath, projectKey(project))?.value as SeatTickSettings | undefined;
+  const row = settingsStore().readRow(filePath, projectKey(project))?.value as SeatTickSettings | undefined;
   return { turbo: row?.turbo, turboHistory: row?.turboHistory };
 }

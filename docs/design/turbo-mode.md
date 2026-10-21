@@ -948,6 +948,11 @@ The build follows sections 2 and 6 with the operator's decisions of
   settings route refuses `credits: true` from anything else, and the
   `seat_tick_settings` tool refuses it outright; the seat may still withdraw an
   approval with a why.
+- **Withdrawal and off do not need account discovery.** An unreadable binding
+  can prevent a new approval, while the existing approval can still be revoked.
+- **The switch queue retains every unfinished row.** The 200-row cap applies
+  only to completed history; larger runs keep every previous tier until its
+  return finishes, including through settings normalization after restart.
 - **A change the seat makes through the tool** reaches the sweep at the
   Viewer's next seat tick pass (at most five minutes); the panel's own changes
   start it at once.
@@ -965,6 +970,8 @@ The build follows sections 2 and 6 with the operator's decisions of
 - **Recurring state work reads and patches one project's row**, using the
   existing bounded store interface and asynchronous lock admission. A missing
   or stale usage reading holds acceleration without paid-credit approval.
+  The settings store is constructed on first access, so a fresh controller's
+  account-selection imports can finish before it instantiates the store.
 - **A Turbo stage switch pins its selection to the conversation's current
   account**, while preserving the stage's account-pin setting. A return can
   clear the native tier even when the role's default has changed meanwhile.

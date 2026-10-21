@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { applySeatTickSettingsChange, defaultSeatTickSettings, type SeatTickSettings, type SeatTickSettingsActor, type SeatTickSettingsChange } from "./seatTickSettings";
-import { endedTurbo, type TurboAccountReading, type TurboPlanAccount, type TurboSetting } from "./turbo";
-import { TURBO_ITEM_DEADLINE_MS, TURBO_MAX_IN_FLIGHT, TURBO_START_SPACING_MS, TurboSweep, type TurboCandidate, type TurboSweepPorts } from "./turboSweep";
+import { TURBO_SWITCH_LIMIT, endedTurbo, type TurboAccountReading, type TurboPlanAccount, type TurboSetting } from "./turbo";
+import { TURBO_ITEMS_PER_PASS, TURBO_ITEM_DEADLINE_MS, TURBO_MAX_IN_FLIGHT, TURBO_START_SPACING_MS, TurboSweep, type TurboCandidate, type TurboSweepPorts } from "./turboSweep";
 
 const project = "turbo-sweep-fixture";
 const at = "2026-10-21T12:00:00.000Z";
@@ -99,6 +99,32 @@ function world(candidates: TurboCandidate[], options: { readings?: Record<string
 }
 
 const agent = (id: number, extra: Partial<TurboCandidate> = {}): TurboCandidate => ({ conversationId: `conversation_${id}`, accountId: "acct-a", model: "gpt-6.1-sol", tier: null, ...extra });
+
+test("more conversations than the history limit all accelerate and return in bounded passes", async () => {
+  const count = TURBO_SWITCH_LIMIT + 7;
+  const w = world(Array.from({ length: count }, (_, i) => agent(i)));
+  w.change({ turbo: { enabled: true } });
+  let sweep = new TurboSweep(w.ports);
+  const drain = async () => {
+    for (let i = 0; i < Math.ceil(count / TURBO_ITEMS_PER_PASS); i += 1) {
+      const before = w.calls.length;
+      const pass = sweep.kick(project);
+      await w.clock.advance(TURBO_ITEMS_PER_PASS * TURBO_START_SPACING_MS);
+      await pass;
+      expect(w.calls.length - before).toBeLessThanOrEqual(TURBO_ITEMS_PER_PASS);
+    }
+  };
+  await drain();
+  expect(w.calls).toHaveLength(count);
+  expect([...w.tiers.values()].every(tier => tier === "ultrafast")).toBe(true);
+  w.change({ turbo: { enabled: false } });
+  sweep = new TurboSweep(w.ports);
+  await drain();
+  expect(w.calls).toHaveLength(count * 2);
+  expect(w.calls.slice(count).every(call => call.cut === "none")).toBe(true);
+  expect([...w.tiers.values()].every(tier => tier === null)).toBe(true);
+  expect(w.turbo().revertedAt).toBeDefined();
+});
 
 test("a new Turbo run waits for an older return so it captures the original tier", async () => {
   const w = world([agent(1)]);
