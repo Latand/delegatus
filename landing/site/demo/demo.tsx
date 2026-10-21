@@ -48,15 +48,6 @@ const STEP_DELAY_MS = [0, 0, FIRST_REPLY_MS, 5200, 5200, 4600];
    orchestrator's answer is always dated at least this long after the send. */
 const ANSWER_AFTER_SEND_S = 2.5;
 
-/* Every frame on the page shares one origin, so what one frame left in
-   storage — a conversation it opened, a message it sent — would otherwise
-   open in the next frame too. Each frame starts from the world alone: the
-   session store is the frame's own (./frameSession), and these are the
-   Viewer's records that live in the shared one. */
-for (const key of Object.keys(localStorage)) {
-  if (key.startsWith("llvOutbox") || key.startsWith("llv:kanban-readers:")) localStorage.removeItem(key);
-}
-
 /* What the visitor sent beyond the script, kept for the life of the frame and
    written into each world the script builds, in time order. */
 interface Aside { path: string; model: string; sentMs: number; text: string; reply: string | null }
@@ -422,14 +413,12 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
     const defaults = { project: PROJECT, enabled: true, wakeIntervalMinutes: null, reason: null, monitorPrompt: null, until: null, updatedAt: null, setBy: null };
     const episode = AUTONOMY ? buildAutonomy(LANG, boot, stepSeconds[LAST_STEP] ?? boot) : null;
-    /* The autonomy frame's operator also set the wakes to every 30 minutes. */
-    const wakes = episode ? 30 : null;
-    const settings = { ...defaults, ...(episode ? { autonomy: episode, wakeIntervalMinutes: wakes, updatedAt: episode.updatedAt, setBy: episode.setBy } : {}) };
+    const settings = { ...defaults, ...(episode ? { autonomy: episode, updatedAt: episode.updatedAt, setBy: episode.setBy } : {}) };
     const [lastPass] = curatorPasses(boot);
     return json({
       project: PROJECT, changed: false, at: new Date().toISOString(), actor: { kind: "gateway", conversationId: null, project: null, seatEpoch: null },
       settings, defaults, defaultWakeIntervalMinutes: 60, monitorPromptLength: 0, cardText: null,
-      effective: { enabled: true, wakeIntervalMinutes: wakes ?? 60, reason: null, monitorPrompt: null, until: null, isDefault: wakes === null, configured: wakes !== null, lapsed: false, updatedAt: settings.updatedAt },
+      effective: { enabled: true, wakeIntervalMinutes: 60, reason: null, monitorPrompt: null, until: null, isDefault: true, configured: false, lapsed: false, updatedAt: null },
       policy: { checkIntervalMinutes: 5, staleAfterMinutes: 15, retryGuardWakes: 2 },
       state: { lastCheckAt: ago(3), lastWakeAt: ago(41), lastWakeReasons: ["interval"], outstandingWake: null, retryGuard: [], sourceGap: null, accountingGap: null },
       stateError: null, lastRun: { at: ago(3), verdict: "quiet", reasons: [], delivery: null, detail: "nothing owed" }, lastDelivery: { at: ago(41), outcome: "landed" },
@@ -478,6 +467,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return json({ enabled: false, callMemory: true, backend: "api", monthlyCapUsd: 20, keySource: "missing", keyEnvironment: "OPENAI_API_KEY", month: new Date().toISOString().slice(0, 7), usageUsd: 0, reservedUsd: 0, incomplete: false, uncertainSession: false });
   }
   if (path === "/api/links/shared") return json({ shared: { v: 1, all: false, projects: [] }, known: [] });
+  if (path === "/api/links/agents") return json({ agents: [], lanes: [], self: null, hosts: {} });
   if (path === "/api/telegram") return json({ telegram: { phase: "disconnected", login: null, identity: null, credentialRef: null, lastHealthCheckAt: null, error: null, credentialsConfigured: false } });
   /* Nothing finished waits for an acknowledgement, no task has pictures, and the transcripts carry no delivery records. */
   if (path === "/api/attention/done") return json({ ok: true, items: [], revision: 1 });
@@ -600,28 +590,54 @@ function goBoard() {
 /** The first of the matches a visitor can see. */
 const shown = (selector: string, root: ParentNode = document) =>
   [...root.querySelectorAll<HTMLElement>(selector)].find((element) => element.getClientRects().length > 0) ?? null;
-/** Scrolls the nearest box that scrolls `target` until it sits at that box's top; the page outside stays put.
-    When the box runs out of room first, it stops on a whole line: none is left cut by the top edge. */
-function scrollToTop(target: Element, gap = 8) {
+/** The nearest box that scrolls `target`, or null. */
+function scroller(target: Element): HTMLElement | null {
   for (let box = target.parentElement; box; box = box.parentElement) {
     const overflow = getComputedStyle(box).overflowY;
-    if ((overflow === "auto" || overflow === "scroll") && box.scrollHeight > box.clientHeight) {
-      box.scrollTop += target.getBoundingClientRect().top - box.getBoundingClientRect().top - gap;
-      const edge = box.getBoundingClientRect().top;
-      const range = document.createRange();
-      const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT);
-      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-        if (!node.textContent?.trim()) continue;
-        range.selectNodeContents(node);
-        const cut = [...range.getClientRects()].find((line) => line.top < edge && line.bottom > edge);
-        if (cut) {
-          box.scrollTop -= edge - cut.top + gap;
-          break;
-        }
-      }
-      return;
-    }
+    if ((overflow === "auto" || overflow === "scroll") && box.scrollHeight > box.clientHeight) return box;
   }
+  return null;
+}
+/** Every line of text drawn in `box`, as viewport rectangles. */
+function textLines(box: HTMLElement): DOMRect[] {
+  const range = document.createRange();
+  const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT);
+  const lines: DOMRect[] = [];
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (!node.textContent?.trim()) continue;
+    range.selectNodeContents(node);
+    lines.push(...range.getClientRects());
+  }
+  return lines;
+}
+/** The first line of text in `box` that `edge` (a viewport y) runs through. */
+const lineAcross = (box: HTMLElement, edge: number) => textLines(box).find((line) => line.top < edge - 0.5 && line.bottom > edge + 0.5) ?? null;
+/** Nudges a scrolled box until no line of text is cut by its top or bottom edge, as a still picture needs. */
+function wholeLines(box: HTMLElement, gap = 6) {
+  for (let pass = 0; pass < 4; pass += 1) {
+    const frame = box.getBoundingClientRect();
+    const top = frame.top + box.clientTop;
+    const bottom = top + box.clientHeight;
+    const above = lineAcross(box, top);
+    if (above) {
+      box.scrollTop -= top - above.top + gap;
+      continue;
+    }
+    const below = lineAcross(box, bottom);
+    if (!below) return;
+    /* Only the empty space above the first line shown may go: a nudge never hides a line at the top. */
+    const first = Math.min(...textLines(box).filter((line) => line.bottom > top).map((line) => line.top));
+    const nudge = below.bottom - bottom + gap;
+    if (first - nudge < top) return;
+    box.scrollTop += nudge;
+  }
+}
+/** Scrolls the nearest box that scrolls `target` until it sits at that box's top, on whole lines; the page outside stays put. */
+function scrollToTop(target: Element, gap = 8) {
+  const box = scroller(target);
+  if (!box) return;
+  box.scrollTop += target.getBoundingClientRect().top - box.getBoundingClientRect().top - gap;
+  wholeLines(box);
 }
 
 /* ── the seat tick, the learned rules and the limits, by their own controls ── */
@@ -643,6 +659,11 @@ async function openSeatTick(): Promise<HTMLElement> {
     await waitFor(open, 10).catch(() => null);
   }
   return waitFor(ready);
+}
+/** The panel at its top, ending on a whole line. */
+function settleAutonomy(panel: HTMLElement) {
+  const box = scroller(panel.querySelector("[data-seat-tick-autonomy-summary]")!);
+  if (box) wholeLines(box);
 }
 /** Its decision log: Details opened, scrolled until the log's heading is the first line. */
 async function showDecisions(panel: HTMLElement) {
@@ -703,7 +724,7 @@ async function navigateView(view: string) {
       await press(() => document.querySelector<HTMLElement>('[data-mobile2-open="search"]'));
       await typeSearch();
     }
-    if (view === "autonomy") await openSeatTick();
+    if (view === "autonomy") settleAutonomy(await openSeatTick());
     if (view === "decisions") await showDecisions(await openSeatTick());
     if (view === "rules") await openRules("orchestrator", RULE_IDS.O1);
     if (view === "curator") {
@@ -720,7 +741,7 @@ async function navigateView(view: string) {
     if (view === "task") scrollToTop(await waitFor(() => document.querySelector("[data-phone-task-spend]")));
     return;
   }
-  /* The rail's visibility is kept in storage every frame on the page shares,
+  /* The rail's visibility is kept in the frame's storage and outlives a view,
      so each view sets it: the accounts and the overview live in it. */
   const wantRail = view === "accounts" || view === "overview" || view === "history";
   if (wantRail && byLabel(label("rail.show"))) await press(() => byLabel(label("rail.show")), 5);
@@ -742,7 +763,7 @@ async function navigateView(view: string) {
       toggle.click();
       await waitFor(() => document.querySelector<HTMLElement>("[data-seat-placement]")?.dataset.seatPlacement === want, 20).catch(() => null);
     }
-    if (view === "autonomy") await openSeatTick();
+    if (view === "autonomy") settleAutonomy(await openSeatTick());
     if (view === "decisions") await showDecisions(await openSeatTick());
     return;
   }

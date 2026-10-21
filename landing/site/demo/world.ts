@@ -615,7 +615,8 @@ export function buildTaskSpend(lang: Lang): Record<string, TaskSpendSummary> {
   const spend = (...providers: TaskSpendSummary["providers"]): TaskSpendSummary => ({ providers });
   return {
     "t-refunds": spend(claude(3.2, [account("claude", "main", main, "max", 2.1, 9), account("claude", "work", L("Work", "Робочий"), "max", 1.1)]), codex(1.4)),
-    "t-retries": spend(claude(2.0), codex(0.6)),
+    /* Two builds and a decision: the board's one in-progress card with two cells. */
+    "t-retries": spend(claude(5.6), codex(0.6)),
     "t-keys": spend(claude(0.4)),
     "t-logs": spend(claude(0.8)),
     "t-receipts": spend(claude(1.2)),

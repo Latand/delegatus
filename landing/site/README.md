@@ -357,8 +357,9 @@ Where these frames depart from a real install, on purpose:
 - **One message, one row.** The composer keeps its own copy of a sent message
   until the transcript moves 2 s past the delivery, so the demo dates the
   request at the exact moment of the send and the answer at least 2.5 s
-  later. Each frame also clears what another frame left in the shared
-  storage (sent messages, opened conversations) before it draws. The 2.5 s
+  later. Each frame keeps its session and local stores in memory
+  (`demo/frameSession.ts`), so nothing one frame sent, opened, docked or
+  folded reaches another frame or the next visit. The 2.5 s
   timestamp offset is a delivery-order constraint, independent of playback
   speed; the first response starts after 650 ms.
 - **Panels fill the frame.** A pipeline's stages and a conversation opened
