@@ -14,6 +14,8 @@ export function attributeQuotaFixture(file: string, accountId: string): void {
   updateQuotaRegistryFixture(state => {
     const generation = state.conversations[conversation.id]!.generations[0]!;
     generation.createdAt = "2000-01-01T00:00:00.000Z";
-    generation.host = { kind: "codex-app-server", identity: "fixture-host", epoch: 1, verifiedAt: generation.createdAt };
+    generation.host = { kind: "codex-app-server", identity: "fixture-host", epoch: 1, verifiedAt: generation.createdAt,
+      };
+    if (generation.accountId) generation.quotaCustody = { accountId: generation.accountId, artifactPath: generation.path };
   });
 }

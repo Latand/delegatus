@@ -178,6 +178,9 @@ export interface NativeGeneration {
   launchProfile: LaunchProfile;
   historyHash: string | null;
   host: GenerationHostEvidence | null;
+  /** Original Codex transcript/account binding, frozen when verified host
+      custody is committed. Inventory reconciliation may rewrite path/accountId. */
+  quotaCustody?: { accountId: string; artifactPath: string };
   createdAt: string;
   archivedAt: string | null;
 }

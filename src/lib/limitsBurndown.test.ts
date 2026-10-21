@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +7,7 @@ import path from "node:path";
 import { computePace } from "./burndown";
 import { buildSeries, collectCodexRateLimitSeries, readCodexLimits, readCodexTranscriptLimits } from "./limits";
 import { agentRegistry } from "./agent/registry";
+import { emptyLaunchProfile } from "./accounts/migration/contracts";
 import { attributeQuotaFixture, updateQuotaRegistryFixture } from "./limitsQuota.fixture";
 
 let root: string;
@@ -19,9 +21,9 @@ afterEach(() => {
 });
 
 /** Write a Codex session JSONL under YYYY/MM/DD derived from `day`. */
-function writeSession(name: string, day: string, events: { ts: string; primary?: [number, number, number]; secondary?: [number, number, number] }[], attributed = true): void {
+function writeSession(name: string, day: string, events: { ts: string; primary?: [number, number, number]; secondary?: [number, number, number] }[], attributed = true, sessionsRoot = root): void {
   const [y, m, d] = day.split("-");
-  const dir = path.join(root, y, m, d);
+  const dir = path.join(sessionsRoot, y, m, d);
   fs.mkdirSync(dir, { recursive: true });
   const win = (w?: [number, number, number]) =>
     w ? { used_percent: w[0], window_minutes: w[1], resets_at: w[2] } : undefined;
@@ -102,7 +104,9 @@ test("mixed-store backfill drops foreign, unknown and ambiguous account readings
     updateQuotaRegistryFixture(state => {
       const generation = state.conversations[conversation.id]!.generations[0]!;
       generation.createdAt = `${day}T00:00:00.000Z`;
-      generation.host = { kind: "codex-app-server", identity: "fixture-host", epoch: 1, verifiedAt: generation.createdAt };
+      generation.host = { kind: "codex-app-server", identity: "fixture-host", epoch: 1, verifiedAt: generation.createdAt,
+      };
+      if (generation.accountId) generation.quotaCustody = { accountId: generation.accountId, artifactPath: generation.path };
       if (name === "ambiguous") state.conversations[conversation.id]!.generations.push({ ...generation, id: "second", accountId: "b" });
     });
   }
@@ -151,12 +155,40 @@ test("same-path account succession attributes events by their generation time", 
     const row = state.conversations[conversation.id]!, first = row.generations[0]!;
     first.archivedAt = next;
     row.generations.push({ ...first, id: "successor", accountId: "b", createdAt: next, archivedAt: null,
-      host: { ...first.host!, verifiedAt: next } });
+      host: { ...first.host!, verifiedAt: next }, quotaCustody: { accountId: "b", artifactPath: file } });
   });
   expect(collectCodexRateLimitSeries(root, 0, "fixture").weekly.map(s => s.remaining)).toEqual([85]);
   expect(collectCodexRateLimitSeries(root, 0, "b").weekly.map(s => s.remaining)).toEqual([4]);
   expect(readCodexTranscriptLimits(root, "fixture").data?.weekly?.usedPercent).toBe(15);
   expect(readCodexTranscriptLimits(root, "b").data?.weekly?.usedPercent).toBe(96);
+});
+
+test("inventory relocation cannot rebind verified quota custody to another account", () => {
+  const ts = "2026-07-08T12:00:00.000Z", hex = createHash("sha256").update("quota-custody-relocation-fixture").digest("hex").slice(0, 32);
+  const id = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+  const sourceRoot = path.join(root, "account-a"), targetRoot = path.join(root, "account-b");
+  writeSession(`${id}.jsonl`, "2026-07-08", [{ ts, primary: [15, 10080, 1_783_994_379] }], false, sourceRoot);
+  const original = path.join(sourceRoot, "2026", "07", "08", `${id}.jsonl`);
+  const relocatedDir = path.join(targetRoot, "2026", "07", "08");
+  fs.mkdirSync(relocatedDir, { recursive: true });
+  const relocated = path.join(relocatedDir, `${id}.jsonl`);
+  const registry = agentRegistry(), conversation = registry.ensureConversation("codex", original, "a");
+  updateQuotaRegistryFixture(state => {
+    const generation = state.conversations[conversation.id]!.generations[0]!;
+    generation.createdAt = "2000-01-01T00:00:00.000Z";
+    generation.host = { kind: "codex-app-server", identity: id, epoch: 1, verifiedAt: generation.createdAt };
+    generation.quotaCustody = { accountId: "a", artifactPath: original };
+  });
+  fs.renameSync(original, relocated);
+  const inventory = registry.reconcileConversations([{
+    engine: "codex", path: relocated, accountId: "b", launchProfile: emptyLaunchProfile(),
+    observedAt: "2026-07-08T12:01:00.000Z", turn: { state: "idle", source: "empty", terminalAt: null },
+  }]);
+  expect(inventory).toBeDefined();
+  expect(registry.conversationForPath(relocated)?.generations[0]).toMatchObject({ path: relocated, accountId: "b" });
+  expect(collectCodexRateLimitSeries(targetRoot, 0, "a").weekly).toEqual([]);
+  expect(collectCodexRateLimitSeries(targetRoot, 0, "b").weekly).toEqual([]);
+  expect(readCodexTranscriptLimits(targetRoot, "b").data).toBeNull();
 });
 
 test("buildSeries drops pre-reset samples so a draining window after a rollover still projects", () => {

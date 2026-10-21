@@ -327,6 +327,52 @@ test("corrected Codex history invalidates frozen rates in bounded pages across r
   expect(result.weeklyPp).toBeCloseTo(20);
 });
 
+test("rate correction discards saved partial calculations across restart", async () => {
+  const now = USAGE_NOW, deps = world([task("a", ["work"])]), hour = Math.floor(now / HOUR) - 1;
+  const ownerKey = `c:${conversationDigest("work")}`;
+  store.db.query("INSERT INTO usage_hours VALUES('',?,?,?,?,?,?,NULL,'builder','operator',NULL,NULL,1,1000000,0,0,0,0,0)")
+    .run(hour, conversationDigest("work"), "gpt-6.1-sol", "standard", "codex:a", "codex");
+  store.db.query("INSERT INTO task_spend_owners VALUES(?,?)").run(ownerKey, "a");
+  store.db.query("INSERT INTO limit_spend_dirty VALUES(?,?)").run("t:a", now);
+  store.db.query("INSERT INTO usage_limit_rates VALUES(?,?,?,?,?,?,?,?,?,?)")
+    .run("codex:a", "weekly", "2026-10-17", 99, 99, 1, "own", "pro", 1, now);
+  store.db.query("UPDATE limit_spend_meta SET rate_schema=3,rates_hour=?").run(Math.floor(now / HOUR));
+  const oldResult = [{ task: "a", account: "codex:a", engine: "codex", tokens: 50_000_000, unpriced_tokens: 0,
+    weight: 100_000, rated_weight: 100_000, weekly_pp: 9_900_000, window_start: null, window_pp: null,
+    session_start: null, session_pp: null, first_hour: hour, last_hour: hour, floor: null, computed_at: now }];
+  const stamp = store.db.query<{ at: number }, [string]>("SELECT at FROM limit_spend_dirty WHERE key=?").get("t:a")!.at;
+  store.db.query("INSERT INTO task_spend_progress VALUES(?,?,?,?,?,?)")
+    .run("a", stamp, JSON.stringify([Math.floor(now / HOUR), true, []]), ownerKey,
+      JSON.stringify([hour, "work", "gpt-6.1-sol", "standard", "codex:a"]), JSON.stringify(oldResult));
+  store.close(); store = ActivityStore.open(path.join(root, "records.sqlite"));
+  await refreshTaskLimitSpend(store, deps);
+  const row = store.db.query<{ tokens: number; weekly_pp: number | null; rated_weight: number }, [string]>(
+    "SELECT tokens,weekly_pp,rated_weight FROM task_limit_spend WHERE task=? AND account='codex:a'").get("a")!;
+  expect(row).toMatchObject({ tokens: 1_000_000, weekly_pp: null, rated_weight: 0 });
+  expect(store.db.query("SELECT * FROM task_spend_progress WHERE task='a'").all()).toEqual([]);
+});
+
+test("correcting expired Codex rates preserves historical tokens and retires old estimates", async () => {
+  const now = USAGE_NOW, oldHour = Math.floor((now - 100 * DAY) / HOUR), currentHour = Math.floor(now / HOUR);
+  const deps = world([task("a", ["work"])]), ownerKey = `c:${conversationDigest("work")}`;
+  deps.history = () => ({ series: {} });
+  store.db.query("INSERT INTO task_limit_spend VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+    .run("a", "codex:a", "codex", 100, 0, 2, 2, 99, null, 99, null, 99, oldHour, oldHour, null, now);
+  store.db.query("INSERT INTO usage_hours VALUES('',?,?,?,?,?,?,NULL,'builder','operator',NULL,NULL,1,1000000,0,0,0,0,0)")
+    .run(currentHour - 1, conversationDigest("work"), "gpt-6.1-sol", "standard", "codex:a", "codex");
+  store.db.query("INSERT INTO task_spend_owners VALUES(?,?)").run(ownerKey, "a");
+  store.db.query("INSERT INTO usage_limit_rates VALUES(?,?,?,?,?,?,?,?,?,?)")
+    .run("codex:a", "weekly", new Date(now - 100 * DAY).toISOString().slice(0, 10), 99, 99, 1, "own", "pro", 1, now);
+  store.db.query("UPDATE usage_meta SET complete=1,pending_bytes=0,counted_from=?").run(now - 92 * DAY);
+  store.db.query(`UPDATE limit_spend_meta SET seed='done',task_revision=1,task_key='',pipeline_revision=1,pipeline_key='',pipeline_seed='done',
+    aggregate_schema=2,rate_schema=3,rates_hour=?`).run(currentHour);
+  await refreshTaskLimitSpend(store, deps);
+  const rows = store.db.query<{ tokens: number; weekly_pp: number | null; rated_weight: number }, []>(
+    "SELECT tokens,weekly_pp,rated_weight FROM task_limit_spend WHERE task='a' AND account='codex:a'").all();
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatchObject({ tokens: 1_000_100, weekly_pp: null, rated_weight: 0 });
+});
+
 test("rate correction refreshes a task that borrowed a retired account's rate from another day", async () => {
   const deps = world([task("a", ["work"])]), hour = Math.floor(USAGE_NOW / HOUR) - 1;
   store.db.query("INSERT INTO usage_hours VALUES('',?,?,?,?,?,?,NULL,'builder','operator',NULL,NULL,1,1000000,0,0,0,0,0)")

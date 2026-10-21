@@ -263,6 +263,7 @@ export function refreshTaskLimitSpend(store: ActivityStore, overrides: Partial<S
       await refreshLimitRates(db,now,{ history: deps.history,observations,
         coverageComplete: coverage?.complete === 1 && coverage.pending_bytes === 0, revalidateFrozen: meta.rate_schema < 3 },write);
       await write(() => { db.query("UPDATE limit_spend_meta SET rates_hour=?,rate_schema=? WHERE singleton=1").run(hour, LIMIT_RATE_SCHEMA); });
+      meta = metaRead(db);
     }
     const rateChanges = db.query<{ account: string; day: string; task_cursor: string }, []>("SELECT * FROM limit_spend_rate_changes ORDER BY account,day LIMIT 20").all();
     for (const change of rateChanges) {
@@ -273,7 +274,11 @@ export function refreshTaskLimitSpend(store: ActivityStore, overrides: Partial<S
         : db.query<{ task: string }, [string,number,number,string]>(`SELECT task FROM task_limit_spend INDEXED BY task_limit_spend_account
           WHERE account=? AND first_hour < ? AND last_hour >= ? AND task>? ORDER BY task LIMIT 100`).all(change.account,dayEnd,dayStart,change.task_cursor);
       await write(() => {
-        for (const row of tasks) dirty(db,`t:${row.task}`,now);
+        for (const row of tasks) {
+          dirty(db,`t:${row.task}`,now);
+          if (change.day === "*") db.query(`UPDATE task_limit_spend SET rated_weight=0,weekly_pp=NULL,window_pp=NULL,session_pp=NULL
+            WHERE task=? AND account=?`).run(row.task,change.account);
+        }
         if (tasks.length < 100) db.query("DELETE FROM limit_spend_rate_changes WHERE account=? AND day=? AND task_cursor=?").run(change.account,change.day,change.task_cursor);
         else db.query("UPDATE limit_spend_rate_changes SET task_cursor=? WHERE account=? AND day=? AND task_cursor=?")
           .run(tasks.at(-1)!.task,change.account,change.day,change.task_cursor);
@@ -298,7 +303,7 @@ export function refreshTaskLimitSpend(store: ActivityStore, overrides: Partial<S
       if (visited >= 50000 || ownerBudget <= 0) break;
       const id = item.key.slice(2), task = tasks.get(id);
       if (!task) { await write(() => deleteTask(db,id)); continue; }
-      const signature = JSON.stringify([hour,coverageComplete,[...observations].sort(([a],[b])=>a.localeCompare(b)).map(([key,o])=>[key,o.weekly?.resetsAt,o.session?.resetsAt])]);
+      const signature = JSON.stringify([hour,meta.rate_schema,coverageComplete,[...observations].sort(([a],[b])=>a.localeCompare(b)).map(([key,o])=>[key,o.weekly?.resetsAt,o.session?.resetsAt])]);
       const progress = db.query<{ stamp: number; signature: string; owner: string; cursor: string | null; rows: string }, [string]>("SELECT * FROM task_spend_progress WHERE task=?").get(id);
       let owner = "", cursor: SQLQueryBindings[] | null = null, result: SpendRow[] = [];
       if (progress?.stamp === item.at && progress.signature === signature) {

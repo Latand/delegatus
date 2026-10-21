@@ -10168,12 +10168,16 @@ export class AgentRegistry {
       const predecessor = conversation.generations.at(-1);
       if (!predecessor) throw new Error("viewer conversation has no native generation");
       const committedAt = now();
+      const committedHost = successor.host ?? expectedReceipt.host;
       predecessor.archivedAt = committedAt;
       const generation: NativeGeneration = {
         ...successor,
         launchProfile: emptyLaunchProfile(successor.launchProfile ?? predecessor.launchProfile),
         historyHash: successor.historyHash ?? null,
-        host: successor.host ?? null,
+        host: committedHost ?? null,
+        ...(committedHost?.kind === "codex-app-server" && successor.accountId
+          ? { quotaCustody: { accountId: successor.accountId, artifactPath: successor.path } }
+          : {}),
         createdAt: committedAt,
         archivedAt: null,
       };
