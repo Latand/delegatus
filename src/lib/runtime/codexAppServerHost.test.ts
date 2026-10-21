@@ -495,6 +495,8 @@ class FakeAppServer extends EventEmitter {
   readonly pid = 4242;
   readonly requests: Array<Record<string, unknown>> = [];
   readonly signals: NodeJS.Signals[] = [];
+  viewerStatus: unknown[] = [{ name: "viewer", tools: { stage_report: {} } }];
+  requireViewerThread = false;
   hookHome: string | null = null;
   hookDelayMs: number | null = 0;
   hookTrustDelayMs: number | null = 0;
@@ -613,6 +615,10 @@ class FakeAppServer extends EventEmitter {
     }
     if (typeof message.id !== "number") return;
     const method = message.method;
+    if (method === "mcpServerStatus/list") {
+      const scoped = !this.requireViewerThread || (message.params as Record<string, unknown>)?.threadId === this.threadId;
+      return this.respond(message.id, { data: scoped ? this.viewerStatus : [{ name: "viewer", tools: { global_only: {} } }], nextCursor: null });
+    }
     if (typeof method === "string" && this.ignoredMethods.includes(method)) return;
     if (method === "initialize") return this.respond(message.id, { userAgent: this.userAgent });
     if (method === "hooks/list" && this.hookHome) {
@@ -881,6 +887,33 @@ function fakeSpawn(server: FakeAppServer, captured?: { args?: string[]; options?
     return server as unknown as ChildProcessWithoutNullStreams;
   };
 }
+
+test("Codex refuses fresh and adopted launches with missing or empty Viewer tools before queue recovery", async () => {
+  for (const resume of [false, true]) for (const status of [[], [{ name: "viewer", tools: {} }]]) {
+    const child = new FakeAppServer();
+    child.viewerStatus = status;
+    const options = { cwd: "/repo", readProtocolVersion: () => "0.162.1", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(child) };
+    let host: CodexAppServerHost | null = null;
+    const error = await (resume ? CodexAppServerHost.adopt("thread-149", options) : CodexAppServerHost.start(options))
+      .then(value => { host = value; return null; }, reason => reason);
+    try {
+      expect(String(error)).toContain("Viewer MCP launch failed");
+      expect(child.requests.some(request => request.method === "thread/queue/start" || request.method === "turn/start")).toBe(false);
+    } finally { if (host) await (host as CodexAppServerHost).release(); }
+  }
+});
+
+test("Codex verifies Viewer tools from the opened thread", async () => {
+  const child = new FakeAppServer();
+  child.requireViewerThread = true;
+  child.viewerStatus = [{ name: "viewer", tools: {} }];
+  let host: CodexAppServerHost | null = null;
+  const error = await CodexAppServerHost.start({ cwd: "/repo", readProtocolVersion: () => "0.162.1",
+    eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(child) })
+    .then(value => { host = value; return null; }, reason => reason);
+  try { expect(String(error)).toContain("viewer has no tools"); }
+  finally { if (host) await (host as CodexAppServerHost).release(); }
+});
 
 async function waitForCondition(predicate: () => boolean | Promise<boolean>, message: string, timeoutMs = 5_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -2537,7 +2570,7 @@ describe("CodexAppServerHost", () => {
           viewer: {
             command: "bun",
             args: ["bin/mcp-server.mjs"],
-            env: { LLV_STATE_DIR: "fixture-state" },
+            env: { LLV_STATE_DIR: process.env.LLV_STATE_DIR },
             enabled: true,
             default_tools_approval_mode: "approve",
           },

@@ -124,8 +124,8 @@ export function headlessCodexThreadConfig(
           ? withoutUnsetFields(server as JsonObject) : {}),
         /* The thread runs under the agent's own config and state root
            (#1905); the Viewer server keeps the real ones, so the MCP link
-           still finds this machine's release. A value already configured for
-           the server wins. An HTTP server takes no `env` (Codex refuses it
+           still finds this machine's release. The launching installation owns
+           the state paths. An HTTP server takes no `env` (Codex refuses it
            there); it takes the shared endpoint's URL and the header that
            carries this agent's capability instead. */
         ...(name === "viewer" && viewerStdio

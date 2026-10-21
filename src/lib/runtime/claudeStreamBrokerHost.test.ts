@@ -233,6 +233,7 @@ class FakeClaude extends EventEmitter {
   readonly signals: NodeJS.Signals[] = [];
   readonly inputs: Array<Record<string, unknown>> = [];
   sessionId = "";
+  viewerStatus: unknown[] = [{ name: "viewer", status: "connected", tools: [{ name: "stage_report" }] }];
 
   constructor(
     private readonly ledger: RecordingDeliveryLedger,
@@ -250,6 +251,11 @@ class FakeClaude extends EventEmitter {
         if (line) {
           const input = JSON.parse(line) as Record<string, unknown>;
           this.inputs.push(input);
+          const control = input.request as { subtype?: string } | undefined;
+          if (input.type === "control_request" && ["initialize", "mcp_status"].includes(control?.subtype ?? "")) {
+            this.emitJson({ type: "control_response", response: { subtype: "success", request_id: input.request_id,
+              response: control?.subtype === "mcp_status" ? { mcpServers: this.viewerStatus } : {} } });
+          }
           const message = input.message as { content?: Array<{ text?: string }> } | undefined;
           if (input.type === "user") {
             this.ledger.order.push(`stdin:${message?.content?.[0]?.text}`);
@@ -285,6 +291,30 @@ function fakeSpawn(
     return child as unknown as ChildProcessWithoutNullStreams;
   };
 }
+
+test("Claude refuses fresh and adopted launches with missing or empty Viewer tools before accepting work", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "claude-mcp-launch-"));
+  try {
+    for (const resume of [false, true]) for (const status of [[], [{ name: "viewer", status: "connected", tools: [] }],
+      [{ name: "viewer", status: "failed", error: "isolated MCP startup refused" }]]) {
+      const child = new FakeClaude(new RecordingDeliveryLedger());
+      child.viewerStatus = status;
+      const store = new MemoryEventStore();
+      const options: ClaudeStreamBrokerHostOptions = { cwd: home, claudeConfigDir: home, eventStore: store,
+        deliveryLedger: new RecordingDeliveryLedger(), readTranscript: () => [],
+        readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }), spawnProcess: fakeSpawn(child, {}) };
+      let host: ClaudeStreamBrokerHost | null = null;
+      const error = await (resume ? ClaudeStreamBrokerHost.adopt("00000000-0000-0000-0000-000000000000", options)
+        : ClaudeStreamBrokerHost.start({ ...options, sessionId: "00000000-0000-0000-0000-000000000000" }))
+        .then(value => { host = value; return null; }, reason => reason);
+      try {
+        expect(String(error)).toContain("Viewer MCP launch failed");
+        expect(child.inputs.some(input => input.type === "user")).toBe(false);
+        expect(store.load("00000000-0000-0000-0000-000000000000").some(event => event.kind === "session-status" && event.status === "idle")).toBe(false);
+      } finally { if (host) await (host as ClaudeStreamBrokerHost).release(); }
+    }
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
 
 test("ledger replay retains the first UUID allocation and accepts its legacy upgrade and a later distinct echo", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-allocation-replay-"));
@@ -1958,7 +1988,7 @@ describe("ClaudeStreamBrokerHost", () => {
       [STRUCTURED_HOST_STAMP_ENV]: structuredHostStamp(),
     });
     expect(await host.send({ id: "managed-entry", text: "managed prompt" })).toEqual({ outcome: "turn-started", turnId: "managed-entry" });
-    expect(child.inputs).toHaveLength(0);
+    expect(child.inputs.filter(input => input.type === "user")).toHaveLength(0);
     await host.release();
   });
 
