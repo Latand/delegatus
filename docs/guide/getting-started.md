@@ -52,6 +52,16 @@ you already use.
 
 Delegatus is built for Linux and also runs on macOS and Windows.
 
+On Linux, each managed agent runs inside a signal boundary where it is
+available: its own kill, pkill, killall or fuser reaches only processes it
+started. The boundary needs Bubblewrap (`bwrap`), Python 3, util-linux,
+unprivileged user and PID namespaces, and a systemd user manager that
+delegates the cpu, memory and pids cgroup controllers. Where any of these is missing, and on macOS and Windows,
+agents launch without the boundary and the launch reports it as off with the
+cause. A missing boundary never stops a launch. Known gaps: an agent can still
+reach the systemd user manager, Docker and the shared tmux server, which can
+act on other processes of the same user.
+
 macOS works through a backend that uses `ps` and `lsof` in place of `/proc`.
 Native Windows runs Delegatus with Claude Code; install Claude with its
 native installer so a `claude.exe` is on `PATH`. Codex, managed accounts,

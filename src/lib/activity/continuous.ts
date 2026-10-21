@@ -8,6 +8,7 @@ import { readHostsConfig } from "./hostSources";
 import { ingestTranscripts, type IngestResult, type IngestSource } from "./ingest";
 import { pullHost, sshTransport, type PullResult } from "./pull";
 import { ActivityStore } from "./store";
+import { refreshTaskLimitSpend } from "./taskLimitSpend";
 
 /*
  * The activity record keeping itself current, run by the process that already
@@ -57,6 +58,11 @@ export async function recordActivityFromIndexFeed(
     state().lastIngest = { ...result, durationMs: Date.now() - startedAt, at: startedAt };
     if (result.failures.length) {
       console.error(`[activity] ${result.failures.length} transcript(s) could not be read; a later pass retries them`);
+    }
+    try {
+      await refreshTaskLimitSpend(store);
+    } catch (error) {
+      console.error(`[activity] limit spend refresh failed: ${error instanceof Error ? error.message : String(error)}; the next pass retries`);
     }
     return result;
   } finally {

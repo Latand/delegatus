@@ -582,3 +582,35 @@ test("identical cached quota observations do not rewrite registry history", asyn
     expect(registry.quotaObservations("codex")[0]!.authCheckedAt).toBe(new Date(now).toISOString());
   } finally { registry.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+
+test("a Codex tick batches only authenticated live observations into forward history", async () => {
+  const { readHistory } = await import("@/lib/limitsHistoryStore");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(),"quota-history-"));
+  const now=Date.parse("2026-10-18T12:00:00Z");
+  try {
+    let registry=new AgentRegistry(path.join(root,"registry.json"));
+    const ids=["live-history","transcript-history","cached-history","unsigned-history"];
+    const accounts:CodexAccount[]=ids.map(id=>({id,label:"Fixture",kind:"managed",home:path.join(root,id),sessionsDir:path.join(root,id,"sessions"),authPresent:true,loginPane:null,createdAt:1}));
+    const probe: QuotaProbePort = {
+      list:()=>accounts, active:()=>ids[0]!,credentialIdentity:()=>"stable-fixture",
+      async probe(engine,account) { return {engine,accountId:account.id,authenticated:account.id!==ids[3],authCheckedAt:now,
+        limits:{session:null,weekly:{usedPercent:25,resetsAt:now/1000+3600},plan:"pro",capturedAt:now/1000},
+        provenance:{source:account.id===ids[2]?"cache":account.id===ids[1]?"transcript":"live",reason:null,staleSince:null},observedAt:now}; },
+    };
+    const controller=new QuotaController(registry,probe,"fixture-boot",()=>now);
+    await controller.tick("codex");
+    const history=readHistory();
+    expect(history.series[`codex|${ids[0]}|weekly`]).toEqual([{t:now/1000,remaining:75}]);
+    // A transcript window is revocable custody evidence; the backfill rereads it.
+    expect(history.series[`codex|${ids[1]}|weekly`]).toBeUndefined();
+    expect(history.series[`codex|${ids[2]}|weekly`]).toBeUndefined(); expect(history.series[`codex|${ids[3]}|weekly`]).toBeUndefined();
+    await controller.tick("codex");
+    expect(readHistory()).toEqual(history);
+    registry.close();
+    registry=new AgentRegistry(path.join(root,"registry.json"));
+    await new QuotaController(registry,probe,"reopened-fixture-boot",()=>now).tick("codex");
+    expect(readHistory()).toEqual(history);
+    registry.close();
+  } finally {fs.rmSync(root,{recursive:true,force:true});}
+});
