@@ -6,7 +6,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 
 type JsonObject = Record<string, unknown>;
 
-const [mode, markerPath, transcriptPath] = process.argv.slice(2);
+const [mode, markerPath, transcriptPath, mcpEntry] = process.argv.slice(2);
 if ((mode !== "hold" && mode !== "probe") || !markerPath || !transcriptPath) {
   throw new Error("seat-successor fixture arguments are invalid");
 }
@@ -76,6 +76,7 @@ async function exerciseViewerMcp(turnId: string): Promise<void> {
     if (result.isError) throw new Error("Viewer MCP deployment_status returned an error");
     writeMarker({
       enginePid: process.pid,
+      entry: viewerServer.args[0],
       toolNames,
       structuredContent: result.structuredContent,
     });
@@ -129,7 +130,9 @@ async function accept(message: JsonObject): Promise<void> {
     return;
   }
   if (message.method === "config/read") {
-    respond(message.id, { config: { mcp_servers: {} } });
+    respond(message.id, { config: { mcp_servers: mcpEntry ? {
+      viewer: { command: process.execPath, args: [mcpEntry] },
+    } : {} } });
     return;
   }
   if (message.method === "thread/start" || message.method === "thread/resume") {

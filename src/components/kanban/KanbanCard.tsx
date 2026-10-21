@@ -46,6 +46,7 @@ import { ChevronDown, ChevronRight, CloseGlyph, MoreGlyph, svgProps } from "./ka
 import { cardAnswers, cardState, laneState, type CardState } from "./cardState";
 import { laneAnswerItems, stopLinkAnswers, type LaneAnswerItem } from "./laneAnswerMenu";
 import { CardStateLine, PriorityMark } from "./CardStateLine";
+import { TaskSpendMarks } from "./TaskSpend";
 import { TaskChronology } from "./TaskChronology";
 import { hasTaskMeta, TaskMeta } from "./TaskMeta";
 import { taskChronology } from "./taskChronologyModel";
@@ -659,6 +660,7 @@ export const KanbanCard = memo(function KanbanCard(props: KanbanCardProps) {
           title={title}
           motion={motionLine(!motionLinks)}
           priority={card.task ? card.priority : undefined}
+          spend={card.task && !remote ? <TaskSpendMarks taskId={card.task.id} interactive /> : undefined}
           onToggle={motionLinks ? undefined : () => props.onToggleCollapsed(card.id)}
           expanded={!collapsed}
         />

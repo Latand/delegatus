@@ -22,6 +22,7 @@ import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv
 import { z } from "zod";
 import { pipelineResumeConditionSchema } from "@/lib/pipelines/pauseMetadata";
 import { prototypePublishSchema } from "@/lib/prototypeReview/input";
+import { MCP_MAX_TOOL_INPUT_ELEMENTS } from "./inputLimits";
 
 import { FOCUS_TARGET_SHAPES } from "@/lib/attention/targets";
 import { statePath } from "@/lib/configDir";
@@ -4875,6 +4876,7 @@ export function createViewerMcpServer(service: McpToolService, tools: readonly M
   // Keep the SDK's validator and its lifetime local to this server when used.
   let elicitationValidator: AjvJsonSchemaValidator | undefined;
   const server = new McpServer({ name: MCP_SERVER_NAME, version: "1.0.0" }, {
+    maxToolInputElements: MCP_MAX_TOOL_INPUT_ELEMENTS,
     instructions: viewerMcpInstructions(),
     jsonSchemaValidator: { getValidator(schema) {
       return (elicitationValidator ??= new AjvJsonSchemaValidator()).getValidator(schema);

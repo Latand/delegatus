@@ -87,12 +87,18 @@ export function historySamples(engine: EngineName, accountId: string, window: Wi
     point per window. Downsampled to {@link MIN_GAP_S}, pruned to the retention
     window and capped, so the file stays small across a long-running viewer. */
 export function recordLimitSample(engine: EngineName, accountId: string, limits: EngineLimits, nowMs = Date.now()): void {
+  recordLimitSamples(engine, [{ accountId, limits }], nowMs);
+}
+
+/** The account controller records one whole tick with one read and rename. */
+export function recordLimitSamples(engine: EngineName, entries: readonly { accountId: string; limits: EngineLimits }[], nowMs = Date.now()): void {
+  if (!entries.length) return;
   const nowS = Math.round(nowMs / 1000);
   const history = readHistory();
   let changed = false;
-  for (const window of WINDOWS) {
+  for (const { accountId, limits } of entries) for (const window of WINDOWS) {
     const win = limits[window];
-    if (!win || typeof win.usedPercent !== "number") continue;
+    if (!win || !Number.isFinite(win.usedPercent)) continue;
     const key = seriesKey(engine, accountId, window);
     const arr = history.series[key] ?? (history.series[key] = []);
     const last = arr[arr.length - 1];

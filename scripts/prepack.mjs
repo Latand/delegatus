@@ -113,6 +113,15 @@ function runRuntimeHostBuild() {
   });
 }
 
+async function runGateBuild() {
+  await new Promise((resolve, reject) => {
+    const bun = process.env.LLV_BUN_EXECUTABLE || "bun";
+    const child = spawn(bun, ["scripts/build-gate.ts"], viewerChildProcessOptions({ cwd: root, env: withoutUnsupportedApiCredentials(process.env), stdio: "inherit" }));
+    child.once("error", reject);
+    child.once("exit", code => code === 0 ? resolve() : reject(new Error("Gate bundle failed")));
+  });
+}
+
 async function findStandaloneServer(dir) {
   const directServer = join(dir, "server.js");
   if (existsSync(directServer)) {
@@ -153,6 +162,7 @@ async function main() {
   await writeFile(join(distStandaloneDir, "server.js"), standaloneServerBootstrap);
   await runRuntimeHostBuild();
   await runMcpBuild();
+  await runGateBuild();
 
   if (!existsSync(join(distStandaloneDir, "server.js")) || !existsSync(runtimeHostBundle)) {
     throw new Error("Prepack did not produce the standalone server and runtime host bundles.");
