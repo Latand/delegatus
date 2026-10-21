@@ -2,13 +2,17 @@ import "./frameSession";
 
 import { createRoot } from "react-dom/client";
 
+import { predictedRules } from "@/components/roleMemory/LearnedRules";
 import { Viewer } from "@/components/Viewer";
 import { reportCardRefs } from "@/lib/bridge/reportCardRefs";
 import { setLocale, translate, type MessageKey } from "@/lib/i18n";
 import { navigateToFragment } from "@/lib/navigation/fragmentNavigation";
 import { SNIPPET_MATCH_CLOSE, SNIPPET_MATCH_OPEN } from "@/lib/search/snippet";
 
-import { askedLine, buildWorld, LAST_STEP, PROJECT, saidLine, type Lang, type World } from "./world";
+import {
+  askedLine, buildAutonomy, buildLessons, buildLimitsHistory, buildProfile, buildRoleMemory, buildTaskSpend, buildWorld, curatorPasses,
+  LAST_STEP, PROJECT, RULE_IDS, saidLine, type Lang, type World,
+} from "./world";
 import TASK_ICONS from "./taskIcons.json";
 
 /*
@@ -20,6 +24,8 @@ import TASK_ICONS from "./taskIcons.json";
  *   → { type: "dlg:step", step }   jump to a step (a backward jump reloads)
  *   → { type: "dlg:play" }         run the rest of the script from here
  *   → { type: "dlg:view", view }   press the product's own control for a view
+ * `autonomy=1` in the query turns the orchestrator's full autonomy on for this
+ * frame alone (./world.ts).
  *   ← { type: "dlg:state", step, lang, playing }  after every change
  *   ← { type: "dlg:lang", lang }   the visitor switched language inside the product
  * The visitor's own send of the prepared request in the orchestrator's
@@ -31,6 +37,7 @@ import TASK_ICONS from "./taskIcons.json";
 const params = new URLSearchParams(location.search);
 const LANG: Lang = params.get("lang") === "uk" ? "uk" : "en";
 const PHONE = params.get("phone") === "1";
+const AUTONOMY = params.get("autonomy") === "1";
 const START = Math.max(0, Math.min(LAST_STEP, Number(params.get("step") ?? 0) || 0));
 
 /* How long each step waits after the one before it, once the visitor sent. */
@@ -61,7 +68,7 @@ const boot = Math.floor(Date.now() / 1000);
 const stepSeconds: number[] = [];
 for (let s = 1; s <= START; s += 1) stepSeconds[s] = boot - (START - s + 1) * 40;
 let step = START;
-let world: World = buildWorld(step, LANG, boot, stepSeconds);
+let world: World = buildWorld(step, LANG, boot, stepSeconds, AUTONOMY);
 let playing = false;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let filesRevision = 1;
@@ -115,7 +122,7 @@ function withAsides(built: World): World {
   return built;
 }
 function refresh() {
-  world = withAsides(buildWorld(step, LANG, boot, stepSeconds));
+  world = withAsides(buildWorld(step, LANG, boot, stepSeconds, AUTONOMY));
   filesRevision += 1;
   for (const stream of runtimeStreams) stream.filesChanged();
   for (const stream of logStreams) stream.logsChanged();
@@ -169,6 +176,13 @@ function jump(to: number) {
 }
 
 /* ── the answers ──────────────────────────────────────────────────────── */
+
+/* The learned rules as this frame keeps them: a visitor's ×, Undo, Return or
+   Undo pass changes this copy, and every later read answers it. */
+let rules = buildRoleMemory(LANG, boot);
+/* The window's pass history is a 128 px box that scrolls. On a phone two passes and their buttons
+   overflow it, so the phone lists the latest pass alone and none sits half under the box's edge. */
+if (PHONE && rules.curation) rules = { ...rules, curation: { ...rules.curation, passes: rules.curation.passes.slice(0, 1) } };
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 const now = () => Math.floor(Date.now() / 1000);
@@ -404,18 +418,77 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     return json({ marker: { schemaVersion: 1, completedAt: new Date((boot - 86_400) * 1000).toISOString(), dismissedAt: null, reason: null, steps: { engines: "done", project: "done" }, lastHealth: null, walk: "done" }, seatTickCheckMinutes: 10 });
   }
   if (path === "/api/monitor/seat-tick/settings") {
+    if (method !== "GET") return json({ error: L("This is a demo: nothing runs here.", "Це демо: тут нічого не запускається.") }, 409);
     const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
-    const settings = { project: PROJECT, enabled: true, wakeIntervalMinutes: null, reason: null, monitorPrompt: null, until: null, updatedAt: null, setBy: null };
+    const defaults = { project: PROJECT, enabled: true, wakeIntervalMinutes: null, reason: null, monitorPrompt: null, until: null, updatedAt: null, setBy: null };
+    const episode = AUTONOMY ? buildAutonomy(LANG, boot, stepSeconds[LAST_STEP] ?? boot) : null;
+    /* The autonomy frame's operator also set the wakes to every 30 minutes. */
+    const wakes = episode ? 30 : null;
+    const settings = { ...defaults, ...(episode ? { autonomy: episode, wakeIntervalMinutes: wakes, updatedAt: episode.updatedAt, setBy: episode.setBy } : {}) };
+    const [lastPass] = curatorPasses(boot);
     return json({
       project: PROJECT, changed: false, at: new Date().toISOString(), actor: { kind: "gateway", conversationId: null, project: null, seatEpoch: null },
-      settings, defaults: settings, defaultWakeIntervalMinutes: 60, monitorPromptLength: 0, cardText: null,
-      effective: { enabled: true, wakeIntervalMinutes: 60, reason: null, monitorPrompt: null, until: null, isDefault: true, configured: false, lapsed: false, updatedAt: null },
+      settings, defaults, defaultWakeIntervalMinutes: 60, monitorPromptLength: 0, cardText: null,
+      effective: { enabled: true, wakeIntervalMinutes: wakes ?? 60, reason: null, monitorPrompt: null, until: null, isDefault: wakes === null, configured: wakes !== null, lapsed: false, updatedAt: settings.updatedAt },
       policy: { checkIntervalMinutes: 5, staleAfterMinutes: 15, retryGuardWakes: 2 },
       state: { lastCheckAt: ago(3), lastWakeAt: ago(41), lastWakeReasons: ["interval"], outstandingWake: null, retryGuard: [], sourceGap: null, accountingGap: null },
       stateError: null, lastRun: { at: ago(3), verdict: "quiet", reasons: [], delivery: null, detail: "nothing owed" }, lastDelivery: { at: ago(41), outcome: "landed" },
+      autonomy: { active: episode !== null, until: episode?.until ?? null, startedAt: episode?.startedAt ?? null, episode },
+      /* The curator's own block; its last pass is the one the learned rules window lists first. */
+      curation: {
+        enabled: true, intervalHours: 6, intervalMs: 6 * 3_600_000, defaultIntervalHours: 6, minIntervalHours: 1, maxIntervalHours: 168, updatedAt: null,
+        live: null, lastRun: { ...lastPass!, conversationId: null }, nextRunAt: rules.curation?.nextAt ?? null, waitingOn: null, runsError: null,
+      },
     });
   }
+  /* The agent mapping the tick panel reads for board maintenance, which this world leaves off. */
+  if (path === "/api/roles" && method === "GET") return json({ revision: "demo", roles: [], launchChoices: [] });
+  if (path === "/api/task-spend") {
+    const spend = buildTaskSpend(LANG);
+    const ids = (url.searchParams.get("ids") ?? "").split(",").filter((id) => id in spend);
+    return json({ generatedAt: now(), tasks: Object.fromEntries(ids.map((id) => [id, spend[id]])) });
+  }
+  if (path === "/api/limits/history") return json(buildLimitsHistory(now()));
+  if (path === "/api/role-memory/lessons") return json({ lessons: url.searchParams.get("project") === PROJECT ? buildLessons(step, LANG) : [] });
+  if (path === "/api/role-memory/profile") {
+    const profile = JSON.stringify(buildProfile(LANG, boot, rules));
+    if (method === "POST") return new Response(`${profile}\n`, { headers: { "content-type": "application/x-ndjson" } });
+    return new Response(profile, { headers: { "content-type": "application/json" } });
+  }
+  if (path === "/api/role-memory") {
+    if (method === "POST") {
+      const { action, ruleId } = body() as { action?: string; ruleId?: string };
+      if (action === "revert-pass") {
+        rules = { ...rules, curation: rules.curation && { ...rules.curation, passes: rules.curation.passes.map((pass) => (pass.id === ruleId ? { ...pass, revertedAt: new Date().toISOString() } : pass)) } };
+      } else if ((action === "delete" || action === "restore" || action === "revert") && typeof ruleId === "string") {
+        rules = predictedRules(rules, action, ruleId);
+      }
+      return json(rules);
+    }
+    return json(url.searchParams.get("project") === PROJECT ? rules : { project: url.searchParams.get("project"), enabled: true, scopes: [] });
+  }
   if (path === "/api/tts/backend") return json({ error: "no speech in the demo" }, 503);
+  if (path === "/api/transcribe/token") return json({ error: "no speech in the demo" }, 503);
+  /* Settings the product reads on the way, each in its off state: nothing here sends telemetry, calls a voice model,
+     classifies messages, shares a project or writes memory on the side. */
+  if (path === "/api/telemetry") return json({ enabled: false, locked: false, noticeDismissed: true });
+  if (path === "/api/memory/settings") return json({ enabled: false, capUsd: 5, spentUsd: 0 });
+  if (path === "/api/asks-you") return json({ enabled: false, keySource: null, keyPath: "", month: new Date().toISOString().slice(0, 7), spentUsd: 0, capUsd: 5, calls: 0, capped: 0 });
+  if (path === "/api/voice-companion/settings") {
+    return json({ enabled: false, callMemory: true, backend: "api", monthlyCapUsd: 20, keySource: "missing", keyEnvironment: "OPENAI_API_KEY", month: new Date().toISOString().slice(0, 7), usageUsd: 0, reservedUsd: 0, incomplete: false, uncertainSession: false });
+  }
+  if (path === "/api/links/shared") return json({ shared: { v: 1, all: false, projects: [] }, known: [] });
+  if (path === "/api/telegram") return json({ telegram: { phase: "disconnected", login: null, identity: null, credentialRef: null, lastHealthCheckAt: null, error: null, credentialsConfigured: false } });
+  /* Nothing finished waits for an acknowledgement, no task has pictures, and the transcripts carry no delivery records. */
+  if (path === "/api/attention/done") return json({ ok: true, items: [], revision: 1 });
+  if (path === "/api/task-album") return json({ tasks: {} });
+  if (path === "/api/log/provenance") return json({ messages: {}, occurrences: [], submissions: {} });
+  /* The orchestrator's parallel helper: never busy here, and it starts nothing. */
+  if (path === "/api/orchestrator/ghost") {
+    if (method !== "GET") return json({ ok: false, error: L("This is a demo: nothing runs here.", "Це демо: тут нічого не запускається.") }, 409);
+    if (url.searchParams.has("askId")) return json({ lines: [], missing: true });
+    return json({ conversationId: world.seat.conversationId, busy: false });
+  }
   if (path === "/api/accounts/copilot") return json({ active: null, accounts: [] });
   if (path === "/api/external-relay/conversations") return json({ relays: [], chats: [], answers: [], retentionDays: 30 });
   if (path === "/api/search/transcripts") return json(search(url.searchParams.get("q") ?? "", url.searchParams.get("speaker")));
@@ -487,6 +560,8 @@ function waitFor<T>(find: () => T | null | undefined, tries = 40): Promise<T> {
 }
 const byLabel = (text: string) => document.querySelector<HTMLElement>(`[aria-label="${CSS.escape(text)}"]`);
 async function closeOverlays() {
+  /* A task's spend popover closes on a press outside it, not on Escape. */
+  if (document.querySelector("[data-spend-pop]")) document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
   const searchWasOpen = !!document.querySelector("[data-search-input]");
   (document.activeElement instanceof HTMLElement ? document.activeElement : document.body).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   // Let React unmount Search before reopening it. A close and open in one
@@ -522,6 +597,75 @@ function settleSendControl() {
 function goBoard() {
   if (location.hash !== `#p=${PROJECT}`) location.hash = `#p=${PROJECT}`;
 }
+/** The first of the matches a visitor can see. */
+const shown = (selector: string, root: ParentNode = document) =>
+  [...root.querySelectorAll<HTMLElement>(selector)].find((element) => element.getClientRects().length > 0) ?? null;
+/** Scrolls the nearest box that scrolls `target` until it sits at that box's top; the page outside stays put.
+    When the box runs out of room first, it stops on a whole line: none is left cut by the top edge. */
+function scrollToTop(target: Element, gap = 8) {
+  for (let box = target.parentElement; box; box = box.parentElement) {
+    const overflow = getComputedStyle(box).overflowY;
+    if ((overflow === "auto" || overflow === "scroll") && box.scrollHeight > box.clientHeight) {
+      box.scrollTop += target.getBoundingClientRect().top - box.getBoundingClientRect().top - gap;
+      const edge = box.getBoundingClientRect().top;
+      const range = document.createRange();
+      const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!node.textContent?.trim()) continue;
+        range.selectNodeContents(node);
+        const cut = [...range.getClientRects()].find((line) => line.top < edge && line.bottom > edge);
+        if (cut) {
+          box.scrollTop -= edge - cut.top + gap;
+          break;
+        }
+      }
+      return;
+    }
+  }
+}
+
+/* ── the seat tick, the learned rules and the limits, by their own controls ── */
+
+/** The seat tick's panel: the popover from the switch in the seat's head, or on the phone the tick's sheet from the seat sheet. */
+async function openSeatTick(): Promise<HTMLElement> {
+  if (PHONE) {
+    /* The seat's ⚙: the row itself opens the chat once the seat has loaded. */
+    await press(() => shown("[data-mobile2-seat-controls]"));
+    await press(() => shown('[data-mobile2-open="tick"]'));
+    return waitFor(() => document.querySelector<HTMLElement>('[data-testid="mobile-seat-tick-sheet"]')?.querySelector<HTMLElement>("[data-seat-tick-autonomy-summary]")
+      ? document.querySelector<HTMLElement>('[data-testid="mobile-seat-tick-sheet"]') : null);
+  }
+  const open = () => document.querySelector<HTMLElement>("[data-seat-tick-popover]");
+  const ready = () => (open()?.querySelector("[data-seat-tick-autonomy-summary]") ? open() : null);
+  /* A seat that was just docked again replaces its head, and a press on the head it replaced opens nothing: press again. */
+  for (let attempt = 0; attempt < 3 && !open(); attempt += 1) {
+    await press(() => shown(`[role="slider"][aria-label="${CSS.escape(label("seatTick.switch.aria"))}"]`));
+    await waitFor(open, 10).catch(() => null);
+  }
+  return waitFor(ready);
+}
+/** Its decision log: Details opened, scrolled until the log's heading is the first line. */
+async function showDecisions(panel: HTMLElement) {
+  const details = await waitFor(() => panel.querySelector<HTMLDetailsElement>("details[data-seat-tick-details]"));
+  details.open = true;
+  scrollToTop(await waitFor(() => panel.querySelector("[data-seat-tick-autonomy-log]")));
+}
+/** The learned rules window from the board's ⋯ (on the phone, the menu's project rules), on All rules with one role chosen. */
+async function openRules(role: string, expand: string | null): Promise<HTMLElement> {
+  if (PHONE) {
+    await press(() => shown('[data-mobile2-open="menu"]'));
+    await press(() => shown('[data-mobile2-menu-row="rules"]'));
+    await press(() => shown("[data-learned-rules-open]"));
+  } else {
+    await press(() => shown("[data-bar-more]"));
+    await press(() => shown("[data-bar-more-menu] [data-learned-rules-open]"));
+  }
+  const rulesWindow = await waitFor(() => document.querySelector<HTMLElement>("[data-rules-window]"));
+  await press(() => [...rulesWindow.querySelectorAll<HTMLElement>("nav button")].find((button) => button.textContent === label("memoryProfile.allRules")));
+  await press(() => rulesWindow.querySelector<HTMLElement>(`[data-rules-role="${role}"]`));
+  if (expand) await press(() => rulesWindow.querySelector<HTMLElement>(`[data-learned-rule="${expand}"] button[aria-expanded]`));
+  return rulesWindow;
+}
 
 /** Presses the product's own controls to reach a view, the way a visitor would. */
 async function navigateView(view: string) {
@@ -541,12 +685,13 @@ async function navigateView(view: string) {
       pipeline: `#pipeline=${step >= 2 ? "p-refunds" : "p-retries"}`, decision: "#pipeline=p-retries",
       conversation: `#c=${encodeURIComponent(`conversation_${step >= 2 ? "refunds-builder" : "webhook-retries"}`)}`,
     };
+    if (view === "task") screens.task = "#task=t-refunds";
     const hash = screens[view] ?? `#p=${PROJECT}`;
     // Project navigation cancels unresolved conversation intent in the Viewer.
     // Wait for its destination before opening a sheet or releasing this queue:
     // assigning a hash alone leaves the previous resolver free to close Search.
     navigateToFragment(hash);
-    const screen = hash.startsWith("#c=") ? "chat" : hash.startsWith("#pipeline=") ? "pipeline"
+    const screen = hash.startsWith("#c=") ? "chat" : hash.startsWith("#pipeline=") ? "pipeline" : hash.startsWith("#task=") ? "task"
       : hash === "#reports" ? "reports" : hash === "#accounts" ? "accounts"
       : hash === "#pipelines" ? "pipelines" : "board";
     await waitFor(() => location.hash === hash && document.querySelector(`[data-mobile2-screen="${screen}"]`));
@@ -558,27 +703,47 @@ async function navigateView(view: string) {
       await press(() => document.querySelector<HTMLElement>('[data-mobile2-open="search"]'));
       await typeSearch();
     }
+    if (view === "autonomy") await openSeatTick();
+    if (view === "decisions") await showDecisions(await openSeatTick());
+    if (view === "rules") await openRules("orchestrator", RULE_IDS.O1);
+    if (view === "curator") {
+      const rulesWindow = await openRules("builder", null);
+      rulesWindow.querySelector<HTMLDetailsElement>("details[data-curation-history]")!.open = true;
+      await press(() => rulesWindow.querySelector<HTMLElement>('[data-rules-history="project"][aria-expanded="false"]'));
+      scrollToTop(rulesWindow.querySelector('[data-rules-section="project"]')!);
+    }
+    /* The phone has no limit history; its frame shows the cards instead. */
+    if (view === "spend" || view === "history") {
+      await press(() => shown('[data-phone-kanban-tab="assigned"]'));
+      await waitFor(() => shown('[data-spend="t-refunds"] .scale'));
+    }
+    if (view === "task") scrollToTop(await waitFor(() => document.querySelector("[data-phone-task-spend]")));
     return;
   }
   /* The rail's visibility is kept in storage every frame on the page shares,
      so each view sets it: the accounts and the overview live in it. */
-  const wantRail = view === "accounts" || view === "overview";
+  const wantRail = view === "accounts" || view === "overview" || view === "history";
   if (wantRail && byLabel(label("rail.show"))) await press(() => byLabel(label("rail.show")), 5);
   if (!wantRail && view !== "orchestrator" && view !== "board" && byLabel(label("rail.hide"))) await press(() => byLabel(label("rail.hide")), 5);
   if (view === "overview") {
     await press(() => document.querySelector<HTMLElement>(`nav[aria-label="${CSS.escape(label("rail.projects"))}"] button`));
     return;
   }
-  if (view === "orchestrator" || view === "board") {
+  if (view === "orchestrator" || view === "board" || view === "autonomy" || view === "decisions") {
     /* The hero's two faces: the orchestrator docked on top with its report
        log, or docked at the side of the board. Both without the project rail. */
     goBoard();
     if (byLabel(label("rail.hide"))) await press(() => byLabel(label("rail.hide")), 5);
     if (byLabel(label("orchPanel.seatExpand"))) await press(() => byLabel(label("orchPanel.seatExpand")), 5);
-    const want = view === "board" ? "side" : "top";
+    const want = view === "orchestrator" ? "top" : "side";
     await waitFor(() => document.querySelector<HTMLElement>("[data-seat-placement]"), 20);
     const toggle = document.querySelector<HTMLElement>("[data-seat-placement]");
-    if (toggle && toggle.dataset.seatPlacement !== want) toggle.click();
+    if (toggle && toggle.dataset.seatPlacement !== want) {
+      toggle.click();
+      await waitFor(() => document.querySelector<HTMLElement>("[data-seat-placement]")?.dataset.seatPlacement === want, 20).catch(() => null);
+    }
+    if (view === "autonomy") await openSeatTick();
+    if (view === "decisions") await showDecisions(await openSeatTick());
     return;
   }
   if (view !== "conversation") {
@@ -586,6 +751,32 @@ async function navigateView(view: string) {
     if (byLabel(label("orchPanel.seatCollapse"))) await press(() => byLabel(label("orchPanel.seatCollapse")), 5);
   }
   if (view === "fold") return;
+  if (view === "rules") {
+    await openRules("orchestrator", RULE_IDS.O1);
+    return;
+  }
+  if (view === "curator") {
+    /* The builder's rule the curator rewrote from two, the passes with their undo, and what it archived. */
+    const rulesWindow = await openRules("builder", RULE_IDS.B1);
+    rulesWindow.querySelector<HTMLDetailsElement>("details[data-curation-history]")!.open = true;
+    await press(() => rulesWindow.querySelector<HTMLElement>('[data-rules-history="project"][aria-expanded="false"]'));
+    return;
+  }
+  if (view === "spend") {
+    await waitFor(() => document.querySelector('[data-spend="t-refunds"] .scale'));
+    return;
+  }
+  if (view === "task") {
+    if (!document.querySelector('[data-spend-pop="t-refunds"]')) await press(() => document.querySelector<HTMLElement>('[data-spend="t-refunds"][role="button"]'));
+    await waitFor(() => document.querySelector('[data-spend-pop="t-refunds"]'));
+    return;
+  }
+  if (view === "history") {
+    const name = label("burndown.openAria", { engine: "Claude" });
+    await press(() => byLabel(name));
+    await waitFor(() => document.querySelector(`[role="dialog"][aria-label="${CSS.escape(name)}"] svg path`));
+    return;
+  }
   if (view === "pipeline" || view === "decision") {
     const card = view === "decision" || step < 2 ? "t-retries" : "t-refunds";
     /* A card is closed by default (#2800): its lane row, and the Stages opener in it, show once it is open. */

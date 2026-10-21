@@ -69,7 +69,7 @@ its last line, with nothing clipped by the prompt's box or a container around it
 CHROME_BIN=/usr/bin/google-chrome-stable bun landing/site/capture.ts --check-fullscreen
 ```
 
-puts each of the four frames full screen through its control, in both
+puts each of the six frames full screen through its control, in both
 languages at 1440×900 and 390×844, once with the browser's Fullscreen API and
 once as the overlay iPhone Safari gets (no element fullscreen there). It fails
 unless the iframe runs unscaled at the width of the screen and at the height of
@@ -81,14 +81,14 @@ position comes back. PNGs go to `/tmp/landing-fullscreen-renders/`.
 
 | file | what it holds |
 | --- | --- |
-| `index.html` | the four sections, the footer band and the install-box template |
+| `index.html` | the hero and the seven sections below it (run, full autonomy, learned rules, open, limits, reach, FAQ), the footer band and the install-box template |
 | `styles.css` | the page: type, the product's dark tokens, the frames around the demo |
 | `copy.js` | every visible string of the page and of the hero's demo in English and Ukrainian, and the two install prompts |
 | `boardDemo.js` | the hero's demo: the drawn board and phone screens, its one timeline, and when it plays |
 | `mascot.js` | the mascot's three poses (unchanged from A) |
 | `main.js` | language, install boxes, the phone's send-the-link action, the legacy giggle, the release line, and the controller of the live frames |
 | `demo/demo.tsx` | the demo: the real `Viewer`, the answers to its requests, the scripted steps, the views |
-| `demo/world.ts` | the invented harbor-api world at each step, in both languages |
+| `demo/world.ts` | the invented harbor-api world at each step, in both languages, and beside it the seat tick's autonomy episode, the learned rules and their curator, each task's limit spend and the accounts' limit history |
 | `demo/taskIcons.json` | the lucide drawings of the demo's task icons, written by the build |
 | `build.ts` | bundles the demo, compiles the product stylesheet, assembles `dist/` |
 | `audioAssets.ts` | the cue files the demo's Viewer requests at the site root, copied from `public/audio/cues/` into `dist/audio/cues/`; the build fails when one is missing. The 5 MB music bed is left out: the demo bundle loads a loop-asset module with no asset, so the sound menu omits the loop controls |
@@ -309,6 +309,35 @@ browser itself scrolls the page, with its own momentum, whatever a swipe starts
 on. The landing's tabs change a frame's screen, and the full-screen control
 opens the demo for use. A window with a mouse keeps its frames interactive at
 any width.
+
+## The three later sections
+
+`docs/design/landing-refresh-autonomy-memory.md` is their brief. Each is one
+more frame over the same world, reached by the product's own controls:
+
+| Section | Frame | Views (`data-view`) |
+| --- | --- | --- |
+| Full autonomy | `.live-auto`, 900×760 | `autonomy`: the tick switch in the seat's head opens its panel (the phone: the seat sheet, then its tick row); `decisions`: the same panel with Details open, scrolled to the decision log |
+| Learned rules | `.live-mem`, 1180×760 | `rules`: the board's ⋯, «Learned rules», «All rules», the Orchestrator chip, its first rule expanded (the phone: the menu's project rules); `curator`: the builder's rule, the curator's passes and what it archived |
+| Limits | `.live-use`, 1180×760 | `spend`: the board with the seat folded, every card's marks; `task`: one card's spend popover (the phone: the task screen at its Limits); `history`: the rail's Claude week button opens the burndown |
+
+`autonomy=1` in a frame's query turns full autonomy on for that frame alone:
+at step 5 the orchestrator has answered the retry window itself, so that
+pipeline's Build runs again and nothing waits for the visitor. The reach
+frame keeps its waiting decision. The memory frame keeps its rules in the
+page: a visitor's ×, Undo, Return or «Undo pass» changes that copy, and every
+later read answers it. The example rules are new texts written for strangers
+from rules agents of each kind really carry; `copy.test.ts` holds them to the
+product's length limits.
+
+Where these frames depart from a real install, on purpose:
+
+- The tick panel's release, auto-rotation and Turbo sections are not answered,
+  so they do not draw: the panel stays short enough for the frame, and Turbo
+  is not shipped yet.
+- The phone has no limit history (the burndown lives in the desktop rail's
+  footer only), so the `history` tab hides at phone widths and a phone frame
+  showing it falls back to `spend`.
 
 ## Decisions where the brief was open
 

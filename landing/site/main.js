@@ -382,6 +382,12 @@
       live.iframe.style.transformOrigin = phone ? "center" : "0 0";
       live.iframe.style.transform = phone ? `translate(-50%, -50%) scale(${scale})` : scale === 1 ? "" : `scale(${scale})`;
     }
+    // A view the phone layout does not have (the limit history) hides its tab
+    // there and gives way to the view the tab names.
+    for (const tab of document.querySelectorAll(`[data-tabs-for="${live.id}"] [data-desktop-only]`)) {
+      tab.hidden = phone;
+      if (phone && live.view === tab.dataset.view) markTabs(live, tab.dataset.phoneView);
+    }
     if (phone !== live.phone) {
       live.phone = phone;
       if (live.iframe) live.iframe.src = liveSrc(live);
@@ -460,7 +466,7 @@
     if (!live) continue;
     list.dataset.tabsFor = live.id;
     const tabs = [...list.querySelectorAll('[role="tab"]')];
-    tabs.forEach((tab, index) => {
+    tabs.forEach((tab) => {
       tab.addEventListener("click", () => {
         const view = tab.dataset.view;
         if (view === live.view && live.iframe) return;
@@ -476,7 +482,8 @@
         const back = vertical ? "ArrowUp" : "ArrowLeft";
         if (event.key !== forward && event.key !== back) return;
         event.preventDefault();
-        const next = tabs[(index + (event.key === forward ? 1 : -1) + tabs.length) % tabs.length];
+        const shown = tabs.filter((candidate) => !candidate.hidden);
+        const next = shown[(shown.indexOf(tab) + (event.key === forward ? 1 : -1) + shown.length) % shown.length];
         next.focus();
         next.click();
       });

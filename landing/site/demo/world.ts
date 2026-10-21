@@ -1,6 +1,10 @@
+import type { TaskSpendSummary } from "@/lib/activity/taskLimitSpendTypes";
+import type { MemoryProfileView, ProfilePartView } from "@/lib/memory/profileTypes";
+import type { CuratorPassView, RoleMemoryProjectView, RuleView, ScopeView, StageLessonView } from "@/lib/memory/roleTypes";
+import type { AutonomySetting } from "@/lib/monitor/autonomy";
 import type { Pipeline } from "@/lib/pipelines/types";
 import type { BoardTask, TaskHold, TaskStatus } from "@/lib/tasks/types";
-import type { FileEntry } from "@/lib/types";
+import type { BurndownPayload, BurndownSeries, FileEntry } from "@/lib/types";
 
 /*
  * The landing demo's world: one invented project, harbor-api, as Delegatus
@@ -16,6 +20,12 @@ import type { FileEntry } from "@/lib/types";
  *   3  Build passed and reported; Review runs on Codex
  *   4  Review passed and reported; Verify runs
  *   5  the webhook-retries pipeline stopped on a decision: Needs you
+ *
+ * The autonomy flag (`autonomy=1` in a frame's query) turns the orchestrator's
+ * full autonomy on for that frame alone: at step 5 the seat has answered the
+ * retry window itself, so its Build runs again and nothing waits for you.
+ * Below the world sit the seat tick's autonomy episode, the learned rules and
+ * their curator, each task's limit spend and the accounts' limit history.
  */
 
 export type Lang = "en" | "uk";
@@ -45,7 +55,7 @@ export const saidLine = (when: string, text: string, model = "claude-opus-5-5") 
 /** What the operator typed, as a transcript line. */
 export const askedLine = (when: string, text: string) => transcriptLine(when, { type: "user", message: { role: "user", content: text }, promptSource: "typed", origin: { kind: "human" } });
 
-export function buildWorld(step: number, lang: Lang, bootSeconds: number, stepSeconds: number[]): World {
+export function buildWorld(step: number, lang: Lang, bootSeconds: number, stepSeconds: number[], autonomy = false): World {
   const L = (en: string, uk: string) => (lang === "uk" ? uk : en);
   /* Times read relative to the page's boot, and a step's own records to the
      moment that step arrived, so "just now" stays true while the visitor reads. */
@@ -145,11 +155,15 @@ export function buildWorld(step: number, lang: Lang, bootSeconds: number, stepSe
     ...tool(iso(7 * MIN), "Grep", { pattern: "hmac\\(", path: "src/webhooks" }, "src/webhooks/sign.ts:9:  return hmac(currentKey(), payload);\nsrc/webhooks/verify.ts:7:  const expected = hmac(currentKey(), payload);"),
   ]);
 
-  /* Webhook retries: its builder works until the decision (step 5). */
+  /* Webhook retries: its builder works until the decision (step 5). Under
+     full autonomy the seat answers it at once and the builder goes on. */
   const retriesDecided = step >= 5;
-  const retries = add("webhook-retries", L("Webhook retry backoff", "Затримка повторів вебхуків"), retriesDecided
-    ? idle(at(5))
-    : working(L("Reading the delivery loop", "Читаю цикл доставки"), 20 * MIN));
+  const retriesAnswered = retriesDecided && autonomy;
+  const retries = add("webhook-retries", L("Webhook retry backoff", "Затримка повторів вебхуків"), retriesAnswered
+    ? working(L("Stopping retries after 72 hours", "Зупиняю повтори через 72 години"), at(5))
+    : retriesDecided
+      ? idle(at(5))
+      : working(L("Reading the delivery loop", "Читаю цикл доставки"), 20 * MIN));
   const retriesLines = [
     asked(iso(21 * MIN), L(
       "Back off webhook retries: exponential with jitter, and stop at some point instead of retrying forever.",
@@ -307,10 +321,12 @@ export function buildWorld(step: number, lang: Lang, bootSeconds: number, stepSe
       "Retry window: stop retrying a failed delivery after 24 hours or after 72 hours? The spec leaves it open, and it sets how many attempts a delivery gets.",
       "Вікно повторів: припиняти повтори невдалої доставки через 24 години чи через 72? Специфікація цього не каже, а від цього залежить, скільки спроб отримає доставка.",
     )] } : null);
-  pipelines.push(lane("p-retries", L("Back off webhook retries", "Затримка повторів вебхуків"), "t-retries", retriesDecided ? "needs_decision" : "running",
-    [{ stageId: "build", attempts: [retriesBuildAttempt] }],
-    { stageId: "build", state: retriesDecided ? "needs_decision" : "running", input: null, activatedBy: null }, iso(21 * MIN),
-    retriesDecided ? { stateDetail: L("Build needs a decision: retry window", "Build чекає рішення: вікно повторів") } : {}));
+  const retriesWaits = retriesDecided && !retriesAnswered;
+  const retriesAttempts = retriesAnswered ? [retriesBuildAttempt, { ...attempt("builder", "running", retries, since(5), null), n: 2 }] : [retriesBuildAttempt];
+  pipelines.push(lane("p-retries", L("Back off webhook retries", "Затримка повторів вебхуків"), "t-retries", retriesWaits ? "needs_decision" : "running",
+    [{ stageId: "build", attempts: retriesAttempts }],
+    { stageId: "build", state: retriesWaits ? "needs_decision" : "running", input: null, activatedBy: null }, iso(21 * MIN),
+    retriesWaits ? { stateDetail: L("Build needs a decision: retry window", "Build чекає рішення: вікно повторів") } : {}));
 
   if (step >= 2) {
     const runs: Array<{ stageId: string; attempts: unknown[] }> = [
@@ -373,7 +389,277 @@ export function buildWorld(step: number, lang: Lang, bootSeconds: number, stepSe
   ];
   if (step >= 3) reports.push({ seq: 104, at: since(3), class: "completed", body: L("Idempotent refunds: Build passed. A repeated Idempotency-Key now answers from the stored response, and 4 tests pass. Review started on Codex.", "Ідемпотентні повернення: Build пройшов. Повторний Idempotency-Key тепер отримує збережену відповідь, 4 тести проходять. Review стартував на Codex.") });
   if (step >= 4) reports.push({ seq: 105, at: since(4), class: "review_verdict", body: L("Idempotent refunds passed review with no findings: two requests with one key refund once. Verify is running.", "Ідемпотентні повернення пройшли рев’ю без зауважень: два запити з одним ключем повертають гроші один раз. Verify виконується.") });
-  if (step >= 5) reports.push({ seq: 106, at: since(5), class: "question", body: L("Back off webhook retries stopped on a decision the spec leaves open: stop retrying after 24 or 72 hours? It waits on the card.", "Затримка повторів вебхуків зупинилася на рішенні, якого немає в специфікації: припиняти повтори через 24 чи через 72 години? Чекає на картці.") });
+  if (step >= 5 && !retriesAnswered) reports.push({ seq: 106, at: since(5), class: "question", body: L("Back off webhook retries stopped on a decision the spec leaves open: stop retrying after 24 or 72 hours? It waits on the card.", "Затримка повторів вебхуків зупинилася на рішенні, якого немає в специфікації: припиняти повтори через 24 чи через 72 години? Чекає на картці.") });
+  if (retriesAnswered) reports.push({ seq: 106, at: since(5), class: "status", body: L("Under full autonomy: webhook retries stop after 72 hours; the stage runs again.", "Під повною автономією: повтори вебхуків зупиняються через 72 години; етап запущено знову.") });
 
-  return { files, tasks, pipelines, reports, transcripts, seat, seatBusy, request, needsYou: retriesDecided ? 1 : 0 };
+  return { files, tasks, pipelines, reports, transcripts, seat, seatBusy, request, needsYou: retriesWaits ? 1 : 0 };
+}
+
+/* ── the seat tick: an autonomy episode and the decisions it recorded ── */
+
+const HOUR = 3600;
+const isoAt = (seconds: number) => new Date(seconds * 1000).toISOString();
+
+/** Eight hours of full autonomy, turned on by the operator 3 h 48 min before
+    the page opened, with the three decisions the seat made in it. */
+export function buildAutonomy(lang: Lang, bootSeconds: number, decidedAtSeconds: number): AutonomySetting {
+  const L = (en: string, uk: string) => (lang === "uk" ? uk : en);
+  const seatActor = { kind: "manager" as const, conversationId: "conversation_orchestrator", project: PROJECT, seatEpoch: 1 };
+  const operator = { kind: "gateway" as const, conversationId: null, project: null, seatEpoch: null };
+  const startedAt = isoAt(bootSeconds - 3 * HOUR - 48 * MIN);
+  return {
+    enabled: true, startedAt, until: isoAt(bootSeconds + 4 * HOUR + 12 * MIN), endedAt: null, endReason: null,
+    updatedAt: startedAt, setBy: operator, why: null,
+    decisions: [
+      {
+        id: "d1", at: isoAt(decidedAtSeconds), taskId: "t-retries", by: seatActor, reviewState: "decided",
+        decision: L("Webhook retries stop after 72 hours.", "Повтори вебхуків зупиняються через 72 години."),
+        why: L("Most merchants fix a broken endpoint within a weekend; 24 hours would drop their deliveries.", "Більшість мерчантів лагодять зламаний ендпоінт за вихідні; за 24 години їхні доставки пропали б."),
+        undo: L("Answer the decision on «Back off webhook retries» again with 24 hours; the stage runs again.", "Дай іншу відповідь на рішення в «Затримка повторів вебхуків» — 24 години; етап запуститься знову."),
+      },
+      {
+        id: "d2", at: isoAt(bootSeconds - HOUR - 40 * MIN), taskId: "t-receipts", by: seatActor,
+        decision: L("Receipts go out as plain text with a one-line summary.", "Квитанції йдуть простим текстом з підсумком в один рядок."),
+        why: L("The other order emails are plain text, so no template engine is added.", "Інші листи про замовлення — простий текст, тож рушій шаблонів не потрібен."),
+        undo: L("Ask the orchestrator for the HTML variant on «Email a receipt for each refund».", "Попроси оркестратора про HTML-варіант у задачі «Квитанція на кожне повернення»."),
+      },
+      {
+        id: "d3", at: isoAt(bootSeconds - 3 * HOUR - 5 * MIN), by: seatActor,
+        decision: L("Refund calls keep the same 10 s provider timeout.", "Виклики повернень мають той самий тайм-аут провайдера 10 с."),
+        why: L("They go through the same provider client; one limit is easier to reason about.", "Вони йдуть через того самого клієнта провайдера; одну межу простіше тримати в голові."),
+        undo: L("Set a separate refunds timeout in the provider client and tell the orchestrator.", "Задай окремий тайм-аут повернень у клієнті провайдера і скажи оркестраторові."),
+      },
+    ],
+  };
+}
+
+/* ── agent memory: the learned rules and their curator ────────────── */
+
+/**
+ * The example rules. Each is a new text written for strangers from a rule an
+ * agent of that kind really carries: generic, with no person, account, path,
+ * id or project name, and within the product's 300 and 160 character limits.
+ */
+export const EXAMPLE_RULES = {
+  O1: {
+    rule: ["Answer a quick question from data you already have in the same turn. Start a pipeline only for work that needs one.",
+      "Швидке питання, на яке вже є дані, закривай тим самим ходом. Пайплайн запускай лише для роботи, якій він потрібен."],
+    why: ["A pipeline for a one-line answer made the person wait for a free slot.",
+      "Пайплайн заради відповіді в один рядок змусив людину чекати вільного місця."],
+  },
+  O2: {
+    rule: ["Run a load test that needs the whole machine at a quiet hour, in small batches, and stop starting runs when asked.",
+      "Навантажувальний тест, якому потрібна вся машина, запускай у тиху годину, малими партіями, і припиняй нові запуски на прохання."],
+    why: ["While it ran, every other task's checks slowed down.",
+      "Поки він ішов, перевірки всіх інших задач сповільнились."],
+  },
+  B1: {
+    rule: ["Change only what was asked. Add no labels, notices or explanations nobody requested; fix the cause of a complaint instead of explaining it.",
+      "Змінюй лише те, що просили. Не додавай написів, повідомлень чи пояснень, яких ніхто не просив; виправляй причину скарги, а не пояснюй її."],
+    why: ["Extra text added to answer one complaint became the next complaint.",
+      "Зайвий текст, доданий у відповідь на скаргу, став наступною скаргою."],
+  },
+  R1: {
+    rule: ["To prove the output never contains something, make the test's fake input contain it and check what comes out. A fake that already behaves passes before the fix and proves nothing.",
+      "Щоб довести, що у виході чогось ніколи немає, дай це в підробленому вході тесту й перевір, що вийде. Підробка, яка вже поводиться правильно, проходить і до виправлення та нічого не доводить."],
+    why: ["A test written the easy way stayed green with the bug put back.",
+      "Тест, написаний легким шляхом, лишався зеленим і з поверненою помилкою."],
+  },
+  A1: {
+    rule: ["When a design turns a setting on by default, list the existing tests that now reach it and the state they share.",
+      "Коли дизайн вмикає налаштування за замовчуванням, перелічи наявні тести, які тепер до нього доходять, і спільний стан між ними."],
+    why: ["Tests that passed one by one failed together after a default changed.",
+      "Тести, що проходили поодинці, впали разом після зміни типового значення."],
+  },
+  P1: {
+    rule: ["A fresh checkout has no dependencies: install them from the lockfile before the first commit, and never skip the commit hook to get past an error.",
+      "У свіжій копії репозиторію немає залежностей: встанови їх із lock-файлу перед першим комітом і ніколи не обходь хук коміту, щоб проскочити помилку."],
+    why: ["The hook failed on a missing module, and skipping it let a lint error through.",
+      "Хук упав через відсутній модуль, а його обхід пропустив помилку лінтера."],
+  },
+  M1: {
+    rule: ["Delete only the temporary files your own script created and recorded. Never choose files to delete by a name pattern.",
+      "Видаляй лише тимчасові файли, які створив і записав твій власний скрипт. Ніколи не обирай файли для видалення за шаблоном імені."],
+    why: ["A pattern matched files another task was still using.",
+      "Шаблон зачепив файли, якими ще користувалась інша задача."],
+  },
+  M2: {
+    rule: ["When a test run stops at its time limit, run it again with a longer limit before reading the results as failures.",
+      "Якщо прогін тестів зупинився на ліміті часу, перезапусти його з довшим лімітом, перш ніж вважати результати падінням."],
+    why: ["Tests cut off by the limit looked like real failures.",
+      "Тести, обірвані лімітом, виглядали як справжні падіння."],
+  },
+  /* The builder rule's text before the curator merged it with its twin. */
+  B1earlier: {
+    rule: ["Build only the change the task asks for, and add no notice that explains it.",
+      "Роби лише ту зміну, про яку просить задача, і не додавай повідомлення, що її пояснює."],
+    why: ["An explanation added to the page drew a complaint of its own.",
+      "Пояснення, додане на сторінку, само викликало скаргу."],
+  },
+  /* An invented one-task rule the curator archived. */
+  P0: {
+    rule: ["Retry the March refunds export twice before reporting it.",
+      "Повтори березневий експорт повернень двічі, перш ніж звітувати."],
+    why: ["The export failed once and then worked.",
+      "Експорт раз упав, а потім спрацював."],
+  },
+} as const;
+
+export const RULE_IDS = { O1: "rule-o1", O2: "rule-o2", B1: "rule-b1", R1: "rule-r1", A1: "rule-a1", P1: "rule-p1", M1: "rule-m1", M2: "rule-m2", P0: "rule-p0" } as const;
+
+/** The project's learned rules as `GET /api/role-memory` answers them. */
+export function buildRoleMemory(lang: Lang, bootSeconds: number): RoleMemoryProjectView {
+  const i = lang === "uk" ? 1 : 0;
+  const ago = (seconds: number) => isoAt(bootSeconds - seconds);
+  const curated = ago(2 * HOUR);
+  const rule = (key: Exclude<keyof typeof EXAMPLE_RULES, "B1earlier">, roleId: string | null, over: Partial<RuleView> = {}): RuleView => ({
+    id: RULE_IDS[key], rule: EXAMPLE_RULES[key].rule[i], why: EXAMPLE_RULES[key].why[i], state: "active", hints: [], tasks: 1,
+    roleId, fixRound: false, stageId: roleId === "orchestrator" ? "seat" : "build", fresh: false,
+    createdAt: ago(5 * 24 * HOUR), changedAt: curated, curatedAt: curated, awaitingCuration: false, ...over,
+  });
+  const scope = (id: string, kind: ScopeView["kind"], roleId: string | null, active: RuleView[], left: RuleView[] = []): ScopeView => ({
+    scope: id, kind, roleId, revision: active.length + left.length + 1, bound: 10_000, addedToday: active.filter((entry) => entry.fresh).length,
+    chars: active.reduce((sum, entry) => sum + entry.rule.length + entry.why.length, 0), active, left,
+  });
+  const curatorRevision = { by: "curator" as const, at: curated };
+  return {
+    project: PROJECT, enabled: true,
+    scopes: [
+      scope(`role:${PROJECT}:orchestrator`, "role", "orchestrator", [rule("O2", "orchestrator", { createdAt: ago(3 * 24 * HOUR) })]),
+      scope("role:*:orchestrator", "role", "orchestrator", [rule("O1", "orchestrator", { tasks: 3 })]),
+      scope("role:*:builder", "role", "builder", [rule("B1", "builder", {
+        tasks: 4, revisedBy: curatorRevision, mergedFrom: ["rule-b1a", "rule-b1b"],
+        versions: [{ id: "rule-b1-v1", rule: EXAMPLE_RULES.B1earlier.rule[i], why: EXAMPLE_RULES.B1earlier.why[i], hints: [], createdAt: ago(4 * 24 * HOUR) }],
+      })]),
+      scope("role:*:reviewer", "role", "reviewer", [rule("R1", "reviewer", { stageId: "review", fixRound: true, tasks: 2 })]),
+      scope("role:*:architect", "role", "architect", [rule("A1", "architect", { stageId: "design", awaitingCuration: true, curatedAt: undefined, fresh: true, createdAt: ago(40 * MIN), changedAt: ago(40 * MIN) })]),
+      scope(`project:${PROJECT}`, "project", null, [rule("P1", "builder", { tasks: 2 })],
+        [rule("P0", "verifier", { state: "archived", reason: "task-specific", stageId: "verify", changedAt: curated })]),
+      scope("machine", "machine", null, [rule("M1", "builder", { tasks: 2 }), rule("M2", "verifier", { stageId: "verify" })]),
+    ],
+    curation: { lastAt: curated, nextAt: isoAt(bootSeconds + 4 * HOUR), newLessons: 1, passes: curatorPasses(bootSeconds) },
+  };
+}
+
+/** The curator's two latest passes: today's, and yesterday's, which was undone. */
+export function curatorPasses(bootSeconds: number): CuratorPassView[] {
+  return [
+    { id: "pass-2", state: "succeeded", claimedAt: isoAt(bootSeconds - 2 * HOUR - 6 * MIN), endedAt: isoAt(bootSeconds - 2 * HOUR), failure: null,
+      counts: { calls: 1, changed: 4, rewritten: 2, merged: 1, moved: 0, split: 0, archived: 1, restored: 0 } },
+    { id: "pass-1", state: "succeeded", claimedAt: isoAt(bootSeconds - 26 * HOUR - 5 * MIN), endedAt: isoAt(bootSeconds - 26 * HOUR), failure: null,
+      counts: { calls: 1, changed: 1, rewritten: 1, merged: 0, moved: 0, split: 0, archived: 0, restored: 0 }, revertedAt: isoAt(bootSeconds - 25 * HOUR) },
+  ];
+}
+
+/** The line under the refunds Review report: the reviewer left one rule. */
+export function buildLessons(step: number, lang: Lang): StageLessonView[] {
+  if (step < 4) return [];
+  return [{ pipelineId: "p-refunds", stageId: "review", attempt: 1, none: null,
+    rules: [{ id: RULE_IDS.R1, rule: EXAMPLE_RULES.R1.rule[lang === "uk" ? 1 : 0], scope: "role", roleId: "reviewer" }] }];
+}
+
+/** The window's Profile page: a finished summary in the frame's language. */
+export function buildProfile(lang: Lang, bootSeconds: number, rules: RoleMemoryProjectView): MemoryProfileView {
+  const L = (en: string, uk: string) => (lang === "uk" ? uk : en);
+  const part = (scope: string, headline: string, text: string, topics: ProfilePartView["answer"]["topics"] = []): ProfilePartView => ({
+    scope, model: "claude-opus-5-5", promptVersion: 1, createdAt: isoAt(bootSeconds - 2 * HOUR + 4 * MIN), durationMs: 41_000, stale: false, answer: { headline, text, topics },
+  });
+  const slice: Record<string, [string, string, string, string]> = {
+    [`role:${PROJECT}:orchestrator`]: ["Heavy runs wait for a quiet hour", "Big load tests run in small batches when the machine is free.", "Важкі прогони чекають тихої години", "Великі навантажувальні тести йдуть малими партіями, коли машина вільна."],
+    "role:*:orchestrator": ["Small questions get small answers", "A question the data already answers never waits for a pipeline.", "Малі питання — малі відповіді", "Питання, на яке вже є дані, не чекає на пайплайн."],
+    "role:*:builder": ["Only what was asked", "Builders change what the task names and fix causes instead of explaining them.", "Лише те, що просили", "Білдери змінюють те, що названо в задачі, і виправляють причини, а не пояснюють їх."],
+    "role:*:reviewer": ["Tests that can fail", "A reviewer checks that a test would turn red with the bug put back.", "Тести, які можуть впасти", "Рев’юер перевіряє, що тест почервоніє, якщо повернути помилку."],
+    "role:*:architect": ["Defaults reach old tests", "A new default comes with the list of tests it now touches.", "Типові значення доходять до старих тестів", "Нове типове значення приходить зі списком тестів, яких воно тепер торкається."],
+    [`project:${PROJECT}`]: ["Hooks stay on", "Dependencies come from the lockfile, and the commit hook is never skipped.", "Хуки лишаються ввімкненими", "Залежності беруться з lock-файлу, а хук коміту ніколи не обходять."],
+    machine: ["Clean up only your own", "Delete what you created, and read a timed-out run as unfinished.", "Прибирай лише своє", "Видаляй те, що створив сам, а прогін, що вперся в ліміт, вважай незавершеним."],
+  };
+  const rule = (key: keyof typeof RULE_IDS) => RULE_IDS[key];
+  return {
+    project: PROJECT, locale: lang, enabled: true, model: "claude-opus-5-5", stale: false, changes: { added: 0, rewritten: 0, removed: 0 },
+    ruleCount: rules.scopes.reduce((sum, scope) => sum + scope.active.length, 0),
+    overall: part("overall",
+      L("Prove it on the real path, change only what was asked, clean up only your own", "Доводь на справжньому шляху, змінюй лише те, що просили, прибирай лише своє"),
+      L("What this project's agents have learned: prove claims with the real path, keep changes to what was asked, and clean up only what you created.",
+        "Чого навчились агенти цього проєкту: доводити твердження справжнім шляхом, тримати зміни в межах прохання і прибирати лише те, що створили самі."),
+      [
+        { title: L("Proof", "Докази"), text: L("A test has to fail without the fix; a timed-out run is not a failure.", "Тест має падати без виправлення; прогін, що вперся в ліміт, — не падіння."), ruleIds: [rule("R1"), rule("A1"), rule("M2")] },
+        { title: L("Scope", "Межі"), text: L("Change what was asked and answer small questions at once.", "Змінюй те, що просили, а на малі питання відповідай одразу."), ruleIds: [rule("B1"), rule("O1")] },
+        { title: L("Shared machine", "Спільна машина"), text: L("Heavy runs wait, hooks stay on, and only your own files are deleted.", "Важкі прогони чекають, хуки працюють, а видаляються лише свої файли."), ruleIds: [rule("O2"), rule("P1"), rule("M1")] },
+      ]),
+    slices: rules.scopes.filter((scope) => scope.active.length).map((scope) => {
+      const words = slice[scope.scope];
+      return { scope: scope.scope, kind: scope.kind, roleId: scope.roleId, acrossProjects: scope.scope.startsWith("role:*:"), count: scope.active.length,
+        summary: words ? part(scope.scope, L(words[0], words[2]), L(words[1], words[3])) : null };
+    }),
+    run: { state: "done", startedAt: isoAt(bootSeconds - 2 * HOUR + 3 * MIN), errors: [], durationMs: 41_000 },
+  };
+}
+
+/* ── limits: what each task spent, and the account's history ─────── */
+
+/** Each task's estimated share of the weekly limits, as `GET /api/task-spend`
+    answers the owner: Claude first, then Codex. Account weeks match the
+    accounts panel (Main 31% of its week, Work 12%, Codex Main 22%). */
+export function buildTaskSpend(lang: Lang): Record<string, TaskSpendSummary> {
+  const L = (en: string, uk: string) => (lang === "uk" ? uk : en);
+  const WEEK = { claude: { main: 31, work: 12 }, codex: { main: 22 } } as const;
+  const account = (engine: "claude" | "codex", id: "main" | "work", label: string, plan: string, pp: number, sessionPp: number | null = null) => ({
+    key: `${engine}:${id}`, label, plan, weeklyPp: pp, tokens: Math.round(pp * 410_000),
+    week: { usedPercent: engine === "claude" ? WEEK.claude[id] : WEEK.codex.main, taskPp: pp }, sessionPp,
+  });
+  const main = L("Main", "Основний");
+  const claude = (pp: number, accounts = [account("claude", "main", main, "max", pp)]) =>
+    ({ engine: "claude" as const, weeklyPp: pp, tokens: Math.round(pp * 410_000), bound: "approx" as const, floor: null, accounts });
+  const codex = (pp: number) =>
+    ({ engine: "codex" as const, weeklyPp: pp, tokens: Math.round(pp * 380_000), bound: "approx" as const, floor: null, accounts: [account("codex", "main", main, "pro", pp)] });
+  const spend = (...providers: TaskSpendSummary["providers"]): TaskSpendSummary => ({ providers });
+  return {
+    "t-refunds": spend(claude(3.2, [account("claude", "main", main, "max", 2.1, 9), account("claude", "work", L("Work", "Робочий"), "max", 1.1)]), codex(1.4)),
+    "t-retries": spend(claude(2.0), codex(0.6)),
+    "t-keys": spend(claude(0.4)),
+    "t-logs": spend(claude(0.8)),
+    "t-receipts": spend(claude(1.2)),
+    "t-postgres": spend(claude(6.3), codex(2.1)),
+    "t-charges": spend(claude(1.9), codex(0.7)),
+    "t-health": spend(claude(0.9)),
+    "t-timeouts": spend(claude(1.1)),
+    "t-grid": spend(claude(0.7)),
+    "t-cart": spend(claude(0.5)),
+    "t-drafts": spend(claude(0.6)),
+    "t-import": spend(claude(0.3)),
+  };
+}
+
+/** Remaining quota sampled through the current window: flat at night, faster
+    in working hours, ending at what the footer reads now. */
+function series(nowSeconds: number, resetsAt: number, windowSeconds: number, stepSeconds: number, endRemaining: number): BurndownSeries {
+  const windowStart = resetsAt - windowSeconds;
+  const times: number[] = [];
+  for (let at = windowStart; at < nowSeconds; at += stepSeconds) times.push(at);
+  times.push(nowSeconds);
+  /* How hard the agents worked in each step: the hours between 08 and 20 UTC carry the work. */
+  const weight = (at: number) => {
+    const hour = new Date(at * 1000).getUTCHours();
+    return hour >= 8 && hour < 20 ? 1 + 0.35 * Math.sin(at / 5400) : 0.12;
+  };
+  const weights = times.map((at, index) => (index === 0 ? 0 : weight(at)));
+  const total = weights.reduce((sum, value) => sum + value, 0) || 1;
+  let spent = 0;
+  const samples = times.map((t, index) => {
+    spent += weights[index]!;
+    return { t, remaining: Math.round((100 - (100 - endRemaining) * (spent / total)) * 10) / 10 };
+  });
+  return { windowStart, resetsAt, windowSeconds, samples };
+}
+
+/** `GET /api/limits/history`: the active account of each engine, its week and
+    its five hours, at the readings `/api/limits` gives for them. */
+export function buildLimitsHistory(nowSeconds: number): BurndownPayload {
+  const WEEK = 7 * 24 * HOUR;
+  const FIVE = 5 * HOUR;
+  return {
+    claudeAccountId: "main", codexAccountId: "main", historySince: isoAt(nowSeconds - 9 * 24 * HOUR),
+    claude: { weekly: series(nowSeconds, nowSeconds + 3 * 24 * HOUR, WEEK, 30 * MIN, 69), session: series(nowSeconds, nowSeconds + 140 * MIN, FIVE, 5 * MIN, 58) },
+    codex: { weekly: series(nowSeconds, nowSeconds + 3 * 24 * HOUR, WEEK, 30 * MIN, 78), session: series(nowSeconds, nowSeconds + 170 * MIN, FIVE, 5 * MIN, 65) },
+  };
 }
