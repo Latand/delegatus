@@ -2,6 +2,7 @@ import { expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { pathToFileURL } from "node:url";
 import { AgentRegistry, normalizeRegistry } from "@/lib/agent/registry";
 import { SqliteAgentRegistryStore } from "@/lib/agent/sqliteRegistryStore";
 import { OWNERSHIP_PRELOAD, ownershipSandbox } from "@/lib/state/fixtures/ownershipSandbox";
@@ -17,7 +18,8 @@ function fixture(receiptsReady = true) {
   const sandbox = ownershipSandbox();
   const directory = path.join(sandbox.home, ".config", "agent-log-viewer", "state");
   fs.mkdirSync(directory, { recursive: true });
-  fs.symlinkSync("agent-log-viewer", path.join(sandbox.home, ".config", "delegatus"), "dir");
+  fs.symlinkSync(path.join(sandbox.home, ".config", "agent-log-viewer"), path.join(sandbox.home, ".config", "delegatus"),
+    process.platform === "win32" ? "junction" : "dir");
   const filename = path.join(directory, "agent-registry.json");
   // The version-2 JSON shape used by the July registry and the JSON-only
   // migration tests. The current launch adds its digest to the old registry.
@@ -280,6 +282,8 @@ test("the HTTP boundary logs a bounded, redacted caller-identification exception
   const secret = "credential".repeat(4);
   const filename = path.join(process.env.HOME!, "private", "registry.sqlite");
   const logging = spyOn(console, "error").mockImplementation(value => { logs.push(String(value)); });
+  const { trackMcpClaim } = await import("../../../bin/mcp-lifecycle.mjs");
+  const pending = Array.from({ length: 256 }, (_, index) => trackMcpClaim(`get_task:pending-${index}`, "fixture"));
   setMcpHttpDependenciesForTests({ service: async () => { throw new Error("unexpected service construction"); },
     conversationForCapability() { throw new Error(`${capability} ${filename}\nAuthorization: Bearer ${secret}\n${"Ω".repeat(5_000)}`); } });
   try {
@@ -295,7 +299,7 @@ test("the HTTP boundary logs a bounded, redacted caller-identification exception
     expect(logs[0]).not.toContain(secret);
     expect(logs[0]).not.toContain(filename);
     expect(Buffer.byteLength(logs[0]!)).toBeLessThan(4096);
-  } finally { setMcpHttpDependenciesForTests(null); logging.mockRestore(); }
+  } finally { for (const release of pending) release(); setMcpHttpDependenciesForTests(null); logging.mockRestore(); }
 });
 
 test("an HTTP MCP client initializes and discovers tools on migrated state across executor restarts", async () => {
@@ -305,10 +309,9 @@ test("an HTTP MCP client initializes and discovers tools on migrated state acros
   const { NextRequest } = await import("next/server");
   const { handleMcpHttpRequest } = await import("./http");
   const { McpTaskExecutor } = await import("./taskExecutor");
-  const executable = path.join(f.sandbox.temporaryRoot(), "fixture-bun");
-  const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-  fs.writeFileSync(executable, `#!/bin/sh\nexec ${quote(process.execPath)} --preload ${quote(OWNERSHIP_PRELOAD)} "$@"\n`, { mode: 0o700 });
-  const executor = new McpTaskExecutor({ launch: { executable, workerPath: path.resolve("src/lib/mcpTask.worker.ts") },
+  const workerPath = path.join(f.sandbox.temporaryRoot(), "fixture-worker.ts");
+  fs.writeFileSync(workerPath, `await import(${JSON.stringify(pathToFileURL(OWNERSHIP_PRELOAD).href)});\nawait import(${JSON.stringify(pathToFileURL(path.resolve("src/lib/mcpTask.worker.ts")).href)});\n`);
+  const executor = new McpTaskExecutor({ launch: { executable: process.execPath, workerPath },
     env: { ...f.sandbox.environment(), LLV_STATE_DIR: f.directory, LLV_TOKEN: "" } });
   const key = Symbol.for("llv.mcp.taskExecutor");
   const holder = globalThis as typeof globalThis & { [key]?: InstanceType<typeof McpTaskExecutor> };

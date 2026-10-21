@@ -92,8 +92,8 @@ Private-channel identification retains its synchronous admission contract.
 Both the HTTP boundary and worker record the caller-identification phase and
 exception. Error text is redacted before its 700-character bound; credentials,
 the presented capability and private paths are removed. Arguments, registry
-rows and raw stacks are excluded. A wait records its first underlying error
-and its terminal failure, rather than logging every retry.
+rows, raw stacks and unrelated active-claim lists are excluded. A wait logs
+its first underlying error once, and logs a terminal failure if one occurs.
 
 `src/lib/mcp/callerIdentification.test.ts` exercises real worker restarts,
 owner startup, the import/publication handoff, deadlines, rotation during a

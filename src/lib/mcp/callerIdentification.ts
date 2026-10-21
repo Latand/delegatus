@@ -1,16 +1,16 @@
-import { logMcpLifecycle } from "../../../bin/mcp-lifecycle.mjs";
 import { redactBounded } from "@/lib/monitor/redact";
 import { StateStartupMutationRefused } from "@/lib/stateOwnership";
 import { RegistryBackendIdentityError } from "@/lib/agent/registryBackendIdentity";
 import { StateLockDeferredError, stateDatabaseBusy, stateLockAttempt, stateLockDeferral, waitForStateLock } from "@/lib/state/lockWait";
 
 /** Never include a request, capability, registry row or raw stack in logs. */
-export function logCallerIdentificationError(error: unknown, capability?: string, outcome = "failed"): void {
+export function logCallerIdentificationError(error: unknown, capability?: string, outcome: "failed" | "waiting-for-registry" = "failed"): void {
   const clean = (value: string) => redactBounded(capability ? value.replaceAll(capability, "[redacted]") : value, 700);
-  logMcpLifecycle("caller-identification", {
-    phase: "registry-read", outcome,
+  // A diagnostic has a fixed shape even while unrelated tool claims are live.
+  console.error(`[mcp caller-identification] ${JSON.stringify({
+    pid: process.pid, phase: "caller-identification", operation: "registry-read", outcome,
     error: clean(error instanceof Error ? `${error.name}: ${error.message}` : String(error)),
-  });
+  })}`);
 }
 
 /** The serving owner performs migrations. Readers wait without taking that
