@@ -48,7 +48,7 @@ function withDocument(request: ExternalRelayRequest, extraction: "complete" | "t
   } });
 }
 
-test.each(["reply", "owner", "captionless"])("%s attachment is fetched in initial and continuation prompts", kind => {
+test.each(["reply", "owner", "captionless", "parameterized-mime"])("%s attachment is fetched in initial and continuation prompts", kind => {
   const request = attachmentRequest();
   if (kind === "owner") {
     request.input.conversation[0]!.text = "Unrelated text";
@@ -56,6 +56,7 @@ test.each(["reply", "owner", "captionless"])("%s attachment is fetched in initia
     request.input.conversation[1]!.reply_to = null;
   }
   if (kind === "captionless") request.input.conversation[0]!.text = marker;
+  if (kind === "parameterized-mime") request.input.conversation[0]!.text = marker.replace("text/markdown", "text/markdown; charset=utf-8");
   for (const prompt of prompts(request)) {
     expect(prompt).toContain(instruction(kind === "owner" ? ownerId : documentId));
     expect(prompt.match(/\[Before answering, fetch /g)).toHaveLength(1);

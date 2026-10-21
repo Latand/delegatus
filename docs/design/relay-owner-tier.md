@@ -22,6 +22,7 @@ fields. Negotiated `Message.media` entries carry `ref`, `kind`, `filename`,
 entries carry `title`, `text`, `message_id`, `media_ref` and `extraction`.
 The existing service-wire tool fixture describes `get_media` as a direct read
 with a required `message_id` argument.
+The marker's MIME value may include parameters such as `charset=utf-8`.
 
 For a marked owner message or its explicit reply target, the initial and
 continuation prompts instruct the agent to fetch the attachment with direct

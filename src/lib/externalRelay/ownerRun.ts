@@ -43,7 +43,7 @@ function ownerAttachmentInstructions(request: ExternalRelayRequest, owner: Owner
   const missing = request.input.conversation.filter(message => {
     if (message.id !== trigger?.id && message.id !== trigger?.reply_to) return false;
     // The service appends this marker to text, including captioned documents.
-    const marker = message.text.match(/^\[Document attached; filename=([^\r\n]+); mime_type=[^;\r\n]+; byte_size=\d+\]$/m);
+    const marker = message.text.match(/^\[Document attached; filename=([^\r\n]+); mime_type=[^\r\n]+; byte_size=\d+\]$/m);
     if (!marker) return false;
     return !request.input.documents.some(document => document.text.trim() && document.extraction !== "unavailable" &&
       (document.message_id === message.id || document.media_ref && message.media?.some(media => media.ref === document.media_ref && media.kind === "document") ||
