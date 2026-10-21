@@ -62,9 +62,14 @@ import { prototypeReviewSummary, prototypeRoundsSuperseded } from "@/lib/prototy
 import type { PrototypeAnswer, PrototypeQuestion, PrototypeDeliveryPhase, PrototypeDeliveryState, PrototypeMediaView, PrototypeReviewSummary, PrototypeRoundView } from "@/lib/prototypeReview/types";
 import { fireTasksChanged } from "@/components/tasks/taskApi";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
+import type { TaskSpendAccount, TaskSpendProvider, TaskSpendSummary } from "@/lib/activity/taskLimitSpendTypes";
 import type { FileEntry } from "@/lib/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
 import { refreshTeamView } from "@/components/team/teamClient";
+import { TeamPage } from "@/components/team/TeamPage";
+import { WorkspacePage } from "@/components/team/WorkspacePage";
+import { FIXTURE_WORKSPACE_IDS, workspacesFixture } from "@/components/team/workspacesEvidence.fixture";
+import { WORKSPACE_STORAGE_KEY } from "@/components/team/workspacesClient";
 
 /*
  * The real Viewer on the kanban face (#1695), over invented content equivalent
@@ -1711,7 +1716,7 @@ const pipelines: Pipeline[] = [
 if (CPU_QUEUE) {
   Object.assign(searchVer2, { activity: "idle", proc: null, pid: null, authoritativeTurn: { state: "terminal", source: "lifecycle", terminalAt: iso(5 * MIN) }, lastTurn: { startedAt: (now - 400) * 1_000, endedAt: (now - 300) * 1_000 } });
   const waiting = pipelines.find(p => p.id === "p-search")!;
-  waiting.stateDetail = `Waiting for the CPU queue · ${SCENARIO === "cpu-queue-stalled" ? "7th · stalled for 62 min" : "2nd · up to 7 min"} · Viewer publication: owner; owner viewer, epoch 1`;
+  waiting.stateDetail = `Waiting for the CPU queue · ${SCENARIO === "cpu-queue-stalled" ? "7th · stalled for 62 min" : "2nd · up to 7 min"} · high priority · Viewer publication: owner; owner viewer, epoch 1`;
   waiting.cursor = { stageId: "verify", state: "pending", input: null, activatedBy: null };
   waiting.runs.find(r => r.stageId === "verify")!.attempts = [attempt(3, "pending", null, { startedAt: null })] as Pipeline["runs"][number]["attempts"];
 }
@@ -3237,6 +3242,57 @@ if (OVERVIEW_PERFORMANCE) {
    agent's renders have — a desktop board, a phone screen, a wide strip, a
    small crop — so the grid meets the aspect ratios it will meet. */
 const ALBUM = params.get("album") === "1";
+/* Task limit spend (`&spend=1`, docs/design/task-limit-spend.md §7.2): each
+   state the card's marks and popover draw, as `GET /api/task-spend` answers
+   them — one provider, two, several accounts of one provider, a tiny spend, a
+   large one with a lower bound, an account with no limit readings, and a task
+   still being counted (no rows yet). `&spend=guest` answers as it does to a
+   member who is not the owner: no account detail. */
+const SPEND = params.get("spend");
+function spendAccount(key: string, label: string, plan: string | null, weeklyPp: number | null, tokens: number, used: number | null, taskPp: number | null, sessionPp: number | null = null): TaskSpendAccount {
+  return { key, label, plan, weeklyPp, tokens, week: used === null ? null : { usedPercent: used, taskPp }, sessionPp };
+}
+function spendProvider(engine: "claude" | "codex", accounts: TaskSpendAccount[], bound: TaskSpendProvider["bound"] = "approx", floor: TaskSpendProvider["floor"] = null): TaskSpendProvider {
+  return { engine, bound, floor, accounts, weeklyPp: accounts.reduce((sum, a) => sum + (a.weeklyPp ?? 0), 0), tokens: accounts.reduce((sum, a) => sum + a.tokens, 0) };
+}
+const SPEND_TASKS: Record<string, TaskSpendSummary> = {
+  /* Two providers, the measured lane of the research rounded; Claude's first
+     account, named as an operator names one, is in its current 5-hour window. */
+  "t-search": { providers: [
+    spendProvider("claude", [spendAccount("claude:a", "Research workstation", "max", 2.1, 132_000_000, 53, 2.1, 12), spendAccount("claude:b", "B", "max", 1, 61_000_000, 31, 1)]),
+    spendProvider("codex", [spendAccount("codex:a", "A", "pro", 1.2, 24_000_000, 47, 1.2), spendAccount("codex:b", "B", "pro", 0.4, 9_000_000, 22, 0.4)]),
+  ] },
+  /* Several accounts of one provider, and a tiny Claude share. */
+  "t-export": { providers: [
+    spendProvider("claude", [spendAccount("claude:a", "A", "max", 0.4, 21_000_000, 53, 0.4)]),
+    spendProvider("codex", [spendAccount("codex:a", "A", "pro", 4.2, 88_000_000, 61, 4.2), spendAccount("codex:b", "B", "plus", 2.1, 12_000_000, 38, 2.1), spendAccount("codex:d", "D", "pro", 1, 19_000_000, 12, 1)]),
+  ] },
+  /* One provider. */
+  "t-upload": { providers: [spendProvider("codex", [spendAccount("codex:a", "A", "pro", 1.1, 23_000_000, 47, 1.1)])] },
+  /* A tiny spend. */
+  "t-links": { providers: [spendProvider("claude", [spendAccount("claude:b", "B", "max", 0.3, 17_000_000, 31, 0.3)])] },
+  /* A Claude account with no limit readings: tokens only. */
+  "t-disk": { providers: [
+    spendProvider("claude", [spendAccount("claude:c", "C", "max", null, 41_000_000, null, null)], "norate"),
+    spendProvider("codex", [spendAccount("codex:a", "A", "pro", 1, 21_000_000, 47, 1)]),
+  ] },
+  /* Still being counted: the task is known and has no rows yet, so the card draws nothing. */
+  "t-merge-a": { providers: [] },
+  /* A large spend; Claude's began before counting did, so it is a lower bound.
+     Its account carries a label at the 80-character cap. */
+  "t-interrupt": { providers: [
+    spendProvider("claude", [spendAccount("claude:a", "Research workstation in the second office, shared by the whole data team on site", "max", 12.4, 610_000_000, 66, 12.4)], "floor", "before-counting"),
+    spendProvider("codex", [spendAccount("codex:a", "A", "pro", 21.3, 402_000_000, 74, 21.3), spendAccount("codex:d", "D", "pro", 12.9, 250_000_000, 40, 12.9)]),
+  ] },
+};
+function spendAnswer(ids: readonly string[]): { generatedAt: number; tasks: Record<string, TaskSpendSummary> } {
+  const tasks: Record<string, TaskSpendSummary> = {};
+  for (const id of ids) {
+    const summary = SPEND_TASKS[id];
+    if (summary) tasks[id] = SPEND === "guest" ? { providers: summary.providers.map((provider) => ({ ...provider, accounts: null })) } : summary;
+  }
+  return { generatedAt: Date.now(), tasks };
+}
 /* `&olderfails=1`: the album's and the report log's older pages are refused,
    so «Show older» meets the line that says so beside it. */
 const OLDER_FAILS = params.get("olderfails") === "1";
@@ -3830,6 +3886,21 @@ const workerAnswer = (project: string | null) => ({
   running: { here: project ? workerRunning : null, machine: WORKER_SCENE ? 19 : 0 },
 });
 const HEADER_ROUTES = ["/api/telemetry", "/api/memory/settings", "/api/asks-you/key", "/api/team"];
+/* Team workspaces (docs/design/workspaces.md §13.9): `?scenario=workspaces` is the Viewer over the rail's
+   projects (`&rail=1`) on a team install; `workspaces-team` and `workspaces-page` mount the Team page's
+   Workspaces tab and one workspace's page. `&member=1` signs the member in, `&ws=client|research|long|all`
+   is the browser's stored choice, `&create=1` opens New workspace. The routes answer in the page. */
+const WORKSPACE_PARAMS = new URLSearchParams(location.search);
+const WORKSPACES = SCENARIO?.startsWith("workspaces") ? workspacesFixture({
+  uk: UK,
+  member: WORKSPACE_PARAMS.has("member"),
+  projects: [{ project: PROJECT, displayName: "Atlas", smt: now - 20 * MIN }, ...railCatalog.map(({ project, displayName, smt }) => ({ project, displayName, smt }))],
+  placed: { client: [LEDGER, "harbor-docs"], research: [MESH], long: [RAIL_LONG] },
+}) : null;
+if (WORKSPACES) {
+  const chosen = WORKSPACE_PARAMS.get("ws");
+  if (chosen) localStorage.setItem(WORKSPACE_STORAGE_KEY, chosen === "all" ? "all" : FIXTURE_WORKSPACE_IDS[chosen as keyof typeof FIXTURE_WORKSPACE_IDS] ?? chosen);
+}
 const ROLE_MEMORY = new URLSearchParams(location.search).has("rolememory");
 /* The one request that leaves the page: the evidence server draws task icons from lucide (#2102). */
 const serverFetch = window.fetch.bind(window);
@@ -3840,6 +3911,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     && ["/api/files", "/api/tasks"].includes(url.pathname)) return serverFetch(input, init);
 
   const method = (init?.method ?? "GET").toUpperCase();
+  if (WORKSPACES) {
+    const answered = await WORKSPACES.answer(url, init);
+    if (answered) return answered;
+  }
   if (PIPELINE_INIT && url.pathname === "/api/pipelines/preflight") return PIPELINE_INIT === "refused"
     ? new Response(JSON.stringify({ error: "initialization refused for the Delegatus state directory", code: "initialization_refused", path: "/project" }), { status: 403 })
     : json({ ok: true, repoDir: "/project", gitCommonDir: "/project/.git", worktreeParent: "/" });
@@ -3963,6 +4038,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       ...(PROTO === "elsewhere" ? { unavailable: "another-installation" } : {}),
     });
   }
+  if (SPEND && url.pathname === "/api/task-spend") return json(spendAnswer((url.searchParams.get("ids") ?? "").split(",").filter(Boolean)));
   if (ALBUM && url.pathname === "/api/task-album") {
     const ids = (url.searchParams.get("ids") ?? "").split(",").filter((id) => albumItems()[id]);
     return json({ tasks: Object.fromEntries(ids.map((id) => {
@@ -4860,6 +4936,8 @@ function CodexCallbacksScene() {
   </main>;
 }
 
+/* The team view is read once the fetch double above answers it. */
+if (WORKSPACES) void refreshTeamView();
 if (HEADER_MENU && new URLSearchParams(location.search).has("member")) void refreshTeamView();
 const diskDensity = new URLSearchParams(location.search).get("disk-density");
 // Mount the production dock beside the Viewer for shared desktop-host cases.
@@ -4868,7 +4946,9 @@ if (dockWidth === "440" || dockWidth === "360") localStorage.setItem(`llvOrchest
 const relayChainEvidence: RelayChatsPayload = { relays: [{ id: "fixture-relay", name: "Example relay", origin: "https://relay.example" }], chats:
   (["member", "admin", "owner"] as const).map((authority, i) => ({ id: `chain-${i}`, relayId: "fixture-relay", relayName: "Example relay", targetId: "fixture-target", targetName: "Support bot", chatKey: "fixture-chat-chain-key", authority,
     engine: "claude", turns: 3, compactions: 0, createdAt: "2026-10-17T10:00:00Z", lastTurnAt: "2026-10-17T10:00:00Z", state: "idle", file: { ...files[0]!, path: `fixture-chain-${i}`, title: `Chain ${i}` } })) };
-createRoot(document.getElementById("root")!).render(PIPELINE_INIT ? <PipelineTemplatePicker repoDir="/project" onCreate={async () => ({})} onCreated={() => {}} onClose={() => {}} /> : SCENARIO === "relay-chain-list" ? <RelayChatsView relayId="fixture-relay" payload={relayChainEvidence} /> : dockWidth === "440" || dockWidth === "360" ? (
+createRoot(document.getElementById("root")!).render(SCENARIO === "workspaces-team" ? <TeamPage initialTab="workspaces" initialCreate={WORKSPACE_PARAMS.has("create")} />
+  : SCENARIO === "workspaces-page" ? <WorkspacePage id={FIXTURE_WORKSPACE_IDS[(WORKSPACE_PARAMS.get("page") ?? "client") as keyof typeof FIXTURE_WORKSPACE_IDS]} />
+  : PIPELINE_INIT ? <PipelineTemplatePicker repoDir="/project" onCreate={async () => ({})} onCreated={() => {}} onClose={() => {}} /> : SCENARIO === "relay-chain-list" ? <RelayChatsView relayId="fixture-relay" payload={relayChainEvidence} /> : dockWidth === "440" || dockWidth === "360" ? (
   <div className="flex h-full min-h-0">
     <OrchestratorDock project={PROJECT} projectName="Atlas" files={files} onClose={() => {}} />
     <div className="min-w-0 flex-1"><Viewer /></div>

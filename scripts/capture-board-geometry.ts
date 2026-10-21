@@ -241,6 +241,7 @@ import { createTailscaleStub, STUB_DNS_NAME } from "../src/test-helpers/tailscal
 
 import { createCaptureDirectory } from "./capture-directory";
 import { idleCheck, idleUpdate, stoppedProcess, MANAGED_STEPS, pendingSteps, type Snapshot } from "../src/lib/selfUpdate/types";
+import { clearRoleOverrides, loadRoleOverrides, saveRoleOverrides } from "../src/lib/roles/store";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
 /* The commit the record was captured from. A `git archive` export has no repository, so the caller
@@ -1016,6 +1017,9 @@ function healthAnswer(state: HealthState): unknown {
 
 async function captureOnboarding(): Promise<void> {
   const providerOnly = process.env.BOARD_CAPTURE_CASE === "provider-account";
+  process.env.HOME = HOME;
+  process.env.XDG_CONFIG_HOME = path.join(HOME, ".config");
+  process.env.LLV_STATE_DIR = STATE_DIR;
   const failures: string[] = [];
   const must = (ok: boolean, message: string) => { if (!ok) failures.push(message); };
   for (const dir of [REPO_DIR, OUT_DIR, BIN_DIR, path.join(HOME, ".claude"), path.join(BASE, "git-home"), path.join(BASE, "tmp", `claude-${process.getuid?.() ?? 1000}`), path.join(BASE, "tmux"), STATE_DIR, path.join(HOME, ".codex/sessions")]) fs.mkdirSync(dir, { recursive: true });
@@ -1037,7 +1041,7 @@ async function captureOnboarding(): Promise<void> {
   const tailscale = createTailscaleStub({ root: BASE });
   const resetInstall = async (codexInstalled: boolean) => {
     fs.rmSync(path.join(STATE_DIR, "onboarding.json"), { force: true });
-    fs.rmSync(path.join(STATE_DIR, "role-presets.json"), { force: true });
+    clearRoleOverrides();
     claudeSignedIn(true);
     /* Codex holds a credential while its command is missing: the card must
        still read Not installed, and its roles stay blocked (#1876 P1). */
@@ -1253,17 +1257,17 @@ async function captureOnboarding(): Promise<void> {
             await shot("agents-moved", (r) => {
               must(r.blockedRows === 0 && r.banner === null, `${tag}: after the move ${r.blockedRows} rows are still blocked`);
             });
-            const moved = JSON.parse(fs.readFileSync(path.join(STATE_DIR, "role-presets.json"), "utf8")) as { overrides: Record<string, { config?: { engine: string }; variants?: Record<string, { engine: string }> }> };
+            const moved = loadRoleOverrides();
             must(moved.overrides.reviewer?.config?.engine === "claude" && moved.overrides.builder?.variants?.["apply-fixes"]?.engine === "claude", `${tag}: the stored mapping after the move is ${JSON.stringify(moved.overrides)}`);
             await page.click("[data-mapping-receipt] button");
             await page.waitForSelector("[data-mapping-banner]", { timeout: 30_000 });
             /* The banner is back as soon as the answer lands; the file behind
                it is written by the server, so the read waits for it rather
                than racing it. */
-            let undone = { overrides: {} as Record<string, unknown> };
+            let undone = loadRoleOverrides();
             const undoneBy = Date.now() + 10_000;
             do {
-              undone = JSON.parse(fs.readFileSync(path.join(STATE_DIR, "role-presets.json"), "utf8")) as { overrides: Record<string, unknown> };
+              undone = loadRoleOverrides();
               if (Object.keys(undone.overrides).length === 0) break;
               await page.waitForTimeout(100);
             } while (Date.now() < undoneBy);
@@ -1309,8 +1313,7 @@ async function captureOnboarding(): Promise<void> {
                §5): the row says what it was, and Restore puts it back through
                the ordinary mapping write, which clears the notice. */
             const retirementId = "2026-09-builder-frontend-opus-xhigh";
-            const presetsFile = path.join(STATE_DIR, "role-presets.json");
-            fs.writeFileSync(presetsFile, JSON.stringify({ schemaVersion: 1, overrides: {}, retirements: { [retirementId]: { at: "2100-01-02T10:00:00.000Z", reset: { row: "builder:frontend", from: { engine: "claude", model: "opus", effort: "xhigh" } } } } }));
+            saveRoleOverrides({}, { [retirementId]: { at: "2100-01-02T10:00:00.000Z", reset: { row: "builder:frontend", from: { engine: "claude", model: "opus", effort: "xhigh" } } } });
             await page.reload({ waitUntil: "domcontentloaded" });
             await openStep("agents");
             await page.waitForSelector('[data-mapping-retired="builder:frontend"]', { timeout: 60_000 });
@@ -1323,14 +1326,13 @@ async function captureOnboarding(): Promise<void> {
             await page.waitForSelector('[data-mapping-retired="builder:frontend"]', { state: "detached" });
             /* The row turns "changed" as the write leaves; the file lands when
                the server answers, so the read waits for it. */
-            type StoredPresets = { overrides: { builder?: { variants?: { frontend?: { effort: string } } } }; retirements?: Record<string, { reset?: unknown }> };
-            let restored = JSON.parse(fs.readFileSync(presetsFile, "utf8")) as StoredPresets;
+            let restored = loadRoleOverrides();
             for (const restoredBy = Date.now() + 10_000; Date.now() < restoredBy && restored.overrides.builder?.variants?.frontend === undefined;) {
               await page.waitForTimeout(100);
-              restored = JSON.parse(fs.readFileSync(presetsFile, "utf8")) as StoredPresets;
+              restored = loadRoleOverrides();
             }
             must(restored.overrides.builder?.variants?.frontend?.effort === "xhigh" && restored.retirements?.[retirementId] !== undefined && restored.retirements[retirementId]!.reset === undefined, `${tag}: after Restore the stored mapping is ${JSON.stringify(restored)}`);
-            fs.writeFileSync(presetsFile, JSON.stringify({ schemaVersion: 1, overrides: {} }));
+            clearRoleOverrides();
             await page.unroute("**/api/accounts");
             codexSignedIn(false);
             fakeCli("codex", false);

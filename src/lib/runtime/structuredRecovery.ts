@@ -17,7 +17,7 @@ import type { MessageOrigin } from "./messageOrigin";
 
 import { accountPark, type AccountPark } from "./accountPark";
 import { runtimeHostClient, type RuntimeHostClient } from "./client";
-import { reconcileDeadStructuredRegistryHost } from "./registry";
+import { reconcileDeadStructuredRegistryHostOffLoop } from "./registry";
 import { restartCutEvidenceHolds } from "./restartCutHold";
 import { assertPipelineTurnAllowed } from "./accountCreditGuard";
 import { StructuredRecoveryContendedError } from "./structuredRecoveryContention";
@@ -30,6 +30,9 @@ import {
 } from "./structuredSpawn";
 import { spawnTransport } from "./spawnTransport";
 import { runtimeSwitchRetirementReason } from "@/lib/pipelines/runtimeSwitchFence";
+import { findPipelineRecord } from "@/lib/pipelines/store";
+import { instanceCpuPrioritySource } from "./cpuAdmissionScope";
+import { cpuPriorityEnv } from "./cpuPriority";
 
 export interface StructuredRecoveryRequest {
   /** Fresh autonomous seat authority, re-read after recovery's lock waits. */
@@ -416,7 +419,10 @@ async function recoverCandidate(
        check; a live or unverifiable host remains fenced. */
     if (!current.hostLive) {
       request.admissionGuard?.();
-      if (reconcileDeadStructuredRegistryHost(registry, current.conversationId, current.key)) {
+      if (await reconcileDeadStructuredRegistryHostOffLoop(registry, current.conversationId, current.key, () => {
+        request.admissionGuard?.();
+        assertRestartCutEvidenceDecided(candidate.key);
+      })) {
         request.admissionGuard?.(current.key);
       }
       current = candidateFor(registry, request, Boolean(ownership), park);
@@ -532,11 +538,18 @@ async function recoverCandidate(
     }
     let response: Awaited<ReturnType<typeof spawnStructuredConversation>>;
     try {
+      const pipelineTaskIds = registry.conversationMemberships(current.conversationId)
+        .filter(membership => membership.kind === "pipeline")
+        .flatMap(membership => findPipelineRecord(membership.containerId)?.taskIds ?? []);
+      const recoveredAccount = {
+        ...account,
+        env: { ...account.env, ...cpuPriorityEnv(instanceCpuPrioritySource(pipelineTaskIds)) },
+      };
       response = await (dependencies.spawn ?? spawnStructuredConversation)({
         engine: current.engine,
         receipt: begun.receipt,
         spec: current.spec,
-        account,
+        account: recoveredAccount,
         "prompt": "",
         registry,
         client,

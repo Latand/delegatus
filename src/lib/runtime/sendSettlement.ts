@@ -3,6 +3,7 @@ export { SEND_SEAT_REVOKED_REASON } from "@/lib/orchestrator/seatChannel";
 import {
   agentRegistry,
   conversationRegistryEntries,
+  deliveryRegistryEntriesForKey,
   ownsItsSettlement,
   readOnlyConversationLookupFromSnapshot,
   type AgentRegistry,
@@ -239,6 +240,9 @@ export interface SendSettlementPorts {
   now?: () => number;
   windowMs?: number;
   inTurnCeilingMs?: number;
+  /** An owning workflow may impose an earlier absolute cutoff on an admitted
+      send. Started work remains governed by its durable activity evidence. */
+  absoluteDeadline?: number;
   /** The bound on each evidence read; tests shorten it. */
   readMs?: number;
   /** The progress records a settled receipt is mirrored into; the Viewer's
@@ -473,7 +477,9 @@ export function journalVerdict(
   if (status === "failed" || status === "rejected") {
     return {
       state: "failed",
-      disposition: "lost",
+      // A discarded uncertain attempt may already have reached the engine.
+      // Recovery must retain that duplicate risk before registry projection.
+      disposition: reason === SEND_DISCARDED_REASON ? "unverified" : "lost",
       reason: reason === SEND_DISCARDED_REASON || reason === SEND_SEAT_REVOKED_REASON ? reason : SEND_LOST_REASON,
     };
   }
@@ -481,6 +487,23 @@ export function journalVerdict(
     return { state: "failed", disposition: "unverified", reason: SEND_UNVERIFIED_REASON };
   }
   return null;
+}
+
+/** Canonical evidence acknowledges the original operation without sending it.
+    The journal's transaction decides whether acknowledgement or discard won;
+    a stale status read cannot make that decision in the Viewer. */
+export async function confirmJournalDelivery(client: RuntimeHostClient, operationId: string): Promise<{
+  operationId: string; verdict: JournalVerdict;
+} | null> {
+  let result;
+  try {
+    result = await client.transitionOperation(operationId, "delivered", {}, { confirmedDelivery: true, awaitProjection: true });
+  } catch {
+    result = await client.operationStatus(operationId, { currentRetryLeaf: true });
+  }
+  const verdict = journalVerdict(result?.receipt.status ?? null, result?.receipt.reason);
+  return result && verdict && (verdict.state === "delivered" || result.receipt.reason === SEND_DISCARDED_REASON)
+    ? { operationId: result.operationId, verdict } : null;
 }
 
 /**
@@ -604,11 +627,13 @@ function pastSettlementDeadline(
   ports: SendSettlementPorts,
 ): boolean {
   if (!subject.settleable) return false;
+  const now = (ports.now ?? Date.now)();
+  if (ports.absoluteDeadline !== undefined && now >= ports.absoluteDeadline) return true;
   const acceptedAt = parseTime(subject.acceptedAt);
   /* An acceptance time that cannot be parsed can never age, and a send nothing
      can ever end is the silence this issue is about. */
   if (acceptedAt === null) return true;
-  const restedMs = (ports.now ?? Date.now)() - acceptedAt;
+  const restedMs = now - acceptedAt;
   if (restedMs < (ports.windowMs ?? SEND_SETTLEMENT_WINDOW_MS)) return false;
   if (restedMs >= (ports.inTurnCeilingMs ?? SEND_SETTLEMENT_IN_TURN_CEILING_MS)) return true;
   return !awaitingRecipientTurn(registry, file, subject.conversationId);
@@ -635,7 +660,9 @@ function settlementDeadline(
   const span = inTurn
     ? ports.inTurnCeilingMs ?? SEND_SETTLEMENT_IN_TURN_CEILING_MS
     : ports.windowMs ?? SEND_SETTLEMENT_WINDOW_MS;
-  return { deadlineAt: new Date(acceptedAt + span).toISOString(), policy: inTurn ? "in-turn-ceiling" : "settlement-window" };
+  const ordinaryDeadline = acceptedAt + span;
+  const deadline = ports.absoluteDeadline === undefined ? ordinaryDeadline : Math.min(ordinaryDeadline, ports.absoluteDeadline);
+  return { deadlineAt: new Date(deadline).toISOString(), policy: inTurn ? "in-turn-ceiling" : "settlement-window" };
 }
 
 export interface SettledSend {
@@ -889,6 +916,7 @@ async function settleSendReceipt(
   const snapshot = registry.readOnlySnapshot();
   const projected = sendReceiptFor(snapshot, operationId);
   if (!projected || projected.state === "delivered") return projected;
+  const client = ports.client === undefined ? runtimeHostClient() : ports.client;
   // A terminal unknown is a fence against replay, not a denial of a later
   // canonical acknowledgement. Keep explicit cancellation and proven loss.
   const mayConfirm = projected.state === "in-flight"
@@ -901,12 +929,23 @@ async function settleSendReceipt(
     ? await readEvidenceWithin(() => confirmedSend(snapshot, operationId, true), readMs, "host delivery evidence is unavailable")
     : null;
   if (confirmed?.readable && confirmed.value) {
+    if (client) {
+      const decision = await readEvidenceWithin(() => confirmJournalDelivery(client, operationId), readMs,
+        "canonical delivery acknowledgement is unavailable");
+      if (!decision.readable || !decision.value) return projected;
+      const settled = await settleProjection(registry, operationId, projected, decision.value.verdict, "delivery-journal");
+      const durable = sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId);
+      if (durable && durable.state !== "in-flight" && durable.state === settled.state && durable.reason === settled.reason) {
+        try { await client.acknowledgeTerminalProjection?.([decision.value.operationId]); }
+        catch { /* The retained receipt remains owed for the controller's repair. */ }
+      }
+      return settled;
+    }
     return settleProjection(registry, operationId, projected, {
       state: "delivered", disposition: "delivered", reason: null,
     }, "delivery-record");
   }
   if (projected.state !== "in-flight") return projected;
-  const client = ports.client === undefined ? runtimeHostClient() : ports.client;
   /* The journal read, keeping whether it happened at all. A socket that is not
      there is the runtime host being unreachable, which is the same answer as a
      read that threw: nothing was asked, so nothing was learned. */
@@ -1006,6 +1045,12 @@ async function settleProjection(
     const reconciled = sendReceiptFor(registry.readOnlySnapshot(), operationId);
     if (reconciled) return { ...reconciled, evidence };
   }
+  if (verdict.reason === SEND_DISCARDED_REASON && projected.conversationId?.startsWith("conversation_")) {
+    const written = await registry.recordDeliveryOutcomeForOperationOffLoop(
+      projected.conversationId as ViewerConversationId, operationId, "failed", SEND_DISCARDED_REASON, "unverified");
+    if (!written) return projected;
+    return sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId) ?? projected;
+  }
   const delivery = deliveryForOperation(file, operationId);
   if (delivery && (SETTLEABLE_DELIVERY_STATES.has(delivery.state)
     || (delivery.state === "failed" && verdict.state === "delivered"))) {
@@ -1080,7 +1125,7 @@ export type OriginalSendLookup =
 
 export function lookupOriginalSend(file: RegistryFile, binding: OriginalSendBinding): OriginalSendLookup {
   const lookup = readOnlyConversationLookupFromSnapshot(file);
-  const canonical = (id: string): string => lookup.conversation(id as ViewerConversationId)?.id ?? id;
+  const canonical = (id: string): string => lookup.canonicalConversationId(id as ViewerConversationId);
   /* The target is resolved through the registry's own lookup — a conversation
      id through its alias walk, a path through the path index — and a target
      nothing resolves matches nothing. An exact id the registry does not know
@@ -1093,11 +1138,11 @@ export function lookupOriginalSend(file: RegistryFile, binding: OriginalSendBind
   if (!target) return { kind: "unresolved" };
   const matches = (conversationId: string): boolean => canonical(conversationId) === target;
   const operations = new Map<string, string | null>();
-  for (const [, delivery] of conversationRegistryEntries(file, "heldDeliveries", target as ViewerConversationId)) {
+  for (const [, delivery] of deliveryRegistryEntriesForKey(file, "heldDeliveries", binding.clientMessageId, [target])) {
     if (delivery.clientMessageId !== binding.clientMessageId || !matches(delivery.conversationId)) continue;
     operations.set(delivery.command.operationId, delivery.id);
   }
-  for (const [operationId, owner] of conversationRegistryEntries(file, "deliveryOperationOwners", target as ViewerConversationId)) {
+  for (const [operationId, owner] of deliveryRegistryEntriesForKey(file, "deliveryOperationOwners", binding.clientMessageId, [target])) {
     if (owner.clientMessageId !== binding.clientMessageId || owner.retryOfOperationId || !matches(owner.conversationId)) continue;
     if (!operations.has(operationId)) operations.set(operationId, owner.deliveryId);
   }
@@ -1158,7 +1203,9 @@ export type OriginalSendEvidence =
 
 /**
  * The CURRENT answer for one found operation, without changing its reservation
- * or journal. Canonical recipient evidence is durably allocated before reporting.
+ * projection. Canonical recipient evidence is reported only after the journal
+ * arbitrates it against terminal actions; an unavailable arbitration is an
+ * unreadable current answer, never a delivered claim.
  *
  * A durable record that is already terminal is the answer. One still in flight
  * is checked against the journal's current retry leaf, and a terminal verdict
@@ -1176,9 +1223,29 @@ async function projectCurrentSend(
   if (projected.state !== "delivered" && projected.reason !== SEND_DISCARDED_REASON
     && (projected.state === "in-flight" || projected.duplicateRisk)
     && await confirmedSend(registry.readOnlySnapshot(), operationId)) {
+    const client = ports.client === undefined ? runtimeHostClient() : ports.client;
+    if (!client) return unreadableEvidence("runtime host socket is unavailable for canonical delivery arbitration");
+    const arbitration = await readEvidenceWithin(
+      () => confirmJournalDelivery(client, operationId),
+      ports.readMs ?? SEND_SETTLEMENT_READ_MS,
+      "canonical delivery arbitration is unavailable",
+    );
+    if (!arbitration.readable) return arbitration;
+    const verdict = arbitration.value?.verdict;
+    if (!verdict) return { readable: true, value: { ...projected, evidence: "delivery-journal" } };
+    if (verdict.state === "failed") {
+      return { readable: true, value: {
+        ...projected,
+        state: "failed",
+        reason: verdict.reason,
+        ...resendGuidance(verdict.disposition, verdict.reason),
+        evidence: "delivery-journal",
+      } };
+    }
+    const owner = registry.readOnlySnapshot().deliveryOperationOwners[operationId];
     return { readable: true, value: { ...projected, state: "delivered", reason: null,
-      ...(registry.readOnlySnapshot().deliveryOperationOwners[operationId]?.batchId ? { turnId: registry.readOnlySnapshot().deliveryOperationOwners[operationId]!.batchId } : {}),
-      duplicateRisk: false, resend: "not-needed", evidence: "delivery-record" } };
+      ...(owner?.batchId ? { turnId: owner.batchId } : {}),
+      duplicateRisk: false, resend: "not-needed", evidence: "delivery-journal" } };
   }
   if (projected.state !== "in-flight") return { readable: true, value: projected };
   const client = ports.client === undefined ? runtimeHostClient() : ports.client;
@@ -1203,8 +1270,8 @@ async function projectCurrentSend(
 
 /**
  * The lookup above, then the current answer for the one operation it found.
- * The registry snapshot and journal row stay unchanged; canonical recipient
- * evidence is allocated in its ledger before reporting delivery.
+ * The registry snapshot stays unchanged; canonical recipient evidence is
+ * accepted only through journal arbitration before reporting delivery.
  * A journal or registry that cannot be read keeps the
  * identity the durable record established and marks the current answer
  * unreadable; it never turns into an absence.

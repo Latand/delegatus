@@ -44,7 +44,7 @@ test("a transcript names the file behind each added memory and the turn where no
   }) as unknown as typeof fetch;
   const session = crypto.randomUUID(), transcript = path.join(root, session + ".jsonl");
   const turn = async (text: string, seed: string) => {
-    const prompt = encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, crypto.createHash("sha256").update(seed).digest("hex"));
+    const prompt = await encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, crypto.createHash("sha256").update(seed).digest("hex"));
     const request = new Request("http://localhost/api/memory/inject", { headers: {
       "x-llv-spawn-capability": capability, "x-llv-memory-hook": crypto.randomUUID(), "x-llv-memory-deadline": String(Date.now() + 1500) } });
     const block = await offerForHook(request, { hook_event_name: "UserPromptSubmit", session_id: session, cwd: root, prompt });
@@ -88,7 +88,7 @@ test("a turn with no candidates leaves no verdict on the message", async () => {
   let decisions = 0;
   globalThis.fetch = (async () => { decisions++; return Response.json({ answers: {}, usage: { cost: 0 } }); }) as unknown as typeof fetch;
   const session = crypto.randomUUID(), transcript = path.join(root, session + ".jsonl");
-  const prompt = encodeCodexStructuredUserText("Update widget parser", undefined, null, { kind: "operator" }, crypto.createHash("sha256").update("empty").digest("hex"));
+  const prompt = await encodeCodexStructuredUserText("Update widget parser", undefined, null, { kind: "operator" }, crypto.createHash("sha256").update("empty").digest("hex"));
   const request = new Request("http://localhost/api/memory/inject", { headers: {
     "x-llv-spawn-capability": capability, "x-llv-memory-hook": crypto.randomUUID(), "x-llv-memory-deadline": String(Date.now() + 1500) } });
   expect(await offerForHook(request, { hook_event_name: "UserPromptSubmit", session_id: session, cwd: root, prompt })).toBe("");

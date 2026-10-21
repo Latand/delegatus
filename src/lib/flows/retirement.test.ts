@@ -16,7 +16,7 @@ const priorState = process.env.LLV_STATE_DIR;
 process.env.LLV_STATE_DIR = path.join(root, "state");
 const { loadFlows, saveFlows, reconcileFlowConversationOwnership, reconcileFlowConversationOwnershipCooperatively } = await import("./store");
 const { createFlowFromRequest, patchFlow, cancelRound, closeFlow } = await import("./commands");
-const { tickFlows, enforceHeadlessAccountCreditGuard } = await import("./engine");
+const { tickFlow, tickFlows, reserveReviewerSpawnOffLoop, enforceHeadlessAccountCreditGuard } = await import("./engine");
 const { submitFlowDecision } = await import("./decisions");
 const { savePipelines, loadPipelines, buildPipeline, pipelineIdentity } = await import("@/lib/pipelines/store");
 const { createPipelineFromRequest, patchPipeline, normalizeStages, tickPipelines, defaultPipelinePorts, reconcileEmbeddedReviewFlows, preparePipelineReviewRepair, reportStageCompletion, pipelineAttemptTargetForSource, adoptAttempt } = await import("@/lib/pipelines/engine");
@@ -102,7 +102,7 @@ test("direct command/workflow ingress refuses all actions and empty/hostile payl
 
 test("legacy engine admission refuses direct start, relay, recovery and persistence before effects", async () => {
   const engine = await import("./engine"); const before = rows();
-  for (const method of ["tickFlow", "reserveReviewerSpawn", "sendToImplementer", "adoptSyntheticLaunchTakeover", "abandonLaunch", "relayFixOrPark", "persistTickFlows"] as const) {
+  for (const method of ["tickFlow", "reserveReviewerSpawn", "reserveReviewerSpawnOffLoop", "sendToImplementer", "adoptSyntheticLaunchTakeover", "abandonLaunch", "relayFixOrPark", "persistTickFlows"] as const) {
     await expect(Promise.resolve().then(() => Reflect.apply(engine[method], null, []))).rejects.toMatchObject({ code: "FLOW_RETIRED" });
   }
   expect(rows()).toBe(before);
@@ -298,6 +298,8 @@ test.each(["blocked", "queued"] as const)("a native parent's merge retry refuses
 test("scanner/controller/host scheduling, runtime readiness, workflow callbacks and provider wakes leave history untouched", async () => {
   const before = rows();
   expect(await tickFlows([])).toMatchObject({ code: "FLOW_RETIRED", changed: false });
+  await expect(tickFlow(flow(), [], new Map(), unreachable)).rejects.toMatchObject({ code: "FLOW_RETIRED" });
+  await expect(reserveReviewerSpawnOffLoop(flow(), {} as never, {} as never, null, new Proxy({}, { get: unreachable }) as never, unreachable)).rejects.toMatchObject({ code: "FLOW_RETIRED" });
   await enforceHeadlessAccountCreditGuard(new Proxy({}, { get: unreachable }) as never, new Set(["fixture-account"]));
   expect(() => advanceFlowFromRuntime(flow(), "REVIEW_READY: done")).toThrow("FLOW_RETIRED");
   const consumers = createServerRuntimeConsumers();

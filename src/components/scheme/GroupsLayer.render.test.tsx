@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { GroupsLayer, groupLabelScreenPx, groupLabelFontSize } from "./nodes";
+import { GroupsLayer, groupLabelFontSize } from "./nodes";
 import type { SchemeGroup } from "./layout";
 import type { Pipeline } from "@/lib/pipelines/types";
 
@@ -101,11 +101,8 @@ test("the label chip fully counter-scales so it stays readable at minimum zoom (
 });
 
 test("the label holds its on-screen size at the 0.12 minimum zoom", () => {
-  /* World font × zoom is constant across zoom → always ~11px on screen, never the
-     ~3.4px the old min(…, 2.6) cap produced at z=0.12. */
-  expect(groupLabelScreenPx(0.12)).toBeCloseTo(11, 6);
-  expect(groupLabelScreenPx(1)).toBeCloseTo(11, 6);
-  expect(groupLabelScreenPx(0.12)).toBeGreaterThanOrEqual(11);
+  /* Pin the rendered CSS: the inverse zoom cancels the camera scale. */
+  expect(render([flowGroup], true)).toContain("font-size:calc(11px * var(--inv-z, 1))");
 });
 
 test("the label chip is a live control when interactive and inert otherwise", () => {

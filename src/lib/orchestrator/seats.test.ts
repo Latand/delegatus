@@ -108,6 +108,27 @@ test("begin persists a pending intent that grants nothing and is replayable by k
   expect(replay.seat.mandate).toBe("run the board");
 });
 
+test("a replay-only begin finishes its own key and writes nothing otherwise", () => {
+  const seatFile = path.join(sandbox, "orchestrator-seats.json");
+  expect(beginOrchestratorSeatIntent({ project: "proj-a", mandate: "m", clientRequestId: "req_a", mode: "spawn", replayOnly: true, now: AT })).toEqual({ kind: "not_replayed" });
+  expect(fs.existsSync(seatFile)).toBe(false);
+
+  beginOrchestratorSeatIntent({ project: "proj-a", mandate: "m", clientRequestId: "req_a", mode: "spawn", now: AT });
+  const written = fs.readFileSync(seatFile, "utf8");
+  expect(beginOrchestratorSeatIntent({ project: "proj-a", mandate: "other", clientRequestId: "req_a", mode: "spawn", replayOnly: true, now: AT })).toMatchObject({ kind: "replay", seat: { mandate: "m" } });
+  expect(beginOrchestratorSeatIntent({ project: "proj-a", mandate: "m", clientRequestId: "req_b", mode: "spawn", replayOnly: true, now: AT })).toMatchObject({ kind: "in_progress" });
+
+  /* Once the key's intent failed, a replay-only begin writes nothing, whichever key. */
+  failOrchestratorSeatIntent("proj-a", "req_a", "launch failed", AT);
+  const failed = fs.readFileSync(seatFile, "utf8");
+  for (const key of ["req_a", "req_b"]) {
+    expect(beginOrchestratorSeatIntent({ project: "proj-a", mandate: "m", clientRequestId: key, mode: "spawn", replayOnly: true, now: AT })).toEqual({ kind: "not_replayed" });
+  }
+  expect(fs.readFileSync(seatFile, "utf8")).toBe(failed);
+  expect(failed).not.toBe(written);
+  expect(orchestratorSeatFor("proj-a").pending).toBeNull();
+});
+
 test("complete activates exactly once and replays idempotently afterwards", () => {
   beginOrchestratorSeatIntent({ project: "proj-a", mandate: "m", clientRequestId: "req_0000001", mode: "spawn", now: AT });
   const first = completeOrchestratorSeatIntent({ project: "proj-a", clientRequestId: "req_0000001", conversationId: "conversation_a", path: "/tmp/a.jsonl", now: AT });

@@ -115,6 +115,29 @@ test("agent media route uses the caller capability and topic link for an album",
   expect(transport.callsOf("sendMediaGroup")[0]!.params.message_thread_id).toBe(5);
 });
 
+test.each(["send_media", "send_document"])("%s names the outside file and allowed roots relative to the host home", async (op) => {
+  await connected();
+  service.setChat(String(TEAM.id), "team-reports", true);
+  fs.mkdirSync(HOME, { recursive: true });
+  const outside = path.join(HOME, "outside.jpg");
+  fs.writeFileSync(outside, await sharp({ create: { width: 1, height: 1, channels: 3, background: { r: 12, g: 34, b: 56 } } }).jpeg().toBuffer());
+  const check = async (roots: string) => {
+    const response = await agentRoute.POST(request("/api/telegram/bot/agent", {
+      method: "POST", headers: AGENT,
+      body: { op, clientRequestId: `${op}-${roots}`, chat: "team-reports", images: [{ path: outside, caption: "" }], document: { path: outside } },
+    }));
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({
+      error: `${op === "send_media" ? "photo 1: " : ""}$HOME/outside.jpg is outside the allowed document roots (${roots}); write the file under one of them`,
+      code: "document_outside_roots", retryable: false,
+    });
+  };
+  await check("$HOME/handoff");
+  service.setDocumentRoots([path.join(HOME, "reports"), path.join(HOME, "exports")]);
+  await check("$HOME/reports, $HOME/exports");
+  expect(transport.calls.filter(call => call.method.startsWith("send"))).toHaveLength(0);
+});
+
 test("agent send resolves a public topic link and forwards message_thread_id", async () => {
   await connected();
   transport.script("getUpdates", ok([{ update_id: 3, my_chat_member: { chat: { ...TEAM, username: "public_reports", is_forum: true }, date: 3, new_chat_member: { status: "administrator" } } }]));
@@ -142,6 +165,9 @@ test("an agent capability is refused every operator action, so no agent widens i
   await connected();
   for (const body of [
     { action: "connect", token: TOKEN },
+    { action: "add_bot", token: fakeBotToken("5151515") },
+    { action: "remove_bot", bot: "second_fixture_bot" },
+    { action: "chat_bot", chatId: String(TEAM.id), bot: "second_fixture_bot" },
     { action: "chat", chatId: String(TEAM.id), alias: "team-reports", postAllowed: true },
     { action: "documents", roots: [SANDBOX] },
     { action: "remove" },
@@ -249,4 +275,31 @@ test("add and test are the operator's: a chat added by id is allowed, a test pos
   expect(transport.callsOf("sendMessage")[0]!.params).toMatchObject({ chat_id: -1000000000404, disable_notification: true });
   expect(String(transport.callsOf("sendMessage")[0]!.params.text)).toContain("Delegatus");
   expect(transport.callsOf("getUpdates")).toEqual([]);
+});
+
+test("the existing operator surface adds, assigns and removes an extra bot without exposing its token", async () => {
+  await connected();
+  service.setChat(String(TEAM.id),"team-reports",true);
+  const extraToken=fakeBotToken("5151515");
+  const before=transport.calls.length;
+  const unstamped=await operatorRoute.POST(request("/api/telegram/bot",{method:"POST",body:{action:"add_bot",token:extraToken}}));
+  expect(unstamped.status).toBe(403);
+  expect(transport.calls.length).toBe(before);
+  transport.script("getMe",ok({id:5151515,is_bot:true,first_name:"Second bot",username:"second_fixture_bot"}));
+  transport.handlers.getChatMember=()=>ok({status:"administrator"});
+  const added=await operatorRoute.POST(request("/api/telegram/bot",{method:"POST",headers:PAGE,body:{action:"add_bot",token:extraToken}}));
+  expect(added.status).toBe(200);
+  const body=await added.json();
+  expect(body.bot.bots).toHaveLength(2);
+  expect(JSON.stringify(body)).not.toContain(extraToken);
+  expect(JSON.stringify(body)).not.toContain("5151515");
+  const assigned=await operatorRoute.POST(request("/api/telegram/bot",{method:"POST",body:{action:"chat_bot",chatId:String(TEAM.id),bot:"second_fixture_bot"}}));
+  expect(assigned.status).toBe(200);
+  expect((await assigned.json()).bot.chats[0].assignedBot).toBe("second_fixture_bot");
+  const removed=await operatorRoute.POST(request("/api/telegram/bot",{method:"POST",body:{action:"remove_bot",bot:"second_fixture_bot"}}));
+  expect(removed.status).toBe(200);
+  const status=(await removed.json()).bot;
+  expect(status.bots).toHaveLength(1);
+  expect(status.chats).toHaveLength(1);
+  expect(status.chats[0].assignedBot).toBeNull();
 });

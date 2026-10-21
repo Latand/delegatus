@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronRight, Crown, X } from "lucide-react";
+import { ChevronRight, Crown, Folders, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 
 import { formatConversationHash, isArchivedPredecessor, parseConversationHash, resolveConversationTarget, withoutArchivedPredecessors, type ConversationHash } from "@/lib/accounts/identity";
@@ -82,6 +82,10 @@ import { ProjectDashboard, queueColumnOpen } from "./ProjectDashboard";
 import { buildProjectSummaries, isChildConversation, OVERVIEW, projectKey, railProjectOrder } from "./projectModel";
 import { workingAgentCounts } from "./workingAgents";
 import { ProjectRail, RAIL_HIDDEN_STORAGE_KEY } from "./ProjectRail";
+import { useTeamView } from "./team/teamClient";
+import { WorkspaceDot, type WorkspaceRailState } from "./team/WorkspaceSwitch";
+import { ALL_WORKSPACES, effectiveWorkspace, followSelection, workspaceScope } from "./team/workspaceFilter";
+import { placeProject, useStoredWorkspace, useWorkspaces } from "./team/workspacesClient";
 import { StateWritesAlert } from "./StateWritesAlert";
 import { DeploymentStatusPill } from "./runtime/DeploymentStatusPill";
 import { StagingBadge } from "./StagingBadge";
@@ -699,6 +703,45 @@ function ViewerApp() {
     applyProject(nextProject);
     recordProjectNavigation(projectUrl(nextProject));
   }, [applyProject]);
+
+  /* Workspaces (docs/design/workspaces.md §13.4): on a team install with at
+     least one, the rail, the phone's project sheet and the Overview show the
+     chosen workspace's projects. Nothing else is filtered. Without one, none
+     of them receives anything and each draws what it always drew. */
+  const teamView = useTeamView({ load: false });
+  const workspacesView = useWorkspaces({ enabled: teamView?.mode === "team" });
+  const teamWorkspaces = workspacesView?.mode === "team" && workspacesView.workspaces.length ? workspacesView : null;
+  const [storedWorkspace, setStoredWorkspace] = useStoredWorkspace();
+  const currentWorkspace = effectiveWorkspace(teamWorkspaces, storedWorkspace);
+  const workspaceState = useMemo<WorkspaceRailState | undefined>(() => (teamWorkspaces ? {
+    view: teamWorkspaces,
+    chosen: currentWorkspace,
+    choose: (next) => {
+      setStoredWorkspace(next);
+      /* The board leaves a project the new choice does not list, for the
+         Overview of the choice. */
+      const scope = workspaceScope(teamWorkspaces, next);
+      if (scope && project !== OVERVIEW && !scope.has(project)) selectProject(OVERVIEW);
+    },
+    place: placeProject,
+    leave: (path) => (isMobile ? mobileNav.leave(path) : window.location.assign(path)),
+  } : undefined), [teamWorkspaces, currentWorkspace, setStoredWorkspace, project, selectProject, isMobile, mobileNav]);
+  /* A link, a search result or a notification can select a project outside
+     the chosen workspace: the choice follows it, so its row is in the rail. */
+  useEffect(() => {
+    if (!teamWorkspaces) return;
+    const next = followSelection(teamWorkspaces, currentWorkspace, project);
+    if (next !== currentWorkspace) setStoredWorkspace(next);
+  }, [project, teamWorkspaces, currentWorkspace, setStoredWorkspace]);
+  const workspaceEyebrow = useMemo(() => {
+    if (!teamWorkspaces) return undefined;
+    const chosen = currentWorkspace === ALL_WORKSPACES ? null : teamWorkspaces.workspaces.find((workspace) => workspace.id === currentWorkspace);
+    return chosen ? (
+      <><WorkspaceDot color={chosen.color} size={7} /><span className="min-w-0 truncate">{chosen.name}</span></>
+    ) : (
+      <><Folders className="h-3 w-3 shrink-0" aria-hidden /><span className="min-w-0 truncate">{t("workspaces.all")}</span></>
+    );
+  }, [teamWorkspaces, currentWorkspace, t]);
 
   /* A phone screen of another project, from a link (#2105): a task or a lane a
      message names. Over the Overview it goes on the stack like any screen, and
@@ -1659,6 +1702,7 @@ function ViewerApp() {
           onDismiss={() => setToastPath(null)}
         />
       ) : null,
+      workspaceEyebrow,
       renderSheet: (name, close) => {
         if (name === "projects") {
           return (
@@ -1678,6 +1722,7 @@ function ViewerApp() {
               onSelect={selectProject}
               onCreateProject={createProject}
               onClose={close}
+              workspace={workspaceState}
             />
           );
         }
@@ -1730,7 +1775,7 @@ function ViewerApp() {
         return null;
       },
     };
-  }, [isMobile, shellEntries, shellDone, toastFile, openFile, openOverOverview, mobileNav, files, allFiles, railCatalog, projectDisplayNames, pipelines, workflows, archivedProjects, crownedProjects, project, clock, needsYouByProject, loaded, catalogFailures, selectProject, createProject, jumpToItem, openPrototypeEntry, phoneNotices.unseen, noticeRows, railOrder, needsOnly, needsOnlyAvailable]);
+  }, [isMobile, shellEntries, shellDone, toastFile, openFile, openOverOverview, mobileNav, files, allFiles, railCatalog, projectDisplayNames, pipelines, workflows, archivedProjects, crownedProjects, project, clock, needsYouByProject, loaded, catalogFailures, selectProject, createProject, jumpToItem, openPrototypeEntry, phoneNotices.unseen, noticeRows, railOrder, needsOnly, needsOnlyAvailable, workspaceState, workspaceEyebrow]);
 
   const shell = (
     <div className="flex h-full">
@@ -1739,7 +1784,7 @@ function ViewerApp() {
         <button type="button" className="rounded-[8px] bg-brand px-3 py-1.5 font-semibold text-on-brand pointer-coarse:min-h-11" onClick={() => window.location.reload()}>{t("selfUpdate.reconnect.reload")}</button>
       </div> : null}
       {isMobile || railHidden ? null : (
-        <ProjectRail onHide={toggleRail} files={files} projectCatalog={railCatalog} projectDisplayNames={projectDisplayNames} pipelines={pipelines} workflows={workflows} archivedProjects={archivedProjects} crownedProjects={crownedProjects} selected={project} now={clock} needsYouCounts={needsYouByProject} loaded={loaded} catalogFailures={catalogFailures} onSelect={selectProject} onToggleCrown={toggleCrown} onCreateProject={createProject} />
+        <ProjectRail onHide={toggleRail} files={files} projectCatalog={railCatalog} projectDisplayNames={projectDisplayNames} pipelines={pipelines} workflows={workflows} archivedProjects={archivedProjects} crownedProjects={crownedProjects} selected={project} now={clock} needsYouCounts={needsYouByProject} loaded={loaded} catalogFailures={catalogFailures} onSelect={selectProject} onToggleCrown={toggleCrown} onCreateProject={createProject} workspace={workspaceState} />
       )}
       {/* Hidden rail (issue #1819): one small control at the top-left edge of
           the main area brings it back, and nothing else of the rail is left on
@@ -1867,6 +1912,7 @@ function ViewerApp() {
             onOpenSearch={openSearch}
             mobileShell={mobileShell}
             onOpenConversation={openOverOverview}
+            workspace={workspaceState}
           />
         ) : (
           <ProjectDashboard

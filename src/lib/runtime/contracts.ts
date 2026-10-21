@@ -321,6 +321,9 @@ export interface RuntimeTransitionDetails {
 }
 
 export interface RuntimeTransitionOptions {
+  /** Canonical recipient evidence can resolve an uncertain message. Its
+      acknowledgement competes with discard inside the journal transaction. */
+  confirmedDelivery?: boolean;
   /** Competing transitions cannot release a live automatic teardown executor. */
   retirementClaim?: RuntimeRetirementClaim;
   /** Compare-and-set fence evaluated inside the journal write transaction. */
@@ -394,6 +397,8 @@ export interface RuntimeSendCommand extends RuntimeCommandBase {
   text: string;
   images?: StructuredImageRef[];
   contentDigest?: string;
+  /** Privacy revision that must still be current when a pipeline first prompt dispatches. */
+  roleMemoryRevision?: string;
   policy?: "queue" | "steer-if-active" | "steer-or-queue" | "interrupt-active";
   turnId?: string | null;
   /** Automatic continuation requires this same idle revision and writer at admission and execution. */
@@ -555,6 +560,7 @@ export interface RuntimeSpawnCommand extends RuntimeCommandBase {
   "prompt": string;
   images?: StructuredImageRef[];
   contentDigest?: string;
+  roleMemoryRevision?: string;
   accountId?: string | null;
   parentConversationId?: string | null;
   sessionId?: string | null;
@@ -963,6 +969,10 @@ export interface ViewerDeploymentOwner {
 export interface ViewerDeploymentStatus {
   /** Live adapter observation; does not authorize readiness or terminal state. */
   servingProgress?: string;
+  /** Request keys that joined this deployment while it was already active. */
+  idempotencyKeys?: string[];
+  /** Exact requested revision paired with each joined checkout key. */
+  idempotencyRequests?: Array<{ idempotencyKey: string; requestedRevision: string }>;
   deploymentId: string;
   idempotencyKey: string;
   requestedRevision: string;
@@ -1083,7 +1093,7 @@ export interface RuntimeSocketRequest {
   /** Opt in to serial reuse; older listeners close after the answer. */
   keepAlive?: boolean;
   id: string;
-  method: "runtime-host-health" | "files-revision" | "session-read" | "snapshot" | "events" | "wait" | "append" | "append-session-fenced" | "operation" | "command" | "guarded-command" | "operation-status" | "operation-delivery-action" | "operation-retry" | "effect-batch" | "operation-transition" | "operation-projection-ack" | "producer-cursor" | "viewer-deployment-request" | "viewer-deployment-read" | "viewer-deployment-list" | "viewer-deployment-find" | "viewer-deployment-cancel" | "mcp-health-probe-admission" | "native-queue-read" | "native-queue-transition" | "native-queue-settle-compacted";
+  method: "runtime-host-health" | "files-revision" | "session-read" | "snapshot" | "events" | "wait" | "append" | "append-session-fenced" | "operation" | "command" | "guarded-command" | "operation-status" | "operation-delivery-action" | "operation-retry" | "effect-batch" | "operation-transition" | "operation-confirm-delivery" | "operation-projection-ack" | "producer-cursor" | "viewer-deployment-request" | "viewer-deployment-read" | "viewer-deployment-list" | "viewer-deployment-find" | "viewer-deployment-cancel" | "mcp-health-probe-admission" | "native-queue-read" | "native-queue-transition" | "native-queue-settle-compacted";
   params?: Record<string, unknown>;
 }
 

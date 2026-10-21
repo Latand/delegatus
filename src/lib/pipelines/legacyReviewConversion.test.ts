@@ -317,6 +317,59 @@ test("an approved legacy review is not the converted reviewer's pass", async () 
   expect(current().cursor).toEqual(lane.cursor);
 });
 
+test("a higher conversion request is refused before mutation; the retained budget replays after a Viewer engine restart", async () => {
+  const h = harness();
+  const draft = await legacyDraft(h.ports);
+  h.flows.set("flow-old", { id: "flow-old", state: "closed", roundLimit: 3, rounds: [] } as unknown as Flow);
+  const lane = parkedLegacyLane(draft, {});
+  const followUp = { taskId: "task-follow-up", title: "Repair retained findings", at: "2026-10-01T00:00:00.000Z" };
+  savePipelines([Object.assign(lane, { reviewBudgetSpent: { stageId: "reviewer", attempt: 1, findings: 1, head: BASE, at: followUp.at, followUp } })]);
+  const revision = pipelineRevision(findPipelineRecord(lane.id)!);
+  const before = rawRow(lane.id);
+  const preview = await patchPipeline(lane.id, { action: "preview-legacy-review", reviewLimit: 7 }, h.ports);
+  expect(preview.legacyReviewPreview).toMatchObject({ ok: false, reviewLimit: 3, refusals: [{ code: "limit-increase" }] });
+  const refused = await convert(lane, { reviewLimit: 7 }, h.ports);
+  expect(refused.status).toBe(409);
+  expect(refused.error).toContain("limit-increase");
+  expect(rawRow(lane.id)).toBe(before);
+  expect(h.flows.get("flow-old")!.roundLimit).toBe(3);
+  expect(h.spawned).toEqual([]);
+  expect(h.flowCalls).toEqual([]);
+  const request = { action: "convert-legacy-review" as const, clientRequestId: "convert-retained", expectedRevision: revision, reviewLimit: 3 };
+
+  // A new engine process reloads the same row and the terminal flow fixture.
+  // It must still refuse growth, then accept the original limit and replay it.
+  const child = Bun.spawn([process.execPath, "-e", `
+    const { findPipelineRecord } = await import("./src/lib/pipelines/store");
+    const { patchPipeline } = await import("./src/lib/pipelines/engine");
+    const id = ${JSON.stringify(lane.id)};
+    const request = ${JSON.stringify(request)};
+    const actor = ${JSON.stringify(creator)};
+    const ports = {
+      getFlow: flowId => ({ id: flowId, state: "closed", roundLimit: 3, rounds: [] }),
+      now: () => "2026-10-01T00:00:00.000Z",
+    };
+    const before = JSON.stringify(findPipelineRecord(id));
+    const refused = await patchPipeline(id, { ...request, clientRequestId: "convert-rejected-after-restart", reviewLimit: 7 }, ports, actor);
+    const unchanged = before === JSON.stringify(findPipelineRecord(id));
+    const accepted = await patchPipeline(id, request, ports, actor);
+    const replay = await patchPipeline(id, request, ports, actor);
+    const conflict = await patchPipeline(id, { ...request, reviewLimit: 7 }, ports, actor);
+    const pipeline = findPipelineRecord(id);
+    console.log(JSON.stringify({
+      limit: pipeline.stages.find(stage => stage.id === "reviewer").onFail.maxRounds,
+      refused: refused.status, refusals: refused.legacyReviewPreview.refusals.map(item => item.code), unchanged,
+      replayed: replay.replayed, error: accepted.error ?? null, conflict: conflict.status,
+      followUp: pipeline.reviewBudgetSpent.followUp,
+    }));
+  `], { cwd: process.cwd(), env: { ...process.env }, stdout: "pipe", stderr: "pipe", timeout: 10_000 });
+  const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect(code, stderr).toBe(0);
+  expect(JSON.parse(stdout)).toEqual({ limit: 3, refused: 409, refusals: ["limit-increase"], unchanged: true, replayed: true, error: null, conflict: 409, followUp });
+  expect(current().legacyReviewConversions).toHaveLength(1);
+  expect(current().stages.find(stage => stage.id === "reviewer")!.onFail!.maxRounds).toBe(3);
+}, 15_000);
+
 test("the paused unsafe-relay lane, unresolved delivery and live ownership refuse conversion and stay byte-for-byte", async () => {
   const h = harness();
   const draft = await legacyDraft(h.ports);

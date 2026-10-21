@@ -1,5 +1,6 @@
 /* This module is also the bundle's preload. Keep it independent of state and
    the application graph: containment must be armed before either is loaded. */
+import { logMcpLifecycle } from "./mcp-lifecycle.mjs";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 
@@ -35,11 +36,13 @@ export function bindMcpChildToParent(expected = mcpProcessIdentity(process.ppid)
     const libc = dlopen("libc.so.6", {
       prctl: { args: [FFIType.i32, FFIType.u64, FFIType.u64, FFIType.u64, FFIType.u64], returns: FFIType.i32 },
     });
-    if (libc.symbols.prctl(1, 9, 0, 0, 0) !== 0 || mcpProcessIdentity(process.ppid) !== expected) process.exit(1);
+    if (libc.symbols.prctl(1, 9, 0, 0, 0) !== 0 || mcpProcessIdentity(process.ppid) !== expected) {
+      logMcpLifecycle("parent-binding-refused"); process.exit(1);
+    }
     libc.close();
   }
   globalThis[key] = true;
-  watchMcpOwner(() => process.exit(0));
+  watchMcpOwner(() => { logMcpLifecycle("parent-exit"); process.exit(0); });
 }
 
 if (process.env.LLV_MCP_PARENT_IDENTITY) bindMcpChildToParent(process.env.LLV_MCP_PARENT_IDENTITY);

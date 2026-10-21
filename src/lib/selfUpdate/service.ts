@@ -21,7 +21,8 @@ import { writeJsonDurably } from "@/lib/state/durableJson";
 import { realExec } from "@/lib/workflows/provision";
 
 import { cancelUntakenRequest, DIALOG_WRITER, readAuto, requestAutoRestart, restorePointer, writeAuto, type AutoState, type AutoView, type AutoWriter } from "./auto";
-import { retainReleases, type RetentionInputs } from "./retention";
+import { type RetentionInputs } from "./retention";
+import { runRetentionPass } from "./retentionPass";
 import { activeDrain, DRAIN_NOTICE_MS, DRAIN_LEASE_MS, DRAIN_START_WINDOW_MS, releaseDrain, writeDrain } from "./drain";
 import { GreenReader, type GreenVerdict } from "./green";
 import { appendHistory, findAutoSwitchRequest, readHistory, storeAutoSwitchResponse } from "./history";
@@ -193,6 +194,8 @@ export class SelfUpdateService {
   private checking: Promise<void> | null = null;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
   private retaining = false;
+  private retentionChecking = false;
+  private retentionAbort: AbortController | null = null;
   private runner: RunnerPort | null = null;
   private runnerRecord: string | null = null;
   private managed: ManagedRecord | null;
@@ -289,9 +292,27 @@ export class SelfUpdateService {
     // their controllers, even when future automatic updates are switched off.
     this.refreshDrain();
     if (this.auto.enabled) this.ensureChecked();
-    this.autoTimer = setInterval(() => { void this.autoTick(); }, 60_000);
+    this.autoTimer = setInterval(() => { void this.autoTick().then(() => this.retentionTick()); }, 60_000);
     this.autoTimer.unref?.();
-    void this.autoTick();
+    void this.autoTick().then(() => this.retentionTick());
+  }
+
+  /** Owner-only startup and cadence work, independent of automatic updates.
+   * The persisted report clock survives Viewer replacement. */
+  async retentionTick(): Promise<void> {
+    if (this.stopped || this.retaining || this.retentionChecking || this.autoRunning) return;
+    this.retentionChecking = true;
+    try {
+      try {
+        const at = Date.parse(JSON.parse(readFileSync(join(this.deps.dir, "retention.json"), "utf8")).at);
+        const elapsed = this.deps.now() - at;
+        if (elapsed >= 0 && elapsed < 60_000) return;
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") console.error("[self-update] invalid retention clock"); }
+      const decision = await this.deps.mode();
+      if (this.stopped || !decision.record || !["checkout", "package"].includes(decision.mode)) return;
+      await this.retain(decision.record);
+    } catch (error) { console.error("[self-update] retention tick failed", error instanceof Error ? error.message : String(error)); }
+    finally { this.retentionChecking = false; }
   }
 
   /** The one switch of automatic updates: the Update dialog and the
@@ -807,11 +828,14 @@ export class SelfUpdateService {
   }
 
   private async retain(record: LauncherRecord, rollback: string | null = null): Promise<void> {
-    if (this.retaining || this.runner?.state.state === "running" || this.pendingRestart || this.auto.pending
+    if (this.retaining || this.runner?.state.state === "running" || this.pendingRestart || this.auto.pending || this.auto.managedPending
+      || this.deploying || managedActive(this.managed)
       || ["building", "ready", "switching"].includes(this.apply.current?.state ?? "")) return;
     if (existsSync(record.requestFile)) return;
     this.retaining = true;
+    const abort = this.retentionAbort = new AbortController();
     const current = () => {
+      if (this.stopped) throw new Error("retention owner stopped");
       const file = this.deps.env[LAUNCHER_RECORD_ENV]?.trim() || launcherControlFile(record.requestFile, "launcher");
       const owner = readLauncherRecord(file);
       if (!owner) throw new Error("cannot read launcher record for retention");
@@ -828,14 +852,18 @@ export class SelfUpdateService {
     };
     try {
       if (this.deps.prune) await this.deps.prune(record, rollback);
-      else await retainReleases(record, current().inputs, { now: this.deps.now, env: this.deps.env,
-        reportFile: join(this.deps.dir, "retention.json"), current });
+      // The owner's hold fence: while `retaining` is set, reserve() refuses
+      // every build, apply, restart and pointer change, and the automatic
+      // rollback capture waits on active(), so no hold lands during the pass.
+      else await runRetentionPass(record, current().inputs, { env: this.deps.env, signal: abort.signal,
+        reportFile: join(this.deps.dir, "retention.json"), current,
+        fence: () => this.retaining && this.retentionAbort === abort && !abort.signal.aborted && !this.stopped });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       try { writeJsonDurably(join(this.deps.dir, "retention.json"), { at: new Date(this.deps.now()).toISOString(), removed: [], reclaimedCacheBytes: 0, kept: [], errors: [message] }); }
       catch (error) { console.error("[self-update] cannot write retention report", error instanceof Error ? error.message : String(error)); }
       console.error("[self-update] release cleanup failed", message);
-    } finally { this.retaining = false; }
+    } finally { this.retaining = false; this.retentionAbort = null; }
   }
 
   private finishManagedAuto(snapshot?: Snapshot): void {
@@ -1787,9 +1815,16 @@ export class SelfUpdateService {
       if (preceding) await preceding.catch(() => {});
       if (!/^[A-Za-z0-9_.:-]{1,200}$/.test(request.idempotencyKey)) throw new Error("Invalid deployment idempotency key");
       const rows = checkoutDeployments(this.deps.dir);
-      const previous = rows.find(row => row.idempotencyKey === request.idempotencyKey);
+      const previous = rows.find(row => row.idempotencyKey === request.idempotencyKey
+        || row.idempotencyKeys?.includes(request.idempotencyKey));
       if (previous) {
-        if ((request.revision && previous.requestedRevision !== request.revision) || (request.ref && previous.requestedRevision !== request.ref)) throw new Error("idempotency-conflict");
+        const isJoinedKey = previous.idempotencyKey !== request.idempotencyKey;
+        const sameJoinedRevision = isJoinedKey && Boolean(request.revision)
+          && /^[0-9a-f]{7,40}$/i.test(request.revision!)
+          && previous.revision.toLowerCase().startsWith(request.revision!.toLowerCase());
+        if (isJoinedKey ? !sameJoinedRevision
+          : (request.revision && previous.requestedRevision !== request.revision)
+            || (request.ref && previous.requestedRevision !== request.ref)) throw new Error("idempotency-conflict");
         return { state: "accepted" as const, deploymentId: previous.deploymentId, revision: previous.revision, replayed: true };
       }
       const decision = await this.decide();
@@ -1799,7 +1834,21 @@ export class SelfUpdateService {
         return { state: "action-required" as const, code: "self-update-action-required" as const, action, error: "Restore or upgrade launcher supervision using the install action" };
       const snapshot = await this.snapshot();
       const active = rows.find(row => !row.terminal);
-      if (snapshot.busy || active) return { state: "busy" as const, deploymentId: active?.deploymentId ?? this.apply.current?.deploymentId ?? "checkout-update", revision: active?.revision ?? snapshot.update.target ?? "" };
+      if (active) {
+        const requested = request.revision?.toLowerCase() ?? "";
+        if (/^[0-9a-f]{7,40}$/.test(requested) && active.revision.toLowerCase().startsWith(requested)) {
+          const joinTarget = checkoutDeployments(this.deps.dir).find(row => row.deploymentId === active.deploymentId);
+          if (joinTarget && joinTarget.revision.toLowerCase().startsWith(requested)) {
+            const idempotencyKeys = [...new Set([...(joinTarget.idempotencyKeys ?? []), request.idempotencyKey])];
+            const idempotencyRequests = [...(joinTarget.idempotencyRequests ?? []).filter(row => row.idempotencyKey !== request.idempotencyKey),
+              { idempotencyKey: request.idempotencyKey, requestedRevision: request.revision! }];
+            saveCheckoutDeployment(this.deps.dir, { ...joinTarget, idempotencyKeys, idempotencyRequests });
+            return { state: "accepted" as const, deploymentId: joinTarget.deploymentId, revision: joinTarget.revision, replayed: false };
+          }
+        }
+        return { state: "busy" as const, deploymentId: active.deploymentId, revision: active.revision };
+      }
+      if (snapshot.busy) return { state: "busy" as const, deploymentId: this.apply.current?.deploymentId ?? "checkout-update", revision: snapshot.update.target ?? "" };
       let target = request.revision ?? "";
       if (/^[a-f0-9]{7,39}$/i.test(target)) {
         if (!record.checkout) throw new Error("pass the full SHA or a ref");
@@ -2299,6 +2348,7 @@ export class SelfUpdateService {
 
   stop(): void {
     this.stopped = true;
+    this.retentionAbort?.abort();
     if (this.comparisonRefreshTimer) clearTimeout(this.comparisonRefreshTimer);
     this.comparisonRefreshTimer = null;
     if (this.autoTimer) clearInterval(this.autoTimer);

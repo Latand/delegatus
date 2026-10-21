@@ -24,7 +24,228 @@ const stages = [
 ];
 const current = () => loadPipelines()[0]!;
 
-async function fixture() {
+test("a publication repair whose admitted delivery never starts permits a decision after its deadline", async () => {
+  const f = await fixture();
+  try {
+    let clock = Date.parse("2026-10-16T10:00:00.000Z");
+    f.h.ports.now = () => new Date(clock).toISOString();
+    f.h.ports.resumeSeveredTurn = async () => true;
+    f.h.ports.conversationAgentActive = async () => null;
+    f.h.ports.conversationDeliveryOutstanding = () => false;
+    Object.assign(f.h.ports, { stageRepairDelivery: async () => clock < Date.parse("2026-10-16T10:20:00.000Z")
+      ? { operationId: "repair-delivery", state: "in-flight", safeToReplace: false }
+      : { operationId: "repair-delivery", state: "failed", safeToReplace: true } });
+    await f.commit("implementation"); f.refuse(); await f.finish();
+    expect(current().runs[0]!.attempts[0]!.publicationRepair?.requestedAt).toBeDefined();
+    clock += 21 * 60_000;
+    await tickPipelines([], f.h.ports);
+    const parked = current();
+    expect(parked.runs[0]!.attempts[0]!.publicationRepair).toMatchObject({ outcome: { status: "rejected" } });
+    const result = await rawPatchPipeline(parked.id, { action: "resolve-decision", clientRequestId: "expired-undelivered-repair",
+      answer: "Continue after the undelivered repair expired.", expectedStageId: "build", expectedAttempt: 1,
+      expectedRevision: pipelineRevision(parked) }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
+    expect(result.error).toBeUndefined();
+    expect(current().runs[0]!.attempts).toHaveLength(2);
+  } finally { f.close(); }
+});
+
+test("a completed producer repair survives a lost delivery acknowledgement after controller restart", async () => {
+  const f = await fixture();
+  try {
+    let clock = Date.parse("2026-10-16T10:00:00.000Z");
+    const keys: string[] = [];
+    f.h.ports.now = () => new Date(clock).toISOString();
+    f.h.ports.resumeSeveredTurn = async input => { keys.push(input.clientMessageId); input.onUncertain?.(); return false; };
+    f.h.ports.conversationAgentActive = async () => null;
+    f.h.ports.conversationDeliveryOutstanding = () => false;
+    f.h.ports.stageRepairDelivery = async () => ({ operationId: "repair-delivery", state: "delivered", safeToReplace: false });
+    await f.commit("implementation"); f.refuse(); await f.finish();
+    const sendingAt = Date.parse(current().runs[0]!.attempts[0]!.publicationRepair!.sendingAt!);
+    f.h.ports.durableTurnEvidence = async () => ({ turn: "terminal", message: { text: "repair finished", ts: sendingAt + 1 }, lastRecordAt: sendingAt + 1 });
+    clock = sendingAt + 21 * 60_000;
+    await tickPipelines([], f.h.ports);
+    const parked = current();
+    const result = await rawPatchPipeline(parked.id, { action: "resolve-decision", clientRequestId: "completed-lost-ack",
+      answer: "Continue after the completed repair.", expectedStageId: "build", expectedAttempt: 1,
+      expectedRevision: pipelineRevision(parked) }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
+    expect(result.error).toBeUndefined();
+    expect(current().runs[0]!.attempts).toHaveLength(2);
+    expect(keys).toHaveLength(1);
+  } finally { f.close(); }
+});
+
+test("an expired undelivered publication repair remains recoverable in a new controller process", async () => {
+  const f = await fixture();
+  try {
+    let clock = Date.parse("2026-10-16T10:00:00.000Z");
+    f.h.ports.now = () => new Date(clock).toISOString();
+    f.h.ports.resumeSeveredTurn = async () => true;
+    await f.commit("implementation"); f.refuse(); await f.finish();
+    clock += 21 * 60_000;
+    await tickPipelines([], f.h.ports);
+    const parked = current();
+    const request = { action: "resolve-decision", clientRequestId: "restarted-expired-repair",
+      answer: "Continue after the repair expired.", expectedStageId: "build", expectedAttempt: 1,
+      expectedRevision: pipelineRevision(parked) };
+    const script = `
+      const { patchPipeline, defaultPipelinePorts } = await import(${JSON.stringify(path.join(import.meta.dir, "engine.ts"))});
+      const result = await patchPipeline(${JSON.stringify(parked.id)}, ${JSON.stringify(request)}, {
+        ...defaultPipelinePorts(), now: () => ${JSON.stringify(new Date(clock).toISOString())},
+        conversationAgentActive: async () => null, conversationDeliveryOutstanding: () => false,
+        durableTurnEvidence: async () => ({ turn: "terminal", message: null }),
+        stageRepairDelivery: async () => ({ operationId: "repair-delivery", state: "failed", safeToReplace: true }),
+      }, { kind: "operator" });
+      console.log(JSON.stringify({ error: result.error ?? null, attempts: result.pipeline?.runs[0]?.attempts.length }));`;
+    const result = await realExec(process.execPath, ["-e", script], process.cwd(), {
+      ...process.env, LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1",
+    }, { timeoutMs: 30_000 });
+    expect(result.code, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ error: null, attempts: 2 });
+  } finally { f.close(); }
+}, 40_000);
+
+test.each([{ admitted: false, uncertain: false }, { admitted: false, uncertain: true }, { admitted: true, uncertain: false }])(
+  "a publication repair settles when delivery fails or admission never starts (admitted: $admitted, uncertain: $uncertain)", async ({ admitted, uncertain }) => {
+  const f = await fixture();
+  try {
+    let clock = Date.parse("2026-10-16T10:00:00.000Z"), failed = false;
+    const keys: string[] = [];
+    f.h.ports.now = () => new Date(clock).toISOString();
+    f.h.ports.conversationAgentActive = async () => null;
+    f.h.ports.conversationDeliveryOutstanding = () => false;
+    f.h.ports.resumeSeveredTurn = async input => { keys.push(input.clientMessageId); if (uncertain) input.onUncertain?.(); return admitted; };
+    f.h.ports.stageRepairDelivery = async () => ({ operationId: admitted ? "repair-delivery" : null,
+      state: admitted ? failed ? "failed" : "in-flight" : "unreserved", safeToReplace: !admitted || failed });
+    await f.commit("implementation"); f.refuse(); await f.finish();
+    failed = true;
+    clock += admitted ? 1_000 : 21 * 60_000;
+    await tickPipelines([], f.h.ports);
+    const parked = current();
+    expect(parked.state).toBe("needs_decision");
+    expect(parked.runs[0]!.attempts[0]!.publicationRepair).toMatchObject({ outcome: { status: "rejected" }, settledAt: new Date(clock).toISOString() });
+    const result = await rawPatchPipeline(parked.id, { action: "resolve-decision", clientRequestId: `failed-admission-${admitted}`,
+      answer: "Continue after the repair could not be delivered.", expectedStageId: "build", expectedAttempt: 1,
+      expectedRevision: pipelineRevision(parked) }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
+    expect(result.error).toBeUndefined();
+    expect(new Set(keys).size).toBe(1);
+  } finally { f.close(); }
+});
+
+test("a delayed repair delivery preflight loses permission at the original deadline", async () => {
+  const f = await fixture();
+  try {
+    let clock = Date.parse("2026-10-16T10:00:00.000Z"), checked = false;
+    f.h.ports.now = () => new Date(clock).toISOString();
+    f.h.ports.resumeSeveredTurn = async input => {
+      expect(input.policy).toBe("queue");
+      expect(await input.continuationAllowed!()).toBe(true);
+      clock += 20 * 60_000;
+      expect(await input.continuationAllowed!()).toBe(false);
+      checked = true;
+      return false;
+    };
+    await f.commit("implementation"); f.refuse(); await f.finish();
+    expect(checked).toBe(true);
+    await tickPipelines([], f.h.ports);
+    expect(current().runs[0]!.attempts[0]!.publicationRepair).toMatchObject({ outcome: { status: "rejected" } });
+    expect(f.h.spawnInputs).toHaveLength(1);
+  } finally { f.close(); }
+});
+
+test("a still-running repair names its operation and delivery state before the deadline", async () => {
+  const f = await fixture();
+  try {
+    f.h.ports.now = () => "2026-10-16T10:00:00.000Z";
+    f.h.ports.resumeSeveredTurn = async () => true;
+    f.h.ports.stageRepairDelivery = async () => ({ operationId: "repair-delivery", state: "in-flight", safeToReplace: false });
+    await f.commit("implementation"); f.refuse(); await f.finish();
+    const running = current();
+    for (const action of ["resolve-decision", "retry-stage"] as const) {
+      const result = await rawPatchPipeline(running.id, { action, expectedStageId: "build", expectedAttempt: 1,
+        ...(action === "resolve-decision" ? { clientRequestId: `pending-${action}`, answer: "Continue.", expectedRevision: pipelineRevision(running) } : {}),
+      }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
+      expect(result.status, result.error).toBe(409);
+      expect(result.error).toContain("operation repair-delivery; delivery in-flight");
+    }
+  } finally { f.close(); }
+});
+
+test("infrastructure deadline exhaustion parks without asking the producer to repair capacity", async () => {
+  const f = await fixture();
+  try {
+    let clock = Date.parse("2026-10-16T10:00:00.000Z"), requests = 0;
+    f.h.ports.now = () => new Date(clock).toISOString();
+    f.h.ports.resumeSeveredTurn = async () => { requests++; return true; };
+    await f.commit("implementation");
+    fs.writeFileSync(path.join(f.hooks, "pre-push"), "#!/bin/sh\necho 'pre-push: touched tests: failed (124)' >&2\necho 'owned runner: deadline expired' >&2\nexit 1\n", { mode: 0o700 });
+    await f.finish();
+    for (const delay of [60_000, 5 * 60_000, 15 * 60_000]) {
+      clock += delay;
+      for (let n = 0; n < 4; n++) await tickPipelines([], f.h.ports);
+    }
+    const parked = current();
+    expect(parked.state).toBe("needs_decision");
+    expect(parked.runs[0]!.attempts[0]!.publicationRepair).toBeUndefined();
+    expect(requests).toBe(0);
+    expect(parked.publicationRecovery?.[parked.lastPassedCommit]).toMatchObject({ failures: 4, totalAttempts: 4 });
+    expect(parked.stateDetail).toContain("after 3 automatic retries");
+  } finally { f.close(); }
+});
+
+test.each(["failed", "unreserved", "live", "uncertain", "background", "outstanding"] as const)(
+  "publication repair recovery respects delivery and producer evidence: %s", async kind => {
+    const f = await fixture();
+    try {
+      let clock = Date.parse("2026-10-16T10:00:00.000Z");
+      f.h.ports.now = () => new Date(clock).toISOString();
+      f.h.ports.resumeSeveredTurn = async () => true;
+      f.h.ports.conversationAgentActive = async () => null;
+      f.h.ports.conversationDeliveryOutstanding = () => false;
+      Object.assign(f.h.ports, { stageRepairDelivery: async () => ({ operationId: "repair-delivery",
+        state: kind === "unreserved" ? "unreserved" : "failed", safeToReplace: kind !== "uncertain" }) });
+      await f.commit("implementation"); f.refuse(); await f.finish();
+      if (kind === "live") f.h.ports.conversationAgentActive = async () => true;
+      clock += 21 * 60_000;
+      await tickPipelines([], f.h.ports);
+      if (kind === "background") f.h.ports.durableTurnEvidence = async () => ({ turn: "terminal", message: null,
+        backgroundTasks: [{ id: "repair-background", kind: "command", startedAt: clock, expiresAt: null }] });
+      if (kind === "outstanding") f.h.ports.conversationDeliveryOutstanding = () => true;
+      const parked = current();
+      const result = await rawPatchPipeline(parked.id, { action: "resolve-decision", clientRequestId: `delivery-${kind}`,
+        answer: "Continue after the repair settled.", expectedStageId: "build", expectedAttempt: 1,
+        expectedRevision: pipelineRevision(parked) }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
+      if (kind === "failed" || kind === "unreserved") expect(result.error).toBeUndefined();
+      else {
+        expect(result.status).toBe(409);
+        expect(result.error).toContain("repair-delivery");
+        expect(result.error).toContain("failed");
+        expect(current().runs[0]!.attempts).toHaveLength(1);
+      }
+    } finally { f.close(); }
+  });
+
+test.each([false, true])("retry-stage checks the publication repair producer before retrying (live: %s)", async live => {
+  const f = await fixture();
+  try {
+    let clock = Date.parse("2026-10-16T10:00:00.000Z");
+    f.h.ports.now = () => new Date(clock).toISOString();
+    f.h.ports.resumeSeveredTurn = async () => true;
+    f.h.ports.conversationAgentActive = async () => null;
+    f.h.ports.conversationDeliveryOutstanding = () => false;
+    Object.assign(f.h.ports, { stageRepairDelivery: async () => ({ operationId: "repair-delivery", state: "failed", safeToReplace: true }) });
+    await f.commit("implementation"); f.refuse(); await f.finish();
+    if (live) f.h.ports.conversationAgentActive = async () => true;
+    clock += 21 * 60_000;
+    await tickPipelines([], f.h.ports);
+    const result = await rawPatchPipeline(current().id, { action: "retry-stage" }, f.h.ports);
+    if (live) {
+      expect(result.status).toBe(409);
+      expect(result.error).toContain("repair-delivery");
+    } else expect(result.error).toBeUndefined();
+  } finally { f.close(); }
+});
+
+async function fixture(prelaunchPrefix?: "unrecorded" | "hooks-off" | "foreign", stageList = stages) {
   savePipelines([]);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "publication-recovery-"));
   const repo = path.join(root, "repo"), remote = path.join(root, "remote.git"), hooks = path.join(root, "hooks");
@@ -54,19 +275,40 @@ async function fixture() {
   h.ports.exec = execute;
   h.ports.provisionExec = async (command, args, cwd, signal) => await execute(command, args, cwd, undefined, { signal });
   h.ports.resumeSeveredTurn = undefined;
+  h.ports.restartRecoveryBootId = () => "publication-recovery-boot";
+  h.ports.restartRecoveryBootStartedAt = () => 0;
   const spawn = h.ports.spawnAgent;
   h.ports.spawnAgent = async (input, reserved) => {
     const launchId = `recovery-${input.clientAttemptId}`;
     const result = await spawn(input, async reservation => {
       await reserved({ ...reservation, launchId });
       lane = input.cwd;
+      if (prelaunchPrefix && input.clientAttemptId.endsWith("_build_1")) {
+        let prefix: string;
+        if (prelaunchPrefix === "foreign") {
+          const foreign = path.join(root, "prelaunch-foreign-prefix");
+          await git(lane, "worktree", "add", "--detach", foreign, "HEAD");
+          const made = await execute("git", ["-c", "core.hooksPath=", "commit", "--allow-empty", "-m", "prelaunch foreign prefix"], foreign, clean);
+          expect(made.code, made.stderr).toBe(0);
+          prefix = await git(foreign, "rev-parse", "HEAD");
+          await git(lane, "merge", "--ff-only", prefix);
+        } else {
+          const args = ["commit", "--allow-empty", "-m", `prelaunch ${prelaunchPrefix} prefix`];
+          const made = await execute("git", prelaunchPrefix === "hooks-off" ? ["-c", "core.hooksPath=", ...args] : args, lane, clean);
+          expect(made.code, made.stderr).toBe(0);
+          prefix = await git(lane, "rev-parse", "HEAD");
+        }
+        const pushed = await execute("git", ["-c", "core.hooksPath=", "push", "origin", `HEAD:${current().delivery!.target.branch}`], lane, clean);
+        expect(pushed.code, pushed.stderr).toBe(0);
+        expect(await git(remote, "rev-parse", current().delivery!.target.branch)).toBe(prefix);
+      }
       const guard = await prepareStageGitGuard(launchId, lane, execute, h.ports.now());
       agentEnv = { ...clean, ...guard, ...agentPublicationIdentityEnv({ ...process.env, ...clean, ...guard }) };
     });
     return { ...result, launchId, paneId: null };
   };
   const created = await createPipelineFromRequest({ task: "Recover stage publication", repoDir: repo, baseRef: await git(repo, "rev-parse", "HEAD"),
-    publication: "remote-branch", stages: stages as never }, h.ports);
+    publication: "remote-branch", stages: stageList as never }, h.ports);
   expect(created.error).toBeUndefined();
   await tickPipelines([], h.ports); await tickPipelines([], h.ports);
   expect(current().cursor, current().stateDetail ?? "").toMatchObject({ stageId: "build", state: "running" });
@@ -84,6 +326,61 @@ async function fixture() {
     },
     close: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
+
+test.each(["unrecorded", "hooks-off", "foreign"] as const)(
+  "ordinary retry refuses a %s inherited head before publishing its receipted output", async origin => {
+    const twoWritableStages = [
+      { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Build", next: "retry" },
+      { id: "retry", kind: "run", role: { roleId: "builder" }, prompt: "Retry", next: "review" },
+      { id: "review", kind: "run", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review", next: null },
+    ];
+    const f = await fixture(undefined, twoWritableStages);
+    try {
+      const accepted = await f.commit("first stage accepted output");
+      await f.finish(1);
+      await tickPipelines([], f.h.ports);
+      expect(current()).toMatchObject({ lastPassedCommit: accepted, publishedCommit: accepted,
+        cursor: { stageId: "retry", state: "running" } });
+      const active = current();
+      active.runs!.find(run => run.stageId === "retry")!.attempts[0]!.paneId = "ordinary-retry-pane";
+      savePipelines([active]);
+      await f.git(f.lane(), "reset", "--hard", current().baseRef);
+
+      let divergent: string;
+      if (origin === "foreign") {
+        const foreign = path.join(f.root, "ordinary-retry-foreign");
+        await f.git(f.lane(), "worktree", "add", "--detach", foreign, current().baseRef);
+        await f.git(foreign, "commit", "--allow-empty", "-m", "foreign retry starting commit");
+        divergent = await f.git(foreign, "rev-parse", "HEAD");
+        await f.git(f.lane(), "fetch", foreign, divergent);
+        await f.git(f.lane(), "reset", "--hard", divergent);
+      } else {
+        const args = ["commit", "--allow-empty", "-m", `${origin} retry starting commit`];
+        const result = await f.execute("git", origin === "hooks-off" ? ["-c", "core.hooksPath=", ...args] : args,
+          f.lane(), undefined);
+        expect(result.code, result.stderr).toBe(0);
+        divergent = await f.git(f.lane(), "rev-parse", "HEAD");
+        if (origin === "unrecorded") {
+          const attempt = current().runs!.find(run => run.stageId === "retry")!.attempts[0]!;
+          fs.rmSync(path.join(stageGitReceiptDirectory(attempt.launchId!), "commits", divergent), { force: true });
+        }
+      }
+      expect(await f.git(f.remote, "rev-parse", current().delivery!.target.branch)).toBe(accepted);
+      await tickPipelines([f.h.finish("/codex/stage-2.jsonl", "fail", "retry this stage")], f.h.ports);
+      expect((await rawPatchPipeline(current().id, { action: "retry-stage" }, f.h.ports)).error).toBeUndefined();
+      await tickPipelines([], f.h.ports);
+      expect(current().runs!.find(run => run.stageId === "retry")!.attempts[1]!.restartContext).toBeUndefined();
+      await f.git(f.lane(), "merge", "--no-ff", "-m", "restore the accepted boundary", accepted);
+      const output = await f.commit("receipted retry output");
+      await tickPipelines([f.h.finish("/codex/stage-3.jsonl", "pass", "implemented")], f.h.ports);
+
+      expect(current().state).toBe("needs_decision");
+      expect(current().stateDetail).toContain(divergent);
+      expect(current().lastPassedCommit).toBe(accepted);
+      expect(await f.git(f.remote, "rev-parse", current().delivery!.target.branch)).toBe(accepted);
+      expect(await f.git(f.lane(), "merge-base", "--is-ancestor", output, "HEAD")).toBe("");
+    } finally { f.close(); }
+  });
 
 test.each([false, true])("a real refused pre-push admits one fresh decision attempt on the current head with refusal output (moved: %s)", async moved => {
   const f = await fixture();
@@ -149,19 +446,37 @@ test("a fresh attempt can finish after the controller accepted and committed dir
   } finally { f.close(); }
 });
 
-test.each(["proved", "unproved"])("a replacement checks the lost attempt's %s commits", async proof => {
+test.each([
+  { proof: "proved", writes: true }, { proof: "proved", writes: false },
+  { proof: "unrecorded", writes: true }, { proof: "hooks-off", writes: false }, { proof: "foreign", writes: false },
+])("a replacement checks the lost attempt's $proof commits (replacement writes: $writes)", async ({ proof, writes }) => {
   const f = await fixture();
   try {
-    const first = await f.commit("lost attempt output");
+    let first: string;
+    if (proof === "foreign") {
+      const foreign = path.join(f.root, "foreign-output");
+      await f.git(f.lane(), "worktree", "add", "--detach", foreign, "HEAD");
+      await f.git(foreign, "commit", "--allow-empty", "-m", "foreign output");
+      first = await f.git(foreign, "rev-parse", "HEAD");
+      await f.git(f.lane(), "merge", "--ff-only", first);
+    } else if (proof === "hooks-off") {
+      const made = await f.execute("git", ["-c", "core.hooksPath=", "commit", "--allow-empty", "-m", "unproved output"], f.lane());
+      expect(made.code, made.stderr).toBe(0);
+      first = await f.git(f.lane(), "rev-parse", "HEAD");
+    } else first = await f.commit("lost attempt output");
     const old = current().runs[0]!.attempts[0]!;
-    if (proof === "unproved") fs.unlinkSync(path.join(stageGitReceiptDirectory(old.launchId!), "commits", first));
+    if (proof === "unrecorded") fs.unlinkSync(path.join(stageGitReceiptDirectory(old.launchId!), "commits", first));
+    expect(fs.existsSync(path.join(stageGitReceiptDirectory(old.launchId!), "commits", first))).toBe(proof === "proved");
     f.h.durableTurns.set(old.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(old.startedAt!) + 1 });
     f.h.advanceWallClock(600_000);
     f.h.ports.conversationTurnInterrupted = async () => "dead";
     await tickPipelines([entry(old.agentPath!)], f.h.ports);
     await tickPipelines([], f.h.ports);
     expect(current().runs[0]!.attempts).toHaveLength(2);
-    const head = await f.commit("replacement output"); await f.finish(2);
+    expect(current().runs[0]!.attempts[1]!.restartContext).toMatchObject({ previousAttempt: 1, cause: "host-lost" });
+    expect(current().worktreeDir).toBe(f.lane());
+    const head = writes ? await f.commit("replacement output") : first;
+    await f.finish(2);
     if (proof === "proved") {
       expect(current()).toMatchObject({ lastPassedCommit: head, publishedCommit: head, cursor: { stageId: "review", state: "pending" } });
     } else {
@@ -169,6 +484,144 @@ test.each(["proved", "unproved"])("a replacement checks the lost attempt's %s co
       expect(current().stateDetail).toContain(first);
       expect(current().publishedCommit).toBeNull();
     }
+  } finally { f.close(); }
+});
+
+for (const proof of ["proved", "unrecorded", "hooks-off", "foreign"] as const) {
+  test(`a replacement validates the already-published ${proof} prefix against attempt custody`, async () => {
+    const f = await fixture();
+    try {
+      let prefix: string;
+      if (proof === "foreign") {
+        const foreign = path.join(f.root, "published-foreign-prefix");
+        await f.git(f.lane(), "worktree", "add", "--detach", foreign, "HEAD");
+        await f.git(foreign, "commit", "--allow-empty", "-m", "published foreign prefix");
+        prefix = await f.git(foreign, "rev-parse", "HEAD");
+        await f.git(f.lane(), "merge", "--ff-only", prefix);
+      } else if (proof === "hooks-off") {
+        const made = await f.execute("git", ["-c", "core.hooksPath=", "commit", "--allow-empty", "-m", "published hooks-off prefix"], f.lane());
+        expect(made.code, made.stderr).toBe(0);
+        prefix = await f.git(f.lane(), "rev-parse", "HEAD");
+      } else prefix = await f.commit(`published ${proof} prefix`);
+
+      const old = current().runs[0]!.attempts[0]!;
+      if (proof === "unrecorded") fs.unlinkSync(path.join(stageGitReceiptDirectory(old.launchId!), "commits", prefix));
+      if (proof === "proved") await f.agentGit(f.lane(), "push", "origin", `HEAD:${current().delivery!.target.branch}`);
+      else {
+        const pushed = await f.execute("git", ["-c", "core.hooksPath=", "push", "origin", `HEAD:${current().delivery!.target.branch}`], f.lane());
+        expect(pushed.code, pushed.stderr).toBe(0);
+      }
+      expect(await f.git(f.remote, "rev-parse", current().delivery!.target.branch)).toBe(prefix);
+
+      f.h.durableTurns.set(old.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(old.startedAt!) + 1 });
+      f.h.advanceWallClock(600_000);
+      f.h.ports.conversationTurnInterrupted = async () => "dead";
+      await tickPipelines([entry(old.agentPath!)], f.h.ports);
+      await tickPipelines([], f.h.ports);
+      expect(current().runs[0]!.attempts[1]!.restartContext).toMatchObject({ previousAttempt: 1, cause: "host-lost" });
+      const head = await f.commit("replacement suffix after published prefix");
+      await f.finish(2);
+      if (proof === "proved") {
+        expect(current()).toMatchObject({ lastPassedCommit: head, publishedCommit: head, cursor: { stageId: "review", state: "pending" } });
+      } else {
+        expect(current().state).toBe("needs_decision");
+        expect(current().stateDetail).toContain(prefix);
+        expect(current().publishedCommit).toBeNull();
+      }
+    } finally { f.close(); }
+  });
+}
+
+for (const proof of ["unrecorded", "hooks-off", "foreign"] as const) {
+  test(`a replacement refuses an unaccepted ${proof} prefix already in its predecessor's starting head`, async () => {
+    const f = await fixture(proof);
+    try {
+      const old = current().runs[0]!.attempts[0]!;
+      const prefix = await f.git(f.lane(), "rev-parse", "HEAD");
+      expect(fs.existsSync(path.join(stageGitReceiptDirectory(old.launchId!), "commits", prefix))).toBe(false);
+      f.h.durableTurns.set(old.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(old.startedAt!) + 1 });
+      f.h.advanceWallClock(600_000);
+      f.h.ports.conversationTurnInterrupted = async () => "dead";
+      await tickPipelines([entry(old.agentPath!)], f.h.ports);
+      await tickPipelines([], f.h.ports);
+      expect(current().runs[0]!.attempts[1]!.restartContext).toMatchObject({ previousAttempt: 1, cause: "host-lost" });
+      const suffix = await f.commit("replacement suffix after unaccepted starting prefix");
+      await f.finish(2);
+      expect(current().state).toBe("needs_decision");
+      expect(current().stateDetail).toContain(prefix);
+      expect(current().publishedCommit).toBeNull();
+      expect(current().lastPassedCommit).not.toBe(suffix);
+    } finally { f.close(); }
+  });
+}
+
+test("a passed replacement's custody refusal can be answered without resetting its checkout", async () => {
+  const f = await fixture();
+  try {
+    const head = await f.commit("lost attempt output");
+    const old = current().runs[0]!.attempts[0]!;
+    // Model a commit whose creation cannot be attributed to any launch.
+    fs.unlinkSync(path.join(stageGitReceiptDirectory(old.launchId!), "commits", head));
+    f.h.durableTurns.set(old.agentPath!, { turn: "busy", message: null, lastRecordAt: Date.parse(old.startedAt!) + 1 });
+    f.h.advanceWallClock(600_000);
+    f.h.ports.conversationTurnInterrupted = async () => "dead";
+    await tickPipelines([entry(old.agentPath!)], f.h.ports);
+    await tickPipelines([], f.h.ports);
+    expect(current().runs[0]!.attempts[1]!.restartContext).toMatchObject({ previousAttempt: 1, cause: "host-lost" });
+    await f.finish(2);
+    const parked = current();
+    expect(parked.state).toBe("needs_decision");
+    expect(parked.stateDetail).toContain("not created in the attempt worktree");
+    expect(parked.runs[0]!.attempts[1]!.verdict?.status).toBe("pass");
+    f.h.setConversationActive(false);
+    const request = { action: "resolve-decision" as const, clientRequestId: "answer-custody-refusal",
+      answer: "Investigate the missing creation receipt while preserving the accepted history.",
+      expectedStageId: "build", expectedAttempt: 2, expectedRevision: pipelineRevision(parked) };
+    const result = await rawPatchPipeline(parked.id, request, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
+    expect(result.error).toBeUndefined();
+    expect(current().runs[0]!.attempts[1]!.report).toEqual(parked.runs[0]!.attempts[1]!.report);
+    expect(current().runs[0]!.attempts[1]!.completedAt).toBe(current().decisionAnswers!.at(-1)!.at);
+    expect((await rawPatchPipeline(parked.id, request, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR)).replayed).toBe(true);
+    expect(await f.git(f.lane(), "rev-parse", "HEAD")).toBe(head);
+    await tickPipelines([], f.h.ports);
+    expect(f.h.spawnInputs[2]!.prompt).toContain("not created in the attempt worktree");
+    await f.finish(3);
+    // An answer starts repair work; it grants no creation proof of its own.
+    expect(current().state).toBe("needs_decision");
+    expect(current().publishedCommit).toBeNull();
+    expect(await f.git(f.lane(), "rev-parse", "HEAD")).toBe(head);
+  } finally { f.close(); }
+});
+
+test.each(["active", "unknown", "busy", "queued", "revision", "actor", "changed during read", "unrelated park"] as const)
+("a custody decision retains its %s fence", async fence => {
+  const f = await fixture();
+  try {
+    const head = await f.commit("unrecorded output");
+    const attempt = current().runs[0]!.attempts[0]!;
+    fs.unlinkSync(path.join(stageGitReceiptDirectory(attempt.launchId!), "commits", head));
+    await f.finish();
+    expect(current().stateDetail).toContain("not created in the attempt worktree");
+    f.h.setConversationActive(false);
+    if (fence === "active") f.h.setConversationActive(true);
+    if (fence === "unknown") f.h.setConversationActive(null);
+    if (fence === "busy") f.h.ports.durableTurnEvidence = async () => ({ turn: "busy", message: null });
+    if (fence === "queued") f.h.ports.conversationDeliveryOutstanding = () => true;
+    if (fence === "changed during read") f.h.ports.conversationAgentActive = async () => {
+      const moved = current(); moved.state = "paused"; savePipelines([moved]); return false;
+    };
+    if (fence === "unrelated park") {
+      const moved = current(); moved.stateDetail = "another settlement refusal"; savePipelines([moved]);
+    }
+    const parked = current();
+    const result = await rawPatchPipeline(parked.id, { action: "resolve-decision", clientRequestId: `custody-fence-${fence}`,
+      answer: "Investigate custody.", expectedStageId: "build", expectedAttempt: 1,
+      expectedRevision: fence === "revision" ? "0".repeat(64) : pipelineRevision(parked) }, f.h.ports,
+    fence === "actor" ? { kind: "agent", role: "builder", conversationId: "conversation_other" } : OPERATOR_PAUSE_RESUME_ACTOR);
+    expect(result.status).toBe(fence === "actor" ? 403 : 409);
+    expect(current().runs[0]!.attempts).toHaveLength(1);
+    expect(current().publishedCommit).toBeNull();
+    expect(await f.git(f.lane(), "rev-parse", "HEAD")).toBe(head);
   } finally { f.close(); }
 });
 

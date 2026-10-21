@@ -1,6 +1,6 @@
 // Pre-S5 execution expectations are retained until S8 removes the engine.
 // Active admission and archive invariants run in flows/retirement.test.ts.
-import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
+import { ownFixtureTree, stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 import { afterAll, expect, spyOn, test } from "bun:test";
 import { spawn, spawnSync as rawSpawnSync, type SpawnSyncReturns } from "node:child_process";
 import crypto from "node:crypto";
@@ -38,7 +38,7 @@ let releaseRelayDeliveries: Array<() => void> = [];
 process.env.LLV_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "llv-flow-engine-test-"));
 const restorePolicyReader = setCodexShellPolicyReaderForTest(() => ({}));
 const { captureReviewHead, newRound, tickFlow, tickFlows, persistTickFlows, flowTickBase, reviewerLaunchPersisted, abandonLaunch, adoptSyntheticLaunchTakeover, recordHeadlessLaunch, relayFixOrPark, reserveReviewerSpawn, sendToImplementer, setRelayDeliveryForTest } = await import("./engine");
-const { loadFlows, outputPathFor, saveFlows, stderrPathFor, stdoutPathFor } = await import("./store");
+const { findingsPathFor, loadFlows, outputPathFor, saveFlows, stderrPathFor, stdoutPathFor } = await import("./store");
 const { BINDINGS_SOURCE } = await import("@/lib/accounts/accountsStore");
 const { clearAccountFixture, seedAccountSource } = await import("@/lib/accounts/accountsStoreFixture");
 const tasksStore = await import("@/lib/tasks/store");
@@ -3372,6 +3372,89 @@ test.skip("startup repair preserves parked hostless reviewer fences without deat
   expect(registry.readOnlySnapshot().entries[`codex:${deadSession}`]).toMatchObject({ status: "dead", pendingAction: null });
   expect(registry.readOnlySnapshot().entries[`codex:${parkedSession}`]).toMatchObject({ status: "starting", pendingAction: "spawn" });
   expect(registry.readOnlySnapshot().entries[`codex:${unverifiedSession}`]).toMatchObject({ status: "starting", pendingAction: "spawn" });
+});
+
+test.skip.each(["settlement", "hostless marker"] as const)("a superseded headless round keeps successor state after %s admission resumes", async boundary => {
+  const { registryLockHolder } = await import("@/lib/agent/registryLockHolderFixture");
+  const { setAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const exec = await import("./exec");
+  const id = "flow-stale-reviewer-settlement";
+  const sessionId = crypto.randomUUID();
+  const implementer = writeCodexEntry("stale-reviewer-implementer.jsonl", { id: crypto.randomUUID(), cwd: "/repo" }, Date.now() / 1_000);
+  const reviewer = writeCodexEntry(`stale-reviewer-${sessionId}.jsonl`, { id: sessionId, cwd: "/repo" }, Date.now() / 1_000);
+  const reviewerProcess = ownFixtureTree(spawn("/bin/sleep", ["30"], { detached: true, stdio: "ignore" }));
+  if (reviewerProcess.pid === undefined) throw new Error("reviewer process fixture did not start");
+  const reviewerIdentity = procBackend.processIdentity(reviewerProcess.pid);
+  if (reviewerIdentity === null) throw new Error("reviewer process fixture has no identity");
+  const flow = hostlessReviewerFlow(id, sessionId, reviewer.path, implementer.path);
+  const round = flow.rounds[0]!;
+  round.reviewerBindingId = "reviewer-binding-before";
+  round.reviewerPid = reviewerProcess.pid;
+  round.reviewerIdentity = reviewerIdentity;
+  const findingsPath = findingsPathFor(id, round.n);
+  round.findingsPath = findingsPath;
+  const root = fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "stale-reviewer-settlement-"));
+  const previousRegistry = agentRegistry();
+  const registry = new AgentRegistry(path.join(root, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  setAgentRegistryForTests(registry);
+  const status = spyOn(exec, "headlessReviewStatus").mockReturnValue({
+    status: "done", stdout: "successor stdout", stderr: "", finalOutput: "unparseable reviewer output",
+    sessionId, processIdentity: null, code: 1, signal: null,
+  });
+  let holder: Awaited<ReturnType<typeof registryLockHolder>> | undefined;
+  let releaseMarker!: () => void;
+  let signalMarkerEntered!: () => void;
+  const markerGate = new Promise<void>(resolve => { releaseMarker = resolve; });
+  const markerEntered = new Promise<void>(resolve => { signalMarkerEntered = resolve; });
+  const deliveryWrite = registry.deliveryWriteOrBusy.bind(registry);
+  const deliveryWriteSpy = spyOn(registry, "deliveryWriteOrBusy").mockImplementation((correlation, write) => {
+    if (boundary === "hostless marker" && correlation.label === "registry.flow-hostless") {
+      signalMarkerEntered();
+      return markerGate.then(() => deliveryWrite(correlation, write));
+    }
+    return deliveryWrite(correlation, write);
+  });
+  try {
+    const seeded = settleHostlessReviewer(flow, sessionId, reviewer.path);
+    round.launchId = seeded.launchId;
+    fs.mkdirSync(path.dirname(stdoutPathFor(id, round.n)), { recursive: true });
+    fs.writeFileSync(stdoutPathFor(id, round.n), "successor stdout");
+    fs.writeFileSync(outputPathFor(id, round.n), "successor output");
+    fs.writeFileSync(findingsPath, "successor findings");
+    saveFlows([flow]);
+    holder = registryLockHolder(path.join(root, "registry.sqlite"));
+    if (boundary === "settlement") await holder.hold();
+
+    const ticking = tickFlow(flow, [implementer, reviewer], new Map([[implementer.path, implementer], [reviewer.path, reviewer]]), () => {});
+    if (boundary === "settlement") await new Promise<void>(resolve => setImmediate(resolve));
+    else await markerEntered;
+    const successor = loadFlows().find(item => item.id === id)!;
+    successor.revision = (successor.revision ?? 0) + 1;
+    successor.rounds[0]!.reviewerBindingId = "reviewer-binding-successor";
+    saveFlows([successor]);
+    fs.writeFileSync(stdoutPathFor(id, round.n), "successor stdout");
+    fs.writeFileSync(outputPathFor(id, round.n), "successor output");
+    if (boundary === "settlement") await holder.release();
+    else releaseMarker();
+    await ticking;
+
+    expect(fs.readFileSync(stdoutPathFor(id, round.n), "utf8")).toBe("successor stdout");
+    expect(fs.readFileSync(outputPathFor(id, round.n), "utf8")).toBe("successor output");
+    expect(fs.readFileSync(findingsPath, "utf8")).toBe("successor findings");
+    expect(procBackend.processIdentity(reviewerProcess.pid)).toBe(reviewerIdentity);
+    expect(loadFlows().find(item => item.id === id)?.rounds[0]).toMatchObject({
+      reviewerBindingId: "reviewer-binding-successor", reviewerPid: reviewerProcess.pid, findingsPath,
+    });
+  } finally {
+    status.mockRestore();
+    deliveryWriteSpy.mockRestore();
+    await holder?.close();
+    await stopFixtureProcess(reviewerProcess);
+    setAgentRegistryForTests(previousRegistry);
+    saveFlows(loadFlows().filter(item => item.id !== id));
+    registry.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test.skip("a legacy review relay resumes with the durable ultrafast tier", async () => {

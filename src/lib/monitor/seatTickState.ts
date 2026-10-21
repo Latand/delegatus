@@ -7,6 +7,7 @@ import path from "node:path";
 import { SeatTickAccounting } from "./seatTickAccounting";
 
 import { statePath } from "@/lib/configDir";
+import { isReminderVersion } from "./seatTickReminders";
 
 import {
   emptySeatTickState,
@@ -61,6 +62,7 @@ function normalizeWakeCommit(value: unknown): SeatTickWakeCommit | null {
   if (typeof raw.eventsThrough !== "number" || !Number.isInteger(raw.eventsThrough) || raw.eventsThrough < 0) return null;
   return {
     ...(raw.diskPressure && typeof raw.diskPressure === "object" && "episode" in raw.diskPressure && "version" in raw.diskPressure && typeof raw.diskPressure.episode === "string" && typeof raw.diskPressure.version === "string" ? { diskPressure: { episode: raw.diskPressure.episode, version: raw.diskPressure.version } } : {}),
+    ...(isoOrNull(raw.deployResumeThrough) ? { deployResumeThrough: isoOrNull(raw.deployResumeThrough)! } : {}),
     ...(raw.catchUp && typeof raw.catchUp === "object" && typeof (raw.catchUp as Record<string, unknown>).key === "string"
       && isoOrNull((raw.catchUp as Record<string, unknown>).from) && isoOrNull((raw.catchUp as Record<string, unknown>).through)
       ? { catchUp: { key: String((raw.catchUp as Record<string, unknown>).key), from: String((raw.catchUp as Record<string, unknown>).from),
@@ -302,6 +304,7 @@ function normalizeRow(value: unknown, legacy: boolean): SeatTickProjectState {
        settled deploy nobody announced is announced. */
     announcedMaintenance: conversationIds(raw.announcedMaintenance).slice(-SEAT_TICK_ANNOUNCED_MAINTENANCE_LIMIT),
     announcedDeploys: conversationIds(raw.announcedDeploys).slice(-SEAT_TICK_ANNOUNCED_DEPLOYS_LIMIT),
+    ...(isoOrNull(raw.deployResumeThrough) ? { deployResumeThrough: isoOrNull(raw.deployResumeThrough)! } : {}),
     /* Absent on every row from before #2030: a seat remembered as having been
        shown no note is shown it. */
     ...(typeof raw.autonomyShown === "string" ? { autonomyShown: raw.autonomyShown } : {}),
@@ -390,6 +393,8 @@ export function seatTickStateForEpoch(row: SeatTickProjectState, seatEpoch: numb
     diskPressureShown: row.diskPressureShown,
     eventsThrough: row.eventsThrough,
     lastWakeAt: row.lastWakeAt,
+    ...(row.deployResumeThrough ? { deployResumeThrough: row.deployResumeThrough } : {}),
+    ...(row.itemsShown?.some(isReminderVersion) ? { itemsShown: row.itemsShown.filter(isReminderVersion) } : {}),
     lastProposalAt: row.lastProposalAt,
     outstandingWake: row.outstandingWake,
     retiredWakes: row.retiredWakes ?? [],

@@ -4,7 +4,6 @@ import type { BoardTask, TaskAssignment } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
 
 import {
-  assignEdgeLanes,
   buildTaskEdges,
   buildTaskTargetIndex,
   corridorGroups,
@@ -674,25 +673,30 @@ function edgeGeom(key: string, x1: number, y1: number, x2: number, y2: number, o
   return { key, taskId: "t", relation: "assignment", path: "/p", x1, y1, x2, y2, status: "assigned", failed: false, error: null, ...over };
 }
 
-describe("assignEdgeLanes", () => {
-  test("coincident source + assignment edges land on distinct lanes", () => {
+describe("routeTaskEdges corridor lanes", () => {
+  test("coincident source + assignment edges land on distinct curves", () => {
     /* The Finding-2 case: a task whose source and assignment resolve to the same
        session give byte-identical endpoints — they must not share a lane. */
     const src = edgeGeom("t::source::/p", 0, 0, 100, 100, { relation: "source" });
     const asn = edgeGeom("t::/p", 0, 0, 100, 100);
-    const lanes = assignEdgeLanes([src, asn]);
-    expect(new Set(lanes.values()).size).toBe(2);
-    expect([...lanes.values()]).toContain(0);
+    const routes = routeTaskEdges([src, asn], [], []);
+    expect(new Set([...routes.values()].map((route) => route.d)).size).toBe(2);
+    expect([...routes.values()].map((route) => route.d)).toContain(routeTaskEdge(src, []).d);
   });
 
   test("three coincident edges spread symmetrically to 0, +1, −1", () => {
-    const es = [edgeGeom("k3", 0, 0, 10, 10), edgeGeom("k1", 0, 0, 10, 10), edgeGeom("k2", 0, 0, 10, 10)];
-    expect([...assignEdgeLanes(es).values()].sort((a, b) => a - b)).toEqual([-1, 0, 1]);
+    const es = [edgeGeom("k3", 0, 0, 200, 0), edgeGeom("k1", 0, 0, 200, 0), edgeGeom("k2", 0, 0, 200, 0)];
+    const routes = routeTaskEdges(es, [], []);
+    expect(new Set([...routes.values()].map((route) => route.d)).size).toBe(3);
+    expect(routes.get("k1")!.d).toBe(routeTaskEdge(es[0]!, [], 0).d);
+    expect(routes.get("k2")!.d).toBe(routeTaskEdge(es[0]!, [], 1).d);
+    expect(routes.get("k3")!.d).toBe(routeTaskEdge(es[0]!, [], -1).d);
   });
 
   test("edges with distinct endpoints all stay on lane 0", () => {
-    const lanes = assignEdgeLanes([edgeGeom("a", 0, 0, 10, 10), edgeGeom("b", 0, 0, 10, 20)]);
-    expect([...lanes.values()]).toEqual([0, 0]);
+    const es = [edgeGeom("a", 0, 0, 10, 10), edgeGeom("b", 0, 0, 10, 20)];
+    const routes = routeTaskEdges(es, [], []);
+    for (const edge of es) expect(routes.get(edge.key)!.d).toBe(routeTaskEdge(edge, []).d);
   });
 
   test("partially collinear edges sharing a corridor get separate lanes (Finding)", () => {
@@ -703,21 +707,25 @@ describe("assignEdgeLanes", () => {
     const a = edgeGeom("A", 0, 0, 1000, 0);
     const b = edgeGeom("B", 500, 0, 1500, 0);
     expect(corridorGroups([a, b]).some((g) => g.length === 2)).toBe(true);
-    expect(new Set(assignEdgeLanes([a, b]).values()).size).toBe(2);
     const routes = routeTaskEdges([a, b], [], []);
     expect(routes.get("A")!.d).not.toBe(routes.get("B")!.d);
+    expect(routes.get("A")!.mid.y).not.toBe(routes.get("B")!.mid.y);
   });
 
   test("reverse-direction coincident edges are one corridor (direction-agnostic)", () => {
-    const groups = corridorGroups([edgeGeom("A", 0, 0, 200, 0), edgeGeom("B", 200, 0, 0, 0)]);
+    const es = [edgeGeom("A", 0, 0, 200, 0), edgeGeom("B", 200, 0, 0, 0)];
+    const groups = corridorGroups(es);
     expect(groups.some((g) => g.length === 2)).toBe(true);
+    const routes = routeTaskEdges(es, [], []);
+    expect(routes.get("A")!.mid.y).not.toBe(routes.get("B")!.mid.y);
   });
 
   test("collinear edges that do not overlap stay on lane 0", () => {
     /* Same line, but their spans (0–100 and 500–600) do not touch — no overdraw,
        so they must not be needlessly fanned. */
-    const lanes = assignEdgeLanes([edgeGeom("a", 0, 0, 100, 0), edgeGeom("b", 500, 0, 600, 0)]);
-    expect([...lanes.values()]).toEqual([0, 0]);
+    const es = [edgeGeom("a", 0, 0, 100, 0), edgeGeom("b", 500, 0, 600, 0)];
+    const routes = routeTaskEdges(es, [], []);
+    for (const edge of es) expect(routes.get(edge.key)!.d).toBe(routeTaskEdge(edge, []).d);
   });
 
   test("near-collinear corridor grouping is symmetric under input order (Finding)", () => {
@@ -734,13 +742,27 @@ describe("assignEdgeLanes", () => {
     expect(key([a, b])).toBe(key([b, a]));
     /* And they do land in one group (the overlap is real). */
     expect(corridorGroups([a, b]).some((g) => g.length === 2)).toBe(true);
+    const forward = routeTaskEdges([a, b], [], []);
+    const reversed = routeTaskEdges([b, a], [], []);
+    expect(forward.get("A")!.mid.y).not.toBe(forward.get("B")!.mid.y);
+    for (const edge of [a, b]) expect(reversed.get(edge.key)).toEqual(forward.get(edge.key));
   });
 
   test("deterministic under input permutation", () => {
-    const es = [edgeGeom("k1", 0, 0, 5, 5), edgeGeom("k2", 0, 0, 5, 5), edgeGeom("k3", 0, 0, 5, 5)];
-    const forward = assignEdgeLanes(es);
-    const reversed = assignEdgeLanes([...es].reverse());
-    for (const e of es) expect(reversed.get(e.key)).toBe(forward.get(e.key));
+    const es = [edgeGeom("k1", 0, 0, 200, 0), edgeGeom("k2", 0, 0, 200, 0), edgeGeom("k3", 200, 0, 0, 0)];
+    const forward = routeTaskEdges(es, [], []);
+    expect(new Set([...forward.values()].map((route) => route.mid.y)).size).toBe(3);
+    const permutations = [
+      [es[0]!, es[2]!, es[1]!],
+      [es[1]!, es[0]!, es[2]!],
+      [es[1]!, es[2]!, es[0]!],
+      [es[2]!, es[0]!, es[1]!],
+      [...es].reverse(),
+    ];
+    for (const permutation of permutations) {
+      const routes = routeTaskEdges(permutation, [], []);
+      for (const edge of es) expect(routes.get(edge.key)).toEqual(forward.get(edge.key));
+    }
   });
 });
 

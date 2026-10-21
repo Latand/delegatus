@@ -21,6 +21,7 @@ import {
   HANDOFF_HEADING,
   HISTORY_BUDGET_BYTES,
   HISTORY_HEADING,
+  launchOverheadBytes,
   splitMandate,
   type HandoffDigestRequest,
 } from "./handoffDigest";
@@ -34,6 +35,9 @@ import {
   ORCHESTRATOR_VIEWER_CLOCK_DIRECTIVE,
   orchestratorMandateForDelivery,
   orchestratorMandateStale,
+  orchestratorMandateUpgraded,
+  orchestratorMandateWithRoleTable,
+  orchestratorRoleTable,
 } from "./prompt";
 import {
   executeOrchestratorRotation,
@@ -63,6 +67,51 @@ afterEach(() => {
 const AT = "2026-07-29T00:00:00.000Z";
 const NEW_ID = "conversation_33333333-3333-4333-8333-333333333333";
 const OLD_ID = "conversation_44444444-4444-4444-8444-444444444444";
+
+for (const shared of [false, true]) test(`completed seat replay awaits registry identity publication without blocking the Viewer (shared=${shared})`, async () => {
+  const { registryLockHolder } = await import("@/lib/agent/registryLockHolderFixture");
+  const sqliteFilename = path.join(sandbox, shared ? "state.sqlite" : "registry.sqlite");
+  const registry = new AgentRegistry(path.join(sandbox, "registry.json"), undefined, undefined, { sqliteMode: "sqlite", sqliteFilename });
+  const transcript = path.join(sandbox, "seat.jsonl");
+  const conversation = registry.ensureConversation("codex", transcript, null);
+  setAgentRegistryForTests(registry);
+  const { deps } = dependencies({
+    conversationTarget: () => ({ kind: "eligible", conversationId: conversation.id, path: transcript, cwd: sandbox, project: "proj-a", engine: "codex" }),
+    stampRegistryIdentity: seat => { registry.stampOrchestratorSeatIdentity(seat); },
+  });
+  const request = { project: "proj-a", mandate: "Own the fixture board", clientRequestId: "registry-seat-replay", conversationId: conversation.id };
+  const holder = registryLockHolder(sqliteFilename);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const identityAdmission = Promise.withResolvers<void>();
+  const accountMutationWrite = registry.accountMutationWrite.bind(registry);
+  registry.accountMutationWrite = async (label, write, guard, options) => {
+    if (label === "registry.seat-identity") identityAdmission.resolve();
+    return accountMutationWrite(label, write, guard, options);
+  };
+  try {
+    expect((await executeOrchestratorSeatRequest(request, deps)).status).toBe(200);
+    await holder.hold();
+    let finished = false;
+    let lastTick = performance.now();
+    let maxLoopGapMs = 0;
+    const sampleLoop = () => {
+      const now = performance.now();
+      maxLoopGapMs = Math.max(maxLoopGapMs, now - lastTick);
+      lastTick = now;
+      if (!finished) timer = setTimeout(sampleLoop, 5);
+    };
+    timer = setTimeout(sampleLoop, 5);
+    const replayWork = executeOrchestratorSeatRequest(request, deps);
+    await identityAdmission.promise;
+    await holder.release();
+    const replay = await replayWork;
+    finished = true;
+    await new Promise(resolve => { timer = setTimeout(resolve, 10); });
+    expect(maxLoopGapMs).toBeLessThan(50);
+    expect(replay.status).toBe(200);
+    expect(registry.conversation(conversation.id)?.agentRole).toBe("orchestrator");
+  } finally { clearTimeout(timer); await holder.close(); registry.close(); }
+});
 
 test("seat activation waits for runtime evidence outside the lease and preserves a racing designation", async () => {
   const { deps, recorded } = dependencies();
@@ -310,6 +359,7 @@ test("spawn mode freezes omitted runtime fields to the resolved orchestrator def
 
 test("a seat designated after the identity wave stamps registry role, membership, and rotation lineage", async () => {
   const registry = new AgentRegistry(path.join(sandbox, "agent-registry.json"), undefined, undefined, { sqliteMode: "off" });
+  setAgentRegistryForTests(registry);
   const oldPath = path.join(sandbox, "old.jsonl");
   const newPath = path.join(sandbox, "new.jsonl");
   const oldConversation = registry.ensureConversation("claude", oldPath, null);
@@ -651,6 +701,8 @@ test("adopting a model-less Codex conversation records its engine-specific effec
 test("a replayed adoption keeps its original target during an ABA-shaped retry", async () => {
   let releaseDelivery: () => void = () => {};
   const gate = new Promise<void>((resolve) => { releaseDelivery = resolve; });
+  let entered!: () => void;
+  const bothDeliveries = new Promise<void>(resolve => { entered = resolve; });
   const { deps, recorded } = dependencies({
     conversationTarget: (conversationId) => ({
       kind: "eligible",
@@ -662,6 +714,7 @@ test("a replayed adoption keeps its original target during an ABA-shaped retry",
     }),
     deliver: async (input) => {
       recorded.deliveries.push({ conversationId: input.conversationId, clientMessageId: input.clientMessageId, text: input.text });
+      if (recorded.deliveries.length === 2) entered();
       await gate;
       return { ok: true, outcome: "delivered" };
     },
@@ -679,6 +732,7 @@ test("a replayed adoption keeps its original target during an ABA-shaped retry",
     conversationId: NEW_ID,
   }, deps);
 
+  await bothDeliveries;
   expect(recorded.deliveries.map((delivery) => delivery.conversationId)).toEqual([OLD_ID, OLD_ID]);
   releaseDelivery();
   await Promise.all([first, replay]);
@@ -1205,6 +1259,149 @@ test("a pending replay sends its first attempt's role table after a role was edi
   const fresh = await executeOrchestratorSeatRequest({ ...spawnRequest("req_00000002"), replaceIncumbent: true }, deps);
   expect(fresh.status).toBe(200);
   expect(String(recorded.spawns[2]?.prompt)).toContain(`| builder | ${builder.config.engine} | ${builder.config.model} | ${effort} |`);
+});
+
+/* v58 upgrades a mandate (the maintenance practice, the current working rule
+   16) when a request composes a new intent. A seat request an earlier release
+   admitted under v57 can stay pending across the upgrade, and its retry must
+   send the first attempt's bytes: the spawn fence answers its clientAttemptId
+   by request digest, an adoption's receipts answer its clientMessageId, and
+   the upgrade can carry a near-bound mandate past the envelope it was
+   admitted under. */
+const V57_MANDATE = fs.readFileSync(path.join(import.meta.dir, "fixtures/mandate-v57.txt"), "utf8");
+const MAINTENANCE_BULLET = "- Maintenance (dead code, stale mechanisms, flaky tests, check cost) is report first:";
+const V57_KEY = "req_00005701";
+
+/** A v57 mandate whose first message, as v57 delivery sent it, is
+    `firstMessageBytes` with the spawn scaffold; null keeps the default. */
+function v57Mandate(firstMessageBytes: number | null): string {
+  if (firstMessageBytes === null) return V57_MANDATE;
+  const shell = `${V57_MANDATE}\n\n${HISTORY_HEADING}\n\n\n${orchestratorRoleTable(ROLE_DEFAULTS)}`;
+  const padding = firstMessageBytes - Buffer.byteLength(shell) - launchOverheadBytes("spawn", { mode: "standard" });
+  return `${V57_MANDATE}\n\n${HISTORY_HEADING}\n${"h".repeat(padding)}`;
+}
+
+/** Durable residue of a v57 request that died before its launch settled. The
+    returned text is what v57 delivery sent: no directive was missing and no
+    shipped text needed replacing, so the role table follows the mandate. */
+function seedV57Intent(mandate: string, mode: "spawn" | "existing"): string {
+  const roleTable = orchestratorRoleTable(ROLE_DEFAULTS);
+  const begun = beginOrchestratorSeatIntent({
+    project: "proj-a", mandate, roleTable, clientRequestId: V57_KEY, mode,
+    ...(mode === "spawn" ? { engine: "claude", model: "opus", telegramGrant: false } : { conversationId: OLD_ID, engine: "claude" }),
+    promptVersion: 57, now: AT,
+  });
+  expect(begun.kind).toBe("begun");
+  return `${mandate}\n\n${roleTable}`;
+}
+
+test.each([
+  { name: "ordinary", firstMessageBytes: null },
+  { name: "near-bound", firstMessageBytes: 31_900 },
+])("a pending $name v57 spawn completes across the upgrade under its key with its first bytes", async ({ firstMessageBytes }) => {
+  const mandate = v57Mandate(firstMessageBytes);
+  const overhead = launchOverheadBytes("spawn", { mode: "standard" });
+  if (firstMessageBytes !== null) {
+    expect(Buffer.byteLength(`${mandate}\n\n${orchestratorRoleTable(ROLE_DEFAULTS)}`) + overhead).toBe(firstMessageBytes);
+    expect(Buffer.byteLength(orchestratorMandateForDelivery(mandate)) + overhead).toBeGreaterThan(MAX_STRUCTURED_TEXT_BYTES);
+  }
+  const firstMessage = seedV57Intent(mandate, "spawn");
+  const { deps, recorded } = dependencies({
+    spawn: async (body) => {
+      recorded.spawns.push(body);
+      return { status: 200, body: { ok: true, conversationId: NEW_ID, path: null } };
+    },
+  });
+
+  const replay = await executeOrchestratorSeatRequest({ ...spawnRequest(V57_KEY), mandate, promptVersion: 57 }, deps);
+
+  expect(replay.status).toBe(200);
+  expect(recorded.spawns).toHaveLength(1);
+  expect(recorded.spawns[0]).toMatchObject({ clientAttemptId: V57_KEY, prompt: firstMessage });
+  expect(String(recorded.spawns[0]!.prompt)).not.toContain(MAINTENANCE_BULLET);
+  const { active, pending } = orchestratorSeatFor("proj-a");
+  expect(pending).toBeNull();
+  expect(active).toMatchObject({ conversationId: NEW_ID, mandate, promptVersion: 57, intent: { clientRequestId: V57_KEY } });
+});
+
+test.each([
+  { name: "ordinary", firstMessageBytes: null },
+  { name: "near-bound", firstMessageBytes: 31_900 },
+])("a pending $name v57 adoption delivers its first bytes under the same message id across the upgrade", async ({ firstMessageBytes }) => {
+  /* Existing mode adds no launch overhead, so the near-bound case sits as
+     close to the envelope as the spawn case does. */
+  const mandate = v57Mandate(firstMessageBytes === null ? null : firstMessageBytes - launchOverheadBytes("spawn", { mode: "standard" }));
+  const firstMessage = seedV57Intent(mandate, "existing");
+  const { deps, recorded } = dependencies();
+
+  const replay = await executeOrchestratorSeatRequest({ project: "proj-a", mandate, clientRequestId: V57_KEY, conversationId: OLD_ID, promptVersion: 57 }, deps);
+
+  expect(replay.status).toBe(200);
+  expect(recorded.deliveries).toEqual([{ conversationId: OLD_ID, clientMessageId: expect.stringContaining(V57_KEY), text: firstMessage }]);
+  expect(orchestratorSeatFor("proj-a")).toMatchObject({ pending: null, active: { conversationId: OLD_ID, mandate } });
+});
+
+test("an oversized upgraded mandate begins no intent, and replays only its own live one", async () => {
+  const mandate = v57Mandate(31_900);
+  const { deps, recorded } = dependencies({
+    spawn: async (body) => {
+      recorded.spawns.push(body);
+      return { status: 200, body: { ok: true, conversationId: NEW_ID, path: null } };
+    },
+  });
+
+  /* No intent for this key: refused before anything is read or written. */
+  const fresh = await executeOrchestratorSeatRequest({ ...spawnRequest(V57_KEY), mandate }, deps);
+  expect(fresh.status).toBe(413);
+  expect(fresh.body).toMatchObject({ code: "mandate_too_large", admission: "refused" });
+  expect(orchestratorSeatFor("proj-a")).toMatchObject({ active: null, pending: null });
+
+  /* The key's intent ends while the retry reconciles it: the deferred
+     refusal stands, the failed intent is not replaced by an oversized one,
+     and nothing spawns. */
+  seedV57Intent(mandate, "spawn");
+  const failed = dependencies({
+    spawn: deps.spawn,
+    launchSettlement: () => ({ kind: "failed", error: "launch exited before a transcript materialized" }),
+  });
+  const ended = await executeOrchestratorSeatRequest({ ...spawnRequest(V57_KEY), mandate }, failed.deps);
+  expect(ended.status).toBe(413);
+  expect(ended.body).toMatchObject({ code: "mandate_too_large", admission: "refused" });
+  expect(recorded.spawns).toEqual([]);
+  const settled = orchestratorSeatFor("proj-a");
+  expect(settled).toMatchObject({ active: null, pending: null });
+  expect(settled.history).toMatchObject([{ seat: { mandate, intent: { clientRequestId: V57_KEY, error: "launch exited before a transcript materialized" } } }]);
+
+  /* The key no longer holds an intent: its next retry is refused up front. */
+  const again = await executeOrchestratorSeatRequest({ ...spawnRequest(V57_KEY), mandate }, deps);
+  expect(again.status).toBe(413);
+  expect(recorded.spawns).toEqual([]);
+  expect(orchestratorSeatFor("proj-a")).toMatchObject({ active: null, pending: null, history: [{ seat: { intent: { clientRequestId: V57_KEY } } }] });
+});
+
+test("a new intent records the upgraded mandate, so its own retry sends the same bytes", async () => {
+  let calls = 0;
+  const { deps, recorded } = dependencies({
+    spawn: async (body) => {
+      recorded.spawns.push(body);
+      calls += 1;
+      if (calls === 1) return new Promise<never>(() => {});
+      return { status: 200, body: { ok: true, conversationId: NEW_ID, path: null } };
+    },
+  });
+  const request = { ...spawnRequest("req_00005801"), mandate: V57_MANDATE };
+
+  void executeOrchestratorSeatRequest(request, deps);
+  await Bun.sleep(0);
+  expect(orchestratorSeatFor("proj-a").pending?.mandate).toBe(orchestratorMandateUpgraded(V57_MANDATE));
+  const replay = await executeOrchestratorSeatRequest(request, deps);
+
+  expect(replay.status).toBe(200);
+  const prompts = recorded.spawns.map((body) => String(body.prompt));
+  expect(prompts).toHaveLength(2);
+  expect(prompts[1]).toBe(prompts[0]!);
+  expect(prompts[0]).toStartWith(`${orchestratorMandateWithRoleTable(orchestratorMandateUpgraded(V57_MANDATE), null)}\n\n`);
+  expect(prompts[0]).toContain(MAINTENANCE_BULLET);
 });
 
 test("a pending adoption replay delivers its first attempt's role table under the same message id (#1880)", async () => {
@@ -1765,8 +1962,12 @@ async function seatIncumbent(mandate: string, clientRequestId: string): Promise<
 
 /* The task-list pointer leaves room for history. Required mandate rules
    (#2518) consume the same bounded envelope: keep a fitting history and drop
-   an oversized one, while preserving both reporting and cross-project rules. */
-test.each([{ historyBytes: 900, dropped: false }, { historyBytes: 2_000, dropped: true }])("a default mandate rotation preserves required rules with $historyBytes bytes of history", async ({ historyBytes, dropped }) => {
+   an oversized one, while preserving both reporting and cross-project rules.
+   v58's maintenance practice (536 bytes, the operator, 2026-10-20) takes the
+   same bytes from this room: the largest history the default mandate keeps
+   fell from 1 150–1 199 bytes to 600–649 (measured in steps of 50), so the
+   fitting case is 500 bytes and a 900-byte history is now dropped. */
+test.each([{ historyBytes: 500, dropped: false }, { historyBytes: 900, dropped: true }, { historyBytes: 2_000, dropped: true }])("a default mandate rotation preserves required rules with $historyBytes bytes of history", async ({ historyBytes, dropped }) => {
   await seatIncumbent(stackedMandate(ORCHESTRATOR_SYSTEM_PROMPT, 1), "req_00002301");
   const prompts: string[] = [];
   const { deps } = dependencies({
@@ -2475,6 +2676,13 @@ test("a spawn route that answers its own busy store is replayed under the same a
   expect(result.status).toBe(200);
   expect(recorded.spawns.map((body) => body.clientAttemptId)).toEqual(["req_busy_0003", "req_busy_0003"]);
   expect(orchestratorSeatFor("proj-a").history).toEqual([]);
+});
+
+test("a newly activated seat publishes identity when request replay is disabled", async () => {
+  const { deps, recorded } = dependencies({ seatStoreWaitMs: 0 });
+  const result = await executeOrchestratorSeatRequest(spawnRequest("req_identity_no_replay"), deps);
+  expect(result.status).toBe(200);
+  expect(recorded.identityStamps).toHaveLength(1);
 });
 
 test("reconcileCompletedSeatReplay waits out a short foreign holder without needing a request replay", async () => {

@@ -1,4 +1,6 @@
 import { FLOW_ARCHIVE } from "./retirement";
+import { legacyImportAllowed } from "@/lib/state/legacyImport";
+import { smallStore } from "@/lib/state/smallStore";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -65,21 +67,12 @@ export function configuredReviewerFallback(): FlowPreset["reviewer"] {
 export const FLOWS_SCHEMA_VERSION = 3;
 
 type FlowFile = { schemaVersion?: unknown; flows?: unknown };
-type PresetFile = { presets?: unknown };
 
 function atomicWriteJson(filePath: string, value: Record<string, unknown>): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const tmp = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${crypto.randomUUID()}.tmp`);
   fs.writeFileSync(tmp, stringifyRegistryDocument(value), "utf8");
   fs.renameSync(tmp, filePath);
-}
-
-function readJson(filePath: string): unknown {
-  try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
-  } catch {
-    return null;
-  }
 }
 
 function readFlowStateJson(): { raw: unknown; source: string } | null {
@@ -523,16 +516,29 @@ export async function withFlowSnapshot<T>(read: (flows: readonly Flow[]) => T | 
   return (await waitForStateLock("flows.open", flowStore)).mutate(records => read(records));
 }
 
+function parsePresets(value: unknown): FlowPreset[] {
+  const raw = (value ?? {}) as { presets?: unknown };
+  return Array.isArray(raw.presets) ? raw.presets.filter(isPreset) : [];
+}
+
+export const presetStore = smallStore<FlowPreset[]>({
+  collection: "review_loop_presets",
+  empty: () => [],
+  parse: parsePresets,
+  toRows: items => items.map((value, index) => ({ key: `item:${index}`, value })),
+  fromRows: rows => rows.map(row => row.value).filter(isPreset),
+  toFile: presets => ({ presets }),
+});
+
 export function loadPresets(): FlowPreset[] {
-  const raw = readJson(presetsFile()) as PresetFile | null;
-  const presets = Array.isArray(raw?.presets) ? raw.presets.filter(isPreset) : [];
+  const presets = presetStore.read(presetsFile());
   const merged = mergeSeededPresets(presets);
-  if (JSON.stringify(merged) !== JSON.stringify(presets)) savePresets(merged);
+  if (JSON.stringify(merged) !== JSON.stringify(presets) && legacyImportAllowed(presetsFile())) savePresets(merged);
   return merged;
 }
 
 export function savePresets(presets: FlowPreset[]): void {
-  atomicWriteJson(presetsFile(), { presets });
+  presetStore.mutate(presetsFile(), () => ({ next: presets, result: undefined }));
 }
 
 export { flowArtifactsDir, findingsPathFor, outputPathFor, stderrPathFor, stdoutPathFor } from "@/lib/reviewHistory/artifacts";

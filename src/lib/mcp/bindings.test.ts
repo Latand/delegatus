@@ -874,7 +874,7 @@ test("conversation_messages resolves id, path, and selectedContext through one p
   sandboxes.push(sandbox);
   process.env.LLV_STATE_DIR = sandbox;
   const transcriptPath = path.join(sandbox, "session.jsonl");
-  const agentWire = encodeCodexStructuredUserText("A message from the seat", undefined, null,
+  const agentWire = await encodeCodexStructuredUserText("A message from the seat", undefined, null,
     { kind: "agent", role: "orchestrator", project: "wardrobe-agent", conversationId: "conversation_sender" }, "c".repeat(64));
   fs.writeFileSync(transcriptPath, [
     { type: "response_item", timestamp: "2026-08-30T10:00:00.000Z", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "question" }] } },
@@ -964,7 +964,7 @@ test("conversation_messages keeps delivery authors across cursors, filters, trun
   ledger.recordQueued("claude-author", { id: "delivered-agent", text: shared, origin: sender }, "turn-started");
   ledger.confirmDelivered("claude-author", "delivered-agent", "agent-row");
   const codexPath = path.join(sandbox, "codex-author.jsonl");
-  const wire = encodeCodexStructuredUserText(shared, undefined, null, sender, "b".repeat(64));
+  const wire = await encodeCodexStructuredUserText(shared, undefined, null, sender, "b".repeat(64));
   fs.writeFileSync(codexPath, [
     { type: "response_item", timestamp: "2026-09-26T10:00:00.000Z", payload: { type: "message", role: "user", content: [{ type: "input_text", text: shared }] } },
     { type: "response_item", timestamp: "2026-09-26T10:00:30.000Z", payload: { type: "message", role: "user", content: [{ type: "input_text", text: wire }] } },

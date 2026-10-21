@@ -9,6 +9,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { Database } from "bun:sqlite";
 
 import { AgentRegistry } from "@/lib/agent/registry";
 import * as pinnedProtocol from "@/lib/accounts/codexPinnedProtocol";
@@ -602,6 +603,7 @@ class FakeAppServer extends EventEmitter {
 
   private accept(message: Record<string, unknown>): void {
     this.requests.push(message);
+    this.emit("client-request", message);
     if ((typeof message.id === "string" || typeof message.id === "number")
       && this.serverRequestIds.delete(message.id)) {
       if (this.autoResolveServerRequests) {
@@ -887,6 +889,47 @@ async function waitForCondition(predicate: () => boolean | Promise<boolean>, mes
     await Bun.sleep(10);
   }
   throw new Error(message);
+}
+
+/** Control host deadlines while metadata I/O and the request barrier keep
+ * using the real event loop. Install only after the host has booted. */
+function controlHostTimeouts() {
+  const realSetTimeout = globalThis.setTimeout;
+  const realClearTimeout = globalThis.clearTimeout;
+  let now = 0;
+  const pending = new Map<ReturnType<typeof setTimeout>, { at: number; run: () => void }>();
+  const timers = spyOn(globalThis, "setTimeout").mockImplementation(((run: () => void, delay = 0) => {
+    const handle = realSetTimeout(run, 120_000);
+    pending.set(handle, { at: now + delay, run });
+    return handle;
+  }) as typeof setTimeout);
+  const cancellations = spyOn(globalThis, "clearTimeout").mockImplementation((handle) => {
+    pending.delete(handle as ReturnType<typeof setTimeout>);
+    realClearTimeout(handle as ReturnType<typeof setTimeout>);
+  });
+  return {
+    pendingCount: () => pending.size,
+    advance(ms: number) {
+      const target = now + ms;
+      for (;;) {
+        const due = [...pending].filter(([, timer]) => timer.at <= target)
+          .sort((a, b) => a[1].at - b[1].at)[0];
+        if (!due) break;
+        const [handle, timer] = due;
+        pending.delete(handle);
+        realClearTimeout(handle);
+        now = timer.at;
+        timer.run();
+      }
+      now = target;
+    },
+    restore() {
+      timers.mockRestore();
+      cancellations.mockRestore();
+      for (const handle of pending.keys()) realClearTimeout(handle);
+      pending.clear();
+    },
+  };
 }
 
 const ownedFakeProcess = {
@@ -1295,7 +1338,7 @@ describe("CodexAppServerHost", () => {
     const firstUser = {
       type: "userMessage",
       id: "user-first",
-      content: [{ type: "text", text: encodeCodexStructuredUserText("Give the first status.") }],
+      content: [{ type: "text", text: await encodeCodexStructuredUserText("Give the first status.") }],
     };
     const followUpText = `<realtime_delegation>
   <input>Repeat the previous status.</input>
@@ -1304,7 +1347,7 @@ describe("CodexAppServerHost", () => {
     const followUp = {
       type: "userMessage",
       id: "user-follow-up",
-      content: [{ type: "text", text: encodeCodexStructuredUserText(followUpText) }],
+      content: [{ type: "text", text: await encodeCodexStructuredUserText(followUpText) }],
     };
     const eventStore = new MemoryEventStore();
     eventStore.append(threadId, { kind: "turn-started", turnId, seq: 1 });
@@ -1506,7 +1549,7 @@ describe("CodexAppServerHost", () => {
           id: `user-${index}`,
           content: [{
             type: "text",
-            text: encodeCodexStructuredUserText(`${"界".repeat(3_000)} follow-up-${index}`),
+            text: await encodeCodexStructuredUserText(`${"界".repeat(3_000)} follow-up-${index}`),
           }],
         },
       });
@@ -1833,7 +1876,7 @@ describe("CodexAppServerHost", () => {
     expect(server.requests.find((request) => request.method === "turn/start")?.params).toMatchObject({
       input: [
         { type: "localImage", path: `/runtime-images/${first.sha256}` },
-        { type: "text", text: encodeCodexStructuredUserText("inspect", firstContent.contentDigest, COMPACT_SELECTED, { kind: "operator" }, deliveryDedup("image-start")) },
+        { type: "text", text: await encodeCodexStructuredUserText("inspect", firstContent.contentDigest, COMPACT_SELECTED, { kind: "operator" }, deliveryDedup("image-start")) },
       ],
       clientUserMessageId: "image-start",
     });
@@ -1847,7 +1890,7 @@ describe("CodexAppServerHost", () => {
       expectedTurnId: "turn-1",
       input: [
         { type: "localImage", path: `/runtime-images/${second.sha256}` },
-        { type: "text", text: encodeCodexStructuredUserText("", secondContent.contentDigest, COMPACT_SELECTED, { kind: "operator" }, deliveryDedup("image-steer")) },
+        { type: "text", text: await encodeCodexStructuredUserText("", secondContent.contentDigest, COMPACT_SELECTED, { kind: "operator" }, deliveryDedup("image-steer")) },
       ],
       clientUserMessageId: "image-steer",
     });
@@ -1963,25 +2006,28 @@ describe("CodexAppServerHost", () => {
   test.each([false, true])("Codex launches carry publication settings through the child allowlist (keyed filters: %s)", async (keyedFilters) => {
     const captured: { options?: SpawnOptionsWithoutStdio } = {};
     const email = ["no-reply", "build.example.invalid"].join("@");
+    const prioritySource = JSON.stringify({ database: path.join(metadataState, "tasks.sqlite"), taskIds: ["stage-task"] });
     const server = new FakeAppServer();
     server.shellPolicy = {
       inherit: "core", set: { GIT_AUTHOR_EMAIL: "unsafe", GIT_COMMITTER_EMAIL: "unsafe", OTHER: "kept" },
       ...(keyedFilters ? { filters: { PATH: "include", HOME: "include", "PRIVATE_*": "exclude" } } : { include_only: ["PATH", "HOME"] }),
     };
     const host = await CodexAppServerHost.start({
-      cwd: "/repo", env: { NODE_ENV: "test", LLV_PUBLICATION_NAME: "Build Agent", LLV_PUBLICATION_EMAIL: email },
+      cwd: "/repo", env: { NODE_ENV: "test", LLV_PUBLICATION_NAME: "Build Agent", LLV_PUBLICATION_EMAIL: email,
+        LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource },
       eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server, captured),
     });
     try {
       expect(captured.options?.env).toMatchObject({
         GIT_AUTHOR_NAME: "Build Agent", GIT_COMMITTER_NAME: "Build Agent",
         GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_EMAIL: email,
+        LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource,
       });
       const git = agentPublicationIdentityEnv({ LLV_PUBLICATION_NAME: "Build Agent", LLV_PUBLICATION_EMAIL: email });
       expect(server.requests.find((request) => request.method === "thread/start")?.params).toMatchObject({ config: {
-        shell_environment_policy: { set: git, ...(keyedFilters
-          ? { filters: Object.fromEntries(Object.keys(git).map((key) => [key, "include"])) }
-          : { include_only: ["PATH", "HOME", ...Object.keys(git)] }) },
+        shell_environment_policy: { set: { ...git, LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource }, ...(keyedFilters
+          ? { filters: Object.fromEntries([...Object.keys(git), "LLV_GATE_CPU_PRIORITY_SOURCE"].map((key) => [key, "include"])) }
+          : { include_only: ["PATH", "HOME", ...Object.keys(git), "LLV_GATE_CPU_PRIORITY_SOURCE"] }) },
       } });
     } finally { await host.release(); }
   });
@@ -2041,7 +2087,7 @@ describe("CodexAppServerHost", () => {
     expect(steer.params).toMatchObject({
       expectedTurnId: "turn-1",
       clientUserMessageId: "delivery-two",
-      input: [{ type: "text", text: encodeCodexStructuredUserText("steer", undefined, null, null, deliveryDedup("delivery-two")) }],
+      input: [{ type: "text", text: await encodeCodexStructuredUserText("steer", undefined, null, null, deliveryDedup("delivery-two")) }],
     });
 
     server.request("approval-1", "item/commandExecution/requestApproval", { command: "touch allowed" });
@@ -2741,7 +2787,7 @@ describe("CodexAppServerHost", () => {
       type: "event_msg",
       payload: {
         type: "user_message",
-        message: encodeCodexStructuredUserText(text, undefined, null, null, deliveryDedup(operationId)),
+        message: await encodeCodexStructuredUserText(text, undefined, null, null, deliveryDedup(operationId)),
       },
     });
     const filler = JSON.stringify({
@@ -2778,9 +2824,9 @@ describe("CodexAppServerHost", () => {
     const userRecord = (message: string) => JSON.stringify({ timestamp: "t1", type: "event_msg", payload: { type: "user_message", message } });
     const lost = { id: "operation-lost-metadata", text: "delivered under another state directory" };
     const kept = { id: "operation-kept-metadata", text: "delivered under this state directory" };
-    const lostWire = encodeCodexStructuredUserText(lost.text, undefined, COMPACT_SELECTED, { kind: "operator" }, deliveryDedup(lost.id));
+    const lostWire = await encodeCodexStructuredUserText(lost.text, undefined, COMPACT_SELECTED, { kind: "operator" }, deliveryDedup(lost.id));
     for (const file of fs.readdirSync(metadataDirectory)) fs.unlinkSync(path.join(metadataDirectory, file));
-    const keptWire = encodeCodexStructuredUserText(kept.text, undefined, COMPACT_SELECTED, { kind: "operator" }, deliveryDedup(kept.id));
+    const keptWire = await encodeCodexStructuredUserText(kept.text, undefined, COMPACT_SELECTED, { kind: "operator" }, deliveryDedup(kept.id));
     fs.writeFileSync(transcriptPath, `${userRecord(lostWire)}\n${userRecord(keptWire)}\n`);
     const server = new FakeAppServer("delivery-thread", "delivery-thread");
     server.threadPath = transcriptPath;
@@ -2806,10 +2852,10 @@ describe("CodexAppServerHost", () => {
     }
   });
 
-  test("a rollout written under state directory A still reads from state directory B", () => {
+  test("a rollout written under state directory A still reads from state directory B", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-rollout-state-ab-"));
     const transcriptPath = path.join(directory, "rollout.jsonl");
-    const wire = encodeCodexStructuredUserText("hello from A", undefined, COMPACT_SELECTED, { kind: "agent", role: "orchestrator" }, deliveryDedup("operation-state-a"));
+    const wire = await encodeCodexStructuredUserText("hello from A", undefined, COMPACT_SELECTED, { kind: "agent", role: "orchestrator" }, deliveryDedup("operation-state-a"));
     const item = { type: "userMessage", id: "user-a", content: [{ type: "text", text: wire }] };
     fs.writeFileSync(transcriptPath, [
       { payload: { type: "user_message", message: wire } },
@@ -2834,7 +2880,7 @@ describe("CodexAppServerHost", () => {
     const text = "retain exact recipient ownership";
     const delivered = JSON.stringify({ type: "event_msg", payload: {
       type: "user_message",
-      message: encodeCodexStructuredUserText(text, undefined, null, null, deliveryDedup(operationId)),
+      message: await encodeCodexStructuredUserText(text, undefined, null, null, deliveryDedup(operationId)),
     } });
     // The 16 MiB tail starts inside this complete, valid tool record. Its
     // quoted marker is ordinary tool output, not a corrupt recipient message.
@@ -2897,25 +2943,33 @@ describe("CodexAppServerHost", () => {
     });
 
     let settled = false;
+    let started!: () => void;
+    const requestStarted = new Promise<void>(resolve => { started = resolve; });
+    const onRequest = (message: Record<string, unknown>) => { if (message.method === "turn/start") started(); };
+    server.on("client-request", onRequest);
     const delivery = host.send({ id: "operation-confirmed", text: "hello" })
       .finally(() => { settled = true; });
-    await Bun.sleep(0);
+    try {
+      await Promise.race([requestStarted, delivery.then(() => { throw new Error("delivery settled before its native request"); })]);
+      expect(server.requests.some((request) => request.method === "turn/start")).toBeTrue();
+      expect(settled).toBeFalse();
 
-    expect(server.requests.some((request) => request.method === "turn/start")).toBeTrue();
-    expect(settled).toBeFalse();
+      server.notify("item/completed", {
+        threadId: "confirm-after-rpc",
+        turnId: "turn-1",
+        item: {
+          type: "userMessage",
+          clientId: "operation-confirmed",
+          content: [{ type: "text", text: "hello" }],
+        },
+      });
 
-    server.notify("item/completed", {
-      threadId: "confirm-after-rpc",
-      turnId: "turn-1",
-      item: {
-        type: "userMessage",
-        clientId: "operation-confirmed",
-        content: [{ type: "text", text: "hello" }],
-      },
-    });
-
-    expect(await delivery).toEqual({ outcome: "turn-started", turnId: "turn-1" });
-    await host.release();
+      expect(await delivery).toEqual({ outcome: "turn-started", turnId: "turn-1" });
+    } finally {
+      server.off("client-request", onRequest);
+      await host.release();
+      await delivery.catch(() => undefined);
+    }
   });
 
   test("rejects a persisted client id whose user-message text differs", async () => {
@@ -4810,34 +4864,44 @@ describe("CodexAppServerHost", () => {
       ...ownedFakeProcess,
     });
 
-    const delivery = host.send({ id: "compaction-delivery", text: "continue after compaction" });
-    await Bun.sleep(10);
-    server.notify("item/started", {
-      threadId: "compaction-delivery-thread",
-      turnId: "turn-1",
-      item: { id: "compaction-one", type: "contextCompaction" },
-    });
-    expect(await host.health()).toMatchObject({ status: "active", activeTurnRef: "turn-1" });
-    expect(server.signals).toEqual([]);
+    const clock = controlHostTimeouts();
+    const delivery = host.send({ id: "compaction-delivery", text: "continue after compaction" })
+      .then((value) => ({ value }), (error: Error) => ({ error }));
+    try {
+      // Reuse the request barrier from e5a91ae8: metadata I/O precedes dispatch.
+      await waitForCondition(() => server.requests.some((candidate) => candidate.method === "turn/start"), "turn/start was never sent");
+      await waitForCondition(() => clock.pendingCount() > 0, "delivery confirmation deadline was never armed");
+      clock.advance(10);
+      server.notify("item/started", {
+        threadId: "compaction-delivery-thread",
+        turnId: "turn-1",
+        item: { id: "compaction-one", type: "contextCompaction" },
+      });
+      expect(await host.health()).toMatchObject({ status: "active", activeTurnRef: "turn-1" });
+      expect(server.signals).toEqual([]);
 
-    const request = server.requests.find((candidate) => candidate.method === "turn/start")!;
-    const params = request.params as { input: unknown };
-    server.notify("item/completed", {
-      threadId: "compaction-delivery-thread",
-      turnId: "turn-1",
-      item: {
-        type: "userMessage",
-        clientId: "compaction-delivery",
-        content: params.input,
-      },
-    });
+      const request = server.requests.find((candidate) => candidate.method === "turn/start")!;
+      const params = request.params as { input: unknown };
+      server.notify("item/completed", {
+        threadId: "compaction-delivery-thread",
+        turnId: "turn-1",
+        item: {
+          type: "userMessage",
+          clientId: "compaction-delivery",
+          content: params.input,
+        },
+      });
 
-    expect(await delivery).toEqual({ outcome: "turn-started", turnId: "turn-1" });
-    expect(server.signals).toEqual([]);
-    await host.release();
+      expect(await delivery).toEqual({ value: { outcome: "turn-started", turnId: "turn-1" } });
+      expect(server.signals).toEqual([]);
+    } finally {
+      clock.restore();
+      await host.release();
+      await delivery;
+    }
   });
 
-  test("an active turn gives thread/read enough time to answer", async () => {
+  test.each([30, 60])("an active turn gives thread/read enough time to answer (%i ms)", async (elapsed) => {
     const ignoredMethods: string[] = [];
     const server = new FakeAppServer("slow-read-thread", "slow-read-thread", false, [], undefined, null, ignoredMethods);
     const host = await CodexAppServerHost.start({
@@ -4846,23 +4910,38 @@ describe("CodexAppServerHost", () => {
       eventStore: new MemoryEventStore(),
       spawnProcess: fakeSpawn(server),
     });
-    expect(await host.send({ id: "first", text: "begin" })).toEqual({ outcome: "turn-started", turnId: "turn-1" });
-    ignoredMethods.push("thread/read");
-
-    const pending = host.send({ id: "slow-read-follow-up", text: "continue", expectedTurnId: "turn-1" })
-      .then((value) => ({ value }), (error: Error) => ({ error }));
-    await Bun.sleep(35);
-    const read = server.requests.findLast((request) => request.method === "thread/read")!;
-    server.stdout.write(`${JSON.stringify({
-      jsonrpc: "2.0",
-      id: read.id,
-      result: { thread: { id: "slow-read-thread", path: "/sessions/slow-read-thread.jsonl", turns: [] } },
-    })}\n`);
-    const result = await pending;
-
-    if ("error" in result) throw result.error;
-    expect(result.value).toEqual({ outcome: "steered", turnId: "turn-1" });
-    await host.release();
+    let pending: Promise<{ value: unknown } | { error: Error }> | undefined;
+    let clock: ReturnType<typeof controlHostTimeouts> | undefined;
+    try {
+      expect(await host.send({ id: "first", text: "begin" })).toEqual({ outcome: "turn-started", turnId: "turn-1" });
+      ignoredMethods.push("thread/read");
+      const reads = () => server.requests.filter((request) => request.method === "thread/read");
+      const earlierReads = reads().length;
+      clock = controlHostTimeouts();
+      pending = host.send({ id: "slow-read-follow-up", text: "continue", expectedTurnId: "turn-1" })
+        .then((value) => ({ value }), (error: Error) => ({ error }));
+      await waitForCondition(() => reads().length > earlierReads, "thread/read was never sent");
+      // Cross the ordinary 20 ms deadline; the active window is exactly 60 ms.
+      clock.advance(elapsed);
+      if (elapsed === 60) {
+        const result = await pending;
+        expect(result).toHaveProperty("error");
+        if (!("error" in result)) throw new Error("thread/read did not expire");
+        expect(result.error.message).toContain("thread/read timed out");
+        return;
+      }
+      const read = reads().at(-1)!;
+      server.stdout.write(`${JSON.stringify({
+        jsonrpc: "2.0",
+        id: read.id,
+        result: { thread: { id: "slow-read-thread", path: "/sessions/slow-read-thread.jsonl", turns: [] } },
+      })}\n`);
+      expect(await pending).toEqual({ value: { outcome: "steered", turnId: "turn-1" } });
+    } finally {
+      clock?.restore();
+      await host.release();
+      await pending;
+    }
   });
 
   test("accepts a legal thread/read response above the legacy frame guard", async () => {
@@ -5107,6 +5186,63 @@ describe("CodexAppServerHost", () => {
     )).rejects.toThrow("structured hosts are disabled");
   });
 
+  for (const ledgerFailure of [false, true]) test(`release waits for its registry checkpoint and concurrent releases (ledger failure=${ledgerFailure})`, async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "codex-release-checkpoint-"));
+    const registryPath = path.join(directory, "registry.json");
+    const registry = new AgentRegistry(registryPath, undefined, undefined, { sqliteMode: "sqlite" });
+    const server = new FakeAppServer("release-checkpoint");
+    const eventStore = ledgerFailure ? new FailingEventStore() : new MemoryEventStore();
+    const host = await CodexAppServerHost.start({
+      cwd: "/repo", eventStore, spawnProcess: fakeSpawn(server), shutdownGraceMs: 2,
+      ...ownedFakeProcess,
+      signalProcess: (_pid, signal) => server.kill(signal),
+    });
+    const key = { engine: "codex" as const, sessionId: "release-checkpoint" };
+    registry.upsert({
+      key, artifactPath: "/sessions/release-checkpoint.jsonl", cwd: "/repo", accountId: null,
+      status: "idle", host: null, structuredHost: codexHostColumns(await host.health(), 7),
+      claimEpoch: 7, claimOwner: "release-writer", pendingAction: null,
+    });
+    const stop = await bindCodexHostPersistence(registry, key, host, "release-writer", 7);
+    const peer = new Database(path.join(directory, "registry.sqlite"));
+    let held = false;
+    let terminal!: () => void;
+    const terminalObserved = new Promise<void>(resolve => { terminal = resolve; });
+    const unsubscribe = host.onStateChange(state => { if (state.status === "unhosted") terminal(); });
+    const releases: Promise<void>[] = [];
+    const acknowledgements: string[] = [];
+    try {
+      peer.exec("BEGIN IMMEDIATE");
+      held = true;
+      releases.push(host.release().then(() => { acknowledgements.push("first"); }));
+      await terminalObserved;
+      // The transport has ended; the second call must still await persistence.
+      releases.push(host.release().then(() => { acknowledgements.push("second"); }));
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(acknowledgements).toEqual([]);
+      expect(registry.readOnlySnapshot().entries["codex:release-checkpoint"]?.claimOwner).toBe("release-writer");
+      peer.exec("ROLLBACK");
+      held = false;
+      await Promise.all(releases);
+      const reopened = new AgentRegistry(registryPath, undefined, undefined, { sqliteMode: "sqlite" });
+      try {
+        expect(reopened.readOnlySnapshot().entries["codex:release-checkpoint"]).toMatchObject({
+          status: "unhosted", claimOwner: null,
+          structuredHost: { process: null, activeTurnRef: null, pendingAttention: [] },
+        });
+      } finally { reopened.close(); }
+    } finally {
+      if (held) peer.exec("ROLLBACK");
+      unsubscribe();
+      await Promise.allSettled(releases);
+      await host.release();
+      await stop();
+      peer.close();
+      registry.close();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   test("boot re-host resumes Codex and reconstructs its Viewer MCP connector (#1346)", async () => {
     const stdioEnv = { ...process.env, LLV_SPAWN_CAPABILITY: undefined };
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-structured-adoption-"));
@@ -5208,7 +5344,7 @@ describe("CodexAppServerHost", () => {
     await releasedRows[0]!.host.release();
   });
 
-  test("a severed seat re-hosts in a distinct process with a discoverable working Viewer MCP", async () => {
+  test.each(["launcher", "source"] as const)("a severed seat re-hosts in a distinct process with a discoverable working Viewer MCP (%s)", async entry => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-seat-successor-process-"));
     const home = path.join(directory, "home");
     const configHome = path.join(directory, "config");
@@ -5237,16 +5373,25 @@ describe("CodexAppServerHost", () => {
       async fetch(request) {
         controlRequests += 1;
         const url = new URL(request.url);
-        expect(url.pathname).toBe("/api/mcp");
-        const call = await request.json() as { id: string; method: string; params: { name: string; arguments: { clientRequestId: string } } };
-        expect(call.method).toBe("tools/call");
-        expect(call.params.name).toBe("deployment_status");
-        expect(call.params.arguments.clientRequestId).toBe("seat-successor-deployment-status");
-        const result = { ok: true, toolName: "deployment_status", clientRequestId: call.params.arguments.clientRequestId,
-          replayed: false, count: 1, deployments: [deployment] };
-        return Response.json({ jsonrpc: "2.0", id: call.id, result: {
-          content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result,
-        } });
+        // A retained launcher bundle can still use the deployment read API;
+        // the current stdio adapter forwards the MCP request to the Viewer.
+        if (url.pathname === "/api/mcp") {
+          expect(request.method).toBe("POST");
+          const call = await request.json() as { id: string; method: string; params: { name: string; arguments: { clientRequestId: string } } };
+          expect(call.method).toBe("tools/call");
+          expect(call.params.name).toBe("deployment_status");
+          expect(call.params.arguments.clientRequestId).toBe("seat-successor-deployment-status");
+          const result = { ok: true, toolName: "deployment_status", clientRequestId: call.params.arguments.clientRequestId,
+            replayed: false, count: 1, deployments: [deployment] };
+          return Response.json({ jsonrpc: "2.0", id: call.id, result: {
+            content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result,
+          } });
+        }
+        expect(entry).toBe("launcher");
+        expect(request.method).toBe("GET");
+        expect(url.pathname).toBe("/api/runtime/deployments");
+        expect(url.searchParams.get("limit")).toBe("25");
+        return Response.json({ count: 1, deployments: [deployment] });
       },
     });
     if (control.port === 8898) {
@@ -5271,6 +5416,7 @@ describe("CodexAppServerHost", () => {
       LLV_STATE_DIR: stateDirectory,
       LLV_VIEWER_DEPLOY_TARGET: targetPath,
       LLV_VIEWER_PORT: String(control.port),
+      ...(entry === "source" ? { LLV_SEAT_SUCCESSOR_MCP_ENTRY: path.resolve("src/lib/mcp/entry.ts") } : {}),
     };
     const hostFixture = path.join(import.meta.dir, "fixtures", "seatSuccessorHost.ts");
     type FixtureIdentity = { pid: number; startIdentity: string };
@@ -5283,6 +5429,7 @@ describe("CodexAppServerHost", () => {
       activeTurnRef: string | null;
       proof?: {
         enginePid: number;
+        entry: string;
         toolNames?: string[];
         structuredContent?: unknown;
         error?: string;
@@ -5399,10 +5546,13 @@ describe("CodexAppServerHost", () => {
       expect(successorReady.engine.pid).not.toBe(successorReady.viewer.pid);
       expect(successorReady.proof).not.toHaveProperty("error");
       expect(successorReady.proof?.enginePid).toBe(successorReady.engine.pid);
+      expect(successorReady.proof?.entry).toBe(entry === "source"
+        ? path.resolve("src/lib/mcp/entry.ts") : path.resolve("bin/mcp-server.mjs"));
       expect(successorReady.proof?.toolNames).toContain("deployment_status");
       expect(successorReady.proof?.structuredContent).toMatchObject({
         ok: true,
         toolName: "deployment_status",
+        clientRequestId: "seat-successor-deployment-status",
         count: 1,
         deployments: [deployment],
       });
@@ -5915,7 +6065,7 @@ test("Codex stdout preserves Unicode split inside a completed user echo", async 
   const eventStore = new MemoryEventStore();
   const host = await CodexAppServerHost.start({ cwd: "/repo", eventStore, spawnProcess: fakeSpawn(server) });
   await host.send({ id: "unicode-original", text: "Привіт 🌍" });
-  const encoded = encodeCodexStructuredUserText("Привіт 🌍", undefined, undefined, undefined, deliveryDedup("unicode-original"));
+  const encoded = await encodeCodexStructuredUserText("Привіт 🌍", undefined, undefined, undefined, deliveryDedup("unicode-original"));
   const bytes = Buffer.from(JSON.stringify({ method: "item/completed", params: { threadId: "unicode-wire", turnId: "turn-1", item: { type: "userMessage", id: "unicode-item", clientId: "unicode-original", content: [{ type: "text", text: encoded }] } } }) + "\n");
   const split = bytes.indexOf(Buffer.from("П")) + 1;
   const beforeEcho = Date.now();
@@ -6140,17 +6290,29 @@ test("Codex transport confirmation waits for delayed native provenance before re
   const server = new FakeAppServer();
   server.threadPath = file;
   const host = await CodexAppServerHost.start({ cwd: metadataState, eventStore: new FileRuntimeEventStore(), spawnProcess: fakeSpawn(server) });
-  const nativeAppend = new Promise<void>(resolve => setTimeout(() => {
-    const request = server.requests.find(row => row.method === "turn/start")!;
+  let sendSettled = false;
+  let sendOutcome: Promise<{ ok: true } | { ok: false; error: unknown }> | undefined;
+  try {
+    sendOutcome = host.send({ id: "late-native-write", text: "Continue interrupted work", origin: { kind: "agent", role: "startup-recovery" } })
+      .then(() => ({ ok: true as const }), error => ({ ok: false as const, error }))
+      .then(outcome => { sendSettled = true; return outcome; });
+    await waitForCondition(() => server.requests.some(row => row.method === "turn/start"), "Codex turn/start request was not observed");
+    const request = server.requests.find(row => row.method === "turn/start");
+    if (!request) throw new Error("Codex turn/start request disappeared after readiness");
     const wire = (request.params as { input: Array<{ text: string }> }).input[0]!.text;
+    const outcome = await sendOutcome;
+    if (!outcome.ok) throw outcome.error;
     fs.appendFileSync(file, JSON.stringify({ type: "event_msg", timestamp: "2026-10-05T16:01:00Z",
       payload: { type: "user_message", message: wire } }) + "\n");
-    resolve();
-  }, 20));
-  try {
-    await host.send({ id: "late-native-write", text: "Continue interrupted work", origin: { kind: "agent", role: "startup-recovery" } });
-    await nativeAppend;
-  } finally { await host.release(); }
+  } finally {
+    if (sendOutcome && !sendSettled) {
+      await host.release();
+      await sendOutcome;
+    } else {
+      await sendOutcome;
+      await host.release();
+    }
+  }
   expect((await durableStageTurnEvidence("codex", file))?.prompts).toEqual([{ ts: Date.parse("2026-10-05T16:01:00Z"), origin: "pipeline" }]);
 });
 

@@ -11,6 +11,8 @@ import { scopeChars } from "../roleConsolidate";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { ROLE_MEMORY_BOUND, type RoleMemoryRule, type RoleMemoryScopeRow, CURATION_NEW_LESSONS, type CuratorPassView } from "../roleTypes";
 
+import { selectImportBatch, importBatchScopes, type ImportBatch } from "../importCuration";
+
 export interface CuratorPass extends CuratorPassView {
   kind: "pass";
   project: string;
@@ -23,13 +25,14 @@ export interface CuratorPass extends CuratorPassView {
   launchedAt: string | null;
   launchBody?: Record<string, unknown>;
   finalText?: string;
+  importBatch?: ImportBatch;
 }
 type ProjectRow = { kind: "project"; project: string; current: string | null; lastClaimAt: string; claimRevisions?: Record<string, number>; lastAt: string | null; passes: string[] };
 type Row = CuratorPass | ProjectRow | { kind: "machine"; current: string | null } | { kind: "conversation"; conversationId: string; pass: string };
 const key = (row: Row) => row.kind === "pass" ? `r:${row.id}` : row.kind === "project" ? `p:${row.project}` : row.kind === "machine" ? "machine" : `c:${row.conversationId}`;
 const seed = { collection: "role_memory_curation", schemaVersion: 1, migrationId: "role-memory-curation-v1", key, loadRecords: (): Row[] => [] };
 const cache = new Map<string, SqliteStateCollection<Row>>();
-function collection(create = false) {
+export function curationCollection(create = false) {
   const file = statePath("state.sqlite");
   if (cache.has(file)) return cache.get(file)!;
   if (!create && !stateCollectionsInitialized(file, [seed])) return null;
@@ -43,29 +46,63 @@ function collection(create = false) {
   cache.set(file, held); return held;
 }
 export const passIsLive = (pass: CuratorPass | null) => !!pass && ["claimed", "launching", "running"].includes(pass.state);
-function passMetadata(id: string): CuratorPass | null {
-  const row = collection()?.get(`r:${id}`);
+export function passMetadata(id: string): CuratorPass | null {
+  const row = curationCollection()?.get(`r:${id}`);
   return row?.kind === "pass" ? row : null;
 }
+/** Fresh authority only; display counts are reconstructed separately by readPass. */
+export function readPassAuthority(id: string): CuratorPass | null {
+  return withViewerOperation("memory.curation-authority", () => {
+    const row = curationCollection()?.get(`r:${id}`);
+    return row?.kind === "pass" ? row : null;
+  });
+}
+type CountMemo = { stamp: string; counts: CuratorPass["counts"]; bytes: number };
+const countOwner = process as typeof process & { __llvCurationCounts?: Map<string, CountMemo> };
+const countMemos = countOwner.__llvCurationCounts ??= new Map<string, CountMemo>();
 export function readPass(id: string): CuratorPass | null {
-  const row = passMetadata(id);
+  const row = readPassAuthority(id);
   if (!row) return null;
+  const memoKey = JSON.stringify([statePath("state.sqlite"), row.project, id]);
+  const stamp = () => `${databaseIdentity()}:${roleMemoryCollection()?.revision()}:${curationRevision()}:${JSON.stringify(projectAliasSnapshot().aliases)}`;
+  const version = stamp(), cached = countMemos.get(memoKey);
+  if (cached?.stamp === version) {
+    countMemos.delete(memoKey); countMemos.set(memoKey, cached);
+    return { ...row, counts: { ...cached.counts } };
+  }
   const calls = new Map<string, CuratorPass["counts"]>();
-  for (const scope of curationScopes(row.project)) {
+  const scopes = new Map(curationScopes(row.project).map(scope => [scope.scope, scope]));
+  // Seatless folders join the installation host's pass, but their own scope
+  // histories still contribute that pass's receipts and counts.
+  for (const scope of row.scopes) {
+    const held = roleMemoryCollection()?.get(`s:${canonicalScope(scope)}`);
+    if (held?.kind === "scope") scopes.set(held.scope, held);
+  }
+  for (const scope of scopes.values()) {
     for (const h of scope.history) if (h.pass === id && h.counts) calls.set(h.at, h.counts);
   }
-  if (!calls.size) return row;
   const counts = { ...row.counts };
-  for (const field of Object.keys(counts) as (keyof typeof counts)[]) counts[field] = [...calls.values()].reduce((n, call) => n + call[field], 0);
+  if (calls.size) for (const field of Object.keys(counts) as (keyof typeof counts)[]) counts[field] = [...calls.values()].reduce((n, call) => n + call[field], 0);
+  // Derived counts contain no histories. One owner, 32 entries / 512 KiB,
+  // invalidated by metadata, scope revisions, aliases or database replacement.
+  const bytes = Buffer.byteLength(memoKey + version + JSON.stringify(counts));
+  if (stamp() === version && bytes <= 16 * 1024) {
+    countMemos.delete(memoKey); countMemos.set(memoKey, { stamp: version, counts: { ...counts }, bytes });
+    let total = [...countMemos.values()].reduce((sum, value) => sum + value.bytes, 0);
+    while (countMemos.size > 32 || total > 512 * 1024) {
+      const oldest = countMemos.keys().next().value!;
+      total -= countMemos.get(oldest)!.bytes; countMemos.delete(oldest);
+    }
+  }
   return { ...row, counts };
 }
 function projectRows(project: string): ProjectRow[] {
   const canonical = canonicalProject(project);
-  return [...new Set([canonical, ...Object.keys(projectAliasSnapshot().aliases).filter(key => canonicalProject(key) === canonical)])].flatMap(project => { const row = collection()?.get(`p:${project}`); return row?.kind === "project" ? [row] : []; });
+  return [...new Set([canonical, ...Object.keys(projectAliasSnapshot().aliases).filter(key => canonicalProject(key) === canonical)])].flatMap(project => { const row = curationCollection()?.get(`p:${project}`); return row?.kind === "project" ? [row] : []; });
 }
 function combineProjectRows(project: string, rows: readonly ProjectRow[]): ProjectRow | null {
   if (!rows.length) return null;
-  const metadata = new Map(rows.flatMap(row => row.passes).map(id => [id, passMetadata(id)]));
+  const metadata = new Map(rows.flatMap(row => row.passes).map(id => [id, readPassAuthority(id)]));
   const passes = [...new Set(rows.flatMap(row => row.passes))].sort((a, b) => {
     const left = metadata.get(a)?.claimedAt ?? "", right = metadata.get(b)?.claimedAt ?? "";
     return left.localeCompare(right) || a.localeCompare(b);
@@ -74,7 +111,7 @@ function combineProjectRows(project: string, rows: readonly ProjectRow[]): Proje
   for (const row of rows) for (const [scope, revision] of Object.entries(row.claimRevisions ?? {})) {
     claimRevisions[scope] = Math.max(claimRevisions[scope] ?? 0, revision);
   }
-  const current = rows.map(row => row.current).find(id => id && passIsLive(metadata.get(id) ?? passMetadata(id))) ?? null;
+  const current = rows.map(row => row.current).find(id => id && passIsLive(metadata.get(id) ?? readPassAuthority(id))) ?? null;
   return {
     kind: "project", project: canonicalProject(project), current,
     lastClaimAt: rows.map(row => row.lastClaimAt).sort().at(-1)!,
@@ -84,13 +121,16 @@ function combineProjectRows(project: string, rows: readonly ProjectRow[]): Proje
   };
 }
 function projectRow(project: string): ProjectRow | null { return combineProjectRows(project, projectRows(project)); }
-export function currentPass(project: string) {
+export function currentPassAuthority(project: string) {
   // Reconciliation needs only the live selection; retained passes need no sort.
-  const id = projectRows(project).map(row => row.current).find(id => id && passIsLive(passMetadata(id)));
-  return id ? readPass(id) : null;
+  const id = projectRows(project).map(row => row.current).find(id => id && passIsLive(readPassAuthority(id)));
+  return id ? readPassAuthority(id) : null;
 }
-export function machinePass() { const row = collection()?.get("machine"); return row?.kind === "machine" && row.current ? readPass(row.current) : null; }
-export function passForConversation(id: string): CuratorPass | null { const row = collection()?.get(`c:${id}`); return row?.kind === "conversation" ? readPass(row.pass) : null; }
+export function machinePassAuthority() { const row = curationCollection()?.get("machine"); return row?.kind === "machine" && row.current ? readPassAuthority(row.current) : null; }
+export function passForConversationAuthority(id: string): CuratorPass | null { const row = curationCollection()?.get(`c:${id}`); return row?.kind === "conversation" ? readPassAuthority(row.pass) : null; }
+export function currentPass(project: string) { const pass = currentPassAuthority(project); return pass ? readPass(pass.id) : null; }
+export function machinePass() { const pass = machinePassAuthority(); return pass ? readPass(pass.id) : null; }
+export function passForConversation(id: string) { const pass = passForConversationAuthority(id); return pass ? readPass(pass.id) : null; }
 /** Scope-key reads exclude requests, versions and the cold rule archive. */
 export function curationScopes(project: string): RoleMemoryScopeRow[] {
   const p = canonicalProject(project), held = roleMemoryCollection();
@@ -142,7 +182,7 @@ function databaseIdentity() {
   try { const stat = fs.statSync(statePath("state.sqlite"), { bigint: true }); return `${stat.dev}:${stat.ino}:${stat.birthtimeNs}`; }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return "missing"; throw error; }
 }
-export function curationRevision() { const held = collection(); return held ? `${held.signature()}:${held.revision()}` : "missing"; }
+export function curationRevision() { const held = curationCollection(); return held ? `${held.signature()}:${held.revision()}` : "missing"; }
 type CurationSummary = { active: boolean; pressure: boolean; newLessons: number; lastAt: string | null; lastClaimAt: string | null };
 // Compiled Viewer bundles share one LRU owner; only 32 tiny summaries survive.
 const shared = globalThis as typeof globalThis & { __llvCurationSummaries?: Map<string, { stamp: string; summary: CurationSummary }> };
@@ -191,12 +231,17 @@ export function curationStatus(project: string, now = Date.now(), setting = effe
         while (summaries.size > 32) summaries.delete(summaries.keys().next().value!);
       }
     }
-    const { active, pressure, newLessons, lastAt, lastClaimAt } = summary;
+    const { pressure, newLessons, lastAt, lastClaimAt } = summary;
+    const batch = selectImportBatch(project);
+    const active = summary.active || !!batch;
+    const lastPassId = projectRows(project).flatMap(row => row.passes).at(-1);
+    const lastPass = lastPassId ? passMetadata(lastPassId) : null;
+    const importing = !!batch && (!lastPass || lastPass.state === "succeeded");
     // Every trigger spends the same durable interval, including failed/no-op
     // passes that leave unseen rules above the pressure threshold.
     const anchor = [lastAt, lastClaimAt].filter((at): at is string => !!at).sort().at(-1);
     const eligibleAt = anchor ? Date.parse(anchor) + setting.intervalMs : now;
-    const due = setting.enabled && active && now >= eligibleAt;
+    const due = setting.enabled && active && (importing || now >= eligibleAt);
     const trigger = !anchor ? "initial" : pressure ? "pressure" : newLessons >= CURATION_NEW_LESSONS ? "new-lessons" : "interval";
     return { active, due, pressure, trigger, newLessons, lastAt, lastClaimAt, nextAt: setting.enabled && active ? new Date(Math.max(now, eligibleAt)).toISOString() : null };
 
@@ -208,22 +253,26 @@ export function claimPass(input: { project: string; repoDir: string | null; now:
   const setting = input.setting ?? effectiveCurationSetting(readSeatTickSettings(project));
   const status = curationStatus(project, input.now, setting);
   if (!status.due) return null;
-  const scopes = passScopes(project);
+  const importBatch = selectImportBatch(project);
+  const scopes = [...new Set([...passScopes(project), ...(importBatch ? importBatchScopes(importBatch) : [])])];
   const claimRevisions: Record<string, number> = Object.fromEntries(scopes.map(scope => [scope, 0]));
   for (const row of curationScopes(project)) {
     const scope = row.revisionScope ?? canonicalScope(row.scope);
     claimRevisions[scope] = Math.max(claimRevisions[scope] ?? 0, row.revision);
   }
-  return collection(true)!.boundedPatch(12, tx => {
+  return curationCollection(true)!.boundedPatch(12, tx => {
     const machine = tx.get("machine");
     if (machine?.kind === "machine" && machine.current) { const pass = tx.get(`r:${machine.current}`); if (pass?.kind === "pass" && passIsLive(pass)) return null; }
     const stored = tx.get(`p:${project}`);
     const held = combineProjectRows(project, [...(prior ? [prior] : []), ...(stored?.kind === "project" ? [stored] : [])]);
-    if (held && input.now < Math.max(Date.parse(held.lastClaimAt), held.lastAt ? Date.parse(held.lastAt) : 0) + setting.intervalMs) return null;
+    const last = held?.passes.at(-1);
+    const completed = last ? passMetadata(last) : null;
+    if (held && !(importBatch && completed?.state === "succeeded") && input.now < Math.max(Date.parse(held.lastClaimAt), held.lastAt ? Date.parse(held.lastAt) : 0) + setting.intervalMs) return null;
     const claimedAt = new Date(input.now).toISOString();
     const id = `curate_${createHash("sha256").update(`${project}:${claimedAt}`).digest("hex").slice(0, 24)}`;
     if (tx.get(`r:${id}`)) return null;
     const pass: CuratorPass = { kind: "pass", id, project, repoDir: input.repoDir, scopes, clientAttemptId: id, claimedAt, state: "claimed", endedAt: null, failure: null, conversationId: null, launchId: null, transcriptPath: null, launchedAt: null,
+      ...(importBatch ? { importBatch } : {}),
       counts: { calls: 0, changed: 0, rewritten: 0, merged: 0, moved: 0, split: 0, archived: 0, restored: 0 } };
     tx.put(pass); tx.put({ kind: "machine", current: id });
     tx.put({ kind: "project", project, current: id, lastClaimAt: claimedAt, claimRevisions, lastAt: held?.kind === "project" ? held.lastAt : null, passes: [...(held?.kind === "project" ? held.passes : []), id] });
@@ -231,9 +280,9 @@ export function claimPass(input: { project: string; repoDir: string | null; now:
   });
 }
 export function patchPass(id: string, patch: Partial<CuratorPass>): CuratorPass | null {
-  const original = readPass(id);
+  const original = readPassAuthority(id);
   const projectRowsBefore = original ? projectRows(original.project) : [];
-  return collection(true)!.boundedPatch(12, tx => {
+  return curationCollection(true)!.boundedPatch(12, tx => {
     const held = tx.get(`r:${id}`); if (held?.kind !== "pass") return null;
     if (!passIsLive(held) && patch.state && ["claimed", "launching", "running"].includes(patch.state)) return held;
     const next = { ...held, ...patch, id, kind: "pass" as const, project: held.project, scopes: held.scopes, launchBody: held.launchBody ?? patch.launchBody };
@@ -261,7 +310,7 @@ export function curationView(project: string, now = Date.now(), scopeRows = cura
     pass.set(h.at, h.counts);
   }
   const passes = (projectRow(project)?.passes ?? []).slice().reverse().flatMap(id => {
-    const pass = passMetadata(id); if (!pass) return [];
+    const pass = readPassAuthority(id); if (!pass) return [];
     const { state, claimedAt, endedAt, failure, counts, revertedAt, skipped } = pass;
     const receipts = calls.get(id);
     const summed = { ...counts };
@@ -282,13 +331,13 @@ export function curationPanelRuns(project: string) {
     // pass, so walk back only to this row's newest completed pass; never
     // materialize the retained history for a panel read.
     for (let index = row.passes.length - 1; index >= 0; index--) {
-      const pass = passMetadata(row.passes[index]!);
+      const pass = readPassAuthority(row.passes[index]!);
       if (!pass) continue;
       if (passIsLive(pass)) continue;
       if (!latestCompleted || pass.claimedAt > latestCompleted.claimedAt) latestCompleted = pass;
       break;
     }
   }
-  const current = rows.map(row => row.current ? passMetadata(row.current) : null).find(passIsLive) ?? null;
+  const current = rows.map(row => row.current ? readPassAuthority(row.current) : null).find(passIsLive) ?? null;
   return { live: current ? readPass(current.id) : null, last: latestCompleted ? readPass(latestCompleted.id) : null };
 }

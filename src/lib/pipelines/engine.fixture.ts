@@ -1537,10 +1537,10 @@ async function parkedReviewStage(h: ReturnType<typeof harness>): Promise<void> {
 
 async function stagedRecoveryHarness(
   mode: "timeout" | "reset" | "busy" | "503" | "uncertain" | "turn-started" | "absent" | "permanent" | "held" = "timeout",
-  options: { hostProcess?: { pid: number; startIdentity: string | null }; nativeTranscript?: boolean } = {},
+  options: { hostProcess?: { pid: number; startIdentity: string | null }; nativeTranscript?: boolean; startedAt?: number } = {},
 ) {
   const h = harness();
-  let clock = Date.now();
+  let clock = options.startedAt ?? Date.now();
   h.ports.now = () => new Date(clock).toISOString();
   await create(h.ports, [
     { id: "build", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "Build {{task}}", next: null },
@@ -1694,11 +1694,11 @@ async function aliveStagedLaunch(options: Parameters<typeof stagedRecoveryHarnes
 /** A host process this test started, with the start identity the kernel
     reports for it; `end` stops it by that pid and waits for it to be reaped. */
 async function stageHostChild() {
-  const { procBackend } = await import("@/lib/proc");
   const child = spawn("sleep", ["300"], { stdio: "ignore" });
   const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
   const pid = child.pid!;
-  const identity = { pid, startIdentity: procBackend.processIdentity(pid) };
+  const { captureProcessIdentity } = await import("@/lib/processIdentity");
+  const identity = captureProcessIdentity(pid);
   expect(identity.startIdentity).not.toBeNull();
   return { process: identity, end: async () => { if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL"); await exited; } };
 }
@@ -1711,7 +1711,10 @@ function productionHostSeams(f: Awaited<ReturnType<typeof stagedRecoveryHarness>
   const ports = () => defaultPipelinePorts();
   Object.assign(f.h.ports, {
     spawnReceipt: (launchId: string) => ports().spawnReceipt(launchId),
+    transcriptPresent: (pathname: string) => ports().transcriptPresent!(pathname),
     failStageLaunch: (launchId: string, conversationId: string, reason: string) => ports().failStageLaunch!(launchId, conversationId, reason),
+    failStoppedStageLaunch: (launchId: string, conversationId: string, reason: string, eligible: () => boolean) => ports().failStoppedStageLaunch!(launchId, conversationId, reason, eligible),
+    releaseFailedStageLaunchContinuation: (launchId: string, conversationId: string) => ports().releaseFailedStageLaunchContinuation!(launchId, conversationId),
     conversationHostUnavailableSince: (conversationId: string) => ports().conversationHostUnavailableSince!(conversationId),
     conversationHostProcess: (conversationId: string) => ports().conversationHostProcess!(conversationId),
   } satisfies Partial<PipelinePorts>);
@@ -2161,7 +2164,7 @@ function cutChainKit(f: Awaited<ReturnType<typeof providerRecoveryHarness>>, eng
     if (engine === "claude") records.push({ type: "user", timestamp: at(), origin: { kind: "task-notification" }, turnOrigin: "task_notification", promptSource: "system", message: { content: "<task-notification>done</task-notification>" } });
     else {
       const { encodeCodexStructuredUserText } = await import("@/lib/runtime/codexStructuredUserText.server");
-      records.push({ type: "event_msg", timestamp: at(), payload: { type: "user_message", message: encodeCodexStructuredUserText("Continue the interrupted turn from the transcript.", undefined, null, { kind: "agent", role: "startup-recovery" } as never) } });
+      records.push({ type: "event_msg", timestamp: at(), payload: { type: "user_message", message: await encodeCodexStructuredUserText("Continue the interrupted turn from the transcript.", undefined, null, { kind: "agent", role: "startup-recovery" } as never) } });
     }
   };
   const output = (busy = false) => records.push(engine === "claude"

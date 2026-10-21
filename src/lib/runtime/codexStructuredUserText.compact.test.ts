@@ -1,4 +1,6 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import fsDefault from "node:fs";
+import * as fs from "node:fs";
 import { mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,7 +34,21 @@ afterEach(() => {
   rmSync(directory, { recursive: true, force: true });
 });
 
-test("production delivery markers fit 96 characters with selected, empty, absent and agent contexts", () => {
+test("delivery encoding yields before durable publication and never uses synchronous persistence", async () => {
+  const syncDefault = spyOn(fsDefault, "fsyncSync");
+  const syncNamed = spyOn(fs, "fsyncSync");
+  try {
+    const pending = encode("async fixture", undefined, selected, { kind: "operator" }, dedup("async"));
+    expect(pending).toBeInstanceOf(Promise);
+    const wire = await pending;
+    expect(syncDefault).not.toHaveBeenCalled();
+    expect(syncNamed).not.toHaveBeenCalled();
+    expect(decode(wire).selectedContext).toEqual(selected);
+    expect(await encode("async fixture", undefined, selected, { kind: "operator" }, dedup("async"))).toBe(wire);
+  } finally { syncDefault.mockRestore(); syncNamed.mockRestore(); }
+});
+
+test("production delivery markers fit 96 characters with selected, empty, absent and agent contexts", async () => {
   for (const [name, context, origin] of [
     ["selected", selected, { kind: "operator" }],
     ["none", none, { kind: "operator" }],
@@ -40,7 +56,7 @@ test("production delivery markers fit 96 characters with selected, empty, absent
     ["agent", selected, { kind: "agent", role: "orchestrator" }],
     ["long-role", selected, { kind: "agent", role: "r".repeat(64) }],
   ] as const) {
-    const wire = encode("Fixture message", undefined, context, origin, dedup(name));
+    const wire = await encode("Fixture message", undefined, context, origin, dedup(name));
     expect(wire.split("\n")[0]!.length).toBeLessThanOrEqual(96);
     expect(decodeWire(wire).metadataRef).toMatch(/^[oad]\.[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{16}$/);
     expect(wire).not.toContain("fixture_card");
@@ -49,13 +65,13 @@ test("production delivery markers fit 96 characters with selected, empty, absent
   }
 });
 
-test("voice channel survives the compact production marker and the feed metadata read", () => {
+test("voice channel survives the compact production marker and the feed metadata read", async () => {
   const origin = { kind: "operator" as const, channel: "voice-delegatus" as const };
-  const wire = encode("Review the plan", undefined, null, origin, dedup("voice-send"));
+  const wire = await encode("Review the plan", undefined, null, origin, dedup("voice-send"));
   expect(decode(wire).origin).toEqual(origin);
   const ref = decodeWire(wire).metadataRef!;
   expect(readStructuredUserProvenance([ref])[ref]).toEqual({ origin: "operator", channel: "voice-delegatus" });
-  const agent = encode("An agent relay", undefined, null, { kind: "agent", channel: "voice-delegatus" }, dedup("agent-send"));
+  const agent = await encode("An agent relay", undefined, null, { kind: "agent", channel: "voice-delegatus" }, dedup("agent-send"));
   expect(decode(agent).origin).toEqual({ kind: "agent" });
 });
 
@@ -67,16 +83,16 @@ test("legacy long ctx, digest-only and bare markers retain exactly their decoded
   ]) expect(decode(wire)).toEqual(decodeWire(wire));
 });
 
-test("an image-only operator delivery preserves its content digest after trimming", () => {
-  const wire = encode("", "b".repeat(64), selected, { kind: "operator" }, dedup("image"));
+test("an image-only operator delivery preserves its content digest after trimming", async () => {
+  const wire = await encode("", "b".repeat(64), selected, { kind: "operator" }, dedup("image"));
   expect(wire.split("\n")[0]!.length).toBeLessThanOrEqual(96);
   expect(decode(wire.trimEnd())).toMatchObject({ text: "", structured: true, contentDigest: "b".repeat(64), origin: { kind: "operator" } });
 });
 
-test("recipient-scoped queue ids can coexist with different image metadata", () => {
+test("recipient-scoped queue ids can coexist with different image metadata", async () => {
   const identity = dedup("shared-native-entry-v1");
-  const first = encode("queued input", "a".repeat(64), selected, { kind: "operator" }, identity);
-  const second = encode("queued input", "b".repeat(64), selected, { kind: "operator" }, identity);
+  const first = await encode("queued input", "a".repeat(64), selected, { kind: "operator" }, identity);
+  const second = await encode("queued input", "b".repeat(64), selected, { kind: "operator" }, identity);
   expect(decodeWire(first).metadataRef).not.toBe(decodeWire(second).metadataRef);
   expect(decodeWire(first).deliveryDedup).toBe(identity);
   expect(decodeWire(second).deliveryDedup).toBe(identity);
@@ -85,8 +101,8 @@ test("recipient-scoped queue ids can coexist with different image metadata", () 
   expect(second.split("\n")[0]!.length).toBeLessThanOrEqual(96);
 });
 
-test("a fresh process resolves the exact admitted card from the shared state directory", () => {
-  const wire = encode("Fixture message", undefined, selected, { kind: "operator" }, dedup("restart"));
+test("a fresh process resolves the exact admitted card from the shared state directory", async () => {
+  const wire = await encode("Fixture message", undefined, selected, { kind: "operator" }, dedup("restart"));
   const ref = decodeWire(wire).metadataRef!;
   const moduleUrl = new URL("../mcp/selectedContextTarget.ts", import.meta.url).href;
   const child = Bun.spawnSync([process.execPath, "-e",
@@ -97,10 +113,10 @@ test("a fresh process resolves the exact admitted card from the shared state dir
   expect(selectedContextArg(ref)).toEqual(selected);
 });
 
-test("a missing or corrupted handle refuses while another card with the same recipient-scoped id remains readable", () => {
-  const wire = encode("Fixture message", undefined, selected, { kind: "operator" }, dedup("immutable"));
+test("a missing or corrupted handle refuses while another card with the same recipient-scoped id remains readable", async () => {
+  const wire = await encode("Fixture message", undefined, selected, { kind: "operator" }, dedup("immutable"));
   const ref = decodeWire(wire).metadataRef!;
-  const other = encode("Fixture message", undefined, { ...selected, conversationId: "conversation_other_fixture" },
+  const other = await encode("Fixture message", undefined, { ...selected, conversationId: "conversation_other_fixture" },
     { kind: "operator" }, dedup("immutable"));
   const otherRef = decodeWire(other).metadataRef!;
   expect(otherRef).not.toBe(ref);

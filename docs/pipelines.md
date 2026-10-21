@@ -141,6 +141,34 @@ A terminal parser miss starts up to three durable evaluations. Identical evidenc
 
 A stage spawn that fails after it reserved a launch consults the launch receipt before anything else. When the runtime host was unreachable or the account mutation lock was busy and the receipt has settled `failed` (the spawn layer's own retry-safe verdict), the engine claims that receipt for retry, retires the launch onto the attempt's `retiredLaunches`, and re-activates the same attempt on a bounded wall-clock wait with backoff: 30 seconds for a busy account, 10 minutes for an unreachable runtime host. While it waits the pipeline reads `stage spawn deferred: … ; retry at <time>`; exhaustion parks with the rounds, the seconds spent and the last failure. One wait keeps the largest budget any of its rounds asked for, so a busy-lock sighting a minute into a runtime-host outage does not end the host's ten minutes early, and every spawn call of the attempt, immediate handshake retries and retired launches included, consumes its own launch identity, counted before the call is made so that a call a restart interrupts keeps its identity away from the retry that follows. An attempt the engine before this count left waiting or mid-spawn resumes past every identity that engine could have spent: its booked rounds plus one activation's three calls. A receipt in any other state is a launch whose fate the engine cannot vouch for: nothing is re-dispatched, the attempt parks, and a receipt that completes after all is adopted by the next tick. A failed receipt that had staged a session identity for a read-write stage is not re-dispatched either, because the engine host may have edited the worktree before it was killed: the attempt parks naming `retry-stage`, whose reset runs first. A spawn a restart interrupted takes the same rule, with the budget starting at the recovering process's first sighting; a wait persisted from before the restart keeps its own start and its exhaustion still counts every round.
 
+A first message fenced by the delivery journal as never executed gets up to
+three automatic replacement launches in the same stage attempt, after 1, 5 and
+15 seconds. Delegatus verifies the original message's operation, conversation,
+key and terminal non-execution reason before claiming its launch and after
+stopping its recorded host. A retry leaf, uncertain result, missing journal or
+changed generation authorizes no resend. The attempt's `fencedMessageRetries`
+counter survives controller restarts and successful spawn handshakes;
+`retiredLaunches` records each replacement and `controllerWait.retryAfter`
+records its next wake. A dispatch interrupted by a controller restart retains
+the existing activation key and adopts its receipt. Exhaustion parks with the
+retry count and delivery reason. Manual `retry-stage` starts a new attempt.
+This recovery preserves the worktree and uses the ordinary stage admission
+queue. It adds no timeout to an active stage turn.
+
+A staged launch with no native turn gets a ten-minute recovery window, with at
+most 16 checks and persisted backoff. If controller downtime consumes the window
+before any check runs, the first real check opens a fresh window. At exhaustion,
+Delegatus stops the silent host through its recorded
+process identity, settles the original launch and its held first delivery, and
+reserves one fresh attempt in the same worktree. Metadata alone is not a native
+turn. A working native turn is adopted; changed or unreadable ownership retains
+the original attempt. The replacement limit is recorded in attempt history and
+survives controller restarts. If that replacement also stays silent, Delegatus
+stops it and parks with a reason naming `retry-stage`. That action also accepts
+an exhausted `spawning` attempt or an older spawn-recovery park with a
+`path-pending` receipt; it preserves the worktree when replacing the silent
+launch. Other retries keep the reset behavior described above.
+
 Run stages use Delegatus spawn receipts and conversation lineage. Stage zero descends from `src` when supplied. Later stages descend from the latest completed stage session. Each attempt persists its launch id, Delegatus conversation id, transcript path, native session id, pane id, output, verdict, and timestamps. Pausing holds coordinator transitions while preserving the active session for inspection and resume.
 
 A task spawn reserves its linked draft pipeline after task admission and before pane actuation. The draft keeps a `task-spawn` creation intent keyed by task id and launch id, plus the reserved Delegatus conversation id. Transcript settlement fills the creator path through the same idempotent ensure operation. Controller recovery can fill the path from the conversation registry when the route process stops after launch settlement. Replays reuse the receipt and the task's linked draft, preserving one pane and one active pipeline.
@@ -167,7 +195,7 @@ Pipeline stages cannot create another pipeline. Every stage's prompt forbids it,
 - `resume` — return to the saved pipeline phase and resume a legacy stage's embedded flow.
 - `override-stage` — change a stage definition from its next attempt. For a running structured run stage, `applyNow: true` moves its runtime immediately while preserving its current attempt, worktree, branch and receipts. Only engine, model, effort, service tier and account may change now. The operator, creator or authorized project seat can request it; a stale stage digest, an already reported stage, or a conflicting open switch is refused before cutting the turn. For a same-engine account change, target migration directories are checked before admission. An unsafe directory answers 409 `RUNTIME_SWITCH_UNAVAILABLE` with repair guidance and leaves the stage definition and running attempt unchanged. Repair the directory or choose another account, then repeat the request. The provider checks again before copying history; a later filesystem change can still require rollback. `expectedAttempt` and `expectedConversationId` name the attempt and conversation the choice was made on; when a retry has started another agent since, the request answers 409 `STAGE_CHANGED` and changes nothing.
 - `retry-stage` — retry the current stage. A passed stage waiting for publication retries verification and publication of its accepted work without launching another attempt.
-- `resolve-decision` — answer a settled stage question, or request a fresh run attempt after publication of a passed stage parks. Supply `answer`, `expectedStageId`, `expectedAttempt`, `expectedRevision` and a stable `clientRequestId`. A publication continuation keeps the current checkout and carries the refusal output into its prompt. Pending publication, queued repair delivery, a busy producer or unresolved survivors prevent the new attempt.
+- `resolve-decision` — answer a settled stage question, or request a fresh run attempt after custody verification or publication of a passed stage parks. Supply `answer`, `expectedStageId`, `expectedAttempt`, `expectedRevision` and a stable `clientRequestId`. A repair continuation keeps the current checkout and carries the refusal output into its prompt. Pending publication, queued repair delivery, a busy producer or unresolved survivors prevent the new attempt.
 - `skip-stage` — record an operator skip and follow `next`.
 - `close` — close the pipeline and any legacy embedded flow while retaining history, the worktree, and any live stage panes for inspection. A close first asks the runtime host to end each resident stage host; when the calling process has no structured control channel at all (an MCP host process), it ends the host by the identity the registry recorded (pid, start identity, boot epoch). That path acts only on an attempt affirmatively bound to the row: the attempt names the conversation the row is the current generation of, and its launch has a receipt naming that same conversation; no launch, no receipt, or a receipt naming another conversation is unresolved ownership and nothing is signalled. The same authority (the row still naming that exact process for that conversation, no orchestrator seat) is asked again after every await inside the termination and one step before each signal. The report says which Delegatus generation started the host and whether it still exists. A signal that was sent and did not end the whole authorized tree — a survivor, a refused signal — leaves the close refused with the pids named, and the survivors' identities are kept on the attempt: until each is proven gone, no later close may terminalize the attempt on registry or transcript evidence, however dead the row looks.
 
@@ -234,6 +262,22 @@ commit receipts from those launches, including output adopted from their scratch
 worktrees. A fresh publication decision can carry the accepted producer's proof
 the same way. Each launch's start must name this worktree; a new starting head,
 shared Git identity or caller-supplied reflog text grants no creation proof.
+
+The lane's accepted head (`lastPassedCommit` or durable `publishedCommit`) is a
+custody boundary across attempts: its ancestors need no new creation receipts
+when a later repair restores that history. A delivery tip that predates launch
+has no proof on its own; settlement checks it against that accepted boundary,
+predecessor attempt receipts or the verified base. New suffix commits still
+need creation proof, and a tracking ref alone cannot authorize them.
+The ordinary committer fences the head captured before custody verification,
+so a later foreign tip cannot enter through the handoff after proof checking.
+
+If custody refuses a passed stage, use `resolve-decision` with the stage,
+attempt and revision from `get_pipeline` to request a repair. The action retires
+the parked attempt after verifying that its producer is inactive, preserves its
+pass report and starts a fresh attempt in the current checkout. It does not
+authorize missing creation receipts or reset accepted history. The repair's
+settlement verifies the same custody chain again.
 
 The pipeline tick runs in the same durable scanner-controller pass as the flow tick. `GET /api/files` remains a pure read and includes the current pipeline records for the project UI. The pipeline store fails closed on malformed or future-schema state, and that failure is contained: the files payload carries `pipelinesError` and serves everything else, and the shared tick skips pipelines while flows, workflows, and tasks keep running.
 

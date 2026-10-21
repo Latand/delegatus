@@ -176,7 +176,7 @@ test.skipIf(!installed)(
       /* The SAME envelope the Viewer writes, so what is asserted below is the
          record production actually produces — marker, authorship and all. */
       const dedup = "b".repeat(64);
-      const wire = encodeCodexStructuredUserText(
+      const wire = await encodeCodexStructuredUserText(
         "probe: injected context line",
         undefined,
         undefined,

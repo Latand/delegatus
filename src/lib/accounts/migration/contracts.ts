@@ -178,6 +178,11 @@ export interface NativeGeneration {
   launchProfile: LaunchProfile;
   historyHash: string | null;
   host: GenerationHostEvidence | null;
+  /** Original Codex transcript/account binding, frozen when verified host
+      custody is committed. Inventory reconciliation may rewrite path/accountId;
+      an unverified account rebind quarantines the whole interval. endedAt is
+      the discovery time, never a proven account-switch boundary. */
+  quotaCustody?: { accountId: string; artifactPath: string; endedAt?: string };
   createdAt: string;
   archivedAt: string | null;
 }
@@ -349,6 +354,8 @@ export interface HeldDeliveryCommand {
       admitted after it began, and reads this to tell a continuation of its
       original cohort from a fresh start. Outside the request digest. */
   cohortAt?: string;
+  /** Privacy revision checked when a pipeline's first message is dispatched. */
+  roleMemoryRevision?: string;
 }
 
 export interface HeldDeliveryCommandInput {
@@ -359,6 +366,7 @@ export interface HeldDeliveryCommandInput {
   onlyIfIdle?: HeldDeliveryCommand["onlyIfIdle"];
   origin?: MessageOrigin;
   cohortAt?: string;
+  roleMemoryRevision?: string;
 }
 
 export interface HeldDelivery {

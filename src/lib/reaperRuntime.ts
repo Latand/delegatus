@@ -32,7 +32,7 @@ import {
 import { procBackend } from "@/lib/proc";
 import { readJsonCache, writeJsonDurably } from "@/lib/state/durableJson";
 import { runtimeHostClient } from "@/lib/runtime/client";
-import { reconcileDeadStructuredRegistryHosts } from "@/lib/runtime/registry";
+import { reconcileDeadStructuredRegistryHostsOffLoop } from "@/lib/runtime/registry";
 import { terminalizeStaleStructuredSpawns } from "@/lib/runtime/structuredSpawn";
 import { listFiles } from "@/lib/scanner";
 import { isNativeCodexSubagentTranscript } from "@/lib/scanner/codexNative";
@@ -1008,7 +1008,7 @@ export async function runReaperCycle(options: {
      those recorded PIDs and available start identities, then clear dead rows
      without signalling any process so ordinary recovery can claim them again. */
   try {
-    reconcileDeadStructuredRegistryHosts(registry);
+    await reconcileDeadStructuredRegistryHostsOffLoop(registry);
   } catch (error) {
     console.error("[reaper] dead structured-host ownership convergence failed", error);
   }

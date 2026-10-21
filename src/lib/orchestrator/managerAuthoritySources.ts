@@ -1,28 +1,32 @@
 import { agentRegistry, type AgentRegistry } from "@/lib/agent/registry";
+import fs from "node:fs";
 import { projectSuccessionFor } from "@/lib/projects/succession";
 
 import { authorizedManagerSeats, type ManagerAuthoritySources } from "./authority";
 import { canonicalOrchestratorProject, orchestratorRevocations } from "./seats";
-import { activeSeatsByCurrentProject, seatLaunchCwd } from "./seatProjectIdentity";
+import { activeSeatsByCurrentProject } from "./seatProjectIdentity";
 
 /** Durable designation and registry evidence used by every manager grant. */
 export function productionManagerAuthoritySources(registry: AgentRegistry = agentRegistry()): ManagerAuthoritySources {
+  const launchCwd = (id: string) => registry.conversationAuthorityFacts(id)?.directories.find(directory => {
+    try { return fs.statSync(directory).isDirectory(); } catch { return false; }
+  }) ?? null;
   return {
-    activeSeats: () => activeSeatsByCurrentProject(),
+    activeSeats: () => activeSeatsByCurrentProject(launchCwd),
     revocations: orchestratorRevocations,
     conversationFacts: (conversationId) => {
-      const conversation = registry.conversation(conversationId as `conversation_${string}`);
+      const conversation = registry.conversationAuthorityFacts(conversationId);
       if (!conversation) return null;
       return {
-        superseded: conversation.supersededBy !== null,
-        hasGeneration: conversation.generations.length > 0,
-        project: conversation.projectOwnership?.project
-          ? canonicalOrchestratorProject(projectSuccessionFor(conversation.projectOwnership.project, seatLaunchCwd(conversationId))?.target
-            ?? conversation.projectOwnership.project)
+        superseded: conversation.superseded,
+        hasGeneration: conversation.hasGeneration,
+        project: conversation.project
+          ? canonicalOrchestratorProject(projectSuccessionFor(conversation.project, launchCwd(conversationId))?.target
+            ?? conversation.project)
           : null,
       };
     },
-    resolveAlias: (conversationId) => registry.conversation(conversationId as `conversation_${string}`)?.id ?? conversationId,
+    resolveAlias: (conversationId) => registry.canonicalConversationId(conversationId as `conversation_${string}`),
   };
 }
 

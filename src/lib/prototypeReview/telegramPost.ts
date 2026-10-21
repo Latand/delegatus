@@ -8,7 +8,7 @@ import { prototypeRoot, storedMediaPath, findPrototypeRound, mutatePrototypeRoun
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import path from "node:path";
 import { withFileTransaction } from "@/lib/state/fileTransaction";
-import { ownerReviewDestination } from "@/lib/externalRelay/telegramPublication";
+import type { OwnerDestinationFailure } from "@/lib/externalRelay/ownerDestination";
 import type { PrototypeTelegramPost } from "./types";
 import { readSelf } from "@/lib/links/self";
 import { publicEntry } from "@/lib/links/publicEntry";
@@ -137,8 +137,9 @@ async function postRound(round: PrototypeReviewRound, key: string): Promise<Prot
     // A durable pending claim survives a stopped process. The bot's journal
     // reconciles it under this same key without issuing a duplicate send.
     if (current.telegramPost?.key === key && current.telegramPost.state !== "pending") return current.telegramPost;
-    const record = async (state: PrototypeTelegramPost["state"], reason?: string) => {
-      const post = { key, state, at: new Date().toISOString(), ...(reason ? { reason } : {}) };
+    const record = async (state: PrototypeTelegramPost["state"], reason?: string, destinationDetail?: PrototypeTelegramPost["destinationDetail"]) => {
+      const post: PrototypeTelegramPost = { key, state, at: new Date().toISOString(), ...(reason ? { reason } : {}),
+        ...(destinationDetail ? { destinationDetail } : {}) };
       await withPrototypeState(() => mutatePrototypeRound(round.taskId, round.id, held => { held.telegramPost = post; }));
       return post;
     };
@@ -147,10 +148,11 @@ async function postRound(round: PrototypeReviewRound, key: string): Promise<Prot
       const task = await withPrototypeState(() => round.taskId === null ? undefined : taskFeedSource()?.get(round.taskId));
       const slides = await prototypeSlides(current);
       const fallback = withReviewLink(renderPrototypeTelegram(current, [], task?.text), current, 0);
+      let unavailable: OwnerDestinationFailure | undefined;
       const result = await telegramBotService().sendOwnerReview({ clientRequestId: key,
         message: withReviewLink(renderPrototypeTelegram(current, slides, task?.text), current, slides.length), fallbackMarkdown: fallback.markdown, fallbackPlainText: fallback.plainText,
-        limitFallback: renderPrototypeTelegramSummary(current, slides, task?.text) });
-      if (!result) return record("failed", ownerReviewDestination().reason ?? "destination_unavailable");
+        limitFallback: renderPrototypeTelegramSummary(current, slides, task?.text) }, failure => { unavailable = failure; });
+      if (!result) return record("failed", unavailable?.reason ?? "destination_unavailable", unavailable?.detail);
       return record("sent");
     } catch (error) {
       // Never log a task title, Telegram description, path or destination.

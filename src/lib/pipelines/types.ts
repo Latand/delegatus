@@ -473,7 +473,8 @@ export type PipelineStageAttempt = {
   publicationIntegration?: { passedSha: string; acceptedSha: string; mainSha: string };
   /** Automatic retries of a publication the stage cannot have caused to fail:
       a refusal of an unchanged head, or a push interrupted before it landed.
-      Each failed operation is counted once; `exhausted` waits for retry-stage. */
+      Each failed operation is counted once; `exhausted` waits for an explicit
+      push, while publicationRecovery keeps the per-head automatic bound. */
   publicationRetry?: { sha: string; operationId: string; failures: number; retryAt: string; exhausted?: boolean };
   /** Bounded PR summary corrections preserve the accepted verdict and SHA.
       Persisted before delivery so a restart reuses the same request. */
@@ -629,6 +630,8 @@ export type PipelineStageAttempt = {
     sendUncertain?: true;
     requestedAt?: string;
     clientMessageId?: string;
+    /** Keyed delivery evidence; safeToReplace requires affirmative no-dispatch evidence. */
+    delivery?: PipelineRepairDelivery;
     /** Missing on older settled repairs, which already permitted a commit. */
     outcome?: { status: "accepted" } | { status: "rejected"; reason: string };
     settledAt?: string;
@@ -662,6 +665,13 @@ export type PipelineStageAttempt = {
       without this count left behind starts it past every id that engine
       could have spent (#1678 review 3). */
   spawnCalls?: number;
+  /** Proven fenced first messages replaced in this attempt. Retained across
+      successful spawn handshakes and controller restarts; at most three. */
+  fencedMessageRetries?: number;
+  /** After a privacy revision conflict, require two stable revision
+      observations across persisted ticks before composing again. */
+  roleMemoryWait?: { revision: string; observations: number; retryAfter: string; ready?: boolean };
+  roleMemoryFailures?: number;
   /** Launches this attempt reserved and then retired because their receipt
       settled `failed` before any host ran them (#1678): the runtime host was
       unreachable or the account mutation lock was busy. The receipt's own
@@ -885,6 +895,23 @@ export type PipelineDeliveryTarget = {
   rejectedHead?: string;
 };
 
+export type PipelineRepairDelivery = {
+  operationId: string | null;
+  state: "unreserved" | "in-flight" | "delivered" | "failed" | "unavailable";
+  safeToReplace: boolean;
+};
+
+export type PipelinePublicationRecovery = {
+  sha: string;
+  /** Recoverable failures across attempts, manual retries and ownership epochs. */
+  failures: number;
+  totalAttempts: number;
+  /** Newest 64 failed operations; totalAttempts includes omitted older records. */
+  history: Array<{ operationId: string; epoch: number; at: string;
+    cause: "infrastructure-deadline" | "interrupted" | "check-failure";
+    detail: string; retryAt: string | null }>;
+};
+
 export type PipelinePublicationFailure = {
   step: string;
   code: number | null;
@@ -1041,6 +1068,8 @@ export type Pipeline = {
   remoteAction?: PipelineRemoteAction;
   /** Legacy lanes observe their repository identity before claiming delivery. */
   publicationAdmission?: { id: string; sha: string; fence: string; state: "pending" | "settled"; error?: string };
+  /** Per-head publication recovery survives a takeover and a new stage attempt. */
+  publicationRecovery?: Record<string, PipelinePublicationRecovery>;
   creationRequest?: { key: string; digest: string };
   id: string;
   task: string;
@@ -1082,6 +1111,8 @@ export type Pipeline = {
       from them, and a key built on the timestamp is what lets a second pause
       after a resume be a genuinely new event instead of a replay of the first. */
   pausedAt?: string | null;
+  /** Last pause's reason, condition and server-attributed author. Legacy pauses have none. */
+  pause?: import("./pauseMetadata").PipelinePause;
   resumedAt?: string | null;
   /** Durable control token: even same-clock pause/resume cancels old work. */
   controlGeneration?: string;
@@ -1333,6 +1364,8 @@ export type PatchPipelineRequest = {
   /** set-delivery-remote: configured Git remote name, default origin; fills an empty target only. */
   remote?: string;
   reason?: string;
+  /** pause only: a date or a cached account usage window below a percentage. */
+  resumeCondition?: import("./pauseMetadata").PipelineResumeCondition;
   action: PipelineAction;
   applyNow?: boolean;
   /** Board task used by link-task and unlink-task. */

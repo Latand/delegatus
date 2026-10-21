@@ -67,6 +67,64 @@ import { readClaudeCredentials } from "@/lib/accounts/claudeCredentials";
 const browserTest = browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1");
 const LAUNCH: LaunchOptions = { headless: true, args: ["--no-sandbox"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) };
 
+describe("legacy review follow-up navigation", () => {
+  browserTest("retained follow-up tasks open from desktop and phone in both languages and themes", async () => {
+    const out = path.resolve(".artifacts/legacy-review-follow-up");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of [1440, 390]) {
+        const phone = width === 390;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=review-stops`, { width, height: 900 }, theme, lang, "reduce", phone);
+        try {
+          const source = phone ? '[data-phone-card="task:t-stop-once"]' : '[data-kanban-board] .card[data-id="task:t-stop-once"]';
+          await page.locator(source).waitFor();
+          const title = lang === "en" ? "Repair retained review findings" : "Виправити збережені зауваження рев’ю";
+          await page.evaluate(({ title }) => {
+            const evidence = (window as unknown as { evidence: { storedPipeline(id: string): Pipeline } }).evidence;
+            Object.assign(evidence.storedPipeline("p-stop-once"), { reviewBudgetSpent: {
+              stageId: "review", attempt: 3, findings: 1, head: "a".repeat(40), at: "2026-10-01T00:00:00.000Z",
+              followUp: { taskId: "t-stop-done", title, at: "2026-10-01T00:00:00.000Z" },
+            } });
+            window.dispatchEvent(new Event("llv:pipelines-changed"));
+          }, { title });
+          if (phone) await page.locator(source).click();
+          else await page.evaluate(() => window.dispatchEvent(new CustomEvent("llv:mcp-navigate", { detail: { kind: "task", id: "t-stop-once" } })));
+          const link = page.locator('[data-pipeline-follow-up="t-stop-done"]').filter({ visible: true }).first();
+          await link.waitFor({ timeout: 10_000 });
+          expect(await link.innerText()).toBe(title);
+          expect(await link.isEnabled()).toBe(true);
+          await link.scrollIntoViewIfNeeded();
+          const box = await link.boundingBox();
+          expect(box).not.toBeNull();
+          expect(box!.x).toBeGreaterThanOrEqual(0);
+          expect(box!.x + box!.width).toBeLessThanOrEqual(width);
+          expect(box!.y).toBeGreaterThanOrEqual(0);
+          expect(box!.y + box!.height).toBeLessThanOrEqual(900);
+          if (phone) expect(box!.height).toBeGreaterThanOrEqual(44);
+          const frame = `${lang}-${theme}-${width}.png`;
+          await page.screenshot({ path: path.join(out, frame) });
+          await link.click();
+          if (phone) await page.locator('[data-phone-task-ended]').click();
+          const target = page.locator(phone ? '[data-phone-task-lane="p-stop-done"]' : '[data-kanban-board] .card[data-id="task:t-stop-done"]');
+          await target.waitFor({ timeout: 10_000 });
+          await page.screenshot({ path: path.join(out, `opened-${frame}`) });
+          expect(pageErrors).toEqual([]);
+          readings.push({ lang, theme, width, title, box, frame, target: "t-stop-done" });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/legacy-review-follow-up", { recursive: true });
+      const sourceDigests = Object.fromEntries(["src/components/pipelines/PipelineBlock.tsx", "src/components/kanban/kanbanBoard.browser.test.tsx"]
+        .map(file => [file, createHash("sha256").update(fs.readFileSync(file)).digest("hex")]));
+      fs.writeFileSync("evidence/legacy-review-follow-up/rendered.json", JSON.stringify({ capturedAt: new Date().toISOString(),
+        command: "LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chromium> bun test src/components/kanban/kanbanBoard.browser.test.tsx --test-name-pattern 'legacy review follow-up navigation' (isolated roots, scripts/gate-slot.sh)",
+        sourceDigests, readings }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});
+
 describe("managed MCP catalog failure", () => {
   browserTest("cause and retry guidance in the Updates panel", async () => {
     const before = process.env.LLV_MCP_CATALOG_BEFORE === "1";
@@ -894,8 +952,8 @@ describe("CPU admission queue", () => {
     const browser = await chromium.launch(LAUNCH);
     const readings: unknown[] = [];
     try {
-      for (const stalled of [false, true]) for (const lang of ["en", "uk"] as const) for (const width of [1440, 1000, 390]) {
-        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=cpu-queue${stalled ? "-stalled" : ""}`, { width, height: 900 }, "dark", lang, "reduce", width === 390);
+      for (const theme of ["light", "dark"] as const) for (const stalled of [false, true]) for (const lang of ["en", "uk"] as const) for (const width of [1440, 1000, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=cpu-queue${stalled ? "-stalled" : ""}`, { width, height: 900 }, theme, lang, "reduce", width === 390);
         try {
           if (width === 390) await page.locator('[data-phone-kanban-tab="assigned"]').click();
           const selector = width === 390 ? '[data-phone-card="task:t-search"]' : card("t-search");
@@ -903,16 +961,16 @@ describe("CPU admission queue", () => {
           const line = target.locator("[data-cpu-queue]");
           await line.waitFor(); await target.scrollIntoViewIfNeeded();
           const text = stalled
-            ? lang === "en" ? "CPU queue is stalled · 7th · nothing started for 62 min" : "Черга CPU стоїть · 7-й · нічого не стартувало 62 хв"
-            : lang === "en" ? "Waiting for the CPU queue · 2nd · up to 7 min" : "Чекає черги CPU · 2-й · до 7 хв";
+            ? lang === "en" ? "CPU queue is stalled · 7th · nothing started for 62 min · High" : "Черга CPU стоїть · 7-й · нічого не стартувало 62 хв · Високий"
+            : lang === "en" ? "Waiting for the CPU queue · 2nd · up to 7 min · High" : "Чекає черги CPU · 2-й · до 7 хв · Високий";
           expect(await line.textContent()).toBe(text);
           expect(await target.textContent()).toContain("#2190");
           expect(await target.locator('[data-motion="working"]').count()).toBe(0);
           const geometry = await line.evaluate(element => ({ clipped: element.scrollWidth > element.clientWidth + 1, width: element.clientWidth, text: element.textContent }));
           expect(geometry.clipped).toBe(false);
           expect(pageErrors).toEqual([]);
-          await target.screenshot({ path: path.join(out, `${stalled ? "stalled" : "variant-1"}-${width}-${lang}.png`) });
-          readings.push({ lang, viewport: width, ...(stalled ? { stalled } : {}), ...geometry });
+          await target.screenshot({ path: path.join(out, `${stalled ? "stalled" : "variant-1"}-${width}-${lang}-${theme}.png`) });
+          readings.push({ lang, theme, viewport: width, ...(stalled ? { stalled } : {}), ...geometry });
           if (width === 390) {
             await target.click();
             const lane = page.locator('[data-phone-task-lane="p-search"]');
@@ -931,8 +989,8 @@ describe("CPU admission queue", () => {
               expect(box.clipped).toBe(false); expect(box.visible).toBe(true);
               expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
               expect(pageErrors).toEqual([]);
-              await page.screenshot({ path: path.join(out, `phone-${stalled ? "stalled-" : ""}${surface}-${lang}.png`) });
-              readings.push({ lang, viewport: width, surface, ...(stalled ? { stalled } : {}), ...box });
+              await page.screenshot({ path: path.join(out, `phone-${stalled ? "stalled-" : ""}${surface}-${lang}-${theme}.png`) });
+              readings.push({ lang, theme, viewport: width, surface, ...(stalled ? { stalled } : {}), ...box });
             }
           }
         } finally { await context.close(); }
@@ -15345,6 +15403,271 @@ describe("the orchestrator's parallel self in the seat's feed", () => {
     }
     fs.writeFileSync(path.join(evidence, "desktop.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
     if (failures.length) throw new Error(failures.join("\n"));
+  }, 600_000);
+});
+
+describe("task limit spend: a scale on the card's state line, the numbers in its popover", () => {
+  /*
+   * docs/design/task-limit-spend.md §7.2, variant 2 as approved: each provider
+   * that did work on a task draws its engine mark and a four-cell scale at the
+   * end of the card's state line, with no digits; the popover lists each
+   * provider's weekly estimate (≈, ≥, <1%), each account's figure beside its
+   * week so far, the 5-hour share while it lasts and the ±30 % note. The phone's
+   * card face carries the marks passively and reads them into its label; the
+   * task screen lists the numbers as one section. States: one provider, two,
+   * several accounts of one provider, tiny, large with a lower bound, no limit
+   * readings, still counting (nothing drawn), and the answer a non-owner gets.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chromium> bun test src/components/kanban/kanbanBoard.browser.test.tsx -t 'task limit spend'
+   *
+   * Frames go to TASK_SPEND_PNG_DIR (default `.artifacts/task-spend/`) with
+   * `readings.json` beside them; nothing is written into the tree.
+   */
+  const CASES = {
+    "t-upload": { state: "one provider", marks: [["codex", "num", 1]], pop: [/Codex ≈1%/] },
+    "t-search": { state: "two providers", marks: [["claude", "num", 1], ["codex", "num", 1]], pop: [/Claude ≈3%/, /Codex ≈2%/, /0[.,]4%/, /5-(hour|годин)/] },
+    "t-export": { state: "several accounts", marks: [["claude", "tiny", 0], ["codex", "num", 2]], pop: [/Claude <1%/, /Codex ≈7%/, /A · Pro/, /B · Plus/, /D · Pro/] },
+    "t-links": { state: "tiny", marks: [["claude", "tiny", 0]], pop: [/Claude <1%/, /0[.,]3%/] },
+    "t-interrupt": { state: "large, lower bound", marks: [["claude", "floor", 2], ["codex", "num", 4]], pop: [/Claude ≥12%/, /Codex ≈34%/, /(task|задача) ≥ ?12%/] },
+    "t-disk": { state: "no limit readings", marks: [["claude", "norate", null], ["codex", "num", 1]], pop: [/Claude — /, /41/, /Codex ≈1%/] },
+  } as const;
+  const COUNTING = "t-merge-a";
+  const WIDTHS = [1440, 1280, 820, 390] as const;
+
+  browserTest("every state at 1440, 1280, 820 and 390, en and uk, light and dark", async () => {
+    const out = path.resolve(process.env.TASK_SPEND_PNG_DIR ?? ".artifacts/task-spend");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const failures: string[] = [];
+    const readings: unknown[] = [];
+    /* The marks of one card: each provider's engine, kind and filled cells, and how the line fits. */
+    const marksReading = (page: Page, selector: string) => page.evaluate((selector) => {
+      const host = document.querySelector<HTMLElement>(selector);
+      const spend = host?.querySelector<HTMLElement>(".spend");
+      if (!host || !spend) return null;
+      const box = (r: DOMRect) => ({ left: r.left, right: r.right, top: r.top, bottom: r.bottom });
+      const words = host.querySelector(".card-state-words");
+      const ranges: ReturnType<typeof box>[] = [];
+      if (words) { const range = document.createRange(); range.selectNodeContents(words); for (const r of range.getClientRects()) if (r.width > 0) ranges.push(box(r)); }
+      const own = box(spend.getBoundingClientRect());
+      const hit = (a: ReturnType<typeof box>, b: ReturnType<typeof box>) => a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5;
+      const cardBox = box((host.closest(".card, [data-phone-card]") ?? host).getBoundingClientRect());
+      return {
+        role: spend.getAttribute("role"), label: spend.getAttribute("aria-label"), hidden: spend.getAttribute("aria-hidden"),
+        providers: [...spend.querySelectorAll<HTMLElement>(".spend-p")].map((p) => ({
+          engine: p.dataset.engine, kind: p.dataset.kind,
+          cells: p.querySelector("svg.scale") ? p.querySelectorAll("svg.scale rect.on").length : null,
+          word: p.querySelector(".spend-n")?.textContent ?? null, floorSign: Boolean(p.querySelector(".scale-floor")),
+        })),
+        digits: /\d/.test(spend.textContent ?? ""),
+        overlapsWords: ranges.some((r) => hit(r, own)),
+        insideCard: own.left >= cardBox.left - 0.5 && own.right <= cardBox.right + 0.5 && own.top >= cardBox.top - 0.5 && own.bottom <= cardBox.bottom + 0.5,
+        own,
+      };
+    }, selector);
+    const popReading = (page: Page, id: string) => page.evaluate((id) => {
+      const pop = document.querySelector<HTMLElement>(`[data-spend-pop="${id}"]`)!.closest<HTMLElement>("[role=tooltip]")!;
+      const r = pop.getBoundingClientRect();
+      const lines = [...pop.querySelectorAll<HTMLElement>(".pop-title, .pop-main, .meter, .meter-note, .pop-note")].map((el) => el.innerText.replace(/\s+/g, " ").trim());
+      /* No line is cut: an account label, whatever its length, is printed whole. */
+      const clipped = [...pop.querySelectorAll<HTMLElement>(".meter-label, .meter-value, .pop-main")].filter((el) => el.scrollWidth > el.clientWidth + 1).length;
+      const labels = [...pop.querySelectorAll<HTMLElement>(".meter-label")].map((el) => ({ text: el.textContent ?? "", lines: new Set([...el.getClientRects()].map((b) => Math.round(b.top))).size, height: el.getBoundingClientRect().height }));
+      /* Every account line, its label's text, its value and its bar stay inside the bubble. */
+      const textRects = [...pop.querySelectorAll<HTMLElement>(".meter-label")].flatMap((el) => { const range = document.createRange(); range.selectNodeContents(el); return [...range.getClientRects()]; });
+      const outside = [...[...pop.querySelectorAll<HTMLElement>(".meter, .meter-figure, .meter-value, .meter-bar")].map((el) => el.getBoundingClientRect()), ...textRects].filter((b) =>
+        b.left < r.left - 0.5 || b.right > r.right + 0.5 || b.top < r.top - 0.5 || b.bottom > r.bottom + 0.5).length;
+      /* The task figure's digits start at one x on every account line. */
+      const numX = [...pop.querySelectorAll<HTMLElement>(".meter-num")].map((el) => Math.round(el.getBoundingClientRect().left));
+      return { box: { left: r.left, right: r.right, top: r.top, bottom: r.bottom }, viewport: { width: innerWidth, height: innerHeight }, lines, clipped, labels, outside, numX, bg: getComputedStyle(pop).backgroundColor };
+    }, id);
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of WIDTHS) {
+        const phone = width === 390;
+        const label = `${lang}-${theme}-${width}`;
+        const height = phone ? 844 : 900;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?spend=1`, { width, height }, theme, lang, "reduce", phone);
+        try {
+          if (!phone) {
+            await page.locator(`${card("t-search")} [data-spend="t-search"]`).waitFor({ state: "attached", timeout: 30_000 });
+            /* Under the seat the board is a strip of columns, or one column behind tabs below 768 px of board. */
+            const column = async (id: string) => {
+              if (await page.locator(card(id)).isVisible()) return;
+              const status = await page.locator(card(id)).evaluate((element) => element.closest<HTMLElement>(".column")?.dataset.status ?? "");
+              await page.locator(`.tabs-nav [data-tab="${status}"]`).first().click();
+            };
+            await column("t-search");
+            /* The seat stands over the board: a tall window shows both, then the case goes on at the named height. */
+            await page.setViewportSize({ width, height: 1900 });
+            await page.locator("[data-kanban-board]").scrollIntoViewIfNeeded();
+            await page.screenshot({ path: path.join(out, `${label}-board.png`) });
+            await page.setViewportSize({ width, height });
+            const counting = await page.locator(`${card(COUNTING)} .spend`).count();
+            if (counting) failures.push(`${label}: the still-counting task draws marks`);
+            for (const [id, expected] of Object.entries(CASES)) {
+              const host = page.locator(card(id));
+              await column(id);
+              await host.scrollIntoViewIfNeeded();
+              await host.screenshot({ path: path.join(out, `${label}-${id}-card.png`) });
+              const marks = await marksReading(page, `${card(id)} .card-state`);
+              readings.push({ label, id, state: expected.state, marks });
+              if (!marks) { failures.push(`${label} ${id}: no marks`); continue; }
+              const got = marks.providers.map((p) => [p.engine, p.kind, p.cells]);
+              if (JSON.stringify(got) !== JSON.stringify(expected.marks)) failures.push(`${label} ${id}: marks ${JSON.stringify(got)} ≠ ${JSON.stringify(expected.marks)}`);
+              if (marks.digits) failures.push(`${label} ${id}: the card's marks carry digits`);
+              if (marks.overlapsWords) failures.push(`${label} ${id}: the marks overlap the state sentence`);
+              if (!marks.insideCard) failures.push(`${label} ${id}: the marks leave the card ${JSON.stringify(marks.own)}`);
+              if (marks.role !== "button" || !marks.label) failures.push(`${label} ${id}: the marks are no labelled control`);
+              const trigger = page.locator(`[data-spend="${id}"]`);
+              await trigger.hover();
+              await page.locator(`[data-spend-pop="${id}"]`).waitFor({ timeout: 5_000 });
+              const pop = await popReading(page, id);
+              readings.push({ label, id, popover: pop });
+              const text = pop.lines.join("\n");
+              for (const want of expected.pop) if (!want.test(text)) failures.push(`${label} ${id}: the popover lacks ${want}:\n${text}`);
+              if (!/±30%/.test(text)) failures.push(`${label} ${id}: no ±30% note`);
+              if (pop.clipped) failures.push(`${label} ${id}: ${pop.clipped} popover lines are cut`);
+              if (pop.outside) failures.push(`${label} ${id}: ${pop.outside} account lines or bars leave the bubble`);
+              /* The fixture's 80-character label cannot share a line with its figure: it is printed whole, on lines of its own. */
+              if (id === "t-interrupt" && !pop.labels.some((l) => l.text.length > 80 && text.includes(l.text.replace(/\s+/g, " ")))) failures.push(`${label} ${id}: the 80-character account label is not printed whole: ${JSON.stringify(pop.labels)}`);
+              if (new Set(pop.numX).size > 1) failures.push(`${label} ${id}: account figures start at ${pop.numX.join(", ")}`);
+              if (pop.box.left < 0 || pop.box.top < 0 || pop.box.right > pop.viewport.width || pop.box.bottom > pop.viewport.height) failures.push(`${label} ${id}: the popover leaves the window ${JSON.stringify(pop.box)}`);
+              const cardBox = (await host.boundingBox())!;
+              const clip = { x: Math.max(0, Math.min(cardBox.x, pop.box.left) - 8), y: Math.max(0, Math.min(cardBox.y, pop.box.top) - 8) };
+              await page.screenshot({ path: path.join(out, `${label}-${id}-popover.png`), clip: { ...clip,
+                width: Math.min(width, Math.max(cardBox.x + cardBox.width, pop.box.right) + 8) - clip.x,
+                height: Math.min(height, Math.max(cardBox.y + cardBox.height, pop.box.bottom) + 8) - clip.y } });
+              await page.mouse.move(0, 0);
+              await page.locator(`[data-spend-pop="${id}"]`).waitFor({ state: "detached", timeout: 5_000 });
+            }
+            /* The keyboard: focus opens it, Escape closes it. */
+            await column("t-search");
+            await page.locator('[data-spend="t-search"]').focus();
+            await page.locator('[data-spend-pop="t-search"]').waitFor({ timeout: 5_000 });
+            await page.keyboard.press("Escape");
+            await page.locator('[data-spend-pop="t-search"]').waitFor({ state: "detached", timeout: 5_000 });
+          } else {
+            for (const [tab, ids] of [["assigned", ["t-search", "t-export", "t-upload", "t-links", "t-disk"]], ["done", ["t-interrupt"]]] as const) {
+              await page.locator(`[data-phone-kanban-tab="${tab}"]`).click();
+              await page.locator(`[data-phone-card="task:${ids[0]}"] .spend`).waitFor({ timeout: 30_000 });
+              if (tab === "assigned" && await page.locator(`[data-phone-card="task:${COUNTING}"] .spend`).count()) failures.push(`${label}: the still-counting task draws marks`);
+              for (const id of ids) {
+                const face = page.locator(`[data-phone-card="task:${id}"]`);
+                await face.scrollIntoViewIfNeeded();
+                await page.screenshot({ path: path.join(out, `${label}-${tab}-${id}.png`) });
+                const marks = await marksReading(page, `[data-phone-card="task:${id}"] .card-state`);
+                const faceLabel = await face.getAttribute("aria-label");
+                readings.push({ label, id, state: CASES[id].state, marks, faceLabel });
+                if (!marks) { failures.push(`${label} ${id}: no marks on the phone card`); continue; }
+                const got = marks.providers.map((p) => [p.engine, p.kind, p.cells]);
+                if (JSON.stringify(got) !== JSON.stringify(CASES[id].marks)) failures.push(`${label} ${id}: phone marks ${JSON.stringify(got)}`);
+                if (marks.role !== null || marks.hidden !== "true") failures.push(`${label} ${id}: the phone face's marks are not passive`);
+                if (marks.overlapsWords || !marks.insideCard || marks.digits) failures.push(`${label} ${id}: phone marks ${JSON.stringify(marks)}`);
+                if (!faceLabel?.includes(translate(lang, "taskSpend.aria", { parts: "" }).trim())) failures.push(`${label} ${id}: the face's label does not read the spend: ${faceLabel}`);
+              }
+            }
+            /* The task screen's section, for two tasks: two providers, and the lower bound. */
+            for (const [tab, id] of [["assigned", "t-search"], ["done", "t-interrupt"], ["assigned", "t-disk"]] as const) {
+              await page.locator(`[data-phone-kanban-tab="${tab}"]`).click();
+              await page.locator(`[data-phone-card="task:${id}"]`).click();
+              const section = page.locator(`[data-phone-task-spend="${id}"]`);
+              await section.waitFor({ timeout: 10_000 });
+              await section.scrollIntoViewIfNeeded();
+              const box = (await section.boundingBox())!;
+              if (box.x < 0 || box.x + box.width > width || box.y < 0 || box.y + box.height > height) failures.push(`${label} ${id}: the Limits section is not whole on screen ${JSON.stringify(box)}`);
+              const text = (await section.innerText()).replace(/[ \t]+/g, " ");
+              /* As in the popover: every account label whole, inside the section, and the digits at one x. */
+              const fit = await section.evaluate((el) => {
+                const r = el.getBoundingClientRect();
+                const cut = [...el.querySelectorAll<HTMLElement>(".meter-label, .meter-value, .pop-main")].filter((node) => node.scrollWidth > node.clientWidth + 1).length;
+                const rects = [...el.querySelectorAll<HTMLElement>(".meter-label")].flatMap((node) => { const range = document.createRange(); range.selectNodeContents(node); return [...range.getClientRects()]; });
+                const outside = [...[...el.querySelectorAll<HTMLElement>(".meter, .meter-figure, .meter-value, .meter-bar")].map((node) => node.getBoundingClientRect()), ...rects].filter((b) => b.left < r.left - 0.5 || b.right > r.right + 0.5).length;
+                const numX = [...el.querySelectorAll<HTMLElement>(".meter-num")].map((node) => Math.round(node.getBoundingClientRect().left));
+                return { cut, outside, numX, labels: [...el.querySelectorAll<HTMLElement>(".meter-label")].map((node) => node.textContent ?? "") };
+              });
+              readings.push({ label, id, section: text, fit });
+              if (fit.cut) failures.push(`${label} ${id}: ${fit.cut} Limits lines are cut`);
+              if (fit.outside) failures.push(`${label} ${id}: ${fit.outside} account lines leave the Limits section`);
+              if (new Set(fit.numX).size > 1) failures.push(`${label} ${id}: Limits figures start at ${fit.numX.join(", ")}`);
+              if (id === "t-interrupt" && !fit.labels.some((l) => l.length > 80)) failures.push(`${label} ${id}: the 80-character account label is not whole in the Limits section: ${JSON.stringify(fit.labels)}`);
+              for (const want of CASES[id].pop) if (!want.test(text)) failures.push(`${label} ${id}: the Limits section lacks ${want}`);
+              await page.screenshot({ path: path.join(out, `${label}-task-${id}.png`) });
+              await page.goBack();
+              await page.locator(`[data-phone-kanban-tab="${tab}"]`).waitFor({ timeout: 10_000 });
+            }
+          }
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join("; ")}`);
+        } finally { await context.close(); }
+      }
+      /* A member who is not the owner gets each provider's figure and no account detail. */
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        const label = `guest-${lang}-${theme}-1440`;
+        const { context, page } = await openFixture(browser, `${server.base}?spend=guest`, VIEWPORT, theme, lang, "reduce");
+        try {
+          await page.locator('[data-spend="t-search"]').waitFor({ timeout: 30_000 });
+          await page.locator('[data-spend="t-search"]').hover();
+          await page.locator('[data-spend-pop="t-search"]').waitFor({ timeout: 5_000 });
+          const pop = await popReading(page, "t-search");
+          readings.push({ label, popover: pop });
+          if (pop.lines.some((line) => / · (Max|Pro)/.test(line)) || pop.numX.length) failures.push(`${label}: account detail reached a guest: ${pop.lines.join(" | ")}`);
+          const cardBox = (await page.locator(card("t-search")).boundingBox())!;
+          await page.screenshot({ path: path.join(out, `${label}-popover.png`), clip: { x: cardBox.x - 8, y: Math.max(0, pop.box.top - 8), width: cardBox.width + 16, height: cardBox.y + cardBox.height - pop.box.top + 16 } });
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+      fs.writeFileSync(path.join(out, "readings.json"), `${JSON.stringify({ capturedAt: new Date().toISOString(), readings, failures }, null, 2)}\n`);
+    }
+    expect(failures).toEqual([]);
+  }, 900_000);
+
+  browserTest("a touch screen at desktop width: a tap opens the marks' popover and the state dot's, a second tap or a tap outside closes them", async () => {
+    const out = path.resolve(process.env.TASK_SPEND_PNG_DIR ?? ".artifacts/task-spend");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const failures: string[] = [];
+    try {
+      for (const width of [820, 1280] as const) for (const lang of ["en", "uk"] as const) {
+        const label = `touch-${lang}-${width}`;
+        /* A tablet: a touch screen with no mouse, at a width that draws the desktop board. */
+        const context = await browser.newContext({ viewport: { width, height: 900 }, hasTouch: true, colorScheme: "light", reducedMotion: "reduce" });
+        await context.addInitScript(`try { localStorage.setItem("llv_lang", ${JSON.stringify(lang)}); } catch {}`);
+        try {
+          const page = await context.newPage();
+          await page.goto(`${server.base}?spend=1`);
+          const host = page.locator(card("t-search"));
+          await host.locator('[data-spend="t-search"]').waitFor({ state: "attached", timeout: 30_000 });
+          if (!await host.isVisible()) {
+            const status = await host.evaluate((element) => element.closest<HTMLElement>(".column")?.dataset.status ?? "");
+            await page.locator(`.tabs-nav [data-tab="${status}"]`).first().tap();
+          }
+          await host.scrollIntoViewIfNeeded();
+          for (const [name, trigger, pop] of [
+            ["marks", host.locator('[data-spend="t-search"]'), page.locator('[data-spend-pop="t-search"]')],
+            ["state dot", host.locator("[data-card-state-dot]"), page.locator("[data-card-state-pop]")],
+          ] as const) {
+            const shows = (open: boolean) => pop.waitFor({ state: open ? "attached" : "detached", timeout: 3_000 }).then(() => true, () => false);
+            await trigger.tap();
+            if (!await shows(true)) { failures.push(`${label}: a tap on the ${name} opens nothing (aria-expanded=${await trigger.getAttribute("aria-expanded")})`); continue; }
+            if (await trigger.getAttribute("aria-expanded") !== "true") failures.push(`${label}: the open ${name} do not say so`);
+            if (name === "marks") await page.screenshot({ path: path.join(out, `${label}-t-search-tap.png`) });
+            await trigger.tap();
+            if (!await shows(false)) failures.push(`${label}: a second tap on the ${name} leaves it open`);
+            await trigger.tap();
+            if (!await shows(true)) failures.push(`${label}: a third tap on the ${name} opens nothing`);
+            /* Outside: a column's heading, plain text. */
+            await page.locator(".kb .col-head h2:visible").first().tap();
+            if (!await shows(false)) failures.push(`${label}: a tap outside leaves the ${name} open`);
+          }
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    expect(failures).toEqual([]);
   }, 600_000);
 });
 
@@ -30462,6 +30785,7 @@ describe("operator decision forms: the «Рішення» column beside the seat
   const OUT = path.resolve(process.env.OPERATOR_DECISIONS_PNG_DIR ?? ".artifacts/operator-decisions");
   const SEAT_ASK = `pr_${"d".repeat(32)}`;
   const LANE_ROUND = `pr_${"c".repeat(32)}`;
+  const SEAT_SECOND = `pr_${"e".repeat(32)}`;
   browserTest("question skip: inline card and feed record at desktop and 390 in both languages", async () => {
     const out = path.resolve(process.env.QUESTION_SKIP_CARD_PNG_DIR ?? ".artifacts/operator-decisions/question-skip"); fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
@@ -30558,6 +30882,10 @@ describe("operator decision forms: the «Рішення» column beside the seat
           try {
             await page.waitForSelector('[data-decision-column="decisions"] [data-decision-list="3"]', { timeout: 30_000 });
             await page.waitForSelector("[data-decision-pointer-open]", { timeout: 30_000 });
+            /* The newest question stands open first; the lane's older round opens from its row. */
+            const newest = await page.locator('[data-decision-column] [data-decision-card="open"]').getAttribute("data-decision-review");
+            if (newest !== SEAT_SECOND) fail(`the column opened ${newest} first, expected the newest`);
+            await page.locator(`[data-decision-column] [data-decision-row="${LANE_ROUND}"]`).click();
             await page.mouse.move(0, 0);
             await page.waitForTimeout(600);
             const lane = await readForm(page, "[data-decision-column]");
@@ -30614,12 +30942,16 @@ describe("operator decision forms: the «Рішення» column beside the seat
             if (strip?.trim() !== t("decisions.waiting", { count: 3 })) fail(`the line reads «${strip}»`);
             await page.locator("[data-decision-strip]").click();
             await page.waitForSelector('[data-decision-column="decisions"] [data-decision-list="3"]', { timeout: 10_000 });
+            /* The lane's round, with its two thumbnails, opens from its row under the newest question. */
+            await page.locator(`[data-decision-column] [data-decision-row="${LANE_ROUND}"]`).click();
+            await page.waitForSelector(`[data-decision-column] [data-decision-card="open"][data-decision-review="${LANE_ROUND}"]`, { timeout: 10_000 });
+            await page.mouse.move(0, 0);
             await page.waitForTimeout(400);
             const column = await readForm(page, "[data-decision-column]");
             const composer = await page.evaluate(() => Boolean(document.querySelector("[data-orchestrator-panel] textarea")));
             readings[`${label}-open`] = { ...column, composer };
             await page.screenshot({ path: path.join(OUT, `${label}-open.png`) });
-            if (!column.sendReachable || column.minOptionHeight < 36 || column.titleCut || column.horizontalOverflow || column.thumbsOverlap || !composer) fail(`the column in place reads ${JSON.stringify({ ...column, composer })}`);
+            if (column.review !== LANE_ROUND || column.thumbs.length !== 2 || !column.sendReachable || column.minOptionHeight < 36 || column.titleCut || column.horizontalOverflow || column.thumbsOverlap || !composer) fail(`the column in place reads ${JSON.stringify({ ...column, composer })}`);
             if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
           } catch (error) {
             fail(error instanceof Error ? error.message.split("\n")[0]! : String(error));
@@ -30645,12 +30977,14 @@ describe("operator decision forms: the «Рішення» column beside the seat
             if (line.height < 44 || line.text !== t("decisions.waiting", { count: 3 })) fail(`the line reads ${JSON.stringify(line)}`);
             await page.locator("[data-decision-strip]").click();
             await page.waitForSelector('[data-mobile2-sheet="decisions"] [data-decision-list="3"]', { timeout: 10_000 });
+            await page.locator(`[data-mobile2-sheet="decisions"] [data-decision-row="${LANE_ROUND}"]`).click();
+            await page.waitForSelector(`[data-mobile2-sheet="decisions"] [data-decision-card="open"][data-decision-review="${LANE_ROUND}"]`, { timeout: 10_000 });
             await page.waitForTimeout(500);
             const sheet = await readForm(page, '[data-mobile2-sheet="decisions"]');
             const tabs = await page.locator('[data-mobile2-sheet="decisions"] [data-decision-tab]').count();
             readings[`${label}-sheet`] = { ...sheet, tabs };
             await page.screenshot({ path: path.join(OUT, `${label}-sheet.png`) });
-            if (tabs !== 2 || !sheet.sendReachable || sheet.minOptionHeight < 44 || sheet.titleCut || sheet.horizontalOverflow || sheet.thumbsOverlap) fail(`the sheet reads ${JSON.stringify({ ...sheet, tabs })}`);
+            if (tabs !== 2 || sheet.review !== LANE_ROUND || sheet.thumbs.length !== 2 || !sheet.sendReachable || sheet.minOptionHeight < 44 || sheet.titleCut || sheet.horizontalOverflow || sheet.thumbsOverlap) fail(`the sheet reads ${JSON.stringify({ ...sheet, tabs })}`);
             await page.locator('[data-mobile2-sheet="decisions"] [data-decision-tab="reports"]').click();
             await page.waitForSelector('[data-mobile2-sheet="decisions"] [data-report-log]', { timeout: 10_000 });
             await page.screenshot({ path: path.join(OUT, `${label}-reports.png`) });
@@ -30667,6 +31001,159 @@ describe("operator decision forms: the «Рішення» column beside the seat
     }
     fs.mkdirSync("evidence/operator-decisions", { recursive: true });
     fs.writeFileSync("evidence/operator-decisions/column.json", `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 900_000);
+
+  /*
+   * The open form folds and the newest decision comes first, over
+   * `&decisions=long` (the first seat question carries a ninety-character
+   * title): at 1440 in the column beside the chat, at 1000 in the transcript's
+   * place, and at 390 in the phone's sheet, uk and en, light and dark. Each
+   * frame reads the list newest first with the newest form open; a press on its
+   * header folds it, every row reads folded, the keyboard lands on the folded
+   * row, and nothing is answered; Enter opens it again and Space folds it. The
+   * long-titled form, opened from its row, keeps its title whole and its time
+   * and fold mark clear of it. At 1440 the feed's pointer opens its own form in
+   * the folded column.
+   *
+   *   CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "folds back to its row"
+   *
+   * Readings go to `evidence/operator-decisions/fold.json`; frames to
+   * OPERATOR_DECISIONS_PNG_DIR or `.artifacts/operator-decisions/`, never committed.
+   */
+  browserTest("the open form folds back to its row and the newest decision is listed first at 1440, 1000 and 390", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(path.join(OUT, "bundle-root-fold"));
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const ORDER = [SEAT_SECOND, SEAT_ASK, LANE_ROUND];
+    /* The list as drawn: its order, which form stands open, each row whole, the open header's parts apart. */
+    const readFold = (page: Page, scope: string) => page.evaluate((root) => {
+      const within = document.querySelector<HTMLElement>(root);
+      const list = within?.querySelector<HTMLElement>("[data-decision-list]") ?? null;
+      const frame = list?.getBoundingClientRect();
+      const box = (rect: DOMRect) => ({ x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) });
+      const apart = (a: DOMRect, b: DOMRect) => a.right <= b.left + 0.5 || b.right <= a.left + 0.5 || a.bottom <= b.top + 0.5 || b.bottom <= a.top + 0.5;
+      const textRects = (node: Element) => { const range = document.createRange(); range.selectNodeContents(node); return [...range.getClientRects()]; };
+      const rows = [...list?.querySelectorAll<HTMLElement>("[data-decision-row]") ?? []].map((row) => {
+        const rect = row.getBoundingClientRect();
+        /* A folded title ends in «…» by design: its box stays inside the row and its line is whole in height. */
+        const title = row.querySelector<HTMLElement>("span.flex-1");
+        const span = title?.getBoundingClientRect();
+        const lines = title ? new Set(textRects(title).map((part) => Math.round(part.top))).size : 0;
+        return { id: row.dataset.decisionRow, expanded: row.getAttribute("aria-expanded"), label: row.getAttribute("aria-label"), text: title?.textContent ?? "", ...box(rect),
+          inside: Boolean(frame && rect.top >= frame.top - 0.5 && rect.bottom <= frame.bottom + 0.5 && rect.left >= frame.left - 0.5 && rect.right <= frame.right + 0.5),
+          truncated: title ? title.scrollWidth > title.clientWidth + 0.5 : null,
+          titleInside: Boolean(span && lines === 1 && span.left >= rect.left && span.right <= rect.right + 0.5 && span.top >= rect.top && span.bottom <= rect.bottom + 0.5) };
+      });
+      const card = list?.querySelector<HTMLElement>("[data-decision-card]") ?? null;
+      const fold = card?.querySelector<HTMLElement>("[data-decision-collapse]") ?? null;
+      const header = fold?.getBoundingClientRect();
+      const title = card?.querySelector<HTMLElement>("[data-decision-title]") ?? null;
+      const time = fold?.querySelector("time")?.getBoundingClientRect();
+      const mark = fold?.querySelector("svg:last-child")?.getBoundingClientRect();
+      const titleRects = title ? textRects(title) : [];
+      const hit = header ? document.elementFromPoint(header.left + header.width / 2, header.top + Math.min(header.height / 2, 12)) : null;
+      return {
+        order: [...list?.querySelectorAll<HTMLElement>("[data-decision-row], [data-decision-card]") ?? []].map((node) => node.dataset.decisionRow ?? node.dataset.decisionReview),
+        expanded: list?.dataset.decisionExpanded ?? null,
+        rows,
+        open: card && fold && header ? {
+          review: card.dataset.decisionReview, ariaExpanded: fold.getAttribute("aria-expanded"), label: fold.getAttribute("aria-label"), header: box(header),
+          title: title?.textContent ?? "", titleWhole: titleRects.length > 0 && titleRects.every((part) => part.right <= header.right + 0.5 && part.bottom <= header.bottom + 0.5),
+          timeApart: Boolean(time && titleRects.every((part) => apart(part, time))), markApart: Boolean(mark && time && apart(mark, time) && titleRects.every((part) => apart(part, mark))),
+          markInside: Boolean(mark && mark.right <= header.right + 0.5 && mark.top >= header.top), uncovered: Boolean(hit && fold.contains(hit)),
+        } : null,
+        focused: (document.activeElement as HTMLElement | null)?.dataset.decisionRow ?? ((document.activeElement as HTMLElement | null)?.hasAttribute("data-decision-collapse") ? `fold:${document.activeElement!.closest<HTMLElement>("[data-decision-review]")?.dataset.decisionReview}` : document.activeElement?.tagName ?? null),
+        horizontalOverflow: document.documentElement.scrollWidth > innerWidth,
+      };
+    }, scope);
+    try {
+      for (const width of [1440, 1000, 390] as const) for (const lang of ["uk", "en"] as const) for (const scheme of ["light", "dark"] as const) {
+        const t = (key: string, vars?: Record<string, string | number>) => translate(lang, key as never, vars);
+        const phone = width === 390;
+        const label = `fold-${width}-${lang}-${scheme}`;
+        const fail = (text: string) => failures.push(`${label}: ${text}`);
+        const scope = phone ? '[data-mobile2-sheet="decisions"]' : '[data-decision-column="decisions"]';
+        const titles: Record<string, string> = {
+          [SEAT_SECOND]: lang === "uk" ? "Акаунт для нічних лейнів Codex" : "Account for the night Codex lanes",
+          [SEAT_ASK]: lang === "uk" ? "Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту" : "Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project",
+          [LANE_ROUND]: lang === "uk" ? "Вікно підтвердження оновлення" : "Update confirmation window",
+        };
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?decisions=long`, phone ? { width: 390, height: 844 } : { width, height: 900 }, scheme, lang, "reduce", phone);
+        const shot = (state: string) => page.screenshot({ path: path.join(OUT, `${label}-${state}.png`) });
+        try {
+          if (phone) {
+            await page.click("[data-mobile2-seat-open]", { timeout: 30_000 });
+            await page.locator("[data-decision-strip]").click({ timeout: 30_000 });
+          } else if (width === 1000) await page.locator('[data-orchestrator-panel] [data-decision-strip="3"]').click({ timeout: 30_000 });
+          await page.waitForSelector(`${scope} [data-decision-list="3"]`, { timeout: 30_000 });
+          await page.mouse.move(0, 0);
+          await page.waitForTimeout(500);
+          /* Newest first, and the newest stands open. */
+          const first = await readFold(page, scope);
+          readings[`${label}-expanded`] = first;
+          await shot("expanded");
+          if (JSON.stringify(first.order) !== JSON.stringify(ORDER) || first.expanded !== SEAT_SECOND) fail(`the list opens ${JSON.stringify({ order: first.order, expanded: first.expanded })}`);
+          if (!first.open || first.open.ariaExpanded !== "true" || first.open.label !== t("decisions.collapseAria", { title: titles[SEAT_SECOND]! }) || !first.open.titleWhole || !first.open.timeApart || !first.open.markApart || !first.open.markInside || !first.open.uncovered || (phone && first.open.header.h < 44)) fail(`the open header reads ${JSON.stringify(first.open)}`);
+          /* A press on the header's title folds it; nothing is answered. */
+          await page.locator(`${scope} [data-decision-review="${SEAT_SECOND}"] [data-decision-title]`).click();
+          await page.waitForSelector(`${scope} [data-decision-card]`, { state: "detached", timeout: 5_000 });
+          const folded = await readFold(page, scope);
+          readings[`${label}-collapsed`] = folded;
+          await shot("collapsed");
+          const posts = await page.evaluate(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts.length);
+          if (JSON.stringify(folded.rows.map((row) => row.id)) !== JSON.stringify(ORDER) || folded.expanded !== "" || folded.open || posts) fail(`folded, the list reads ${JSON.stringify({ ...folded, posts })}`);
+          for (const row of folded.rows) {
+            if (row.expanded !== "false" || row.label !== t("decisions.expandAria", { title: titles[row.id!]! }) || row.text !== titles[row.id!] || !row.inside || !row.titleInside || row.h < 44) fail(`the row of ${row.id} reads ${JSON.stringify(row)}`);
+          }
+          if (folded.focused !== SEAT_SECOND) fail(`the keyboard landed on ${folded.focused}`);
+          if (folded.horizontalOverflow) fail("the folded list scrolls sideways");
+          /* The keyboard: Enter opens the folded row, Space folds it again. */
+          await page.keyboard.press("Enter");
+          await page.waitForSelector(`${scope} [data-decision-card="open"][data-decision-review="${SEAT_SECOND}"]`, { timeout: 5_000 });
+          const reopened = await readFold(page, scope);
+          if (reopened.focused !== `fold:${SEAT_SECOND}`) fail(`after Enter the keyboard is on ${reopened.focused}`);
+          await page.keyboard.press("Space");
+          await page.waitForSelector(`${scope} [data-decision-card]`, { state: "detached", timeout: 5_000 });
+          readings[`${label}-keyboard`] = { reopened: reopened.focused, refolded: (await readFold(page, scope)).focused };
+          /* The long-titled form opens from its row: its title whole, its time and fold mark clear of it. */
+          await page.locator(`${scope} [data-decision-row="${SEAT_ASK}"]`).click();
+          await page.waitForSelector(`${scope} [data-decision-card="open"][data-decision-review="${SEAT_ASK}"]`, { timeout: 5_000 });
+          await page.locator(`${scope} [data-decision-review="${SEAT_ASK}"] [data-decision-collapse]`).scrollIntoViewIfNeeded();
+          await page.waitForTimeout(300);
+          const long = await readFold(page, scope);
+          readings[`${label}-long`] = long;
+          await shot("long-open");
+          if (!long.open || long.open.review !== SEAT_ASK || long.open.title !== titles[SEAT_ASK] || !long.open.titleWhole || !long.open.timeApart || !long.open.markApart || !long.open.markInside || long.horizontalOverflow) fail(`the long form's header reads ${JSON.stringify(long.open)}`);
+          /* A request from the feed opens its form in the folded column. */
+          if (width === 1440) {
+            await page.locator(`${scope} [data-decision-review="${SEAT_ASK}"] [data-decision-collapse]`).click();
+            await page.waitForSelector(`${scope} [data-decision-card]`, { state: "detached", timeout: 5_000 });
+            await page.locator("[data-decision-pointer-open]").click();
+            await page.waitForSelector(`${scope} [data-decision-card="open"][data-decision-review="${SEAT_ASK}"]`, { timeout: 5_000 });
+            await page.waitForTimeout(300);
+            const requested = await readFold(page, scope);
+            readings[`${label}-requested`] = requested;
+            await shot("requested");
+            if (requested.expanded !== SEAT_ASK) fail(`the pointer opened ${requested.expanded}`);
+          }
+          const sent = await page.evaluate(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts.length);
+          if (sent) fail(`${sent} answers were posted while folding`);
+          if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          fail(error instanceof Error ? error.message.split("\n")[0]! : String(error));
+          await shot("failed").catch(() => {});
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/operator-decisions", { recursive: true });
+    fs.writeFileSync("evidence/operator-decisions/fold.json", `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings, failures }, null, 2)}\n`);
     if (failures.length) throw new Error(failures.join("\n"));
   }, 900_000);
 
@@ -30721,6 +31208,8 @@ describe("operator decision forms: the «Рішення» column beside the seat
           try {
             if (!phone) await page.waitForSelector("[data-decision-pointer-open]", { timeout: 30_000 });
             await openList(page);
+            await page.locator(`${scope} [data-decision-row="${LANE_ROUND}"]`).click();
+            await page.waitForSelector(`${scope} [data-decision-card="open"][data-decision-review="${LANE_ROUND}"]`);
             const lane = await readParts(page, scope);
             if (!lane.source || !lane.source.whole || /[…]|\.\.\./.test(lane.source.text) || /\d+\s*(variant|варіант)/i.test(lane.source.text) || !lane.source.text.includes("Restore search results") && !lane.source.text.includes("Відновити")) fail(`the lane's source line reads ${JSON.stringify(lane.source)}`);
             if (lane.horizontalOverflow) fail("the lane's round scrolls sideways");
@@ -30807,7 +31296,6 @@ describe("operator decision forms: the «Рішення» column beside the seat
    * the next read of the board takes its row and its count away as well.
    * Readings go to `evidence/operator-decisions/mirror.json`.
    */
-  const SEAT_SECOND = `pr_${"e".repeat(32)}`;
   const waitingCount = (page: Page, phone: boolean) => page.evaluate((onPhone) => onPhone
     ? Number(document.querySelector<HTMLElement>("[data-mobile2-attention-count]")?.dataset.mobile2AttentionCount ?? "0")
     : Number((document.querySelector("[data-attention-count] .tabular-nums")?.textContent ?? document.querySelector("[data-needs-you-title]")?.textContent?.match(/\d+\s*$/)?.[0] ?? "0")), phone);
@@ -30956,7 +31444,9 @@ describe("operator decision forms: the «Рішення» column beside the seat
             await page.locator("[data-decision-strip]").click({ timeout: 30_000 });
           }
           await page.waitForSelector(`${scope} [data-decision-list="3"]`, { timeout: 30_000 });
-          await page.locator(`${scope} [data-decision-row="${SEAT_SECOND}"]`).click();
+          /* The newest round stands open first; a row is pressed only where it is folded. */
+          const folded = page.locator(`${scope} [data-decision-row="${SEAT_SECOND}"]`);
+          if (await folded.count()) await folded.click();
           const card = `${scope} [data-decision-card="open"][data-decision-review="${SEAT_SECOND}"]`;
           await page.waitForSelector(card, { timeout: 10_000 });
           await page.locator(`${card} [data-prototype-option="account:1"]`).click();
@@ -32956,6 +33446,9 @@ describe("operator decision forms: rejecting the task's prototype variants", () 
             await page.locator("[data-mobile2-seat-open]").click();
             await page.locator("[data-decision-strip]").click();
           }
+          const lane = page.locator(`[data-decision-row="pr_${"c".repeat(32)}"]`);
+          await lane.waitFor({ timeout: 30_000 });
+          await lane.click();
           const card = page.locator('[data-decision-card="open"]');
           await card.waitFor({ timeout: 30_000 });
           const reject = card.locator("[data-decision-reject]");
@@ -34143,6 +34636,8 @@ describe("saved decision delivery", () => {
             const folded = column.locator(`[data-decision-row="${id}"]`);
             if (await folded.count()) await folded.click();
             await column.locator(`[data-decision-review="${id}"] [data-decision-retry]`).click();
+            /* The delivered record leaves and the newest left opens in its place: wait, or the next row turns under the press. */
+            await column.locator(`[data-decision-review="${id}"], [data-decision-row="${id}"]`).first().waitFor({ state: "detached" });
           }
           await column.locator("[data-decision-list-empty]").waitFor();
           await column.locator("[data-decision-tab-count]").waitFor({ state: "hidden" });
@@ -34754,4 +35249,404 @@ describe("finished work leaves In progress", () => {
       fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2));
     } finally { await browser?.close(); if (tempFd !== null) fs.closeSync(tempFd); server.stop(); }
   }, 120_000);
+});
+
+/*
+ * Team workspaces, slice (a) (docs/design/workspaces.md §13.5 D1–D7, §13.9):
+ * the rail's chip and its menu as owner and member, the All view with Move to…,
+ * the Team page's Workspaces tab and New workspace, and one workspace's page,
+ * at 1440×900, 1000×700, 820×900 and 390×844, in en and uk, light and dark.
+ * The rail frames are desktop only (at 390 the board is the phone's, framed by
+ * the phone driver); the Team and workspace pages are framed at every width.
+ * Every state is
+ * reached through the real controls, its defining words are measured from
+ * text ranges on the first screen, and every menu and dialog stays inside the
+ * window. Frames go to `.artifacts/team-workspaces/`; the readings are
+ * committed to `evidence/team-workspaces/rendered.json`.
+ */
+describe("team workspaces slice (a)", () => {
+  browserTest("chip, menu, All with Move to…, Workspaces tab, New workspace and the workspace page", async () => {
+    const out = path.resolve(process.env.LLV_WORKSPACES_OUT ?? ".artifacts/team-workspaces");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(path.join(out, "bundle-root"));
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const failures: string[] = [];
+    const readings: Array<Record<string, unknown>> = [];
+    const words = (lang: "en" | "uk", key: string, params?: Record<string, string | number>) => translate(lang, key as never, params as never);
+    /* The ids `workspacesEvidence.fixture.ts` gives its workspaces. */
+    const FIXTURE_IDS = { client: `w_${"c1".repeat(16)}` };
+    const names = {
+      en: { client: "Client work", long: "Northwind customer data platform rollout" },
+      uk: { client: "Клієнтська робота", long: "Впровадження платформи даних Northwind" },
+    };
+
+    /** Each text node under `selector` that contains `text`: its range boxes, and whether all of them sit inside the
+        window and inside every clipping ancestor (a scroll edge or the window cutting a word fails). */
+    const measure = (page: Page, selector: string, text: string) => page.evaluate(({ selector, text }) => {
+      const roots = [...document.querySelectorAll<HTMLElement>(selector)].filter((element) => element.getClientRects().length > 0);
+      const boxes: Array<{ left: number; top: number; right: number; bottom: number }> = [];
+      let cut = false;
+      const words = (element: Element) => (element.textContent ?? "").replace(/\s+/g, " ");
+      for (const root of roots) {
+        if (!words(root).includes(text)) continue;
+        /* The deepest element that holds the words: only its text is measured, not a whole list around it. */
+        let holder: Element = root;
+        for (let child = [...holder.children].find((candidate) => words(candidate).includes(text)); child; child = [...holder.children].find((candidate) => words(candidate).includes(text))) holder = child;
+        const walker = document.createTreeWalker(holder, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          if (!(node.textContent ?? "").trim()) continue;
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          for (const rect of range.getClientRects()) {
+            if (rect.width === 0) continue;
+            boxes.push({ left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom });
+            if (rect.top < -0.5 || rect.bottom > innerHeight + 0.5 || rect.left < -0.5 || rect.right > innerWidth + 0.5) cut = true;
+            for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+              const style = getComputedStyle(parent);
+              if (style.overflowY === "visible" && style.overflowX === "visible") continue;
+              const clip = parent.getBoundingClientRect();
+              if (rect.top < clip.top - 0.5 || rect.bottom > clip.bottom + 0.5) cut = true;
+            }
+          }
+        }
+        break;
+      }
+      return { found: boxes.length > 0, cut, boxes: boxes.slice(0, 6).map((box) => Object.values(box).map((value) => Math.round(value))) };
+    }, { selector, text });
+    const inside = (page: Page, selector: string) => page.evaluate((selector) => {
+      const element = [...document.querySelectorAll<HTMLElement>(selector)].find((candidate) => candidate.getClientRects().length > 0);
+      if (!element) return null;
+      const box = element.getBoundingClientRect();
+      return { box: [box.left, box.top, box.width, box.height].map(Math.round), inside: box.left >= -0.5 && box.top >= -0.5 && box.right <= innerWidth + 0.5 && box.bottom <= innerHeight + 0.5 };
+    }, selector);
+
+    /* Every element `selector` matches whose text the box cuts (an ellipsis): a name must be whole. */
+    const cutNames = (page: Page, selector: string) => page.evaluate((selector) => [...document.querySelectorAll<HTMLElement>(selector)]
+      .filter((element) => element.getClientRects().length > 0 && element.scrollWidth > element.clientWidth + 0.5)
+      .map((element) => element.textContent ?? ""), selector);
+    /* A rail heading that counts nothing under it. */
+    const emptyHeadings = (page: Page) => page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-rail-section]")]
+      .filter((label) => label.querySelector("[data-rail-count]")?.textContent?.trim() === "0")
+      .map((label) => label.textContent ?? ""));
+
+    async function frame(page: Page, tag: string, state: string, defining: Array<[selector: string, text: string]>, popover?: string) {
+      for (const [selector, text] of defining) {
+        const reading = await measure(page, selector, text);
+        if (!reading.found) failures.push(`${tag} ${state}: «${text}» is not on the first screen in ${selector}`);
+        else if (reading.cut) failures.push(`${tag} ${state}: «${text}» is cut ${JSON.stringify(reading.boxes)}`);
+      }
+      let box: unknown = null;
+      if (popover) {
+        const reading = await inside(page, popover);
+        box = reading?.box ?? null;
+        if (!reading) failures.push(`${tag} ${state}: ${popover} is not open`);
+        else if (!reading.inside) failures.push(`${tag} ${state}: ${popover} leaves the window ${JSON.stringify(reading.box)}`);
+      }
+      const file = `${tag}-${state}.png`.replace(/\s+/g, "-");
+      await page.screenshot({ path: path.join(out, file) });
+      readings.push({ tag, state, defining: defining.map(([, text]) => text), popover: popover ?? null, box, file });
+    }
+
+    try {
+      /* 1000×700 is the short desktop window, where a dialog's body scrolls. */
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const [width, height] of [[1440, 900], [1000, 700], [820, 900], [390, 844]] as const) {
+        const tag = `${lang}-${theme}-${width}`;
+        const phone = width === 390;
+        let chipRight: number | null = null;
+        const open = async (query: string) => {
+          const opened = await openFixture(browser, `${server.base}?${query}`, { width, height }, theme, lang, "reduce", phone);
+          return opened;
+        };
+        if (!phone) {
+          /* D1: the chip names the chosen workspace in place of the product name; the rail lists its projects alone. */
+          {
+            const { context, page, pageErrors } = await open("scenario=workspaces&rail=1&railview=overview&ws=client");
+            try {
+              await page.locator("[data-workspace-chip]").waitFor();
+              await page.locator("[data-rail-project]").first().waitFor();
+              const listed = await page.locator("[data-rail-project]").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-rail-project")));
+              if (JSON.stringify([...listed].sort()) !== JSON.stringify(["acme-ledger", "harbor-docs"])) failures.push(`${tag} D1: the rail lists ${JSON.stringify(listed)}`);
+              if (await page.locator("[data-rail-brand]").count()) failures.push(`${tag} D1: the product name is still in the header`);
+              await frame(page, tag, "D1-client", [["[data-workspace-chip]", names[lang].client]]);
+              const empty = await emptyHeadings(page);
+              if (empty.length) failures.push(`${tag} D1: a heading counts nothing under it ${JSON.stringify(empty)}`);
+              chipRight = await page.locator("[data-workspace-chip]").evaluate((chip) => chip.getBoundingClientRect().right);
+              /* D2 as the owner: the menu with the counts, the check, settings, New and Manage. */
+              await page.locator("[data-workspace-chip]").click();
+              await page.locator("[data-workspace-menu]").waitFor();
+              await frame(page, tag, "D2-owner", [
+                ["[data-workspace-menu]", words(lang, "workspaces.heading")],
+                ["[data-workspace-menu]", words(lang, "workspaces.all")],
+                ["[data-workspace-menu]", words(lang, "workspaces.settings")],
+                ["[data-workspace-menu]", words(lang, "workspaces.new")],
+                ["[data-workspace-menu]", words(lang, "workspaces.manage")],
+              ], "[data-workspace-menu]");
+              if (pageErrors.length) failures.push(`${tag} D1/D2: page errors ${pageErrors.join("; ")}`);
+            } finally { await context.close(); }
+          }
+          /* D2 as a member: the rows and Manage only. */
+          {
+            const { context, page } = await open("scenario=workspaces&rail=1&railview=overview&ws=client&member=1");
+            try {
+              await page.locator("[data-workspace-chip]").click();
+              await page.locator("[data-workspace-menu]").waitFor();
+              const links = await page.locator("[data-workspace-link]").evaluateAll((items) => items.map((item) => item.getAttribute("data-workspace-link")));
+              if (JSON.stringify(links) !== JSON.stringify(["manage"])) failures.push(`${tag} D2 member: the menu offers ${JSON.stringify(links)}`);
+              await frame(page, tag, "D2-member", [["[data-workspace-menu]", words(lang, "workspaces.manage")]], "[data-workspace-menu]");
+            } finally { await context.close(); }
+          }
+          /* The longest name truncates inside the chip, clear of the hide control. */
+          {
+            const { context, page } = await open("scenario=workspaces&rail=1&railview=overview&ws=long");
+            try {
+              await page.locator("[data-workspace-chip]").waitFor();
+              const chip = await page.evaluate(() => {
+                const label = document.querySelector<HTMLElement>("[data-workspace-chip-label]")!;
+                const chipBox = document.querySelector<HTMLElement>("[data-workspace-chip]")!.getBoundingClientRect();
+                const hide = document.querySelector<HTMLElement>("[data-rail-hide]")!.getBoundingClientRect();
+                const labelBox = label.getBoundingClientRect();
+                return { truncated: label.scrollWidth > label.clientWidth, labelRight: labelBox.right, chipRight: chipBox.right, hideLeft: hide.left };
+              });
+              if (!chip.truncated) failures.push(`${tag} long name: the chip label is not truncated`);
+              if (chip.labelRight > chip.chipRight + 0.5 || chip.chipRight > chip.hideLeft + 0.5) failures.push(`${tag} long name: the chip overruns ${JSON.stringify(chip)}`);
+              readings.push({ tag, state: "chip-long", ...chip, clientChipRight: chipRight });
+              /* The chip fills the header: its edge stands where it stood for a short name. */
+              if (chipRight === null || Math.abs(chip.chipRight - chipRight) > 0.5) failures.push(`${tag} long name: the chip's right edge moved from ${chipRight} to ${chip.chipRight}`);
+              await frame(page, tag, "D1-long", [["[data-workspace-chip]", names[lang].long.slice(0, 8)]]);
+            } finally { await context.close(); }
+          }
+          /* D3: All, the sections in order, Move on the selected Unassigned row, and its menu. */
+          {
+            const { context, page, pageErrors } = await open("scenario=workspaces&rail=1&railview=overview&ws=all");
+            try {
+              await page.locator("[data-rail-workspace-section='unassigned']").waitFor();
+              /* The headings count once the catalog's rows have arrived, not while the sections stand empty. */
+              await page.locator("[data-rail-project='paper-kite']").waitFor();
+              await page.locator("[data-rail-project='acme-ledger']").waitFor();
+              const order = await page.locator("[data-rail-workspace-section]").evaluateAll((items) => items.map((item) => item.getAttribute("data-rail-workspace-section")));
+              if (order.at(-1) !== "unassigned" || order.length !== 4) failures.push(`${tag} D3: sections ${JSON.stringify(order)}`);
+              /* Each heading counts what the switcher counts for its workspace, pinned projects included. */
+              const headed = await page.locator("[data-rail-workspace-section]").evaluateAll((items) => Object.fromEntries(items
+                .filter((item) => item.getAttribute("data-rail-workspace-section") !== "unassigned")
+                .map((item) => [item.getAttribute("data-rail-workspace-section"), Number(item.querySelector("[data-rail-count]")?.textContent)])));
+              await page.locator("[data-workspace-chip]").click();
+              await page.locator("[data-workspace-menu]").waitFor();
+              const menuCounts = await page.locator("[data-workspace-option]").evaluateAll((items) => Object.fromEntries(items
+                .filter((item) => item.getAttribute("data-workspace-option") !== "all")
+                .map((item) => [item.getAttribute("data-workspace-option"), Number(/\d+/.exec(item.textContent ?? "")?.[0])])));
+              await page.keyboard.press("Escape");
+              await page.waitForFunction(() => !document.querySelector("[data-workspace-menu]"));
+              readings.push({ tag, state: "D3-counts", headed, menuCounts });
+              if (JSON.stringify(headed) !== JSON.stringify(menuCounts)) failures.push(`${tag} D3: headings count ${JSON.stringify(headed)}, the switcher ${JSON.stringify(menuCounts)}`);
+              if (await page.locator("[data-rail-section]").filter({ has: page.locator("[data-testid='crown-marker']") }).count()) failures.push(`${tag} D3: a Pinned section stands apart from the workspaces`);
+              const marked = await page.locator("[data-rail-pinned-mark]").evaluateAll((marks) => marks.map((mark) => mark.closest("[data-rail-project]")?.getAttribute("data-rail-project")).sort());
+              if (JSON.stringify(marked) !== JSON.stringify(["acme-ledger", "harbor-docs"])) failures.push(`${tag} D3: the pinned rows' crowns ${JSON.stringify(marked)}`);
+              await page.locator("[data-rail-project='paper-kite']").click();
+              const move = page.locator("[data-rail-project='paper-kite']").locator("xpath=..").locator("[data-rail-move]");
+              await move.waitFor();
+              await frame(page, tag, "D3-all", [
+                ["[data-rail-workspace-section='unassigned']", words(lang, "workspaces.unassigned")],
+                ["[data-workspace-chip]", words(lang, "workspaces.all")],
+                ["[data-rail-move]:not(.opacity-0)", words(lang, "workspaces.move")],
+                ["[data-rail-project='paper-kite']", "Paper Kite"],
+              ]);
+              await move.click();
+              await page.locator("[data-workspace-popover='move']").waitFor();
+              /* The menu covers neither the row's own name nor its control. */
+              const covers = await page.evaluate(() => {
+                const menu = document.querySelector("[data-workspace-popover='move']")!.getBoundingClientRect();
+                const own = [document.querySelector("[data-rail-project='paper-kite'] [data-rail-name]"), document.querySelector("[data-rail-project='paper-kite']")?.parentElement?.querySelector("[data-rail-move]")]
+                  .map((element) => element!.getBoundingClientRect());
+                return own.some((box) => box.left < menu.right && box.right > menu.left && box.top < menu.bottom && box.bottom > menu.top);
+              });
+              if (covers) failures.push(`${tag} D3: the Move to… menu covers its own row`);
+              await frame(page, tag, "D3-move", [["[data-workspace-popover='move']", words(lang, "workspaces.moveTo")], ["[data-workspace-popover='move']", names[lang].client]], "[data-workspace-popover='move']");
+              const cutTargets = await cutNames(page, "[data-workspace-popover='move'] [data-workspace-move-to] span.truncate");
+              if (cutTargets.length) failures.push(`${tag} D3: Move to… cuts ${JSON.stringify(cutTargets)}`);
+              /* The move lands: the row joins Client work and leaves Unassigned. */
+              await page.locator(`[data-workspace-move-to='${FIXTURE_IDS.client}']`).click();
+              await page.waitForFunction(() => !document.querySelector("[data-workspace-popover='move']"));
+              const moved = await page.evaluate(() => [...document.querySelectorAll("[data-rail-workspace-section], [data-rail-project]")]
+                .map((element) => element.getAttribute("data-rail-workspace-section") ?? element.getAttribute("data-rail-project")));
+              const at = moved.indexOf("paper-kite");
+              const start = moved.indexOf(FIXTURE_IDS.client);
+              const next = moved.findIndex((entry, index) => index > start && entry !== null && entry.startsWith("w_") || (index > start && entry === "unassigned"));
+              if (at < 0 || start < 0 || at < start || (next >= 0 && at > next)) failures.push(`${tag} D3: after the move the order is ${JSON.stringify(moved)}`);
+              if (pageErrors.length) failures.push(`${tag} D3: page errors ${pageErrors.join("; ")}`);
+            } finally { await context.close(); }
+          }
+        }
+        /* D4 as the owner and as a member, P4 at 390. */
+        for (const member of [false, true]) {
+          const { context, page, pageErrors } = await open(`scenario=workspaces-team&rail=1${member ? "&member=1" : ""}`);
+          try {
+            await page.locator("[data-team-workspaces]").waitFor();
+            await page.locator("[data-workspace-unassigned]").waitFor();
+            const defining: Array<[string, string]> = [
+              ["[data-team-tab='workspaces'][aria-selected='true']", words(lang, "team.tabs.workspaces")],
+              ["[data-team-workspaces]", words(lang, "workspaces.lead")],
+              [`[data-workspace-row='${FIXTURE_IDS.client}']`, names[lang].client],
+            ];
+            if (!member) defining.push(["[data-workspace-create-open]", words(lang, "workspaces.new")]);
+            await frame(page, tag, member ? "D4-member" : "D4-owner", defining);
+            await page.locator("#workspaces-unassigned-title").scrollIntoViewIfNeeded();
+            await frame(page, tag, member ? "D4-member-unassigned" : "D4-owner-unassigned", [
+              ["#workspaces-unassigned-title", `${words(lang, "workspaces.unassignedTitle")} · 2`],
+              ...(member ? [] : [["[data-workspace-move-open]", words(lang, "workspaces.moveTo")] as [string, string]]),
+            ]);
+            if (member && await page.locator("[data-workspace-create-open], [data-workspace-row-menu], [data-workspace-move-open]").count()) failures.push(`${tag} D4 member: an owner's control is drawn`);
+            if (!member) {
+              await page.locator(`[data-workspace-row='${FIXTURE_IDS.client}'] [data-workspace-row-menu]`).click();
+              await page.locator("[data-workspace-popover='row']").waitFor();
+              await frame(page, tag, "D4-row-menu", [["[data-workspace-popover='row']", words(lang, "workspaces.deleteBlocked")]], "[data-workspace-popover='row']");
+              /* The menu hangs under ⋯, its right edge on the button's, inside the list. */
+              const hung = await page.evaluate((id) => {
+                const menu = document.querySelector("[data-workspace-popover='row']")!.getBoundingClientRect();
+                const trigger = document.querySelector(`[data-workspace-row='${id}'] [data-workspace-row-menu]`)!.getBoundingClientRect();
+                const list = document.querySelector(`[data-workspace-row='${id}']`)!.parentElement!.getBoundingClientRect();
+                return { menuLeft: menu.left, menuRight: menu.right, menuTop: menu.top, triggerRight: trigger.right, triggerBottom: trigger.bottom, listLeft: list.left, listRight: list.right };
+              }, FIXTURE_IDS.client);
+              readings.push({ tag, state: "D4-row-menu-place", ...hung });
+              if (hung.menuRight > hung.triggerRight + 0.5 || hung.menuRight > hung.listRight + 0.5 || hung.menuLeft < hung.listLeft - 0.5 || hung.menuTop < hung.triggerBottom - 0.5) failures.push(`${tag} D4: the row menu stands outside its list ${JSON.stringify(hung)}`);
+            }
+            if (pageErrors.length) failures.push(`${tag} D4: page errors ${pageErrors.join("; ")}`);
+          } finally { await context.close(); }
+        }
+        /* D5 (P5 at 390): New workspace, opened by `?create=1` as the switcher's row opens it; Create stays reachable. */
+        {
+          const { context, page, pageErrors } = await open("scenario=workspaces-team&rail=1&create=1");
+          try {
+            await page.locator("[data-team-dialog='workspace-create']").waitFor();
+            await frame(page, tag, "D5", [
+              ["[data-team-dialog='workspace-create']", words(lang, "workspaces.new")],
+              ["[data-team-dialog='workspace-create']", words(lang, "workspaces.create.name")],
+              ["[data-team-dialog='workspace-create']", words(lang, "workspaces.create.colour")],
+              ["[data-team-dialog='workspace-create']", words(lang, "workspaces.create.projects")],
+            ], "[data-team-dialog='workspace-create']");
+            /* The eight swatches share one row, or stand four to a row. */
+            const swatchRows = await page.locator("[data-workspace-color]").evaluateAll((items) => {
+              const rows = new Map<number, number>();
+              for (const item of items) { const top = Math.round(item.getBoundingClientRect().top); rows.set(top, (rows.get(top) ?? 0) + 1); }
+              return [...rows.values()];
+            });
+            readings.push({ tag, state: "D5-swatch-rows", swatchRows });
+            if (!(swatchRows.length === 1 && swatchRows[0] === 8) && !swatchRows.every((count) => count === 4)) failures.push(`${tag} D5: the swatches stand ${JSON.stringify(swatchRows)} to a row`);
+            const cutChecks = await cutNames(page, "[data-workspace-check-name]");
+            if (cutChecks.length) failures.push(`${tag} D5: the checklist cuts ${JSON.stringify(cutChecks)}`);
+            await page.locator("[data-workspace-create-submit]").scrollIntoViewIfNeeded();
+            await frame(page, tag, "D5-submit", [
+              ["[data-team-dialog='workspace-create']", words(lang, "workspaces.create.projectsHint")],
+              ["[data-workspace-create-submit]", words(lang, "workspaces.create.submit")],
+            ], "[data-team-dialog='workspace-create']");
+            /* The refusal of an empty name says why, in the dialog. */
+            await page.locator("[data-workspace-create-submit]").click();
+            /* The reason stands under Name, and Cancel and Create stay whole inside the dialog and the window. */
+            await frame(page, tag, "D5-refused", [
+              ["[data-workspace-create-error]", words(lang, "workspaces.error.nameRequired")],
+              ["[data-team-dialog-footer]", words(lang, "common.cancel")],
+              ["[data-workspace-create-submit]", words(lang, "workspaces.create.submit")],
+            ], "[data-team-dialog='workspace-create']");
+            await page.locator("[data-workspace-create-name]").fill(lang === "uk" ? "Дизайн" : "Design");
+            await page.locator("[data-workspace-check='atlas'] input").check();
+            await page.locator("[data-workspace-create-submit]").click();
+            await page.waitForFunction(() => !document.querySelector("[data-team-dialog='workspace-create']"));
+            const rows = await page.locator("[data-workspace-row-name]").allInnerTexts();
+            if (!rows.includes(lang === "uk" ? "Дизайн" : "Design")) failures.push(`${tag} D5: the created workspace is not listed ${JSON.stringify(rows)}`);
+            if (pageErrors.length) failures.push(`${tag} D5: page errors ${pageErrors.join("; ")}`);
+          } finally { await context.close(); }
+        }
+        /* D6 and D7 (P6 at 390): the workspace page, Rename inline, Add project, and Delete refused while it has projects. */
+        {
+          const { context, page, pageErrors } = await open("scenario=workspaces-page&rail=1&page=client");
+          try {
+            await page.locator("[data-workspace-title]").waitFor();
+            await frame(page, tag, "D6", [
+              ["[data-workspace-back]", words(lang, "activity.back")],
+              ["[data-workspace-title]", names[lang].client],
+              ["[data-workspace-sub]", words(lang, "workspaces.page.sub", { projects: words(lang, "mobile2.projects.count", { count: 2 }) })],
+              ["[data-workspace-remove]", words(lang, "workspaces.page.remove")],
+              ["[data-workspace-delete-blocked]", words(lang, "workspaces.deleteBlocked")],
+            ]);
+            if (await page.locator("[data-workspace-delete]").isEnabled()) failures.push(`${tag} D7: Delete is enabled on a workspace with projects`);
+            /* Remove starts where the project's name starts, or is a bordered button. */
+            const remove = await page.evaluate(() => {
+              const row = document.querySelector("[data-workspace-project]")!;
+              const button = row.querySelector<HTMLElement>("[data-workspace-remove]")!;
+              const name = row.querySelector<HTMLElement>("span.truncate")!.getBoundingClientRect();
+              return { removeLeft: button.getBoundingClientRect().left, nameLeft: name.left, border: getComputedStyle(button).borderTopWidth };
+            });
+            readings.push({ tag, state: "D6-remove", ...remove });
+            if (remove.border === "0px" && Math.abs(remove.removeLeft - remove.nameLeft) > 1) failures.push(`${tag} D6: Remove is loose text off the name's edge ${JSON.stringify(remove)}`);
+            if (phone && Math.abs(remove.removeLeft - remove.nameLeft) > 1) failures.push(`${tag} P6: Remove does not start where the name starts ${JSON.stringify(remove)}`);
+            const headingTop = () => page.locator("#workspace-projects-title").evaluate((heading) => heading.getBoundingClientRect().top);
+            const before = await headingTop();
+            await page.locator("[data-workspace-rename]").click();
+            await page.locator("[data-workspace-rename-field]").waitFor();
+            await frame(page, tag, "D6-rename", [["[data-workspace-page]", words(lang, "team.member.save")], ["[data-workspace-page]", words(lang, "common.cancel")]]);
+            /* The field shows the whole name being edited. */
+            const field = await page.locator("[data-workspace-rename-field]").evaluate((input: HTMLInputElement) => ({
+              value: input.value, width: Math.round(input.getBoundingClientRect().width), scrollWidth: input.scrollWidth, clientWidth: input.clientWidth,
+            }));
+            readings.push({ tag, state: "D6-rename-field", ...field });
+            if (field.value !== names[lang].client) failures.push(`${tag} D6: the rename field holds ${JSON.stringify(field.value)}`);
+            if (field.width < 200 || field.scrollWidth > field.clientWidth) failures.push(`${tag} D6: the rename field cuts the name ${JSON.stringify(field)}`);
+            /* On the phone the field takes the content width (390 less the page's 12 px sides and the dot), with Save and Cancel under it. */
+            if (phone && field.width < 340) failures.push(`${tag} P6: the rename field does not take its own line ${JSON.stringify(field)}`);
+            /* On the desktop the inline field moves nothing: Save, Cancel and Delete share a centre, and Projects keeps its place. */
+            const renameLine = await page.evaluate(() => {
+              const form = document.querySelector("[data-workspace-rename-field]")!.closest("form")!;
+              const centre = (element: Element) => { const box = element.getBoundingClientRect(); return Math.round((box.top + box.bottom) / 2); };
+              const [save, cancel] = [...form.querySelectorAll("button")];
+              return { field: centre(form.querySelector("input")!), save: centre(save!), cancel: centre(cancel!), remove: centre(document.querySelector("[data-workspace-delete]")!), dot: Boolean(form.querySelector("[data-workspace-dot]")) };
+            });
+            const after = await headingTop();
+            readings.push({ tag, state: "D6-rename-line", ...renameLine, headingBefore: before, headingAfter: after });
+            /* On the phone the field takes its own line and Save and Cancel the one under it, so Projects moves down. */
+            if (!phone && Math.abs(after - before) > 0.5) failures.push(`${tag} D6: Rename moves the Projects heading from ${before} to ${after}`);
+            if (phone && renameLine.save <= renameLine.field) failures.push(`${tag} P6: Save stands beside the rename field ${JSON.stringify(renameLine)}`);
+            if (renameLine.save !== renameLine.cancel || (!phone && renameLine.save !== renameLine.remove)) failures.push(`${tag} D6: Save, Cancel and Delete stand on different lines ${JSON.stringify(renameLine)}`);
+            if (!renameLine.dot) failures.push(`${tag} D6: the title's colour dot leaves while renaming`);
+            await page.keyboard.press("Escape");
+            await page.locator("[data-workspace-add]").click();
+            await page.locator("[data-workspace-popover='add']").waitFor();
+            await frame(page, tag, "D6-add", [["[data-workspace-popover='add']", words(lang, "workspaces.page.add")], ["[data-workspace-popover='add']", "Paper Kite"]], "[data-workspace-popover='add']");
+            const cutAdd = await cutNames(page, "[data-workspace-popover='add'] [data-workspace-check-name]");
+            if (cutAdd.length) failures.push(`${tag} D6: Add project cuts ${JSON.stringify(cutAdd)}`);
+            /* Remove every project: Delete is offered, and deleting goes back to the list. */
+            await page.keyboard.press("Escape");
+            for (let left = await page.locator("[data-workspace-remove]").count(); left > 0; left -= 1) await page.locator("[data-workspace-remove]").first().click();
+            await page.locator("[data-workspace-empty]").waitFor();
+            if (!await page.locator("[data-workspace-delete]").isEnabled()) failures.push(`${tag} D7: Delete stays disabled on an empty workspace`);
+            await frame(page, tag, "D7-empty", [["[data-workspace-empty]", words(lang, "workspaces.page.empty")], ["[data-workspace-delete]", words(lang, "workspaces.delete")]]);
+            if (pageErrors.length) failures.push(`${tag} D6: page errors ${pageErrors.join("; ")}`);
+          } finally { await context.close(); }
+        }
+      }
+      fs.mkdirSync("evidence/team-workspaces", { recursive: true });
+      fs.writeFileSync("evidence/team-workspaces/rendered.json", JSON.stringify({
+        driver: "src/components/kanban/kanbanBoard.browser.test.tsx", block: "team workspaces slice (a)",
+        frames: readings.length, failures, readings,
+      }, null, 2) + "\n");
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 900_000);
+});
+
+// docs/design/telegram-multi-bot.md: keep multiple bots inside the Telegram panel.
+describe("Telegram multiple bots", () => {
+  browserTest("Telegram multiple bots settings and refused chats", async () => {
+    const { captureTelegramMultiBot, serveEvidenceFixture } = await import("@/components/kanban/issue1695BrowserHarness");
+    const out = path.resolve(".artifacts/telegram-multi-bot/desktop");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/mobile/issue1671Evidence.fixture.tsx");
+    const tempFd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, ignoreDefaultArgs: ["--hide-scrollbars"], args: ["--no-sandbox", "--disable-dev-shm-usage"],
+      ...(tempFd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${tempFd}` } }),
+    }).catch(error => { if (tempFd !== null) fs.closeSync(tempFd); server.stop(); throw error; });
+    try {
+      const readings = await captureTelegramMultiBot(browser, server.base, out, false);
+      fs.mkdirSync("evidence/telegram-multi-bot", { recursive: true });
+      fs.writeFileSync("evidence/telegram-multi-bot/desktop.json", JSON.stringify({ readings }, null, 2) + "\n");
+    } finally { await browser.close(); if (tempFd !== null) fs.closeSync(tempFd); server.stop(); }
+  }, 300_000);
 });

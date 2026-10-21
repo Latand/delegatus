@@ -2,6 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { shortId } from "@/lib/shortIds";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-seat-tick-sources-"));
@@ -32,7 +33,8 @@ const gatherSeatTickInput: typeof gatherProduction = (project, state, policy, po
   accounting.initialize(state, null);
   return gatherProduction(project, accounting.readState(), policy, ports);
 };
-const { AgentRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
+const { AgentRegistry, normalizeRegistry, setAgentRegistryForTests } = await import("@/lib/agent/registry");
+const { SqliteAgentRegistryStore } = await import("@/lib/agent/sqliteRegistryStore");
 const { FileClaudeDeliveryLedger } = await import("@/lib/runtime/claudeStreamBrokerHost");
 const { structuredContentDigest } = await import("@/lib/runtime/structuredContent");
 const { wakeRecordPorts } = await import("./seatTickSources");
@@ -283,6 +285,87 @@ function sources(over: {
 function gather(over: Parameters<typeof sources>[0], state: SeatTickProjectState = emptySeatTickState()) {
   return gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, sources(over));
 }
+
+test("lane hashing yields and refuses a frozen source replaced while hashing", async () => {
+  let rows = Object.freeze(Array.from({ length: 24 }, (_, index) => Object.freeze(lane({ id: `hash-${index}`, state: "closed", cursor: null }))));
+  const ports = sources({ pipelines: rows as never, noSeat: true });
+  ports.pipelines = () => rows as never;
+  const { performanceSpans, performanceSites } = await import("@/lib/performanceSpans");
+  let scheduled = false;
+  performanceSpans.observeSite(site => {
+    if (performanceSites[site] !== "seat-tick.hash" || scheduled) return;
+    scheduled = true;
+    setImmediate(() => { rows = Object.freeze([...rows]); });
+  });
+  try {
+    await expect(gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports)).rejects.toThrow("sources changed");
+  } finally { performanceSpans.observeSite(); }
+  expect(scheduled).toBe(true);
+  expect((await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports)).project).toBe(PROJECT);
+}, 30_000);
+
+test("gather and refresh retain explicit work and its blocker for the reminder composer", async () => {
+  const hold = { kind: "external", note: "waiting for the upstream release", since: new Date(NOW - DAY_MS).toISOString(), by: "agent" };
+  const task = boardCard({ chosen: true, status: "inbox", hold });
+  const ports = sources({ tasks: [task], pipelines: [] });
+  const gathered = await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  for (const observed of [gathered, refreshSeatTickInput(gathered, ports)]) {
+    expect(observed.tasks[0]).toMatchObject({ accepted: true, hold, waitingSince: task.createdAt });
+    expect(seatTickDecision(observed).verdict.kind).toBe("quiet");
+  }
+  delete task.hold;
+  const refreshed = refreshSeatTickInput(gathered, ports);
+  expect(seatTickDecision(refreshed).verdict.kind).toBe("wake");
+});
+
+test("accepted work is owned only by an open lane, including a hidden open lane", async () => {
+  const task = boardCard({ chosen: true, status: "assigned", assignments: [{ state: "linked", path: null }] });
+  const predecessor = lane({ state: "completed", closedAt: new Date(NOW - DAY_MS).toISOString(), taskIds: [task.id] });
+  const ports = sources({ tasks: [task], pipelines: [predecessor] });
+  const gathered = await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  expect(gathered.tasks[0]!.owned).toBe(false);
+  expect(seatTickDecision(gathered).verdict.kind).toBe("wake");
+  predecessor.state = "running";
+  predecessor.closedAt = null;
+  predecessor.hiddenAt = new Date(NOW).toISOString();
+  const fresh = refreshSeatTickInput(gathered, ports);
+  expect(fresh.tasks[0]!.owned).toBe(true);
+  expect(seatTickDecision(fresh).verdict.kind).toBe("quiet");
+});
+
+test("pause account conditions use fresh cached quota once per engine and refresh after recovery", async () => {
+  const pausedAt = new Date(NOW - 4 * DAY_MS).toISOString();
+  const condition = { kind: "account-usage", engine: "codex", accountId: "fixture", window: "weekly", belowPercent: 80 };
+  const pipelines = ["paused-first", "paused-second"].map(id => lane({ id, state: "paused", pausedAt,
+    pause: { reason: "wait for quota recovery", resumeCondition: condition,
+      actor: { kind: "agent", role: "orchestrator", conversationId: CONVERSATION } } }));
+  const ports = sources({ pipelines });
+  const registry = ports.registry();
+  let reads = 0;
+  const observation = { engine: "codex", accountId: "fixture", authenticated: true,
+    observedAt: new Date(NOW).toISOString(), authCheckedAt: new Date(NOW).toISOString(),
+    provenance: { source: "live" }, limits: { weekly: { usedPercent: 90, resetsAt: null } } };
+  ports.registry = () => ({ ...registry, quotaObservations: () => { reads++; return [observation]; } }) as never;
+  const gathered = await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  expect(reads).toBe(1);
+  expect(gathered.pipelines.every(pipeline => pipeline.pauseConditionMet === false)).toBe(true);
+  expect(seatTickDecision(gathered).verdict.kind).toBe("quiet");
+  observation.limits.weekly.usedPercent = 79;
+  const recovered = refreshSeatTickInput(gathered, ports);
+  expect(reads).toBe(2);
+  expect(recovered.pipelines.every(pipeline => pipeline.pauseConditionMet === true)).toBe(true);
+  expect(seatTickDecision(recovered).verdict.kind).toBe("wake");
+  observation.observedAt = pausedAt;
+  expect(seatTickDecision(refreshSeatTickInput(recovered, ports)).verdict.kind).toBe("quiet");
+  observation.observedAt = new Date(NOW).toISOString();
+  observation.limits.weekly.usedPercent = 80;
+  expect(seatTickDecision(refreshSeatTickInput(recovered, ports)).verdict.kind).toBe("quiet");
+  observation.limits.weekly.usedPercent = 79;
+  observation.engine = "claude";
+  expect(seatTickDecision(refreshSeatTickInput(recovered, ports)).verdict.kind).toBe("quiet");
+  ports.registry = () => ({ ...registry, quotaObservations: () => { throw new Error("cached quota unavailable"); } }) as never;
+  expect(seatTickDecision(refreshSeatTickInput(recovered, ports)).verdict.kind).toBe("quiet");
+});
 
 test("an unrotated seat's next gather reads changed machine and project worker limits", async () => {
   const { setMachineWorkerLimit, setProjectWorkerLimit } = await import("@/lib/operator/workerLimit");
@@ -1867,7 +1950,7 @@ test("a timed-out Codex wake retains canonical transcript confirmation", async (
   const held = registry.holdDelivery(conversation.id, text, key, "text", [], null, { kind: "send", policy: "queue" });
   registry.beginDeliveryAttempt(held.id, conversation.generations[0]!.id);
   registry.recordDeliveryOutcome(held.id, "failed", "Codex delivery confirmation timed out; outcome is uncertain", "unverified");
-  const wire = encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken(held.command.operationId));
+  const wire = await encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken(held.command.operationId));
   fs.writeFileSync(transcript, JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: wire } }) + "\n");
   const previousSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
   process.env.LLV_RUNTIME_HOST_SOCKET = "";
@@ -1953,7 +2036,7 @@ interface ChildRegistry {
   project: string;
   seatId: string;
   now: number;
-  spawn(options: { title: string; turn?: "busy" | "idle" | "terminal" | "unknown"; terminalAt?: string | null; host?: "live" | "dead" | "idle" | null; cwd?: string; unobserved?: boolean; parent?: string; transcriptPath?: string; ledger?: boolean }): { id: string; launchId: string; path: string };
+  spawn(options: { title: string; turn?: "busy" | "idle" | "terminal" | "unknown"; terminalAt?: string | null; host?: "live" | "dead" | "idle" | null; cwd?: string; unobserved?: boolean; parent?: string; transcriptPath?: string; ledger?: boolean; admissionOwned?: boolean }): { id: string; launchId: string; path: string };
 }
 
 function childRegistry(name: string): ChildRegistry {
@@ -1987,6 +2070,9 @@ function childRegistry(name: string): ChildRegistry {
         parentSource: "explicit",
         launchProfile: { title: options.title },
       });
+      if (!options.admissionOwned && begun.receipt.admissionOwner) {
+        registry.releaseStructuredSpawnAdmissionOwner(begun.receipt.launchId, begun.receipt.admissionOwner);
+      }
       const child = observed ?? { id: begun.receipt.conversationId, generations: [] };
       if (!options.unobserved) {
         registry.reconcileConversations([{
@@ -2011,7 +2097,7 @@ function childRegistry(name: string): ChildRegistry {
   };
 }
 
-function childGather(fixture: ChildRegistry, over: Parameters<typeof sources>[0] = {}, state: SeatTickProjectState = emptySeatTickState()) {
+function childGather(fixture: Omit<ChildRegistry, "spawn">, over: Parameters<typeof sources>[0] = {}, state: SeatTickProjectState = emptySeatTickState()) {
   return gatherSeatTickInput(fixture.project, state, DEFAULT_SEAT_TICK_POLICY, sources({
     registry: fixture.registry,
     seatConversationId: fixture.seatId,
@@ -2019,6 +2105,66 @@ function childGather(fixture: ChildRegistry, over: Parameters<typeof sources>[0]
     now: fixture.now,
     ...over,
   }));
+}
+
+/** A production SQLite layout with fixed identities and clocks for recovery
+ * regressions. The JSON seed is normalized by the production reader. */
+function replayChildren(name: string, cases: { title: string; unobserved?: boolean; host?: "dead" | "live"; ledger?: boolean | "partial"; generations?: number; admissionOwned?: boolean }[]) {
+  const dir = fs.mkdtempSync(path.join(SANDBOX, `${name}-`));
+  const cwd = path.join(dir, "repo");
+  fs.mkdirSync(cwd);
+  const filename = path.join(dir, "registry.sqlite");
+  const seatId = `conversation_${name}_seat`;
+  const successorId = `conversation_${name}_successor`;
+  const createdAt = new Date(NOW - 10 * MINUTE_MS).toISOString();
+  const conversation = (id: string, generations: unknown[] = []) => ({ id, engine: "claude", generations,
+    turn: { state: "unknown", source: "empty", terminalAt: null, observedAt: null }, createdAt, updatedAt: createdAt });
+  const file = normalizeRegistry({ version: 2, entries: {}, receipts: {}, conversations: {
+    [seatId]: conversation(seatId), [successorId]: conversation(successorId),
+  } });
+  const workers = cases.map((options, index) => {
+    const id = `conversation_${name}_${index}`;
+    const launchId = `${name}-launch-${index}`;
+    const generations = Array.from({ length: options.generations ?? 1 }, (_, generationIndex) => {
+      const digest = createHash("sha256").update(`${name}/${index}/${generationIndex}`).digest("hex");
+      const id = `${digest.slice(0, 8)}-${digest.slice(8, 12)}-${digest.slice(12, 16)}-${digest.slice(16, 20)}-${digest.slice(20, 32)}`;
+      const transcriptPath = path.join(SESSIONS, `${id}.jsonl`);
+      fs.writeFileSync(transcriptPath, "");
+      fs.utimesSync(transcriptPath, NOW / 1000 - 60, NOW / 1000 - 60);
+      return { id, path: transcriptPath, key: sessionKeyFromTranscript("claude", transcriptPath)! };
+    });
+    const latest = generations.at(-1)!;
+    const { id: generation, path: childPath, key } = latest;
+    const profile = emptyLaunchProfile({ cwd, title: options.title });
+    const seed = normalizeRegistry({ version: 2, entries: {}, receipts: {
+      [launchId]: { launchId, conversationId: id, engine: "claude", cwd, createdAt,
+        state: options.unobserved ? "starting" : "completed", transport: "structured", launchProfile: profile,
+        admissionOwner: options.admissionOwned ? { pid: 42, startIdentity: null } : null,
+        artifactPath: options.unobserved ? null : childPath, key: options.unobserved ? null : key },
+    }, conversations: options.unobserved ? {} : { [id]: conversation(id, generations.map((item) => ({ id: item.id, path: item.path, accountId: null, launchProfile: profile, host: null, createdAt }))) } });
+    Object.assign(file.receipts, seed.receipts);
+    Object.assign(file.conversations, seed.conversations);
+    if (options.host) file.entries[`claude:${generation}`] = { key, artifactPath: childPath, cwd, accountId: null,
+      status: options.host, host: null, claimEpoch: 0, claimOwner: null, pendingAction: null, updatedAt: createdAt };
+    file.lineageEdges[id] = { childConversationId: id as never, parentConversationId: seatId as never, childSessionKey: options.unobserved ? null : key,
+      parentSessionKey: null, childArtifactPath: options.unobserved ? null : childPath, parentArtifactPath: null,
+      source: "viewer-spawn", kind: "spawn", role: null, reviewsConversationId: null, createdAt, evidence: { launchId, clientAttemptId: null } };
+    if (options.ledger) {
+      const ledger = new FileRuntimeEventStore(statePath("structured-host-events"));
+      for (const [generationIndex, item] of generations.entries()) {
+        ledger.append(item.id, { kind: "turn-started", turnId: `turn-${generationIndex}-one`, seq: 1 });
+        ledger.append(item.id, { kind: "turn-ended", turnId: `turn-${generationIndex}-one`, status: "completed", seq: 2 });
+        if (options.ledger === "partial" && generationIndex === generations.length - 1) {
+          ledger.append(item.id, { kind: "turn-started", turnId: "abandoned-turn", seq: 3 });
+        }
+      }
+    }
+    return { id, launchId, path: childPath, generation, generations: generations.map((item) => item.id) };
+  });
+  const store = new SqliteAgentRegistryStore(filename, { normalize: normalizeRegistry, initialSnapshot: file });
+  store.close();
+  const registry = new AgentRegistry(path.join(dir, "registry.json"), () => false, undefined, { sqliteMode: "sqlite", sqliteFilename: filename });
+  return { registry, cwd, project: projectForCwd(cwd)!, seatId, successorId, now: NOW, workers };
 }
 
 test("each kind of child is classified from the snapshot alone (#1465)", async () => {
@@ -2045,10 +2191,10 @@ test("each kind of child is classified from the snapshot alone (#1465)", async (
   expect(byId.get(released.id)!.terminalAt).not.toBeNull();
   expect(byId.get(gone.id)).toMatchObject({ status: "running", activity: { lifecycle: "gone", reason: "host_gone_turn_open", turnState: "busy" } });
   expect(byId.get(failed.id)).toMatchObject({ status: "terminal", outcome: "failed", title: "failed launch" });
-  expect(byId.get(reserved.id)).toMatchObject({ status: "unknown", outcome: null });
+  expect(byId.get(reserved.id)).toMatchObject({ status: "terminal", outcome: "failed" });
   expect(byId.get(unknownTurn.id)).toMatchObject({ status: "unknown" });
-  /* The two children the registry cannot place are the one condition standing:
-     a fresh child with no ledger yet is no gap (#1465). */
+  /* The unobserved turn with a readable transcript still needs evidence;
+     the abandoned reservation has its own terminal failure. */
   expect(input.childrenUnavailable).toBe("child-unplaced");
   expect(input.state.childrenGap).toMatchObject({ gap: "child-unplaced", attempts: 1, reported: false });
   /* Liveness is asked by id, for the hosted open turns only: the stall the
@@ -2061,6 +2207,183 @@ test("a fresh launch inside its admission lease is a running child even before a
   const fresh = fixture.spawn({ title: "just launched", turn: "unknown" });
   const input = await childGather(fixture, { now: Date.now() });
   expect(input.children).toMatchObject([{ conversationId: fresh.id, status: "running" }]);
+});
+
+test("a settled child with an unknown registry turn clears the gap and stays acknowledged across seat rotation", async () => {
+  const fixture = replayChildren("settled-unknown", [{ title: "completed deputy", host: "dead", ledger: true }]);
+  const worker = fixture.workers[0]!;
+  const first = await childGather(fixture);
+  expect(first.childrenUnavailable).toBeNull();
+  expect(first.children).toMatchObject([{ conversationId: worker.id, title: "completed deputy", status: "terminal", outcome: "finished" }]);
+  const accounting = new SeatTickAccounting(first.state.accounting!.filename, fixture.project);
+  const outcome = accounting.ready(1)[0]!;
+  const wake = { clientMessageId: "harvest-completed-deputy", conversationId: fixture.seatId, seatEpoch: 7,
+    operationId: null, commit: { proposal: false, reasons: [], fingerprint: "completed-deputy", eventsThrough: 0, children: [outcome.identity] } };
+  expect(accounting.prepare(accounting.readState(), wake)).toBe(true);
+  expect(accounting.settle(wake.clientMessageId, { ...accounting.readState(), lastWakeAt: new Date(fixture.now).toISOString() }, "landed")).toBe(true);
+  const rotated = await childGather(fixture, { seatConversationId: fixture.successorId, seatEpoch: 8 }, accounting.readState());
+  expect(rotated.childrenUnavailable).toBeNull();
+  expect(rotated.children).toEqual([]);
+  expect(new SeatTickAccounting(first.state.accounting!.filename, fixture.project).ready(10)).toEqual([]);
+});
+
+test("an expired launch without a conversation is a named failure owed until its wake lands", async () => {
+  const fixture = replayChildren("abandoned-launch", [{ title: "launch never materialized", unobserved: true }]);
+  const worker = fixture.workers[0]!;
+  const first = await childGather(fixture);
+  expect(first.childrenUnavailable).toBeNull();
+  expect(first.children).toMatchObject([{ conversationId: worker.id, title: "launch never materialized", status: "terminal", outcome: "failed", transcriptReason: "no-transcript" }]);
+  const again = await childGather(fixture, {}, first.state);
+  expect(again.children.map(child => child.outcomeId)).toEqual(first.children.map(child => child.outcomeId));
+  expect(new SeatTickAccounting(first.state.accounting!.filename, fixture.project).ready(10)).toHaveLength(1);
+});
+
+test("a hostless child without a transcript is a named failure while a live child and an admission owner stay running", async () => {
+  const fixture = replayChildren("lost-transcript", [
+    { title: "host ended without transcript", host: "dead" },
+    { title: "live worker without transcript", host: "live" },
+    { title: "launch still owned", unobserved: true, admissionOwned: true },
+  ]);
+  const [lost, live, admitting] = fixture.workers as [typeof fixture.workers[number], typeof fixture.workers[number], typeof fixture.workers[number]];
+  fs.unlinkSync(lost.path);
+  fs.unlinkSync(live.path);
+  const input = await childGather(fixture);
+  expect(input.childrenUnavailable).toBeNull();
+  const byId = new Map(input.children.map(child => [child.conversationId, child]));
+  expect(byId.get(lost.id)).toMatchObject({ status: "terminal", outcome: "failed", transcriptReason: "missing" });
+  expect(byId.get(live.id)).toMatchObject({ status: "running", outcome: null });
+  expect(byId.get(admitting.id)).toMatchObject({ status: "running", outcome: null });
+  expect(new SeatTickAccounting(input.state.accounting!.filename, fixture.project).ready(10)).toHaveLength(1);
+});
+
+test("a gap in a completed ledger preserves the unplaced child and its owed result", async () => {
+  const fixture = replayChildren("gapped-completion", [{ title: "completion with missing events", host: "dead", ledger: true }]);
+  const worker = fixture.workers[0]!;
+  fs.appendFileSync(statePath("structured-host-events", `${worker.generation}.jsonl`), JSON.stringify({ kind: "unhosted", seq: 4 }) + "\n");
+  const input = await childGather(fixture);
+  expect(input.childrenUnavailable).not.toBeNull();
+  expect(input.children.some(child => child.conversationId === worker.id && child.status === "unknown")).toBe(true);
+  const accounting = new SeatTickAccounting(input.state.accounting!.filename, fixture.project);
+  expect(accounting.ready(10)).toHaveLength(1);
+  expect(accounting.page("source", 10)).toMatchObject([{ cursor: { gap: "sequence-gap" } }]);
+});
+
+test("a lost transcript and ledger resolve once while retained outcomes stay owed", async () => {
+  const fixture = replayChildren("lost-ledger", [{ title: "worker whose records vanished", host: "dead", ledger: true }]);
+  const worker = fixture.workers[0]!;
+  const first = await childGather(fixture);
+  expect(first.childrenUnavailable).toBeNull();
+  fs.unlinkSync(worker.path);
+  fs.unlinkSync(statePath("structured-host-events", `${worker.generation}.jsonl`));
+  const lost = await childGather(fixture, {}, first.state);
+  expect(lost.childrenUnavailable).toBeNull();
+  expect(lost.children.some(child => child.conversationId === worker.id && child.outcome === "failed")).toBe(true);
+  const accounting = new SeatTickAccounting(lost.state.accounting!.filename, fixture.project);
+  expect(accounting.ready(10).map(row => row.input.outcome)).toEqual(["finished", "failed"]);
+  const again = await childGather(fixture, {}, lost.state);
+  expect(again.childrenUnavailable).toBeNull();
+  expect(accounting.ready(10)).toHaveLength(2);
+});
+
+test("a hostless partial ledger names its abandoned turn and keeps earlier and later outcomes", async () => {
+  const fixture = replayChildren("partial-ledger", [{ title: "host died during second turn", host: "dead", ledger: "partial" }]);
+  const worker = fixture.workers[0]!;
+  fs.unlinkSync(worker.path);
+  let input = await childGather(fixture);
+  const accounting = new SeatTickAccounting(input.state.accounting!.filename, fixture.project);
+  expect(input.childrenUnavailable).toBeNull();
+  expect(accounting.ready(10).map(row => row.input.outcome)).toEqual(["finished", "failed"]);
+  for (let tick = 0; tick < 2; tick += 1) {
+    input = await childGather(fixture, {}, input.state);
+    expect(input.childrenUnavailable).toBeNull();
+  }
+  expect(accounting.ready(10).map(row => row.input.outcome)).toEqual(["finished", "failed"]);
+  const ledger = new FileRuntimeEventStore(statePath("structured-host-events"));
+  ledger.append(worker.generation, { kind: "turn-ended", turnId: "abandoned-turn", status: "interrupted", seq: 4 });
+  input = await childGather(fixture, {}, input.state);
+  expect(input.childrenUnavailable).toBeNull();
+  expect(accounting.ready(10).map(row => row.input.outcome)).toEqual(["finished", "failed", "failed"]);
+});
+
+test("a proven latest-generation completion stays placed through historical polls and acknowledgment", async () => {
+  const fixture = replayChildren("historical-generations", [{ title: "two completed generations", host: "dead", ledger: true, generations: 2 }]);
+  let input = await childGather(fixture);
+  const accounting = new SeatTickAccounting(input.state.accounting!.filename, fixture.project);
+  input = await childGather(fixture, {}, input.state);
+  expect(input.childrenUnavailable).toBeNull();
+  expect(input.children.some(child => child.status === "terminal" && child.outcome === "finished")).toBe(true);
+  const outcomes = accounting.ready(10);
+  expect(outcomes).toHaveLength(2);
+  const wake = { clientMessageId: "harvest-both-generations", conversationId: fixture.seatId, seatEpoch: 7,
+    operationId: null, commit: { proposal: false, reasons: [], fingerprint: "two-generations", eventsThrough: 0, children: outcomes.map(row => row.identity) } };
+  expect(accounting.prepare(accounting.readState(), wake)).toBe(true);
+  expect(accounting.settle(wake.clientMessageId, { ...accounting.readState(), lastWakeAt: new Date(fixture.now).toISOString() }, "landed")).toBe(true);
+  for (let tick = 0; tick < 4; tick += 1) {
+    input = await childGather(fixture, {}, input.state);
+    expect(input.childrenUnavailable).toBeNull();
+    expect(input.children.some(child => child.status === "unknown")).toBe(false);
+  }
+  expect(accounting.ready(10)).toEqual([]);
+});
+
+test("retained structured custody keeps a completed child running until the registry clears it", async () => {
+  const fixture = replayChildren("retained-custody", [
+    { title: "structured host retained", host: "dead", ledger: true },
+    { title: "termination survivor retained", host: "dead", ledger: true },
+  ]);
+  const identity = { pid: 42, startIdentity: null };
+  for (const [index, worker] of fixture.workers.entries()) {
+    const entry = fixture.registry.readOnlySnapshot().entries[`claude:${worker.generation}`]!;
+    fixture.registry.upsert({ ...entry, ...(index === 0 ? { structuredHost: {
+      kind: "claude-broker" as const, endpoint: "fixture-endpoint", process: identity, eventCursor: 2, protocolVersion: null,
+      writerClaimEpoch: 1, activeTurnRef: null, pendingAttention: [], activeFlags: [],
+    } } : { structuredTerminationSurvivors: [identity] }) });
+  }
+  const input = await childGather(fixture);
+  expect(input.childrenUnavailable).toBeNull();
+  for (const worker of fixture.workers) {
+    expect(input.children.some(child => child.conversationId === worker.id && child.status === "running")).toBe(true);
+  }
+  const released = fixture.workers[0]!;
+  const entry = fixture.registry.readOnlySnapshot().entries[`claude:${released.generation}`]!;
+  fixture.registry.upsert({ ...entry, structuredHost: null });
+  const cleared = await childGather(fixture, {}, input.state);
+  expect(cleared.childrenUnavailable).toBeNull();
+  expect(cleared.children.some(child => child.conversationId === released.id && child.status === "running")).toBe(false);
+  expect(cleared.children.some(child => child.conversationId === fixture.workers[1]!.id && child.status === "running")).toBe(true);
+});
+
+test("a child acquiring a host after discovery is rechecked before a missing-record resolution", async () => {
+  const fixture = replayChildren("host-after-discovery", [{ title: "worker recovering during the tick", host: "dead" }]);
+  const worker = fixture.workers[0]!;
+  fs.unlinkSync(worker.path);
+  let scheduled = false;
+  let published = false;
+  const registry = fixture.registry;
+  const ports = sources({ registry, seatConversationId: fixture.seatId, pipelines: [], now: fixture.now });
+  ports.registry = () => ({
+    seatTickConversation: registry.seatTickConversation.bind(registry),
+    conversation: registry.conversation.bind(registry),
+    conversationForPath: registry.conversationForPath.bind(registry),
+    readOnlySnapshot: registry.readOnlySnapshot.bind(registry),
+    pageSeatChildren: (...args: Parameters<typeof registry.pageSeatChildren>) => {
+      const page = registry.pageSeatChildren(...args);
+      if (!scheduled && page?.keys.length) {
+        scheduled = true;
+        setImmediate(() => {
+          const entry = registry.readOnlySnapshot().entries[`claude:${worker.generation}`]!;
+          registry.upsert({ ...entry, status: "live" });
+          published = true;
+        });
+      }
+      return page;
+    },
+  }) as never;
+  const input = await gatherSeatTickInput(fixture.project, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  expect(published).toBe(true);
+  expect(input.childrenUnavailable).toBeNull();
+  expect(input.children).toMatchObject([{ conversationId: worker.id, status: "running", outcome: null }]);
+  expect(new SeatTickAccounting(input.state.accounting!.filename, fixture.project).ready(10)).toEqual([]);
 });
 
 test("harvested children leave the projection, and one seen running again is released from the cursor (#1465)", async () => {
@@ -2097,7 +2420,7 @@ test("paged discovery eventually reaches every child without a newest window (#1
   }
   const accounting = new SeatTickAccounting(input.state.accounting!.filename, fixture.project);
   expect(accounting.collection.snapshot().filter((row) => row.kind === "outcome")).toHaveLength(63);
-});
+}, 15_000);
 
 /* A registry with no indexed lineage projection (a JSON-mode registry) still
    answers the seat's own turn; the children beside it are a gap of their own
@@ -2123,7 +2446,7 @@ test("a registry that cannot page children reports the children as unindexed, an
    account for every child advances it, and one that could clears it. */
 test("the children gap run advances across failing checks and clears when every child is accounted for (#1465)", async () => {
   const fixture = childRegistry("children-run");
-  fixture.spawn({ title: "reservation nothing settled", unobserved: true });
+  fixture.spawn({ title: "turn not observed yet", turn: "unknown" });
   const first = await childGather(fixture);
   expect(first.state.childrenGap).toMatchObject({ gap: "child-unplaced", attempts: 1 });
   const second = await childGather(fixture, { now: fixture.now + 5 * MINUTE_MS }, first.state);
@@ -2203,6 +2526,28 @@ test("a lane the seat created reads as provisioned while its first stage is its 
   /* A lane still provisioning has not been provisioned. */
   const waiting = lane({ srcConversationId: CONVERSATION, state: "provisioning", runs: [{ stageId: "build", attempts: [] }] });
   expect((await gather({ pipelines: [waiting] })).ownLanes).toEqual([]);
+});
+
+test("own settled lanes select the newest twenty before projecting review details", async () => {
+  let reviewReads = 0;
+  const rows = Array.from({ length: 804 }, (_, index) => {
+    const pipeline = lane({
+      id: `own-settled-${String(index).padStart(4, "0")}`,
+      srcConversationId: CONVERSATION,
+      state: "needs_review",
+      pausedState: "needs_review",
+      cursor: null,
+      runs: [{ stageId: "build", attempts: [] }],
+      createdAt: new Date(NOW - index * 1_000).toISOString(),
+    });
+    Object.defineProperty(pipeline, "reviewPending", { get: () => { reviewReads++; return NEEDS_REVIEW; } });
+    return pipeline;
+  });
+  const input = await gather({ pipelines: rows });
+  expect(input.ownLanes).toHaveLength(20);
+  expect(input.ownLanes.map(item => item.id)).toEqual(Array.from({ length: 20 }, (_, index) =>
+    `own-settled-${String(index).padStart(4, "0")}`));
+  expect(reviewReads).toBe(40);
 });
 
 test("an announced lane is not offered as provisioned a second time (#1799)", async () => {
@@ -2523,7 +2868,7 @@ test("foreign flipping retirement reports never wake an idle project or make its
   ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
   let state: SeatTickProjectState = { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: new Date(NOW - 61 * 60_000).toISOString() };
   const baseline = await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports);
-  state = { ...state, reportFingerprint: baseline.changeFingerprint.split(".")[0], checkFingerprint: baseline.changeFingerprint.split(".")[0] };
+  state = { ...state, reportFingerprint: baseline.digestFingerprint!, checkFingerprint: baseline.digestFingerprint! };
   for (let check = 0; check < 24; check++) {
     ports.now = () => NOW + check * 15 * 60_000;
     ports.retirementReport = () => ({ failed: [], refused: Array.from({ length: 4 + check % 2 }, () => ({
@@ -2544,7 +2889,7 @@ test("non-actionable signal churn and machine-wide retirement stalls leave idle 
     ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
     let state: SeatTickProjectState = { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: new Date(NOW - 61 * 60_000).toISOString(), lastProposalAt: new Date(NOW).toISOString() };
     const baseline = await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports);
-    state = { ...state, reportFingerprint: baseline.changeFingerprint.split(".")[0], checkFingerprint: baseline.changeFingerprint.split(".")[0] };
+    state = { ...state, reportFingerprint: baseline.digestFingerprint!, checkFingerprint: baseline.digestFingerprint! };
     for (let check = 0; check < 24; check++) {
       ports.now = () => NOW + check * 15 * 60_000;
       ports.memoryProblems = () => [{ id: "memory-problem:informational", actionable: false, label: `host retirement: ${4 + check % 2} undetermined at check ${check}` }];
@@ -2566,7 +2911,7 @@ test("an own-project lane change wakes and makes a digest due while signal churn
   ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
   const initial = { ...emptySeatTickState(), seatEpoch: 7, lastWakeAt: new Date(NOW - 61 * 60_000).toISOString() };
   const baseline = await gatherSeatTickInput(PROJECT, initial, DEFAULT_SEAT_TICK_POLICY, ports);
-  let state: SeatTickProjectState = { ...initial, reportFingerprint: baseline.changeFingerprint.split(".")[0], checkFingerprint: baseline.changeFingerprint.split(".")[0] };
+  let state: SeatTickProjectState = { ...initial, reportFingerprint: baseline.digestFingerprint!, checkFingerprint: baseline.digestFingerprint! };
   ports.memoryProblems = () => [{ id: "memory-problem:informational", actionable: false, label: "host retirement: 4 undetermined" }];
   pipelines = [lane({ project: "elsewhere", resumedAt: new Date(NOW).toISOString() })];
   const foreign = await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports);
@@ -2582,7 +2927,7 @@ test("an own-project lane change wakes and makes a digest due while signal churn
   expect(decision.verdict.reportLines?.some(line => line.startsWith("Digest due"))).toBe(true);
   // A report covering this board followed by informational churn owes no digest,
   // including during the live lane's normal periodic interval wake.
-  state = { ...decision.state, reportFingerprint: moved.changeFingerprint.split(".")[0] };
+  state = { ...decision.state, reportFingerprint: moved.digestFingerprint! };
   ports.memoryProblems = () => [{ id: "memory-problem:informational", actionable: false, label: "host retirement: 5 undetermined" }];
   ports.now = () => NOW + 2 * 60 * 60_000;
   const unchanged = seatTickDecision(await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports));
@@ -2590,6 +2935,181 @@ test("an own-project lane change wakes and makes a digest due while signal churn
   if (unchanged.verdict.kind !== "wake") throw new Error("live lane keeps its cadence");
   expect(unchanged.verdict.reportLines ?? []).toEqual([]);
   expect(unchanged.verdict.items.some(item => item.id === "memory-problem:informational")).toBe(false);
+});
+
+test.each(["task note edits", "maintenance timestamps", "details appends", "report writes"])("repeated %s owe no digest", async (write) => {
+  let task = boardCard({ status: "inbox" });
+  const ports = sources({ laneRows: [livenessRow({ lifecycle: "running" })] });
+  ports.tasks = () => [task] as never;
+  let reports: { id: string; project: string; at: string; origin: { kind: "manager" } }[] = [];
+  ports.reports = { log: () => reports as never, enabled: () => true, operatorLocale: () => "en" };
+  const baseline = seatTickDecision(await gatherSeatTickInput(PROJECT,
+    { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, DEFAULT_SEAT_TICK_POLICY, ports));
+  let state = baseline.state;
+  for (let check = 1; check <= 4; check++) {
+    const now = NOW + check * 2 * 60 * 60_000;
+    ports.now = () => now;
+    task = { ...task, updatedAt: new Date(now).toISOString(),
+      ...(write === "task note edits" ? { text: `wire the chip\nProgress note ${check}` } : {}),
+      ...(write === "details appends" ? { details: `${task.details ?? "Investigation notes"}\nCheck ${check}` } : {}) };
+    if (write === "report writes") reports = [...reports,
+      { id: `fixture-report-${check}`, project: PROJECT, at: new Date(now - 60 * 60_000).toISOString(), origin: { kind: "manager" } }];
+    const gathered = await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports);
+    for (const input of [gathered, refreshSeatTickInput(gathered, ports)]) {
+      const decision = seatTickDecision(input);
+      expect(decision.verdict.kind).toBe("wake");
+      if (decision.verdict.kind !== "wake") throw new Error("live lane keeps its cadence");
+      expect(decision.verdict.reasons.some(reason => reason.kind === "interval")).toBe(true);
+      expect(decision.verdict.reportLines ?? []).toEqual([]);
+      state = decision.state;
+    }
+  }
+});
+
+test.each(["task status", "stage transition", "stage state", "attempt state", "merge", "deployment"])("a real %s change still owes a report", async (change) => {
+  let task = boardCard({ status: "inbox" });
+  let activeLane = lane();
+  let pullRequests = change === "merge" ? [openPullRequest()] : [];
+  let deployed = false;
+  const ports = sources({ laneRows: [livenessRow({ lifecycle: "running" })] });
+  ports.tasks = () => [task] as never;
+  ports.pipelines = () => [activeLane, finishedLane()] as never;
+  ports.openPullRequests = async () => ({ ok: true, pullRequests });
+  ports.seatDeployments = () => deployed ? [{ deploymentId: "deploy-material", conversationId: CONVERSATION, project: PROJECT,
+    revision: "c".repeat(40), requestedAt: new Date(NOW).toISOString() }] : [];
+  ports.deployment = () => ({ state: "ok", value: { deploymentId: "deploy-material", phase: "succeeded", terminal: true,
+    revision: "c".repeat(40), error: null, updatedAt: new Date(NOW).toISOString() } }) as never;
+  ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+  const baseline = seatTickDecision(await gatherSeatTickInput(PROJECT,
+    { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, DEFAULT_SEAT_TICK_POLICY, ports));
+  ports.now = () => NOW + 2 * 60 * 60_000;
+  if (change === "task status") task = { ...task, status: "blocked" };
+  if (change === "stage transition") activeLane = lane({ cursor: { stageId: "review", state: "running" } });
+  if (change === "stage state") activeLane = lane({ cursor: { stageId: "build", state: "committing" } });
+  if (change === "attempt state") activeLane = lane({ runs: [{ stageId: "build", attempts: [{ n: 1, state: "passed",
+    conversationId: STAGE_CONVERSATION, agentPath: TRANSCRIPT, startedAt: "2026-08-28T11:00:00.000Z" }] }] });
+  if (change === "merge") pullRequests = [];
+  if (change === "deployment") deployed = true;
+  const gathered = await gatherSeatTickInput(PROJECT, baseline.state, DEFAULT_SEAT_TICK_POLICY, ports);
+  for (const input of [gathered, refreshSeatTickInput(gathered, ports)]) {
+    const decision = seatTickDecision(input);
+    expect(decision.verdict.kind).toBe("wake");
+    if (decision.verdict.kind !== "wake") throw new Error("material change must wake");
+    expect(decision.verdict.reportLines?.some(line => line.startsWith(change === "deployment" ? "Report owed" : "Digest due"))).toBe(true);
+  }
+});
+
+test("a legacy digest baseline upgrades without owing a digest for task timestamps", async () => {
+  const ports = sources({ tasks: [boardCard({ status: "inbox", updatedAt: new Date(NOW).toISOString() })] });
+  ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+  const state = { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE,
+    reportFingerprint: "legacy-board", checkFingerprint: "legacy-board" };
+  const decision = seatTickDecision(await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports));
+  expect(decision.verdict.kind).toBe("wake");
+  if (decision.verdict.kind !== "wake") throw new Error("live lane keeps its cadence");
+  expect(decision.verdict.reportLines ?? []).toEqual([]);
+  expect(decision.state.checkFingerprint).toStartWith("digest-v1:");
+  ports.tasks = () => [boardCard({ status: "blocked" })] as never;
+  const changed = seatTickDecision(await gatherSeatTickInput(PROJECT, decision.state, DEFAULT_SEAT_TICK_POLICY, ports));
+  expect(changed.verdict.kind).toBe("wake");
+  if (changed.verdict.kind !== "wake") throw new Error("material change must wake after upgrade");
+  expect(changed.verdict.reportLines?.some(line => line.startsWith("Digest due"))).toBe(true);
+});
+
+test("a flapping pull-request source owes no digest, but a verified merge does", async () => {
+  const ports = sources({ pipelines: [lane(), finishedLane()], openPullRequests: [openPullRequest()],
+    laneRows: [livenessRow({ lifecycle: "running" })] });
+  ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+  let state = seatTickDecision(await gatherSeatTickInput(PROJECT,
+    { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, DEFAULT_SEAT_TICK_POLICY, ports)).state;
+  for (let check = 1; check <= 4; check++) {
+    ports.now = () => NOW + check * 2 * 60 * 60_000;
+    ports.openPullRequests = async () => check % 2
+      ? { ok: false, unavailable: "command-failed" }
+      : { ok: true, pullRequests: [openPullRequest()] };
+    const decision = seatTickDecision(await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports));
+    expect(decision.verdict.kind).toBe("wake");
+    if (decision.verdict.kind !== "wake") throw new Error("live lane keeps its cadence");
+    expect(decision.verdict.reportLines ?? []).toEqual([]);
+    state = decision.state;
+  }
+  ports.openPullRequests = async () => ({ ok: true, pullRequests: [] });
+  const merged = seatTickDecision(await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports));
+  expect(merged.verdict.kind).toBe("wake");
+  if (merged.verdict.kind !== "wake") throw new Error("live lane keeps its cadence");
+  expect(merged.verdict.reportLines?.some(line => line.startsWith("Digest due"))).toBe(true);
+});
+
+test("gated PR reads and report writes cannot invent digest movement", async () => {
+  const pullRequestCalls: { cwd: string; limit: number }[] = [];
+  const ports = sources({ pipelines: [lane(), finishedLane()], openPullRequests: [openPullRequest()], pullRequestCalls,
+    laneRows: [livenessRow({ lifecycle: "running" })] });
+  let reports: { id: string; project: string; at: string; origin: { kind: "manager" } }[] = [];
+  ports.reports = { log: () => reports as never, enabled: () => true, operatorLocale: () => "en" };
+  let state = seatTickDecision(await gatherSeatTickInput(PROJECT,
+    { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, DEFAULT_SEAT_TICK_POLICY, ports)).state;
+  state = { ...state, lastWakeAt: new Date(NOW).toISOString() };
+  const readsAfterBaseline = pullRequestCalls.length;
+
+  for (const minute of [5, 10]) {
+    ports.now = () => NOW + minute * 60_000;
+    if (minute === 10) reports = [{ id: "fixture-report", project: PROJECT,
+      at: new Date(NOW + 6 * 60_000).toISOString(), origin: { kind: "manager" } }];
+    const decision = seatTickDecision(await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports));
+    const lines = decision.verdict.kind === "wake" ? decision.verdict.reportLines ?? [] : [];
+    expect(lines.some(line => line.startsWith("Digest due"))).toBe(false);
+    expect(pullRequestCalls).toHaveLength(readsAfterBaseline);
+    state = decision.state;
+  }
+
+  ports.now = () => NOW + 2 * 60 * 60_000;
+  const due = seatTickDecision(await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports));
+  const lines = due.verdict.kind === "wake" ? due.verdict.reportLines ?? [] : [];
+  expect(lines.some(line => line.startsWith("Digest due"))).toBe(false);
+  expect(pullRequestCalls).toHaveLength(readsAfterBaseline + 1);
+});
+
+test("recovered PR evidence establishes a baseline before a later verified merge", async () => {
+  const ports = sources({ pipelines: [lane(), finishedLane()], laneRows: [livenessRow({ lifecycle: "running" })] });
+  ports.openPullRequests = async () => ({ ok: false, unavailable: "command-failed" });
+  ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+  let state = seatTickDecision(await gatherSeatTickInput(PROJECT,
+    { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, DEFAULT_SEAT_TICK_POLICY, ports)).state;
+  state = { ...state, lastWakeAt: new Date(NOW).toISOString() };
+
+  ports.now = () => NOW + 2 * 60 * 60_000;
+  ports.openPullRequests = async () => ({ ok: true, pullRequests: [openPullRequest()] });
+  const recovered = seatTickDecision(await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports));
+  expect(recovered.verdict.kind).toBe("wake");
+  if (recovered.verdict.kind !== "wake") throw new Error("live lane keeps its cadence");
+  expect(recovered.verdict.reportLines ?? []).toEqual([]);
+  state = { ...recovered.state, lastWakeAt: new Date(NOW + 2 * 60 * 60_000).toISOString() };
+
+  ports.now = () => NOW + 4 * 60 * 60_000;
+  ports.openPullRequests = async () => ({ ok: true, pullRequests: [] });
+  const merged = seatTickDecision(await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports));
+  expect(merged.verdict.kind).toBe("wake");
+  if (merged.verdict.kind !== "wake") throw new Error("live lane keeps its cadence");
+  expect(merged.verdict.reportLines?.some(line => line.startsWith("Digest due"))).toBe(true);
+});
+
+test("first recovered PR evidence preserves unreported board movement", async () => {
+  let task = boardCard({ status: "inbox" });
+  const ports = sources({ pipelines: [lane(), finishedLane()], tasks: [task], laneRows: [livenessRow({ lifecycle: "running" })] });
+  ports.openPullRequests = async () => ({ ok: false, unavailable: "command-failed" });
+  ports.reports = { log: () => [], enabled: () => true, operatorLocale: () => "en" };
+  let state = seatTickDecision(await gatherSeatTickInput(PROJECT,
+    { ...emptySeatTickState(), seatEpoch: 7, ...OVERDUE }, DEFAULT_SEAT_TICK_POLICY, ports)).state;
+  state = { ...state, lastWakeAt: new Date(NOW).toISOString() };
+
+  task = { ...task, status: "blocked" };
+  ports.tasks = () => [task] as never;
+  ports.now = () => NOW + 2 * 60 * 60_000;
+  ports.openPullRequests = async () => ({ ok: true, pullRequests: [openPullRequest()] });
+  const recovered = seatTickDecision(await gatherSeatTickInput(PROJECT, state, DEFAULT_SEAT_TICK_POLICY, ports));
+  expect(recovered.verdict.kind).toBe("wake");
+  if (recovered.verdict.kind !== "wake") throw new Error("live lane keeps its cadence");
+  expect(seatTickBoardMoved(recovered.state.reportFingerprint ?? null, recovered.state.checkFingerprint ?? "")).toBe(true);
 });
 
 test("observing an old report without a board baseline cannot invent digest movement", async () => {
@@ -2681,8 +3201,74 @@ test("seat check keeps wake ordering and zero decoded or copied rows with tenfol
   expect(counts).toEqual([{ decoded: 0, copied: 0 }, { decoded: 0, copied: 0 }]);
 });
 
+test("seat projection yields through a large immutable specification and attempt history, then reuses warm evidence", async () => {
+  const { refreshSeatTickEvidence } = await import("./seatTickSources");
+  const { deepFreeze } = await import("@/lib/deepFreeze");
+  const { performanceSpans, performanceSites } = await import("@/lib/performanceSpans");
+  const attempts = Array.from({ length: 6000 }, (_, index) => ({
+    n: index + 1, state: "running", startedAt: new Date(NOW - index * 1000).toISOString(), completedAt: null,
+  }));
+  const largeSpec = `${"work ".repeat(21_000)}#123456`;
+  const largeRows = deepFreeze(Array.from({ length: 804 }, (_, index) => lane({
+    id: `large-spec-${index}`,
+    spec: largeSpec,
+    runs: index === 0 ? [{ stageId: "build", attempts }] : [{ stageId: "build", attempts: attempts.slice(0, 8) }],
+  }))) as never;
+  const ports = sources({ pipelines: largeRows });
+  const frozenTasks = deepFreeze([]);
+  ports.tasks = () => frozenTasks;
+  let yielded = false;
+  const turn = new Promise<boolean>(resolve => setImmediate(() => { yielded = true; resolve(true); }));
+  const gathering = gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  expect(await Promise.race([gathering.then(() => false), turn])).toBe(true);
+  const input = await gathering;
+  expect(input.pipelines).toHaveLength(804);
+  for (let pass = 0; pass < 3; pass++) {
+    const refreshed = refreshSeatTickInput(input, ports);
+    expect(refreshed.pipelines).toEqual(input.pipelines);
+  }
+  let refreshed = input;
+  for (let pass = 0; pass < 3; pass++) {
+    let warmYielded = false;
+    const warmTurn = new Promise<void>(resolve => setImmediate(() => { warmYielded = true; resolve(); }));
+    const warmStarted = performance.now();
+    const warming = refreshSeatTickEvidence(refreshed, ports);
+    expect(await Promise.race([warming.then(() => false), warmTurn.then(() => true)])).toBe(true);
+    refreshed = await warming;
+    expect(warmYielded).toBe(true);
+    expect(refreshed.pipelines).toEqual(input.pipelines);
+    expect(performanceSpans.snapshot(warmStarted).records.filter(record =>
+      record.kind === "sync" && performanceSites[record.site] === "seat-tick.project" && record.rows >= 100)).toHaveLength(0);
+  }
+  expect(refreshed.pipelines).toEqual(input.pipelines);
+  expect(yielded).toBe(true);
+});
 
-test("unchanged frozen lane evidence serializes no retained body and replacement invalidates the key", async () => {
+
+test("seat refresh retries preparation when its pipeline source is replaced during an await", async () => {
+  const { refreshSeatTickEvidence } = await import("./seatTickSources");
+  const { deepFreeze } = await import("@/lib/deepFreeze");
+  const largeSpec = "old source evidence ".repeat(1800);
+  const oldRows = deepFreeze(Array.from({ length: 16 }, (_, index) => lane({
+    id: `source-race-${index}`, spec: largeSpec,
+    ...(index === 15 ? { state: "needs_review", pausedState: "needs_review", cursor: null,
+      runs: [{ stageId: "build", attempts: [] }], srcConversationId: CONVERSATION } : {}),
+  })));
+  const replacementRows = deepFreeze(oldRows.map((row, index) => ({
+    ...row, task: index === 0 ? "replacement source evidence" : row.task,
+  }))) as never;
+  let currentRows = oldRows;
+  const ports = sources({});
+  ports.pipelines = () => currentRows as never;
+  const input = await gatherSeatTickInput(PROJECT, emptySeatTickState(), DEFAULT_SEAT_TICK_POLICY, ports);
+  setImmediate(() => { currentRows = replacementRows; });
+  const refreshed = await refreshSeatTickEvidence(input, ports);
+  expect(refreshed.pipelines[0]?.title).toBe("replacement source evidence");
+  expect(refreshed.pipelines.map(pipeline => pipeline.id)).toContain("source-race-0");
+  expect(refreshed.ownLanes.map(lane => lane.id)).toContain("source-race-15");
+});
+
+test("frozen lane evidence avoids whole-row serialization and replacement invalidates the key", async () => {
   const { refreshSeatTickEvidence } = await import("./seatTickSources");
   const { spyOn } = await import("bun:test");
   const { deepFreeze } = await import("@/lib/deepFreeze");
@@ -2701,7 +3287,7 @@ test("unchanged frozen lane evidence serializes no retained body and replacement
     current = deepFreeze(lane({ spec: "replacement evidence" }));
     const replaced = await refreshSeatTickEvidence(first, ports);
     expect(replaced.pullRequestEvidenceKey).not.toBe(first.pullRequestEvidenceKey);
-    expect(bodies).toBe(1);
+    expect(bodies).toBe(0);
   } finally { serializing.mockRestore(); }
 });
 

@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 
-import { beforeEach, afterEach, expect, test } from "bun:test";
+import { beforeEach, afterEach, expect, spyOn, test } from "bun:test";
+import * as io from "node:fs/promises";
 
 import {
   CodexAppServerHost,
@@ -615,24 +616,47 @@ test("the wait ends when the turn it joined ends, without burning the whole wind
   /* A window far longer than this test may take: what ends the wait has to be
      the turn ending, not the deadline. */
   const host = await startHost(server, { injectObservationTimeoutMs: 120_000 });
-  const turnId = server.startTurn();
-  await Bun.sleep(10);
+  let observation: Promise<boolean> | undefined;
+  let restoreTimers: (() => void) | undefined;
+  try {
+    const turnId = server.startTurn();
+    expect(await host.health()).toMatchObject({ activeTurnRef: turnId });
 
-  const pending = host.inject({
-    operationId: "op-turn-ends",
-    threadId: server.threadId,
-    text: "never flushed",
-    contentDigest: digestOf("never flushed"),
-  });
-  await Bun.sleep(50);
-  server.notify("turn/completed", { threadId: server.threadId, turn: { id: turnId, status: "completed" } });
-  server.endTurn(turnId);
+    // The ack proves metadata publication and injection finished against this
+    // turn. Ending it after a sleep races that I/O and correctly refuses it.
+    const outcome = await host.inject({
+      operationId: "op-turn-ends",
+      threadId: server.threadId,
+      text: "never flushed",
+      contentDigest: digestOf("never flushed"),
+    });
+    expect(outcome).toMatchObject({ placement: "pending-input", turnId });
+    expect(server.injectedItems).toHaveLength(1);
+    // Wait for the observer's first unsuccessful scan to schedule its poll.
+    // The turn must end while an observation is already waiting for evidence.
+    const realSetTimeout = globalThis.setTimeout;
+    let ready!: () => void;
+    const waiting = new Promise<void>((resolve) => { ready = resolve; });
+    const timers = spyOn(globalThis, "setTimeout").mockImplementation(((run: () => void, delay?: number) => {
+      const timer = realSetTimeout(run, delay);
+      ready();
+      return timer;
+    }) as typeof setTimeout);
+    restoreTimers = () => timers.mockRestore();
+    observation = outcome.observe();
+    await waiting;
+    server.notify("turn/completed", { threadId: server.threadId, turn: { id: turnId, status: "completed" } });
+    server.endTurn(turnId);
+    expect(await host.health()).toMatchObject({ activeTurnRef: null });
 
-  /* The verdict arrives at all: the 120 s window cannot have run out inside
-     this test, so only the turn ending can have ended the wait. */
-  const outcome = await pending;
-  expect(await outcome.observe()).toBe(false);
-  await host.release();
+    /* The verdict arrives at all: the 120 s window cannot have run out inside
+       this test, so only the turn ending can have ended the wait. */
+    expect(await observation).toBe(false);
+  } finally {
+    restoreTimers?.();
+    await host.release();
+    await observation;
+  }
 });
 
 test("an unarticulated transport failure is unverified, never a refusal", async () => {
@@ -770,6 +794,48 @@ test("writer ownership lost during the canonical read refuses before the injecti
   expect((failure as StructuredInjectError).phase).toBe("refused");
   await host.release();
 });
+
+for (const method of ["send", "steer", "inject"] as const) {
+  test(`${method} rechecks writer ownership after asynchronous metadata publication`, async () => {
+    const server = new InjectAppServer(scratchRoot());
+    const host = await startHost(server);
+    if (method === "steer") {
+      server.startTurn();
+      await new Promise<void>(resolve => setImmediate(resolve));
+    }
+    let ready!: () => void, release!: () => void;
+    const entered = new Promise<void>(resolve => { ready = resolve; });
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const original = io.open;
+    const open = spyOn(io, "open").mockImplementation(async (...args) => {
+      const handle = await original(...args);
+      if (String(args[0]).endsWith(".tmp")) {
+        const sync = handle.sync.bind(handle);
+        handle.sync = async () => { ready(); await held; await sync(); };
+      }
+      return handle;
+    });
+    const pending = method === "inject"
+      ? host.inject({ operationId: "publication-writer-loss", threadId: server.threadId, text: "input", contentDigest: digestOf("input") })
+      : host[method]({ id: "publication-writer-loss", text: "input" });
+    const outcome = pending.catch((error: unknown) => error);
+    try {
+      await Promise.race([entered, outcome.then(() => { throw new Error("delivery ended before reaching metadata publication"); })]);
+      expect(server.requests.filter(request => ["turn/start", "turn/steer", "thread/inject_items"].includes(request.method))).toHaveLength(0);
+      host.setWriterFence(() => false);
+      release();
+      const error = await outcome;
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain("stale-generation");
+      expect(server.requests.filter(request => ["turn/start", "turn/steer", "thread/inject_items"].includes(request.method))).toHaveLength(0);
+    } finally {
+      release();
+      await outcome;
+      open.mockRestore();
+      await host.release();
+    }
+  });
+}
 
 /** A relaunch of an existing thread that holds the Telegram tool: the thread is
     resumed, and the first message of the run is on its way to the engine. */

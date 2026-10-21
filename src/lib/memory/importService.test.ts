@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { runMemoryImport } from "./importJob";
-import { readImportCandidates } from "./importStore";
+import { readImportCandidates, readImportRecord } from "./importStore";
 import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
 import { performanceSpans, performanceSites } from "@/lib/performanceSpans";
 
@@ -57,4 +57,16 @@ test("the helper refuses a stale import and clears its single-flight slot for a 
   await expect(runMemoryImport({ importId: "stale", previous: null, roots: fixtureHome.roots, at })).rejects.toThrow("source_changed");
   await fs.writeFile(path.join(process.env.LLV_STATE_DIR!, "memory-source.json"), JSON.stringify({ schemaVersion: 1, source: "delegatus", phase: "importing", importId: "valid", changedAt: at }));
   expect((await runMemoryImport({ importId: "valid", previous: null, roots: fixtureHome.roots, at })).state).toBe("ready");
+});
+
+test("large private root inventories stay in state while the leased helper returns bounded metadata", async () => {
+  const fixtureHome = await fixture();
+  await fs.writeFile(path.join(fixtureHome.memory, "topic.md"), "Fixture topic.\n");
+  const id = "large-root-inventory";
+  await fs.writeFile(path.join(process.env.LLV_STATE_DIR!, "memory-source.json"), JSON.stringify({ schemaVersion: 1, source: "delegatus", phase: "importing", importId: id, changedAt: at }));
+  const homes = [...fixtureHome.roots.claudeHomes, ...Array.from({ length: 80 }, (_, i) => path.join(fixtureHome.root, "empty-home-" + i + "-" + "x".repeat(200)))];
+  expect(Buffer.byteLength(JSON.stringify(homes))).toBeGreaterThan(16 * 1024);
+  const result = await runMemoryImport({ importId: id, previous: null, roots: { claudeHomes: homes, codexHomes: [] }, at });
+  expect(result.state).toBe("ready"); expect(result.roots).toBeUndefined();
+  expect(readImportRecord(id)?.roots?.claudeHomes).toHaveLength(homes.length);
 });

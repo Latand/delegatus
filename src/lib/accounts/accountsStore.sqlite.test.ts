@@ -515,6 +515,7 @@ describe("an import record a stray process wrote is not evidence the move happen
     expect(outcome.state).toBe("already-imported");
     expect((body(directory, CLAUDE_ACCOUNTS_SOURCE) as { accounts: { id: string }[] }).accounts.map((row) => row.id).sort())
       .toEqual(["added", "spare", "work"]);
+    expect(readStateImport(accountsDatabasePath(directory), "accounts")?.reconciledSha256).toBeTruthy();
   });
 
   test("a file that no longer parses leaves the stale rows and the database exactly as they were", () => {

@@ -13,7 +13,8 @@ import type { Pipeline, PipelineStageAttempt } from "@/lib/pipelines/types";
 import type { Flow } from "@/lib/flows/types";
 import type { FileScanSnapshot } from "@/lib/scanner/scanCache";
 import type { FileEntry } from "@/lib/types";
-import { installHistoryProjection, readHistoryProjection, historyHeadlessFlows } from "@/lib/state/historyProjection";
+import { installHistoryProjection, readHistoryProjection, historyHeadlessFlows, historyPipelineRef } from "@/lib/state/historyProjection";
+import { buildPipeline, isStoredPipeline } from "@/lib/pipelines/store";
 
 import { completedGenerationSelection, type CompletedGenerationRead } from "./inventorySelection";
 import {
@@ -219,6 +220,128 @@ function sources(
     ...overrides,
   };
 }
+
+test.each(["passed", "failed", "needs_decision", "skipped"] as const)("issue 1999: an unknown reviewer turn in a matching %s attempt is settled", async state => {
+  const transcript = "/sessions/settled-reviewer.jsonl";
+  const conversationId = "conversation_settled_reviewer";
+  const pipeline = zombiePipeline(conversationId, transcript);
+  pipeline.state = "completed";
+  pipeline.runs[0]!.attempts[0]!.state = state;
+  const snapshot = await agentLivenessSnapshot({}, sources({
+    listFiles: async () => [fileEntry({ path: transcript, conversationId })],
+    registrySnapshot: () => ({ entries: { reviewer: structuredEntry(transcript, 2222) }, conversations: {} }),
+    pipelines: () => [pipeline],
+    probe: { now: () => NOW, pidAlive: () => true, processIdentity: () => "start-token-of-a-dead-host" },
+    transcriptEvidence: async () => ({ turn: "unknown", lastRecordTs: FROZEN_AT }),
+  }));
+  expect(snapshot.conversations[0]).toMatchObject({ lifecycle: "waiting", reason: "pipeline_stage_settled" });
+});
+
+test.each(["none", "held"] as const)("issue 1999: exact transcript proof without a current id preserves pending work=%s", async work => {
+  const pending = work === "held";
+  const transcript = "/sessions/settled-reviewer-without-id.jsonl";
+  const conversationId = "conversation_settled_without_id";
+  const pipeline = zombiePipeline(conversationId, transcript);
+  pipeline.runs[0]!.attempts[0]!.state = "passed";
+  const snapshot = await agentLivenessSnapshot({}, sources({
+    listFiles: async () => [fileEntry({ path: transcript, conversationId: undefined })],
+    registrySnapshot: () => ({ entries: { reviewer: structuredEntry(transcript, 2222) }, conversations: {},
+      heldDeliveries: pending ? { held: { conversationId, state: "held" } } as never : {} }),
+    pipelines: () => [pipeline],
+    probe: { now: () => NOW, pidAlive: () => true, processIdentity: () => "start-token-of-a-dead-host" },
+    transcriptEvidence: async () => ({ turn: "unknown", lastRecordTs: FROZEN_AT }),
+  }));
+  expect(snapshot.conversations[0]).toMatchObject(pending
+    ? { lifecycle: "stalled", reason: "host_alive_transcript_silent" }
+    : { lifecycle: "waiting", reason: "pipeline_stage_settled" });
+});
+
+test.each(["busy", "active-turn", "pending-action", "held-delivery", "held-alias", "permission", "tool", "background", "process", "wrong-conversation", "running-attempt", "historical", "unreadable", "receipt", "receipt-alias", "receipt-with-host", "completed-receipt", "dead-receipt"] as const)("issue 1999: settled reviewer proof preserves %s evidence", async control => {
+  const transcript = "/sessions/settled-reviewer-control.jsonl";
+  const conversationId = "conversation_settled_control";
+  const pipeline = zombiePipeline(control === "wrong-conversation" ? "conversation_other" : conversationId, transcript);
+  pipeline.state = "completed";
+  const attempt = pipeline.runs[0]!.attempts[0]!;
+  attempt.state = control === "running-attempt" ? "running" : "passed";
+  if (control === "historical") attempt.historical = true;
+  const entry = structuredEntry(transcript, 2222);
+  if (control === "active-turn") entry.structuredHost!.activeTurnRef = "active-review-turn";
+  if (control === "pending-action") entry.pendingAction = "handoff";
+  if (control === "permission") entry.structuredHost!.pendingPermissions = [{ requestId: "permission-one" }] as never;
+  const receiptConversationId = control === "receipt-alias" ? "conversation_old" : conversationId;
+  const receipt = { launchId: "launch_settled_review", state: control === "completed-receipt" ? "completed" : "starting",
+    transport: "structured", conversationId: receiptConversationId, artifactPath: transcript,
+    admissionOwner: { pid: 3333, startIdentity: "start-token-of-a-live-launch" },
+  } as unknown as RegistryFile["receipts"][string];
+  const snapshot = await agentLivenessSnapshot({}, sources({
+    listFiles: async () => [fileEntry({ path: transcript, conversationId })],
+    registrySnapshot: () => ({ entries: { reviewer: entry }, conversations: {},
+      conversationAliases: { conversation_old: conversationId },
+      receipts: ["receipt", "receipt-alias", "receipt-with-host", "completed-receipt", "dead-receipt"].includes(control)
+        ? { [receipt.launchId]: control === "dead-receipt" ? { ...receipt, admissionOwner: { pid: 3333, startIdentity: "different-identity" } } : receipt }
+        : {},
+      heldDeliveries: ["held-delivery", "held-alias"].includes(control) ? { held: {
+        conversationId: control === "held-alias" ? "conversation_old" : conversationId, state: "held" } } as never : {} }),
+    pipelines: () => [pipeline],
+    probe: { now: () => NOW, pidAlive: () => true, processIdentity: pid => pid === 3333
+      ? control === "dead-receipt" ? "reused-pid-identity" : "start-token-of-a-live-launch"
+      : "start-token-of-a-dead-host" },
+    workProcesses: () => control === "process" ? [{ startedAt: FROZEN_AT, command: "bun test fixture.test.ts" }] : [],
+    transcriptEvidence: async () => control === "unreadable" ? null : ({ turn: control === "busy" ? "busy" : "unknown", lastRecordTs: FROZEN_AT,
+      activityFacts: { lastRecordAt: FROZEN_AT,
+        ...(control === "tool" ? { openCall: { name: "exec", input: { code: "await check()" }, startedAt: FROZEN_AT } } : {}),
+        ...(control === "background" ? { background: [{ description: "tests" }] } : {}),
+      } }),
+  }));
+  const record = snapshot.conversations[0]!;
+  if (["receipt", "receipt-alias", "receipt-with-host"].includes(control)) {
+    expect(record).toMatchObject({ lifecycle: "stalled", reason: "host_alive_transcript_silent" });
+    return;
+  }
+  if (["completed-receipt", "dead-receipt"].includes(control)) {
+    expect(record).toMatchObject({ lifecycle: "waiting", reason: "pipeline_stage_settled" });
+    return;
+  }
+  expect(record.reason).not.toBe("pipeline_stage_settled");
+  if (["busy", "wrong-conversation", "running-attempt", "historical"].includes(control)) expect(record.lifecycle).toBe("stalled");
+  if (["tool", "background", "process"].includes(control)) expect(record.activity?.state).toBe("checking");
+  if (control === "permission") expect(record.reason).toBe("permission_request");
+});
+
+test.each(["pipelines", "pipelines_archive"])("issue 1999: persisted %s proof settles a stale registry turn without loading pipeline payloads", async collection => {
+  const transcript = "/sessions/persisted-reviewer.jsonl";
+  const conversationId = "conversation_persisted_reviewer";
+  const pipeline = buildPipeline({ id: "settled-reviewer", task: "review", project: "viewer", repoDir: "/repo",
+    srcPath: null, srcConversationId: null, now: new Date(FROZEN_AT).toISOString(), stages: [
+      { id: "build", kind: "run", prompt: "review", role: { roleId: "reviewer" }, next: null,
+        effectiveRole: { roleId: "reviewer", engine: "codex", model: null, effort: null, access: "read-only", promptScaffold: "review" } },
+    ] });
+  pipeline.state = "completed";
+  pipeline.cursor = null;
+  pipeline.runs = zombiePipeline(conversationId, transcript).runs;
+  pipeline.runs[0]!.attempts[0]!.state = "passed";
+  expect(isStoredPipeline(pipeline)).toBe(true);
+  const directory = sandbox(), filename = path.join(directory, "state.sqlite");
+  const db = new Database(filename);
+  db.exec("CREATE TABLE state_rows(collection TEXT,row_key TEXT,value_json TEXT,row_order INTEGER,PRIMARY KEY(collection,row_key))");
+  db.exec("BEGIN IMMEDIATE");
+  installHistoryProjection(db, directory);
+  db.exec("COMMIT");
+  db.query("INSERT INTO state_rows VALUES (?,?,?,0)").run(collection, pipeline.id, JSON.stringify(pipeline));
+  db.close();
+  const snapshot = await agentLivenessSnapshot({}, sources({
+    listFiles: async () => [fileEntry({ path: transcript, conversationId })],
+    registrySnapshot: () => ({ entries: { reviewer: structuredEntry(transcript, 2222) }, conversations: {
+      [conversationId]: { id: conversationId, engine: "codex", generations: [{ path: transcript }], turn: { state: "busy" } },
+    } } as unknown as RegistryFile),
+    pipelines: Object.assign(() => { throw new Error("no whole-pipeline read"); }, {
+      forLiveness: targets => readHistoryProjection(db => targets.map(target => historyPipelineRef(db, target.conversationId, target.path)), { filename, collections: ["pipelines", "pipelines_archive"] }),
+    } as Pick<AgentLivenessSources["pipelines"], "forLiveness">),
+    probe: { now: () => NOW, pidAlive: () => true, processIdentity: () => "start-token-of-a-dead-host" },
+    transcriptEvidence: async () => ({ turn: "unknown", lastRecordTs: FROZEN_AT }),
+  }));
+  expect(snapshot.conversations[0]).toMatchObject({ lifecycle: "waiting", reason: "pipeline_stage_settled", pipeline: { conversationId, agentPath: transcript } });
+});
 
 test.each([120, 240])("liveness fallback bounds archive reads with %i historical rows", async (count) => {
   let reads = 0;

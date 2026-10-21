@@ -10,6 +10,17 @@ export function checkoutDeployments(directory: string): ViewerDeploymentStatus[]
   if (!Array.isArray(rows) || rows.some(row => typeof row.deploymentId !== "string" || typeof row.idempotencyKey !== "string")) throw new Error("The checkout deployment ledger is unreadable");
   return rows;
 }
+export function checkoutDeploymentByIdempotencyKey(directory: string, idempotencyKey: string): ViewerDeploymentStatus | null {
+  const status = checkoutDeployments(directory).find(row => row.idempotencyKey === idempotencyKey
+    || row.idempotencyKeys?.includes(idempotencyKey));
+  if (!status) return null;
+  const request = Array.isArray(status.idempotencyRequests)
+    ? status.idempotencyRequests.find(row => row && row.idempotencyKey === idempotencyKey
+      && typeof row.requestedRevision === "string")
+    : undefined;
+  return { ...status, idempotencyKey,
+    requestedRevision: request?.requestedRevision ?? status.requestedRevision };
+}
 export function saveCheckoutDeployment(directory: string, status: ViewerDeploymentStatus): void {
   const rows = checkoutDeployments(directory);
   const index = rows.findIndex(row => row.deploymentId === status.deploymentId);

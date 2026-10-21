@@ -274,10 +274,24 @@ On Unix the sandbox lives under `/var/tmp`, including when a pipeline inherits
 a `TMPDIR` under the operator's scratch tree. Browser tests keep their rendered
 capture drivers and are not selected by the hook.
 
-Touched tests run the branch first, up to three explicit files at once, each
+Touched tests run the branch first, up to eight explicit head files at once, each
 in its own owned process and isolated roots. A green branch skips the baseline
 entirely. For a red branch, only failing files run on the merge base, filtered
-to failing assertions; runner diagnostics need the whole file. The three verdicts read as follows.
+to failing assertions; runner diagnostics need the whole file. Both kinds share
+one three-worker baseline pool, with the filter chosen per file.
+
+The publisher and direct hook share `src/lib/pipelines/gateBudget.ts`.
+Changes to `src/lib/pipelines/engine.ts` and its `engine.*.ts` siblings,
+`src/lib/pipelines/git.ts` or `src/lib/pipelines/parkedPublication.test.ts`
+reserve 25 minutes for the push and 24 for its hook. Other changes retain 15
+and 14 minutes. The publisher applies this rule
+to repositories using `scripts/local-gate-tests.ts`; other repositories keep
+their existing 15-minute limit. An unreadable diff in an opted-in repository
+reserves the larger bounded window. All checks still owe a verdict, and an
+explicit caller deadline takes precedence. File, phase and paired-confirmation
+budgets remain unchanged.
+
+The three verdicts read as follows.
 `PRE-EXISTING`: the assertion failed the initial sample on both sides. It is
 classified on those two samples, runs no further, and permits the push.
 `FLAKY`: the assertion failed the initial head sample, passed the initial base
@@ -285,7 +299,7 @@ sample, and then gave mixed results on at least one side. It is listed with the
 file, suite/test name and pass/fail counts for both sides, and permits the push.
 `NEW`: the assertion fails every head sample and never fails on base. It
 refuses the push.
-Only an assertion that could end as `NEW` is confirmed: it runs three more
+Only an assertion that could end as `NEW` is confirmed: it runs up to three more
 times on each side, filtered by its full test name in its file. A failure on
 any base retry or a pass on any head retry makes it `FLAKY`. New tests have
 zero base observations. Missing, skipped or incomplete retry results are gate
@@ -326,13 +340,20 @@ refusal. Both attempts share the push execution budget and existing admission;
 the retry never starts another push or repeats publication effects.
 
 Clean head samples and failures already present in the initial base sample
-incur no reruns. The three rounds share a five-minute
-budget across all candidate files and both sides, including baseline checkout
-and dependency setup. Each child command is capped by the
-remaining budget; exhausting it blocks with a gate error. This adds at most
+incur no reruns. An occurrence with a complete passing head retry or failing
+base retry is already `FLAKY` and leaves the later confirmation selections.
+Unresolved occurrences still receive up to three rounds per side. The base and
+head of a round run concurrently in separate sandboxes, with at most three
+files per side. Both sides settle before evidence is judged, including when
+one refuses. Duplicate names retain their occurrence identities; filtering one name can still execute
+its other occurrences. The rounds share a five-minute budget across all
+candidate files and both sides, including baseline checkout and dependency setup.
+Counts on a `FLAKY` row stop at its classification. Each child command is capped
+by the remaining budget; exhausting it blocks with a gate error. This adds at most
 five minutes of subprocess execution/setup, plus ordinary report parsing and
-sandbox cleanup. After an initially passing base sample, three independent
-reruns detect a one-in-ten base failure with probability `1 - 0.9^3 = 27.1%`.
+sandbox cleanup. For an unresolved occurrence after an initially passing
+base sample, three independent reruns detect a one-in-ten base failure with
+probability `1 - 0.9^3 = 27.1%`.
 Four independent base samples detect it with probability `34.39%` overall;
 rare or correlated failures can still evade this bounded sampling. Head
 recovery supplies a separate opportunity to identify intermittency.
@@ -364,16 +385,18 @@ stage, a branch that only trails `origin/main`) runs privacy with
 `.txt` files skips types. Any other changed file keeps every scoped check.
 The native Codex phase runs the files that start the Codex executable once per
 supported version (`verify-native-codex-runtime.ts --engine-only`) and the rest
-once (`--shared-only`), all three at the same time. Local publication gives the
-shared selection its merge base through `LLV_GATE_COMPARE_BASE`; it uses the
+once (`--shared-only`), with those checks running concurrently. Local publication
+gives the shared selection its merge base through `LLV_GATE_COMPARE_BASE`; it uses the
 same isolated comparator and bounded retries as touched tests. Hosted shared
 verification keeps its absolute verdict. Both modes isolate every file's
 roots and preserve nested service CPU placement and admission accounting.
 A caller that kills the
 push at a limit of its own hands the hook a Unix-millisecond deadline in
 `LLV_GATE_PUSH_DEADLINE`; the controller's publication sets it a minute before
-its fifteen-minute limit. The fetch of `origin/main`, a cold-cache Bun or Codex
-install and every step use that execution deadline. CPU queue waits extend it,
+the selected 15- or 25-minute push limit. With a supplied deadline, the fetch
+of `origin/main`, a cold-cache Bun or Codex install and every step use it.
+A direct hook derives the same default after planning when no caller supplied
+one; its initial fetch and planning precede that default. CPU queue waits extend it,
 including waits during installation and earlier steps; once the remaining
 execution budget is spent, nothing starts. A stopped step takes with it every process
 that inherited its environment and every scope `gate-slot.sh` gave it; one that
@@ -405,7 +428,11 @@ refuses with exit 69 unless `DELEGATUS_AGENT_CPU=off`
 (`LLV_OWNED_RUN_TIMEOUT_MS`, default fifteen minutes) and a kernel watchdog. A recorded caller start
 identity detects a hard-killed wrapper; detached descendants stay owned by the
 service. Surviving children fail the command before the manager reaps them.
-Linux requires a reachable user systemd manager. macOS and Windows use an
+Linux requires a reachable user systemd manager. A stage agent in a signal
+domain gets the same service and limits: the service runs its command inside
+the agent's own namespaces. Only without a reachable manager does such a gate
+run in a leaf of the agent's scope, under the agent's memory cap, and it says
+so on stderr. macOS and Windows use an
 independent identity-bound guardian with best-effort execution and one warning
 per owning run; a detached child can escape between guardian polls. The strong
 lifetime guarantee applies to Linux native containment, as recorded in

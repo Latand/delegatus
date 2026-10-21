@@ -230,6 +230,8 @@ function normalizeTelegram(value: unknown): BridgeReportTelegram | undefined {
     chat: raw.chat,
     ...(typeof raw.topicId === "number" && Number.isSafeInteger(raw.topicId) && raw.topicId > 0 ? { topicId: raw.topicId } : {}),
     html: raw.html,
+    ...(typeof raw.bot === "string" ? { bot: raw.bot.slice(0, 64) } : {}),
+    ...(Array.isArray(raw.refusals) ? { refusals: raw.refusals.slice(0, 9).filter(r => r && typeof r.bot === "string" && typeof r.code === "string").map(r => ({ bot: r.bot.slice(0, 64), code: r.code.slice(0, 64) })) } : {}),
     state: raw.state,
     ...(Array.isArray(raw.messageIds) ? { messageIds: raw.messageIds.filter((id): id is number => Number.isInteger(id)) } : {}),
     ...(typeof raw.code === "string" ? { code: raw.code } : {}),
@@ -946,15 +948,19 @@ export function appendBridgeReports(
  */
 export function recordBridgeReportTelegram(
   id: string,
-  outcome: { state: BridgeReportTelegramState; messageIds?: readonly number[]; code?: string | null; message?: string; at: string; attempted?: boolean },
+  outcome: { state: BridgeReportTelegramState; messageIds?: readonly number[]; code?: string | null; message?: string; bot?: string; refusals?: { bot: string; code: string }[]; at: string; attempted?: boolean },
 ): BridgeReportV1 | null {
   return mutateLog((file) => {
     const report = file.reports.find((candidate) => candidate.id === id);
     if (!report?.telegram) return { result: null, changed: false };
     const { code: _previous, message: _previousMessage, ...held } = report.telegram;
+    delete held.bot;
+    delete held.refusals;
     report.telegram = {
       ...held,
       state: outcome.state,
+      ...(outcome.bot ? { bot: outcome.bot } : {}),
+      ...(outcome.refusals ? { refusals: outcome.refusals.slice(0, 9) } : {}),
       ...(outcome.messageIds?.length ? { messageIds: [...outcome.messageIds] } : held.messageIds ? { messageIds: held.messageIds } : {}),
       ...(outcome.code ? { code: outcome.code } : {}),
       ...(outcome.message ? { message: scrubTelegramDiagnostic(outcome.message) } : {}),
@@ -1222,8 +1228,9 @@ export function acknowledgeBridgeReports(
  * too, answers and parked answers are unioned, and the trim marks take the
  * higher value.
  */
-function mergeLegacyLog(legacyPath: string, body: BridgeReportLogV1, options: { fenceOwner: boolean }): LegacyReconcileSummary {
+function mergeLegacyLog(legacyPath: string, body: BridgeReportLogV1, options: { fenceOwner: boolean; consumedSha256?: string }): LegacyReconcileSummary {
   const collection = openCollection(legacyDatabasePath(legacyPath), REPORTS_COLLECTION);
+  const consumedSha256 = options.consumedSha256;
   const summary: LegacyReconcileSummary = { added: 0, replaced: 0, removed: 0, kept: 0, keys: [], conflicts: [], spared: [] };
   collection.patchSync(() => {
     const rows = collection.snapshot();
@@ -1266,7 +1273,14 @@ function mergeLegacyLog(legacyPath: string, body: BridgeReportLogV1, options: { 
     trimToCapacity(log, readBridgeChannel()?.managerReportCursor ?? 0);
     log.retired = log.retired.slice(-BRIDGE_RETIRED_ID_CAPACITY);
     return diffRows(rows, rowsFromLog(log));
-  }, { fenceOwner: options.fenceOwner });
+  }, {
+    fenceOwner: options.fenceOwner,
+    ...(consumedSha256 ? { afterPersist: (db) => {
+      const result = db.query("UPDATE state_imports SET reconciled_sha256 = ? WHERE collection = ?")
+        .run(consumedSha256, REPORTS_COLLECTION);
+      if (result.changes !== 1) throw new Error(`missing import evidence for ${REPORTS_COLLECTION} reconciliation`);
+    } } : {}),
+  });
   return summary;
 }
 

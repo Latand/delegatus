@@ -56,6 +56,7 @@ import {
   ORCHESTRATOR_SYSTEM_PROMPT,
   orchestratorMandateForDelivery,
   orchestratorMandateStale,
+  orchestratorMandateUpgraded,
   orchestratorMandateWithRoleTable,
   orchestratorRoleTable,
 } from "./prompt";
@@ -575,7 +576,7 @@ async function activate(
   }, { holder: "orchestrator seat activation", waitMs: dependencies.seatStoreWaitMs ?? SEAT_STORE_WAIT_MS });
   if (refused) return { hold: refused };
   if (completed.kind === "missing") return null;
-  const seat: OrchestratorSeat = reconcileAuthorityProjections(completed.seat, dependencies);
+  const seat: OrchestratorSeat = await reconcileAuthorityProjections(completed.seat, dependencies, dependencies.seatStoreWaitMs ?? SEAT_STORE_WAIT_MS);
   /* Once per new seat epoch — a fresh seat, an adopted conversation, a
      rotation — whatever produced it; the report's own claim makes a second
      activation of the same epoch a no-op. Never awaited, so the seat command
@@ -590,35 +591,49 @@ async function activate(
   return { seat };
 }
 
-function reconcileAuthorityProjections(
+async function reconcileAuthorityProjections(
   seat: OrchestratorSeat,
   dependencies: SeatCommandDependencies,
-): OrchestratorSeat {
+  waitMs = SEAT_STORE_WAIT_MS,
+): Promise<OrchestratorSeat> {
   if (!seat.conversationId) throw new Error("active orchestrator seat is missing its conversation identity");
-  const durableRuntime = seat.engine && seat.model
-    ? { engine: null, model: null }
-    : dependencies.runtimeIdentity(seat.conversationId);
-  return withAccountMutationLock(() => {
-    const current = orchestratorSeatFor(seat.project).active;
-    if (current?.seatEpoch !== seat.seatEpoch || current.conversationId !== seat.conversationId) {
-      throw new Error("orchestrator seat changed before identity publication");
-    }
-    const repaired = repairOrchestratorSeatRuntimeIdentity({
-      project: seat.project,
-      conversationId: seat.conversationId!,
-      engine: durableRuntime.engine,
-      model: durableRuntime.model,
-    }) ?? current;
-    dependencies.stampRegistryIdentity(repaired);
-    return repaired;
-  });
+  const registry = agentRegistry();
+  // Active seats own their identity admission even when request replay is
+  // disabled. New activations can supply a positive, shorter store deadline.
+  const deadline = performance.now() + (waitMs || SEAT_STORE_WAIT_MS);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const revision = registry.storageDiagnostics().revision;
+    // Discovery can take another state lease. Prepare outside both writers,
+    // then fence that registry version and the seat epoch inside admission.
+    const durableRuntime = seat.engine && seat.model
+      ? { engine: null, model: null }
+      : dependencies.runtimeIdentity(seat.conversationId);
+    const written = await registry.accountMutationWrite("registry.seat-identity", () => {
+      const current = orchestratorSeatFor(seat.project).active;
+      if (current?.seatEpoch !== seat.seatEpoch || current.conversationId !== seat.conversationId) {
+        throw new Error("orchestrator seat changed before identity publication");
+      }
+      if (registry.storageDiagnostics().revision !== revision) return null;
+      const repaired = repairOrchestratorSeatRuntimeIdentity({
+        project: seat.project,
+        conversationId: seat.conversationId!,
+        engine: durableRuntime.engine,
+        model: durableRuntime.model,
+      }) ?? current;
+      dependencies.stampRegistryIdentity(repaired);
+      return repaired;
+    }, undefined, { releaseBeforeWrite: true, waitMs: Math.max(0, deadline - performance.now()) });
+    if (!written.acquired) throw new AccountMutationBusyError();
+    if (written.value) return written.value;
+  }
+  throw new AccountAdmissionChangedError();
 }
 
-function reconcileCompletedSeatReplay(
+async function reconcileCompletedSeatReplay(
   project: string,
   clientRequestId: string,
   dependencies: SeatCommandDependencies,
-): OrchestratorSeat | null {
+): Promise<OrchestratorSeat | null> {
   const seat = orchestratorSeatFor(project).active;
   if (!seat || seat.intent.clientRequestId !== clientRequestId) return null;
   return reconcileAuthorityProjections(seat, dependencies);
@@ -1023,6 +1038,14 @@ export function executeOrchestratorSeatRequest(
   });
 }
 
+/** Whether this key already owns the project's live pending intent or its
+    active seat, so a retry under it replays instead of beginning anew. */
+function holdsSeatIntent(project: string, clientRequestId: string): boolean {
+  const { active, pending } = orchestratorSeatFor(project);
+  return active?.intent.clientRequestId === clientRequestId
+    || (pending?.intent.clientRequestId === clientRequestId && pending.intent.error === null);
+}
+
 async function runOrchestratorSeatRequest(
   rawBody: Record<string, unknown>,
   dependencies: SeatCommandDependencies,
@@ -1037,7 +1060,9 @@ async function runOrchestratorSeatRequest(
      designated under the key its lanes will be written to. */
   recordProjectSuccessions([projectSuccessionFor(canonicalOrchestratorProject(namedProject), text(rawBody.cwd))]);
   const project = canonicalOrchestratorProject(namedProject);
-  const mandate = typeof rawBody.mandate === "string" ? rawBody.mandate : "";
+  /* Upgraded before preflight and before the durable begin, so a new intent
+     records the text it delivers; a replay delivers what its intent recorded. */
+  const mandate = orchestratorMandateUpgraded(typeof rawBody.mandate === "string" ? rawBody.mandate : "");
   if (!mandate.trim()) return { status: 400, body: { error: "mandate is required", admission: "refused" } };
   const clientRequestId = text(rawBody.clientRequestId);
   if (!CLIENT_REQUEST_ID.test(clientRequestId)) {
@@ -1058,7 +1083,12 @@ async function runOrchestratorSeatRequest(
      before either begin, so no durable intent can exist for a mandate that
      cannot be delivered. */
   const preflight = mandatePreflight(mandate, existingConversationId ? "existing" : "spawn", rawBody.roleParams);
-  if (!preflight.ok) return { status: 413, body: { ...mandateTooLargeBody(preflight), admission: "refused" } };
+  /* A retry of this key's own intent replays the bytes its first attempt
+     admitted, which a later release's upgrade can push past the bound; it is
+     reconciled and finished, never stranded. Begin enforces the refusal under
+     its lock, so a key whose intent ended meanwhile still begins nothing. */
+  const tooLarge = preflight.ok ? null : { status: 413, body: { ...mandateTooLargeBody(preflight), admission: "refused" } };
+  if (tooLarge && !holdsSeatIntent(project, clientRequestId)) return tooLarge;
 
   /* Before anything reads the incumbent: a seat still standing on a launch that
      died is not an incumbent, and rolling it back here is what puts the
@@ -1067,7 +1097,7 @@ async function runOrchestratorSeatRequest(
   const reconciliation = reconcilePendingSeatIntent(project, dependencies, 0, retryingSqliteRequestId);
   if (reconciliation) await reconciliation;
 
-  const completedReplay = reconcileCompletedSeatReplay(project, clientRequestId, dependencies);
+  const completedReplay = await reconcileCompletedSeatReplay(project, clientRequestId, dependencies);
   if (completedReplay) return replayedSeatResponse(completedReplay);
 
   const replacementCheck = admission?.replacementHold?.();
@@ -1120,10 +1150,12 @@ async function runOrchestratorSeatRequest(
       model: target.model ?? null,
       promptVersion,
       triggeredBy,
+      replayOnly: tooLarge !== null,
       now: dependencies.now(),
     });
+    if (begun.kind === "not_replayed") return tooLarge!;
     if (begun.kind === "completed") {
-      const repaired = reconcileCompletedSeatReplay(project, clientRequestId, dependencies);
+      const repaired = await reconcileCompletedSeatReplay(project, clientRequestId, dependencies);
       if (!repaired) return { status: 409, body: { error: "seat intent was superseded by a newer designation" } };
       return replayedSeatResponse(repaired);
     }
@@ -1240,10 +1272,12 @@ async function runOrchestratorSeatRequest(
     automaticReplacement: admission?.automaticReplacement,
     promptVersion,
     triggeredBy,
+    replayOnly: tooLarge !== null,
     now: dependencies.now(),
   });
+  if (begun.kind === "not_replayed") return tooLarge!;
   if (begun.kind === "completed") {
-    const repaired = reconcileCompletedSeatReplay(project, clientRequestId, dependencies);
+    const repaired = await reconcileCompletedSeatReplay(project, clientRequestId, dependencies);
     if (!repaired) return { status: 409, body: { error: "seat intent was superseded by a newer designation" } };
     return replayedSeatResponse(repaired);
   }

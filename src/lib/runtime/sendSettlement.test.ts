@@ -2097,9 +2097,177 @@ test("a Codex canonical user turn settles started delivery even when the Viewer 
     const text = "check the release";
     const { operationId } = acceptSend(active, { text });
     active.journal.transitionOperation(operationId, "delivering");
-    const wire = encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken(operationId));
+    const wire = await encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken(operationId));
     fs.writeFileSync(active.transcriptPath, JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: wire } }) + "\n");
     expect(await resolveSendReceipt(operationId, { registry: active.registry, client: active.client })).toMatchObject({ state: "delivered", resend: "not-needed" });
+  } finally { active.close(); }
+});
+
+test("a committed discard wins a late canonical acknowledgement before its registry projection", async () => {
+  const active = fixture("discard-canonical-race", { now: () => Date.parse("2026-10-01T00:00:00Z") });
+  const { handleRuntimeDiscard } = await import("./http");
+  const text = "check the retained delivery";
+  const { operationId, deliveryId } = acceptSend(active, { text, operationId: "discard-canonical-operation", clientMessageId: "discard-canonical-key" });
+  active.journal.transitionOperation(operationId, "delivering");
+  active.journal.transitionOperation(operationId, "uncertain");
+  active.registry.recordDeliveryOutcome(deliveryId, "failed", SEND_UNVERIFIED_REASON, "unverified");
+  const wire = await encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken(operationId));
+  fs.writeFileSync(active.transcriptPath, JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: wire } }) + "\n");
+  let entered!: () => void;
+  const committed = new Promise<void>(resolve => { entered = resolve; });
+  let release!: () => void;
+  const acknowledgement = new Promise<void>(resolve => { release = resolve; });
+  active.client.claimDeliveryAction = async (...args) => {
+    const result = active.journal.claimDeliveryAction(...args);
+    entered();
+    await acknowledgement;
+    return result;
+  };
+  const discarding = handleRuntimeDiscard(new NextRequest("http://127.0.0.1/api/runtime/operations/discard-canonical-operation", {
+    method: "DELETE", headers: { host: "127.0.0.1" },
+  }), operationId, { enabled: () => true, client: () => active.client, registry: () => active.registry, kick: () => {} });
+  try {
+    await committed;
+    expect(await resolveSendReceipt(operationId, { registry: active.registry, client: active.client }))
+      .toMatchObject({ state: "failed", reason: "delivery-discarded", duplicateRisk: true });
+    release();
+    expect((await discarding).status).toBe(200);
+    expect(active.journal.operationResult(operationId)?.receipt).toMatchObject({ status: "failed", reason: "delivery-discarded" });
+    expect(sendReceiptFor(active.registry.readOnlySnapshot(), operationId)).toMatchObject({ state: "failed", reason: "delivery-discarded" });
+  } finally {
+    release();
+    await discarding;
+    active.close();
+  }
+});
+
+test("original-key recovery follows the journal winner while canonical evidence is present", async () => {
+  const active = fixture("original-key-discard-canonical-race", { now: () => Date.parse("2026-10-01T00:00:00Z") });
+  const { handleRuntimeDiscard } = await import("./http");
+  const { viewerMcpRecoverableTools } = await import("@/lib/mcp/bindings");
+  const binding = { conversationId: active.conversationId, clientMessageId: "discard-canonical-key" };
+  const text = "check the retained delivery";
+  const { operationId, deliveryId } = acceptSend(active, { text, operationId: "discard-canonical-operation", clientMessageId: binding.clientMessageId });
+  active.journal.transitionOperation(operationId, "delivering");
+  active.journal.transitionOperation(operationId, "uncertain");
+  active.registry.recordDeliveryOutcome(deliveryId, "failed", SEND_UNVERIFIED_REASON, "unverified");
+  const wire = await encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken(operationId));
+  fs.writeFileSync(active.transcriptPath, JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: wire } }) + "\n");
+
+  let entered!: () => void;
+  const committed = new Promise<void>(resolve => { entered = resolve; });
+  let release!: () => void;
+  const acknowledgement = new Promise<void>(resolve => { release = resolve; });
+  active.client.claimDeliveryAction = async (...args) => {
+    const result = active.journal.claimDeliveryAction(...args);
+    entered();
+    await acknowledgement;
+    return result;
+  };
+  const discarding = handleRuntimeDiscard(new NextRequest("http://127.0.0.1/api/runtime/operations/discard-canonical-operation", {
+    method: "DELETE", headers: { host: "127.0.0.1" },
+  }), operationId, { enabled: () => true, client: () => active.client, registry: () => active.registry, kick: () => {} });
+  try {
+    await committed;
+    const beforeProjection = await resolveOriginalSend(binding, { registry: active.registry, client: active.client });
+    expect(beforeProjection).toMatchObject({
+      kind: "found",
+      current: { readable: true, value: { state: "failed", reason: "delivery-discarded", duplicateRisk: true } },
+    });
+    let mcpRegistry = active.registry;
+    const mcp = viewerMcpRecoverableTools({ sendSettlementPorts: () => ({ registry: mcpRegistry, client: active.client }) } as never);
+    const mcpBinding = { toolName: "send_message", downstreamKey: binding.clientMessageId, target: { identity: binding.conversationId } } as never;
+    expect(await mcp.send_message!.recover!(mcpBinding, { legacy: false })).toMatchObject({
+      outcome: "settled", reason: "delivery-discarded", facts: { state: "failed", resend: "verify-first", duplicateRisk: true },
+    });
+
+    release();
+    expect((await discarding).status).toBe(200);
+    expect(active.journal.operationResult(operationId)?.receipt).toMatchObject({ status: "failed", reason: "delivery-discarded" });
+    expect(active.registry.readOnlySnapshot().heldDeliveries[deliveryId]).toMatchObject({ state: "failed", error: "delivery-discarded" });
+
+    const reopened = new AgentRegistry(active.registryPath);
+    mcpRegistry = reopened;
+    const afterRestart = await resolveOriginalSend(binding, { registry: reopened, client: active.client });
+    expect(afterRestart).toMatchObject({
+      kind: "found",
+      current: { readable: true, value: { state: "failed", reason: "delivery-discarded", duplicateRisk: true } },
+    });
+    expect(await mcp.send_message!.recover!(mcpBinding, { legacy: false })).toMatchObject({
+      outcome: "settled", reason: "delivery-discarded", facts: { state: "failed", resend: "verify-first", duplicateRisk: true },
+    });
+  } finally {
+    release();
+    await discarding;
+    active.close();
+  }
+});
+
+test("original-key recovery keeps canonical delivery when acknowledgement won first", async () => {
+  const active = fixture("original-key-ack-canonical-first");
+  const { viewerMcpRecoverableTools } = await import("@/lib/mcp/bindings");
+  try {
+    const text = "check the retained delivery";
+    const { operationId, deliveryId } = acceptSend(active, { text, operationId: "ack-canonical-operation", clientMessageId: "ack-canonical-key" });
+    active.journal.transitionOperation(operationId, "delivering");
+    active.journal.transitionOperation(operationId, "uncertain");
+    active.registry.recordDeliveryOutcome(deliveryId, "failed", SEND_UNVERIFIED_REASON, "unverified");
+    active.journal.transitionOperation(operationId, "delivered", {}, { confirmedDelivery: true });
+    const wire = await encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken(operationId));
+    fs.writeFileSync(active.transcriptPath, JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: wire } }) + "\n");
+
+    const beforeProjection = await resolveOriginalSend({ conversationId: active.conversationId, clientMessageId: "ack-canonical-key" }, {
+      registry: active.registry, client: active.client,
+    });
+    expect(beforeProjection).toMatchObject({ kind: "found", current: { readable: true, value: { state: "delivered", resend: "not-needed" } } });
+    expect(sendReceiptFor(active.registry.readOnlySnapshot(), operationId)).toMatchObject({ state: "failed", reason: SEND_UNVERIFIED_REASON });
+    let mcpRegistry = active.registry;
+    const mcp = viewerMcpRecoverableTools({ sendSettlementPorts: () => ({ registry: mcpRegistry, client: active.client }) } as never);
+    const mcpBinding = { toolName: "send_message", downstreamKey: "ack-canonical-key", target: { identity: active.conversationId } } as never;
+    expect(await mcp.send_message!.recover!(mcpBinding, { legacy: false })).toMatchObject({
+      outcome: "settled", facts: { state: "delivered", resend: "not-needed", duplicateRisk: false },
+    });
+
+    const reopened = new AgentRegistry(active.registryPath);
+    mcpRegistry = reopened;
+    expect(await resolveOriginalSend({ conversationId: active.conversationId, clientMessageId: "ack-canonical-key" }, {
+      registry: reopened, client: active.client,
+    })).toMatchObject({ kind: "found", current: { readable: true, value: { state: "delivered", resend: "not-needed" } } });
+    expect(await mcp.send_message!.recover!(mcpBinding, { legacy: false })).toMatchObject({
+      outcome: "settled", facts: { state: "delivered", resend: "not-needed", duplicateRisk: false },
+    });
+  } finally { active.close(); }
+});
+
+test("original-key recovery cannot report canonical delivery when journal arbitration is unavailable", async () => {
+  const active = fixture("original-key-canonical-unavailable");
+  const { viewerMcpRecoverableTools } = await import("@/lib/mcp/bindings");
+  try {
+    const text = "check the retained delivery";
+    const { operationId, deliveryId } = acceptSend(active, { text, operationId: "unavailable-canonical-operation", clientMessageId: "unavailable-canonical-key" });
+    active.journal.transitionOperation(operationId, "delivering");
+    active.journal.transitionOperation(operationId, "uncertain");
+    active.registry.recordDeliveryOutcome(deliveryId, "failed", SEND_UNVERIFIED_REASON, "unverified");
+    const wire = await encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken(operationId));
+    fs.writeFileSync(active.transcriptPath, JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: wire } }) + "\n");
+    const unavailable = { ...active.client, transitionOperation: async () => { throw new Error("journal arbitration unavailable"); },
+      operationStatus: async () => { throw new Error("journal status unavailable"); } } as RuntimeHostClient;
+
+    for (const client of [unavailable, null]) {
+      const found = await resolveOriginalSend({ conversationId: active.conversationId, clientMessageId: "unavailable-canonical-key" }, {
+        registry: active.registry, client,
+      });
+      expect(found).toMatchObject({ kind: "found", current: { readable: false } });
+      if (found.kind === "found" && found.current.readable) expect(found.current.value.state).not.toBe("delivered");
+    }
+    const mcp = viewerMcpRecoverableTools({ sendSettlementPorts: () => ({ registry: active.registry, client: unavailable }) } as never);
+    expect(await mcp.send_message!.recover!({
+      toolName: "send_message", downstreamKey: "unavailable-canonical-key", target: { identity: active.conversationId },
+    } as never, { legacy: false })).toMatchObject({
+      outcome: "settled", facts: { state: "failed", resend: "verify-first", duplicateRisk: true },
+      reason: expect.stringContaining("current runtime answer could not be read"),
+    });
+    expect(sendReceiptFor(active.registry.readOnlySnapshot(), operationId)).toMatchObject({ state: "failed", reason: SEND_UNVERIFIED_REASON });
   } finally { active.close(); }
 });
 
@@ -2109,7 +2277,7 @@ test("equal text under another key and an assistant answer prove nothing about t
     const text = "check the release";
     const { operationId } = acceptSend(active, { text });
     active.journal.transitionOperation(operationId, "delivering");
-    const wire = encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken("different-operation"));
+    const wire = await encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken("different-operation"));
     fs.writeFileSync(active.transcriptPath, JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: wire } }) + "\n" + JSON.stringify({ type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "done" }] } }) + "\n");
     expect(await resolveSendReceipt(operationId, { registry: active.registry, client: active.client, now: AFTER_THE_WINDOW })).toMatchObject({ state: "failed", resend: "verify-first" });
   } finally { active.close(); }
@@ -2237,7 +2405,7 @@ test("a retry records and settles against the currently committed generation", a
     const retryId = "op_retry_successor";
     expect(reopened.recordDeliveryRetryAttempt(original.operationId, retryId)).toBeTrue();
     expect(reopened.readOnlySnapshot().deliveryOperationOwners[retryId]?.targetGenerationId).toBe(successorId);
-    const wire = encodeCodexStructuredUserText("recover into successor", undefined, null,
+    const wire = await encodeCodexStructuredUserText("recover into successor", undefined, null,
       { kind: "operator" }, deliveryDedupToken(retryId));
     fs.writeFileSync(successorPath, JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: wire } }) + "\n");
     expect(await resolveSendReceipt(retryId, { registry: reopened, client: null }))
@@ -2299,7 +2467,9 @@ test("an explicit status recovery with late canonical delivery never rearms the 
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ receipt: { status: "delivered", resend: "not-needed" } });
     expect(active.journal.effectBatch(100)).toEqual([]);
-    expect(active.journal.operationResult(operationId)?.receipt.status).toBe("uncertain");
+    // Canonical acknowledgement now arbitrates in the journal before its
+    // projection, so both durable records agree without rearming any effect.
+    expect(active.journal.operationResult(operationId)?.receipt.status).toBe("delivered");
   } finally { active.close(); }
 });
 
@@ -2333,7 +2503,7 @@ test("late canonical delivery remains observable after seat rotation", async () 
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ receipt: { status: "delivered", resend: "not-needed" } });
     expect(active.journal.effectBatch(100)).toEqual([]);
-    expect(active.journal.operationResult(operationId)?.receipt.status).toBe("uncertain");
+    expect(active.journal.operationResult(operationId)?.receipt.status).toBe("delivered");
     expect(Object.keys(active.registry.readOnlySnapshot().deliveryOperationOwners)).toEqual([operationId]);
   } finally { active.close(); }
 });
@@ -2375,7 +2545,7 @@ test("a late canonical acknowledgement corrects the progress record that ended u
 
     /* Nothing was rearmed or sent again. */
     expect(active.journal.effectBatch(100)).toEqual(effectsBefore);
-    expect(active.journal.operationResult(operationId)?.receipt.status).toBe("uncertain");
+    expect(active.journal.operationResult(operationId)?.receipt.status).toBe("delivered");
     expect(ledger.load(active.generationId)).toHaveLength(queuedBefore);
 
     progress.close();
@@ -2516,7 +2686,7 @@ test("a compacted Codex attempt settles from its canonical turn after registry r
     active.journal.transitionOperation(operationId, "delivering");
     active.journal.transitionOperation(operationId, "uncertain", { reason: SEND_UNVERIFIED_REASON });
     active.registry.recordDeliveryOutcome(deliveryId, "failed", SEND_UNVERIFIED_REASON, "unverified");
-    const wire = encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken(operationId));
+    const wire = await encodeCodexStructuredUserText(text, undefined, null, { kind: "operator" }, deliveryDedupToken(operationId));
     fs.writeFileSync(active.transcriptPath, JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: wire } }) + "\n");
     clock += 8 * 24 * 60 * 60 * 1000;
     const later = acceptSend(active, { clientMessageId: "codex-retention-trigger", operationId: "op_codex_retention_trigger" });

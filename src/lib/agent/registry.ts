@@ -1,5 +1,6 @@
+import { agentSignalDomainAlive, normalizeAgentSignalDomain, normalizeSignalBoundaryOff, type AgentSignalDomain, type SignalBoundaryOff } from "@/lib/runtime/agentSignalSandbox";
 import { liveRootSession } from "@/lib/root/adopt";
-import { StateLockDeferredError, waitForStateLock } from "@/lib/state/lockWait";
+import { StateLockDeferredError, stateLockAttempt, stateLockDeferral, waitForStateLock } from "@/lib/state/lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { normalizeHostMemory, type HostMemoryState } from "@/lib/runtime/agentMemoryState";
@@ -98,7 +99,7 @@ import {
 } from "./registryBackendIdentity";
 import {
   SqliteAgentRegistryStore,
-  registryRowsMatching, registryKeysMatching, registryHasLookupIndex, registryConversationsForPath, registryHasPathIndex,
+  registryRowsMatching, registryKeysMatching, registryKeysMatchingBounded, registryHasLookupIndex, registryConversationsForPath, registryHasPathIndex,
   registryConversationsForEntryKey, registryHasEntryKeyIndex,
   sqliteRegistryStoreImported,
   type RegistryDeliveryCompactionChanges,
@@ -141,6 +142,9 @@ export interface TmuxHostEvidence {
 }
 
 export interface StructuredHostColumns {
+  signalDomain?: AgentSignalDomain;
+  /** Why this host's engine runs without the signal boundary, if it does. */
+  signalBoundary?: SignalBoundaryOff;
   memory?: HostMemoryState;
   /** Why the recorded host ended (#2790); kept with the terminal row. */
   ended?: HostEndCause;
@@ -2186,8 +2190,14 @@ function normalizeStructuredHost(value: unknown): StructuredHostColumns | null {
         ...(typeof host.process.bootEpoch === "string" ? { bootEpoch: host.process.bootEpoch } : {}),
       }
     : null;
+  const signalDomain = normalizeAgentSignalDomain(host.signalDomain);
+  if (signalDomain && processIdentity && !sameRecordedProcessIdentity(processIdentity, signalDomain.native)) {
+    throw new Error("structured host signal identity is contradictory");
+  }
   return {
     kind: host.kind,
+    ...(signalDomain ? { signalDomain } : {}),
+    ...(normalizeSignalBoundaryOff(host.signalBoundary) ? { signalBoundary: normalizeSignalBoundaryOff(host.signalBoundary)! } : {}),
     endpoint: typeof host.endpoint === "string" ? host.endpoint : "",
     process: processIdentity,
     eventCursor: eventCursor === undefined ? 0 : eventCursor as number,
@@ -2527,13 +2537,15 @@ function canonicalHeldDeliveryCommand(
   const origin = parseMessageOrigin(value?.origin);
   if (origin) command.origin = origin;
   if (typeof value?.cohortAt === "string" && Number.isFinite(Date.parse(value.cohortAt))) command.cohortAt = value.cohortAt;
+  if (typeof value?.roleMemoryRevision === "string" && /^[a-f0-9]{64}$/.test(value.roleMemoryRevision)
+    && command.operationId.startsWith("spawn_message_")) command.roleMemoryRevision = value.roleMemoryRevision;
   return command;
 }
 
 function heldDeliveryRequestDigest(
   conversationId: ViewerConversationId,
   text: string,
-  command: Pick<HeldDeliveryCommand, "kind" | "policy" | "turnId" | "onlyIfIdle">,
+  command: Pick<HeldDeliveryCommand, "kind" | "policy" | "turnId" | "onlyIfIdle" | "roleMemoryRevision">,
 ): string {
   const turnFence = command.turnId === undefined
     ? ["absent"]
@@ -2546,6 +2558,7 @@ function heldDeliveryRequestDigest(
     command.policy,
     turnFence,
     ...(command.onlyIfIdle ? [["idle", command.onlyIfIdle.revision, command.onlyIfIdle.writerClaim]] : []),
+    ...(command.roleMemoryRevision ? [["role-memory-revision", command.roleMemoryRevision]] : []),
   ])).digest("hex");
 }
 
@@ -2586,6 +2599,36 @@ export function conversationRegistryEntries<C extends "heldDeliveries" | "delive
   const rows = file[collection] as Record<string, RegistryFile[C][string]>;
   return registryKeysMatching(file, collection, "conversationId", conversationIdentities(file, id))
     .flatMap((key) => rows[key] ? [[key, rows[key]!] as [string, RegistryFile[C][string]]] : []);
+}
+
+/** Recovery hydrates only this message key and recipient. The bound refuses
+ * ambiguous or hostile histories before any command bodies are decoded. */
+export const DELIVERY_KEY_ROW_LIMIT = 256;
+export function deliveryRegistryEntriesForKey<C extends "heldDeliveries" | "deliveryOperationOwners">(
+  file: RegistryFile, collection: C, clientMessageId: string, recipients?: readonly string[],
+): Array<[string, RegistryFile[C][string]]> {
+  return withViewerOperation("registry.delivery-key", () => performanceSpans.sync("registry.delivery-key", () => {
+    const filters: { field: "clientMessageId" | "conversationId"; value: string | readonly string[] }[] = [
+      { field: "clientMessageId", value: clientMessageId },
+    ];
+    if (recipients) {
+      const identities = [...new Set(recipients.flatMap(id => conversationIdentities(file, id as ViewerConversationId)))];
+      if (identities.length === 0) return [];
+      filters.push({ field: "conversationId", value: identities });
+    }
+    const keys = registryKeysMatchingBounded(file, collection, filters, DELIVERY_KEY_ROW_LIMIT + 1);
+    if (keys.length > DELIVERY_KEY_ROW_LIMIT) throw new Error("delivery key recovery exceeds its row budget");
+    const rows = file[collection] as Record<string, RegistryFile[C][string]>;
+    return keys.flatMap(key => rows[key] ? [[key, rows[key]!] as [string, RegistryFile[C][string]]] : []);
+  }));
+}
+
+export interface ConversationAuthorityFacts {
+  id: string;
+  superseded: boolean;
+  hasGeneration: boolean;
+  project: string | null;
+  directories: string[];
 }
 
 function heldDeliveryRequestDigests(
@@ -2667,6 +2710,12 @@ function terminalDeliveryState(
 }
 
 const OPERATOR_DISCARDED_DELIVERY_REASON = "delivery-discarded";
+
+function discardableDeliveryFailure(error: string | null, disposition: DeliveryTerminalDisposition | null,
+  reason = OPERATOR_DISCARDED_DELIVERY_REASON): boolean {
+  return error === reason || disposition === "unverified" || (disposition === null
+    && !error?.startsWith(MIGRATION_DELIVERY_CANCELLATION_PREFIX));
+}
 
 function terminalDeliveryFailureIsAbsorbing(delivery: HeldDelivery): boolean {
   return delivery.state === "failed"
@@ -4437,6 +4486,9 @@ export interface AgentRegistryStorageOptions {
       sets it: a reader that guesses wrong opens a store the writer does not
       own. See {@link resolveRegistryBackend}. */
   resolveBackendIdentity?: boolean;
+  /** First session lookup opens under async admission and prepares the SQLite
+      cold-key projection cooperatively. */
+  deferColdKeyInitialization?: boolean;
   /** Grant bound for the MCP origin rebound (issue #739). Production omits it;
       a test supplies a policy that HAS a grantable connector, since the shipped
       bound has none and an empty bound proves nothing about the origin rule. */
@@ -4715,6 +4767,7 @@ export class AgentRegistry {
     const mayRunStartupMaintenance = mayRunStateStartupMutation(path.dirname(this.filename));
     const openStore = () => new SqliteAgentRegistryStore(sqliteFilename, {
       allowArchiveMigration: mayRunStartupMaintenance,
+      deferColdKeyInitialization: storage.deferColdKeyInitialization,
       /* Lazy: an initialised store never reads the JSON (#1870). */
       initialSnapshot: () => readFile(filename, storage.mcpGrantPolicy),
       verifyImport: (source, imported) => verifyRegistryImport(source, imported, storage.onRegistryImportVerify),
@@ -5655,6 +5708,18 @@ export class AgentRegistry {
     return written.value;
   }
 
+  /** A synchronous multi-mutation callback keeps the admitted SQLite writer
+   * through every member. Successful members retain their ordinary failure
+   * semantics if a later member throws; the callback is never retried. */
+  async deliveryWriteBatchOrBusy<T>(correlation: { label: string; operationId?: string | null }, write: () => T): Promise<T> {
+    return this.deliveryWriteOrBusy(correlation, () => this.withMutationBatch(write));
+  }
+
+  private withMutationBatch<T>(write: () => T): T {
+    return this.sqliteMode === "read" || this.sqliteMode === "sqlite"
+      ? this.sqliteStore!.withMutationBatch(write) : write();
+  }
+
   /**
    * {@link deliveryWrite} for a caller that may not wait at all, because it
    * runs inside another synchronous lock (account retirement holds the
@@ -5716,9 +5781,9 @@ export class AgentRegistry {
     return this.readOnlySnapshot();
   }
 
-  private readKeyed<T>(reader: (file: RegistryFile) => T): T {
-    return performanceSpans.sync("registry.keyed", () => this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
-      ? this.sqliteStore.read(reader) : reader(this.readOnlySnapshot()));
+  private readKeyed<T>(reader: (file: RegistryFile) => T, options: { skipColdKeyInitialization?: boolean } = {}): T {
+    return withViewerOperation("registry.read", () => performanceSpans.sync("registry.keyed", () => this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
+      ? this.sqliteStore.read(reader, options) : reader(this.readOnlySnapshot())));
   }
 
   /** Retention evidence for one pending runtime effect. SQLite selectors run
@@ -6018,7 +6083,7 @@ export class AgentRegistry {
   spawnEvidence(launchId: string): {
     receipt: SpawnReceipt | null;
     generation: { engine: AgentEngine; id: string; path: string } | null;
-    entry: Pick<AgentRegistryEntry, "artifactPath" | "structuredHostOperationId"> | null;
+    entry: Pick<AgentRegistryEntry, "artifactPath" | "structuredHostOperationId" | "status" | "claimOwner" | "structuredHost" | "structuredTerminationSurvivors"> | null;
     structured: boolean;
   } {
     return this.readKeyed(file => {
@@ -6030,7 +6095,9 @@ export class AgentRegistry {
       return {
         receipt: clone(receipt),
         generation: conversation && generation ? { engine: conversation.engine, id: generation.id, path: generation.path } : null,
-        entry: entry ? { artifactPath: entry.artifactPath, structuredHostOperationId: entry.structuredHostOperationId } : null,
+        entry: entry ? { artifactPath: entry.artifactPath, structuredHostOperationId: entry.structuredHostOperationId,
+          status: entry.status, claimOwner: entry.claimOwner, structuredHost: entry.structuredHost,
+          structuredTerminationSurvivors: entry.structuredTerminationSurvivors } : null,
         structured: !!entry?.structuredHost || typeof entry?.structuredHostOperationId === "string",
       };
     });
@@ -6309,6 +6376,7 @@ export class AgentRegistry {
     if (!written.acquired) throw new RegistryWriterBusyError(`${caller} admission`);
     const result = written.value;
     if (result.kind === "created" || result.kind === "replay") {
+      await new Promise<void>(resolve => setImmediate(resolve));
       // Reservation is durable. Retry only its idempotent prerequisite, with
       // no registry writer held while the task store takes its own writer.
       const admission = await waitForStateLock(`${caller}.membership`, async () => {
@@ -6323,6 +6391,7 @@ export class AgentRegistry {
         }
       }, { waitMs: remaining(), subject: result.receipt.launchId });
       if (admission.ok) {
+        await new Promise<void>(resolve => setImmediate(resolve));
         const recorded = await this.accountMutationWrite(`${caller} membership record`, () => {
           this.recordSpawnMembership(result.receipt, admission.taskIds);
         }, guard, { waitMs: remaining() });
@@ -6338,6 +6407,11 @@ export class AgentRegistry {
     operationId?: string | null;
     correlate?: (value: T) => BlockingWaitCorrelation | null;
     waitMs?: number;
+    /** Mixed account/state writers share state.sqlite with this registry.
+     * Probe first, then release SQLite before their callback; account custody
+     * remains held and every registry mutation still makes a zero-wait probe.
+     * These callbacks must roll back or be idempotent on a deferred write. */
+    releaseBeforeWrite?: boolean;
   } = {}): Promise<{ acquired: true; value: T } | { acquired: false }> {
     const inherited = accountMutationHeld();
     const startedAt = performance.now();
@@ -6350,20 +6424,34 @@ export class AgentRegistry {
       const deadline = performance.now() + remainingMs;
       try {
         for (;;) {
-          const result = await withAccountMutationLockAsync(() => {
-            guard?.();
-            // Publish one correlated wait after admission supplies its operation
-            // id; individual failed probes are part of this same wait.
-            return this.deliveryWriteNow(correlation, () => { acquiredAt = performance.now(); refused = false; return write(); }, { recordRefusal: false });
-          }, {
-            holder: label, caller: label,
-            waitMs: Math.min(ACCOUNT_MUTATION_ADMISSION_WAIT_MS, Math.max(0, deadline - performance.now())),
-          });
+          let result: { acquired: true; value: T } | { acquired: false };
+          try {
+            result = await withAccountMutationLockAsync(() => {
+              guard?.();
+              // Publish one correlated wait after admission supplies its operation
+              // id; individual failed probes are part of this same wait.
+              const invoke = () => { acquiredAt = performance.now(); refused = false; return write(); };
+              if (options.releaseBeforeWrite) {
+                const probe = this.deliveryWriteNow(correlation, () => undefined, { recordRefusal: false });
+                return probe.acquired ? { acquired: true, value: withWaitCorrelation(correlation, invoke) } : probe;
+              }
+              return this.deliveryWriteNow(correlation, invoke, { recordRefusal: false });
+            }, {
+              holder: label, caller: label,
+              waitMs: Math.min(ACCOUNT_MUTATION_ADMISSION_WAIT_MS, Math.max(0, deadline - performance.now())),
+            });
+          } catch (error) {
+            const registryBusy = error instanceof RegistryWriterBusyError
+              || (error instanceof Error && (error as { code?: string }).code === "SQLITE_BUSY");
+            if (!options.releaseBeforeWrite || !(registryBusy || error instanceof AccountMutationBusyError || stateLockDeferral(error))) throw error;
+            result = { acquired: false };
+          }
           if (result.acquired) {
             correlation = options.correlate?.(result.value) ?? correlation;
             return result;
           }
           refused = true;
+          acquiredAt = undefined;
           if (inherited || performance.now() >= deadline) return result;
           waited = true;
           await new Promise<void>(resolve => setTimeout(resolve, 5));
@@ -6373,13 +6461,13 @@ export class AgentRegistry {
           durationMs: (acquiredAt ?? performance.now()) - startedAt, correlation, subject: "agent-registry", refused });
       }
     };
-    if (inherited) return run(totalWaitMs);
-    return this.withWriterAdmissionQueue(run, totalWaitMs, () => {
+    if (inherited) return withViewerOperation("registry.write", () => run(totalWaitMs));
+    return withViewerOperation("registry.write", () => this.withWriterAdmissionQueue(run, totalWaitMs, () => {
       refused = true;
       recordBlockingWait({ site: "registry-lock-async", synchronous: false,
         durationMs: performance.now() - startedAt, correlation, subject: "agent-registry", refused: true });
       return { acquired: false };
-    });
+    }));
   }
 
   private reserveSpawnRequest(input: SpawnRequest): SpawnBeginResult {
@@ -7438,6 +7526,7 @@ export class AgentRegistry {
         throw new Error("structured spawn recovery identity is unavailable");
       }
       if (entry.host || entry.structuredHost?.process || entry.claimOwner
+        || (entry.structuredHost?.signalDomain && entry.structuredHost.signalDomain.retired !== true)
         || (entry.status !== "dead" && entry.status !== "unhosted")) {
         throw new Error("structured spawn host loss is unconfirmed");
       }
@@ -7828,7 +7917,9 @@ export class AgentRegistry {
          process table. Only this launch's registered live host qualifies.
          A captured descendant has the same preservation requirement: clearing
          the root row would strand its identity and let a resume start a twin. */
-      if (retainedSurvivors.length > 0 || (options.retainRegisteredHost === true
+      if (retainedSurvivors.length > 0
+        || (entry.structuredHost?.signalDomain && entry.structuredHost.signalDomain.retired !== true)
+        || (options.retainRegisteredHost === true
         && releaseRegisteredHost
         && entry.structuredHost?.process)) {
         entry.pendingAction = null;
@@ -7882,6 +7973,9 @@ export class AgentRegistry {
       const existing = file.entries[keyId];
       const survivors = existing?.structuredTerminationSurvivors ?? [];
       const requestedHost = entry.structuredHost === undefined ? existing?.structuredHost : entry.structuredHost;
+      if (existing?.structuredHost?.signalDomain && existing.structuredHost.signalDomain.retired !== true && !requestedHost?.signalDomain) {
+        throw new Error("structured host signal domain must be retired before replacement");
+      }
       if (survivors.length > 0 && (!existing?.structuredHost?.process || !requestedHost?.process
         || !sameRecordedProcessIdentity(existing.structuredHost.process, requestedHost.process))) {
         throw new Error("structured host termination still has live survivors");
@@ -7907,6 +8001,9 @@ export class AgentRegistry {
       const keyId = sessionKeyId(key);
       const entry = file.entries[keyId];
       if (!entry) throw new Error("agent registry entry is missing");
+      if (entry.structuredHost?.signalDomain && entry.structuredHost.signalDomain.retired !== true && !structuredHost?.signalDomain) {
+        throw new Error("structured host signal domain must be retired before replacement");
+      }
       if ((entry.structuredTerminationSurvivors?.length ?? 0) > 0
         && (!structuredHost?.process || !entry.structuredHost?.process
           || !sameRecordedProcessIdentity(entry.structuredHost.process, structuredHost.process))) {
@@ -7954,10 +8051,13 @@ export class AgentRegistry {
       if (retained.length > 0 && (!expected || !current || !sameRecordedProcessIdentity(current, expected))) return false;
       const confirmed = new Set(confirmedSurvivors.map(identity => `${identity.pid}:${identity.startIdentity}:${identity.bootEpoch ?? ""}`));
       if (retained.some(identity => !confirmed.has(`${identity.pid}:${identity.startIdentity}:${identity.bootEpoch ?? ""}`))) return false;
+      const domain = entry.structuredHost?.signalDomain;
+      if (domain && [domain.monitor, domain.bubblewrap, domain.init, domain.native].some(identity => processIdentityStatus(identity) !== "dead")) return false;
       const replacement = {
         ...entry,
         host: null,
-        structuredHost: null,
+        structuredHost: domain ? { ...entry.structuredHost!, endpoint: "stdio:released", process: null, activeTurnRef: null,
+          pendingAttention: [], activeFlags: [], signalDomain: { ...domain, retired: true as const } } : null,
         structuredTerminationSurvivors: [],
         status: "dead" as const,
         claimOwner: null,
@@ -8066,6 +8166,12 @@ export class AgentRegistry {
       const retained = entry.structuredTerminationSurvivors ?? [];
       const confirmed = new Set(confirmedSurvivors.map(identityKey));
       if (retained.some(identity => !confirmed.has(identityKey(identity)) || this.ownerAlive(identity))) return null;
+      const domain = entry.structuredHost?.signalDomain;
+      if (domain) {
+        if ([domain.monitor, domain.bubblewrap, domain.init, domain.native].some(identity => processIdentityStatus(identity) !== "dead")) return null;
+        entry.structuredHost!.signalDomain = { ...domain, retired: true };
+        entry.updatedAt = now();
+      }
       if (entry.structuredTerminationSurvivors === undefined) return [];
       delete entry.structuredTerminationSurvivors;
       entry.updatedAt = now();
@@ -8162,6 +8268,7 @@ export class AgentRegistry {
       const entry = file.entries[keyId];
       const structuredProcess = entry?.structuredHost?.process ?? null;
       const retainedSurvivors = entry?.structuredTerminationSurvivors ?? [];
+      const domain = entry?.structuredHost?.signalDomain;
       const staleStructuredWrapper = structuredProcess !== null && !this.ownerAlive(structuredProcess);
       if (!conversation
         || conversation.engine !== key.engine
@@ -8173,13 +8280,15 @@ export class AgentRegistry {
           || entry.structuredHost?.writerClaimEpoch !== expected.claimEpoch))
         || entry.host
         || retainedSurvivors.length > 0
+        || (domain && [domain.monitor, domain.bubblewrap, domain.init, domain.native].some(identity => processIdentityStatus(identity) !== "dead"))
         || (structuredProcess !== null && !staleStructuredWrapper)
         || (entry.claimOwner && !staleStructuredWrapper)
         || (!staleStructuredWrapper && entry.status !== "dead" && entry.status !== "unhosted")) return false;
       const replacement = {
         ...entry,
         host: null,
-        structuredHost: null,
+        structuredHost: domain ? { ...entry.structuredHost!, endpoint: "stdio:released", process: null, activeTurnRef: null,
+          pendingAttention: [], activeFlags: [], signalDomain: { ...domain, retired: true as const } } : null,
         status: "dead" as const,
         claimOwner: null,
         pendingAction: null,
@@ -8320,6 +8429,11 @@ export class AgentRegistry {
         ?? (!entry.host && options.allowUnhosted === true ? options.setupHost : null);
       if (!structuredHost) return null;
       if ((entry.structuredTerminationSurvivors?.length ?? 0) > 0) return null;
+      if (structuredHost.signalDomain && structuredHost.signalDomain.retired !== true
+        && (!options.reconnectCodex || structuredHost.kind !== "codex-app-server"
+          || structuredHost.endpoint !== options.reconnectCodex.endpoint
+          || !sameRecordedProcessIdentity(structuredHost.signalDomain.native, options.reconnectCodex.process)
+          || !agentSignalDomainAlive(structuredHost.signalDomain))) return null;
       if (entry.status === "unhosted" && options.allowUnhosted !== true) return null;
       /* Adoption builds its host options from the entry this returns, and a
          mutation loads rows lazily rather than from an assembled snapshot, so
@@ -8829,7 +8943,14 @@ export class AgentRegistry {
         const priorTurnState = conversation.turn.state;
         const lineage = file.lineageEdges[conversation.id];
         const observedParentConversationId = observation.launchProfile.parentConversationId;
-        generation.accountId = observation.accountId ?? generation.accountId;
+        const observedAccountId = observation.accountId ?? generation.accountId;
+        if (observedAccountId !== generation.accountId && generation.quotaCustody
+          && !generation.quotaCustody.endedAt) {
+          // Discovery time cannot establish the switch time. Readers quarantine
+          // this whole custody interval, even if inventory later returns to it.
+          generation.quotaCustody = { ...generation.quotaCustody, endedAt: observation.observedAt };
+        }
+        generation.accountId = observedAccountId;
         generation.launchProfile = {
           ...generation.launchProfile,
           ...observation.launchProfile,
@@ -8921,8 +9042,26 @@ export class AgentRegistry {
     });
   }
 
+  /** One request's aliases, conversation and staged-path receipts, under the
+      same keyed read transaction. No lookup or lazy registry row escapes it. */
+  sessionTarget(
+    conversationId: string | null,
+    fallbackPath: string,
+    options: { skipColdKeyInitialization?: boolean } = {},
+  ): { path: string; unavailable: boolean } {
+    return this.readKeyed(file => {
+      const lookup = readOnlyConversationLookupFromSnapshot(file);
+      const fence = identityMaterializationFence(file);
+      const conversation = conversationId?.startsWith("conversation_") ? lookup.conversation(conversationId as ViewerConversationId) : null;
+      const materialized = conversation ? fence.pathForConversation(conversation.id) : null;
+      const path = materialized ?? fallbackPath;
+      return { path, unavailable: Boolean(conversation && !materialized || path && !fence.allowsPath(path)) };
+    }, options);
+  }
+
+  /** Alias resolution needs no conversation payload or grant normalization. */
   canonicalConversationId(id: ViewerConversationId): ViewerConversationId {
-    return this.readKeyed(file => resolveConversationAlias(file, id));
+    return this.readKeyed(file => resolveConversationAlias(file, id), { skipColdKeyInitialization: true });
   }
 
   /** Records the terminal predecessor → successor edge (issue #383) outside
@@ -8991,6 +9130,18 @@ export class AgentRegistry {
       const conversation = file.conversations[resolveConversationAlias(file, id)];
       return conversation ? clone(conversation) : null;
     });
+  }
+
+  conversationAuthorityFacts(id: string): ConversationAuthorityFacts | null {
+    return withViewerOperation("orchestrator.authority", () => performanceSpans.sync("authority.facts", () => {
+      if (this.sqliteStore && (this.sqliteMode === "sqlite" || this.sqliteMode === "read")) return this.sqliteStore.conversationAuthorityFacts(id);
+      return this.readKeyed(file => {
+        const conversation = file.conversations[resolveConversationAlias(file, id as ViewerConversationId)];
+        return conversation ? { id: conversation.id, superseded: conversation.supersededBy !== null,
+          hasGeneration: conversation.generations.length > 0, project: conversation.projectOwnership?.project ?? null,
+          directories: conversation.generations.toReversed().flatMap(g => g.launchProfile?.cwd ? [g.launchProfile.cwd] : []) } : null;
+      });
+    }));
   }
 
   launchProfileForPath(artifactPath: string): LaunchProfile | null {
@@ -10060,12 +10211,16 @@ export class AgentRegistry {
       const predecessor = conversation.generations.at(-1);
       if (!predecessor) throw new Error("viewer conversation has no native generation");
       const committedAt = now();
+      const committedHost = successor.host ?? expectedReceipt.host;
       predecessor.archivedAt = committedAt;
       const generation: NativeGeneration = {
         ...successor,
         launchProfile: emptyLaunchProfile(successor.launchProfile ?? predecessor.launchProfile),
         historyHash: successor.historyHash ?? null,
-        host: successor.host ?? null,
+        host: committedHost ?? null,
+        ...(committedHost?.kind === "codex-app-server" && successor.accountId
+          ? { quotaCustody: { accountId: successor.accountId, artifactPath: successor.path } }
+          : {}),
         createdAt: committedAt,
         archivedAt: null,
       };
@@ -11149,8 +11304,16 @@ export class AgentRegistry {
       const settled = outcomes.map((outcome) => {
         const canonicalId = resolveConversationAlias(file, outcome.conversationId);
         const delivery = deliveries.get(keyFor(canonicalId, outcome.operationId));
+        const discarded = outcome.state === "failed" && outcome.error === OPERATOR_DISCARDED_DELIVERY_REASON;
         if (!delivery) {
           const owner = file.deliveryOperationOwners[outcome.operationId];
+          if (discarded && owner && resolveConversationAlias(file, owner.conversationId) === canonicalId
+            && owner.terminalState === "failed"
+            && discardableDeliveryFailure(owner.terminalReason, owner.terminalDisposition)) {
+            owner.terminalReason = OPERATOR_DISCARDED_DELIVERY_REASON;
+            owner.terminalDisposition = "unverified";
+            owner.evidenceText = "";
+          }
           if (owner && resolveConversationAlias(file, owner.conversationId) === canonicalId
             && outcome.state === "delivered" && outcome.disposition === "delivered"
             && owner.terminalState === "failed" && owner.terminalDisposition === "unverified"
@@ -11167,17 +11330,29 @@ export class AgentRegistry {
         const retryRecovered = delivery.state === "failed"
           && outcome.state === "delivered"
           && !terminalDeliveryFailureIsAbsorbing(delivery);
-        if (delivery.state !== "delivery-uncertain" && !retryRecovered) return null;
+        const discardRecovered = discarded && (delivery.state === "held" || delivery.state === "assigned"
+          || (delivery.state === "failed" && discardableDeliveryFailure(delivery.error,
+            file.deliveryOperationOwners[outcome.operationId]?.terminalDisposition ?? null)));
+        if (delivery.state !== "delivery-uncertain" && !retryRecovered && !discardRecovered) return null;
         const conversation = file.conversations[canonicalId];
         const paths = new Set([conversation?.generations.at(-1)?.path].filter((pathname): pathname is string => Boolean(pathname)));
         const signature = conversation ? migrationReadinessSignature(file, conversation.engine, paths) : "";
         delivery.state = outcome.state;
         delivery.deliveredAt = outcome.state === "delivered" ? now() : null;
         delivery.error = outcome.error?.slice(0, 240) ?? null;
+        if (discarded) {
+          delivery.text = "";
+          delivery.generationId = null;
+          delivery.assignedAt = null;
+        }
         if (outcome.state === "delivered") delivery.text = "";
         if (outcome.state === "failed") failInitialSpawnReceiptForDelivery(file, delivery);
         if (conversation) advanceMigrationScopeRevision(file, conversation.engine, signature, paths);
         syncDeliveryOperationOwnerState(file, delivery, outcome.disposition);
+        if (discarded) {
+          const owner = file.deliveryOperationOwners[outcome.operationId];
+          if (owner) owner.evidenceText = "";
+        }
         if (outcome.state === "delivered") recordDeliveryRoute(deliveryOwner(file, delivery), outcome.route);
         compactConversations.add(delivery.conversationId);
         return clone(delivery);
@@ -11268,13 +11443,10 @@ export class AgentRegistry {
       // is the durable record in that case; there is no reservation to mutate.
       // An explicit unverified disposition also covers account switches after
       // an attempt; the migration reason alone cannot establish a known loss.
-      const discardableFailure = (error: string | null, terminalDisposition: DeliveryTerminalDisposition | null) =>
-        error === reason || terminalDisposition === "unverified" || (terminalDisposition === null
-          && !error?.startsWith(MIGRATION_DELIVERY_CANCELLATION_PREFIX));
       if (!delivery) {
         if (owner && resolveConversationAlias(file, owner.conversationId) === canonicalId
           && owner.terminalState === "failed"
-          && discardableFailure(owner.terminalReason, owner.terminalDisposition)) {
+          && discardableDeliveryFailure(owner.terminalReason, owner.terminalDisposition, reason)) {
           owner.terminalReason = reason.slice(0, 240);
           owner.terminalDisposition = disposition;
           owner.settledAt = now();
@@ -11289,7 +11461,7 @@ export class AgentRegistry {
         || delivery.state === "assigned"
         || delivery.state === "delivery-uncertain"
         || (delivery.state === "failed"
-          && discardableFailure(delivery.error, owner?.terminalDisposition ?? null));
+          && discardableDeliveryFailure(delivery.error, owner?.terminalDisposition ?? null, reason));
       if (!discardable) return null;
       const conversation = file.conversations[canonicalId];
       const paths = new Set([conversation?.generations.at(-1)?.path]
@@ -11428,8 +11600,28 @@ const registryProcessState = process as typeof process & {
 };
 
 export function agentRegistry(): AgentRegistry {
-  registryProcessState.__llvAgentRegistry ??= new AgentRegistry(undefined, undefined, undefined, { resolveBackendIdentity: true });
+  registryProcessState.__llvAgentRegistry ??= withViewerOperation("registry.prepare", () => performanceSpans.sync("registry.prepare.open", () =>
+    new AgentRegistry(undefined, undefined, undefined, { resolveBackendIdentity: true, deferColdKeyInitialization: true })));
   return registryProcessState.__llvAgentRegistry;
+}
+
+/** Open the cold session facade and answer from keyed rows. The one admitted
+    read bypasses the full cold-key index and snapshot preparation; uncached row
+    parsing keeps archived values out of the hot row cache. */
+export async function readAgentSessionTarget(
+  conversationId: string | null,
+  fallbackPath: string,
+  signal?: AbortSignal,
+): Promise<{ path: string; unavailable: boolean }> {
+  return waitForStateLock("registry.session.read", () => {
+    const registry = stateLockAttempt("registry.session.open", () => {
+      registryProcessState.__llvAgentRegistry ??= withViewerOperation("registry.prepare", () => performanceSpans.sync("registry.prepare.open", () =>
+        new AgentRegistry(undefined, undefined, undefined, { resolveBackendIdentity: true, deferColdKeyInitialization: true })));
+      return registryProcessState.__llvAgentRegistry;
+    });
+    return stateLockAttempt("registry.session.read", () => registry.sessionTarget(conversationId, fallbackPath,
+      { skipColdKeyInitialization: true }));
+  }, { signal });
 }
 
 export function setAgentRegistryForTests(value: AgentRegistry | null): void {

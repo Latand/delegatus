@@ -168,9 +168,11 @@ import { peekSeatTickState } from "@/lib/monitor/seatTickState";
 import type { SeatTickProjectState } from "@/lib/monitor/types";
 import { authorizedManagerSeats, type ManagerAuthoritySources } from "@/lib/orchestrator/authority";
 import { deputiesForSeatIn, productionDeputyPrincipal, readDeputies, spawnParentForCaller } from "@/lib/orchestrator/deputies";
-import { beginSeatDeployment, forgetSeatDeploymentRequest, recoverSeatDeploymentRequests, recordSeatDeployment, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
+import { beginSeatDeployment, forgetSeatDeploymentRequest, recoverSeatDeploymentRequests, recordSeatDeployment, seatDeploymentForRequestKey, type SeatDeploymentRecord } from "@/lib/orchestrator/seatDeployments";
 import { activeDrain } from "@/lib/selfUpdate/drain";
 import { launchHoldRefusal } from "@/lib/selfUpdate/launchHold";
+import { checkoutDeploymentByIdempotencyKey } from "@/lib/selfUpdate/deployments";
+import { statePath } from "@/lib/configDir";
 import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorRevocations, orchestratorSeatFor, orchestratorSeatIdentityForConversation, revokedOrchestratorSeatConversationsOrUnknown, type OrchestratorSeat } from "@/lib/orchestrator/seats";
 import { revokedSeatPipelineRefusal, SeatRevocationStoreUnavailableError } from "@/lib/orchestrator/seatAuthority";
 import { productionManagerAuthoritySources } from "@/lib/orchestrator/managerAuthoritySources";
@@ -249,6 +251,8 @@ import { refineTask } from "@/lib/tasks/membership";
 import { isoNow } from "@/lib/tasks/helpers";
 import { refuseBusyBeforeAdmission, StoreBusyBeforeAdmissionError } from "@/lib/state/fileTransaction";
 import { loadTasks, loadTasksForList, taskSelectionSource, mutateTasks, mutateTasksAsync, mutateTasksFile } from "@/lib/tasks/store";
+import { refreshCurationKnownValuesAsync } from "@/lib/memory/privacy";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { TASK_PRIORITIES, taskPriority, type BoardTask } from "@/lib/tasks/types";
 import type { FileEntry } from "@/lib/types";
@@ -263,6 +267,7 @@ import {
   McpDispatchNotExecutedError,
   McpDispatchUncertainError,
   McpPrototypePublicationPendingError,
+  McpDeploymentPendingError,
   McpDispatchVerdictError,
   McpDispatchSettledRefusalError,
   McpToolRefusal,
@@ -280,7 +285,7 @@ import {
   type McpToolPayload,
 } from "./server";
 import { parseSelectedContextRef } from "@/lib/selection/selectedContext";
-import { RETRYABLE_TELEGRAM_BOT_CODES, type TelegramBotErrorCode } from "@/lib/telegram/bot/contracts";
+import { RETRYABLE_TELEGRAM_BOT_CODES, readTelegramBotRefusals, type TelegramBotErrorCode } from "@/lib/telegram/bot/contracts";
 import { telegramSetUp } from "@/lib/telegram/launchReadiness";
 
 import {
@@ -416,7 +421,7 @@ async function requestViewerControl(
   init: RequestInit,
   context: McpToolCallContext = {},
   pinConfiguredEndpoint = false,
-): Promise<{ response: Response; parsed: unknown; unreadable: boolean }> {
+): Promise<{ response: Response; parsed: unknown; unreadable: boolean; uncertainPriorPost: boolean }> {
   const baseUrl = viewerControlOrigin(process.env, pinConfiguredEndpoint);
   const token = viewerControlToken(process.env, baseUrl);
   const now = Date.now();
@@ -429,6 +434,7 @@ async function requestViewerControl(
   const expiresAt = now + Math.min(publication ? PROTOTYPE_CONTROL_BUDGET_MS : CONTROL_READ_RECOVERY_BUDGET_MS, callerBudget);
   let attempts = 0;
   let lastFailure = "connection failed";
+  let uncertainPriorPost = init.method === "POST" && context.priorAttemptUncertain === true;
   while (Date.now() < expiresAt) {
     if (context.signal?.aborted) throw context.signal.reason;
     if (init.method === "POST") context.assertCaller?.();
@@ -446,6 +452,7 @@ async function requestViewerControl(
       }
       const response = await fetch(new URL(pathname, baseUrl), { ...init, headers, signal: attempt.signal });
       if (TRANSIENT_CONTROL_STATUSES.has(response.status)) {
+        if (init.method === "POST") uncertainPriorPost = true;
         lastFailure = `status ${response.status}`;
         await response.body?.cancel().catch(() => {});
       } else {
@@ -455,13 +462,14 @@ async function requestViewerControl(
             && objectRecord(parsed)
             && Boolean(text(parsed.error) || text(parsed.code));
           if (response.status !== 503 || answeredDomainFailure || !retryable) {
-            return { response, parsed, unreadable: false };
+            return { response, parsed, unreadable: false, uncertainPriorPost };
           }
           lastFailure = "status 503";
         } catch {
           if (context.signal?.aborted) throw context.signal.reason;
+          if (init.method === "POST") uncertainPriorPost = true;
           if (!retryable) {
-            return { response, parsed: null, unreadable: true };
+            return { response, parsed: null, unreadable: true, uncertainPriorPost };
           } else if (attempt.signal.aborted) {
             lastFailure = "response body timed out";
           } else if (response.status === 503) {
@@ -471,8 +479,10 @@ async function requestViewerControl(
           }
         }
       }
-    } catch {
+    } catch (error) {
       if (context.signal?.aborted) throw context.signal.reason;
+      const code = error && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
+      if (init.method === "POST" && code !== "ConnectionRefused" && code !== "ECONNREFUSED") uncertainPriorPost = true;
       lastFailure = attempt.signal.aborted ? "attempt timed out" : "connection failed";
     } finally {
       attempt.release();
@@ -562,7 +572,7 @@ async function postViewerControl(
     }
     throw error;
   }
-  const { response, parsed, unreadable } = answer;
+  const { response, parsed, unreadable, uncertainPriorPost } = answer;
   /* A body of literal `null` is valid JSON, so `.catch` never fires and every
      later `result.x` throws a TypeError before the status can be classified —
      which is how a 405 from a revision that does not serve the route arrived as
@@ -576,6 +586,9 @@ async function postViewerControl(
   const result: Record<string, unknown> = parsed && typeof parsed === "object" && !Array.isArray(parsed)
     ? parsed as Record<string, unknown>
     : {};
+  if (pathname === "/api/runtime/deployments" && uncertainPriorPost && !response.ok) {
+    throw new McpDeploymentPendingError(`${controlFailureMessage(response.status, result.error)} after an earlier deploy request may have reached admission`);
+  }
   if (pathname === "/api/prototype-reviews" && response.ok
     && (typeof result.reviewId !== "string" || !/^pr_[a-f0-9]{32}$/.test(result.reviewId))) {
     throw new McpPrototypePublicationPendingError("Viewer publication response did not name its reviewId");
@@ -609,6 +622,9 @@ async function postViewerControl(
         ...(text(result.resend) ? { resend: text(result.resend) } : {}),
         ...(result.actuation === "started" ? { actuation: "started" } : {}),
       });
+    }
+    if (pathname === "/api/runtime/deployments" && response.status >= 400 && response.status < 500 && response.status !== 408) {
+      throw new McpToolRefusal(message, { code: text(result.code) || "deploy_refused", retryable: false, status: response.status });
     }
     throw new Error(message);
   }
@@ -731,11 +747,13 @@ async function dispatchViewerControl(
   }
   if (result.error || (!response.ok && result.state !== "busy")) {
     const message = controlFailureMessage(response.status, result.error);
+    const refusals = readTelegramBotRefusals(result.refusals);
     const operationId = text(result.operationId);
     const launchId = text(result.launchId);
     if (operationId || launchId) {
       throw new McpDispatchVerdictError(message, {
         status: response.status,
+        ...(refusals.length ? { refusals } : {}),
         ...(operationId ? { operationId } : {}),
         ...(launchId ? { launchId } : {}),
         ...(text(result.conversationId) ? { conversationId: text(result.conversationId) } : {}),
@@ -752,6 +770,7 @@ async function dispatchViewerControl(
       ...(typeof result.retryAfterSeconds === "number" ? { retryAfterSeconds: result.retryAfterSeconds } : {}),
       ...(Array.isArray(result.sentMessageIds) && result.sentMessageIds.every((id) => typeof id === "number") ? { sentMessageIds: result.sentMessageIds } : {}),
       ...(text(result.secretClass) ? { secretClass: text(result.secretClass) } : {}),
+      ...(refusals.length ? { refusals } : {}),
     });
   }
   return result;
@@ -947,7 +966,8 @@ export interface ViewerMcpDomainDependencies {
   /** Records which seat started an accepted deployment (#2063), so the seat
       tick can wake that seat when it settles. Optional so partial harnesses
       fall back to the production store. */
-  recordSeatDeployment?(record: SeatDeploymentRecord): void;
+  recordSeatDeployment?(record: SeatDeploymentRecord, assertCaller?: () => void): void | Promise<void>;
+  beginSeatDeployment?(record: import("@/lib/orchestrator/seatDeployments").PendingSeatDeployment, assertCaller?: () => void): Promise<void>;
   findDeploymentByIdempotencyKey?: typeof import("@/lib/orchestrator/seatDeployments").findSeatDeploymentByKey;
   /** The account↔project binding store (#1279). Optional so a partial harness
       can exercise the tool with no state directory; production reads and
@@ -1445,6 +1465,11 @@ export const productionDomainDependencies: ViewerMcpDomainDependencies = {
       (conversationId) => managers().some((seat) => seat.conversationId === conversationId),
       (conversationId) => productionDeputyPrincipal(conversationId)?.seatConversationId ?? null,
     );
+  },
+  findDeploymentByIdempotencyKey: async idempotencyKey => {
+    const checkout = checkoutDeploymentByIdempotencyKey(statePath("self-update"), idempotencyKey);
+    if (checkout) return checkout;
+    return (await import("@/lib/orchestrator/seatDeployments")).findSeatDeploymentByKey(idempotencyKey);
   },
   viewerProjects: viewerOwnProjects,
 };
@@ -3554,14 +3579,10 @@ function viewerSeatAuthority(
   return { ok: true, seat };
 }
 
-async function deployExactSha(
-  args: McpToolArgs,
-  control: ViewerControlDependencies,
+function deploySeatAuthority(
   dependencies: ViewerMcpDomainDependencies,
-): Promise<McpToolPayload> {
-  const revision = required(args, "revision");
-  if (!/^[0-9a-f]{7,40}$/i.test(revision)) throw new Error("revision must be a commit SHA or prefix of at least 7 characters");
-
+  revision?: string,
+) {
   const authority = viewerSeatAuthority(dependencies);
   if (!authority.ok) {
     const refusals: Record<ViewerSeatRefusal, [string, string]> = {
@@ -3574,41 +3595,112 @@ async function deployExactSha(
     const [message, code] = refusals[authority.reason];
     throw new McpToolRefusal(message, { code, revision });
   }
-  const seat = authority.seat;
+  return authority.seat;
+}
+
+async function deployExactSha(
+  args: McpToolArgs,
+  control: ViewerControlDependencies,
+  dependencies: ViewerMcpDomainDependencies,
+  callContext: McpToolCallContext = {},
+): Promise<McpToolPayload> {
+  const revision = required(args, "revision");
+  if (!/^[0-9a-f]{7,40}$/i.test(revision)) throw new Error("revision must be a commit SHA or prefix of at least 7 characters");
+  const seat = deploySeatAuthority(dependencies, revision);
+  const assertSeat = () => {
+    const current = deploySeatAuthority(dependencies, revision);
+    if (current.conversationId !== seat.conversationId || current.project !== seat.project) {
+      throw new McpToolRefusal("the designated deploy seat changed", { code: "deploy_caller_not_designated", retryable: false });
+    }
+  };
 
   const idempotencyKey = requestId(args);
   const pending = { conversationId: seat.conversationId, project: seat.project,
     revision: revision.toLowerCase(), requestedAt: new Date().toISOString(), idempotencyKey };
-  beginSeatDeployment(pending);
-  let receipt: Record<string, unknown>;
   try {
-    receipt = await control.post("/api/runtime/deployments", { revision, idempotencyKey });
+    await (dependencies.beginSeatDeployment ?? beginSeatDeployment)(pending, assertSeat);
   } catch (error) {
-    await recoverSeatDeploymentRequests(seat.conversationId, dependencies.findDeploymentByIdempotencyKey,
-      dependencies.recordSeatDeployment);
+    if (callContext.priorAttemptUncertain && !(error instanceof McpToolRefusal)) {
+      throw new McpDeploymentPendingError(`the prior deploy request is still being reconciled because seat attribution is unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    }
     throw error;
   }
+  assertSeat();
+  if (callContext.priorAttemptUncertain) {
+    try {
+      await recoverSeatDeploymentRequests(seat.conversationId, dependencies.findDeploymentByIdempotencyKey,
+        dependencies.recordSeatDeployment);
+      const recovered = seatDeploymentForRequestKey(idempotencyKey);
+      if (recovered) {
+        if (recovered.conversationId !== seat.conversationId || recovered.project !== seat.project
+          || !recovered.revision.toLowerCase().startsWith(revision.toLowerCase())) {
+          throw new McpToolRefusal("the deployment request key is attributed to a different seat or revision", {
+            code: "deploy_request_key_conflict", retryable: false,
+          });
+        }
+      } else {
+        throw new McpDeploymentPendingError("the prior deploy request is still being reconciled; no new admission was sent");
+      }
+    } catch (error) {
+      if (error instanceof McpToolRefusal || error instanceof McpDeploymentPendingError) throw error;
+      throw new McpDeploymentPendingError(`the prior deploy request is still being reconciled because its receipt store is unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  const admittedReceipt = (): Record<string, unknown> | null => {
+    const priorAdmission = seatDeploymentForRequestKey(idempotencyKey);
+    if (!priorAdmission) return null;
+    assertSeat();
+    if (priorAdmission.conversationId !== seat.conversationId || priorAdmission.project !== seat.project
+      || !priorAdmission.revision.toLowerCase().startsWith(revision.toLowerCase())) {
+      throw new McpToolRefusal("the deployment request key is attributed to a different seat or revision", {
+        code: "deploy_request_key_conflict", retryable: false,
+      });
+    }
+    return { state: "accepted", deploymentId: priorAdmission.deploymentId,
+      revision: priorAdmission.revision, replayed: true };
+  };
+  let receipt = admittedReceipt();
+  if (!receipt) try {
+    receipt = await control.post("/api/runtime/deployments", { revision, idempotencyKey });
+  } catch (error) {
+    if (error instanceof McpToolRefusal) {
+      await forgetSeatDeploymentRequest(idempotencyKey, seat.conversationId);
+      throw error;
+    }
+    try {
+      await recoverSeatDeploymentRequests(seat.conversationId, dependencies.findDeploymentByIdempotencyKey,
+        dependencies.recordSeatDeployment);
+    } catch (recoveryError) {
+      throw new McpDeploymentPendingError(`deployment admission may have completed, and its receipt could not be reconciled: ${recoveryError instanceof Error ? recoveryError.message : String(recoveryError)}`);
+    }
+    receipt = admittedReceipt();
+    if (!receipt) throw new McpDeploymentPendingError(error instanceof Error ? error.message : "Deployment control wait ended");
+  }
+  const matchingBusy = receipt.state === "busy" && typeof receipt.revision === "string"
+    && /^[0-9a-f]{40}$/i.test(receipt.revision) && receipt.revision.toLowerCase().startsWith(revision.toLowerCase());
+  if (matchingBusy) receipt = { ...receipt, state: "accepted" };
   if (receipt.state === "busy" || receipt.state === "refused") {
-    forgetSeatDeploymentRequest(idempotencyKey, seat.conversationId);
+    await forgetSeatDeploymentRequest(idempotencyKey, seat.conversationId);
   }
   /* #2063: the ledger never learns who asked, and the seat ends its turn so
      the promotion can replace its host. Recording the pair is what lets the
-     seat tick wake this seat when the deployment settles. A `busy` receipt
-     names someone else's deployment, which is not this seat's to be woken on.
+     seat tick wake this seat when the deployment settles. A matching busy
+     receipt joins the same SHA; a different SHA remains a busy refusal.
      A failed write costs the wake and nothing else: the deployment is
      already admitted, so the answer says so rather than failing the call. */
   let wakeOnSettle = false;
   if (receipt.state === "accepted" && typeof receipt.deploymentId === "string" && receipt.deploymentId) {
     try {
-      (dependencies.recordSeatDeployment ?? recordSeatDeployment)({
+      assertSeat();
+      await (dependencies.recordSeatDeployment ?? recordSeatDeployment)({
         deploymentId: receipt.deploymentId,
         conversationId: seat.conversationId,
         project: seat.project,
         revision: typeof receipt.revision === "string" ? receipt.revision : revision.toLowerCase(),
         requestedAt: pending.requestedAt,
         idempotencyKey,
-      });
-      forgetSeatDeploymentRequest(idempotencyKey, seat.conversationId);
+      }, assertSeat);
+      await forgetSeatDeploymentRequest(idempotencyKey, seat.conversationId);
       wakeOnSettle = true;
     } catch (error) {
       console.error(`[deploy_exact_sha] could not record the seat for deployment ${receipt.deploymentId}: ${error instanceof Error ? error.message : String(error)}`);
@@ -3848,6 +3940,8 @@ function reportDestinations(seq: number, telegram: BridgeReportTelegram | null):
           ...(telegram.messageIds?.length ? { messageIds: telegram.messageIds } : {}),
           ...(telegram.code ? { code: telegram.code, retryable: isRetryableReportSend(telegram.code) } : {}),
           ...(telegram.message ? { message: telegram.message } : {}),
+          ...(telegram.bot ? { bot: telegram.bot } : {}),
+          ...(telegram.refusals ? { refusals: telegram.refusals } : {}),
         },
       }
       : {}),
@@ -3884,9 +3978,10 @@ async function postReportTelegram(
     outcome = { ok: false, code: "telegram_failed", message: error instanceof Error ? error.message : String(error) };
   }
   const at = new Date().toISOString();
+  const evidence = { ...(outcome.bot ? { bot: outcome.bot } : {}), ...(outcome.refusals ? { refusals: outcome.refusals } : {}) };
   return recordBridgeReportTelegram(reportId, outcome.ok
-    ? { state: "sent", messageIds: outcome.messageIds, at }
-    : { state: outcome.code === "send_uncertain" ? "uncertain" : "failed", code: outcome.code, message: outcome.message ?? `Telegram report send failed (${outcome.code})`, at })?.telegram ?? null;
+    ? { state: "sent", messageIds: outcome.messageIds, at, ...evidence }
+    : { state: outcome.code === "send_uncertain" ? "uncertain" : "failed", code: outcome.code, message: outcome.message ?? `Telegram report send failed (${outcome.code})`, at, ...evidence })?.telegram ?? null;
 }
 
 export interface ReportTelegramSend {
@@ -3896,9 +3991,9 @@ export interface ReportTelegramSend {
   clientRequestId: string;
 }
 
-export type ReportTelegramSendOutcome =
+export type ReportTelegramSendOutcome = { bot?: string; refusals?: { bot: string; code: string }[] } & (
   | { ok: true; messageIds: number[] }
-  | { ok: false; code: string; message?: string };
+  | { ok: false; code: string; message?: string });
 
 async function productionSendReportTelegram(input: ReportTelegramSend, control: ViewerControlDependencies | null): Promise<ReportTelegramSendOutcome> {
   if (!control) return { ok: false, code: "telegram_failed", message: "no Viewer control is available to post through" };
@@ -3911,12 +4006,14 @@ async function productionSendReportTelegram(input: ReportTelegramSend, control: 
       text: input.html,
       format: "html",
       silent: true,
-    }, callerCapabilityHeaders()) as { messageIds?: unknown };
+    }, callerCapabilityHeaders()) as { messageIds?: unknown; sentBy?: { username?: string | null }; refusals?: import("@/lib/telegram/bot/contracts").TelegramBotRefusal[] };
     const messageIds = Array.isArray(result?.messageIds) ? result.messageIds.filter((id): id is number => Number.isInteger(id)) : [];
-    return { ok: true, messageIds };
+    return { ok: true, messageIds, ...(result.sentBy?.username ? { bot: result.sentBy.username } : {}),
+      ...(result.refusals ? { refusals: readTelegramBotRefusals(result.refusals).map(r => ({ bot: r.bot.username ?? r.bot.name, code: r.code })) } : {}) };
   } catch (error) {
     if (error instanceof McpDispatchVerdictError && typeof error.details.code === "string") {
-      return { ok: false, code: error.details.code, message: error.message };
+      return { ok: false, code: error.details.code, message: error.message,
+        ...(Array.isArray(error.details.refusals) ? { refusals: readTelegramBotRefusals(error.details.refusals).map(r => ({ bot: r.bot.username ?? r.bot.name, code: r.code })) } : {}) };
     }
     return { ok: false, code: "telegram_failed", message: error instanceof Error ? error.message : String(error) };
   }
@@ -4950,7 +5047,7 @@ async function rolePresetsTool(args: McpToolArgs, dependencies: ViewerMcpDomainD
     });
   } catch (error) {
     if (error instanceof RoleStoreError || error instanceof FileTransactionBusyError) throw error;
-    /* The store put the file back when the record failed, so nothing changed. */
+    /* The store rolled the SQLite transaction back when the record failed. */
     throw new McpToolRefusal(
       `the role mapping was not changed: it could not be written together with its audit record (${error instanceof Error ? error.message : String(error)})`,
       { code: "role_presets_audit_unavailable" },
@@ -5248,6 +5345,7 @@ async function telegramBotSend(args: McpToolArgs, control: ViewerControlDependen
       throw new McpToolRefusal(error.message, {
         code,
         retryable: RETRYABLE_TELEGRAM_BOT_CODES.has(code as TelegramBotErrorCode),
+        ...(Array.isArray(error.details.refusals) ? { refusals: readTelegramBotRefusals(error.details.refusals) } : {}),
         ...(typeof retryAfterSeconds === "number" ? { retryAfterSeconds } : {}),
         ...(Array.isArray(sentMessageIds) ? { sentMessageIds } : {}),
       });
@@ -5270,7 +5368,8 @@ async function telegramBotSendMedia(args: McpToolArgs, control: ViewerControlDep
   }, callerCapabilityHeaders()).catch((error: unknown) => {
     if (error instanceof McpDispatchVerdictError && typeof error.details.code === "string") {
       const code = error.details.code;
-      throw new McpToolRefusal(error.message, { code, retryable: RETRYABLE_TELEGRAM_BOT_CODES.has(code as TelegramBotErrorCode) });
+      throw new McpToolRefusal(error.message, { code, retryable: RETRYABLE_TELEGRAM_BOT_CODES.has(code as TelegramBotErrorCode),
+        ...(Array.isArray(error.details.refusals) ? { refusals: readTelegramBotRefusals(error.details.refusals) } : {}) });
     }
     throw error;
   });
@@ -5296,6 +5395,7 @@ async function telegramBotSendDocument(args: McpToolArgs, control: ViewerControl
       throw new McpToolRefusal(error.message, {
         code,
         retryable: RETRYABLE_TELEGRAM_BOT_CODES.has(code as TelegramBotErrorCode),
+        ...(Array.isArray(error.details.refusals) ? { refusals: readTelegramBotRefusals(error.details.refusals) } : {}),
         ...(typeof retryAfterSeconds === "number" ? { retryAfterSeconds } : {}),
         ...(typeof secretClass === "string" ? { secretClass } : {}),
       });
@@ -7982,7 +8082,17 @@ export function viewerMcpBindings(
         const assertAdmission = await domainDependencies.curatorAdmission?.(conversationId);
         if (typeof assertAdmission === "function") assertAdmission();
         const pass = curatorCallerOf(conversationId, domainDependencies.curatorSnapshot && conversationId ? domainDependencies.curatorSnapshot(conversationId) : domainDependencies.registrySnapshot());
-        if (args.action !== "read") return applyCuration(pass, args as unknown as CurationApply);
+        if (args.action !== "read") {
+          const result = await withViewerOperation("memory.import.curation", () => waitForStateLock("memory.import.curate", () => {
+            if (typeof assertAdmission === "function") assertAdmission();
+            const fresh = curatorCallerOf(conversationId, domainDependencies.curatorSnapshot && conversationId ? domainDependencies.curatorSnapshot(conversationId) : domainDependencies.registrySnapshot());
+            return applyCuration(fresh, args as unknown as CurationApply, undefined, { refreshKnownValues: !fresh.importBatch });
+          }));
+          if (pass.importBatch) await refreshCurationKnownValuesAsync();
+          if (typeof assertAdmission === "function") assertAdmission();
+          curatorCallerOf(conversationId, domainDependencies.curatorSnapshot && conversationId ? domainDependencies.curatorSnapshot(conversationId) : domainDependencies.registrySnapshot());
+          return result;
+        }
         const result = await readCuration(pass, typeof args.scope === "string" ? args.scope : undefined, typeof args.cursor === "string" ? args.cursor : undefined);
         if (typeof assertAdmission === "function") assertAdmission();
         curatorCallerOf(conversationId, domainDependencies.curatorSnapshot && conversationId ? domainDependencies.curatorSnapshot(conversationId) : domainDependencies.registrySnapshot());
@@ -8014,7 +8124,10 @@ export function viewerMcpBindings(
     get_conversation: (args, context) => getConversation(args, domainDependencies, context),
     conversation_deliverability: (args) => Promise.resolve(conversationDeliverability(args, domainDependencies)),
     conversation_messages: reads.conversation_messages,
-    deploy_exact_sha: (args, context) => deployExactSha(args, viewerControlForCall(controlDependencies, context), domainDependencies),
+    deploy_exact_sha: Object.assign(
+      (args: McpToolArgs, context?: McpToolCallContext) => deployExactSha(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),
+      { authorizeReceipt: () => { deploySeatAuthority(domainDependencies); } },
+    ),
     get_pipeline: reads.get_pipeline,
     board_snapshot: (args) => boardSnapshot(args, domainDependencies),
     list_flows: (args) => Promise.resolve(listFlows(args, domainDependencies)),
@@ -8059,7 +8172,7 @@ export function viewerMcpBindings(
     seat_tick_settings: orchestratorProjectBinding(domainDependencies, (args) => seatTickSettingsTool(args, domainDependencies), true),
     /* Async bindings expose synchronous refusals as rejected promises. */
     account_project_binding: async (args) => accountProjectBindingTool(args, domainDependencies),
-    role_presets: async (args) => rolePresetsTool(args, domainDependencies),
+    role_presets: async (args) => waitForStateLock("mcp.role-presets", () => rolePresetsTool(args, domainDependencies)),
     auto_updates: (args, context) => autoUpdatesTool(args, viewerControlForCall(controlDependencies, context), domainDependencies),
     account_limits: async (args) => accountLimitsTool(args, domainDependencies),
     create_orchestrator: orchestratorProjectBinding(domainDependencies, (args, context) => createOrchestrator(args, viewerControlForCall(controlDependencies, context)), false, false),

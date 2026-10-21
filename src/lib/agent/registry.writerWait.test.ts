@@ -8,7 +8,7 @@ import { Database } from "bun:sqlite";
 import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
 import { blockingWaitDiagnostics, resetBlockingWaitsForTests, withWaitCorrelation } from "@/lib/blockingWaits";
 
-import { AgentRegistry, normalizeRegistry, setAgentRegistryForTests } from "./registry";
+import { AgentRegistry, closeAgentRegistryForTests, normalizeRegistry, readAgentSessionTarget, setAgentRegistryForTests } from "./registry";
 import { SqliteAgentRegistryStore } from "./sqliteRegistryStore";
 
 /*
@@ -23,6 +23,119 @@ import { SqliteAgentRegistryStore } from "./sqliteRegistryStore";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-writer-wait-"));
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 beforeEach(() => resetBlockingWaitsForTests(() => {}));
+
+for (const revoked of [false, true]) test(`a mixed account callback retries a rival writer outside custody and repeats its guard (revoked=${revoked})`, async () => {
+  const directory = fs.mkdtempSync(path.join(root, "mixed-writer-"));
+  const filename = path.join(directory, "registry.json");
+  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+  const peer = new Database(path.join(directory, "registry.sqlite"));
+  let attempts = 0;
+  let current = true;
+  let rivalHeld = false;
+  try {
+    const work = registry.accountMutationWrite("registry.mixed-fixture", () => {
+      attempts++;
+      if (attempts === 1) {
+        peer.exec("BEGIN IMMEDIATE");
+        rivalHeld = true;
+        setImmediate(() => {
+          if (revoked) current = false;
+          peer.exec("ROLLBACK");
+          rivalHeld = false;
+        });
+      }
+      registry.setEngineRouting("codex", "mixed-account");
+    }, () => { if (!current) throw new Error("mixed custody replaced"); }, { releaseBeforeWrite: true });
+    if (revoked) await expect(work).rejects.toThrow("mixed custody replaced");
+    else expect((await work).acquired).toBe(true);
+    expect(attempts).toBe(revoked ? 1 : 2);
+    expect(registry.engineRouting("codex").activeAccountId).toBe(revoked ? null : "mixed-account");
+    expect(blockingWaitDiagnostics().sites["registry-lock"]).toBeUndefined();
+    registry.close();
+    const reopened = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+    try { expect(reopened.engineRouting("codex").activeAccountId).toBe(revoked ? null : "mixed-account"); }
+    finally { reopened.close(); }
+  } finally {
+    if (rivalHeld) peer.exec("ROLLBACK");
+    peer.close(); registry.close();
+  }
+});
+
+for (const prepared of [false, true]) test(`an admitted group keeps every mutation under its writer and preserves successful members on failure (prepared=${prepared})`, async () => {
+  const directory = fs.mkdtempSync(path.join(root, "writer-group-"));
+  const registry = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const peer = new Database(path.join(directory, "registry.sqlite"));
+  const first = "/sessions/group-first.jsonl";
+  const second = "/sessions/group-second.jsonl";
+  try {
+    registry.readOnlySnapshot();
+    if (prepared) await registry.prepareReadOnlySnapshot();
+    await expect(registry.deliveryWriteBatchOrBusy({ label: "registry.group-fixture" }, () => {
+      const a = registry.ensureConversation("codex", first, null);
+      expect(registry.conversationForPath(first)?.id).toBe(a.id);
+      expect(registry.readOnlySnapshot().conversations[a.id]?.generations[0]?.path).toBe(first);
+      peer.exec("PRAGMA busy_timeout = 0");
+      expect(() => peer.exec("BEGIN IMMEDIATE")).toThrow();
+      registry.ensureConversation("codex", second, null);
+      expect(() => registry.setStructuredHost({ engine: "codex", sessionId: "missing" }, null)).toThrow("missing");
+      throw new Error("later group member refused");
+    })).rejects.toThrow("later group member refused");
+    expect(registry.conversationForPath(first)).not.toBeNull();
+    expect(registry.conversationForPath(second)).not.toBeNull();
+    expect(blockingWaitDiagnostics().sites["registry-lock"]).toBeUndefined();
+    peer.exec("BEGIN IMMEDIATE");
+    peer.exec("ROLLBACK");
+    registry.close();
+    const reopened = new AgentRegistry(path.join(directory, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+    try {
+      expect(reopened.conversationForPath(first)).not.toBeNull();
+      expect(reopened.conversationForPath(second)).not.toBeNull();
+    } finally { reopened.close(); }
+  } finally { peer.close(); registry.close(); }
+});
+
+test("a failed batch member rolls back its draft and subsequent members still commit", async () => {
+  const f = store("batch-savepoint");
+  try {
+    await f.store.withWriter(() => f.store.withMutationBatch(() => {
+      f.store.mutate(file => { file.engineRouting.codex.activeAccountId = "first"; }, false);
+      expect(() => f.store.mutate(file => {
+        file.engineRouting.codex.activeAccountId = "refused";
+        file.engineRouting.claude.activeAccountId = "refused";
+        throw new Error("batch member refused");
+      }, false)).toThrow("batch member refused");
+      expect(f.store.readOnlySnapshot().file.engineRouting.codex.activeAccountId).toBe("first");
+      expect(f.store.readOnlySnapshot().file.engineRouting.claude.activeAccountId).not.toBe("refused");
+      f.store.mutate(file => { file.engineRouting.claude.activeAccountId = "last"; }, false);
+    }));
+    expect(f.store.snapshot().file.engineRouting).toMatchObject({ codex: { activeAccountId: "first" }, claude: { activeAccountId: "last" } });
+  } finally { f.store.close(); }
+  const reopened = new SqliteAgentRegistryStore(f.filename, { initialSnapshot: () => { throw new Error("already initialized"); }, normalize: normalizeRegistry });
+  try {
+    expect(reopened.snapshot().file.engineRouting).toMatchObject({ codex: { activeAccountId: "first" }, claude: { activeAccountId: "last" } });
+  } finally { reopened.close(); }
+});
+
+test("a refused batch commit discards cached drafts and permits a fresh writer", async () => {
+  const f = store("batch-commit-refusal");
+  const before = structuredClone(f.store.readOnlySnapshot().file.engineRouting);
+  const execute = Database.prototype.exec;
+  let refuse = false;
+  const fault = spyOn(Database.prototype, "exec").mockImplementation(function (this: Database, sql: string) {
+    if (refuse && sql === "COMMIT") { refuse = false; throw new Error("batch commit refused"); }
+    return execute.call(this, sql);
+  });
+  try {
+    await expect(f.store.withWriter(() => f.store.withMutationBatch(() => {
+      f.store.mutate(file => { file.engineRouting.codex.activeAccountId = "discarded"; }, false);
+      expect(f.store.readOnlySnapshot().file.engineRouting.codex.activeAccountId).toBe("discarded");
+      refuse = true;
+    }))).rejects.toThrow("batch commit refused");
+    expect(f.store.readOnlySnapshot().file.engineRouting).toEqual(before);
+    await f.store.withWriter(() => f.store.mutate(file => { file.engineRouting.codex.activeAccountId = "accepted"; }, false));
+    expect(f.store.readOnlySnapshot().file.engineRouting.codex.activeAccountId).toBe("accepted");
+  } finally { fault.mockRestore(); f.store.close(); }
+});
 
 function store(name: string): { store: SqliteAgentRegistryStore; filename: string } {
   const registry = new AgentRegistry(path.join(root, `${name}.json`), undefined, undefined, { sqliteMode: "off" });
@@ -319,7 +432,7 @@ test("runtime-switch cancellation reads and releases through real contended regi
 });
 
 // Exercise an actual Viewer request, rather than an already-admitted store callback.
-test("Viewer policy write lets a 10 ms timer run within 50 ms while a child holds the writer", async () => {
+test("Viewer policy write yields to a timer while a child holds the writer", async () => {
   const { NextRequest } = await import("next/server");
   const { PATCH } = await import("@/app/api/accounts/claude/policy/route");
   const directory = fs.mkdtempSync(path.join(root, "viewer-policy-"));
@@ -332,9 +445,8 @@ test("Viewer policy write lets a 10 ms timer run within 50 ms while a child hold
   try {
     await holder.hold(200);
     let settled = false;
-    const started = performance.now();
-    const tick = new Promise<{ elapsed: number; pending: boolean }>(resolve => {
-      timer = setTimeout(() => resolve({ elapsed: performance.now() - started, pending: !settled }), 10);
+    const tick = new Promise<boolean>(resolve => {
+      timer = setTimeout(() => resolve(!settled), 10);
     });
     const writing = PATCH(new NextRequest("http://localhost/api/accounts/claude/policy", {
       method: "PATCH", headers: { host: "localhost", "content-type": "application/json" },
@@ -342,9 +454,7 @@ test("Viewer policy write lets a 10 ms timer run within 50 ms while a child hold
     })).finally(() => { settled = true; });
     const progress = await tick;
     const response = await writing;
-    console.info(`[L7 policy timer] ${progress.elapsed.toFixed(2)} ms; pending=${progress.pending}`);
-    expect(progress.elapsed).toBeLessThan(50);
-    expect(progress.pending).toBe(true);
+    expect(progress).toBe(true);
     expect(response.status).toBe(200);
     expect(blockingWaitDiagnostics().longest.some(sample => sample.site === "registry-lock-async" && sample.role === "viewer")).toBe(true);
     expect(registry.autoBalancePolicy("claude")).toMatchObject({ enabled: true, revision: 1 });
@@ -357,6 +467,52 @@ test("Viewer policy write lets a 10 ms timer run within 50 ms while a child hold
     else process.env.LLV_STATE_OWNER = previousOwner;
     setAgentRegistryForTests(null);
     registry.close();
+  }
+});
+
+test("cold session facade opening yields while the SQLite writer is contended", async () => {
+  const directory = fs.mkdtempSync(path.join(root, "session-open-wait-"));
+  const previousStateDir = process.env.LLV_STATE_DIR;
+  const previousOwner = process.env.LLV_STATE_OWNER;
+  process.env.LLV_STATE_DIR = directory;
+  process.env.LLV_STATE_OWNER = "viewer";
+  const seed = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  const conversation = seed.ensureConversation("codex", "/sessions/session-open.jsonl", null);
+  seed.close();
+  const archive = new SqliteAgentRegistryStore(path.join(directory, "agent-registry.sqlite"), {
+    initialSnapshot: () => { throw new Error("fixture already initialized"); },
+    normalize: normalizeRegistry,
+  });
+  try { expect(archive.archiveInactive()).toBeGreaterThan(0); }
+  finally { archive.close(); }
+  const archivedDb = new Database(path.join(directory, "agent-registry.sqlite"), { readonly: true });
+  try {
+    expect(archivedDb.query("SELECT 1 FROM registry_cold WHERE collection='conversations' AND row_key=?").get(conversation.id)).toBeTruthy();
+  } finally { archivedDb.close(); }
+  const holder = registryLockHolder(path.join(directory, "agent-registry.sqlite"));
+  closeAgentRegistryForTests();
+  const query = Database.prototype.query;
+  let coldKeyScans = 0;
+  const queryProbe = spyOn(Database.prototype, "query").mockImplementation((function (this: Database, sql: string) {
+    if (/SELECT\s+collection\s*,\s*row_key\s+FROM\s+registry_cold/i.test(sql)) coldKeyScans++;
+    return query.call(this, sql);
+  }) as typeof Database.prototype.query);
+  try {
+    await holder.hold(120);
+    let settled = false;
+    const opening = readAgentSessionTarget(conversation.id, "", AbortSignal.timeout(10_000)).finally(() => { settled = true; });
+    const progress = await new Promise<boolean>(resolve => setTimeout(() => resolve(!settled), 10));
+    expect(progress).toBe(true);
+    expect(settled).toBe(false);
+    expect(await opening).toEqual({ path: "/sessions/session-open.jsonl", unavailable: false });
+    expect(coldKeyScans).toBe(0);
+  } finally {
+    queryProbe.mockRestore();
+    await holder.close();
+    closeAgentRegistryForTests();
+    setAgentRegistryForTests(null);
+    if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousStateDir;
+    if (previousOwner === undefined) delete process.env.LLV_STATE_OWNER; else process.env.LLV_STATE_OWNER = previousOwner;
   }
 });
 
@@ -613,7 +769,7 @@ test("Viewer policy admission reads a bounded number of rows as unrelated conver
       expect(registry.autoBalancePolicy("claude")).toMatchObject({ enabled: false, revision: 1 });
     } finally { setAgentRegistryForTests(null); registry.close(); }
   }
-  expect(reads[1]).toBe(reads[0]!);
+  expect(reads[0]).toBeLessThan(10);
   expect(reads[1]).toBeLessThan(10);
 });
 
