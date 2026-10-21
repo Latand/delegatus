@@ -1005,12 +1005,17 @@ export async function readCompactPipelineEvidence<T>(filename: string, prior: Co
   };
   assertActive();
   if (!fs.existsSync(filename)) return null;
+  // Bind the cache key to the file opened for this snapshot. A pathname stat
+  // taken only after BEGIN can observe a replacement inode while SQLite keeps
+  // reading the original one.
+  const openedIdentity = databaseFileIdentity(filename);
   const db = connectReadonlyDatabase(filename);
   try {
     db.exec("BEGIN");
     if (!pipelineEvidenceIndexReady(db)) return null;
     const schema = db.query<{ schema_version: number }, []>("PRAGMA schema_version").get()!.schema_version;
-    const identity = `${databaseFileIdentity(filename)}:${schema}`;
+    if (databaseFileIdentity(filename) !== openedIdentity) throw new StateSnapshotChangedError();
+    const identity = `${openedIdentity}:${schema}`;
     const collections = db.query<{ collection: string }, []>("SELECT collection FROM state_collections WHERE collection IN ('pipelines','pipelines_archive')").all();
     if (collections.length !== 2) return null;
     const sourceRevision = db.query<{ revision: number }, []>("SELECT revision FROM pipeline_evidence_clock WHERE id=1").get()!.revision;
