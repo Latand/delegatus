@@ -7,9 +7,13 @@ produced a quota event.
 `src/lib/limits.ts` accepts a transcript reading only when its exact path has a
 Codex registry generation with verified app-server host custody. The event must
 fall at or after that generation's creation and host verification and before its
-archive time. The latest generation at the event's time must identify the
-requested account without conflicting ownership. Unknown ownership, registry
-read failure and continuity copies contribute no quota samples. The same check
+archive time or an `endedAt` custody boundary. An unverified same-path account
+rebind closes the old custody interval at the observation time; events at or
+after that time remain unattributed until verified custody is recorded. All
+eligible custody claims are counted before selecting the requested account, so
+overlapping claims from different accounts quarantine the event for both.
+Unknown ownership, registry read failure and continuity copies contribute no
+quota samples. The same check
 covers quota readings, paid-credit metadata and usage-limit rejections used in
 live reconciliation and offline fallback, as well as burndown backfill.
 

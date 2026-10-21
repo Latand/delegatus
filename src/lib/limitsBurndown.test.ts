@@ -107,7 +107,9 @@ test("mixed-store backfill drops foreign, unknown and ambiguous account readings
       generation.host = { kind: "codex-app-server", identity: "fixture-host", epoch: 1, verifiedAt: generation.createdAt,
       };
       if (generation.accountId) generation.quotaCustody = { accountId: generation.accountId, artifactPath: generation.path };
-      if (name === "ambiguous") state.conversations[conversation.id]!.generations.push({ ...generation, id: "second", accountId: "b" });
+      if (name === "ambiguous") state.conversations[conversation.id]!.generations.push({
+        ...generation, id: "second", accountId: "b", quotaCustody: { accountId: "b", artifactPath: file },
+      });
     });
   }
   expect(collectCodexRateLimitSeries(root, 0, "a").weekly).toEqual([{ t: Date.parse(ts) / 1000, remaining: 85 }]);
@@ -127,7 +129,8 @@ test.each(["unverified", "before-start", "host-after-event", "archived", "contin
     if (kind === "archived") generation.archivedAt = ts;
     if (kind === "continuity") { generation.path = path.join(root, "source.jsonl"); row.continuityPaths.push(file); }
     if (kind === "wrong-engine") row.engine = "claude";
-    if (kind === "conflict") row.generations.push({ ...generation, id: "conflict", accountId: "foreign" });
+    if (kind === "conflict") row.generations.push({ ...generation, id: "conflict", accountId: "foreign",
+      quotaCustody: { accountId: "foreign", artifactPath: file } });
   });
   fs.appendFileSync(file, JSON.stringify({ timestamp: ts, payload: { codex_error_info: "usage_limit_exceeded" } }) + "\n");
   const refused = kind === "unavailable" ? spyOn(registry, "conversationForPath").mockImplementation(() => { throw new Error("fixture registry unavailable"); }) : null;
@@ -161,6 +164,51 @@ test("same-path account succession attributes events by their generation time", 
   expect(collectCodexRateLimitSeries(root, 0, "b").weekly.map(s => s.remaining)).toEqual([4]);
   expect(readCodexTranscriptLimits(root, "fixture").data?.weekly?.usedPercent).toBe(15);
   expect(readCodexTranscriptLimits(root, "b").data?.weekly?.usedPercent).toBe(96);
+});
+
+test("same-path unverified account rebind ends old custody for live and offline reads", async () => {
+  const before = "2026-07-08T12:00:00.000Z", rebound = "2026-07-08T13:00:00.000Z", after = "2026-07-08T14:00:00.000Z";
+  writeSession("rebound.jsonl", "2026-07-08", [
+    { ts: before, primary: [15, 10080, 1_783_994_379] },
+    { ts: rebound, primary: [90, 10080, 1_783_994_379] },
+  ]);
+  const file = path.join(root, "2026", "07", "08", "rebound.jsonl"), registry = agentRegistry();
+  fs.appendFileSync(file, JSON.stringify({ timestamp: after, payload: { rate_limits: {
+    primary: { used_percent: 96, window_minutes: 10080, resets_at: 1_783_994_379 }, plan_type: "pro",
+  } } }) + "\n");
+  registry.reconcileConversations([{
+    engine: "codex", path: file, accountId: "b", launchProfile: emptyLaunchProfile(), observedAt: rebound,
+    turn: { state: "idle", source: "empty", terminalAt: null },
+  }]);
+  const accountA = { id: "fixture", kind: "managed" as const, home: path.dirname(root), sessionsDir: root };
+  const accountB = { ...accountA, id: "b" };
+  const series = collectCodexRateLimitSeries(root, 0, "fixture");
+  expect(series.weekly).toEqual([{ t: Date.parse(before) / 1000, remaining: 85 }]);
+  expect(collectCodexRateLimitSeries(root, 0, "b").weekly).toEqual([]);
+  expect(readCodexTranscriptLimits(root, "fixture").data?.weekly?.usedPercent).toBe(15);
+  expect(readCodexTranscriptLimits(root, "b").data).toBeNull();
+  expect((await readCodexLimits({ account: accountA, liveReader: async () => { throw new Error("offline"); } })).data?.weekly?.usedPercent).toBe(15);
+  expect((await readCodexLimits({ account: accountB, liveReader: async () => { throw new Error("offline"); } })).data).toBeNull();
+});
+
+test("overlapping verified custody for different accounts quarantines the transcript event", async () => {
+  const ts = "2026-07-08T12:00:00.000Z";
+  writeSession("conflicted.jsonl", "2026-07-08", [{ ts, primary: [15, 10080, 1_783_994_379] }]);
+  const file = path.join(root, "2026", "07", "08", "conflicted.jsonl"), registry = agentRegistry();
+  const conversation = registry.conversationForPath(file)!;
+  updateQuotaRegistryFixture(state => {
+    const generation = state.conversations[conversation.id]!.generations[0]!;
+    state.conversations[conversation.id]!.generations.push({ ...generation, id: "second", accountId: "b",
+      quotaCustody: { accountId: "b", artifactPath: file } });
+  });
+  expect(collectCodexRateLimitSeries(root, 0, "fixture").weekly).toEqual([]);
+  expect(collectCodexRateLimitSeries(root, 0, "b").weekly).toEqual([]);
+  expect(readCodexTranscriptLimits(root, "fixture").data).toBeNull();
+  expect(readCodexTranscriptLimits(root, "b").data).toBeNull();
+  for (const id of ["fixture", "b"]) {
+    const account = { id, kind: "managed" as const, home: path.dirname(root), sessionsDir: root };
+    expect((await readCodexLimits({ account, liveReader: async () => { throw new Error("offline"); } })).data).toBeNull();
+  }
 });
 
 test("inventory relocation cannot rebind verified quota custody to another account", () => {

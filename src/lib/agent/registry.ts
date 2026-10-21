@@ -8907,7 +8907,12 @@ export class AgentRegistry {
         const priorTurnState = conversation.turn.state;
         const lineage = file.lineageEdges[conversation.id];
         const observedParentConversationId = observation.launchProfile.parentConversationId;
-        generation.accountId = observation.accountId ?? generation.accountId;
+        const observedAccountId = observation.accountId ?? generation.accountId;
+        if (observedAccountId !== generation.accountId && generation.quotaCustody
+          && generation.quotaCustody.accountId !== observedAccountId && !generation.quotaCustody.endedAt) {
+          generation.quotaCustody = { ...generation.quotaCustody, endedAt: observation.observedAt };
+        }
+        generation.accountId = observedAccountId;
         generation.launchProfile = {
           ...generation.launchProfile,
           ...observation.launchProfile,

@@ -1048,10 +1048,12 @@ function codexReadingOwner(file: string, accountId: string): (at: number) => boo
     return at => {
       if (!Number.isFinite(at)) return false;
       const owners = generations.filter(g => g.path === file && g.host?.kind === "codex-app-server"
-        && g.quotaCustody?.artifactPath === file && g.quotaCustody.accountId === accountId
+        && g.quotaCustody?.artifactPath === file
+        && (g.accountId === g.quotaCustody.accountId || g.quotaCustody.endedAt !== undefined)
         && Date.parse(g.createdAt) <= at && Date.parse(g.host.verifiedAt) <= at
-        && (g.archivedAt === null || Date.parse(g.archivedAt) > at));
-      return owners.length === 1;
+        && (g.archivedAt === null || Date.parse(g.archivedAt) > at)
+        && (g.quotaCustody.endedAt === undefined || Date.parse(g.quotaCustody.endedAt) > at));
+      return owners.length === 1 && owners[0]?.quotaCustody?.accountId === accountId;
     };
   } catch {
     return () => false;
