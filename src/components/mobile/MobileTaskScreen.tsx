@@ -23,6 +23,7 @@ import { addTaskChip } from "@/components/orchestrator/taskChips";
 import { designatedManagerConversationId } from "@/components/voice/managerIdentity";
 import { PipelineBlock } from "@/components/pipelines/PipelineBlock";
 import { PhoneAlbumRow } from "@/components/taskAlbum/AlbumButton";
+import { PhoneTaskSpend } from "@/components/kanban/TaskSpend";
 import { PhonePrototypeRow } from "@/components/prototypeReview/PrototypeReviewButton";
 import { finishesTaskOffer, toggleFinishesTask } from "@/components/pipelines/finishesTask";
 import { taskFinishWaitCount } from "@/lib/pipelines/taskFinish";
@@ -1248,6 +1249,9 @@ export function MobileTaskScreen(props: MobileTaskScreenProps) {
 
                 {/* The task's album: every picture its agents made or looked at. */}
                 <PhoneAlbumRow taskId={taskId} title={title} pipelines={lanes.map((summary) => summary.pipeline)} files={files} rowClass={`${ROW} shrink-0 min-h-12`} />
+
+                {/* The task's limit spend: the numbers its card's marks stand for. */}
+                {remote ? null : <PhoneTaskSpend taskId={taskId} headingClass={SECTION} />}
 
                 {/* 6. The agents, working first. */}
                 <section data-phone-task-agents={agents.length} className="flex shrink-0 flex-col gap-2">
