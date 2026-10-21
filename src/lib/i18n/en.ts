@@ -2551,6 +2551,8 @@ export const en = {
   "voiceCompanion.tools.refused.SERVER_NOT_FOUND": "This server was removed.",
   "voiceCompanion.tools.refused.TIMEOUT": "The dry run did not finish within 20 seconds.",
   "voiceCompanion.tools.refused.BUSY": "Another change is running. Try again in a moment.",
+  "voiceCompanion.tools.refused.dryRun.BUSY": "Eight dry runs are already running. Try again in a moment.",
+  "voiceCompanion.tools.refused.dryRun.CATALOG_BOUNDS": "The server's tool list did not pass the checks, so it was not saved.",
   "voiceCompanion.tools.refused.other": "The change could not be saved. Try again.",
   "voiceCompanion.settings.label": "Voice Delegatus",
   "voiceCompanion.settings.enable": "Show the voice",

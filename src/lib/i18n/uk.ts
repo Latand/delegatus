@@ -2496,6 +2496,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "voiceCompanion.tools.refused.SERVER_NOT_FOUND": "Цей сервер видалено.",
   "voiceCompanion.tools.refused.TIMEOUT": "Пробний запуск не завершився за 20 секунд.",
   "voiceCompanion.tools.refused.BUSY": "Триває інша зміна. Спробуйте за мить.",
+  "voiceCompanion.tools.refused.dryRun.BUSY": "Уже виконується вісім пробних запусків. Спробуйте за мить.",
+  "voiceCompanion.tools.refused.dryRun.CATALOG_BOUNDS": "Список інструментів сервера не пройшов перевірку, тож його не збережено.",
   "voiceCompanion.tools.refused.other": "Не вдалося зберегти зміну. Спробуйте ще раз.",
   "voiceCompanion.settings.label": "Голосовий Delegatus",
   "voiceCompanion.settings.enable": "Показувати голос",

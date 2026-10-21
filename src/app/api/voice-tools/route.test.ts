@@ -73,7 +73,10 @@ test("the operator dry-runs and approves a pinned catalog, configures acting con
     expect((await POST(request("POST", { action: "approve", name: "music", digest: discovered.servers.music.digest }))).status).toBe(409);
     const approved = await (await POST(request("POST", { action: "approve", name: "music", digest: configured.servers.music.digest }))).json();
     expect(approved.servers.music.state).toBe("enabled"); expect(approved.servers.music.approval.digest).toBe(configured.servers.music.digest);
-    const changed = await (await POST(request("POST", { action: "configure", name: "music", digest: approved.servers.music.digest, askBeforeActing: true }))).json();
+    const kept = await (await POST(request("POST", { action: "configure", name: "music", digest: approved.servers.music.digest, askBeforeActing: true, reapprove: true }))).json();
+    expect([kept.servers.music.state, kept.servers.music.approval.digest]).toEqual(["enabled", kept.servers.music.digest]);
+    expect((await POST(request("POST", { action: "configure", name: "music", digest: kept.servers.music.digest, reapprove: false }))).status).toBe(400);
+    const changed = await (await POST(request("POST", { action: "configure", name: "music", digest: kept.servers.music.digest, askBeforeActing: false }))).json();
     expect(changed.servers.music.state).toBe("pending"); expect(changed.servers.music.approval).toBeNull();
     expect((await POST(request("POST", { action: "remove", name: "music", digest: changed.servers.music.digest }))).status).toBe(200);
   } finally { await peer.stop(true); }

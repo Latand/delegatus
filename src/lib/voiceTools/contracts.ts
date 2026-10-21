@@ -18,9 +18,17 @@ export function allowedHttpUrl(input: string): boolean {
         (url.hostname === "localhost" || url.hostname === "[::1]" || /^127\.\d+\.\d+\.\d+$/.test(url.hostname)));
   } catch { return false; }
 }
+/**
+ * Variables that choose which binary, loader, interpreter, package, registry or config file a stdio
+ * launch uses. The settings card shows variable names only, so a value under one of these could
+ * swap what runs while the card still reads the same command; a proposal naming one is refused.
+ * NODE_ENV only tells the server how to behave, so a proposal may still set it.
+ */
+export const launchShapingEnv = /^(?:PATH|PATHEXT|HOME|SHELL|COMSPEC|SYSTEMROOT|WINDIR|TMPDIR|TEMP|TMP|LD_\w*|DYLD_\w*|NODE_(?!ENV$)\w*|BUN_\w*|BUNFIG\w*|UV_\w*|NPM_CONFIG_\w*|YARN_\w*|PIP_\w*|PYTHON\w*|VIRTUAL_ENV|CONDA_\w*|XDG_\w*|GIT_\w*|GLIBC_TUNABLES|MALLOC_\w*|SSL_CERT_\w*|CURL_CA_BUNDLE|REQUESTS_CA_BUNDLE|(?:HTTPS?|ALL|NO)_PROXY)$/i;
 export const transportSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("stdio"), command: z.enum(["bun", "uv"]), args: z.array(z.string().max(4096).refine(v => !v.includes("\0"))).max(64),
-    cwd: text(4096).nullable().default(null), env: variables(/^[A-Za-z_][A-Za-z0-9_]{0,127}$/).default({}) }).strict(),
+    cwd: text(4096).nullable().default(null),
+    env: variables(/^[A-Za-z_][A-Za-z0-9_]{0,127}$/).refine(v => Object.keys(v).every(name => !launchShapingEnv.test(name))).default({}) }).strict(),
   z.object({ type: z.literal("http"), url: text(4096).refine(allowedHttpUrl), headers: variables(/^[A-Za-z][A-Za-z0-9-]{0,127}$/).default({}) }).strict(),
 ]);
 export const proposalSchema = z.object({

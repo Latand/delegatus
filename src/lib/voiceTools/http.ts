@@ -22,7 +22,7 @@ export function voiceToolsOperator(req: NextRequest): NextResponse | null {
 const common = { name: serverName, digest: z.string().regex(/^sha256:[a-f0-9]{64}$/) };
 const browserSchema = z.discriminatedUnion("action", [
   z.object({ action: z.enum(["approve", "reject", "remove", "disable", "dry-run"]), ...common }).strict(),
-  z.object({ action: z.literal("configure"), ...common, tools: selectionSchema.optional(), askBeforeActing: z.boolean().optional() }).strict(),
+  z.object({ action: z.literal("configure"), ...common, tools: selectionSchema.optional(), askBeforeActing: z.boolean().optional(), reapprove: z.literal(true).optional() }).strict(),
   z.object({ action: z.literal("secrets"), secrets: secretsSchema }).strict(),
   z.object({ action: z.literal("propose"), proposal: proposalSchema }).strict(),
 ]);
@@ -70,7 +70,7 @@ export async function changeVoiceTools(req: NextRequest) {
     if (input.action === "propose") await hub.store.propose(input.proposal, { kind: "operator", conversationId: null, at: new Date().toISOString() });
     else if (input.action === "secrets") await hub.store.saveSecrets(input.secrets, authorize);
     else if (input.action === "dry-run") await hub.dryRun(input.name, input.digest, req.signal, authorize);
-    else await hub.store.operatorChange(input.name, input.digest, input.action, input.action === "configure" ? { tools: input.tools, askBeforeActing: input.askBeforeActing } : {}, authorize);
+    else await hub.store.operatorChange(input.name, input.digest, input.action, input.action === "configure" ? { tools: input.tools, askBeforeActing: input.askBeforeActing, reapprove: input.reapprove } : {}, authorize);
     return await readVoiceTools(req);
   } catch (error) { return voiceToolsFailure(error); }
 }

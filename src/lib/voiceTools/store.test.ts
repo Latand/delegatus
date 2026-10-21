@@ -197,6 +197,52 @@ test("reserved names, relative working directories and unpinned script entries a
   await expect(store.propose({ ...proposal(), transport: { type: "stdio", command: "bun", args: ["server.ts"] } }, actor)).rejects.toThrow("INVALID_PROPOSAL");
 });
 
+test("a launch variable is refused at proposal and on load, and allowed variable names still show", async () => {
+  const { store, root } = await setup();
+  const launch = (env: Record<string, unknown>) => ({ ...proposal(), transport: { type: "stdio", command: "bun", args: ["x", "harmless-mcp"], env } });
+  await expect(store.propose(launch({ PATH: { value: "/srv/agent/bin" }, LD_PRELOAD: { value: "/srv/agent/x.so" }, BUN_CONFIG_REGISTRY: { value: "https://registry.example.test" } }), actor))
+    .rejects.toThrow("INVALID_PROPOSAL");
+  await expect(store.propose(launch({ NODE_OPTIONS: { value: "--require /srv/agent/x.js" } }), actor)).rejects.toThrow("INVALID_PROPOSAL");
+  expect((await store.view()).servers).toEqual({});
+  await store.propose(launch({ SPOTIFY_REDIRECT_URI: { value: "http://127.0.0.1:8888/callback" }, SPOTIFY_CLIENT_ID: { secretRef: "spotify-client-id" } }), actor);
+  const shown = (await server(store)).transport;
+  expect(shown).toEqual({ type: "stdio", command: "bun", args: ["x", "harmless-mcp"], cwd: null, envNames: ["SPOTIFY_CLIENT_ID", "SPOTIFY_REDIRECT_URI"] });
+  /* A record edited on disk to carry one fails closed on the next load. */
+  const raw = JSON.parse(await fs.readFile(store.file, "utf8")); raw.servers.music.transport.env.PATH = { value: "/srv/agent/bin" };
+  await fs.writeFile(store.file, JSON.stringify(raw), { mode: 0o600 });
+  await expect(new VoiceToolsStore(root).view()).rejects.toThrow("REGISTRY_UNAVAILABLE");
+});
+
+test("re-approving the operator's own change on an approved server commits both or neither", async () => {
+  const { store } = await setup();
+  await store.propose({ ...proposal(), transport: { type: "http", url: "https://example.invalid/mcp" } }, actor);
+  await catalog(store, 33);
+  const first32 = Object.fromEntries(Array.from({ length: 32 }, (_, i) => [`search${i}`, { enabled: true, acts: false }]));
+  await store.operatorChange("music", (await server(store)).digest, "configure", { tools: { ...first32, search32: { enabled: false, acts: false } } });
+  await store.operatorChange("music", (await server(store)).digest, "approve");
+  const approved = await server(store);
+  expect(approved.state).toBe("enabled");
+  const bytes = await fs.readFile(store.file);
+  /* A 33rd tool exceeds the selection bound: the configure that would have landed is refused with it. */
+  await expect(store.operatorChange("music", approved.digest, "configure", { tools: { ...first32, search32: { enabled: true, acts: false } }, reapprove: true }))
+    .rejects.toThrow("SELECTION_BOUNDS");
+  expect(Buffer.compare(await fs.readFile(store.file), bytes)).toBe(0);
+  const reread = await server(new VoiceToolsStore(store.directory, () => at));
+  expect([reread.state, reread.digest, reread.approval, reread.askBeforeActing, reread.tools.search32.enabled]).toEqual(["enabled", approved.digest, approved.approval, false, false]);
+  /* An accepted change is approved under its new digest in the same write. */
+  await store.operatorChange("music", approved.digest, "configure", { askBeforeActing: true, reapprove: true });
+  const changed = await server(store);
+  expect([changed.state, changed.askBeforeActing, changed.approval?.digest]).toEqual(["enabled", true, changed.digest]);
+  expect(changed.digest).not.toBe(approved.digest);
+  /* Re-approval is only for a server the operator saw approved; a pending one keeps its digest-bound flow. */
+  await store.operatorChange("music", changed.digest, "disable");
+  const disabled = await server(store);
+  const before = await fs.readFile(store.file);
+  await expect(store.operatorChange("music", disabled.digest, "configure", { askBeforeActing: false, reapprove: true })).rejects.toThrow("STALE_APPROVAL");
+  await expect(store.operatorChange("music", disabled.digest, "configure", { askBeforeActing: false, reapprove: "yes" })).rejects.toThrow("INVALID_REQUEST");
+  expect(Buffer.compare(await fs.readFile(store.file), before)).toBe(0);
+});
+
 test("local stdio pins the actual explicit entry against its execution cwd", async () => {
   const { store, root } = await setup();
   const cwd = path.join(root, "voice-tools-data", "music");

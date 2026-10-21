@@ -224,12 +224,16 @@ const voiceSettings = {
    the record `/api/voice-tools` answers, kept in memory so a press changes it as the route does: `empty`, `pending`
    (a server waits with a secret still needed and no dry run), `review` (its dry run passed and the operator is
    choosing tools), `failed` (a local script's dry run timed out), `approved` and `approved-ask` (approved with
-   «ask before acting» off and on), and `long` (every operator-visible field at its schema maximum). */
+   «ask before acting» off and on), `long` (every operator-visible field at its schema maximum), and two whose next
+   press is refused: `approved-refused` (the switch's change and re-approval meet the selection bound) and
+   `dry-run-busy` (the hub already runs eight dry runs). */
 const VOICE_TOOLS = new URLSearchParams(location.search).get("voicetools");
 type FixtureVoiceTool = Record<string, unknown> & { state: string; digest: string; askBeforeActing: boolean; tools: Record<string, { enabled: boolean; acts: boolean }>;
   missingSecrets: string[]; secretRefs: string[]; catalog: { digest: string; fetchedAt: string; tools: Array<{ name: string; description: string; annotations?: { readOnlyHint?: boolean } }> } | null;
   lastDryRun: { code: string; at: string; digest: string } | null };
 const voiceToolsState = { revision: 7, servers: {} as Record<string, FixtureVoiceTool> };
+/* One refusal per action, answered before the record changes, as the route answers a refused mutation. */
+const voiceToolsRefuse: Record<string, string> = VOICE_TOOLS === "approved-refused" ? { configure: "SELECTION_BOUNDS" } : VOICE_TOOLS === "dry-run-busy" ? { "dry-run": "BUSY" } : {};
 const voiceToolDigest = (seed: number) => `sha256:${seed.toString(16).padStart(64, "0")}`;
 const voiceToolAt = (minutesAgo: number) => new Date((VOICE_LOADED - minutesAgo * 60) * 1000).toISOString();
 const spotifyCatalog = () => ({ digest: voiceToolDigest(901), fetchedAt: voiceToolAt(4), tools: [
@@ -251,7 +255,8 @@ function seedVoiceTools() {
   const ok = { code: "OK", at: voiceToolAt(4), digest: voiceToolDigest(501) };
   if (VOICE_TOOLS === "pending") voiceToolsState.servers.spotify = spotify({ missingSecrets: ["spotify-client-id"] });
   if (VOICE_TOOLS === "review") voiceToolsState.servers.spotify = spotify({ catalog: spotifyCatalog(), lastDryRun: ok, tools: { ...chosen, play: { enabled: false, acts: true } } });
-  if (VOICE_TOOLS === "approved" || VOICE_TOOLS === "approved-ask") voiceToolsState.servers.spotify = spotify({ state: "enabled", catalog: spotifyCatalog(), lastDryRun: ok, tools: chosen,
+  if (VOICE_TOOLS === "dry-run-busy") voiceToolsState.servers.spotify = spotify({});
+  if (VOICE_TOOLS === "approved" || VOICE_TOOLS === "approved-ask" || VOICE_TOOLS === "approved-refused") voiceToolsState.servers.spotify = spotify({ state: "enabled", catalog: spotifyCatalog(), lastDryRun: ok, tools: chosen,
     askBeforeActing: VOICE_TOOLS === "approved-ask", approval: { by: "operator", at: voiceToolAt(2), digest: voiceToolDigest(1) } });
   if (VOICE_TOOLS === "failed") voiceToolsState.servers.notes = {
     title: L("Notes", "Нотатки"), capability: L("Reads and appends to the operator's plain-text notes folder.", "Читає й доповнює теку текстових нотаток оператора."),
@@ -4684,8 +4689,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
      code on a refusal. A dry run of the timed-out script times out again; the Spotify server's passes. */
   if (VOICE && url.pathname === "/api/voice-tools") {
     if (method === "POST") {
-      const body = JSON.parse(String(init?.body ?? "{}")) as { action: string; name?: string; digest?: string; tools?: FixtureVoiceTool["tools"]; askBeforeActing?: boolean; secrets?: Record<string, string> };
+      const body = JSON.parse(String(init?.body ?? "{}")) as { action: string; name?: string; digest?: string; tools?: FixtureVoiceTool["tools"]; askBeforeActing?: boolean; reapprove?: true; secrets?: Record<string, string> };
       const server = body.name ? voiceToolsState.servers[body.name] : undefined;
+      const refused = voiceToolsRefuse[body.action];
+      if (refused) { delete voiceToolsRefuse[body.action]; return json({ code: refused }, 409); }
       voiceToolsState.revision += 1;
       const next = voiceToolDigest(voiceToolsState.revision * 10);
       if (body.action === "secrets") {
@@ -4697,9 +4704,12 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         if (body.name !== "notes") { server.catalog = spotifyCatalog(); server.tools = Object.fromEntries(server.catalog.tools.map(tool => [tool.name, server.tools[tool.name] ?? { enabled: false, acts: tool.annotations?.readOnlyHint !== true }])); }
         server.digest = next;
       } else if (body.action === "configure") {
+        if (body.reapprove && server.state !== "enabled") return json({ code: "STALE_APPROVAL" }, 409);
         if (body.tools) server.tools = body.tools;
         if (body.askBeforeActing !== undefined) server.askBeforeActing = body.askBeforeActing;
-        server.digest = next; server.state = "pending"; server.approval = null;
+        server.digest = next;
+        if (body.reapprove) { server.state = "enabled"; server.approval = { by: "operator", at: voiceToolAt(0), digest: next }; }
+        else { server.state = "pending"; server.approval = null; }
       } else if (body.action === "approve") {
         if (server.lastDryRun?.code !== "OK") return json({ code: "DRY_RUN_REQUIRED" }, 409);
         server.state = "enabled"; server.approval = { by: "operator", at: voiceToolAt(0), digest: server.digest };

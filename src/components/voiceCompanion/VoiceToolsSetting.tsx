@@ -5,7 +5,7 @@ import type { VoiceToolsView } from "@/lib/voiceTools/contracts";
 
 type Server = VoiceToolsView["servers"][string];
 type Body = { action: "dry-run" | "approve" | "reject" | "disable" | "remove"; name: string; digest: string }
-  | { action: "configure"; name: string; digest: string; tools?: Server["tools"]; askBeforeActing?: boolean }
+  | { action: "configure"; name: string; digest: string; tools?: Server["tools"]; askBeforeActing?: boolean; reapprove?: true }
   | { action: "secrets"; secrets: Record<string, string> };
 type Control = "secrets" | "dry-run" | "approve" | "reject" | "disable" | "remove" | "ask" | "tools";
 
@@ -17,7 +17,10 @@ const BUTTON = "min-h-9 rounded-[8px] border border-border px-3 text-[13px] font
 const PRIMARY = "min-h-9 rounded-[8px] border border-accent bg-accent px-3 text-[13px] font-semibold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-45 max-sm:min-h-11";
 const FIELD = "min-h-9 w-full min-w-0 rounded-[8px] border border-border bg-well px-2.5 font-mono text-[13px] text-primary placeholder:text-muted placeholder:font-sans focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-55 max-sm:min-h-11";
 
-function refusalKey(code: string): MessageKey {
+function refusalKey(code: string, control: Control): MessageKey {
+  /* Under Run dry run, BUSY is the hub's limit of eight dry runs and CATALOG_BOUNDS a tool list the store
+     refused to save; the file lock answers VOICE_TOOLS_BUSY. */
+  if (control === "dry-run" && (code === "BUSY" || code === "CATALOG_BOUNDS")) return `voiceCompanion.tools.refused.dryRun.${code}`;
   const known = code === "VOICE_TOOLS_BUSY" ? "BUSY" : code;
   return (REFUSALS.includes(known) ? `voiceCompanion.tools.refused.${known}` : "voiceCompanion.tools.refused.other") as MessageKey;
 }
@@ -82,15 +85,10 @@ export function VoiceToolsSetting() {
     setWriting({ name, control });
     if (optimistic && before && Object.hasOwn(before.servers, name)) setView({ ...before, servers: { ...before.servers, [name]: optimistic(before.servers[name]) } });
     try {
-      let answer = await post(body);
-      /* A change of the operator's own choices on an approved server keeps it approved: the pinned
-         digest moved, so the same press approves the new one, and a refusal says why it is pending. */
+      /* A change of the operator's own choices on an approved server keeps it approved: the route
+         changes it and approves the moved digest in one write, and a refusal changes nothing. */
       const wasEnabled = before !== null && Object.hasOwn(before.servers, name) && before.servers[name].state === "enabled";
-      if ("view" in answer && body.action === "configure" && wasEnabled && Object.hasOwn(answer.view.servers, name) && answer.view.servers[name].state === "pending") {
-        setView(answer.view);
-        answer = await post({ action: "approve", name, digest: answer.view.servers[name].digest });
-        if ("code" in answer) { setRefusal({ name, control, code: answer.code }); return; }
-      }
+      const answer = await post(body.action === "configure" && wasEnabled ? { ...body, reapprove: true } : body);
       if ("view" in answer) { setView(answer.view); return; }
       setRefusal({ name, control, code: answer.code });
       if (optimistic) setView(before);
@@ -124,7 +122,7 @@ function ServerRow({ name, server, when, busy, writing, refusal, write }: {
   const [typed, setTyped] = useState<ReadonlySet<string>>(new Set());
   const digest = server.digest;
   const reason = (control: Control) => refusal?.control === control
-    ? <p role="alert" data-voice-tools-refused={refusal.code} className="mt-1.5 text-[13px] text-danger">{t(refusalKey(refusal.code))}</p> : null;
+    ? <p role="alert" data-voice-tools-refused={refusal.code} className="mt-1.5 text-[13px] text-danger">{t(refusalKey(refusal.code, refusal.control))}</p> : null;
   const dryRun = server.lastDryRun;
   const passed = dryRun?.code === "OK" && server.catalog !== null;
   const blockedBySecrets = server.missingSecrets.length > 0;

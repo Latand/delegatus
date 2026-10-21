@@ -35,13 +35,14 @@ class BoundedStdio implements Transport {
     if (transport.type !== "stdio") throw new Error("PROTOCOL_ERROR");
     // Recheck after connection setup and immediately before the pinned file is executed.
     await verifyEntry(request.server);
-    const inherited = Object.fromEntries(["PATH", "LANG", "LC_ALL", "SYSTEMROOT", "WINDIR", "PATHEXT"].flatMap(name => process.env[name] ? [[name, process.env[name]]] : []));
+    const inherit = (names: string[]) => Object.fromEntries(names.flatMap(name => process.env[name] ? [[name, process.env[name]]] : []));
     const args = transport.command === "bun" && request.server.entryFile
       ? ["run", request.server.entryFile.path, ...transport.args.slice(2)]
       : transport.args;
     const child = this.child = spawn(transport.command, args, { cwd: transport.cwd ?? request.home,
-      env: { ...inherited, NODE_ENV: "production", XDG_CONFIG_HOME: `${request.home}/.config`, XDG_CACHE_HOME: `${request.home}/.cache`, TMPDIR: request.home,
-        ...resolveValues(transport.env), HOME: request.home }, stdio: ["pipe", "pipe", "ignore"] });
+      // The proposal's variables cannot name a launch or loader variable (contracts.ts); the platform's own and the private home still win.
+      env: { NODE_ENV: "production", ...inherit(["LANG", "LC_ALL"]), ...resolveValues(transport.env), ...inherit(["PATH", "SYSTEMROOT", "WINDIR", "PATHEXT"]), XDG_CONFIG_HOME: `${request.home}/.config`, XDG_CACHE_HOME: `${request.home}/.cache`, TMPDIR: request.home,
+        HOME: request.home }, stdio: ["pipe", "pipe", "ignore"] });
     this.closed = new Promise(resolve => { child.once("close", () => { this.onclose?.(); resolve(); }); });
     let buffer = Buffer.alloc(0);
     child.stdout!.on("data", (chunk: Buffer) => {

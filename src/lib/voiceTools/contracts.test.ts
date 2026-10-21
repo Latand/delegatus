@@ -55,6 +55,23 @@ test("proposals validate launchers, names, transports, secrets and timeouts", ()
   for (const callTimeoutMs of [4999, 60001, 5000.5]) expect(proposalSchema.safeParse({ ...valid, callTimeoutMs }).success).toBe(false);
 });
 
+test("a stdio proposal cannot name a variable that chooses the binary, loader, package or config of its launch", () => {
+  const stdio = (env: Record<string, unknown>) => ({ name: "music", title: "Music", capability: "Play", transport: { type: "stdio", command: "bun", args: ["x", "harmless-mcp"], env } });
+  for (const name of ["PATH", "Path", "PATHEXT", "HOME", "TMPDIR", "LD_PRELOAD", "LD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES", "NODE_OPTIONS", "node_options", "NODE_PATH", "NODE_ENVIRONMENT", "BUN_CONFIG_REGISTRY",
+    "BUN_INSTALL", "BUNFIG", "UV_INDEX_URL", "UV_PYTHON", "NPM_CONFIG_REGISTRY", "npm_config_registry", "PYTHONPATH", "PYTHONSTARTUP", "PIP_INDEX_URL", "VIRTUAL_ENV",
+    "XDG_CONFIG_HOME", "GIT_SSH_COMMAND", "GLIBC_TUNABLES", "HTTPS_PROXY", "https_proxy", "SSL_CERT_FILE"]) {
+    expect(proposalSchema.safeParse(stdio({ [name]: { value: "/srv/agent/bin" } })).success).toBe(false);
+    expect(proposalSchema.safeParse(stdio({ [name]: { secretRef: "chosen-later" } })).success).toBe(false);
+  }
+  expect(proposalSchema.safeParse(stdio({ PATH: { value: "/srv/agent/bin" }, LD_PRELOAD: { value: "/srv/agent/x.so" }, BUN_CONFIG_REGISTRY: { value: "https://registry.example.test" } })).success).toBe(false);
+  /* Ordinary configuration, including names that only contain a refused word, still passes. */
+  for (const name of ["SPOTIFY_CLIENT_ID", "SPOTIFY_REDIRECT_URI", "LABEL", "MY_PATH", "NOTES_HOME", "LANG", "LOG_LEVEL", "NODE_ENV"]) {
+    expect(proposalSchema.safeParse(stdio({ [name]: { value: "music" } })).success).toBe(true);
+  }
+  /* HTTP headers launch nothing; their names are not launch variables. */
+  expect(proposalSchema.safeParse({ ...stdio({}), transport: { type: "http", url: "https://example.invalid/mcp", headers: { Path: { value: "x" } } } }).success).toBe(true);
+});
+
 test("catalogs bound count, UTF-8 descriptions, schema bytes, depth, validity and normalized names", () => {
   const ajv = new Ajv({ strict: false });
   const validate = (tools: unknown) => validateCatalog("music", tools, s => { ajv.compile(s); });

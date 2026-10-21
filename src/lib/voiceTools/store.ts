@@ -242,11 +242,18 @@ export class VoiceToolsStore {
       if (server.approval?.digest !== approvalDigest(name, server)) { server.state = "pending"; server.approval = null; }
     });
   }
-  async operatorChange(name: string, expected: string, action: "approve" | "reject" | "remove" | "disable" | "configure", input: { tools?: unknown; askBeforeActing?: unknown } = {}, authorize?: () => void): Promise<void> {
+  /**
+   * `reapprove` is the operator changing their own choices on an approved server from the settings:
+   * the change and the approval of its new digest commit together or not at all, so a refused
+   * approval leaves the record as it was. Without it a pinned change returns the server to pending.
+   */
+  async operatorChange(name: string, expected: string, action: "approve" | "reject" | "remove" | "disable" | "configure", input: { tools?: unknown; askBeforeActing?: unknown; reapprove?: unknown } = {}, authorize?: () => void): Promise<void> {
     await this.mutate(async registry => {
       const server = this.server(registry, name, expected);
       if (action === "remove") { delete registry.servers[name]; return; }
       if (action === "configure") {
+        if (input.reapprove !== undefined && input.reapprove !== true) return fail("INVALID_REQUEST");
+        if (input.reapprove && server.state !== "enabled") return fail("STALE_APPROVAL");
         if (input.askBeforeActing !== undefined) {
           if (typeof input.askBeforeActing !== "boolean") return fail("INVALID_REQUEST");
           server.askBeforeActing = input.askBeforeActing;
@@ -257,6 +264,7 @@ export class VoiceToolsStore {
           server.tools = parsed.data;
         }
         if (server.approval?.digest !== approvalDigest(name, server)) { server.state = "pending"; server.approval = null; }
+        if (input.reapprove) await this.approve(registry, name, server);
         return;
       }
       if (action !== "approve") {
@@ -264,18 +272,21 @@ export class VoiceToolsStore {
         server.generation = registry.revision + 1;
         return;
       }
-      if (!server.catalog || server.lastDryRun?.code !== "OK" || server.lastDryRun.digest !== probeDigest(name, server)) return fail("DRY_RUN_REQUIRED");
-      if (secretReferences(server).some(ref => !hasSecret(this.secrets, ref))) return fail("MISSING_SECRET");
-      try { await verifyEntry(server); } catch { return fail("ENTRY_CHANGED"); }
-      const enabled = Object.entries(registry.servers).filter(([key, value]) => key === name || value.state === "enabled");
-      if (enabled.length > voiceToolBounds.enabledServers) return fail("SELECTION_BOUNDS");
-      const selected = enabled.flatMap(([key, value]) => value.catalog?.tools.filter(tool => value.tools[tool.name]?.enabled).map(tool => ({
-        type: "function", name: toolName(key, tool.name), description: tool.description, parameters: tool.inputSchema, strict: false,
-      })) ?? []);
-      if (selected.length > voiceToolBounds.selectedTools || Buffer.byteLength(JSON.stringify(selected)) > voiceToolBounds.selectionBytes) return fail("SELECTION_BOUNDS");
-      if (new Set(selected.map(tool => tool.name)).size !== selected.length) return fail("CATALOG_BOUNDS");
-      server.state = "enabled"; server.approval = { by: "operator", at: this.now(), digest: approvalDigest(name, server) };
+      await this.approve(registry, name, server);
     }, authorize);
+  }
+  private async approve(registry: VoiceToolsRegistry, name: string, server: VoiceToolServer): Promise<void> {
+    if (!server.catalog || server.lastDryRun?.code !== "OK" || server.lastDryRun.digest !== probeDigest(name, server)) return fail("DRY_RUN_REQUIRED");
+    if (secretReferences(server).some(ref => !hasSecret(this.secrets, ref))) return fail("MISSING_SECRET");
+    try { await verifyEntry(server); } catch { return fail("ENTRY_CHANGED"); }
+    const enabled = Object.entries(registry.servers).filter(([key, value]) => key === name || value.state === "enabled");
+    if (enabled.length > voiceToolBounds.enabledServers) return fail("SELECTION_BOUNDS");
+    const selected = enabled.flatMap(([key, value]) => value.catalog?.tools.filter(tool => value.tools[tool.name]?.enabled).map(tool => ({
+      type: "function", name: toolName(key, tool.name), description: tool.description, parameters: tool.inputSchema, strict: false,
+    })) ?? []);
+    if (selected.length > voiceToolBounds.selectedTools || Buffer.byteLength(JSON.stringify(selected)) > voiceToolBounds.selectionBytes) return fail("SELECTION_BOUNDS");
+    if (new Set(selected.map(tool => tool.name)).size !== selected.length) return fail("CATALOG_BOUNDS");
+    server.state = "enabled"; server.approval = { by: "operator", at: this.now(), digest: approvalDigest(name, server) };
   }
   async saveSecrets(input: unknown, authorize?: () => void): Promise<void> {
     const parsed = secretsSchema.safeParse(input);

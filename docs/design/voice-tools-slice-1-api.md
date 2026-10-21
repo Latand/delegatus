@@ -40,7 +40,7 @@ endpoint. The client-safe view type is `VoiceToolsView` in
 | --- | --- |
 | `propose` | `proposal`, matching `proposalSchema` |
 | `dry-run` | `name`, current `digest` |
-| `configure` | `name`, current `digest`, optional `tools` and `askBeforeActing` |
+| `configure` | `name`, current `digest`, optional `tools`, `askBeforeActing` and `reapprove: true` |
 | `approve`, `reject`, `disable`, `remove` | `name`, current `digest` |
 | `secrets` | `secrets`, a mapping of reference names to values |
 
@@ -51,6 +51,10 @@ successful matching dry run. Every selected tool entry is
 `{ enabled: boolean, acts: boolean }`; newly discovered tools start unselected,
 with `acts` derived conservatively from `readOnlyHint`. Changes to pinned
 configuration or selections clear approval and return the server to pending.
+A `configure` with `reapprove: true` is the operator's change on an approved
+server: the change and the approval of its new digest commit in one store
+mutation, or a refusal (any approval refusal, or `STALE_APPROVAL` when the
+server is no longer approved) leaves the record unchanged.
 Secret rotation preserves approval because only reference names are pinned.
 `askBeforeActing` defaults to false, matching the operator's explicit-request
 policy; the operator can turn it on per server.
@@ -70,7 +74,15 @@ without contacting a server. A failure enables no extra tools.
 The probe is a leased helper, with at most eight concurrent probes and one
 20-second deadline covering preparation and peer work. The helper's lease
 also bounds shutdown and reaps its process group. Stdio gets a private HOME
-and a platform environment allowlist. HTTP redirects are refused. Incoming
+and a platform environment allowlist. A stdio proposal may not name an
+environment variable that chooses the launched binary, loader, interpreter,
+package, registry or config file (`PATH`, `HOME`, `TMPDIR`, `LD_*`, `DYLD_*`,
+`NODE_*` other than `NODE_ENV`, `BUN_*`, `UV_*`, `NPM_CONFIG_*`, `PIP_*`,
+`PYTHON*`, `XDG_*`, `GIT_*`, proxy and CA variables; `launchShapingEnv` in
+`contracts.ts`), as a literal or a secret reference: the settings show
+variable names only, so the command shown must be the command that runs. Such
+a proposal is refused with `INVALID_PROPOSAL`, and such a persisted record
+fails the load. HTTP redirects are refused. Incoming
 wire data is capped at 2 MiB, catalogs at 128 tools, schema JSON at 8 KiB and
 10 levels, and descriptions at 1 KiB of UTF-8. Schema compilation runs in the
 helper. Approval caps enabled servers at 16, selections at 32 tools and extra
@@ -96,8 +108,8 @@ as reading only or acting; the per-server «ask before acting» switch; and Run
 dry run, Approve, Reject, Turn off and Remove by state. Every press carries the
 digest shown. A refusal reads under the control pressed, and a stale digest
 rereads the view. On an approved server, a change to the operator's own
-choices (a tool, the switch) moves the pinned digest, so the same press
-approves the new digest; a refused approval leaves the server waiting, with
-the reason shown. Strings ship in English and Ukrainian. Rendered evidence
+choices (a tool, the switch) is one `configure` with `reapprove: true`, so the
+server stays approved under the new digest; a refusal changes nothing, puts the
+control back and shows the reason under it. Strings ship in English and Ukrainian. Rendered evidence
 comes from the kanban browser driver's «voice tools settings» case
 (`evidence/voice-companion/voice-tools.json`); frames are never committed.

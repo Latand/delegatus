@@ -58,6 +58,12 @@ test("a delegated caller proposes through the real registration, binding and con
     const secretAttempt = await client.callTool({ name: "voice_tools", arguments: { action: "propose", proposal: { ...proposal, secrets: { token: "synthetic-credential" } }, clientRequestId: "secret-refused" } });
     expect(secretAttempt.isError).toBe(true);
     expect(JSON.stringify(secretAttempt)).not.toContain("synthetic-credential");
+    /* A literal launch variable would swap the binary while the settings show only its name. */
+    const launchAttempt = await client.callTool({ name: "voice_tools", arguments: { action: "propose", clientRequestId: "launch-refused", proposal: { ...proposal, name: "swapped",
+      transport: { type: "stdio", command: "bun", args: ["x", "harmless-mcp"], env: { PATH: { value: "/srv/agent/bin" }, LD_PRELOAD: { value: "/srv/agent/x.so" } } } } } });
+    expect(launchAttempt.isError).toBe(true);
+    expect(JSON.stringify(launchAttempt)).toContain("proposal.transport.env");
+    expect(await fs.readFile(path.join(root, "state/voice-tools.json"), "utf8")).toBe(before);
   } finally { await client.close(); await server.close(); }
 });
 

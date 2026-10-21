@@ -48,7 +48,7 @@ function routes(servers: Record<string, Server>) {
   harness.setRoute((url, init) => {
     if (new URL(url, "http://127.0.0.1:8898").pathname !== "/api/voice-tools") return undefined;
     if (!init?.method || init.method === "GET") return jsonResponse(view());
-    const body = JSON.parse(String(init.body)) as { action: string; name?: string; digest?: string; tools?: Server["tools"]; askBeforeActing?: boolean; secrets?: Record<string, string> };
+    const body = JSON.parse(String(init.body)) as { action: string; name?: string; digest?: string; tools?: Server["tools"]; askBeforeActing?: boolean; reapprove?: true; secrets?: Record<string, string> };
     const answer = ((): Answer => {
       if (refuse[body.action]) { const code = refuse[body.action]; delete refuse[body.action]; return { status: 409, body: { code } }; }
       record.revision += 1;
@@ -61,9 +61,13 @@ function routes(servers: Record<string, Server>) {
       if (server.digest !== body.digest) return { status: 409, body: { code: "STALE_APPROVAL" } };
       const next = digestOf(record.revision * 10);
       if (body.action === "configure") {
+        if (body.reapprove && server.state !== "enabled") return { status: 409, body: { code: "STALE_APPROVAL" } };
         if (body.tools) server.tools = body.tools;
         if (body.askBeforeActing !== undefined) server.askBeforeActing = body.askBeforeActing;
-        server.state = "pending"; server.approval = null; server.digest = next;
+        server.digest = next;
+        /* Re-approval commits with the change, as the store's one mutation does. */
+        if (body.reapprove) { server.state = "enabled"; server.approval = { by: "operator", at: AT, digest: next }; }
+        else { server.state = "pending"; server.approval = null; }
       } else if (body.action === "approve") {
         if (server.lastDryRun?.code !== "OK") return { status: 409, body: { code: "DRY_RUN_REQUIRED" } };
         server.state = "enabled"; server.approval = { by: "operator", at: AT, digest: server.digest };
@@ -158,23 +162,20 @@ test("choosing a tool and approving each carry the current digest; the server re
   expect([button(host, "disable")?.textContent, button(host, "remove")?.textContent]).toEqual(["Turn off", "Remove"]);
 });
 
-test("«ask before acting» on an approved server stays approved: the same press approves the moved digest", async () => {
+test("«ask before acting» on an approved server stays approved: one write changes it and approves the moved digest", async () => {
   routes({ spotify: spotify({ state: "enabled", missingSecrets: [], catalog, lastDryRun: { code: "OK", at: AT, digest: digestOf(500) }, approval: { by: "operator", at: AT, digest: digestOf(1) },
     tools: { search: { enabled: true, acts: false }, play: { enabled: true, acts: true } } }) });
   const host = await mount();
   const ask = host.querySelector<HTMLInputElement>("[data-voice-tool-ask]")!;
   expect(ask.checked).toBe(false);
   await click(ask);
-  expect(writes()).toEqual([
-    { action: "configure", name: "spotify", digest: digestOf(1), askBeforeActing: true },
-    { action: "approve", name: "spotify", digest: digestOf(20) },
-  ]);
+  expect(writes()).toEqual([{ action: "configure", name: "spotify", digest: digestOf(1), askBeforeActing: true, reapprove: true }]);
   expect(host.querySelector<HTMLInputElement>("[data-voice-tool-ask]")!.checked).toBe(true);
   expect(host.querySelector("[data-voice-tool-state]")?.textContent).toBe("Approved");
 });
 
-test("a refused switch flips back with its reason beside it; an approval refused after the switch landed says why it waits", async () => {
-  const { refuse } = routes({ spotify: spotify({ state: "enabled", missingSecrets: [], catalog, lastDryRun: { code: "OK", at: AT, digest: digestOf(500) }, approval: { by: "operator", at: AT, digest: digestOf(1) } }) });
+test("a refused switch flips back with its reason beside it; a refused re-approval changes nothing and the row stays approved", async () => {
+  const { refuse, record } = routes({ spotify: spotify({ state: "enabled", missingSecrets: [], catalog, lastDryRun: { code: "OK", at: AT, digest: digestOf(500) }, approval: { by: "operator", at: AT, digest: digestOf(1) } }) });
   const host = await mount();
   refuse.configure = "OPERATOR_REQUIRED";
   await click(host.querySelector("[data-voice-tool-ask]"));
@@ -184,11 +185,34 @@ test("a refused switch flips back with its reason beside it; an approval refused
   /* Beside the switch, before the action row. */
   expect(reason.compareDocumentPosition(host.querySelector("[data-voice-tool-actions]")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
-  refuse.approve = "SELECTION_BOUNDS";
+  /* The route refuses the change and its approval together: the record and the row stay as they were. */
+  refuse.configure = "SELECTION_BOUNDS";
   await click(host.querySelector("[data-voice-tool-ask]"));
-  expect(host.querySelector<HTMLInputElement>("[data-voice-tool-ask]")!.checked).toBe(true);
-  expect(host.querySelector("[data-voice-tool-state]")?.textContent).toBe("Waiting for approval");
+  expect(writes().at(-1)).toEqual({ action: "configure", name: "spotify", digest: digestOf(1), askBeforeActing: true, reapprove: true });
+  expect(host.querySelector<HTMLInputElement>("[data-voice-tool-ask]")!.checked).toBe(false);
+  expect(host.querySelector("[data-voice-tool-state]")?.textContent).toBe("Approved");
+  expect(host.querySelector<HTMLElement>("[data-voice-tool-server]")!.dataset.state).toBe("enabled");
   expect(host.querySelector("[data-voice-tools-refused]")?.textContent).toBe(translate("en", "voiceCompanion.tools.refused.SELECTION_BOUNDS"));
+  expect([record.servers.spotify.state, record.servers.spotify.askBeforeActing, record.servers.spotify.digest]).toEqual(["enabled", false, digestOf(1)]);
+  /* The same for a tool on the approved server. */
+  refuse.configure = "SELECTION_BOUNDS";
+  await click(host.querySelector("[data-voice-tool='play'] input"));
+  expect(host.querySelector<HTMLInputElement>("[data-voice-tool='play'] input")!.checked).toBe(false);
+  expect(host.querySelector("[data-voice-tool-state]")?.textContent).toBe("Approved");
+  expect(host.querySelector("[data-voice-tools-refused]")?.textContent).toBe(translate("en", "voiceCompanion.tools.refused.SELECTION_BOUNDS"));
+});
+
+test("under Run dry run, the hub's limit and a refused tool list read as dry-run reasons, and the file lock as another change", async () => {
+  const { refuse } = routes({ spotify: spotify({ missingSecrets: [] }) });
+  const host = await mount();
+  for (const [code, key] of [["BUSY", "voiceCompanion.tools.refused.dryRun.BUSY"], ["CATALOG_BOUNDS", "voiceCompanion.tools.refused.dryRun.CATALOG_BOUNDS"], ["VOICE_TOOLS_BUSY", "voiceCompanion.tools.refused.BUSY"]] as const) {
+    refuse["dry-run"] = code;
+    await click(button(host, "dry-run"));
+    const reason = host.querySelector<HTMLElement>("[data-voice-tools-refused]")!;
+    expect([reason.dataset.voiceToolsRefused, reason.textContent]).toEqual([code, translate("en", key)]);
+    expect(host.querySelector("[data-voice-tool-actions]")!.compareDocumentPosition(reason) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  }
+  expect(translate("uk", "voiceCompanion.tools.refused.dryRun.BUSY")).not.toBe(translate("en", "voiceCompanion.tools.refused.dryRun.BUSY"));
 });
 
 test("a failed dry run reads its reason, and a stale digest rereads the record before the next press", async () => {

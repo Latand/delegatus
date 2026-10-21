@@ -22874,7 +22874,9 @@ describe("floating voice companion", () => {
    * The Tools section of the voice settings (docs/design/voice-extensible-tools.md §4.8 item 1,
    * `&voicetools=<state>`): no servers, a pending proposal with a secret still needed, a passed
    * dry run with tools being chosen, a failed dry run, an approval with «ask before acting» off and
-   * on, and every visible field at its schema maximum. Each state is read at 1440, 820 and 390,
+   * on, every visible field at its schema maximum, and two refused presses: «ask before acting» on an
+   * approved server whose change and re-approval are refused together (the row stays approved and the
+   * switch flips back) and Run dry run refused by the hub's limit. Each state is read at 1440, 820 and 390,
    * in both languages and themes: its defining words are whole on screen once the section is
    * scrolled to, no text range leaves the dialog or the window, the page never scrolls sideways,
    * and every control is at least 24 px tall (44 on the phone). Approving a chosen tool and
@@ -22904,7 +22906,13 @@ describe("floating voice companion", () => {
         foot: [translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.disable"), translate(lang, "voiceCompanion.tools.action.remove")] }),
       long: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.changed"), "a234567890123456789012_x"],
         foot: [translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.reject")] }),
+      "approved-refused": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.enabled"), "spotify-mcp-example"],
+        foot: [translate(lang, "voiceCompanion.tools.refused.SELECTION_BOUNDS"), translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.disable")] }),
+      "dry-run-busy": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example"],
+        foot: [translate(lang, "voiceCompanion.tools.action.dryRun"), translate(lang, "voiceCompanion.tools.refused.dryRun.BUSY")] }),
     };
+    /* The refused states are read after their press, which every language and theme makes. */
+    const refusedPress: Record<string, string> = { "approved-refused": "[data-voice-tool-ask]", "dry-run-busy": "[data-voice-tool-action='dry-run']" };
     try {
       for (const width of [1440, 820, 390]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const state of Object.keys(defining)) {
         const label = `${width}-${lang}-${scheme}-${state}`;
@@ -22916,12 +22924,23 @@ describe("floating voice companion", () => {
           await section.waitFor();
           await page.waitForFunction(() => !document.querySelector("[data-voice-tools-status]")?.textContent?.includes("…"));
           const row = page.locator("[data-voice-tool-server]").first();
+          if (refusedPress[state]) {
+            const control = page.locator(refusedPress[state]);
+            await control.scrollIntoViewIfNeeded();
+            if (phone) await control.tap(); else await control.click();
+            await page.waitForSelector("[data-voice-tools-refused]");
+            await page.waitForFunction(selector => !(document.querySelector(selector) as HTMLInputElement | HTMLButtonElement).disabled, refusedPress[state]);
+            if (state === "approved-refused") {
+              expect(await page.locator("[data-voice-tool-ask]").isChecked()).toBe(false);
+              expect(await page.locator("[data-voice-tool-state]").getAttribute("data-voice-tool-state")).toBe("enabled");
+            }
+          }
           for (const part of ["head", "foot"] as const) {
             const words = defining[state](lang)[part];
             if (!words.length) continue;
             if (state === "empty") await section.scrollIntoViewIfNeeded();
-            /* The head: the row's top at the dialog's top. The foot: its action row at the dialog's bottom. */
-            else await page.evaluate(([selector, top]) => document.querySelector(selector)!.scrollIntoView({ block: top ? "start" : "end" }), [part === "head" ? "[data-voice-tool-server]" : "[data-voice-tool-actions]", part === "head"] as const);
+            /* The head: the row's top at the dialog's top. The foot: its last line (the action row, or a refusal under it) at the dialog's bottom. */
+            else await page.evaluate(([selector, top]) => document.querySelector(selector)!.scrollIntoView({ block: top ? "start" : "end" }), [part === "head" ? "[data-voice-tool-server]" : "[data-voice-tool-server] > :last-child", part === "head"] as const);
             await page.screenshot({ path: path.join(out, `${label}-${part}.png`) });
             const read = await page.evaluate(({ words, phone }) => {
               const dialog = document.querySelector<HTMLElement>("[data-voice-companion-settings]")!;
