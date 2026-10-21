@@ -164,7 +164,7 @@ if (import.meta.main) {
   // admission accounting as well as the manager connection, or those services
   // escape the publication's work slice and lose its queue-wait credit. The
   // step token also keeps their services visible to cancellation cleanup.
-  for (const key of ["XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS", "LLV_OWNED_RUN_CPU_SLICE", "LLV_OWNED_RUN_CPU_QUOTA", "LLV_GATE_MEM", "LLV_CPU_WAIT_ROOTS", "LLV_GATE_SLOT_LEASE", "LLV_GATE_STEP"]) {
+  for (const key of ["XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS", "LLV_OWNED_RUN_CPU_SLICE", "LLV_OWNED_RUN_CPU_QUOTA", "LLV_GATE_MEM", "LLV_CPU_WAIT_ROOTS", "LLV_GATE_SLOT_LEASE", "LLV_GATE_STEP", "LLV_SIGNAL_SANDBOX"]) {
     if (process.env[key] !== undefined) env[key] = process.env[key];
   }
   for (const key of ISOLATED_ROOT_KEYS) {
