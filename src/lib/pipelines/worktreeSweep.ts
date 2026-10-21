@@ -266,7 +266,11 @@ function pipelineHoldsCheckout(pipeline: SweptPipeline): boolean {
 }
 
 function latestTerminalTime(pipelines: readonly SweptPipeline[]): number {
-  const times = pipelines.flatMap(owner => [owner.closedAt, ...(owner.runs ?? []).flatMap(run => run.attempts.map(attempt => attempt.completedAt))])
+  const times = pipelines.flatMap(owner => [
+    owner.closedAt,
+    ...(owner.runs ?? []).flatMap(run => run.attempts.map(attempt => attempt.completedAt)),
+    ...(owner.delivery?.journal ?? []).filter(entry => entry.kind === "release").map(entry => entry.at),
+  ])
     .map(date => date ? Date.parse(date) : Number.NaN).filter(Number.isFinite);
   return times.length ? Math.max(...times) : 0;
 }

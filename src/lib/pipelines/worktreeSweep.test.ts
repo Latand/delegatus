@@ -2607,6 +2607,30 @@ test("a clean finished lane whose commits are all on the remote is freed one hou
   expect(map[dir]?.repo).toBe(fs.realpathSync(root));
 });
 
+test("a late delivery release starts a pushed lane's hour when the previous report does not list it", async () => {
+  const { root, branch, dir, owner } = pushedLane("late-release");
+  const releasedAt = SETTLED + 3 * HOUR - 5 * 60_000;
+  owner.delivery = {
+    target: { repository: REPOSITORY, remote: "origin", branch },
+    disposition: "owner", publish: "enabled", ownerId: owner.id, epoch: 1, active: false,
+    journal: [{ at: new Date(releasedAt).toISOString(), kind: "release", ownerId: owner.id, epoch: 1,
+      conversationId: null, reason: "fixture delivery settled" }],
+  };
+  const options = (at: number) => ports({ pipelines: [owner], previous: null, now: () => at,
+    inspect: writtenAt(() => SETTLED - 10 * 60_000) });
+
+  const beforeReleaseGrace = await sweepMergedWorktrees(options(releasedAt + HOUR - 1));
+  expect(beforeReleaseGrace.removed).toEqual([]);
+  expect(beforeReleaseGrace.kept).toEqual([expect.objectContaining({ path: dir, reason: "retention",
+    firstSettledAt: new Date(releasedAt).toISOString() })]);
+  expect(fs.existsSync(dir)).toBe(true);
+
+  const due = await sweepMergedWorktrees(options(releasedAt + HOUR));
+  expect(due.removed).toEqual([expect.objectContaining({ path: dir, pr: null, preservation: "remote-ref", branch, pipelineId: owner.id })]);
+  expect(fs.existsSync(dir)).toBe(false);
+  expect(branchExists(root, branch)).toBe(true);
+});
+
 test("a clean finished lane with an unpushed commit keeps the four-day retention", async () => {
   const { root, branch, dir, tip, owner } = pushedLane("unpushed", false);
   let previous: WorktreeSweepReport | undefined;
