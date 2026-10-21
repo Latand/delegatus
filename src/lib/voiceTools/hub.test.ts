@@ -134,6 +134,7 @@ test("probe cancellation and proposal replacement cannot publish a stale catalog
 test("stdio starts under the lease with a private environment, checks entry drift and is reaped", async () => {
   const { store, root } = await setup();
   const entry = path.join(root, "fake");
+  const changedCodeMarker = path.join(root, "changed-code-ran");
   const source = `import readline from 'node:readline';
 const input = readline.createInterface({input:process.stdin});
 input.on('line', line => { const m=JSON.parse(line); if(m.id===undefined)return;
@@ -149,9 +150,10 @@ input.on('line', line => { const m=JSON.parse(line); if(m.id===undefined)return;
   expect((await store.view()).servers.music.lastDryRun?.code).toBe("OK");
   expect((await store.view()).servers.music.catalog?.tools[0].description).toBe("Search");
   await store.operatorChange("music", (await store.view()).servers.music.digest, "approve");
-  await fs.appendFile(entry, "\n// drift\n");
+  await fs.appendFile(entry, `\nawait Bun.write(${JSON.stringify(changedCodeMarker)}, "ran");\n`);
   await new VoiceToolHub(store).dryRun("music", (await store.view()).servers.music.digest);
   expect((await store.view()).servers.music.lastDryRun?.code).toBe("ENTRY_CHANGED");
+  await expect(fs.access(changedCodeMarker)).rejects.toThrow();
   expect((await store.view()).servers.music.state).toBe("pending");
   await expect(store.operatorChange("music", (await store.view()).servers.music.digest, "approve")).rejects.toThrow("DRY_RUN_REQUIRED");
 });

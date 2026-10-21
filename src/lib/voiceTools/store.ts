@@ -23,8 +23,10 @@ function validProposal(input: unknown, defaultCwd: string) {
   if (config.transport.type === "stdio" && config.transport.cwd && !path.isAbsolute(config.transport.cwd)) return null;
   if (config.transport.type === "stdio" && config.entryFile) {
     const transport = config.transport;
+    // Bun dispatches these words as commands, so neither names a script file here.
+    // A script literally named `run` or `x` can use an explicit relative path instead.
     const entry = transport.command === "bun"
-      ? transport.args[0] && !transport.args[0].startsWith("-") ? transport.args[0] : undefined
+      ? transport.args[0] && !["run", "x"].includes(transport.args[0]) && !transport.args[0].startsWith("-") ? transport.args[0] : undefined
       : transport.args[0] === "run" && transport.args[1] && !transport.args[1].startsWith("-") ? transport.args[1] : undefined;
     const cwd = transport.cwd ?? defaultCwd;
     if (!entry || path.resolve(cwd, entry) !== config.entryFile.path) return null;
