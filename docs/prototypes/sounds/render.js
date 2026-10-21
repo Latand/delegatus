@@ -10,7 +10,7 @@
   const SAMPLE_RATE = 48000;
   const PRE_ROLL = 0.3;
   /** Renders are lifted by this much, the same for every file (see createGraph). */
-  const RENDER_MAKEUP_DB = 8;
+  const RENDER_MAKEUP_DB = 9;
   const DEFAULT_VOLUME = 0.4;
 
   // ── Scenes ─────────────────────────────────────────────────────────────
@@ -122,6 +122,8 @@
   async function renderScene(scene, { volume = DEFAULT_VOLUME } = {}) {
     const ctx = new OfflineAudioContext(2, Math.ceil(scene.seconds * SAMPLE_RATE), SAMPLE_RATE);
     const graph = DS.createGraph(ctx, { makeupDb: RENDER_MAKEUP_DB });
+    // Sounds start at PRE_ROLL, past graph.settledAt; the hour excerpt's
+    // first two seconds are lead-in, and its first sound plays after them.
     scene.schedule(graph, 0, { volume });
     return ctx.startRendering();
   }
@@ -362,6 +364,7 @@
       return captureCatalogue(DS.state.slices).map(({ name }) => name);
     },
     async render(name) {
+      await DS.state.ready;
       const entry = captureCatalogue(DS.state.slices).find((item) => item.name === name);
       if (!entry) throw new Error(`no capture item ${name}`);
       const item = entry.build();

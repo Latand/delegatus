@@ -151,7 +151,7 @@ export interface Timbre {
   wave: OscillatorType;            // "sine" | "triangle"
   modes: readonly Mode[];
   attack: number;                  // seconds, linear ramp from 0
-  detuneCents?: number;            // > 0: each mode is a pair at ±detune (slow beating)
+  detuneCents?: number;            // > 0: each mode is a pair at ±detune, levels 0.6 and 0.4 (slow, shallow beating)
   mallet?: { bandHz: number; q: number; gain: number; length: number }; // noise strike
   lowpass: { hz: number; q: number };
 }
@@ -170,7 +170,7 @@ export interface Strike {
 
 export interface SoundSpec {
   strikes: readonly Strike[];
-  peak: number;                    // linear gain at cue volume 1.0, before the bus limiter
+  loudness: number;                // LUFS, momentary maximum at cue volume 1.0; sets the gain (6.3)
   length: number;                  // seconds until every node has stopped
 }
 ```
@@ -183,7 +183,7 @@ const osc = ctx.createOscillator();
 osc.type = strike.wave ?? timbre.wave;
 osc.frequency.setValueAtTime(strike.glideFrom ?? strike.hz * mode.ratio, t);
 if (strike.glideFrom) osc.frequency.exponentialRampToValueAtTime(strike.hz * mode.ratio, t + strike.glideTime!);
-if (twin) osc.detune.value = twin * timbre.detuneCents!;
+if (twin) osc.detune.value = twin * timbre.detuneCents!;   // twin −1 at level × 0.6, twin +1 at level × 0.4
 const env = ctx.createGain();
 const level = strike.vel * mode.gain;
 const attack = strike.attack ?? timbre.attack;
@@ -196,9 +196,9 @@ osc.start(t);
 osc.stop(t + attack + decay + 0.05);
 ```
 
-A mallet adds a slice of the shared one-second white-noise buffer through a band-pass (`bandHz`, `q`) with a 1 ms attack and `setTargetAtTime(0, t, length / 6.91)`. Vibrato is one LFO oscillator into `osc.detune` with gain `cents`. Each sound then runs `soundLowpass → soundGain(peak × cueVolume) → StereoPanner(pan) → event bus`.
+A mallet adds a slice of the shared one-second white-noise buffer through a band-pass (`bandHz`, `q`) with a 1 ms attack and `setTargetAtTime(0, t, length / 6.91)`. Vibrato is one LFO oscillator into `osc.detune` with gain `cents`. Each sound then runs `soundLowpass → soundGain(gain × cueVolume) → StereoPanner(pan) → event bus`, where `gain` comes from the sound's measured loudness (6.3), never from its strikes' levels: a struck sound's loudness is what its overlapping tails add up to, which no single strike shows, and the first prototype, levelled by per-strike peak, put S5 above S6 and S4 above S7.
 
-The graph has two buses: an event bus and a typing bus, both into one master gain and a limiter (`DynamicsCompressorNode`: threshold −10 dB, knee 0, ratio 20, attack 3 ms, release 150 ms) before the destination. The limiter only catches overlaps; a single sound never reaches it.
+The graph has two buses: an event bus and a typing bus, both into one master gain and a limiter (`DynamicsCompressorNode`: threshold −10 dB, knee 0, ratio 20, attack 3 ms, release 150 ms) before the destination. The limiter only catches overlaps; at the default cue volume no single sound reaches it (measured: the loudest single sound, S6 in palette 2, peaks at −11.6 dBFS). Two properties of the Web Audio compressor the implementation has to handle. It adds its own makeup gain, `(1 / its gain at 0 dBFS)^0.6`, +5.7 dB at these settings, so a `Gain` of −5.7 dB follows it and the chain is unity below the threshold; without that every layer plays 5.7 dB louder than its table value, which is how the first prototype's renders came out. And it starts from a low-gain state that takes about 100 ms to settle, so the first sound on a new graph is scheduled no earlier than 150 ms after the graph is made (measured: S3 started at once came out 5 dB quiet, at 50 ms 1.4 dB quiet).
 
 ### 5.2 Two timbres, one set of gestures
 
@@ -215,21 +215,21 @@ Every new pitch is in D major (D, E, F♯, A, B), so overlapping sounds never cl
 
 ### 5.3 The sounds
 
-Values for palette 1. `peak` is the linear gain at cue volume 1.0; the default cue volume stays 0.4 (`src/lib/audio/prefs.ts:47`).
+Values for palette 1. `loudness` is the momentary maximum in LUFS at cue volume 1.0 (6.3); the default cue volume stays 0.4 (`src/lib/audio/prefs.ts:47`), 8 dB lower.
 
-| Sound | Gesture | Strikes (`at` s, `hz`, `vel`, `decay` s, extras) | peak | length |
+| Sound | Gesture | Strikes (`at` s, `hz`, `vel`, `decay` s, extras) | loudness | length |
 | --- | --- | --- | ---: | ---: |
-| S6 your-move | A call repeated: a rising fourth, a pause, the same fourth again with the top held, as a knock at the door is repeated | (0, 739.99 F♯5, .7, .35); (0.12, 987.77 B5, .9, .5); (0.40, 739.99 F♯5, .7, .35); (0.52, 987.77 B5, 1, 1.0) | 0.50 | 1.6 |
-| S7 fault | Three notes falling, slowly beating, over a low drop | Timbre override `detuneCents: 8`. (0, 880 A5, .85, .5); (0.14, 698.46 F5, .85, .5); (0.28, 587.33 D5, 1, 1.1); thud (0, 146.83 D3, .6, .3, `wave: "triangle"`, `glideFrom: 196`, `glideTime: .12`). Sound lowpass 3200 Hz | 0.42 | 1.3 |
-| S8 reply | Two notes falling a fourth: the familiar "message arrived" | (0, 1174.66 D6, .8, .5); (0.13, 880 A5, .7, .9) | 0.30 | 1.0 |
-| S4 landed | Quick major arpeggio up, the top note shimmering | (0, 587.33, .6, .6); (0.07, 739.99 F♯5, .65, .6); (0.14, 880, .7, .6); (0.21, 1174.66, .9, 1.6, `vibrato: {hz 5, cents 6}`). For a coalesced batch of n lanes add `min(n−1, 3)` grace strikes (0.40 + 0.09k, 1318.51 E6, .3, .4) | 0.32 | 1.8 |
-| S5 released | The landed arpeggio over a low swell, ending higher | S4's four strikes; swell (0, 293.66 D4, .5, 2.0, `wave: "triangle"`, `attack: .25`); top (0.42, 1479.98 F♯6, .5, 1.4) | 0.36 | 2.2 |
-| S3 step | One short note | (0, 880 A5, .7, .45), first two modes only, sound lowpass 6000 Hz | 0.18 | 0.5 |
-| S9 launched | A quick upward glide and a light answer | (0, 880, .6, .25, `glideFrom: 440`, `glideTime: .09`); (0.08, 1318.51 E6, .4, .35) | 0.20 | 0.45 |
+| S6 your-move | A call repeated: a rising fourth, a pause, the same fourth again with the top held, as a knock at the door is repeated | (0, 739.99 F♯5, .7, .35); (0.12, 987.77 B5, .9, .5); (0.40, 739.99 F♯5, .7, .35); (0.52, 987.77 B5, 1, 1.0) | −14 | 1.6 |
+| S7 fault | Three notes falling, slowly beating, over a low drop | Timbre override `detuneCents: 2.5` (the twins beat at 1.7 Hz on D5, 0.85 Hz in palette 2; at 8 cents they beat at 5.5–8 Hz and swung 24 dB, a wobble). (0, 880 A5, .85, .5); (0.14, 698.46 F5, .85, .5); (0.28, 587.33 D5, 1, 1.1); thud (0, 146.83 D3, .6, .3, `wave: "triangle"`, `glideFrom: 196`, `glideTime: .12`). Sound lowpass 3200 Hz | −16 | 1.3 |
+| S8 reply | Two notes falling a fourth: the familiar "message arrived", above and slower than the call-ended pair | (0, 1318.51 E6, .8, .5); (0.16, 987.77 B5, .7, .9) | −20 | 1.0 |
+| S4 landed | Quick major arpeggio up, the top note shimmering | (0, 587.33, .6, .6); (0.07, 739.99 F♯5, .65, .6); (0.14, 880, .7, .6); (0.21, 1174.66, .9, 1.6, `vibrato: {hz 5, cents 6}`). For a coalesced batch of n lanes add `min(n−1, 3)` grace strikes (0.40 + 0.09k, 1318.51 E6, .3, .4) | −18 | 1.8 |
+| S5 released | The landed arpeggio over a low swell, ending higher | S4's four strikes; swell (0, 293.66 D4, .5, 2.0, `wave: "triangle"`, `attack: .25`); top (0.42, 1479.98 F♯6, .5, 1.4) | −18 | 2.2 |
+| S3 step | One short note | (0, 880 A5, .7, .45), first two modes only, sound lowpass 6000 Hz | −23 | 0.5 |
+| S9 launched | A quick upward glide and a light answer | (0, 880, .6, .25, `glideFrom: 440`, `glideTime: .09`); (0.08, 1318.51 E6, .4, .35) | −23 | 0.45 |
 | voice-connect / voice-disconnect | Two short notes up / down, as today | (0, 880, 1, .12); (0.09, 1174.66, 1, .12); reversed for disconnect | 0.05 (unchanged, `src/lib/voiceCompanion/cues.ts:11`) | 0.25 |
-| dict-warn / dict-stop | One ping / a low fall, pitches unchanged from `src/lib/chime.ts:118` | warn (0, 660 E5, .8, .32); stop (0, 523.25 C5, 1, .3), (0.17, 329.63 E4, 1, .62) | 0.07 (unchanged, `src/lib/chime.ts:155`) | 0.8 |
+| dict-warn / dict-stop | Two quick pings / a low fall, pitches unchanged from `src/lib/chime.ts:118`. Warn was one ping, the same gesture as S3, which can play while the operator dictates | warn (0, 660 E5, .8, .2), (0.11, 660 E5, .8, .32); stop (0, 523.25 C5, 1, .3), (0.17, 329.63 E4, 1, .62) | 0.07 (unchanged, `src/lib/chime.ts:155`) | 0.8 |
 
-The contours are what tells the sounds apart, and they stay distinct at any volume. Four sounds rise (S4, S5, S6, S9), so for those the top note, the time it arrives and the rhythm have to differ as well; this matters most for listeners with weak pitch discrimination, who hear rhythm before pitch. No two of the four share direction, top note and top-note onset within 50 ms:
+The contours are what tells the sounds apart, and they stay distinct at any volume. Four sounds rise (S4, S5, S6, S9), so for those the top note, the time it arrives and the rhythm have to differ as well; this matters most for listeners with weak pitch discrimination, who hear rhythm before pitch. The rule covers every sound that can play in the same minute, the small ones included: no two share direction, the same number of notes and onset spacing within 50 ms while also landing on the same pitches, and two one-note sounds must differ in note count or rhythm, since a single note has only its height to tell it apart. The prototype checks this rule on the sound table (its «Rules check» list), and it caught two collisions in the first version: S8 and the call-ended pair were both D6 then A5, and dict-warn and S3 were both one short sine ping.
 
 | Sound | Direction | Top note, onset | Rhythm |
 | --- | --- | --- | --- |
@@ -237,9 +237,13 @@ The contours are what tells the sounds apart, and they stay distinct at any volu
 | S4 landed | Rising | D6 at 0.21 s (a batch adds E6 grace notes from 0.40 s) | Four even notes 70 ms apart, the last shimmering |
 | S5 released | Rising | F♯6 at 0.42 s | S4's run over a slow low swell, then a higher note |
 | S9 launched | Rising glide | E6 at 0.08 s | One glide and one light answer, under half a second |
-| S7 fault | Falling | A5 at 0 s | Three notes 140 ms apart, beating, over a low drop |
-| S8 reply | Falling | D6 at 0 s | Two notes |
+| S7 fault | Falling | A5 at 0 s | Three notes 140 ms apart, slowly beating, over a low drop |
+| S8 reply | Falling a fourth | E6 at 0 s | Two notes 160 ms apart |
 | S3 step | One note | A5 at 0 s | One |
+| V+ call connected | Rising a fourth | D6 at 0.09 s | Two short notes 90 ms apart |
+| V− call ended | Falling a fourth | D6 at 0 s | Two short notes 90 ms apart (S8 is 70 ms slower and a tone higher) |
+| D! dictation near the cap | Repeated | E5 at 0 s | Two pings 110 ms apart |
+| D■ dictation stopped | Falling a sixth | C5 at 0 s | Two notes 170 ms apart, an octave under S8 |
 
 S6 also differs in register: it is the only rising sound that stops below D6, so it never shares the top note of a result sound. The two loudest sounds are the two that need the operator. The prototype plays S4, S5, S6 and S9 back to back so the operator can judge the difference by ear.
 
@@ -287,7 +291,7 @@ Each keystroke is a 3 ms noise burst through its band-pass with `setTargetAtTime
 
 ### 5.5 Distant typing (S2)
 
-S2 reuses the S1 slices (or the replica) processed so it sounds like typing in the next room: `BufferSource(playbackRate 0.92) → BiquadFilter(lowpass, 1400 Hz, Q 0.7) → Gain(S1 gain × 0.2, that is −14 dB) → StereoPanner(random −0.3…0.3) → typing bus`. One voice at a time.
+S2 reuses the S1 slices (or the replica) processed so it sounds like typing in the next room: `BufferSource(playbackRate 0.92) → BiquadFilter(lowpass, 1400 Hz, Q 0.7) → Gain(S1 gain × 0.2 × 10^(5.5/20)) → StereoPanner(random −0.3…0.3) → typing bus`. One voice at a time. The 0.2 is the intended −14 dB; the lowpass alone takes about 5.5 LU out of slices centred at 3–5.5 kHz, so without the extra 5.5 dB S2 measured 19–21 LU under S1 and was close to inaudible. With it, S2's momentary maximum sits 12.6–15.1 LU under S1's (measured over one, four and seven agents off screen).
 
 Rate: at most one slice every `clamp(8 / √n, 3, 8)` seconds, where n is the number of sessions with a running turn and no on-screen pane. One agent off screen murmurs every 8 s, four every 4 s, seven or more every 3 s, which caps the duty at about 22% at the audit's peak of 26 concurrent intervals. S2 is skipped when S1 played within the last second, since the near layer already says the same thing.
 
@@ -329,17 +333,21 @@ So an S7 fault arriving during S6 (1.6 s) plays right after it, and an S5 releas
 
 ### 6.3 Levels
 
-| Layer | Peak at cue volume 1.0 | At the default 0.4 |
-| --- | --- | --- |
-| S6 your-move | 0.50 (−6 dB) | −14 dB |
-| S7 fault | 0.42 | −15.5 dB |
-| S5 released | 0.36 | −16.9 dB |
-| S4 landed | 0.32 | −17.9 dB |
-| S8 reply | 0.30 | −18.4 dB |
-| S9 launched | 0.20 | −22 dB |
-| S3 step | 0.18 | −22.9 dB |
-| S1 typing | gain 0.5 × slice (slice max −4 to −12 dB) | about −18 to −26 dB peaks, −46 to −49 dB mean |
-| S2 distant typing | S1 × 0.2 | about −32 to −40 dB peaks |
+Each event sound is levelled by its measured loudness. The engine renders every sound once per palette at gain 1 (offline, about a second in all, no user gesture needed), measures its momentary maximum (EBU R 128: K-weighted, 400 ms windows every 100 ms) and sets `gain = 10^((loudness − measured) / 20)`. So the order below holds in both palettes whatever the strikes add up to. The targets keep today's scale: today's attention cue reaches −13.1 LUFS at cue volume 1.0, failure −17.5, success −22.6 and a typing slice −33 to −37.
+
+| Layer | Target, LUFS momentary max at cue volume 1.0 | Measured at the default 0.4, both palettes (momentary max / sample peak) |
+| --- | ---: | --- |
+| S6 your-move | −14 | −22.0 / −14.1 (1) and −11.6 (2) dBFS |
+| S7 fault | −16 | −24.0 / −14.6 and −14.4 dBFS |
+| S5 released | −18 | −26.0 / −19.4 and −17.5 dBFS |
+| S4 landed | −18 | −26.0 / −18.8 and −17.6 dBFS |
+| S8 reply | −20 | −28.0 / −20.9 and −17.8 dBFS |
+| S9 launched | −23 | −31.0 / −19.5 and −17.3 dBFS |
+| S3 step | −23 | −31.0 / −19.5 and −16.5 dBFS |
+| S1 typing | gain 0.5 × slice, unchanged | −39.0 (six calls in 5.6 s) / −21.0 dBFS |
+| S2 distant typing | S1 × 0.2 × the 5.5 dB room loss (5.5) | −51.6 to −54.1 / −29.2 to −33.8 dBFS |
+
+Neighbours are at least 2 LU apart: S6 > S7 > S5 = S4 > S8 > S9 = S3, and S3 sits 8 LU over a run of typing, so a step is heard over it as an event. No single sound reaches the −10 dB limiter at the default volume. Measured with ffmpeg `ebur128` and `astats` on the prototype's renders (cue volume 0.4 plus a fixed 9 dB for listening, subtracted above); the prototype's «Rules check» repeats the limiter test from its own measurement.
 
 ### 6.4 Ducking
 
@@ -424,21 +432,23 @@ Each insertion point checked for frequency, overlap and meaning. "Fixed" names t
 | 13 | Runtime stream → S2 (new, `src/hooks/runtimeBus.ts:567`) | Up to 1,632/h of items, 26 concurrent intervals | On-screen panes also ring S1. Keyed on pane registration, a mounted pane scrolled out of view would play neither S1 (its feed is paused) nor S2 (it is registered), so most off-screen work on a full board would be silent | Fails as first written | **Fixed:** eligibility is "no live feed", the same `paused` state that stops the feed (4.4), so every live session is exactly one of S1 or S2; a resumed feed re-baselines silently; rate formula, skipped right after S1, off when hidden and on phones. |
 | 14 | Runtime stream → S8 reply (new) | Bounded by sends and own launches | A seat's own ticks end turns too; the default `interrupt-active` send ends the running turn first (880 «waiting for the current turn» records in W) | Fails as first written: S8 at the interrupt, then silence at the real answer | **Fixed:** limited to the "awaiting reply" set filled by this tab's sends and launches, and played only when the carrying turn (a turn newer than the ones recorded at the send) ends `completed`; the store keeps `lastTurnOutcome` (4.4). |
 | 15 | Master switch preview (`src/components/SoundToggle.tsx:52`) | Per toggle | — | Previewed `success`, a sound now gone | **Fixed:** previews S3. |
-| 16 | Voice-call and dictation cues (`src/lib/voiceCompanion/cues.ts:64`, `src/hooks/useDictation.ts:243`, `:596`) | 0.04/h calls; dictation unrecorded | None | Passes | **Kept;** same pitches, rendered by the shared engine. The companion keeps its own context, opened on the Talk tap. |
+| 16 | Voice-call and dictation cues (`src/lib/voiceCompanion/cues.ts:64`, `src/hooks/useDictation.ts:243`, `:596`) | 0.04/h calls; dictation unrecorded | S8 plays during a call (section 8); S3 can play while the operator dictates | Passes for meaning; fails for distinctness as first written (row 22) | **Kept;** same pitches, rendered by the shared engine; dict-warn becomes two pings (row 22). The companion keeps its own context, opened on the Talk tap. |
 | 17 | Tab title count (`src/components/Viewer.tsx:1128`) | — | Reads the same queue as S6/S7 | — | Unchanged; the sound and the badge now agree by construction. |
 | 18 | Pipelines → S7 on a blocked merge (new) | 7 in W (0.04/h) | A blocked lane can also park for a decision (S6); different obligation, different sound | Passes: the change did not land and needs a look | **Added**, keyed `merge-blocked:<pipeline id>`. |
 | 19 | The event lane (6.2) | 2,517 plays in W, 45 in the busiest hour | S7 during S6 (1.6 s), S5 during S4, S6, S7 or S8; in 10-20 12:00 a launch failure fell within 10 s of a lane park | Fails as first written: an equal or lower sound was dropped and its identity already spent, so a rare S5 or S7 was never heard | **Fixed:** every class but S3 and S9 queues behind the playing sound, one pending play per class, a 15 s bound; a cut sound replays once. Replayed over W, only 3 S3 plays are dropped. |
 | 20 | S6 against S4, S5 and S9 (5.3) | — | All four rise; S6 and S4 both reached D6 at about 0.21 s in D major | Fails as first written: the most important sound and a routine result sounded alike | **Fixed:** S6 is a repeated rising fourth topping at B5; S9 tops at E6; no two rising sounds share top note and onset within 50 ms (5.3 table). |
 | 21 | Two tabs, the focus key (section 8) | Per focus change | A closed or crashed owner tab | Fails as first written: a closed tab would silence the others | **Fixed:** the key is refreshed every 30 s, removed on `pagehide`, void after 90 s. |
+| 22 | S8 against the call-ended pair, S3 against dict-warn (5.3) | S8 bounded by sends; S3 8.7/h | S8 keeps playing during a call, so «reply arrived» and «call ended» can fall in one minute; S3 can sound while the operator dictates | Fails as first written: S8 and V− were the same D6→A5 figure 40 ms apart in spacing; S3 and dict-warn were both one short sine ping | **Fixed:** S8 is E6→B5, 160 ms apart; dict-warn is two pings; the distinctness rule now covers every sound, the small ones included, and the prototype checks it. |
+| 23 | Levels (6.3) | — | S5 and S4 against S6 and S7 | Fails as first written: levelled by per-strike peak, a routine release was as loud as «your move» and a fault quieter than a landing; S3 sat at typing level and S2 20 LU under S1 | **Fixed:** each sound's gain comes from its measured loudness, with targets 2 LU or more apart; S2 makes up the lowpass loss; the compressor's own makeup gain is taken back out. |
 
 ## 12. Change list for the implementation lane
 
 | Where | Change |
 | --- | --- |
-| `src/lib/audio/synth.ts` (new) | The spec types, the renderer (5.1), both palettes (5.2), the sound table (5.3), the typing replica (5.4) and the distant-typing chain (5.5). |
+| `src/lib/audio/synth.ts` (new) | The spec types, the renderer (5.1), both palettes (5.2), the sound table (5.3), the loudness calibration that sets each gain (6.3), the typing replica (5.4) and the distant-typing chain with its room-loss makeup (5.5). |
 | `src/lib/audio/cues.ts:19`, `:50`, `:67`, `:118` | `AudioCue` becomes the nine sound ids; `CUES` keeps only the typing slices as files; `TIER_GAIN` becomes the level table (6.3); `CUE_OF_LIFECYCLE` is deleted. |
 | `src/lib/audio/cuePlayer.ts:77`, `:132` | Two pools: typing (3 voices) and the event lane (6.2) with its queue (one pending play per class, S3 and S9 dropped, a cut sound replayed once, a 15 s bound, emptied on mute); per-class coalescing windows, gaps, caps and the staleness rule with its per-source clocks (6.1). |
-| `src/lib/audio/webAudioTransport.ts:209` | The cue transport starts either a typing buffer or a synth spec on the right bus; adds the two buses, the limiter and the typing duck (6.4). |
+| `src/lib/audio/webAudioTransport.ts:209` | The cue transport starts either a typing buffer or a synth spec on the right bus; adds the two buses, the limiter with its makeup gain taken back out and the 150 ms settle before the first sound (5.1), and the typing duck (6.4). |
 | `src/lib/audio/app.ts:106`, `:151`, `:213` | `playCue` takes the new ids; the voice-call rule (section 8); warming only the eight typing files. |
 | `src/lib/audio/prefs.ts:19`, `:47`, `:112` | `llvAudioTypingEnabled`, default on. |
 | `src/lib/audio/toolCues.ts:35` | Every tool call is typing. |
@@ -447,7 +457,7 @@ Each insertion point checked for frequency, overlap and meaning. "Fixed" names t
 | `src/hooks/useFleetCues.ts` (new), mounted once in `Viewer` | Runtime-bus subscriber for S2 and S8 (4.4); also owns the focus key of section 8 (30 s refresh, `pagehide` removal, 90 s expiry). |
 | `src/hooks/useRuntime.ts:347` | Before the POST, record a pending "awaiting reply" entry with the session's `activeTurnId`, `settledTurnId` and the send's policy; commit it on acceptance, remove it on refusal. |
 | `src/components/runtime/runtimeModel.ts:710` | The `turn-ended` case stores `lastTurnOutcome` from the payload's `outcome`. |
-| `src/lib/chime.ts:45`, `:118`, `:155`, `:187` | Add `registerLiveFeed(conversationId)` (reference-counted) and `hasLiveFeed(conversationId)` beside `registerPane`; delete the lifecycle tunes; route `dictWarn`/`dictStop` through the engine. |
+| `src/lib/chime.ts:45`, `:118`, `:155`, `:187` | Add `registerLiveFeed(conversationId)` (reference-counted) and `hasLiveFeed(conversationId)` beside `registerPane`; delete the lifecycle tunes; route `dictWarn` (now two pings) and `dictStop` through the engine. |
 | `src/components/LogFeed.tsx:885` | Register the conversation as a live feed while `!paused`; when `paused` turns false, re-baseline the cue scanner silently on the next parse. |
 | `src/lib/voiceCompanion/cues.ts:9`, `:64` | Render connect/disconnect from the engine's specs on the companion's own context. |
 | `src/components/DraftAgentPane.tsx:650` | `launched` only; when the receipt names `conversationId`, add it to the "awaiting reply" set. |

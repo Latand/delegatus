@@ -1,15 +1,16 @@
 /* Every visible line of the prototype, in the two languages Delegatus ships.
  * ?lang=en|uk picks one; Ukrainian is the default. Rates are quoted from
- * docs/design/sound-redesign.md §3.1 and §10 (window W, machine-wide). */
+ * docs/design/sound-redesign.md §3.1 and §10 (window W, machine-wide); the
+ * page names no file path, seed or section number. */
 (() => {
   const DS = window.DelegatusSounds;
 
   const COPY = {
     uk: {
       title: "Звуки Delegatus · прототип",
-      intro: "Кожен звук нижче синтезовано кодом у браузері: осцилятори, обвідні, фільтри й шум, без файлів. Карта звуків, частоти й правила — docs/design/sound-redesign.md.",
-      served: "Оригінальні фрагменти набору завантажено з public/audio/cues.",
-      fileOnly: "Сторінку відкрито як файл, тож оригінальні фрагменти набору недоступні й звучить синтезована копія. Щоб почути оригінал, відкрийте сторінку через локальний HTTP-сервер з кореня репозиторію.",
+      intro: "Кожен звук нижче синтезовано кодом у браузері: осцилятори, обвідні, фільтри й шум, без файлів. Набір тексту можна послухати і в оригінальному записі, і в синтезованій копії.",
+      served: "Оригінальний запис набору завантажено.",
+      fileOnly: "Сторінку відкрито як файл, тож оригінальний запис набору недоступний і звучить синтезована копія. Щоб почути оригінал, відкрийте сторінку через локальний вебсервер, запущений у теці Delegatus.",
       controls: "Налаштування",
       palette: "Палітра",
       recommended: "рекомендовано",
@@ -30,7 +31,7 @@
       compareNote: "Усі чотири йдуть угору, тож розрізняються верхньою нотою, її моментом і ритмом.",
       smallSounds: "Малі звуки: дзвінок і диктування",
       hour: "Година пікового навантаження",
-      hourIntro: "Найнавантаженіша година з історії, {label}: {calls} викликів інструментів і {sources} озвучуваних подій у реальному темпі. Кількість у кожному п'ятихвилинному відрізку справжня; місце події всередині відрізка випадкове з фіксованим зерном {seed}. Справжні події йдуть сплесками, які правила зливають (за реальними часами ця година дає 38 звуків із 46 подій, розділ 10), а тут вони розкидані рівномірно, тож симуляція трохи щільніша за реальність.",
+      hourIntro: "Найнавантаженіша година з історії, {label}: {calls} викликів інструментів і {sources} озвучуваних подій у реальному темпі. Кількість у кожному п'ятихвилинному відрізку справжня, а місце події всередині відрізка вибрано випадково. Справжні події йдуть сплесками, які правила зливають в один звук, тож за реальними часами ця година дала б 38 звуків, а тут, де події розкидано рівномірно, звучить більше.",
       startAt: "Почати з хвилини",
       liveSessions: "Живих сесій",
       liveSessionsNote: "з них 2 на екрані (S1), решта поза екраном (S2); пік в аудиті — 26",
@@ -47,11 +48,11 @@
       silentAsks: ", {n} виведених «питає вас»",
       typingSummary: "{calls} викликів: {near} разів S1 для двох панелей на екрані, {distant} разів S2 для {off} сесій поза екраном (раз на {interval} с).",
       rules: "Перевірка правил",
-      rulesNote: "Планувальник правил розділу 6 на випадках зі списку тестів розділу 12.",
+      rulesNote: "Правила часу (злиття, паузи, пріоритет) на випадках, які має перевіряти впровадження, і перевірка самих звуків.",
       pass: "так",
       fail: "НІ",
       footer: "Прототип для форми прослуховування. Впровадження — окремим лейном після відповіді.",
-      renderNote: "гучність сигналів 0.4 · +8 дБ для прослуховування, однаково для всіх файлів",
+      renderNote: "гучність сигналів 0.4 · +9 дБ для прослуховування, однаково для всіх файлів",
       excerpt: "Година пікового навантаження, {from}–{to}",
       excerptNote: "{label} · {n} сесій · набір: {typing}",
       risingTitle: "S4 · S5 · S6 · S9 підряд",
@@ -63,9 +64,9 @@
     },
     en: {
       title: "Delegatus sounds · prototype",
-      intro: "Every sound below is synthesized by code in the browser: oscillators, envelopes, filters and noise, no files. The sound map, the rates and the rules are in docs/design/sound-redesign.md.",
-      served: "The original typing slices were loaded from public/audio/cues.",
-      fileOnly: "This page was opened as a file, so the original typing slices are unavailable and the synthesized replica plays. To hear the original, open the page through a local HTTP server at the repository root.",
+      intro: "Every sound below is synthesized by code in the browser: oscillators, envelopes, filters and noise, no files. The typing can be heard both as the original recording and as a synthesized replica.",
+      served: "The original typing recording is loaded.",
+      fileOnly: "This page was opened as a file, so the original typing recording is unavailable and the synthesized replica plays. To hear the original, open the page through a local web server started in the Delegatus folder.",
       controls: "Settings",
       palette: "Palette",
       recommended: "recommended",
@@ -86,7 +87,7 @@
       compareNote: "All four go up, so they differ in their top note, when it arrives, and their rhythm.",
       smallSounds: "Small sounds: calls and dictation",
       hour: "The busiest hour",
-      hourIntro: "The busiest hour on record, {label}: {calls} tool calls and {sources} voiced events at real pace. Each five-minute bin holds its real count; where an event falls inside its bin is random, from the fixed seed {seed}. Real events come in bursts that the rules merge (at their real times this hour gives 38 sounds from 46 events, section 10); here they are spread evenly, so the simulation is a little denser than reality.",
+      hourIntro: "The busiest hour on record, {label}: {calls} tool calls and {sources} voiced events at real pace. Each five-minute bin holds its real count, and where an event falls inside its bin is chosen at random. Real events come in bursts that the rules merge into one sound, so at their real times this hour would give 38 sounds; spread evenly as here, more of them play.",
       startAt: "Start at minute",
       liveSessions: "Live sessions",
       liveSessionsNote: "2 of them on screen (S1), the rest off screen (S2); the audit's peak is 26",
@@ -103,11 +104,11 @@
       silentAsks: ", {n} inferred «asks you»",
       typingSummary: "{calls} calls: S1 {near} times for two panes on screen, S2 {distant} times for {off} sessions off screen (once every {interval} s).",
       rules: "Rules check",
-      rulesNote: "The section 6 rules planner on the cases section 12 lists as tests.",
+      rulesNote: "The timing rules (merging, gaps, priority) on the cases the implementation has to test, and a check of the sounds themselves.",
       pass: "yes",
       fail: "NO",
       footer: "A prototype for the listening form. Implementation is a separate lane after the answer.",
-      renderNote: "cue volume 0.4 · +8 dB for listening, the same for every file",
+      renderNote: "cue volume 0.4 · +9 dB for listening, the same for every file",
       excerpt: "The busiest hour, {from}–{to}",
       excerptNote: "{label} · {n} sessions · typing: {typing}",
       risingTitle: "S4 · S5 · S6 · S9 back to back",

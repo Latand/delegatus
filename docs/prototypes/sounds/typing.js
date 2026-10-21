@@ -12,6 +12,12 @@
   const ROUTINE_GAIN = 0.5;
   /** S2: the same slice, one room away (−14 dB). */
   const DISTANT_GAIN = 0.2;
+  /**
+   * The room's 1400 Hz lowpass takes about 5.5 LU out of slices centred at
+   * 3–5.5 kHz (measured: S2 sat 19–20 LU under S1 with this at 0 dB). Putting
+   * it back leaves S2 heard 14 LU under S1, as DISTANT_GAIN intends.
+   */
+  const ROOM_LOSS_DB = 5.5;
   const SLICE_FILES = Array.from({ length: 8 }, (_, i) => `tool-tick-${i + 1}.mp3`);
   const SLICE_DIR = new URL("../../../public/audio/cues/", document.baseURI);
 
@@ -94,14 +100,14 @@
    * S1, or S2 with `distant`. `source` is "original" (needs `slices`) or
    * "replica". The distant chain (§5.5):
    *
-   *   slice at rate 0.92 ─ lowpass 1400 Hz ─ gain × 0.2 ─ pan ±0.3 ─ typing bus
+   *   slice at rate 0.92 ─ lowpass 1400 Hz ─ gain × 0.2 × room loss ─ pan ±0.3 ─ typing bus
    */
   function play(graph, { at, volume = 0.4, pan = 0, random, source, slices, distant = false }) {
     const { ctx } = graph;
     const rate = distant ? 0.92 : 1;
 
     const gain = ctx.createGain();
-    gain.gain.value = ROUTINE_GAIN * volume * (distant ? DISTANT_GAIN : 1);
+    gain.gain.value = ROUTINE_GAIN * volume * (distant ? DISTANT_GAIN * 10 ** (ROOM_LOSS_DB / 20) : 1);
     const panner = ctx.createStereoPanner();
     panner.pan.value = distant ? (random() * 2 - 1) * 0.3 : pan;
     let input = gain;

@@ -14,13 +14,17 @@
   const settings = { paletteId: "glass", source: "original", volume: DS.DEFAULT_VOLUME };
   DS.state = { slices: null, ready: null };
 
-  /** Decoding needs no running context, so the slices load before any gesture. */
-  DS.state.ready = DS.typing.loadSlices(new OfflineAudioContext(2, 1, 48000)).then((slices) => {
+  /**
+   * Decoding and offline rendering need no running context, so the slices
+   * load and every sound is measured for its gain before any gesture.
+   */
+  const slicesLoaded = DS.typing.loadSlices(new OfflineAudioContext(2, 1, 48000)).then((slices) => {
     DS.state.slices = slices;
     if (!slices) settings.source = "replica";
     $("slices-status").textContent = DS.t(slices ? "served" : "fileOnly");
     renderChoices();
   });
+  DS.state.ready = Promise.all([slicesLoaded, DS.calibrate()]);
 
   let live = null;
   /** The page's one AudioContext and its graph, made on the first press. */
@@ -33,9 +37,10 @@
     return live;
   }
 
-  function playScene(scene) {
+  async function playScene(scene) {
     const { ctx, graph } = liveContext();
-    scene.schedule(graph, ctx.currentTime + 0.05, { volume: settings.volume });
+    await DS.state.ready;
+    scene.schedule(graph, Math.max(ctx.currentTime + 0.05, graph.settledAt), { volume: settings.volume });
   }
 
   const sourceNow = () => (settings.source === "original" && DS.state.slices ? "original" : "replica");
@@ -72,10 +77,12 @@
   }
   renderChoices();
 
+  const showVolume = () => { $("volume-out").textContent = DS.number(settings.volume, 2); };
   $("volume").addEventListener("input", (event) => {
     settings.volume = Number(event.target.value);
-    $("volume-out").textContent = settings.volume.toFixed(2);
+    showVolume();
   });
+  showVolume();
 
   // ── The sound tables ───────────────────────────────────────────────────
 
@@ -172,7 +179,7 @@
     });
     const sources = Object.values(hour.events.stats.sources).reduce((a, b) => a + b, 0);
     $("hour-intro").textContent = DS.t("hourIntro", {
-      label: hour.label, calls: DS.number(hour.tools.calls), sources, seed: hour.seed,
+      label: hour.label, calls: DS.number(hour.tools.calls), sources,
     });
     renderHourTable();
     drawTimeline(Number($("start-minute").value) * 60);
@@ -266,11 +273,13 @@
     g.fillRect(xOf(position), 4, 2, height - 34);
   }
 
-  function startHour() {
+  async function startHour() {
     const { ctx } = liveContext();
+    await DS.state.ready;
+    if (run) return; // a second press while the gains were still being measured
     const graph = DS.createGraph(ctx);
     const from = Math.min(59, Math.max(0, Number($("start-minute").value) || 0)) * 60;
-    const t0 = ctx.currentTime + 0.1;
+    const t0 = Math.max(ctx.currentTime + 0.1, graph.settledAt);
     const options = { volume: settings.volume, paletteId: settings.paletteId, source: sourceNow(), slices: DS.state.slices };
     let scheduledUntil = from;
 
@@ -323,12 +332,16 @@
 
   // ── The rules check ────────────────────────────────────────────────────
 
-  for (const check of DS.lane.selfCheck()) {
-    const item = document.createElement("li");
-    const verdict = document.createElement("span");
-    verdict.className = check.pass ? "ok" : "bad";
-    verdict.textContent = DS.t(check.pass ? "pass" : "fail");
-    item.append(verdict, ` · ${check.name[DS.lang]}`);
-    $("checks").append(item);
+  function listChecks(checks) {
+    for (const check of checks) {
+      const item = document.createElement("li");
+      const verdict = document.createElement("span");
+      verdict.className = check.pass ? "ok" : "bad";
+      verdict.textContent = DS.t(check.pass ? "pass" : "fail");
+      item.append(verdict, ` · ${check.name[DS.lang]}`);
+      $("checks").append(item);
+    }
   }
+  listChecks(DS.lane.selfCheck());
+  void DS.state.ready.then(() => listChecks(DS.soundChecks()));
 })();

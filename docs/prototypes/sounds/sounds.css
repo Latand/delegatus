@@ -106,16 +106,19 @@ details {
 
 summary { font-weight: 600; }
 
+/* One question per row; the legends share a column, so every row's
+   choices start at the same indent. */
 fieldset {
   border: 0;
-  margin: 0 24px 8px 0;
+  margin: 0 0 8px;
   padding: 0;
-  display: inline-flex;
+  display: flex;
   flex-wrap: wrap;
   gap: 4px 14px;
   align-items: center;
 }
-legend { float: left; margin-right: 10px; color: var(--color-secondary); }
+legend { float: left; width: 10em; padding: 0; color: var(--color-secondary); }
+#volume { width: 160px; }
 label { display: inline-flex; gap: 6px; align-items: center; }
 
 button {
@@ -185,8 +188,17 @@ output { font-variant-numeric: tabular-nums; }
 
 footer { margin-top: 16px; color: var(--color-secondary); }
 
-/* A phone: each sound row becomes a short block, with its buttons in reach. */
+/* A phone: each question's legend sits above its choices, which stack at
+   one indent; the volume value stays beside its slider. Each sound row
+   becomes a short block, with its buttons in reach. */
 @media (max-width: 640px) {
+  fieldset { margin: 0 0 12px; }
+  legend { float: none; width: auto; margin: 0 0 4px; }
+  #palette-choice,
+  #typing-choice { flex-direction: column; align-items: flex-start; }
+  #volume { flex: 1; min-width: 0; }
+  #volume-choice { flex-wrap: nowrap; }
+
   .sound-table thead { display: none; }
   .sound-table tr {
     display: grid;
