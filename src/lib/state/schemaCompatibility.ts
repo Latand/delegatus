@@ -23,10 +23,22 @@ export interface SchemaCompileFailure {
 }
 
 export function schemaCompileFailure(error: unknown): SchemaCompileFailure | null {
+  if (error instanceof IncompatibleSchemaError) return error.failure;
   const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
-  const match = /malformed database schema \(([^)]*)\) - ([\s\S]+)$/.exec(message);
+  const match = /malformed database schema \(([\s\S]*)\) - ([\s\S]+)$/.exec(message);
   if (!match || !COMPILE_FAILURE.test(match[2]!)) return null;
   return { object: match[1]!, reason: match[2]!.trim() };
+}
+
+/** Keep newly submitted DDL failures as explicit as incompatible saved schema.
+ * Only the object name enters the error; SQL values and bindings stay private. */
+export function classifySchemaStatementError(error: unknown, sql: unknown, database: string): unknown {
+  if (error instanceof IncompatibleSchemaError) return error;
+  const saved = schemaCompileFailure(error);
+  if (saved) return new IncompatibleSchemaError(database, saved, { cause: error });
+  if (typeof sql !== "string" || !(error instanceof Error) || !COMPILE_FAILURE.test(error.message)) return error;
+  const object = /^\s*(?:CREATE\s+(?:UNIQUE\s+|VIRTUAL\s+)?(?:TABLE|INDEX|VIEW|TRIGGER)(?:\s+IF\s+NOT\s+EXISTS)?|ALTER\s+TABLE)\s+("(?:[^"]|"")*"|`[^`]*`|\[[^\]]*\]|[\w.]+)/i.exec(sql)?.[1];
+  return object ? new IncompatibleSchemaError(database, { object, reason: error.message }, { cause: error }) : error;
 }
 
 let runtimeVersion: string | undefined;

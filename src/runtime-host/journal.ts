@@ -1,4 +1,6 @@
-import { dirname } from "node:path";
+import { basename, dirname } from "node:path";
+import { assertStateStartupMutation } from "@/lib/stateOwnership";
+import { IncompatibleSchemaError, schemaCompileFailure } from "@/lib/state/schemaCompatibility";
 import { RuntimeDataCorruptionError } from "@/lib/runtime/dataCorruption";
 import { MIGRATION_DELIVERY_CANCELLATION_PREFIX } from "@/lib/accounts/migration/intentLiveness";
 import { declaredIndexes } from "@/lib/state/declaredIndexes";
@@ -114,7 +116,9 @@ export const RUNTIME_UNPROJECTED_RECEIPT_RETENTION_LIMIT = 512;
 // macOS 13 ships 3.39, where it yields NULL and every row would sort as the
 // fallback. Both read the same millisecond Julian day, so the values are equal.
 // The index carries a new name because its expression changed; the previous
-// `deployment_list_recent` stays for an older host that still names it.
+// `deployment_list_recent` stays on SQLite 3.42+ for older hosts that name it.
+// On 3.39 its stored keys can disagree with the now-NULL expression, so it is
+// removed at startup before any entity changes.
 export const DEPLOYMENT_LIST_STARTED_AT = "COALESCE(CAST(round((julianday(json_extract(state_json, '$.createdAt')) - 2440587.5) * 86400000) AS INTEGER), CAST(round((julianday(json_extract(state_json, '$.updatedAt')) - 2440587.5) * 86400000) AS INTEGER), -8640000000000000)";
 
 export type RuntimeRegistryConversationRetentionState = "current" | "dead" | "superseded";
@@ -390,9 +394,11 @@ export interface RuntimeJournalOptions {
 /** How long an open or a write waits for another connection's lock. */
 export const RUNTIME_JOURNAL_BUSY_TIMEOUT_MS = 5000;
 
-/* A lock that outlasts the busy wait is named as one; any other open failure
-   passes through unchanged. */
-function runtimeJournalOpenRefusal(error: unknown): unknown {
+/* Lock and schema refusals name their cause; other errors pass through. */
+function runtimeJournalOpenRefusal(error: unknown, filename: string): unknown {
+  if (error instanceof IncompatibleSchemaError) return error;
+  const failure = schemaCompileFailure(error);
+  if (failure) return new IncompatibleSchemaError(basename(filename), failure, { cause: error });
   const code = (error as { code?: unknown } | null)?.code;
   if (typeof code !== "string" || !code.startsWith("SQLITE_BUSY")) return error;
   return Object.assign(
@@ -447,7 +453,7 @@ export class RuntimeJournal {
       return journal;
     } catch (error) {
       journal.close();
-      throw runtimeJournalOpenRefusal(error);
+      throw runtimeJournalOpenRefusal(error, filename);
     }
   }
 
@@ -483,6 +489,13 @@ export class RuntimeJournal {
          peer's lock must not be replaced by a later statement's outcome. */
       journalDeploymentIndexes.assertRepairAuthority(this.db, dirname(filename));
       journalEventIndexes.assertRepairAuthority(this.db, dirname(filename));
+      if (this.db.query("SELECT 1 FROM sqlite_master WHERE type='index' AND name='deployment_list_recent'").get()) {
+        const version = this.db.query<{ version: string }, []>("SELECT sqlite_version() AS version").get()!.version.split(".").map(Number);
+        if (version[0] === 3 && version[1]! < 42) {
+          assertStateStartupMutation(dirname(filename), "runtime journal date-index compatibility");
+          this.db.exec("DROP INDEX deployment_list_recent");
+        }
+      }
       for (const statement of [
         `CREATE TABLE IF NOT EXISTS journal_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
         `CREATE TABLE IF NOT EXISTS events (
@@ -555,11 +568,11 @@ export class RuntimeJournal {
       this.initialization = this.initialize();
     } catch (error) {
       this.db.close();
-      throw runtimeJournalOpenRefusal(error);
+      throw runtimeJournalOpenRefusal(error, filename);
     }
     if (!options[cooperativeOpen]) {
       try { while (!this.initialization.next().done) { /* synchronous compatibility */ } }
-      catch (error) { this.close(); throw runtimeJournalOpenRefusal(error); }
+      catch (error) { this.close(); throw runtimeJournalOpenRefusal(error, filename); }
     }
   }
 

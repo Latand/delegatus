@@ -706,3 +706,43 @@ test("a set-aside database that opens here is put back only when its incident na
   expect(checkStateDatabasesAtActivation(damage, { now: new Date("2026-10-21T12:00:00.000Z") })).toEqual([]);
   expect(fs.existsSync(path.join(damage, "state.sqlite"))).toBe(false);
 });
+
+test.each([true, false])("schema recovery preserves a concurrent row (live file exists: %s)", liveExists => {
+  const directory = sandbox();
+  const filename = path.join(directory, "state.sqlite");
+  const asideName = "state.sqlite.corrupt-2026-10-20T08-00-00-000Z";
+  const aside = new Database(path.join(directory, asideName));
+  try {
+    aside.exec("CREATE TABLE kept(value TEXT)");
+    aside.exec("INSERT INTO kept VALUES ('recovered')");
+  } finally { aside.close(); }
+  writeJsonDurably(path.join(directory, "storage-incidents.json"), { version: 1, incidents: [{
+    kind: "database-fresh", database: "state.sqlite", at: "2026-10-20T08:00:00.000Z", message: "earlier release",
+    detail: 'SQLITE_CORRUPT: malformed database schema (pipeline_refs_insert) - near "ORDER": syntax error',
+    corruptFiles: [asideName], backup: null, backupAt: null, backupAgeMs: null,
+  }] });
+  let writer: Database | null = liveExists ? new Database(filename) : null;
+  try {
+    writer?.exec("CREATE TABLE kept(value TEXT)");
+    let raced = false;
+    const incidents = checkStateDatabasesAtActivation(directory, {
+      now: new Date("2026-10-21T12:00:00.000Z"),
+      beforeSwapStep: step => {
+        if (step === "recovery-lock") {
+          if (!writer) {
+            writer = new Database(filename);
+            writer.exec("CREATE TABLE kept(value TEXT)");
+          }
+          writer.exec("INSERT INTO kept VALUES ('new work')");
+          raced = true;
+        }
+      },
+    });
+    expect(incidents).toEqual([]);
+    expect(raced).toBe(true);
+    const live = new Database(filename, { readonly: true });
+    try { expect(live.query("SELECT value FROM kept").all()).toEqual([{ value: "new work" }]); } finally { live.close(); }
+    expect(fs.existsSync(path.join(directory, asideName))).toBe(true);
+    expect(fs.readdirSync(directory).some(name => name.includes(".replaced-"))).toBe(false);
+  } finally { writer?.close(); }
+});

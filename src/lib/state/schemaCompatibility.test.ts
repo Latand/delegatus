@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { observeSqlite } from "@/lib/sqliteReadAttribution";
 import { runtimeDataCorruptionCode } from "@/lib/runtime/dataCorruption";
 import { IncompatibleSchemaError, schemaCompileFailure, sqliteRuntimeVersion } from "./schemaCompatibility";
 
@@ -12,6 +13,7 @@ test("a schema statement this SQLite cannot parse or resolve is told apart from 
     ['malformed database schema (t) - unrecognized token: "1_000"', "t", 'unrecognized token: "1_000"'],
     ["malformed database schema (v) - wrong number of arguments to function json_valid()", "v", "wrong number of arguments to function json_valid()"],
     ["malformed database schema (search) - no such module: fts5", "search", "no such module: fts5"],
+    ['malformed database schema (history(input) old) - near "ORDER": syntax error', "history(input) old", 'near "ORDER": syntax error'],
   ] as const) {
     expect(schemaCompileFailure(corrupt(message))).toEqual({ object, reason });
     expect(runtimeDataCorruptionCode(corrupt(message))).toBeUndefined();
@@ -44,5 +46,25 @@ test("the runtime version is the one this process's SQLite reports", () => {
   const db = new Database(":memory:");
   try {
     expect(sqliteRuntimeVersion()).toBe(db.query<{ v: string }, []>("SELECT sqlite_version() AS v").get()!.v);
+  } finally { db.close(); }
+});
+
+test("new schema compilation errors name the SQLite version and statement on every database entry", () => {
+  const db = observeSqlite(new Database(":memory:"), "schema-compatibility");
+  try {
+    db.exec("CREATE TABLE kept(value TEXT)");
+    for (const [method, compile] of [
+      ["exec", (sql: string) => db.exec(sql)],
+      ["run", (sql: string) => db.run(sql)],
+      ["query", (sql: string) => db.query(sql)],
+      ["prepare", (sql: string) => db.prepare(sql)],
+    ] as const) {
+      let caught: unknown;
+      try { compile(`CREATE INDEX compile_${method} ON kept(compile_error_fn(value))`); } catch (error) { caught = error; }
+      expect(caught).toBeInstanceOf(IncompatibleSchemaError);
+      expect((caught as Error).message).toContain(`SQLite ${sqliteRuntimeVersion()} cannot compile: compile_${method}`);
+      expect(runtimeDataCorruptionCode(caught)).toBeUndefined();
+    }
+    expect(db.query("SELECT name FROM sqlite_master WHERE type='table'").all()).toEqual([{ name: "kept" }]);
   } finally { db.close(); }
 });

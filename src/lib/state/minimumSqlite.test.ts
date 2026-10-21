@@ -54,7 +54,7 @@ const pipelines = { collection: "pipelines", schemaVersion: 1, busyMessage: "bus
   decode: (raw: unknown) => raw as Pipeline, clone: (row: Pipeline) => structuredClone(row) };
 
 /** Writes `filename` on Bun's own SQLite in a child, as a newer SQLite leaves it. */
-function seed(filename: string, mode: "legacy" | "foreign", row: Pipeline): void {
+function seed(filename: string, mode: "legacy" | "foreign" | "journal" | "journal-foreign", row: Pipeline): void {
   const child = Bun.spawnSync([process.execPath, SEED, filename, mode, JSON.stringify(row)], { stdout: "pipe", stderr: "pipe" });
   if (child.exitCode !== 0) throw new Error(`seed child failed: ${child.stderr.toString()}`);
 }
@@ -173,6 +173,26 @@ test("a statement no store rebuilds fails loudly with the SQLite version and its
   expect(digest(filename)).toBe(before);
 });
 
+test("an incompatible backup stops fallback before any state is set aside or started empty", async () => {
+  const { checkStateDatabasesAtActivation } = await import("./durability");
+  const { root, filename } = sandbox();
+  const backups = path.join(root, "backups", "sqlite");
+  fs.mkdirSync(backups, { recursive: true });
+  const backup = path.join(backups, "state-2026-10-21T11-00-00-000Z.sqlite");
+  seed(backup, "foreign", pipeline("pipeline_backed_up"));
+  const backupDigest = digest(backup);
+  fs.writeFileSync(filename, Buffer.alloc(8192, 0x5a));
+  const damagedDigest = digest(filename);
+
+  const incidents = checkStateDatabasesAtActivation(root, { now: new Date(NOW) });
+  expect(incidents.map(incident => incident.kind)).toEqual(["database-incompatible"]);
+  expect(incidents[0]!.message).toContain("SQLite 3.39.4 cannot compile: operator_pipeline_keys");
+  expect(incidents[0]!.message).toContain(path.basename(backup));
+  expect(digest(filename)).toBe(damagedDigest);
+  expect(digest(backup)).toBe(backupDigest);
+  expect(fs.readdirSync(root).filter(name => /\.(corrupt|replaced|restoring)/.test(name))).toEqual([]);
+});
+
 test("a damaged database is restored from a backup that holds legacy triggers: no backup is refused for them", async () => {
   const { checkStateDatabasesAtActivation } = await import("./durability");
   const { root, filename } = sandbox();
@@ -255,4 +275,35 @@ test("the runtime journal's deployment list orders by start time on the minimum 
     }
     expect(journal.listViewerDeployments({ limit: 3 }).deployments.map(row => row.deploymentId)).toEqual(["deployment-a", "deployment-b", "deployment-c"]);
   } finally { journal.close(); }
+});
+
+test("a legacy deployment index written on newer SQLite keeps no incompatible keys after migration", async () => {
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const { root } = sandbox();
+  const filename = path.join(root, "runtime.sqlite");
+  seed(filename, "journal", pipeline("fixture"));
+  const journal = new RuntimeJournal(filename);
+  try {
+    const db = (journal as unknown as { db: InstanceType<typeof sqlite.Database> }).db;
+    expect(db.query("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+    expect(journal.listViewerDeployments().deployments.map(row => row.deploymentId)).toEqual(["deployment-kept"]);
+    db.exec("DELETE FROM entities WHERE kind='deployment'");
+    expect(db.query("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+  } finally { journal.close(); }
+});
+
+test("the runtime host names an incompatible journal schema without classifying it as damage", async () => {
+  const { RuntimeJournal } = await import("@/runtime-host/journal");
+  const { IncompatibleSchemaError } = await import("./schemaCompatibility");
+  const { runtimeDataCorruptionCode } = await import("@/lib/runtime/dataCorruption");
+  const { root } = sandbox();
+  const filename = path.join(root, "runtime.sqlite");
+  seed(filename, "journal-foreign", pipeline("fixture"));
+  const before = digest(filename);
+  let caught: unknown;
+  try { new RuntimeJournal(filename); } catch (error) { caught = error; }
+  expect(caught).toBeInstanceOf(IncompatibleSchemaError);
+  expect((caught as Error).message).toContain("SQLite 3.39.4 cannot compile: foreign_runtime_view");
+  expect(runtimeDataCorruptionCode(caught)).toBeUndefined();
+  expect(digest(filename)).toBe(before);
 });

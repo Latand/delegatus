@@ -9,7 +9,7 @@ import { assertStateStartupMutation } from "@/lib/stateOwnership";
 import { databaseFileIdentity, databaseSwapMarker } from "./currentDatabase";
 import { fsyncPath, writeJsonDurably } from "./durableJson";
 import { PIPELINE_REFERENCE_TRIGGERS } from "./pipelineControllerReferences";
-import { describeSchemaCompileFailure, schemaCompileFailure, sqliteRuntimeVersion } from "./schemaCompatibility";
+import { describeSchemaCompileFailure, IncompatibleSchemaError, schemaCompileFailure, sqliteRuntimeVersion } from "./schemaCompatibility";
 
 /**
  * The state databases survive a crash (#1870 slice 10,
@@ -340,7 +340,7 @@ export type DatabaseCheckOutcome =
   | { state: "restored" | "fresh" | "failed" | "repaired" | "incompatible"; incident: StorageIncident };
 
 /** Test seam: runs before each step of the swap, so a test can fail one. */
-export type SwapStepHook = (step: "set-aside-main" | "set-aside-wal" | "set-aside-shm" | "restore") => void;
+export type SwapStepHook = (step: "recovery-lock" | "set-aside-main" | "set-aside-wal" | "set-aside-shm" | "restore") => void;
 
 export function checkDatabaseAtActivation(
   database: StateDatabase,
@@ -390,7 +390,19 @@ export function checkDatabaseAtActivation(
   const backups = options.backupDirectory ?? path.join(options.stateDirectory, BACKUP_DIRECTORY);
   const base = { database: database.name, at: now.toISOString(), detail: verdict.detail };
   /* The replacement is copied and checked before the damaged files are touched. */
-  const restored = prepareNewestGoodBackup(database, backups);
+  let restored: BackupFile | null;
+  try {
+    restored = prepareNewestGoodBackup(database, backups);
+  } catch (error) {
+    if (!(error instanceof IncompatibleSchemaError)) throw error;
+    const incident: StorageIncident = {
+      ...base, kind: "database-incompatible", corruptFiles: [], backup: error.database,
+      backupAt: null, backupAgeMs: null, detail: error.message,
+      message: `${describeSchemaCompileFailure(error.database, error.failure)} Fallback stopped before changing ${database.name}; all files were kept.`,
+    };
+    recordIncident(options.stateDirectory, incident);
+    return { state: "incompatible", incident };
+  }
   const swap = swapDamagedDatabase(database.filename, now, restored ? restoringName(database.filename) : null, options.beforeSwapStep);
   if (swap.error !== null) {
     removeTrio(restoringName(database.filename));
@@ -461,8 +473,7 @@ function prepareNewestGoodBackup(database: StateDatabase, backupDirectory: strin
         verdict = inspect(restoring, "integrity_check", false);
       }
       if (verdict.verdict === "incompatible") {
-        console.error(`[state durability] backup ${candidate.name} skipped, not damaged: ${describeSchemaCompileFailure(candidate.name, verdict)}`);
-        continue;
+        throw new IncompatibleSchemaError(candidate.name, verdict);
       }
       if (verdict.verdict !== "ok" || exists(`${restoring}-wal`)) {
         throw new Error(verdict.verdict === "ok" ? "it left a WAL behind" : verdict.detail);
@@ -472,6 +483,10 @@ function prepareNewestGoodBackup(database: StateDatabase, backupDirectory: strin
       fsyncPath(restoring);
       return candidate;
     } catch (error) {
+      if (error instanceof IncompatibleSchemaError) {
+        removeTrio(restoring);
+        throw error;
+      }
       console.error(`[state durability] backup ${candidate.name} refused: ${errorText(error)}`);
     }
   }
@@ -504,10 +519,16 @@ function swapDamagedDatabase(
   const marker = databaseSwapMarker(filename);
   let lock: BunDatabase | null = null;
   let error: string | null = null;
+  let mainAside = false;
   try {
     fs.writeFileSync(marker, `${process.pid}\n`, { mode: 0o600 });
+    if (label === "replaced") beforeStep?.("recovery-lock");
     lock = holdWriteLock(filename);
-    let mainAside = false;
+    // Recovery is allowed only while empty, including rows committed while
+    // acquiring the write lock. Refuse if the lock or the proof is unavailable.
+    if (label === "replaced" && (!lock || databaseIsEmpty(filename, lock) !== true)) {
+      throw new Error("schema recovery stopped: the live database is no longer provably empty under its write lock");
+    }
     if (restoring) {
       beforeStep?.("set-aside-main");
       try {
@@ -537,7 +558,7 @@ function swapDamagedDatabase(
     /* Never leave the damaged main file without its WAL under the name: it
        is set aside too, so the store starts empty rather than half-read. */
     try {
-      if (exists(filename) && databaseFileIdentity(filename) === databaseFileIdentity(target)) {
+      if (mainAside && exists(filename) && databaseFileIdentity(filename) === databaseFileIdentity(target)) {
         fs.unlinkSync(filename);
       } else if (exists(filename) && !exists(target) && corruptFiles.length) {
         fs.renameSync(filename, target);
@@ -621,18 +642,18 @@ function dropRebuiltTriggers(filename: string, triggers: readonly string[], keep
 }
 
 /** No table holds a row, or there is no database. Null when it cannot be read. */
-function databaseIsEmpty(filename: string): boolean | null {
+function databaseIsEmpty(filename: string, held?: BunDatabase): boolean | null {
   if (!exists(filename)) return true;
   let db: BunDatabase | null = null;
   try {
-    db = observeSqlite(new (sqliteDatabase())(filename, { readonly: true }), "state-durability");
+    db = held ?? observeSqlite(new (sqliteDatabase())(filename, { readonly: true }), "state-durability");
     db.exec("PRAGMA busy_timeout = 5000");
     const tables = db.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all();
     return tables.every(({ name }) => !db!.query(`SELECT 1 FROM "${name.replaceAll('"', '""')}" LIMIT 1`).get());
   } catch {
     return null;
   } finally {
-    db?.close();
+    if (!held) db?.close();
   }
 }
 
@@ -664,7 +685,7 @@ function setAsideDatabases(database: StateDatabase): { name: string; file: strin
  */
 export function recoverSchemaSetAside(
   database: StateDatabase,
-  options: { stateDirectory: string; now?: Date },
+  options: { stateDirectory: string; now?: Date; beforeSwapStep?: SwapStepHook },
 ): StorageIncident | null {
   const candidates = setAsideDatabases(database);
   if (!candidates.length || databaseIsEmpty(database.filename) !== true) return null;
@@ -701,11 +722,15 @@ export function recoverSchemaSetAside(
       fsyncPath(restoring);
       let replaced: string[] = [];
       if (exists(database.filename)) {
-        const swap = swapDamagedDatabase(database.filename, now, restoring, undefined, "replaced");
+        const swap = swapDamagedDatabase(database.filename, now, restoring, options.beforeSwapStep, "replaced");
         if (swap.error !== null) throw new Error(`putting it back failed: ${swap.error}`);
         replaced = swap.corruptFiles;
       } else {
-        fs.renameSync(restoring, database.filename);
+        options.beforeSwapStep?.("recovery-lock");
+        // Publish only if the name is still absent; a concurrently created
+        // live database is never replaced by this recovery candidate.
+        fs.linkSync(restoring, database.filename);
+        fs.unlinkSync(restoring);
         fsyncPath(path.dirname(database.filename));
       }
       const kept = [candidate.name, ...["-wal", "-shm"].filter((suffix) => exists(`${candidate.file}${suffix}`)).map((suffix) => `${candidate.name}${suffix}`)];
@@ -742,7 +767,7 @@ export function checkStateDatabasesAtActivation(
       const outcome = checkDatabaseAtActivation(database, { stateDirectory, ...options });
       if ("incident" in outcome) incidents.push(outcome.incident);
       if (outcome.state === "absent" || outcome.state === "ok" || outcome.state === "repaired") {
-        const recovered = recoverSchemaSetAside(database, { stateDirectory, now: options.now });
+        const recovered = recoverSchemaSetAside(database, { stateDirectory, ...options });
         if (recovered) incidents.push(recovered);
       }
     } catch (error) {

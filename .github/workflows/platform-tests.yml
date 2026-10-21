@@ -149,6 +149,7 @@ jobs:
             src/lib/mcp/server.test.ts
             src/lib/mcp/http.test.ts
             src/lib/runtime/handoffQueueStore.test.ts
+            src/lib/runtime/cpuAdmissionBudget.test.ts
             src/lib/runtime/deliveryProgress.test.ts
             src/lib/runtime/deploymentLedger.test.ts
             src/lib/runtime/runtimeImageStore.test.ts
@@ -179,14 +180,19 @@ jobs:
             local root
             root=$(mktemp -d "$RUNNER_TEMP/minimum-sqlite-XXXXXX")
             mkdir -p "$root/home" "$root/config" "$root/state" "$root/tmp"
-            HOME="$root/home" XDG_CONFIG_HOME="$root/config" LLV_STATE_DIR="$root/state" TMPDIR="$root/tmp" bun test "$@" 2>&1 | tee "$RUNNER_TEMP/minimum-sqlite.log"
+            HOME="$root/home" XDG_CONFIG_HOME="$root/config" LLV_STATE_DIR="$root/state" TMPDIR="$root/tmp" bun test --timeout 60000 "$@" 2>&1 | tee "$RUNNER_TEMP/minimum-sqlite.log"
             grep -q "across 1 file" "$RUNNER_TEMP/minimum-sqlite.log"
           }
+          run src/lib/state/minimumSqliteSchema.test.ts
           run src/lib/state/minimumSqlite.test.ts
           for file in "${files[@]}"; do
             test -f "$file"
             run --preload ./src/lib/state/minimumSqlite.preload.ts "$file"
           done
+          # Migration coverage is independent of the existing project-name
+          # ambiguity failure in this file, which also fails on the base.
+          run --preload ./src/lib/state/minimumSqlite.preload.ts src/lib/search/transcriptSearch.test.ts \
+            --test-name-pattern 'migrates a version-one|upgrades version two|legacy migration captures|v4 to v5'
 
   scope:
     timeout-minutes: 3

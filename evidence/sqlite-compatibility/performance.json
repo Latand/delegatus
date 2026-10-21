@@ -1,0 +1,294 @@
+{
+  "version": 1,
+  "recordedAt": "2026-10-21T14:34:32.392202+00:00",
+  "baseline": "4df56467",
+  "bun": "1.4.0",
+  "sourceSha256": {
+    "src/lib/state/pipelineControllerReferences.ts": "27531dfc254114966c047811aa9b1bbf7f28c6d20052f9f955c96207ad73d477",
+    "src/lib/state/historyProjection.ts": "0598dc24a5e5024b098f76d3c6d369839bcfa85fe9d51a2078ea39c464016dfe",
+    "src/lib/state/sqliteStateStore.ts": "e666e28ba52c0073df9ee68b4512cec5ab935d833206c32cef4987cc8aaabcac",
+    "src/runtime-host/journal.ts": "51e09a5dd2da34938d2c2f273f7b578fef8b2e61dc1c4e40c694db8797c3b0e5",
+    "src/lib/sqliteReadAttribution.ts": "a3ccf10bc0321f363db040e3b5fb1246d99a0b3f55913399a667a42738087b96"
+  },
+  "workload": {
+    "pipelines": 48,
+    "attemptsPerPipeline": 12,
+    "bytesPerPipeline": 59402,
+    "cyclesPerTrial": 8,
+    "warmupCycles": 1,
+    "trialsPerVariant": 3,
+    "assertedBuilderAttempts": 576
+  },
+  "benchmark": {
+    "source": "const { initializeStateCollections, SqliteStateCollection } = await import(process.cwd()+\"/src/lib/state/sqliteStateStore.ts\");\nconst { buildPipeline, isStoredPipeline } = await import(process.cwd()+\"/src/lib/pipelines/store.ts\");\nconst { readHistoryProjection, historyAttemptCounts } = await import(process.cwd()+\"/src/lib/state/historyProjection.ts\");\nimport { Database } from \"bun:sqlite\";\nimport path from \"node:path\";\nconst now=\"2026-10-21T12:00:00.000Z\";\nconst role={roleId:\"builder\",engine:\"codex\",model:null,effort:null,access:\"read-write\",promptScaffold:\"fixture\"};\nconst rows=Array.from({length:48},(_,i)=>{\n const p=buildPipeline({id:`pipeline_${String(i).padStart(3,\"0\")}`,project:\"fixture\",task:\"fixture\",repoDir:\"/repo\",srcPath:null,srcConversationId:null,now,stages:[{id:\"build\",kind:\"run\",prompt:\"x\".repeat(4096),role:{roleId:\"builder\"},effectiveRole:role,next:null}] } as never);\n p.state=\"running\";p.runs[0]!.attempts=Array.from({length:12},(_,n)=>({n:n+1,state:n===11?\"running\":\"passed\",effectiveRole:role,launchId:null,sessionId:null,flowId:null,input:null,activatedBy:null,output:null,conversationId:`conversation_${i}_${n}`,agentPath:`fixture-${i}-${n}.jsonl`,paneId:null,startedAt:now,completedAt:n===11?null:now,verdict:n===11?null:{status:\"pass\"},error:\"x\".repeat(4096)})) as never;\n return p;\n});\nif(!rows.every(isStoredPipeline)) throw new Error(\"invalid benchmark pipeline\");\nconst spec={collection:\"pipelines\",schemaVersion:1,busyMessage:\"busy\",key:(p:typeof rows[number])=>p.id,decode:(r:unknown)=>r as typeof rows[number],clone:structuredClone};\nconst filename=path.join(process.env.LLV_STATE_DIR!,\"bench.sqlite\");\ninitializeStateCollections(filename,[{...spec,migrationId:\"bench\",loadRecords:()=>rows}]);const store=new SqliteStateCollection(filename,spec);\nconst samples=[];\nfor(let cycle=0;cycle<8;cycle++){\n const start=performance.now();\n for(const row of rows){row.runs[0]!.attempts[11]!.state=cycle%2?\"running\":\"pending\";store.boundedPatch(1,tx=>tx.put(row));}\n const written=performance.now();\n const count=await readHistoryProjection(db=>historyAttemptCounts(db,\"fixture\",Date.parse(now)),{filename});\n if(!count || count.builder!==576)throw new Error(JSON.stringify(count));\n const end=performance.now();if(cycle)samples.push({write:written-start,history:end-written,total:end-start});\n}\nconsole.log(JSON.stringify({sqlite:new Database(\":memory:\").query(\"SELECT sqlite_version() AS version\").get(),rows:48,attempts:12,payloadBytes:JSON.stringify(rows[0]).length,samples}));\n",
+    "command": "bash scripts/gate-slot.sh bun \"$TMPDIR/bench.ts\"",
+    "environment": "Fresh isolated HOME, XDG_CONFIG_HOME, TMPDIR, LLV_STATE_DIR and LLV_VIEWER_CONTROL_URL=http://127.0.0.1:1 for each process; benchmark source saved outside each export."
+  },
+  "medianMs": {
+    "base": {
+      "write": 622.65,
+      "history": 150.053,
+      "total": 770.919
+    },
+    "head": {
+      "write": 584.226,
+      "history": 144.039,
+      "total": 736.939
+    }
+  },
+  "runs": [
+    {
+      "variant": "base",
+      "trial": 1,
+      "sqlite": "3.53.2",
+      "samplesMs": [
+        {
+          "write": 552.666,
+          "history": 153.689,
+          "total": 706.355
+        },
+        {
+          "write": 635.29,
+          "history": 150.182,
+          "total": 785.472
+        },
+        {
+          "write": 655.515,
+          "history": 156.83,
+          "total": 812.346
+        },
+        {
+          "write": 944.074,
+          "history": 156.526,
+          "total": 1100.599
+        },
+        {
+          "write": 749.446,
+          "history": 165.467,
+          "total": 914.913
+        },
+        {
+          "write": 664.0,
+          "history": 182.949,
+          "total": 846.949
+        },
+        {
+          "write": 750.154,
+          "history": 182.952,
+          "total": 933.106
+        }
+      ]
+    },
+    {
+      "variant": "head",
+      "trial": 1,
+      "sqlite": "3.53.2",
+      "samplesMs": [
+        {
+          "write": 493.669,
+          "history": 142.049,
+          "total": 635.717
+        },
+        {
+          "write": 560.525,
+          "history": 144.039,
+          "total": 704.564
+        },
+        {
+          "write": 628.174,
+          "history": 155.293,
+          "total": 783.466
+        },
+        {
+          "write": 532.497,
+          "history": 136.619,
+          "total": 669.116
+        },
+        {
+          "write": 605.912,
+          "history": 142.495,
+          "total": 748.408
+        },
+        {
+          "write": 661.659,
+          "history": 143.986,
+          "total": 805.644
+        },
+        {
+          "write": 812.777,
+          "history": 272.257,
+          "total": 1085.034
+        }
+      ]
+    },
+    {
+      "variant": "head",
+      "trial": 2,
+      "sqlite": "3.53.2",
+      "samplesMs": [
+        {
+          "write": 722.032,
+          "history": 163.001,
+          "total": 885.033
+        },
+        {
+          "write": 689.205,
+          "history": 162.461,
+          "total": 851.666
+        },
+        {
+          "write": 584.226,
+          "history": 152.713,
+          "total": 736.939
+        },
+        {
+          "write": 560.752,
+          "history": 118.114,
+          "total": 678.866
+        },
+        {
+          "write": 524.253,
+          "history": 142.634,
+          "total": 666.887
+        },
+        {
+          "write": 522.083,
+          "history": 115.062,
+          "total": 637.145
+        },
+        {
+          "write": 534.624,
+          "history": 131.436,
+          "total": 666.061
+        }
+      ]
+    },
+    {
+      "variant": "base",
+      "trial": 2,
+      "sqlite": "3.53.2",
+      "samplesMs": [
+        {
+          "write": 514.046,
+          "history": 134.227,
+          "total": 648.272
+        },
+        {
+          "write": 604.837,
+          "history": 135.189,
+          "total": 740.026
+        },
+        {
+          "write": 628.819,
+          "history": 136.845,
+          "total": 765.663
+        },
+        {
+          "write": 604.685,
+          "history": 166.801,
+          "total": 771.485
+        },
+        {
+          "write": 579.533,
+          "history": 122.292,
+          "total": 701.825
+        },
+        {
+          "write": 603.775,
+          "history": 148.376,
+          "total": 752.151
+        },
+        {
+          "write": 619.749,
+          "history": 130.397,
+          "total": 750.146
+        }
+      ]
+    },
+    {
+      "variant": "base",
+      "trial": 3,
+      "sqlite": "3.53.2",
+      "samplesMs": [
+        {
+          "write": 559.958,
+          "history": 157.012,
+          "total": 716.971
+        },
+        {
+          "write": 550.425,
+          "history": 119.199,
+          "total": 669.624
+        },
+        {
+          "write": 690.265,
+          "history": 226.052,
+          "total": 916.316
+        },
+        {
+          "write": 706.135,
+          "history": 138.377,
+          "total": 844.513
+        },
+        {
+          "write": 622.65,
+          "history": 148.269,
+          "total": 770.919
+        },
+        {
+          "write": 616.057,
+          "history": 144.9,
+          "total": 760.958
+        },
+        {
+          "write": 626.959,
+          "history": 150.053,
+          "total": 777.012
+        }
+      ]
+    },
+    {
+      "variant": "head",
+      "trial": 3,
+      "sqlite": "3.53.2",
+      "samplesMs": [
+        {
+          "write": 603.006,
+          "history": 147.597,
+          "total": 750.603
+        },
+        {
+          "write": 575.687,
+          "history": 175.337,
+          "total": 751.025
+        },
+        {
+          "write": 659.835,
+          "history": 130.811,
+          "total": 790.646
+        },
+        {
+          "write": 588.383,
+          "history": 130.305,
+          "total": 718.688
+        },
+        {
+          "write": 544.108,
+          "history": 167.011,
+          "total": 711.119
+        },
+        {
+          "write": 710.779,
+          "history": 153.796,
+          "total": 864.576
+        },
+        {
+          "write": 550.115,
+          "history": 148.635,
+          "total": 698.75
+        }
+      ]
+    }
+  ],
+  "interpretation": "Interleaved runs on the same shared Linux machine under one admitted gate. No measured regression for this workload; no performance gain claimed."
+}

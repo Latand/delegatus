@@ -84,21 +84,48 @@ export function installHistoryProjection(db: Database, directory: string): void 
 }
 
 // Compact inputs omit prompts, output, scaffolds, reports, decisions and journals.
-// Text JSON and ordered subqueries only: macOS runs the system SQLite, as old
-// as 3.39, without jsonb or aggregate ORDER BY (minimumSqlite.fixture.ts).
-const pipelineInput = `WITH source AS MATERIALIZED (SELECT value_json AS payload FROM state_rows WHERE collection=? AND row_key=?),
+// Two forms of one query, chosen by the SQLite this connection runs; both
+// store text JSON, so a database stays readable on either. Where jsonb exists
+// (3.45+, Bun's own SQLite) each payload is parsed once into binary form. The
+// SQLite macOS ships (3.39 on macOS 13) has neither jsonb nor aggregate
+// ORDER BY and runs the text form (minimumSqlite.fixture.ts).
+const compactAttempt = ["n","state","historical","conversationId","agentPath","paneId","startedAt","effectiveRole.roleId","providerWait"]
+  .map(field => `'${field === "effectiveRole.roleId" ? "role" : field}',json_extract(payload,'$.${field}')`).join(",");
+const pipelineInputJsonb = `SELECT json(input) AS input FROM (WITH source AS MATERIALIZED (SELECT jsonb(value_json) AS payload FROM state_rows WHERE collection=? AND row_key=?),
+ runs AS MATERIALIZED (SELECT r.key,json_extract(r.value,'$.stageId') AS stageId,jsonb_extract(r.value,'$.attempts') AS attempts FROM source,json_each(payload,'$.runs') r),
+ attempts AS MATERIALIZED (SELECT r.key AS run,a.key,jsonb(a.value) AS payload FROM runs r,json_each(r.attempts) a),
+ compact AS MATERIALIZED (SELECT run,key,json_object(${compactAttempt}) AS payload FROM attempts),
+ compact_runs AS MATERIALIZED (SELECT r.key,json_object('stageId',r.stageId,'attempts',json_group_array(json(a.payload) ORDER BY a.key) FILTER (WHERE a.key IS NOT NULL)) AS payload
+ FROM runs r LEFT JOIN compact a ON a.run=r.key GROUP BY r.key)
+ SELECT jsonb_object('closedAt',json_extract(payload,'$.closedAt'),'roles',(SELECT jsonb_group_array(jsonb_object('id',json_extract(s.value,'$.id'),'role',json_extract(s.value,'$.role.roleId'))) FROM json_each(payload,'$.stages') s),
+ 'runs',(SELECT jsonb_group_array(jsonb(payload) ORDER BY key) FROM compact_runs)) AS input FROM source)`;
+const pipelineInputText = `WITH source AS MATERIALIZED (SELECT value_json AS payload FROM state_rows WHERE collection=? AND row_key=?),
  runs AS MATERIALIZED (SELECT r.key,json_extract(r.value,'$.stageId') AS stageId,json_extract(r.value,'$.attempts') AS attempts FROM source,json_each(payload,'$.runs') r),
  attempts AS MATERIALIZED (SELECT r.key AS run,a.key,a.value AS payload FROM runs r,json_each(r.attempts) a),
- compact AS MATERIALIZED (SELECT run,key,json_object(${["n","state","historical","conversationId","agentPath","paneId","startedAt","effectiveRole.roleId","providerWait"].map(field => `'${field === "effectiveRole.roleId" ? "role" : field}',json_extract(payload,'$.${field}')`).join(",")}) AS payload FROM attempts),
+ compact AS MATERIALIZED (SELECT run,key,json_object(${compactAttempt}) AS payload FROM attempts),
  compact_runs AS MATERIALIZED (SELECT r.key,json_object('stageId',r.stageId,'attempts',
  json((SELECT json_group_array(json(a.payload)) FROM (SELECT payload FROM compact WHERE run=r.key ORDER BY key) a))) AS payload FROM runs r)
  SELECT json_object('closedAt',json_extract(payload,'$.closedAt'),'roles',json((SELECT json_group_array(json_object('id',json_extract(s.value,'$.id'),'role',json_extract(s.value,'$.role.roleId'))) FROM json_each(payload,'$.stages') s)),
  'runs',json((SELECT json_group_array(json(payload)) FROM (SELECT payload FROM compact_runs ORDER BY key)))) AS input FROM source`;
-const pipelineSql = pipelineInput;
-const flowSql = `WITH source AS MATERIALIZED (SELECT value_json AS payload FROM state_rows WHERE collection=? AND row_key=?)
+const flowSqlJsonb = `SELECT json(input) AS input FROM (WITH source AS MATERIALIZED (SELECT jsonb(value_json) AS payload FROM state_rows WHERE collection=? AND row_key=?)
+ SELECT jsonb_object('reviewerMode',json_extract(payload,'$.reviewerMode'),'rounds',
+ (SELECT jsonb_group_array(jsonb_object('reviewerPath',json_extract(r.value,'$.reviewerPath'),'reviewerConversationId',json_extract(r.value,'$.reviewerConversationId'),
+ 'reviewerPid',json_extract(r.value,'$.reviewerPid'),'reviewerIdentity',json_extract(r.value,'$.reviewerIdentity')) ORDER BY r.key) FROM json_each(payload,'$.rounds') r)) AS input FROM source)`;
+const flowSqlText = `WITH source AS MATERIALIZED (SELECT value_json AS payload FROM state_rows WHERE collection=? AND row_key=?)
  SELECT json_object('reviewerMode',json_extract(payload,'$.reviewerMode'),'rounds',
  json((SELECT json_group_array(json_object('reviewerPath',json_extract(r.value,'$.reviewerPath'),'reviewerConversationId',json_extract(r.value,'$.reviewerConversationId'),
  'reviewerPid',json_extract(r.value,'$.reviewerPid'),'reviewerIdentity',json_extract(r.value,'$.reviewerIdentity'))) FROM (SELECT value FROM json_each(payload,'$.rounds') ORDER BY key) r))) AS input FROM source`;
+
+const jsonbConnections = new WeakMap<Database, boolean>();
+/** The input query for this connection's SQLite: `form` pins one for tests. */
+export function historyInputSql(db: Database, collection: string, form?: "jsonb" | "text"): string {
+  let jsonb = form ? form === "jsonb" : jsonbConnections.get(db);
+  if (jsonb === undefined) {
+    try { db.query("SELECT jsonb('{}')").get(); jsonb = true; } catch { jsonb = false; }
+    jsonbConnections.set(db, jsonb);
+  }
+  return collection === "flows" ? (jsonb ? flowSqlJsonb : flowSqlText) : (jsonb ? pipelineInputJsonb : pipelineInputText);
+}
 
 type CountUpdate = { oldProject: string | null; newProject: string | null; oldSignature: string; newSignature: string };
 function projectOne(db: Database, collection: string, key: string): CountUpdate | null {
@@ -111,7 +138,7 @@ function projectOne(db: Database, collection: string, key: string): CountUpdate 
   const accepted = raw && (collection === "flows" ? isStoredFlow(decoded) : isStoredPipeline(decoded));
   const row = accepted ? db.query<{ project: string | null; state: string | null; row_order: number }, [string,string]>(
     "SELECT json_extract(value_json,'$.project') AS project,json_extract(value_json,'$.state') AS state,row_order FROM state_rows WHERE collection=? AND row_key=?").get(collection,key) : null;
-  const input = row ? db.query<{ input: string }, [string,string]>(collection === "flows" ? flowSql : pipelineSql).get(collection,key)!.input : null;
+  const input = row ? db.query<{ input: string }, [string,string]>(historyInputSql(db, collection)).get(collection,key)!.input : null;
   const oldCountSignature = collection === "flows" ? "" : countSignature(db,collection,key);
   const newCountSignature = collection === "flows" || !input ? "" : countSignatureFromInput(input);
   const before = db.query<{ project: string | null; same: number }, [string | null,number | null,string | null,string | null,string,string]>(
