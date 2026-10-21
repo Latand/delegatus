@@ -102,12 +102,22 @@ test("B: a controller-created replacement link proves a completed parent without
   } finally { if (childLaunch) await fs.rm(stageGitReceiptDirectory(childLaunch), { recursive: true, force: true }); await f.close(); }
 });
 
-test("review safety: manual silent retry preserves predecessor commit custody", async () => {
+// A predecessor's own commit without a hook receipt is proved by the lane
+// reflog's creation entry; one it reached by reset stays unproved.
+test.each(["own hooks-off commit", "imported commit"] as const)("review safety: manual silent retry preserves predecessor commit custody (%s)", async predecessor => {
   const f = await fixture();
   let childLaunch: string | null = null;
   try {
     const parent = { ...f.attempt, n: 1, state: "failed", completedAt: NOW, agentPath: "/stage/silent.jsonl" } as PipelineStageAttempt;
-    await f.own("-c", "core.hooksPath=/dev/null", "commit", "--allow-empty", "-m", "unreceipted predecessor");
+    if (predecessor === "own hooks-off commit") {
+      await f.own("-c", "core.hooksPath=/dev/null", "commit", "--allow-empty", "-m", "unreceipted predecessor");
+    } else {
+      await f.git(f.foreign, "commit", "--allow-empty", "-m", "unreceipted predecessor");
+      await f.git(f.foreign, "push", "origin", "HEAD:refs/heads/pipeline/proof");
+      await f.own("fetch", "origin", "pipeline/proof");
+      await f.own("reset", "--hard", "FETCH_HEAD");
+    }
+    const inherited = await f.own("rev-parse", "HEAD");
 
     childLaunch = `stage-proof-manual-silent-retry-${nextFixture}`;
     await fs.rm(stageGitReceiptDirectory(childLaunch), { recursive: true, force: true });
@@ -118,13 +128,12 @@ test("review safety: manual silent retry preserves predecessor commit custody", 
     f.pipeline.runs = [{ stageId: "build", attempts: [parent, child] }] as never;
     await f.push();
 
-    expect(await settleStageAttemptPush(f.pipeline, child, realExec, NOW)).toMatchObject({
-      ok: false, error: expect.stringContaining("was not created in the attempt worktree"),
-    });
+    const expected = predecessor === "own hooks-off commit" ? { ok: true, sha: head }
+      : { ok: false, error: expect.stringContaining(`commit ${inherited} was not created in the attempt worktree`) };
+    expect(await settleStageAttemptPush(f.pipeline, child, realExec, NOW)).toMatchObject(expected);
     const unlinked = structuredClone(f.pipeline);
     delete unlinked.runs![0]!.attempts[1]!.restartContext;
-    expect(await settleStageAttemptPush(unlinked, unlinked.runs![0]!.attempts[1]!, realExec, NOW))
-      .toMatchObject({ ok: false, error: expect.stringContaining("was not created in the attempt worktree") });
+    expect(await settleStageAttemptPush(unlinked, unlinked.runs![0]!.attempts[1]!, realExec, NOW)).toMatchObject(expected);
   } finally {
     if (childLaunch) await fs.rm(stageGitReceiptDirectory(childLaunch), { recursive: true, force: true });
     await f.close();
@@ -172,7 +181,7 @@ test.each(["none", "foreign", "unrecorded"] as const)("the custody-to-committer 
 });
 
 test.each((["accepted", "accepted replacement", "published"] as const).flatMap(proof =>
-  (["valid", "foreign suffix", "unrecorded suffix", "dropped history", "remote race", "head race"] as const).map(suffix => ({ proof, suffix }))))
+  (["valid", "lost receipt", "foreign suffix", "unrecorded suffix", "dropped history", "remote race", "head race"] as const).map(suffix => ({ proof, suffix }))))
 ("recorded ancestry survives a later attempt ($proof, $suffix)", async ({ proof, suffix }) => {
   const f = await fixture();
   const childLaunch = `stage-proof-recorded-ancestry-${nextFixture}`;
@@ -213,7 +222,16 @@ test.each((["accepted", "accepted replacement", "published"] as const).flatMap(p
       } : {}) } as PipelineStageAttempt;
     if (proof !== "published") await f.own("merge", "--no-ff", "-m", "restore accepted history", accepted);
     let head = await f.commit("later attempt output");
-    if (suffix === "unrecorded suffix") await fs.rm(path.join(stageGitReceiptDirectory(childLaunch), "commits", head));
+    // A lost receipt leaves the lane reflog's creation entry as proof.
+    if (suffix === "lost receipt") await fs.rm(path.join(stageGitReceiptDirectory(childLaunch), "commits", head));
+    if (suffix === "unrecorded suffix") {
+      // No receipt and no creation entry: the object is written outside a
+      // commit command and HEAD reaches it by reset.
+      const made = await realExec("git", ["commit-tree", `${head}^{tree}`, "-p", head, "-m", "unrecorded suffix"], f.lane, f.env);
+      expect(made.code, made.stderr).toBe(0);
+      head = made.stdout.trim();
+      await f.own("reset", "--hard", head);
+    }
     if (suffix === "foreign suffix") {
       const foreign = path.join(f.root, "foreign-suffix");
       await f.own("worktree", "add", "--detach", foreign, head);
@@ -245,7 +263,7 @@ test.each((["accepted", "accepted replacement", "published"] as const).flatMap(p
     };
     const result = await commitAndAdoptStageBranch(f.pipeline, "build", exec, () => [f.pipeline], undefined,
       () => {}, null, undefined, undefined, child, NOW);
-    if (suffix === "valid") {
+    if (suffix === "valid" || suffix === "lost receipt") {
       expect(result).toEqual({ ok: true, sha: head });
       expect(await f.own("merge-base", "--is-ancestor", inherited, "HEAD")).toBe("");
       expect(await f.own("ls-remote", "--refs", "origin", "refs/heads/pipeline/proof")).toBe(`${inherited}\trefs/heads/pipeline/proof`);
@@ -1070,4 +1088,146 @@ test.each(["remote", "head", "dirty", "branch", "default race", "default branch"
     expect(await f.own("rev-parse", "HEAD")).toBe(mode === "head" ? f.head : f.reviewed);
     if (mode === "dirty") expect(await fs.readFile(path.join(f.lane, "unsaved.txt"), "utf8")).toBe("preserve\n");
   } finally { await f.close(); }
+});
+
+// Agents committed with `git -c core.hooksPath=.githooks` to "keep hooks on".
+// A command-line hooks path beats the guard's GIT_CONFIG_COUNT entry, so the
+// guard's receipt hooks never run, while the repository's own hooks still do.
+async function repositoryHooks(f: Awaited<ReturnType<typeof fixture>>, referenceTransaction?: string) {
+  const hooks = path.join(f.root, "repository-hooks");
+  await fs.mkdir(hooks, { recursive: true });
+  if (referenceTransaction) await fs.writeFile(path.join(hooks, "reference-transaction"), referenceTransaction, { mode: 0o700 });
+  await f.own("config", "core.hooksPath", hooks);
+  return async (args: string[], env: Record<string, string> = {}) =>
+    await realExec("git", ["-c", `core.hooksPath=${hooks}`, ...args], f.lane, { ...f.env, ...env });
+}
+
+async function advanceMain(f: Awaited<ReturnType<typeof fixture>>, file: string, content: string) {
+  await fs.writeFile(path.join(f.foreign, file), content);
+  await f.git(f.foreign, "add", file);
+  await f.git(f.foreign, "commit", "-m", "main advances");
+  await f.git(f.foreign, "push", "origin", "main");
+  await f.own("fetch", "origin", "main");
+}
+
+test.each(["clean merge", "clean merge concluded by commit", "conflicted merge"] as const)(
+  "a %s the attempt made under the repository's own hooks path settles", async shape => {
+    const f = await fixture();
+    try {
+      const withRepositoryHooks = await repositoryHooks(f);
+      await fs.writeFile(path.join(f.lane, "shared.txt"), "lane\n");
+      await f.own("add", "shared.txt");
+      await f.commit("own work before the merge");
+      if (shape === "conflicted merge") await advanceMain(f, "shared.txt", "main\n");
+      else await advanceMain(f, "main.txt", "main\n");
+      if (shape === "clean merge") {
+        const merged = await withRepositoryHooks(["merge", "--no-ff", "--no-edit", "origin/main"]);
+        expect(merged.code, merged.stderr).toBe(0);
+      } else {
+        const merged = await realExec("git", ["merge", "--no-ff", "--no-commit", "origin/main"], f.lane, f.env);
+        expect(merged.code).toBe(shape === "conflicted merge" ? 1 : 0);
+        if (shape === "conflicted merge") {
+          await fs.writeFile(path.join(f.lane, "shared.txt"), "lane and main\n");
+          await f.own("add", "shared.txt");
+        }
+        const message = path.join(f.root, "merge-message.txt");
+        await fs.writeFile(message, "Merge origin/main into the lane\n\nCo-authored-by: Fixture <noreply@example.invalid>\n");
+        const committed = await withRepositoryHooks(["commit", "--cleanup=strip", "--file", message]);
+        expect(committed.code, committed.stderr).toBe(0);
+      }
+      const merge = await f.own("rev-parse", "HEAD");
+      expect((await f.own("show", "-s", "--format=%P", merge)).split(" ")).toHaveLength(2);
+      expect(await fs.access(path.join(f.receipt, "commits", merge)).then(() => true, () => false)).toBe(false);
+      const head = await f.commit("own fix after the merge");
+      await f.push();
+      expect(await f.settle()).toEqual({ ok: true, sha: head });
+    } finally { await f.close(); }
+  });
+
+test("an ordinary commit under the repository's own hooks path settles", async () => {
+  const f = await fixture();
+  try {
+    const withRepositoryHooks = await repositoryHooks(f);
+    const made = await withRepositoryHooks(["commit", "--allow-empty", "-m", "own work, hooks path overridden"]);
+    expect(made.code, made.stderr).toBe(0);
+    const head = await f.own("rev-parse", "HEAD");
+    expect(await fs.access(path.join(f.receipt, "commits", head)).then(() => true, () => false)).toBe(false);
+    await f.push();
+    expect(await f.settle()).toEqual({ ok: true, sha: head });
+  } finally { await f.close(); }
+});
+
+/** Commit inside its own process group and kill the whole group from the
+ * reference-transaction hook once the branch moved, before post-commit runs:
+ * the same cut an OOM kill of the agent's scope makes. */
+async function commitThenDie(f: Awaited<ReturnType<typeof fixture>>, message: string): Promise<string> {
+  await repositoryHooks(f,
+    "#!/bin/sh\ncat >/dev/null\n[ \"$1\" = committed ] && [ -n \"${STAGE_PROOF_DIE:-}\" ] && kill -KILL 0\nexit 0\n");
+  const { spawn } = await import("node:child_process");
+  const status = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+    const child = spawn("git", ["commit", "--allow-empty", "-m", message], { cwd: f.lane, detached: true, stdio: "ignore",
+      env: { ...f.env, STAGE_PROOF_DIE: "1" } as NodeJS.ProcessEnv });
+    child.once("error", reject);
+    child.once("exit", (code, signal) => resolve({ code, signal }));
+  });
+  expect(status.signal).toBe("SIGKILL");
+  await f.own("config", "--unset", "core.hooksPath");
+  const head = await f.own("rev-parse", "HEAD");
+  expect(await f.own("log", "-1", "--format=%s", head)).toBe(message);
+  expect(await fs.access(path.join(f.receipt, "commits", head)).then(() => true, () => false)).toBe(false);
+  return head;
+}
+
+test.each(["host-lost replacement", "operator retry"] as const)(
+  "a commit whose host died before post-commit settles in the %s", async lineage => {
+    const f = await fixture();
+    const childLaunch = `stage-proof-host-death-${nextFixture}`;
+    try {
+      const lost = await commitThenDie(f, "own work committed just before the kill");
+      const parent = { ...f.attempt, n: 1, state: "failed", completedAt: "2026-10-16T09:30:00.000Z",
+        agentPath: "/stage/killed.jsonl", ...(lineage === "host-lost replacement" ? { restartRecovery: { bootId: "killed-host",
+          requestedAt: "2026-10-16T09:30:00.000Z", lastRecordAt: null, replacementAttempt: 2 } } : {}) } as PipelineStageAttempt;
+      await fs.rm(stageGitReceiptDirectory(childLaunch), { recursive: true, force: true });
+      Object.assign(f.env, await prepareStageGitGuard(childLaunch, f.lane, realExec, "2026-10-16T10:00:00.000Z"));
+      const child = { ...f.attempt, n: 2, launchId: childLaunch, startedAt: "2026-10-16T10:00:00.000Z", completedAt: NOW,
+        state: "passed", agentPath: "/stage/after-kill.jsonl",
+        ...(lineage === "host-lost replacement" ? { restartContext: { previousAttempt: 1, transcriptPath: parent.agentPath, cause: "host-lost" } } : {}),
+      } as PipelineStageAttempt;
+      const head = await f.commit("retry output");
+      await f.push();
+      f.pipeline.runs = [{ stageId: "build", attempts: [parent, child] }] as never;
+      expect(await settleStageAttemptPush(f.pipeline, child, realExec, NOW)).toEqual({ ok: true, sha: head });
+      expect(await f.own("merge-base", "--is-ancestor", lost, head)).toBe("");
+    } finally {
+      await fs.rm(stageGitReceiptDirectory(childLaunch), { recursive: true, force: true });
+      await f.close();
+    }
+  });
+
+test("a same-identity commit made in the lane after the attempt ended is still refused", async () => {
+  const f = await fixture();
+  const childLaunch = `stage-proof-after-end-${nextFixture}`;
+  try {
+    await f.commit("own receipted work");
+    const parent = { ...f.attempt, n: 1, state: "failed", completedAt: "2026-10-16T09:30:00.000Z",
+      agentPath: "/stage/ended.jsonl" } as PipelineStageAttempt;
+    const withRepositoryHooks = await repositoryHooks(f);
+    const late = await withRepositoryHooks(["commit", "--allow-empty", "-m", "another writer after the attempt ended"],
+      { GIT_COMMITTER_DATE: "2026-10-16T09:45:00Z" });
+    expect(late.code, late.stderr).toBe(0);
+    const foreign = await f.own("rev-parse", "HEAD");
+    Object.assign(f.env, await prepareStageGitGuard(childLaunch, f.lane, realExec, "2026-10-16T10:00:00.000Z"));
+    const child = { ...f.attempt, n: 2, launchId: childLaunch, startedAt: "2026-10-16T10:00:00.000Z", completedAt: NOW,
+      state: "passed", agentPath: "/stage/after-end.jsonl" } as PipelineStageAttempt;
+    await f.commit("retry output");
+    await f.push();
+    f.pipeline.runs = [{ stageId: "build", attempts: [parent, child] }] as never;
+    const result = await settleStageAttemptPush(f.pipeline, child, realExec, NOW);
+    expect(result?.ok).toBe(false);
+    if (!result || result.ok) throw new Error("a commit after the attempt ended was accepted");
+    expect(result.error).toContain(foreign);
+  } finally {
+    await fs.rm(stageGitReceiptDirectory(childLaunch), { recursive: true, force: true });
+    await f.close();
+  }
 });

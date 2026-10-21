@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { stageGitReceiptDirectory } from "@/lib/git/stageAttemptGuard";
-import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
+import { agentPublicationIdentity, agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { rollupChecksWithIdentity } from "@/lib/forge/checkRollup";
 import type { ExecPort } from "@/lib/workflows/provision";
@@ -160,6 +160,86 @@ async function hasCreatedCommits(directory: string | null): Promise<boolean> {
   } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
 }
 
+type StageStart = { head: string; commitReceiptVersion?: unknown; reflog?: { path?: unknown; offset?: unknown } | null };
+type ReflogWindow = { start: StageStart; until: string };
+const REFLOG_PROOF_BYTES = 4 * 1024 * 1024;
+const REFLOG_PROOF_ENTRIES = 1024;
+const normalizedReflogMessage = (text: string) => text.replace(/\s+/g, " ").trim();
+
+/** Commits each attempt made in the lane worktree, read from that worktree's
+ * own HEAD reflog after the offset its start receipt recorded. Git appends
+ * the entry with the ref update itself, so it survives a hooks path override
+ * and a kill before post-commit, which both lose the hook receipt.
+ *
+ * Each window replays a chain from the attempt's starting head: every entry
+ * continues the previous one and either leaves HEAD in place or creates a
+ * commit on top of it (`commit`, `commit (merge)`, `merge …: Merge made by`).
+ * The commit's first parent is the entry's old head, a `commit` entry carries
+ * the commit's own first line, and the committer ident and time equal the
+ * entry's and are the agent publication identity. Any other
+ * entry (a reset, a checkout elsewhere, an amend, a rebase) ends the window,
+ * as does an entry stamped after the attempt ended, so an imported, rewritten
+ * or later commit stays unproved. */
+async function reflogCreatedCommits(worktree: string, windows: ReflogWindow[], exec: ExecPort): Promise<Set<string>> {
+  const created = new Set<string>();
+  let identity: { name: string; email: string };
+  try { identity = agentPublicationIdentity(process.env); } catch { return created; }
+  const located = await exec("git", ["rev-parse", "--path-format=absolute", "--git-path", "logs/HEAD"], worktree);
+  if (located.code !== 0) return created;
+  const file = located.stdout.trim();
+  const usable = windows.flatMap(({ start, until }) => {
+    const offset = start.reflog?.offset;
+    return start.commitReceiptVersion === 2 && start.reflog?.path === file && typeof offset === "number"
+      && Number.isSafeInteger(offset) && offset >= 0 && Number.isFinite(Date.parse(until))
+      ? [{ head: start.head, offset, until: Math.floor(Date.parse(until) / 1000) }] : [];
+  }).sort((a, b) => a.offset - b.offset);
+  if (!usable.length) return created;
+  let bytes: Buffer;
+  let base: number;
+  try {
+    const fd = await fs.open(file, "r");
+    try {
+      const size = (await fd.stat()).size;
+      // A shorter log was rewritten (expired or deleted) after a start.
+      if (size < usable.at(-1)!.offset) return created;
+      base = Math.max(0, usable[0]!.offset - 1);
+      bytes = Buffer.alloc(Math.min(size - base, REFLOG_PROOF_BYTES));
+      const { bytesRead } = await fd.read(bytes, 0, bytes.length, base);
+      bytes = bytes.subarray(0, bytesRead);
+    } finally { await fd.close(); }
+  } catch { return created; }
+  for (const [index, window] of usable.entries()) {
+    if (window.offset > 0 && bytes[window.offset - 1 - base] !== 0x0a) continue;
+    const end = Math.min(usable.slice(index + 1).find(next => next.offset > window.offset)?.offset ?? Infinity, base + bytes.length);
+    if (end <= window.offset) continue;
+    const text = bytes.subarray(window.offset - base, end - base).toString("utf8");
+    const lines = text.split("\n").slice(0, -1).slice(0, REFLOG_PROOF_ENTRIES);
+    let cursor = window.head;
+    for (const line of lines) {
+      const entry = line.match(/^([0-9a-f]{40}) ([0-9a-f]{40}) (.*) <([^<>]*)> (\d+) [+-]\d{4}\t(.*)$/);
+      if (!entry || entry[1] !== cursor) break;
+      const [, old, made, name, email, stamp, message] = entry;
+      if (old === made) continue;
+      const action = message.match(/^(commit|commit \(merge\)): /)?.[1]
+        ?? (/^merge .+: Merge made by the '[^']+' strategy\.$/.test(message) ? "merge" : null);
+      if (!action || name !== identity.name || email !== identity.email || Number(stamp) > window.until) break;
+      const object = await exec("git", ["cat-file", "commit", made], worktree);
+      if (object.code !== 0) break;
+      const split = object.stdout.indexOf("\n\n");
+      const headers = (split < 0 ? object.stdout : object.stdout.slice(0, split)).split("\n");
+      const parents = headers.flatMap(header => header.match(/^parent ([0-9a-f]{40})$/)?.[1] ?? []);
+      const committer = headers.find(header => header.startsWith("committer "))?.match(/^committer (.*) <([^<>]*)> (\d+) [+-]\d{4}$/);
+      const subject = split < 0 ? "" : object.stdout.slice(split + 2).split("\n")[0]!;
+      if (parents[0] !== old || (action === "commit" ? parents.length !== 1 : parents.length < 2)
+        || !committer || committer[1] !== name || committer[2] !== email || committer[3] !== stamp
+        || (action !== "merge" && normalizedReflogMessage(`${action}: ${subject}`) !== message)) break;
+      created.add(made);
+      cursor = made;
+    }
+  }
+  return created;
+}
+
 export async function stageAttemptPushRefusal(launchId: string | null): Promise<string | null> {
   if (!launchId) return null;
   try { return (await smallFile(path.join(stageGitReceiptDirectory(launchId), "refused")))?.trim() ?? null; }
@@ -182,9 +262,11 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       try { await fs.access(directory); return refuse("the attempt's starting-head receipt is missing"); }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     }
-    // Only launches predating start receipts use reflog recovery. Once a launch
-    // receipt exists, its commit receipts are authoritative; reflog actions and
-    // timestamps are caller-controlled metadata and cannot fill a missing one.
+    // Only launches predating start receipts use time-bounded reflog recovery.
+    // Once a launch receipt exists, reflog actions and timestamps alone cannot
+    // fill a missing commit receipt; a version 2 start also bounds the lane's
+    // own reflog by offset, and only a continuous creation chain from its
+    // starting head proves a commit (reflogCreatedCommits).
     const start = raw === null ? { launchId: attempt.launchId, worktree: pipeline.worktreeDir,
       head: pipeline.lastPassedCommit, startedAt: attempt.startedAt } : JSON.parse(raw);
     if (start.launchId !== attempt.launchId || start.worktree !== pipeline.worktreeDir
@@ -198,6 +280,8 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
     // Only durable same-stage replacement/decision edges carry creation proof.
     // A later start is a boundary to verify, never evidence of who made its prefix.
     const directories = directory ? [directory] : [];
+    // The settling attempt may still be finishing, so its window runs to now.
+    const reflogWindows = new Map<string, ReflogWindow>(raw !== null && directory ? [[directory, { start, until: now }]] : []);
     let anchor = start.head;
     let lineageCursor = start.head;
     const replacementStarts = new Set<string>();
@@ -217,6 +301,7 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
         || !Number.isFinite(Date.parse(priorStart.startedAt)) || !Number.isFinite(Date.parse(prior.startedAt))
         || Date.parse(priorStart.startedAt) < Date.parse(prior.startedAt) || Date.parse(priorStart.startedAt) > Date.parse(now)) continue;
       directories.push(priorDirectory);
+      reflogWindows.set(priorDirectory, { start: priorStart, until: prior.completedAt ?? now });
       replacementStarts.add(priorStart.head);
     }
     for (;;) {
@@ -245,6 +330,7 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       lineageCursor = parentStart.head;
       replacementStarts.add(parentStart.head);
       directories.push(parentDirectory);
+      if (!reflogWindows.has(parentDirectory)) reflogWindows.set(parentDirectory, { start: parentStart, until: parent.completedAt });
       const acceptedBoundaries = [pipeline.lastPassedCommit, pipeline.publishedCommit]
         .filter((sha): sha is string => typeof sha === "string" && /^[0-9a-f]{40}$/.test(sha));
       for (const boundary of acceptedBoundaries) {
@@ -338,6 +424,11 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       }
       return nativeCreated.has(sha);
     };
+    let reflogCreated: Set<string> | undefined;
+    const reflogCreation = async (sha: string): Promise<boolean> => {
+      reflogCreated ??= await reflogCreatedCommits(pipeline.worktreeDir, [...reflogWindows.values()], exec);
+      return reflogCreated.has(sha);
+    };
     let baseTip: string | null | undefined;
     let integrationBase: string | null = null;
     const verifiedBase = async (): Promise<string | null> => {
@@ -393,6 +484,7 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
           }
           if (created) continue;
           if (await nativeCreation(sha)) continue;
+          if (await reflogCreation(sha)) continue;
           // A stage merges current main to keep up. Its already published
           // ancestors belong to the base, so they need no stage receipt.
           const base = await verifiedBase();

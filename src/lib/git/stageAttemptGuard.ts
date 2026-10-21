@@ -8,12 +8,26 @@ export function stageGitReceiptDirectory(launchId: string): string {
   return statePath("pipeline-git-attempts", crypto.createHash("sha256").update(launchId).digest("hex"));
 }
 
+/** Where the lane worktree's own HEAD reflog ends when the attempt starts.
+ * Git appends to it under the same lock as the ref update, so a commit whose
+ * hooks never ran (a `-c core.hooksPath` override, a kill before post-commit)
+ * still leaves an entry after this offset. Null leaves hook receipts as the
+ * only proof. */
+async function stageReflogStart(worktree: string, exec: ExecPort): Promise<{ path: string; offset: number } | null> {
+  const located = await exec("git", ["rev-parse", "--path-format=absolute", "--git-path", "logs/HEAD"], worktree);
+  const file = located.code === 0 ? located.stdout.trim() : "";
+  if (!path.isAbsolute(file)) return null;
+  try { return { path: file, offset: (await fs.stat(file)).size }; }
+  catch (error) { return (error as NodeJS.ErrnoException).code === "ENOENT" ? { path: file, offset: 0 } : null; }
+}
+
 export async function prepareStageGitGuard(launchId: string, worktree: string, exec: ExecPort, now: string): Promise<Record<string, string>> {
   const directory = stageGitReceiptDirectory(launchId);
   const head = await exec("git", ["rev-parse", "HEAD"], worktree);
   if (head.code !== 0 || !/^[0-9a-f]{40}$/.test(head.stdout.trim())) throw new Error("stage Git guard cannot read the starting head");
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
-  const start = { launchId, worktree, head: head.stdout.trim(), startedAt: now, commitReceiptVersion: 1 };
+  const start = { launchId, worktree, head: head.stdout.trim(), startedAt: now, commitReceiptVersion: 2,
+    reflog: await stageReflogStart(worktree, exec) };
   try { await fs.writeFile(path.join(directory, "start.json"), JSON.stringify(start), { flag: "wx", mode: 0o600 }); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;

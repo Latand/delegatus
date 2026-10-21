@@ -25,6 +25,7 @@ test("standalone assembly finds the install and quotes its wrapper for another c
     const guidance = resolveStageTestGuidance(standalone);
     const command = guidance.match(/: (bash .+?) <project-test-command>/)?.[1];
     expect(command).toBeDefined();
+    expect(guidance).toContain(`Run heavy checks (test suites, typecheck, builds) one at a time through this wrapper by default, since agent scopes have a 4–8 GB memory cap: ${command} <command>.`);
     const result = spawnSync("bash", ["-c", `${command} npm test -- src/example.test.ts`], { cwd: checkout, encoding: "utf8", timeout: 5_000 });
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("npm\ntest\n--\nsrc/example.test.ts\n");

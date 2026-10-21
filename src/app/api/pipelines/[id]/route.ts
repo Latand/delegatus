@@ -107,7 +107,9 @@ export async function PATCH(
   }
   const { id } = await ctx.params;
   try {
+    // publish needs its caller only to accept a head whose commit custody was refused.
     const actor = body.action === "resolve-decision" || body.action === "continue-review" || body.action === "accept-head" || body.action === "override-stage"
+      || body.action === "publish"
       ? admission.actor
       : undefined;
     const result = await patchPipeline(id, body, undefined, actor);
