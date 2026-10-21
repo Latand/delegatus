@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { VoiceToolHub, resolveExecutable, voiceToolEnvironment } from "./hub";
 import { VoiceToolsStore } from "./store";
+import { approvalDigest, digest } from "./contracts";
 
 const roots: string[] = [];
 const listeners: ReturnType<typeof Bun.serve>[] = [];
@@ -470,6 +471,28 @@ test("the launcher resolves to an absolute executable file on the Viewer's PATH,
   } finally { process.chdir(previous); }
 });
 
+async function writeRegistryLauncher(executable: string, marker: string) {
+  await fs.writeFile(executable, `#!${process.execPath}
+import * as fs from 'node:fs/promises';
+import path from 'node:path';
+import readline from 'node:readline';
+await fs.appendFile(${JSON.stringify(marker)}, JSON.stringify(process.argv.slice(2)) + '\\n');
+if (process.argv.includes('install')) {
+  const manifest = JSON.parse(await fs.readFile('package.json', 'utf8'));
+  const name = Object.keys(manifest.dependencies)[0];
+  if (name === 'failed-install') process.exit(1);
+  const dir = path.join(process.cwd(), 'node_modules', ...name.split('/'));
+  await fs.mkdir(dir, {recursive:true});
+  await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({name, bin:name === 'escaped-bin' ? '../../escape.mjs' : name === 'missing-bin' ? undefined : 'server.mjs'}));
+  await fs.writeFile(path.join(dir, 'server.mjs'), ${JSON.stringify(pinnedServer("'Registry'"))});
+  await fs.writeFile('escape.mjs', ${JSON.stringify(pinnedServer("'Escaped'"))});
+  process.exit(0);
+}
+if (process.argv.includes('run') && process.argv.includes('--no-env-file')) await import(process.argv.at(-1));
+else { ${pinnedServer("'Registry'").replace("import readline from 'node:readline';", "")} }
+`, { mode: 0o755 });
+}
+
 test.skipIf(process.platform === "win32")("the real probe worker refuses non-registry package targets before spawning the launcher", async () => {
   const { root } = await setup();
   const home = path.join(root, "home"), runDir = path.join(root, "run");
@@ -477,15 +500,25 @@ test.skipIf(process.platform === "win32")("the real probe worker refuses non-reg
   const config = path.join(root, "config.toml"); await fs.writeFile(config, "");
   const marker = path.join(root, "launcher-ran");
   const executable = path.join(root, "launcher");
-  await fs.writeFile(executable, `#!${process.execPath}\nawait Bun.write(${JSON.stringify(marker)}, JSON.stringify(process.argv.slice(2)));\n${pinnedServer("'Registry'")}`, { mode: 0o755 });
+  await writeRegistryLauncher(executable, marker);
   const cases: ["bun" | "uv", string[], "OK" | "START_FAILED"][] = [
     ["bun", ["x", "name@file:/abs"], "START_FAILED"], ["bun", ["x", "/abs"], "START_FAILED"],
     ["uv", ["tool", "run", "/abs"], "START_FAILED"], ["uv", ["tool", "run", "n @ file:///abs"], "START_FAILED"],
     ["bun", ["x", "git+file:/abs"], "START_FAILED"], ["uv", ["tool", "run", "git+file:/abs"], "START_FAILED"],
-    ["bun", ["x", "@tools/music@1.2.3", "--stdio"], "OK"], ["uv", ["tool", "run", "music==1.2.3", "--stdio"], "OK"],
+    ["bun", ["x", "sh", "-c", "exec bun /abs/server.mjs"], "START_FAILED"],
+    ["bun", ["x", "bun", "/abs/server.mjs"], "START_FAILED"],
+    ["bun", ["x", "python3", "/abs/server.py"], "START_FAILED"],
+    ["uv", ["tool", "run", "python", "/abs/server.py"], "START_FAILED"],
+    ["uv", ["tool", "run", "python==3.12"], "START_FAILED"],
+    ["uv", ["tool", "run", "PyPy3.10"], "START_FAILED"],
+    ["bun", ["x", "failed-install"], "START_FAILED"],
+    ["bun", ["x", "missing-bin"], "START_FAILED"], ["bun", ["x", "escaped-bin"], "START_FAILED"],
+    ["bun", ["x", "@tools/music@1.2.3"], "OK"], ["uv", ["tool", "run", "music==1.2.3"], "OK"],
   ];
+  const outcomes: unknown[] = [];
   for (const [command, args, expected] of cases) {
     await fs.rm(marker, { force: true });
+    await fs.rm(runDir, { recursive: true, force: true }); await fs.mkdir(runDir);
     // Bypass every proposal and store check: this exercises the production spawn boundary itself.
     const server = { transport: { type: "stdio", command, args, cwd: null, env: {} }, entryFile: null };
     const child = spawn(process.execPath, [path.join(import.meta.dir, "probe.worker.ts")],
@@ -496,8 +529,111 @@ test.skipIf(process.platform === "win32")("the real probe worker refuses non-reg
     child.stdin.end(JSON.stringify({ name: "music", server, secrets: {}, home, launch: { executable, config, runDir } }));
     const watchdog = setTimeout(() => child.kill("SIGKILL"), 10_000);
     try { await closed; } finally { clearTimeout(watchdog); }
-    expect(JSON.parse(output).code).toBe(expected);
-    if (expected === "START_FAILED") expect(await absent(marker)).toBe(true);
-    else expect(JSON.parse(await fs.readFile(marker, "utf8"))).toEqual(command === "bun" ? [`--config=${config}`, ...args] : ["tool", "run", "--no-config", ...args.slice(2)]);
+    outcomes.push({ command, args, expected, actual: JSON.parse(output).code, spawned: !await absent(marker) });
   }
+  expect(outcomes).toEqual(cases.map(([command, args, expected]) => ({ command, args, expected, actual: expected, spawned: expected === "OK" || ["failed-install", "missing-bin", "escaped-bin"].includes(args[1]) })));
 }, 30_000);
+
+test.each([
+  ["bun", ["x", "sh", "-c", "exec bun ENTRY"]], ["bun", ["x", "bun", "ENTRY"]],
+  ["bun", ["x", "python3", "PYTHON"]], ["uv", ["tool", "run", "python", "PYTHON"]],
+] as ["bun" | "uv", string[]][])("verifier launch %s %j is refused by proposal and hub reload", async (command, template) => {
+  const { store, root } = await setup();
+  const entry = path.join(root, "server.mjs"), python = path.join(root, "server.py");
+  const marker = path.join(root, "local-ran");
+  await fs.writeFile(entry, `await Bun.write(${JSON.stringify(marker)}, "ran");\n${pinnedServer()}`);
+  await fs.writeFile(python, `open(${JSON.stringify(marker)}, "w").write("ran")\n${pythonServer}`);
+  const proposal = (command: "bun" | "uv", args: string[]) => ({ name: "music", title: "Music", capability: "Search",
+    transport: { type: "stdio", command, args } });
+  await store.propose(proposal("bun", ["x", "@tools/music@1.2.3"]), actor);
+  const catalog = { tools, digest: digest(tools), fetchedAt: at };
+  await store.recordProbe("music", (await store.view()).servers.music.digest, { code: "OK", catalog });
+  await store.operatorChange("music", (await store.view()).servers.music.digest, "approve");
+  const approved = JSON.parse(await fs.readFile(store.file, "utf8"));
+  const args = template.map(arg => arg.replace("ENTRY", entry).replace("PYTHON", python));
+  await fs.writeFile(store.file, JSON.stringify(approved));
+  let outcome = await store.propose(proposal(command, args), actor).then(() => "accepted", error => String(error.code));
+  if (outcome === "accepted") {
+    // On the vulnerable base, follow the verifier's real dry-run/approve path
+    // before the red assertion, so acceptance alone cannot hide a broken repro.
+    const ran = await dryRunView(store);
+    if (ran.lastDryRun?.code === "OK") await store.operatorChange("music", ran.digest, "approve");
+    outcome = `${ran.lastDryRun?.code}:${(await store.view()).servers.music.state}`;
+  }
+  expect(outcome).toBe("INVALID_PROPOSAL");
+  const raw = structuredClone(approved);
+  raw.servers.music.transport = { type: "stdio", command, args, cwd: null, env: {} };
+  raw.servers.music.approval.digest = approvalDigest("music", raw.servers.music);
+  await fs.writeFile(store.file, JSON.stringify(raw));
+  const restarted = new VoiceToolsStore(root, () => at);
+  await expect(new VoiceToolHub(restarted).dryRun("music", raw.servers.music.approval.digest)).rejects.toThrow("REGISTRY_UNAVAILABLE");
+  await expect(restarted.operatorChange("music", raw.servers.music.approval.digest, "approve")).rejects.toThrow("REGISTRY_UNAVAILABLE");
+  expect(await absent(marker)).toBe(true);
+});
+
+test.skipIf(process.platform === "win32")("bun package resolution never executes echo from inherited PATH or a global bin", async () => {
+  const { store, root } = await setup();
+  const marker = path.join(root, "path-echo-ran");
+  const entry = path.join(root, "path-server.mjs");
+  await fs.writeFile(entry, `await Bun.write(${JSON.stringify(marker)}, "ran");\n${pinnedServer("'PATH echo'")}`);
+  const bin = path.join(root, "bin"); await fs.mkdir(bin);
+  await fs.writeFile(path.join(bin, "echo"), `#!${process.execPath}\nawait import(${JSON.stringify(entry)});\n`, { mode: 0o755 });
+  const globalBin = path.join(root, "voice-tools-data/music/.bun/bin");
+  await fs.mkdir(globalBin, { recursive: true });
+  await fs.copyFile(path.join(bin, "echo"), path.join(globalBin, "echo"));
+  const previous = process.env.PATH;
+  try {
+    process.env.PATH = [bin, previous].join(path.delimiter);
+    await store.propose({ name: "music", title: "Music", capability: "Search", transport: { type: "stdio", command: "bun", args: ["x", "echo"] } }, actor);
+    const shown = await dryRunView(store, new VoiceToolHub(store, 10_000));
+    expect(shown.lastDryRun?.code).not.toBe("OK");
+    expect(await absent(marker)).toBe(true);
+    expect(await fs.readdir(path.join(root, "voice-tools-runs"))).toEqual([]);
+  } finally { if (previous === undefined) delete process.env.PATH; else process.env.PATH = previous; }
+}, 20_000);
+
+test.skipIf(process.platform === "win32")("registry controls discover and approve through the real store, hub and worker", async () => {
+  const { root, store } = await setup();
+  const bin = path.join(root, "bin"); await fs.mkdir(bin);
+  const marker = path.join(root, "launches");
+  await writeRegistryLauncher(path.join(bin, "bun"), marker);
+  await writeRegistryLauncher(path.join(bin, "uv"), marker);
+  const previous = process.env.PATH;
+  try {
+    process.env.PATH = [bin, previous].join(path.delimiter);
+    for (const command of ["bun", "uv"] as const) {
+      const args = command === "bun" ? ["x", "@scope/name@1.2.3"] : ["tool", "run", "name==1.2.3"];
+      await store.propose({ name: "music", title: "Music", capability: "Search", transport: { type: "stdio", command, args } }, actor);
+      const shown = await dryRunView(store);
+      expect(shown.lastDryRun?.code).toBe("OK");
+      expect(shown.catalog?.tools[0].description).toBe("Registry");
+      await store.operatorChange("music", shown.digest, "approve");
+      const enabled = (await new VoiceToolsStore(root).view()).servers.music;
+      expect(enabled.state).toBe("enabled");
+      await store.operatorChange("music", enabled.digest, "remove");
+    }
+    const launches = (await fs.readFile(marker, "utf8")).trim().split("\n").map(line => JSON.parse(line) as string[]);
+    expect(launches).toHaveLength(3);
+    expect(launches[0].slice(1)).toEqual(["install", "--ignore-scripts", "--no-progress", "--no-cache", "--registry=https://registry.npmjs.org"]);
+    expect(launches[1].slice(1, 3)).toEqual(["run", "--no-env-file"]);
+    expect(launches[1][3]).toEndWith(path.join("node_modules", "@scope", "name", "server.mjs"));
+    expect(launches[2]).toEqual(["tool", "run", "--no-config", "name==1.2.3"]);
+    expect(await fs.readdir(path.join(root, "voice-tools-runs"))).toEqual([]);
+  } finally { if (previous === undefined) delete process.env.PATH; else process.env.PATH = previous; }
+}, 20_000);
+
+
+test.skipIf(process.env.LLV_VOICE_REGISTRY_NETWORK_TEST !== "1")("public registry controls install, discover and approve with the real launchers", async () => {
+  for (const [command, args] of [
+    ["bun", ["x", "@modelcontextprotocol/server-memory@2025.8.4"]],
+    ["uv", ["tool", "run", "mcp-server-time==2025.8.4"]],
+  ] as ["bun" | "uv", string[]][]) {
+    const { store, root } = await setup();
+    await store.propose({ name: "music", title: "Music", capability: "Search", transport: { type: "stdio", command, args } }, actor);
+    const shown = await dryRunView(store);
+    expect([command, shown.lastDryRun?.code]).toEqual([command, "OK"]);
+    expect(shown.catalog!.tools.length).toBeGreaterThan(0);
+    await store.operatorChange("music", shown.digest, "approve");
+    expect((await new VoiceToolsStore(root).view()).servers.music.state).toBe("enabled");
+  }
+}, 45_000);

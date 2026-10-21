@@ -109,6 +109,7 @@ test("package launches accept only registry names and optional versions", () => 
   ] as const) expect(proposalSchema.safeParse(proposal(command, target)).success).toBe(false);
   for (const target of ["file:/abs", "link:/abs", "workspace:*", "git+https://example.invalid/repo", "git://example.invalid/repo",
     "https://example.invalid/pkg.tgz", "http://example.invalid/pkg.tgz", "./pkg", "../pkg", "~/pkg", "C:\\pkg", "pkg\\bin",
+    "File:/abs", "%66ile:/abs", "name@File:/abs", "name@%66ile:/abs", "name%40file%3A%2Fabs",
     "name @ https://example.invalid/pkg.tgz", "name@https://example.invalid/pkg.tgz", "name@npm:other", "repo/pkg", "--from", "pkg\n"]) {
     for (const command of ["bun", "uv"] as const) expect(proposalSchema.safeParse(proposal(command, target)).success).toBe(false);
   }
@@ -133,4 +134,21 @@ test("package targets refuse bare archives, incomplete versions and launcher opt
   expect(proposalSchema.safeParse(proposal("uv", ["tool", "run", "--from", "/abs"])).success).toBe(false);
   expect(proposalSchema.safeParse(proposal("bun", ["run", "/abs"])).success).toBe(false);
   expect(proposalSchema.safeParse({ ...proposal("bun", ["run", "/abs"]), entryFile: { path: "/abs", sha256: "a".repeat(64) } }).success).toBe(true);
+});
+
+
+test("package launches refuse trailing execution arguments and uv interpreter requests", () => {
+  const accepts = (command: "bun" | "uv", args: string[]) => proposalSchema.safeParse({ name: "music", title: "Music", capability: "Search",
+    transport: { type: "stdio", command, args } }).success;
+  for (const [command, args] of [
+    ["bun", ["x", "sh", "-c", "exec bun /abs/server.mjs"]], ["bun", ["x", "bun", "/abs/server.mjs"]],
+    ["bun", ["x", "python3", "/abs/server.py"]], ["uv", ["tool", "run", "python", "/abs/server.py"]],
+    ["bun", ["x", "env", "bun", "/abs/server.mjs"]], ["bun", ["x", "name@1.2.3", "--eval=code"]],
+    ["uv", ["tool", "run", "name==1.2.3", "--from", "/abs"]],
+  ] as ["bun" | "uv", string[]][]) expect(accepts(command, args)).toBe(false);
+  for (const name of ["python", "python3", "python3.12", "pythonw", "cpython", "cpython-3.12", "pypy", "pypy3.10", "graalpy", "graalpy-3.11", "cp312", "3.12"]) {
+    for (const target of [name, name.toUpperCase(), `${name}==3.12`]) expect(accepts("uv", ["tool", "run", target])).toBe(false);
+  }
+  expect(accepts("bun", ["x", "@scope/name@1.2.3"])).toBe(true);
+  expect(accepts("uv", ["tool", "run", "name==1.2.3"])).toBe(true);
 });

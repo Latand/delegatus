@@ -26,6 +26,11 @@ test("both proposal routes return INVALID_PROPOSAL for non-registry package targ
   const before = await (await GET(request("GET"))).json();
   const approvedService = internalServiceHeaders("mcp");
   for (const transport of [
+    { type: "stdio", command: "bun", args: ["x", "sh", "-c", "exec bun /abs/server.mjs"] },
+    { type: "stdio", command: "bun", args: ["x", "bun", "/abs/server.mjs"] },
+    { type: "stdio", command: "bun", args: ["x", "python3", "/abs/server.py"] },
+    { type: "stdio", command: "uv", args: ["tool", "run", "python", "/abs/server.py"] },
+    { type: "stdio", command: "uv", args: ["tool", "run", "python==3.12"] },
     { type: "stdio", command: "bun", args: ["x", "name@file:/abs"] },
     { type: "stdio", command: "bun", args: ["x", "/abs"] },
     { type: "stdio", command: "uv", args: ["tool", "run", "/abs"] },

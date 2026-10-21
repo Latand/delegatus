@@ -6,6 +6,7 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import Ajv from "ajv";
 import path from "node:path";
+import * as fs from "node:fs/promises";
 import { digest, launchShapingEnv, packageLaunch, validateCatalog, voiceToolBounds, type VoiceToolServer } from "./contracts";
 import { verifyEntry } from "./entry";
 
@@ -49,14 +50,24 @@ class BoundedStdio implements Transport {
     const entry = request.server.entryFile?.path;
     const pkg = !entry && packageLaunch(transport);
     if (!entry && !pkg) throw new Error("START_FAILED");
+    if (pkg) {
+      // A previous server can write its private home, including global tools
+      // and package-manager configuration. Package resolution gets a fresh home.
+      const home = path.join(launch.runDir, ".home");
+      await fs.mkdir(home, { recursive: true, mode: 0o700 });
+      Object.assign(env, { HOME: home, XDG_CONFIG_HOME: path.join(home, ".config"), XDG_CACHE_HOME: path.join(home, ".cache"), TMPDIR: home });
+    }
     // Nothing found from a folder may choose what runs before the pinned entry: Bun reads the
     // Viewer's empty config and no .env file; uv neither builds a project nor reads its config, and it
     // runs the interpreter found while virtual environments are skipped, because finding one runs it.
     let args: string[];
-    if (transport.command === "bun") args = entry ? [`--config=${launch.config}`, "run", "--no-env-file", entry, ...transport.args.slice(2)] : [`--config=${launch.config}`, ...transport.args];
+    if (transport.command === "bun") {
+      const file = entry ?? await this.installBunPackage(launch, transport.args[1], env).catch(() => { throw new Error("START_FAILED"); });
+      args = [`--config=${launch.config}`, "run", "--no-env-file", file, ...(entry ? transport.args.slice(2) : [])];
+    }
     else if (pkg) args = ["tool", "run", "--no-config", ...transport.args.slice(2)];
     else args = ["run", "--python", await systemPython(launch, env), "--no-project", "--no-config", "--no-env-file", entry!, ...transport.args.slice(2)];
-    // A package launcher prefers a binary under node_modules/.bin of its folder and each parent, so it starts in the empty one.
+    // Package execution never asks PATH or a global bin directory to satisfy the target.
     const child = this.child = spawn(launch.executable, args, { cwd: pkg ? launch.runDir : transport.cwd ?? request.home, env, stdio: ["pipe", "pipe", "ignore"] });
     this.closed = new Promise(resolve => { child.once("close", () => { this.onclose?.(); resolve(); }); });
     let buffer = Buffer.alloc(0);
@@ -72,6 +83,34 @@ class BoundedStdio implements Transport {
     });
     child.stdin!.on("error", () => { this.onerror?.(new Error("START_FAILED")); });
     await new Promise<void>((resolve, reject) => { child.once("spawn", resolve); child.once("error", () => reject(new Error("START_FAILED"))); });
+  }
+  private async installBunPackage(launch: { executable: string; config: string; runDir: string }, target: string, env: NodeJS.ProcessEnv): Promise<string> {
+    const versionAt = target.indexOf("@", 1);
+    const name = versionAt < 0 ? target : target.slice(0, versionAt);
+    const version = versionAt < 0 ? "latest" : target.slice(versionAt + 1);
+    await fs.writeFile(path.join(launch.runDir, "package.json"), JSON.stringify({ private: true, workspaces: [], dependencies: { [name]: version } }), { flag: "wx", mode: 0o600 });
+    // Installing into an explicit manifest avoids bun x's PATH/global fallback.
+    // No lifecycle hook may run before the resolved registry entry is chosen.
+    const installer = this.child = spawn(launch.executable, [`--config=${launch.config}`, "install", "--ignore-scripts", "--no-progress", "--no-cache", "--registry=https://registry.npmjs.org"],
+      { cwd: launch.runDir, env, stdio: ["ignore", "ignore", "ignore"] });
+    this.closed = new Promise(resolve => { installer.once("close", () => resolve()); });
+    const code = await new Promise<number | null>(resolve => { installer.once("error", () => resolve(null)); installer.once("close", resolve); });
+    if (code !== 0) throw new Error("START_FAILED");
+    const directory = path.join(launch.runDir, "node_modules", ...name.split("/"));
+    const manifest = path.join(directory, "package.json");
+    if ((await fs.stat(manifest)).size > 64 * 1024) throw new Error("START_FAILED");
+    const metadata = JSON.parse(await fs.readFile(manifest, "utf8"));
+    const bins = metadata.bin;
+    const shortName = name.split("/").at(-1)!;
+    const bin = typeof bins === "string" ? bins : bins && typeof bins === "object" && !Array.isArray(bins)
+      ? Object.hasOwn(bins, shortName) ? bins[shortName] : Object.keys(bins).length === 1 ? Object.values(bins)[0] : null : null;
+    if (typeof bin !== "string" || !bin || path.isAbsolute(bin)) throw new Error("START_FAILED");
+    const root = await fs.realpath(directory), file = await fs.realpath(path.resolve(directory, bin));
+    // A workspace link or symlinked package root cannot substitute local code.
+    if (root !== path.join(await fs.realpath(launch.runDir), "node_modules", ...name.split("/"))) throw new Error("START_FAILED");
+    const relative = path.relative(root, file);
+    if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative) || !(await fs.stat(file)).isFile()) throw new Error("START_FAILED");
+    return file;
   }
   async send(message: JSONRPCMessage): Promise<void> {
     const child = this.child;

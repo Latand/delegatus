@@ -64,6 +64,11 @@ test("a delegated caller proposes through the real registration, binding and con
     expect(launchAttempt.isError).toBe(true);
     expect(JSON.stringify(launchAttempt)).toContain("INVALID_PROPOSAL");
     for (const [index, transport] of [
+      { type: "stdio", command: "bun", args: ["x", "sh", "-c", "exec bun /abs/server.mjs"] },
+      { type: "stdio", command: "bun", args: ["x", "bun", "/abs/server.mjs"] },
+      { type: "stdio", command: "bun", args: ["x", "python3", "/abs/server.py"] },
+      { type: "stdio", command: "uv", args: ["tool", "run", "python", "/abs/server.py"] },
+      { type: "stdio", command: "uv", args: ["tool", "run", "python==3.12"] },
       { type: "stdio", command: "bun", args: ["x", "name@file:/abs"] },
       { type: "stdio", command: "bun", args: ["x", "/abs"] },
       { type: "stdio", command: "uv", args: ["tool", "run", "/abs"] },

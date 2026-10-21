@@ -103,18 +103,31 @@ a folder may choose what runs before the pinned entry:
   find --system`, because uv otherwise starts the interpreter of a `.venv` it
   finds in the folder or any parent, and `--no-project` stops it building a
   `pyproject.toml` there;
-- a package launch (`bun x`, `uv tool run --no-config`) runs in the run's
-  empty folder, because `bun x` prefers a binary under `node_modules/.bin` of
-  its folder and every parent. A package launch with a proposed `cwd` is
-  refused. The package target must be an npm registry name (optionally scoped)
-  with an optional `@semver` or `@tag`, or a Python registry name with an
-  optional `==version`. Paths, bare archives, `file:`, `link:`, `workspace:`,
-  git references, URLs, npm aliases and Python `name @ URL` forms are refused.
-  The proposal schema and persisted-record loader enforce this restriction;
-  an approved record carrying such a target fails the load with
-  `REGISTRY_UNAVAILABLE`. The probe checks the target again before spawning,
-  returning `START_FAILED` for an invalid target. A local program requires an
-  `entryFile` pin and the explicit file launch described above.
+- a package launch runs in a fresh folder with a fresh package-manager home.
+  A proposed `cwd` is refused. For Bun, the worker writes a manifest containing
+  only the requested npm registry dependency, installs from the public npm
+  registry with lifecycle scripts disabled, and executes that package's
+  resolved binary by absolute path. PATH, global binaries and ancestor
+  `node_modules/.bin` cannot satisfy the name. The binary must resolve inside
+  the installed package; a missing, ambiguous or escaping bin fails the probe.
+  An unversioned name resolves the registry's `latest` tag; explicit versions
+  and tags keep their requested meaning. For uv, `tool run --no-config`
+  resolves the PyPI package, and interpreter request names (`python`,
+  `python3.12`, `cpython`, `pypy`, `graalpy` and versioned forms) are refused.
+  Slice 1 accepts no arguments after a package target, preventing interpreter
+  and wrapper launches from selecting another program or an unpinned local
+  entry. Package configuration uses the admitted environment fields; pinned
+  file launches retain their arguments.
+  The target must be an npm registry name (optionally scoped) with an optional
+  `@semver` or `@tag`, or a Python registry name with an optional `==version`.
+  Paths, bare archives, `file:`, `link:`, `workspace:`, git references, URLs,
+  npm aliases and Python `name @ URL` forms are refused. Proposal validation
+  and persisted-record loads enforce these restrictions; an approved record
+  carrying a refused shape fails the load with `REGISTRY_UNAVAILABLE`, even
+  if its approval digest matches. The probe checks again before spawning and
+  returns `START_FAILED` for a refused shape. Both browser and MCP proposal
+  routes return `INVALID_PROPOSAL`. A local program requires an `entryFile`
+  pin and the explicit file launch described above.
 
 HTTP redirects are refused. Incoming
 wire data is capped at 2 MiB, catalogs at 128 tools, schema JSON at 8 KiB and

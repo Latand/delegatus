@@ -10,7 +10,7 @@ export async function voiceTools(args: McpToolArgs, control: ViewerControlDepend
   }
   if (Object.keys(args).some(key => !["action", "proposal", "clientRequestId"].includes(key))) throw new McpToolRefusal("Invalid voice tools request.", { code: "INVALID_REQUEST" });
   const parsed = args.action === "propose" ? proposalSchema.safeParse(args.proposal) : null;
-  if (parsed && !parsed.success) throw new McpToolRefusal("Invalid voice tools proposal. Package launches require a registry name with an optional version; local scripts require a pinned entryFile. Put credentials in the voice settings only, and set no environment variable that chooses the launch (PATH, HOME, LD_*, NODE_OPTIONS, BUN_*, UV_*, PYTHON*, XDG_* and the like).", { code: "INVALID_PROPOSAL" });
+  if (parsed && !parsed.success) throw new McpToolRefusal("Invalid voice tools proposal. Package launches require a registry name with an optional version, no trailing arguments and no interpreter requests; local scripts require a pinned entryFile. Put credentials in the voice settings only, and set no environment variable that chooses the launch (PATH, HOME, LD_*, NODE_OPTIONS, BUN_*, UV_*, PYTHON*, XDG_* and the like).", { code: "INVALID_PROPOSAL" });
   return control.post("/api/voice-tools/proposals", { action: args.action, clientRequestId: args.clientRequestId, conversationId,
     ...(parsed?.success ? { proposal: parsed.data } : {}) });
 }

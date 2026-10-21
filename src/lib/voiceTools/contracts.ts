@@ -37,7 +37,7 @@ export const proposalSchema = z.object({
   private: z.boolean().default(false), askBeforeActing: z.boolean().default(false),
   callTimeoutMs: z.number().int().min(5000).max(60_000).default(15_000),
 }).strict().refine(config => config.transport.type !== "stdio" || config.entryFile !== null || packageLaunch(config.transport),
-  { path: ["transport", "args"], message: "Use a registry package name with an optional version, or pin a local entryFile." });
+  { path: ["transport", "args"], message: "Use a registry package name with an optional version and no trailing arguments or interpreter requests, or pin a local entryFile." });
 export type VoiceToolProposal = z.infer<typeof proposalSchema>;
 export type Tool = { name: string; description: string; inputSchema: Record<string, unknown>; annotations?: Record<string, unknown> };
 export type Catalog = { digest: string; fetchedAt: string; tools: Tool[] };
@@ -84,12 +84,18 @@ const npmRegistryPackage = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*(?:
 const pythonRegistryPackage = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?(?:==v?(?:[0-9]+!)?[0-9]+(?:\.[0-9]+)*(?:[-_.]?(?:alpha|a|beta|b|preview|pre|c|rc)[-_.]?[0-9]*)?(?:-[0-9]+|[-_.]?(?:post|rev|r)[-_.]?[0-9]*)?(?:[-_.]?dev[-_.]?[0-9]*)?(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?)?$/i;
 /** Checked by proposal/persisted-record validation and again by the probe before spawn. */
 export function packageLaunch(transport: { command: "bun" | "uv"; args: string[] }): boolean {
+  if (transport.command !== "bun" && transport.command !== "uv") return false;
   const args = transport.args;
+  // Slice 1 accepts no package arguments: an interpreter or wrapper package
+  // must not turn an unpinned local file or program into the effective entry.
+  if (args.length !== (transport.command === "bun" ? 2 : 3)) return false;
   const target = transport.command === "bun" ? args[0] === "x" && args[1]
     : args[0] === "tool" && args[1] === "run" && args[2];
   if (!target || /\s/.test(target)) return false;
   const versionAt = transport.command === "bun" ? target.indexOf("@", 1) : target.indexOf("==");
   const name = versionAt < 0 ? target : target.slice(0, versionAt);
+  // uv treats these as interpreter requests, bypassing PyPI entirely.
+  if (transport.command === "uv" && /^(?:(?:pythonw?|cpython|pypy|graalpy|cp|py)(?:[._-]?[0-9]+)*[td]?|[0-9]+(?:\.[0-9]+)*[td]?)$/i.test(name)) return false;
   if (transport.command === "bun" && name.length > 214) return false;
   // A bare archive filename can also look like a registry name.
   if (/\.(?:tgz|tar(?:\.gz)?|zip|whl)$/i.test(name)) return false;
