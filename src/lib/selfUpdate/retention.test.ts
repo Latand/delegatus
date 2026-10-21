@@ -522,6 +522,59 @@ function packageContainerFixture() {
   return { ...h, dirs, target: dirs[2]! };
 }
 
+test.each(["active", "rollback", "serving", "in-flight"] as const)(
+  "owner protection acquired during the final process scan preserves package trash (%s)", async protection => {
+    const h = packageContainerFixture();
+    const servingSha = "ab".repeat(20);
+    const packageMetadata = path.join(h.target, "node_modules/delegatus-cli/package.json");
+    fs.mkdirSync(path.dirname(packageMetadata), { recursive: true });
+    fs.writeFileSync(packageMetadata, JSON.stringify({ gitHead: servingSha }));
+    h.ports.current = () => structuredClone({ record: h.record, inputs: h.inputs });
+    let acquired = false;
+    h.ports.scan = () => {
+      const quarantined = fs.readdirSync(h.record.releasesDir).some(name => name.startsWith(`.delegatus-trash-${path.basename(h.target)}-`));
+      if (quarantined && !acquired) {
+        acquired = true;
+        if (protection === "active") fs.writeFileSync(h.record.releasePointer, JSON.stringify({ dir: h.target }));
+        if (protection === "rollback") h.inputs.rollbackPackage = h.target;
+        if (protection === "serving") h.record.web.revision = servingSha;
+        if (protection === "in-flight") h.inputs.inFlight = [h.target];
+      }
+      return EMPTY;
+    };
+
+    const report = await h.run();
+    expect(acquired).toBeTrue();
+    expect(report.errors).toEqual([]);
+    expect(fs.existsSync(path.join(h.target, "package.json"))).toBeTrue();
+    expect(report.removed.some(row => row.dir === h.target)).toBeFalse();
+    expect(report.kept).toContainEqual(expect.objectContaining({ dir: h.target, reason: protection }));
+  },
+);
+
+test("owner protection acquired during the final recovery scan preserves package trash", async () => {
+  const h = packageContainerFixture();
+  const journal = path.join(path.dirname(h.ports.reportFile!), "package-trash-recovery-race.json");
+  await expect(removeTreeViaTrash(h.target, { journal, held: () => false, remove: async () => { throw new Error("interrupted"); } }))
+    .rejects.toThrow("interrupted");
+  h.ports.current = () => structuredClone({ record: h.record, inputs: h.inputs });
+  let acquired = false;
+  h.ports.scan = () => {
+    const quarantined = fs.readdirSync(h.record.releasesDir).some(name => name.startsWith(`.delegatus-trash-${path.basename(h.target)}-`));
+    if (quarantined && !acquired) { acquired = true; h.inputs.rollbackPackage = h.target; }
+    return EMPTY;
+  };
+
+  const report = await h.run();
+  const trash = fs.readdirSync(h.record.releasesDir).find(name => name.startsWith(`.delegatus-trash-${path.basename(h.target)}-`));
+  expect(acquired).toBeTrue();
+  expect(report.errors).toEqual([]);
+  expect(trash).toBeDefined();
+  expect(fs.existsSync(path.join(h.record.releasesDir, trash!, "package.json"))).toBeTrue();
+  expect(fs.existsSync(journal)).toBeTrue();
+  expect(report.kept).toContainEqual(expect.objectContaining({ dir: h.target, reason: "rollback" }));
+});
+
 function dirtyNestedRepository(directory: string) {
   fs.mkdirSync(directory, { recursive: true });
   const git = (args: string[]) => {

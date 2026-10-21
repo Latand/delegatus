@@ -88,6 +88,15 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
       return value;
     } catch (error) { throw new RetentionInspectionError(String(error)); }
   };
+  const freshObservation = async () => {
+    // Keep the inventory after the first owner IPC, then take owner state again
+    // after the scan. Either wait can expose new protection: a holder may enter
+    // quarantined trash during IPC, or an owner may acquire a target during scan.
+    await read();
+    const processes = await scan();
+    const current = await read();
+    return { current, processes };
+  };
   type Candidate = { dir: string; sha: string; age: number; locked: boolean; identity: string };
   const byAge = (a: Candidate, b: Candidate) => a.age - b.age || (a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0);
   const identity = (dir: string) => { const stat = fs.lstatSync(dir); return `${stat.dev}:${stat.ino}`; };
@@ -133,8 +142,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
     return null;
   };
   const freshProtection = async (candidate: Candidate, recovering = false) => {
-    const current = await read();
-    const processes = await scan();
+    const { current, processes } = await freshObservation();
     return protect(candidate, current, processes, recovering);
   };
   try {
@@ -214,8 +222,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
           const bytesBefore = await bytesOf(cache);
           const journal = path.join(path.dirname(reportFile), `cache-trash-${randomUUID()}.json`);
           const inUse = async (trash: string) => {
-            const current = await read();
-            const fresh = await scan();
+            const { current, processes: fresh } = await freshObservation();
             return heldByProcess(trash, fresh) || heldByProcess(cache, fresh)
               || (current.inputs.inFlight ?? []).some(dir => under(dir, candidate.dir));
           };
@@ -226,8 +233,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
           continue;
         }
         // Awaited listing and measurements cannot carry stale authority into removal.
-        const fresh = await scan();
-        const latest = await read();
+        const { current: latest, processes: fresh } = await freshObservation();
         if (protect(candidate, latest, fresh) || mounts(candidate.dir).length || identity(candidate.dir) !== candidate.identity) {
           report.kept.push({ dir: candidate.dir, reason: "changed", bytes: 0 }); continue;
         }
@@ -321,7 +327,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
           }
           const journal = path.join(path.dirname(reportFile), `package-trash-${randomUUID()}.json`);
           if (!await removeTreeViaTrash(candidate.dir, { journal, context: { sha: candidate.sha }, held: async trash => {
-            const current = await read(); const activeProcesses = await scan();
+            const { current, processes: activeProcesses } = await freshObservation();
             const reason = protect({ dir: candidate.dir, sha: candidate.sha, age: candidate.age, locked: candidate.locked, identity: candidate.identity }, current, activeProcesses, true);
             if (reason) report.kept.push({ dir: candidate.dir, reason, bytes: 0 });
             const processHeld = heldByProcess(trash, activeProcesses);
@@ -365,8 +371,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
           if (!candidate || mounts(candidate.dir).length || identity(candidate.dir) !== candidate.identity) continue;
         }
         const held = async (trash: string) => {
-          const current = await read();
-          const processes = await scan();
+          const { current, processes } = await freshObservation();
           const processHeld = heldByProcess(trash, processes) || heldByProcess(row.directory, processes);
           if (processHeld) {
             if (packageTrash) report.kept.push({ dir: row.directory, reason: "process", bytes: 0 });
