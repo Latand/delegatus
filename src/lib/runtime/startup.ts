@@ -1970,7 +1970,8 @@ export async function claudeStartupHostOptions(
         : owner.claudeProvider.model
       : entry.launchProfile?.model ?? undefined,
     effort: entry.launchProfile?.effort ?? undefined,
-    permissionMode: effectiveClaudePermissionMode({ ...entry.launchProfile, permissionMode: entry.launchProfile?.permissionMode ?? await readClaudePermissionMode(entry.artifactPath) }),
+    permissionMode: effectiveClaudePermissionMode({ ...entry.launchProfile, permissionMode: entry.launchProfile?.permissionMode
+      ?? (entry.launchProfile?.readOnly ? "plan" : await readClaudePermissionMode(entry.artifactPath)) }),
   };
 }
 

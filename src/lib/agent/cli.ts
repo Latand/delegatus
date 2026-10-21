@@ -556,7 +556,8 @@ export function resumeSpecFor(root: string, pathname: string, options: ResumeSpe
   if (!eligibility.ok) return null;
   return resumeSpecForSession(eligibility.engine, eligibility.sessionId, eligibility.cwd, eligibility.home, {
     ...options, operatorDecisionForms: options.operatorDecisionForms || operatorDecisionFormsRequired(null, pathname),
-    permissionMode: options.permissionMode ?? (eligibility.engine === "claude" ? readClaudePermissionModeSync(pathname) : null),
+    permissionMode: options.permissionMode ?? (eligibility.engine === "claude"
+      ? options.readOnly ? "plan" : readClaudePermissionModeSync(pathname) : null),
   });
 }
 

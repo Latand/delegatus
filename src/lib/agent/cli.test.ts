@@ -615,6 +615,16 @@ test.each([
   expect(await readClaudePermissionMode(transcript) ?? "default").toBe(expected);
 });
 
+test("read-only Claude resume keeps plan mode when the transcript records bypass", () => {
+  const transcript = path.join(process.env.LLV_CLAUDE_HOME!, "projects", "readonly", `${PERMISSION_SESSION_ID}.jsonl`);
+  fs.mkdirSync(path.dirname(transcript), { recursive: true });
+  fs.writeFileSync(transcript, JSON.stringify({ type: "user", permissionMode: "bypassPermissions" }) + "\n");
+  const spec = resumeSpecFor("claude-projects", transcript, { cwd: SANDBOX, readOnly: true })!;
+  expect(spec.launchProfile?.permissionMode).toBe("plan");
+  expect(spec.command).toContain("'--permission-mode' 'plan'");
+  expect(spec.command).not.toContain("--dangerously-skip-permissions");
+});
+
 test("Claude resume uses confirmations for incomplete or unreadable mode evidence", async () => {
   const { resumeSpecForSession } = await import("./cli");
   const { readClaudePermissionMode, readClaudePermissionModeSync } = await import("./claudePermissionMode");

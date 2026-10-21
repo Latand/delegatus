@@ -321,22 +321,29 @@ test("ledger replay retains the first UUID allocation and accepts its legacy upg
 });
 
 test.each([
-  { configured: null, recorded: "default", expected: "default" },
-  { configured: null, recorded: "acceptEdits", expected: "acceptEdits" },
-  { configured: null, recorded: null, expected: "default" },
-  { configured: "bypassPermissions", recorded: "default", expected: "bypassPermissions" },
-])("Claude rehosting keeps configured=$configured recorded=$recorded permissions", async ({ configured, recorded, expected }) => {
+  { configured: null, recorded: "default", expected: "default", direct: false, readOnly: false },
+  { configured: null, recorded: "acceptEdits", expected: "acceptEdits", direct: false, readOnly: false },
+  { configured: null, recorded: null, expected: "default", direct: false, readOnly: false },
+  { configured: "bypassPermissions", recorded: "default", expected: "bypassPermissions", direct: false, readOnly: false },
+  { configured: null, recorded: "acceptEdits", expected: "acceptEdits", direct: true, readOnly: false },
+  { configured: null, recorded: "bypassPermissions", expected: "bypassPermissions", direct: true, readOnly: false },
+  { configured: null, recorded: null, expected: "default", direct: true, readOnly: false },
+  { configured: null, recorded: "bypassPermissions", expected: "plan", direct: false, readOnly: true },
+  { configured: null, recorded: "bypassPermissions", expected: "plan", direct: true, readOnly: true },
+])("Claude rehosting keeps configured=$configured recorded=$recorded direct=$direct readOnly=$readOnly permissions", async ({ configured, recorded, expected, direct, readOnly }) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-resume-permissions-"));
   const sessionId = ["00000000", "0000", "0000", "0000", "000000000001"].join("-");
-  const artifactPath = path.join(directory, `${sessionId}.jsonl`);
+  const { claudeTranscriptPath } = await import("@/lib/agent/transcript");
+  const artifactPath = claudeTranscriptPath(directory, sessionId, directory);
   const registryPath = path.join(directory, "registry.json");
   const captured: { args?: string[]; options?: SpawnOptionsWithoutStdio } = {};
   let host: ClaudeStreamBrokerHost | undefined;
   try {
+    fs.mkdirSync(path.dirname(artifactPath), { recursive: true });
     fs.writeFileSync(artifactPath, JSON.stringify({ type: "user", permissionMode: recorded }) + "\n");
     const registry = new AgentRegistry(registryPath, undefined, undefined, { sqliteMode: "off" });
     registry.upsert({ key: { engine: "claude", sessionId }, artifactPath, cwd: directory, accountId: null,
-      launchProfile: emptyLaunchProfile({ cwd: directory, permissionMode: configured }),
+      launchProfile: emptyLaunchProfile({ cwd: directory, permissionMode: configured, readOnly }),
       status: "dead", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
     const reopened = new AgentRegistry(registryPath, undefined, undefined, { sqliteMode: "off" });
     const entry = reopened.readOnlySnapshot().entries[`claude:${sessionId}`]!;
@@ -350,7 +357,8 @@ test.each([
     }, { env: { NODE_ENV: "test" }, host: {} });
     expect(structured.permissionMode).toBe(expected);
     host = await ClaudeStreamBrokerHost.adopt(sessionId, {
-      ...options, eventStore: new MemoryEventStore(), readTranscript: () => [],
+      ...options, ...(direct ? { permissionMode: undefined, claudeProjectsDir: directory } : {}),
+      eventStore: new MemoryEventStore(), readTranscript: () => [],
       readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
       spawnProcess: fakeSpawn(new FakeClaude(new RecordingDeliveryLedger()), captured),
     });

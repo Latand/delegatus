@@ -11,6 +11,7 @@ import { StringDecoder } from "node:string_decoder";
 
 import { statePath } from "@/lib/configDir";
 import { effectiveClaudePermissionMode } from "@/lib/agent/cli";
+import { readClaudePermissionMode } from "@/lib/agent/claudePermissionMode";
 import type { ProcessIdentity } from "@/lib/agent/registry";
 import { applyClaudeSpawnPolicy, NATIVE_MULTI_AGENT_TOOLS, viewerMcpTransportForLaunch } from "@/lib/agent/spawnPolicy";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
@@ -816,7 +817,11 @@ export class ClaudeStreamBrokerHost implements EngineHost {
 
   static async adopt(sessionId: string, options: ClaudeStreamBrokerHostOptions): Promise<ClaudeStreamBrokerHost> {
     if (!sessionId) throw new Error("Claude session id is required for adoption");
-    return this.open(sessionId, true, options);
+    const permissionMode = options.permissionMode ?? (options.readOnly ? "plan"
+      : /^[0-9a-f-]{36}$/.test(sessionId)
+        ? await readClaudePermissionMode(claudeTranscriptPath(options.cwd, sessionId, options.claudeProjectsDir))
+        : null);
+    return this.open(sessionId, true, { ...options, permissionMode: permissionMode ?? undefined });
   }
 
   private static async open(

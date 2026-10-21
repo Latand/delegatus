@@ -2088,7 +2088,8 @@ export async function claudeStructuredHostOptions(
         : input.account.claudeProvider.model
       : profile.model ?? undefined,
     effort: profile.effort ?? undefined,
-    permissionMode: effectiveClaudePermissionMode({ ...profile, permissionMode: profile.permissionMode ?? await readClaudePermissionMode(input.spec.transcript) }),
+    permissionMode: effectiveClaudePermissionMode({ ...profile, permissionMode: profile.permissionMode
+      ?? (profile.readOnly ? "plan" : await readClaudePermissionMode(input.spec.transcript)) }),
     initialEventCursor,
     env: access.env,
     ...access.host,
