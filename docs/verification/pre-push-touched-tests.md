@@ -617,16 +617,16 @@ in the JSON.
 
 ## Loaded engine-family campaign
 
-Status: in progress. The required sample is 30 qualifying after-runs, ten before-runs and two refusal controls. All attempts, including load outliers, are retained in `evidence/perf/pre-push-touched-tests.json#engineLoadCampaign`.
+Status: paused for a runner-context decision after recovery. The required sample is 30 qualifying after-runs, ten before-runs and two refusal controls. All attempts, including load outliers, are retained in `evidence/perf/pre-push-touched-tests.json#engineLoadCampaign`.
 
-The fixed comparison uses main `144c87e12af0` before the fix and `04df47ce7042` after it, with three captured lane heads and their merged trees recorded in the manifest. The stage merged current main at resumption (`b4cdbbe554b8`); the paired campaign keeps its original inputs so the earlier qualifying runs remain comparable. A separate final gate will verify the integrated source.
+The fixed comparison uses main `144c87e12af0` before the fix and `04df47ce7042` after it, with three captured lane heads and their merged trees recorded in the manifest. The stage merged current main at resumption (`51d851863f7d`); the paired campaign keeps its original inputs so the earlier qualifying runs remain comparable. A separate final gate will verify the integrated source.
 
 Each attempt runs the real pre-push entry point in a scratch clone with its own HOME, config, temp and state roots and a closed Viewer control URL. The local bare origin pins the side’s main revision. No scratch commit or push is created. Load and owned file services are sampled every two seconds. Only an execution-period median load from 25 through 30 qualifies. Outer admission is excluded from complete-gate time; any nested wait is retained in that wall time and also reported by the comparator. Kernel samples retain the three-CPU file quota and eighteen-CPU work quota. CPU counters are sampled lower bounds; short services can finish between samples.
 
 | Side | Qualifying runs | Current sample P90 (s) | File expirations | Refusals | NEW lines |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | before | 5 | 1166.6 | 5 | 3 | 0 |
-| after | 16 | 495.0 | 0 | 0 | 0 |
+| after | 18 | 495.0 | 0 | 0 | 0 |
 
 The sample P90 is provisional until all runs complete. An incomplete baseline or runner error is a refusal even when it emits no NEW assertion line.
 
@@ -666,6 +666,8 @@ The sample P90 is provisional until all runs complete. An incomplete baseline or
 | after-15 | after | 3 | 9.66 / 27.07 / 35.00 | 1.0 | 395.2 | yes | 0 | 0 |
 | before-05 | before | 2 | 8.47 / 28.68 / 32.91 | 1.3 | 945.7 | yes | 0 | 0 |
 | after-16 | after | 1 | 10.84 / 29.22 / 32.31 | 1.0 | 425.0 | yes | 0 | 0 |
+| after-17 | after | 2 | 6.41 / 28.72 / 31.98 | 3.0 | 470.4 | yes | 0 | 0 |
+| after-18 | after | 3 | 6.44 / 29.19 / 31.36 | 0.8 | 414.4 | yes | 0 | 0 |
 
 The ten split families retain all 1,078 registered cases, including their names, parameter values and assertion bodies. The preserved calibration and JUnit inventory established that partition before the campaign. The measured timeout exceptions are described in `docs/design/pre-push-gate-under-load.md#2-fix`.
 
@@ -682,6 +684,7 @@ The resumed campaign began with three qualifying after-runs and one before-run. 
 | batch-07 | 3 | 2 | 0 |
 | batch-08 | 3 | 2 | 1 |
 | batch-09 | 4 | 3 | 1 |
+| batch-10 | 3 | 2 | 0 |
 
 Two before-runs fell below the required load band as their remaining files and baseline work used fewer CPUs. Observed test CPU usage averaged at least 3.78 CPUs in `before-02`, against 7.04 in `after-306`. Future before-runs use a four-CPU foreground estimate for initial load padding; after-runs retain eight. New records include `paddingForegroundCpuEstimate`; earlier records used eight. The real gate retains its eight head workers and existing quotas, deadlines and verdict rules. Every earlier qualifier and outlier stays in the sample.
 
@@ -690,3 +693,7 @@ Static padding still produced an above-band before-run (`before-202`, median 31.
 The separate merged-source engine comparison passed on `b68b4fb6c5b1`: 46 explicit engine files, 425.9 s including admission, exit 0, zero NEW failures. Its command, source digest and log digest are recorded in `integratedEngineComparison`. Other final project checks remain outstanding.
 
 The high-load `after-05` outlier captured two existing 15-second explicit test timeouts in `engine.providerReset.part3.test.ts`; filtered retries passed and the comparator classified the occurrences as flaky. The 30/10 sample and the two controls remain incomplete.
+
+The recovery attempt merged current main before continuing. Its process now has a private PID namespace; both frozen campaign runners capture local process identities and launch user-manager services without namespace support. The host process view showed that the preceding run was still alive after its agent restarted. That run was allowed to finish, and its campaign pause flag prevented another dispatch. Its later 889.5-second result is excluded from acceptance at the campaign owner’s direction and retained under `discardedRuns`. This attempt submitted no new hook. The preserved sample remains provisional: the remaining runs need a compatible execution context or an agreed new measurement epoch. The current merged dependency lock also differs from the captured inputs; final project and integration checks remain outstanding.
+
+The supported-wrapper probe completed with exit 0 and an effective ancestor quota of three CPUs (`60000 20000`), outside the historical shared work slice. A read-only identity probe found that the frozen local-PID owner differs from the host identity, while the supported helper translates it correctly. The environment observations and procedures are retained in `engineLoadCampaign.continuationEnvironment`. No acceptance hook was dispatched from the recovery attempt. The next dispatch must also respect the campaign’s 06:00 UTC cutoff.
