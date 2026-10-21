@@ -19,7 +19,7 @@ function attachmentRequest() {
       { ...message, id: documentId, author: { key: "member", name: "Member", self: false }, text: `Read these notes\n${marker}` },
       { ...message, id: ownerId, text: "/ai", reply_to: documentId },
     ], respond_to: ownerId, request_text: null,
-    tools: [serviceClaim.input.tools.find(tool => tool.name === "get_media")!],
+    tools: [serviceClaim.request.input.tools.find(tool => tool.name === "get_media")!],
   } });
 }
 
