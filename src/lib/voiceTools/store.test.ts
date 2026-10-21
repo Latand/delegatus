@@ -206,18 +206,23 @@ test("local stdio pins the actual explicit entry against its execution cwd", asy
   const config = (command: "bun" | "uv", args: string[], entryFile: typeof pin | null = pin) => ({
     ...proposal(), transport: { type: "stdio" as const, command, args, cwd: null, env: {} }, entryFile,
   });
+  const pinnedArgs = async () => {
+    const current = await server(store);
+    if (current.transport.type !== "stdio") throw new Error("Expected a stdio server");
+    return current.transport.args;
+  };
   await store.propose(config("bun", ["server" ]), actor);
-  expect((await server(store)).transport.args).toEqual(["run", pinned]);
+  expect(await pinnedArgs()).toEqual(["run", pinned]);
   await store.operatorChange("music", (await server(store)).digest, "remove");
   await store.propose(config("bun", ["./server"]), actor);
-  expect((await server(store)).transport.args).toEqual(["run", pinned]);
+  expect(await pinnedArgs()).toEqual(["run", pinned]);
   await store.operatorChange("music", (await server(store)).digest, "remove");
   await store.propose(config("bun", ["run", path.join(cwd, "actual.mjs")], { ...pin, path: path.join(cwd, "actual.mjs") }), actor);
-  expect((await server(store)).transport.args).toEqual(["run", path.join(cwd, "actual.mjs")]);
+  expect(await pinnedArgs()).toEqual(["run", path.join(cwd, "actual.mjs")]);
   await store.operatorChange("music", (await server(store)).digest, "remove");
   await expect(store.propose(config("bun", ["run", path.join(cwd, "actual.mjs")], { ...pin, path: path.join(cwd, "run") }), actor)).rejects.toThrow("INVALID_PROPOSAL");
   await store.propose(config("bun", ["x", "music-mcp"], { ...pin, path: path.join(cwd, "x") }), actor);
-  expect((await server(store)).transport.args).toEqual(["run", path.join(cwd, "x"), "music-mcp"]);
+  expect(await pinnedArgs()).toEqual(["run", path.join(cwd, "x"), "music-mcp"]);
   await store.operatorChange("music", (await server(store)).digest, "remove");
   await store.propose(config("bun", ["./run"], { ...pin, path: path.join(cwd, "run") }), actor);
   await store.operatorChange("music", (await server(store)).digest, "remove");
