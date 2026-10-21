@@ -11,7 +11,7 @@ import { statePath } from "@/lib/configDir";
 import { readViewerGatewayConfig, VIEWER_GATEWAY_FILE } from "@/runtime-host/deploymentProxy";
 import { stableMcpRuntimeRoot } from "@/runtime-host/mcpRuntimeRelease";
 
-import { appDirIn } from "../../../bin/appDir.mjs";
+import { viewerMcpStateContext } from "../../../bin/mcp-state-paths.mjs";
 
 import type { AgentEngine } from "./cli";
 import { grantedMcpServers } from "./mcpAllowlist";
@@ -91,12 +91,10 @@ export interface ViewerMcpServerEntry {
  * in its sandbox.
  */
 export function viewerMcpServerEnv(source: McpEnvironment = process.env, overrides: JsonObject = {}): Record<string, string> {
-  const configRoot = source.XDG_CONFIG_HOME?.trim() || path.join(os.homedir(), ".config");
-  const sandboxed = (source.LLV_STATE_DIR || configRoot).split(/[\\/]/).includes("llv-spawn-sandbox");
+  const { configRoot, stateDirectory } = viewerMcpStateContext(source, path.join(os.homedir(), ".config"));
   const env: Record<string, string> = {
     XDG_CONFIG_HOME: configRoot,
-    LLV_STATE_DIR: (sandboxed ? source.LLV_STRUCTURED_HOST?.trim() : undefined)
-      || source.LLV_STATE_DIR?.trim() || path.join(appDirIn(configRoot), "state"),
+    LLV_STATE_DIR: stateDirectory,
   };
   /* PATH and HOME are restated rather than assumed: a CLI that treats a
      server's `env` table as the whole environment instead of as additions to

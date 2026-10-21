@@ -72,6 +72,30 @@ test.each(["linux", "darwin"])("Viewer state pin survives %s sandbox and registe
   }
 });
 
+test.each(["linux", "darwin"])("authenticated Viewer MCP launch recovers the real config root from the %s host stamp", async layout => {
+  const root = home();
+  const sandboxConfig = path.join(root, layout === "darwin" ? "private/var/folders/example/T" : "tmp", "llv-spawn-sandbox/.claude/config");
+  const realConfig = path.join(root, "operator", "config");
+  const realState = path.join(realConfig, "agent-log-viewer", "state");
+  fs.mkdirSync(path.dirname(realState), { recursive: true });
+  fs.mkdirSync(realState);
+  const key = crypto.randomUUID();
+  fs.writeFileSync(path.join(path.dirname(realState), "token"), key);
+  const viewer = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request =>
+    request.headers.get("authorization") === `Bearer ${key}` ? Response.json({ ok: true }) : new Response("credential required", { status: 403 }),
+  });
+  try {
+    const env = viewerMcpServerEnv({ HOME: root, XDG_CONFIG_HOME: sandboxConfig,
+      LLV_STATE_DIR: path.join(sandboxConfig, "agent-log-viewer", "state"), LLV_STRUCTURED_HOST: realState,
+      LLV_VIEWER_PORT: String(viewer.port), PATH: process.env.PATH });
+    expect(env.LLV_STATE_DIR).toBe(realState);
+    expect(env.XDG_CONFIG_HOME).toBe(realConfig);
+    const origin = viewerControlOrigin(env);
+    const token = viewerControlToken(env, origin);
+    expect(await fetch(origin, { headers: token ? { authorization: `Bearer ${token}` } : {} })).toHaveProperty("status", 200);
+  } finally { viewer.stop(true); }
+});
+
 test.each([[false, false], [false, true], [true, false], [true, true]] as const)("Claude publication settings override inherited settings env (account: %s, configured: %s)", (accountSettings, configured) => {
   const accountHome = home();
   const sourcePath = path.join(accountSettings ? accountHome : home(), "settings.json");

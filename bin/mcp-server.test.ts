@@ -278,6 +278,48 @@ test.each(["linux", "darwin"])("a direct %s sandbox launcher uses the real host 
   }
 });
 
+test.each(["linux", "darwin"])("the %s sandbox launcher authenticates initialize from the stamped install config", async layout => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-authenticated-mcp-"));
+  sandboxes.push(root);
+  const realConfig = path.join(root, "operator", "config");
+  const realApp = path.join(realConfig, "agent-log-viewer");
+  const state = path.join(realApp, "state");
+  const sandboxConfig = path.join(root, layout === "darwin" ? "private/var/folders/example/T" : "tmp", "llv-spawn-sandbox/.claude/config");
+  fs.mkdirSync(state, { recursive: true });
+  const key = "isolated-install-key";
+  fs.writeFileSync(path.join(realApp, "token"), key);
+  const control = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request =>
+    request.headers.get("authorization") === `Bearer ${key}` ? new Response("initialized") : new Response("credential required", { status: 403 }),
+  });
+  const { launcher } = installedPackage(`
+    import fs from "node:fs";
+    import path from "node:path";
+    import { createInterface } from "node:readline";
+    createInterface({ input: process.stdin }).on("line", async line => {
+      const request = JSON.parse(line);
+      if (request.id === undefined) return;
+      if (request.method === "initialize") {
+        const token = fs.readFileSync(path.join(process.env.XDG_CONFIG_HOME, "agent-log-viewer", "token"), "utf8");
+        const response = await fetch("http://127.0.0.1:${control.port}", { headers: { authorization: "Bearer " + token } });
+        if (!response.ok) return console.log(JSON.stringify({ jsonrpc: "2.0", id: request.id, error: { code: -32002, message: "authenticated initialize refused" } }));
+        return console.log(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "viewer", version: "1" } } }));
+      }
+      console.log(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: { tools: [{ name: "stage_report" }] } }));
+    });
+  `);
+  const session = stdioSession(process.execPath, launcher, root, { HOME: root, XDG_CONFIG_HOME: sandboxConfig,
+    LLV_STATE_DIR: path.join(sandboxConfig, "agent-log-viewer", "state"), LLV_STRUCTURED_HOST: state,
+    LLV_VIEWER_PORT: String(control.port), LLV_SPAWN_CAPABILITY: "", LLV_VIEWER_DEPLOY_TARGET: "" });
+  try {
+    expect((await session.call(1, "initialize")).result.serverInfo.name).toBe("viewer");
+    expect(fs.existsSync(sandboxConfig)).toBe(false);
+  } finally {
+    control.stop(true);
+    session.process.stdin.end();
+    await new Promise<void>(resolve => session.process.once("close", () => resolve()));
+  }
+});
+
 function git(cwd: string, ...args: string[]): string {
   const result = spawnSync("git", ["-c", "user.name=Fixture", "-c", "user.email=noreply", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8" });
   if (result.status !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr}`);

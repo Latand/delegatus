@@ -905,6 +905,25 @@ test("Codex refuses fresh and adopted launches with missing or empty Viewer tool
   }
 });
 
+test("Codex rejects its failed Viewer runtime status even with a cached catalog and retains toolsError", async () => {
+  const cases = [
+    { name: "viewer", runtimeStatus: "failed", tools: { stage_report: {} }, toolsError: null },
+    { name: "viewer", runtimeStatus: "failed", tools: {}, toolsError: "Viewer release target is missing" },
+  ];
+  for (const viewer of cases) {
+    const child = new FakeAppServer();
+    child.viewerStatus = [viewer];
+    const outcome = await CodexAppServerHost.start({ cwd: "/repo", readProtocolVersion: () => "0.162.1",
+      eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(child) }).then(
+      value => ({ host: value, error: null as unknown }), reason => ({ host: null, error: reason as unknown }));
+    try {
+      expect(String(outcome.error)).toContain("Viewer MCP launch failed");
+      expect(String(outcome.error)).toContain(viewer.toolsError ?? "failed");
+      expect(child.requests.some(request => request.method === "thread/queue/start" || request.method === "turn/start")).toBe(false);
+    } finally { if (outcome.host) await outcome.host.release(); }
+  }
+});
+
 test("Codex verifies Viewer tools from the opened thread", async () => {
   const child = new FakeAppServer();
   child.requireViewerThread = true;

@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
 
-import { appDirIn } from "./appDir.mjs";
+import { viewerMcpStateContext } from "./mcp-state-paths.mjs";
 import { mcpProcessIdentity, watchMcpOwner } from "./mcp-lifetime.mjs";
 import { installMcpLifecycle, logMcpLifecycle } from "./mcp-lifecycle.mjs";
 import {
@@ -33,10 +33,8 @@ const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 // A direct launcher invocation from the agent shell has no per-server env
 // overlay. Use its host stamp only for that sandbox layout; explicit isolated
 // roots remain authoritative for tests, builds and standalone clients.
-const configRoot = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
-const sandboxed = (process.env.LLV_STATE_DIR || configRoot).split(/[\\/]/).includes("llv-spawn-sandbox");
-const stateDir = (sandboxed ? process.env.LLV_STRUCTURED_HOST?.trim() : undefined)
-  || process.env.LLV_STATE_DIR || join(appDirIn(configRoot), "state");
+const { configRoot, stateDirectory: stateDir } = viewerMcpStateContext(process.env, join(homedir(), ".config"));
+process.env.XDG_CONFIG_HOME = configRoot;
 process.env.LLV_STATE_DIR = stateDir;
 const targetFile = process.env.LLV_VIEWER_DEPLOY_TARGET || join(stateDir, "viewer-release.json");
 const selfUpdateConfig = isGitCheckout(packageRoot) ? cliRuntimeHostConfig(packageRoot) : null;

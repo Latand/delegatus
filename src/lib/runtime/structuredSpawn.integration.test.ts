@@ -985,7 +985,7 @@ test("a real host's empty Viewer catalog persists as a failed launch card withou
         : message.method === "account/read" ? { account: { type: "chatgpt", planType: "pro" } }
         : message.method === "config/read" ? { config: { mcp_servers: {} } }
         : message.method === "thread/start" ? { thread: { id: "mcp-launch-card", path: null } }
-        : message.method === "mcpServerStatus/list" ? { data: [{ name: "viewer", tools: {} }], nextCursor: null }
+        : message.method === "mcpServerStatus/list" ? { data: [{ name: "viewer", runtimeStatus: "failed", tools: {}, toolsError: "Viewer release target is missing" }], nextCursor: null }
         : { data: [] };
       console.log(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
     });
@@ -1007,7 +1007,7 @@ test("a real host's empty Viewer catalog persists as a failed launch card withou
     const card = spawnResponseForReceipt(reopened.snapshot().receipts[begun.receipt.launchId]!);
     expect(card.state).toBe("failed");
     expect(card.launched).toBe(false);
-    expect(card.error).toContain("viewer has no tools");
+    expect(card.error).toContain("Viewer release target is missing");
     expect(fs.readFileSync(inputs, "utf8")).not.toContain('"turn/start"');
   } finally { journal.close(); }
 });
