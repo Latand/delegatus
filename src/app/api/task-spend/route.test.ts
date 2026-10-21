@@ -1,20 +1,33 @@
-import { afterAll, expect, setSystemTime, test } from "bun:test";
+import { afterAll, beforeEach, expect, setSystemTime, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 const now = Date.parse("2026-10-18T12:00:00Z");
-setSystemTime(now);
-const sandbox = fs.mkdtempSync(path.join(os.tmpdir(),"spend-route-"));
+const sandbox=fs.mkdtempSync(path.join(os.tmpdir(),"spend-route-"));
 const previous = new Map<string,string | undefined>();
 for (const key of ["HOME","XDG_CONFIG_HOME","XDG_CACHE_HOME","LLV_STATE_DIR","TMPDIR"]) {
-  previous.set(key,process.env[key]); process.env[key] = path.join(sandbox,key); fs.mkdirSync(process.env[key]!,{recursive:true});
+  previous.set(key,process.env[key]); process.env[key]=path.join(sandbox,key); fs.mkdirSync(process.env[key]!,{recursive:true});
 }
-const { NextRequest } = await import("next/server");
-const { GET } = await import("./route");
-const { ActivityStore } = await import("@/lib/activity/store");
-const { saveTasks } = await import("@/lib/tasks/store");
-const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
-const { mintSession } = await import("@/lib/team/sessions");
+let NextRequest: typeof import("next/server").NextRequest;
+let GET: typeof import("./route").GET;
+let ActivityStore: typeof import("@/lib/activity/store").ActivityStore;
+let saveTasks: typeof import("@/lib/tasks/store").saveTasks;
+let teamStore: typeof import("@/lib/team/store").teamStore;
+let resetTeamStoreForTests: typeof import("@/lib/team/store").resetTeamStoreForTests;
+let mintSession: typeof import("@/lib/team/sessions").mintSession;
+beforeEach(async()=>{
+  setSystemTime(now);
+  ({NextRequest}=await import("next/server"));
+  ({GET}=await import("./route"));
+  ({ActivityStore}=await import("@/lib/activity/store"));
+  ({saveTasks}=await import("@/lib/tasks/store"));
+  ({teamStore,resetTeamStoreForTests}=await import("@/lib/team/store"));
+  ({mintSession}=await import("@/lib/team/sessions"));
+  resetTeamStoreForTests();
+  for (const file of ["team/team.sqlite","team/team.sqlite-wal","team/team.sqlite-shm","activity/records.sqlite","activity/records.sqlite-wal","activity/records.sqlite-shm"])
+    fs.rmSync(path.join(sandbox,"LLV_STATE_DIR",file),{force:true});
+  saveTasks([]);
+});
 import type { BoardTask } from "@/lib/tasks/types";
 const task = (id:string):BoardTask => ({id,project:"fixture",placement:"unplaced",text:"Fixture",status:"inbox",createdAt:new Date(now).toISOString(),updatedAt:new Date(now).toISOString(),assignments:[]});
 afterAll(()=>{ resetTeamStoreForTests(); setSystemTime(); for(const [key,value] of previous) { if(value===undefined) delete process.env[key]; else process.env[key]=value; } fs.rmSync(sandbox,{recursive:true,force:true}); });

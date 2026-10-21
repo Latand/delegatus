@@ -49,3 +49,31 @@ test("hourly calibration uses the seven-day span, borrows only within a plan, an
     await run(); expect(store.db.query("SELECT * FROM usage_limit_rates WHERE day='2026-10-17'").all()).toEqual(frozen);
   } finally {store.close();fs.rmSync(root,{recursive:true,force:true});}
 });
+
+test("incomplete token coverage keeps yesterday provisional until the full denominator arrives", async () => {
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),"limit-rates-coverage-")),store=ActivityStore.open(path.join(root,"records.sqlite"));
+  const now=Date.parse("2026-10-18T12:00:00Z"), yesterday=Date.parse("2026-10-17T00:00:00Z");
+  const put=store.db.query("INSERT INTO usage_hours VALUES('',?,?,?,?,?,?,NULL,'builder','operator',NULL,NULL,1,1000000,0,0,0,0,0)");
+  const add=(label:string,at:number)=>put.run(Math.floor(at/HOUR),label,"claude-sonnet-5","standard","claude:a","claude");
+  const observations=new Map([["claude:a",{session:null,weekly:null,plan:"max",capturedAt:null}]]);
+  const history=()=>({series:{"claude|a|weekly":[{t:(yesterday+3600000)/1000,remaining:100},{t:(yesterday+7200000)/1000,remaining:80}]}});
+  const run=(coverageComplete:boolean)=>refreshLimitRates(store.db,now,{history,observations,coverageComplete},async work=>{store.transaction(work);});
+  try {
+    add("first",yesterday+3600000);
+    await run(false);
+    const row=()=>store.db.query<{rate:number;frozen:number;weight:number},[]>("SELECT rate,frozen,weight FROM usage_limit_rates WHERE account='claude:a' AND window='weekly' AND day='2026-10-17'").get()!;
+    expect(row().frozen).toBe(0);
+    const partialRate=row().rate,partialWeight=row().weight;
+    add("deferred",yesterday+3*3600000);
+    const changed=await run(true);
+    expect(row().weight).toBeCloseTo(2*partialWeight);
+    expect(row().rate).toBeCloseTo(partialRate/2);
+    expect(row().frozen).toBe(1);
+    expect(changed).toContainEqual({account:"claude:a",day:"2026-10-17"});
+    expect(store.db.query("SELECT account,day FROM limit_spend_rate_changes").all()).toContainEqual({account:"claude:a",day:"2026-10-17"});
+    store.db.query("UPDATE usage_limit_rates SET rate=?,frozen=1 WHERE account='claude:a' AND window='weekly' AND day='2026-10-17'").run(partialRate);
+    const repaired=await refreshLimitRates(store.db,now,{history,observations,coverageComplete:true,revalidateFrozen:true},async work=>{store.transaction(work);});
+    expect(row().rate).toBeCloseTo(partialRate/2);
+    expect(repaired).toContainEqual({account:"claude:a",day:"2026-10-17"});
+  } finally {store.close();fs.rmSync(root,{recursive:true,force:true});}
+});

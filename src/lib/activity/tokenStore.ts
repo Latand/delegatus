@@ -49,6 +49,8 @@ export function migrateUsage(db: Database): void {
     `CREATE TABLE IF NOT EXISTS task_spend_progress (task TEXT PRIMARY KEY, stamp INTEGER NOT NULL, signature TEXT NOT NULL,
       owner TEXT NOT NULL, cursor TEXT, rows TEXT NOT NULL) WITHOUT ROWID`,
     "CREATE INDEX IF NOT EXISTS task_spend_owners_task ON task_spend_owners(task, owner)",
+    `CREATE TABLE IF NOT EXISTS limit_spend_rate_changes (
+      account TEXT NOT NULL, day TEXT NOT NULL, task_cursor TEXT NOT NULL DEFAULT '', PRIMARY KEY(account, day)) WITHOUT ROWID`,
     `CREATE TABLE IF NOT EXISTS usage_limit_rates (account TEXT NOT NULL, window TEXT NOT NULL, day TEXT NOT NULL,
       rate REAL, rise REAL NOT NULL, weight REAL NOT NULL, source TEXT NOT NULL, plan TEXT,
       frozen INTEGER NOT NULL DEFAULT 0, computed_at INTEGER NOT NULL, PRIMARY KEY(account, window, day)) WITHOUT ROWID`,
@@ -58,9 +60,13 @@ export function migrateUsage(db: Database): void {
       weekly_pp REAL, window_start INTEGER, window_pp REAL, session_start INTEGER, session_pp REAL,
       first_hour INTEGER NOT NULL, last_hour INTEGER NOT NULL, floor TEXT, computed_at INTEGER NOT NULL,
       PRIMARY KEY(task, account)) WITHOUT ROWID`,
+    "CREATE INDEX IF NOT EXISTS task_limit_spend_account ON task_limit_spend(account, task)",
     `CREATE TABLE IF NOT EXISTS limit_spend_meta (singleton INTEGER PRIMARY KEY CHECK(singleton=1), schema INTEGER NOT NULL,
       seed TEXT NOT NULL DEFAULT 'tasks:', task_revision INTEGER NOT NULL DEFAULT -1, task_key TEXT NOT NULL DEFAULT '',
-      rates_hour INTEGER NOT NULL DEFAULT -1)`,
+      rates_hour INTEGER NOT NULL DEFAULT -1, pipeline_revision INTEGER NOT NULL DEFAULT -1,
+      pipeline_key TEXT NOT NULL DEFAULT '', pipeline_seed TEXT NOT NULL DEFAULT 'seed:',
+      aggregate_schema INTEGER NOT NULL DEFAULT 2, aggregate_cursor TEXT NOT NULL DEFAULT '',
+      rate_schema INTEGER NOT NULL DEFAULT 2)`,
     "INSERT OR IGNORE INTO limit_spend_meta(singleton, schema) VALUES(1, 1)",
     `CREATE TABLE IF NOT EXISTS usage_days (${dayDefinition}) WITHOUT ROWID`,
     `CREATE TABLE IF NOT EXISTS usage_days_rebuild (${dayDefinition}) WITHOUT ROWID`,
@@ -79,6 +85,13 @@ export function migrateUsage(db: Database): void {
     "INSERT OR IGNORE INTO usage_meta(singleton, schema, version, zone) VALUES(1, 1, 0, 'Europe/Kyiv')",
   ];
   for (const statement of statements) db.exec(statement);
+  const spendCols = new Set(db.query<{ name: string }, []>("PRAGMA table_info(limit_spend_meta)").all().map(r => r.name));
+  if (!spendCols.has("pipeline_revision")) db.exec("ALTER TABLE limit_spend_meta ADD COLUMN pipeline_revision INTEGER NOT NULL DEFAULT -1");
+  if (!spendCols.has("pipeline_key")) db.exec("ALTER TABLE limit_spend_meta ADD COLUMN pipeline_key TEXT NOT NULL DEFAULT ''");
+  if (!spendCols.has("pipeline_seed")) db.exec("ALTER TABLE limit_spend_meta ADD COLUMN pipeline_seed TEXT NOT NULL DEFAULT 'seed:'");
+  if (!spendCols.has("aggregate_schema")) db.exec("ALTER TABLE limit_spend_meta ADD COLUMN aggregate_schema INTEGER NOT NULL DEFAULT 1");
+  if (!spendCols.has("aggregate_cursor")) db.exec("ALTER TABLE limit_spend_meta ADD COLUMN aggregate_cursor TEXT NOT NULL DEFAULT ''");
+  if (!spendCols.has("rate_schema")) db.exec("ALTER TABLE limit_spend_meta ADD COLUMN rate_schema INTEGER NOT NULL DEFAULT 1");
   const cols = new Set(db.query<{ name: string }, []>("PRAGMA table_info(activity_files)").all().map(r => r.name));
   if (!cols.has("usage_offset")) db.exec("ALTER TABLE activity_files ADD COLUMN usage_offset INTEGER NOT NULL DEFAULT 0");
   if (!cols.has("usage_facts")) db.exec("ALTER TABLE activity_files ADD COLUMN usage_facts TEXT");

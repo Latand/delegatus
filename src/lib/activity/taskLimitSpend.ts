@@ -3,7 +3,7 @@ import { setImmediate as yieldLoop } from "node:timers/promises";
 import { agentRegistry } from "@/lib/agent/registry";
 import { listClaudeAccounts } from "@/lib/accounts/claude";
 import { listCodexAccounts } from "@/lib/accounts/codex";
-import { findPipelineRecord } from "@/lib/pipelines/store";
+import { findPipelineRecord, pipelineTaskBindingSource } from "@/lib/pipelines/store";
 import { loadTasksByIds, taskFeedSource } from "@/lib/tasks/store";
 import type { EngineLimits } from "@/lib/types";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -21,19 +21,21 @@ export interface SpendDependencies {
   source(): Pick<NonNullable<ReturnType<typeof taskFeedSource>>, "revision" | "get" | "keyRange" | "changesAfter" | "parse"> | null;
   tasks(ids: ReadonlySet<string>): BoardTask[];
   pipelineTasks(id: string): readonly string[];
+  pipelineSource?(): Pick<ReturnType<typeof pipelineTaskBindingSource>, "revision" | "changesAfter" | "parse"> | null;
   observations(): SpendObservations;
   labels(): ReadonlyMap<string, string>;
   history(): ReturnType<typeof readHistory> | Pick<ReturnType<typeof readHistory>, "series">;
 }
 const production: SpendDependencies = {
   now: Date.now, source: taskFeedSource, tasks: loadTasksByIds,
-  pipelineTasks: id => findPipelineRecord(id)?.taskIds ?? [], history: readHistory,
+  pipelineTasks: id => findPipelineRecord(id)?.taskIds ?? [], pipelineSource: pipelineTaskBindingSource, history: readHistory,
   observations: () => new Map((["claude", "codex"] as const).flatMap(engine => agentRegistry().quotaObservations(engine)
     .flatMap(o => o.limits ? [[`${engine}:${o.accountId}`, o.limits] as const] : []))),
   labels: () => new Map([...listClaudeAccounts().map(a => [`claude:${a.id}`, a.label] as const),
     ...listCodexAccounts().map(a => [`codex:${a.id}`, a.label] as const)]),
 };
-interface Meta { seed: string; task_revision: number; task_key: string; rates_hour: number }
+interface Meta { seed: string; task_revision: number; task_key: string; rates_hour: number;
+  pipeline_revision: number; pipeline_key: string; pipeline_seed: string; aggregate_schema: number; aggregate_cursor: string; rate_schema: number }
 interface Dirty { key: string; at: number }
 export interface SpendRow {
   task: string; account: string; engine: SpendEngine; tokens: number; unpriced_tokens: number; weight: number; rated_weight: number;
@@ -49,11 +51,14 @@ const clearDirty = (db: Database, row: Dirty) => db.query("DELETE FROM limit_spe
 export const TASK_SPEND_DUE_SQL = "SELECT key,at FROM limit_spend_dirty INDEXED BY limit_spend_dirty_tasks WHERE key >= 't:' AND key < 't;' ORDER BY at,key LIMIT 100";
 const assignmentOwners = (task: BoardTask) => [...new Set(task.assignments.flatMap(a => a.conversationId ? [`c:${conversationDigest(a.conversationId)}`] : []))].sort();
 const ownerTasks = (db: Database, owner: string) => db.query<{ task: string }, [string]>("SELECT task FROM task_spend_owners WHERE owner=?").all(owner).map(r => r.task);
-function replaceOwner(db: Database, owner: string, tasks: readonly string[], now: number) {
-  const old = ownerTasks(db,owner);
-  db.query("DELETE FROM task_spend_owners WHERE owner=?").run(owner);
-  for (const task of tasks) db.query("INSERT OR IGNORE INTO task_spend_owners VALUES(?,?)").run(owner,task);
-  for (const task of new Set([...old,...tasks])) dirty(db,`t:${task}`,now);
+function replaceOwner(db: Database, owner: string, tasks: readonly string[], now: number, forceTasks = true) {
+  const old = ownerTasks(db,owner).sort(), next = [...new Set(tasks)].sort();
+  const changed = JSON.stringify(old) !== JSON.stringify(next);
+  if (changed) {
+    db.query("DELETE FROM task_spend_owners WHERE owner=?").run(owner);
+    for (const task of next) db.query("INSERT OR IGNORE INTO task_spend_owners VALUES(?,?)").run(owner,task);
+  }
+  if (changed || forceTasks) for (const task of new Set([...old,...next])) dirty(db,`t:${task}`,now);
 }
 function mapTask(db: Database, task: BoardTask, now: number, force = false) {
   const old = db.query<{ owner: string }, [string]>("SELECT owner FROM task_spend_owners WHERE task=? AND owner >= 'c:' AND owner < 'c;' ORDER BY owner").all(task.id).map(r=>r.owner);
@@ -90,7 +95,7 @@ export function computeTaskRows(task: BoardTask, hours: readonly SpendHour[], ra
     let row = result.get(account);
     if (!row) {
       row = { task: task.id, account, engine: h.engine, tokens: 0, unpriced_tokens: 0, weight: 0, rated_weight: 0,
-        weekly_pp: null, window_start: week, window_pp: week === null ? null : 0, session_start: session, session_pp: null,
+        weekly_pp: null, window_start: week, window_pp: null, session_start: session, session_pp: null,
         first_hour: h.hour, last_hour: h.hour, floor: Date.parse(task.createdAt) < Math.max(countedFrom ?? now,now-92*DAY) ? "before-counting" : null, computed_at: now };
       result.set(account,row);
     }
@@ -124,12 +129,22 @@ export function ownerHoursSql(owner: string, cursor: SQLQueryBindings[] | null, 
  * 100 tasks, 2k owner pages and 50k hour rows. */
 export function refreshTaskLimitSpend(store: ActivityStore, overrides: Partial<SpendDependencies> = {}) {
   return activityOperation("activity.limit-spend", async () => {
-    const deps = { ...production,...overrides }, db = store.db, now = deps.now(), source = deps.source();
+    const deps = { ...production,...overrides }, db = store.db, now = deps.now(), source = deps.source(), pipelineSource = deps.pipelineSource?.() ?? null;
     let meta = metaRead(db);
     const hour = Math.floor(now/HOUR);
     if (meta.seed === "done" && !db.query("SELECT 1 FROM limit_spend_dirty LIMIT 1").get()
-      && (!source || (source.revision() === meta.task_revision && !meta.task_key)) && meta.rates_hour === hour) return { tasks: 0, rows: 0 };
+      && (!source || (source.revision() === meta.task_revision && !meta.task_key))
+      && (!pipelineSource || (meta.pipeline_seed === "done" && pipelineSource.revision() === meta.pipeline_revision && !meta.pipeline_key))
+      && meta.aggregate_schema >= 2 && meta.rate_schema >= 2 && !db.query("SELECT 1 FROM limit_spend_rate_changes LIMIT 1").get() && meta.rates_hour === hour) return { tasks: 0, rows: 0 };
     const write = async (work: () => void) => { await waitForStateLock("activity.limit-spend", () => store.transaction(work)); await yieldLoop(); };
+    if (meta.aggregate_schema < 2 && meta.aggregate_cursor !== "~") {
+      const rows=db.query<{task:string},[string]>("SELECT DISTINCT task FROM task_limit_spend WHERE task>? ORDER BY task LIMIT 200").all(meta.aggregate_cursor);
+      await write(()=>{
+        for(const row of rows) dirty(db,`t:${row.task}`,now);
+        db.query("UPDATE limit_spend_meta SET aggregate_cursor=? WHERE singleton=1").run(rows.length<200?"~":rows.at(-1)!.task);
+      });
+      meta=metaRead(db);
+    }
     if (meta.seed.startsWith("tasks:")) {
       const revision = source?.revision() ?? 0;
       const after = meta.seed.slice(6) || "t:", rows = source?.keyRange(after,"t:\uffff",200) ?? [];
@@ -173,13 +188,49 @@ export function refreshTaskLimitSpend(store: ActivityStore, overrides: Partial<S
           page.entries.length < 256 ? page.revision : last!.revision, page.entries.length < 256 ? "" : last!.key);
       });
     }
+    if (pipelineSource) {
+      meta = metaRead(db);
+      if (meta.pipeline_seed.startsWith("seed:")) {
+        if (meta.pipeline_revision < 0) {
+          const revision = pipelineSource.revision();
+          await write(() => db.query("UPDATE limit_spend_meta SET pipeline_revision=?,pipeline_key='',pipeline_seed='seed:' WHERE singleton=1").run(revision));
+          meta = metaRead(db);
+        }
+        const after = meta.pipeline_seed.slice(5);
+        const rows = db.query<{ pipeline: string }, [string]>(`SELECT DISTINCT pipeline FROM usage_hours INDEXED BY usage_hours_pipeline
+          WHERE host='' AND pipeline IS NOT NULL AND pipeline > ? ORDER BY pipeline LIMIT 200`).all(after);
+        await write(() => {
+          for (const row of rows) dirty(db,`p:${row.pipeline}`,now);
+          db.query("UPDATE limit_spend_meta SET pipeline_seed=? WHERE singleton=1").run(rows.length < 200 ? "done" : `seed:${rows.at(-1)!.pipeline}`);
+        });
+      }
+      meta = metaRead(db);
+      if (meta.pipeline_seed === "done") {
+        const page = pipelineSource.changesAfter(meta.pipeline_revision,meta.pipeline_key,256);
+        await write(() => {
+          if (meta.pipeline_revision < page.changeFloor) {
+            db.query("UPDATE limit_spend_meta SET pipeline_revision=?,pipeline_key='',pipeline_seed='seed:' WHERE singleton=1").run(page.revision);
+            return;
+          }
+          for (const entry of page.entries) {
+            if (entry.operation === "upsert" && entry.valueJson) pipelineSource.parse(entry.valueJson);
+            dirty(db,`b:${entry.key}`,now);
+          }
+          const last = page.entries.at(-1);
+          db.query("UPDATE limit_spend_meta SET pipeline_revision=?,pipeline_key=? WHERE singleton=1").run(
+            page.entries.length < 256 ? page.revision : last!.revision,
+            page.entries.length < 256 ? "" : last!.key);
+        });
+      }
+    }
     const owners = db.query<Dirty, []>("SELECT key,at FROM limit_spend_dirty WHERE key < 't:' ORDER BY key LIMIT 500").all();
     for (const owner of owners) {
       await waitForStateLock("activity.limit-spend", () => {
         // Each lock attempt reads state before entering the activity transaction.
-        const tasks = owner.key.startsWith("p:") ? deps.pipelineTasks(owner.key.slice(2)) : null;
+        const binding = owner.key.startsWith("b:"), pipelineOwner = owner.key.startsWith("p:") || binding;
+        const pipelineId = owner.key.slice(2), tasks = pipelineOwner ? deps.pipelineTasks(pipelineId) : null;
         store.transaction(() => {
-          if (tasks) replaceOwner(db,owner.key,tasks,now);
+          if (tasks) replaceOwner(db,binding ? `p:${pipelineId}` : owner.key,tasks,now,!binding);
           else for (const task of ownerTasks(db,owner.key)) dirty(db,`t:${task}`,now);
           clearDirty(db,owner);
         });
@@ -188,16 +239,21 @@ export function refreshTaskLimitSpend(store: ActivityStore, overrides: Partial<S
     }
     const observations = deps.observations();
     if (meta.rates_hour !== hour) {
-      const changed = await refreshLimitRates(db,now,{ history: deps.history,observations },write);
-      for (const account of changed) {
-        const rows = db.query<{ pipeline: string | null; conversation: string; role: string }, [number,string]>(`SELECT DISTINCT pipeline,conversation,role FROM usage_hours
-          WHERE host='' AND hour >= ? AND account=?`).all(Math.floor(Date.parse(utcDay(now))/HOUR),account);
-        await write(() => { for (const row of rows) {
-          const owner = row.pipeline ? `p:${row.pipeline}` : row.role !== "orchestrator" ? `c:${row.conversation}` : null;
-          if (owner) for (const task of ownerTasks(db,owner)) dirty(db,`t:${task}`,now);
-        } });
-      }
-      await write(() => { db.query("UPDATE limit_spend_meta SET rates_hour=? WHERE singleton=1").run(hour); });
+      const coverage = usageMeta(db);
+      await refreshLimitRates(db,now,{ history: deps.history,observations,
+        coverageComplete: coverage?.complete === 1 && coverage.pending_bytes === 0, revalidateFrozen: meta.rate_schema < 2 },write);
+      await write(() => { db.query("UPDATE limit_spend_meta SET rates_hour=?,rate_schema=2 WHERE singleton=1").run(hour); });
+    }
+    const rateChanges = db.query<{ account: string; day: string; task_cursor: string }, []>("SELECT * FROM limit_spend_rate_changes ORDER BY account,day LIMIT 20").all();
+    for (const change of rateChanges) {
+      const tasks = db.query<{ task: string }, [string,string]>(`SELECT task FROM task_limit_spend INDEXED BY task_limit_spend_account
+        WHERE account=? AND task>? ORDER BY task LIMIT 100`).all(change.account,change.task_cursor);
+      await write(() => {
+        for (const row of tasks) dirty(db,`t:${row.task}`,now);
+        if (tasks.length < 100) db.query("DELETE FROM limit_spend_rate_changes WHERE account=? AND day=? AND task_cursor=?").run(change.account,change.day,change.task_cursor);
+        else db.query("UPDATE limit_spend_rate_changes SET task_cursor=? WHERE account=? AND day=? AND task_cursor=?")
+          .run(tasks.at(-1)!.task,change.account,change.day,change.task_cursor);
+      });
     }
     const rateCache = new Map<string, LimitRate[]>();
     const accountRates = (account: string) => {
@@ -262,6 +318,9 @@ export function refreshTaskLimitSpend(store: ActivityStore, overrides: Partial<S
       });
       await yieldLoop();
     }
+    meta=metaRead(db);
+    if(meta.aggregate_schema<2&&meta.aggregate_cursor==="~"&&!db.query("SELECT 1 FROM limit_spend_dirty LIMIT 1").get())
+      await write(()=>db.query("UPDATE limit_spend_meta SET aggregate_schema=2,aggregate_cursor='' WHERE singleton=1").run());
     return { tasks: completed, rows: visited };
   });
 }
@@ -270,8 +329,9 @@ export function refreshTaskLimitSpend(store: ActivityStore, overrides: Partial<S
 export function readTaskLimitSpend(db: Database | null, ids: readonly string[], viewer: { canChoose?: boolean }, overrides: Partial<SpendDependencies> = {}): TaskSpendResponse {
   const deps = { ...production,...overrides }, now = deps.now();
   const body: TaskSpendResponse = { generatedAt: now, tasks: Object.create(null) };
-  if (!db || !ids.length || db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name IN ('task_limit_spend','limit_spend_meta')").get()!.n !== 2
-    || !db.query("SELECT 1 FROM limit_spend_meta WHERE singleton=1 AND schema=1").get()) return body;
+  if (!db || !ids.length || db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name IN ('task_limit_spend','limit_spend_meta')").get()!.n !== 2) return body;
+  const metaColumns=new Set(db.query<{name:string},[]>("PRAGMA table_info(limit_spend_meta)").all().map(row=>row.name));
+  if(!metaColumns.has("aggregate_schema")||!db.query("SELECT 1 FROM limit_spend_meta WHERE singleton=1 AND schema=1 AND aggregate_schema>=2").get()) return body;
   const unique = [...new Set(ids)].slice(0,400), known = deps.tasks(new Set(unique));
   const observations = deps.observations(), labels = viewer.canChoose ? deps.labels() : new Map<string,string>();
   for (const task of known) body.tasks[task.id] = { providers: [] };

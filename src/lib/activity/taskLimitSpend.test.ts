@@ -31,7 +31,10 @@ function world(tasks: BoardTask[], lanes: Record<string, string[]> = {}): SpendD
     source: () => ({ revision: () => 1, get: id => tasks.find(t => t.id === id) ?? null,
       keyRange: (after, _through, limit) => tasks.filter(t => `t:${t.id}` > after).sort((a,b) => a.id.localeCompare(b.id)).slice(0, limit),
       changesAfter: () => ({ revision: 1, changeFloor: 0, entries: [] }), parse: json => JSON.parse(json) }),
-    pipelineTasks: id => lanes[id] ?? [], observations: () => new Map(), labels: () => new Map(), history: () => ({ series: {} }) };
+    pipelineTasks: id => lanes[id] ?? [],
+    pipelineSource: () => ({ revision: () => 1, parse: json => JSON.parse(json),
+      changesAfter: () => ({ revision: 1, changeFloor: 0, entries: [] }) }),
+    observations: () => new Map(), labels: () => new Map(), history: () => ({ series: {} }) };
 }
 test("refresh seeds lane and standalone ownership without counting a linked lane twice or including the seat", async () => {
   const deps = world([task("a", ["work", "chat", "seat", "foreign"])], { lane: ["a"] });
@@ -78,16 +81,28 @@ test("rated, partial, unpriced and unattributed rows retain their bound and wind
   expect(computeTaskRows(task("a"),[h],rates,observations,now,now)[0]!.floor).toBe("before-counting");
 });
 
-test("a lane membership change remaps old and new tasks; deleting a task removes all its spend", async () => {
+test("pipeline binding changes remap old and new tasks without another token write", async () => {
   const tasks = [task("a"),task("b")], lanes = { lane: ["a"] };
   const deps = world(tasks,lanes);
   commit("lane", { pipelineId: "lane" });
   for (let i=0;i<4;i++) await refreshTaskLimitSpend(store,deps);
   expect(readTaskLimitSpend(store.db,["a","b"],{canChoose:true},deps).tasks.a!.providers).toHaveLength(1);
-  lanes.lane = ["b"]; commit("more",{pipelineId:"lane"});
+  lanes.lane = ["b"];
+  let revision=1;
+  deps.pipelineSource=()=>({revision:()=>revision,parse:json=>JSON.parse(json),
+    changesAfter:(from:number)=>({revision,changeFloor:0,entries:from<revision?[{revision,key:"lane",operation:"upsert" as const,valueJson:"{}",rowRevision:revision}]:[]})});
+  // Install the initial cursor, then change only pipeline membership.
+  await refreshTaskLimitSpend(store,deps);
+  revision=2;
   await refreshTaskLimitSpend(store,deps);
   const response = readTaskLimitSpend(store.db,["a","b"],{canChoose:true},deps);
-  expect(response.tasks.a!.providers).toEqual([]); expect(response.tasks.b!.providers[0]!.tokens).toBe(240);
+  expect(response.tasks.a!.providers).toEqual([]); expect(response.tasks.b!.providers[0]!.tokens).toBe(120);
+});
+
+test("deleting a task removes its spend and owner mappings", async () => {
+  const tasks=[task("b")],deps=world(tasks,{lane:["b"]});
+  commit("lane",{pipelineId:"lane"});
+  for(let i=0;i<4;i++) await refreshTaskLimitSpend(store,deps);
   tasks.pop(); store.db.query("INSERT INTO limit_spend_dirty VALUES(?,?)").run("t:b",USAGE_NOW+1);
   await refreshTaskLimitSpend(store,deps);
   expect(store.db.query("SELECT * FROM task_limit_spend WHERE task='b'").all()).toEqual([]);
@@ -183,6 +198,33 @@ test("read-time weekly and session starts accept five minutes of jitter and refu
   expect(account().week).toEqual({usedPercent:40,taskPp:null});
 });
 
+test("weekly task spend stays unknown without a usable rate and is zero only before the window", () => {
+  const start=USAGE_NOW/1000-3*86400;
+  store.db.query("INSERT INTO task_limit_spend VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+    .run("a","claude:a","claude",1_000_000,1_000_000,0,0,null,null,null,null,null,Math.floor(USAGE_NOW/3600000)-1,Math.floor(USAGE_NOW/3600000)-1,null,USAGE_NOW);
+  const deps={...world([task("a")]),observations:()=>new Map([["claude:a",{session:null,weekly:{usedPercent:50,resetsAt:USAGE_NOW/1000+4*86400},plan:"max",capturedAt:USAGE_NOW/1000}]])};
+  const account=()=>readTaskLimitSpend(store.db,["a"],{canChoose:true},deps).tasks.a!.providers[0]!.accounts![0]!;
+  expect(account().week!.taskPp).toBeNull();
+  store.db.query("UPDATE task_limit_spend SET last_hour=?").run(Math.floor(start*1000/3600000)-1);
+  expect(account().week!.taskPp).toBe(0);
+});
+
+test("legacy aggregate rows stay hidden until bounded migration replaces unsupported window zeroes", async () => {
+  const tasks=[task("a")],deps=world(tasks);
+  commit("legacy");
+  store.db.query("INSERT INTO task_spend_owners VALUES(?,?)").run(`c:${conversationDigest("work")}`,"a");
+  store.db.query("DELETE FROM limit_spend_dirty");
+  store.db.query("INSERT INTO task_limit_spend VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+    .run("a","claude:a","claude",120,120,0,0,null,USAGE_NOW/1000-1000,0,null,null,Math.floor(USAGE_NOW/3600000),Math.floor(USAGE_NOW/3600000),null,USAGE_NOW);
+  store.db.query("UPDATE limit_spend_meta SET aggregate_schema=1,aggregate_cursor='',seed='done',task_revision=1,task_key='',pipeline_revision=1,pipeline_seed='done',rates_hour=?")
+    .run(Math.floor(USAGE_NOW/3600000));
+  const depsWithWindow={...deps,observations:()=>new Map([["claude:a",{session:null,weekly:{usedPercent:50,resetsAt:USAGE_NOW/1000+6*86400},plan:"max",capturedAt:USAGE_NOW/1000}]])};
+  expect(readTaskLimitSpend(store.db,["a"],{canChoose:true},depsWithWindow).tasks).toEqual({});
+  await refreshTaskLimitSpend(store,depsWithWindow);
+  expect(store.db.query<{aggregate_schema:number},[]>("SELECT aggregate_schema FROM limit_spend_meta").get()!.aggregate_schema).toBe(2);
+  expect(readTaskLimitSpend(store.db,["a"],{canChoose:true},depsWithWindow).tasks.a!.providers[0]!.accounts![0]!.week!.taskPp).toBeNull();
+});
+
 
 test("a failed rate refresh retries durably without advancing its hourly gate",async()=>{
   const deps=world([task("a",["work"])]);
@@ -207,20 +249,23 @@ test("new owner usage after computation is kept dirty and cannot publish the sta
 });
 
 
-test("a changed calibration requeues only tasks with usage today",async()=>{
-  const day=86400000,hour=3600000;
-  const tasks=[task("old",["old"]),task("today",["today"])],deps=world(tasks);
-  let now=USAGE_NOW;
-  deps.now=()=>now;
-  commit("old-row",{conversation:"old"});commit("today-row",{conversation:"today"});
-  store.db.query("UPDATE usage_hours SET model='claude-sonnet-5',hour=CASE WHEN conversation=? THEN ? ELSE ? END").run(conversationDigest("old"),Math.floor((now-2*day)/hour),Math.floor((now-hour)/hour));
-  const series={"claude|a|weekly":[{t:(now-3*day)/1000,remaining:90},{t:(now-2*day)/1000,remaining:80},{t:(now-hour)/1000,remaining:70}]};
-  deps.history=()=>({series});deps.observations=()=>new Map([["claude:a",{session:null,weekly:{usedPercent:30,resetsAt:(USAGE_NOW+day)/1000},plan:"max",capturedAt:now/1000}]]);
-  for(let i=0;i<4;i++)await refreshTaskLimitSpend(store,deps);
-  now+=hour;series["claude|a|weekly"].push({t:(now-1000)/1000,remaining:50});
+test("finalizing yesterday's rate recomputes tasks that have no usage today",async()=>{
+  const hour=3600000,tasks=[task("yesterday",["work"])],deps=world(tasks);
+  let now=Date.parse("2026-10-18T00:10:00Z"); deps.now=()=>now;
+  commit("yesterday-row");
+  store.db.query("UPDATE usage_hours SET model='claude-sonnet-5',hour=?").run(Math.floor(Date.parse("2026-10-17T23:00:00Z")/hour));
+  store.db.query("UPDATE usage_meta SET complete=0,pending_bytes=100").run();
+  const series={"claude|a|weekly":[{t:Date.parse("2026-10-17T22:00:00Z")/1000,remaining:100},{t:Date.parse("2026-10-17T23:00:00Z")/1000,remaining:80}]};
+  deps.history=()=>({series}); deps.observations=()=>new Map([["claude:a",{session:null,weekly:{usedPercent:30,resetsAt:Date.parse("2026-10-18T00:00:00Z")/1000+7*86400},plan:"max",capturedAt:now/1000}]]);
+  for(let i=0;i<5;i++) await refreshTaskLimitSpend(store,deps);
+  const before=store.db.query<{weekly_pp:number},[]>("SELECT weekly_pp FROM task_limit_spend WHERE task='yesterday'").get()!.weekly_pp;
+  now+=hour;
+  store.db.query("UPDATE usage_meta SET complete=1,pending_bytes=0").run();
+  series["claude|a|weekly"].push({t:Date.parse("2026-10-17T23:30:00Z")/1000,remaining:60});
   await refreshTaskLimitSpend(store,deps);
-  expect(store.db.query<{computed_at:number},[]>("SELECT computed_at FROM task_limit_spend WHERE task='old'").get()!.computed_at).toBe(USAGE_NOW);
-  expect(store.db.query<{computed_at:number},[]>("SELECT computed_at FROM task_limit_spend WHERE task='today'").get()!.computed_at).toBe(now);
+  const after=store.db.query<{weekly_pp:number},[]>("SELECT weekly_pp FROM task_limit_spend WHERE task='yesterday'").get()!.weekly_pp;
+  expect(after).toBeCloseTo(before*2);
+  expect(store.db.query<{frozen:number},[string]>("SELECT frozen FROM usage_limit_rates WHERE account='claude:a' AND window='weekly' AND day=?").get("2026-10-17")!.frozen).toBe(1);
 });
 
 
