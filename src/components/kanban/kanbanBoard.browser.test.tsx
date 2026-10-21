@@ -15470,18 +15470,16 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
       const pop = document.querySelector<HTMLElement>(`[data-spend-pop="${id}"]`)!.closest<HTMLElement>("[role=tooltip]")!;
       const r = pop.getBoundingClientRect();
       const lines = [...pop.querySelectorAll<HTMLElement>(".pop-title, .pop-main, .meter, .meter-note, .pop-note")].map((el) => el.innerText.replace(/\s+/g, " ").trim());
-      /* An account label may end in an ellipsis only when its title holds the whole text. */
-      const clipped = [...pop.querySelectorAll<HTMLElement>(".meter-label, .meter-value, .pop-main")]
-        .filter((el) => el.scrollWidth > el.clientWidth + 1 && !(el.matches(".meter-label") && el.title === el.textContent)).length;
-      const ellipsized = [...pop.querySelectorAll<HTMLElement>(".meter-label")].filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => el.title);
-      /* Every account line, its value and its bar stay inside the bubble. */
-      const outside = [...pop.querySelectorAll<HTMLElement>(".meter, .meter-value, .meter-bar")].filter((el) => {
-        const b = el.getBoundingClientRect();
-        return b.left < r.left - 0.5 || b.right > r.right + 0.5;
-      }).length;
+      /* No line is cut: an account label, whatever its length, is printed whole. */
+      const clipped = [...pop.querySelectorAll<HTMLElement>(".meter-label, .meter-value, .pop-main")].filter((el) => el.scrollWidth > el.clientWidth + 1).length;
+      const labels = [...pop.querySelectorAll<HTMLElement>(".meter-label")].map((el) => ({ text: el.textContent ?? "", lines: new Set([...el.getClientRects()].map((b) => Math.round(b.top))).size, height: el.getBoundingClientRect().height }));
+      /* Every account line, its label's text, its value and its bar stay inside the bubble. */
+      const textRects = [...pop.querySelectorAll<HTMLElement>(".meter-label")].flatMap((el) => { const range = document.createRange(); range.selectNodeContents(el); return [...range.getClientRects()]; });
+      const outside = [...[...pop.querySelectorAll<HTMLElement>(".meter, .meter-figure, .meter-value, .meter-bar")].map((el) => el.getBoundingClientRect()), ...textRects].filter((b) =>
+        b.left < r.left - 0.5 || b.right > r.right + 0.5 || b.top < r.top - 0.5 || b.bottom > r.bottom + 0.5).length;
       /* The task figure's digits start at one x on every account line. */
       const numX = [...pop.querySelectorAll<HTMLElement>(".meter-num")].map((el) => Math.round(el.getBoundingClientRect().left));
-      return { box: { left: r.left, right: r.right, top: r.top, bottom: r.bottom }, viewport: { width: innerWidth, height: innerHeight }, lines, clipped, ellipsized, outside, numX, bg: getComputedStyle(pop).backgroundColor };
+      return { box: { left: r.left, right: r.right, top: r.top, bottom: r.bottom }, viewport: { width: innerWidth, height: innerHeight }, lines, clipped, labels, outside, numX, bg: getComputedStyle(pop).backgroundColor };
     }, id);
     try {
       for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of WIDTHS) {
@@ -15530,8 +15528,8 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
               if (!/±30%/.test(text)) failures.push(`${label} ${id}: no ±30% note`);
               if (pop.clipped) failures.push(`${label} ${id}: ${pop.clipped} popover lines are cut`);
               if (pop.outside) failures.push(`${label} ${id}: ${pop.outside} account lines or bars leave the bubble`);
-              /* The fixture's 80-character label cannot fit the bubble, so it must be the one cut short. */
-              if (id === "t-interrupt" && !pop.ellipsized.some((title) => title.length > 80)) failures.push(`${label} ${id}: the 80-character account label is not cut short: ${JSON.stringify(pop.ellipsized)}`);
+              /* The fixture's 80-character label cannot share a line with its figure: it is printed whole, on lines of its own. */
+              if (id === "t-interrupt" && !pop.labels.some((l) => l.text.length > 80 && text.includes(l.text.replace(/\s+/g, " ")))) failures.push(`${label} ${id}: the 80-character account label is not printed whole: ${JSON.stringify(pop.labels)}`);
               if (new Set(pop.numX).size > 1) failures.push(`${label} ${id}: account figures start at ${pop.numX.join(", ")}`);
               if (pop.box.left < 0 || pop.box.top < 0 || pop.box.right > pop.viewport.width || pop.box.bottom > pop.viewport.height) failures.push(`${label} ${id}: the popover leaves the window ${JSON.stringify(pop.box)}`);
               const cardBox = (await host.boundingBox())!;
@@ -15578,7 +15576,20 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
               const box = (await section.boundingBox())!;
               if (box.x < 0 || box.x + box.width > width || box.y < 0 || box.y + box.height > height) failures.push(`${label} ${id}: the Limits section is not whole on screen ${JSON.stringify(box)}`);
               const text = (await section.innerText()).replace(/[ \t]+/g, " ");
-              readings.push({ label, id, section: text });
+              /* As in the popover: every account label whole, inside the section, and the digits at one x. */
+              const fit = await section.evaluate((el) => {
+                const r = el.getBoundingClientRect();
+                const cut = [...el.querySelectorAll<HTMLElement>(".meter-label, .meter-value, .pop-main")].filter((node) => node.scrollWidth > node.clientWidth + 1).length;
+                const rects = [...el.querySelectorAll<HTMLElement>(".meter-label")].flatMap((node) => { const range = document.createRange(); range.selectNodeContents(node); return [...range.getClientRects()]; });
+                const outside = [...[...el.querySelectorAll<HTMLElement>(".meter, .meter-figure, .meter-value, .meter-bar")].map((node) => node.getBoundingClientRect()), ...rects].filter((b) => b.left < r.left - 0.5 || b.right > r.right + 0.5).length;
+                const numX = [...el.querySelectorAll<HTMLElement>(".meter-num")].map((node) => Math.round(node.getBoundingClientRect().left));
+                return { cut, outside, numX, labels: [...el.querySelectorAll<HTMLElement>(".meter-label")].map((node) => node.textContent ?? "") };
+              });
+              readings.push({ label, id, section: text, fit });
+              if (fit.cut) failures.push(`${label} ${id}: ${fit.cut} Limits lines are cut`);
+              if (fit.outside) failures.push(`${label} ${id}: ${fit.outside} account lines leave the Limits section`);
+              if (new Set(fit.numX).size > 1) failures.push(`${label} ${id}: Limits figures start at ${fit.numX.join(", ")}`);
+              if (id === "t-interrupt" && !fit.labels.some((l) => l.length > 80)) failures.push(`${label} ${id}: the 80-character account label is not whole in the Limits section: ${JSON.stringify(fit.labels)}`);
               for (const want of CASES[id].pop) if (!want.test(text)) failures.push(`${label} ${id}: the Limits section lacks ${want}`);
               await page.screenshot({ path: path.join(out, `${label}-task-${id}.png`) });
               await page.goBack();
@@ -15610,6 +15621,54 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
     }
     expect(failures).toEqual([]);
   }, 900_000);
+
+  browserTest("a touch screen at desktop width: a tap opens the marks' popover and the state dot's, a second tap or a tap outside closes them", async () => {
+    const out = path.resolve(process.env.TASK_SPEND_PNG_DIR ?? ".artifacts/task-spend");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const failures: string[] = [];
+    try {
+      for (const width of [820, 1280] as const) for (const lang of ["en", "uk"] as const) {
+        const label = `touch-${lang}-${width}`;
+        /* A tablet: a touch screen with no mouse, at a width that draws the desktop board. */
+        const context = await browser.newContext({ viewport: { width, height: 900 }, hasTouch: true, colorScheme: "light", reducedMotion: "reduce" });
+        await context.addInitScript(`try { localStorage.setItem("llv_lang", ${JSON.stringify(lang)}); } catch {}`);
+        try {
+          const page = await context.newPage();
+          await page.goto(`${server.base}?spend=1`);
+          const host = page.locator(card("t-search"));
+          await host.locator('[data-spend="t-search"]').waitFor({ state: "attached", timeout: 30_000 });
+          if (!await host.isVisible()) {
+            const status = await host.evaluate((element) => element.closest<HTMLElement>(".column")?.dataset.status ?? "");
+            await page.locator(`.tabs-nav [data-tab="${status}"]`).first().tap();
+          }
+          await host.scrollIntoViewIfNeeded();
+          for (const [name, trigger, pop] of [
+            ["marks", host.locator('[data-spend="t-search"]'), page.locator('[data-spend-pop="t-search"]')],
+            ["state dot", host.locator("[data-card-state-dot]"), page.locator("[data-card-state-pop]")],
+          ] as const) {
+            const shows = (open: boolean) => pop.waitFor({ state: open ? "attached" : "detached", timeout: 3_000 }).then(() => true, () => false);
+            await trigger.tap();
+            if (!await shows(true)) { failures.push(`${label}: a tap on the ${name} opens nothing (aria-expanded=${await trigger.getAttribute("aria-expanded")})`); continue; }
+            if (await trigger.getAttribute("aria-expanded") !== "true") failures.push(`${label}: the open ${name} do not say so`);
+            if (name === "marks") await page.screenshot({ path: path.join(out, `${label}-t-search-tap.png`) });
+            await trigger.tap();
+            if (!await shows(false)) failures.push(`${label}: a second tap on the ${name} leaves it open`);
+            await trigger.tap();
+            if (!await shows(true)) failures.push(`${label}: a third tap on the ${name} opens nothing`);
+            /* Outside: a column's heading, plain text. */
+            await page.locator(".kb .col-head h2:visible").first().tap();
+            if (!await shows(false)) failures.push(`${label}: a tap outside leaves the ${name} open`);
+          }
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    expect(failures).toEqual([]);
+  }, 600_000);
 });
 
 describe("a task's album: every picture its agents made, one click from the card", () => {

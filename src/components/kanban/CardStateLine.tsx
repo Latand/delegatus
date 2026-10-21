@@ -24,6 +24,7 @@ import { cardStatePopover, cardStateText, type CardState } from "./cardState";
 export function CardStateDot({ state, nowMs, title, interactive }: { state: CardState; nowMs: number; title: string; interactive: boolean }) {
   const { t } = useLocale();
   const ref = useRef<HTMLSpanElement>(null);
+  const pressed = useRef(false);
   const [open, setOpen] = useState(false);
   const age = state.sinceMs === null ? "" : humanizeDuration(Math.max(0, (nowMs - state.sinceMs) / 1000));
   const words = cardStatePopover(t, state, age).replace(/\s+$/, "");
@@ -46,11 +47,13 @@ export function CardStateDot({ state, nowMs, title, interactive }: { state: Card
       tabIndex={0}
       aria-label={`${t("cardState.dotAria", { title })}: ${words}`}
       aria-expanded={open}
-      onPointerEnter={() => setOpen(true)}
+      /* A mouse opens it by hovering; a tap focuses and clicks it, so only the click toggles it. */
+      onPointerEnter={(event) => { if (event.pointerType === "mouse") setOpen(true); }}
       onPointerLeave={(event) => { if (event.pointerType === "mouse") setOpen(false); }}
-      onFocus={() => setOpen(true)}
-      onBlur={() => setOpen(false)}
-      onClick={(event) => { event.stopPropagation(); setOpen((value) => !value); }}
+      onPointerDown={() => { pressed.current = true; }}
+      onFocus={() => { if (!pressed.current) setOpen(true); }}
+      onBlur={() => { pressed.current = false; setOpen(false); }}
+      onClick={(event) => { event.stopPropagation(); pressed.current = false; setOpen((value) => !value); }}
       onKeyDown={(event) => {
         if (event.key === "Escape") { event.stopPropagation(); setOpen(false); }
         else if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); setOpen((value) => !value); }

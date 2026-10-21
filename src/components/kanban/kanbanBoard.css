@@ -2073,12 +2073,14 @@
 .spend-pop .meter-note { margin: 2px 0 0 17px; }
 /* An account's line: the sidebar's limit line, with the task's part drawn
    over the week the account has used so far. */
-.spend-pop .meter { display: flex; align-items: center; gap: 8px; height: 18px; margin-left: 17px; }
-/* Account labels are the operator's own, up to 80 characters: a long one ends
-   in an ellipsis, its whole text in the title, so the figures keep one x. */
-.spend-pop .meter-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--color-secondary); white-space: nowrap; }
+.spend-pop .meter { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; min-height: 18px; margin-left: 17px; }
+/* Account labels are the operator's own, up to 80 characters: one too long for
+   the line takes a line of its own above its figure and bar, wrapping as it
+   needs, and the figure stays at the line's end, so the digits keep one x. */
+.spend-pop .meter-label { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; color: var(--color-secondary); }
 .spend-pop .meter-value { flex: none; color: var(--color-muted); font-variant-numeric: tabular-nums; }
 .spend-pop .meter-bar { width: 44px; }
+:is(.spend-pop, .phone-spend) .meter-figure { display: flex; flex: none; align-items: center; gap: 8px; margin-left: auto; }
 /* The task's figure in a fixed slot: its sign (<, ≥) right-aligned in a cell
    of its own, so «task» and the digits start at one x on every line. */
 :is(.spend-pop, .phone-spend) .meter-value b { color: var(--color-primary); font-weight: 600; }
@@ -2100,8 +2102,8 @@
 .phone-spend .pop-note { color: var(--color-muted); font-size: var(--text-label); line-height: 16px; padding-top: 6px; border-top: 1px solid var(--border-default); }
 .phone-spend .pop-warn { color: var(--color-warning); }
 .phone-spend .meter-note { margin-left: 18px; font-size: var(--text-label); line-height: 16px; }
-.phone-spend .meter { display: flex; align-items: center; gap: 8px; min-height: 20px; margin-left: 18px; font-size: var(--text-label); }
-.phone-spend .meter-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-secondary); }
+.phone-spend .meter { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; min-height: 20px; margin-left: 18px; font-size: var(--text-label); }
+.phone-spend .meter-label { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; color: var(--color-secondary); }
 .phone-spend .meter-value { flex: none; color: var(--color-muted); font-variant-numeric: tabular-nums; }
 .phone-spend .meter-bar { width: 64px; }
 

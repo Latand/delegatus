@@ -434,8 +434,12 @@ Common to all three:
 - Providers keep one fixed order everywhere, Claude then Codex: on the face,
   in the popover and on the phone's task screen. Each mark keeps its slot from
   card to card; ordering by size would swap them within one column.
-- The popover opens the way `CardStateDot` does (hover, focus or tap; Escape
-  closes; `TooltipBubble`, `src/components/kanban/CardStateLine.tsx:24-65`).
+- The popover opens the way `CardStateDot` does (mouse hover, keyboard focus
+  or a tap, which toggles it on a touch screen at any width; Escape closes;
+  `TooltipBubble`, `src/components/kanban/CardStateLine.tsx`). While open, the
+  marks are described by the bubble (`aria-describedby`), so a screen reader
+  hears each account's lines. An account label is printed whole: one too long
+  for its line takes a line of its own above its figure and bar.
   No pill, no new row type, no glass.
 - Six cards per variant, invented titles and accounts:
   1. one provider — Codex A · Pro ≈1%;

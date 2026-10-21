@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import { intlLocale } from "@/components/activity/format";
 import { compact } from "@/components/activity/tokenParts";
@@ -124,8 +124,8 @@ function Meter({ provider, account }: { provider: TaskSpendProvider; account: Ta
   if (account.weeklyPp === null) {
     return (
       <span className="meter" data-spend-account={account.key}>
-        <span className="meter-label" title={name}>{name}</span>
-        <span className="meter-value">{t("taskSpend.accountNoRate", { tokens: compact(account.tokens, locale) })}</span>
+        <span className="meter-label">{name}</span>
+        <span className="meter-figure"><span className="meter-value">{t("taskSpend.accountNoRate", { tokens: compact(account.tokens, locale) })}</span></span>
       </span>
     );
   }
@@ -135,17 +135,20 @@ function Meter({ provider, account }: { provider: TaskSpendProvider; account: Ta
   const part = used !== null && account.week?.taskPp ? Math.min(used, Math.max(0, account.week.taskPp)) : 0;
   return (
     <span className="meter" data-spend-account={account.key}>
-      <span className="meter-label" title={name}>{name}</span>
-      <span className="meter-value">
-        {t("taskSpend.task")} <b className="meter-task"><span className="meter-sign">{figure.sign}</span><span className="meter-num">{figure.num}</span></b>
-        {used !== null ? <> · {t("taskSpend.week", { value: `${Math.round(used)}%` })}</> : null}
-      </span>
-      {used !== null ? (
-        <span className="meter-bar" aria-hidden>
-          <span className="week" style={{ width: `${used}%` }} />
-          {part > 0 ? <span className="task" data-engine={provider.engine} style={{ left: `${used - part}%`, width: `${part}%` }} /> : null}
+      <span className="meter-label">{name}</span>
+      {/* The figure and its bar wrap as one, so a label too long for the line leaves them together at its end. */}
+      <span className="meter-figure">
+        <span className="meter-value">
+          {t("taskSpend.task")} <b className="meter-task"><span className="meter-sign">{figure.sign}</span><span className="meter-num">{figure.num}</span></b>
+          {used !== null ? <> · {t("taskSpend.week", { value: `${Math.round(used)}%` })}</> : null}
         </span>
-      ) : null}
+        {used !== null ? (
+          <span className="meter-bar" aria-hidden>
+            <span className="week" style={{ width: `${used}%` }} />
+            {part > 0 ? <span className="task" data-engine={provider.engine} style={{ left: `${used - part}%`, width: `${part}%` }} /> : null}
+          </span>
+        ) : null}
+      </span>
     </span>
   );
 }
@@ -200,7 +203,7 @@ function SpendLines({ summary }: { summary: TaskSpendSummary }) {
 
 /**
  * The marks at the end of a card's state line. On the desktop card they open
- * the popover by hover, focus or tap, as the state dot does; on the phone's
+ * the popover by mouse hover, keyboard focus or tap, as the state dot does; on the phone's
  * card face, which is one button, they are passive and the task screen lists
  * the numbers. A task with no counted work draws nothing.
  */
@@ -208,6 +211,8 @@ export function TaskSpendMarks({ taskId, interactive }: { taskId: string; intera
   const { t, locale } = useLocale();
   const summary = useTaskSpend(taskId);
   const ref = useRef<HTMLSpanElement>(null);
+  const pressed = useRef(false);
+  const bubbleId = useId();
   const [open, setOpen] = useState(false);
   useEffect(() => {
     if (!open) return;
@@ -229,11 +234,14 @@ export function TaskSpendMarks({ taskId, interactive }: { taskId: string; intera
       tabIndex={0}
       aria-label={label}
       aria-expanded={open}
-      onPointerEnter={() => setOpen(true)}
+      aria-describedby={open ? bubbleId : undefined}
+      /* A mouse opens it by hovering; a tap focuses and clicks it, so only the click toggles it. */
+      onPointerEnter={(event) => { if (event.pointerType === "mouse") setOpen(true); }}
       onPointerLeave={(event) => { if (event.pointerType === "mouse") setOpen(false); }}
-      onFocus={() => setOpen(true)}
-      onBlur={() => setOpen(false)}
-      onClick={(event) => { event.stopPropagation(); setOpen((value) => !value); }}
+      onPointerDown={() => { pressed.current = true; }}
+      onFocus={() => { if (!pressed.current) setOpen(true); }}
+      onBlur={() => { pressed.current = false; setOpen(false); }}
+      onClick={(event) => { event.stopPropagation(); pressed.current = false; setOpen((value) => !value); }}
       onKeyDown={(event) => {
         if (event.key === "Escape") { event.stopPropagation(); setOpen(false); }
         else if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); setOpen((value) => !value); }
@@ -241,7 +249,7 @@ export function TaskSpendMarks({ taskId, interactive }: { taskId: string; intera
     >
       <Marks summary={summary} />
       {open ? (
-        <TooltipBubble anchorRef={ref} side="top" align="right" className="card-state-pop spend-pop">
+        <TooltipBubble id={bubbleId} anchorRef={ref} side="top" align="right" className="card-state-pop spend-pop">
           <span data-spend-pop={taskId}>
             <span className="pop-title">{t("taskSpend.title")}</span>
             <SpendLines summary={summary} />

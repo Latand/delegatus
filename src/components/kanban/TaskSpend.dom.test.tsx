@@ -16,7 +16,7 @@ import type { TaskSpendAccount, TaskSpendProvider, TaskSpendSummary } from "@/li
 const dom = new Window({ url: "http://localhost/", width: 1440, height: 900 });
 Object.assign(globalThis, {
   window: dom, document: dom.document, navigator: dom.navigator,
-  HTMLElement: dom.HTMLElement, Node: dom.Node, Event: dom.Event, KeyboardEvent: dom.KeyboardEvent,
+  HTMLElement: dom.HTMLElement, Node: dom.Node, Event: dom.Event, KeyboardEvent: dom.KeyboardEvent, PointerEvent: dom.PointerEvent,
   CustomEvent: dom.CustomEvent, localStorage: dom.localStorage, sessionStorage: dom.sessionStorage,
   requestAnimationFrame: dom.requestAnimationFrame.bind(dom),
   cancelAnimationFrame: dom.cancelAnimationFrame.bind(dom),
@@ -182,12 +182,46 @@ test("a lower bound's scale fills by its printed, floored figure", async () => {
   expect((await open("floor146")).textContent).toContain("Claude ≥14%");
 });
 
-test("an account's label carries its whole text in a title, so an ellipsis loses nothing", async () => {
+test("an account's label is printed whole, with no title standing in for a cut", async () => {
   await mount(<><TaskSpendMarks taskId="long" interactive /><PhoneTaskSpend taskId="long" headingClass="h" /></>);
   const name = "Research workstation in the second office, shared by the whole data team on site · Max";
   const pop = await open("long");
-  expect(pop.querySelector(".meter-label")!.getAttribute("title")).toBe(name);
-  expect(document.querySelector("[data-phone-task-spend='long'] .meter-label")!.getAttribute("title")).toBe(name);
+  for (const label of [pop.querySelector(".meter-label")!, document.querySelector("[data-phone-task-spend='long'] .meter-label")!]) {
+    expect(label.textContent).toBe(name);
+    expect(label.hasAttribute("title")).toBe(false);
+  }
+});
+
+test("a screen reader reaches the popover's lines: the open marks are described by the bubble", async () => {
+  await mount(<TaskSpendMarks taskId="two" interactive />);
+  const trigger = document.querySelector<HTMLElement>("[data-spend='two']")!;
+  expect(trigger.hasAttribute("aria-describedby")).toBe(false);
+  await open("two");
+  const described = document.getElementById(trigger.getAttribute("aria-describedby")!)!;
+  expect(described.getAttribute("role")).toBe("tooltip");
+  const text = described.textContent!;
+  for (const line of ["A · Max", "B · Max", "A · Pro", "B · Pro", "week 53%", "Now 12% of A's 5-hour window", "±30%"]) expect(text).toContain(line);
+  await act(async () => trigger.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as unknown as Event));
+  expect(trigger.hasAttribute("aria-describedby")).toBe(false);
+});
+
+test("a tap opens the popover and the next tap closes it: a touch pointer neither hovers it open nor focuses it open", async () => {
+  await mount(<TaskSpendMarks taskId="two" interactive />);
+  const trigger = document.querySelector<HTMLElement>("[data-spend='two']")!;
+  const pointer = (type: string) => new dom.PointerEvent(type, { bubbles: type !== "pointerenter", pointerType: "touch" }) as unknown as Event;
+  const tap = async (focus: boolean) => {
+    await act(async () => trigger.dispatchEvent(pointer("pointerover")));
+    await act(async () => trigger.dispatchEvent(pointer("pointerenter")));
+    await act(async () => trigger.dispatchEvent(pointer("pointerdown")));
+    if (focus) await act(async () => trigger.dispatchEvent(new dom.FocusEvent("focusin", { bubbles: true }) as unknown as Event));
+    await act(async () => trigger.dispatchEvent(new dom.MouseEvent("click", { bubbles: true }) as unknown as Event));
+  };
+  await tap(true);
+  expect(document.querySelector("[data-spend-pop='two']")).not.toBeNull();
+  expect(trigger.getAttribute("aria-expanded")).toBe("true");
+  await tap(false);
+  expect(document.querySelector("[data-spend-pop='two']")).toBeNull();
+  expect(trigger.getAttribute("aria-expanded")).toBe("false");
 });
 
 test("the popover reads as an estimate: ≈ per provider, each account beside its week, the 5-hour share, ±30 %", async () => {
