@@ -1,3 +1,4 @@
+import { isComposerUploadRef, sameComposerUploadRef, type ComposerUploadRef } from "./filePolicy";
 import {
   ComposerPayloadStore,
   ComposerPayloadStorageError,
@@ -11,7 +12,7 @@ import {
 export interface ComposerSubmission {
   text: string;
   images: { id?: string; base64: string; mime: string; preview: string }[];
-  files: { id: string; name: string; mime: string; base64: string }[];
+  files: { id: string; name: string; mime: string; base64: string; upload?: ComposerUploadRef }[];
   selectedContext?: unknown;
   runtime?: Record<string, unknown>;
   policy?: "interrupt-active" | "steer-if-active";
@@ -135,7 +136,8 @@ function checkedSubmission(value: unknown): ComposerSubmission {
   if (!item || typeof item.text !== "string" || !Array.isArray(item.images) || !Array.isArray(item.files)
     || item.images.some(image => !image || typeof image.base64 !== "string" || typeof image.mime !== "string")
     || item.files.some(file => !file || typeof file.id !== "string" || typeof file.name !== "string"
-      || typeof file.base64 !== "string" || typeof file.mime !== "string")) {
+      || typeof file.base64 !== "string" || typeof file.mime !== "string"
+      || file.upload !== undefined && (!isComposerUploadRef(file.upload) || file.base64 !== ""))) {
     throw new ComposerPayloadStorageError("The complete original message could not be verified");
   }
   // A blob URL belongs to its old document. Derive a usable preview from bytes.
@@ -204,11 +206,12 @@ export class ComposerSubmissionPayloads {
       if (!raw || raw.fingerprint !== ref.fingerprint) throw new ComposerPayloadStorageError();
       const submission = checkedSubmission(raw.payload.submission);
       const images = captured.body.images as { base64: string; mime: string }[] | undefined;
-      const files = captured.body.files as { base64: string; name: string }[] | undefined;
+      const files = captured.body.files as { base64: string; name: string; upload?: ComposerUploadRef }[] | undefined;
       if ((images !== undefined && !Array.isArray(images)) || (files !== undefined && !Array.isArray(files))
         || (images?.length ?? 0) !== submission.images.length || (files?.length ?? 0) !== submission.files.length
         || submission.images.some((image, index) => image.base64 !== images?.[index]?.base64 || image.mime !== images?.[index]?.mime)
-        || submission.files.some((file, index) => file.base64 !== files?.[index]?.base64 || file.name !== files?.[index]?.name)) {
+        || submission.files.some((file, index) => file.base64 !== files?.[index]?.base64 || file.name !== files?.[index]?.name
+          || !sameComposerUploadRef(file.upload, files?.[index]?.upload))) {
         throw new ComposerPayloadStorageError("The request is missing original attachment bytes");
       }
       await this.envelopes.retain(owner, { version: 1, submissionFingerprint: raw.fingerprint, envelope: captured });

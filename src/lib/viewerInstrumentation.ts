@@ -1,5 +1,6 @@
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { runtimeDataCorruptionCode } from "@/lib/runtime/dataCorruption";
+import { schemaCompileFailure } from "@/lib/state/schemaCompatibility";
 import { checkpointHotStateRollbackMirrorsForDemotion } from "./state/checkpointRollbackMirrors";
 export { checkpointHotStateRollbackMirrorsForDemotion } from "./state/checkpointRollbackMirrors";
 import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
@@ -674,6 +675,13 @@ export function classifyStructuredHostStartupError(
       action: "Correct the structured-host configuration and restart the Viewer.",
     };
   }
+  if (name === "IncompatibleSchemaError" || schemaCompileFailure(error)) {
+    return {
+      disposition: "terminal",
+      category: "configuration",
+      action: "The state database holds a statement this SQLite cannot compile; it is not damaged. Run a Delegatus release that supports this SQLite, then restart the Viewer.",
+    };
+  }
   if (name === "RegistryParityError"
     || name === "RegistryBackendIdentityError"
     || runtimeDataCorruptionCode(error)
@@ -839,15 +847,16 @@ export async function completeViewerRuntimeActivation(
 /** Check every state database before a store opens one (#1870 slice 10):
     a damaged one is replaced by its newest good backup, or starts empty. The
     returned `start` raises the board cards and arms the backup timer once the
-    release is ready. A failure here never blocks activation. */
+    release is ready. A failed schema recovery blocks store initialization. */
 export async function checkStateDatabasesBeforeStores(
   stateDirectory: string,
 ): Promise<{ start(ownsTraffic: () => boolean): void }> {
+  const { checkStateDatabasesInWorker, startStateDurability, SchemaRecoveryError } = await import("@/lib/state/durability");
   try {
-    const { checkStateDatabasesInWorker, startStateDurability } = await import("@/lib/state/durability");
     const incidents = await checkStateDatabasesInWorker(stateDirectory);
     return { start: (ownsTraffic) => { startStateDurability({ stateDirectory, incidents, ownsTraffic }); } };
   } catch (error) {
+    if (error instanceof SchemaRecoveryError) throw error;
     console.error("[state durability] activation check failed", error instanceof Error ? error.message : String(error));
     return { start: () => {} };
   }

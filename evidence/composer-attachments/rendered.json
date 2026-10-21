@@ -1,0 +1,114 @@
+{
+  "1280-light-en": {
+    "progressPercent": 37,
+    "progress": {
+      "x": 17,
+      "y": 639,
+      "width": 24,
+      "height": 24
+    },
+    "failureVisible": true,
+    "retryCompleted": true,
+    "oversizedRefused": true,
+    "sentBytes": 104857600,
+    "pageErrors": []
+  },
+  "1280-light-uk": {
+    "progressPercent": 37,
+    "progress": {
+      "x": 17,
+      "y": 639,
+      "width": 24,
+      "height": 24
+    },
+    "failureVisible": true,
+    "retryCompleted": true,
+    "oversizedRefused": true,
+    "sentBytes": 104857600,
+    "pageErrors": []
+  },
+  "1280-dark-en": {
+    "progressPercent": 37,
+    "progress": {
+      "x": 17,
+      "y": 639,
+      "width": 24,
+      "height": 24
+    },
+    "failureVisible": true,
+    "retryCompleted": true,
+    "oversizedRefused": true,
+    "sentBytes": 104857600,
+    "pageErrors": []
+  },
+  "1280-dark-uk": {
+    "progressPercent": 37,
+    "progress": {
+      "x": 17,
+      "y": 639,
+      "width": 24,
+      "height": 24
+    },
+    "failureVisible": true,
+    "retryCompleted": true,
+    "oversizedRefused": true,
+    "sentBytes": 104857600,
+    "pageErrors": []
+  },
+  "390-light-en": {
+    "progressPercent": 37,
+    "progress": {
+      "x": 25,
+      "y": 683,
+      "width": 32,
+      "height": 32
+    },
+    "failureVisible": true,
+    "retryCompleted": true,
+    "oversizedRefused": true,
+    "sentBytes": 104857600,
+    "pageErrors": []
+  },
+  "390-light-uk": {
+    "progressPercent": 37,
+    "progress": {
+      "x": 25,
+      "y": 683,
+      "width": 32,
+      "height": 32
+    },
+    "failureVisible": true,
+    "retryCompleted": true,
+    "oversizedRefused": true,
+    "sentBytes": 104857600,
+    "pageErrors": []
+  },
+  "390-dark-en": {
+    "progressPercent": 37,
+    "progress": {
+      "x": 25,
+      "y": 683,
+      "width": 32,
+      "height": 32
+    },
+    "failureVisible": true,
+    "retryCompleted": true,
+    "oversizedRefused": true,
+    "sentBytes": 104857600,
+    "pageErrors": []
+  },
+  "390-dark-uk": {
+    "progressPercent": 37,
+    "progress": {
+      "x": 25,
+      "y": 683,
+      "width": 32,
+      "height": 32
+    },
+    "failureVisible": true,
+    "retryCompleted": true,
+    "oversizedRefused": true,
+    "sentBytes": 104857600,
+    "pageErrors": []
+  }
+}
