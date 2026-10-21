@@ -1429,8 +1429,8 @@ test("a snapshot with no windows at all charts the forward history and claims no
   setActiveCodexAccount(account.id);
   const nowS = Math.round(Date.now() / 1000);
   const weekly = (usedPercent: number) => ({ session: null, weekly: { usedPercent, resetsAt: nowS + 2 * 86_400, windowMinutes: 10_080 }, plan: "pro", capturedAt: nowS });
-  recordLimitSample("codex", account.id, weekly(30), (nowS - 7_200) * 1000);
-  recordLimitSample("codex", account.id, weekly(45), (nowS - 3_600) * 1000);
+  recordLimitSample("codex", account.id, weekly(30), "live", (nowS - 7_200) * 1000);
+  recordLimitSample("codex", account.id, weekly(45), "live", (nowS - 3_600) * 1000);
 
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async () => new Response(null, { status: 503 })) as unknown as typeof fetch;
@@ -2076,6 +2076,67 @@ test("live reads and offline fallback exclude foreign and unregistered quota in 
   try {
     await readLimits({ now: () => now, codexLiveReader: offline });
     const { readHistory } = await import("./limitsHistoryStore");
-    expect(readHistory().series[`codex|${account.id}|weekly`]).toEqual([{ t: now / 1000, remaining: 75 }]);
+    // The offline fallback serves A's own transcript reading, which the
+    // backfill rereads under current custody; forward history keeps only live.
+    expect(readHistory().series[`codex|${account.id}|weekly`]).toBeUndefined();
   } finally { globalThis.fetch = fetchBefore; resetLimitsCache(); }
+});
+
+test("a transcript reading whose custody is later quarantined never stays in forward history, burndown or calibration input", async () => {
+  const { setSystemTime } = await import("bun:test");
+  const { agentRegistry, closeAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const { QuotaController, codexObservationFromProbe } = await import("@/lib/accounts/migration/quotaController");
+  const { historySamples, readHistory } = await import("./limitsHistoryStore");
+  resetLimitsCache();
+  const account = createManagedCodexAccount("custody account A");
+  setActiveCodexAccount(account.id);
+  const at = (clock: string) => Date.parse(`2026-10-20T${clock}:00.000Z`);
+  const weeklyReset = at("12:00") / 1000 + 5 * 86_400, sessionReset = at("12:00") / 1000 + 4 * 3600;
+  const file = path.join(account.sessionsDir, "2026", "10", "20", "reused.jsonl");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  // A holds verified custody of the rollout; B's 96% weekly reading lands in it at 13:00.
+  writeQuotaFixture(file, JSON.stringify({ timestamp: new Date(at("13:00")).toISOString(), payload: { rate_limits: {
+    primary: { used_percent: 96, window_minutes: 10080, resets_at: weeklyReset }, plan_type: "pro" } } }) + "\n");
+  const session = (usedPercent: number) => ({ usedPercent, windowDurationMins: 300, resetsAt: sessionReset });
+  const weekly = (usedPercent: number) => ({ usedPercent, windowDurationMins: 10080, resetsAt: weeklyReset });
+  let rateLimits: { primary: ReturnType<typeof session>; secondary: ReturnType<typeof weekly> | null; planType: string } =
+    { primary: session(10), secondary: null, planType: "pro" };
+  let now = at("13:01");
+  const tick = () => new QuotaController(agentRegistry(), {
+    list: () => [account], active: () => account.id, credentialIdentity: () => "stable-fixture",
+    probe: async (_engine, _candidate, probedAt) => codexObservationFromProbe(account, {
+      account: { account: null, requiresOpenaiAuth: true }, rateLimits, resetCredits: null, authenticated: true, envelope: null,
+    }, probedAt),
+  }, "custody-fixture-boot", () => now).tick("codex");
+  const inventory = (accountId: string, observedAt: string) => agentRegistry().reconcileConversations([{
+    engine: "codex", path: file, accountId, launchProfile: emptyLaunchProfile(), observedAt,
+    turn: { state: "idle", source: "empty", terminalAt: null },
+  }]);
+  const fetchBefore = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(null, { status: 503 })) as unknown as typeof fetch;
+  try {
+    // 13:01: A's authenticated probe reports only its session window.
+    await tick();
+    // 14:00: inventory discovers B on the rollout; then a restart, and the binding returns to A.
+    inventory("custody-account-b", new Date(at("14:00")).toISOString());
+    closeAgentRegistryForTests();
+    inventory(account.id, new Date(at("15:00")).toISOString());
+    now = at("15:10");
+    rateLimits = { primary: session(12), secondary: weekly(20), planType: "pro" };
+    await tick();
+    const nowS = now / 1000;
+    expect(historySamples("codex", account.id, "weekly", nowS)).toEqual([{ t: nowS, remaining: 80 }]);
+    expect(historySamples("codex", account.id, "session", nowS)).toEqual([
+      { t: at("13:01") / 1000, remaining: 90 }, { t: nowS, remaining: 88 },
+    ]);
+    // Rate calibration reads exactly this store.
+    expect(Object.entries(readHistory().series).filter(([key]) => key.startsWith(`codex|${account.id}|`))
+      .flatMap(([, samples]) => samples).some(sample => sample.remaining === 4)).toBe(false);
+    setSystemTime(new Date(now));
+    resetLimitsCache();
+    const burndown = await readBurndown({ codexLiveReader: async () => rateLimits });
+    expect(burndown.codex!.weekly.samples).toEqual([{ t: nowS, remaining: 80 }]);
+    expect(burndown.codex!.session.samples.map(sample => sample.remaining)).toEqual([90, 88]);
+  } finally { setSystemTime(); globalThis.fetch = fetchBefore; resetLimitsCache(); }
 });

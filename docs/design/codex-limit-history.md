@@ -21,9 +21,19 @@ covers quota readings, paid-credit metadata and usage-limit rejections used in
 live reconciliation and offline fallback, as well as burndown backfill.
 
 Live provider reads use the runtime selected for the requested account. The
-existing quota controller records its accepted, authenticated live or transcript
-observations through `recordLimitSamples`; repeated observations share the
-store's five-minute sampling interval. This recording path shipped in #3151.
+existing quota controller records its accepted, authenticated observations
+through `recordLimitSamples`; repeated observations share the store's
+five-minute sampling interval. This recording path shipped in #3151.
+
+Forward history keeps a Codex window only when the account's own live probe
+answered it. A transcript-derived window, whether reconciliation filled it
+beside a live window, it came from the offline fallback or it projects a
+usage-limit rejection, is never stored. Its custody can be quarantined after the
+reading, and a stored point keeps no link back to the rollout that would let a
+reader revoke it. Those readings reach the chart only through the transcript
+backfill, which rechecks custody on every read, so a later quarantine removes
+them from the burndown. Rate calibration reads forward history alone and never
+sees them. Claude history is unaffected.
 
 History files carry `codexAttributionVersion: 1`. A reader excludes Codex series
 without that marker. The next successful history write preserves those values

@@ -266,10 +266,11 @@ function remember(engine: EngineName, accountId: string, resolved: ResolvedRead,
   };
   writeDiskCache(cache());
   if (!resolved.data || (resolved.meta.source !== "live" && resolved.meta.source !== "transcript")) return;
-  // A fresh live/transcript value is also a burndown sample. The browser's 60s
-  // poll drives this, so forward history accrues without a separate sampler.
+  // A fresh read is also a burndown sample; the store keeps only live Codex
+  // windows. The browser's 60s poll drives this, so forward history accrues
+  // without a separate sampler.
   try {
-    recordLimitSample(engine, accountId, resolved.data, now);
+    recordLimitSample(engine, accountId, resolved.data, resolved.meta.source, now);
   } catch (err) {
     console.warn("[limits] failed to record burndown sample", err);
   }

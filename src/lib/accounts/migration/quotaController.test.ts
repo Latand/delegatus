@@ -584,7 +584,7 @@ test("identical cached quota observations do not rewrite registry history", asyn
 });
 
 
-test("a Codex tick batches only authenticated live or transcript observations into forward history", async () => {
+test("a Codex tick batches only authenticated live observations into forward history", async () => {
   const { readHistory } = await import("@/lib/limitsHistoryStore");
   const root = fs.mkdtempSync(path.join(os.tmpdir(),"quota-history-"));
   const now=Date.parse("2026-10-18T12:00:00Z");
@@ -602,7 +602,8 @@ test("a Codex tick batches only authenticated live or transcript observations in
     await controller.tick("codex");
     const history=readHistory();
     expect(history.series[`codex|${ids[0]}|weekly`]).toEqual([{t:now/1000,remaining:75}]);
-    expect(history.series[`codex|${ids[1]}|weekly`]).toEqual([{t:now/1000,remaining:75}]);
+    // A transcript window is revocable custody evidence; the backfill rereads it.
+    expect(history.series[`codex|${ids[1]}|weekly`]).toBeUndefined();
     expect(history.series[`codex|${ids[2]}|weekly`]).toBeUndefined(); expect(history.series[`codex|${ids[3]}|weekly`]).toBeUndefined();
     await controller.tick("codex");
     expect(readHistory()).toEqual(history);
