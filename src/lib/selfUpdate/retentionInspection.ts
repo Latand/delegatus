@@ -20,6 +20,9 @@ function resolvePhysicalPath(candidate: string): string {
     }
   }
 }
+/** This process's initial environment, read while its /proc files are its
+ * own: sealed for a removal, they belong to root and environ is unreadable. */
+const OWN_ENVIRON = (() => { try { return fs.readFileSync("/proc/self/environ", "utf8"); } catch { return null; } })();
 const fields = (stat: string) => stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/);
 const exited = (stat: string) => ["Z", "X", "x"].includes(fields(stat)[0]!);
 const unescapeMount = (value: string) => value.replace(/\\([0-7]{3})/g, (_, octal: string) => String.fromCharCode(parseInt(octal, 8)));
@@ -35,7 +38,7 @@ function mountTable(file: string) {
 /** An inventory records uncertainty instead of discarding every keep decision.
  * Missing evidence has installation-wide scope: a different UID or a private
  * ancestor cannot exclude files inherited before a credential change. */
-export function retentionProcessScan(root: string, procRoot = "/proc"): RetentionScan {
+export function retentionProcessScan(root: string, procRoot = "/proc", only?: number): RetentionScan {
   const processes: ProcessScan["processes"] = [];
   const uncertain: RetentionUncertainty[] = [];
   const ownNamespace = fs.readlinkSync(path.join(procRoot, "self/ns/mnt"));
@@ -50,7 +53,7 @@ export function retentionProcessScan(root: string, procRoot = "/proc"): Retentio
   };
   let ownMounts: ReturnType<typeof mountTable> | undefined;
   for (const name of fs.readdirSync(procRoot).sort()) {
-    if (!/^\d+$/.test(name)) continue;
+    if (!/^\d+$/.test(name) || only !== undefined && name !== String(only)) continue;
     const base = path.join(procRoot, name);
     const paths: string[] = []; const references: string[] = [];
     let namespace = ownNamespace; let operation = "stat";
@@ -78,7 +81,11 @@ export function retentionProcessScan(root: string, procRoot = "/proc"): Retentio
       }
       let environment = "";
       try { environment = read("environ"); }
-      catch (error) { if (!(kernel && (error as NodeJS.ErrnoException).code === "ESRCH")) throw error; }
+      catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "EACCES" && Number(name) === process.pid && OWN_ENVIRON !== null) environment = OWN_ENVIRON;
+        else if (!(kernel && code === "ESRCH")) throw error;
+      }
       for (const pair of environment.split("\0")) {
         const equals = pair.indexOf("=");
         if (equals > 0) { const value = pair.slice(equals + 1); references.push(value); if (value.startsWith("/")) paths.push(value); }
@@ -116,6 +123,16 @@ export function retentionProcessScan(root: string, procRoot = "/proc"): Retentio
     if (held.length || refs.length) processes.push({ pid: Number(name), namespace, stamped: false, paths: held, references: refs });
   }
   return { ownNamespace, processes, complete: true, uncertain };
+}
+
+/** While retention removes a tree it seals its own /proc links, so a helper
+ * scan cannot read this process and records it as uncertain. The process
+ * observes itself instead: its own links stay readable to it. */
+export function withSelfObservation<T extends ProcessScan & { uncertain?: RetentionUncertainty[] }>(scan: T, root: string, procRoot = "/proc"): T {
+  if (!scan.uncertain?.some(row => row.pid === process.pid)) return scan;
+  const own = retentionProcessScan(root, procRoot, process.pid);
+  return { ...scan, processes: [...scan.processes.filter(proc => proc.pid !== process.pid), ...own.processes],
+    uncertain: [...scan.uncertain.filter(row => row.pid !== process.pid), ...own.uncertain ?? []] };
 }
 
 /** Validate both the ordinary helper reply and the optional proc observer's

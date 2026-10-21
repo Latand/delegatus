@@ -1,4 +1,4 @@
-import type { RetentionScan } from "./retentionInspection";
+import { withSelfObservation, type RetentionScan } from "./retentionInspection";
 import { RetentionWorker, RetentionInspectionError, type RetentionInspection } from "./retentionWorker";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
@@ -26,11 +26,16 @@ export type RetentionReport = {
   recoveryCursor?: string;
   reclaimedCacheBytes: number; kept: { dir: string; reason: string; bytes: number }[]; errors: string[];
 };
+/** The owner's state. `fenced` answers a claim: the owner refuses every new
+ * serving, rollback or in-flight hold on the claimed release from before this
+ * read until the pass ends, so the read is the last word on its holds. */
+export type RetentionCurrent = { record: LauncherRecord; inputs: RetentionInputs; fenced?: boolean };
 export type RetentionPorts = {
   inspection?: RetentionInspection;
   git?: typeof runGit; scan?: () => ProcessScan & Partial<Pick<RetentionScan, "uncertain">>; mountPoints?: (directory: string) => string[];
   now?: () => number; env?: Readonly<Record<string, string | undefined>>; reportFile?: string;
-  current?: () => { record: LauncherRecord; inputs: RetentionInputs } | Promise<{ record: LauncherRecord; inputs: RetentionInputs }>;
+  /** Called with `claim`, the release about to be removed, for the final read. */
+  current?: (claim?: string) => RetentionCurrent | Promise<RetentionCurrent>;
   maxCandidates?: number;
   removeTree?: (directory: string) => Promise<void>;
   lockHead?: (directory: string) => (() => void) | null;
@@ -78,7 +83,8 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
       recoveryCursor = previousReport.recoveryCursor;
   } catch { /* A first pass, or an older report with no cursor. */ }
   const mounts = ports.mountPoints ?? mountPointsUnder;
-  const read = async () => ports.current?.() ?? { record, inputs };
+  // Without an owner port the inputs are the caller's own and cannot change.
+  const read = async (claim?: string): Promise<RetentionCurrent> => ports.current ? ports.current(claim) : { record, inputs, fenced: true };
   const budget = ports.maxCandidates ?? 4;
   const maxCandidates = Number.isFinite(budget) ? Math.max(1, Math.min(128, Math.floor(budget))) : 4;
   let worked = 0;
@@ -102,16 +108,19 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
   const union = (first: ProcessScan, second: ProcessScan): ProcessScan => ({ ...second,
     processes: [...first.processes, ...second.processes],
     uncertain: [...(first as Partial<RetentionScan>).uncertain ?? [], ...(second as Partial<RetentionScan>).uncertain ?? []] } as ProcessScan);
-  /** With a gate closed, a process can no longer reach the tree by any path,
-   * so a holder found now held it before. Two scans catch a descriptor handed
-   * to a child between them; the owner read follows the last scan, so a hold
-   * added while it ran is seen. This process's own cwd is the trash. */
-  const gatedObservation = async (trash: string) => {
-    const scanned = union(await scan(), await scan());
+  /** With a gate closed and this process's links sealed, a process can no
+   * longer reach the tree by any path, so a holder found now held it before.
+   * Two scans catch a descriptor handed to a child between them. The owner
+   * read follows the last scan and claims `claim`: the owner fences new holds
+   * on it first, so no hold can land after this read. An owner that cannot
+   * fence keeps the tree. This process's own cwd is the trash. */
+  const gatedObservation = async (trash: string, claim: string) => {
+    const root = path.resolve(record.releasesDir);
+    const scanned = union(withSelfObservation(await scan(), root), withSelfObservation(await scan(), root));
     const processes = { ...scanned, processes: scanned.processes.map(proc => proc.pid === process.pid
       ? { ...proc, paths: proc.paths.filter(entry => entry !== trash) } : proc) };
-    const current = await read();
-    return { current, processes };
+    const current = await read(claim);
+    return { current, processes, unfenced: current.fenced !== true };
   };
   type Candidate = { dir: string; sha: string; age: number; locked: boolean; identity: string };
   const byAge = (a: Candidate, b: Candidate) => a.age - b.age || (a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0);
@@ -163,8 +172,8 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
   };
   /** The last word on a quarantined release, read with its gate closed. */
   const gatedReleaseHold = async (candidate: Candidate, trash: string, gate: string) => {
-    const { current, processes } = await gatedObservation(trash);
-    return protect(candidate, current, processes, true) ?? (heldByProcess(gate, processes) ? "process" : null);
+    const { current, processes, unfenced } = await gatedObservation(trash, candidate.dir);
+    return protect(candidate, current, processes, true) ?? (heldByProcess(gate, processes) ? "process" : unfenced ? "owner-unfenced" : null);
   };
   const worktreeStatus = async (directory: string) => {
     const status = await run(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], directory);
@@ -221,7 +230,33 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
     const keepCount = Number.isFinite(rawKeep) ? Math.max(1, Math.floor(rawKeep)) : 3;
     // Validate every safety input before the first mutation.
     const protectedSet = new Map(candidates.map(candidate => [candidate.dir, protect(candidate, initial, processes)]));
-    const newest = new Set(candidates.filter(candidate => !protectedSet.get(candidate.dir) && now() - candidate.age >= DAY).sort((a, b) => byAge(b, a)).slice(0, keepCount).map(candidate => candidate.dir));
+    // A whole release an interrupted pass quarantined, still intact, is still
+    // a release: it counts toward the newest kept at the age it left its path
+    // with, and recovery restores it when it is one of them.
+    const quarantined: Candidate[] = [];
+    const recentQuarantine = new Set<string>();
+    for (const file of previousTrash) {
+      const releaseJournal = file.startsWith("release-trash-");
+      if (!TRASH_JOURNAL.test(file) || !releaseJournal && !file.startsWith("package-trash-") || releaseJournal !== !!record.checkout) continue;
+      try {
+        const row = JSON.parse(fs.readFileSync(path.join(path.dirname(reportFile), file), "utf8"));
+        if (typeof row?.directory !== "string" || path.dirname(row.directory) !== root || row.deleting
+          || !(record.checkout ? /^[a-f0-9]{12}$/ : /^npm-\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/).test(path.basename(row.directory))
+          || candidates.some(candidate => candidate.dir === row.directory)) continue;
+        const gated = isGatedTrashRow(row);
+        if (releaseJournal && !gated) continue;
+        // A gate left closed by a crash still holds its intact tree.
+        const location = gated ? (fs.existsSync(row.gate) ? row.trash : row.legacyTrash) : row.trash;
+        if (typeof location !== "string" || !gated && !fs.lstatSync(location, { throwIfNoEntry: false })?.isDirectory()) continue;
+        let age = Number(row.context?.age);
+        if (!Number.isFinite(age)) { try { age = releaseAge(location, !!record.checkout); } catch { age = now(); } }
+        if (now() - age < DAY) recentQuarantine.add(row.directory);
+        else quarantined.push({ dir: row.directory, sha: row.context?.sha ?? "", age, locked: false, identity: String(row.identity ?? "") });
+      } catch { /* An unreadable journal is replayed, and reported, below. */ }
+    }
+    const newest = new Set([...candidates.filter(candidate => !protectedSet.get(candidate.dir)),
+      ...quarantined.filter(candidate => !protect(candidate, initial, processes, true))]
+      .filter(candidate => now() - candidate.age >= DAY).sort((a, b) => byAge(b, a)).slice(0, keepCount).map(candidate => candidate.dir));
     const safeRef = async (sha: string) => {
       const refs = await run(["for-each-ref", "--contains", sha, "--format=%(refname)", "refs/heads", "refs/remotes", "refs/self-update/tip"], record.checkout!);
       return refs.code === 0 && refs.stdout.split("\n").some(ref => ref.trim().length > 0);
@@ -269,9 +304,9 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
           if (!row) continue;
           const outcome = await settleGatedTrash(journal, row, { remove: ports.removeTree,
             observe: async (trash, gate) => {
-              const { current, processes: fresh } = await gatedObservation(trash);
+              const { current, processes: fresh, unfenced } = await gatedObservation(trash, candidate.dir);
               return heldByProcess(gate, fresh) || heldByProcess(cache, fresh)
-                || (current.inputs.inFlight ?? []).some(dir => under(dir, candidate.dir)) ? "process" : null;
+                || (current.inputs.inFlight ?? []).some(dir => under(dir, candidate.dir)) ? "process" : unfenced ? "owner-unfenced" : null;
             },
             validate: root => !inspectTree(root, { git: true, mounts: mounts(row.trash) }).hold });
           if (outcome.removed) report.reclaimedCacheBytes += bytesBefore;
@@ -315,8 +350,8 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
             const row = quarantineTree(target, journal);
             if (!row || !(await settleGatedTrash(journal, row, { remove: ports.removeTree,
               observe: async (trash, gate) => {
-                const { current, processes: fresh } = await gatedObservation(trash);
-                return protect(candidate, current, fresh, true) ?? (heldByProcess(gate, fresh) ? "process" : null);
+                const { current, processes: fresh, unfenced } = await gatedObservation(trash, candidate.dir);
+                return protect(candidate, current, fresh, true) ?? (heldByProcess(gate, fresh) ? "process" : unfenced ? "owner-unfenced" : null);
               },
               validate: root => disposableGeneratedTree(root, generated),
             })).removed) { content = { ...content, ignored: [ignored] }; break; }
@@ -370,7 +405,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
           // Rename out of the release path, recheck Git content there, then
           // remove from behind the closed gate. The ready marker goes first.
           const journal = path.join(path.dirname(reportFile), `release-trash-${randomUUID()}.json`);
-          const row = quarantineTree(candidate.dir, journal, { sha: candidate.sha });
+          const row = quarantineTree(candidate.dir, journal, { sha: candidate.sha, age: candidate.age });
           if (!row) { report.kept.push({ dir: candidate.dir, reason: "changed", bytes }); continue; }
           const outcome = await settleGatedTrash(journal, row, { remove: ports.removeTree, first: [".next/DELEGATUS_RELEASE_READY"],
             beforeGate: trash => releaseContentHold(trash, candidate.sha),
@@ -385,7 +420,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
             report.kept.push({ dir: candidate.dir, reason: packageTree.hold, bytes: await bytesOf(candidate.dir) }); continue;
           }
           const journal = path.join(path.dirname(reportFile), `package-trash-${randomUUID()}.json`);
-          const row = quarantineTree(candidate.dir, journal, { sha: candidate.sha });
+          const row = quarantineTree(candidate.dir, journal, { sha: candidate.sha, age: candidate.age });
           if (!row) { report.kept.push({ dir: candidate.dir, reason: "changed", bytes: 0 }); continue; }
           const outcome = await settleGatedTrash(journal, row, { remove: ports.removeTree,
             observe: (trash, gate) => gatedReleaseHold(candidate, trash, gate),
@@ -442,7 +477,9 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
           if ([gate, row.directory, quarantine.legacyTrash].some(entry => entry && heldByProcess(entry, processes))) return "process";
           if (outputCandidate) return protect(outputCandidate, current, processes, true);
           if (!wholeRelease) return (current.inputs.inFlight ?? []).some(dir => under(row.directory, dir)) ? "in-flight" : null;
-          return protect({ dir: row.directory, sha: row.context?.sha ?? "", age: 0, locked: false, identity: row.identity }, current, processes, true);
+          return protect({ dir: row.directory, sha: row.context?.sha ?? "", age: 0, locked: false, identity: row.identity }, current, processes, true)
+            ?? (!quarantine.deleting && newest.has(row.directory) ? "newest" : null)
+            ?? (!quarantine.deleting && recentQuarantine.has(row.directory) ? "recent" : null);
         };
         const reportHold = (reason: string) => {
           if (wholeRelease) report.kept.push({ dir: row.directory, reason, bytes: 0 });
@@ -454,7 +491,10 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
         const outcome = await settleGatedTrash(journal, quarantine, { remove: ports.removeTree,
           first: releaseTrash ? [".next/DELEGATUS_RELEASE_READY"] : undefined,
           beforeGate: releaseTrash ? trash => releaseContentHold(trash, quarantine.context?.sha ?? "") : undefined,
-          observe: async (trash, gate) => { const { current, processes } = await gatedObservation(trash); return hold(gate, current, processes); },
+          observe: async (trash, gate) => {
+            const { current, processes, unfenced } = await gatedObservation(trash, outputCandidate?.dir ?? row.directory);
+            return hold(gate, current, processes) ?? (unfenced ? "owner-unfenced" : null);
+          },
           // A checkout release is itself a Git worktree; Git checked its content before the gate.
           validate: releaseTrash ? undefined : tree => (!outputCandidate || disposableGeneratedTree(tree, generatedOutput))
             && (outputTrash || !inspectTree(tree, { git: true, mounts: mounts(quarantine.trash) }).hold) });

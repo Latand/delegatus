@@ -24,7 +24,7 @@ function fixture(count = 12) {
   fs.writeFileSync(record.releasePointer, JSON.stringify({ dir: dirs[0] }));
   const inputs: RetentionInputs = {};
   const options = { reportFile: path.join(root, "retention.json"), env: { LLV_SELF_UPDATE_KEEP_RELEASES: "1" }, now,
-    current: () => ({ record, inputs }), launch: { executable: process.execPath, entry: path.join(import.meta.dir, "retentionPass.fixture.ts"), args: [root] } };
+    current: () => ({ record, inputs }), fence: () => true, launch: { executable: process.execPath, entry: path.join(import.meta.dir, "retentionPass.fixture.ts"), args: [root] } };
   const ended = () => expect(() => process.kill(Number(fs.readFileSync(path.join(root, "helper-pid"), "utf8")), 0)).toThrow();
   return { root, dirs, record, inputs, options, ended };
 }
@@ -133,3 +133,31 @@ test.skipIf(process.platform !== "linux").each(["malformed", "invalid-report"])(
   h.ended();
   for (const dir of h.dirs) expect(fs.existsSync(dir)).toBeTrue();
 });
+
+test.skipIf(process.platform !== "linux").each([true, false])("the owner raises its hold fence before answering a removal claim (fenced %p)", async fenced => {
+  const h = fixture(4); const target = h.dirs[1]!;
+  const claims: string[] = []; let delayed = 0; let refusedHold = false;
+  const report = await runRetentionPass(h.record, h.inputs, { ...h.options,
+    fence: claim => { claims.push(claim); return fenced; },
+    current: async () => {
+      // A delayed reply: a hold attempted meanwhile on a claimed release is
+      // refused by the owner's fence, never acquired behind the reply.
+      if (claims.includes(target) && !delayed++) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+        if (fenced) refusedHold = true; else h.inputs.rollbackPointers = [JSON.stringify({ dir: target })];
+      }
+      return { record: h.record, inputs: structuredClone(h.inputs) };
+    } });
+  expect(report.errors).toEqual([]);
+  expect(claims).toContain(target);
+  if (fenced) {
+    expect(refusedHold).toBeTrue();
+    expect(report.removed.map(row => row.dir)).toContain(target);
+  } else {
+    // An owner that cannot fence authorizes no removal at all.
+    expect(report.removed).toEqual([]);
+    for (const dir of h.dirs) expect(fs.existsSync(path.join(dir, "package.json"))).toBeTrue();
+    expect(report.kept).toContainEqual(expect.objectContaining({ dir: h.dirs[2], reason: "owner-unfenced" }));
+  }
+  h.ended();
+}, 30_000);

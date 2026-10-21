@@ -4,9 +4,9 @@ import { spawnLeasedHelper, leasedHelperInput, endLeasedHelper } from "@/lib/hel
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { retentionWorkerLaunch, type RetentionInspection } from "./retentionWorker";
 import type { LauncherRecord } from "./launcher";
-import type { RetentionInputs, RetentionReport } from "./retention";
+import type { RetentionCurrent, RetentionInputs, RetentionReport } from "./retention";
 
-type Current = { record: LauncherRecord; inputs: RetentionInputs };
+type Current = RetentionCurrent;
 const validReport = (report: RetentionReport | undefined): report is RetentionReport => !!report
   && typeof report.at === "string" && Number.isFinite(Date.parse(report.at))
   && Number.isFinite(report.reclaimedCacheBytes) && report.reclaimedCacheBytes >= 0
@@ -17,10 +17,14 @@ const scheduleDeadline = (expire: () => void, ms: number) => { const timer = set
 
 /** The whole filesystem pass is off the Viewer loop, including Git status,
  * generated-tree inspection and trash snapshots. Each guard asks the owner
- * for its current safety inputs instead of replaying the initial snapshot. */
+ * for its current safety inputs instead of replaying the initial snapshot.
+ * The final read before a removal claims its release: `fence` must answer
+ * true only while the owner refuses every new hold on it, and runs before
+ * `current`, so a hold either precedes that read or is refused. */
 export async function runRetentionPass(record: LauncherRecord, inputs: RetentionInputs, options: {
   reportFile: string; env: Readonly<Record<string, string | undefined>>;
   current: () => Current | Promise<Current>;
+  fence?: (claim: string) => boolean;
   launch?: ReturnType<typeof retentionWorkerLaunch>; timeoutMs?: number; now?: number; signal?: AbortSignal;
   schedule?: typeof scheduleDeadline;
 }): Promise<RetentionReport> {
@@ -56,8 +60,11 @@ export async function runRetentionPass(record: LauncherRecord, inputs: Retention
             try {
               const message = JSON.parse(line);
               if (message.kind === "current" && Number.isSafeInteger(message.id)) {
+                const claim = typeof message.claim === "string" ? message.claim : undefined;
+                let fenced: boolean | undefined;
+                try { fenced = claim === undefined ? undefined : options.fence?.(claim) === true; } catch { fenced = false; }
                 void Promise.resolve().then(options.current).then(current => {
-                  if (!settled) input.write(JSON.stringify({ id: message.id, current }) + "\n");
+                  if (!settled) input.write(JSON.stringify({ id: message.id, current: { record: current.record, inputs: current.inputs, fenced } }) + "\n");
                 }, () => { if (!settled) input.write(JSON.stringify({ id: message.id, error: "retention owner unavailable" }) + "\n"); });
               } else if (message.kind === "report" && validReport(message.report)) {
                 settled = true; resolve(message.report);
@@ -94,8 +101,8 @@ export async function serveRetentionPass(inspection?: RetentionInspection): Prom
           console.log = console.error;
           void import("./retention").then(({ retainReleases }) => retainReleases(message.record, message.inputs, {
             reportFile: message.reportFile, env: message.env, inspection, now: message.now === undefined ? Date.now : () => message.now,
-            current: () => new Promise<Current>((resolve, reject) => {
-              const id = ++sequence; pending.set(id, { resolve, reject }); send({ kind: "current", id });
+            current: claim => new Promise<Current>((resolve, reject) => {
+              const id = ++sequence; pending.set(id, { resolve, reject }); send({ kind: "current", id, ...(claim === undefined ? {} : { claim }) });
             }),
           })).then(report => { send({ kind: "report", report }); resolve(); }, reject);
         } else {
@@ -103,7 +110,7 @@ export async function serveRetentionPass(inspection?: RetentionInspection): Prom
           if (!request) throw new Error("unknown retention safety reply");
           pending.delete(message.id);
           if (message.error) request.reject(new Error(message.error));
-          else if (message.current?.record && message.current?.inputs) request.resolve(message.current);
+          else if (message.current?.record && message.current?.inputs && [undefined, true, false].includes(message.current.fenced)) request.resolve(message.current);
           else request.reject(new Error("invalid retention safety reply"));
         }
       } catch (error) { reject(error); }

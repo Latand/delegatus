@@ -2523,7 +2523,9 @@ request, a bounded reply and a 60-second request deadline. The pass closes its
 recorded lease and waits for the guardian and its process group to end.
 `self-update.retention` remains the Viewer operation label;
 `self-update.bytes` records the asynchronous measurement waits in the Viewer
-and the synchronous byte walks in the helper.
+and the synchronous byte walks in the helper; `self-update.trash-inventory`
+records the pass helper's synchronous inventory of a tree before its removal
+and before a replay finishes one.
 
 The T19 replay driver is `scripts/measure-release-retention.ts`. It requires
 exactly 87 already-copied release directories below its isolated `TMPDIR`,

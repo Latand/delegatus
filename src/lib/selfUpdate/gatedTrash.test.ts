@@ -126,3 +126,49 @@ test("a tree replaced at its quarantine path is never removed", async () => {
   expect(await settleGatedTrash(h.journal, row, { observe: async () => null })).toEqual({ removed: false, reason: "changed" });
   expect(fs.readFileSync(path.join(row.trash, "foreign"), "utf8")).toBe("keep");
 });
+
+test.skipIf(process.platform !== "linux")("no process of the installation user can enter the trash through the remover's /proc links while the gate is closed", async () => {
+  const h = tree();
+  const row = quarantineTree(h.directory, h.journal)!;
+  const entries: Record<string, boolean> = {};
+  const outcome = await settleGatedTrash(h.journal, row, {
+    observe: async () => {
+      for (const link of [`/proc/${process.pid}/cwd`, `/proc/self/../${process.pid}/cwd`]) entries[link] = outsiderCanEnter(link);
+      return null;
+    },
+  });
+  expect(entries).toEqual({ [`/proc/${process.pid}/cwd`]: false, [`/proc/self/../${process.pid}/cwd`]: false });
+  expect(outcome).toEqual({ removed: true });
+  // Outside the window the process is ordinary again.
+  expect(outsiderCanEnter(`/proc/${process.pid}/cwd`)).toBeTrue();
+});
+
+test.each(["edited", "added", "replaced"] as const)("a replayed deletion preserves a partial tree %s after the interruption", async change => {
+  const h = tree();
+  fs.writeFileSync(path.join(h.directory, "lib/other.js"), "module.exports = 2;");
+  const row = quarantineTree(h.directory, h.journal)!;
+  await expect(settleGatedTrash(h.journal, row, { observe: async () => null, first: ["lib/index.js"],
+    remove: async entry => { if (entry !== "lib/index.js") throw new Error("interrupted"); await fs.promises.rm(entry); } })).rejects.toThrow("interrupted");
+  const replay = JSON.parse(fs.readFileSync(h.journal, "utf8")) as GatedTrashRow;
+  expect(replay.deleting).toBeTrue();
+  const other = path.join(row.trash, "lib/other.js");
+  if (change === "edited") fs.writeFileSync(other, "new operator bytes");
+  if (change === "added") fs.writeFileSync(path.join(row.trash, "lib/new.js"), "new operator bytes");
+  if (change === "replaced") { fs.rmSync(path.join(row.trash, "lib"), { recursive: true }); fs.mkdirSync(path.join(row.trash, "lib")); fs.writeFileSync(other, "new operator bytes"); }
+  expect(await settleGatedTrash(h.journal, replay, { observe: async () => null })).toEqual({ removed: false, reason: "changed" });
+  const kept = change === "added" ? path.join(row.trash, "lib/new.js") : other;
+  expect(fs.readFileSync(kept, "utf8")).toBe("new operator bytes");
+  expect(fs.existsSync(h.journal)).toBeTrue();
+});
+
+test("a replayed deletion of an unchanged partial tree finishes", async () => {
+  const h = tree();
+  fs.writeFileSync(path.join(h.directory, "lib/other.js"), "module.exports = 2;");
+  const row = quarantineTree(h.directory, h.journal)!;
+  await expect(settleGatedTrash(h.journal, row, { observe: async () => null, first: ["lib/index.js"],
+    remove: async entry => { if (entry !== "lib/index.js") throw new Error("interrupted"); await fs.promises.rm(entry); } })).rejects.toThrow("interrupted");
+  const replay = JSON.parse(fs.readFileSync(h.journal, "utf8")) as GatedTrashRow;
+  expect(await settleGatedTrash(h.journal, replay, { observe: async () => null })).toEqual({ removed: true });
+  expect(fs.existsSync(row.gate)).toBeFalse(); expect(fs.existsSync(h.journal)).toBeFalse();
+  expect(fs.readdirSync(h.root).filter(name => name.startsWith("package-trash"))).toEqual([]);
+});

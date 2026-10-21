@@ -86,22 +86,49 @@ through `src/lib/selfUpdate/gatedTrash.ts`:
 
 1. A durable journal is written, then the tree is renamed into
    `<parent>/.delegatus-trash-<name>-<uuid>/<name>`. Its own path is gone, so
-   a new start, open, map or module load by that path fails.
+   a new start, open, map or module load by that path fails. A whole release
+   records its revision and its age in the journal.
 2. A checkout release's Git content is checked again at that location.
-3. The retention process moves its cwd into the tree and closes the gate
-   directory (mode 000). From then on, no process of the installation user can
-   reach the tree by any path, its trash path included. A holder found after
-   this point held the tree before it closed.
-4. Two process scans run, then the owner's serving, rollback and in-flight
-   holds are read. The read follows the last scan, so a hold added while a
-   scan ran is seen. A hold added after that read names a path that no longer
-   exists.
+3. The retention process moves its cwd into the tree, makes itself
+   non-dumpable (`prctl(PR_SET_DUMPABLE, 0)` through Bun's FFI) and closes the
+   gate directory (mode 000). A non-dumpable process's `/proc/<pid>/cwd` and
+   `fd` links cannot be followed by another unprivileged process, so from then
+   on no process of the installation user can reach the tree by any path, its
+   trash path and the remover's own links included. A holder found after this
+   point held the tree before it closed. On Linux, a process that cannot seal
+   its links keeps the tree (`process-links-unsealed`); other platforms have no
+   such links.
+4. Two process scans run. A helper cannot read the sealed remover, so the
+   remover observes itself instead, with its environment read before it
+   sealed. Then the owner's serving, rollback and in-flight holds are read with
+   a claim on the release: the owner raises its hold fence before that read
+   and keeps it until the pass ends, so a hold either precedes the read or is
+   refused. The Viewer's fence is its existing admission: while a pass runs,
+   `reserve()` refuses every build, apply, restart and pointer change, and the
+   automatic rollback capture waits on it. An owner that cannot fence keeps
+   the tree (`owner-unfenced`).
 5. Any holder, hold or failed check restores the tree to its path. Otherwise
-   the journal records that deletion began, the release's ready marker goes
-   first, and the entries are removed relative to the cwd. A partial tree is
-   never restored; it waits behind its gate for the next pass.
+   the pass inventories the tree (inode, size and both change times of every
+   entry, at most 200,000 entries), writes that inventory durably beside the
+   journal, records that deletion began, removes the release's ready marker
+   first, and removes the entries relative to the cwd. A partial tree is never
+   restored; it waits behind its gate for the next pass. A replay removes it
+   only when every remaining entry is unchanged from the inventory; an added,
+   edited or replaced entry keeps the partial tree in quarantine.
 6. A removed checkout's own worktree registration is dropped; no other
    registration is pruned.
+
+An intact whole release left in quarantine by an interrupted pass still counts
+toward the newest `LLV_SELF_UPDATE_KEEP_RELEASES`, at the age it left its path
+with. When it is one of them, recovery restores it to its path.
+
+A process that loads Delegatus code from a release keeps a descriptor on the
+release's root for its lifetime (`src/lib/selfUpdate/releaseHold.ts`, loaded
+by `src/lib/stateOwnership.ts`). A loaded module leaves nothing else in
+`/proc` once its file has been read; the descriptor is what the inventory
+finds. A load from a release already moved off its path fails. A process that
+runs no Delegatus code and keeps nothing open in the release is outside this
+hold.
 
 A journal written before gates existed is adopted on replay: its trash moves
 behind a gate after the snapshot, identity and owner checks its own replay
@@ -130,8 +157,16 @@ after the final scan's snapshot (cwd, open file, mapped file, Bun module) kept
 running while its release was removed. With the gate, every such hold keeps
 the release; every such holder is refused (`EACCES` at the gate, `ENOENT` at
 the old path) or, when it arrived before the gate closed, keeps the release.
-A third test replies to each owner read with the state from before its hold:
-a release removed anyway was already off its path when that hold landed.
+A third test replies to each owner read with the state from before its hold,
+from an owner that fences claimed releases: every hold that lands keeps its
+release, renamed or not, and holds after the claim are refused.
+
+Five further counterexamples were confirmed on `09386336` and fail there:
+a holder entering through `/proc/<remover>/cwd` after the final scan; bytes
+written into a partial tree before its deletion was replayed; a module loaded
+over stdin by a Bun process outside the release, with no other trace; an
+intact quarantined release that a raised keep count names; and an owner
+reply that predates a hold acquired while it was in flight.
 
 Checks run in scratch exports with private HOME, config, temp and state roots,
 a closed Viewer control URL, and the required shared gate wrapper. No latency

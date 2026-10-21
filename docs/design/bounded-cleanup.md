@@ -429,7 +429,7 @@ state refuses the retry and preserves the directory.
 | Remove of a trash path fails partway | trash stays and is finished next sweep; error recorded |
 | Holder found after rename | renamed back, kept `inUse` |
 | `git worktree remove` fails | worktree: `remove-failed` (unchanged); release: its tree is already removed, the registration stays, error recorded |
-| Viewer killed mid-removal | temp/trim: a trash name remains and is revalidated next sweep; worktree: intent journal resumes or holds as `interrupted-removal`; release: the ready marker goes first, the partial tree waits behind its gate, and the next pass finishes it after the same gated checks, never restoring it to its path; until then its registration stays, so `git worktree add` of that same revision is refused. An apply reaching a tree an older release's removal left partial restores only proven missing tracked paths |
+| Viewer killed mid-removal | temp/trim: a trash name remains and is revalidated next sweep; worktree: intent journal resumes or holds as `interrupted-removal`; release: the ready marker goes first, the partial tree waits behind its gate, and the next pass finishes it after the same gated checks only when every remaining entry matches the inventory recorded before deletion began (a changed partial tree stays in quarantine), never restoring it to its path; until then its registration stays, so `git worktree add` of that same revision is refused. An apply reaching a tree an older release's removal left partial restores only proven missing tracked paths |
 | Retention throws after a successful apply | apply stays `done`; error in `retention.json` and the log |
 
 ## 8. Must-not-delete cases, each with a test

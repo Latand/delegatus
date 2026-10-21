@@ -852,8 +852,12 @@ export class SelfUpdateService {
     };
     try {
       if (this.deps.prune) await this.deps.prune(record, rollback);
+      // The owner's hold fence: while `retaining` is set, reserve() refuses
+      // every build, apply, restart and pointer change, and the automatic
+      // rollback capture waits on active(), so no hold lands during the pass.
       else await runRetentionPass(record, current().inputs, { env: this.deps.env, signal: abort.signal,
-        reportFile: join(this.deps.dir, "retention.json"), current });
+        reportFile: join(this.deps.dir, "retention.json"), current,
+        fence: () => this.retaining && this.retentionAbort === abort && !abort.signal.aborted && !this.stopped });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       try { writeJsonDurably(join(this.deps.dir, "retention.json"), { at: new Date(this.deps.now()).toISOString(), removed: [], reclaimedCacheBytes: 0, kept: [], errors: [message] }); }

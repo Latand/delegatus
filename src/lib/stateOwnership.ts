@@ -3,6 +3,11 @@ import os from "node:os";
 import path from "node:path";
 
 import { APP_DIR_NAMES } from "../../bin/appDir.mjs";
+import { holdReleaseOf } from "./selfUpdate/releaseHold";
+
+// Every Delegatus process that resolves state loads this module, so loading
+// it from a self-update release holds that release for the process lifetime.
+holdReleaseOf(import.meta.url);
 
 /**
  * Who may resolve the operator's real config and state directories (#1905).
