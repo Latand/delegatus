@@ -5538,10 +5538,10 @@ describe("streamed composer attachments", () => {
             }
             Object.defineProperty(window, "XMLHttpRequest", { value: UploadRequest, configurable: true });
             const original = window.fetch;
-            window.fetch = (input, init) => {
+            Object.defineProperty(window, "fetch", { configurable: true, value: (input: RequestInfo | URL, init?: RequestInit) => {
               if (String(input) === "/api/runtime/send" && init?.method === "POST") state.sent = JSON.parse(String(init.body));
               return original(input, init);
-            };
+            } });
             const transfer = new DataTransfer();
             transfer.items.add(new File([new Uint8Array(100 * 1024 * 1024)], "recording.ogg", { type: "audio/ogg" }));
             const picker = document.querySelector<HTMLInputElement>('input[type="file"]')!;

@@ -34,11 +34,12 @@ test("the raw upload route admits a body and returns an owner-bound completed re
   expect(await fs.readFile(stored.path, "utf8")).toBe("synthetic recording");
 });
 
-test.each([
+const foreignUploadHeaders: Record<string, string>[] = [
   { host: "foreign.example" },
   { origin: "https://foreign.example" },
   { "sec-fetch-site": "cross-site" },
-])("foreign upload requests refuse before their body is read: %j", async headers => {
+];
+test.each(foreignUploadHeaders)("foreign upload requests refuse before their body is read: %j", async headers => {
   const incoming = request(headers);
   expect((await POST(incoming)).status).toBe(403);
   expect(incoming.bodyUsed).toBe(false);
