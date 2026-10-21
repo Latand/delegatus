@@ -510,7 +510,11 @@ test("upgrades version two with file-time fallbacks and a persistent ID watermar
   await indexTranscriptSources([{ ...source(pathname, "claude", "migration"), mtimeMs: 12_345 }]);
   const filename = statePath("transcript-search.sqlite");
   const old = new Database(filename);
-  old.exec("ALTER TABLE transcript_messages DROP COLUMN sort_timestamp; DROP TABLE transcript_search_sequence; PRAGMA user_version = 2;");
+  old.exec("DROP INDEX transcript_messages_search_hit");
+  old.exec("DROP INDEX transcript_messages_time");
+  old.exec("ALTER TABLE transcript_messages DROP COLUMN sort_timestamp");
+  old.exec("DROP TABLE transcript_search_sequence");
+  old.exec("PRAGMA user_version = 2");
   old.close();
   expect(searchTranscripts({ query: "beryl" }).items[0].timestamp).toBe(12.345);
   const upgraded = new Database(filename, { readonly: true });
