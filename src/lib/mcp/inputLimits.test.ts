@@ -73,21 +73,24 @@ test("readable control-character paths for 240 frames fit the HTTP budget and pu
     process.env.LLV_EVIDENCE_ROOTS = root;
     let directory = root;
     const segments = 19;
-    const segmentLength = Math.floor((4100 - root.length - segments - "/frame.png".length) / segments);
-    expect(segmentLength).toBeLessThanOrEqual(255);
+    const totalSegmentChars = 4094 - root.length - segments - "/frame.png".length;
+    const segmentLength = Math.floor(totalSegmentChars / segments);
+    const longerSegments = totalSegmentChars % segments;
+    expect(segmentLength).toBeGreaterThan(0);
+    expect(segmentLength + (longerSegments > 0 ? 1 : 0)).toBeLessThanOrEqual(255);
     for (let i = 0; i < segments; i++) {
-      directory = path.join(directory, "\u0001".repeat(segmentLength));
+      directory = path.join(directory, "\u0001".repeat(segmentLength + (i < longerSegments ? 1 : 0)));
       fs.mkdirSync(directory);
     }
     const framePath = path.join(directory, "frame.png");
     fs.writeFileSync(framePath, Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
     expect(fs.readFileSync(framePath).byteLength).toBe(8);
-    expect(framePath.length).toBeLessThanOrEqual(4096);
+    expect(framePath.length).toBe(4094);
 
     const args = {
       clientRequestId: "control-path-envelope", title: "Control path envelope",
       variants: [{ number: 1, name: "Long path", description: "Readable segmented path",
-        frames: Array.from({ length: PROTOTYPE_LIMITS.media }, () => ({ path: framePath, caption: "", width: 240, lang: "en" })) }],
+        frames: Array.from({ length: PROTOTYPE_LIMITS.media }, () => ({ path: framePath, caption: "界".repeat(200), width: 240, lang: "en" })) }],
       questions: Array.from({ length: 7 }, (_, i) => ({ id: `control-question-${i}`, text: "界".repeat(300),
         options: Array.from({ length: 6 }, (_, j) => ({ label: `${j}` + "界".repeat(119), recommended: j === 0 })),
         multiple: true, other: true })),

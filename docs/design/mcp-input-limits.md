@@ -46,7 +46,7 @@ prototype paths exercise JSON escaping at the accepted path-length limit.
 | --- | --- | ---: | ---: |
 | `create_pipeline` | 8 stages, 8,000-character prompts, 20 maximum-length output paths per stage, 16,000-character spec | 246 | 280,208 |
 | `publish_prototype_review` | 9 variants, 240 frames with 4,088-character quote-heavy paths and 200-character captions, 7 questions with 6 options each | 1,417 | 2,150,103 |
-| `publish_prototype_review` | 240 frames with one readable 4,094-character segmented path containing U+0001 characters, plus 7 maximum questions and 6 options each | 1,377 | 5,805,877 |
+| `publish_prototype_review` | 240 frames with one readable 4,094-character segmented path containing U+0001 characters and 200-character captions, plus 7 maximum questions and 6 options each | 1,377 | 5,858,677–5,937,877 across isolated temp-root lengths |
 | `update_task` | Details at the 20,000-character domain cap | 3 | 60,163 |
 | `bridge_report` | 120-character summary, 27 section items at 200 characters, 64 covered outcome keys; whole-report limit enforced | 102 | 6,929 |
 
@@ -60,7 +60,7 @@ or downstream operation changes.
 
 `src/lib/mcp/inputLimits.ts` sets **8,192 elements** and **8,388,608 body bytes**.
 Against the largest measured envelope, these leave 6,775 elements (478%) and
-2,582,731 bytes (45%) of margin. The body budget is twice the SDK's default
+2,450,731 bytes (29%) of margin. The body budget is twice the SDK's default
 4 MiB cap; each ingress path still enforces this explicit cap before parsing.
 A future workflow requiring a larger envelope should update its measured case
 and these budgets together.
