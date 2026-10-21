@@ -22,7 +22,7 @@ process.env.LLV_STATE_DIR = path.join(SANDBOX, "state");
 process.env.LLV_CODEX_HOME = path.join(SANDBOX, "legacy");
 process.env.LLV_CLAUDE_HOME = path.join(SANDBOX, "legacy-claude");
 
-const { claudeEnvPrefix, freshSpecFor, resumeSpecFor, withSpawnCapability, prepareAgentPublicationSpec } = await import("./cli");
+const { claudeEnvPrefix, freshSpecFor, resumeSpecFor, resumeSpecForSession, withSpawnCapability, prepareAgentPublicationSpec } = await import("./cli");
 const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
 const { createManagedClaudeAccount } = await import("@/lib/accounts/claude");
 const { saveTelegramSession, telegramConnectorTokenPath, telegramSessionPath } = await import("@/lib/telegram/sessionStore");
@@ -676,6 +676,30 @@ test("resume preserves read-only execution policy for both engines", () => {
   expect(claude?.command).toContain("'--permission-mode' 'plan' '--disallowedTools' 'Edit,Write,NotebookEdit'");
   expect(claude?.command).not.toContain("'--dangerously-skip-permissions'");
   expect(claude?.launchProfile).toMatchObject({ readOnly: true, permissionMode: "plan" });
+});
+
+test.each([
+  { sandbox: "full" as const, permissionMode: "bypassPermissions", expected: "--dangerously-skip-permissions" },
+  { sandbox: "restricted" as const, permissionMode: "auto", expected: "'--permission-mode' 'auto'" },
+])("pipeline Claude resume keeps $sandbox execution mode beside read-only repository policy", ({ sandbox, permissionMode, expected }) => {
+  const spec = resumeSpecForSession("claude", PERMISSION_SESSION_ID, SANDBOX, process.env.LLV_CLAUDE_HOME!, {
+    readOnly: true, sandbox, permissionMode,
+  })!;
+  expect(spec.command).toContain(expected);
+  expect(spec.command).not.toContain("'--permission-mode' 'plan'");
+  expect(spec.launchProfile).toMatchObject({ readOnly: true, sandbox, permissionMode });
+});
+
+test.each([
+  { sandbox: "full" as const, expected: "--sandbox danger-full-access" },
+  { sandbox: "restricted" as const, expected: "--sandbox workspace-write" },
+])("pipeline Codex resume keeps $sandbox execution boundary", ({ sandbox, expected }) => {
+  const spec = resumeSpecForSession("codex", PERMISSION_SESSION_ID, SANDBOX, SANDBOX, {
+    readOnly: true, sandbox,
+  })!;
+  expect(spec.command).toContain(expected);
+  expect(spec.command).not.toContain("--sandbox read-only");
+  expect(spec.launchProfile).toMatchObject({ readOnly: true, sandbox });
 });
 
 test("Claude resume normalizes transcript families and omits unknown model overrides", () => {

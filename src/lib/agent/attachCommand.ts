@@ -70,6 +70,7 @@ export type AttachResolution =
 export interface AttachLaunchProfile {
   readOnly?: boolean | null;
   permissionMode?: string | null;
+  sandbox?: "full" | "restricted" | null;
   cwd?: string | null;
   model?: string | null;
   effort?: string | null;
@@ -129,6 +130,7 @@ export function resolveAttachCommand(path: string, deps: AttachResolverDeps): At
     serviceTier: profile?.serviceTier,
     readOnly: profile?.readOnly,
     permissionMode: profile?.permissionMode,
+    sandbox: profile?.sandbox,
     allowSubagents: profile?.allowSubagents ?? deps.allowSubagentsForPath?.(target.entry.path),
     mcpServers: profile?.mcpServers ?? deps.mcpServersForPath?.(target.entry.path),
     cwd: effectiveCwd,
@@ -159,7 +161,7 @@ export interface LaunchAttachReceipt {
   accountId: string | null;
   agentRole?: string | null;
   key: { engine: AgentEngine; sessionId: string } | null;
-  launchProfile: { readOnly?: boolean | null; permissionMode?: string | null; model: string | null; effort: string | null; fast: boolean | null; serviceTier?: string | null; allowSubagents?: boolean; mcpServers?: readonly string[] };
+  launchProfile: { readOnly?: boolean | null; permissionMode?: string | null; sandbox?: "full" | "restricted" | null; model: string | null; effort: string | null; fast: boolean | null; serviceTier?: string | null; allowSubagents?: boolean; mcpServers?: readonly string[] };
   transport: SpawnReceipt["transport"];
   state: SpawnReceipt["state"];
   purpose: SpawnReceipt["purpose"];
@@ -212,6 +214,7 @@ export function resolveLaunchAttachCommand(deps: LaunchAttachDeps): AttachResolu
     fast: receipt.launchProfile.fast,
     readOnly: receipt.launchProfile.readOnly,
     permissionMode: receipt.launchProfile.permissionMode,
+    sandbox: receipt.launchProfile.sandbox,
     serviceTier: receipt.launchProfile.serviceTier,
     allowSubagents: receipt.launchProfile.allowSubagents,
     operatorDecisionForms: operatorDecisionFormsRequired(receipt.agentRole, receipt.artifactPath),
