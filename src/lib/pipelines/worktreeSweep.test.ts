@@ -28,6 +28,7 @@ import {
   CONVERSATION_PROCESS_PROBE_LIMIT,
   WORKTREE_SWEEP_INTERVAL_MS,
   classifyStatus,
+  conversationCwdStatus,
   exclusiveBytes,
   allocatedBytes,
   forgeCacheMergedPullRequests,
@@ -950,6 +951,78 @@ test("bounded owner proof rotates across passes and releases settled dead rows b
   expect(calls).toEqual([CONVERSATION_PROCESS_PROBE_LIMIT, 1]);
   const live = liveOrWaitingConversationCwds(settled, WORKTREE_SWEEP_INTERVAL_MS, () => false);
   expect(live).toContain(path.join(caseDir, String(CONVERSATION_PROCESS_PROBE_LIMIT)));
+});
+
+test("dead conversations sharing a checkout stay on one proof page", () => {
+  const { registry } = finishedRegistryConversation(caseDir);
+  const snapshot = registry.readOnlySnapshot();
+  const template = Object.values(snapshot.entries)[0]!;
+  const conversation = Object.values(snapshot.conversations)[0]!;
+  const sharedCwd = path.join(caseDir, "0-shared-checkout");
+  const entries: typeof snapshot.entries = {};
+  const conversations: typeof snapshot.conversations = {};
+  for (let index = 0; index <= CONVERSATION_PROCESS_PROBE_LIMIT; index++) {
+    const generationId = `shared-generation-${String(index).padStart(5, "0")}`;
+    const key = `${conversation.engine}:${generationId}`;
+    entries[key] = { ...template, key: key as unknown as typeof template.key,
+      cwd: index === 0 || index === CONVERSATION_PROCESS_PROBE_LIMIT ? sharedCwd : path.join(caseDir, `row-${String(index).padStart(5, "0")}`),
+      status: "dead", structuredTerminationSurvivors: [] };
+    conversations[`shared-conversation-${index}`] = {
+      ...conversation,
+      id: `shared-conversation-${index}` as typeof conversation.id,
+      generations: conversation.generations.map((generation, generationIndex) => generationIndex === conversation.generations.length - 1
+        ? { ...generation, id: generationId } : generation),
+    };
+  }
+  let probes = 0;
+  const status = conversationCwdStatus({ entries, conversations }, 0, () => { probes++; return true; });
+  expect(probes).toBe(CONVERSATION_PROCESS_PROBE_LIMIT);
+  expect(status.held).not.toContain(sharedCwd);
+  expect(status.deferred).not.toContain(sharedCwd);
+});
+
+test("proof-page deferrals preserve a finished lane's retention clock", async () => {
+  const root = repository();
+  const { dir, tip } = lane(root, path.join(caseDir, "zz-proof-target"), "pipeline/proof-target");
+  const { registry } = finishedRegistryConversation(dir);
+  const snapshot = registry.readOnlySnapshot();
+  const template = Object.values(snapshot.entries)[0]!;
+  const conversation = Object.values(snapshot.conversations)[0]!;
+  const entries: typeof snapshot.entries = {};
+  const conversations: typeof snapshot.conversations = {};
+  for (let index = 0; index <= CONVERSATION_PROCESS_PROBE_LIMIT; index++) {
+    const generationId = `retention-generation-${String(index).padStart(5, "0")}`;
+    const key = `${conversation.engine}:${generationId}`;
+    entries[key] = { ...template, key: key as unknown as typeof template.key,
+      cwd: index === CONVERSATION_PROCESS_PROBE_LIMIT ? dir : path.join(caseDir, `aa-proof-${String(index).padStart(5, "0")}`),
+      status: "dead", structuredTerminationSurvivors: [] };
+    conversations[`retention-conversation-${index}`] = {
+      ...conversation,
+      id: `retention-conversation-${index}` as typeof conversation.id,
+      generations: conversation.generations.map((generation, generationIndex) => generationIndex === conversation.generations.length - 1
+        ? { ...generation, id: generationId } : generation),
+    };
+  }
+  const settled = { entries, conversations };
+  const closedAt = "2026-10-01T00:00:00.000Z";
+  const owner = pipeline({ repoDir: root, worktreeDir: dir, branch: "pipeline/proof-target", state: "closed",
+    baseRef: tip, closedAt });
+  let previous: Awaited<ReturnType<typeof sweepMergedWorktrees>> | undefined;
+  const reports = [];
+  for (const hour of [0, 1, 2, 97]) {
+    const at = Date.parse(closedAt) + hour * WORKTREE_SWEEP_INTERVAL_MS;
+    const report = await sweepMergedWorktrees(ports({ pipelines: [owner], prs: [], previous,
+      now: () => at, conversationCwds: () => conversationCwdStatus(settled, at, () => true) }));
+    reports.push(report);
+    previous = report;
+  }
+  expect(reports[3]!.removed.map(row => row.path)).toContain(dir);
+  expect(reports[0]!.kept).toContainEqual(expect.objectContaining({ path: dir, reason: "live-conversation",
+    firstSettledAt: closedAt, detail: "owner proof deferred by per-pass budget" }));
+  expect(reports[1]!.kept).toContainEqual(expect.objectContaining({ path: dir, reason: "retention", firstSettledAt: closedAt }));
+  expect(reports[2]!.kept).toContainEqual(expect.objectContaining({ path: dir, reason: "live-conversation",
+    firstSettledAt: closedAt, detail: "owner proof deferred by per-pass budget" }));
+  expect(fs.existsSync(dir)).toBe(false);
 });
 
 test.each(["process", "conversation", "delivery"] as const)("a late %s still prevents removal after captured hosts were proven dead", async (kind) => {

@@ -224,9 +224,9 @@ export type WorktreeSweepPorts = {
   currentPipelines?: () => readonly SweptPipeline[];
   /** Repository roots registered some other way (operator-created projects). */
   repositories?: readonly string[];
-  /** Working directories of conversations that are live or waiting, as they
-      are now; read again before each removal. */
-  conversationCwds: () => readonly string[];
+  /** Working directories held by live conversations, plus owner proofs
+      deferred by this pass's budget; read again before each removal. */
+  conversationCwds: () => readonly string[] | ConversationCwdStatus;
   scan: () => ProcessScan;
   /** Writes the checkout's resolution to the worktree map; false refuses the removal. */
   recordResolution: (worktree: string) => boolean;
@@ -514,6 +514,11 @@ type RegistryShape = {
   heldDeliveries?: Record<string, { conversationId?: string; state?: string }>;
 };
 
+export type ConversationCwdStatus = { held: string[]; deferred: string[] };
+
+const isConversationCwdStatus = (value: readonly string[] | ConversationCwdStatus): value is ConversationCwdStatus =>
+  !Array.isArray(value);
+
 /** Kernel probes per guard read, on the leased sweep worker. Each page contains
     whole entries whose combined owner count fits this bound; the selected page
     comes from the sweep clock, so a worker restart cannot reset progress. */
@@ -522,18 +527,19 @@ export const CONVERSATION_PROCESS_PROBE_LIMIT = 4096;
 /** A captured host tree can outlive its processes while leaving `idle` in the
     registry. Drop that hold only with dead owners and a settled turn. Unknown
     ownership, setup and runnable deliveries continue protecting their cwd. */
-export function liveOrWaitingConversationCwds(
+export function conversationCwdStatus(
   file: RegistryShape,
   now = Date.now(),
   provenDead: (identity: Readonly<ProcessIdentity>) => boolean = processIdentityProvenDead,
-): string[] {
-  const cwds = new Set<string>();
+): ConversationCwdStatus {
+  const held = new Set<string>();
+  const deferred = new Set<string>();
   const settled = new Set<string>();
   for (const conversation of Object.values(file.conversations ?? {})) {
     const generation = conversation.generations?.at(-1);
     // A migration can still launch into this cwd before a host row appears.
     if (conversation.migration && !["committed", "rolled-back", "failed-recoverable"].includes(conversation.migration.phase)) {
-      if (generation?.launchProfile?.cwd) cwds.add(generation.launchProfile.cwd);
+      if (generation?.launchProfile?.cwd) held.add(generation.launchProfile.cwd);
       continue;
     }
     if (generation?.id && conversation.engine && (conversation.turn?.state === "terminal" || conversation.turn?.state === "idle"))
@@ -548,35 +554,52 @@ export function liveOrWaitingConversationCwds(
     if (claimant) owners.push(claimant);
     return { owners, survivors, unreadableClaim: !!entry.claimOwner && !claimant };
   };
-  const ownerPageByKey = new Map<string, number>();
-  let page = 0;
-  let pageProbes = 0;
-  for (const [key, entry] of entries) {
+  const groups = new Map<string, { cost: number; unreadableClaim: boolean }>();
+  for (const row of entries) {
+    const entry = row[1];
     if (!entry?.cwd) continue;
     const { owners, survivors, unreadableClaim } = ownersFor(entry);
-    if (unreadableClaim) continue;
-    const cost = owners.length + survivors.length;
-    if (cost === 0) continue;
-    if (cost > CONVERSATION_PROCESS_PROBE_LIMIT) {
-      ownerPageByKey.set(key, -1);
+    const cwd = path.resolve(entry.cwd);
+    const group = groups.get(cwd) ?? { cost: 0, unreadableClaim: false };
+    group.cost += unreadableClaim ? 0 : owners.length + survivors.length;
+    group.unreadableClaim ||= unreadableClaim;
+    groups.set(cwd, group);
+  }
+  const ownerPageByCwd = new Map<string, number>();
+  let page = 0;
+  let pageProbes = 0;
+  // `entries` is already key-sorted; Map retains each cwd group's first key,
+  // so paging keeps its established deterministic order after grouping.
+  for (const [cwd, group] of groups) {
+    if (group.unreadableClaim || group.cost === 0) continue;
+    if (group.cost > CONVERSATION_PROCESS_PROBE_LIMIT) {
+      ownerPageByCwd.set(cwd, -1);
       continue;
     }
-    if (pageProbes > 0 && pageProbes + cost > CONVERSATION_PROCESS_PROBE_LIMIT) {
+    if (pageProbes > 0 && pageProbes + group.cost > CONVERSATION_PROCESS_PROBE_LIMIT) {
       page++;
       pageProbes = 0;
     }
-    ownerPageByKey.set(key, page);
-    pageProbes += cost;
+    ownerPageByCwd.set(cwd, page);
+    pageProbes += group.cost;
   }
   const pageCount = page + 1;
   const selectedPage = Math.floor(now / WORKTREE_SWEEP_INTERVAL_MS) % pageCount;
   for (const [key, entry] of entries) {
     if (!entry?.cwd) continue;
     const { owners, survivors, unreadableClaim } = ownersFor(entry);
-    const ownerPage = ownerPageByKey.get(key);
-    if (unreadableClaim || ownerPage === -1 || (ownerPage !== undefined && ownerPage !== selectedPage)
-      || owners.some(identity => !provenDead(identity)) || survivors.some(identity => !provenDead(identity))) {
-      cwds.add(entry.cwd);
+    const cwd = path.resolve(entry.cwd);
+    const ownerPage = ownerPageByCwd.get(cwd);
+    if (unreadableClaim || ownerPage === -1) {
+      held.add(entry.cwd);
+      continue;
+    }
+    if (ownerPage !== undefined && ownerPage !== selectedPage) {
+      deferred.add(entry.cwd);
+      continue;
+    }
+    if (owners.some(identity => !provenDead(identity)) || survivors.some(identity => !provenDead(identity))) {
+      held.add(entry.cwd);
       continue;
     }
     const hosted = entry.status === "live" || entry.status === "idle" || entry.status === "handoff";
@@ -585,7 +608,7 @@ export function liveOrWaitingConversationCwds(
       && Number.isFinite(updated) && now - updated < PENDING_CONVERSATION_MS;
     const ended = (owners.length > 0 || survivors.length > 0) && settled.has(key) && !entry.pendingAction
       && entry.status !== "starting" && !entry.structuredHost?.activeTurnRef;
-    if ((hosted || pending) && !ended) cwds.add(entry.cwd);
+    if ((hosted || pending) && !ended) held.add(entry.cwd);
   }
   for (const delivery of Object.values(file.heldDeliveries ?? {})) {
     /* `delivery-uncertain` was written and never confirmed; the reaper counts
@@ -597,9 +620,18 @@ export function liveOrWaitingConversationCwds(
     if (delivery.state === "held" && conversation?.migration?.phase === "failed-recoverable") continue;
     const generations = conversation?.generations ?? [];
     const cwd = generations.at(-1)?.launchProfile?.cwd;
-    if (cwd) cwds.add(cwd);
+    if (cwd) held.add(cwd);
   }
-  return [...cwds];
+  return { held: [...held], deferred: [...deferred].filter(cwd => !held.has(cwd)) };
+}
+
+export function liveOrWaitingConversationCwds(
+  file: RegistryShape,
+  now = Date.now(),
+  provenDead: (identity: Readonly<ProcessIdentity>) => boolean = processIdentityProvenDead,
+): string[] {
+  const status = conversationCwdStatus(file, now, provenDead);
+  return [...new Set([...status.held, ...status.deferred])];
 }
 
 function pipelinePrCandidates(pipelines: readonly SweptPipeline[]): { heads: Set<string>; numbers: Set<number> } {
@@ -929,7 +961,9 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
   if (!dryRun) recoverCheckoutHeadLocks(accessible, report.errors);
   const keep = (kept: WorktreeKept) => {
     /* Activity restarts the retention clock. */
-    if (BUSY_REASONS.has(kept.reason)) delete kept.firstSettledAt;
+    if (BUSY_REASONS.has(kept.reason)
+      && !(kept.reason === "live-conversation" && kept.detail === "owner proof deferred by per-pass budget"))
+      delete kept.firstSettledAt;
     report.kept.push(kept);
     report.keptCounts[kept.reason] = (report.keptCounts[kept.reason] ?? 0) + 1;
   };
@@ -946,10 +980,14 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
       pipeline needs its own checkout and the repository it runs git in. */
   const readGuards = () => {
     const scan = ports.scan();
+    const conversationStatus = ports.conversationCwds();
+    const conversationCwds = isConversationCwdStatus(conversationStatus) ? conversationStatus.held : conversationStatus;
+    const deferredConversationCwds = isConversationCwdStatus(conversationStatus) ? conversationStatus.deferred : [];
     return {
       open: paths(ownershipPipelines().filter(pipelineHoldsCheckout)
         .flatMap(pipeline => [pipeline.worktreeDir, pipeline.repoDir].filter(Boolean))),
-      conversations: paths(ports.conversationCwds()),
+      conversations: paths(conversationCwds),
+      deferredConversations: paths(deferredConversationCwds),
       scan: { ...scan, processes: scan.processes.map(process => ({ ...process, paths: paths(process.paths) })) },
     };
   };
@@ -963,6 +1001,8 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
       if (process.paths.some(holds)) return { path: directory, reason: "in-use", detail: `pid ${process.pid}` };
     }
     if (guards.conversations.some(holds)) return { path: directory, reason: "live-conversation" };
+    if (guards.deferredConversations.some(holds))
+      return { path: directory, reason: "live-conversation", detail: "owner proof deferred by per-pass budget" };
     return null;
   };
   /* The first read skips what is plainly busy; each removal reads them again. */
@@ -1647,7 +1687,7 @@ export async function productionWorktreeSweepPorts(
     pipelines,
     currentPipelines: () => loadPipelinesForList(),
     repositories,
-    conversationCwds: () => liveOrWaitingConversationCwds(agentRegistry().readOnlySnapshot()),
+    conversationCwds: () => conversationCwdStatus(agentRegistry().readOnlySnapshot()),
     scan: () => scanProcesses(),
     recordResolution: (worktree) => recordWorktreeResolution(worktree, access.accessiblePath(worktree)) !== null,
     tempRoots: [...new Set(temp.map(root => root.path))],
