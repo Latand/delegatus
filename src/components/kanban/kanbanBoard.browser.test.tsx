@@ -22892,14 +22892,15 @@ describe("floating voice companion", () => {
     const failures: string[] = [];
     const measurements: unknown[] = [];
     const dryRun = (lang: "en" | "uk") => [translate(lang, "voiceCompanion.tools.action.dryRun"), translate(lang, "voiceCompanion.tools.dryRunHint")];
-    /* Each state's defining words: those of a row's head once the row is scrolled to, then those of its foot once
-       its action row is. A row taller than the phone's dialog is read in these two frames. */
-    const defining: Record<string, (lang: "en" | "uk") => { head: string[]; foot: string[] }> = {
+    /* Each state's defining words: those of a row's head once the row is scrolled to, those of its tool list once
+       that list's end is, then those of its foot once its action row is. A row taller than the phone's dialog is
+       read in these frames. */
+    const defining: Record<string, (lang: "en" | "uk") => { head: string[]; tools?: string[]; foot: string[] }> = {
       empty: lang => ({ head: [translate(lang, "voiceCompanion.tools.empty")], foot: [] }),
       pending: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example", "SPOTIFY_CLIENT_ID, SPOTIFY_REDIRECT_URI"],
         foot: [translate(lang, "voiceCompanion.tools.secretNeeded"), translate(lang, "voiceCompanion.tools.dryRun.none"), ...dryRun(lang), translate(lang, "voiceCompanion.tools.action.reject")] }),
       review: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example"],
-        foot: ["skip", translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.approve"), ...dryRun(lang)] }),
+        tools: ["skip"], foot: [translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.approve"), ...dryRun(lang)] }),
       failed: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "--notes", "/srv/delegatus/mcp-servers/notes/server.ts"],
         foot: [translate(lang, "voiceCompanion.tools.dryRun.TIMEOUT"), ...dryRun(lang)] }),
       approved: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.enabled"), "spotify-mcp-example"],
@@ -22941,12 +22942,12 @@ describe("floating voice companion", () => {
               expect(await page.locator("[data-voice-tool-state]").getAttribute("data-voice-tool-state")).toBe("enabled");
             }
           }
-          for (const part of ["head", "foot"] as const) {
-            const words = defining[state](lang)[part];
+          for (const part of ["head", "tools", "foot"] as const) {
+            const words = defining[state](lang)[part] ?? [];
             if (!words.length) continue;
             if (state === "empty") await section.scrollIntoViewIfNeeded();
-            /* The head: the row's top at the dialog's top. The foot: its last line (the action row, or a refusal under it) at the dialog's bottom. */
-            else await page.evaluate(([selector, top]) => document.querySelector(selector)!.scrollIntoView({ block: top ? "start" : "end" }), [part === "head" ? "[data-voice-tool-server]" : "[data-voice-tool-server] > :last-child", part === "head"] as const);
+            /* The head: the row's top at the dialog's top. The tools: the list's end at the dialog's bottom. The foot: its last line (the action row, or a line or refusal under it) at the dialog's bottom. */
+            else await page.evaluate(([selector, top]) => document.querySelector(selector)!.scrollIntoView({ block: top ? "start" : "end" }), [part === "head" ? "[data-voice-tool-server]" : part === "tools" ? "[data-voice-tool-tools]" : "[data-voice-tool-server] > :last-child", part === "head"] as const);
             await page.screenshot({ path: path.join(out, `${label}-${part}.png`) });
             const read = await page.evaluate(({ words, phone }) => {
               const dialog = document.querySelector<HTMLElement>("[data-voice-companion-settings]")!;
