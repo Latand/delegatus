@@ -372,7 +372,7 @@ export class QuotaController {
     if (engine === "codex") {
       recordLimitSamples("codex", observations.flatMap(observation => observation.authenticated && observation.limits
         && (observation.provenance.source === "live" || observation.provenance.source === "transcript")
-        ? [{ accountId: observation.accountId, limits: observation.limits }] : []), now);
+        ? [{ accountId: observation.accountId, limits: observation.limits, source: observation.provenance.source }] : []), now);
     }
     const accounts = new Map(snapshot.accounts.map(({ account }) => [account.id, account]));
     observations.forEach((observation) => {
