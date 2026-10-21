@@ -12,6 +12,7 @@ import { patchTask } from "@/lib/tasks/commands";
 import { MAX_PIPELINE_STAGES, MAX_STAGE_OUTPUTS, MAX_STAGE_OUTPUT_PATH_LENGTH, MAX_STAGE_PROMPT_LENGTH, MAX_SPEC_LENGTH } from "@/lib/pipelines/limits";
 import { parsePrototypeInput, PROTOTYPE_LIMITS } from "@/lib/prototypeReview/input";
 import { completeFits } from "@/lib/bridge/reportComplete";
+import { publishPrototype } from "@/lib/prototypeReview/store";
 import * as pipelineEngine from "@/lib/pipelines/engine";
 import { setMcpHttpDependenciesForTests } from "./http";
 import { MCP_MAX_REQUEST_BODY_BYTES, MCP_MAX_TOOL_INPUT_ELEMENTS } from "./inputLimits";
@@ -64,6 +65,61 @@ function elements(value: unknown): number {
 }
 
 afterEach(() => setMcpHttpDependenciesForTests(null));
+
+test("readable control-character paths for 240 frames fit the HTTP budget and publish", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "mcp-control-path-"));
+  const previousEvidenceRoots = process.env.LLV_EVIDENCE_ROOTS;
+  try {
+    process.env.LLV_EVIDENCE_ROOTS = root;
+    let directory = root;
+    const segments = 19;
+    const segmentLength = Math.floor((4100 - root.length - segments - "/frame.png".length) / segments);
+    expect(segmentLength).toBeLessThanOrEqual(255);
+    for (let i = 0; i < segments; i++) {
+      directory = path.join(directory, "\u0001".repeat(segmentLength));
+      fs.mkdirSync(directory);
+    }
+    const framePath = path.join(directory, "frame.png");
+    fs.writeFileSync(framePath, Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+    expect(fs.readFileSync(framePath).byteLength).toBe(8);
+    expect(framePath.length).toBeLessThanOrEqual(4096);
+
+    const args = {
+      clientRequestId: "control-path-envelope", title: "Control path envelope",
+      variants: [{ number: 1, name: "Long path", description: "Readable segmented path",
+        frames: Array.from({ length: PROTOTYPE_LIMITS.media }, () => ({ path: framePath, caption: "", width: 240, lang: "en" })) }],
+      questions: Array.from({ length: 7 }, (_, i) => ({ id: `control-question-${i}`, text: "界".repeat(300),
+        options: Array.from({ length: 6 }, (_, j) => ({ label: `${j}` + "界".repeat(119), recommended: j === 0 })),
+        multiple: true, other: true })),
+    };
+    const parsed = parsePrototypeInput(args);
+    const requestBody = JSON.stringify(rpc("publish_prototype_review", args));
+    const bodyBytes = Buffer.byteLength(requestBody);
+    console.info(`MCP control-character prototype envelope: path ${framePath.length} chars, ${elements(args)} elements, ${bodyBytes} bytes`);
+    expect(bodyBytes).toBeGreaterThan(5_790_148);
+    expect(bodyBytes).toBeLessThan(MCP_MAX_REQUEST_BODY_BYTES);
+
+    let received = 0;
+    setMcpHttpDependenciesForTests({ conversationForCapability: () => "fixture-caller", service: async () => ({
+      async callTool(name, values) {
+        expect(name).toBe("publish_prototype_review");
+        expect(values).toEqual(args);
+        received++;
+        return { ok: true, toolName: name as McpToolName, clientRequestId: String(values.clientRequestId), replayed: false };
+      },
+    }) });
+    const response = await POST(new NextRequest("http://127.0.0.1/api/mcp", { method: "POST", headers, body: requestBody }));
+    expect(response.status).toBe(200);
+    expect(received).toBe(1);
+
+    const round = await publishPrototype(parsed, null, { conversationId: "fixture-conversation" }, "fixture-project");
+    expect(round.variants.flatMap(variant => variant.frames).length).toBe(PROTOTYPE_LIMITS.media);
+  } finally {
+    if (previousEvidenceRoots === undefined) delete process.env.LLV_EVIDENCE_ROOTS;
+    else process.env.LLV_EVIDENCE_ROOTS = previousEvidenceRoots;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 for (const [name, args] of workloads) {
   test(`${name}: the measured workflow maximum passes its schema, SDK and HTTP ingress`, async () => {
