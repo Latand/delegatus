@@ -161,12 +161,25 @@ A third test replies to each owner read with the state from before its hold,
 from an owner that fences claimed releases: every hold that lands keeps its
 release, renamed or not, and holds after the claim are refused.
 
-Five further counterexamples were confirmed on `09386336` and fail there:
+Four further counterexamples were confirmed on `09386336` and fail there:
 a holder entering through `/proc/<remover>/cwd` after the final scan; bytes
-written into a partial tree before its deletion was replayed; a module loaded
-over stdin by a Bun process outside the release, with no other trace; an
-intact quarantined release that a raised keep count names; and an owner
-reply that predates a hold acquired while it was in flight.
+written into a partial tree before its deletion was replayed; an intact
+quarantined release that a raised keep count names; and an owner reply that
+predates a hold acquired while it was in flight.
+
+The loaded-module hold is tested through a copy of the real
+`src/lib/stateOwnership.ts` module graph placed inside the release, as a
+checkout release built in place loads it; no test module calls the hold
+itself. A Bun process outside the release imports that copy by a path read
+from stdin. The tests in `src/lib/selfUpdate/retention.test.ts` and
+`src/lib/selfUpdate/releaseHold.test.ts` assert that the process keeps the
+release-root descriptor, that retention keeps the release with reason
+`process` while it lives and removes it after it exits, and that a load whose
+release is renamed off its path after its modules were read fails with
+`is being removed`. With the hold line in `src/lib/stateOwnership.ts`
+removed, all four fail. On `09386336`, whose `stateOwnership.ts` had no hold,
+the same retention test with the graph cut to the files that commit has
+removes the release while the consumer is still running.
 
 Checks run in scratch exports with private HOME, config, temp and state roots,
 a closed Viewer control URL, and the required shared gate wrapper. No latency

@@ -10,6 +10,7 @@ import { runGit } from "./git";
 import { RetentionWorker } from "./retentionWorker";
 import { retentionProcessScan, withSelfObservation } from "./retentionInspection";
 import { quarantineTree, sealProcessLinks } from "./gatedTrash";
+import { installStateOwnershipGraph, MODULE_CONSUMER_SOURCE } from "./stateOwnershipGraph.fixture";
 
 const DAY = 86_400_000;
 const LOOP_PROBE_INTERVAL_MS = 10;
@@ -1382,12 +1383,10 @@ test.skipIf(process.platform !== "linux").each(["package", "checkout"] as const)
     await settleChildren();
   }, 60_000);
 
-const RELEASE_HOLD = path.join(import.meta.dir, "releaseHold.ts");
-/** A Bun process outside the release that loads one of its modules by a path
- * it receives over stdin, keeping only the export. */
+/** A Bun process outside the release that imports one of its modules by a
+ * path it receives over stdin, keeping only what the import leaves behind. */
 async function startModuleConsumer(file: string, cwd: string) {
-  const source = `process.stdin.once("data", chunk => { globalThis.held = require(String(chunk).trim()); process.stdout.write("ready"); }); setInterval(() => {}, 1000);`;
-  const child = spawn(process.execPath, ["-e", source], { cwd, env: HOLDER_ENV(), stdio: ["pipe", "pipe", "inherit"] });
+  const child = spawn(process.execPath, ["-e", MODULE_CONSUMER_SOURCE], { cwd, env: HOLDER_ENV(), stdio: ["pipe", "pipe", "inherit"] });
   children.push(child);
   const ready = new Promise<boolean>(resolve => {
     child.once("error", () => { children.splice(children.indexOf(child) >>> 0, 1); resolve(false); });
@@ -1400,23 +1399,23 @@ async function startModuleConsumer(file: string, cwd: string) {
 }
 
 test.skipIf(process.platform !== "linux").each(["package", "checkout"] as const)(
-  "a loaded release module keeps the %s release for its consumer's lifetime", async layout => {
+  "a process that loaded the real state-ownership module from the %s release keeps it for its lifetime", async layout => {
     const h = RACE_LAYOUTS[layout]();
-    const heldModule = path.join(h.target, "lib/held-module.js");
-    fs.mkdirSync(path.dirname(heldModule), { recursive: true });
-    fs.writeFileSync(heldModule, `require(${JSON.stringify(RELEASE_HOLD)}).holdReleaseOf(__filename);\nmodule.exports = { value: 1 };\n`);
+    // A copy of the real module graph, loaded from inside the tree as a
+    // checkout release built in place loads it; nothing here calls the hold.
+    const entry = installStateOwnershipGraph(h.target);
     h.ports.inspection = probedInspection(h, async () => {}, () => null).inspection;
     h.ports.current = () => structuredClone({ record: h.record, inputs: h.inputs, fenced: true });
-    const consumer = await startModuleConsumer(heldModule, h.root);
+    const consumer = await startModuleConsumer(entry, h.root);
     // The consumer names the release in no argv, environment, cwd or mapping:
-    // only the release root descriptor the heldModule's own hold opened.
+    // only the release root descriptor stateOwnership's own load opened.
     const own = retentionProcessScan(h.record.releasesDir, scopedProcRoot(h.root, [consumer.pid!])).processes.find(proc => proc.pid === consumer.pid);
     expect(own?.references ?? []).toEqual([]);
     expect(own?.paths ?? []).toEqual([h.target]);
     const report = await h.run();
     expect(report.errors).toEqual([]);
     expect(alive(consumer)).toBeTrue();
-    expect(fs.readFileSync(heldModule, "utf8")).toContain("module.exports");
+    expect(fs.existsSync(entry)).toBeTrue();
     expect(report.kept).toContainEqual(expect.objectContaining({ dir: h.target, reason: "process" }));
     await settleChildren();
     const after = await h.run();
