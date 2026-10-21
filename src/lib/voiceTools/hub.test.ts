@@ -198,6 +198,35 @@ test("at most eight probes run, cancellation reaps them before admitting another
   } finally { controller.abort(); release.release(); await Promise.allSettled(pending); }
 }, 20_000);
 
+test("Bun pinned probes execute the pinned file through explicit file dispatch", async () => {
+  const cases = [
+    { pinnedName: "exec", args: () => ["exec", `${process.execPath} ./actual.mjs`] },
+    { pinnedName: "server", args: () => ["server"] },
+  ];
+  for (const [index, scenario] of cases.entries()) {
+    const { store, root } = await setup();
+    const entry = path.join(root, scenario.pinnedName);
+    const actual = path.join(root, "actual.mjs");
+    const marker = path.join(root, `changed-code-ran-${index}`);
+    const source = `import readline from 'node:readline';\nconst input=readline.createInterface({input:process.stdin});\ninput.on('line', line => { const m=JSON.parse(line); if(m.id===undefined)return; const result=m.method==='initialize'?{protocolVersion:'2025-03-26',capabilities:{tools:{}},serverInfo:{name:'pinned',version:'1'}}:{tools:[{name:'search',description:'Pinned',inputSchema:{type:'object'}}]}; console.log(JSON.stringify({jsonrpc:'2.0',id:m.id,result})); });\n`;
+    await fs.writeFile(entry, source);
+    await fs.writeFile(actual, source);
+    if (scenario.pinnedName === "server") await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ scripts: { server: "bun actual.mjs" } }));
+    await store.propose({ name: "music", title: "Music", capability: "Search", transport: { type: "stdio", command: "bun", args: scenario.args(), cwd: root, env: {} },
+      entryFile: { path: entry, sha256: createHash("sha256").update(source).digest("hex") } }, actor);
+    let digest = (await store.view()).servers.music.digest;
+    await new VoiceToolHub(store).dryRun("music", digest);
+    expect((await store.view()).servers.music.lastDryRun?.code).toBe("OK");
+    await store.operatorChange("music", (await store.view()).servers.music.digest, "approve");
+    await fs.writeFile(actual, `${source}\nawait Bun.write(${JSON.stringify(marker)}, "ran");\n`);
+    digest = (await store.view()).servers.music.digest;
+    await new VoiceToolHub(store).dryRun("music", digest);
+    expect((await store.view()).servers.music.lastDryRun?.code).toBe("OK");
+    await expect(fs.access(marker)).rejects.toThrow();
+    expect((await store.view()).servers.music.state).toBe("enabled");
+  }
+}, 20_000);
+
 test("revoked operator authority during preparation dispatches no server", async () => {
   const { store } = await setup(); const server = fake(); const expected = await propose(store, server.url);
   await expect(new VoiceToolHub(store).dryRun("music", expected, undefined, () => { throw new Error("REVOKED"); })).rejects.toThrow("REVOKED");

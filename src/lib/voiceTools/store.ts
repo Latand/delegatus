@@ -23,13 +23,18 @@ function validProposal(input: unknown, defaultCwd: string) {
   if (config.transport.type === "stdio" && config.transport.cwd && !path.isAbsolute(config.transport.cwd)) return null;
   if (config.transport.type === "stdio" && config.entryFile) {
     const transport = config.transport;
-    // Bun dispatches these words as commands, so neither names a script file here.
-    // A script literally named `run` or `x` can use an explicit relative path instead.
-    const entry = transport.command === "bun"
-      ? transport.args[0] && !["run", "x"].includes(transport.args[0]) && !transport.args[0].startsWith("-") ? transport.args[0] : undefined
-      : transport.args[0] === "run" && transport.args[1] && !transport.args[1].startsWith("-") ? transport.args[1] : undefined;
     const cwd = transport.cwd ?? defaultCwd;
-    if (!entry || path.resolve(cwd, entry) !== config.entryFile.path) return null;
+    if (transport.command === "bun") {
+      const scriptIndex = transport.args[0] === "run" ? 1 : 0;
+      const entry = transport.args[scriptIndex];
+      if (!entry || entry.startsWith("-") || path.resolve(cwd, entry) !== config.entryFile.path) return null;
+      // Canonicalize pinned launches to explicit file dispatch, avoiding Bun
+      // command and package-script resolution for names such as `exec` or `server`.
+      transport.args = ["run", config.entryFile.path, ...transport.args.slice(scriptIndex + 1)];
+    } else {
+      const entry = transport.args[0] === "run" && transport.args[1] && !transport.args[1].startsWith("-") ? transport.args[1] : undefined;
+      if (!entry || path.resolve(cwd, entry) !== config.entryFile.path) return null;
+    }
   } else if (config.transport.type === "stdio") {
     // Package launchers are explicit; local scripts always carry an entry pin.
     const args = config.transport.args;
