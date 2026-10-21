@@ -349,6 +349,16 @@ export async function initializeHotStateStoresAtStartup(
   // Requests consume the persisted narrow projections from their first call.
   const { readHistoryProjection } = await import("@/lib/state/historyProjection");
   await readHistoryProjection(() => undefined, { startup: true, signal: options.signal });
+  // MCP readers cannot install missing receipt indexes in operator state.
+  // Prepare the existing schema and legacy import under the serving owner's
+  // startup fence, before a thread's first task call reaches its worker.
+  const { openAsyncMcpReceiptStore } = await import("@/lib/mcp/server");
+  await waitForStateLock("mcp.receipts.startup", async () => {
+    const receipts = await openAsyncMcpReceiptStore(statePath("mcp-receipts.sqlite"), {
+      legacyFilePath: statePath("mcp-receipts.json"),
+    });
+    receipts.close();
+  }, { signal: options.signal });
   if (boundary.authority?.mode === "preparing") {
     return completeHotStatePreparation(path.dirname(statePath("state.sqlite")), boundary.authority);
   }
