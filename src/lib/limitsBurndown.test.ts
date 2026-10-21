@@ -6,7 +6,7 @@ import path from "node:path";
 
 import { computePace } from "./burndown";
 import { buildSeries, collectCodexRateLimitSeries, readCodexLimits, readCodexTranscriptLimits } from "./limits";
-import { agentRegistry } from "./agent/registry";
+import { agentRegistry, closeAgentRegistryForTests } from "./agent/registry";
 import { emptyLaunchProfile } from "./accounts/migration/contracts";
 import { attributeQuotaFixture, updateQuotaRegistryFixture } from "./limitsQuota.fixture";
 
@@ -166,7 +166,7 @@ test("same-path account succession attributes events by their generation time", 
   expect(readCodexTranscriptLimits(root, "b").data?.weekly?.usedPercent).toBe(96);
 });
 
-test("same-path unverified account rebind ends old custody for live and offline reads", async () => {
+test("same-path unverified account rebind quarantines old custody for live and offline reads", async () => {
   const before = "2026-07-08T12:00:00.000Z", rebound = "2026-07-08T13:00:00.000Z", after = "2026-07-08T14:00:00.000Z";
   writeSession("rebound.jsonl", "2026-07-08", [
     { ts: before, primary: [15, 10080, 1_783_994_379] },
@@ -183,12 +183,51 @@ test("same-path unverified account rebind ends old custody for live and offline 
   const accountA = { id: "fixture", kind: "managed" as const, home: path.dirname(root), sessionsDir: root };
   const accountB = { ...accountA, id: "b" };
   const series = collectCodexRateLimitSeries(root, 0, "fixture");
-  expect(series.weekly).toEqual([{ t: Date.parse(before) / 1000, remaining: 85 }]);
+  expect(series.weekly).toEqual([]);
   expect(collectCodexRateLimitSeries(root, 0, "b").weekly).toEqual([]);
-  expect(readCodexTranscriptLimits(root, "fixture").data?.weekly?.usedPercent).toBe(15);
+  expect(readCodexTranscriptLimits(root, "fixture").data).toBeNull();
   expect(readCodexTranscriptLimits(root, "b").data).toBeNull();
-  expect((await readCodexLimits({ account: accountA, liveReader: async () => { throw new Error("offline"); } })).data?.weekly?.usedPercent).toBe(15);
+  expect((await readCodexLimits({ account: accountA, liveReader: async () => { throw new Error("offline"); } })).data).toBeNull();
   expect((await readCodexLimits({ account: accountB, liveReader: async () => { throw new Error("offline"); } })).data).toBeNull();
+});
+
+test.each(["changed", "returned", "legacy-returned"] as const)("delayed account-change observation quarantines uncertain custody after reload (%s)", async binding => {
+  const before = "2026-07-08T12:00:00.000Z", foreign = "2026-07-08T13:00:00.000Z", observed = "2026-07-08T14:00:00.000Z";
+  const reset = Date.parse("2026-07-09T12:00:00.000Z") / 1000;
+  writeSession("delayed.jsonl", "2026-07-08", [
+    { ts: before, primary: [15, 10080, reset] },
+    { ts: foreign, primary: [96, 10080, reset] },
+  ]);
+  const file = path.join(root, "2026", "07", "08", "delayed.jsonl"), registry = agentRegistry();
+  fs.appendFileSync(file, JSON.stringify({ timestamp: foreign, payload: { codex_error_info: "usage_limit_exceeded" } }) + "\n");
+  const observation = {
+    engine: "codex" as const, path: file, accountId: "b", launchProfile: emptyLaunchProfile(), observedAt: observed,
+    turn: { state: "idle" as const, source: "empty" as const, terminalAt: null },
+  };
+  if (binding === "legacy-returned") {
+    // Older registries could persist a contradictory binding without endedAt.
+    const conversation = registry.conversationForPath(file)!;
+    updateQuotaRegistryFixture(state => { state.conversations[conversation.id]!.generations[0]!.accountId = "b"; });
+  } else {
+    registry.reconcileConversations([observation]);
+  }
+  if (binding !== "changed") registry.reconcileConversations([{ ...observation, accountId: "fixture", observedAt: "2026-07-08T15:00:00.000Z" }]);
+  // Read the persisted custody again, including a binding that returned to A.
+  closeAgentRegistryForTests();
+  for (const id of ["fixture", "b"]) {
+    expect(collectCodexRateLimitSeries(root, 0, id).weekly).toEqual([]);
+    const transcript = readCodexTranscriptLimits(root, id);
+    expect(transcript.data).toBeNull();
+    expect(transcript.rejectedAt).toBeUndefined();
+    const account = { id, kind: "managed" as const, home: path.dirname(root), sessionsDir: root };
+    const offline = await readCodexLimits({ account, now: () => Date.parse(observed), liveReader: async () => { throw new Error("offline"); } });
+    expect(offline.data).toBeNull();
+    const live = await readCodexLimits({ account, now: () => Date.parse(observed), liveReader: async () => ({
+      primary: { usedPercent: 12, windowDurationMins: 10080, resetsAt: reset }, secondary: null, planType: "pro",
+    }) });
+    expect(live.data?.weekly?.usedPercent).toBe(12);
+    expect(live.source).toBe("live");
+  }
 });
 
 test("overlapping verified custody for different accounts quarantines the transcript event", async () => {

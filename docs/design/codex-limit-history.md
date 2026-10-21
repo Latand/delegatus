@@ -7,9 +7,12 @@ produced a quota event.
 `src/lib/limits.ts` accepts a transcript reading only when its exact path has a
 Codex registry generation with verified app-server host custody. The event must
 fall at or after that generation's creation and host verification and before its
-archive time or an `endedAt` custody boundary. An unverified same-path account
-rebind closes the old custody interval at the observation time; events at or
-after that time remain unattributed until verified custody is recorded. All
+archive time. An unverified same-path account rebind quarantines the whole old
+custody interval, including events before discovery: inventory's observation
+time cannot prove when the account changed. The durable `endedAt` marker records
+discovery; readers reject marked custody even if the binding later returns to
+the original account. Verified generation succession retains its proven
+creation, verification and archive boundaries. All
 eligible custody claims are counted before selecting the requested account, so
 overlapping claims from different accounts quarantine the event for both.
 Unknown ownership, registry read failure and continuity copies contribute no

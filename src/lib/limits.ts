@@ -1038,8 +1038,9 @@ function isCodexUsageLimitInfo(value: unknown): boolean {
  * reading. Only an exact generation path with verified host custody, within
  * the immutable account/artifact binding recorded when its verified host was
  * committed, within that generation's lifetime, can attribute a transcript
- * event. The current generation path/account may be rewritten during inventory
- * reconciliation and are never quota-attribution evidence. */
+ * event. An unverified rebind quarantines that entire custody interval: its
+ * endedAt records discovery, which cannot prove when the account changed.
+ * Inventory's current path/account cannot restore that proof. */
 function codexReadingOwner(file: string, accountId: string): (at: number) => boolean {
   try {
     const conversation = agentRegistry().conversationForPath(file);
@@ -1049,10 +1050,9 @@ function codexReadingOwner(file: string, accountId: string): (at: number) => boo
       if (!Number.isFinite(at)) return false;
       const owners = generations.filter(g => g.path === file && g.host?.kind === "codex-app-server"
         && g.quotaCustody?.artifactPath === file
-        && (g.accountId === g.quotaCustody.accountId || g.quotaCustody.endedAt !== undefined)
+        && g.accountId === g.quotaCustody.accountId && g.quotaCustody.endedAt === undefined
         && Date.parse(g.createdAt) <= at && Date.parse(g.host.verifiedAt) <= at
-        && (g.archivedAt === null || Date.parse(g.archivedAt) > at)
-        && (g.quotaCustody.endedAt === undefined || Date.parse(g.quotaCustody.endedAt) > at));
+        && (g.archivedAt === null || Date.parse(g.archivedAt) > at));
       return owners.length === 1 && owners[0]?.quotaCustody?.accountId === accountId;
     };
   } catch {

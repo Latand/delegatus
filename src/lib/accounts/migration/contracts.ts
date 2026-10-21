@@ -180,7 +180,8 @@ export interface NativeGeneration {
   host: GenerationHostEvidence | null;
   /** Original Codex transcript/account binding, frozen when verified host
       custody is committed. Inventory reconciliation may rewrite path/accountId;
-      an unverified account rebind closes this custody interval at endedAt. */
+      an unverified account rebind quarantines the whole interval. endedAt is
+      the discovery time, never a proven account-switch boundary. */
   quotaCustody?: { accountId: string; artifactPath: string; endedAt?: string };
   createdAt: string;
   archivedAt: string | null;

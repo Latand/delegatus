@@ -8945,7 +8945,9 @@ export class AgentRegistry {
         const observedParentConversationId = observation.launchProfile.parentConversationId;
         const observedAccountId = observation.accountId ?? generation.accountId;
         if (observedAccountId !== generation.accountId && generation.quotaCustody
-          && generation.quotaCustody.accountId !== observedAccountId && !generation.quotaCustody.endedAt) {
+          && !generation.quotaCustody.endedAt) {
+          // Discovery time cannot establish the switch time. Readers quarantine
+          // this whole custody interval, even if inventory later returns to it.
           generation.quotaCustody = { ...generation.quotaCustody, endedAt: observation.observedAt };
         }
         generation.accountId = observedAccountId;
