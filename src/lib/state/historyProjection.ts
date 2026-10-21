@@ -33,10 +33,15 @@ const historyProjectionIndexes = declaredIndexes([
   "CREATE INDEX IF NOT EXISTS history_reviewer_path ON history_rounds(reviewerPath,row_key,round)",
 ]);
 
+/** Inputs are text JSON. Releases 1.14.0 to 1.15.0 stored jsonb in a BLOB
+ * column, which the SQLite macOS ships (3.39 on macOS 13) cannot read; a
+ * database with that column is rebuilt by the release that may migrate state. */
+const historyInputsTable = "CREATE TABLE history_inputs(collection TEXT NOT NULL,row_key TEXT NOT NULL,row_order INTEGER NOT NULL,project TEXT,state TEXT,input TEXT NOT NULL,PRIMARY KEY(collection,row_key))";
+
 export function historyProjectionReady(db: Database): boolean {
   const rows = db.query<{ name: string; sql: string }, []>("SELECT name,sql FROM sqlite_master WHERE name LIKE 'history_%'").all();
   const names = new Set(rows.map(row => row.name));
-  return ["history_meta", "history_flow_meta", "history_flow_changes", "history_count_meta", "history_count_roles", "history_pending", "history_inputs", "history_runs", "history_attempts", "history_rounds", "history_projects", "history_count_projects"].every(name => names.has(name))
+  return rows.some(row => row.name === "history_inputs" && row.sql === historyInputsTable) && ["history_meta", "history_flow_meta", "history_flow_changes", "history_count_meta", "history_count_roles", "history_pending", "history_inputs", "history_runs", "history_attempts", "history_rounds", "history_projects", "history_count_projects"].every(name => names.has(name))
     && historyProjectionIndexes.ready(names)
     && triggers.every(sql => rows.some(row => row.sql === sql));
 }
@@ -63,7 +68,7 @@ export function installHistoryProjection(db: Database, directory: string): void 
     "INSERT INTO history_count_meta VALUES (0)",
     "CREATE TABLE history_count_roles(project TEXT NOT NULL,role TEXT NOT NULL,runs INTEGER NOT NULL,PRIMARY KEY(project,role))",
     "CREATE TABLE history_pending(collection TEXT NOT NULL,row_key TEXT NOT NULL,PRIMARY KEY(collection,row_key))",
-    "CREATE TABLE history_inputs(collection TEXT NOT NULL,row_key TEXT NOT NULL,row_order INTEGER NOT NULL,project TEXT,state TEXT,input BLOB NOT NULL,PRIMARY KEY(collection,row_key))",
+    historyInputsTable,
     "CREATE TABLE history_projects(project TEXT PRIMARY KEY,revision INTEGER NOT NULL)",
     "CREATE TABLE history_count_projects(project TEXT PRIMARY KEY,revision INTEGER NOT NULL)",
     "CREATE TABLE history_runs(collection TEXT NOT NULL,row_key TEXT NOT NULL,run INTEGER NOT NULL,role TEXT NOT NULL,PRIMARY KEY(collection,row_key,run))",
@@ -79,19 +84,21 @@ export function installHistoryProjection(db: Database, directory: string): void 
 }
 
 // Compact inputs omit prompts, output, scaffolds, reports, decisions and journals.
-const pipelineInput = `WITH source AS MATERIALIZED (SELECT jsonb(value_json) AS payload FROM state_rows WHERE collection=? AND row_key=?),
- runs AS MATERIALIZED (SELECT r.key,json_extract(r.value,'$.stageId') AS stageId,jsonb_extract(r.value,'$.attempts') AS attempts FROM source,json_each(payload,'$.runs') r),
- attempts AS MATERIALIZED (SELECT r.key AS run,a.key,jsonb(a.value) AS payload FROM runs r,json_each(r.attempts) a),
+// Text JSON and ordered subqueries only: macOS runs the system SQLite, as old
+// as 3.39, without jsonb or aggregate ORDER BY (minimumSqlite.fixture.ts).
+const pipelineInput = `WITH source AS MATERIALIZED (SELECT value_json AS payload FROM state_rows WHERE collection=? AND row_key=?),
+ runs AS MATERIALIZED (SELECT r.key,json_extract(r.value,'$.stageId') AS stageId,json_extract(r.value,'$.attempts') AS attempts FROM source,json_each(payload,'$.runs') r),
+ attempts AS MATERIALIZED (SELECT r.key AS run,a.key,a.value AS payload FROM runs r,json_each(r.attempts) a),
  compact AS MATERIALIZED (SELECT run,key,json_object(${["n","state","historical","conversationId","agentPath","paneId","startedAt","effectiveRole.roleId","providerWait"].map(field => `'${field === "effectiveRole.roleId" ? "role" : field}',json_extract(payload,'$.${field}')`).join(",")}) AS payload FROM attempts),
- compact_runs AS MATERIALIZED (SELECT r.key,json_object('stageId',r.stageId,'attempts',json_group_array(json(a.payload) ORDER BY a.key) FILTER (WHERE a.key IS NOT NULL)) AS payload
- FROM runs r LEFT JOIN compact a ON a.run=r.key GROUP BY r.key)
- SELECT jsonb_object('closedAt',json_extract(payload,'$.closedAt'),'roles',(SELECT jsonb_group_array(jsonb_object('id',json_extract(s.value,'$.id'),'role',json_extract(s.value,'$.role.roleId'))) FROM json_each(payload,'$.stages') s),
- 'runs',(SELECT jsonb_group_array(jsonb(payload) ORDER BY key) FROM compact_runs)) AS input FROM source`;
+ compact_runs AS MATERIALIZED (SELECT r.key,json_object('stageId',r.stageId,'attempts',
+ json((SELECT json_group_array(json(a.payload)) FROM (SELECT payload FROM compact WHERE run=r.key ORDER BY key) a))) AS payload FROM runs r)
+ SELECT json_object('closedAt',json_extract(payload,'$.closedAt'),'roles',json((SELECT json_group_array(json_object('id',json_extract(s.value,'$.id'),'role',json_extract(s.value,'$.role.roleId'))) FROM json_each(payload,'$.stages') s)),
+ 'runs',json((SELECT json_group_array(json(payload)) FROM (SELECT payload FROM compact_runs ORDER BY key)))) AS input FROM source`;
 const pipelineSql = pipelineInput;
-const flowSql = `WITH source AS MATERIALIZED (SELECT jsonb(value_json) AS payload FROM state_rows WHERE collection=? AND row_key=?)
- SELECT jsonb_object('reviewerMode',json_extract(payload,'$.reviewerMode'),'rounds',
- (SELECT jsonb_group_array(jsonb_object('reviewerPath',json_extract(r.value,'$.reviewerPath'),'reviewerConversationId',json_extract(r.value,'$.reviewerConversationId'),
- 'reviewerPid',json_extract(r.value,'$.reviewerPid'),'reviewerIdentity',json_extract(r.value,'$.reviewerIdentity')) ORDER BY r.key) FROM json_each(payload,'$.rounds') r)) AS input FROM source`;
+const flowSql = `WITH source AS MATERIALIZED (SELECT value_json AS payload FROM state_rows WHERE collection=? AND row_key=?)
+ SELECT json_object('reviewerMode',json_extract(payload,'$.reviewerMode'),'rounds',
+ json((SELECT json_group_array(json_object('reviewerPath',json_extract(r.value,'$.reviewerPath'),'reviewerConversationId',json_extract(r.value,'$.reviewerConversationId'),
+ 'reviewerPid',json_extract(r.value,'$.reviewerPid'),'reviewerIdentity',json_extract(r.value,'$.reviewerIdentity'))) FROM (SELECT value FROM json_each(payload,'$.rounds') ORDER BY key) r))) AS input FROM source`;
 
 type CountUpdate = { oldProject: string | null; newProject: string | null; oldSignature: string; newSignature: string };
 function projectOne(db: Database, collection: string, key: string): CountUpdate | null {
@@ -104,10 +111,10 @@ function projectOne(db: Database, collection: string, key: string): CountUpdate 
   const accepted = raw && (collection === "flows" ? isStoredFlow(decoded) : isStoredPipeline(decoded));
   const row = accepted ? db.query<{ project: string | null; state: string | null; row_order: number }, [string,string]>(
     "SELECT json_extract(value_json,'$.project') AS project,json_extract(value_json,'$.state') AS state,row_order FROM state_rows WHERE collection=? AND row_key=?").get(collection,key) : null;
-  const input = row ? db.query<{ input: Uint8Array }, [string,string]>(collection === "flows" ? flowSql : pipelineSql).get(collection,key)!.input : null;
+  const input = row ? db.query<{ input: string }, [string,string]>(collection === "flows" ? flowSql : pipelineSql).get(collection,key)!.input : null;
   const oldCountSignature = collection === "flows" ? "" : countSignature(db,collection,key);
-  const newCountSignature = collection === "flows" || !input ? "" : countSignatureFromInput(db,input);
-  const before = db.query<{ project: string | null; same: number }, [Uint8Array | null,number | null,string | null,string | null,string,string]>(
+  const newCountSignature = collection === "flows" || !input ? "" : countSignatureFromInput(input);
+  const before = db.query<{ project: string | null; same: number }, [string | null,number | null,string | null,string | null,string,string]>(
     "SELECT project,(input IS ? AND row_order IS ? AND project IS ? AND state IS ?) AS same FROM history_inputs WHERE collection=? AND row_key=?")
     .get(input,row?.row_order ?? null,row?.project ?? null,row?.state ?? null,collection,key);
   if (before?.same) return null;
@@ -174,9 +181,8 @@ function countSignature(db: Database, collection: string, key: string): string {
     JOIN history_runs r USING(collection,row_key,run) WHERE a.collection=? AND a.row_key=? ORDER BY a.run,a.attempt`).all(collection,key);
   return JSON.stringify([roles,attempts]);
 }
-function countSignatureFromInput(db:Database,input:Uint8Array): string {
-  const json=db.query<{json:string},[Uint8Array]>("SELECT json(?) AS json").get(input)!.json;
-  const value=JSON.parse(json) as {roles:Array<{id:string;role:string}>;runs:Array<{stageId:string;attempts:Array<{role?:string;startedAt?:string|null}>}>};
+function countSignatureFromInput(input:string): string {
+  const value=JSON.parse(input) as {roles:Array<{id:string;role:string}>;runs:Array<{stageId:string;attempts:Array<{role?:string;startedAt?:string|null}>}>};
   const role=(stageId:string)=>value.roles.find(item=>item.id===stageId)?.role ?? "unassigned";
   return JSON.stringify([value.runs.map(run=>role(run.stageId)),value.runs.flatMap(run=>run.attempts.map(attempt=>({role:attempt.role ?? role(run.stageId),startedAt:attempt.startedAt ?? null}))) ]);
 }

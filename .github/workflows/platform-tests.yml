@@ -95,6 +95,99 @@ jobs:
           flock /var/tmp/llv-heavy-gate.lock bun scripts/verify-runtime-host.ts
 
 
+  # macOS runs the SQLite Apple ships (3.39.5 on macOS 13, the oldest macOS Bun
+  # supports), while Bun on this runner links a much newer one. Every state store
+  # runs here on SQLite 3.39.4 built from the official amalgamation, the 3.39
+  # release Apple's build follows (src/lib/state/minimumSqlite.fixture.ts).
+  minimum-sqlite:
+    name: Minimum macOS SQLite
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+      - name: Resolve the image interpreter
+        id: pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          pin=$(sed -nE 's/.*npm install -g bun@([0-9]+\.[0-9]+\.[0-9]+).*/\1/p' Dockerfile | sort -u)
+          [[ "$pin" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          printf 'version=%s\n' "$pin" >> "$GITHUB_OUTPUT"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: ${{ steps.pin.outputs.version }}
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Build SQLite 3.39.4 from the official amalgamation
+        shell: bash
+        run: |
+          set -euo pipefail
+          library=$(bun -e 'const { minimumSqliteLibrary } = await import("./src/lib/state/minimumSqlite.fixture.ts"); console.log(minimumSqliteLibrary(process.argv[1]))' "$RUNNER_TEMP/minimum-sqlite")
+          test -f "$library"
+          printf 'LLV_MINIMUM_SQLITE_LIBRARY=%s\n' "$library" >> "$GITHUB_ENV"
+      - name: Run the state stores on it
+        shell: bash
+        env:
+          LLV_VIEWER_CONTROL_URL: http://127.0.0.1:1
+        run: |
+          set -euo pipefail
+          files=(
+            src/lib/state/sqliteStateStore.bounded.test.ts
+            src/lib/state/sqliteStateStore.lifecycle.test.ts
+            src/lib/state/sqliteStateStore.readCache.test.ts
+            src/lib/state/stateLeaseRecovery.test.ts
+            src/lib/state/hotStateStores.sqlite.test.ts
+            src/lib/state/pipelineControllerIndex.owner.test.ts
+            src/lib/state/durability.test.ts
+            src/lib/agent/sqliteRegistryStore.archivedOwner.test.ts
+            src/lib/agent/sqliteRegistryStore.history.test.ts
+            src/lib/agent/sqliteRegistryStore.keyedWrites.test.ts
+            src/lib/agent/sqliteRegistryStore.readOnlyView.test.ts
+            src/lib/agent/sqliteRegistryStore.refresh.test.ts
+            src/lib/mcp/server.test.ts
+            src/lib/mcp/http.test.ts
+            src/lib/runtime/handoffQueueStore.test.ts
+            src/lib/runtime/deliveryProgress.test.ts
+            src/lib/runtime/deploymentLedger.test.ts
+            src/lib/runtime/runtimeImageStore.test.ts
+            src/lib/memory/index.test.ts
+            src/lib/memory/deliveryLedger.test.ts
+            src/lib/pipelines/legacyReviewConversion.test.ts
+            src/lib/scanner/conversationSearchProjection.test.ts
+            src/lib/activity/ingest.test.ts
+            src/lib/activity/pull.test.ts
+            src/lib/activity/report.test.ts
+            src/lib/activity/tokenIngest.test.ts
+            src/lib/activity/tokenReport.test.ts
+            src/lib/team/cli.team.test.ts
+            src/lib/team/passkeys.test.ts
+            src/lib/team/workspaces.test.ts
+            src/lib/telegram/bot/outbound.test.ts
+            src/lib/telegram/bot/store.test.ts
+            src/runtime-host/journal.test.ts
+            src/runtime-host/journal.codexCallbacks.test.ts
+            src/runtime-host/journal.consumerRetention.test.ts
+            src/runtime-host/journal.copilot.test.ts
+            src/runtime-host/journal.inject.test.ts
+            src/runtime-host/journal.sessionRead.test.ts
+            src/runtime-host/journalSessionMetadata.test.ts
+            src/runtime-host/nativeQueueJournal.test.ts
+          )
+          run() {
+            local root
+            root=$(mktemp -d "$RUNNER_TEMP/minimum-sqlite-XXXXXX")
+            mkdir -p "$root/home" "$root/config" "$root/state" "$root/tmp"
+            HOME="$root/home" XDG_CONFIG_HOME="$root/config" LLV_STATE_DIR="$root/state" TMPDIR="$root/tmp" bun test "$@" 2>&1 | tee "$RUNNER_TEMP/minimum-sqlite.log"
+            grep -q "across 1 file" "$RUNNER_TEMP/minimum-sqlite.log"
+          }
+          run src/lib/state/minimumSqlite.test.ts
+          for file in "${files[@]}"; do
+            test -f "$file"
+            run --preload ./src/lib/state/minimumSqlite.preload.ts "$file"
+          done
+
   scope:
     timeout-minutes: 3
     name: Scope (Windows)

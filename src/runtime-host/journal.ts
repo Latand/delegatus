@@ -110,7 +110,12 @@ export const RUNTIME_UNPROJECTED_RECEIPT_RETENTION_LIMIT = 512;
 
 // This expression is shared by the index and both keyset query forms. SQLite
 // maintains it for old-host writes too, so a rollback needs no metadata repair.
-export const DEPLOYMENT_LIST_STARTED_AT = "COALESCE(CAST(round(unixepoch(json_extract(state_json, '$.createdAt'), 'subsec') * 1000) AS INTEGER), CAST(round(unixepoch(json_extract(state_json, '$.updatedAt'), 'subsec') * 1000) AS INTEGER), -8640000000000000)";
+// Milliseconds come from julianday(): the 'subsec' modifier is SQLite 3.42 and
+// macOS 13 ships 3.39, where it yields NULL and every row would sort as the
+// fallback. Both read the same millisecond Julian day, so the values are equal.
+// The index carries a new name because its expression changed; the previous
+// `deployment_list_recent` stays for an older host that still names it.
+export const DEPLOYMENT_LIST_STARTED_AT = "COALESCE(CAST(round((julianday(json_extract(state_json, '$.createdAt')) - 2440587.5) * 86400000) AS INTEGER), CAST(round((julianday(json_extract(state_json, '$.updatedAt')) - 2440587.5) * 86400000) AS INTEGER), -8640000000000000)";
 
 export type RuntimeRegistryConversationRetentionState = "current" | "dead" | "superseded";
 
@@ -402,7 +407,7 @@ const journalDeploymentIndexes = declaredIndexes([
 ]);
 
 const journalEventIndexes = declaredIndexes([
-  `CREATE INDEX IF NOT EXISTS deployment_list_recent ON entities(${DEPLOYMENT_LIST_STARTED_AT} DESC, id DESC) WHERE kind = 'deployment'`,
+  `CREATE INDEX IF NOT EXISTS deployment_list_started ON entities(${DEPLOYMENT_LIST_STARTED_AT} DESC, id DESC) WHERE kind = 'deployment'`,
   `CREATE UNIQUE INDEX IF NOT EXISTS events_event_id ON events(event_id)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS events_scope_revision ON events(scope, revision)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS events_producer_key ON events(producer_kind, producer_key) WHERE producer_key IS NOT NULL`,
@@ -1759,7 +1764,7 @@ export class RuntimeJournal {
     )` : "state_json";
     const rows = this.db.query<{ id: string; started_at: number; value: string }, [number, number, string, number] | [number]>(`
       SELECT id, ${DEPLOYMENT_LIST_STARTED_AT} AS started_at, ${projection} AS value
-      FROM entities INDEXED BY deployment_list_recent WHERE kind = 'deployment'
+      FROM entities INDEXED BY deployment_list_started WHERE kind = 'deployment'
       ${cursor ? `AND ${DEPLOYMENT_LIST_STARTED_AT} <= ? AND (${DEPLOYMENT_LIST_STARTED_AT}, id) < (?, ?)` : ""}
       ORDER BY ${DEPLOYMENT_LIST_STARTED_AT} DESC, id DESC LIMIT ?
     `).all(...(cursor ? [cursor[0], cursor[0], cursor[1], limit + 1] as [number, number, string, number] : [limit + 1] as [number]));

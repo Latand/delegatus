@@ -8,6 +8,8 @@ import { assertStateStartupMutation } from "@/lib/stateOwnership";
 
 import { databaseFileIdentity, databaseSwapMarker } from "./currentDatabase";
 import { fsyncPath, writeJsonDurably } from "./durableJson";
+import { PIPELINE_REFERENCE_TRIGGERS } from "./pipelineControllerReferences";
+import { describeSchemaCompileFailure, schemaCompileFailure, sqliteRuntimeVersion } from "./schemaCompatibility";
 
 /**
  * The state databases survive a crash (#1870 slice 10,
@@ -25,6 +27,12 @@ import { fsyncPath, writeJsonDurably } from "./durableJson";
  *   that changed since its last one, and a worker process takes the
  *   `VACUUM INTO` backups and prunes the generations to the retention tiers
  *   and a size budget, off the Viewer's thread.
+ * - A schema statement this SQLite cannot compile is not damage
+ *   (schemaCompatibility.ts): nothing is set aside for it and no backup is
+ *   refused for it. Triggers the store rebuilds are dropped in place (after a
+ *   copy) so the store installs its own; any other such statement is reported
+ *   with the SQLite version and left alone. A database an earlier release set
+ *   aside only for that reason is put back while the live one is empty.
  * - Every fallback, a failed one, a refused backup and a failing backup are recorded in
  *   `storage-incidents.json`. That record has to live outside the databases it
  *   describes; the files route reads it into `systemHealth.storage`, and the
@@ -61,6 +69,9 @@ export interface StateDatabase {
   /** A content revision, so an unchanged database is not copied again. When it
       is null or fails, the file signature stands in. */
   revisionSql: string | null;
+  /** Triggers its store installs again when they are missing. Releases 1.13.0
+      to 1.15.0 wrote these with SQL the SQLite macOS ships cannot compile. */
+  rebuiltTriggers: readonly string[];
 }
 
 export function stateDatabases(stateDirectory: string): StateDatabase[] {
@@ -72,6 +83,7 @@ export function stateDatabases(stateDirectory: string): StateDatabase[] {
       check: "integrity_check",
       backup: { intervalMs: 10 * MINUTE, retention: { kind: "tiered" } },
       revisionSql: "SELECT (SELECT COUNT(*) FROM state_collections) || ':' || (SELECT COALESCE(SUM(revision), 0) FROM state_collections) AS revision",
+      rebuiltTriggers: PIPELINE_REFERENCE_TRIGGERS,
     },
     {
       name: "agent-registry.sqlite",
@@ -79,6 +91,7 @@ export function stateDatabases(stateDirectory: string): StateDatabase[] {
       check: "integrity_check",
       backup: { intervalMs: 10 * MINUTE, retention: { kind: "tiered" } },
       revisionSql: "SELECT value AS revision FROM registry_meta WHERE key = 'revision'",
+      rebuiltTriggers: [],
     },
     {
       name: "mcp-receipts.sqlite",
@@ -86,6 +99,7 @@ export function stateDatabases(stateDirectory: string): StateDatabase[] {
       check: "quick_check",
       backup: { intervalMs: DAY, retention: { kind: "newest", count: 3 } },
       revisionSql: null,
+      rebuiltTriggers: [],
     },
     {
       name: "handoff-queue.sqlite",
@@ -93,12 +107,14 @@ export function stateDatabases(stateDirectory: string): StateDatabase[] {
       check: "quick_check",
       backup: null,
       revisionSql: null,
+      rebuiltTriggers: [],
     },
   ];
 }
 
 export interface StorageIncident {
-  kind: "database-restored" | "database-fresh" | "database-fallback-failed" | "backup-skipped-low-space" | "backup-failed";
+  kind: "database-restored" | "database-fresh" | "database-fallback-failed" | "backup-skipped-low-space" | "backup-failed"
+    | "database-schema-repaired" | "database-incompatible" | "database-recovered";
   database: string;
   at: string;
   message: string;
@@ -120,7 +136,8 @@ function sqliteDatabase(): typeof import("bun:sqlite").Database {
   return sqlite.Database;
 }
 
-type Verdict = { verdict: "ok" } | { verdict: "corrupt"; detail: string } | { verdict: "unknown"; detail: string };
+type Verdict = { verdict: "ok" } | { verdict: "corrupt"; detail: string } | { verdict: "unknown"; detail: string }
+  | { verdict: "incompatible"; detail: string; object: string; reason: string };
 
 function errorText(error: unknown): string {
   if (!(error instanceof Error)) return String(error);
@@ -131,6 +148,7 @@ function errorText(error: unknown): string {
 /** Only damage counts as damage. A busy, locked or unreadable file is left
     alone: moving a healthy database aside would be the outage itself. */
 function isCorruptionError(error: unknown): boolean {
+  if (schemaCompileFailure(error)) return false;
   const code = error instanceof Error ? (error as { code?: unknown }).code : undefined;
   if (typeof code === "string" && /^SQLITE_(CORRUPT|NOTADB)/.test(code)) return true;
   const message = error instanceof Error ? error.message : String(error);
@@ -148,6 +166,8 @@ function inspect(filename: string, pragma: StateDatabase["check"], readonly: boo
     if (messages.length === 1 && messages[0] === "ok") return { verdict: "ok" };
     return { verdict: "corrupt", detail: `${pragma}: ${messages.slice(0, 5).join("; ") || "no result"}` };
   } catch (error) {
+    const failure = schemaCompileFailure(error);
+    if (failure) return { verdict: "incompatible", detail: errorText(error), ...failure };
     return isCorruptionError(error)
       ? { verdict: "corrupt", detail: errorText(error) }
       : { verdict: "unknown", detail: errorText(error) };
@@ -317,7 +337,7 @@ export type DatabaseCheckOutcome =
   | { state: "absent" }
   | { state: "ok" }
   | { state: "unchecked"; detail: string }
-  | { state: "restored" | "fresh" | "failed"; incident: StorageIncident };
+  | { state: "restored" | "fresh" | "failed" | "repaired" | "incompatible"; incident: StorageIncident };
 
 /** Test seam: runs before each step of the swap, so a test can fail one. */
 export type SwapStepHook = (step: "set-aside-main" | "set-aside-wal" | "set-aside-shm" | "restore") => void;
@@ -329,13 +349,44 @@ export function checkDatabaseAtActivation(
   /* A marker left by a swap that died would refuse every open until it aged. */
   fs.rmSync(databaseSwapMarker(database.filename), { force: true });
   if (!exists(database.filename)) return { state: "absent" };
-  const verdict = inspect(database.filename, database.check, true);
-  if (verdict.verdict === "ok") return { state: "ok" };
+  const now = options.now ?? new Date();
+  let verdict = inspect(database.filename, database.check, true);
+  let repaired: StorageIncident | null = null;
+  if (verdict.verdict === "incompatible") {
+    const first = verdict;
+    const incompatible = (failure: { detail: string; object: string; reason: string }, kept: string[] = []): DatabaseCheckOutcome => {
+      const incident: StorageIncident = {
+        kind: "database-incompatible", database: database.name, at: now.toISOString(), detail: failure.detail,
+        corruptFiles: [], backup: null, backupAt: null, backupAgeMs: null,
+        message: `${describeSchemaCompileFailure(database.name, failure)} Its store cannot open it until it runs on a SQLite that compiles that statement.`
+          + (kept.length ? ` A copy taken before the rebuilt triggers were dropped is kept as ${kept.join(", ")}.` : ""),
+      };
+      recordIncident(options.stateDirectory, incident);
+      return { state: "incompatible", incident };
+    };
+    if (!database.rebuiltTriggers.includes(first.object)) return incompatible(first);
+    let kept: string[];
+    try {
+      kept = dropRebuiltTriggers(database.filename, database.rebuiltTriggers, `${database.filename}.schema-${stamp(now)}`);
+    } catch (error) {
+      console.error(`[state durability] ${database.name}: dropping the triggers its store rebuilds failed: ${errorText(error)}`);
+      return incompatible(first);
+    }
+    verdict = inspect(database.filename, database.check, true);
+    if (verdict.verdict === "incompatible") return incompatible(verdict, kept);
+    repaired = {
+      kind: "database-schema-repaired", database: database.name, at: now.toISOString(), detail: first.detail,
+      corruptFiles: [], backup: null, backupAt: null, backupAgeMs: null,
+      message: `${describeSchemaCompileFailure(database.name, first)} Its triggers ${database.rebuiltTriggers.join(", ")} were written by an earlier `
+        + `release; they were dropped and the store installs this release's. A copy taken before is kept as ${kept.join(", ")}.`,
+    };
+    recordIncident(options.stateDirectory, repaired);
+  }
+  if (verdict.verdict === "ok") return repaired ? { state: "repaired", incident: repaired } : { state: "ok" };
   if (verdict.verdict === "unknown") {
     console.error(`[state durability] ${database.name} could not be checked, left as it is: ${verdict.detail}`);
     return { state: "unchecked", detail: verdict.detail };
   }
-  const now = options.now ?? new Date();
   const backups = options.backupDirectory ?? path.join(options.stateDirectory, BACKUP_DIRECTORY);
   const base = { database: database.name, at: now.toISOString(), detail: verdict.detail };
   /* The replacement is copied and checked before the damaged files are touched. */
@@ -402,7 +453,17 @@ function prepareNewestGoodBackup(database: StateDatabase, backupDirectory: strin
     removeTrio(restoring);
     try {
       fs.copyFileSync(candidate.file, restoring);
-      const verdict = inspect(restoring, "integrity_check", false);
+      let verdict = inspect(restoring, "integrity_check", false);
+      /* A backup written where a newer SQLite ran is not damaged for holding
+         a trigger this one cannot compile; the store rebuilds those. */
+      if (verdict.verdict === "incompatible" && database.rebuiltTriggers.includes(verdict.object)) {
+        dropRebuiltTriggers(restoring, database.rebuiltTriggers, null);
+        verdict = inspect(restoring, "integrity_check", false);
+      }
+      if (verdict.verdict === "incompatible") {
+        console.error(`[state durability] backup ${candidate.name} skipped, not damaged: ${describeSchemaCompileFailure(candidate.name, verdict)}`);
+        continue;
+      }
       if (verdict.verdict !== "ok" || exists(`${restoring}-wal`)) {
         throw new Error(verdict.verdict === "ok" ? "it left a WAL behind" : verdict.detail);
       }
@@ -436,8 +497,9 @@ function swapDamagedDatabase(
   now: Date,
   restoring: string | null,
   beforeStep: SwapStepHook | undefined,
+  label: "corrupt" | "replaced" = "corrupt",
 ): { corruptFiles: string[]; error: string | null } {
-  const target = `${filename}.corrupt-${stamp(now)}`;
+  const target = `${filename}.${label}-${stamp(now)}`;
   const corruptFiles: string[] = [];
   const marker = databaseSwapMarker(filename);
   let lock: BunDatabase | null = null;
@@ -516,6 +578,155 @@ function holdWriteLock(filename: string): BunDatabase | null {
   }
 }
 
+/**
+ * Delete the named triggers from `filename`'s catalogue. SQLite cannot read a
+ * schema whose statement it cannot parse, so the rows go through
+ * `writable_schema`, which skips that statement while the catalogue loads.
+ * Triggers own no pages, so removing their rows leaves nothing behind, and the
+ * schema cookie is advanced so every other connection reloads. With `keepAs`,
+ * the database and its WAL are copied there first, under the write lock.
+ * Returns the names of the copies kept.
+ */
+function dropRebuiltTriggers(filename: string, triggers: readonly string[], keepAs: string | null): string[] {
+  const db = observeSqlite(new (sqliteDatabase())(filename, { readwrite: true }), "state-durability");
+  const kept: string[] = [];
+  try {
+    db.exec("PRAGMA busy_timeout = 5000");
+    db.exec("PRAGMA writable_schema = ON");
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      if (keepAs) {
+        for (const suffix of ["", "-wal"]) {
+          if (!exists(`${filename}${suffix}`)) continue;
+          fs.copyFileSync(`${filename}${suffix}`, `${keepAs}${suffix}`);
+          fs.chmodSync(`${keepAs}${suffix}`, 0o600);
+          fsyncPath(`${keepAs}${suffix}`);
+          kept.push(path.basename(`${keepAs}${suffix}`));
+        }
+        fsyncPath(path.dirname(filename));
+      }
+      const cookie = db.query<{ schema_version: number }, []>("PRAGMA schema_version").get()!.schema_version;
+      db.query(`DELETE FROM sqlite_master WHERE type = 'trigger' AND name IN (${triggers.map(() => "?").join(",")})`).run(...triggers);
+      db.exec(`PRAGMA schema_version = ${cookie + 1}`);
+      db.exec("COMMIT");
+    } catch (error) {
+      try { db.exec("ROLLBACK"); } catch { /* not in a transaction */ }
+      throw error;
+    }
+  } finally {
+    try { db.exec("PRAGMA writable_schema = OFF"); } catch { /* closing anyway */ }
+    db.close();
+  }
+  return kept;
+}
+
+/** No table holds a row, or there is no database. Null when it cannot be read. */
+function databaseIsEmpty(filename: string): boolean | null {
+  if (!exists(filename)) return true;
+  let db: BunDatabase | null = null;
+  try {
+    db = observeSqlite(new (sqliteDatabase())(filename, { readonly: true }), "state-durability");
+    db.exec("PRAGMA busy_timeout = 5000");
+    const tables = db.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all();
+    return tables.every(({ name }) => !db!.query(`SELECT 1 FROM "${name.replaceAll('"', '""')}" LIMIT 1`).get());
+  } catch {
+    return null;
+  } finally {
+    db?.close();
+  }
+}
+
+/** Main files of the sets `swapDamagedDatabase` moved aside, newest first. */
+function setAsideDatabases(database: StateDatabase): { name: string; file: string; at: number }[] {
+  const directory = path.dirname(database.filename);
+  const prefix = `${path.basename(database.filename)}.corrupt-`;
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(directory);
+  } catch {
+    return [];
+  }
+  return entries.flatMap((name) => {
+    const at = name.startsWith(prefix) ? parseStamp(name.slice(prefix.length)) : null;
+    return at === null ? [] : [{ name, file: path.join(directory, name), at }];
+  }).sort((left, right) => right.at - left.at);
+}
+
+/**
+ * Releases 1.13.0 to 1.15.0 moved a database aside as damaged when SQLite
+ * could not compile one of its triggers, and its store then started empty.
+ * While the live database is still empty (or absent), the newest such set is
+ * put back: copied, its rebuilt triggers dropped from the copy, the copy
+ * checked with `integrity_check`, and then renamed in. The set-aside files are
+ * kept, and so is the empty database it replaces. A set counts only when its
+ * own check names a statement this SQLite cannot compile, or when the
+ * incident recorded when it was moved aside did.
+ */
+export function recoverSchemaSetAside(
+  database: StateDatabase,
+  options: { stateDirectory: string; now?: Date },
+): StorageIncident | null {
+  const candidates = setAsideDatabases(database);
+  if (!candidates.length || databaseIsEmpty(database.filename) !== true) return null;
+  const now = options.now ?? new Date();
+  const recorded = readIncidentRecord(options.stateDirectory);
+  const restoring = restoringName(database.filename);
+  for (const candidate of candidates) {
+    removeTrio(restoring);
+    try {
+      fs.copyFileSync(candidate.file, restoring);
+      if (exists(`${candidate.file}-wal`)) fs.copyFileSync(`${candidate.file}-wal`, `${restoring}-wal`);
+      const first = inspect(restoring, "integrity_check", false);
+      const reason = first.verdict === "incompatible" ? first
+        : first.verdict === "ok"
+          ? recorded.flatMap((incident) => incident.corruptFiles.includes(candidate.name) && incident.detail ? [schemaCompileFailure(incident.detail)] : [])
+            .find((failure) => failure !== null) ?? null
+          : null;
+      if (!reason) throw new Error(`it was not set aside for a statement SQLite could not compile (${first.verdict === "ok" ? "no such incident" : first.detail})`);
+      if (first.verdict === "incompatible") {
+        if (!database.rebuiltTriggers.includes(first.object)) throw new Error(describeSchemaCompileFailure(candidate.name, first));
+        dropRebuiltTriggers(restoring, database.rebuiltTriggers, null);
+      }
+      /* One self-contained file: what the copied WAL held moves into it. */
+      const checkpoint = observeSqlite(new (sqliteDatabase())(restoring, { readwrite: true }), "state-durability");
+      try { checkpoint.exec("PRAGMA wal_checkpoint(TRUNCATE)"); } finally { checkpoint.close(); }
+      const verdict = inspect(restoring, "integrity_check", false);
+      if (verdict.verdict !== "ok") throw new Error(verdict.detail);
+      for (const suffix of ["-wal", "-shm"]) {
+        if (!exists(`${restoring}${suffix}`)) continue;
+        if (suffix === "-wal" && fs.statSync(`${restoring}-wal`).size > 0) throw new Error("it left a WAL behind");
+        fs.rmSync(`${restoring}${suffix}`);
+      }
+      fs.chmodSync(restoring, 0o600);
+      fsyncPath(restoring);
+      let replaced: string[] = [];
+      if (exists(database.filename)) {
+        const swap = swapDamagedDatabase(database.filename, now, restoring, undefined, "replaced");
+        if (swap.error !== null) throw new Error(`putting it back failed: ${swap.error}`);
+        replaced = swap.corruptFiles;
+      } else {
+        fs.renameSync(restoring, database.filename);
+        fsyncPath(path.dirname(database.filename));
+      }
+      const kept = [candidate.name, ...["-wal", "-shm"].filter((suffix) => exists(`${candidate.file}${suffix}`)).map((suffix) => `${candidate.name}${suffix}`)];
+      const incident: StorageIncident = {
+        kind: "database-recovered", database: database.name, at: now.toISOString(), detail: `${reason.object}: ${reason.reason}`,
+        corruptFiles: kept, backup: null, backupAt: null, backupAgeMs: null,
+        message: `${database.name} was moved aside as ${candidate.name} on ${new Date(candidate.at).toISOString()} because SQLite could not compile `
+          + `${reason.object} (${reason.reason}); that is not damage. It passed integrity_check under SQLite ${sqliteRuntimeVersion()} and was put back; `
+          + `its store installs this release's triggers. The set-aside files are kept as ${kept.join(", ")}`
+          + (replaced.length ? `, and the empty database it replaced as ${replaced.join(", ")}.` : "."),
+      };
+      recordIncident(options.stateDirectory, incident);
+      return incident;
+    } catch (error) {
+      removeTrio(restoring);
+      console.error(`[state durability] ${candidate.name} not put back: ${errorText(error)}`);
+    }
+  }
+  return null;
+}
+
 /** Check every state database before any store opens one. Returns the
     fallbacks taken; each is already recorded durably. */
 export function checkStateDatabasesAtActivation(
@@ -530,6 +741,10 @@ export function checkStateDatabasesAtActivation(
     try {
       const outcome = checkDatabaseAtActivation(database, { stateDirectory, ...options });
       if ("incident" in outcome) incidents.push(outcome.incident);
+      if (outcome.state === "absent" || outcome.state === "ok" || outcome.state === "repaired") {
+        const recovered = recoverSchemaSetAside(database, { stateDirectory, now: options.now });
+        if (recovered) incidents.push(recovered);
+      }
     } catch (error) {
       console.error(`[state durability] ${database.name} check failed: ${errorText(error)}`);
     }
@@ -986,7 +1201,13 @@ export function storageIncidentTaskText(incident: StorageIncident): string {
     ? `State database ${incident.database} was restored from a backup`
     : incident.kind === "database-fallback-failed"
       ? `State database ${incident.database} was damaged and could not be restored`
-      : `State database ${incident.database} was damaged and started empty`;
+      : incident.kind === "database-schema-repaired"
+        ? `State database ${incident.database} had triggers this SQLite cannot compile; they were rebuilt`
+        : incident.kind === "database-incompatible"
+          ? `State database ${incident.database} holds a statement this SQLite cannot compile`
+          : incident.kind === "database-recovered"
+            ? `State database ${incident.database} was put back after an earlier release set it aside`
+            : `State database ${incident.database} was damaged and started empty`;
   return `${title}\n\n${incident.message}`;
 }
 

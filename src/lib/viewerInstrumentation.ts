@@ -1,5 +1,6 @@
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { runtimeDataCorruptionCode } from "@/lib/runtime/dataCorruption";
+import { schemaCompileFailure } from "@/lib/state/schemaCompatibility";
 import { checkpointHotStateRollbackMirrorsForDemotion } from "./state/checkpointRollbackMirrors";
 export { checkpointHotStateRollbackMirrorsForDemotion } from "./state/checkpointRollbackMirrors";
 import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
@@ -662,6 +663,13 @@ export function classifyStructuredHostStartupError(
       disposition: "terminal",
       category: "configuration",
       action: "Correct the structured-host configuration and restart the Viewer.",
+    };
+  }
+  if (name === "IncompatibleSchemaError" || schemaCompileFailure(error)) {
+    return {
+      disposition: "terminal",
+      category: "configuration",
+      action: "The state database holds a statement this SQLite cannot compile; it is not damaged. Run a Delegatus release that supports this SQLite, then restart the Viewer.",
     };
   }
   if (name === "RegistryParityError"

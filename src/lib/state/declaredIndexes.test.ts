@@ -39,7 +39,7 @@ test("state reopens with every declared index and preserves all table data", () 
     try {
       fixture.exec("INSERT INTO pipeline_tick_work VALUES ('fixture',4,9,0,424242,7)");
       fixture.exec("UPDATE pipeline_tick_cursor SET row_order=4,row_key='fixture'");
-      fixture.exec("INSERT INTO pipeline_ref_inputs VALUES ('fixture',jsonb('{}'))");
+      fixture.exec("INSERT INTO pipeline_ref_inputs VALUES ('fixture','{}')");
       fixture.exec("INSERT INTO pipeline_attempt_refs VALUES ('fixture',1,'build',1,0,0,0,1,1)");
       fixture.exec("INSERT INTO pipeline_owner_refs VALUES ('fixture','conversation','conversation_fixture',1)");
     } finally { fixture.close(); }
@@ -431,10 +431,10 @@ test.skipIf(process.env.LLV_INDEX_REPAIR_BENCHMARK !== "1")("index repair startu
       db.exec(`WITH RECURSIVE n(i) AS (VALUES(0) UNION ALL SELECT i+1 FROM n WHERE i<53298)
         INSERT INTO pipeline_tick_work SELECT printf('pipeline-%06d',i),i,1,i%2,i*1000,i%8 FROM n`);
       db.exec("INSERT INTO pipeline_controller_work SELECT 'publication',row_key,row_order FROM pipeline_tick_work");
-      db.exec("INSERT INTO pipeline_ref_inputs SELECT row_key,jsonb('{}') FROM pipeline_tick_work");
+      db.exec("INSERT INTO pipeline_ref_inputs SELECT row_key,'{}' FROM pipeline_tick_work");
       db.exec("INSERT INTO pipeline_attempt_refs SELECT row_key,1,'build',1,0,0,0,1,1 FROM pipeline_tick_work");
       db.exec("INSERT INTO pipeline_owner_refs SELECT row_key,'conversation',row_key,1 FROM pipeline_tick_work");
-      db.exec("INSERT INTO history_inputs SELECT 'pipelines',row_key,row_order,'repo-fixture','running',jsonb('{}') FROM pipeline_tick_work");
+      db.exec("INSERT INTO history_inputs SELECT 'pipelines',row_key,row_order,'repo-fixture','running','{}' FROM pipeline_tick_work");
       db.exec("INSERT INTO history_attempts(collection,row_key,run,attempt,conversationId,agentPath,historical,startedMs) SELECT 'pipelines',row_key,0,0,row_key,row_key,0,row_order FROM pipeline_tick_work");
       db.exec("INSERT INTO history_rounds SELECT row_key,0,row_key,row_key,row_order,'fixture' FROM pipeline_tick_work");
       db.exec("COMMIT");

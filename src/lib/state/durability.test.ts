@@ -675,3 +675,34 @@ test("a production store held across a fresh fallback writes into the new databa
     expect(fs.readFileSync(path.join(directory, name)).includes("gen-after")).toBe(false);
   }
 });
+
+test("a set-aside database that opens here is put back only when its incident names a statement SQLite could not compile", () => {
+  const recorded = (directory: string, detail: string) => writeJsonDurably(path.join(directory, "storage-incidents.json"), { version: 1, incidents: [{
+    kind: "database-fresh", database: "state.sqlite", at: "2026-10-20T08:00:00.000Z", message: "earlier release", detail,
+    corruptFiles: ["state.sqlite.corrupt-2026-10-20T08-00-00-000Z"], backup: null, backupAt: null, backupAgeMs: null,
+  }] });
+  const seedAside = (directory: string) => {
+    const aside = path.join(directory, "state.sqlite.corrupt-2026-10-20T08-00-00-000Z");
+    const db = new Database(aside);
+    try {
+      db.exec("CREATE TABLE kept(value TEXT)");
+      db.exec("INSERT INTO kept VALUES ('before the set-aside')");
+    } finally { db.close(); }
+    return aside;
+  };
+
+  const compile = sandbox();
+  const aside = seedAside(compile);
+  recorded(compile, 'SQLITE_CORRUPT: malformed database schema (pipeline_refs_insert) - near "ORDER": syntax error');
+  const incidents = checkStateDatabasesAtActivation(compile, { now: new Date("2026-10-21T12:00:00.000Z") });
+  expect(incidents.map((incident) => [incident.kind, incident.detail])).toEqual([["database-recovered", 'pipeline_refs_insert: near "ORDER": syntax error']]);
+  const restored = new Database(path.join(compile, "state.sqlite"), { readonly: true });
+  try { expect(restored.query("SELECT value FROM kept").all()).toEqual([{ value: "before the set-aside" }]); } finally { restored.close(); }
+  expect(fs.existsSync(aside)).toBe(true);
+
+  const damage = sandbox();
+  seedAside(damage);
+  recorded(damage, "SQLITE_CORRUPT: database disk image is malformed");
+  expect(checkStateDatabasesAtActivation(damage, { now: new Date("2026-10-21T12:00:00.000Z") })).toEqual([]);
+  expect(fs.existsSync(path.join(damage, "state.sqlite"))).toBe(false);
+});

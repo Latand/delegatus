@@ -322,6 +322,13 @@ When a database fails its open or its check at activation:
 
 A store whose rows fail to decode at runtime already surfaces through the store's own `onDecodeError`/`strictDecode` path. That behaviour is unchanged.
 
+A schema statement the running SQLite cannot compile is not damage, and none of the steps above runs for it (`src/lib/state/schemaCompatibility.ts`). SQLite reports such a statement as `SQLITE_CORRUPT`, "malformed database schema (<name>) - <parser error>". On macOS bun:sqlite runs the SQLite Apple ships, 3.39.5 on macOS 13. A database written where Bun links a newer SQLite can therefore carry statements that macOS cannot parse. Releases 1.13.0 to 1.15.0 wrote their pipeline reference triggers with jsonb and aggregate ORDER BY, so on macOS they set state aside and started empty. At activation:
+
+- When the statement is one of the triggers the state store rebuilds, the trio is first copied to `<db>.schema-<ts>{,-wal}`. The trigger rows are then deleted from the catalogue under `writable_schema`, the schema cookie is advanced, and the store installs this release's triggers. The incident is `database-schema-repaired`.
+- Any other such statement is left alone and reported as `database-incompatible`, naming the SQLite version and the statement. The store's open fails with the same text (`IncompatibleSchemaError`), and no corruption code is attached.
+- A backup that holds those triggers is repaired the same way on its copy, so it is never refused for them.
+- A `<db>.corrupt-<ts>` set an earlier release moved aside only for such a statement is put back while the live database is still empty or absent. Its own check must name the statement, or the incident recorded when it was moved aside must. The set is copied, repaired, checkpointed and checked with `integrity_check`, then renamed in. The set-aside files are kept, and so is the empty database they replace (`<db>.replaced-<ts>`). The incident is `database-recovered`. If the live database already holds rows, nothing happens automatically. To recover by hand, stop Delegatus, move the live trio aside, and start it again; activation then puts the set back the same way.
+
 ### 7.5 Loss bound
 
 - **kill -9 of any writer:** at most the transaction in flight, and it rolls back as a whole. The WAL does not depend on the process, and leases held by a dead PID are reclaimed through the process-identity check.
