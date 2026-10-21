@@ -79,3 +79,20 @@ test("a lower revision that does not end the message, or names another operation
   expect(await payloads.settle(ref, current)).toBe(false);
   expect(await payloads.restore(ref)).not.toBeNull();
 });
+
+
+test("a completed upload reference survives recovery and cannot be omitted from the sealed command", async () => {
+  const payloads = new ComposerSubmissionPayloads("llv-composer-streamed-upload");
+  const upload = { id: "a".repeat(32), bytes: 100 * 1024 * 1024, sha256: "b".repeat(64) };
+  const files = [{ id: "recording", name: "recording.ogg", mime: "audio/ogg", base64: "", upload }];
+  const ref = await payloads.retain({ conversationId: CONVERSATION, key: "streamed-upload" }, { text: "inspect", images: [], files });
+  await expect(payloads.seal(ref, { route: "runtime", body: {
+    conversationId: CONVERSATION, idempotencyKey: "streamed-upload", text: "inspect",
+    files: [{ name: "recording.ogg", base64: "" }],
+  } })).rejects.toThrow("missing original attachment");
+  await payloads.seal(ref, { route: "runtime", body: {
+    conversationId: CONVERSATION, idempotencyKey: "streamed-upload", text: "inspect", files,
+  } });
+  const recovered = new ComposerSubmissionPayloads("llv-composer-streamed-upload");
+  expect((await recovered.restore(ref))?.submission.files[0]?.upload).toEqual(upload);
+});

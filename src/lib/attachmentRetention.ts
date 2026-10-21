@@ -14,7 +14,7 @@
  *
  * The trade is deliberate and one-directional: an uncertain delivery that in
  * fact never landed leaves at most one message's attachments behind (5 files,
- * 40 MB, by `filePolicy`), while the opposite mistake destroys the operator's
+ * 200 MB, by `filePolicy`), while the opposite mistake destroys the operator's
  * only copy. Bytes are recoverable; a deleted attachment is not.
  */
 
