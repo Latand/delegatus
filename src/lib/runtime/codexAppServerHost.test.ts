@@ -891,6 +891,47 @@ async function waitForCondition(predicate: () => boolean | Promise<boolean>, mes
   throw new Error(message);
 }
 
+/** Control host deadlines while metadata I/O and the request barrier keep
+ * using the real event loop. Install only after the host has booted. */
+function controlHostTimeouts() {
+  const realSetTimeout = globalThis.setTimeout;
+  const realClearTimeout = globalThis.clearTimeout;
+  let now = 0;
+  const pending = new Map<ReturnType<typeof setTimeout>, { at: number; run: () => void }>();
+  const timers = spyOn(globalThis, "setTimeout").mockImplementation(((run: () => void, delay = 0) => {
+    const handle = realSetTimeout(run, 120_000);
+    pending.set(handle, { at: now + delay, run });
+    return handle;
+  }) as typeof setTimeout);
+  const cancellations = spyOn(globalThis, "clearTimeout").mockImplementation((handle) => {
+    pending.delete(handle as ReturnType<typeof setTimeout>);
+    realClearTimeout(handle as ReturnType<typeof setTimeout>);
+  });
+  return {
+    pendingCount: () => pending.size,
+    advance(ms: number) {
+      const target = now + ms;
+      for (;;) {
+        const due = [...pending].filter(([, timer]) => timer.at <= target)
+          .sort((a, b) => a[1].at - b[1].at)[0];
+        if (!due) break;
+        const [handle, timer] = due;
+        pending.delete(handle);
+        realClearTimeout(handle);
+        now = timer.at;
+        timer.run();
+      }
+      now = target;
+    },
+    restore() {
+      timers.mockRestore();
+      cancellations.mockRestore();
+      for (const handle of pending.keys()) realClearTimeout(handle);
+      pending.clear();
+    },
+  };
+}
+
 const ownedFakeProcess = {
   pidAlive: () => true,
   processIdentity: () => "4242:owned",
@@ -1965,25 +2006,28 @@ describe("CodexAppServerHost", () => {
   test.each([false, true])("Codex launches carry publication settings through the child allowlist (keyed filters: %s)", async (keyedFilters) => {
     const captured: { options?: SpawnOptionsWithoutStdio } = {};
     const email = ["no-reply", "build.example.invalid"].join("@");
+    const prioritySource = JSON.stringify({ database: path.join(metadataState, "tasks.sqlite"), taskIds: ["stage-task"] });
     const server = new FakeAppServer();
     server.shellPolicy = {
       inherit: "core", set: { GIT_AUTHOR_EMAIL: "unsafe", GIT_COMMITTER_EMAIL: "unsafe", OTHER: "kept" },
       ...(keyedFilters ? { filters: { PATH: "include", HOME: "include", "PRIVATE_*": "exclude" } } : { include_only: ["PATH", "HOME"] }),
     };
     const host = await CodexAppServerHost.start({
-      cwd: "/repo", env: { NODE_ENV: "test", LLV_PUBLICATION_NAME: "Build Agent", LLV_PUBLICATION_EMAIL: email },
+      cwd: "/repo", env: { NODE_ENV: "test", LLV_PUBLICATION_NAME: "Build Agent", LLV_PUBLICATION_EMAIL: email,
+        LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource },
       eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server, captured),
     });
     try {
       expect(captured.options?.env).toMatchObject({
         GIT_AUTHOR_NAME: "Build Agent", GIT_COMMITTER_NAME: "Build Agent",
         GIT_AUTHOR_EMAIL: email, GIT_COMMITTER_EMAIL: email,
+        LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource,
       });
       const git = agentPublicationIdentityEnv({ LLV_PUBLICATION_NAME: "Build Agent", LLV_PUBLICATION_EMAIL: email });
       expect(server.requests.find((request) => request.method === "thread/start")?.params).toMatchObject({ config: {
-        shell_environment_policy: { set: git, ...(keyedFilters
-          ? { filters: Object.fromEntries(Object.keys(git).map((key) => [key, "include"])) }
-          : { include_only: ["PATH", "HOME", ...Object.keys(git)] }) },
+        shell_environment_policy: { set: { ...git, LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource }, ...(keyedFilters
+          ? { filters: Object.fromEntries([...Object.keys(git), "LLV_GATE_CPU_PRIORITY_SOURCE"].map((key) => [key, "include"])) }
+          : { include_only: ["PATH", "HOME", ...Object.keys(git), "LLV_GATE_CPU_PRIORITY_SOURCE"] }) },
       } });
     } finally { await host.release(); }
   });
@@ -4820,36 +4864,44 @@ describe("CodexAppServerHost", () => {
       ...ownedFakeProcess,
     });
 
-    const delivery = host.send({ id: "compaction-delivery", text: "continue after compaction" });
-    // Dispatch waits on metadata I/O first; time the deadline from the request itself.
-    await waitForCondition(() => server.requests.some((candidate) => candidate.method === "turn/start"), "turn/start was never sent");
-    await Bun.sleep(10);
-    server.notify("item/started", {
-      threadId: "compaction-delivery-thread",
-      turnId: "turn-1",
-      item: { id: "compaction-one", type: "contextCompaction" },
-    });
-    expect(await host.health()).toMatchObject({ status: "active", activeTurnRef: "turn-1" });
-    expect(server.signals).toEqual([]);
+    const clock = controlHostTimeouts();
+    const delivery = host.send({ id: "compaction-delivery", text: "continue after compaction" })
+      .then((value) => ({ value }), (error: Error) => ({ error }));
+    try {
+      // Reuse the request barrier from e5a91ae8: metadata I/O precedes dispatch.
+      await waitForCondition(() => server.requests.some((candidate) => candidate.method === "turn/start"), "turn/start was never sent");
+      await waitForCondition(() => clock.pendingCount() > 0, "delivery confirmation deadline was never armed");
+      clock.advance(10);
+      server.notify("item/started", {
+        threadId: "compaction-delivery-thread",
+        turnId: "turn-1",
+        item: { id: "compaction-one", type: "contextCompaction" },
+      });
+      expect(await host.health()).toMatchObject({ status: "active", activeTurnRef: "turn-1" });
+      expect(server.signals).toEqual([]);
 
-    const request = server.requests.find((candidate) => candidate.method === "turn/start")!;
-    const params = request.params as { input: unknown };
-    server.notify("item/completed", {
-      threadId: "compaction-delivery-thread",
-      turnId: "turn-1",
-      item: {
-        type: "userMessage",
-        clientId: "compaction-delivery",
-        content: params.input,
-      },
-    });
+      const request = server.requests.find((candidate) => candidate.method === "turn/start")!;
+      const params = request.params as { input: unknown };
+      server.notify("item/completed", {
+        threadId: "compaction-delivery-thread",
+        turnId: "turn-1",
+        item: {
+          type: "userMessage",
+          clientId: "compaction-delivery",
+          content: params.input,
+        },
+      });
 
-    expect(await delivery).toEqual({ outcome: "turn-started", turnId: "turn-1" });
-    expect(server.signals).toEqual([]);
-    await host.release();
+      expect(await delivery).toEqual({ value: { outcome: "turn-started", turnId: "turn-1" } });
+      expect(server.signals).toEqual([]);
+    } finally {
+      clock.restore();
+      await host.release();
+      await delivery;
+    }
   });
 
-  test("an active turn gives thread/read enough time to answer", async () => {
+  test.each([30, 60])("an active turn gives thread/read enough time to answer (%i ms)", async (elapsed) => {
     const ignoredMethods: string[] = [];
     const server = new FakeAppServer("slow-read-thread", "slow-read-thread", false, [], undefined, null, ignoredMethods);
     const host = await CodexAppServerHost.start({
@@ -4858,31 +4910,38 @@ describe("CodexAppServerHost", () => {
       eventStore: new MemoryEventStore(),
       spawnProcess: fakeSpawn(server),
     });
-    expect(await host.send({ id: "first", text: "begin" })).toEqual({ outcome: "turn-started", turnId: "turn-1" });
-    ignoredMethods.push("thread/read");
-    const reads = () => server.requests.filter((request) => request.method === "thread/read");
-    const earlierReads = reads().length;
-
-    const pending = host.send({ id: "slow-read-follow-up", text: "continue", expectedTurnId: "turn-1" })
-      .then((value) => ({ value }), (error: Error) => ({ error }));
-    // Answer past the ordinary 20 ms deadline and within the active turn's 60 ms.
-    const sent = Date.now() + 5_000;
-    while (reads().length === earlierReads) {
-      if (Date.now() > sent) throw new Error("thread/read was never sent");
-      await Bun.sleep(1);
+    let pending: Promise<{ value: unknown } | { error: Error }> | undefined;
+    let clock: ReturnType<typeof controlHostTimeouts> | undefined;
+    try {
+      expect(await host.send({ id: "first", text: "begin" })).toEqual({ outcome: "turn-started", turnId: "turn-1" });
+      ignoredMethods.push("thread/read");
+      const reads = () => server.requests.filter((request) => request.method === "thread/read");
+      const earlierReads = reads().length;
+      clock = controlHostTimeouts();
+      pending = host.send({ id: "slow-read-follow-up", text: "continue", expectedTurnId: "turn-1" })
+        .then((value) => ({ value }), (error: Error) => ({ error }));
+      await waitForCondition(() => reads().length > earlierReads, "thread/read was never sent");
+      // Cross the ordinary 20 ms deadline; the active window is exactly 60 ms.
+      clock.advance(elapsed);
+      if (elapsed === 60) {
+        const result = await pending;
+        expect(result).toHaveProperty("error");
+        if (!("error" in result)) throw new Error("thread/read did not expire");
+        expect(result.error.message).toContain("thread/read timed out");
+        return;
+      }
+      const read = reads().at(-1)!;
+      server.stdout.write(`${JSON.stringify({
+        jsonrpc: "2.0",
+        id: read.id,
+        result: { thread: { id: "slow-read-thread", path: "/sessions/slow-read-thread.jsonl", turns: [] } },
+      })}\n`);
+      expect(await pending).toEqual({ value: { outcome: "steered", turnId: "turn-1" } });
+    } finally {
+      clock?.restore();
+      await host.release();
+      await pending;
     }
-    await Bun.sleep(30);
-    const read = reads().at(-1)!;
-    server.stdout.write(`${JSON.stringify({
-      jsonrpc: "2.0",
-      id: read.id,
-      result: { thread: { id: "slow-read-thread", path: "/sessions/slow-read-thread.jsonl", turns: [] } },
-    })}\n`);
-    const result = await pending;
-
-    if ("error" in result) throw result.error;
-    expect(result.value).toEqual({ outcome: "steered", turnId: "turn-1" });
-    await host.release();
   });
 
   test("accepts a legal thread/read response above the legacy frame guard", async () => {

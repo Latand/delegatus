@@ -284,7 +284,7 @@ import {
   type McpToolPayload,
 } from "./server";
 import { parseSelectedContextRef } from "@/lib/selection/selectedContext";
-import { RETRYABLE_TELEGRAM_BOT_CODES, type TelegramBotErrorCode } from "@/lib/telegram/bot/contracts";
+import { RETRYABLE_TELEGRAM_BOT_CODES, readTelegramBotRefusals, type TelegramBotErrorCode } from "@/lib/telegram/bot/contracts";
 import { telegramSetUp } from "@/lib/telegram/launchReadiness";
 
 import {
@@ -746,11 +746,13 @@ async function dispatchViewerControl(
   }
   if (result.error || (!response.ok && result.state !== "busy")) {
     const message = controlFailureMessage(response.status, result.error);
+    const refusals = readTelegramBotRefusals(result.refusals);
     const operationId = text(result.operationId);
     const launchId = text(result.launchId);
     if (operationId || launchId) {
       throw new McpDispatchVerdictError(message, {
         status: response.status,
+        ...(refusals.length ? { refusals } : {}),
         ...(operationId ? { operationId } : {}),
         ...(launchId ? { launchId } : {}),
         ...(text(result.conversationId) ? { conversationId: text(result.conversationId) } : {}),
@@ -767,6 +769,7 @@ async function dispatchViewerControl(
       ...(typeof result.retryAfterSeconds === "number" ? { retryAfterSeconds: result.retryAfterSeconds } : {}),
       ...(Array.isArray(result.sentMessageIds) && result.sentMessageIds.every((id) => typeof id === "number") ? { sentMessageIds: result.sentMessageIds } : {}),
       ...(text(result.secretClass) ? { secretClass: text(result.secretClass) } : {}),
+      ...(refusals.length ? { refusals } : {}),
     });
   }
   return result;
@@ -3934,6 +3937,8 @@ function reportDestinations(seq: number, telegram: BridgeReportTelegram | null):
           ...(telegram.messageIds?.length ? { messageIds: telegram.messageIds } : {}),
           ...(telegram.code ? { code: telegram.code, retryable: isRetryableReportSend(telegram.code) } : {}),
           ...(telegram.message ? { message: telegram.message } : {}),
+          ...(telegram.bot ? { bot: telegram.bot } : {}),
+          ...(telegram.refusals ? { refusals: telegram.refusals } : {}),
         },
       }
       : {}),
@@ -3970,9 +3975,10 @@ async function postReportTelegram(
     outcome = { ok: false, code: "telegram_failed", message: error instanceof Error ? error.message : String(error) };
   }
   const at = new Date().toISOString();
+  const evidence = { ...(outcome.bot ? { bot: outcome.bot } : {}), ...(outcome.refusals ? { refusals: outcome.refusals } : {}) };
   return recordBridgeReportTelegram(reportId, outcome.ok
-    ? { state: "sent", messageIds: outcome.messageIds, at }
-    : { state: outcome.code === "send_uncertain" ? "uncertain" : "failed", code: outcome.code, message: outcome.message ?? `Telegram report send failed (${outcome.code})`, at })?.telegram ?? null;
+    ? { state: "sent", messageIds: outcome.messageIds, at, ...evidence }
+    : { state: outcome.code === "send_uncertain" ? "uncertain" : "failed", code: outcome.code, message: outcome.message ?? `Telegram report send failed (${outcome.code})`, at, ...evidence })?.telegram ?? null;
 }
 
 export interface ReportTelegramSend {
@@ -3982,9 +3988,9 @@ export interface ReportTelegramSend {
   clientRequestId: string;
 }
 
-export type ReportTelegramSendOutcome =
+export type ReportTelegramSendOutcome = { bot?: string; refusals?: { bot: string; code: string }[] } & (
   | { ok: true; messageIds: number[] }
-  | { ok: false; code: string; message?: string };
+  | { ok: false; code: string; message?: string });
 
 async function productionSendReportTelegram(input: ReportTelegramSend, control: ViewerControlDependencies | null): Promise<ReportTelegramSendOutcome> {
   if (!control) return { ok: false, code: "telegram_failed", message: "no Viewer control is available to post through" };
@@ -3997,12 +4003,14 @@ async function productionSendReportTelegram(input: ReportTelegramSend, control: 
       text: input.html,
       format: "html",
       silent: true,
-    }, callerCapabilityHeaders()) as { messageIds?: unknown };
+    }, callerCapabilityHeaders()) as { messageIds?: unknown; sentBy?: { username?: string | null }; refusals?: import("@/lib/telegram/bot/contracts").TelegramBotRefusal[] };
     const messageIds = Array.isArray(result?.messageIds) ? result.messageIds.filter((id): id is number => Number.isInteger(id)) : [];
-    return { ok: true, messageIds };
+    return { ok: true, messageIds, ...(result.sentBy?.username ? { bot: result.sentBy.username } : {}),
+      ...(result.refusals ? { refusals: readTelegramBotRefusals(result.refusals).map(r => ({ bot: r.bot.username ?? r.bot.name, code: r.code })) } : {}) };
   } catch (error) {
     if (error instanceof McpDispatchVerdictError && typeof error.details.code === "string") {
-      return { ok: false, code: error.details.code, message: error.message };
+      return { ok: false, code: error.details.code, message: error.message,
+        ...(Array.isArray(error.details.refusals) ? { refusals: readTelegramBotRefusals(error.details.refusals).map(r => ({ bot: r.bot.username ?? r.bot.name, code: r.code })) } : {}) };
     }
     return { ok: false, code: "telegram_failed", message: error instanceof Error ? error.message : String(error) };
   }
@@ -5334,6 +5342,7 @@ async function telegramBotSend(args: McpToolArgs, control: ViewerControlDependen
       throw new McpToolRefusal(error.message, {
         code,
         retryable: RETRYABLE_TELEGRAM_BOT_CODES.has(code as TelegramBotErrorCode),
+        ...(Array.isArray(error.details.refusals) ? { refusals: readTelegramBotRefusals(error.details.refusals) } : {}),
         ...(typeof retryAfterSeconds === "number" ? { retryAfterSeconds } : {}),
         ...(Array.isArray(sentMessageIds) ? { sentMessageIds } : {}),
       });
@@ -5356,7 +5365,8 @@ async function telegramBotSendMedia(args: McpToolArgs, control: ViewerControlDep
   }, callerCapabilityHeaders()).catch((error: unknown) => {
     if (error instanceof McpDispatchVerdictError && typeof error.details.code === "string") {
       const code = error.details.code;
-      throw new McpToolRefusal(error.message, { code, retryable: RETRYABLE_TELEGRAM_BOT_CODES.has(code as TelegramBotErrorCode) });
+      throw new McpToolRefusal(error.message, { code, retryable: RETRYABLE_TELEGRAM_BOT_CODES.has(code as TelegramBotErrorCode),
+        ...(Array.isArray(error.details.refusals) ? { refusals: readTelegramBotRefusals(error.details.refusals) } : {}) });
     }
     throw error;
   });
@@ -5382,6 +5392,7 @@ async function telegramBotSendDocument(args: McpToolArgs, control: ViewerControl
       throw new McpToolRefusal(error.message, {
         code,
         retryable: RETRYABLE_TELEGRAM_BOT_CODES.has(code as TelegramBotErrorCode),
+        ...(Array.isArray(error.details.refusals) ? { refusals: readTelegramBotRefusals(error.details.refusals) } : {}),
         ...(typeof retryAfterSeconds === "number" ? { retryAfterSeconds } : {}),
         ...(typeof secretClass === "string" ? { secretClass } : {}),
       });

@@ -1,6 +1,6 @@
 {
   "name": "delegatus-cli",
-  "version": "1.14.0",
+  "version": "1.15.0",
   "bin": {
     "delegatus": "bin/cli.mjs",
     "dlg": "bin/cli.mjs",
@@ -48,7 +48,7 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.31.0",
+    "@modelcontextprotocol/sdk": "1.32.0",
     "@simplewebauthn/browser": "14.0.0",
     "@simplewebauthn/server": "14.0.3",
     "entities": "^8.0.0",

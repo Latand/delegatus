@@ -1,3 +1,4 @@
+import { cpuPriorityFromEnv } from "../src/lib/runtime/cpuPriority";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -45,8 +46,9 @@ if (mode === "--watch-wait") {
 const queue = machineCpuAdmissionQueue();
 if (!key || !pid || !["--wait", "--claim"].includes(mode!)) throw new Error("cpu admission needs a mode, ticket and owner PID");
 const owner = cpuOwnerIdentity(Number(pid));
+const priority = cpuPriorityFromEnv();
 if (mode === "--claim") {
-  const admitted = !queue.check(key, !pressure.check(), owner);
+  const admitted = !queue.check(key, !pressure.check(), owner, true, priority);
   queue.close();
   process.exit(admitted ? 0 : 75);
 }
@@ -68,9 +70,9 @@ const parentGuard = setInterval(() => {
 try {
   let shown = "";
   for (;;) {
-    const wait = queue.check(key, !pressure.check(), owner, false);
+    const wait = queue.check(key, !pressure.check(), owner, false, priority);
     if (!wait && slotAvailable()) break;
-    const text = wait ? cpuQueueDetail(wait.position, wait.remainingMs, wait.stalledMs) : "Waiting for a heavy command slot";
+    const text = wait ? cpuQueueDetail(wait.position, wait.remainingMs, wait.stalledMs, wait.priority) : "Waiting for a heavy command slot";
     if (text !== shown) { console.error(`gate-slot: ${text}`); shown = text; }
     await Bun.sleep(Number(process.env.LLV_GATE_POLL_SECONDS ?? 2) * 1000);
   }

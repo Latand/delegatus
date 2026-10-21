@@ -56,6 +56,7 @@ import {
   ORCHESTRATOR_SYSTEM_PROMPT,
   orchestratorMandateForDelivery,
   orchestratorMandateStale,
+  orchestratorMandateUpgraded,
   orchestratorMandateWithRoleTable,
   orchestratorRoleTable,
 } from "./prompt";
@@ -1037,6 +1038,14 @@ export function executeOrchestratorSeatRequest(
   });
 }
 
+/** Whether this key already owns the project's live pending intent or its
+    active seat, so a retry under it replays instead of beginning anew. */
+function holdsSeatIntent(project: string, clientRequestId: string): boolean {
+  const { active, pending } = orchestratorSeatFor(project);
+  return active?.intent.clientRequestId === clientRequestId
+    || (pending?.intent.clientRequestId === clientRequestId && pending.intent.error === null);
+}
+
 async function runOrchestratorSeatRequest(
   rawBody: Record<string, unknown>,
   dependencies: SeatCommandDependencies,
@@ -1051,7 +1060,9 @@ async function runOrchestratorSeatRequest(
      designated under the key its lanes will be written to. */
   recordProjectSuccessions([projectSuccessionFor(canonicalOrchestratorProject(namedProject), text(rawBody.cwd))]);
   const project = canonicalOrchestratorProject(namedProject);
-  const mandate = typeof rawBody.mandate === "string" ? rawBody.mandate : "";
+  /* Upgraded before preflight and before the durable begin, so a new intent
+     records the text it delivers; a replay delivers what its intent recorded. */
+  const mandate = orchestratorMandateUpgraded(typeof rawBody.mandate === "string" ? rawBody.mandate : "");
   if (!mandate.trim()) return { status: 400, body: { error: "mandate is required", admission: "refused" } };
   const clientRequestId = text(rawBody.clientRequestId);
   if (!CLIENT_REQUEST_ID.test(clientRequestId)) {
@@ -1072,7 +1083,12 @@ async function runOrchestratorSeatRequest(
      before either begin, so no durable intent can exist for a mandate that
      cannot be delivered. */
   const preflight = mandatePreflight(mandate, existingConversationId ? "existing" : "spawn", rawBody.roleParams);
-  if (!preflight.ok) return { status: 413, body: { ...mandateTooLargeBody(preflight), admission: "refused" } };
+  /* A retry of this key's own intent replays the bytes its first attempt
+     admitted, which a later release's upgrade can push past the bound; it is
+     reconciled and finished, never stranded. Begin enforces the refusal under
+     its lock, so a key whose intent ended meanwhile still begins nothing. */
+  const tooLarge = preflight.ok ? null : { status: 413, body: { ...mandateTooLargeBody(preflight), admission: "refused" } };
+  if (tooLarge && !holdsSeatIntent(project, clientRequestId)) return tooLarge;
 
   /* Before anything reads the incumbent: a seat still standing on a launch that
      died is not an incumbent, and rolling it back here is what puts the
@@ -1134,8 +1150,10 @@ async function runOrchestratorSeatRequest(
       model: target.model ?? null,
       promptVersion,
       triggeredBy,
+      replayOnly: tooLarge !== null,
       now: dependencies.now(),
     });
+    if (begun.kind === "not_replayed") return tooLarge!;
     if (begun.kind === "completed") {
       const repaired = await reconcileCompletedSeatReplay(project, clientRequestId, dependencies);
       if (!repaired) return { status: 409, body: { error: "seat intent was superseded by a newer designation" } };
@@ -1254,8 +1272,10 @@ async function runOrchestratorSeatRequest(
     automaticReplacement: admission?.automaticReplacement,
     promptVersion,
     triggeredBy,
+    replayOnly: tooLarge !== null,
     now: dependencies.now(),
   });
+  if (begun.kind === "not_replayed") return tooLarge!;
   if (begun.kind === "completed") {
     const repaired = await reconcileCompletedSeatReplay(project, clientRequestId, dependencies);
     if (!repaired) return { status: 409, body: { error: "seat intent was superseded by a newer designation" } };

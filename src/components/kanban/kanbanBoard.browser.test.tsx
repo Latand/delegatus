@@ -952,8 +952,8 @@ describe("CPU admission queue", () => {
     const browser = await chromium.launch(LAUNCH);
     const readings: unknown[] = [];
     try {
-      for (const stalled of [false, true]) for (const lang of ["en", "uk"] as const) for (const width of [1440, 1000, 390]) {
-        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=cpu-queue${stalled ? "-stalled" : ""}`, { width, height: 900 }, "dark", lang, "reduce", width === 390);
+      for (const theme of ["light", "dark"] as const) for (const stalled of [false, true]) for (const lang of ["en", "uk"] as const) for (const width of [1440, 1000, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=cpu-queue${stalled ? "-stalled" : ""}`, { width, height: 900 }, theme, lang, "reduce", width === 390);
         try {
           if (width === 390) await page.locator('[data-phone-kanban-tab="assigned"]').click();
           const selector = width === 390 ? '[data-phone-card="task:t-search"]' : card("t-search");
@@ -961,16 +961,16 @@ describe("CPU admission queue", () => {
           const line = target.locator("[data-cpu-queue]");
           await line.waitFor(); await target.scrollIntoViewIfNeeded();
           const text = stalled
-            ? lang === "en" ? "CPU queue is stalled · 7th · nothing started for 62 min" : "Черга CPU стоїть · 7-й · нічого не стартувало 62 хв"
-            : lang === "en" ? "Waiting for the CPU queue · 2nd · up to 7 min" : "Чекає черги CPU · 2-й · до 7 хв";
+            ? lang === "en" ? "CPU queue is stalled · 7th · nothing started for 62 min · High" : "Черга CPU стоїть · 7-й · нічого не стартувало 62 хв · Високий"
+            : lang === "en" ? "Waiting for the CPU queue · 2nd · up to 7 min · High" : "Чекає черги CPU · 2-й · до 7 хв · Високий";
           expect(await line.textContent()).toBe(text);
           expect(await target.textContent()).toContain("#2190");
           expect(await target.locator('[data-motion="working"]').count()).toBe(0);
           const geometry = await line.evaluate(element => ({ clipped: element.scrollWidth > element.clientWidth + 1, width: element.clientWidth, text: element.textContent }));
           expect(geometry.clipped).toBe(false);
           expect(pageErrors).toEqual([]);
-          await target.screenshot({ path: path.join(out, `${stalled ? "stalled" : "variant-1"}-${width}-${lang}.png`) });
-          readings.push({ lang, viewport: width, ...(stalled ? { stalled } : {}), ...geometry });
+          await target.screenshot({ path: path.join(out, `${stalled ? "stalled" : "variant-1"}-${width}-${lang}-${theme}.png`) });
+          readings.push({ lang, theme, viewport: width, ...(stalled ? { stalled } : {}), ...geometry });
           if (width === 390) {
             await target.click();
             const lane = page.locator('[data-phone-task-lane="p-search"]');
@@ -989,8 +989,8 @@ describe("CPU admission queue", () => {
               expect(box.clipped).toBe(false); expect(box.visible).toBe(true);
               expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
               expect(pageErrors).toEqual([]);
-              await page.screenshot({ path: path.join(out, `phone-${stalled ? "stalled-" : ""}${surface}-${lang}.png`) });
-              readings.push({ lang, viewport: width, surface, ...(stalled ? { stalled } : {}), ...box });
+              await page.screenshot({ path: path.join(out, `phone-${stalled ? "stalled-" : ""}${surface}-${lang}-${theme}.png`) });
+              readings.push({ lang, theme, viewport: width, surface, ...(stalled ? { stalled } : {}), ...box });
             }
           }
         } finally { await context.close(); }
@@ -34812,4 +34812,404 @@ describe("finished work leaves In progress", () => {
       fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2));
     } finally { await browser?.close(); if (tempFd !== null) fs.closeSync(tempFd); server.stop(); }
   }, 120_000);
+});
+
+/*
+ * Team workspaces, slice (a) (docs/design/workspaces.md §13.5 D1–D7, §13.9):
+ * the rail's chip and its menu as owner and member, the All view with Move to…,
+ * the Team page's Workspaces tab and New workspace, and one workspace's page,
+ * at 1440×900, 1000×700, 820×900 and 390×844, in en and uk, light and dark.
+ * The rail frames are desktop only (at 390 the board is the phone's, framed by
+ * the phone driver); the Team and workspace pages are framed at every width.
+ * Every state is
+ * reached through the real controls, its defining words are measured from
+ * text ranges on the first screen, and every menu and dialog stays inside the
+ * window. Frames go to `.artifacts/team-workspaces/`; the readings are
+ * committed to `evidence/team-workspaces/rendered.json`.
+ */
+describe("team workspaces slice (a)", () => {
+  browserTest("chip, menu, All with Move to…, Workspaces tab, New workspace and the workspace page", async () => {
+    const out = path.resolve(process.env.LLV_WORKSPACES_OUT ?? ".artifacts/team-workspaces");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(path.join(out, "bundle-root"));
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const failures: string[] = [];
+    const readings: Array<Record<string, unknown>> = [];
+    const words = (lang: "en" | "uk", key: string, params?: Record<string, string | number>) => translate(lang, key as never, params as never);
+    /* The ids `workspacesEvidence.fixture.ts` gives its workspaces. */
+    const FIXTURE_IDS = { client: `w_${"c1".repeat(16)}` };
+    const names = {
+      en: { client: "Client work", long: "Northwind customer data platform rollout" },
+      uk: { client: "Клієнтська робота", long: "Впровадження платформи даних Northwind" },
+    };
+
+    /** Each text node under `selector` that contains `text`: its range boxes, and whether all of them sit inside the
+        window and inside every clipping ancestor (a scroll edge or the window cutting a word fails). */
+    const measure = (page: Page, selector: string, text: string) => page.evaluate(({ selector, text }) => {
+      const roots = [...document.querySelectorAll<HTMLElement>(selector)].filter((element) => element.getClientRects().length > 0);
+      const boxes: Array<{ left: number; top: number; right: number; bottom: number }> = [];
+      let cut = false;
+      const words = (element: Element) => (element.textContent ?? "").replace(/\s+/g, " ");
+      for (const root of roots) {
+        if (!words(root).includes(text)) continue;
+        /* The deepest element that holds the words: only its text is measured, not a whole list around it. */
+        let holder: Element = root;
+        for (let child = [...holder.children].find((candidate) => words(candidate).includes(text)); child; child = [...holder.children].find((candidate) => words(candidate).includes(text))) holder = child;
+        const walker = document.createTreeWalker(holder, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          if (!(node.textContent ?? "").trim()) continue;
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          for (const rect of range.getClientRects()) {
+            if (rect.width === 0) continue;
+            boxes.push({ left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom });
+            if (rect.top < -0.5 || rect.bottom > innerHeight + 0.5 || rect.left < -0.5 || rect.right > innerWidth + 0.5) cut = true;
+            for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+              const style = getComputedStyle(parent);
+              if (style.overflowY === "visible" && style.overflowX === "visible") continue;
+              const clip = parent.getBoundingClientRect();
+              if (rect.top < clip.top - 0.5 || rect.bottom > clip.bottom + 0.5) cut = true;
+            }
+          }
+        }
+        break;
+      }
+      return { found: boxes.length > 0, cut, boxes: boxes.slice(0, 6).map((box) => Object.values(box).map((value) => Math.round(value))) };
+    }, { selector, text });
+    const inside = (page: Page, selector: string) => page.evaluate((selector) => {
+      const element = [...document.querySelectorAll<HTMLElement>(selector)].find((candidate) => candidate.getClientRects().length > 0);
+      if (!element) return null;
+      const box = element.getBoundingClientRect();
+      return { box: [box.left, box.top, box.width, box.height].map(Math.round), inside: box.left >= -0.5 && box.top >= -0.5 && box.right <= innerWidth + 0.5 && box.bottom <= innerHeight + 0.5 };
+    }, selector);
+
+    /* Every element `selector` matches whose text the box cuts (an ellipsis): a name must be whole. */
+    const cutNames = (page: Page, selector: string) => page.evaluate((selector) => [...document.querySelectorAll<HTMLElement>(selector)]
+      .filter((element) => element.getClientRects().length > 0 && element.scrollWidth > element.clientWidth + 0.5)
+      .map((element) => element.textContent ?? ""), selector);
+    /* A rail heading that counts nothing under it. */
+    const emptyHeadings = (page: Page) => page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-rail-section]")]
+      .filter((label) => label.querySelector("[data-rail-count]")?.textContent?.trim() === "0")
+      .map((label) => label.textContent ?? ""));
+
+    async function frame(page: Page, tag: string, state: string, defining: Array<[selector: string, text: string]>, popover?: string) {
+      for (const [selector, text] of defining) {
+        const reading = await measure(page, selector, text);
+        if (!reading.found) failures.push(`${tag} ${state}: «${text}» is not on the first screen in ${selector}`);
+        else if (reading.cut) failures.push(`${tag} ${state}: «${text}» is cut ${JSON.stringify(reading.boxes)}`);
+      }
+      let box: unknown = null;
+      if (popover) {
+        const reading = await inside(page, popover);
+        box = reading?.box ?? null;
+        if (!reading) failures.push(`${tag} ${state}: ${popover} is not open`);
+        else if (!reading.inside) failures.push(`${tag} ${state}: ${popover} leaves the window ${JSON.stringify(reading.box)}`);
+      }
+      const file = `${tag}-${state}.png`.replace(/\s+/g, "-");
+      await page.screenshot({ path: path.join(out, file) });
+      readings.push({ tag, state, defining: defining.map(([, text]) => text), popover: popover ?? null, box, file });
+    }
+
+    try {
+      /* 1000×700 is the short desktop window, where a dialog's body scrolls. */
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const [width, height] of [[1440, 900], [1000, 700], [820, 900], [390, 844]] as const) {
+        const tag = `${lang}-${theme}-${width}`;
+        const phone = width === 390;
+        let chipRight: number | null = null;
+        const open = async (query: string) => {
+          const opened = await openFixture(browser, `${server.base}?${query}`, { width, height }, theme, lang, "reduce", phone);
+          return opened;
+        };
+        if (!phone) {
+          /* D1: the chip names the chosen workspace in place of the product name; the rail lists its projects alone. */
+          {
+            const { context, page, pageErrors } = await open("scenario=workspaces&rail=1&railview=overview&ws=client");
+            try {
+              await page.locator("[data-workspace-chip]").waitFor();
+              await page.locator("[data-rail-project]").first().waitFor();
+              const listed = await page.locator("[data-rail-project]").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-rail-project")));
+              if (JSON.stringify([...listed].sort()) !== JSON.stringify(["acme-ledger", "harbor-docs"])) failures.push(`${tag} D1: the rail lists ${JSON.stringify(listed)}`);
+              if (await page.locator("[data-rail-brand]").count()) failures.push(`${tag} D1: the product name is still in the header`);
+              await frame(page, tag, "D1-client", [["[data-workspace-chip]", names[lang].client]]);
+              const empty = await emptyHeadings(page);
+              if (empty.length) failures.push(`${tag} D1: a heading counts nothing under it ${JSON.stringify(empty)}`);
+              chipRight = await page.locator("[data-workspace-chip]").evaluate((chip) => chip.getBoundingClientRect().right);
+              /* D2 as the owner: the menu with the counts, the check, settings, New and Manage. */
+              await page.locator("[data-workspace-chip]").click();
+              await page.locator("[data-workspace-menu]").waitFor();
+              await frame(page, tag, "D2-owner", [
+                ["[data-workspace-menu]", words(lang, "workspaces.heading")],
+                ["[data-workspace-menu]", words(lang, "workspaces.all")],
+                ["[data-workspace-menu]", words(lang, "workspaces.settings")],
+                ["[data-workspace-menu]", words(lang, "workspaces.new")],
+                ["[data-workspace-menu]", words(lang, "workspaces.manage")],
+              ], "[data-workspace-menu]");
+              if (pageErrors.length) failures.push(`${tag} D1/D2: page errors ${pageErrors.join("; ")}`);
+            } finally { await context.close(); }
+          }
+          /* D2 as a member: the rows and Manage only. */
+          {
+            const { context, page } = await open("scenario=workspaces&rail=1&railview=overview&ws=client&member=1");
+            try {
+              await page.locator("[data-workspace-chip]").click();
+              await page.locator("[data-workspace-menu]").waitFor();
+              const links = await page.locator("[data-workspace-link]").evaluateAll((items) => items.map((item) => item.getAttribute("data-workspace-link")));
+              if (JSON.stringify(links) !== JSON.stringify(["manage"])) failures.push(`${tag} D2 member: the menu offers ${JSON.stringify(links)}`);
+              await frame(page, tag, "D2-member", [["[data-workspace-menu]", words(lang, "workspaces.manage")]], "[data-workspace-menu]");
+            } finally { await context.close(); }
+          }
+          /* The longest name truncates inside the chip, clear of the hide control. */
+          {
+            const { context, page } = await open("scenario=workspaces&rail=1&railview=overview&ws=long");
+            try {
+              await page.locator("[data-workspace-chip]").waitFor();
+              const chip = await page.evaluate(() => {
+                const label = document.querySelector<HTMLElement>("[data-workspace-chip-label]")!;
+                const chipBox = document.querySelector<HTMLElement>("[data-workspace-chip]")!.getBoundingClientRect();
+                const hide = document.querySelector<HTMLElement>("[data-rail-hide]")!.getBoundingClientRect();
+                const labelBox = label.getBoundingClientRect();
+                return { truncated: label.scrollWidth > label.clientWidth, labelRight: labelBox.right, chipRight: chipBox.right, hideLeft: hide.left };
+              });
+              if (!chip.truncated) failures.push(`${tag} long name: the chip label is not truncated`);
+              if (chip.labelRight > chip.chipRight + 0.5 || chip.chipRight > chip.hideLeft + 0.5) failures.push(`${tag} long name: the chip overruns ${JSON.stringify(chip)}`);
+              readings.push({ tag, state: "chip-long", ...chip, clientChipRight: chipRight });
+              /* The chip fills the header: its edge stands where it stood for a short name. */
+              if (chipRight === null || Math.abs(chip.chipRight - chipRight) > 0.5) failures.push(`${tag} long name: the chip's right edge moved from ${chipRight} to ${chip.chipRight}`);
+              await frame(page, tag, "D1-long", [["[data-workspace-chip]", names[lang].long.slice(0, 8)]]);
+            } finally { await context.close(); }
+          }
+          /* D3: All, the sections in order, Move on the selected Unassigned row, and its menu. */
+          {
+            const { context, page, pageErrors } = await open("scenario=workspaces&rail=1&railview=overview&ws=all");
+            try {
+              await page.locator("[data-rail-workspace-section='unassigned']").waitFor();
+              /* The headings count once the catalog's rows have arrived, not while the sections stand empty. */
+              await page.locator("[data-rail-project='paper-kite']").waitFor();
+              await page.locator("[data-rail-project='acme-ledger']").waitFor();
+              const order = await page.locator("[data-rail-workspace-section]").evaluateAll((items) => items.map((item) => item.getAttribute("data-rail-workspace-section")));
+              if (order.at(-1) !== "unassigned" || order.length !== 4) failures.push(`${tag} D3: sections ${JSON.stringify(order)}`);
+              /* Each heading counts what the switcher counts for its workspace, pinned projects included. */
+              const headed = await page.locator("[data-rail-workspace-section]").evaluateAll((items) => Object.fromEntries(items
+                .filter((item) => item.getAttribute("data-rail-workspace-section") !== "unassigned")
+                .map((item) => [item.getAttribute("data-rail-workspace-section"), Number(item.querySelector("[data-rail-count]")?.textContent)])));
+              await page.locator("[data-workspace-chip]").click();
+              await page.locator("[data-workspace-menu]").waitFor();
+              const menuCounts = await page.locator("[data-workspace-option]").evaluateAll((items) => Object.fromEntries(items
+                .filter((item) => item.getAttribute("data-workspace-option") !== "all")
+                .map((item) => [item.getAttribute("data-workspace-option"), Number(/\d+/.exec(item.textContent ?? "")?.[0])])));
+              await page.keyboard.press("Escape");
+              await page.waitForFunction(() => !document.querySelector("[data-workspace-menu]"));
+              readings.push({ tag, state: "D3-counts", headed, menuCounts });
+              if (JSON.stringify(headed) !== JSON.stringify(menuCounts)) failures.push(`${tag} D3: headings count ${JSON.stringify(headed)}, the switcher ${JSON.stringify(menuCounts)}`);
+              if (await page.locator("[data-rail-section]").filter({ has: page.locator("[data-testid='crown-marker']") }).count()) failures.push(`${tag} D3: a Pinned section stands apart from the workspaces`);
+              const marked = await page.locator("[data-rail-pinned-mark]").evaluateAll((marks) => marks.map((mark) => mark.closest("[data-rail-project]")?.getAttribute("data-rail-project")).sort());
+              if (JSON.stringify(marked) !== JSON.stringify(["acme-ledger", "harbor-docs"])) failures.push(`${tag} D3: the pinned rows' crowns ${JSON.stringify(marked)}`);
+              await page.locator("[data-rail-project='paper-kite']").click();
+              const move = page.locator("[data-rail-project='paper-kite']").locator("xpath=..").locator("[data-rail-move]");
+              await move.waitFor();
+              await frame(page, tag, "D3-all", [
+                ["[data-rail-workspace-section='unassigned']", words(lang, "workspaces.unassigned")],
+                ["[data-workspace-chip]", words(lang, "workspaces.all")],
+                ["[data-rail-move]:not(.opacity-0)", words(lang, "workspaces.move")],
+                ["[data-rail-project='paper-kite']", "Paper Kite"],
+              ]);
+              await move.click();
+              await page.locator("[data-workspace-popover='move']").waitFor();
+              /* The menu covers neither the row's own name nor its control. */
+              const covers = await page.evaluate(() => {
+                const menu = document.querySelector("[data-workspace-popover='move']")!.getBoundingClientRect();
+                const own = [document.querySelector("[data-rail-project='paper-kite'] [data-rail-name]"), document.querySelector("[data-rail-project='paper-kite']")?.parentElement?.querySelector("[data-rail-move]")]
+                  .map((element) => element!.getBoundingClientRect());
+                return own.some((box) => box.left < menu.right && box.right > menu.left && box.top < menu.bottom && box.bottom > menu.top);
+              });
+              if (covers) failures.push(`${tag} D3: the Move to… menu covers its own row`);
+              await frame(page, tag, "D3-move", [["[data-workspace-popover='move']", words(lang, "workspaces.moveTo")], ["[data-workspace-popover='move']", names[lang].client]], "[data-workspace-popover='move']");
+              const cutTargets = await cutNames(page, "[data-workspace-popover='move'] [data-workspace-move-to] span.truncate");
+              if (cutTargets.length) failures.push(`${tag} D3: Move to… cuts ${JSON.stringify(cutTargets)}`);
+              /* The move lands: the row joins Client work and leaves Unassigned. */
+              await page.locator(`[data-workspace-move-to='${FIXTURE_IDS.client}']`).click();
+              await page.waitForFunction(() => !document.querySelector("[data-workspace-popover='move']"));
+              const moved = await page.evaluate(() => [...document.querySelectorAll("[data-rail-workspace-section], [data-rail-project]")]
+                .map((element) => element.getAttribute("data-rail-workspace-section") ?? element.getAttribute("data-rail-project")));
+              const at = moved.indexOf("paper-kite");
+              const start = moved.indexOf(FIXTURE_IDS.client);
+              const next = moved.findIndex((entry, index) => index > start && entry !== null && entry.startsWith("w_") || (index > start && entry === "unassigned"));
+              if (at < 0 || start < 0 || at < start || (next >= 0 && at > next)) failures.push(`${tag} D3: after the move the order is ${JSON.stringify(moved)}`);
+              if (pageErrors.length) failures.push(`${tag} D3: page errors ${pageErrors.join("; ")}`);
+            } finally { await context.close(); }
+          }
+        }
+        /* D4 as the owner and as a member, P4 at 390. */
+        for (const member of [false, true]) {
+          const { context, page, pageErrors } = await open(`scenario=workspaces-team&rail=1${member ? "&member=1" : ""}`);
+          try {
+            await page.locator("[data-team-workspaces]").waitFor();
+            await page.locator("[data-workspace-unassigned]").waitFor();
+            const defining: Array<[string, string]> = [
+              ["[data-team-tab='workspaces'][aria-selected='true']", words(lang, "team.tabs.workspaces")],
+              ["[data-team-workspaces]", words(lang, "workspaces.lead")],
+              [`[data-workspace-row='${FIXTURE_IDS.client}']`, names[lang].client],
+            ];
+            if (!member) defining.push(["[data-workspace-create-open]", words(lang, "workspaces.new")]);
+            await frame(page, tag, member ? "D4-member" : "D4-owner", defining);
+            await page.locator("#workspaces-unassigned-title").scrollIntoViewIfNeeded();
+            await frame(page, tag, member ? "D4-member-unassigned" : "D4-owner-unassigned", [
+              ["#workspaces-unassigned-title", `${words(lang, "workspaces.unassignedTitle")} · 2`],
+              ...(member ? [] : [["[data-workspace-move-open]", words(lang, "workspaces.moveTo")] as [string, string]]),
+            ]);
+            if (member && await page.locator("[data-workspace-create-open], [data-workspace-row-menu], [data-workspace-move-open]").count()) failures.push(`${tag} D4 member: an owner's control is drawn`);
+            if (!member) {
+              await page.locator(`[data-workspace-row='${FIXTURE_IDS.client}'] [data-workspace-row-menu]`).click();
+              await page.locator("[data-workspace-popover='row']").waitFor();
+              await frame(page, tag, "D4-row-menu", [["[data-workspace-popover='row']", words(lang, "workspaces.deleteBlocked")]], "[data-workspace-popover='row']");
+              /* The menu hangs under ⋯, its right edge on the button's, inside the list. */
+              const hung = await page.evaluate((id) => {
+                const menu = document.querySelector("[data-workspace-popover='row']")!.getBoundingClientRect();
+                const trigger = document.querySelector(`[data-workspace-row='${id}'] [data-workspace-row-menu]`)!.getBoundingClientRect();
+                const list = document.querySelector(`[data-workspace-row='${id}']`)!.parentElement!.getBoundingClientRect();
+                return { menuLeft: menu.left, menuRight: menu.right, menuTop: menu.top, triggerRight: trigger.right, triggerBottom: trigger.bottom, listLeft: list.left, listRight: list.right };
+              }, FIXTURE_IDS.client);
+              readings.push({ tag, state: "D4-row-menu-place", ...hung });
+              if (hung.menuRight > hung.triggerRight + 0.5 || hung.menuRight > hung.listRight + 0.5 || hung.menuLeft < hung.listLeft - 0.5 || hung.menuTop < hung.triggerBottom - 0.5) failures.push(`${tag} D4: the row menu stands outside its list ${JSON.stringify(hung)}`);
+            }
+            if (pageErrors.length) failures.push(`${tag} D4: page errors ${pageErrors.join("; ")}`);
+          } finally { await context.close(); }
+        }
+        /* D5 (P5 at 390): New workspace, opened by `?create=1` as the switcher's row opens it; Create stays reachable. */
+        {
+          const { context, page, pageErrors } = await open("scenario=workspaces-team&rail=1&create=1");
+          try {
+            await page.locator("[data-team-dialog='workspace-create']").waitFor();
+            await frame(page, tag, "D5", [
+              ["[data-team-dialog='workspace-create']", words(lang, "workspaces.new")],
+              ["[data-team-dialog='workspace-create']", words(lang, "workspaces.create.name")],
+              ["[data-team-dialog='workspace-create']", words(lang, "workspaces.create.colour")],
+              ["[data-team-dialog='workspace-create']", words(lang, "workspaces.create.projects")],
+            ], "[data-team-dialog='workspace-create']");
+            /* The eight swatches share one row, or stand four to a row. */
+            const swatchRows = await page.locator("[data-workspace-color]").evaluateAll((items) => {
+              const rows = new Map<number, number>();
+              for (const item of items) { const top = Math.round(item.getBoundingClientRect().top); rows.set(top, (rows.get(top) ?? 0) + 1); }
+              return [...rows.values()];
+            });
+            readings.push({ tag, state: "D5-swatch-rows", swatchRows });
+            if (!(swatchRows.length === 1 && swatchRows[0] === 8) && !swatchRows.every((count) => count === 4)) failures.push(`${tag} D5: the swatches stand ${JSON.stringify(swatchRows)} to a row`);
+            const cutChecks = await cutNames(page, "[data-workspace-check-name]");
+            if (cutChecks.length) failures.push(`${tag} D5: the checklist cuts ${JSON.stringify(cutChecks)}`);
+            await page.locator("[data-workspace-create-submit]").scrollIntoViewIfNeeded();
+            await frame(page, tag, "D5-submit", [
+              ["[data-team-dialog='workspace-create']", words(lang, "workspaces.create.projectsHint")],
+              ["[data-workspace-create-submit]", words(lang, "workspaces.create.submit")],
+            ], "[data-team-dialog='workspace-create']");
+            /* The refusal of an empty name says why, in the dialog. */
+            await page.locator("[data-workspace-create-submit]").click();
+            /* The reason stands under Name, and Cancel and Create stay whole inside the dialog and the window. */
+            await frame(page, tag, "D5-refused", [
+              ["[data-workspace-create-error]", words(lang, "workspaces.error.nameRequired")],
+              ["[data-team-dialog-footer]", words(lang, "common.cancel")],
+              ["[data-workspace-create-submit]", words(lang, "workspaces.create.submit")],
+            ], "[data-team-dialog='workspace-create']");
+            await page.locator("[data-workspace-create-name]").fill(lang === "uk" ? "Дизайн" : "Design");
+            await page.locator("[data-workspace-check='atlas'] input").check();
+            await page.locator("[data-workspace-create-submit]").click();
+            await page.waitForFunction(() => !document.querySelector("[data-team-dialog='workspace-create']"));
+            const rows = await page.locator("[data-workspace-row-name]").allInnerTexts();
+            if (!rows.includes(lang === "uk" ? "Дизайн" : "Design")) failures.push(`${tag} D5: the created workspace is not listed ${JSON.stringify(rows)}`);
+            if (pageErrors.length) failures.push(`${tag} D5: page errors ${pageErrors.join("; ")}`);
+          } finally { await context.close(); }
+        }
+        /* D6 and D7 (P6 at 390): the workspace page, Rename inline, Add project, and Delete refused while it has projects. */
+        {
+          const { context, page, pageErrors } = await open("scenario=workspaces-page&rail=1&page=client");
+          try {
+            await page.locator("[data-workspace-title]").waitFor();
+            await frame(page, tag, "D6", [
+              ["[data-workspace-back]", words(lang, "activity.back")],
+              ["[data-workspace-title]", names[lang].client],
+              ["[data-workspace-sub]", words(lang, "workspaces.page.sub", { projects: words(lang, "mobile2.projects.count", { count: 2 }) })],
+              ["[data-workspace-remove]", words(lang, "workspaces.page.remove")],
+              ["[data-workspace-delete-blocked]", words(lang, "workspaces.deleteBlocked")],
+            ]);
+            if (await page.locator("[data-workspace-delete]").isEnabled()) failures.push(`${tag} D7: Delete is enabled on a workspace with projects`);
+            /* Remove starts where the project's name starts, or is a bordered button. */
+            const remove = await page.evaluate(() => {
+              const row = document.querySelector("[data-workspace-project]")!;
+              const button = row.querySelector<HTMLElement>("[data-workspace-remove]")!;
+              const name = row.querySelector<HTMLElement>("span.truncate")!.getBoundingClientRect();
+              return { removeLeft: button.getBoundingClientRect().left, nameLeft: name.left, border: getComputedStyle(button).borderTopWidth };
+            });
+            readings.push({ tag, state: "D6-remove", ...remove });
+            if (remove.border === "0px" && Math.abs(remove.removeLeft - remove.nameLeft) > 1) failures.push(`${tag} D6: Remove is loose text off the name's edge ${JSON.stringify(remove)}`);
+            if (phone && Math.abs(remove.removeLeft - remove.nameLeft) > 1) failures.push(`${tag} P6: Remove does not start where the name starts ${JSON.stringify(remove)}`);
+            const headingTop = () => page.locator("#workspace-projects-title").evaluate((heading) => heading.getBoundingClientRect().top);
+            const before = await headingTop();
+            await page.locator("[data-workspace-rename]").click();
+            await page.locator("[data-workspace-rename-field]").waitFor();
+            await frame(page, tag, "D6-rename", [["[data-workspace-page]", words(lang, "team.member.save")], ["[data-workspace-page]", words(lang, "common.cancel")]]);
+            /* The field shows the whole name being edited. */
+            const field = await page.locator("[data-workspace-rename-field]").evaluate((input: HTMLInputElement) => ({
+              value: input.value, width: Math.round(input.getBoundingClientRect().width), scrollWidth: input.scrollWidth, clientWidth: input.clientWidth,
+            }));
+            readings.push({ tag, state: "D6-rename-field", ...field });
+            if (field.value !== names[lang].client) failures.push(`${tag} D6: the rename field holds ${JSON.stringify(field.value)}`);
+            if (field.width < 200 || field.scrollWidth > field.clientWidth) failures.push(`${tag} D6: the rename field cuts the name ${JSON.stringify(field)}`);
+            /* On the phone the field takes the content width (390 less the page's 12 px sides and the dot), with Save and Cancel under it. */
+            if (phone && field.width < 340) failures.push(`${tag} P6: the rename field does not take its own line ${JSON.stringify(field)}`);
+            /* On the desktop the inline field moves nothing: Save, Cancel and Delete share a centre, and Projects keeps its place. */
+            const renameLine = await page.evaluate(() => {
+              const form = document.querySelector("[data-workspace-rename-field]")!.closest("form")!;
+              const centre = (element: Element) => { const box = element.getBoundingClientRect(); return Math.round((box.top + box.bottom) / 2); };
+              const [save, cancel] = [...form.querySelectorAll("button")];
+              return { field: centre(form.querySelector("input")!), save: centre(save!), cancel: centre(cancel!), remove: centre(document.querySelector("[data-workspace-delete]")!), dot: Boolean(form.querySelector("[data-workspace-dot]")) };
+            });
+            const after = await headingTop();
+            readings.push({ tag, state: "D6-rename-line", ...renameLine, headingBefore: before, headingAfter: after });
+            /* On the phone the field takes its own line and Save and Cancel the one under it, so Projects moves down. */
+            if (!phone && Math.abs(after - before) > 0.5) failures.push(`${tag} D6: Rename moves the Projects heading from ${before} to ${after}`);
+            if (phone && renameLine.save <= renameLine.field) failures.push(`${tag} P6: Save stands beside the rename field ${JSON.stringify(renameLine)}`);
+            if (renameLine.save !== renameLine.cancel || (!phone && renameLine.save !== renameLine.remove)) failures.push(`${tag} D6: Save, Cancel and Delete stand on different lines ${JSON.stringify(renameLine)}`);
+            if (!renameLine.dot) failures.push(`${tag} D6: the title's colour dot leaves while renaming`);
+            await page.keyboard.press("Escape");
+            await page.locator("[data-workspace-add]").click();
+            await page.locator("[data-workspace-popover='add']").waitFor();
+            await frame(page, tag, "D6-add", [["[data-workspace-popover='add']", words(lang, "workspaces.page.add")], ["[data-workspace-popover='add']", "Paper Kite"]], "[data-workspace-popover='add']");
+            const cutAdd = await cutNames(page, "[data-workspace-popover='add'] [data-workspace-check-name]");
+            if (cutAdd.length) failures.push(`${tag} D6: Add project cuts ${JSON.stringify(cutAdd)}`);
+            /* Remove every project: Delete is offered, and deleting goes back to the list. */
+            await page.keyboard.press("Escape");
+            for (let left = await page.locator("[data-workspace-remove]").count(); left > 0; left -= 1) await page.locator("[data-workspace-remove]").first().click();
+            await page.locator("[data-workspace-empty]").waitFor();
+            if (!await page.locator("[data-workspace-delete]").isEnabled()) failures.push(`${tag} D7: Delete stays disabled on an empty workspace`);
+            await frame(page, tag, "D7-empty", [["[data-workspace-empty]", words(lang, "workspaces.page.empty")], ["[data-workspace-delete]", words(lang, "workspaces.delete")]]);
+            if (pageErrors.length) failures.push(`${tag} D6: page errors ${pageErrors.join("; ")}`);
+          } finally { await context.close(); }
+        }
+      }
+      fs.mkdirSync("evidence/team-workspaces", { recursive: true });
+      fs.writeFileSync("evidence/team-workspaces/rendered.json", JSON.stringify({
+        driver: "src/components/kanban/kanbanBoard.browser.test.tsx", block: "team workspaces slice (a)",
+        frames: readings.length, failures, readings,
+      }, null, 2) + "\n");
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 900_000);
+});
+
+// docs/design/telegram-multi-bot.md: keep multiple bots inside the Telegram panel.
+describe("Telegram multiple bots", () => {
+  browserTest("Telegram multiple bots settings and refused chats", async () => {
+    const { captureTelegramMultiBot, serveEvidenceFixture } = await import("@/components/kanban/issue1695BrowserHarness");
+    const out = path.resolve(".artifacts/telegram-multi-bot/desktop");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/mobile/issue1671Evidence.fixture.tsx");
+    const tempFd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, ignoreDefaultArgs: ["--hide-scrollbars"], args: ["--no-sandbox", "--disable-dev-shm-usage"],
+      ...(tempFd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${tempFd}` } }),
+    }).catch(error => { if (tempFd !== null) fs.closeSync(tempFd); server.stop(); throw error; });
+    try {
+      const readings = await captureTelegramMultiBot(browser, server.base, out, false);
+      fs.mkdirSync("evidence/telegram-multi-bot", { recursive: true });
+      fs.writeFileSync("evidence/telegram-multi-bot/desktop.json", JSON.stringify({ readings }, null, 2) + "\n");
+    } finally { await browser.close(); if (tempFd !== null) fs.closeSync(tempFd); server.stop(); }
+  }, 300_000);
 });

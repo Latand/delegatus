@@ -3,6 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import type { Database } from "bun:sqlite";
+import { readCpuPriority, type CpuPrioritySource } from "./cpuPriority";
+import type { TaskPriority } from "../tasks/types";
 
 import { processIdentityStatus, type ProcessIdentity, type ProcessIdentityStatus } from "../processIdentity";
 import { procBackend } from "../proc";
@@ -19,8 +21,8 @@ export const CPU_QUEUE_ABANDONED_MS = 24 * 60 * 60_000;
 /** How long a head may stay past its bound, with nothing admitted, before the wait reads as stalled. */
 export const CPU_QUEUE_STALE_GRACE_MS = 60_000;
 /** `stalledMs` is set only while the head is past its bound and nothing is admitted. */
-export type CpuQueueWait = { since: number; position: number; remainingMs: number; stalledMs?: number };
-type Ticket = { seq: number; key: string; since: number; owner: string | null };
+export type CpuQueueWait = { since: number; position: number; remainingMs: number; priority?: TaskPriority; stalledMs?: number };
+type Ticket = { seq: number; fifo_seq: number; key: string; since: number; owner: string | null; priority: number; source: string | null };
 export type CpuSlotLease = { owner: ProcessIdentity; slot: string };
 
 /** A continuation retains its parent's admission only while the kernel
@@ -89,7 +91,7 @@ export function cpuAdmissionFile(isolatedStateDir?: string | null): string {
   if (!process.env.LLV_GATE_LOCK_DIR && isolatedStateDir) return path.join(isolatedStateDir, "cpu-gate", "admission.sqlite");
   if (!process.env.LLV_GATE_LOCK_DIR && /\.test\.[cm]?[jt]sx?$/.test(process.argv[1] ?? "")) {
     // Bun's test process names its first file as argv[1]. Gate helpers name
-    // their own script, so the outer heavy command still shares machine FIFO.
+    // their own script, so the outer heavy command still shares the machine queue.
     if (!process.env.LLV_STATE_DIR) throw new Error("Test CPU admission requires an isolated LLV_STATE_DIR or LLV_GATE_LOCK_DIR");
     return path.join(process.env.LLV_STATE_DIR, "cpu-gate", "admission.sqlite");
   }
@@ -155,6 +157,40 @@ export class CpuAdmissionQueue {
         this.db.exec("CREATE TRIGGER tickets_gone AFTER DELETE ON tickets BEGIN DELETE FROM unpolled WHERE key = OLD.key; DELETE FROM suspended WHERE key = OLD.key; END");
       }).immediate();
     }
+    this.db.transaction(() => {
+      const columns = this.db.query<{ name: string }, []>("PRAGMA table_info(tickets)").all();
+      if (!columns.some(column => column.name === "priority")) this.db.exec("ALTER TABLE tickets ADD COLUMN priority INTEGER NOT NULL DEFAULT 1");
+      if (!columns.some(column => column.name === "source")) this.db.exec("ALTER TABLE tickets ADD COLUMN source TEXT");
+      if (!columns.some(column => column.name === "fifo_seq")) {
+        this.db.exec("ALTER TABLE tickets ADD COLUMN fifo_seq INTEGER");
+        this.db.exec("UPDATE tickets SET fifo_seq = seq");
+      }
+      this.db.exec("CREATE TABLE IF NOT EXISTS ticket_order (id INTEGER PRIMARY KEY CHECK (id = 1), next INTEGER NOT NULL)");
+      if (!this.db.query("SELECT 1 FROM ticket_order WHERE id = 1").get()) {
+        const next = this.db.query<{ next: number }, []>("SELECT COALESCE(MAX(fifo_seq), 0) + 1 AS next FROM tickets").get()!.next;
+        this.db.query("INSERT INTO ticket_order VALUES (1, ?)").run(next);
+      }
+      this.db.exec("DROP TRIGGER IF EXISTS tickets_fifo");
+      this.db.exec(`CREATE TRIGGER tickets_fifo AFTER INSERT ON tickets BEGIN
+        UPDATE tickets SET fifo_seq = COALESCE(fifo_seq, (SELECT next FROM ticket_order WHERE id = 1)) WHERE key = NEW.key;
+        UPDATE ticket_order SET next = MAX(next, (SELECT COALESCE(MAX(fifo_seq), 0) + 1 FROM tickets)) WHERE id = 1;
+        -- Rebuild the seq view for every membership change. Older helpers
+        -- write only seq/since/owner, so this trigger is their ordering
+        -- boundary even when the new row's default priority is unchanged.
+        -- Offset first to avoid collisions in the primary key.
+        UPDATE tickets SET seq = seq + (SELECT COALESCE(MAX(seq), 0) + COUNT(*) + 1 FROM tickets);
+        UPDATE tickets SET seq = (
+          SELECT COUNT(*) FROM tickets AS earlier
+          WHERE earlier.priority < tickets.priority
+             OR (earlier.priority = tickets.priority AND earlier.fifo_seq <= tickets.fifo_seq)
+        );
+        UPDATE sqlite_sequence SET seq = (SELECT COUNT(*) FROM tickets) WHERE name = 'tickets';
+      END`);
+      this.db.exec("CREATE INDEX IF NOT EXISTS tickets_priority_seq ON tickets(priority, seq)");
+    }).immediate();
+    // Repair a queue left in the inconsistent order produced by the earlier
+    // priority implementation before any old or new checker can claim it.
+    this.db.transaction(() => this.orderLegacyTicketsByPriority()).immediate();
   }
   close(): void { this.db.close(); }
   cancel(key: string): void {
@@ -172,6 +208,19 @@ export class CpuAdmissionQueue {
    * check does: a released stage is ahead of later work before its next tick. */
   private touch(key: string): void {
     this.db.query("UPDATE tickets SET polled = ? WHERE key = ? AND owner IS NULL").run(this.now(), key);
+  }
+  /** Older gate helpers share this file and use fixed `seq`-ordered queries.
+   * Keep that durable view in priority order so they cannot admit ahead of a
+   * ticket whose priority an upgraded checker has observed. Equal priorities
+   * retain their prior sequence order. */
+  private orderLegacyTicketsByPriority(): void {
+    const rows = this.db.query<{ seq: number; priority: number }, []>("SELECT seq, priority FROM tickets ORDER BY priority, fifo_seq").all();
+    if (rows.every((row, index) => row.seq === index + 1)) return;
+    const offset = Math.max(0, ...rows.map(row => row.seq)) + rows.length + 1;
+    this.db.query("UPDATE tickets SET seq = seq + ?").run(offset);
+    const assign = this.db.query("UPDATE tickets SET seq = ? WHERE seq = ?");
+    rows.forEach((row, index) => assign.run(index + 1, row.seq + offset));
+    this.db.query("UPDATE sqlite_sequence SET seq = ? WHERE name = 'tickets'").run(rows.length);
   }
   /** Only the release owning this pipeline namespace reconciles stage tickets. */
   reconcile(prefix: string, active: ReadonlySet<string>, eligible = active): void {
@@ -194,7 +243,7 @@ export class CpuAdmissionQueue {
       }
     }).immediate();
   }
-  check(key: string, pressureAllows: boolean, owner?: ProcessIdentity, consume = true): CpuQueueWait | null {
+  check(key: string, pressureAllows: boolean, owner?: ProcessIdentity, consume = true, source?: CpuPrioritySource): CpuQueueWait | null {
     return this.db.transaction(() => {
       const now = this.now();
       // A release that predates polls released these from a hold since the last check.
@@ -208,7 +257,10 @@ export class CpuAdmissionQueue {
       this.db.query("DELETE FROM suspended WHERE key = ?").run(key);
       this.db.query("DELETE FROM stage_admissions WHERE key = ?").run(key);
       this.touch(key);
-      const ticket = this.db.query<Ticket, [string]>("SELECT * FROM tickets WHERE key = ?").get(key)!;
+      if (source) {
+        const binding = JSON.stringify(source);
+        this.db.query("UPDATE tickets SET source = ? WHERE key = ? AND source IS NOT ?").run(binding, key, binding);
+      }
       for (const row of this.db.query<{ key: string }, [number]>("SELECT key FROM tickets WHERE owner IS NULL AND polled < ? AND (key NOT IN (SELECT key FROM suspended) OR key IN (SELECT key FROM unpolled))").all(now - CPU_QUEUE_ABANDONED_MS)) this.cancel(row.key);
       // An ownerless ticket nobody polls is passed over, never removed here:
       // its instance may only be restarting, and it returns to its sequence
@@ -217,9 +269,24 @@ export class CpuAdmissionQueue {
         this.db.query("INSERT INTO suspended VALUES (?)").run(row.key);
         this.db.query("INSERT INTO unpolled VALUES (?)").run(row.key);
       }
-      const counted = "seq <= ? AND key NOT IN (SELECT key FROM suspended) AND key NOT IN (SELECT key FROM stage_admissions)";
-      const ahead = this.db.query<{ n: number; since: number | null }, [number, number]>(`SELECT COUNT(*) AS n, MAX(CASE WHEN seq < ? THEN since END) AS since FROM tickets WHERE ${counted}`).get(ticket.seq, ticket.seq)!;
-      const head = this.db.query<{ since: number }, [number]>(`SELECT since FROM tickets WHERE ${counted} ORDER BY seq LIMIT 1`).get(ticket.seq)!;
+      // Refresh every waiting binding before any caller can dispatch. Reads seek
+      // task primary keys and extract only priority; no task store is decoded.
+      let priorityChanged = false;
+      for (const row of this.db.query<Ticket, []>("SELECT * FROM tickets WHERE source IS NOT NULL AND key NOT IN (SELECT key FROM suspended) AND key NOT IN (SELECT key FROM stage_admissions)").all()) {
+        const priority = readCpuPriority(parseSqliteJson(row.source!, this.db) as CpuPrioritySource);
+        const rank = priority === "high" ? 0 : priority === "low" ? 2 : 1;
+        if (rank !== row.priority) {
+          this.db.query("UPDATE tickets SET priority = ? WHERE key = ?").run(rank, row.key);
+          priorityChanged = true;
+        }
+      }
+      if (priorityChanged) this.orderLegacyTicketsByPriority();
+      const ticket = this.db.query<Ticket, [string]>("SELECT * FROM tickets WHERE key = ?").get(key)!;
+      // Strict high → normal → low; the durable sequence is FIFO within a
+      // level, including after reprioritization, restart and recovery.
+      const counted = "(priority < ? OR (priority = ? AND seq <= ?)) AND key NOT IN (SELECT key FROM suspended) AND key NOT IN (SELECT key FROM stage_admissions)";
+      const ahead = this.db.query<{ n: number; since: number | null }, [string, number, number, number]>(`SELECT COUNT(*) AS n, MAX(CASE WHEN key <> ? THEN since END) AS since FROM tickets WHERE ${counted}`).get(key, ticket.priority, ticket.priority, ticket.seq)!;
+      const head = this.db.query<{ since: number }, [number, number, number]>(`SELECT since FROM tickets WHERE ${counted} ORDER BY priority, seq LIMIT 1`).get(ticket.priority, ticket.priority, ticket.seq)!;
       const position = ahead.n;
       const last = this.db.query<{ last: number | null }, []>("SELECT last FROM admission WHERE id = 1").get()!.last;
       const spacing = last === null ? 0 : Math.max(0, last + this.spacingMs - now);
@@ -242,7 +309,7 @@ export class CpuAdmissionQueue {
       // past that and nothing has been admitted since, they promise nothing.
       const stalledMs = now - Math.max(head.since + this.maxWaitMs, last ?? 0);
       return {
-        since: ticket.since, position, remainingMs: Math.max(budget, priorBudget, spacing) + (position - 1) * this.spacingMs,
+        since: ticket.since, position, ...(ticket.priority === 1 ? {} : { priority: ticket.priority === 0 ? "high" as const : "low" as const }), remainingMs: Math.max(budget, priorBudget, spacing) + (position - 1) * this.spacingMs,
         ...(stalledMs > CPU_QUEUE_STALE_GRACE_MS ? { stalledMs } : {}),
       };
     }).immediate();

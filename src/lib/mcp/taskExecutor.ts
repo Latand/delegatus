@@ -1,4 +1,7 @@
+import { blockingWaitRole } from "@/lib/blockingWaits";
+import { logMcpLifecycle } from "../../../bin/mcp-lifecycle.mjs";
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import type { ChildProcess } from "node:child_process";
 import type { Readable } from "node:stream";
@@ -19,7 +22,7 @@ export type ExecutorHttpResponse = { status: number; headers: [string, string][]
 type ExecutorResult = McpToolResult | { conversationId: string | null } | { http: ExecutorHttpResponse };
 type ExecutorReply = { id: number; result?: ExecutorResult; error?: string; http?: ExecutorHttpResponse; control?: { ready?: string | null; heartbeat?: boolean; retiring?: boolean } };
 type ExecutorWireReply = Omit<ExecutorReply, "http"> & { http?: Omit<ExecutorHttpResponse, "body"> };
-type Pending = { bytes: number; finish: (error?: Error, result?: ExecutorResult) => void; dispose: () => void };
+type Pending = { tool: string; claim: string; bytes: number; finish: (error?: Error, result?: ExecutorResult) => void; dispose: () => void };
 export type TaskExecutorRequest = { id: number; name: string; args: McpToolArgs; caller: McpHttpCaller; deadlineAt: number; nativeWork?: McpToolCallContext["nativeWork"] };
 
 /** HTTP bodies cross the pipe as bytes. Only their small header is decoded on
@@ -138,10 +141,21 @@ export function taskExecutorLaunch(cwd = process.cwd()) {
 /** One task service per Viewer, shared across Next bundles. A timed-out caller
  * keeps its slot until the executor settles: cancellation cannot create an
  * unbounded queue of work whose replies nobody is waiting for. */
+type ExecutorRuntime = {
+  launch?: ReturnType<typeof taskExecutorLaunch>;
+  env?: Partial<NodeJS.ProcessEnv>;
+  idleMs?: number;
+  drainMs?: number;
+  schedule?: (callback: () => void, delayMs: number) => () => void;
+  now?: () => number;
+};
+
 export class McpTaskExecutor {
   private child: ChildProcess | null = null;
   private closing: Promise<void> = Promise.resolve();
+  private draining?: Promise<void>;
   private pending = new Map<number, Pending>();
+  private endedInputs = new WeakSet<ChildProcess>();
   private inputBytes = 0;
   private nextId = 0;
   private idle?: ReturnType<typeof setTimeout>;
@@ -150,7 +164,15 @@ export class McpTaskExecutor {
   private workerManagesIdle = false;
   private replies?: TaskExecutorReplies;
 
-  constructor(private runtime: { launch?: ReturnType<typeof taskExecutorLaunch>; env?: Partial<NodeJS.ProcessEnv>; idleMs?: number } = {}) {}
+  constructor(private runtime: ExecutorRuntime = {}) {}
+
+  private schedule(callback: () => void, delayMs: number): () => void {
+    if (this.runtime.schedule) return this.runtime.schedule(callback, delayMs);
+    const timer = setTimeout(callback, delayMs);
+    return () => clearTimeout(timer);
+  }
+
+  private now(): number { return this.runtime.now?.() ?? Date.now(); }
 
   async identifyCapability(capability: string, context: McpToolCallContext = {}): Promise<string | null> {
     const result = await this.request("identifyCapability", {}, { capability }, context);
@@ -183,8 +205,9 @@ export class McpTaskExecutor {
 
   private request(name: string, args: McpToolArgs, caller: McpHttpCaller, context: McpToolCallContext): Promise<ExecutorResult> {
     return withViewerOperation("mcp.tasks.executor", async () => {
-      const deadlineAt = Math.min(context.deadlineAt ?? Infinity, Date.now() + 30_000);
-      if (context.signal?.aborted || deadlineAt <= Date.now()) throw new Error("task executor call ended before dispatch");
+      const now = this.now();
+      const deadlineAt = Math.min(context.deadlineAt ?? Infinity, now + 30_000);
+      if (this.draining || context.signal?.aborted || deadlineAt <= now) throw new Error("task executor call ended before dispatch");
       const id = ++this.nextId;
       const frame = JSON.stringify({ id, name, args, caller, deadlineAt, nativeWork: context.nativeWork } satisfies TaskExecutorRequest) + "\n";
       const bytes = Buffer.byteLength(frame);
@@ -193,7 +216,6 @@ export class McpTaskExecutor {
       return await new Promise<ExecutorResult>((resolve, reject) => {
         let settled = false;
         let dispatched: ChildProcess | undefined;
-        let cancellationTimer: ReturnType<typeof setTimeout> | undefined;
         const finish: Pending["finish"] = (error, result) => {
           if (settled) return;
           settled = true;
@@ -202,23 +224,28 @@ export class McpTaskExecutor {
         };
         const cancel = () => {
           finish(new Error("task executor reply was cancelled or timed out; look up the original request key"));
-          if (dispatched && this.child === dispatched) {
-            leasedHelperInput(dispatched).write(JSON.stringify({ cancel: id }) + "\n");
-            cancellationTimer ??= setTimeout(() => {
-              if (this.pending.has(id)) this.retire(dispatched!, "did not settle cancellation");
-            }, 1_000);
+          if (dispatched && this.child === dispatched && !this.endedInputs.has(dispatched)) {
+            const input = leasedHelperInput(dispatched);
+            if (!input.writableEnded && !input.destroyed) input.write(JSON.stringify({ cancel: id }) + "\n");
+            // The slot stays owned until settlement. Killing the shared worker
+            // here also killed unrelated mutations while they were committing.
           }
         };
-        const timer = setTimeout(cancel, Math.max(1, deadlineAt - Date.now()));
+        const cancelDeadline = this.schedule(cancel, Math.max(1, deadlineAt - this.now()));
         context.signal?.addEventListener("abort", cancel, { once: true });
-        const pending: Pending = { bytes, finish, dispose: () => {
+        const httpBody = name === "httpTaskCall" ? args.body as { params?: { name?: string; arguments?: McpToolArgs } } | undefined : undefined;
+        const tool = name === "httpTaskCall" && typeof args.toolName === "string" && TASK_EXECUTOR_TOOLS.has(args.toolName) ? args.toolName : name;
+        const requestKey = (httpBody?.params?.arguments ?? args).clientRequestId;
+        const claim = createHash("sha256").update(`${tool}:${typeof requestKey === "string" ? requestKey : "unkeyed"}`).digest("hex");
+        const pending: Pending = { tool, claim, bytes, finish, dispose: () => {
           if (this.pending.get(id) !== pending) return;
-          clearTimeout(timer); clearTimeout(cancellationTimer); context.signal?.removeEventListener("abort", cancel);
+          cancelDeadline(); context.signal?.removeEventListener("abort", cancel);
           this.pending.delete(id); this.inputBytes -= bytes;
         } };
         this.pending.set(id, pending); this.inputBytes += bytes;
         void this.closing.then(() => {
           if (settled) { pending.dispose(); return; }
+          if (this.draining) throw new Error("task executor is draining before dispatch; retry the original key");
           clearTimeout(this.idle);
           const child = this.child ?? this.start();
           dispatched = child;
@@ -278,6 +305,10 @@ export class McpTaskExecutor {
 
   private retire(child: ChildProcess, reason = "stopped"): void {
     if (this.child !== child) return;
+    logMcpLifecycle("task-executor-retire", { childPid: child.pid, childRole: "mcp-task-guardian",
+      workerPid: this.channel ? decodeTaskChannel(this.channel)?.identity.pid : undefined,
+      detail: reason, role: blockingWaitRole(), pendingCalls: this.pending.size,
+      pendingClaims: [...this.pending.values()].map(job => ({ tool: job.tool, claim: job.claim })) });
     this.replies?.close(); this.replies = undefined;
     this.child = null; clearTimeout(this.idle); clearTimeout(this.watchdog);
     this.channel = undefined; this.workerManagesIdle = false;
@@ -289,7 +320,23 @@ export class McpTaskExecutor {
     }
   }
 
-  async close(): Promise<void> { if (this.child) this.retire(this.child); await this.closing; }
+  async close(): Promise<void> {
+    if (this.draining) return this.draining;
+    const drain = (async () => {
+      const child = this.child;
+      if (child && child.exitCode === null && child.signalCode === null) {
+        // Withdraw new private admissions, then let existing calls commit receipts.
+        const closed = new Promise<void>(resolve => child.once("close", () => resolve()));
+        this.endedInputs.add(child);
+        leasedHelperInput(child).end();
+        const cancelDrainDeadline = this.schedule(() => this.retire(child, "drain deadline exceeded"), this.runtime.drainMs ?? 35_000);
+        try { await closed; } finally { cancelDrainDeadline(); }
+      } else if (child) this.retire(child);
+      await this.closing;
+    })();
+    this.draining = drain;
+    try { await drain; } finally { if (this.draining === drain) this.draining = undefined; }
+  }
 }
 
 const KEY = Symbol.for("llv.mcp.taskExecutor");

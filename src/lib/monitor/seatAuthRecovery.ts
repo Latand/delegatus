@@ -21,7 +21,7 @@ export interface SeatAuthRecoveryPorts {
 
 function telegramRefusedBeforeSend(error: unknown): boolean {
   return error instanceof Error && "code" in error
-    && ["bot_not_connected", "chat_not_found", "chat_not_allowed", "bot_not_in_chat"].includes(String(error.code));
+    && ["bot_not_connected", "chat_not_found", "chat_not_allowed", "bot_not_in_chat", "not_enough_rights"].includes(String(error.code));
 }
 
 export function seatAuthRotationKey(id: string): string {

@@ -20,3 +20,23 @@ test.each([
   expect(override.inherit).toBeUndefined();
   expect(override.exclude).toBeUndefined();
 });
+
+test.each([
+  { include_only: ["PATH", "HOME"] },
+  { filters: { PATH: "include", HOME: "include", "PRIVATE_*": "exclude" } },
+])("Codex shell policy forwards the gate priority binding through $policy", policy => {
+  const prioritySource = JSON.stringify({ database: "fixture-state.sqlite", taskIds: ["task-one"] });
+  const source = {
+    NODE_ENV: "test",
+    LLV_PUBLICATION_NAME: "Build Agent",
+    LLV_PUBLICATION_EMAIL: ["no-reply", "build.example.invalid"].join("@"),
+    LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource,
+  };
+  const result = agentCodexPublicationPolicy(policy, source);
+  expect((result.set as Record<string, string>).LLV_GATE_CPU_PRIORITY_SOURCE).toBe(prioritySource);
+  if ("include_only" in policy) {
+    expect(result.include_only).toContain("LLV_GATE_CPU_PRIORITY_SOURCE");
+  } else {
+    expect((result.filters as Record<string, string>).LLV_GATE_CPU_PRIORITY_SOURCE).toBe("include");
+  }
+});

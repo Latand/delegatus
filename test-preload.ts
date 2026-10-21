@@ -51,10 +51,12 @@ setHeadlessSpawnForTests(spawn);
 const run = claimProcessTempRoot(TEST_RUN_TEMP_PREFIX);
 // A launch's environment-level hooksPath outranks every fixture repository's
 // config and even affects `rev-parse --git-path hooks`. Drop launch bindings
-// before test modules load, and keep newly generated guards in this run too.
+// before test modules load, including the task database a gate waited on.
+// The gate has already claimed its CPU slot; fixtures get their own bindings.
+// Keep newly generated guards in this run too.
 for (const key of Object.keys(process.env)) {
   if (/^GIT_(?:CONFIG(?:_|$)|DIR$|WORK_TREE$|COMMON_DIR$|INDEX_FILE$|OBJECT_DIRECTORY$|ALTERNATE_OBJECT_DIRECTORIES$|IMPLICIT_WORK_TREE$|GRAFT_FILE$|NO_REPLACE_OBJECTS$|REPLACE_REF_BASE$|PREFIX$|SHALLOW_FILE$)/.test(key)
-    || /^LLV_(?:AGENT_GIT_GUARD_DIR|STAGE_GIT_RECEIPT|STAGE_GIT_WORKTREE)$/.test(key)) delete process.env[key];
+    || /^LLV_(?:AGENT_GIT_GUARD_DIR|STAGE_GIT_RECEIPT|STAGE_GIT_WORKTREE|GATE_CPU_PRIORITY_SOURCE)$/.test(key)) delete process.env[key];
 }
 for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"]) {
   process.env[key] = path.join(run.root, key.toLowerCase());

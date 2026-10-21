@@ -303,6 +303,7 @@ const CHILD_ENV_ALLOWLIST = [
   "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR",
   "DBUS_SESSION_BUS_ADDRESS", "SSL_CERT_FILE", "SSL_CERT_DIR",
   "LLV_SPAWN_CAPABILITY",
+  "LLV_GATE_CPU_PRIORITY_SOURCE",
   /* Where Claude Code writes background-task output. A pipeline stage runs
      with TMPDIR in its scratch directory and this pinned to the temp root the
      Viewer scans for those tasks (#1957). */

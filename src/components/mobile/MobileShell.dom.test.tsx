@@ -334,3 +334,26 @@ test("the receipt sits in flow between the body and the dock; a sheet takes it i
   expect(restored).toBe(1);
   expect(q(root, "[data-mobile2-receipt]")).toBeNull();
 });
+
+test("the bar title's eyebrow names the workspace above the name, and gives way to the reconnecting line and to meta", async () => {
+  const { ServerReachProvider } = await import("@/hooks/serverReach");
+  const container = dom.document.createElement("div");
+  dom.document.body.appendChild(container);
+  const reactRoot = createRoot(container as unknown as Element);
+  roots.push(reactRoot);
+  const root = container as unknown as HTMLElement;
+  const draw = (reach: "ok" | "reconnecting", meta?: string) => flushSync(() => reactRoot.render(
+    <ServerReachProvider value={{ kind: reach, lastGoodAt: reach === "ok" ? null : Date.UTC(2026, 9, 20, 9) }}>
+      <MobileBarTitle meta={meta} eyebrow={<span>Client work</span>}>shop-backend</MobileBarTitle>
+    </ServerReachProvider>,
+  ));
+  draw("ok");
+  const lines = [...root.querySelectorAll("[data-mobile2-title-eyebrow], [data-mobile2-title-text]")].map((line) => line.textContent);
+  expect(lines).toEqual(["Client work", "shop-backend"]);
+  draw("reconnecting");
+  expect(q(root, "[data-mobile2-title-eyebrow]")).toBeNull();
+  expect(q(root, "[data-reach-line]")).not.toBeNull();
+  draw("ok", "updating…");
+  expect(q(root, "[data-mobile2-title-eyebrow]")).toBeNull();
+  expect(q(root, "[data-mobile2-title-meta]")?.textContent).toBe("updating…");
+});

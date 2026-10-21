@@ -616,24 +616,47 @@ test("the wait ends when the turn it joined ends, without burning the whole wind
   /* A window far longer than this test may take: what ends the wait has to be
      the turn ending, not the deadline. */
   const host = await startHost(server, { injectObservationTimeoutMs: 120_000 });
-  const turnId = server.startTurn();
-  await Bun.sleep(10);
+  let observation: Promise<boolean> | undefined;
+  let restoreTimers: (() => void) | undefined;
+  try {
+    const turnId = server.startTurn();
+    expect(await host.health()).toMatchObject({ activeTurnRef: turnId });
 
-  const pending = host.inject({
-    operationId: "op-turn-ends",
-    threadId: server.threadId,
-    text: "never flushed",
-    contentDigest: digestOf("never flushed"),
-  });
-  await Bun.sleep(50);
-  server.notify("turn/completed", { threadId: server.threadId, turn: { id: turnId, status: "completed" } });
-  server.endTurn(turnId);
+    // The ack proves metadata publication and injection finished against this
+    // turn. Ending it after a sleep races that I/O and correctly refuses it.
+    const outcome = await host.inject({
+      operationId: "op-turn-ends",
+      threadId: server.threadId,
+      text: "never flushed",
+      contentDigest: digestOf("never flushed"),
+    });
+    expect(outcome).toMatchObject({ placement: "pending-input", turnId });
+    expect(server.injectedItems).toHaveLength(1);
+    // Wait for the observer's first unsuccessful scan to schedule its poll.
+    // The turn must end while an observation is already waiting for evidence.
+    const realSetTimeout = globalThis.setTimeout;
+    let ready!: () => void;
+    const waiting = new Promise<void>((resolve) => { ready = resolve; });
+    const timers = spyOn(globalThis, "setTimeout").mockImplementation(((run: () => void, delay?: number) => {
+      const timer = realSetTimeout(run, delay);
+      ready();
+      return timer;
+    }) as typeof setTimeout);
+    restoreTimers = () => timers.mockRestore();
+    observation = outcome.observe();
+    await waiting;
+    server.notify("turn/completed", { threadId: server.threadId, turn: { id: turnId, status: "completed" } });
+    server.endTurn(turnId);
+    expect(await host.health()).toMatchObject({ activeTurnRef: null });
 
-  /* The verdict arrives at all: the 120 s window cannot have run out inside
-     this test, so only the turn ending can have ended the wait. */
-  const outcome = await pending;
-  expect(await outcome.observe()).toBe(false);
-  await host.release();
+    /* The verdict arrives at all: the 120 s window cannot have run out inside
+       this test, so only the turn ending can have ended the wait. */
+    expect(await observation).toBe(false);
+  } finally {
+    restoreTimers?.();
+    await host.release();
+    await observation;
+  }
 });
 
 test("an unarticulated transport failure is unverified, never a refusal", async () => {
