@@ -389,10 +389,10 @@ Where these frames depart from a real install, on purpose:
   last 30 days, with the changelog beside it. The star count left the header.
 
 - **Full screen.** Each frame has a control at the top-right corner of its
-  window: in the bar of the run frame, above the corner of the other two, so
-  the product's own header controls stay clear. The run frame goes full screen
-  as a whole window with its tabs, the other two with a 52 px strip that holds
-  the way out. The frame
+  window: in the tab bar of the run, learned rules and limits frames, above
+  the corner of the others, so the product's own header controls stay clear.
+  A frame with a tab bar goes full screen as a whole window with its tabs, the
+  others with a 52 px strip that holds the way out. The frame
   then runs at the real size of its area, unscaled, so the product's own
   layout applies. Full screen never changes an iframe's `src`. The demo's own
   synthetic Esc (it closes panels between views) does not leave the overlay;
@@ -425,7 +425,7 @@ retry without acknowledging readiness, and retry must recover three results
 in the same iframe. Acknowledgements are checked against the rendered DOM.
 `--search-failure-only` isolates the empty-response and retry check.
 
-To check phone swipes, run `CHROME_BIN=/usr/bin/google-chrome-stable bun landing/site/capture.ts --check-swipe=after` after building. It drives touch gestures at DPR 3 at 390×844 and 375×667 in both languages: a vertical swipe in each direction and a diagonal one over the hero's demo, the install prompt, the conversation composer, each demo frame and plain text. It sets up no nested scroll area, so a frame that takes any of the gesture shows. The page must move within 4 px of what it moves over plain text, in the same direction, with no backwards step in a per-frame `scrollY` trace, and no scroll area inside a frame may change its position. It also checks who may touch a frame: `pointer-events` is `none` on every frame at both phone sizes, in a phone turned sideways, and on the touch tablet's handset; `auto` at 1440×900 and in a 600 px mouse window, and on the tablet's run and open frames. A tap on the landing tab under each frame still switches its screen, and the run frame takes touch in full screen only. The check writes `swipe-after.json` to `LANDING_RENDER_DIR`. Use `--check-swipe=before` to record an unchanged or published baseline without asserting it.
+To check phone swipes, run `CHROME_BIN=/usr/bin/google-chrome-stable bun landing/site/capture.ts --check-swipe=after` after building. It drives touch gestures at DPR 3 at 390×844 and 375×667 in both languages: a vertical swipe in each direction and a diagonal one over the hero's demo, the install prompt, the conversation composer, each demo frame and plain text. It sets up no nested scroll area, so a frame that takes any of the gesture shows. The page must move within 4 px of what it moves over plain text, in the same direction, with no backwards step in a per-frame `scrollY` trace, and no scroll area inside a frame may change its position. It also checks who may touch a frame: `pointer-events` is `none` on every frame at both phone sizes, in a phone turned sideways, and on the touch tablet's handset; `auto` at 1440×900 and in a 600 px mouse window, and on every tablet frame but the handset. A tap on the landing tab under each frame still switches its screen, and the run frame takes touch in full screen only. The check writes `swipe-after.json` to `LANDING_RENDER_DIR`. Use `--check-swipe=before` to record an unchanged or published baseline without asserting it.
 
 The driver records load, tabs and repeated
 EN/UK switches after visiting the lower sections. Chrome traces record script
