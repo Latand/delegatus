@@ -7,9 +7,12 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { NextRequest } from "next/server";
 import { POST } from "@/app/api/mcp/route";
-import { TASK_DETAILS_LIMIT } from "@/lib/tasks/types";
-import { MAX_PIPELINE_STAGES, MAX_STAGE_OUTPUTS, MAX_STAGE_PROMPT_LENGTH } from "@/lib/pipelines/limits";
-import { PROTOTYPE_LIMITS } from "@/lib/prototypeReview/input";
+import { TASK_DETAILS_LIMIT, type BoardTask } from "@/lib/tasks/types";
+import { patchTask } from "@/lib/tasks/commands";
+import { MAX_PIPELINE_STAGES, MAX_STAGE_OUTPUTS, MAX_STAGE_OUTPUT_PATH_LENGTH, MAX_STAGE_PROMPT_LENGTH, MAX_SPEC_LENGTH } from "@/lib/pipelines/limits";
+import { parsePrototypeInput, PROTOTYPE_LIMITS } from "@/lib/prototypeReview/input";
+import { completeFits } from "@/lib/bridge/reportComplete";
+import * as pipelineEngine from "@/lib/pipelines/engine";
 import { setMcpHttpDependenciesForTests } from "./http";
 import { MCP_MAX_REQUEST_BODY_BYTES, MCP_MAX_TOOL_INPUT_ELEMENTS } from "./inputLimits";
 import { ownFixtureChild, reapFixtureChildren } from "./ownedFixtureChildren";
@@ -26,12 +29,12 @@ const rpc = (name: McpToolName, args: Record<string, unknown>) => ({ jsonrpc: "2
 const workloads: Array<[McpToolName, Record<string, unknown>]> = [
   ["create_pipeline", {
     clientRequestId: "pipeline-envelope", task: "Pipeline input envelope", repoDir: "/workspace/project",
-    spec: "s".repeat(256 * 1024), autoStart: false,
+    spec: "界".repeat(MAX_SPEC_LENGTH), autoStart: false,
     stages: Array.from({ length: MAX_PIPELINE_STAGES }, (_, i) => ({
       id: `stage-${i}`, kind: "run", prompt: "界".repeat(MAX_STAGE_PROMPT_LENGTH),
       next: i + 1 < MAX_PIPELINE_STAGES ? `stage-${i + 1}` : null,
-      outputs: Array.from({ length: MAX_STAGE_OUTPUTS }, (_, j) => `output-${j}/` + "x".repeat(225)),
-      role: { roleId: "builder" }, engine: "codex", access: "read-write",
+      outputs: Array.from({ length: MAX_STAGE_OUTPUTS }, (_, j) => `output-${j}/` + "x".repeat(MAX_STAGE_OUTPUT_PATH_LENGTH - `output-${j}/`.length)),
+      role: { roleId: "builder" }, engine: "codex", access: "read-only",
     })),
   }],
   ["publish_prototype_review", {
@@ -40,7 +43,7 @@ const workloads: Array<[McpToolName, Record<string, unknown>]> = [
       number: i + 1, name: "界".repeat(60), description: "界".repeat(300),
       frames: Array.from({ length: Math.floor(PROTOTYPE_LIMITS.media / PROTOTYPE_LIMITS.variants)
         + (i < PROTOTYPE_LIMITS.media % PROTOTYPE_LIMITS.variants ? 1 : 0) }, (_, j) => ({
-        path: "/workspace/" + "p/".repeat(2035) + `${i}-${j}`.padStart(10, "x") + ".png",
+        path: `/${'"'.repeat(4088 - 1 - `${i}-${j}`.length - 4)}${i}-${j}.png`,
         caption: "界".repeat(200), width: 3840, lang: "uk",
       })),
     })),
@@ -50,9 +53,9 @@ const workloads: Array<[McpToolName, Record<string, unknown>]> = [
   }],
   ["update_task", { clientRequestId: "task-envelope", taskId: "fixture-task", details: "界".repeat(TASK_DETAILS_LIMIT) }],
   ["bridge_report", { clientRequestId: "report-envelope", key: "fixture-report", class: "status",
-    summary: "界".repeat(120), covers: Array.from({ length: 240 }, (_, i) => `outcome-${i}`),
+    summary: "界".repeat(120), covers: Array.from({ length: 64 }, (_, i) => `outcome-${i}`),
     sections: Object.fromEntries(["prod", "merged", "inProgress", "queued", "decision"].map(name => [name,
-      Array.from({ length: name === "decision" ? 3 : 6 }, () => "界".repeat(200))])) }],
+      Array.from({ length: name === "decision" ? 3 : 6 }, () => "x".repeat(200))])) }],
 ];
 
 function elements(value: unknown): number {
@@ -65,11 +68,38 @@ afterEach(() => setMcpHttpDependenciesForTests(null));
 for (const [name, args] of workloads) {
   test(`${name}: the measured workflow maximum passes its schema, SDK and HTTP ingress`, async () => {
     expect(TOOL_INPUT_SCHEMAS[name].safeParse(args).success).toBe(true);
+    if (name === "create_pipeline") {
+      const result = await pipelineEngine.createPipelineFromRequest(args as never, {
+        ...pipelineEngine.defaultPipelinePorts(),
+        preflightRepo: () => ({ ok: false, code: "missing", path: "/fixture/project" }),
+      }, { allowOperatorDraftWithoutLineage: true });
+      // A preflight refusal proves the engine's request validation accepted
+      // every field, including the maximum supported spec and all stage bounds.
+      expect(result).toMatchObject({ status: 400 });
+      expect(result.error).not.toContain("spec exceeds");
+      expect(result.error).toContain("does not exist");
+    }
+    if (name === "publish_prototype_review") {
+      const parsed = parsePrototypeInput(args);
+      expect(parsed.variants?.reduce((count, variant) => count + (variant.frames?.length ?? 0), 0)).toBe(PROTOTYPE_LIMITS.media);
+      expect(parsed.variants?.flatMap(variant => variant.frames ?? []).every(frame => frame.path.length === 4088)).toBe(true);
+    }
+    if (name === "update_task") {
+      const task: BoardTask = { id: "fixture-task", project: "fixture-project", status: "inbox", text: "Fixture task",
+        placement: "unplaced", assignments: [], createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" };
+      expect(patchTask([task], task.id, { details: args.details }).ok).toBe(true);
+    }
+    if (name === "bridge_report") {
+      const sections = args.sections as Record<string, string[]>;
+      expect(completeFits({ summary: args.summary as string,
+        sections: Object.entries(sections).map(([heading, items]) => ({ heading, items })) })).toBe(true);
+      expect((args.covers as string[]).length).toBeLessThanOrEqual(64);
+    }
     const count = elements(args);
     const bytes = Buffer.byteLength(JSON.stringify(rpc(name, args)));
     console.info(`MCP input envelope ${name}: ${count} elements, ${bytes} bytes`);
     expect(count).toBeLessThan(MCP_MAX_TOOL_INPUT_ELEMENTS / 4);
-    expect(bytes).toBeLessThan(MCP_MAX_REQUEST_BODY_BYTES / 1.7);
+    expect(bytes).toBeLessThan(MCP_MAX_REQUEST_BODY_BYTES / 1.4);
     const received: Record<string, unknown>[] = [];
     const service: McpToolService = { async callTool(toolName, values) {
       received.push(values);
@@ -161,7 +191,7 @@ for (const ingress of ["authenticated", "native", "unattributed"] as const) {
     setMcpHttpDependenciesForTests({ conversationForCapability: () => "fixture-caller", service: async () => ({
       async callTool() { throw new Error("must not dispatch"); },
     }) });
-    const chunk = new TextEncoder().encode("界".repeat(Math.ceil(MCP_MAX_REQUEST_BODY_BYTES / 3)));
+    const chunk = new TextEncoder().encode("界".repeat(Math.floor(MCP_MAX_REQUEST_BODY_BYTES / 3) + 1));
     let reads = 0;
     const body = new ReadableStream<Uint8Array>({ pull(controller) {
       reads++;

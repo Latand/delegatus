@@ -32,28 +32,35 @@ confirms:
 ## Measured workflow envelopes
 
 `src/lib/mcp/inputLimits.test.ts` generates synthetic inputs from current domain
-constants, validates the existing schemas, counts elements using the SDK's
-semantics, measures UTF-8 bytes of the complete JSON-RPC request, and sends each
-through the exported HTTP route and real SDK. Only the final service operation
-is inert, so measurement creates no pipelines, publications or bridge messages.
-Three-byte Unicode text exercises byte growth beyond character counts.
+constants, validates the existing schemas and the production domain validators,
+counts elements using the SDK's semantics, measures UTF-8 bytes of the complete
+JSON-RPC request, and sends each through the exported HTTP route and real SDK.
+Pipeline validation runs with repository preflight stubbed after request-shape
+validation; prototype parsing, task detail updates and bridge report size checks
+use their production validators. Only the final service operation is inert, so
+measurement creates no pipelines, publications or bridge messages. Three-byte
+Unicode text exercises byte growth beyond character counts, while quoted
+prototype paths exercise JSON escaping at the accepted path-length limit.
 
 | Tool | Input envelope | Argument elements | HTTP bytes |
 | --- | --- | ---: | ---: |
-| `create_pipeline` | 8 stages, 8,000-character prompts, 20 output paths per stage, 256 KiB spec | 246 | 493,480 |
-| `publish_prototype_review` | 9 variants, 240 frames with 4,095-byte paths and 200-character captions, 7 questions with 6 options each | 1,417 | 1,172,733 |
+| `create_pipeline` | 8 stages, 8,000-character prompts, 20 maximum-length output paths per stage, 16,000-character spec | 246 | 280,208 |
+| `publish_prototype_review` | 9 variants, 240 frames with 4,088-character quote-heavy paths and 200-character captions, 7 questions with 6 options each | 1,417 | 2,150,103 |
 | `update_task` | Details at the 20,000-character domain cap | 3 | 60,163 |
-| `bridge_report` | 120-character summary, 200-character section items, 240 covered outcome keys | 278 | 20,157 |
+| `bridge_report` | 120-character summary, 27 section items at 200 characters, 64 covered outcome keys; whole-report limit enforced | 102 | 6,929 |
 
 `create_pipeline.spec`, bridge arrays and some passthrough values have no finite
-schema maximum. These measurements describe supported workflow envelopes;
-they cannot establish a mathematical maximum for arbitrary schema-valid JSON.
-The transport budgets establish an explicit bound while preserving these
-large workflows. No tool schema, field cap, default or downstream operation changes.
+schema maximum. The measured workflow envelopes pass their domain validators
+as well as SDK and HTTP validation; they cannot establish a mathematical
+maximum for arbitrary schema-valid JSON. Bridge report content also passes the
+production whole-report byte limit. The transport budgets establish an explicit
+bound while preserving these large workflows. No tool schema, field cap, default
+or downstream operation changes.
 
-`src/lib/mcp/inputLimits.ts` sets **8,192 elements** and **2,097,152 body bytes**.
+`src/lib/mcp/inputLimits.ts` sets **8,192 elements** and **3,145,728 body bytes**.
 Against the largest measured envelope, these leave 6,775 elements (478%) and
-924,419 bytes (79%) of margin. The body budget is half the SDK's default.
+995,625 bytes (46%) of margin. The body budget is 25% below the SDK's default
+4 MiB cap, while the local ingress paths enforce it before parsing.
 A future workflow requiring a larger envelope should update its measured case
 and these budgets together.
 
@@ -64,8 +71,8 @@ accepts native peer proof and service-authenticated unattributed clients.
 `src/lib/mcp/http.ts` parses bodies for native proof, the small framed task
 optimization and ordinary dispatch. Each read now uses the SDK bounded reader
 before JSON parsing. Oversized input answers HTTP 413 with
-`Payload Too Large: Request body must not exceed 2097152 bytes`.
-The transport also receives `maxRequestBodySize: 2097152` explicitly; local
+`Payload Too Large: Request body must not exceed 3145728 bytes`.
+The transport also receives `maxRequestBodySize: 3145728` explicitly; local
 reads enforce the same budget when passing `parsedBody`.
 
 `createViewerMcpServer` is the single element-budget owner. The HTTP route,
