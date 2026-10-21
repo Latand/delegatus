@@ -54,6 +54,18 @@ async function empty(gate: Gate): Promise<void> {
   }
 }
 
+/** The lowest memory.max on the scope and its ancestors, if any is set. */
+function scopeMemoryCeiling(scope: string): number | null {
+  let lowest: number | null = null;
+  for (let group = scope; group !== "/" && group !== "."; group = path.dirname(group)) {
+    try {
+      const value = fs.readFileSync(`/sys/fs/cgroup${group}/memory.max`, "utf8").trim();
+      if (/^\d+$/.test(value) && (lowest === null || Number(value) < lowest)) lowest = Number(value);
+    } catch { /* The root and unreadable ancestors carry no file to read. */ }
+  }
+  return lowest;
+}
+
 /** Separate from the runner and outside the workload leaf. It remains able to
  * end a stopped or hard-killed runner's detached workload. */
 export async function guardSandboxGate(file: string): Promise<never> {
@@ -104,6 +116,11 @@ export async function runSandboxGate(command: string[], timeoutMs: number, entry
     const memory = parseMemorySize(process.env.LLV_GATE_MEM ?? "8G");
     const quota = Number((process.env.DELEGATUS_WORK_SCOPE_CPU_QUOTA ?? process.env.LLV_WORK_SCOPE_CPU_QUOTA ?? "300").replace(/%$/, ""));
     if (!memory || !Number.isSafeInteger(quota) || quota <= 0) throw new Error("owned runner needs finite memory and CPU limits");
+    // The leaf cannot exceed a limit above it; name the one that binds.
+    const ceiling = scopeMemoryCeiling(context.scope);
+    if (ceiling !== null && ceiling < memory) {
+      console.error(`owned runner: this gate leaf sits inside the agent's scope, so its effective memory cap is ${(ceiling / 2 ** 30).toFixed(2)} GiB, below the gate's ${process.env.LLV_GATE_MEM ?? "8G"}`);
+    }
     fs.writeFileSync(path.join(root, "memory.max"), String(memory));
     fs.writeFileSync(path.join(root, "memory.swap.max"), "0");
     fs.writeFileSync(path.join(root, "cpu.max"), `${quota * 200} 20000`);
