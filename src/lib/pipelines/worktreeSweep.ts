@@ -514,8 +514,9 @@ type RegistryShape = {
   heldDeliveries?: Record<string, { conversationId?: string; state?: string }>;
 };
 
-/** Kernel probes per guard read, on the leased sweep worker. Exhaustion keeps
-    the remaining owners unverified; it never supplies proof of death. */
+/** Kernel probes per guard read, on the leased sweep worker. Each page contains
+    whole entries whose combined owner count fits this bound; the selected page
+    comes from the sweep clock, so a worker restart cannot reset progress. */
 export const CONVERSATION_PROCESS_PROBE_LIMIT = 4096;
 
 /** A captured host tree can outlive its processes while leaving `idle` in the
@@ -538,16 +539,43 @@ export function liveOrWaitingConversationCwds(
     if (generation?.id && conversation.engine && (conversation.turn?.state === "terminal" || conversation.turn?.state === "idle"))
       settled.add(`${conversation.engine}:${generation.id}`);
   }
-  let probes = 0;
-  const mayOwn = (identity: Readonly<ProcessIdentity>) => ++probes > CONVERSATION_PROCESS_PROBE_LIMIT || !provenDead(identity);
-  for (const [key, entry] of Object.entries(file.entries ?? {})) {
-    if (!entry?.cwd) continue;
+  const entries = Object.entries(file.entries ?? {}).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
+  const ownersFor = (entry: NonNullable<(typeof entries)[number][1]>) => {
     const owners = [entry.structuredHost?.process, entry.host?.agent, entry.host?.panePid]
       .filter((identity): identity is ProcessIdentity => !!identity);
     const survivors = entry.structuredTerminationSurvivors ?? [];
     const claimant = entry.claimOwner ? structuredClaimIdentity(entry.claimOwner) : null;
     if (claimant) owners.push(claimant);
-    if ((entry.claimOwner && !claimant) || owners.some(mayOwn) || survivors.some(mayOwn)) {
+    return { owners, survivors, unreadableClaim: !!entry.claimOwner && !claimant };
+  };
+  const ownerPageByKey = new Map<string, number>();
+  let page = 0;
+  let pageProbes = 0;
+  for (const [key, entry] of entries) {
+    if (!entry?.cwd) continue;
+    const { owners, survivors, unreadableClaim } = ownersFor(entry);
+    if (unreadableClaim) continue;
+    const cost = owners.length + survivors.length;
+    if (cost === 0) continue;
+    if (cost > CONVERSATION_PROCESS_PROBE_LIMIT) {
+      ownerPageByKey.set(key, -1);
+      continue;
+    }
+    if (pageProbes > 0 && pageProbes + cost > CONVERSATION_PROCESS_PROBE_LIMIT) {
+      page++;
+      pageProbes = 0;
+    }
+    ownerPageByKey.set(key, page);
+    pageProbes += cost;
+  }
+  const pageCount = page + 1;
+  const selectedPage = Math.floor(now / WORKTREE_SWEEP_INTERVAL_MS) % pageCount;
+  for (const [key, entry] of entries) {
+    if (!entry?.cwd) continue;
+    const { owners, survivors, unreadableClaim } = ownersFor(entry);
+    const ownerPage = ownerPageByKey.get(key);
+    if (unreadableClaim || ownerPage === -1 || (ownerPage !== undefined && ownerPage !== selectedPage)
+      || owners.some(identity => !provenDead(identity)) || survivors.some(identity => !provenDead(identity))) {
       cwds.add(entry.cwd);
       continue;
     }

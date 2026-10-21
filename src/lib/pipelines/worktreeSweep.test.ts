@@ -26,6 +26,7 @@ import type { RunState as MergeBatchState } from "../../../scripts/merge-batch";
 import {
   FINISHED_WORKTREE_RETENTION_MS,
   CONVERSATION_PROCESS_PROBE_LIMIT,
+  WORKTREE_SWEEP_INTERVAL_MS,
   classifyStatus,
   exclusiveBytes,
   allocatedBytes,
@@ -916,18 +917,39 @@ test.each(["requested", "waiting-turn", "preparing", "successor-starting", "veri
       Date.parse("2026-10-21T00:00:00Z"), () => true)).toEqual([caseDir]);
   });
 
-test("owner probe exhaustion keeps the unverified remainder and resets on the next read", () => {
-  const { registry, key } = finishedRegistryConversation(caseDir);
-  const template = registry.readOnlySnapshot().entries[`codex:${key.sessionId}`]!;
-  const entries = Object.fromEntries(Array.from({ length: CONVERSATION_PROCESS_PROBE_LIMIT + 1 }, (_, index) =>
-    [String(index), { ...template, cwd: path.join(caseDir, String(index)), status: "dead" as const,
-      structuredTerminationSurvivors: [] }]));
-  for (let read = 0; read < 2; read++) {
-    let probes = 0;
-    const cwds = liveOrWaitingConversationCwds({ entries }, 0, () => { probes++; return true; });
-    expect(probes).toBe(CONVERSATION_PROCESS_PROBE_LIMIT);
-    expect(cwds).toEqual([path.join(caseDir, String(CONVERSATION_PROCESS_PROBE_LIMIT))]);
+test("bounded owner proof rotates across passes and releases settled dead rows beyond the budget", () => {
+  const { registry } = finishedRegistryConversation(caseDir);
+  const snapshot = registry.readOnlySnapshot();
+  const template = Object.values(snapshot.entries)[0]!;
+  const conversation = Object.values(snapshot.conversations)[0]!;
+  const entries: typeof snapshot.entries = {};
+  const conversations: typeof snapshot.conversations = {};
+  for (let index = 0; index <= CONVERSATION_PROCESS_PROBE_LIMIT; index++) {
+    const generationId = `settled-generation-${String(index).padStart(5, "0")}`;
+    const key = `${conversation.engine}:${generationId}`;
+    entries[key] = { ...template, key: key as unknown as typeof template.key, cwd: path.join(caseDir, String(index)), status: "dead",
+      structuredTerminationSurvivors: [] };
+    conversations[`settled-conversation-${index}`] = {
+      ...conversation,
+      id: `settled-conversation-${index}` as typeof conversation.id,
+      generations: conversation.generations.map((generation, generationIndex) =>
+        generationIndex === conversation.generations.length - 1 ? { ...generation, id: generationId } : generation),
+    };
   }
+  const settled = { entries, conversations };
+  const calls: number[] = [];
+  for (let pass = 0; pass < 2; pass++) {
+    let probes = 0;
+    const at = pass * WORKTREE_SWEEP_INTERVAL_MS;
+    const cwds = liveOrWaitingConversationCwds(settled, at, () => { probes++; return true; });
+    calls.push(probes);
+    expect(probes).toBe(pass === 0 ? CONVERSATION_PROCESS_PROBE_LIMIT : 1);
+    if (pass === 0) expect(cwds).toContain(path.join(caseDir, String(CONVERSATION_PROCESS_PROBE_LIMIT)));
+    else expect(cwds).not.toContain(path.join(caseDir, String(CONVERSATION_PROCESS_PROBE_LIMIT)));
+  }
+  expect(calls).toEqual([CONVERSATION_PROCESS_PROBE_LIMIT, 1]);
+  const live = liveOrWaitingConversationCwds(settled, WORKTREE_SWEEP_INTERVAL_MS, () => false);
+  expect(live).toContain(path.join(caseDir, String(CONVERSATION_PROCESS_PROBE_LIMIT)));
 });
 
 test.each(["process", "conversation", "delivery"] as const)("a late %s still prevents removal after captured hosts were proven dead", async (kind) => {
