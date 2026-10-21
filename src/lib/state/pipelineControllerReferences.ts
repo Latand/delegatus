@@ -21,10 +21,13 @@ const populate = (source: string, key: string) => {
   const attemptValue = "a.payload";
   const runValue = "r.metadata";
   const hostValue = "(CASE WHEN h.type='object' THEN h.value ELSE '{}' END)";
-  const cte = `WITH controller_source AS MATERIALIZED (SELECT ${source} AS payload),
+  // Every reference reads root custody fields. Keep the retained runs out of
+  // that text so each attempt decodes only the small header, even on 3.39.
+  const cte = `WITH controller_source AS MATERIALIZED (SELECT json_remove(${source},'$.runs') AS payload,
+      json_extract(${source},'$.runs') AS runs),
     controller_runs AS MATERIALIZED (SELECT r.key,
       json_object('stageId',json_extract(r.value,'$.stageId')) AS metadata,
-      json_extract(r.value,'$.attempts') AS attempts FROM controller_source,json_each(payload,'$.runs') r),
+      json_extract(r.value,'$.attempts') AS attempts FROM controller_source,json_each(runs) r),
     controller_attempts AS MATERIALIZED (SELECT r.key AS run,a.key,a.value AS payload
       FROM controller_runs r,json_each(r.attempts) a),
     settled AS MATERIALIZED (SELECT value AS identity FROM controller_source,json_each(payload,'$.terminalReap.settledAttempts')),

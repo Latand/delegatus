@@ -290,5 +290,243 @@
       ]
     }
   ],
-  "interpretation": "Interleaved runs on the same shared Linux machine under one admitted gate. No measured regression for this workload; no performance gain claimed."
+  "interpretation": "Interleaved runs on the same shared Linux machine under one admitted gate. No measured regression for this workload; no performance gain claimed.",
+  "largeRetainedHistories": {
+    "recordedAt": "2026-10-21T16:39:35.125806+00:00",
+    "baseline": "4df56467",
+    "candidateBase": "ead953448",
+    "bun": "1.4.0",
+    "sqlite": "3.53.2",
+    "procedure": {
+      "command": "bun test src/lib/state/sqliteStateStore.bounded.test.ts -t 'output-only old-writer edits leave compact references intact as retained history grows' --timeout 60000",
+      "samples": "Three alternating baseline/head fresh isolated processes under one scripts/gate-slot.sh admission; LLV_CONTROLLER_WRITE_EVIDENCE collects the unchanged test output.",
+      "workload": "32, 1024 and 4096 attempts in one pipeline, each with 512 output characters; three output-only updates followed by one ownership update and rollback; assertions verify reference writes and owner visibility."
+    },
+    "sourceSha256": {
+      "baseline": {
+        "src/lib/state/pipelineControllerReferences.ts": "3bfa6abc57c444e6268aa6539259905dfe18d29bd5aca019bc4b8e84b602416f",
+        "src/lib/state/sqliteStateStore.bounded.test.ts": "e2b5851e4ea890a0d2d130087df53ca5dd73fde6d507916910ba5a4a0c136eb7"
+      },
+      "head": {
+        "src/lib/state/pipelineControllerReferences.ts": "0b7e56d21124357694a3a8625c72fb39816a854dcfb0d83fe36b10d6fec3f112",
+        "src/lib/state/sqliteStateStore.bounded.test.ts": "e2b5851e4ea890a0d2d130087df53ca5dd73fde6d507916910ba5a4a0c136eb7"
+      }
+    },
+    "runs": {
+      "baseline": [
+        [
+          {
+            "history": 32,
+            "outputMs": [
+              2.8247269999999958,
+              1.1931529999999952,
+              0.9127710000000206
+            ],
+            "ownershipMs": 4.556076000000019
+          },
+          {
+            "history": 1024,
+            "outputMs": [
+              22.004222000000027,
+              17.036152000000016,
+              15.898590000000013
+            ],
+            "ownershipMs": 41.00550999999996
+          },
+          {
+            "history": 4096,
+            "outputMs": [
+              84.98966700000005,
+              74.56615599999998,
+              75.20983100000012
+            ],
+            "ownershipMs": 513.903726
+          }
+        ],
+        [
+          {
+            "history": 32,
+            "outputMs": [
+              1.9308560000000057,
+              0.6738770000000045,
+              0.5754759999999806
+            ],
+            "ownershipMs": 2.670133999999962
+          },
+          {
+            "history": 1024,
+            "outputMs": [
+              14.615070000000003,
+              20.041021,
+              13.519367000000045
+            ],
+            "ownershipMs": 55.82162900000003
+          },
+          {
+            "history": 4096,
+            "outputMs": [
+              57.59076399999992,
+              57.95032900000001,
+              63.959168999999974
+            ],
+            "ownershipMs": 306.0589420000001
+          }
+        ],
+        [
+          {
+            "history": 32,
+            "outputMs": [
+              1.8945769999999982,
+              0.7109389999999962,
+              0.6751439999999889
+            ],
+            "ownershipMs": 2.8579090000000065
+          },
+          {
+            "history": 1024,
+            "outputMs": [
+              19.104404000000045,
+              15.341426000000013,
+              14.85224599999998
+            ],
+            "ownershipMs": 36.10226799999998
+          },
+          {
+            "history": 4096,
+            "outputMs": [
+              67.29911700000002,
+              98.18747300000007,
+              70.55697699999996
+            ],
+            "ownershipMs": 564.7097430000001
+          }
+        ]
+      ],
+      "head": [
+        [
+          {
+            "history": 32,
+            "outputMs": [
+              2.5302619999999933,
+              0.7947570000000042,
+              0.6010809999999935
+            ],
+            "ownershipMs": 3.059118000000012
+          },
+          {
+            "history": 1024,
+            "outputMs": [
+              19.666518999999994,
+              15.093484999999987,
+              14.217382000000043
+            ],
+            "ownershipMs": 32.643294000000026
+          },
+          {
+            "history": 4096,
+            "outputMs": [
+              63.38247899999999,
+              80.774856,
+              69.07050100000004
+            ],
+            "ownershipMs": 161.96679599999993
+          }
+        ],
+        [
+          {
+            "history": 32,
+            "outputMs": [
+              1.7368309999999951,
+              0.6277929999999969,
+              0.5569290000000251
+            ],
+            "ownershipMs": 2.7072310000000073
+          },
+          {
+            "history": 1024,
+            "outputMs": [
+              14.792314999999974,
+              14.287184000000025,
+              12.485071000000005
+            ],
+            "ownershipMs": 29.252595000000042
+          },
+          {
+            "history": 4096,
+            "outputMs": [
+              109.57486200000005,
+              92.69700699999999,
+              65.94769599999995
+            ],
+            "ownershipMs": 128.57440199999996
+          }
+        ],
+        [
+          {
+            "history": 32,
+            "outputMs": [
+              2.490356999999989,
+              0.7050690000000088,
+              0.666577000000018
+            ],
+            "ownershipMs": 2.347619000000009
+          },
+          {
+            "history": 1024,
+            "outputMs": [
+              16.619770000000017,
+              15.986875999999995,
+              12.16811899999999
+            ],
+            "ownershipMs": 30.775652999999977
+          },
+          {
+            "history": 4096,
+            "outputMs": [
+              63.49196600000005,
+              52.52396400000009,
+              57.18496200000004
+            ],
+            "ownershipMs": 125.02632700000004
+          }
+        ]
+      ]
+    },
+    "medians": [
+      {
+        "attempts": 32,
+        "baseline": {
+          "ownershipMs": 2.8579090000000065,
+          "outputMs": 0.9127710000000206
+        },
+        "head": {
+          "ownershipMs": 2.7072310000000073,
+          "outputMs": 0.7050690000000088
+        }
+      },
+      {
+        "attempts": 1024,
+        "baseline": {
+          "ownershipMs": 41.00550999999996,
+          "outputMs": 15.898590000000013
+        },
+        "head": {
+          "ownershipMs": 30.775652999999977,
+          "outputMs": 14.792314999999974
+        }
+      },
+      {
+        "attempts": 4096,
+        "baseline": {
+          "ownershipMs": 513.903726,
+          "outputMs": 70.55697699999996
+        },
+        "head": {
+          "ownershipMs": 128.57440199999996,
+          "outputMs": 65.94769599999995
+        }
+      }
+    ],
+    "interpretation": "At every retained-history size the fixed Linux ownership write retains baseline performance. Shared-machine timing varies; no speed gain is claimed."
+  }
 }

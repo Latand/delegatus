@@ -837,15 +837,16 @@ export async function completeViewerRuntimeActivation(
 /** Check every state database before a store opens one (#1870 slice 10):
     a damaged one is replaced by its newest good backup, or starts empty. The
     returned `start` raises the board cards and arms the backup timer once the
-    release is ready. A failure here never blocks activation. */
+    release is ready. A failed schema recovery blocks store initialization. */
 export async function checkStateDatabasesBeforeStores(
   stateDirectory: string,
 ): Promise<{ start(ownsTraffic: () => boolean): void }> {
+  const { checkStateDatabasesInWorker, startStateDurability, SchemaRecoveryError } = await import("@/lib/state/durability");
   try {
-    const { checkStateDatabasesInWorker, startStateDurability } = await import("@/lib/state/durability");
     const incidents = await checkStateDatabasesInWorker(stateDirectory);
     return { start: (ownsTraffic) => { startStateDurability({ stateDirectory, incidents, ownsTraffic }); } };
   } catch (error) {
+    if (error instanceof SchemaRecoveryError) throw error;
     console.error("[state durability] activation check failed", error instanceof Error ? error.message : String(error));
     return { start: () => {} };
   }

@@ -16,6 +16,7 @@ import { checkStateDatabasesBeforeStores } from "@/lib/viewerInstrumentation";
 
 import {
   backupDatabase,
+  SchemaRecoveryError,
   checkStateDatabasesAtActivation,
   pruneBackups,
   raiseStorageIncidentCard,
@@ -605,17 +606,14 @@ test("activation leaves a busy healthy database intact while the Viewer timers p
   } finally { holder.exec("ROLLBACK"); holder.close(); }
 }, 20_000);
 
-test("an activation worker launch refusal retains the existing logged startup failure policy", async () => {
+test("an activation worker launch refusal stops store initialization without a recovery verdict", async () => {
   const directory = sandbox();
   const helper = await import("@/lib/helperLease");
   const launch = spyOn(helper, "spawnLeasedHelper").mockImplementation(() => { throw new Error("fixture launch refused"); });
-  const log = spyOn(console, "error").mockImplementation(() => {});
   try {
-    const checked = await checkStateDatabasesBeforeStores(directory);
-    expect(log).toHaveBeenCalledWith("[state durability] activation check failed", "fixture launch refused");
-    expect(() => checked.start(() => true)).not.toThrow();
+    await expect(checkStateDatabasesBeforeStores(directory)).rejects.toThrow("fixture launch refused");
     expect(readStorageIncidents(directory)).toEqual([]);
-  } finally { launch.mockRestore(); log.mockRestore(); }
+  } finally { launch.mockRestore(); }
 });
 
 // Windows terminates the process immediately; this fixture delays POSIX SIGTERM.
@@ -644,12 +642,10 @@ test.if(process.platform !== "win32")("activation timeout awaits helper cleanup 
     }, 1);
   }, { __promisify__: schedule.__promisify__ }) as typeof setTimeout;
   const timer = spyOn(globalThis, "setTimeout").mockImplementation(accelerated);
-  const log = spyOn(console, "error").mockImplementation(() => {});
   try {
-    await checkStateDatabasesBeforeStores(directory);
+    await expect(checkStateDatabasesBeforeStores(directory)).rejects.toThrow("was stopped");
     expect(fs.existsSync(ended)).toBe(true);
-    expect(log).toHaveBeenCalledWith("[state durability] activation check failed", expect.stringContaining("was stopped"));
-  } finally { timer.mockRestore(); launch.mockRestore(); log.mockRestore(); }
+  } finally { timer.mockRestore(); launch.mockRestore(); }
 }, 20_000);
 
 test("a production store held across a fresh fallback writes into the new database, not the damaged one", () => {
@@ -725,7 +721,7 @@ test.each([true, false])("schema recovery preserves a concurrent row (live file 
   try {
     writer?.exec("CREATE TABLE kept(value TEXT)");
     let raced = false;
-    const incidents = checkStateDatabasesAtActivation(directory, {
+    expect(() => checkStateDatabasesAtActivation(directory, {
       now: new Date("2026-10-21T12:00:00.000Z"),
       beforeSwapStep: step => {
         if (step === "recovery-lock") {
@@ -737,8 +733,7 @@ test.each([true, false])("schema recovery preserves a concurrent row (live file 
           raced = true;
         }
       },
-    });
-    expect(incidents).toEqual([]);
+    })).toThrow(SchemaRecoveryError);
     expect(raced).toBe(true);
     const live = new Database(filename, { readonly: true });
     try { expect(live.query("SELECT value FROM kept").all()).toEqual([{ value: "new work" }]); } finally { live.close(); }
@@ -746,3 +741,81 @@ test.each([true, false])("schema recovery preserves a concurrent row (live file 
     expect(fs.readdirSync(directory).some(name => name.includes(".replaced-"))).toBe(false);
   } finally { writer?.close(); }
 });
+
+test.each(["restore", "recovery-lock"] as const)("schema recovery refuses initialization after a %s failure and restores on the next start", stepToFail => {
+  const directory = sandbox();
+  const filename = path.join(directory, "state.sqlite");
+  const asideName = "state.sqlite.corrupt-2026-10-20T08-00-00-000Z";
+  const asidePath = path.join(directory, asideName);
+  const aside = new Database(asidePath);
+  try {
+    aside.exec("CREATE TABLE kept(value TEXT)");
+    aside.exec("INSERT INTO kept VALUES ('recovered')");
+  } finally { aside.close(); }
+  const original = fs.readFileSync(asidePath);
+  writeJsonDurably(path.join(directory, "storage-incidents.json"), { version: 1, incidents: [{
+    kind: "database-fresh", database: "state.sqlite", at: "2026-10-20T08:00:00.000Z", message: "earlier release",
+    detail: 'SQLITE_CORRUPT: malformed database schema (pipeline_refs_insert) - near "ORDER": syntax error',
+    corruptFiles: [asideName], backup: null, backupAt: null, backupAgeMs: null,
+  }] });
+  new Database(filename).close();
+  let initialized = false;
+  expect(() => {
+    checkStateDatabasesAtActivation(directory, {
+      now: new Date("2026-10-21T12:00:00.000Z"),
+      beforeSwapStep: step => { if (step === stepToFail) throw new Error(`EACCES at ${step}`); },
+    });
+    initialized = true;
+  }).toThrow(`EACCES at ${stepToFail}`);
+  expect(initialized).toBe(false);
+  expect(fs.readFileSync(asidePath)).toEqual(original);
+  const incidents = checkStateDatabasesAtActivation(directory, { now: new Date("2026-10-21T12:00:01.000Z") });
+  expect(incidents.map(incident => incident.kind)).toEqual(["database-recovered"]);
+  const live = new Database(filename, { readonly: true });
+  try { expect(live.query("SELECT value FROM kept").all()).toEqual([{ value: "recovered" }]); } finally { live.close(); }
+  expect(fs.readFileSync(asidePath)).toEqual(original);
+});
+
+test.each(["publication", "lost-verdict"] as const)("the Viewer refuses stores after a recovery %s failure, and a fresh worker retries successfully", async failure => {
+  const directory = sandbox();
+  const filename = path.join(directory, "state.sqlite");
+  const asideName = "state.sqlite.corrupt-2026-10-20T08-00-00-000Z";
+  const asidePath = path.join(directory, asideName);
+  const aside = new Database(asidePath);
+  try {
+    aside.exec("CREATE TABLE kept(value TEXT)");
+    aside.exec("INSERT INTO kept VALUES ('recovered')");
+  } finally { aside.close(); }
+  new Database(filename).close();
+  const original = fs.readFileSync(asidePath);
+  writeJsonDurably(path.join(directory, "storage-incidents.json"), { version: 1, incidents: [{
+    kind: "database-fresh", database: "state.sqlite", at: "2026-10-20T08:00:00.000Z", message: "earlier release",
+    detail: 'SQLITE_CORRUPT: malformed database schema (pipeline_refs_insert) - near "ORDER": syntax error',
+    corruptFiles: [asideName], backup: null, backupAt: null, backupAgeMs: null,
+  }] });
+  const workerPath = path.join(directory, "refused-worker.ts");
+  fs.writeFileSync(workerPath, `import fs from "node:fs";
+    if (${JSON.stringify(failure)} === "lost-verdict") process.stdout.write = () => { process.exit(73); };
+    const rename = fs.renameSync;
+    fs.renameSync = (from, to) => {
+      if (String(from).endsWith(".restoring")) throw new Error("EACCES publishing recovery");
+      return rename(from, to);
+    };
+    await import(${JSON.stringify(path.resolve("src/lib/stateBackup.worker.ts"))});
+  `);
+  const helper = await import("@/lib/helperLease");
+  const spawn = helper.spawnLeasedHelper;
+  const launch = spyOn(helper, "spawnLeasedHelper").mockImplementation((name, spec, ...rest) =>
+    spawn(name, { ...spec, command: process.execPath, args: [workerPath] }, ...rest));
+  try {
+    await expect(checkStateDatabasesBeforeStores(directory)).rejects.toThrow(failure === "publication" ? "EACCES publishing recovery" : "the backup worker exited with 73");
+    expect(fs.readFileSync(asidePath)).toEqual(original);
+    expect(fs.existsSync(filename)).toBe(false);
+    expect(fs.existsSync(`${filename}.restoring`)).toBe(true);
+  } finally { launch.mockRestore(); }
+  // The next real activation starts a fresh worker, with no inherited verdict.
+  await checkStateDatabasesBeforeStores(directory);
+  const live = new Database(filename, { readonly: true });
+  try { expect(live.query("SELECT value FROM kept").all()).toEqual([{ value: "recovered" }]); } finally { live.close(); }
+  expect(fs.readFileSync(asidePath)).toEqual(original);
+}, 60_000);

@@ -673,6 +673,10 @@ function setAsideDatabases(database: StateDatabase): { name: string; file: strin
   }).sort((left, right) => right.at - left.at);
 }
 
+export class SchemaRecoveryError extends Error {
+  override name = "SchemaRecoveryError";
+}
+
 /**
  * Releases 1.13.0 to 1.15.0 moved a database aside as damaged when SQLite
  * could not compile one of its triggers, and its store then started empty.
@@ -694,6 +698,7 @@ export function recoverSchemaSetAside(
   const restoring = restoringName(database.filename);
   for (const candidate of candidates) {
     removeTrio(restoring);
+    let eligible = false;
     try {
       fs.copyFileSync(candidate.file, restoring);
       if (exists(`${candidate.file}-wal`)) fs.copyFileSync(`${candidate.file}-wal`, `${restoring}-wal`);
@@ -704,6 +709,7 @@ export function recoverSchemaSetAside(
             .find((failure) => failure !== null) ?? null
           : null;
       if (!reason) throw new Error(`it was not set aside for a statement SQLite could not compile (${first.verdict === "ok" ? "no such incident" : first.detail})`);
+      eligible = true;
       if (first.verdict === "incompatible") {
         if (!database.rebuiltTriggers.includes(first.object)) throw new Error(describeSchemaCompileFailure(candidate.name, first));
         dropRebuiltTriggers(restoring, database.rebuiltTriggers, null);
@@ -745,6 +751,10 @@ export function recoverSchemaSetAside(
       recordIncident(options.stateDirectory, incident);
       return incident;
     } catch (error) {
+      if (eligible) {
+        throw new SchemaRecoveryError(`${database.name} schema recovery from ${candidate.name} failed: ${errorText(error)}. `
+          + "Startup stopped before initializing stores; the recovery candidate is kept for the next start.", { cause: error });
+      }
       removeTrio(restoring);
       console.error(`[state durability] ${candidate.name} not put back: ${errorText(error)}`);
     }
@@ -771,6 +781,7 @@ export function checkStateDatabasesAtActivation(
         if (recovered) incidents.push(recovered);
       }
     } catch (error) {
+      if (error instanceof SchemaRecoveryError) throw error;
       console.error(`[state durability] ${database.name} check failed: ${errorText(error)}`);
     }
   }
@@ -1093,12 +1104,20 @@ export interface BackupWorkerRequest {
 export interface BackupWorkerResponse {
   outcomes: [string, BackupOutcome][];
   incidents?: StorageIncident[];
+  recoveryFailure?: string;
   checkpoint?: import("./hotStateAuthority").HotStateCheckpoint["revisions"];
 }
 
 /** The worker's side: one pass over the request, answered as one JSON line. */
 export function answerBackupWorkerRequest(request: BackupWorkerRequest): BackupWorkerResponse {
-  if (request.operation === "activation") return { outcomes: [], incidents: checkStateDatabasesAtActivation(request.stateDirectory) };
+  if (request.operation === "activation") {
+    try {
+      return { outcomes: [], incidents: checkStateDatabasesAtActivation(request.stateDirectory) };
+    } catch (error) {
+      if (error instanceof SchemaRecoveryError) return { outcomes: [], recoveryFailure: error.message };
+      throw error;
+    }
+  }
   const outcomes = runBackupPass(request.stateDirectory, new Map(request.lastRevisions));
   return { outcomes: [...outcomes] };
 }
@@ -1139,8 +1158,13 @@ export async function runBackupPassInWorker(
 /** Activation awaits the same recovery decisions, with SQLite work off-thread. */
 export async function checkStateDatabasesInWorker(stateDirectory: string): Promise<StorageIncident[]> {
   assertStateStartupMutation(stateDirectory, "state database activation check");
-  const response = await runDurabilityWorker({ stateDirectory, lastRevisions: [], operation: "activation" });
-  if (!Array.isArray(response.incidents)) throw new Error("the activation worker returned no incidents result");
+  const response = await runDurabilityWorker({ stateDirectory, lastRevisions: [], operation: "activation" }).catch(error => {
+    // A missing verdict can follow a partial recovery. Even a launch refusal
+    // leaves any eligible set-aside state unchecked, so stores must not open.
+    throw new SchemaRecoveryError(`The activation worker returned no recovery verdict: ${errorText(error)}. Startup stopped before initializing stores.`, { cause: error });
+  });
+  if (response.recoveryFailure) throw new SchemaRecoveryError(response.recoveryFailure);
+  if (!Array.isArray(response.incidents)) throw new SchemaRecoveryError("the activation worker returned no incidents result; startup stopped before initializing stores");
   return response.incidents;
 }
 

@@ -19,7 +19,9 @@ Calling `Database.setCustomSQLite()` with that library on this Linux Bun
 returns true, but `SELECT sqlite_version()` still reports 3.53.2. Consequently
 the Linux test harness loads the library with `bun:ffi` and substitutes its
 database module for both `bun:sqlite` imports and `process.getBuiltinModule`.
-Every SQL prepare and step in that process then runs on 3.39.4. Seeding children
+The guard runs that substitution only in an owned child (`minimumSqliteCases.fixture.ts`),
+so other collected files keep their native module, process hook and version cache.
+Every SQL prepare and step in the child then runs on 3.39.4. Seeding children
 keep Bun's SQLite to produce databases written by a newer release.
 
 ## SQL audit
@@ -55,7 +57,7 @@ SQLite loader or extra dependency.
 
 ## Linux performance check
 
-The [recorded benchmark](../../evidence/sqlite-compatibility/performance.json)
+The [initial compatibility benchmark](../../evidence/sqlite-compatibility/performance.json)
 includes its executable source, source hashes and all samples. It alternates
 base `4df56467` and the fix in three fresh processes each, under one admitted
 gate. Each process writes 48 validated pipelines with 12 attempts and 59,402
@@ -71,6 +73,24 @@ Eight cycles include one warmup, leaving 21 samples per variant. Both use Bun
 
 This workload shows no regression. The medians are computed independently. Shared-machine timing varies; these results
 support retaining current performance and make no claim of a speed gain.
+
+The follow-up retained-history measurement in the same evidence file uses the
+unchanged `sqliteStateStore.bounded.test.ts` case, three alternating fresh
+processes per revision under one admission, Bun 1.4.0 and SQLite 3.53.2. Each
+attempt holds 512 output characters. Ownership updates rebuild references
+atomically; output-only updates leave them intact. Root custody fields are
+materialized separately from the retained runs before per-attempt projections,
+so text JSON on 3.39 avoids repeatedly decoding the full history.
+
+| Attempts per pipeline | Baseline ownership median (ms) | Fix ownership median (ms) |
+| --- | ---: | ---: |
+| 32 | 2.86 | 2.71 |
+| 1,024 | 41.01 | 30.78 |
+| 4,096 | 513.90 | 128.57 |
+
+The evidence includes all ownership and output-only samples and source hashes.
+The fixed write retains baseline performance at each measured size; these
+shared-machine measurements make no claim of a speed gain.
 
 ## Reproduction and guard
 
@@ -110,7 +130,12 @@ the compilation failure or have a matching durable incident. Recovery operates
 on a copy, repairs only the known triggers, checkpoints its WAL, and requires
 `integrity_check` to pass. Both the set-aside original and the displaced empty
 database remain on disk. Actual damage and populated live databases are kept
-out of automatic schema recovery. See also
+out of automatic schema recovery. Once an eligible candidate is established,
+a repair, lock or publication failure stops activation before stores initialize.
+The worker carries that refusal back to the Viewer; the original and prepared
+copy remain available, and a later successful activation retries recovery. A worker
+that cannot launch, exits or times out before answering also stops startup: its missing verdict
+might follow a partial recovery. See also
 [`state-sqlite-migration.md` §7.4](state-sqlite-migration.md#74-automatic-fallback-and-the-incident-it-raises).
 
 ## Verification record, 2026-10-21
@@ -151,3 +176,19 @@ Two earlier continuation attempts stopped before that completed verdict:
 one hit the unchanged queue test's 10 ms deadline (a fresh isolated base/head
 control passed on both), and one could not complete a comparator base rerun.
 The successful full run retains its normal comparison and refusal rules.
+
+
+## Review follow-up checks, 2026-10-21
+
+The guard now runs 13 minimum-library regressions in its owned child. Both
+explicit collection orders with `schemaCompatibility.test.ts` pass, and the
+parent retains its native SQLite module, process hook and cached version.
+The retained-history write case also passes on 3.39.4 at 4,096 attempts.
+
+All 29 native durability cases pass, including publication and lock refusal,
+worker launch refusal, timeout, a lost worker verdict and a successful retry
+in a fresh worker. Removing the production Viewer refusal line in scratch
+makes both worker-publication regressions fail. The first hook comparison of
+21 explicit files reports zero new failures, seven confirmed pre-existing
+failures and two intermittent assertions. Typecheck passes; the publication
+gate reruns its checks on the final merged source.
