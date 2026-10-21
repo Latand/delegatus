@@ -497,6 +497,7 @@ class FakeAppServer extends EventEmitter {
   readonly signals: NodeJS.Signals[] = [];
   viewerStatus: unknown[] = [{ name: "viewer", tools: { stage_report: {} } }];
   requireViewerThread = false;
+  beforeViewerStatus: (() => void) | null = null;
   hookHome: string | null = null;
   hookDelayMs: number | null = 0;
   hookTrustDelayMs: number | null = 0;
@@ -616,6 +617,7 @@ class FakeAppServer extends EventEmitter {
     if (typeof message.id !== "number") return;
     const method = message.method;
     if (method === "mcpServerStatus/list") {
+      this.beforeViewerStatus?.();
       const scoped = !this.requireViewerThread || (message.params as Record<string, unknown>)?.threadId === this.threadId;
       return this.respond(message.id, { data: scoped ? this.viewerStatus : [{ name: "viewer", tools: { global_only: {} } }], nextCursor: null });
     }
@@ -913,6 +915,21 @@ test("Codex verifies Viewer tools from the opened thread", async () => {
     .then(value => { host = value; return null; }, reason => reason);
   try { expect(String(error)).toContain("viewer has no tools"); }
   finally { if (host) await (host as CodexAppServerHost).release(); }
+});
+
+test("Codex drains resume notifications before awaiting Viewer discovery", async () => {
+  const child = new FakeAppServer();
+  child.beforeViewerStatus = () => {
+    for (let frame = 0; frame < 20; frame++) child.notify("thread/status/changed", {
+      threadId: "thread-149", status: { type: "idle", activeFlags: [] }, padding: "x".repeat(256 * 1024),
+    });
+  };
+  const host = await CodexAppServerHost.adopt("thread-149", { cwd: "/repo", readProtocolVersion: () => "0.162.1",
+    eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(child) });
+  try {
+    expect((await host.health()).status).toBe("idle");
+    expect(child.requests.some(request => request.method === "turn/start" || request.method === "thread/queue/start")).toBe(false);
+  } finally { await host.release(); }
 });
 
 async function waitForCondition(predicate: () => boolean | Promise<boolean>, message: string, timeoutMs = 5_000): Promise<void> {

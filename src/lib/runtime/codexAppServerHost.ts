@@ -1667,7 +1667,6 @@ export class CodexAppServerHost implements EngineHost {
       provisional.identity.path = identity.path;
       provisional.requestedModel = stringField(result, "model") ?? provisional.requestedModel;
       if (granted.length > 0) await provisional.verifyPluginGrant(granted, config);
-      if (!options.socketOwner) await provisional.verifyViewerMcp();
       provisional.rememberConfirmedDeliveries(result);
       provisional.restoreEvents();
       // Capture a previously observed interruption before resume history
@@ -1682,6 +1681,7 @@ export class CodexAppServerHost implements EngineHost {
       if (threadId) provisional.reconcileThreadHistory(result);
       provisional.reconcileAfterOpen(threadStatus(result), resumedActiveTurnId(result));
       provisional.endBufferedNotificationReconciliation();
+      if (!options.socketOwner) await provisional.verifyViewerMcp();
       provisional.selectModel(provisional.currentImageModel());
       await provisional.initializeNativeQueue();
       await provisional.negotiateHistoryCapability();
