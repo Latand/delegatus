@@ -1,4 +1,7 @@
 import { worktreeMapStore } from "@/lib/projects/persistence";
+import { AgentRegistry } from "@/lib/agent/registry";
+import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
+import { processIdentityProvenDead } from "@/lib/processIdentity";
 import { createHash } from "node:crypto";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
@@ -22,6 +25,7 @@ import type { RunState as MergeBatchState } from "../../../scripts/merge-batch";
 
 import {
   FINISHED_WORKTREE_RETENTION_MS,
+  CONVERSATION_PROCESS_PROBE_LIMIT,
   classifyStatus,
   exclusiveBytes,
   allocatedBytes,
@@ -86,6 +90,8 @@ function repository(): string {
   const root = path.join(caseDir, "widgets");
   fs.mkdirSync(root, { recursive: true });
   git(["init", "-q", "-b", "main"], root);
+  // The isolated test preload supplies an empty Git template.
+  fs.mkdirSync(path.join(root, ".git", "info"), { recursive: true });
   git(["remote", "add", "origin", `https://github.com/${REPOSITORY}.git`], root);
   fs.writeFileSync(path.join(root, ".gitignore"), "node_modules/\n");
   fs.writeFileSync(path.join(root, "README.md"), "widgets\n");
@@ -789,6 +795,174 @@ test("live or waiting conversations: hosted, freshly starting, or holding a queu
     },
   }, now);
   expect(cwds.sort()).toEqual(["/w/assigned", "/w/idle", "/w/live", "/w/queued", "/w/starting", "/w/uncertain"]);
+});
+
+function finishedRegistryConversation(dir: string) {
+  const filename = path.join(process.env.LLV_STATE_DIR!, "agent-registry.json");
+  const registry = new AgentRegistry(filename, () => false, undefined, { sqliteMode: "sqlite" });
+  const sessionId = createHash("sha256").update("finished-sweep-conversation").digest("hex").slice(0, 32)
+    .replace(/(.{8})(.{4})(.{4})(.{4})(.{12})/, "$1-$2-$3-$4-$5");
+  const key = { engine: "codex" as const, sessionId };
+  const artifactPath = path.join(caseDir, `${key.sessionId}.jsonl`);
+  const processIdentity = { pid: 61001, startIdentity: "finished-host", bootEpoch: "fixture-boot" };
+  registry.upsert({ key, artifactPath, cwd: dir, accountId: null, status: "idle", host: null,
+    claimEpoch: 1, claimOwner: null, pendingAction: null,
+    structuredHost: { kind: "codex-app-server", endpoint: "stdio:finished", process: processIdentity,
+      writerClaimEpoch: 1, eventCursor: 1, protocolVersion: null, activeTurnRef: null,
+      pendingAttention: [], activeFlags: [] } });
+  registry.reconcileConversations([{ engine: "codex", path: artifactPath, accountId: null,
+    launchProfile: emptyLaunchProfile({ cwd: dir }),
+    turn: { state: "terminal", source: "lifecycle", terminalAt: "2026-10-01T00:00:00Z" },
+    observedAt: "2026-10-01T00:00:00Z" }]);
+  expect(registry.captureStructuredTerminationSurvivors(key, processIdentity,
+    [{ pid: 61002, startIdentity: "finished-child", bootEpoch: "fixture-boot" }])).not.toBeNull();
+  return { registry, filename, key, processIdentity, artifactPath };
+}
+
+test("a settled registry conversation with dead captured hosts releases its linked checkout", async () => {
+  const root = repository();
+  const { dir, tip } = lane(root, path.join(caseDir, "finished-lane"), "pipeline/finished");
+  const { filename, key } = finishedRegistryConversation(dir);
+  // Reopen the actual SQLite layout: capture evidence outlives the host.
+  const reopened = new AgentRegistry(filename, () => false, undefined, { sqliteMode: "sqlite" });
+  expect(reopened.readOnlySnapshot().entries[`codex:${key.sessionId}`]?.status).toBe("idle");
+  const report = await sweepMergedWorktrees(ports({
+    pipelines: [pipeline({ repoDir: root, worktreeDir: dir, branch: "pipeline/finished" })],
+    prs: [merged(71, "pipeline/finished", tip)],
+    conversationCwds: () => liveOrWaitingConversationCwds(reopened.readOnlySnapshot(),
+      Date.parse("2026-10-21T00:00:00Z"), () => true),
+  }));
+  expect(report.kept.filter(row => row.reason === "live-conversation")).toEqual([]);
+  expect(report.removed.map(row => row.path)).toEqual([dir]);
+  expect(fs.existsSync(dir)).toBe(false);
+});
+
+test("a failed migration's parked message releases its dead conversation's linked checkout", async () => {
+  const root = repository();
+  const { dir, tip } = lane(root, path.join(caseDir, "parked-lane"), "pipeline/parked");
+  const { registry, filename, artifactPath } = finishedRegistryConversation(dir);
+  const conversation = registry.conversationForPath(artifactPath)!;
+  const migration = { intentId: "parked-switch", targetId: "target", revision: 1,
+    error: null, updatedAt: "2026-10-01T00:00:00Z" };
+  registry.setConversationMigration(conversation.id, { ...migration, phase: "preparing" });
+  const delivery = registry.holdDelivery(conversation.id, "Continue when the switch completes", "parked-message");
+  expect(delivery).toMatchObject({ state: "held", generationId: null, attempts: 0, waitReason: "switching-accounts" });
+  registry.setConversationMigration(conversation.id, { ...migration, phase: "failed-recoverable", error: "successor failed" });
+  const reopened = new AgentRegistry(filename, () => false, undefined, { sqliteMode: "sqlite" });
+  const report = await sweepMergedWorktrees(ports({
+    pipelines: [pipeline({ repoDir: root, worktreeDir: dir, branch: "pipeline/parked", state: "closed" })],
+    prs: [merged(72, "pipeline/parked", tip)],
+    conversationCwds: () => liveOrWaitingConversationCwds(reopened.readOnlySnapshot(),
+      Date.parse("2026-10-21T00:00:00Z"), () => true),
+  }));
+  expect(report.kept.filter(row => row.reason === "live-conversation")).toEqual([]);
+  expect(report.removed.map(row => row.path)).toEqual([dir]);
+  expect(reopened.readOnlySnapshot().heldDeliveries[delivery.id]?.state).toBe("held");
+});
+
+for (const owner of ["structured", "survivor", "claimant", "tmux-agent", "tmux-pane"] as const)
+  test.each(["alive", "unverified"] as const)(`a ${owner} owner that is %s protects a settled registry conversation`, (verdict) => {
+    const { registry, filename, key } = finishedRegistryConversation(caseDir);
+    const entry = registry.readOnlySnapshot().entries[`codex:${key.sessionId}`]!;
+    const identity = (pid: number) => ({ pid, startIdentity: `owner-${pid}`, bootEpoch: "fixture-boot" });
+    registry.upsert({ ...entry, status: "dead", claimOwner: `structured-host:${JSON.stringify(identity(61005))}`,
+      host: { kind: "tmux", endpoint: "fixture", server: identity(61006), paneId: "%1", windowName: "fixture",
+        agent: identity(61003), panePid: identity(61004), argv: [] } });
+    const livePid = { structured: 61001, survivor: 61002, claimant: 61005, "tmux-agent": 61003, "tmux-pane": 61004 }[owner];
+    const reopened = new AgentRegistry(filename, () => false, undefined, { sqliteMode: "sqlite" });
+    const cwds = liveOrWaitingConversationCwds(reopened.readOnlySnapshot(), Date.parse("2026-10-21T00:00:00Z"),
+      current => processIdentityProvenDead(current, {
+        pidAlive: pid => pid === livePid,
+        processIdentity: () => verdict === "unverified" ? null : (livePid === 61001 ? "finished-host"
+          : livePid === 61002 ? "finished-child" : `owner-${livePid}`),
+        bootEpoch: () => "fixture-boot",
+      }));
+    expect(cwds).toEqual([caseDir]);
+  });
+
+test.each(["busy", "unknown", "pending", "active-turn", "missing-owner", "unreadable-claim"] as const)(
+  "%s evidence keeps the captured conversation's checkout", (kind) => {
+    const { registry, key } = finishedRegistryConversation(caseDir);
+    const file = structuredClone(registry.readOnlySnapshot());
+    const entry = file.entries[`codex:${key.sessionId}`]!;
+    const conversation = Object.values(file.conversations)[0]!;
+    if (kind === "busy" || kind === "unknown") conversation.turn.state = kind;
+    if (kind === "pending") entry.pendingAction = "resume";
+    if (kind === "active-turn") entry.structuredHost!.activeTurnRef = "current-turn";
+    if (kind === "missing-owner") { entry.structuredHost!.process = null; entry.structuredTerminationSurvivors = []; }
+    if (kind === "unreadable-claim") entry.claimOwner = "unreadable-owner";
+    expect(liveOrWaitingConversationCwds(file, Date.parse("2026-10-21T00:00:00Z"), () => true)).toEqual([caseDir]);
+  });
+
+test.each(["held", "assigned", "delivery-uncertain"] as const)("a runnable %s message keeps its checkout", (state) => {
+  const { registry, artifactPath } = finishedRegistryConversation(caseDir);
+  const conversation = registry.conversationForPath(artifactPath)!;
+  registry.setConversationMigration(conversation.id, { intentId: "switch", phase: "preparing",
+    targetId: "target", revision: 1, error: null, updatedAt: "2026-10-01T00:00:00Z" });
+  const delivery = registry.holdDelivery(conversation.id, "Continue", "queued-message");
+  const file = structuredClone(registry.readOnlySnapshot());
+  file.heldDeliveries[delivery.id]!.state = state;
+  file.conversations[conversation.id]!.migration!.phase = state === "held" ? "committed" : "failed-recoverable";
+  expect(liveOrWaitingConversationCwds(file, Date.parse("2026-10-21T00:00:00Z"), () => true)).toEqual([caseDir]);
+});
+
+test.each(["requested", "waiting-turn", "preparing", "successor-starting", "verifying"] as const)(
+  "a %s migration keeps its checkout before its successor publishes a host", (phase) => {
+    const { registry, artifactPath } = finishedRegistryConversation(caseDir);
+    const conversation = registry.conversationForPath(artifactPath)!;
+    registry.setConversationMigration(conversation.id, { intentId: "active-switch", phase,
+      targetId: "target", revision: 1, error: null, updatedAt: "2026-10-01T00:00:00Z" });
+    expect(liveOrWaitingConversationCwds(registry.readOnlySnapshot(),
+      Date.parse("2026-10-21T00:00:00Z"), () => true)).toEqual([caseDir]);
+  });
+
+test("owner probe exhaustion keeps the unverified remainder and resets on the next read", () => {
+  const { registry, key } = finishedRegistryConversation(caseDir);
+  const template = registry.readOnlySnapshot().entries[`codex:${key.sessionId}`]!;
+  const entries = Object.fromEntries(Array.from({ length: CONVERSATION_PROCESS_PROBE_LIMIT + 1 }, (_, index) =>
+    [String(index), { ...template, cwd: path.join(caseDir, String(index)), status: "dead" as const,
+      structuredTerminationSurvivors: [] }]));
+  for (let read = 0; read < 2; read++) {
+    let probes = 0;
+    const cwds = liveOrWaitingConversationCwds({ entries }, 0, () => { probes++; return true; });
+    expect(probes).toBe(CONVERSATION_PROCESS_PROBE_LIMIT);
+    expect(cwds).toEqual([path.join(caseDir, String(CONVERSATION_PROCESS_PROBE_LIMIT))]);
+  }
+});
+
+test.each(["process", "conversation", "delivery"] as const)("a late %s still prevents removal after captured hosts were proven dead", async (kind) => {
+  const root = repository();
+  const { dir, tip } = lane(root, path.join(caseDir, "late-holder"), "pipeline/late-holder");
+  const { registry, key, processIdentity, artifactPath } = finishedRegistryConversation(dir);
+  const conversation = registry.conversationForPath(artifactPath)!;
+  const migration = { intentId: "retry-switch", targetId: "target", revision: 1,
+    error: null, updatedAt: "2026-10-01T00:00:00Z" };
+  if (kind === "delivery") {
+    registry.setConversationMigration(conversation.id, { ...migration, phase: "preparing" });
+    registry.holdDelivery(conversation.id, "Continue after retry", "retry-message");
+    registry.setConversationMigration(conversation.id, { ...migration, phase: "failed-recoverable" });
+  }
+  let measured = false;
+  const report = await sweepMergedWorktrees(ports({
+    pipelines: [pipeline({ repoDir: root, worktreeDir: dir, branch: "pipeline/late-holder" })],
+    prs: [merged(73, "pipeline/late-holder", tip)],
+    conversationCwds: () => liveOrWaitingConversationCwds(registry.readOnlySnapshot(),
+      Date.parse("2026-10-21T00:00:00Z"), identity => identity.pid !== 61008),
+    scan: () => measured && kind === "process"
+      ? { ownNamespace: null, processes: [{ pid: 61007, paths: [dir], namespace: null, stamped: false }] } : NO_PROCESSES,
+    measure: async () => {
+      measured = true;
+      if (kind === "conversation") registry.captureStructuredTerminationSurvivors(key, processIdentity,
+        [{ pid: 61008, startIdentity: "late-holder", bootEpoch: "fixture-boot" }]);
+      if (kind === "delivery") registry.setConversationMigration(conversation.id, { ...migration, phase: "preparing" });
+      return 1;
+    },
+  }));
+  expect(measured).toBe(true);
+  expect(report.removed).toEqual([]);
+  expect(report.kept).toContainEqual(expect.objectContaining({ path: dir,
+    reason: kind === "process" ? "in-use" : "live-conversation" }));
+  expect(fs.existsSync(dir)).toBe(true);
 });
 
 test("the porcelain listing parses branches, detached heads, locks and prunable entries", () => {

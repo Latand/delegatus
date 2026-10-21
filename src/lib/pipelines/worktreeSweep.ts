@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
+import { structuredClaimIdentity, type AgentRegistryEntry } from "@/lib/agent/registry";
 import type { ForgeCacheFile } from "@/lib/forge/cache";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { githubRunner, type GithubRunner } from "@/lib/monitor/githubEvidence";
@@ -61,7 +62,9 @@ import { pipelineLiteralGitEnv } from "./git";
  *   `TMPDIR`/`LLV_STATE_DIR`/`XDG_CONFIG_HOME` inside it (the `/proc` scan the
  *   temp sweep uses).
  * - `live-conversation` — a registry conversation that is hosted, starting, or
- *   holding a queued message runs there.
+ *   holding a deliverable queued message runs there. A settled entry whose
+ *   recorded owners are all proven dead holds nothing; a message parked after
+ *   a failed migration waits for an explicit retry.
  * - `uncommitted` — tracked changes or untracked files; `git worktree remove`
  *   is forced only when resuming a recorded deletion at the same HEAD.
  * - `ignored-files` — ignored source, evidence and unknown output classes.
@@ -503,30 +506,68 @@ async function measureDirectory(directory: string, excludedDirectories: readonly
 }
 
 type RegistryShape = {
-  entries?: Record<string, { cwd?: string; status?: string; pendingAction?: string | null; updatedAt?: string; structuredHost?: unknown }>;
-  conversations?: Record<string, { generations?: Array<{ launchProfile?: { cwd?: string | null } | null }> }>;
+  entries?: Record<string, Partial<Pick<AgentRegistryEntry, "key" | "cwd" | "status" | "pendingAction" | "updatedAt"
+    | "host" | "structuredHost" | "structuredTerminationSurvivors" | "claimOwner">>>;
+  conversations?: Record<string, { engine?: string; turn?: { state: string };
+    migration?: { phase: string } | null;
+    generations?: Array<{ id?: string; launchProfile?: { cwd?: string | null } | null }> }>;
   heldDeliveries?: Record<string, { conversationId?: string; state?: string }>;
 };
 
-/** The working directories of registry conversations that are live or
-    waiting: hosted (`live`, `idle`, `handoff`), starting or resuming within
-    the last day, or holding a message that is still queued for delivery. A
-    `starting` row months old is a spawn that never came, and holds nothing. */
-export function liveOrWaitingConversationCwds(file: RegistryShape, now = Date.now()): string[] {
+/** Kernel probes per guard read, on the leased sweep worker. Exhaustion keeps
+    the remaining owners unverified; it never supplies proof of death. */
+export const CONVERSATION_PROCESS_PROBE_LIMIT = 4096;
+
+/** A captured host tree can outlive its processes while leaving `idle` in the
+    registry. Drop that hold only with dead owners and a settled turn. Unknown
+    ownership, setup and runnable deliveries continue protecting their cwd. */
+export function liveOrWaitingConversationCwds(
+  file: RegistryShape,
+  now = Date.now(),
+  provenDead: (identity: Readonly<ProcessIdentity>) => boolean = processIdentityProvenDead,
+): string[] {
   const cwds = new Set<string>();
-  for (const entry of Object.values(file.entries ?? {})) {
+  const settled = new Set<string>();
+  for (const conversation of Object.values(file.conversations ?? {})) {
+    const generation = conversation.generations?.at(-1);
+    // A migration can still launch into this cwd before a host row appears.
+    if (conversation.migration && !["committed", "rolled-back", "failed-recoverable"].includes(conversation.migration.phase)) {
+      if (generation?.launchProfile?.cwd) cwds.add(generation.launchProfile.cwd);
+      continue;
+    }
+    if (generation?.id && conversation.engine && (conversation.turn?.state === "terminal" || conversation.turn?.state === "idle"))
+      settled.add(`${conversation.engine}:${generation.id}`);
+  }
+  let probes = 0;
+  const mayOwn = (identity: Readonly<ProcessIdentity>) => ++probes > CONVERSATION_PROCESS_PROBE_LIMIT || !provenDead(identity);
+  for (const [key, entry] of Object.entries(file.entries ?? {})) {
     if (!entry?.cwd) continue;
+    const owners = [entry.structuredHost?.process, entry.host?.agent, entry.host?.panePid]
+      .filter((identity): identity is ProcessIdentity => !!identity);
+    const survivors = entry.structuredTerminationSurvivors ?? [];
+    const claimant = entry.claimOwner ? structuredClaimIdentity(entry.claimOwner) : null;
+    if (claimant) owners.push(claimant);
+    if ((entry.claimOwner && !claimant) || owners.some(mayOwn) || survivors.some(mayOwn)) {
+      cwds.add(entry.cwd);
+      continue;
+    }
     const hosted = entry.status === "live" || entry.status === "idle" || entry.status === "handoff";
     const updated = entry.updatedAt ? Date.parse(entry.updatedAt) : Number.NaN;
     const pending = (entry.status === "starting" || Boolean(entry.pendingAction)) && entry.status !== "dead"
       && Number.isFinite(updated) && now - updated < PENDING_CONVERSATION_MS;
-    if (hosted || pending) cwds.add(entry.cwd);
+    const ended = (owners.length > 0 || survivors.length > 0) && settled.has(key) && !entry.pendingAction
+      && entry.status !== "starting" && !entry.structuredHost?.activeTurnRef;
+    if ((hosted || pending) && !ended) cwds.add(entry.cwd);
   }
   for (const delivery of Object.values(file.heldDeliveries ?? {})) {
     /* `delivery-uncertain` was written and never confirmed; the reaper counts
        it as undelivered too. */
     if (delivery?.state !== "held" && delivery?.state !== "assigned" && delivery?.state !== "delivery-uncertain") continue;
-    const generations = file.conversations?.[delivery.conversationId ?? ""]?.generations ?? [];
+    const conversation = file.conversations?.[delivery.conversationId ?? ""];
+    // The migration coordinator requires an explicit retry here. Assigned and
+    // uncertain attempts still drain/reconcile while the switch is parked.
+    if (delivery.state === "held" && conversation?.migration?.phase === "failed-recoverable") continue;
+    const generations = conversation?.generations ?? [];
     const cwd = generations.at(-1)?.launchProfile?.cwd;
     if (cwd) cwds.add(cwd);
   }
