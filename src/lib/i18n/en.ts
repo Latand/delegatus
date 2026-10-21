@@ -1967,6 +1967,7 @@ export const en = {
   "decisions.openPrototypes": "Open prototypes",
   "decisions.thumbAria": "Variant {n}, {name}: open the prototypes",
   "decisions.expandAria": "Open «{title}»",
+  "decisions.collapseAria": "Collapse «{title}»",
   "decisions.inColumn": "Answer in the Decisions column",
   "decisions.answeredAt": "Answered · {time}",
   "decisions.state.sent": "delivered",

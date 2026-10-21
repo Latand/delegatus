@@ -81,6 +81,13 @@ const input = readline.createInterface({ input: process.stdin, crlfDelay: Infini
 for await (const line of input) {
   if (!line) continue;
   const frame = object(JSON.parse(line));
+  const control = object(frame?.request);
+  if (frame?.type === "control_request" && ["initialize", "mcp_status"].includes(String(control?.subtype))) {
+    emit({ type: "control_response", response: { subtype: "success", request_id: frame.request_id,
+      response: control?.subtype === "mcp_status" ? { mcpServers: viewer
+        ? [{ name: "viewer", status: "connected", tools: [{ name: "stage_report" }] }] : [] } : {} } });
+    continue;
+  }
   const message = object(frame?.message);
   if (frame?.type !== "user" || message?.role !== "user") continue;
   const text = Array.isArray(message.content)

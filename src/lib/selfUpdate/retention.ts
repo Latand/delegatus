@@ -1,3 +1,4 @@
+import { withSelfObservation, type RetentionScan } from "./retentionInspection";
 import { RetentionWorker, RetentionInspectionError, type RetentionInspection } from "./retentionWorker";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
@@ -5,13 +6,15 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { statePath } from "@/lib/configDir";
 import { writeJsonDurably } from "@/lib/state/durableJson";
-import { finishTreeTrash, inspectTree, mountPointsUnder, removeTreeViaTrash, resolvePhysicalPath, type ProcessScan } from "@/lib/tempSweep";
+import { inspectTree, matchesSnapshot, mountPointsUnder, resolvePhysicalPath, type ProcessScan } from "@/lib/tempSweep";
 import { classifyStatus, disposableGeneratedTree, disposableIgnoredPath, keptIgnored, lockCheckoutHead, parseWorktreeList } from "@/lib/pipelines/worktreeSweep";
 import { runGit } from "./git";
 import { builtRevision } from "./steps";
+import { adoptLegacyTrash, isGatedTrashRow, quarantineTree, reopenGate, settleGatedTrash } from "./gatedTrash";
 import type { LauncherRecord } from "./launcher";
 
 const DAY = 86_400_000;
+const TRASH_JOURNAL = /^(cache|package|release-output|release)-trash-.*\.json$/;
 export type RetentionInputs = {
   rollbackPointers?: (string | null)[];
   rollbackPackage?: string | null;
@@ -19,13 +22,21 @@ export type RetentionInputs = {
 };
 export type RetentionReport = {
   at: string; removed: { dir: string; sha: string; bytes: number }[];
+  cursor?: { age: number; dir: string };
+  recoveryCursor?: string;
   reclaimedCacheBytes: number; kept: { dir: string; reason: string; bytes: number }[]; errors: string[];
 };
+/** The owner's state. `fenced` answers a claim: the owner refuses every new
+ * serving, rollback or in-flight hold on the claimed release from before this
+ * read until the pass ends, so the read is the last word on its holds. */
+export type RetentionCurrent = { record: LauncherRecord; inputs: RetentionInputs; fenced?: boolean };
 export type RetentionPorts = {
   inspection?: RetentionInspection;
-  git?: typeof runGit; scan?: () => ProcessScan; mountPoints?: (directory: string) => string[];
+  git?: typeof runGit; scan?: () => ProcessScan & Partial<Pick<RetentionScan, "uncertain">>; mountPoints?: (directory: string) => string[];
   now?: () => number; env?: Readonly<Record<string, string | undefined>>; reportFile?: string;
-  current?: () => { record: LauncherRecord; inputs: RetentionInputs };
+  /** Called with `claim`, the release about to be removed, for the final read. */
+  current?: (claim?: string) => RetentionCurrent | Promise<RetentionCurrent>;
+  maxCandidates?: number;
   removeTree?: (directory: string) => Promise<void>;
   lockHead?: (directory: string) => (() => void) | null;
 };
@@ -61,9 +72,23 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
   const report: RetentionReport = { at: new Date(now()).toISOString(), removed: [], reclaimedCacheBytes: 0, kept: [], errors: [] };
   const reportFile = ports.reportFile ?? statePath("self-update", "retention.json");
   fs.mkdirSync(path.dirname(reportFile), { recursive: true });
-  const previousTrash = fs.readdirSync(path.dirname(reportFile));
+  const previousTrash = fs.readdirSync(path.dirname(reportFile)).sort();
+  let cursor: RetentionReport["cursor"];
+  let recoveryCursor: string | undefined;
+  try {
+    const previousReport = JSON.parse(fs.readFileSync(reportFile, "utf8"));
+    const previous = previousReport.cursor;
+    if (Number.isFinite(previous?.age) && typeof previous?.dir === "string" && path.dirname(previous.dir) === path.resolve(record.releasesDir)) cursor = previous;
+    if (typeof previousReport.recoveryCursor === "string" && TRASH_JOURNAL.test(previousReport.recoveryCursor))
+      recoveryCursor = previousReport.recoveryCursor;
+  } catch { /* A first pass, or an older report with no cursor. */ }
   const mounts = ports.mountPoints ?? mountPointsUnder;
-  const read = () => ports.current?.() ?? { record, inputs };
+  // Without an owner port the inputs are the caller's own and cannot change.
+  const read = async (claim?: string): Promise<RetentionCurrent> => ports.current ? ports.current(claim) : { record, inputs, fenced: true };
+  const budget = ports.maxCandidates ?? 4;
+  const maxCandidates = Number.isFinite(budget) ? Math.max(1, Math.min(128, Math.floor(budget))) : 4;
+  let worked = 0;
+  const deadline = now() + 120_000;
   const scan = async () => {
     try {
       const value = ports.scan ? ports.scan() : await inspection.scan(path.resolve(record.releasesDir));
@@ -71,11 +96,43 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
       return value;
     } catch (error) { throw new RetentionInspectionError(String(error)); }
   };
+  const freshObservation = async () => {
+    // Early refusals before a tree is quarantined. Only gatedObservation, read
+    // with the tree off its path and behind a closed gate, authorizes removal.
+    await read();
+    await scan();
+    const current = await read();
+    const processes = await scan();
+    return { current, processes };
+  };
+  const union = (first: ProcessScan, second: ProcessScan): ProcessScan => ({ ...second,
+    processes: [...first.processes, ...second.processes],
+    uncertain: [...(first as Partial<RetentionScan>).uncertain ?? [], ...(second as Partial<RetentionScan>).uncertain ?? []] } as ProcessScan);
+  /** With a gate closed and this process's links sealed, a process can no
+   * longer reach the tree by any path, so a holder found now held it before.
+   * Two scans catch a descriptor handed to a child between them. The owner
+   * read follows the last scan and claims `claim`: the owner fences new holds
+   * on it first, so no hold can land after this read. An owner that cannot
+   * fence keeps the tree. This process's own cwd is the trash. */
+  const gatedObservation = async (trash: string, claim: string) => {
+    const root = path.resolve(record.releasesDir);
+    const scanned = union(withSelfObservation(await scan(), root), withSelfObservation(await scan(), root));
+    const processes = { ...scanned, processes: scanned.processes.map(proc => proc.pid === process.pid
+      ? { ...proc, paths: proc.paths.filter(entry => entry !== trash) } : proc) };
+    const current = await read(claim);
+    return { current, processes, unfenced: current.fenced !== true };
+  };
   type Candidate = { dir: string; sha: string; age: number; locked: boolean; identity: string };
+  const byAge = (a: Candidate, b: Candidate) => a.age - b.age || (a.dir < b.dir ? -1 : a.dir > b.dir ? 1 : 0);
   const identity = (dir: string) => { const stat = fs.lstatSync(dir); return `${stat.dev}:${stat.ino}`; };
   const candidates: Candidate[] = [];
   const physicalPaths = new WeakMap<ProcessScan, Map<string, string>>();
+  const uncertainReason = (dir: string, processes: ProcessScan) => {
+    const uncertain = (processes as Partial<RetentionScan>).uncertain?.find(row => row.roots.some(root => under(dir, root) || under(root, dir)));
+    return uncertain ? `process-unreadable:${uncertain.pid}:${uncertain.reason}` : null;
+  };
   const heldByProcess = (dir: string, processes: ProcessScan) => {
+    if (uncertainReason(dir, processes)) return true;
     const resolved = physicalPaths.get(processes) ?? new Map<string, string>();
     physicalPaths.set(processes, resolved);
     const physical = (entry: string) => {
@@ -90,7 +147,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
       return under(target, dir) || under(physical(target), dir);
     }) || proc.references?.some(entry => entry.includes(dir)));
   };
-  const protect = (candidate: Candidate, current: ReturnType<typeof read>, processes: ProcessScan, recovering = false): string | null => {
+  const protect = (candidate: Candidate, current: Awaited<ReturnType<typeof read>>, processes: ProcessScan, recovering = false): string | null => {
     const { record: owner, inputs: state } = current;
     if (owner.releasesDir !== record.releasesDir || owner.checkout !== record.checkout || owner.releasePointer !== record.releasePointer)
       throw new Error("installation changed during retention");
@@ -102,18 +159,51 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
     if ((state.rollbackPointers ?? []).some(raw => names(pointerDir(raw))) || names(state.rollbackPackage ?? null)) return "rollback";
     if ((state.inFlight ?? []).some(names)) return "in-flight";
     if ([owner.web.revision, owner.runtimeHost.revision, owner.launcher.revision].some(sha => sha && candidate.sha.startsWith(sha))) return "serving";
+    const uncertainty = uncertainReason(candidate.dir, processes);
+    if (uncertainty) return uncertainty;
     if (heldByProcess(candidate.dir, processes)) return "process";
     if (candidate.locked) return "locked";
     if (!recovering && now() - releaseAge(candidate.dir, !!record.checkout) < DAY) return "recent";
     return null;
   };
   const freshProtection = async (candidate: Candidate, recovering = false) => {
-    const processes = await scan();
-    return protect(candidate, read(), processes, recovering);
+    const { current, processes } = await freshObservation();
+    return protect(candidate, current, processes, recovering);
+  };
+  /** The last word on a quarantined release, read with its gate closed. */
+  const gatedReleaseHold = async (candidate: Candidate, trash: string, gate: string) => {
+    const { current, processes, unfenced } = await gatedObservation(trash, candidate.dir);
+    return protect(candidate, current, processes, true) ?? (heldByProcess(gate, processes) ? "process" : unfenced ? "owner-unfenced" : null);
+  };
+  const worktreeStatus = async (directory: string) => {
+    const status = await run(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], directory);
+    if (status.code !== 0) return { ok: false, changed: ["status unavailable"], ignored: [] as string[], allIgnored: [] as string[] };
+    const classified = classifyStatus(status.stdout, true);
+    return { ok: true, changed: classified.changed, ignored: keptIgnored(directory, classified.ignored), allIgnored: classified.ignored };
+  };
+  const safeTrackedFlags = async (directory: string) => {
+    const tagged = await run(["ls-files", "--cached", "-v", "-z"], directory);
+    return tagged.code === 0 && tagged.stdout.split("\0").filter(Boolean).every(row => row.startsWith("H "));
+  };
+  /** Git's view of a quarantined checkout, before its gate closes: an edit
+   * made before the rename restores the release. */
+  const releaseContentHold = async (trash: string, sha: string) => {
+    const content = await worktreeStatus(trash);
+    if (!content.ok || content.changed.length || content.ignored.length || !await safeTrackedFlags(trash)) return "uncommitted";
+    const head = await run(["rev-parse", "--verify", "HEAD"], trash);
+    return head.code === 0 && head.stdout.trim() === sha ? null : "changed";
+  };
+  /** The tree is gone; drop only its own registration, never other prunable ones. */
+  const dropWorktreeMetadata = async (directory: string) => {
+    if (fs.existsSync(directory)) { report.errors.push(`${directory}: path reacquired after removal; worktree registration kept`); return; }
+    const listing = await run(["worktree", "list", "--porcelain", "-z"], record.checkout!);
+    if (listing.code === 0 && !parseWorktreeList(listing.stdout).some(entry => path.resolve(entry.path) === directory)) return;
+    const result = await run(["worktree", "remove", directory], record.checkout!);
+    if (result.code !== 0) report.errors.push(`${directory}: cannot drop removed release registration: ${result.stderr || result.stdout}`);
   };
   try {
     const processes = await scan();
-    const initial = read();
+    const initial = await read();
     const root = path.resolve(record.releasesDir);
     if (fs.realpathSync(root) !== root) throw new Error("release root is an alias; skipped");
     let listed: ReturnType<typeof parseWorktreeList> = [];
@@ -122,7 +212,7 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
       if (result.code !== 0) throw new Error(`cannot list release worktrees: ${result.stderr}`);
       listed = parseWorktreeList(result.stdout);
     }
-    for (const name of fs.readdirSync(root)) {
+    for (const name of fs.readdirSync(root).sort()) {
       const dir = path.join(root, name);
       const stat = fs.lstatSync(dir);
       if (!stat.isDirectory() || stat.isSymbolicLink()) continue;
@@ -140,33 +230,61 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
     const keepCount = Number.isFinite(rawKeep) ? Math.max(1, Math.floor(rawKeep)) : 3;
     // Validate every safety input before the first mutation.
     const protectedSet = new Map(candidates.map(candidate => [candidate.dir, protect(candidate, initial, processes)]));
-    const newest = new Set(candidates.filter(candidate => !protectedSet.get(candidate.dir) && now() - candidate.age >= DAY).sort((a, b) => b.age - a.age).slice(0, keepCount).map(candidate => candidate.dir));
-    const worktreeStatus = async (directory: string) => {
-      const status = await run(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], directory);
-      if (status.code !== 0) return { ok: false, changed: ["status unavailable"], ignored: [] as string[], allIgnored: [] as string[] };
-      const classified = classifyStatus(status.stdout, true);
-      return { ok: true, changed: classified.changed, ignored: keptIgnored(directory, classified.ignored), allIgnored: classified.ignored };
-    };
-    const safeTrackedFlags = async (directory: string) => {
-      const tagged = await run(["ls-files", "--cached", "-v", "-z"], directory);
-      return tagged.code === 0 && tagged.stdout.split("\0").filter(Boolean).every(row => row.startsWith("H "));
-    };
+    // A whole release an interrupted pass quarantined, still intact, is still
+    // a release: it counts toward the newest kept at the age it left its path
+    // with, and recovery restores it when it is one of them.
+    const quarantined: Candidate[] = [];
+    const recentQuarantine = new Set<string>();
+    for (const file of previousTrash) {
+      const releaseJournal = file.startsWith("release-trash-");
+      if (!TRASH_JOURNAL.test(file) || !releaseJournal && !file.startsWith("package-trash-") || releaseJournal !== !!record.checkout) continue;
+      try {
+        const row = JSON.parse(fs.readFileSync(path.join(path.dirname(reportFile), file), "utf8"));
+        if (typeof row?.directory !== "string" || path.dirname(row.directory) !== root || row.deleting
+          || !(record.checkout ? /^[a-f0-9]{12}$/ : /^npm-\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/).test(path.basename(row.directory))
+          || candidates.some(candidate => candidate.dir === row.directory)) continue;
+        const gated = isGatedTrashRow(row);
+        if (releaseJournal && !gated) continue;
+        // A gate left closed by a crash still holds its intact tree.
+        const location = gated ? (fs.existsSync(row.gate) ? row.trash : row.legacyTrash) : row.trash;
+        if (typeof location !== "string" || !gated && !fs.lstatSync(location, { throwIfNoEntry: false })?.isDirectory()) continue;
+        let age = Number(row.context?.age);
+        if (!Number.isFinite(age)) { try { age = releaseAge(location, !!record.checkout); } catch { age = now(); } }
+        if (now() - age < DAY) recentQuarantine.add(row.directory);
+        else quarantined.push({ dir: row.directory, sha: row.context?.sha ?? "", age, locked: false, identity: String(row.identity ?? "") });
+      } catch { /* An unreadable journal is replayed, and reported, below. */ }
+    }
+    const newest = new Set([...candidates.filter(candidate => !protectedSet.get(candidate.dir)),
+      ...quarantined.filter(candidate => !protect(candidate, initial, processes, true))]
+      .filter(candidate => now() - candidate.age >= DAY).sort((a, b) => byAge(b, a)).slice(0, keepCount).map(candidate => candidate.dir));
     const safeRef = async (sha: string) => {
       const refs = await run(["for-each-ref", "--contains", sha, "--format=%(refname)", "refs/heads", "refs/remotes", "refs/self-update/tip"], record.checkout!);
       return refs.code === 0 && refs.stdout.split("\n").some(ref => ref.trim().length > 0);
     };
-    for (const candidate of candidates.sort((a, b) => a.age - b.age)) {
+    const ordered = candidates.sort(byAge);
+    const afterCursor = (candidate: Candidate) => cursor && (candidate.age > cursor.age || candidate.age === cursor.age && candidate.dir > cursor.dir);
+    const window = cursor ? [...ordered.filter(afterCursor), ...ordered.filter(candidate => !afterCursor(candidate))] : ordered;
+    for (const candidate of window) {
       try {
-        const current = read();
+        const current = await read();
         let reason = protect(candidate, current, processes) ?? (now() - candidate.age < DAY ? "recent" : newest.has(candidate.dir) ? "newest" : null);
         if (mounts(candidate.dir).length) reason = "mount-boundary";
         if (identity(candidate.dir) !== candidate.identity || fs.realpathSync(candidate.dir) !== candidate.dir) reason = "changed";
+        if (worked >= maxCandidates || now() >= deadline) {
+          report.kept.push({ dir: candidate.dir, reason: reason ?? "pass-budget", bytes: 0 }); continue;
+        }
+        // Unknown ownership also protects generated contents of the release.
+        if (uncertainReason(candidate.dir, processes)) {
+          report.kept.push({ dir: candidate.dir, reason: reason!, bytes: 0 }); continue;
+        }
+        worked++;
+        report.cursor = { age: candidate.age, dir: candidate.dir };
         if (reason) {
           const bytes = reason === "mount-boundary" ? 0 : await bytesOf(candidate.dir);
           report.kept.push({ dir: candidate.dir, reason, bytes });
           // Runtime caches and unfinished builds are kept. Only webpack is disposable.
           if (["mount-boundary", "in-flight", "changed"].includes(reason) || !record.checkout
-            || (read().inputs.inFlight ?? []).some(dir => under(dir, candidate.dir))) continue;
+            || ((await read()).inputs.inFlight ?? []).some(dir => under(dir, candidate.dir))) continue;
           const head = await run(["rev-parse", "HEAD"], candidate.dir);
           if (head.code !== 0 || builtRevision(candidate.dir) !== head.stdout.trim()) continue;
           const cache = path.join(candidate.dir, ".next/cache/webpack");
@@ -176,19 +294,26 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
           const bytesBefore = await bytesOf(cache);
           const journal = path.join(path.dirname(reportFile), `cache-trash-${randomUUID()}.json`);
           const inUse = async (trash: string) => {
-            const fresh = await scan();
+            const { current, processes: fresh } = await freshObservation();
             return heldByProcess(trash, fresh) || heldByProcess(cache, fresh)
-              || (read().inputs.inFlight ?? []).some(dir => under(dir, candidate.dir));
+              || (current.inputs.inFlight ?? []).some(dir => under(dir, candidate.dir));
           };
           if (await inUse(cache) || mounts(candidate.dir).length || fs.realpathSync(cache) !== cache || identity(candidate.dir) !== candidate.identity
             || inspectTree(cache, { git: true, mounts: mounts(cache) }).hold) continue;
-          if (await removeTreeViaTrash(cache, { journal, held: inUse, remove: ports.removeTree,
-            validate: trash => !inspectTree(trash, { git: true, mounts: mounts(trash) }).hold })) report.reclaimedCacheBytes += bytesBefore;
+          const row = quarantineTree(cache, journal);
+          if (!row) continue;
+          const outcome = await settleGatedTrash(journal, row, { remove: ports.removeTree,
+            observe: async (trash, gate) => {
+              const { current, processes: fresh, unfenced } = await gatedObservation(trash, candidate.dir);
+              return heldByProcess(gate, fresh) || heldByProcess(cache, fresh)
+                || (current.inputs.inFlight ?? []).some(dir => under(dir, candidate.dir)) ? "process" : unfenced ? "owner-unfenced" : null;
+            },
+            validate: root => !inspectTree(root, { git: true, mounts: mounts(row.trash) }).hold });
+          if (outcome.removed) report.reclaimedCacheBytes += bytesBefore;
           continue;
         }
         // Awaited listing and measurements cannot carry stale authority into removal.
-        const fresh = await scan();
-        const latest = read();
+        const { current: latest, processes: fresh } = await freshObservation();
         if (protect(candidate, latest, fresh) || mounts(candidate.dir).length || identity(candidate.dir) !== candidate.identity) {
           report.kept.push({ dir: candidate.dir, reason: "changed", bytes: 0 }); continue;
         }
@@ -222,9 +347,14 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
             if (!stat.isDirectory() || stat.isSymbolicLink()) { content = { ...content, ignored: [ignored] }; break; }
             const generated = ignored.split("/").some(name => ["node_modules", ".next", ".turbo", ".cache", ".parcel-cache", ".svelte-kit", "out", "dist", "build", "coverage", "test-results", "playwright-report", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".hypothesis", ".venv", "venv", ".tox", ".nox"].includes(name) || name.endsWith(".egg-info"));
             const journal = path.join(path.dirname(reportFile), `release-output-trash-${randomUUID()}.json`);
-            if (!await removeTreeViaTrash(target, { journal, remove: ports.removeTree,
-              held: async trash => !disposableGeneratedTree(trash, generated) || !!await freshProtection(candidate, true),
-            })) { content = { ...content, ignored: [ignored] }; break; }
+            const row = quarantineTree(target, journal);
+            if (!row || !(await settleGatedTrash(journal, row, { remove: ports.removeTree,
+              observe: async (trash, gate) => {
+                const { current, processes: fresh, unfenced } = await gatedObservation(trash, candidate.dir);
+                return protect(candidate, current, fresh, true) ?? (heldByProcess(gate, fresh) ? "process" : unfenced ? "owner-unfenced" : null);
+              },
+              validate: root => disposableGeneratedTree(root, generated),
+            })).removed) { content = { ...content, ignored: [ignored] }; break; }
             content = await worktreeStatus(candidate.dir);
             if (!content.ok || content.changed.length || content.ignored.length || !await safeTrackedFlags(candidate.dir)) break;
           }
@@ -272,39 +402,59 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
           if (markerParentExists && fs.existsSync(marker) && fs.lstatSync(marker).isDirectory()) {
             report.kept.push({ dir: candidate.dir, reason: "changed", bytes }); continue;
           }
-          fs.rmSync(marker, { force: true });
-          const result = await run(["worktree", "remove", candidate.dir], record.checkout);
-          if (result.code !== 0) throw new Error(`cannot remove release: ${result.stderr || result.stdout}`);
+          // Rename out of the release path, recheck Git content there, then
+          // remove from behind the closed gate. The ready marker goes first.
+          const journal = path.join(path.dirname(reportFile), `release-trash-${randomUUID()}.json`);
+          const row = quarantineTree(candidate.dir, journal, { sha: candidate.sha, age: candidate.age });
+          if (!row) { report.kept.push({ dir: candidate.dir, reason: "changed", bytes }); continue; }
+          const outcome = await settleGatedTrash(journal, row, { remove: ports.removeTree, first: [".next/DELEGATUS_RELEASE_READY"],
+            beforeGate: trash => releaseContentHold(trash, candidate.sha),
+            observe: (trash, gate) => gatedReleaseHold(candidate, trash, gate) });
+          if (!outcome.removed) { report.kept.push({ dir: candidate.dir, reason: outcome.reason, bytes }); continue; }
+          report.removed.push({ dir: candidate.dir, sha: candidate.sha, bytes });
+          await dropWorktreeMetadata(candidate.dir);
+          continue;
         } else {
           const packageTree = inspectTree(candidate.dir, { git: true, mounts: mounts(candidate.dir) });
           if (packageTree.hold) {
             report.kept.push({ dir: candidate.dir, reason: packageTree.hold, bytes: await bytesOf(candidate.dir) }); continue;
           }
           const journal = path.join(path.dirname(reportFile), `package-trash-${randomUUID()}.json`);
-          if (!await removeTreeViaTrash(candidate.dir, { journal, context: { sha: candidate.sha }, held: async trash => {
-            const activeProcesses = await scan(); const current = read();
-            const reason = protect({ dir: candidate.dir, sha: candidate.sha, age: candidate.age, locked: candidate.locked, identity: candidate.identity }, current, activeProcesses, true);
-            if (reason) report.kept.push({ dir: candidate.dir, reason, bytes: 0 });
-            return !!reason || heldByProcess(trash, activeProcesses)
-              || !!inspectTree(trash, { git: true, mounts: mounts(trash) }).hold;
-          }, validate: trash => !inspectTree(trash, { git: true, mounts: mounts(trash) }).hold, remove: ports.removeTree })) continue;
+          const row = quarantineTree(candidate.dir, journal, { sha: candidate.sha, age: candidate.age });
+          if (!row) { report.kept.push({ dir: candidate.dir, reason: "changed", bytes: 0 }); continue; }
+          const outcome = await settleGatedTrash(journal, row, { remove: ports.removeTree,
+            observe: (trash, gate) => gatedReleaseHold(candidate, trash, gate),
+            validate: root => !inspectTree(root, { git: true, mounts: mounts(row.trash) }).hold });
+          if (!outcome.removed) { report.kept.push({ dir: candidate.dir, reason: outcome.reason, bytes: 0 }); continue; }
         }
         report.removed.push({ dir: candidate.dir, sha: candidate.sha, bytes });
         } finally { releaseHead?.(); }
       } catch (error) { if (error instanceof RetentionInspectionError) throw error; report.errors.push(`${candidate.dir}: ${String(error)}`); }
     }
     // Recover only intents whose original path belongs to this releases root.
-    for (const file of previousTrash) {
-      if (!/^(cache|package|release-output)-trash-.*\.json$/.test(file)) continue;
+    let recovered = 0;
+    const recoveryFiles = previousTrash.filter(file => TRASH_JOURNAL.test(file));
+    const afterRecoveryCursor = (file: string) => recoveryCursor !== undefined && file > recoveryCursor;
+    const recoveryWindow = recoveryCursor
+      ? [...recoveryFiles.filter(afterRecoveryCursor), ...recoveryFiles.filter(file => !afterRecoveryCursor(file))]
+      : recoveryFiles;
+    for (const file of recoveryWindow) {
+      if (recovered >= maxCandidates || now() >= deadline) break;
       const journal = path.join(path.dirname(reportFile), file);
+      recovered++;
+      report.recoveryCursor = file;
       try {
         const row = JSON.parse(fs.readFileSync(journal, "utf8"));
+        const gated = isGatedTrashRow(row);
         const packageTrash = file.startsWith("package-");
         const outputTrash = file.startsWith("release-output-");
+        const releaseTrash = file.startsWith("release-trash-");
         let outputCandidate: Candidate | undefined;
         let generatedOutput = false;
         if (packageTrash) {
           if (record.checkout || path.dirname(row.directory) !== root || !/^npm-\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/.test(path.basename(row.directory))) continue;
+        } else if (releaseTrash) {
+          if (!record.checkout || !gated || path.dirname(row.directory) !== root || !/^[a-f0-9]{12}$/.test(path.basename(row.directory))) continue;
         } else if (outputTrash) {
           outputCandidate = candidates.find(candidate => under(row.directory, candidate.dir) && row.directory !== candidate.dir);
           if (!record.checkout || !outputCandidate || mounts(outputCandidate.dir).length || identity(outputCandidate.dir) !== outputCandidate.identity) continue;
@@ -315,26 +465,44 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
           const candidate = candidates.find(candidate => row.directory === path.join(candidate.dir, ".next/cache/webpack"));
           if (!candidate || mounts(candidate.dir).length || identity(candidate.dir) !== candidate.identity) continue;
         }
-        const held = async (trash: string) => {
-          const processes = await scan();
-          if (heldByProcess(trash, processes) || heldByProcess(row.directory, processes)) return true;
-          if (outputCandidate) {
-            const reason = protect(outputCandidate, read(), processes, true);
-            if (reason) report.kept.push({ dir: outputCandidate.dir, reason, bytes: 0 });
-            return !!reason;
-          }
-          if (!packageTrash) return (read().inputs.inFlight ?? []).some(dir => under(row.directory, dir));
-          const reason = protect({ dir: row.directory, sha: row.context?.sha ?? "", age: 0, locked: false, identity: row.identity }, read(), processes, true);
-          if (reason) report.kept.push({ dir: row.directory, reason, bytes: 0 });
-          return !!reason;
-        };
+        const wholeRelease = packageTrash || releaseTrash;
         if (mounts(row.trash).length) { report.kept.push({ dir: row.directory, reason: "mount-boundary", bytes: 0 }); continue; }
-        const bytes = fs.existsSync(row.trash) ? await bytesOf(row.trash) : 0;
-        if (await finishTreeTrash(journal, held, ports.removeTree,
-          trash => (!outputCandidate || disposableGeneratedTree(trash, generatedOutput))
-            && (outputTrash || !inspectTree(trash, { git: true, mounts: mounts(trash) }).hold))) {
-          if (packageTrash) report.removed.push({ dir: row.directory, sha: row.context?.sha ?? "", bytes });
+        // A journal from before gates existed: its trash moves behind a gate
+        // too, after the checks its own replay made; held, it returns there.
+        const quarantine = gated ? row : adoptLegacyTrash(journal, row,
+          trash => !!row.snapshot && matchesSnapshot(trash, row.snapshot) && !mountPointsUnder(trash).length);
+        if (!quarantine) continue;
+        /** `gate` names the closed gate around the quarantined tree. */
+        const hold = (gate: string, current: Awaited<ReturnType<typeof read>>, processes: ProcessScan): string | null => {
+          if ([gate, row.directory, quarantine.legacyTrash].some(entry => entry && heldByProcess(entry, processes))) return "process";
+          if (outputCandidate) return protect(outputCandidate, current, processes, true);
+          if (!wholeRelease) return (current.inputs.inFlight ?? []).some(dir => under(row.directory, dir)) ? "in-flight" : null;
+          return protect({ dir: row.directory, sha: row.context?.sha ?? "", age: 0, locked: false, identity: row.identity }, current, processes, true)
+            ?? (!quarantine.deleting && newest.has(row.directory) ? "newest" : null)
+            ?? (!quarantine.deleting && recentQuarantine.has(row.directory) ? "recent" : null);
+        };
+        const reportHold = (reason: string) => {
+          if (wholeRelease) report.kept.push({ dir: row.directory, reason, bytes: 0 });
+          else if (outputCandidate && reason !== "process") report.kept.push({ dir: outputCandidate.dir, reason, bytes: 0 });
+        };
+        reopenGate(quarantine);
+        if (mounts(quarantine.trash).length) { report.kept.push({ dir: row.directory, reason: "mount-boundary", bytes: 0 }); continue; }
+        const bytes = fs.existsSync(quarantine.trash) ? await bytesOf(quarantine.trash) : 0;
+        const outcome = await settleGatedTrash(journal, quarantine, { remove: ports.removeTree,
+          first: releaseTrash ? [".next/DELEGATUS_RELEASE_READY"] : undefined,
+          beforeGate: releaseTrash ? trash => releaseContentHold(trash, quarantine.context?.sha ?? "") : undefined,
+          observe: async (trash, gate) => {
+            const { current, processes, unfenced } = await gatedObservation(trash, outputCandidate?.dir ?? row.directory);
+            return hold(gate, current, processes) ?? (unfenced ? "owner-unfenced" : null);
+          },
+          // A checkout release is itself a Git worktree; Git checked its content before the gate.
+          validate: releaseTrash ? undefined : tree => (!outputCandidate || disposableGeneratedTree(tree, generatedOutput))
+            && (outputTrash || !inspectTree(tree, { git: true, mounts: mounts(quarantine.trash) }).hold) });
+        if (!outcome.removed) reportHold(outcome.reason);
+        else {
+          if (wholeRelease) report.removed.push({ dir: row.directory, sha: row.context?.sha ?? "", bytes });
           else if (!outputTrash) report.reclaimedCacheBytes += bytes;
+          if (releaseTrash) await dropWorktreeMetadata(row.directory);
         }
       } catch (error) { if (error instanceof RetentionInspectionError) throw error; report.errors.push(String(error)); }
     }

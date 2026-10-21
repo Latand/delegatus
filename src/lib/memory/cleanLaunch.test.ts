@@ -102,6 +102,7 @@ class FakeAppServer extends EventEmitter {
     if (message.method === "account/read") return answer({ account: { type: "chatgpt", planType: "pro" } });
     if (message.method === "model/list") return answer({ data: [{ id: "gpt-5.6-sol", isDefault: true }] });
     if (message.method === "config/read") return answer({ config: { mcp_servers: { viewer: { command: "agent-log-viewer-mcp" } } } });
+    if (message.method === "mcpServerStatus/list") return answer({ data: [{ name: "viewer", tools: { stage_report: {} } }], nextCursor: null });
     if (message.method === "hooks/list") return answer({ data: [] });
     if (message.method === "thread/start") return answer({ thread: { id: "thread-clean", path: "/sessions/thread-clean.jsonl" } });
     answer({ data: [] });

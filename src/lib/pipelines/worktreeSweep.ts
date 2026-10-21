@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
+import { structuredClaimIdentity, type AgentRegistryEntry } from "@/lib/agent/registry";
 import type { ForgeCacheFile } from "@/lib/forge/cache";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { githubRunner, type GithubRunner } from "@/lib/monitor/githubEvidence";
@@ -61,7 +62,9 @@ import { pipelineLiteralGitEnv } from "./git";
  *   `TMPDIR`/`LLV_STATE_DIR`/`XDG_CONFIG_HOME` inside it (the `/proc` scan the
  *   temp sweep uses).
  * - `live-conversation` — a registry conversation that is hosted, starting, or
- *   holding a queued message runs there.
+ *   holding a deliverable queued message runs there. A settled entry whose
+ *   recorded owners are all proven dead holds nothing; a message parked after
+ *   a failed migration waits for an explicit retry.
  * - `uncommitted` — tracked changes or untracked files; `git worktree remove`
  *   is forced only when resuming a recorded deletion at the same HEAD.
  * - `ignored-files` — ignored source, evidence and unknown output classes.
@@ -221,9 +224,9 @@ export type WorktreeSweepPorts = {
   currentPipelines?: () => readonly SweptPipeline[];
   /** Repository roots registered some other way (operator-created projects). */
   repositories?: readonly string[];
-  /** Working directories of conversations that are live or waiting, as they
-      are now; read again before each removal. */
-  conversationCwds: () => readonly string[];
+  /** Working directories held by live conversations, plus owner proofs
+      deferred by this pass's budget; read again before each removal. */
+  conversationCwds: () => readonly string[] | ConversationCwdStatus;
   scan: () => ProcessScan;
   /** Writes the checkout's resolution to the worktree map; false refuses the removal. */
   recordResolution: (worktree: string) => boolean;
@@ -503,34 +506,145 @@ async function measureDirectory(directory: string, excludedDirectories: readonly
 }
 
 type RegistryShape = {
-  entries?: Record<string, { cwd?: string; status?: string; pendingAction?: string | null; updatedAt?: string; structuredHost?: unknown }>;
-  conversations?: Record<string, { generations?: Array<{ launchProfile?: { cwd?: string | null } | null }> }>;
+  entries?: Record<string, Partial<Pick<AgentRegistryEntry, "key" | "cwd" | "status" | "pendingAction" | "updatedAt"
+    | "host" | "structuredHost" | "structuredTerminationSurvivors" | "claimOwner">>>;
+  conversations?: Record<string, { engine?: string; turn?: { state: string };
+    migration?: { phase: string } | null;
+    generations?: Array<{ id?: string; launchProfile?: { cwd?: string | null } | null }> }>;
   heldDeliveries?: Record<string, { conversationId?: string; state?: string }>;
 };
 
-/** The working directories of registry conversations that are live or
-    waiting: hosted (`live`, `idle`, `handoff`), starting or resuming within
-    the last day, or holding a message that is still queued for delivery. A
-    `starting` row months old is a spawn that never came, and holds nothing. */
-export function liveOrWaitingConversationCwds(file: RegistryShape, now = Date.now()): string[] {
-  const cwds = new Set<string>();
-  for (const entry of Object.values(file.entries ?? {})) {
+export type ConversationCwdStatus = { held: string[]; deferred: string[] };
+
+const isConversationCwdStatus = (value: readonly string[] | ConversationCwdStatus): value is ConversationCwdStatus =>
+  !Array.isArray(value);
+
+/** Kernel probes per guard read, on the leased sweep worker. Pages split the
+    distinct unproven owner identities, so a page probes at most this many even
+    when one identity is shared by many entries; each identity is probed once
+    per read and every entry that names it reuses the verdict. The selected page
+    comes from the sweep clock, so a worker restart cannot reset progress. */
+export const CONVERSATION_PROCESS_PROBE_LIMIT = 4096;
+
+const OWNER_PROOF_CACHE_LIMIT = 65_536;
+function ownerProofCachePath(): string { return statePath("worktree-sweep-owner-proofs.json"); }
+function identityProofKey(identity: Readonly<ProcessIdentity>): string {
+  return createHash("sha256").update(JSON.stringify(identity)).digest("hex");
+}
+
+/** A captured host tree can outlive its processes while leaving `idle` in the
+    registry. Drop that hold only with dead owners and a settled turn. Unknown
+    ownership, setup and runnable deliveries continue protecting their cwd. */
+export function conversationCwdStatus(
+  file: RegistryShape,
+  now = Date.now(),
+  provenDead: (identity: Readonly<ProcessIdentity>) => boolean = processIdentityProvenDead,
+): ConversationCwdStatus {
+  const held = new Set<string>();
+  const deferred = new Set<string>();
+  const settled = new Set<string>();
+  for (const conversation of Object.values(file.conversations ?? {})) {
+    const generation = conversation.generations?.at(-1);
+    // A migration can still launch into this cwd before a host row appears.
+    if (conversation.migration && !["committed", "rolled-back", "failed-recoverable"].includes(conversation.migration.phase)) {
+      if (generation?.launchProfile?.cwd) held.add(generation.launchProfile.cwd);
+      continue;
+    }
+    if (generation?.id && conversation.engine && (conversation.turn?.state === "terminal" || conversation.turn?.state === "idle"))
+      settled.add(`${conversation.engine}:${generation.id}`);
+  }
+  const entries = Object.entries(file.entries ?? {}).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0);
+  const ownersFor = (entry: NonNullable<(typeof entries)[number][1]>) => {
+    const owners = [entry.structuredHost?.process, entry.host?.agent, entry.host?.panePid]
+      .filter((identity): identity is ProcessIdentity => !!identity);
+    const survivors = entry.structuredTerminationSurvivors ?? [];
+    const claimant = entry.claimOwner ? structuredClaimIdentity(entry.claimOwner) : null;
+    if (claimant) owners.push(claimant);
+    return { owners, survivors, unreadableClaim: !!entry.claimOwner && !claimant };
+  };
+  const cacheFile = ownerProofCachePath();
+  let cachedProofs: string[] = [];
+  try {
+    const parsed = JSON.parse(fs.readFileSync(cacheFile, "utf8"));
+    if (Array.isArray(parsed)) cachedProofs = parsed.filter((item): item is string => typeof item === "string");
+  } catch { /* Missing or malformed cache is conservative: owners are reprobed. */ }
+  const loadedProofs = [...cachedProofs];
+  const cachedProofSet = new Set(cachedProofs);
+  const currentIdentities = new Set<string>();
+  for (const row of entries) {
+    const entry = row[1];
     if (!entry?.cwd) continue;
+    const { owners, survivors } = ownersFor(entry);
+    const identities = [...owners, ...survivors];
+    for (const identity of identities) currentIdentities.add(identityProofKey(identity));
+  }
+  const ownerPageByIdentity = new Map<string, number>();
+  const identitiesToProbe = [...currentIdentities].filter(key => !cachedProofSet.has(key)).sort();
+  identitiesToProbe.forEach((key, index) => ownerPageByIdentity.set(key, Math.floor(index / CONVERSATION_PROCESS_PROBE_LIMIT)));
+  const pageCount = Math.max(1, Math.ceil(identitiesToProbe.length / CONVERSATION_PROCESS_PROBE_LIMIT));
+  const selectedPage = Math.floor(now / WORKTREE_SWEEP_INTERVAL_MS) % pageCount;
+  // Live and unverified verdicts are reused too: a live writer's claimOwner can
+  // be shared by many entries.
+  const verdicts = new Map<string, boolean>();
+  const dead = (identity: Readonly<ProcessIdentity>) => {
+    const proof = identityProofKey(identity);
+    let verdict = verdicts.get(proof);
+    if (verdict === undefined) verdicts.set(proof, verdict = provenDead(identity));
+    return verdict;
+  };
+  for (const [key, entry] of entries) {
+    if (!entry?.cwd) continue;
+    const { owners, survivors, unreadableClaim } = ownersFor(entry);
+    if (unreadableClaim) {
+      held.add(entry.cwd);
+      continue;
+    }
     const hosted = entry.status === "live" || entry.status === "idle" || entry.status === "handoff";
     const updated = entry.updatedAt ? Date.parse(entry.updatedAt) : Number.NaN;
     const pending = (entry.status === "starting" || Boolean(entry.pendingAction)) && entry.status !== "dead"
       && Number.isFinite(updated) && now - updated < PENDING_CONVERSATION_MS;
-    if (hosted || pending) cwds.add(entry.cwd);
+    const ended = (owners.length > 0 || survivors.length > 0) && settled.has(key) && !entry.pendingAction
+      && entry.status !== "starting" && !entry.structuredHost?.activeTurnRef;
+    if ((hosted || pending) && !ended) { held.add(entry.cwd); continue; }
+    const identities = [...owners, ...survivors];
+    const unknownOwners = identities.filter(identity => !cachedProofSet.has(identityProofKey(identity)));
+    const selectedOwners = unknownOwners.filter(identity => ownerPageByIdentity.get(identityProofKey(identity)) === selectedPage);
+    if (unknownOwners.some(identity => ownerPageByIdentity.get(identityProofKey(identity)) !== selectedPage)) deferred.add(entry.cwd);
+    if (selectedOwners.some(identity => !dead(identity))) {
+      held.add(entry.cwd);
+      continue;
+    }
+    for (const identity of selectedOwners) {
+      const proof = identityProofKey(identity);
+      cachedProofs.push(proof);
+      cachedProofSet.add(proof);
+    }
   }
+  const liveProofs = [...new Set(cachedProofs.filter(key => currentIdentities.has(key)))].slice(-OWNER_PROOF_CACHE_LIMIT);
+  if (liveProofs.length !== loadedProofs.length || liveProofs.some((key, index) => key !== loadedProofs[index]))
+    writeJsonDurably(cacheFile, liveProofs);
   for (const delivery of Object.values(file.heldDeliveries ?? {})) {
     /* `delivery-uncertain` was written and never confirmed; the reaper counts
        it as undelivered too. */
     if (delivery?.state !== "held" && delivery?.state !== "assigned" && delivery?.state !== "delivery-uncertain") continue;
-    const generations = file.conversations?.[delivery.conversationId ?? ""]?.generations ?? [];
+    const conversation = file.conversations?.[delivery.conversationId ?? ""];
+    // The migration coordinator requires an explicit retry here. Assigned and
+    // uncertain attempts still drain/reconcile while the switch is parked.
+    if (delivery.state === "held" && conversation?.migration?.phase === "failed-recoverable") continue;
+    const generations = conversation?.generations ?? [];
     const cwd = generations.at(-1)?.launchProfile?.cwd;
-    if (cwd) cwds.add(cwd);
+    if (cwd) held.add(cwd);
   }
-  return [...cwds];
+  return { held: [...held], deferred: [...deferred].filter(cwd => !held.has(cwd)) };
+}
+
+export function liveOrWaitingConversationCwds(
+  file: RegistryShape,
+  now = Date.now(),
+  provenDead: (identity: Readonly<ProcessIdentity>) => boolean = processIdentityProvenDead,
+): string[] {
+  const status = conversationCwdStatus(file, now, provenDead);
+  return [...new Set([...status.held, ...status.deferred])];
 }
 
 function pipelinePrCandidates(pipelines: readonly SweptPipeline[]): { heads: Set<string>; numbers: Set<number> } {
@@ -860,7 +974,9 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
   if (!dryRun) recoverCheckoutHeadLocks(accessible, report.errors);
   const keep = (kept: WorktreeKept) => {
     /* Activity restarts the retention clock. */
-    if (BUSY_REASONS.has(kept.reason)) delete kept.firstSettledAt;
+    if (BUSY_REASONS.has(kept.reason)
+      && !(kept.reason === "live-conversation" && kept.detail === "owner proof deferred by per-pass budget"))
+      delete kept.firstSettledAt;
     report.kept.push(kept);
     report.keptCounts[kept.reason] = (report.keptCounts[kept.reason] ?? 0) + 1;
   };
@@ -877,10 +993,14 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
       pipeline needs its own checkout and the repository it runs git in. */
   const readGuards = () => {
     const scan = ports.scan();
+    const conversationStatus = ports.conversationCwds();
+    const conversationCwds = isConversationCwdStatus(conversationStatus) ? conversationStatus.held : conversationStatus;
+    const deferredConversationCwds = isConversationCwdStatus(conversationStatus) ? conversationStatus.deferred : [];
     return {
       open: paths(ownershipPipelines().filter(pipelineHoldsCheckout)
         .flatMap(pipeline => [pipeline.worktreeDir, pipeline.repoDir].filter(Boolean))),
-      conversations: paths(ports.conversationCwds()),
+      conversations: paths(conversationCwds),
+      deferredConversations: paths(deferredConversationCwds),
       scan: { ...scan, processes: scan.processes.map(process => ({ ...process, paths: paths(process.paths) })) },
     };
   };
@@ -894,6 +1014,8 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
       if (process.paths.some(holds)) return { path: directory, reason: "in-use", detail: `pid ${process.pid}` };
     }
     if (guards.conversations.some(holds)) return { path: directory, reason: "live-conversation" };
+    if (guards.deferredConversations.some(holds))
+      return { path: directory, reason: "live-conversation", detail: "owner proof deferred by per-pass budget" };
     return null;
   };
   /* The first read skips what is plainly busy; each removal reads them again. */
@@ -1578,7 +1700,7 @@ export async function productionWorktreeSweepPorts(
     pipelines,
     currentPipelines: () => loadPipelinesForList(),
     repositories,
-    conversationCwds: () => liveOrWaitingConversationCwds(agentRegistry().readOnlySnapshot()),
+    conversationCwds: () => conversationCwdStatus(agentRegistry().readOnlySnapshot()),
     scan: () => scanProcesses(),
     recordResolution: (worktree) => recordWorktreeResolution(worktree, access.accessiblePath(worktree)) !== null,
     tempRoots: [...new Set(temp.map(root => root.path))],

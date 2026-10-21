@@ -130,6 +130,21 @@ test("the Codex socket probe fails on a build that does not carry the transport,
   expect(report.evidence).toBeUndefined();
 }, 30_000);
 
+test("runtime probes preserve their signal namespace boundary without inheriting state ownership", () => {
+  const previous = process.env.LLV_SIGNAL_SANDBOX;
+  const boundary = JSON.stringify({ pidNamespace: "pid:[fixture]", userNamespace: "user:[fixture]" });
+  process.env.LLV_SIGNAL_SANDBOX = boundary;
+  try {
+    const env = sandboxEnvironment(path.join(os.tmpdir(), "viewer-probe-fixture"));
+    expect(env.LLV_SIGNAL_SANDBOX).toBe(boundary);
+    expect(env.LLV_STATE_OWNER).toBeUndefined();
+    expect(env.LLV_OWNED_TEST_RUN_CGROUP).toBeUndefined();
+  } finally {
+    if (previous === undefined) delete process.env.LLV_SIGNAL_SANDBOX;
+    else process.env.LLV_SIGNAL_SANDBOX = previous;
+  }
+});
+
 test.skipIf(process.platform !== "linux").each(["normal", "slow stop", "failed stop", "direct CLI"])("verification with %s reaps its served process and detached worker before reporting success", async mode => {
   const root = fixtureRoot([
     "package.json", "node_modules/next/dist/server/node-environment.js",

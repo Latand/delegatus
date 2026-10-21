@@ -60,8 +60,14 @@ verified_exec() {
 # The command runs through this script once more inside its new scope, which
 # checks the kernel's controls before it execs the command in place.
 if [[ ${1:-} == --in-cpu-scope ]]; then shift; verified_exec "$@"; fi
+# Inside an agent signal domain the gate service enters the caller's
+# namespaces before the command runs (src/lib/runtime/sandboxGateEntry.ts), so
+# the command keeps the gate's limits and the agent's signal boundary. Only
+# without a user manager does it run in a leaf of the agent's own scope, whose
+# memory cap then applies; that fallback is announced, never silent.
 run() {
-  if [[ -n ${LLV_SIGNAL_SANDBOX:-} ]]; then
+  if [[ -n ${LLV_SIGNAL_SANDBOX:-} ]] && ! user_manager; then
+    echo "gate-slot: no reachable systemd user manager, so no gate service with MemoryMax=${LLV_GATE_MEM:-8G}; running in a bounded leaf of this agent's own scope instead, under the agent's memory cap" >&2
     exec "${LLV_GATE_BUN:-bun}" "$(dirname "${BASH_SOURCE[0]}")/owned-runner.ts" --namespace "$@"
   fi
   if cpu_applies; then

@@ -12,7 +12,7 @@ import { readHistory } from "@/lib/limitsHistoryStore";
 import { ActivityStore, activityStorePath, conversationDigest } from "./store";
 import { countsFromRow, DAY, HOUR, usageMeta } from "./tokenStore";
 import { tokenTotal } from "./tokenUsage";
-import { limitWeight, nearestRate, refreshLimitRates, utcDay, type LimitRate, type SpendObservations } from "./limitRates";
+import { invalidateUnattributedCodexRates, LIMIT_RATE_SCHEMA, limitWeight, nearestRate, refreshLimitRates, utcDay, type LimitRate, type SpendObservations } from "./limitRates";
 import { activityOperation } from "./operation";
 import type { TaskSpendAccount, TaskSpendResponse, SpendEngine } from "./taskLimitSpendTypes";
 
@@ -153,8 +153,9 @@ export function refreshTaskLimitSpend(store: ActivityStore, overrides: Partial<S
     if (meta.seed === "done" && !db.query("SELECT 1 FROM limit_spend_dirty LIMIT 1").get()
       && (!source || (source.revision() === meta.task_revision && !meta.task_key))
       && (!pipelineSource || (meta.pipeline_seed === "done" && pipelineSource.revision() === meta.pipeline_revision && !meta.pipeline_key))
-      && meta.aggregate_schema >= 2 && meta.rate_schema >= 3 && !db.query("SELECT 1 FROM limit_spend_rate_changes LIMIT 1").get() && meta.rates_hour === hour) return { tasks: 0, rows: 0 };
+      && meta.aggregate_schema >= 2 && meta.rate_schema >= LIMIT_RATE_SCHEMA && !db.query("SELECT 1 FROM limit_spend_rate_changes LIMIT 1").get() && meta.rates_hour === hour) return { tasks: 0, rows: 0 };
     const write = async (work: () => void) => { await waitForStateLock("activity.limit-spend", () => store.transaction(work)); await yieldLoop(); };
+    if (meta.rate_schema < LIMIT_RATE_SCHEMA && !await invalidateUnattributedCodexRates(db, write)) return { tasks: 0, rows: 0 };
     if (meta.aggregate_schema < 2 && meta.aggregate_cursor !== "~") {
       const rows=db.query<{task:string},[string]>("SELECT DISTINCT task FROM task_limit_spend WHERE task>? ORDER BY task LIMIT 200").all(meta.aggregate_cursor);
       await write(()=>{
@@ -257,19 +258,27 @@ export function refreshTaskLimitSpend(store: ActivityStore, overrides: Partial<S
     }
     const observations = deps.observations(), coverage = usageMeta(db);
     const coverageComplete = coverage?.complete === 1 && coverage.pending_bytes === 0;
-    if (meta.rates_hour !== hour || meta.rate_schema < 3) {
+    if (meta.rates_hour !== hour || meta.rate_schema < LIMIT_RATE_SCHEMA) {
       const coverage = usageMeta(db);
       await refreshLimitRates(db,now,{ history: deps.history,observations,
         coverageComplete: coverage?.complete === 1 && coverage.pending_bytes === 0, revalidateFrozen: meta.rate_schema < 3 },write);
-      await write(() => { db.query("UPDATE limit_spend_meta SET rates_hour=?,rate_schema=3 WHERE singleton=1").run(hour); });
+      await write(() => { db.query("UPDATE limit_spend_meta SET rates_hour=?,rate_schema=? WHERE singleton=1").run(hour, LIMIT_RATE_SCHEMA); });
+      meta = metaRead(db);
     }
     const rateChanges = db.query<{ account: string; day: string; task_cursor: string }, []>("SELECT * FROM limit_spend_rate_changes ORDER BY account,day LIMIT 20").all();
     for (const change of rateChanges) {
       const dayStart = Math.floor(Date.parse(`${change.day}T00:00:00Z`) / HOUR), dayEnd = dayStart + DAY/HOUR;
-      const tasks = db.query<{ task: string }, [string,number,number,string]>(`SELECT task FROM task_limit_spend INDEXED BY task_limit_spend_account
-        WHERE account=? AND first_hour < ? AND last_hour >= ? AND task>? ORDER BY task LIMIT 100`).all(change.account,dayEnd,dayStart,change.task_cursor);
+      const tasks = change.day === "*"
+        ? db.query<{ task: string }, [string,string]>(`SELECT task FROM task_limit_spend INDEXED BY task_limit_spend_account
+          WHERE account=? AND task>? ORDER BY task LIMIT 100`).all(change.account, change.task_cursor)
+        : db.query<{ task: string }, [string,number,number,string]>(`SELECT task FROM task_limit_spend INDEXED BY task_limit_spend_account
+          WHERE account=? AND first_hour < ? AND last_hour >= ? AND task>? ORDER BY task LIMIT 100`).all(change.account,dayEnd,dayStart,change.task_cursor);
       await write(() => {
-        for (const row of tasks) dirty(db,`t:${row.task}`,now);
+        for (const row of tasks) {
+          dirty(db,`t:${row.task}`,now);
+          if (change.day === "*") db.query(`UPDATE task_limit_spend SET rated_weight=0,weekly_pp=NULL,window_pp=NULL,session_pp=NULL
+            WHERE task=? AND account=?`).run(row.task,change.account);
+        }
         if (tasks.length < 100) db.query("DELETE FROM limit_spend_rate_changes WHERE account=? AND day=? AND task_cursor=?").run(change.account,change.day,change.task_cursor);
         else db.query("UPDATE limit_spend_rate_changes SET task_cursor=? WHERE account=? AND day=? AND task_cursor=?")
           .run(tasks.at(-1)!.task,change.account,change.day,change.task_cursor);
@@ -294,7 +303,7 @@ export function refreshTaskLimitSpend(store: ActivityStore, overrides: Partial<S
       if (visited >= 50000 || ownerBudget <= 0) break;
       const id = item.key.slice(2), task = tasks.get(id);
       if (!task) { await write(() => deleteTask(db,id)); continue; }
-      const signature = JSON.stringify([hour,coverageComplete,[...observations].sort(([a],[b])=>a.localeCompare(b)).map(([key,o])=>[key,o.weekly?.resetsAt,o.session?.resetsAt])]);
+      const signature = JSON.stringify([hour,meta.rate_schema,coverageComplete,[...observations].sort(([a],[b])=>a.localeCompare(b)).map(([key,o])=>[key,o.weekly?.resetsAt,o.session?.resetsAt])]);
       const progress = db.query<{ stamp: number; signature: string; owner: string; cursor: string | null; rows: string }, [string]>("SELECT * FROM task_spend_progress WHERE task=?").get(id);
       let owner = "", cursor: SQLQueryBindings[] | null = null, result: SpendRow[] = [];
       if (progress?.stamp === item.at && progress.signature === signature) {

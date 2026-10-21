@@ -3,7 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { performanceSpans } from "@/lib/performanceSpans";
 
-import { systemScheduler, type DeadlineScheduler } from "@/lib/deadline";
+import { deadlineSignal, systemScheduler, type DeadlineScheduler } from "@/lib/deadline";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { endLeasedHelper, leasedHelperInput, spawnLeasedHelper } from "@/lib/helperLease";
 import { scheduleTranscriptIndex, type TranscriptIndexFeed } from "@/lib/search/transcriptFeed";
 
@@ -19,6 +20,9 @@ import {
 const FILE_SCAN_WORKER_TIMEOUT_MS = 5 * 60_000;
 const FILE_SCAN_WORKER_OUTPUT_MAX_BYTES = 32 * 1024 * 1024;
 const FILE_SCAN_WORKER_STDERR_MAX_BYTES = 4 * 1024;
+const FILE_SCAN_BOOTSTRAP_BACKOFF_MS = [250, 1_000] as const;
+
+class FileScannerBootstrapBusyError extends Error {}
 
 type SerializableFileScanOptions = Omit<FileScanOptions, "onResourceSnapshot" | "signal">;
 
@@ -36,8 +40,8 @@ export interface FileScanWorkerRuntime {
   transcriptIndexScheduler?: (feed: TranscriptIndexFeed) => void;
 }
 
-function abortError(): Error {
-  return new DOMException("file scan cancelled", "AbortError");
+function abortError(reason?: unknown): Error {
+  return reason instanceof Error ? reason : new DOMException("file scan cancelled", "AbortError");
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -105,7 +109,52 @@ export function collectFileScanInWorker(
   onResourceSnapshot?: (snapshot: FileCatalogScan) => void,
   runtime: FileScanWorkerRuntime = {},
 ): Promise<FileCatalogScan> {
-  if (runtime.signal?.aborted) return Promise.reject(abortError());
+  if (runtime.signal?.aborted) return Promise.reject(abortError(runtime.signal.reason));
+  return withViewerOperation("scanner.worker", async () => {
+    const scheduler = runtime.scheduler ?? systemScheduler;
+    // All launches and retry waits belong to one generation and one deadline.
+    const deadline = deadlineSignal(runtime.timeoutMs ?? FILE_SCAN_WORKER_TIMEOUT_MS, {
+      signal: runtime.signal, scheduler, reason: "file scanner worker timed out",
+    });
+    try {
+      for (let attempt = 0; ; attempt++) {
+        if (deadline.signal.aborted) throw abortError(deadline.signal.reason);
+        try {
+          return await collectFileScanAttempt(options, onResourceSnapshot, { ...runtime, signal: deadline.signal });
+        } catch (error) {
+          const delay = FILE_SCAN_BOOTSTRAP_BACKOFF_MS[attempt];
+          if (!(error instanceof FileScannerBootstrapBusyError) || delay === undefined) throw error;
+          await waitForBootstrapRetry(delay, deadline.signal, scheduler);
+        }
+      }
+    } finally {
+      deadline.release();
+    }
+  });
+}
+
+function waitForBootstrapRetry(ms: number, signal: AbortSignal, scheduler: DeadlineScheduler): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) { reject(abortError(signal.reason)); return; }
+    const onAbort = () => {
+      scheduler.clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      reject(abortError(signal.reason));
+    };
+    const timer = scheduler.setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function collectFileScanAttempt(
+  options: SerializableFileScanOptions,
+  onResourceSnapshot: ((snapshot: FileCatalogScan) => void) | undefined,
+  runtime: FileScanWorkerRuntime,
+): Promise<FileCatalogScan> {
+  if (runtime.signal?.aborted) return Promise.reject(abortError(runtime.signal.reason));
   const launch = runtime.launch ?? fileScanWorkerLaunch(runtime.cwd);
   /* Callers choose the in-process scan when no artifact is present; reaching
      here without one would spawn a path this process does not have. */
@@ -130,7 +179,6 @@ export function collectFileScanInWorker(
   }, undefined, { input: true, stdout: "pipe", stderr: "pipe", followRelease: false });
   const input = leasedHelperInput(child);
   return new Promise<FileCatalogScan>((resolve, reject) => {
-    const scheduler = runtime.scheduler ?? systemScheduler;
     let settled = false;
     let listening = false;
     let stdout = "";
@@ -139,14 +187,11 @@ export function collectFileScanInWorker(
     let completed: FileCatalogScan | null = null;
     let completedConversationCatalog: FileCatalogScan["conversationCatalog"];
     let terminationError: Error | null = null;
-    let timer: unknown;
+    let receivedFrame = false;
+    let inputError: Error | undefined;
     const finish = (error?: Error, snapshot?: FileCatalogScan) => {
       if (settled) return;
       settled = true;
-      if (timer !== undefined) {
-        scheduler.clearTimeout(timer);
-        timer = undefined;
-      }
       if (listening) {
         runtime.signal?.removeEventListener("abort", onAbort);
         listening = false;
@@ -163,7 +208,7 @@ export function collectFileScanInWorker(
     const fail = (message: string) => {
       terminate(new Error(message));
     };
-    const onAbort = () => terminate(abortError());
+    const onAbort = () => terminate(abortError(runtime.signal?.reason));
     const consume = () => performanceSpans.sync("scanner.ipc-frame", () => {
       while (true) {
         const newline = stdout.indexOf("\n");
@@ -183,6 +228,7 @@ export function collectFileScanInWorker(
           fail("file scanner worker emitted an invalid message");
           return;
         }
+        receivedFrame = true;
         if (message.type === "resource") {
           performanceSpans.sync("scanner.publication", () => onResourceSnapshot?.(message.snapshot));
         } else {
@@ -196,10 +242,6 @@ export function collectFileScanInWorker(
         }
       }
     });
-    timer = scheduler.setTimeout(() => {
-      timer = undefined;
-      fail("file scanner worker timed out");
-    }, runtime.timeoutMs ?? FILE_SCAN_WORKER_TIMEOUT_MS);
     child.once("error", (error) => finish(error));
     child.stdout!.setEncoding("utf8");
     child.stdout!.on("data", (chunk: string) => {
@@ -226,8 +268,13 @@ export function collectFileScanInWorker(
       }
       consume();
       if (code !== 0 || !completed) {
-        const detail = stderr.trim();
-        finish(new Error(`file scanner worker exited before completion (${signal ?? code ?? "unknown"})${detail ? `: ${detail}` : ""}`));
+        const detail = stderr.trim() || inputError?.message || "";
+        // Retry only a bootstrap refusal before any resource was published.
+        // A later failure may follow scanner effects and remains decisive.
+        const BootstrapError = code === 1 && !signal && !receivedFrame
+          && /state database initialization is busy|state admission is busy at state\.schema(?:\s|$)/.test(detail)
+          ? FileScannerBootstrapBusyError : Error;
+        finish(new BootstrapError(`file scanner worker exited before completion (${signal ?? code ?? "unknown"})${detail ? `: ${detail}` : ""}`));
         return;
       }
       if (completedConversationCatalog) {
@@ -245,7 +292,10 @@ export function collectFileScanInWorker(
       finish(undefined, completed);
     });
     input.once("error", (error) => {
-      if (!terminationError) finish(error);
+      // A bootstrap refusal can close stdin before the request is written.
+      // Wait for close to retain its stderr and release the owned child before
+      // deciding whether that refusal is retryable.
+      inputError = error;
     });
     if (runtime.signal) {
       runtime.signal.addEventListener("abort", onAbort, { once: true });
