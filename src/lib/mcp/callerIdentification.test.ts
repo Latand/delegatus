@@ -3,13 +3,22 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
-import { AgentRegistry, normalizeRegistry } from "@/lib/agent/registry";
-import { SqliteAgentRegistryStore } from "@/lib/agent/sqliteRegistryStore";
 import { OWNERSHIP_PRELOAD, ownershipSandbox } from "@/lib/state/fixtures/ownershipSandbox";
 import { ownFixtureChild } from "./ownedFixtureChildren";
-import { SqliteMcpReceiptStore } from "./server";
 
 setDefaultTimeout(30_000);
+
+function providerEnvironment(home: string): Record<string, string> {
+  const roots = { CODEX_HOME: "codex", LLV_CODEX_HOME: "codex", CLAUDE_CONFIG_DIR: "claude", LLV_CLAUDE_HOME: "claude",
+    COPILOT_HOME: "copilot", OPENCLAW_STATE_DIR: "openclaw", GH_CONFIG_DIR: "gh" };
+  const env = Object.fromEntries(Object.entries(roots).map(([key, directory]) => [key, path.join(home, "provider-fixtures", directory)]));
+  for (const directory of new Set(Object.values(env))) fs.mkdirSync(directory, { recursive: true });
+  return env;
+}
+Object.assign(process.env, providerEnvironment(process.env.HOME!));
+const { AgentRegistry, normalizeRegistry } = await import("@/lib/agent/registry");
+const { SqliteAgentRegistryStore } = await import("@/lib/agent/sqliteRegistryStore");
+const { SqliteMcpReceiptStore } = await import("./server");
 
 const capability = "a".repeat(43);
 const conversationId = "conversation_legacy";
@@ -35,7 +44,9 @@ function fixture(receiptsReady = true) {
   process.env.LLV_STATE_OWNER = "viewer";
   try { if (receiptsReady) new SqliteMcpReceiptStore(path.join(directory, "mcp-receipts.sqlite")).close(); }
   finally { if (receiptOwner === undefined) delete process.env.LLV_STATE_OWNER; else process.env.LLV_STATE_OWNER = receiptOwner; }
-  return { sandbox, filename, directory, migrate(explicitSqlite = false) {
+  return { sandbox, filename, directory,
+    environment: () => ({ ...sandbox.environment(), ...providerEnvironment(sandbox.home) }),
+    migrate(explicitSqlite = false) {
     const owner = process.env.LLV_STATE_OWNER;
     const backend = process.env.LLV_AGENT_REGISTRY_SQLITE;
     const mode = process.env.NODE_ENV;
@@ -58,7 +69,7 @@ async function worker(f: ReturnType<typeof fixture>, request: Record<string, unk
   deadlineMs?: number;
 } = {}) {
   const child = ownFixtureChild(Bun.spawn([process.execPath, "--preload", OWNERSHIP_PRELOAD, "src/lib/mcpTask.worker.ts"], {
-    env: { ...f.sandbox.environment(), LLV_STATE_OWNER: "mcp", LLV_TOKEN: "",
+    env: { ...f.environment(), LLV_STATE_OWNER: "mcp", LLV_TOKEN: "",
       LLV_STATE_DIR: path.join(f.sandbox.home, ".config", "delegatus", "state") },
     stdin: "pipe", stdout: "pipe", stderr: "pipe",
   }));
@@ -195,7 +206,7 @@ for (const ingress of ["identity", "http"] as const) test(`${ingress} caller ide
 async function prepareViewer(f: ReturnType<typeof fixture>) {
     const child = ownFixtureChild(Bun.spawn([process.execPath, "--preload", OWNERSHIP_PRELOAD, "--eval",
       'const { initializeHotStateStoresAtStartup } = await import("./src/lib/viewerInstrumentation.ts"); await initializeHotStateStoresAtStartup();'], {
-      env: { ...f.sandbox.environment(), LLV_STATE_OWNER: "viewer", LLV_STATE_DIR: f.directory }, stdout: "pipe", stderr: "pipe",
+      env: { ...f.environment(), LLV_STATE_OWNER: "viewer", LLV_STATE_DIR: f.directory }, stdout: "pipe", stderr: "pipe",
     }));
     const output = new Response(child.stdout).text(), errors = new Response(child.stderr).text();
     const timer = setTimeout(() => child.kill(), 20_000);
@@ -312,7 +323,7 @@ test("an HTTP MCP client initializes and discovers tools on migrated state acros
   const workerPath = path.join(f.sandbox.temporaryRoot(), "fixture-worker.ts");
   fs.writeFileSync(workerPath, `await import(${JSON.stringify(pathToFileURL(OWNERSHIP_PRELOAD).href)});\nawait import(${JSON.stringify(pathToFileURL(path.resolve("src/lib/mcpTask.worker.ts")).href)});\n`);
   const executor = new McpTaskExecutor({ launch: { executable: process.execPath, workerPath },
-    env: { ...f.sandbox.environment(), LLV_STATE_DIR: f.directory, LLV_TOKEN: "" } });
+    env: { ...f.environment(), LLV_STATE_DIR: f.directory, LLV_TOKEN: "" } });
   const key = Symbol.for("llv.mcp.taskExecutor");
   const holder = globalThis as typeof globalThis & { [key]?: InstanceType<typeof McpTaskExecutor> };
   const previous = holder[key]; holder[key] = executor;
