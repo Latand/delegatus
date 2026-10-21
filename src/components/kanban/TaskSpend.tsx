@@ -31,12 +31,15 @@ function providerKind(provider: TaskSpendProvider): Kind {
   return provider.weeklyPp < 1 ? "tiny" : "num";
 }
 
-/** Filled cells of the scale: none below 1 %, one to 4 %, two to 14 %, three to 29 %, four from 30 %. */
+/** Filled cells of the scale: none below 1 %, one to 4 %, two to 14 %, three to 29 %, four from 30 %. Pass the figure the popover prints. */
 export function spendCells(pp: number): number {
   if (pp < 1) return 0;
   const shown = Math.round(pp);
   return shown <= 4 ? 1 : shown <= 14 ? 2 : shown <= 29 ? 3 : 4;
 }
+
+/** A lower bound fills by its floored figure, as it prints, so the scale never claims more than «≥». */
+const providerCells = (provider: TaskSpendProvider) => spendCells(provider.bound === "floor" ? Math.floor(provider.weeklyPp) : provider.weeklyPp);
 
 const decimal = (value: number, locale: Locale) => new Intl.NumberFormat(intlLocale(locale), { maximumFractionDigits: 1 }).format(value);
 
@@ -105,7 +108,7 @@ function Marks({ summary }: { summary: TaskSpendSummary }) {
             {kind === "norate" ? <span className="spend-n">{t("taskSpend.unknown")}</span> : (
               <>
                 {kind === "floor" ? <span className="scale-floor" aria-hidden>≥</span> : null}
-                <Scale cells={spendCells(provider.weeklyPp)} />
+                <Scale cells={providerCells(provider)} />
               </>
             )}
           </span>
@@ -121,7 +124,7 @@ function Meter({ provider, account }: { provider: TaskSpendProvider; account: Ta
   if (account.weeklyPp === null) {
     return (
       <span className="meter" data-spend-account={account.key}>
-        <span className="meter-label">{name}</span>
+        <span className="meter-label" title={name}>{name}</span>
         <span className="meter-value">{t("taskSpend.accountNoRate", { tokens: compact(account.tokens, locale) })}</span>
       </span>
     );
@@ -132,7 +135,7 @@ function Meter({ provider, account }: { provider: TaskSpendProvider; account: Ta
   const part = used !== null && account.week?.taskPp ? Math.min(used, Math.max(0, account.week.taskPp)) : 0;
   return (
     <span className="meter" data-spend-account={account.key}>
-      <span className="meter-label">{name}</span>
+      <span className="meter-label" title={name}>{name}</span>
       <span className="meter-value">
         {t("taskSpend.task")} <b className="meter-task"><span className="meter-sign">{figure.sign}</span><span className="meter-num">{figure.num}</span></b>
         {used !== null ? <> · {t("taskSpend.week", { value: `${Math.round(used)}%` })}</> : null}

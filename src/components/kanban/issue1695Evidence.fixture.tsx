@@ -3256,9 +3256,10 @@ function spendProvider(engine: "claude" | "codex", accounts: TaskSpendAccount[],
   return { engine, bound, floor, accounts, weeklyPp: accounts.reduce((sum, a) => sum + (a.weeklyPp ?? 0), 0), tokens: accounts.reduce((sum, a) => sum + a.tokens, 0) };
 }
 const SPEND_TASKS: Record<string, TaskSpendSummary> = {
-  /* Two providers, the measured lane of the research rounded; Claude A is in its current 5-hour window. */
+  /* Two providers, the measured lane of the research rounded; Claude's first
+     account, named as an operator names one, is in its current 5-hour window. */
   "t-search": { providers: [
-    spendProvider("claude", [spendAccount("claude:a", "A", "max", 2.1, 132_000_000, 53, 2.1, 12), spendAccount("claude:b", "B", "max", 1, 61_000_000, 31, 1)]),
+    spendProvider("claude", [spendAccount("claude:a", "Research workstation", "max", 2.1, 132_000_000, 53, 2.1, 12), spendAccount("claude:b", "B", "max", 1, 61_000_000, 31, 1)]),
     spendProvider("codex", [spendAccount("codex:a", "A", "pro", 1.2, 24_000_000, 47, 1.2), spendAccount("codex:b", "B", "pro", 0.4, 9_000_000, 22, 0.4)]),
   ] },
   /* Several accounts of one provider, and a tiny Claude share. */
@@ -3277,9 +3278,10 @@ const SPEND_TASKS: Record<string, TaskSpendSummary> = {
   ] },
   /* Still being counted: the task is known and has no rows yet, so the card draws nothing. */
   "t-merge-a": { providers: [] },
-  /* A large spend; Claude's began before counting did, so it is a lower bound. */
+  /* A large spend; Claude's began before counting did, so it is a lower bound.
+     Its account carries a label at the 80-character cap. */
   "t-interrupt": { providers: [
-    spendProvider("claude", [spendAccount("claude:a", "A", "max", 12.4, 610_000_000, 66, 12.4)], "floor", "before-counting"),
+    spendProvider("claude", [spendAccount("claude:a", "Research workstation in the second office, shared by the whole data team on site", "max", 12.4, 610_000_000, 66, 12.4)], "floor", "before-counting"),
     spendProvider("codex", [spendAccount("codex:a", "A", "pro", 21.3, 402_000_000, 74, 21.3), spendAccount("codex:d", "D", "pro", 12.9, 250_000_000, 40, 12.9)]),
   ] },
 };

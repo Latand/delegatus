@@ -43,15 +43,22 @@ const TASKS: Record<string, TaskSpendSummary> = {
     provider("codex", [account("codex:a", "A", "pro", 1, 21e6, 47)]),
   ] },
   counting: { providers: [] },
+  /* Lower bounds just under a band's edge: the scale fills by the floored figure. */
+  floor46: { providers: [provider("claude", [account("claude:a", "A", "max", 4.6, 200e6, 50)], "floor", "before-counting")] },
+  floor146: { providers: [provider("claude", [account("claude:a", "A", "max", 14.6, 600e6, 60)], "floor", "before-counting")] },
+  long: { providers: [provider("claude", [account("claude:a", "Research workstation in the second office, shared by the whole data team on site", "max", 2, 90e6, 40)])] },
 };
 
 const previousFetch = globalThis.fetch;
 const calls: string[] = [];
 let guest = false;
 let refuse = false;
+/* Set by a test to hold the next answer open until it says so. */
+let hold: Promise<void> | null = null;
 globalThis.fetch = (async (input: RequestInfo | URL) => {
   const url = String(input);
   calls.push(url);
+  if (hold) { const wait = hold; hold = null; await wait; }
   if (refuse) return new Response("{}", { status: 500 });
   if (url.startsWith("/api/task-spend?")) {
     const ids = new URL(url, "http://localhost").searchParams.get("ids")!.split(",");
@@ -64,7 +71,9 @@ globalThis.fetch = (async (input: RequestInfo | URL) => {
 }) as unknown as typeof fetch;
 
 const { TaskSpendMarks, PhoneTaskSpend, spendCells } = await import("./TaskSpend");
-const { resetTaskSpend } = await import("./taskSpendSummaries");
+const { resetTaskSpend, flushTaskSpend, pendingTaskSpendRefresh, setTaskSpendClock } = await import("./taskSpendSummaries");
+/* A clock that never fires: each read runs when a test flushes it. */
+setTaskSpendClock({ set: () => ({}), clear: () => {} });
 const { setLocale } = await import("@/lib/i18n");
 
 const roots: Root[] = [];
@@ -75,27 +84,37 @@ afterEach(() => {
   calls.length = 0;
   guest = false;
   refuse = false;
+  hold = null;
   setLocale("en");
 });
 afterAll(() => {
   globalThis.fetch = previousFetch;
+  setTaskSpendClock(null);
 });
 
-const settle = async (ms = 320) => {
+/* The store's pending read, run now. */
+const settle = async () => {
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, ms));
+    await flushTaskSpend();
   });
 };
 
-async function mount(node: React.ReactNode): Promise<HTMLElement> {
+function render(node: React.ReactNode): HTMLElement {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
   roots.push(root);
   act(() => root.render(node));
+  return host;
+}
+
+async function mount(node: React.ReactNode): Promise<HTMLElement> {
+  const host = render(node);
   await settle();
   return host;
 }
+
+const spendCalls = () => calls.filter((url) => url.startsWith("/api/task-spend?")).map((url) => new URL(url, "http://localhost").searchParams.get("ids")!.split(","));
 
 const marks = (host: Element, id: string) => [...host.querySelectorAll(`[data-spend='${id}'] .spend-p`)].map((p) => [
   p.getAttribute("data-engine"), p.getAttribute("data-kind"),
@@ -121,7 +140,7 @@ test("the board's cards ask once for every task, and each provider draws its mar
     <TaskSpendMarks taskId="norate" interactive />
     <TaskSpendMarks taskId="counting" interactive />
   </>);
-  expect(calls.filter((url) => url.startsWith("/api/task-spend?")).length).toBe(1);
+  expect(spendCalls()).toEqual([["two", "large", "norate", "counting"]]);
   expect(marks(host, "two")).toEqual([["claude", "num", 1], ["codex", "num", 1]]);
   expect(marks(host, "large")).toEqual([["claude", "floor", 2], ["codex", "num", 4]]);
   expect(marks(host, "norate")).toEqual([["claude", "norate", null], ["codex", "num", 1]]);
@@ -132,6 +151,43 @@ test("the board's cards ask once for every task, and each provider draws its mar
   expect(host.querySelector("[data-spend='norate'] .spend-n")!.textContent).toBe("unknown");
   expect(host.querySelector("[data-spend='large']")!.getAttribute("aria-label")).toBe("Limit spent: Claude at least 12% of the week, Codex about 34% of the week");
   expect(host.querySelector("[data-spend='two']")!.getAttribute("role")).toBe("button");
+});
+
+test("a card that mounts while a read is out is asked for after the settle delay, not the next beat", async () => {
+  let answer!: () => void;
+  hold = new Promise<void>((resolve) => { answer = resolve; });
+  render(<TaskSpendMarks taskId="two" interactive />);
+  expect(pendingTaskSpendRefresh()).toBe(250);
+  let first!: Promise<void>;
+  act(() => { first = flushTaskSpend(); });
+  /* The first read is out for «two»; «large» mounts before it answers. */
+  const host = render(<TaskSpendMarks taskId="large" interactive />);
+  expect(spendCalls()).toEqual([["two"]]);
+  await act(async () => { answer(); await first; });
+  expect(host.querySelector("[data-spend='large']")).toBeNull();
+  /* The answer did not ask for it, so the next read is the settle delay away. */
+  expect(pendingTaskSpendRefresh()).toBe(250);
+  await settle();
+  expect(spendCalls()).toEqual([["two"], ["two", "large"]]);
+  expect(marks(host, "large")).toEqual([["claude", "floor", 2], ["codex", "num", 4]]);
+  /* Everything asked for: back to the slow beat. */
+  expect(pendingTaskSpendRefresh()).toBe(45_000);
+});
+
+test("a lower bound's scale fills by its printed, floored figure", async () => {
+  const host = await mount(<><TaskSpendMarks taskId="floor46" interactive /><TaskSpendMarks taskId="floor146" interactive /></>);
+  expect(marks(host, "floor46")).toEqual([["claude", "floor", 1]]);
+  expect(marks(host, "floor146")).toEqual([["claude", "floor", 2]]);
+  expect((await open("floor46")).textContent).toContain("Claude ≥4%");
+  expect((await open("floor146")).textContent).toContain("Claude ≥14%");
+});
+
+test("an account's label carries its whole text in a title, so an ellipsis loses nothing", async () => {
+  await mount(<><TaskSpendMarks taskId="long" interactive /><PhoneTaskSpend taskId="long" headingClass="h" /></>);
+  const name = "Research workstation in the second office, shared by the whole data team on site · Max";
+  const pop = await open("long");
+  expect(pop.querySelector(".meter-label")!.getAttribute("title")).toBe(name);
+  expect(document.querySelector("[data-phone-task-spend='long'] .meter-label")!.getAttribute("title")).toBe(name);
 });
 
 test("the popover reads as an estimate: ≈ per provider, each account beside its week, the 5-hour share, ±30 %", async () => {

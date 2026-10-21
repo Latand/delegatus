@@ -15470,10 +15470,18 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
       const pop = document.querySelector<HTMLElement>(`[data-spend-pop="${id}"]`)!.closest<HTMLElement>("[role=tooltip]")!;
       const r = pop.getBoundingClientRect();
       const lines = [...pop.querySelectorAll<HTMLElement>(".pop-title, .pop-main, .meter, .meter-note, .pop-note")].map((el) => el.innerText.replace(/\s+/g, " ").trim());
-      const clipped = [...pop.querySelectorAll<HTMLElement>(".meter-label, .meter-value, .pop-main")].filter((el) => el.scrollWidth > el.clientWidth + 1).length;
+      /* An account label may end in an ellipsis only when its title holds the whole text. */
+      const clipped = [...pop.querySelectorAll<HTMLElement>(".meter-label, .meter-value, .pop-main")]
+        .filter((el) => el.scrollWidth > el.clientWidth + 1 && !(el.matches(".meter-label") && el.title === el.textContent)).length;
+      const ellipsized = [...pop.querySelectorAll<HTMLElement>(".meter-label")].filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => el.title);
+      /* Every account line, its value and its bar stay inside the bubble. */
+      const outside = [...pop.querySelectorAll<HTMLElement>(".meter, .meter-value, .meter-bar")].filter((el) => {
+        const b = el.getBoundingClientRect();
+        return b.left < r.left - 0.5 || b.right > r.right + 0.5;
+      }).length;
       /* The task figure's digits start at one x on every account line. */
       const numX = [...pop.querySelectorAll<HTMLElement>(".meter-num")].map((el) => Math.round(el.getBoundingClientRect().left));
-      return { box: { left: r.left, right: r.right, top: r.top, bottom: r.bottom }, viewport: { width: innerWidth, height: innerHeight }, lines, clipped, numX, bg: getComputedStyle(pop).backgroundColor };
+      return { box: { left: r.left, right: r.right, top: r.top, bottom: r.bottom }, viewport: { width: innerWidth, height: innerHeight }, lines, clipped, ellipsized, outside, numX, bg: getComputedStyle(pop).backgroundColor };
     }, id);
     try {
       for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of WIDTHS) {
@@ -15521,6 +15529,9 @@ describe("task limit spend: a scale on the card's state line, the numbers in its
               for (const want of expected.pop) if (!want.test(text)) failures.push(`${label} ${id}: the popover lacks ${want}:\n${text}`);
               if (!/±30%/.test(text)) failures.push(`${label} ${id}: no ±30% note`);
               if (pop.clipped) failures.push(`${label} ${id}: ${pop.clipped} popover lines are cut`);
+              if (pop.outside) failures.push(`${label} ${id}: ${pop.outside} account lines or bars leave the bubble`);
+              /* The fixture's 80-character label cannot fit the bubble, so it must be the one cut short. */
+              if (id === "t-interrupt" && !pop.ellipsized.some((title) => title.length > 80)) failures.push(`${label} ${id}: the 80-character account label is not cut short: ${JSON.stringify(pop.ellipsized)}`);
               if (new Set(pop.numX).size > 1) failures.push(`${label} ${id}: account figures start at ${pop.numX.join(", ")}`);
               if (pop.box.left < 0 || pop.box.top < 0 || pop.box.right > pop.viewport.width || pop.box.bottom > pop.viewport.height) failures.push(`${label} ${id}: the popover leaves the window ${JSON.stringify(pop.box)}`);
               const cardBox = (await host.boundingBox())!;

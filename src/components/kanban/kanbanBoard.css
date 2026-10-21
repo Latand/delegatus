@@ -2074,7 +2074,9 @@
 /* An account's line: the sidebar's limit line, with the task's part drawn
    over the week the account has used so far. */
 .spend-pop .meter { display: flex; align-items: center; gap: 8px; height: 18px; margin-left: 17px; }
-.spend-pop .meter-label { flex: 1 0 auto; color: var(--color-secondary); white-space: nowrap; }
+/* Account labels are the operator's own, up to 80 characters: a long one ends
+   in an ellipsis, its whole text in the title, so the figures keep one x. */
+.spend-pop .meter-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--color-secondary); white-space: nowrap; }
 .spend-pop .meter-value { flex: none; color: var(--color-muted); font-variant-numeric: tabular-nums; }
 .spend-pop .meter-bar { width: 44px; }
 /* The task's figure in a fixed slot: its sign (<, ≥) right-aligned in a cell
@@ -2099,7 +2101,7 @@
 .phone-spend .pop-warn { color: var(--color-warning); }
 .phone-spend .meter-note { margin-left: 18px; font-size: var(--text-label); line-height: 16px; }
 .phone-spend .meter { display: flex; align-items: center; gap: 8px; min-height: 20px; margin-left: 18px; font-size: var(--text-label); }
-.phone-spend .meter-label { flex: 1; min-width: 0; color: var(--color-secondary); }
+.phone-spend .meter-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-secondary); }
 .phone-spend .meter-value { flex: none; color: var(--color-muted); font-variant-numeric: tabular-nums; }
 .phone-spend .meter-bar { width: 64px; }
 

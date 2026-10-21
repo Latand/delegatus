@@ -21,7 +21,11 @@ const BATCH = 400;
 const watchers = new Map<string, number>();
 const summaries = new Map<string, TaskSpendSummary>();
 const listeners = new Set<() => void>();
-let timer: ReturnType<typeof setTimeout> | null = null;
+type Clock = { set: (run: () => void, delay: number) => unknown; clear: (handle: unknown) => void };
+const PAGE_CLOCK: Clock = { set: (run, delay) => setTimeout(run, delay), clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>) };
+let clock = PAGE_CLOCK;
+let timer: unknown = null;
+let timerDelay: number | null = null;
 let inflight = false;
 let version = 0;
 
@@ -31,11 +35,19 @@ function notify(): void {
 }
 
 function schedule(delay: number): void {
-  if (timer !== null) clearTimeout(timer);
-  timer = setTimeout(() => {
+  if (timer !== null) clock.clear(timer);
+  timerDelay = delay;
+  timer = clock.set(() => {
     timer = null;
+    timerDelay = null;
     void refresh();
   }, delay);
+}
+
+function cancel(): void {
+  if (timer !== null) clock.clear(timer);
+  timer = null;
+  timerDelay = null;
 }
 
 async function refresh(): Promise<void> {
@@ -62,7 +74,11 @@ async function refresh(): Promise<void> {
     /* The next beat asks again; a card keeps what it last showed. */
   } finally {
     inflight = false;
-    if (watchers.size) schedule(REFRESH_MS);
+    /* A card that mounted while this request was out was not in it: ask for it
+       after the settle delay, not on the next slow beat. */
+    const asked = new Set(ids);
+    if ([...watchers.keys()].some((id) => !asked.has(id))) schedule(SETTLE_MS);
+    else if (watchers.size) schedule(REFRESH_MS);
   }
 }
 
@@ -74,10 +90,7 @@ function watch(taskId: string): () => void {
     const left = (watchers.get(taskId) ?? 1) - 1;
     if (left > 0) watchers.set(taskId, left);
     else watchers.delete(taskId);
-    if (!watchers.size && timer !== null) {
-      clearTimeout(timer);
-      timer = null;
-    }
+    if (!watchers.size) cancel();
   };
 }
 
@@ -97,8 +110,24 @@ export function useTaskSpend(taskId: string | null): TaskSpendSummary | null {
 export function resetTaskSpend(): void {
   watchers.clear();
   summaries.clear();
-  if (timer !== null) clearTimeout(timer);
-  timer = null;
+  cancel();
   inflight = false;
   notify();
+}
+
+/** Test seam: arm refreshes on this clock instead of the page's timers; null restores them. */
+export function setTaskSpendClock(next: Clock | null): void {
+  cancel();
+  clock = next ?? PAGE_CLOCK;
+}
+
+/** Test seam: run the pending refresh now instead of on its timer, and wait for its answer. */
+export async function flushTaskSpend(): Promise<void> {
+  cancel();
+  await refresh();
+}
+
+/** Test seam: the delay of the armed refresh, or null when none is armed. */
+export function pendingTaskSpendRefresh(): number | null {
+  return timerDelay;
 }
