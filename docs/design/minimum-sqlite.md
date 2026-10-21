@@ -112,3 +112,31 @@ on a copy, repairs only the known triggers, checkpoints its WAL, and requires
 database remain on disk. Actual damage and populated live databases are kept
 out of automatic schema recovery. See also
 [`state-sqlite-migration.md` §7.4](state-sqlite-migration.md#74-automatic-fallback-and-the-incident-it-raises).
+
+## Verification record, 2026-10-21
+
+- On main `3e6ca3c16dbd`, the transplanted minimum-library state-install and
+  runtime-order tests both fail. The static SQL guard also fails there.
+- The fix passes all 11 minimum-library regressions, the two static-audit
+  tests, and four schema-classification tests. The minimum-library sweep
+  exercised 41 store test files plus four transcript-search migration cases;
+  the default-timeout case passes with the CI job's 60-second test budget.
+- Full `tsc --noEmit --incremental false`, the production Viewer build,
+  changed-file lint and publication privacy with commit inspection pass.
+- The runtime-host rehearsal passes under Bun 1.4.0 with both endpoints held
+  across succession. The built Viewer loads 32/32 server modules and serves
+  `GET /` with status 200 and 82,936 bytes.
+- Existing native assertions remain red on both base and fix: three history
+  alias cases, two index-inventory/fence cases, one deployment-wire case and
+  one search project-name ambiguity case. The index failures have the same
+  diagnostic differences on both revisions.
+
+The unmodified local pre-push gate stops at native Codex exit 69 before the
+fixture command runs: its isolated environment drops `LLV_SIGNAL_SANDBOX`.
+The same native gate command, fixture executable and isolation reproduce exit
+69 on base `4df56467`. The gate cancels its other lanes, so this is not a
+completed publication-gate verdict. The separate Viewer check above uses the
+existing one-line marker-forwarding fix from PR #3164 in its scratch verifier;
+the stage's two shared verification scripts remain unchanged. A normal local
+publication requires that prerequisite in `scripts/verify-native-codex-runtime.ts`
+and `scripts/verify-viewer-runtime.ts`.
