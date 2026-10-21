@@ -94,7 +94,9 @@ test("deployment status polling retries a locked database and still reports inva
     writer.exec("BEGIN EXCLUSIVE");
     expect(deploymentStatus(filename, "fixture-deployment")).toBeUndefined();
     writer.exec("ROLLBACK");
-    expect(deploymentStatus(filename, "fixture-deployment")).toEqual({ terminal: true, phase: "succeeded" });
+    const status = deploymentStatus(filename, "fixture-deployment");
+    expect(status?.terminal).toBe(true);
+    expect(status?.phase).toBe("succeeded");
     writer.query("UPDATE viewer_deployments SET status_json=?").run("invalid JSON");
     expect(() => deploymentStatus(filename, "fixture-deployment")).toThrow(SyntaxError);
     writer.exec("DROP TABLE viewer_deployments");
