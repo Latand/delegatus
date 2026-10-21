@@ -76,7 +76,7 @@ export function PriorityMark({ priority }: { priority: TaskPriority }) {
   );
 }
 
-export function CardStateLine({ state, nowMs, title, motion, priority, onToggle, expanded, phone = false }: {
+export function CardStateLine({ state, nowMs, title, motion, priority, spend, onToggle, expanded, phone = false }: {
   state: CardState;
   nowMs: number;
   /** The card's title, for the dot's and the toggle's labels. */
@@ -84,6 +84,8 @@ export function CardStateLine({ state, nowMs, title, motion, priority, onToggle,
   /** The card's motion line, drawn when the state has no sentence of its own. */
   motion: ReactNode;
   priority?: TaskPriority;
+  /** The task's limit spend marks (TaskSpendMarks), at the line's end before the priority mark. */
+  spend?: ReactNode;
   /** Desktop: the line opens and closes the card. */
   onToggle?: () => void;
   expanded?: boolean;
@@ -117,6 +119,7 @@ export function CardStateLine({ state, nowMs, title, motion, priority, onToggle,
           {sentence}
         </button>
       ) : sentence}
+      {spend}
       {prio}
     </div>
   );
