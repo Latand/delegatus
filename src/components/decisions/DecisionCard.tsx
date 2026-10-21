@@ -1,7 +1,7 @@
 "use client";
 
 import { CircleCheck, GalleryHorizontalEnd, Loader2, MessageCircleQuestionMark, RotateCw, ZoomIn } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { ImageGalleryProvider, Lightbox, type GalleryImage } from "@/components/feed/Lightbox";
 import { Check, ChevronDown } from "@/components/icons";
@@ -119,7 +119,37 @@ export function DecisionRow({ decision, onOpen }: { decision: OperatorDecisionVi
   );
 }
 
-export function DecisionCard({ decision, narrow = false, columns = 1, onAnswer, error }: {
+/** The open decision's header. In the column it is also the fold: a press
+    turns the form back into its row, and nothing about the decision changes. */
+function FoldHeader({ title, frame, row, onCollapse, children }: {
+  title: string;
+  /** The header's own box: its border and ground. */
+  frame: string;
+  /** How the header lays out its line. */
+  row: string;
+  onCollapse?: () => void;
+  children: ReactNode;
+}) {
+  const { t } = useLocale();
+  if (!onCollapse) return <header className={frame ? `${frame} ${row}` : row}>{children}</header>;
+  return (
+    <header className={frame}>
+      <button
+        type="button"
+        data-decision-collapse=""
+        aria-expanded
+        aria-label={t("decisions.collapseAria", { title })}
+        onClick={onCollapse}
+        className={`group ${row} w-full text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 [@media(pointer:coarse)]:min-h-11`}
+      >
+        {children}
+        <ChevronDown className="mt-0.5 h-4 w-4 shrink-0 rotate-180 text-muted group-hover:text-primary" aria-hidden />
+      </button>
+    </header>
+  );
+}
+
+export function DecisionCard({ decision, narrow = false, columns = 1, onAnswer, error, onCollapse }: {
   decision: OperatorDecisionView;
   /** A column narrower than the card's own design: the title keeps the room
       and the source line goes, the frames draw smaller. */
@@ -129,6 +159,8 @@ export function DecisionCard({ decision, narrow = false, columns = 1, onAnswer, 
   onAnswer: (reviewId: string, answer: DecisionAnswer) => Promise<boolean>;
   /** The server's refusal of the last answer, said under the button. */
   error?: string | null;
+  /** Folds the form back to its row; absent where nothing can fold it. */
+  onCollapse?: () => void;
 }) {
   const { t, locale } = useLocale();
   const questions = decision.questions ?? [];
@@ -180,13 +212,13 @@ export function DecisionCard({ decision, narrow = false, columns = 1, onAnswer, 
       aria-label={decision.title}
       className="flex min-w-0 shrink-0 flex-col overflow-hidden rounded-surface border border-accent/40 bg-card shadow-1"
     >
-      <header className="flex min-w-0 items-start gap-1.5 border-b border-border bg-accent-soft/60 px-3 py-2">
+      <FoldHeader title={decision.title} onCollapse={onCollapse} frame="border-b border-border bg-accent-soft/60" row={`flex min-w-0 items-start gap-1.5 px-3 py-2${onCollapse ? " hover:bg-accent-soft" : ""}`}>
         <Mark className="mt-0.5 h-4 w-4 shrink-0 text-accent" aria-hidden />
         <span data-decision-title="" className="min-w-0 [overflow-wrap:anywhere] text-ui font-semibold text-primary" title={decision.title}>{decision.title}</span>
         {narrow ? null : <span data-decision-source="" className="mt-px min-w-0 shrink truncate text-label text-muted">· {source(t, decision)}</span>}
         <span className="flex-1" />
         <time dateTime={decision.createdAt} className="mt-0.5 shrink-0 text-caption tabular-nums text-muted">{decisionClock(decision.createdAt, locale)}</time>
-      </header>
+      </FoldHeader>
       {narrow && decision.taskId !== null ? <p data-decision-source="" className="m-0 px-3 pt-2 text-label text-muted [overflow-wrap:anywhere]">{source(t, decision)}</p> : null}
       {decision.variants.length ? <div className="px-3 pt-3"><Thumbs decision={decision} small={narrow} /></div> : null}
       {asks ? (
@@ -243,7 +275,7 @@ export function DecisionCard({ decision, narrow = false, columns = 1, onAnswer, 
     time of the answer and whether the seat has it. A message that did not
     reach the seat offers to send it again from here: a seat's own question has
     no task card and no review window to retry from (§2.4). */
-export function DecisionRecord({ decision, onRetry, retrying = false, retryError = null, onRevoke, revokeError = null }: {
+export function DecisionRecord({ decision, onRetry, retrying = false, retryError = null, onRevoke, revokeError = null, onCollapse }: {
   decision: OperatorDecisionView;
   /** Sends the saved message again; absent where the record cannot. */
   onRetry?: () => void;
@@ -251,6 +283,8 @@ export function DecisionRecord({ decision, onRetry, retrying = false, retryError
   retryError?: string | null;
   onRevoke?: () => Promise<boolean>;
   revokeError?: string | null;
+  /** Folds the record back to its row in the column. */
+  onCollapse?: () => void;
 }) {
   const { t, locale } = useLocale();
   const made = decision.decision;
@@ -261,12 +295,12 @@ export function DecisionRecord({ decision, onRetry, retrying = false, retryError
   const tone = decision.nativeAssociationState === "approved" || state === "sent" ? "bg-success-soft text-success" : state === "pending" && !attention ? "bg-sunken text-secondary" : "bg-warning-soft text-warning";
   return (
     <section data-decision-card="answered" data-decision-review={decision.id} aria-label={t("decisions.recordAria", { title: decision.title })} className="min-w-0 rounded-surface border border-border bg-card">
-      <header className="flex min-w-0 flex-wrap items-start gap-1.5 px-3 py-2">
+      <FoldHeader title={decision.title} onCollapse={onCollapse} frame="" row="flex min-w-0 flex-wrap items-start gap-1.5 rounded-t-surface px-3 py-2">
         <CircleCheck className="h-4 w-4 shrink-0 text-success" aria-hidden />
         <span className="shrink-0 text-ui font-semibold text-primary">{t("decisions.answeredAt", { time: decisionClock(made.at, locale) })}</span>
         <span data-decision-record-title="" className="order-last min-w-0 basis-full text-ui font-semibold text-primary [overflow-wrap:anywhere]">{decision.title}</span>
         <span data-decision-delivery={state} className={`ml-auto shrink-0 rounded-full px-1.5 py-0.5 text-caption font-semibold ${tone}`}>{t(decision.nativeAssociationState === "approved" ? "decisions.accessApproved" : decision.nativeAssociationState === "refused" ? "decisions.accessRefused" : attention && state === "pending" ? "decisions.state.failed" : `decisions.state.${state}`)}</span>
-      </header>
+      </FoldHeader>
       {made.rejected ? <p data-decision-rejected="" className="m-0 px-3 pb-2.5 text-ui font-semibold text-warning">{t("proto.rejected")}</p> : null}
       {decision.questions?.length ? (
         <ol className="m-0 flex list-none flex-col gap-1 px-3 pb-2.5">
