@@ -1,5 +1,7 @@
 "use client";
 
+import { composerFilePayload, isComposerUploadRef } from "@/lib/filePolicy";
+
 import { messageTextAttachmentFromText, type MessageTextAttachment } from "@/lib/messageTextAttachment";
 
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
@@ -261,6 +263,7 @@ function writeRecoveryReceipts(id: string, receipts: RuntimeReceipt[]): void {
 /* A document stays owned by its injection across a lost answer and a remount.
    Intake ids and content tokens survive; attachment bytes stay in the tray. */
 function contextDocumentToken(file: PendingFile): string {
+  if (file.upload) return `document:sha256:${file.upload.sha256}`;
   // Equal bytes must stay fenced even after removal, renaming and reattachment.
   // A hash collision only fences additional content; it cannot permit a replay.
   let first = 2166136261;
@@ -1342,6 +1345,7 @@ function persistedFiles(value: unknown): RestoredFile[] | null {
       ...(typeof raw.id === "string" ? { id: raw.id } : {}),
       name: raw.name,
       ...(typeof raw.mime === "string" ? { mime: raw.mime } : {}),
+      ...(isComposerUploadRef(raw.upload) ? { upload: raw.upload } : {}),
     });
   }
   return files;
@@ -1356,14 +1360,13 @@ function readDraftFiles(id: string): RestoredFile[] {
   }
 }
 
-/** Persists the NAMES of every staged non-image slot, whatever its status: a
-    slot that came back un-restored is still a file the operator has to attach
-    again, so its marker has to survive the next switch too. */
+/** Keep every file's name and any completed upload reference across a card
+    switch. A name without a reference restores as a request to reattach. */
 function writeDraftFiles(id: string, slots: readonly PendingAttachment[]): void {
   try {
     const files = slots
       .filter((slot) => slot.kind === "file")
-      .map((slot) => ({ id: slot.id, name: slot.name, mime: slot.mime }));
+      .map((slot) => ({ id: slot.id, name: slot.name, mime: slot.mime, ...(slot.upload ? { upload: slot.upload } : {}) }));
     if (!files.length) sessionStorage.removeItem(draftFilesKey(id));
     else sessionStorage.setItem(draftFilesKey(id), JSON.stringify(files));
   } catch { /* The visible in-memory tray remains authoritative. */ }
@@ -3630,7 +3633,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
         const content = {
           text: wireText,
           images: requestedImages.map(({ base64, mime }) => ({ base64, mime })),
-          ...(requestedFiles.length ? { files: requestedFiles.map(({ name, base64 }) => ({ name, base64 })) } : {}),
+          ...(requestedFiles.length ? { files: requestedFiles.map(composerFilePayload) } : {}),
           idempotencyKey: clientMessageId,
         };
         /* The sealed envelope carries the route, so a retry after a reload
@@ -4178,7 +4181,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
                  the conversation's inbox, then names the path in the delivered
                  message — nothing has to reach the agent's machine separately,
                  because it is the same machine. */
-              ...(sentFiles.length ? { files: sentFiles.map((file) => ({ name: file.name, base64: file.base64 })) } : {}),
+              ...(sentFiles.length ? { files: sentFiles.map(composerFilePayload) } : {}),
               idempotencyKey: clientMessageId,
               /* DEFAULT INTERRUPT STAYS THE DEFAULT (#1629). A submission asks
                  for something else only when the operator chose it explicitly
@@ -4210,7 +4213,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
               idempotencyKey: clientMessageId,
               clientMessageId,
               images: sentImages.map((image) => ({ base64: image.base64, mime: image.mime })),
-              ...(sentFiles.length ? { files: sentFiles.map((file) => ({ name: file.name, base64: file.base64 })) } : {}),
+              ...(sentFiles.length ? { files: sentFiles.map(composerFilePayload) } : {}),
               /* #1117: the composer is the operator's own surface; the
                  structured branch above is stamped server-side by /api/runtime/send. */
               origin: { kind: "operator" },
@@ -4858,7 +4861,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
          inbox under this operation's key and folds its path into the queued
          words, exactly as Enter does, so the bytes are part of what a replay
          must repeat. */
-      ...(requestedFiles.length ? { files: requestedFiles.map(({ name, base64 }) => ({ name, base64 })) } : {}),
+      ...(requestedFiles.length ? { files: requestedFiles.map(composerFilePayload) } : {}),
       /* AN AUDIT RECORD OF WHAT WAS ASKED FOR. Native's queue parameters carry no model or
          effort, so what the operator had selected when they queued is retained
          as what they asked for; the panel says what the thread is observed on
@@ -5047,12 +5050,12 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       const files = envelope.mutation.files ?? [];
       const current = textRef.current.trim();
       const imageBytes = new Set(images.map((image) => image.base64));
-      const fileBytes = new Set(files.map((entry) => entry.base64));
+      const fileBytes = new Set(files.map((entry) => entry.upload?.id ?? entry.base64));
       const fileNames = new Set(files.map((entry) => entry.name));
       const holdsOnlyThis = (!current || current === text.trim())
         && attachments.attachmentsRef.current.every((slot) => (slot.status === "error"
           ? slot.kind === "file" && fileNames.has(slot.name)
-          : slot.status === "ready" && Boolean(slot.base64) && (slot.kind === "image" ? imageBytes : fileBytes).has(slot.base64!)));
+          : slot.status === "ready" && Boolean(slot.base64 || slot.upload) && (slot.kind === "image" ? imageBytes : fileBytes).has(slot.upload?.id ?? slot.base64!)));
       const holdsOnlyTheseChips = !chipProject || readTaskChips(chipProject).every((chip) => tasks.some((task) => task.id === chip.id && task.title === chip.title));
       if (!holdsOnlyThis || !holdsOnlyTheseChips) {
         setStatus({ kind: "err", text: t("queue.refusedRestoreOccupied") });
@@ -5062,7 +5065,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
       setText(text);
       attachments.replace(
         images.map((image) => ({ base64: image.base64, mime: image.mime, preview: `data:${image.mime};base64,${image.base64}` })),
-        files.map((entry, index) => ({ id: `${key}-file-${index}`, name: entry.name, mime: "", base64: entry.base64 })),
+        files.map((entry, index) => ({ id: `${key}-file-${index}`, name: entry.name, mime: "", base64: entry.base64, ...(entry.upload ? { upload: entry.upload } : {}) })),
       );
       setStatus(null);
       inputRef.current?.focus();
@@ -5195,7 +5198,7 @@ export const TmuxComposerCore = memo(function TmuxComposerCore({
         text: [taskReferencePrelude(reference.tasks), requestedText].filter(Boolean).join("\n"),
         idempotencyKey: clientMessageId,
         ...(requestedFiles.length
-          ? { files: requestedFiles.map((file) => ({ name: file.name, base64: file.base64 })) }
+          ? { files: requestedFiles.map(composerFilePayload) }
           : {}),
         ...wireSelectedContext(reference),
       }).catch((): CommandResult => ({ ok: false, error: "network" })).finally(() => {

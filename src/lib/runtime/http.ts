@@ -252,8 +252,8 @@ async function dispatchRuntimeCommand(
          paths are folded into the text the agent receives, so a document needs
          no engine image capability at all. Folded BEFORE the command is parsed,
          because an attachment-only send has no text of its own to validate. */
-      const { admitInboxFilePayload, inboxFileBatchToken, inboxFileText, inboxFilePaths } = await import("@/lib/inboxFiles");
-      const admittedFiles = admitInboxFilePayload({ files: body.files });
+      const { admitInboxFilePayloadAsync, inboxFileBatchToken, inboxFileText, inboxFilePaths } = await import("@/lib/inboxFiles");
+      const admittedFiles = await admitInboxFilePayloadAsync({ files: body.files }, person);
       if (admittedFiles.error) {
         return NextResponse.json({ error: admittedFiles.error.error }, { status: admittedFiles.error.status });
       }
@@ -288,10 +288,10 @@ async function dispatchRuntimeCommand(
      over a file already there — and staging, delivery and the release below
      take one turn per batch with every other request under the key. */
   if (attachments.files.length) {
-    const { enterInboxBatch, InboxFileConflictError, stageInboxFiles } = await import("@/lib/inboxFiles");
+    const { enterInboxBatch, InboxFileConflictError, stageInboxFilesAsync } = await import("@/lib/inboxFiles");
     attachments.leave = await enterInboxBatch(attachments.batch);
     try {
-      attachments.staged = stageInboxFiles(attachments.files, attachments.batch);
+      attachments.staged = await stageInboxFilesAsync(attachments.files, attachments.batch);
     } catch (error) {
       if (error instanceof InboxFileConflictError) {
         return NextResponse.json({ error: error.message, recovery: "query or replay the original Viewer idempotency key" }, { status: 409 });
