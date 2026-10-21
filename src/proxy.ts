@@ -134,4 +134,4 @@ function perimeterCheck(request: NextRequest): PerimeterResult {
 
 /* `/api/streams` runs this proxy itself, for its own request and for every channel opened on it, so it can
    stop reading a control body at its limit (src/app/api/streams/route.ts). */
-export const config = { matcher: ["/((?!_next/static|favicon.ico|api/streams$).*)"] };
+export const config = { matcher: ["/((?!_next/static|favicon.ico|api/streams$|api/composer-upload$).*)"] };
