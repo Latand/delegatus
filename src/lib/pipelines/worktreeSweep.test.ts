@@ -1040,7 +1040,7 @@ test("unreadable claim remains held without letting readable peers exceed the pr
   expect(result.held).toContain(caseDir);
 });
 
-test("proof-page deferrals preserve a finished lane's retention clock", async () => {
+test("proof-page deferrals preserve a finished lane's retention clock until proofs converge, and fresh activity restarts it", async () => {
   const root = repository();
   const { dir, tip } = lane(root, path.join(caseDir, "zz-proof-target"), "pipeline/proof-target");
   const { registry } = finishedRegistryConversation(dir);
@@ -1049,6 +1049,9 @@ test("proof-page deferrals preserve a finished lane's retention clock", async ()
   const conversation = Object.values(snapshot.conversations)[0]!;
   const entries: typeof snapshot.entries = {};
   const conversations: typeof snapshot.conversations = {};
+  const generation = (id: string, generationId: string) => ({ ...conversation, id: id as typeof conversation.id,
+    generations: conversation.generations.map((item, index) => index === conversation.generations.length - 1
+      ? { ...item, id: generationId } : item) });
   for (let index = 0; index <= CONVERSATION_PROCESS_PROBE_LIMIT; index++) {
     const generationId = `retention-generation-${String(index).padStart(5, "0")}`;
     const key = `${conversation.engine}:${generationId}`;
@@ -1056,32 +1059,68 @@ test("proof-page deferrals preserve a finished lane's retention clock", async ()
       cwd: index === CONVERSATION_PROCESS_PROBE_LIMIT ? dir : path.join(caseDir, `aa-proof-${String(index).padStart(5, "0")}`),
       status: "dead", structuredHost: { ...template.structuredHost!, process: { pid: 74000 + index,
         startIdentity: `retention-${index}`, bootEpoch: "fixture-boot" } }, structuredTerminationSurvivors: [] };
-    conversations[`retention-conversation-${index}`] = {
-      ...conversation,
-      id: `retention-conversation-${index}` as typeof conversation.id,
-      generations: conversation.generations.map((generation, generationIndex) => generationIndex === conversation.generations.length - 1
-        ? { ...generation, id: generationId } : generation),
-    };
+    conversations[`retention-conversation-${index}`] = generation(`retention-conversation-${index}`, generationId);
   }
-  const settled = { entries, conversations };
+  /* Owner pages hold sorted proof keys; start on the hour that selects the
+     page without the target, so the first pass must defer it. */
+  const proofKey = (identity: object) => createHash("sha256").update(JSON.stringify(identity)).digest("hex");
+  const targetIdentity = { pid: 74000 + CONVERSATION_PROCESS_PROBE_LIMIT,
+    startIdentity: `retention-${CONVERSATION_PROCESS_PROBE_LIMIT}`, bootEpoch: "fixture-boot" };
+  const keys = Object.values(entries).map(entry => proofKey(entry.structuredHost!.process!)).sort();
+  const targetPage = Math.floor(keys.indexOf(proofKey(targetIdentity)) / CONVERSATION_PROCESS_PROBE_LIMIT);
   const closedAt = "2026-10-01T00:00:00.000Z";
+  const hourOf = (hour: number) => Date.parse(closedAt) + hour * WORKTREE_SWEEP_INTERVAL_MS;
+  const start = Math.floor(hourOf(0) / WORKTREE_SWEEP_INTERVAL_MS) % 2 === targetPage ? 1 : 0;
   const owner = pipeline({ repoDir: root, worktreeDir: dir, branch: "pipeline/proof-target", state: "closed",
     baseRef: tip, closedAt });
+  const freshKey = `${conversation.engine}:fresh-generation`;
+  const freshPid = 79000;
+  let freshAlive = true;
   let previous: Awaited<ReturnType<typeof sweepMergedWorktrees>> | undefined;
-  const reports = [];
-  for (const hour of [0, 1, 2, 98]) {
-    const at = Date.parse(closedAt) + hour * WORKTREE_SWEEP_INTERVAL_MS;
-    const report = await sweepMergedWorktrees(ports({ pipelines: [owner], prs: [], previous,
-      now: () => at, conversationCwds: () => conversationCwdStatus(settled, at, () => true) }));
+  const reports: Awaited<ReturnType<typeof sweepMergedWorktrees>>[] = [];
+  const probes: number[] = [];
+  const sweep = async (hour: number) => {
+    const at = hourOf(hour);
+    let count = 0;
+    const report = await sweepMergedWorktrees(ports({ pipelines: [owner], prs: [], previous, now: () => at,
+      conversationCwds: () => conversationCwdStatus({ entries, conversations }, at, identity => {
+        count++;
+        return identity.pid !== freshPid || !freshAlive;
+      }) }));
+    probes.push(count);
     reports.push(report);
     previous = report;
-  }
-  expect(reports[3]!.removed.map(row => row.path)).toContain(dir);
+    return report;
+  };
+  for (const hour of [start, start + 1, start + 2]) await sweep(hour);
   expect(reports[0]!.kept).toContainEqual(expect.objectContaining({ path: dir, reason: "live-conversation",
     firstSettledAt: closedAt, detail: "owner proof deferred by per-pass budget" }));
+  // Earlier dead proofs persist, so the next pass probes only what is left.
   expect(reports[1]!.kept).toContainEqual(expect.objectContaining({ path: dir, reason: "retention", firstSettledAt: closedAt }));
-  expect(reports[2]!.kept).toContainEqual(expect.objectContaining({ path: dir, reason: "live-conversation",
-    firstSettledAt: closedAt, detail: "owner proof deferred by per-pass budget" }));
+  expect(reports[2]!.kept).toContainEqual(expect.objectContaining({ path: dir, reason: "retention", firstSettledAt: closedAt }));
+  expect(probes.every(count => count <= CONVERSATION_PROCESS_PROBE_LIMIT)).toBe(true);
+  expect(probes[0]! + probes[1]!).toBe(CONVERSATION_PROCESS_PROBE_LIMIT + 1);
+  expect(probes[2]).toBe(0);
+
+  /* A new conversation starts in the checkout: its unknown owner is probed,
+     found alive, and the activity drops the retention clock. */
+  entries[freshKey] = { ...template, key: freshKey as unknown as typeof template.key, cwd: path.join(dir, "src"), status: "dead",
+    structuredHost: { ...template.structuredHost!, process: { pid: freshPid, startIdentity: "fresh", bootEpoch: "fixture-boot" } },
+    structuredTerminationSurvivors: [] };
+  conversations["fresh-conversation"] = generation("fresh-conversation", "fresh-generation");
+  const busy = await sweep(start + 3);
+  const busyRow = busy.kept.find(row => row.path === dir);
+  expect(busyRow).toEqual(expect.objectContaining({ reason: "live-conversation" }));
+  expect(busyRow?.detail).toBeUndefined();
+  expect(busyRow?.firstSettledAt).toBeUndefined();
+  freshAlive = false;
+  const restarted = await sweep(start + 4);
+  expect(restarted.kept).toContainEqual(expect.objectContaining({ path: dir, reason: "retention", firstSettledAt: restarted.at }));
+  expect(probes.slice(3)).toEqual([1, 1]);
+  // The original clock would have released it by hour 98; the restarted one keeps it.
+  expect((await sweep(98)).kept).toContainEqual(expect.objectContaining({ path: dir, reason: "retention", firstSettledAt: restarted.at }));
+  expect(fs.existsSync(dir)).toBe(true);
+  expect((await sweep(start + 4 + 97)).removed.map(row => row.path)).toContain(dir);
   expect(fs.existsSync(dir)).toBe(false);
 });
 

@@ -566,6 +566,7 @@ export function conversationCwdStatus(
     const parsed = JSON.parse(fs.readFileSync(cacheFile, "utf8"));
     if (Array.isArray(parsed)) cachedProofs = parsed.filter((item): item is string => typeof item === "string");
   } catch { /* Missing or malformed cache is conservative: owners are reprobed. */ }
+  const loadedProofs = [...cachedProofs];
   const cachedProofSet = new Set(cachedProofs);
   const currentIdentities = new Set<string>();
   for (const row of entries) {
@@ -609,7 +610,7 @@ export function conversationCwdStatus(
     }
   }
   const liveProofs = [...new Set(cachedProofs.filter(key => currentIdentities.has(key)))].slice(-OWNER_PROOF_CACHE_LIMIT);
-  if (liveProofs.length !== cachedProofs.length || liveProofs.some((key, index) => key !== cachedProofs[index]))
+  if (liveProofs.length !== loadedProofs.length || liveProofs.some((key, index) => key !== loadedProofs[index]))
     writeJsonDurably(cacheFile, liveProofs);
   for (const delivery of Object.values(file.heldDeliveries ?? {})) {
     /* `delivery-uncertain` was written and never confirmed; the reaper counts
