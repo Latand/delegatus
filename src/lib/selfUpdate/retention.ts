@@ -89,12 +89,13 @@ export async function retainReleases(record: LauncherRecord, inputs: RetentionIn
     } catch (error) { throw new RetentionInspectionError(String(error)); }
   };
   const freshObservation = async () => {
-    // Keep the inventory after the first owner IPC, then take owner state again
-    // after the scan. Either wait can expose new protection: a holder may enter
-    // quarantined trash during IPC, or an owner may acquire a target during scan.
+    // Read owner inputs on both sides of the first scan: a new owner hold can
+    // appear while it runs. Then scan again after the final owner IPC: a process
+    // can enter quarantined trash during that round trip.
     await read();
-    const processes = await scan();
+    await scan();
     const current = await read();
+    const processes = await scan();
     return { current, processes };
   };
   type Candidate = { dir: string; sha: string; age: number; locked: boolean; identity: string };

@@ -379,11 +379,16 @@ test("a process entering a recovered trash tree during owner IPC prevents replay
   const journal = path.join(path.dirname(h.ports.reportFile!), "package-trash-recovery-race.json");
   await expect(removeTreeViaTrash(dir, { journal, held: () => false, remove: async () => { throw new Error("interrupted"); } })).rejects.toThrow("interrupted");
   const trash = JSON.parse(fs.readFileSync(journal, "utf8")).trash as string;
-  h.ports.scan = scanProcesses;
+  const scanned = path.join(h.root, "recovery-trash-scanned");
+  h.ports.scan = () => {
+    const result = scanProcesses();
+    if (fs.existsSync(trash) && !fs.existsSync(scanned)) fs.writeFileSync(scanned, "yes");
+    return result;
+  };
   const originalCurrent = h.ports.current;
-  let reads = 0; let child: ChildProcess | undefined;
+  let child: ChildProcess | undefined;
   h.ports.current = async () => {
-    if (++reads === 2) {
+    if (fs.existsSync(scanned) && !child) {
       const holder = spawn(process.execPath, ["-e", "process.stdout.write('ready'); setInterval(() => {}, 1000)"], {
         cwd: trash, env: { PATH: process.env.PATH, NODE_ENV: "test", HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
           TMPDIR: process.env.TMPDIR, LLV_STATE_DIR: process.env.LLV_STATE_DIR, LLV_VIEWER_CONTROL_URL: process.env.LLV_VIEWER_CONTROL_URL },
@@ -402,6 +407,45 @@ test("a process entering a recovered trash tree during owner IPC prevents replay
   expect(fs.existsSync(trash)).toBeTrue(); expect(fs.existsSync(journal)).toBeTrue();
   expect(report.kept).toContainEqual(expect.objectContaining({ dir, reason: "process" }));
   expect(child?.exitCode).toBeNull(); expect(child?.signalCode).toBeNull();
+}, 30_000);
+
+test("a process entering cache trash during owner IPC restores the cache", async () => {
+  const h = fixture();
+  const cache = path.join(h.dirs[0]!, ".next/cache/webpack");
+  const scanned = path.join(h.root, "cache-trash-scanned");
+  let trash: string | undefined;
+  let child: ChildProcess | undefined;
+  h.ports.scan = () => {
+    const result = scanProcesses();
+    const found = fs.readdirSync(path.dirname(cache)).map(name => path.join(path.dirname(cache), name))
+      .find(entry => path.basename(entry).startsWith(".delegatus-trash-webpack-"));
+    if (found) trash = found;
+    if (!fs.existsSync(cache) && trash && !fs.existsSync(scanned)) fs.writeFileSync(scanned, "yes");
+    return result;
+  };
+  const originalCurrent = h.ports.current;
+  h.ports.current = async () => {
+    if (fs.existsSync(scanned) && trash && !child) {
+      const holder = spawn(process.execPath, ["-e", "process.stdout.write('ready'); setInterval(() => {}, 1000)"], {
+        cwd: trash, env: { PATH: process.env.PATH, NODE_ENV: "test", HOME: process.env.HOME,
+          XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, TMPDIR: process.env.TMPDIR,
+          LLV_STATE_DIR: process.env.LLV_STATE_DIR, LLV_VIEWER_CONTROL_URL: process.env.LLV_VIEWER_CONTROL_URL },
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      child = holder; children.push(holder);
+      await new Promise<void>((resolve, reject) => {
+        holder.once("error", reject); holder.stdout!.once("data", () => resolve());
+        holder.once("exit", () => reject(new Error("holder exited before retention finished")));
+      });
+    }
+    return originalCurrent?.() ?? { record: h.record, inputs: h.inputs };
+  };
+  const report = await h.run();
+  expect(report.errors).toEqual([]);
+  expect(trash).toBeDefined();
+  expect(fs.existsSync(cache)).toBeTrue();
+  expect(child?.exitCode).toBeNull(); expect(child?.signalCode).toBeNull();
+  expect(fs.readlinkSync(`/proc/${child!.pid}/cwd`)).toBe(cache);
 }, 30_000);
 
 test("recent and newest-K releases are kept; K follows LLV_SELF_UPDATE_KEEP_RELEASES", async () => {

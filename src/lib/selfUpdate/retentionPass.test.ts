@@ -72,17 +72,17 @@ test.skipIf(process.platform !== "linux")("a pass reads fresh owner inputs acros
   } finally { release(); await running; }
 }, 30_000);
 
-test.skipIf(process.platform !== "linux")("a process entering quarantined trash during owner IPC restores its release", async () => {
+test.skipIf(process.platform !== "linux")("a process entering quarantined trash during the final owner IPC scan restores its release", async () => {
   const h = fixture(4);
   h.options.env.LLV_SELF_UPDATE_KEEP_RELEASES = "1";
   const target = h.dirs[1]!;
   const proc = path.join(h.root, "proc");
   let child: import("node:child_process").ChildProcess | undefined;
   const current = async () => {
-    if (!fs.existsSync(target)) {
+    if (fs.existsSync(path.join(h.root, "trash-scan-complete")) && !child) {
       const trash = fs.readdirSync(h.record.releasesDir).map(name => path.join(h.record.releasesDir, name))
         .find(directory => path.basename(directory).startsWith(`.delegatus-trash-${path.basename(target)}-`));
-      if (trash && !child) {
+      if (trash) {
         const holder = spawn(process.execPath, ["-e", "process.stdout.write('ready'); setInterval(() => {}, 1000)"], {
           cwd: trash, env: { PATH: process.env.PATH, NODE_ENV: "test", HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
             TMPDIR: process.env.TMPDIR, LLV_STATE_DIR: process.env.LLV_STATE_DIR, LLV_VIEWER_CONTROL_URL: process.env.LLV_VIEWER_CONTROL_URL },
@@ -104,12 +104,15 @@ test.skipIf(process.platform !== "linux")("a process entering quarantined trash 
     return { record: h.record, inputs: h.inputs };
   };
   try {
-    const report = await runRetentionPass(h.record, h.inputs, { ...h.options, current });
+    const report = await runRetentionPass(h.record, h.inputs, { ...h.options, current,
+      launch: { ...h.options.launch, args: [h.root, "arrival-during-second-current"] } });
     expect(report.errors).toEqual([]);
     expect(fs.existsSync(target)).toBeTrue();
     expect(report.removed.some(row => row.dir === target)).toBeFalse();
     expect(report.kept).toContainEqual(expect.objectContaining({ dir: target, reason: "process" }));
     expect(child?.exitCode).toBeNull(); expect(child?.signalCode).toBeNull();
+    const cwd = fs.readlinkSync(`/proc/${child!.pid}/cwd`);
+    expect(cwd).toBe(target);
   } finally {
     if (child && child.exitCode === null && child.signalCode === null) {
       const exited = new Promise<void>(resolve => child!.once("exit", () => resolve())); child.kill("SIGKILL"); await exited;
