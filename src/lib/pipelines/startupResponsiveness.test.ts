@@ -624,6 +624,45 @@ test("history evidence never joins a pending read of a replaced database", async
   }
 });
 
+test("history evidence never retains validation across an inode swap during identity sampling", async () => {
+  const { root, row } = fixture();
+  const filename = path.join(root, "state.sqlite");
+  const replacement = path.join(root, "replacement.sqlite");
+  const db = new Database(filename);
+  db.query("UPDATE state_rows SET value_json=json_set(value_json, '$.stateDetail', 'same-clock-change') WHERE collection='pipelines' AND row_key=?").run(row.id);
+  try { fs.writeFileSync(replacement, db.serialize()); }
+  finally { db.close(); }
+  const corrupt = new Database(replacement);
+  corrupt.query("UPDATE state_rows SET value_json='{broken' WHERE collection='pipelines' AND row_key=?").run(row.id);
+  corrupt.close();
+
+  const originalStat = fs.statSync;
+  let readerIdentityChecks = 0;
+  let swapped = false;
+  const stat = spyOn(fs, "statSync").mockImplementation(((...args: Parameters<typeof originalStat>) => {
+    const target = args[0];
+    const stack = new Error().stack ?? "";
+    if (!swapped && target === filename && stack.includes("readCompactPipelineEvidence") && !stack.includes("openCurrentDatabase")) {
+      readerIdentityChecks++;
+      if (readerIdentityChecks === 2) {
+        swapped = true;
+        fs.renameSync(filename, path.join(root, "retired.sqlite"));
+        for (const suffix of ["-wal", "-shm"]) {
+          if (fs.existsSync(filename + suffix)) fs.renameSync(filename + suffix, path.join(root, "retired.sqlite" + suffix));
+        }
+        fs.renameSync(replacement, filename);
+      }
+    }
+    return originalStat.apply(fs, args);
+  }) as typeof originalStat);
+  try {
+    await expect(pipelineRegistryHealthAsync()).rejects.toThrow("controller snapshot changed");
+    expect(swapped).toBeTrue();
+  } finally { stat.mockRestore(); }
+
+  await expect(pipelineRegistryHealthAsync()).rejects.toThrow(`corrupt pipelines SQLite row: ${row.id}`);
+});
+
 test("history evidence keeps 48 validated rows when one row changes before freshness rejection", async () => {
   const { root, row } = fixture();
   const db = new Database(path.join(root, "state.sqlite"));
