@@ -38,12 +38,15 @@ export function tooltipPlacement(
  * sliver in the orchestrator seat (#1858).
  */
 export function TooltipBubble({
+  id,
   anchorRef,
   side = "top",
   align = "center",
   className,
   children,
 }: {
+  /** For the anchor's `aria-describedby`, so a screen reader reads the bubble. */
+  id?: string;
   anchorRef: RefObject<Element | null>;
   side?: "top" | "bottom";
   align?: "center" | "left" | "right";
@@ -81,6 +84,7 @@ export function TooltipBubble({
   return createPortal(
     <span
       ref={bubbleRef}
+      id={id}
       role="tooltip"
       style={position ?? { left: -9999, top: 0, visibility: "hidden" }}
       className={`pointer-events-none fixed ${Z.tooltip} ${className}`}

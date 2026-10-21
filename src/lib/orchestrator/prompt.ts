@@ -79,7 +79,10 @@ import { shortId } from "@/lib/shortIds";
  * every way of reaching the operator in one section, names no engine's own
  * scheduling tools, holds a task where it used to mark it blocked, and adds
  * what seats learned about doing exactly what was asked. "Who you are" stays
- * word for word. */
+ * word for word. v58 (docs/design/gpt-6-role-prompts.md §3.3) states the
+ * maintenance practice: report first, ramp, compare model arms, one lane per
+ * accepted workstream, a re-run when a role's default model changes; it also
+ * ships the working rule 16 that #3083 rewrote. */
 
 import { ROLE_DEFAULTS, WORKING_RULES_SHORT } from "@/lib/roles/defaults";
 import { configForVariant, VARIANT_PARAMS, variantParamLabel } from "@/lib/roles/paramConfig";
@@ -107,7 +110,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-export const ORCHESTRATOR_PROMPT_VERSION = 57;
+export const ORCHESTRATOR_PROMPT_VERSION = 58;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -513,6 +516,20 @@ const SHIPPED_LITERAL_REQUEST_PROPOSALS = [
   "anything beyond the literal request is a proposal offered in chat and acted on only after their yes.",
 ] as const;
 
+/** v58 (docs/design/gpt-6-role-prompts.md §3.3, the operator, 2026-10-20):
+    the maintenance practice of docs/design/gpt-6-maintenance.md, stated for
+    every installation. It follows the bullet on declared outputs, and
+    `orchestratorMandateUpgraded` adds it there to a v55–v57 mandate by exact
+    match. */
+const ORCHESTRATOR_OUTPUTS_BULLET = "- A stage that hands a document on (a design, an audit report) declares its path in outputs: read-only stages write only declared outputs. Role params hold short values; put the rest in the brief.";
+const ORCHESTRATOR_MAINTENANCE_PRACTICE = "- Maintenance (dead code, stale mechanisms, flaky tests, check cost) is report first: a read-only architect mode=architecture-audit stage with its report in outputs, deleting nothing. Ramp from one task to one subdirectory to the repository; before each widening, compare model arms on the same snapshot, findings judged blind, by cost per accepted finding. Then one small lane per accepted workstream, its brief carrying the audit's evidence and keep-list. When a role's default model changes, re-run the audit once on its fixed task.";
+
+/** Working rule 16 as v55–v57 carried it in its short form; #3083 rewrote it
+    in `WORKING_RULES_SHORT` and v58 is the version that ships the rewrite, so
+    `orchestratorMandateUpgraded` replaces the old line by exact match. */
+const SHIPPED_WORKING_RULE_16 = "16. Leave the checkout as you found it: work in a scratch export; a read-only stage leaves no new file behind.";
+const WORKING_RULE_16 = WORKING_RULES_SHORT.split("\n").find((line) => line.startsWith("16. ")) ?? SHIPPED_WORKING_RULE_16;
+
 /** v55 (docs/design/role-memory-to-prompts.md §4.1, the SEAT block): what
     seats learned about the literal request, routine recoveries, forms, names
     and delivery. It follows "Who you are", which stays word for word. */
@@ -574,7 +591,8 @@ Every piece of accepted work runs as a pipeline on its board task: find or creat
 - Size the lane first, then compose it from the role table: an architect stage first when the work needs options or a plan, then a builder, then a reviewer stage whose fail edge leads to a fix stage (builder mode=apply-fixes with the implementer's domain and size, which returns to a fresh reviewer); add stages when the task needs them. A fix stage's self-fail without blocked:true and with a new head proceeds to review as reviewer notes; a fail with no new head parks.
 - The brief says what to do, where, the acceptance, and the fences: the files or areas other open lanes are changing. It never says how to end. Delegatus tells every agent how to report, and the words are pass, fail and needs_decision; never write REVIEW_READY, VERDICT: APPROVE, VERDICT: REQUEST_CHANGES or NO FINDINGS into a brief.
 - Quote the operator's originating requirement verbatim, with its date, at the top of the pinned specification. When the project names its required checks, name them; otherwise write "the project's own checks". The pinned specification is what the whole lane must achieve and every stage reads it. Steps for one stage (where to branch, whether to open a pull request, which checks that stage runs) go in that stage's prompt.
-- A stage that hands a document on (a design, an audit report) declares its path in outputs: read-only stages write only declared outputs. Role params hold short values; put the rest in the brief.
+${ORCHESTRATOR_OUTPUTS_BULLET}
+${ORCHESTRATOR_MAINTENANCE_PRACTICE}
 - Work no pipeline can host (a deploy, a review of a fork's pull request or of uncommitted work in another checkout) goes through spawn_agent with a role and the task's taskId; the agent ends with a Verdict line in the same three words.
 - Merge bar: the project's merge setting ("Merge when the review passes", mergeOnReview in get_orchestrator and in list_pipelines rows) governs every automatic merge, yours included. A PR is ready when reviews passed its final head or the last budget fix passed, required checks are green and its body is read. Setting off: you do not merge on your own; tell the operator "PR ready: <url>" and merge only when they ask. Setting on: Delegatus merges a completed lane whose reviews passed, or spent their budget with the last fix passed, once its checks settle green; never merge a lane whose merge it holds (merge.state queued, checking, waiting-checks, updating, refreshing or merging), and act on merge.state blocked: fix its reason or ask the operator, then pipeline_action retry-merge. Red checks hold merging; unverified, assumed or synthetic premises go to the operator. Batch 2+ ready, authorized PRs (N@reviewedHead): merger run stage or spawn_agent; exclude held merge.state. needs-review → independent git show --remerge-diff review, then next batch. culprit → lane finding.
 - Releases run only when seat_tick_settings.release enables them or requestNow asks for one. Hold releases during known production incidents.
@@ -713,14 +731,30 @@ const DELIVERED_DIRECTIVES: readonly { markers: readonly string[]; directive: st
     match with the current one, which states the tick contract the wake no
     longer repeats. The v55 reply-draft paragraph and the v10–v54 reply-draft
     sections are removed and the v40–v55 bug-report rule replaced the same way
-    (v56), so no seat is told to ask with reply drafts.
+    (v56), so no seat is told to ask with reply drafts. A v55–v57 mandate gets
+    the v58 maintenance practice after its outputs bullet and the current
+    working rule 16 the same way, through `orchestratorMandateUpgraded`, which
+    a seat request applies before it records a new intent.
 
     Last, delivery renders the role table (#1880) from `roles` and puts it at
     the end, replacing any table the mandate already carried. Server callers
     pass the live registry; the built-in presets are only the fallback for a
     caller that has none to read. */
 export function orchestratorMandateForDelivery(mandate: string, roles: readonly RoleDefinition[] = ROLE_DEFAULTS): string {
-  return orchestratorMandateWithRoleTable(mandate, orchestratorRoleTable(roles));
+  return orchestratorMandateWithRoleTable(orchestratorMandateUpgraded(mandate), orchestratorRoleTable(roles));
+}
+
+/** The v58 upgrades, idempotent. A seat request applies them to its mandate
+    before preflight and before it records a new intent, so the intent stores
+    the upgraded text. They stay out of `orchestratorMandateWithRoleTable`: a
+    pending intent recorded by an earlier release replays its first attempt's
+    bytes under the same clientAttemptId, and a spawn receipt matched by
+    request digest refuses any other text. */
+export function orchestratorMandateUpgraded(mandate: string): string {
+  mandate = mandate.split(SHIPPED_WORKING_RULE_16).join(WORKING_RULE_16);
+  return mandate.includes(ORCHESTRATOR_MAINTENANCE_PRACTICE)
+    ? mandate
+    : mandate.replace(ORCHESTRATOR_OUTPUTS_BULLET, `${ORCHESTRATOR_OUTPUTS_BULLET}\n${ORCHESTRATOR_MAINTENANCE_PRACTICE}`);
 }
 
 /** Delivery with an already rendered role table. A pending seat intent replays

@@ -4,7 +4,7 @@ import type { ChildProcess } from "node:child_process";
 import { spawnLeasedHelper, leasedHelperInput, endLeasedHelper } from "@/lib/helperLease";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
-import type { RetentionScan } from "./retentionInspection";
+import { validRetentionScan, type RetentionScan } from "./retentionInspection";
 
 export interface RetentionInspection {
   scan(directory: string): Promise<RetentionScan>;
@@ -52,11 +52,7 @@ export class RetentionWorker implements RetentionInspection {
         if (!pending || value.error || value.kind !== pending.kind) throw new Error(value.error || "invalid retention helper reply");
         const result = value.result;
         const valid = pending.kind === "bytes" ? Number.isSafeInteger(result) && result >= 0
-          : result?.complete === true && typeof result.ownNamespace === "string" && !!result.ownNamespace
-            && Array.isArray(result.processes) && result.processes.every((proc: RetentionScan["processes"][number]) =>
-              Number.isSafeInteger(proc.pid) && proc.pid > 0 && typeof proc.namespace === "string"
-              && Array.isArray(proc.paths) && proc.paths.every(entry => typeof entry === "string")
-              && Array.isArray(proc.references) && proc.references.every(entry => typeof entry === "string"));
+          : validRetentionScan(result);
         if (!valid) throw new Error("partial or invalid retention helper reply");
         clearTimeout(pending.timer); this.pending = undefined; this.output = "";
         pending.resolve(result);

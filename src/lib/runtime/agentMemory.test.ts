@@ -625,7 +625,7 @@ const propertiesOf = (args: string[]) => args.flatMap((arg, index) => args[index
 test("operator scopes carry a high CPU weight beside their memory ceiling", () => {
   const wrapped = wrapAgentCommand({ ...basePlan, cpu: operatorCpu }, "agent", ["x"]);
   expect(wrapped.args).toContain("--slice=delegatus-agents-test.slice");
-  expect(propertiesOf(wrapped.args)).toEqual([`MemoryMax=${15 * GIB}`, "MemorySwapMax=0", "OOMPolicy=continue", "CPUWeight=1000", "BindsTo=delegatus.service", "After=delegatus.service"]);
+  expect(propertiesOf(wrapped.args)).toEqual(["Delegate=yes", `MemoryMax=${15 * GIB}`, "MemorySwapMax=0", "OOMPolicy=continue", "CPUWeight=1000", "BindsTo=delegatus.service", "After=delegatus.service"]);
 });
 test("work scopes sit in the work slice with a per-scope quota whatever the memory mode", () => {
   const scoped = wrapAgentCommand({ ...basePlan, cpu: workCpu }, "agent", ["x"]);
@@ -643,7 +643,7 @@ test("work scopes sit in the work slice with a per-scope quota whatever the memo
   expect(off.unit).toMatch(/^delegatus-agent-codex-[0-9a-f]{12}\.scope$/);
   const bare = wrapAgentCommand(off, "agent", ["x"]);
   expect(bare.args.slice(bare.args.indexOf("--") + 1)).toEqual(["agent", "x"]);
-  expect(propertiesOf(bare.args).filter((property) => !property.startsWith("BindsTo=") && !property.startsWith("After="))).toEqual(["CPUWeight=100", "CPUQuota=300%", "CPUQuotaPeriodSec=20ms"]);
+  expect(propertiesOf(bare.args).filter((property) => !property.startsWith("BindsTo=") && !property.startsWith("After="))).toEqual(["Delegate=yes", "CPUWeight=100", "CPUQuota=300%", "CPUQuotaPeriodSec=20ms"]);
   const cell = new AgentMemoryCell(off, { cgroupForPid: () => null });
   try { expect(cell.memoryState()).toBeNull(); } finally { cell.close(); }
   expect(planAgentMemory({ engine: "codex", sessionKey: "off", liveAgents: 1 }, { NODE_ENV: "test", DELEGATUS_AGENT_MEMORY: "off" })).toBeNull();

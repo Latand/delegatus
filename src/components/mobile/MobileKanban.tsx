@@ -22,6 +22,7 @@ import { SeatActionWires } from "@/components/kanban/SeatActionWires";
 import { TaskMotionLine } from "@/components/kanban/TaskMotionLine";
 import { cardAnswers, cardState, formAnswerTarget, type CardState } from "@/components/kanban/cardState";
 import { CardStateLine } from "@/components/kanban/CardStateLine";
+import { TaskSpendMarks, useTaskSpendLabel } from "@/components/kanban/TaskSpend";
 import { hasTaskMeta, TaskMeta } from "@/components/kanban/TaskMeta";
 import { openPrototypeReview } from "@/hooks/usePrototypeReview";
 import { requestTaskLane } from "./taskLaneRequest";
@@ -532,7 +533,10 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onOpenStag
   const motion = loose && item.firstAgent?.agentActivity ? null : <TaskMotionLine finding={card.task?.finding} motion={card.motion} working={card.working} nowMs={nowMs} plain laneShown={Boolean(!state && item.shown && !loose)} taskTitle={card.holdTarget?.title} cpuWaiting={cardWaitsForCpu(card.pipelines, card.working)} />;
   /* The task's review row is already where a waiting round is answered. */
   const answerRow = onAnswer && state && cardAnswers(state) && !(state.subject.kind === "form" && item.waitsOnPrototype) ? state : null;
-  const label = [t(item.kind === "task" ? "mobile2.kanban.openTask" : "mobile2.kanban.openRow", { title }), priority ? t(`kanban.priorityMark.${priority}`) : null, item.waitsOnPrototype ? t(card.task?.prototypeReview?.asks === "questions" ? "proto.notice.questions" : "proto.notice.ready") : null, project].filter(Boolean).join(", ");
+  /* The task's limit spend: passive marks on the state line, read into the face's one label. */
+  const spendTask = item.kind === "task" && card.task && !remote ? card.task.id : null;
+  const spendLabel = useTaskSpendLabel(spendTask);
+  const label = [t(item.kind === "task" ? "mobile2.kanban.openTask" : "mobile2.kanban.openRow", { title }), priority ? t(`kanban.priorityMark.${priority}`) : null, item.waitsOnPrototype ? t(card.task?.prototypeReview?.asks === "questions" ? "proto.notice.questions" : "proto.notice.ready") : null, project, state ? spendLabel : null].filter(Boolean).join(", ");
   const body = (
     <>
       {project ? (
@@ -571,7 +575,7 @@ function CardView({ item, now, project, remoteAgents, remote, onOpen, onOpenStag
         <NeedBadge item={item} />
       </span>
       {state ? (
-        <CardStateLine state={state} nowMs={nowMs} title={title} phone motion={motion} />
+        <CardStateLine state={state} nowMs={nowMs} title={title} phone motion={motion} spend={spendTask ? <TaskSpendMarks taskId={spendTask} interactive={false} /> : undefined} />
       ) : motion}
       {item.kind === "task" && card.task && hasTaskMeta(card.task) ? <span className="card-meta-line"><TaskMeta task={card.task} nowMs={nowMs} /></span> : null}
       <TaskStepsLine summary={card.stepSummary} />

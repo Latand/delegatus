@@ -1,4 +1,4 @@
-import { ORCHESTRATOR_ROLE_TABLE_HEADING, orchestratorMandateWithRoleTable } from "@/lib/orchestrator/prompt";
+import { ORCHESTRATOR_ROLE_TABLE_HEADING, orchestratorMandateUpgraded, orchestratorMandateWithRoleTable } from "@/lib/orchestrator/prompt";
 import type { MandateDelivery } from "@/lib/runtime/messageOrigin";
 
 /**
@@ -41,14 +41,18 @@ export function heldMandateFor(conversationKey: string | null | undefined): Held
 export function heldMandateMatches(card: HeldMandate, recordText: string): boolean {
   const text = recordText.trim();
   if (text === card.text.trim() || text === card.echoText?.trim()) return true;
-  const delivered = orchestratorMandateWithRoleTable(card.text, null).trim();
-  // A provisional card can precede the server's exact echo. The role scaffold
-  // prefixes the same completed mandate; only its first uncropped record uses
-  // this fallback, and provenance remains authoritative once it arrives.
-  const start = text.startsWith(delivered) ? 0 : text.indexOf(`\n\n${delivered}`);
-  if (start < 0) return false;
-  const body = text.slice(start === 0 ? 0 : start + 2);
-  return body === delivered || body.startsWith(`${delivered}\n\n${ORCHESTRATOR_ROLE_TABLE_HEADING}\n`);
+  // A new intent records the upgraded mandate; a replay of an older intent
+  // delivers the text as it was recorded.
+  return [orchestratorMandateUpgraded(card.text), card.text].some((mandate) => {
+    const delivered = orchestratorMandateWithRoleTable(mandate, null).trim();
+    // A provisional card can precede the server's exact echo. The role scaffold
+    // prefixes the same completed mandate; only its first uncropped record uses
+    // this fallback, and provenance remains authoritative once it arrives.
+    const start = text.startsWith(delivered) ? 0 : text.indexOf(`\n\n${delivered}`);
+    if (start < 0) return false;
+    const body = text.slice(start === 0 ? 0 : start + 2);
+    return body === delivered || body.startsWith(`${delivered}\n\n${ORCHESTRATOR_ROLE_TABLE_HEADING}\n`);
+  });
 }
 
 /**

@@ -91,6 +91,9 @@ export type ChatRow = {
 };
 
 export type SendRow = {
+  botId: string | null;
+  botIdentity: { name: string; username: string | null } | null;
+  attempts: import("./multiBot").BotAttempt[];
   state: "pending" | "sent" | "failed";
   chatId: string;
   messageIds: number[];
@@ -305,9 +308,21 @@ export class TelegramBotStore {
          documents gain the column empty. */
       const messageColumns = new Set(db.query<{ name: string }, []>("PRAGMA table_info(messages)").all().map((column) => column.name));
       if (!messageColumns.has("file_name")) db.exec("ALTER TABLE messages ADD COLUMN file_name TEXT");
+      db.exec("CREATE TABLE IF NOT EXISTS sending_bots (bot_id TEXT PRIMARY KEY, name TEXT NOT NULL, username TEXT, connected_at TEXT NOT NULL, token_state TEXT NOT NULL DEFAULT 'ok')");
+      db.exec("CREATE TABLE IF NOT EXISTS chat_bots (chat_id TEXT NOT NULL, bot_id TEXT NOT NULL, value_json TEXT NOT NULL, PRIMARY KEY (chat_id, bot_id))");
+      for (const [table, column, definition] of [
+        ["chats", "assigned_bot", "TEXT"], ["chats", "last_delivery", "TEXT"],
+        ["sends", "bot_id", "TEXT"], ["sends", "bot_identity", "TEXT"], ["sends", "attempts", "TEXT NOT NULL DEFAULT '[]'"],
+      ]) {
+        const columns = db.query<{ name: string }, []>(`PRAGMA table_info(${table})`).all();
+        if (!columns.some(c => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+      }
       return db;
     });
   }
+
+  /** Read-only snapshots for the bounded multi-bot settings surface. */
+  postingState<T>(read: (db: import("bun:sqlite").Database) => T): T { return read(this.db); }
 
   close(): void {
     try { this.db.close(); } catch { /* already closed */ }
@@ -532,7 +547,7 @@ export class TelegramBotStore {
 
   private migrateChatRows(fromChatId: string, toChatId: string, type: TelegramChatType): void {
     if (fromChatId === toChatId) return;
-    const source = this.db.query<SqlChat, [string]>(`${CHAT_SELECT} WHERE c.chat_id = ?1`).get(fromChatId);
+    const source = this.db.query<SqlChat & { assigned_bot: string | null; last_delivery: string | null }, [string]>(`${CHAT_SELECT} WHERE c.chat_id = ?1`).get(fromChatId);
     if (!source) return;
     const target = this.db.query<SqlChat, [string]>(`${CHAT_SELECT} WHERE c.chat_id = ?1`).get(toChatId);
     if (!target) {
@@ -546,14 +561,17 @@ export class TelegramBotStore {
           last_post_at = COALESCE(last_post_at, ?4),
           last_post_conversation_id = COALESCE(last_post_conversation_id, ?5),
           bot_status = COALESCE(bot_status, ?6),
-          first_seen_at = MIN(first_seen_at, ?7)
+          first_seen_at = MIN(first_seen_at, ?7),
+          assigned_bot = COALESCE(assigned_bot, ?8), last_delivery = COALESCE(last_delivery, ?9)
         WHERE chat_id = ?1
-      `).run(toChatId, source.alias, source.post_allowed, source.last_post_at, source.last_post_conversation_id, source.bot_status, source.first_seen_at);
+      `).run(toChatId, source.alias, source.post_allowed, source.last_post_at, source.last_post_conversation_id, source.bot_status, source.first_seen_at, source.assigned_bot, source.last_delivery);
       this.db.query("DELETE FROM chats WHERE chat_id = ?1").run(fromChatId);
     }
     this.db.query("UPDATE OR IGNORE messages SET chat_id = ?2 WHERE chat_id = ?1").run(fromChatId, toChatId);
     this.db.query("DELETE FROM messages WHERE chat_id = ?1").run(fromChatId);
     this.db.query("UPDATE sends SET chat_id = ?2 WHERE chat_id = ?1").run(fromChatId, toChatId);
+    this.db.query("INSERT OR IGNORE INTO chat_bots(chat_id, bot_id, value_json) SELECT ?2, bot_id, value_json FROM chat_bots WHERE chat_id=?1").run(fromChatId, toChatId);
+    this.db.query("DELETE FROM chat_bots WHERE chat_id=?").run(fromChatId);
   }
 
   /** Keeps the newest {@link RETAIN_MESSAGES} of each chat and nothing older
@@ -662,20 +680,20 @@ export class TelegramBotStore {
       if (existing && (existing.state !== "failed" || existing.messageIds.length > 0)) return { claimed: false as const, row: existing };
       this.db.query(`
         INSERT INTO sends (caller_key, client_request_id, state, chat_id, created_at) VALUES (?1, ?2, 'pending', ?3, ?4)
-        ON CONFLICT(caller_key, client_request_id) DO UPDATE SET state = 'pending', chat_id = ?3, error_code = NULL, message_ids = '[]', parts = 0
+        ON CONFLICT(caller_key, client_request_id) DO UPDATE SET state = 'pending', chat_id = ?3, error_code = NULL, message_ids = '[]', parts = 0, bot_id = NULL, bot_identity = NULL, attempts = '[]'
       `).run(callerKey, clientRequestId, chatId, now.toISOString());
       return { claimed: true as const };
     });
   }
 
   sendRow(callerKey: string, clientRequestId: string): SendRow | null {
-    const row = this.db.query<{ state: string; chat_id: string; message_ids: string; parts: number; sent_at: string | null; error_code: string | null }, [string, string]>(
-      "SELECT state, chat_id, message_ids, parts, sent_at, error_code FROM sends WHERE caller_key = ?1 AND client_request_id = ?2",
+    const row = this.db.query<{ state: string; chat_id: string; message_ids: string; parts: number; sent_at: string | null; error_code: string | null; bot_id: string | null; bot_identity: string | null; attempts: string }, [string, string]>(
+      "SELECT state, chat_id, message_ids, parts, sent_at, error_code, bot_id, bot_identity, attempts FROM sends WHERE caller_key = ?1 AND client_request_id = ?2",
     ).get(callerKey, clientRequestId);
     if (!row) return null;
     let messageIds: number[] = [];
     try { messageIds = (parseSqliteJson(row.message_ids, this.db) as unknown[]).filter((value): value is number => Number.isSafeInteger(value)); } catch { /* none */ }
-    return { state: row.state as SendRow["state"], chatId: row.chat_id, messageIds, parts: row.parts, sentAt: row.sent_at, errorCode: row.error_code };
+    return { botId: row.bot_id, botIdentity: row.bot_identity ? parseSqliteJson(row.bot_identity, this.db) as SendRow["botIdentity"] : null, attempts: parseSqliteJson(row.attempts, this.db) as SendRow["attempts"], state: row.state as SendRow["state"], chatId: row.chat_id, messageIds, parts: row.parts, sentAt: row.sent_at, errorCode: row.error_code };
   }
 
   /** Identifies settled legacy receipts so callers can preserve them while

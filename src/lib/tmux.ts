@@ -1,3 +1,4 @@
+import { terminalSignalSandboxCommand } from "@/lib/runtime/agentSignalSandbox";
 import { memoryIndex } from "@/lib/memory/service";
 import { unsupportedApiCredentialNames, withoutUnsupportedApiCredentials } from "@/lib/environmentIsolation";
 import { spawn } from "node:child_process";
@@ -1354,7 +1355,7 @@ async function spawnAgentWithPromptUnchecked(spec: ResumeSpec, text: string, rec
     if (placement) await placePaneInCpuScope(binding, spec.engine, placement, endpoint, runBoundTmux);
     const capability = initialCapability ?? (await agentRegistry().deliveryWriteOrBusy({ label: "registry.rotateSpawnCapabilityForReceipt" }, agentRegistry().rotateSpawnCapabilityForReceipt.bind(agentRegistry(), receipt.launchId)));
     const bootSpec = withSpawnCapability(spec, capability);
-    await sendShellCommandToPane(target, spec.cwd, bootSpec.command, runBoundTmux);
+    await sendShellCommandToPane(target, spec.cwd, terminalSignalSandboxCommand(bootSpec.command), runBoundTmux);
   }
 
   const deadline = Date.now() + SPAWN_READY_TIMEOUT_MS;

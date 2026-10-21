@@ -1,4 +1,5 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import { readRequestBody, requestBodyTooLargeMessage } from "@modelcontextprotocol/sdk/server/requestBody.js";
 import crypto from "node:crypto";
 import type { NextRequest } from "next/server";
 
@@ -6,6 +7,7 @@ import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/capabilityHeader";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { TASK_EXECUTOR_TOOLS, viewerTaskExecutor } from "./taskExecutor";
 import { mcpHttpRefusal as refusal } from "./httpResponse";
+import { MCP_MAX_REQUEST_BODY_BYTES } from "./inputLimits";
 
 import {
   createProductionViewerMcpService,
@@ -53,6 +55,21 @@ import {
 const CAPABILITY_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const CONNECTION_HEADER = "mcp-session-id";
 const CONNECTION_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+
+class McpBodyTooLargeError extends Error {}
+
+// All three ingress paths parse locally for identity, cancellation and task
+// routing. The transport's maxRequestBodySize is bypassed by parsedBody, so
+// use its bounded reader before any local JSON.parse or native peer proof.
+async function boundedBodyText(request: Request): Promise<string> {
+  const body = await readRequestBody(request, MCP_MAX_REQUEST_BODY_BYTES);
+  if (body.tooLarge) throw new McpBodyTooLargeError();
+  return body.text;
+}
+
+function bodyTooLarge(): Response {
+  return refusal(413, -32000, requestBodyTooLargeMessage(MCP_MAX_REQUEST_BODY_BYTES));
+}
 
 export interface McpHttpDependencies {
   service: () => Promise<McpToolService>;
@@ -136,12 +153,15 @@ export async function handleMcpHttpRequest(request: NextRequest): Promise<Respon
   let capability = request.headers.get(VIEWER_SPAWN_CAPABILITY_HEADER)?.trim() ?? "";
   if (nativeHeader && !request.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER)) {
     try {
-      const raw = await request.text();
+      const raw = await boundedBodyText(request);
       const { verifyNativePeer } = await import("./nativePeer");
       nativePeer = await verifyNativePeer(nativeHeader, raw);
       body = JSON.parse(raw);
       capability = `native:${nativePeer.pid}:${nativePeer.startIdentity}:${nativePeer.bootEpoch}`;
-    } catch { return refusal(403, -32001, "The native MCP peer could not be authenticated."); }
+    } catch (error) {
+      if (error instanceof McpBodyTooLargeError) return bodyTooLarge();
+      return refusal(403, -32001, "The native MCP peer could not be authenticated.");
+    }
   }
   if (!nativeHeader && !request.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER) && request.headers.get("x-delegatus-mcp-unattributed") === "1") {
     const { internalServiceClaim } = await import("@/lib/agent/callerClaims");
@@ -159,8 +179,11 @@ export async function handleMcpHttpRequest(request: NextRequest): Promise<Respon
   let parseFailed = false;
   if (!bodyRead && !testDependencies && length !== null && /^\d{1,5}$/.test(length) && Number(length) <= 16_384) {
     bodyRead = true;
-    try { body = await request.json(); }
-    catch { parseFailed = true; }
+    try { body = JSON.parse(await boundedBodyText(request)); }
+    catch (error) {
+      if (error instanceof McpBodyTooLargeError) return bodyTooLarge();
+      parseFailed = true;
+    }
   }
   const earlyMessages = bodyRead && !parseFailed ? jsonRpcMessages(body) : [];
   const earlyTool = earlyMessages.length === 1 && earlyMessages[0]?.method === "tools/call"
@@ -189,8 +212,9 @@ export async function handleMcpHttpRequest(request: NextRequest): Promise<Respon
 
   try {
     if (parseFailed) throw new Error("invalid JSON");
-    if (!bodyRead) body = await request.json();
-  } catch {
+    if (!bodyRead) body = JSON.parse(await boundedBodyText(request));
+  } catch (error) {
+    if (error instanceof McpBodyTooLargeError) return bodyTooLarge();
     return refusal(400, -32700, "Parse error: the request body is not JSON.");
   }
   const messages = jsonRpcMessages(body);
@@ -252,7 +276,8 @@ export async function handleMcpHttpRequest(request: NextRequest): Promise<Respon
       }
     }
     server = createViewerMcpServer(service, tools, textOnly);
-    const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+    const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true,
+      maxRequestBodySize: MCP_MAX_REQUEST_BODY_BYTES });
     await server.connect(transport);
     const response = await transport.handleRequest(request, {
       parsedBody: body,

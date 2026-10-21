@@ -29,8 +29,9 @@
   ],
   "scripts": {
     "dev": "LLV_STATE_OWNER=viewer NODE_ENV=development bun --bun node_modules/.bin/next dev --webpack --hostname 127.0.0.1",
-    "build": "next build --webpack && bun run build:mcp",
+    "build": "next build --webpack && bun run build:mcp && bun run build:gate",
     "build:mcp": "bun scripts/build-mcp.ts",
+    "build:gate": "bun scripts/build-gate.ts",
     "demo:capture": "bun scripts/demo-capture.ts",
     "deploy:staging": "bun scripts/deploy-staging.ts",
     "bootstrap:runtime-host": "bun scripts/bootstrap-runtime-host.ts",
@@ -47,7 +48,7 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.31.0",
+    "@modelcontextprotocol/sdk": "1.32.0",
     "@simplewebauthn/browser": "14.0.0",
     "@simplewebauthn/server": "14.0.3",
     "entities": "^8.0.0",

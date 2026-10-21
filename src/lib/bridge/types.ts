@@ -235,6 +235,8 @@ export function isBridgeReportOutcomeKind(value: unknown): value is BridgeReport
 export type BridgeReportTelegramState = "pending" | "sent" | "failed" | "uncertain";
 
 export interface BridgeReportTelegram {
+  bot?: string;
+  refusals?: { bot: string; code: string }[];
   /** The bot chat's alias the project chose. */
   chat: string;
   topicId?: number;

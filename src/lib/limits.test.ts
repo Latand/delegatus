@@ -13,7 +13,7 @@ process.env.LLV_CLAUDE_HOME = path.join(SANDBOX, "legacy-claude");
 fs.mkdirSync(process.env.LLV_CLAUDE_HOME, { recursive: true });
 fs.writeFileSync(path.join(process.env.LLV_CLAUDE_HOME, ".credentials.json"), JSON.stringify({ claudeAiOauth: { accessToken: "test-token", subscriptionType: "max" } }), { mode: 0o600 });
 
-const { createManagedCodexAccount, setActiveCodexAccount } = await import("@/lib/accounts/codex");
+const { createManagedCodexAccount, setActiveCodexAccount, listCodexAccounts } = await import("@/lib/accounts/codex");
 const {
   cachedLimitsProvenance,
   fetchClaudeLimits,
@@ -25,6 +25,7 @@ const {
   readCodexTranscriptLimits,
   readLimits,
 } = await import("./limits");
+const { attributeQuotaFixture } = await import("./limitsQuota.fixture");
 const { recordLimitSample } = await import("@/lib/limitsHistoryStore");
 const { selectHeadlessAccount } = await import("@/lib/accounts/headlessSelection");
 const { effectiveRemaining } = await import("@/lib/accounts/migration/quotaPolicy");
@@ -45,6 +46,16 @@ const codexLiveReader = async () => ({
   planType: "pro",
 });
 
+/** Synthetic transcript writes declare custody explicitly for these parser and
+ * reconciliation cases. Hostile/unregistered cases use fs.writeFileSync. */
+function writeQuotaFixture(file: string, data: string): void {
+  fs.writeFileSync(file, data);
+  if (!file.endsWith(".jsonl")) return;
+  const account = listCodexAccounts().find(a => file.startsWith(a.sessionsDir + path.sep));
+  if (!account) throw new Error("fixture transcript account missing");
+  attributeQuotaFixture(file, account.id);
+}
+
 function resetLimitsCache(): void {
   delete (globalThis as { __llvLimitsCache?: unknown }).__llvLimitsCache;
   delete (globalThis as { __llvLimitsInflight?: unknown }).__llvLimitsInflight;
@@ -56,13 +67,13 @@ test("paid-credit metadata survives transcript/live reconciliation and windowles
   const file = path.join(account.sessionsDir, "2026", "10", "15", "credits.jsonl");
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const now = Date.parse("2026-10-15T00:00:00Z");
-  fs.writeFileSync(file, [
+  writeQuotaFixture(file, [
     { timestamp: new Date(now - 1000).toISOString(), payload: { rate_limits: {
       primary: { used_percent: 99, window_minutes: 10080, resets_at: now / 1000 + 86400 },
       credits: { has_credits: true, balance: "10", unlimited: false } } } },
     { timestamp: new Date(now).toISOString(), payload: { rate_limits: { credits: { has_credits: true, balance: "12", unlimited: false } } } },
   ].map(row => JSON.stringify(row)).join("\n") + "\n");
-  expect(readCodexTranscriptLimits(account.sessionsDir).data?.credits).toEqual({ hasCredits: true, balance: "12", unlimited: false });
+  expect(readCodexTranscriptLimits(account.sessionsDir, account.id).data?.credits).toEqual({ hasCredits: true, balance: "12", unlimited: false });
   const live = await readCodexLimits({ account, now: () => now, liveReader: async () => ({
     primary: { usedPercent: 99, windowDurationMins: 10080, resetsAt: now / 1000 + 86400 }, secondary: null, planType: "pro",
     credits: { hasCredits: true, balance: "11", unlimited: false },
@@ -183,7 +194,7 @@ test("Claude usage probes honor a caller-specific timeout", async () => {
 test("switching to an account without events never reuses another account's Codex limits", async () => {
   const legacySession = path.join(process.env.LLV_CODEX_HOME!, "sessions", "2026", "07", "09", "rollout.jsonl");
   fs.mkdirSync(path.dirname(legacySession), { recursive: true });
-  fs.writeFileSync(legacySession, JSON.stringify({ timestamp: "2026-07-09T00:00:00.000Z", payload: { rate_limits: { primary: { used_percent: 37 }, plan_type: "pro" } } }) + "\n");
+  writeQuotaFixture(legacySession, JSON.stringify({ timestamp: "2026-07-09T00:00:00.000Z", payload: { rate_limits: { primary: { used_percent: 37 }, plan_type: "pro" } } }) + "\n");
   expect((await readCodexLimits({ liveReader: async () => { throw new Error("offline"); } })).data?.session?.usedPercent).toBe(37);
 
   const fresh = createManagedCodexAccount("No events");
@@ -224,7 +235,7 @@ test("a weekly-only transcript event feeds the weekly window of the fallback rea
   const weeklyOnly = createManagedCodexAccount("Weekly only");
   const session = path.join(weeklyOnly.sessionsDir, "2026", "07", "13", "weekly.jsonl");
   fs.mkdirSync(path.dirname(session), { recursive: true });
-  fs.writeFileSync(session, JSON.stringify({
+  writeQuotaFixture(session, JSON.stringify({
     timestamp: "2026-07-13T21:04:47.943Z",
     payload: { rate_limits: { primary: { used_percent: 15, window_minutes: 10_080, resets_at: 1_784_574_264 }, secondary: null, plan_type: "pro" } },
   }) + "\n");
@@ -239,7 +250,7 @@ test("a provider-exhausted transcript window overrides a newer app-server probe"
   const resetsAt = nowS + 6 * 86_400;
   const session = path.join(account.sessionsDir, "2026", "08", "15", "exhausted.jsonl");
   fs.mkdirSync(path.dirname(session), { recursive: true });
-  fs.writeFileSync(session, JSON.stringify({
+  writeQuotaFixture(session, JSON.stringify({
     timestamp: new Date((nowS - 600) * 1000).toISOString(),
     payload: { rate_limits: { limit_id: "codex", primary: { used_percent: 100, window_minutes: 10_080, resets_at: resetsAt }, secondary: null, plan_type: "prolite" } },
   }) + "\n");
@@ -263,7 +274,7 @@ test("a usage_limit terminal record makes the matching transcript window authori
   const resetsAt = nowS + 6 * 86_400;
   const session = path.join(account.sessionsDir, "2026", "08", "15", "rejected.jsonl");
   fs.mkdirSync(path.dirname(session), { recursive: true });
-  fs.writeFileSync(session, [
+  writeQuotaFixture(session, [
     JSON.stringify({
       timestamp: new Date((nowS - 120) * 1000).toISOString(),
       payload: { type: "token_count", rate_limits: { limit_id: "codex", primary: { used_percent: 21, window_minutes: 10_080, resets_at: resetsAt }, secondary: null, plan_type: "prolite" } },
@@ -294,7 +305,7 @@ test("a redeemed reset makes the later live window authoritative and keeps the a
   const liveReset = Date.parse("2026-09-08T08:48:00.000Z") / 1000;
   const session = path.join(account.sessionsDir, "2026", "09", "01", "redeemed-reset.jsonl");
   fs.mkdirSync(path.dirname(session), { recursive: true });
-  fs.writeFileSync(session, [
+  writeQuotaFixture(session, [
     JSON.stringify({
       timestamp: "2026-09-01T02:35:00.000Z",
       payload: { type: "token_count", rate_limits: { limit_id: "codex", primary: { used_percent: 90, window_minutes: 10_080, resets_at: transcriptReset }, secondary: null, plan_type: "prolite" } },
@@ -345,7 +356,7 @@ test("a transcript's last 100% yields to the live 0% of the cycle a redeemed res
   const liveReset = Date.parse("2026-10-05T09:42:56.000Z") / 1000;
   const session = path.join(account.sessionsDir, "2026", "09", "27", "exhausted-before-reset.jsonl");
   fs.mkdirSync(path.dirname(session), { recursive: true });
-  fs.writeFileSync(session, JSON.stringify({
+  writeQuotaFixture(session, JSON.stringify({
     timestamp: "2026-09-27T21:10:00.000Z",
     payload: { type: "token_count", rate_limits: { limit_id: "codex", primary: { used_percent: 100, window_minutes: 10_080, resets_at: transcriptReset }, secondary: null, plan_type: "prolite" } },
   }) + "\n");
@@ -369,7 +380,7 @@ test("usage_limit_exceeded clears an already-expired quota reset", async () => {
   const expiredReset = nowS - 300;
   const session = path.join(account.sessionsDir, "2026", "08", "15", "expired-reset-rejected.jsonl");
   fs.mkdirSync(path.dirname(session), { recursive: true });
-  fs.writeFileSync(session, [
+  writeQuotaFixture(session, [
     JSON.stringify({
       timestamp: new Date((nowS - 120) * 1000).toISOString(),
       payload: { type: "token_count", rate_limits: { limit_id: "codex", primary: { used_percent: 21, window_minutes: 10_080, resets_at: expiredReset }, secondary: null, plan_type: "prolite" } },
@@ -398,7 +409,7 @@ test("a cleared-reset exhaustion stops governing once its window length has pass
   const expiredReset = nowS - 300;
   const session = path.join(account.sessionsDir, "2026", "08", "15", "expired-reset-lifetime.jsonl");
   fs.mkdirSync(path.dirname(session), { recursive: true });
-  fs.writeFileSync(session, [
+  writeQuotaFixture(session, [
     JSON.stringify({
       timestamp: new Date((nowS - 120) * 1000).toISOString(),
       payload: { type: "token_count", rate_limits: { limit_id: "codex", primary: { used_percent: 21, window_minutes: 10_080, resets_at: expiredReset }, secondary: null, plan_type: "prolite" } },
@@ -434,7 +445,7 @@ test("a standalone usage_limit_exceeded event exhausts the live governing window
   const resetsAt = nowS + 6 * 86_400;
   const session = path.join(account.sessionsDir, "2026", "08", "15", "standalone-rejection.jsonl");
   fs.mkdirSync(path.dirname(session), { recursive: true });
-  fs.writeFileSync(session, JSON.stringify({
+  writeQuotaFixture(session, JSON.stringify({
     timestamp: new Date((nowS - 60) * 1000).toISOString(),
     payload: { type: "task_complete", codex_error_info: "usage_limit_exceeded" },
   }) + "\n");
@@ -473,7 +484,7 @@ test("a standalone rejection exhausts a cached window when the live probe fails"
 
     const session = path.join(account.sessionsDir, "2026", "08", "15", "cached-standalone-rejection.jsonl");
     fs.mkdirSync(path.dirname(session), { recursive: true });
-    fs.writeFileSync(session, JSON.stringify({
+    writeQuotaFixture(session, JSON.stringify({
       timestamp: "2026-08-15T12:00:30.000Z",
       payload: { type: "task_complete", codex_error_info: "usage_limit_exceeded" },
     }) + "\n");
@@ -497,7 +508,7 @@ test("a rejection from a previous cycle never exhausts the live window", async (
   const resetsAt = nowS + 5 * 86_400;
   const session = path.join(account.sessionsDir, "2026", "08", "12", "previous-cycle-rejection.jsonl");
   fs.mkdirSync(path.dirname(session), { recursive: true });
-  fs.writeFileSync(session, JSON.stringify({
+  writeQuotaFixture(session, JSON.stringify({
     timestamp: new Date((nowS - 3 * 86_400) * 1000).toISOString(),
     payload: { type: "task_complete", codex_error_info: "usage_limit_exceeded" },
   }) + "\n");
@@ -523,7 +534,7 @@ test("a rejection past the transcript window's cycle never exhausts the live pro
   const capturedAt = nowS - 4 * 86_400;
   const session = path.join(account.sessionsDir, "2026", "08", "11", "rolled-over-cycle.jsonl");
   fs.mkdirSync(path.dirname(session), { recursive: true });
-  fs.writeFileSync(session, [
+  writeQuotaFixture(session, [
     JSON.stringify({
       timestamp: new Date(capturedAt * 1000).toISOString(),
       payload: { type: "token_count", rate_limits: { limit_id: "codex", primary: { used_percent: 40, window_minutes: 300, resets_at: capturedAt + 5 * 3_600 }, secondary: null, plan_type: "prolite" } },
@@ -559,7 +570,7 @@ test("a fresh rejection exhausts the live window when the transcript snapshot is
   const capturedAt = nowS - 10 * 86_400;
   const session = path.join(account.sessionsDir, "2026", "08", "05", "stale-snapshot-fresh-rejection.jsonl");
   fs.mkdirSync(path.dirname(session), { recursive: true });
-  fs.writeFileSync(session, [
+  writeQuotaFixture(session, [
     JSON.stringify({
       timestamp: new Date(capturedAt * 1000).toISOString(),
       payload: { type: "token_count", rate_limits: { limit_id: "codex", primary: { used_percent: 21, window_minutes: 10_080, resets_at: capturedAt + 86_400 }, secondary: null, plan_type: "prolite" } },
@@ -592,7 +603,7 @@ test("a live cycle that opened after the rejection ends its reset-erased exhaust
   const snapshotAt = nowS - 8 * 86_400;
   const session = path.join(account.sessionsDir, "2026", "08", "07", "rolled-live-cycle.jsonl");
   fs.mkdirSync(path.dirname(session), { recursive: true });
-  fs.writeFileSync(session, [
+  writeQuotaFixture(session, [
     JSON.stringify({
       timestamp: new Date(snapshotAt * 1000).toISOString(),
       payload: { type: "token_count", rate_limits: { limit_id: "codex", primary: { used_percent: 30, window_minutes: 10_080, resets_at: nowS - 7 * 86_400 }, secondary: null, plan_type: "prolite" } },
@@ -640,7 +651,7 @@ test("a rejection projected onto cache keeps the failed probe's backoff", async 
 
     const session = path.join(account.sessionsDir, "2026", "08", "16", "cached-rejection-backoff.jsonl");
     fs.mkdirSync(path.dirname(session), { recursive: true });
-    fs.writeFileSync(session, JSON.stringify({
+    writeQuotaFixture(session, JSON.stringify({
       timestamp: "2026-08-16T12:00:30.000Z",
       payload: { type: "task_complete", codex_error_info: "usage_limit_exceeded" },
     }) + "\n");
@@ -685,7 +696,7 @@ test("a cached rejection stops being current once the window it exhausted resets
 
     const session = path.join(account.sessionsDir, "2026", "08", "17", "cached-rejection-expiry.jsonl");
     fs.mkdirSync(path.dirname(session), { recursive: true });
-    fs.writeFileSync(session, JSON.stringify({
+    writeQuotaFixture(session, JSON.stringify({
       timestamp: "2026-08-17T12:05:00.000Z",
       payload: { type: "task_complete", codex_error_info: "usage_limit_exceeded" },
     }) + "\n");
@@ -715,7 +726,7 @@ test("an elapsed rejection stops governing the offline transcript fallback", asy
   const resetsAt = nowS - 30 * 86_400;
   const session = path.join(account.sessionsDir, "2026", "07", "19", "elapsed-fallback.jsonl");
   fs.mkdirSync(path.dirname(session), { recursive: true });
-  fs.writeFileSync(session, [
+  writeQuotaFixture(session, [
     JSON.stringify({
       timestamp: new Date((resetsAt - 3_600) * 1000).toISOString(),
       payload: { type: "token_count", rate_limits: { limit_id: "codex", primary: { used_percent: 21, window_minutes: 10_080, resets_at: resetsAt }, secondary: null, plan_type: "prolite" } },
@@ -750,7 +761,7 @@ test("a rejection reconciled during a live poll leaves the live reading in the c
   try {
     const session = path.join(account.sessionsDir, "2026", "08", "19", "reconciled-rejection.jsonl");
     fs.mkdirSync(path.dirname(session), { recursive: true });
-    fs.writeFileSync(session, JSON.stringify({
+    writeQuotaFixture(session, JSON.stringify({
       timestamp: "2026-08-19T11:59:30.000Z",
       payload: { type: "task_complete", codex_error_info: "usage_limit_exceeded" },
     }) + "\n");
@@ -790,7 +801,7 @@ test("a rejection on a window declaring no bounds expires at its canonical horiz
   const rejectedAt = capturedAt + 60;
   const session = path.join(account.sessionsDir, "2026", "07", "10", "boundless.jsonl");
   fs.mkdirSync(path.dirname(session), { recursive: true });
-  fs.writeFileSync(session, [
+  writeQuotaFixture(session, [
     JSON.stringify({ timestamp: new Date(capturedAt * 1000).toISOString(), payload: { rate_limits: { primary: { used_percent: 22 } } } }),
     JSON.stringify({ timestamp: new Date(rejectedAt * 1000).toISOString(), payload: { type: "task_complete", codex_error_info: "usage_limit_exceeded" } }),
   ].join("\n") + "\n");
@@ -838,7 +849,7 @@ test("a rejection from a previous cycle leaves a cached window as cached evidenc
 
     const session = path.join(account.sessionsDir, "2026", "08", "12", "cached-previous-cycle-rejection.jsonl");
     fs.mkdirSync(path.dirname(session), { recursive: true });
-    fs.writeFileSync(session, JSON.stringify({
+    writeQuotaFixture(session, JSON.stringify({
       timestamp: "2026-08-12T12:00:00.000Z",
       payload: { type: "task_complete", codex_error_info: "usage_limit_exceeded" },
     }) + "\n");
@@ -860,7 +871,7 @@ test("a root-envelope usage_limit_exceeded event is authoritative in one transcr
   const resetsAt = nowS + 6 * 86_400;
   const session = path.join(account.sessionsDir, "2026", "08", "15", "root-rejected.jsonl");
   fs.mkdirSync(path.dirname(session), { recursive: true });
-  fs.writeFileSync(session, [
+  writeQuotaFixture(session, [
     JSON.stringify({
       timestamp: new Date((nowS - 120) * 1000).toISOString(),
       payload: { type: "token_count", rate_limits: { limit_id: "codex", primary: { used_percent: 21, window_minutes: 10_080, resets_at: resetsAt }, secondary: null, plan_type: "prolite" } },
@@ -891,11 +902,11 @@ test("usage_limit_exceeded carries from the newest transcript file to an older q
   const rejectionFile = path.join(account.sessionsDir, "2026", "08", "15", "rejection.jsonl");
   fs.mkdirSync(path.dirname(quotaFile), { recursive: true });
   fs.mkdirSync(path.dirname(rejectionFile), { recursive: true });
-  fs.writeFileSync(quotaFile, JSON.stringify({
+  writeQuotaFixture(quotaFile, JSON.stringify({
     timestamp: new Date((nowS - 120) * 1000).toISOString(),
     payload: { type: "token_count", rate_limits: { limit_id: "codex", primary: { used_percent: 21, window_minutes: 10_080, resets_at: resetsAt }, secondary: null, plan_type: "prolite" } },
   }) + "\n");
-  fs.writeFileSync(rejectionFile, JSON.stringify({
+  writeQuotaFixture(rejectionFile, JSON.stringify({
     timestamp: new Date((nowS - 60) * 1000).toISOString(),
     payload: { type: "task_complete", message: "You've hit your usage limit. Try again after reset.", codex_error_info: "usage_limit_exceeded" },
   }) + "\n");
@@ -920,11 +931,11 @@ test("transcript reconciliation selects a newer rejection by event time across s
   const rejectionFile = path.join(account.sessionsDir, "2026", "08", "14", "long-running.jsonl");
   fs.mkdirSync(path.dirname(quotaFile), { recursive: true });
   fs.mkdirSync(path.dirname(rejectionFile), { recursive: true });
-  fs.writeFileSync(quotaFile, JSON.stringify({
+  writeQuotaFixture(quotaFile, JSON.stringify({
     timestamp: new Date((nowS - 120) * 1000).toISOString(),
     payload: { type: "token_count", rate_limits: { limit_id: "codex", primary: { used_percent: 21, window_minutes: 10_080, resets_at: resetsAt }, secondary: null, plan_type: "prolite" } },
   }) + "\n");
-  fs.writeFileSync(rejectionFile, JSON.stringify({
+  writeQuotaFixture(rejectionFile, JSON.stringify({
     timestamp: new Date((nowS - 60) * 1000).toISOString(),
     payload: { type: "task_complete", error: { message: "You've hit your usage limit. Try again after reset.", codex_error_info: "usage_limit_exceeded" } },
   }) + "\n");
@@ -947,16 +958,16 @@ test("a newer sub-second quota event supersedes an older cross-file rejection", 
   const quotaFile = path.join(account.sessionsDir, "2026", "08", "15", "quota.jsonl");
   fs.mkdirSync(path.dirname(rejectionFile), { recursive: true });
   fs.mkdirSync(path.dirname(quotaFile), { recursive: true });
-  fs.writeFileSync(rejectionFile, JSON.stringify({
+  writeQuotaFixture(rejectionFile, JSON.stringify({
     timestamp: "2026-08-15T12:00:00.100Z",
     payload: { type: "task_complete", codex_error_info: "usage_limit_exceeded" },
   }) + "\n");
-  fs.writeFileSync(quotaFile, JSON.stringify({
+  writeQuotaFixture(quotaFile, JSON.stringify({
     timestamp: "2026-08-15T12:00:00.400Z",
     payload: { type: "token_count", rate_limits: { limit_id: "codex", primary: { used_percent: 21, window_minutes: 10_080, resets_at: 1_787_000_000 }, secondary: null, plan_type: "prolite" } },
   }) + "\n");
 
-  expect(readCodexTranscriptLimits(account.sessionsDir).data?.weekly).toMatchObject({
+  expect(readCodexTranscriptLimits(account.sessionsDir, account.id).data?.weekly).toMatchObject({
     usedPercent: 21,
     observedAt: Date.parse("2026-08-15T12:00:00.400Z") / 1000,
   });
@@ -968,16 +979,16 @@ test("cross-file quota events retain sub-second ordering", () => {
   const newerFile = path.join(account.sessionsDir, "2026", "08", "14", "newer-long-running.jsonl");
   fs.mkdirSync(path.dirname(olderFile), { recursive: true });
   fs.mkdirSync(path.dirname(newerFile), { recursive: true });
-  fs.writeFileSync(olderFile, JSON.stringify({
+  writeQuotaFixture(olderFile, JSON.stringify({
     timestamp: "2026-08-15T12:00:00.100Z",
     payload: { type: "token_count", rate_limits: { limit_id: "codex", primary: { used_percent: 37, window_minutes: 10_080, resets_at: 1_787_000_000 }, secondary: null, plan_type: "prolite" } },
   }) + "\n");
-  fs.writeFileSync(newerFile, JSON.stringify({
+  writeQuotaFixture(newerFile, JSON.stringify({
     timestamp: "2026-08-15T12:00:00.400Z",
     payload: { type: "token_count", rate_limits: { limit_id: "codex", primary: { used_percent: 21, window_minutes: 10_080, resets_at: 1_787_000_000 }, secondary: null, plan_type: "prolite" } },
   }) + "\n");
 
-  expect(readCodexTranscriptLimits(account.sessionsDir).data?.weekly).toMatchObject({
+  expect(readCodexTranscriptLimits(account.sessionsDir, account.id).data?.weekly).toMatchObject({
     usedPercent: 21,
     observedAt: Date.parse("2026-08-15T12:00:00.400Z") / 1000,
   });
@@ -993,7 +1004,7 @@ test("transcript candidate discovery bounds metadata reads in a large session tr
     }
   }
   const current = path.join(account.sessionsDir, "2026", "07", "40", "zz-current.jsonl");
-  fs.writeFileSync(current, JSON.stringify({
+  writeQuotaFixture(current, JSON.stringify({
     timestamp: "2026-08-15T12:00:00.400Z",
     payload: { type: "token_count", rate_limits: { limit_id: "codex", primary: { used_percent: 21, window_minutes: 10_080, resets_at: 1_787_000_000 }, secondary: null, plan_type: "prolite" } },
   }) + "\n");
@@ -1005,7 +1016,7 @@ test("transcript candidate discovery bounds metadata reads in a large session tr
     return realStatSync(target, ...args as []);
   }) as typeof fs.statSync);
   try {
-    expect(readCodexTranscriptLimits(account.sessionsDir).data?.weekly?.usedPercent).toBe(21);
+    expect(readCodexTranscriptLimits(account.sessionsDir, account.id).data?.weekly?.usedPercent).toBe(21);
     expect(sessionStats).toBeLessThanOrEqual(120);
   } finally {
     statSync.mockRestore();
@@ -1026,7 +1037,7 @@ test("recent history indexes a long-running rejection beyond the day-bucket boun
   );
   const oldFile = path.join(oldDir, `rollout-2026-06-01T12-00-00-${sessionId}.jsonl`);
   fs.mkdirSync(oldDir, { recursive: true });
-  fs.writeFileSync(oldFile, JSON.stringify({
+  writeQuotaFixture(oldFile, JSON.stringify({
     timestamp: "2026-08-15T12:00:01.000Z",
     payload: { type: "task_complete", codex_error_info: "usage_limit_exceeded" },
   }) + "\n");
@@ -1038,7 +1049,7 @@ test("recent history indexes a long-running rejection beyond the day-bucket boun
   for (let day = 1; day <= 10; day += 1) {
     const dir = path.join(account.sessionsDir, "2026", "08", String(day).padStart(2, "0"));
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, "quota.jsonl"), JSON.stringify({
+    writeQuotaFixture(path.join(dir, "quota.jsonl"), JSON.stringify({
       timestamp: "2026-08-15T12:00:00.400Z",
       payload: { type: "token_count", rate_limits: { limit_id: "codex", primary: { used_percent: 21, window_minutes: 10_080, resets_at: 1_787_000_000 }, secondary: null, plan_type: "prolite" } },
     }) + "\n");
@@ -1046,7 +1057,7 @@ test("recent history indexes a long-running rejection beyond the day-bucket boun
 
   // The indexed rejection travels on the read, and the consumer that projects
   // it turns the newest quota event into the exhaustion it reports.
-  const transcript = readCodexTranscriptLimits(account.sessionsDir);
+  const transcript = readCodexTranscriptLimits(account.sessionsDir, account.id);
   expect(transcript.rejectedAt).toBe(Date.parse("2026-08-15T12:00:01.000Z") / 1000);
   expect(transcript.data?.weekly).toMatchObject({ usedPercent: 21 });
 
@@ -1069,7 +1080,7 @@ test("a newer windowless rate-limits event does not mask the account's real wind
   const masked = createManagedCodexAccount("Windowless newest");
   const session = path.join(masked.sessionsDir, "2026", "07", "24", "masked.jsonl");
   fs.mkdirSync(path.dirname(session), { recursive: true });
-  fs.writeFileSync(session, [
+  writeQuotaFixture(session, [
     JSON.stringify({ timestamp: "2026-07-24T06:00:00.000Z", payload: { rate_limits: { limit_id: "codex", primary: { used_percent: 15, window_minutes: 10_080, resets_at: 1_785_000_000 }, secondary: null, plan_type: "pro" } } }),
     JSON.stringify({ timestamp: "2026-07-24T13:05:43.423Z", payload: { rate_limits: { limit_id: "premium", primary: null, secondary: null, plan_type: null } } }),
   ].join("\n") + "\n");
@@ -1082,7 +1093,7 @@ test("managed transcript fallback reports per-engine provenance without account 
   const fallback = createManagedCodexAccount("Transcript fallback");
   const session = path.join(fallback.sessionsDir, "2026", "07", "10", "fallback.jsonl");
   fs.mkdirSync(path.dirname(session), { recursive: true });
-  fs.writeFileSync(session, JSON.stringify({ timestamp: "2026-07-10T00:00:00.000Z", payload: { rate_limits: { primary: { used_percent: 22 } } } }) + "\n");
+  writeQuotaFixture(session, JSON.stringify({ timestamp: "2026-07-10T00:00:00.000Z", payload: { rate_limits: { primary: { used_percent: 22 } } } }) + "\n");
   const result = await readCodexLimits({ account: fallback, liveReader: async () => { throw new Error("offline access_token=secret"); } });
   expect(result.data?.session?.usedPercent).toBe(22);
   expect(result.source).toBe("transcript");
@@ -1117,7 +1128,7 @@ test("readLimits stamps the active account id into the payload and disk cache", 
   }
 });
 
-test("readLimits stamps a fresh legacy Codex cache while refreshing Claude", async () => {
+test("readLimits discards a legacy Codex cache with unproven account attribution while refreshing Claude", async () => {
   const account = createManagedCodexAccount("Legacy cache");
   setActiveCodexAccount(account.id);
   const cacheFile = path.join(process.env.LLV_STATE_DIR!, "limits-cache.json");
@@ -1142,7 +1153,7 @@ test("readLimits stamps a fresh legacy Codex cache while refreshing Claude", asy
   try {
     const payload = await readLimits({ codexLiveReader: async () => { throw new Error("offline"); } });
     expect(payload.codexAccountId).toBe(account.id);
-    expect(payload.codex?.session?.usedPercent).toBe(37);
+    expect(payload.codex).toBeNull();
     expect(fetchCalled).toBeTrue();
   } finally {
     globalThis.fetch = realFetch;
@@ -1153,7 +1164,7 @@ test("a fresh Claude cache still refreshes missing Codex limits", async () => {
   setActiveCodexAccount("default");
   const legacySession = path.join(process.env.LLV_CODEX_HOME!, "sessions", "2026", "07", "09", "refresh.jsonl");
   fs.mkdirSync(path.dirname(legacySession), { recursive: true });
-  fs.writeFileSync(legacySession, JSON.stringify({ timestamp: "2026-07-09T00:00:00.000Z", payload: { rate_limits: { primary: { used_percent: 37 }, plan_type: "pro" } } }) + "\n");
+  writeQuotaFixture(legacySession, JSON.stringify({ timestamp: "2026-07-09T00:00:00.000Z", payload: { rate_limits: { primary: { used_percent: 37 }, plan_type: "pro" } } }) + "\n");
   const cacheFile = path.join(process.env.LLV_STATE_DIR!, "limits-cache.json");
   fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
   fs.writeFileSync(cacheFile, JSON.stringify({
@@ -1381,7 +1392,7 @@ test("a weekly-only Codex account charts its weekly window and names the missing
   });
   const transcript = path.join(account.sessionsDir, "2026", "07", "20", "weekly-burndown.jsonl");
   fs.mkdirSync(path.dirname(transcript), { recursive: true });
-  fs.writeFileSync(transcript, [event(7_200, 30), event(3_600, 45)].join("\n") + "\n");
+  writeQuotaFixture(transcript, [event(7_200, 30), event(3_600, 45)].join("\n") + "\n");
 
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async () => new Response(null, { status: 503 })) as unknown as typeof fetch;
@@ -1418,8 +1429,8 @@ test("a snapshot with no windows at all charts the forward history and claims no
   setActiveCodexAccount(account.id);
   const nowS = Math.round(Date.now() / 1000);
   const weekly = (usedPercent: number) => ({ session: null, weekly: { usedPercent, resetsAt: nowS + 2 * 86_400, windowMinutes: 10_080 }, plan: "pro", capturedAt: nowS });
-  recordLimitSample("codex", account.id, weekly(30), (nowS - 7_200) * 1000);
-  recordLimitSample("codex", account.id, weekly(45), (nowS - 3_600) * 1000);
+  recordLimitSample("codex", account.id, weekly(30), "live", (nowS - 7_200) * 1000);
+  recordLimitSample("codex", account.id, weekly(45), "live", (nowS - 3_600) * 1000);
 
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async () => new Response(null, { status: 503 })) as unknown as typeof fetch;
@@ -1440,7 +1451,7 @@ test("a transcript left with only windowless events reports no snapshot rather t
   const nowS = Math.round(Date.now() / 1000);
   const transcript = path.join(account.sessionsDir, "2026", "07", "24", "windowless.jsonl");
   fs.mkdirSync(path.dirname(transcript), { recursive: true });
-  fs.writeFileSync(transcript, [
+  writeQuotaFixture(transcript, [
     JSON.stringify({ timestamp: new Date((nowS - 1_800) * 1000).toISOString(), payload: { rate_limits: { limit_id: "premium", primary: null, secondary: null, plan_type: null } } }),
     JSON.stringify({ timestamp: new Date((nowS - 600) * 1000).toISOString(), payload: { rate_limits: { limit_id: "premium", primary: null, secondary: null, plan_type: null } } }),
   ].join("\n") + "\n");
@@ -1586,7 +1597,7 @@ test("pre-tier-list cached limits keep their bucket, and an older parser's entry
   };
   const file = path.join(process.env.LLV_STATE_DIR!, "limits-cache.json");
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify({ version: 2, engines: {
+  writeQuotaFixture(file, JSON.stringify({ version: 2, engines: {
     claude: { default: { at: now, data: legacy, provenance: { source: "live", reason: null, staleSince: null }, retryAt: now + 15 * 60_000 } }, codex: {},
   } }));
   const request = spyOn(globalThis, "fetch").mockImplementation((async () => { throw new Error("offline"); }) as unknown as typeof fetch);
@@ -2039,4 +2050,93 @@ test("a snapshot the other process wrote is what the next read answers from (#18
     expect(payload.claude?.weekly?.usedPercent).toBe(77);
     expect(request).toHaveBeenCalledTimes(1);
   } finally { request.mockRestore(); resetLimitsCache(); }
+});
+
+test("live reads and offline fallback exclude foreign and unregistered quota in a mixed store", async () => {
+  resetLimitsCache();
+  const account = createManagedCodexAccount("account A"), other = createManagedCodexAccount("account B");
+  setActiveCodexAccount(account.id);
+  const now = Date.parse("2026-10-18T12:00:00Z"), reset = now / 1000 + 86400;
+  const event = (used: number, at: number) => JSON.stringify({ timestamp: new Date(at).toISOString(),
+    payload: { rate_limits: { primary: { used_percent: used, window_minutes: 10080, resets_at: reset }, plan_type: "pro" } } }) + "\n";
+  const dir = path.join(account.sessionsDir, "2026", "10", "18");
+  fs.mkdirSync(dir, { recursive: true });
+  const own = path.join(dir, "own.jsonl"), foreign = path.join(dir, "foreign.jsonl");
+  fs.writeFileSync(own, event(25, now - 1000)); attributeQuotaFixture(own, account.id);
+  fs.writeFileSync(foreign, event(100, now)); attributeQuotaFixture(foreign, other.id);
+  fs.writeFileSync(path.join(dir, "unknown.jsonl"), event(99, now));
+  const offline = async () => { throw new Error("fixture offline"); };
+  expect((await readCodexLimits({ account, liveReader: offline, now: () => now })).data?.weekly?.usedPercent).toBe(25);
+  const read = await readCodexLimits({ account, now: () => now, liveReader: async () => ({
+    primary: { usedPercent: 30, windowDurationMins: 10080, resetsAt: reset }, secondary: null, planType: "pro",
+  }) });
+  expect(read.data?.weekly?.usedPercent).toBe(30);
+  const fetchBefore = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(null, { status: 503 })) as unknown as typeof fetch;
+  try {
+    await readLimits({ now: () => now, codexLiveReader: offline });
+    const { readHistory } = await import("./limitsHistoryStore");
+    // The offline fallback serves A's own transcript reading, which the
+    // backfill rereads under current custody; forward history keeps only live.
+    expect(readHistory().series[`codex|${account.id}|weekly`]).toBeUndefined();
+  } finally { globalThis.fetch = fetchBefore; resetLimitsCache(); }
+});
+
+test("a transcript reading whose custody is later quarantined never stays in forward history, burndown or calibration input", async () => {
+  const { setSystemTime } = await import("bun:test");
+  const { agentRegistry, closeAgentRegistryForTests } = await import("@/lib/agent/registry");
+  const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+  const { QuotaController, codexObservationFromProbe } = await import("@/lib/accounts/migration/quotaController");
+  const { historySamples, readHistory } = await import("./limitsHistoryStore");
+  resetLimitsCache();
+  const account = createManagedCodexAccount("custody account A");
+  setActiveCodexAccount(account.id);
+  const at = (clock: string) => Date.parse(`2026-10-20T${clock}:00.000Z`);
+  const weeklyReset = at("12:00") / 1000 + 5 * 86_400, sessionReset = at("12:00") / 1000 + 4 * 3600;
+  const file = path.join(account.sessionsDir, "2026", "10", "20", "reused.jsonl");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  // A holds verified custody of the rollout; B's 96% weekly reading lands in it at 13:00.
+  writeQuotaFixture(file, JSON.stringify({ timestamp: new Date(at("13:00")).toISOString(), payload: { rate_limits: {
+    primary: { used_percent: 96, window_minutes: 10080, resets_at: weeklyReset }, plan_type: "pro" } } }) + "\n");
+  const session = (usedPercent: number) => ({ usedPercent, windowDurationMins: 300, resetsAt: sessionReset });
+  const weekly = (usedPercent: number) => ({ usedPercent, windowDurationMins: 10080, resetsAt: weeklyReset });
+  let rateLimits: { primary: ReturnType<typeof session>; secondary: ReturnType<typeof weekly> | null; planType: string } =
+    { primary: session(10), secondary: null, planType: "pro" };
+  let now = at("13:01");
+  const tick = () => new QuotaController(agentRegistry(), {
+    list: () => [account], active: () => account.id, credentialIdentity: () => "stable-fixture",
+    probe: async (_engine, _candidate, probedAt) => codexObservationFromProbe(account, {
+      account: { account: null, requiresOpenaiAuth: true }, rateLimits, resetCredits: null, authenticated: true, envelope: null,
+    }, probedAt),
+  }, "custody-fixture-boot", () => now).tick("codex");
+  const inventory = (accountId: string, observedAt: string) => agentRegistry().reconcileConversations([{
+    engine: "codex", path: file, accountId, launchProfile: emptyLaunchProfile(), observedAt,
+    turn: { state: "idle", source: "empty", terminalAt: null },
+  }]);
+  const fetchBefore = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(null, { status: 503 })) as unknown as typeof fetch;
+  try {
+    // 13:01: A's authenticated probe reports only its session window.
+    await tick();
+    // 14:00: inventory discovers B on the rollout; then a restart, and the binding returns to A.
+    inventory("custody-account-b", new Date(at("14:00")).toISOString());
+    closeAgentRegistryForTests();
+    inventory(account.id, new Date(at("15:00")).toISOString());
+    now = at("15:10");
+    rateLimits = { primary: session(12), secondary: weekly(20), planType: "pro" };
+    await tick();
+    const nowS = now / 1000;
+    expect(historySamples("codex", account.id, "weekly", nowS)).toEqual([{ t: nowS, remaining: 80 }]);
+    expect(historySamples("codex", account.id, "session", nowS)).toEqual([
+      { t: at("13:01") / 1000, remaining: 90 }, { t: nowS, remaining: 88 },
+    ]);
+    // Rate calibration reads exactly this store.
+    expect(Object.entries(readHistory().series).filter(([key]) => key.startsWith(`codex|${account.id}|`))
+      .flatMap(([, samples]) => samples).some(sample => sample.remaining === 4)).toBe(false);
+    setSystemTime(new Date(now));
+    resetLimitsCache();
+    const burndown = await readBurndown({ codexLiveReader: async () => rateLimits });
+    expect(burndown.codex!.weekly.samples).toEqual([{ t: nowS, remaining: 80 }]);
+    expect(burndown.codex!.session.samples.map(sample => sample.remaining)).toEqual([90, 88]);
+  } finally { setSystemTime(); globalThis.fetch = fetchBefore; resetLimitsCache(); }
 });
