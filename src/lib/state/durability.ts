@@ -463,12 +463,21 @@ function prepareNewestGoodBackup(database: StateDatabase, backupDirectory: strin
   const restoring = restoringName(database.filename);
   for (const candidate of listBackups(backupDirectory, database.name)) {
     removeTrio(restoring);
+    let schemaRepair: string | null = null;
     try {
       fs.copyFileSync(candidate.file, restoring);
+      // Inspection can create WAL sidecars with the main file's mode. Make
+      // the working copy writable before SQLite opens any of those files.
+      try { fs.chmodSync(restoring, 0o600); }
+      catch (error) {
+        throw new SchemaRecoveryError(`${database.name} could not prepare backup ${candidate.name}: ${errorText(error)}. `
+          + "Startup stopped before changing live state; the backup and prepared copy are kept for the next start.", { cause: error });
+      }
       let verdict = inspect(restoring, "integrity_check", false);
       /* A backup written where a newer SQLite ran is not damaged for holding
          a trigger this one cannot compile; the store rebuilds those. */
       if (verdict.verdict === "incompatible" && database.rebuiltTriggers.includes(verdict.object)) {
+        schemaRepair = describeSchemaCompileFailure(candidate.name, verdict);
         dropRebuiltTriggers(restoring, database.rebuiltTriggers, null);
         verdict = inspect(restoring, "integrity_check", false);
       }
@@ -486,6 +495,11 @@ function prepareNewestGoodBackup(database: StateDatabase, backupDirectory: strin
       if (error instanceof IncompatibleSchemaError) {
         removeTrio(restoring);
         throw error;
+      }
+      if (error instanceof SchemaRecoveryError) throw error;
+      if (schemaRepair) {
+        throw new SchemaRecoveryError(`${database.name} backup schema recovery failed (${schemaRepair}): ${errorText(error)}. `
+          + "Startup stopped before changing live state or initializing stores; the backup and any prepared recovery files are kept for the next start.", { cause: error });
       }
       console.error(`[state durability] backup ${candidate.name} refused: ${errorText(error)}`);
     }

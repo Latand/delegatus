@@ -11,7 +11,7 @@
  * which this process loads in place of Bun's own. A seeding child keeps Bun's
  * SQLite, so it writes databases exactly as a newer SQLite leaves them.
  */
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -201,7 +201,10 @@ test("a damaged database is restored from a backup that holds legacy triggers: n
     backup.exec("PRAGMA writable_schema = ON");
     backup.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   } finally { backup.close(); }
-  fs.copyFileSync(filename, path.join(backups, "state-2026-10-21T11-00-00-000Z.sqlite"));
+  const backupFile = path.join(backups, "state-2026-10-21T11-00-00-000Z.sqlite");
+  fs.copyFileSync(filename, backupFile);
+  fs.chmodSync(backupFile, 0o400);
+  const backupDigest = digest(backupFile);
   for (const suffix of ["-wal", "-shm"]) fs.rmSync(`${filename}${suffix}`, { force: true });
   fs.writeFileSync(filename, Buffer.alloc(8192, 0x5a));
 
@@ -209,7 +212,138 @@ test("a damaged database is restored from a backup that holds legacy triggers: n
   expect(incidents.map(incident => [incident.kind, incident.backup])).toEqual([["database-restored", "state-2026-10-21T11-00-00-000Z.sqlite"]]);
   expect(rows<{ row_key: string }>(filename, "SELECT row_key FROM state_rows WHERE collection='pipelines'")).toEqual([{ row_key: "pipeline_backed_up" }]);
   expect(rows<{ name: string }>(filename, "SELECT name FROM sqlite_master WHERE name='pipeline_refs_insert'")).toEqual([]);
+  expect(digest(backupFile)).toBe(backupDigest);
+  expect(fs.statSync(backupFile).mode & 0o777).toBe(0o400);
 });
+
+test.each(["permissions", "repair", "validation"] as const)("backup schema recovery stops direct activation on a %s failure and retries without losing state", async failure => {
+  const { checkStateDatabasesAtActivation, SchemaRecoveryError } = await import("./durability");
+  const { SqliteStateCollection } = await import("./sqliteStateStore");
+  const { root, filename } = sandbox();
+  const backup = path.join(root, "backups", "sqlite", "state-2026-10-21T11-00-00-000Z.sqlite");
+  fs.mkdirSync(path.dirname(backup), { recursive: true });
+  seed(backup, "legacy", pipeline("pipeline_backed_up"));
+  fs.chmodSync(backup, failure === "permissions" ? 0o400 : 0o600);
+  fs.writeFileSync(filename, Buffer.alloc(8192, 0x5a));
+  const before = { live: digest(filename), backup: digest(backup) };
+  const active = process.getBuiltinModule("bun:sqlite") as unknown as typeof sqlite;
+  const chmod = fs.chmodSync;
+  const exec = active.Database.prototype.exec;
+  const query = active.Database.prototype.query;
+  let repaired = false;
+  const permissions = spyOn(fs, "chmodSync").mockImplementation((file, mode) => {
+    if (failure === "permissions" && String(file) === `${filename}.restoring`) throw new Error("EACCES preparing backup schema repair");
+    return chmod(file, mode);
+  });
+  const repair = spyOn(active.Database.prototype, "exec").mockImplementation(function(this: InstanceType<typeof active.Database>, sql, ...args) {
+    if (this.filename === `${filename}.restoring` && sql === "PRAGMA writable_schema = ON") {
+      if (failure === "repair") throw Object.assign(new Error("I/O error repairing backup schema"), { code: "SQLITE_IOERR" });
+      repaired = true;
+    }
+    return exec.call(this, sql, ...args);
+  });
+  const validation = spyOn(active.Database.prototype, "query").mockImplementation(function(this: InstanceType<typeof active.Database>, sql) {
+    if (failure === "validation" && repaired && this.filename === `${filename}.restoring` && sql === "PRAGMA integrity_check") {
+      throw Object.assign(new Error("I/O error validating repaired backup"), { code: "SQLITE_IOERR" });
+    }
+    return query.call(this, sql);
+  });
+  let initialized = false;
+  try {
+    let caught: unknown;
+    try {
+      checkStateDatabasesAtActivation(root, { now: new Date(NOW) });
+      new SqliteStateCollection<Pipeline>(filename, pipelines).get("pipeline_backed_up");
+      initialized = true;
+    } catch (error) { caught = error; }
+    expect(caught).toBeInstanceOf(SchemaRecoveryError);
+    expect((caught as Error).message).toContain(failure === "permissions" ? "EACCES preparing backup schema repair"
+      : failure === "repair" ? "I/O error repairing backup schema" : "I/O error validating repaired backup");
+    expect(initialized).toBe(false);
+    expect(digest(filename)).toBe(before.live);
+    expect(digest(backup)).toBe(before.backup);
+    expect(fs.existsSync(`${filename}.restoring`)).toBe(true);
+    expect(fs.readdirSync(root).filter(name => /\.(corrupt|replaced)-/.test(name))).toEqual([]);
+  } finally { permissions.mockRestore(); repair.mockRestore(); validation.mockRestore(); }
+  expect(checkStateDatabasesAtActivation(root, { now: new Date(NOW + 1000) }).map(incident => incident.kind)).toEqual(["database-restored"]);
+  expect(new SqliteStateCollection<Pipeline>(filename, pipelines).get("pipeline_backed_up")?.id).toBe("pipeline_backed_up");
+  expect(digest(backup)).toBe(before.backup);
+});
+
+test.each(["none", "permissions", "repair", "validation"] as const)("the Viewer runs backup schema recovery in a real minimum-SQLite worker with %s failure and retries in a fresh worker", async failure => {
+  const { checkStateDatabasesBeforeStores } = await import("@/lib/viewerInstrumentation");
+  const { SchemaRecoveryError } = await import("./durability");
+  const { SqliteStateCollection } = await import("./sqliteStateStore");
+  const { root, filename } = sandbox();
+  const backup = path.join(root, "backups", "sqlite", "state-2026-10-21T11-00-00-000Z.sqlite");
+  fs.mkdirSync(path.dirname(backup), { recursive: true });
+  seed(backup, "legacy", pipeline("pipeline_backed_up"));
+  const backupMode = failure === "none" || failure === "permissions" ? 0o400 : 0o600;
+  fs.chmodSync(backup, backupMode);
+  fs.writeFileSync(filename, Buffer.alloc(8192, 0x5a));
+  const before = { live: digest(filename), backup: digest(backup) };
+  const workerPath = path.join(root, "backup-schema-worker.ts");
+  const faultFile = path.join(root, "inject-failure");
+  if (failure !== "none") fs.writeFileSync(faultFile, failure);
+  fs.writeFileSync(workerPath, `import fs from "node:fs";
+    import { minimumSqliteModule } from ${JSON.stringify(path.join(import.meta.dir, "minimumSqlite.fixture.ts"))};
+    const sqlite = minimumSqliteModule(${JSON.stringify(minimumSqliteLibrary())});
+    const builtin = process.getBuiltinModule.bind(process);
+    process.getBuiltinModule = id => id === "bun:sqlite" ? sqlite : builtin(id);
+    const failure = fs.existsSync(${JSON.stringify(faultFile)}) ? fs.readFileSync(${JSON.stringify(faultFile)}, "utf8") : "none";
+    const restoring = ${JSON.stringify(`${filename}.restoring`)};
+    const chmod = fs.chmodSync;
+    fs.chmodSync = (file, mode) => {
+      if (failure === "permissions" && String(file) === restoring) throw new Error("EACCES preparing backup schema repair");
+      return chmod(file, mode);
+    };
+    let repaired = false;
+    const exec = sqlite.Database.prototype.exec;
+    sqlite.Database.prototype.exec = function(sql, ...args) {
+      if (this.filename === restoring && sql === "PRAGMA writable_schema = ON") {
+        if (failure === "repair") throw Object.assign(new Error("I/O error repairing backup schema"), { code: "SQLITE_IOERR" });
+        repaired = true;
+      }
+      return exec.call(this, sql, ...args);
+    };
+    const query = sqlite.Database.prototype.query;
+    sqlite.Database.prototype.query = function(sql) {
+      if (failure === "validation" && repaired && this.filename === restoring && sql === "PRAGMA integrity_check") {
+        throw Object.assign(new Error("I/O error validating repaired backup"), { code: "SQLITE_IOERR" });
+      }
+      return query.call(this, sql);
+    };
+    await import(${JSON.stringify(path.resolve("src/lib/stateBackup.worker.ts"))});
+  `);
+  const helper = await import("@/lib/helperLease");
+  const spawn = helper.spawnLeasedHelper;
+  const launch = spyOn(helper, "spawnLeasedHelper").mockImplementation((name, spec, ...rest) =>
+    spawn(name, { ...spec, command: process.execPath, args: [workerPath] }, ...rest));
+  try {
+    if (failure !== "none") {
+      let initialized = false;
+      let caught: unknown;
+      try {
+        await checkStateDatabasesBeforeStores(root);
+        new SqliteStateCollection<Pipeline>(filename, pipelines).get("pipeline_backed_up");
+        initialized = true;
+      } catch (error) { caught = error; }
+      expect(caught).toBeInstanceOf(SchemaRecoveryError);
+      expect((caught as Error).message).toContain(failure === "permissions" ? "EACCES preparing backup schema repair"
+        : failure === "repair" ? "I/O error repairing backup schema" : "I/O error validating repaired backup");
+      expect(initialized).toBe(false);
+      expect(digest(filename)).toBe(before.live);
+      expect(digest(backup)).toBe(before.backup);
+      expect(fs.existsSync(`${filename}.restoring`)).toBe(true);
+      expect(fs.readdirSync(root).filter(name => /\.(corrupt|replaced)-/.test(name))).toEqual([]);
+      fs.unlinkSync(faultFile);
+    }
+    await checkStateDatabasesBeforeStores(root);
+    expect(new SqliteStateCollection<Pipeline>(filename, pipelines).get("pipeline_backed_up")?.id).toBe("pipeline_backed_up");
+    expect(digest(backup)).toBe(before.backup);
+    expect(fs.statSync(backup).mode & 0o777).toBe(backupMode);
+  } finally { launch.mockRestore(); }
+}, 60_000);
 
 test("a database an earlier release set aside for an uncompilable trigger is put back while the live one is empty; every file is kept", async () => {
   const { checkStateDatabasesAtActivation } = await import("./durability");
