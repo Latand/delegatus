@@ -7,7 +7,7 @@
     "src/lib/state/pipelineControllerReferences.ts": "27531dfc254114966c047811aa9b1bbf7f28c6d20052f9f955c96207ad73d477",
     "src/lib/state/historyProjection.ts": "0598dc24a5e5024b098f76d3c6d369839bcfa85fe9d51a2078ea39c464016dfe",
     "src/lib/state/sqliteStateStore.ts": "e666e28ba52c0073df9ee68b4512cec5ab935d833206c32cef4987cc8aaabcac",
-    "src/runtime-host/journal.ts": "51e09a5dd2da34938d2c2f273f7b578fef8b2e61dc1c4e40c694db8797c3b0e5",
+    "src/runtime-host/journal.ts": "69e3a22e86190c73f4dc48d382e484e328389a680912373d1acd783b44133e34",
     "src/lib/sqliteReadAttribution.ts": "a3ccf10bc0321f363db040e3b5fb1246d99a0b3f55913399a667a42738087b96"
   },
   "workload": {

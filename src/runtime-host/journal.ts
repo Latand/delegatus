@@ -493,7 +493,7 @@ export class RuntimeJournal {
         const version = this.db.query<{ version: string }, []>("SELECT sqlite_version() AS version").get()!.version.split(".").map(Number);
         if (version[0] === 3 && version[1]! < 42) {
           assertStateStartupMutation(dirname(filename), "runtime journal date-index compatibility");
-          this.db.exec("DROP INDEX deployment_list_recent");
+          this.db.exec("DROP INDEX IF EXISTS deployment_list_recent");
         }
       }
       for (const statement of [
