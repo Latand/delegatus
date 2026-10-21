@@ -13567,9 +13567,11 @@ export async function patchPipeline(
     let integration: PipelineStageAttempt["publicationIntegration"];
     // A pass whose commit custody settlement refused: whoever answers the
     // lane's decisions accepts its clean head after reviewing it, in place.
-    const custodyAcceptance = moved && pipeline.state === "needs_decision"
+    // A refused push can park a lane whose HEAD is still the passed commit;
+    // naming that head accepts it the same way.
+    const custodyAcceptance = req.acceptedSha !== undefined && pipeline.state === "needs_decision"
       && passedStageCustodyPark(pipeline, pipeline.cursor ? currentAttempt(pipeline, pipeline.cursor.stageId) : null);
-    if (moved) {
+    if (moved || custodyAcceptance) {
       if (!custodyAcceptance && (!awaitingPassedPublication(pipeline) || pipeline.state !== "needs_decision")) {
         return { error: "accepting a moved head requires a parked passed stage in committing", status: 409 };
       }
@@ -13633,7 +13635,10 @@ export async function patchPipeline(
         await persist(); requestPipelineTick();
         return { pipeline: current };
       }
-      if (moved) {
+      if (custodyAcceptance && !(current.state === "needs_decision" && passedStageCustodyPark(current, attempt))) {
+        return { error: "the lane changed during accepted-head verification; read it again", status: 409 };
+      }
+      if (moved || custodyAcceptance) {
         current.lastPassedCommit = accepted;
         const acceptedAttempt = currentAttempt(current, current.cursor!.stageId)!;
         if (custodyAcceptance) {
@@ -13643,7 +13648,7 @@ export async function patchPipeline(
             redactBounded((current.stateDetail ?? "").split("\n")[0]!, 300)}`, actor?.kind === "agent" ? actor.conversationId : null);
         } else acceptedAttempt.publicationIntegration = integration;
       }
-      const resumesPass = moved || resumablePassedPublication(current);
+      const resumesPass = moved || custodyAcceptance || resumablePassedPublication(current);
       const acceptedSha = req.acceptedSha === undefined ? current.lastPassedCommit : accepted;
       if (!/^[0-9a-f]{40}$/i.test(acceptedSha)) return { error: "publication requires an exact accepted SHA", status: 400 };
       if (!current.delivery) {

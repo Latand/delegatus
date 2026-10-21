@@ -161,37 +161,43 @@ async function hasCreatedCommits(directory: string | null): Promise<boolean> {
 }
 
 type StageStart = { head: string; commitReceiptVersion?: unknown; reflog?: { path?: unknown; offset?: unknown } | null };
-type ReflogWindow = { start: StageStart; until: string };
+type ReflogWindow = { start: StageStart; until: string; directory: string };
 const REFLOG_PROOF_BYTES = 4 * 1024 * 1024;
 const REFLOG_PROOF_ENTRIES = 1024;
 const normalizedReflogMessage = (text: string) => text.replace(/\s+/g, " ").trim();
 
-/** Commits each attempt made in the lane worktree, read from that worktree's
- * own HEAD reflog after the offset its start receipt recorded. Git appends
- * the entry with the ref update itself, so it survives a hooks path override
- * and a kill before post-commit, which both lose the hook receipt.
+/** Commits each attempt made in the lane worktree whose post-commit or
+ * post-merge receipt is missing, as when the agent's scope was killed after
+ * the ref update. The worktree's own HEAD reflog after the offset the start
+ * receipt recorded orders them; the attempt's commit intent proves them.
  *
- * Each window replays a chain from the attempt's starting head: every entry
- * continues the previous one and either leaves HEAD in place or creates a
- * commit on top of it (`commit`, `commit (merge)`, `merge …: Merge made by`).
- * The commit's first parent is the entry's old head, a `commit` entry carries
- * the commit's own first line, and the committer ident and time equal the
- * entry's and are the agent publication identity. Any other
- * entry (a reset, a checkout elsewhere, an amend, a rebase) ends the window,
- * as does an entry stamped after the attempt ended, so an imported, rewritten
- * or later commit stays unproved. */
-async function reflogCreatedCommits(worktree: string, windows: ReflogWindow[], exec: ExecPort): Promise<Set<string>> {
+ * A reflog message is caller-controlled text (`GIT_REFLOG_ACTION`,
+ * `update-ref -m`), so it only selects the entries to examine. Each window
+ * replays a chain from the attempt's starting head: every entry continues the
+ * previous one and either leaves HEAD in place, fast-forwards onto verified
+ * base-branch history (a refresh of current main), or creates a commit on top
+ * of it (`commit`, `commit (merge)`, `merge …: Merge made by`). A created
+ * commit's first parent is the entry's old head, a `commit` entry carries the
+ * commit's own first line, the committer ident and time equal the entry's and
+ * are the agent publication identity, and the same attempt's
+ * prepare-commit-msg hook recorded an intent for exactly its tree and parents
+ * before Git wrote the commit. A reset or update-ref runs no commit hook, so
+ * an imported commit has no intent. Any other entry (a reset elsewhere, an
+ * amend, a rebase) ends the window, as does an entry stamped after the
+ * attempt ended, so an imported, rewritten or later commit stays unproved. */
+async function reflogCreatedCommits(worktree: string, windows: ReflogWindow[], exec: ExecPort,
+  onBase: (sha: string) => Promise<boolean>): Promise<Set<string>> {
   const created = new Set<string>();
   let identity: { name: string; email: string };
   try { identity = agentPublicationIdentity(process.env); } catch { return created; }
   const located = await exec("git", ["rev-parse", "--path-format=absolute", "--git-path", "logs/HEAD"], worktree);
   if (located.code !== 0) return created;
   const file = located.stdout.trim();
-  const usable = windows.flatMap(({ start, until }) => {
+  const usable = windows.flatMap(({ start, until, directory }) => {
     const offset = start.reflog?.offset;
     return start.commitReceiptVersion === 2 && start.reflog?.path === file && typeof offset === "number"
       && Number.isSafeInteger(offset) && offset >= 0 && Number.isFinite(Date.parse(until))
-      ? [{ head: start.head, offset, until: Math.floor(Date.parse(until) / 1000) }] : [];
+      ? [{ head: start.head, offset, until: Math.floor(Date.parse(until) / 1000), directory }] : [];
   }).sort((a, b) => a.offset - b.offset);
   if (!usable.length) return created;
   let bytes: Buffer;
@@ -208,6 +214,26 @@ async function reflogCreatedCommits(worktree: string, windows: ReflogWindow[], e
       bytes = bytes.subarray(0, bytesRead);
     } finally { await fd.close(); }
   } catch { return created; }
+  const createdBy = async (window: (typeof usable)[number], old: string, made: string, name: string, email: string,
+    stamp: string, message: string): Promise<boolean> => {
+    const action = message.match(/^(commit|commit \(merge\)): /)?.[1]
+      ?? (/^merge .+: Merge made by the '[^']+' strategy\.$/.test(message) ? "merge" : null);
+    if (!action || name !== identity.name || email !== identity.email) return false;
+    const object = await exec("git", ["cat-file", "commit", made], worktree);
+    if (object.code !== 0) return false;
+    const split = object.stdout.indexOf("\n\n");
+    const headers = (split < 0 ? object.stdout : object.stdout.slice(0, split)).split("\n");
+    const tree = headers[0]?.match(/^tree ([0-9a-f]{40})$/)?.[1];
+    const parents = headers.flatMap(header => header.match(/^parent ([0-9a-f]{40})$/)?.[1] ?? []);
+    const committer = headers.find(header => header.startsWith("committer "))?.match(/^committer (.*) <([^<>]*)> (\d+) [+-]\d{4}$/);
+    const subject = split < 0 ? "" : object.stdout.slice(split + 2).split("\n")[0]!;
+    if (!tree || parents[0] !== old || (action === "commit" ? parents.length !== 1 : parents.length < 2)
+      // A longer intent name exceeds the file-name limit the hook writes under.
+      || parents.length > 5
+      || !committer || committer[1] !== name || committer[2] !== email || committer[3] !== stamp
+      || (action !== "merge" && normalizedReflogMessage(`${action}: ${subject}`) !== message)) return false;
+    return await smallFile(path.join(window.directory, "intents", [tree, ...parents].join("-"))) === "";
+  };
   for (const [index, window] of usable.entries()) {
     if (window.offset > 0 && bytes[window.offset - 1 - base] !== 0x0a) continue;
     const end = Math.min(usable.slice(index + 1).find(next => next.offset > window.offset)?.offset ?? Infinity, base + bytes.length);
@@ -220,21 +246,19 @@ async function reflogCreatedCommits(worktree: string, windows: ReflogWindow[], e
       if (!entry || entry[1] !== cursor) break;
       const [, old, made, name, email, stamp, message] = entry;
       if (old === made) continue;
-      const action = message.match(/^(commit|commit \(merge\)): /)?.[1]
-        ?? (/^merge .+: Merge made by the '[^']+' strategy\.$/.test(message) ? "merge" : null);
-      if (!action || name !== identity.name || email !== identity.email || Number(stamp) > window.until) break;
-      const object = await exec("git", ["cat-file", "commit", made], worktree);
-      if (object.code !== 0) break;
-      const split = object.stdout.indexOf("\n\n");
-      const headers = (split < 0 ? object.stdout : object.stdout.slice(0, split)).split("\n");
-      const parents = headers.flatMap(header => header.match(/^parent ([0-9a-f]{40})$/)?.[1] ?? []);
-      const committer = headers.find(header => header.startsWith("committer "))?.match(/^committer (.*) <([^<>]*)> (\d+) [+-]\d{4}$/);
-      const subject = split < 0 ? "" : object.stdout.slice(split + 2).split("\n")[0]!;
-      if (parents[0] !== old || (action === "commit" ? parents.length !== 1 : parents.length < 2)
-        || !committer || committer[1] !== name || committer[2] !== email || committer[3] !== stamp
-        || (action !== "merge" && normalizedReflogMessage(`${action}: ${subject}`) !== message)) break;
-      created.add(made);
-      cursor = made;
+      if (Number(stamp) > window.until) break;
+      if (await createdBy(window, old, made, name, email, stamp, message)) {
+        created.add(made);
+        cursor = made;
+        continue;
+      }
+      // Whatever the message, a forward move onto verified base history
+      // imports only commits the base branch already holds.
+      if ((await exec("git", ["merge-base", "--is-ancestor", old, made], worktree)).code === 0 && await onBase(made)) {
+        cursor = made;
+        continue;
+      }
+      break;
     }
   }
   return created;
@@ -281,7 +305,7 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
     // A later start is a boundary to verify, never evidence of who made its prefix.
     const directories = directory ? [directory] : [];
     // The settling attempt may still be finishing, so its window runs to now.
-    const reflogWindows = new Map<string, ReflogWindow>(raw !== null && directory ? [[directory, { start, until: now }]] : []);
+    const reflogWindows = new Map<string, ReflogWindow>(raw !== null && directory ? [[directory, { start, until: now, directory }]] : []);
     let anchor = start.head;
     let lineageCursor = start.head;
     const replacementStarts = new Set<string>();
@@ -301,7 +325,7 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
         || !Number.isFinite(Date.parse(priorStart.startedAt)) || !Number.isFinite(Date.parse(prior.startedAt))
         || Date.parse(priorStart.startedAt) < Date.parse(prior.startedAt) || Date.parse(priorStart.startedAt) > Date.parse(now)) continue;
       directories.push(priorDirectory);
-      reflogWindows.set(priorDirectory, { start: priorStart, until: prior.completedAt ?? now });
+      reflogWindows.set(priorDirectory, { start: priorStart, until: prior.completedAt ?? now, directory: priorDirectory });
       replacementStarts.add(priorStart.head);
     }
     for (;;) {
@@ -330,7 +354,7 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       lineageCursor = parentStart.head;
       replacementStarts.add(parentStart.head);
       directories.push(parentDirectory);
-      if (!reflogWindows.has(parentDirectory)) reflogWindows.set(parentDirectory, { start: parentStart, until: parent.completedAt });
+      if (!reflogWindows.has(parentDirectory)) reflogWindows.set(parentDirectory, { start: parentStart, until: parent.completedAt, directory: parentDirectory });
       const acceptedBoundaries = [pipeline.lastPassedCommit, pipeline.publishedCommit]
         .filter((sha): sha is string => typeof sha === "string" && /^[0-9a-f]{40}$/.test(sha));
       for (const boundary of acceptedBoundaries) {
@@ -426,7 +450,10 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
     };
     let reflogCreated: Set<string> | undefined;
     const reflogCreation = async (sha: string): Promise<boolean> => {
-      reflogCreated ??= await reflogCreatedCommits(pipeline.worktreeDir, [...reflogWindows.values()], exec);
+      reflogCreated ??= await reflogCreatedCommits(pipeline.worktreeDir, [...reflogWindows.values()], exec, async made => {
+        const base = await verifiedBase();
+        return base !== null && (await exec("git", ["merge-base", "--is-ancestor", made, base], pipeline.worktreeDir)).code === 0;
+      });
       return reflogCreated.has(sha);
     };
     let baseTip: string | null | undefined;

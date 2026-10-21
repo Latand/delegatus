@@ -189,6 +189,44 @@ for (const suffix of ["proved", "lost receipt", "unrecorded", "divergent"] as co
   } finally { h.cleanup(); fs.rmSync(stageGitReceiptDirectory(launchId), { recursive: true, force: true }); }
 });
 
+// A refused foreign push parks a lane whose own HEAD never moved past the
+// passed commit. Accepting that unchanged head is the same in-place recovery.
+test("publish acceptedSha accepts a custody-parked head equal to the passed commit", async () => {
+  const h = fixture();
+  const launchId = "parked-unchanged-head";
+  try {
+    const attempt = h.lane.runs[0]!.attempts[0]!;
+    const now = "2026-10-20T10:00:00.000Z";
+    attempt.startedAt = now; attempt.completedAt = null; attempt.launchId = launchId;
+    attempt.state = "needs_decision";
+    await prepareStageGitGuard(launchId, h.repo, realExec, now);
+    const refusal = `stage push refused: commit ${"f".repeat(40)} was not created in the attempt worktree during this attempt; commit in the lane worktree and let Delegatus publish`;
+    fs.writeFileSync(path.join(stageGitReceiptDirectory(launchId), "refused"), `${refusal}\n`);
+    h.lane.lastPassedCommit = h.head;
+    h.lane.stateDetail = `${refusal}\nTo accept the stage's own work without a new lane, review the lane head, then call pipeline_action publish with acceptedSha set to that clean worktree HEAD.`;
+    savePipelines([h.lane]);
+    const ports = { ...h.ports, now: () => "2026-10-20T11:00:00.000Z" };
+    expect(h.git("rev-parse", "HEAD")).toBe(h.current().lastPassedCommit);
+    const stranger = { kind: "agent" as const, role: "worker", conversationId: "conversation-of-another-lane" };
+    expect(await patchPipeline(h.lane.id, { action: "publish", acceptedSha: h.head }, ports, stranger)).toMatchObject({ status: 403 });
+    fs.writeFileSync(path.join(h.repo, "unsaved.txt"), "keep\n");
+    expect(await patchPipeline(h.lane.id, { action: "publish", acceptedSha: h.head }, ports)).toMatchObject({ status: 409,
+      error: expect.stringContaining("uncommitted changes") });
+    fs.rmSync(path.join(h.repo, "unsaved.txt"));
+    expect(h.current()).toMatchObject({ state: "needs_decision", lastPassedCommit: h.head });
+    expect((await patchPipeline(h.lane.id, { action: "publish", acceptedSha: h.head }, ports)).error).toBeUndefined();
+    expect(h.current()).toMatchObject({ state: "running", lastPassedCommit: h.head });
+    expect(h.current().delivery!.journal.at(-1)).toMatchObject({ kind: "recovery",
+      reason: expect.stringContaining(`accepted reviewed head ${h.head} after commit custody was refused: stage push refused:`) });
+    for (let n = 0; n < 3; n++) await tickPipelines([], ports);
+    expect(h.current()).toMatchObject({ lastPassedCommit: h.head, publishedCommit: h.head, state: "completed" });
+    expect(h.current().runs[0]!.attempts).toHaveLength(1);
+    expect(h.current().runs[0]!.attempts[0]).toMatchObject({ state: "passed", completedAt: "2026-10-20T11:00:00.000Z" });
+    expect(h.pushes()).toBe(1);
+    expect(h.git("ls-remote", "origin", `refs/heads/${h.lane.branch}`).split(/\s+/)[0]).toBe(h.head);
+  } finally { h.cleanup(); fs.rmSync(stageGitReceiptDirectory(launchId), { recursive: true, force: true }); }
+});
+
 for (const alreadyRemote of [false, true]) test(`parked publication accepts a clean merge descendant and advances (already remote: ${alreadyRemote})`, async () => {
   const h = fixture();
   try {

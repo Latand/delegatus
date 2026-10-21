@@ -60,7 +60,7 @@ stage_refuse() {
   cat "$receipt/refused" >&2
   exit 1
 }
-if [ "$hook" = post-commit ] || [ "$hook" = post-merge ] || [ "$hook" = post-applypatch ] || [ "$hook" = post-rewrite ]; then
+if [ "$hook" = post-commit ] || [ "$hook" = post-merge ] || [ "$hook" = post-applypatch ] || [ "$hook" = post-rewrite ] || [ "$hook" = prepare-commit-msg ]; then
   common=$(git rev-parse --path-format=absolute --git-common-dir) || exit 1
   lane_common=$(lane_git rev-parse --path-format=absolute --git-common-dir) || exit 1
   if [ "$common" = "$lane_common" ]; then
@@ -71,7 +71,25 @@ if [ "$hook" = post-commit ] || [ "$hook" = post-merge ] || [ "$hook" = post-app
       scratch=$(cd "$scratch" && pwd -P) || exit 1
       case "$producer/" in "$scratch/"*) owned=true ;; esac
     fi
-    if [ "$owned" = true ]; then
+    if [ "$owned" = true ] && [ "$hook" = prepare-commit-msg ]; then
+      # Commit and merge run this before the commit object and the ref update
+      # exist, --no-verify included. Its tree and parents prove a commit whose
+      # post-commit or post-merge never ran because the process was killed;
+      # a reset or update-ref runs no commit hook. Never refuse the commit.
+      index=\${GIT_INDEX_FILE:-$(git rev-parse --git-path index)}
+      if mkdir -p "$receipt/intents" && copy=$(mktemp "$receipt/intents/.index-XXXXXX"); then
+        if cp "$index" "$copy" && tree=$(GIT_INDEX_FILE=$copy git write-tree 2>/dev/null); then
+          intent=$tree
+          if parent=$(git rev-parse -q --verify HEAD); then intent=$intent-$parent; fi
+          merge_file=$(git rev-parse --git-path MERGE_HEAD) || merge_file=
+          if [ -n "$merge_file" ] && [ -f "$merge_file" ]; then
+            while read -r merged; do intent=$intent-$merged; done < "$merge_file"
+          fi
+          : > "$receipt/intents/$intent" 2>/dev/null || :
+        fi
+        rm -f "$copy"
+      fi
+    elif [ "$owned" = true ]; then
       mkdir -p "$receipt/commits"
       if [ "$hook" = post-rewrite ]; then
         printf '%s\\n' "$input" | while read -r old made rest; do

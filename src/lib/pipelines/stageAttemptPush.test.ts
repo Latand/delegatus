@@ -102,14 +102,17 @@ test("B: a controller-created replacement link proves a completed parent without
   } finally { if (childLaunch) await fs.rm(stageGitReceiptDirectory(childLaunch), { recursive: true, force: true }); await f.close(); }
 });
 
-// A predecessor's own commit without a hook receipt is proved by the lane
-// reflog's creation entry; one it reached by reset stays unproved.
-test.each(["own hooks-off commit", "imported commit"] as const)("review safety: manual silent retry preserves predecessor commit custody (%s)", async predecessor => {
+// A predecessor's own commit whose post-commit receipt was lost is proved by
+// its commit intent and the lane reflog's creation entry; one it reached by
+// reset, or made with the launch hooks overridden, stays unproved.
+test.each(["own commit, receipt lost", "own hooks-off commit", "imported commit"] as const)("review safety: manual silent retry preserves predecessor commit custody (%s)", async predecessor => {
   const f = await fixture();
   let childLaunch: string | null = null;
   try {
     const parent = { ...f.attempt, n: 1, state: "failed", completedAt: NOW, agentPath: "/stage/silent.jsonl" } as PipelineStageAttempt;
-    if (predecessor === "own hooks-off commit") {
+    if (predecessor === "own commit, receipt lost") {
+      await fs.rm(path.join(f.receipt, "commits", await f.commit("unreceipted predecessor")));
+    } else if (predecessor === "own hooks-off commit") {
       await f.own("-c", "core.hooksPath=/dev/null", "commit", "--allow-empty", "-m", "unreceipted predecessor");
     } else {
       await f.git(f.foreign, "commit", "--allow-empty", "-m", "unreceipted predecessor");
@@ -128,7 +131,7 @@ test.each(["own hooks-off commit", "imported commit"] as const)("review safety: 
     f.pipeline.runs = [{ stageId: "build", attempts: [parent, child] }] as never;
     await f.push();
 
-    const expected = predecessor === "own hooks-off commit" ? { ok: true, sha: head }
+    const expected = predecessor === "own commit, receipt lost" ? { ok: true, sha: head }
       : { ok: false, error: expect.stringContaining(`commit ${inherited} was not created in the attempt worktree`) };
     expect(await settleStageAttemptPush(f.pipeline, child, realExec, NOW)).toMatchObject(expected);
     const unlinked = structuredClone(f.pipeline);
@@ -657,6 +660,27 @@ test("B: rebase receipts include each rewritten commit and preserve the original
   } finally { await f.close(); }
 });
 
+// A rewrite runs prepare-commit-msg too, but its reflog entry is no creation
+// entry and an amend's parents differ from the intent's HEAD: once the
+// post-rewrite receipt is lost, the rewritten commit stays unproved.
+test.each(["amend", "rebase"] as const)("B: an own %s whose rewrite receipt was lost stays unproved", async rewrite => {
+  const f = await fixture();
+  try {
+    await fs.writeFile(path.join(f.lane, "own.txt"), "own\n"); await f.own("add", "own.txt");
+    await f.commit("own patch");
+    if (rewrite === "amend") await f.own("commit", "--amend", "-m", "own patch, amended");
+    else {
+      await f.git(f.foreign, "commit", "--allow-empty", "-m", "main advances");
+      await f.git(f.foreign, "push", "origin", "main"); await f.own("fetch", "origin", "main");
+      await f.own("rebase", "origin/main");
+    }
+    const made = await f.own("rev-parse", "HEAD");
+    await fs.rm(path.join(f.receipt, "commits", made));
+    await f.push();
+    expect(await f.settle()).toMatchObject({ ok: false, error: expect.stringContaining(`commit ${made} was not created in the attempt worktree`) });
+  } finally { await f.close(); }
+});
+
 test("B: applied patch creation is attested by the native hook", async () => {
   const f = await fixture();
   try {
@@ -743,7 +767,10 @@ test.each(["native", "forged"])("B: an imported merge stays unreceipted with a %
   } finally { await f.close(); }
 });
 
-test.each(["versioned", "versionless"])("B: a %s start refuses imported shared-identity commits with forged reflog creation", async version => {
+// `GIT_REFLOG_ACTION=commit git reset` writes `commit: updating HEAD`; a
+// foreign commit with that subject matches it word for word.
+test.each((["versioned", "versionless"] as const).flatMap(version => (["shared identity outside lane", "updating HEAD"] as const)
+  .map(subject => ({ version, subject }))))("B: a $version start refuses an imported shared-identity commit with forged reflog creation ($subject)", async ({ version, subject }) => {
   const f = await fixture();
   try {
     const startPath = path.join(f.receipt, "start.json");
@@ -752,7 +779,7 @@ test.each(["versioned", "versionless"])("B: a %s start refuses imported shared-i
     await fs.writeFile(startPath, JSON.stringify(start));
     const foreignEnv: NodeJS.ProcessEnv = { ...f.env, GIT_CONFIG_COUNT: "0",
       LLV_STAGE_GIT_RECEIPT: undefined, LLV_STAGE_GIT_WORKTREE: undefined };
-    const made = await realExec("git", ["commit", "--allow-empty", "-m", "shared identity outside lane"], f.foreign, foreignEnv);
+    const made = await realExec("git", ["commit", "--allow-empty", "-m", subject], f.foreign, foreignEnv);
     expect(made.code, made.stderr).toBe(0);
     const imported = await f.git(f.foreign, "rev-parse", "HEAD");
     await f.git(f.foreign, "push", "origin", "HEAD:refs/heads/pipeline/proof");
@@ -760,11 +787,74 @@ test.each(["versioned", "versionless"])("B: a %s start refuses imported shared-i
     const reset = await realExec("git", ["reset", "--hard", "FETCH_HEAD"], f.lane,
       { ...f.env, GIT_REFLOG_ACTION: "commit" });
     expect(reset.code, reset.stderr).toBe(0);
+    if (subject === "updating HEAD") expect(await f.own("reflog", "-1", "--format=%gs")).toBe("commit: updating HEAD");
     expect(await fs.access(path.join(f.receipt, "commits", imported)).then(() => true, () => false)).toBe(false);
     const settled = await f.settle();
     expect(settled?.ok).toBe(false);
     if (!settled || settled.ok) throw new Error("versionless start trusted forged creation");
     expect(settled.error).toContain(imported);
+  } finally { await f.close(); }
+});
+
+test("B: a foreign shared-identity merge reached by update-ref with a merge reflog message stays unproved", async () => {
+  const f = await fixture();
+  try {
+    const own = await f.commit("own before the foreign merge");
+    await f.push();
+    const foreignEnv: NodeJS.ProcessEnv = { ...f.env, GIT_CONFIG_COUNT: "0",
+      LLV_STAGE_GIT_RECEIPT: undefined, LLV_STAGE_GIT_WORKTREE: undefined };
+    await f.git(f.foreign, "commit", "--allow-empty", "-m", "advance main");
+    await f.git(f.foreign, "push", "origin", "main");
+    await f.git(f.foreign, "fetch", "origin", "pipeline/proof");
+    await f.git(f.foreign, "checkout", "-b", "pipeline/proof", own);
+    const merged = await realExec("git", ["merge", "--no-ff", "--no-edit", "main"], f.foreign, foreignEnv);
+    expect(merged.code, merged.stderr).toBe(0);
+    const imported = await f.git(f.foreign, "rev-parse", "HEAD");
+    await f.git(f.foreign, "push", "origin", "HEAD:refs/heads/pipeline/proof");
+    await f.own("fetch", "origin", "pipeline/proof");
+    const message = "merge origin/main: Merge made by the 'ort' strategy.";
+    await f.own("update-ref", "-m", message, "HEAD", imported, own);
+    await f.own("read-tree", "--reset", "-u", "HEAD");
+    expect(await f.own("reflog", "-1", "--format=%gs")).toBe(message);
+    expect(await f.own("log", "-1", "--format=%cn <%ce> %ct", imported)).toBe(await f.own("log", "-1", "--format=%cn <%ce> %ct", own));
+    expect(await fs.access(path.join(f.receipt, "commits", imported)).then(() => true, () => false)).toBe(false);
+    const settled = await f.settle();
+    expect(settled?.ok).toBe(false);
+    if (!settled || settled.ok) throw new Error("a foreign merge was accepted from its reflog message");
+    expect(settled.error).toContain(`commit ${imported} was not created in the attempt worktree`);
+  } finally { await f.close(); }
+});
+
+// A refresh of current main mid-attempt is a fast-forward onto verified base
+// history; the attempt's own commits after it stay provable from the reflog.
+test.each(["lost receipt", "forged reset"] as const)("A: main fast-forward followed by an own commit (%s)", async shape => {
+  const f = await fixture();
+  try {
+    await f.git(f.foreign, "commit", "--allow-empty", "-m", "new main");
+    await f.git(f.foreign, "push", "origin", "main");
+    await f.own("fetch", "origin", "main"); await f.own("merge", "--ff-only", "origin/main");
+    expect(await f.own("reflog", "-1", "--format=%gs")).toBe("merge origin/main: Fast-forward");
+    let head: string;
+    if (shape === "lost receipt") {
+      head = await f.commit("own after the refresh");
+      await fs.rm(path.join(f.receipt, "commits", head));
+    } else {
+      const foreignEnv: NodeJS.ProcessEnv = { ...f.env, GIT_CONFIG_COUNT: "0",
+        LLV_STAGE_GIT_RECEIPT: undefined, LLV_STAGE_GIT_WORKTREE: undefined };
+      await f.git(f.foreign, "fetch", "origin", "main");
+      await f.git(f.foreign, "checkout", "-B", "pipeline/proof", await f.own("rev-parse", "HEAD"));
+      const made = await realExec("git", ["commit", "--allow-empty", "-m", "updating HEAD"], f.foreign, foreignEnv);
+      expect(made.code, made.stderr).toBe(0);
+      head = await f.git(f.foreign, "rev-parse", "HEAD");
+      await f.git(f.foreign, "push", "-f", "origin", "HEAD:refs/heads/pipeline/proof");
+      await f.own("fetch", "origin", "pipeline/proof");
+      const reset = await realExec("git", ["reset", "--hard", "FETCH_HEAD"], f.lane, { ...f.env, GIT_REFLOG_ACTION: "commit" });
+      expect(reset.code, reset.stderr).toBe(0);
+    }
+    await f.push();
+    const settled = await f.settle();
+    if (shape === "lost receipt") expect(settled).toEqual({ ok: true, sha: head });
+    else expect(settled).toMatchObject({ ok: false, error: expect.stringContaining(`commit ${head} was not created in the attempt worktree`) });
   } finally { await f.close(); }
 });
 
@@ -1110,20 +1200,46 @@ async function advanceMain(f: Awaited<ReturnType<typeof fixture>>, file: string,
   await f.own("fetch", "origin", "main");
 }
 
+/** Run one Git command inside its own process group and kill the whole group
+ * from the reference-transaction hook once a branch moved, before post-commit
+ * or post-merge runs: the same cut an OOM kill of the agent's scope makes. The
+ * launch's guard hooks run and forward to the repository's own. */
+async function dieAfterRefUpdate(f: Awaited<ReturnType<typeof fixture>>, args: string[]): Promise<string> {
+  await repositoryHooks(f, "#!/bin/sh\ninput=$(cat)\n[ \"$1\" = committed ] && [ -n \"${STAGE_PROOF_DIE:-}\" ] "
+    + "&& printf '%s\\n' \"$input\" | grep -q ' refs/heads/' && kill -KILL 0\nexit 0\n");
+  const { spawn } = await import("node:child_process");
+  const status = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+    const child = spawn("git", args, { cwd: f.lane, detached: true, stdio: "ignore",
+      env: { ...f.env, STAGE_PROOF_DIE: "1" } as NodeJS.ProcessEnv });
+    child.once("error", reject);
+    child.once("exit", (code, signal) => resolve({ code, signal }));
+  });
+  expect(status.signal).toBe("SIGKILL");
+  await f.own("config", "--unset", "core.hooksPath");
+  // The kill also skipped Git's own cleanup of the merge state.
+  if ((await realExec("git", ["rev-parse", "-q", "--verify", "MERGE_HEAD"], f.lane, f.env)).code === 0) await f.own("merge", "--quit");
+  const head = await f.own("rev-parse", "HEAD");
+  expect(await fs.access(path.join(f.receipt, "commits", head)).then(() => true, () => false)).toBe(false);
+  return head;
+}
+
+async function commitThenDie(f: Awaited<ReturnType<typeof fixture>>, message: string): Promise<string> {
+  const head = await dieAfterRefUpdate(f, ["commit", "--allow-empty", "-m", message]);
+  expect(await f.own("log", "-1", "--format=%s", head)).toBe(message);
+  return head;
+}
+
 test.each(["clean merge", "clean merge concluded by commit", "conflicted merge"] as const)(
-  "a %s the attempt made under the repository's own hooks path settles", async shape => {
+  "a %s the attempt made just before its host died settles", async shape => {
     const f = await fixture();
     try {
-      const withRepositoryHooks = await repositoryHooks(f);
       await fs.writeFile(path.join(f.lane, "shared.txt"), "lane\n");
       await f.own("add", "shared.txt");
       await f.commit("own work before the merge");
       if (shape === "conflicted merge") await advanceMain(f, "shared.txt", "main\n");
       else await advanceMain(f, "main.txt", "main\n");
-      if (shape === "clean merge") {
-        const merged = await withRepositoryHooks(["merge", "--no-ff", "--no-edit", "origin/main"]);
-        expect(merged.code, merged.stderr).toBe(0);
-      } else {
+      if (shape === "clean merge") await dieAfterRefUpdate(f, ["merge", "--no-ff", "--no-edit", "origin/main"]);
+      else {
         const merged = await realExec("git", ["merge", "--no-ff", "--no-commit", "origin/main"], f.lane, f.env);
         expect(merged.code).toBe(shape === "conflicted merge" ? 1 : 0);
         if (shape === "conflicted merge") {
@@ -1132,51 +1248,35 @@ test.each(["clean merge", "clean merge concluded by commit", "conflicted merge"]
         }
         const message = path.join(f.root, "merge-message.txt");
         await fs.writeFile(message, "Merge origin/main into the lane\n\nCo-authored-by: Fixture <noreply@example.invalid>\n");
-        const committed = await withRepositoryHooks(["commit", "--cleanup=strip", "--file", message]);
-        expect(committed.code, committed.stderr).toBe(0);
+        await dieAfterRefUpdate(f, ["commit", "--cleanup=strip", "--file", message]);
       }
       const merge = await f.own("rev-parse", "HEAD");
       expect((await f.own("show", "-s", "--format=%P", merge)).split(" ")).toHaveLength(2);
-      expect(await fs.access(path.join(f.receipt, "commits", merge)).then(() => true, () => false)).toBe(false);
+      expect(await f.own("status", "--porcelain")).toBe("");
       const head = await f.commit("own fix after the merge");
       await f.push();
       expect(await f.settle()).toEqual({ ok: true, sha: head });
     } finally { await f.close(); }
   });
 
-test("an ordinary commit under the repository's own hooks path settles", async () => {
+// A command-line hooks path beats the guard's GIT_CONFIG_COUNT entry, so no
+// launch hook runs. The reflog entry alone is caller-controlled text
+// (`GIT_REFLOG_ACTION`, `update-ref -m`), so such a commit stays unproved and
+// the park names the in-place acceptance instead.
+test.each(["ordinary commit", "clean merge"] as const)("%s under a command-line hooks path override stays unproved", async shape => {
   const f = await fixture();
   try {
     const withRepositoryHooks = await repositoryHooks(f);
-    const made = await withRepositoryHooks(["commit", "--allow-empty", "-m", "own work, hooks path overridden"]);
+    if (shape === "clean merge") await advanceMain(f, "main.txt", "main\n");
+    const made = await withRepositoryHooks(shape === "clean merge" ? ["merge", "--no-ff", "--no-edit", "origin/main"]
+      : ["commit", "--allow-empty", "-m", "own work, hooks path overridden"]);
     expect(made.code, made.stderr).toBe(0);
     const head = await f.own("rev-parse", "HEAD");
     expect(await fs.access(path.join(f.receipt, "commits", head)).then(() => true, () => false)).toBe(false);
     await f.push();
-    expect(await f.settle()).toEqual({ ok: true, sha: head });
+    expect(await f.settle()).toMatchObject({ ok: false, error: expect.stringContaining(`commit ${head} was not created in the attempt worktree`) });
   } finally { await f.close(); }
 });
-
-/** Commit inside its own process group and kill the whole group from the
- * reference-transaction hook once the branch moved, before post-commit runs:
- * the same cut an OOM kill of the agent's scope makes. */
-async function commitThenDie(f: Awaited<ReturnType<typeof fixture>>, message: string): Promise<string> {
-  await repositoryHooks(f,
-    "#!/bin/sh\ncat >/dev/null\n[ \"$1\" = committed ] && [ -n \"${STAGE_PROOF_DIE:-}\" ] && kill -KILL 0\nexit 0\n");
-  const { spawn } = await import("node:child_process");
-  const status = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
-    const child = spawn("git", ["commit", "--allow-empty", "-m", message], { cwd: f.lane, detached: true, stdio: "ignore",
-      env: { ...f.env, STAGE_PROOF_DIE: "1" } as NodeJS.ProcessEnv });
-    child.once("error", reject);
-    child.once("exit", (code, signal) => resolve({ code, signal }));
-  });
-  expect(status.signal).toBe("SIGKILL");
-  await f.own("config", "--unset", "core.hooksPath");
-  const head = await f.own("rev-parse", "HEAD");
-  expect(await f.own("log", "-1", "--format=%s", head)).toBe(message);
-  expect(await fs.access(path.join(f.receipt, "commits", head)).then(() => true, () => false)).toBe(false);
-  return head;
-}
 
 test.each(["host-lost replacement", "operator retry"] as const)(
   "a commit whose host died before post-commit settles in the %s", async lineage => {
@@ -1211,11 +1311,12 @@ test("a same-identity commit made in the lane after the attempt ended is still r
     await f.commit("own receipted work");
     const parent = { ...f.attempt, n: 1, state: "failed", completedAt: "2026-10-16T09:30:00.000Z",
       agentPath: "/stage/ended.jsonl" } as PipelineStageAttempt;
-    const withRepositoryHooks = await repositoryHooks(f);
-    const late = await withRepositoryHooks(["commit", "--allow-empty", "-m", "another writer after the attempt ended"],
-      { GIT_COMMITTER_DATE: "2026-10-16T09:45:00Z" });
+    // Made through the launch hooks, so only the attempt's end bounds it.
+    const late = await realExec("git", ["commit", "--allow-empty", "-m", "another writer after the attempt ended"], f.lane,
+      { ...f.env, GIT_COMMITTER_DATE: "2026-10-16T09:45:00Z" });
     expect(late.code, late.stderr).toBe(0);
     const foreign = await f.own("rev-parse", "HEAD");
+    await fs.rm(path.join(f.receipt, "commits", foreign));
     Object.assign(f.env, await prepareStageGitGuard(childLaunch, f.lane, realExec, "2026-10-16T10:00:00.000Z"));
     const child = { ...f.attempt, n: 2, launchId: childLaunch, startedAt: "2026-10-16T10:00:00.000Z", completedAt: NOW,
       state: "passed", agentPath: "/stage/after-end.jsonl" } as PipelineStageAttempt;
