@@ -30942,12 +30942,16 @@ describe("operator decision forms: the «Рішення» column beside the seat
             if (strip?.trim() !== t("decisions.waiting", { count: 3 })) fail(`the line reads «${strip}»`);
             await page.locator("[data-decision-strip]").click();
             await page.waitForSelector('[data-decision-column="decisions"] [data-decision-list="3"]', { timeout: 10_000 });
+            /* The lane's round, with its two thumbnails, opens from its row under the newest question. */
+            await page.locator(`[data-decision-column] [data-decision-row="${LANE_ROUND}"]`).click();
+            await page.waitForSelector(`[data-decision-column] [data-decision-card="open"][data-decision-review="${LANE_ROUND}"]`, { timeout: 10_000 });
+            await page.mouse.move(0, 0);
             await page.waitForTimeout(400);
             const column = await readForm(page, "[data-decision-column]");
             const composer = await page.evaluate(() => Boolean(document.querySelector("[data-orchestrator-panel] textarea")));
             readings[`${label}-open`] = { ...column, composer };
             await page.screenshot({ path: path.join(OUT, `${label}-open.png`) });
-            if (!column.sendReachable || column.minOptionHeight < 36 || column.titleCut || column.horizontalOverflow || column.thumbsOverlap || !composer) fail(`the column in place reads ${JSON.stringify({ ...column, composer })}`);
+            if (column.review !== LANE_ROUND || column.thumbs.length !== 2 || !column.sendReachable || column.minOptionHeight < 36 || column.titleCut || column.horizontalOverflow || column.thumbsOverlap || !composer) fail(`the column in place reads ${JSON.stringify({ ...column, composer })}`);
             if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
           } catch (error) {
             fail(error instanceof Error ? error.message.split("\n")[0]! : String(error));
@@ -30973,12 +30977,14 @@ describe("operator decision forms: the «Рішення» column beside the seat
             if (line.height < 44 || line.text !== t("decisions.waiting", { count: 3 })) fail(`the line reads ${JSON.stringify(line)}`);
             await page.locator("[data-decision-strip]").click();
             await page.waitForSelector('[data-mobile2-sheet="decisions"] [data-decision-list="3"]', { timeout: 10_000 });
+            await page.locator(`[data-mobile2-sheet="decisions"] [data-decision-row="${LANE_ROUND}"]`).click();
+            await page.waitForSelector(`[data-mobile2-sheet="decisions"] [data-decision-card="open"][data-decision-review="${LANE_ROUND}"]`, { timeout: 10_000 });
             await page.waitForTimeout(500);
             const sheet = await readForm(page, '[data-mobile2-sheet="decisions"]');
             const tabs = await page.locator('[data-mobile2-sheet="decisions"] [data-decision-tab]').count();
             readings[`${label}-sheet`] = { ...sheet, tabs };
             await page.screenshot({ path: path.join(OUT, `${label}-sheet.png`) });
-            if (tabs !== 2 || !sheet.sendReachable || sheet.minOptionHeight < 44 || sheet.titleCut || sheet.horizontalOverflow || sheet.thumbsOverlap) fail(`the sheet reads ${JSON.stringify({ ...sheet, tabs })}`);
+            if (tabs !== 2 || sheet.review !== LANE_ROUND || sheet.thumbs.length !== 2 || !sheet.sendReachable || sheet.minOptionHeight < 44 || sheet.titleCut || sheet.horizontalOverflow || sheet.thumbsOverlap) fail(`the sheet reads ${JSON.stringify({ ...sheet, tabs })}`);
             await page.locator('[data-mobile2-sheet="decisions"] [data-decision-tab="reports"]').click();
             await page.waitForSelector('[data-mobile2-sheet="decisions"] [data-report-log]', { timeout: 10_000 });
             await page.screenshot({ path: path.join(OUT, `${label}-reports.png`) });

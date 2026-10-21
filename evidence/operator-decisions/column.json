@@ -71,7 +71,7 @@
       }
     ],
     "1440-uk-light-answered": {
-      "text": "Відповідь · 12:21\n«Готово»: місце і деплой\nдоставлено\n1\nДе закріпити список «Готово»? Зверху «Чекають на вас»\n2\nКоли деплоїти після мержу? Увечері, одним деплоєм\nTelegram: публікацію ще не записано\nНадіслати в Telegram ще раз",
+      "text": "Відповідь · 14:00\n«Готово»: місце і деплой\nдоставлено\n1\nДе закріпити список «Готово»? Зверху «Чекають на вас»\n2\nКоли деплоїти після мержу? Увечері, одним деплоєм\nTelegram: публікацію ще не записано\nНадіслати в Telegram ще раз",
       "delivery": "sent",
       "left": {
         "card": {
@@ -95,15 +95,28 @@
     "1000-uk-light-open": {
       "card": {
         "x": 273,
-        "y": 183,
+        "y": 174,
         "w": 702,
-        "h": 293
+        "h": 469
       },
-      "review": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "review": "pr_cccccccccccccccccccccccccccccccc",
       "rows": 2,
       "sendReachable": true,
       "minOptionHeight": 36,
-      "thumbs": [],
+      "thumbs": [
+        {
+          "x": 286,
+          "y": 222,
+          "w": 176,
+          "h": 106
+        },
+        {
+          "x": 470,
+          "y": 222,
+          "w": 176,
+          "h": 106
+        }
+      ],
       "thumbsOverlap": false,
       "titleCut": false,
       "tabCount": "3",
@@ -118,15 +131,28 @@
     "390-uk-light-sheet": {
       "card": {
         "x": 12,
-        "y": 343,
+        "y": 102,
         "w": 366,
-        "h": 372
+        "h": 749
       },
-      "review": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "review": "pr_cccccccccccccccccccccccccccccccc",
       "rows": 2,
       "sendReachable": true,
       "minOptionHeight": 44,
-      "thumbs": [],
+      "thumbs": [
+        {
+          "x": 25,
+          "y": 185,
+          "w": 150,
+          "h": 90
+        },
+        {
+          "x": 183,
+          "y": 185,
+          "w": 150,
+          "h": 90
+        }
+      ],
       "thumbsOverlap": false,
       "titleCut": false,
       "tabCount": "3",
@@ -203,7 +229,7 @@
       }
     ],
     "1440-uk-dark-answered": {
-      "text": "Відповідь · 12:21\n«Готово»: місце і деплой\nдоставлено\n1\nДе закріпити список «Готово»? Зверху «Чекають на вас»\n2\nКоли деплоїти після мержу? Увечері, одним деплоєм\nTelegram: публікацію ще не записано\nНадіслати в Telegram ще раз",
+      "text": "Відповідь · 14:00\n«Готово»: місце і деплой\nдоставлено\n1\nДе закріпити список «Готово»? Зверху «Чекають на вас»\n2\nКоли деплоїти після мержу? Увечері, одним деплоєм\nTelegram: публікацію ще не записано\nНадіслати в Telegram ще раз",
       "delivery": "sent",
       "left": {
         "card": {
@@ -227,15 +253,28 @@
     "1000-uk-dark-open": {
       "card": {
         "x": 273,
-        "y": 183,
+        "y": 174,
         "w": 702,
-        "h": 293
+        "h": 469
       },
-      "review": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "review": "pr_cccccccccccccccccccccccccccccccc",
       "rows": 2,
       "sendReachable": true,
       "minOptionHeight": 36,
-      "thumbs": [],
+      "thumbs": [
+        {
+          "x": 286,
+          "y": 222,
+          "w": 176,
+          "h": 106
+        },
+        {
+          "x": 470,
+          "y": 222,
+          "w": 176,
+          "h": 106
+        }
+      ],
       "thumbsOverlap": false,
       "titleCut": false,
       "tabCount": "3",
@@ -250,15 +289,28 @@
     "390-uk-dark-sheet": {
       "card": {
         "x": 12,
-        "y": 343,
+        "y": 102,
         "w": 366,
-        "h": 372
+        "h": 749
       },
-      "review": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "review": "pr_cccccccccccccccccccccccccccccccc",
       "rows": 2,
       "sendReachable": true,
       "minOptionHeight": 44,
-      "thumbs": [],
+      "thumbs": [
+        {
+          "x": 25,
+          "y": 185,
+          "w": 150,
+          "h": 90
+        },
+        {
+          "x": 183,
+          "y": 185,
+          "w": 150,
+          "h": 90
+        }
+      ],
       "thumbsOverlap": false,
       "titleCut": false,
       "tabCount": "3",
@@ -335,7 +387,7 @@
       }
     ],
     "1440-en-light-answered": {
-      "text": "Answered · 12:21\n«Done»: placement and deploy\ndelivered\n1\nWhere should the «Done» list be pinned? Above «Waiting for you»\n2\nWhen to deploy after the merge? In the evening, in one deploy\nTelegram: no post recorded yet\nSend to Telegram again",
+      "text": "Answered · 14:00\n«Done»: placement and deploy\ndelivered\n1\nWhere should the «Done» list be pinned? Above «Waiting for you»\n2\nWhen to deploy after the merge? In the evening, in one deploy\nTelegram: no post recorded yet\nSend to Telegram again",
       "delivery": "sent",
       "left": {
         "card": {
@@ -359,15 +411,28 @@
     "1000-en-light-open": {
       "card": {
         "x": 273,
-        "y": 183,
+        "y": 174,
         "w": 702,
-        "h": 293
+        "h": 469
       },
-      "review": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "review": "pr_cccccccccccccccccccccccccccccccc",
       "rows": 2,
       "sendReachable": true,
       "minOptionHeight": 36,
-      "thumbs": [],
+      "thumbs": [
+        {
+          "x": 286,
+          "y": 222,
+          "w": 176,
+          "h": 106
+        },
+        {
+          "x": 470,
+          "y": 222,
+          "w": 176,
+          "h": 106
+        }
+      ],
       "thumbsOverlap": false,
       "titleCut": false,
       "tabCount": "3",
@@ -382,15 +447,28 @@
     "390-en-light-sheet": {
       "card": {
         "x": 12,
-        "y": 367,
+        "y": 127,
         "w": 366,
-        "h": 347
+        "h": 724
       },
-      "review": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "review": "pr_cccccccccccccccccccccccccccccccc",
       "rows": 2,
       "sendReachable": true,
       "minOptionHeight": 44,
-      "thumbs": [],
+      "thumbs": [
+        {
+          "x": 25,
+          "y": 210,
+          "w": 150,
+          "h": 90
+        },
+        {
+          "x": 183,
+          "y": 210,
+          "w": 150,
+          "h": 90
+        }
+      ],
       "thumbsOverlap": false,
       "titleCut": false,
       "tabCount": "3",
@@ -467,7 +545,7 @@
       }
     ],
     "1440-en-dark-answered": {
-      "text": "Answered · 12:21\n«Done»: placement and deploy\ndelivered\n1\nWhere should the «Done» list be pinned? Above «Waiting for you»\n2\nWhen to deploy after the merge? In the evening, in one deploy\nTelegram: no post recorded yet\nSend to Telegram again",
+      "text": "Answered · 14:00\n«Done»: placement and deploy\ndelivered\n1\nWhere should the «Done» list be pinned? Above «Waiting for you»\n2\nWhen to deploy after the merge? In the evening, in one deploy\nTelegram: no post recorded yet\nSend to Telegram again",
       "delivery": "sent",
       "left": {
         "card": {
@@ -491,15 +569,28 @@
     "1000-en-dark-open": {
       "card": {
         "x": 273,
-        "y": 183,
+        "y": 174,
         "w": 702,
-        "h": 293
+        "h": 469
       },
-      "review": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "review": "pr_cccccccccccccccccccccccccccccccc",
       "rows": 2,
       "sendReachable": true,
       "minOptionHeight": 36,
-      "thumbs": [],
+      "thumbs": [
+        {
+          "x": 286,
+          "y": 222,
+          "w": 176,
+          "h": 106
+        },
+        {
+          "x": 470,
+          "y": 222,
+          "w": 176,
+          "h": 106
+        }
+      ],
       "thumbsOverlap": false,
       "titleCut": false,
       "tabCount": "3",
@@ -514,15 +605,28 @@
     "390-en-dark-sheet": {
       "card": {
         "x": 12,
-        "y": 367,
+        "y": 127,
         "w": 366,
-        "h": 347
+        "h": 724
       },
-      "review": "pr_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "review": "pr_cccccccccccccccccccccccccccccccc",
       "rows": 2,
       "sendReachable": true,
       "minOptionHeight": 44,
-      "thumbs": [],
+      "thumbs": [
+        {
+          "x": 25,
+          "y": 210,
+          "w": 150,
+          "h": 90
+        },
+        {
+          "x": 183,
+          "y": 210,
+          "w": 150,
+          "h": 90
+        }
+      ],
       "thumbsOverlap": false,
       "titleCut": false,
       "tabCount": "3",

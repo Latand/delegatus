@@ -338,6 +338,41 @@ test("a folded column stays folded while reads add and keep decisions, until the
   expect(host.querySelector('[data-decision-card="open"]')?.getAttribute("data-decision-review")).toBe(TASK);
 });
 
+test("a newer decision read while the default form is being answered lists first as a row; the form stays open and focused until it leaves", async () => {
+  let decisions = [seatDecision()];
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+    if (init?.method === "POST") throw new Error("a read never answers");
+    return new Response(JSON.stringify({ project: "project-a", decisions }), { status: 200 });
+  }) as typeof fetch;
+  const read = async () => { await act(async () => { window.dispatchEvent(new dom.Event("llv:tasks-changed") as unknown as Event); await new Promise((resolve) => setTimeout(resolve, 10)); }); };
+  const host = await render(<DecisionList project="project-a" />);
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
+  expect(host.querySelector('[data-decision-card="open"]')?.getAttribute("data-decision-review")).toBe(SEAT);
+  await typeComment(host, "Not before CI.");
+  const field = host.querySelector<HTMLTextAreaElement>("[data-decision-comment]")!;
+  field.focus();
+  expect(dom.document.activeElement as unknown).toBe(field);
+  decisions = [seatDecision(), lateDecision()];
+  await read();
+  expect(listed(host)).toEqual([LATE, SEAT]);
+  expect(host.querySelector(`[data-decision-row="${LATE}"]`)).not.toBeNull();
+  expect(host.querySelector('[data-decision-card="open"]')?.getAttribute("data-decision-review")).toBe(SEAT);
+  expect(field.isConnected).toBe(true);
+  expect(field.value).toBe("Not before CI.");
+  expect(dom.document.activeElement as unknown).toBe(field);
+  /* A form the operator opened from its row holds the same way. */
+  decisions = [taskDecision(), seatDecision(), lateDecision()];
+  await read();
+  await click(host.querySelector(`[data-decision-row="${TASK}"]`));
+  decisions = [taskDecision(), seatDecision(), lateDecision(), seatDecision({ id: `pr_${"f".repeat(32)}`, createdAt: "2026-10-11T15:30:00.000Z" })];
+  await read();
+  expect(host.querySelector('[data-decision-card="open"]')?.getAttribute("data-decision-review")).toBe(TASK);
+  /* Once the shown form leaves the read, the newest opens. */
+  decisions = [seatDecision(), lateDecision(), seatDecision({ id: `pr_${"f".repeat(32)}`, createdAt: "2026-10-11T15:30:00.000Z" })];
+  await read();
+  expect(host.querySelector('[data-decision-card="open"]')?.getAttribute("data-decision-review")).toBe(`pr_${"f".repeat(32)}`);
+});
+
 test("a request for a form opens it again after the operator folded the column", async () => {
   const draw = (focus: { reviewId?: string; nonce: number } | null) => <DecisionList project="project-a" focus={focus} initial={[seatDecision(), taskDecision(), lateDecision()]} />;
   const host = await render(draw({ reviewId: TASK, nonce: 1 }));

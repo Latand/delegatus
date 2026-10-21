@@ -78,7 +78,9 @@ What variant 3 means at each width, as built:
   on that form.
 - **Order and folding** (2026-10-21): the column and the phone's sheet list
   the newest decision first and open it, while the read below stays oldest
-  first. The open form's header is a button (`aria-expanded`) that folds the
+  first. A form once shown stays open while later reads add newer decisions
+  above it as rows; the newest opens again only when the shown form leaves the
+  list. The open form's header is a button (`aria-expanded`) that folds the
   form back to its row; the list then keeps every form folded until the
   operator opens a row or a request (the feed's pointer, a «Чекають на вас»
   row) names a form. Folding is a view state of the open list: it answers,

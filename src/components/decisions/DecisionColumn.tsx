@@ -77,8 +77,13 @@ export function DecisionList({ project, active = true, focus, touch = false, ini
       setCollapsed(false);
     }
   }
+  /* The form last shown stays open while reads add newer ones above it; the
+     newest is the default only on the first draw and once the shown form leaves. */
+  const [held, setHeld] = useState<string | null>(null);
   const decisions = newestDecisionsFirst(read.decisions ?? []);
-  const expanded = collapsed ? null : decisions.find((decision) => decision.id === picked) ?? decisions[0] ?? null;
+  const expanded = collapsed ? null : decisions.find((decision) => decision.id === picked)
+    ?? decisions.find((decision) => decision.id === held) ?? decisions[0] ?? null;
+  if (expanded && expanded.id !== held) setHeld(expanded.id);
   /* A request that named a form brings it into the column's view; a first
      paint scrolls nothing, so the board around the column stays put. */
   const expandedId = expanded?.id ?? null;
