@@ -1018,11 +1018,12 @@ describe("subscription API consent", () => {
       for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const phone of [false, true]) {
         enabled = false;
         const viewport = phone ? { width: 390, height: 844 } : { width: 1000, height: 700 };
-        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-settings&header=1`, viewport, theme, lang, "reduce", phone);
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-settings&header=1&lang=${lang}`, viewport, theme, lang, "reduce", phone);
         try {
           await page.locator(phone ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]").click();
           await page.locator(phone ? '[data-mobile2-menu-row="ping"]' : "[data-rail-menu-ping]").click();
           const section = page.locator("[data-subscription-api]"); await section.waitFor();
+          expect(await section.locator("h3").innerText()).toBe(translate(lang, "subscriptionApi.title"));
           const toggle = section.getByRole("switch");
           await toggle.waitFor({ state: "visible" });
           expect(await toggle.isChecked()).toBe(false);

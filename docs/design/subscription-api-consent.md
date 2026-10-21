@@ -55,8 +55,24 @@ The optional browser timing case also calls the profile caller.
 `fetchClaudeLimits` serves both the account manager and the shared limits cache;
 the quota controller uses `readClaudeAccountLimits`. Consent must be checked
 inside the direct endpoint function, including callers bypassing the cache.
-The separate installation consent file has one writer (the operator settings
-route), one migration reader, and the direct usage request as its effect reader.
+The separate installation consent file is created exclusively by
+`subscriptionApiConsent` and updated by the operator settings route through
+`setSubscriptionApiConsent`. Its readers are that route's GET, the limits cache
+loader and the direct usage dispatch check. It has no per-project copies or
+cascading account defaults. The cache loader initializes consent before it can
+upgrade an older parser marker, including when a Codex cache write comes first.
+Creation follows the existing startup mutation guard; other process kinds read
+the choice the Viewer initialized. A refused migration does not turn into an
+empty cache that could overwrite its proof of prior use.
 New installations persist false before the first endpoint attempt. Successful
 historical Claude OAuth readings in `limits-cache.json` prove prior use for
 migration; an explicit choice always wins and corrupt consent fails closed.
+
+Claude Code may answer `/usage` from its own cached usage snapshot. Delegatus
+records when it read the CLI report; the CLI manages the cache and its provider
+requests. An unrecognized or empty report stays unavailable.
+
+The headless launcher's memory planner reads `liveStructuredHostCount` through
+the registry's existing active-status index. It counts the same four active
+structured-host states as the previous snapshot scan, excludes retained dead
+and unhosted rows, and does not change host writers or the memory policy.

@@ -137,10 +137,10 @@ function withCurrentParser(entry: EngineCacheEntry): EngineCacheEntry {
 }
 
 function readDiskCache(): LimitsCache {
+  // A refused consent migration must not become an empty cache that another
+  // engine could persist over the prior-use evidence.
+  subscriptionApiConsent();
   try {
-    // Freeze prior-use consent before any engine rewrites old Claude entries
-    // with the current parser generation in this shared cache file.
-    subscriptionApiConsent();
     const raw = (readJsonCache(limitsCacheFile()) ?? {}) as Partial<LimitsCache> & { at?: unknown; accountId?: unknown; data?: LimitsPayload };
     if (raw.version === 2 && raw.engines && typeof raw.engines === "object") {
       const cache = emptyCache();
@@ -544,12 +544,6 @@ export async function fetchClaudeLimits(
 ): Promise<LimitRead> {
   // Freeze migration before a CLI result can create the first new cache entry.
   subscriptionApiConsent();
-  // Linux subscriptions use the file store. A missing file needs no CLI
-  // process; macOS may authenticate from Keychain without one.
-  if (process.platform === "linux") {
-    try { fs.statSync(credentialsPath); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return { data: null, reason: "credentials absent", source: "unavailable" }; }
-  }
   try {
     const home = path.dirname(credentialsPath);
     const cli = await (ports.run ?? runHeadlessClaudeOnce)({ account: { engine: "claude", accountId: "usage", kind: "managed", home,

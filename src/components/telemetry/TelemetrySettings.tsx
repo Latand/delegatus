@@ -7,9 +7,9 @@ import { telemetryNotice } from "../../../bin/telemetry-notice.mjs";
 import { SubscriptionApiSetting } from "./SubscriptionApiSetting";
 export const openTelemetrySettings = () => window.dispatchEvent(new Event("delegatus:open-settings"));
 type Status = { enabled: boolean; locked: boolean; noticeDismissed: boolean };
-/* The install ping's dialog, behind «Install ping» on the header menu's
-   Settings page: the notice and the one switch. Shared memory and the
-   OpenRouter key have rows of their own on that page. */
+/* The disclosure dialog behind «Install ping» on the header's Settings page
+   contains the ping and direct subscription API consent. Shared memory and
+   provider keys have their own settings rows. */
 export function TelemetrySettingsHost() {
   const { t, locale } = useLocale();
   const [status, setStatus] = useState<Status | null>(null);

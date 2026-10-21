@@ -3,6 +3,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { statePath } from "@/lib/configDir";
 import { writeJsonDurably } from "@/lib/state/durableJson";
+import { assertStateStartupMutation } from "@/lib/stateOwnership";
 
 type Consent = { version: 1; enabled: boolean; source: "default" | "migration" | "operator" };
 const consentFile = () => statePath("subscription-api-consent.json");
@@ -39,6 +40,7 @@ export function subscriptionApiConsent(): Consent {
   }
   const initial: Consent = { version: 1, enabled: previouslyUsedDirectUsage(), source: "default" };
   if (initial.enabled) initial.source = "migration";
+  assertStateStartupMutation(path.dirname(file), "subscription API consent migration");
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const temporary = `${file}.${randomUUID()}.tmp`;
   try {

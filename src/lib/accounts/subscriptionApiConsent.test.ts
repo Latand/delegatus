@@ -1,9 +1,10 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { subscriptionApiConsent, setSubscriptionApiConsent } from "./subscriptionApiConsent";
+import * as stateOwnership from "@/lib/stateOwnership";
 
 const prior = process.env.LLV_STATE_DIR;
 const roots: string[] = [];
@@ -28,6 +29,14 @@ test("corrupt consent never reenables direct requests through migration", () => 
   const root = isolated();
   fs.writeFileSync(path.join(root, "subscription-api-consent.json"), "{");
   expect(subscriptionApiConsent().enabled).toBe(false);
+});
+test("initial consent migration obeys the startup mutation guard", () => {
+  const root = isolated();
+  const guard = spyOn(stateOwnership, "assertStateStartupMutation").mockImplementation(() => { throw Error("startup guard refused"); });
+  try {
+    expect(() => subscriptionApiConsent()).toThrow("startup guard refused");
+    expect(fs.existsSync(path.join(root, "subscription-api-consent.json"))).toBe(false);
+  } finally { guard.mockRestore(); }
 });
 test("a real process restart retains explicit revocation and default-off", async () => {
   const root = isolated();
