@@ -5127,6 +5127,10 @@ export async function serveViewerMcpStdio(service: McpToolService, healthProbe =
     ? createViewerMcpHealthProbeServer(admittedService)
     : createViewerMcpServer(admittedService);
   const transport = new StdioServerTransport();
+  if (!healthProbe) {
+    const { guardViewerMcpStartup } = await import("./startup");
+    guardViewerMcpStartup(transport);
+  }
   // The SDK does not close its transport on EOF. A dead client (including a
   // killed launcher) must not leave domain timers or in-flight reads resident.
   // This entry point owns a dedicated stdio process, never the Viewer server.

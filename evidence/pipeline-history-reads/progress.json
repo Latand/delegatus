@@ -1,0 +1,261 @@
+{
+  "measuredAt": "2026-10-21T13:44:08.789034+00:00",
+  "base": "db528f4d85d7d2ced1ad771455de393543f3de45",
+  "candidateSourceSha256": {
+    "src/lib/pipelines/store.ts": "b5582ebc6d2bdee10bc237b11e58994a86aa7714bd80512548143d0f6689ae9c",
+    "src/lib/pipelines/startupResponsiveness.test.ts": "3855ce93268436f6714b6338ac6057427970f5663151a7eb7040fb31d4072fe9"
+  },
+  "runtime": "Bun 1.4.0",
+  "command": [
+    "bun",
+    "test",
+    "./src/lib/pipelines/startupResponsiveness.test.ts",
+    "-t",
+    "history evidence (keeps|callers)"
+  ],
+  "repetitions": 3,
+  "hostLogicalCpus": 24,
+  "workload": "48 retained rows and one active row; one committed direct SQLite update; retry with one caller, overlap with two callers; no added background load; alternating base/candidate, fresh process and isolated roots per sample; gate-slot CPU admission; host load average recorded per sample",
+  "samples": [
+    {
+      "case": "history-evidence-retry",
+      "retained": 48,
+      "changed": 1,
+      "callers": 1,
+      "decodes": 49,
+      "elapsedMs": 13.71351900000002,
+      "load": [
+        30.76,
+        28.83,
+        28.59
+      ],
+      "repeat": 1,
+      "revision": "base",
+      "loadBefore": [
+        30.75390625,
+        28.82470703125,
+        28.58154296875
+      ]
+    },
+    {
+      "case": "history-evidence-overlap",
+      "retained": 48,
+      "changed": 1,
+      "callers": 2,
+      "decodes": 98,
+      "elapsedMs": 30.650995000000023,
+      "load": [
+        30.76,
+        28.83,
+        28.59
+      ],
+      "repeat": 1,
+      "revision": "base",
+      "loadBefore": [
+        30.75390625,
+        28.82470703125,
+        28.58154296875
+      ]
+    },
+    {
+      "case": "history-evidence-retry",
+      "retained": 48,
+      "changed": 1,
+      "callers": 1,
+      "decodes": 1,
+      "elapsedMs": 13.568573000000015,
+      "load": [
+        30.76,
+        28.83,
+        28.59
+      ],
+      "repeat": 1,
+      "revision": "candidate",
+      "loadBefore": [
+        30.75390625,
+        28.82470703125,
+        28.58154296875
+      ]
+    },
+    {
+      "case": "history-evidence-overlap",
+      "retained": 48,
+      "changed": 1,
+      "callers": 2,
+      "decodes": 49,
+      "elapsedMs": 15.32623000000001,
+      "load": [
+        30.76,
+        28.83,
+        28.59
+      ],
+      "repeat": 1,
+      "revision": "candidate",
+      "loadBefore": [
+        30.75390625,
+        28.82470703125,
+        28.58154296875
+      ]
+    },
+    {
+      "case": "history-evidence-retry",
+      "retained": 48,
+      "changed": 1,
+      "callers": 1,
+      "decodes": 49,
+      "elapsedMs": 20.843131000000028,
+      "load": [
+        30.76,
+        28.83,
+        28.59
+      ],
+      "repeat": 2,
+      "revision": "base",
+      "loadBefore": [
+        30.75390625,
+        28.82470703125,
+        28.58154296875
+      ]
+    },
+    {
+      "case": "history-evidence-overlap",
+      "retained": 48,
+      "changed": 1,
+      "callers": 2,
+      "decodes": 98,
+      "elapsedMs": 23.224309000000005,
+      "load": [
+        30.76,
+        28.83,
+        28.59
+      ],
+      "repeat": 2,
+      "revision": "base",
+      "loadBefore": [
+        30.75390625,
+        28.82470703125,
+        28.58154296875
+      ]
+    },
+    {
+      "case": "history-evidence-retry",
+      "retained": 48,
+      "changed": 1,
+      "callers": 1,
+      "decodes": 1,
+      "elapsedMs": 14.991030000000023,
+      "load": [
+        30.76,
+        28.83,
+        28.59
+      ],
+      "repeat": 2,
+      "revision": "candidate",
+      "loadBefore": [
+        30.75390625,
+        28.82470703125,
+        28.58154296875
+      ]
+    },
+    {
+      "case": "history-evidence-overlap",
+      "retained": 48,
+      "changed": 1,
+      "callers": 2,
+      "decodes": 49,
+      "elapsedMs": 20.865620000000035,
+      "load": [
+        30.76,
+        28.83,
+        28.59
+      ],
+      "repeat": 2,
+      "revision": "candidate",
+      "loadBefore": [
+        30.75390625,
+        28.82470703125,
+        28.58154296875
+      ]
+    },
+    {
+      "case": "history-evidence-retry",
+      "retained": 48,
+      "changed": 1,
+      "callers": 1,
+      "decodes": 49,
+      "elapsedMs": 21.624206000000015,
+      "load": [
+        30.76,
+        28.83,
+        28.59
+      ],
+      "repeat": 3,
+      "revision": "base",
+      "loadBefore": [
+        30.75390625,
+        28.82470703125,
+        28.58154296875
+      ]
+    },
+    {
+      "case": "history-evidence-overlap",
+      "retained": 48,
+      "changed": 1,
+      "callers": 2,
+      "decodes": 98,
+      "elapsedMs": 25.886877000000027,
+      "load": [
+        30.76,
+        28.83,
+        28.59
+      ],
+      "repeat": 3,
+      "revision": "base",
+      "loadBefore": [
+        30.75390625,
+        28.82470703125,
+        28.58154296875
+      ]
+    },
+    {
+      "case": "history-evidence-retry",
+      "retained": 48,
+      "changed": 1,
+      "callers": 1,
+      "decodes": 1,
+      "elapsedMs": 15.42528500000003,
+      "load": [
+        30.76,
+        28.83,
+        28.59
+      ],
+      "repeat": 3,
+      "revision": "candidate",
+      "loadBefore": [
+        30.75390625,
+        28.82470703125,
+        28.58154296875
+      ]
+    },
+    {
+      "case": "history-evidence-overlap",
+      "retained": 48,
+      "changed": 1,
+      "callers": 2,
+      "decodes": 49,
+      "elapsedMs": 19.85303399999998,
+      "load": [
+        30.76,
+        28.83,
+        28.59
+      ],
+      "repeat": 3,
+      "revision": "candidate",
+      "loadBefore": [
+        30.75390625,
+        28.82470703125,
+        28.58154296875
+      ]
+    }
+  ]
+}
