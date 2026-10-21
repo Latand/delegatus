@@ -179,7 +179,7 @@
     });
     const sources = Object.values(hour.events.stats.sources).reduce((a, b) => a + b, 0);
     $("hour-intro").textContent = DS.t("hourIntro", {
-      label: hour.label, calls: DS.number(hour.tools.calls), sources,
+      label: hour.label, calls: DS.number(hour.tools.calls), sources: DS.number(sources),
     });
     renderHourTable();
     drawTimeline(Number($("start-minute").value) * 60);
@@ -189,7 +189,7 @@
     const table = $("hour-table");
     table.replaceChildren();
     const head = table.createTHead().insertRow();
-    for (const [key, numeric] of [["tableSound", false], ["tableSources", true], ["tablePlays", true]]) {
+    for (const [key, numeric] of [["tableSound", false], ["tablePlays", true]]) {
       const th = document.createElement("th");
       th.textContent = DS.t(key);
       if (numeric) th.className = "num";
@@ -202,11 +202,14 @@
       cell.className = "code";
       cell.style.setProperty("--hue", hueOf(id));
       cell.textContent = `${DS.SOUNDS[id].code} ${DS.soundName(DS.SOUNDS[id])}`;
+      // The event count shows only where the rules merged or dropped some.
       const sources = hour.events.stats.sources[id] ?? 0;
       const plays = hour.events.plays.filter((p) => p.sound === id && !p.replay).length;
-      Object.assign(row.insertCell(), { className: "num", textContent: DS.number(sources) });
-      Object.assign(row.insertCell(), { className: "num", textContent: DS.number(plays) });
+      const played = plays === sources ? DS.number(plays)
+        : DS.t("playedOf", { plays: DS.number(plays), sources: DS.number(sources) });
+      Object.assign(row.insertCell(), { className: "num", textContent: played });
     }
+    $("played-note").textContent = DS.t("playedNote");
     const { tools, silent } = hour;
     $("typing-summary").textContent = DS.t("typingSummary", {
       calls: DS.number(tools.calls), near: DS.number(tools.near.length), distant: DS.number(tools.distant.length),

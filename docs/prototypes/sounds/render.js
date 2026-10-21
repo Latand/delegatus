@@ -373,7 +373,7 @@
       const png = drawWaveform(buffer, item.scene, {
         title: item.title,
         subtitle: item.subtitle,
-        note: DS.t("renderNote"),
+        note: DS.t("renderNote", { volume: DS.number(DEFAULT_VOLUME, 2) }),
       });
       return {
         wav: toBase64(encodeWav(buffer)),
