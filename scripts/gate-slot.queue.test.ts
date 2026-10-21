@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { cpuAdmissionFile, CPU_QUEUE_MAX_WAIT_MS, CpuAdmissionQueue, inheritedCpuSlot } from "../src/lib/runtime/cpuAdmission";
 import { realExec } from "../src/lib/workflows/provision";
+import { withoutInheritedGate } from "../src/lib/testing/inheritedGateEnv";
 import { runSteps } from "./local-gate";
 
 async function until(check: () => boolean) {
@@ -15,6 +16,10 @@ async function until(check: () => boolean) {
 function fixture() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gate-queue-"));
   const env = { ...process.env, LLV_GATE_LOCK_DIR: dir, LLV_GATE_PSI_FILE: path.join(dir, "pressure"), LLV_GATE_POLL_SECONDS: "0.02", DELEGATUS_AGENT_CPU: "off", DELEGATUS_CPU_PRESSURE: "on" };
+  // The fixture's gates queue for slots of their own, never the run's gate. A
+  // signal-sandboxed stage keeps its marker: these gates use the real user
+  // manager and really start in the stage's namespaces.
+  withoutInheritedGate(env, { keepSandbox: true });
   fs.writeFileSync(env.LLV_GATE_PSI_FILE, "some avg10=90.00 avg60=90.00 avg300=90.00 total=1\n");
   const file = path.join(dir, path.basename(cpuAdmissionFile()));
   new CpuAdmissionQueue(file).close();
