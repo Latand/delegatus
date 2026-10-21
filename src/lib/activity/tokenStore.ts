@@ -66,7 +66,7 @@ export function migrateUsage(db: Database): void {
       rates_hour INTEGER NOT NULL DEFAULT -1, pipeline_revision INTEGER NOT NULL DEFAULT -1,
       pipeline_key TEXT NOT NULL DEFAULT '', pipeline_seed TEXT NOT NULL DEFAULT 'seed:',
       aggregate_schema INTEGER NOT NULL DEFAULT 2, aggregate_cursor TEXT NOT NULL DEFAULT '',
-      rate_schema INTEGER NOT NULL DEFAULT 2)`,
+      rate_schema INTEGER NOT NULL DEFAULT 3)`,
     "INSERT OR IGNORE INTO limit_spend_meta(singleton, schema) VALUES(1, 1)",
     `CREATE TABLE IF NOT EXISTS usage_days (${dayDefinition}) WITHOUT ROWID`,
     `CREATE TABLE IF NOT EXISTS usage_days_rebuild (${dayDefinition}) WITHOUT ROWID`,

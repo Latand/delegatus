@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ActivityStore, conversationDigest, type TurnOwner } from "./store";
-import { commitUsage } from "./tokenStore";
+import { commitUsage, DAY, HOUR, maintainUsage } from "./tokenStore";
 import { usageRecord, USAGE_NOW } from "./tokenUsage.fixture";
 import { refreshTaskLimitSpend, readTaskLimitSpend, TASK_SPEND_DUE_SQL, type SpendDependencies } from "./taskLimitSpend";
 import type { BoardTask } from "@/lib/tasks/types";
@@ -209,6 +209,64 @@ test("weekly task spend stays unknown without a usable rate and is zero only bef
   expect(account().week!.taskPp).toBe(0);
 });
 
+test("incomplete token coverage keeps a priced task total at a lower bound until the tail is ingested", async () => {
+  const tasks=[task("a",["work"])],deps=world(tasks),hour=Math.floor(USAGE_NOW/HOUR)-1,day=new Date(hour*HOUR).toISOString().slice(0,10);
+  const ownerKey=`c:${conversationDigest("work")}`;
+  store.transaction(()=>{
+    store.db.query("UPDATE usage_meta SET counted_from=?,complete=0,pending_bytes=10000").run(USAGE_NOW-4*DAY);
+    store.db.query("INSERT INTO usage_hours VALUES('',?,?,?,?,?,?,NULL,'builder','operator',NULL,NULL,1,1000000,0,0,0,0,0)")
+      .run(hour,conversationDigest("work"),"claude-sonnet-5","standard","claude:a","claude");
+    store.db.query("INSERT INTO task_spend_owners VALUES(?,?)").run(ownerKey,"a");
+    store.db.query("INSERT INTO limit_spend_dirty VALUES(?,?)").run("t:a",USAGE_NOW);
+    store.db.query("INSERT INTO usage_limit_rates VALUES(?,?,?,?,?,?,?,?,?,?)")
+      .run("claude:a","weekly",day,2,20,10,"own","max",1,USAGE_NOW);
+    store.db.query(`UPDATE limit_spend_meta SET seed='done',task_revision=1,task_key='',pipeline_revision=1,pipeline_key='',pipeline_seed='done',
+      aggregate_schema=2,rate_schema=3,rates_hour=?`).run(Math.floor(USAGE_NOW/HOUR));
+  });
+  deps.observations=()=>new Map([["claude:a",{session:null,weekly:{usedPercent:30,resetsAt:USAGE_NOW/1000+7*86400},plan:"max",capturedAt:USAGE_NOW/1000}]]);
+  await refreshTaskLimitSpend(store,deps);
+  const partial=readTaskLimitSpend(store.db,["a"],{canChoose:true},deps).tasks.a!.providers[0]!;
+  expect(partial).toMatchObject({weeklyPp:expect.any(Number),bound:"floor",floor:"uncounted"});
+  store.transaction(()=>{
+    store.db.query("UPDATE usage_meta SET complete=1,pending_bytes=0 WHERE singleton=1").run();
+    store.db.query("INSERT INTO usage_hours VALUES('',?,?,?,?,?,?,NULL,'builder','operator',NULL,NULL,1,1000000,0,0,0,0,0)")
+      .run(hour+1,conversationDigest("work"),"claude-sonnet-5","standard","claude:a","claude");
+    store.db.query("INSERT INTO limit_spend_dirty VALUES(?,?) ON CONFLICT(key) DO UPDATE SET at=at+1").run(ownerKey,USAGE_NOW+1);
+  });
+  await refreshTaskLimitSpend(store,deps);
+  expect(readTaskLimitSpend(store.db,["a"],{canChoose:true},deps).tasks.a!.providers[0]).toMatchObject({bound:"approx",floor:null});
+});
+
+test("a finalized task retains its persisted spend after hourly retention and an unrelated rate change", async () => {
+  const oldHour=Math.floor((USAGE_NOW-91*DAY)/HOUR), now=USAGE_NOW+3*DAY, currentHour=Math.floor(now/HOUR);
+  const oldTask={...task("old"),createdAt:new Date(USAGE_NOW-95*DAY).toISOString()};
+  const deps=world([oldTask]); deps.now=()=>now;
+  const row=store.db.query("INSERT INTO task_limit_spend VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+  row.run("old","claude:a","claude",1_000_000,0,2,2,4,null,null,null,null,oldHour,oldHour,null,USAGE_NOW);
+  const ownerKey=`c:${conversationDigest("work")}`;
+  store.db.query("INSERT INTO task_spend_owners VALUES(?,?)").run(ownerKey,"old");
+  store.db.query("INSERT INTO usage_hours VALUES('',?,?,?,?,?,?,NULL,'builder','operator',NULL,NULL,1,1000000,0,0,0,0,0)")
+    .run(oldHour,"expired","claude-sonnet-5","standard","claude:a","claude");
+  store.db.query(`UPDATE limit_spend_meta SET seed='done',task_revision=1,task_key='',pipeline_revision=1,pipeline_key='',pipeline_seed='done',
+    aggregate_schema=2,rate_schema=3,rates_hour=?`).run(currentHour);
+  store.db.query("INSERT INTO limit_spend_rate_changes VALUES(?,?, '')").run("claude:a",new Date(now).toISOString().slice(0,10));
+  store.transaction(()=>maintainUsage(store.db,now,"Europe/Kyiv"));
+  expect(store.db.query("SELECT * FROM usage_hours WHERE conversation='expired'").all()).toEqual([]);
+  await refreshTaskLimitSpend(store,deps);
+  const provider=readTaskLimitSpend(store.db,["old"],{canChoose:true},deps).tasks.old!.providers[0]!;
+  expect(provider).toMatchObject({weeklyPp:4,tokens:1_000_000,bound:"approx"});
+  expect(store.db.query("SELECT * FROM limit_spend_rate_changes").all()).toEqual([]);
+  const day=new Date(currentHour*HOUR).toISOString().slice(0,10);
+  store.db.query("INSERT INTO usage_limit_rates VALUES(?,?,?,?,?,?,?,?,?,?)").run("claude:a","weekly",day,2,20,10,"own","max",1,now);
+  store.db.query("INSERT INTO usage_hours VALUES('',?,?,?,?,?,?,NULL,'builder','operator',NULL,NULL,1,1000000,0,0,0,0,0)")
+    .run(currentHour,conversationDigest("work"),"claude-sonnet-5","standard","claude:a","claude");
+  store.db.query("INSERT INTO limit_spend_dirty VALUES(?,?)").run(ownerKey,now+1);
+  await refreshTaskLimitSpend(store,deps);
+  const afterNewUsage=readTaskLimitSpend(store.db,["old"],{canChoose:true},deps).tasks.old!.providers[0]!;
+  expect(afterNewUsage.tokens).toBe(2_000_000);
+  expect(afterNewUsage.weeklyPp).toBeGreaterThan(4);
+});
+
 test("legacy aggregate rows stay hidden until bounded migration replaces unsupported window zeroes", async () => {
   const tasks=[task("a")],deps=world(tasks);
   commit("legacy");
@@ -255,7 +313,8 @@ test("finalizing yesterday's rate recomputes tasks that have no usage today",asy
   commit("yesterday-row");
   store.db.query("UPDATE usage_hours SET model='claude-sonnet-5',hour=?").run(Math.floor(Date.parse("2026-10-17T23:00:00Z")/hour));
   store.db.query("UPDATE usage_meta SET complete=0,pending_bytes=100").run();
-  const series={"claude|a|weekly":[{t:Date.parse("2026-10-17T22:00:00Z")/1000,remaining:100},{t:Date.parse("2026-10-17T23:00:00Z")/1000,remaining:80}]};
+  const series={"claude|a|weekly":[{t:Date.parse("2026-10-11T00:00:00Z")/1000,remaining:100},
+    {t:Date.parse("2026-10-17T22:00:00Z")/1000,remaining:100},{t:Date.parse("2026-10-17T23:00:00Z")/1000,remaining:80},{t:now/1000,remaining:80}]};
   deps.history=()=>({series}); deps.observations=()=>new Map([["claude:a",{session:null,weekly:{usedPercent:30,resetsAt:Date.parse("2026-10-18T00:00:00Z")/1000+7*86400},plan:"max",capturedAt:now/1000}]]);
   for(let i=0;i<5;i++) await refreshTaskLimitSpend(store,deps);
   const before=store.db.query<{weekly_pp:number},[]>("SELECT weekly_pp FROM task_limit_spend WHERE task='yesterday'").get()!.weekly_pp;

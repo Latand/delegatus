@@ -13,6 +13,9 @@ export interface RateDependencies { history(): { series: Record<string, LimitSam
   coverageComplete?: boolean; revalidateFrozen?: boolean }
 export interface RateChange { account: string; day: string }
 export const utcDay = (at: number) => new Date(at).toISOString().slice(0, 10);
+const SAMPLE_TOLERANCE = 5 * 60_000;
+const covers = (samples: readonly LimitSample[], from: number, through: number) =>
+  samples.length > 0 && samples[0]!.t * 1000 <= from && samples.at(-1)!.t * 1000 >= through - SAMPLE_TOLERANCE;
 
 export function limitWeight(model: string, tier: string, engine: string, counts: TokenCounts): number | null {
   return tokenCost(model, engine === "codex" && priceTier(tier) === "ultrafast" ? "fast" : tier, counts);
@@ -54,6 +57,7 @@ export async function refreshLimitRates(db: Database, now: number, deps: RateDep
   write: (work: () => void) => Promise<void>): Promise<RateChange[]> {
   const series = deps.history().series;
   const rises = new Map<string, ReturnType<typeof risesFromSamples>>();
+  const samplesByAccountWindow = new Map<string, LimitSample[]>();
   const accounts = new Set(deps.observations.keys());
   let oldest = now;
   for (const [key, samples] of Object.entries(series)) {
@@ -63,7 +67,9 @@ export async function refreshLimitRates(db: Database, now: number, deps: RateDep
     if (!ordered.length) continue;
     accounts.add(`${engine}:${id}`);
     oldest = Math.min(oldest, ordered[0]!.t * 1000);
-    rises.set(`${engine}:${id}|${window}`, risesFromSamples(ordered));
+    const accountWindow = `${engine}:${id}|${window}`;
+    rises.set(accountWindow, risesFromSamples(ordered));
+    samplesByAccountWindow.set(accountWindow, ordered);
   }
   const today = utcDay(now), changed = new Map<string, RateChange>();
   const coverageComplete = deps.coverageComplete ?? true;
@@ -88,9 +94,12 @@ export async function refreshLimitRates(db: Database, now: number, deps: RateDep
       const prior = previous.get(`${account}|${window}`);
       if (prior?.frozen && coverageComplete && !revalidateFrozen) { pending.push(prior); continue; }
       const rise = (rises.get(`${account}|${window}`) ?? []).filter(s => s.t*1000 >= from && s.t*1000 < end).reduce((n,s) => n+s.rise,0);
-      const weight = weights.get(account) ?? 0, rate = dayRate(rise, weight);
+      const weight = weights.get(account) ?? 0;
+      const historyCovered = covers(samplesByAccountWindow.get(`${account}|${window}`) ?? [], from, end);
+      const rate = historyCovered ? dayRate(rise, weight) : null;
       pending.push({ account, window, day, rate, rise, weight, source: rate === null ? "none" : "own",
-        plan: deps.observations.get(account)?.plan ?? null, frozen: coverageComplete && day < today ? 1 : 0, computed_at: now });
+        plan: deps.observations.get(account)?.plan ?? null,
+        frozen: coverageComplete && historyCovered && day < today ? 1 : 0, computed_at: now });
     }
     for (const row of pending) {
       if (row.frozen && previous.get(`${row.account}|${row.window}`)?.frozen && !revalidateFrozen) continue;
@@ -99,6 +108,7 @@ export async function refreshLimitRates(db: Database, now: number, deps: RateDep
           && r.account.split(":")[0] === row.account.split(":")[0]).map(r => r.rate!));
         if (row.rate !== null) row.source = "plan";
       }
+      if (coverageComplete && day < today && row.source === "plan") row.frozen = 1;
       const prior = previous.get(`${row.account}|${row.window}`);
       if (!prior || row.rate !== prior.rate || row.source !== prior.source) changed.set(`${row.account}|${day}`, { account: row.account, day });
     }

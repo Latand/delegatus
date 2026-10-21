@@ -39,7 +39,7 @@ test("hourly calibration uses the seven-day span, borrows only within a plan, an
     }
     const obs=(plan:string)=>({session:null,weekly:null,plan,capturedAt:null});
     const observations=new Map([["claude:a",obs("max")],["claude:b",obs("max")],["claude:c",obs("pro")]]);
-    let series={"claude|a|weekly":[{t:first/1000,remaining:90},{t:(first+300000)/1000,remaining:70},{t:today/1000,remaining:50}]};
+    let series={"claude|a|weekly":[{t:(first-DAY)/1000,remaining:90},{t:first/1000,remaining:90},{t:(first+300000)/1000,remaining:70},{t:today/1000,remaining:50},{t:(now-60_000)/1000,remaining:50}]};
     const run=()=>refreshLimitRates(store.db,now,{history:()=>({series}),observations},async work=>{store.transaction(work);});
     await run();
     const rows=()=>store.db.query<{account:string;rate:number|null;source:string;frozen:number},[string]>("SELECT account,rate,source,frozen FROM usage_limit_rates WHERE window='weekly' AND day=? ORDER BY account").all("2026-10-18");
@@ -56,7 +56,7 @@ test("incomplete token coverage keeps yesterday provisional until the full denom
   const put=store.db.query("INSERT INTO usage_hours VALUES('',?,?,?,?,?,?,NULL,'builder','operator',NULL,NULL,1,1000000,0,0,0,0,0)");
   const add=(label:string,at:number)=>put.run(Math.floor(at/HOUR),label,"claude-sonnet-5","standard","claude:a","claude");
   const observations=new Map([["claude:a",{session:null,weekly:null,plan:"max",capturedAt:null}]]);
-  const history=()=>({series:{"claude|a|weekly":[{t:(yesterday+3600000)/1000,remaining:100},{t:(yesterday+7200000)/1000,remaining:80}]}});
+  const history=()=>({series:{"claude|a|weekly":[{t:(yesterday-6*DAY)/1000,remaining:100},{t:(yesterday+3600000)/1000,remaining:100},{t:(yesterday+7200000)/1000,remaining:80},{t:(now-60_000)/1000,remaining:80}]}});
   const run=(coverageComplete:boolean)=>refreshLimitRates(store.db,now,{history,observations,coverageComplete},async work=>{store.transaction(work);});
   try {
     add("first",yesterday+3600000);
@@ -75,5 +75,27 @@ test("incomplete token coverage keeps yesterday provisional until the full denom
     const repaired=await refreshLimitRates(store.db,now,{history,observations,coverageComplete:true,revalidateFrozen:true},async work=>{store.transaction(work);});
     expect(row().rate).toBeCloseTo(partialRate/2);
     expect(repaired).toContainEqual({account:"claude:a",day:"2026-10-17"});
+  } finally {store.close();fs.rmSync(root,{recursive:true,force:true});}
+});
+
+test("truncated limit history cannot freeze an own rate against a full seven-day token denominator", async () => {
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),"limit-rates-truncated-")),store=ActivityStore.open(path.join(root,"records.sqlite"));
+  const now=Date.parse("2026-10-18T12:00:00Z"), first=Date.parse("2026-10-10T12:00:00Z");
+  try {
+    const put=store.db.query("INSERT INTO usage_hours VALUES('',?,?,?,?,?,?,NULL,'builder','operator',NULL,NULL,1,1000000,0,0,0,0,0)");
+    for(let day=0;day<15;day++)put.run(Math.floor((first+day*DAY)/HOUR),`day-${day}`,"claude-sonnet-5","standard","claude:a","claude");
+    const series: Record<string,{t:number;remaining:number}[]>={"claude|a|weekly":[{t:first/1000,remaining:100},{t:(first+5*60_000)/1000,remaining:90}]};
+    for(let day=1;day<=8;day++)series["claude|a|weekly"]!.push({t:(first+day*DAY)/1000,remaining:90-day*10});
+    const observations=new Map([["claude:a",{session:null,weekly:null,plan:null,capturedAt:null}]]);
+    await refreshLimitRates(store.db,now,{history:()=>({series}),observations,coverageComplete:true},async work=>{store.transaction(work);});
+    const truncated=store.db.query<{rate:number|null;source:string;frozen:number},[]>("SELECT rate,source,frozen FROM usage_limit_rates WHERE account='claude:a' AND window='weekly' AND day='2026-10-10'").get()!;
+    expect(truncated).toEqual({rate:null,source:"none",frozen:0});
+    const supported=store.db.query<{rate:number|null;source:string},[]>("SELECT rate,source FROM usage_limit_rates WHERE account='claude:a' AND window='weekly' AND day='2026-10-17'").get()!;
+    expect(supported.source).toBe("own"); expect(supported.rate).toBeCloseTo(5);
+    store.db.query("UPDATE usage_limit_rates SET rate=0.714,frozen=1,source='own' WHERE account='claude:a' AND window='weekly' AND day='2026-10-10'").run();
+    const repaired=await refreshLimitRates(store.db,now,{history:()=>({series}),observations,coverageComplete:true,revalidateFrozen:true},async work=>{store.transaction(work);});
+    expect(store.db.query<{rate:number|null;frozen:number},[]>("SELECT rate,frozen FROM usage_limit_rates WHERE account='claude:a' AND window='weekly' AND day='2026-10-10'").get())
+      .toEqual({rate:null,frozen:0});
+    expect(repaired).toContainEqual({account:"claude:a",day:"2026-10-10"});
   } finally {store.close();fs.rmSync(root,{recursive:true,force:true});}
 });
