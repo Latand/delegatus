@@ -625,7 +625,7 @@ Each attempt runs the real pre-push entry point in a scratch clone with its own 
 
 | Side | Qualifying runs | Current sample P90 (s) | File expirations | Refusals | NEW lines |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| before | 2 | 1166.6 | 5 | 2 | 0 |
+| before | 3 | 1166.6 | 5 | 2 | 0 |
 | after | 9 | 508.2 | 0 | 0 | 0 |
 
 The sample P90 is provisional until all runs complete. An incomplete baseline or runner error is a refusal even when it emits no NEW assertion line.
@@ -655,6 +655,7 @@ The sample P90 is provisional until all runs complete. An incomplete baseline or
 | after-07 | after | 1 | 5.83 / 27.98 / 38.06 | 1.2 | 432.1 | yes | 0 | 0 |
 | after-08 | after | 2 | 7.75 / 28.16 / 35.83 | 1.0 | 384.6 | yes | 0 | 0 |
 | after-09 | after | 3 | 8.50 / 27.80 / 31.06 | 1.2 | 400.5 | yes | 0 | 0 |
+| before-03 | before | 3 | 7.94 / 26.40 / 39.11 | 1.0 | 783.4 | yes | 0 | 0 |
 
 The ten split families retain all 1,078 registered cases, including their names, arguments and assertion bodies. The preserved calibration and JUnit inventory established that partition before the campaign. The measured timeout exceptions are described in `docs/design/pre-push-gate-under-load.md#2-fix`.
 
@@ -667,6 +668,7 @@ The resumed campaign began with three qualifying after-runs and one before-run. 
 | batch-03 | 4 | 1 | 0 |
 | batch-04 | 1 | 0 | 0 |
 | batch-05 | 4 | 3 | 1 |
+| batch-06 | 1 | 0 | 1 |
 
 Two before-runs fell below the required load band as their remaining files and baseline work used fewer CPUs. Observed test CPU usage averaged at least 3.78 CPUs in `before-02`, against 7.04 in `after-306`. Future before-runs use a four-CPU foreground estimate for initial load padding; after-runs retain eight. New records include `paddingForegroundCpuEstimate`; earlier records used eight. The real gate retains its eight head workers and existing quotas, deadlines and verdict rules. Every earlier qualifier and outlier stays in the sample.
 
