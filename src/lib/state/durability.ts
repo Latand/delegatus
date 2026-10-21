@@ -697,19 +697,26 @@ export function recoverSchemaSetAside(
   const recorded = readIncidentRecord(options.stateDirectory);
   const restoring = restoringName(database.filename);
   for (const candidate of candidates) {
-    removeTrio(restoring);
-    let eligible = false;
+    // The incident already proves why this set was moved aside, even when
+    // preparing or inspecting its copy fails before SQLite can confirm it.
+    const recordedReason = recorded.flatMap((incident) => incident.database === database.name
+      && incident.corruptFiles.includes(candidate.name) && incident.detail ? [schemaCompileFailure(incident.detail)] : [])
+      .find((failure) => failure !== null) ?? null;
     try {
+      removeTrio(restoring);
       fs.copyFileSync(candidate.file, restoring);
-      if (exists(`${candidate.file}-wal`)) fs.copyFileSync(`${candidate.file}-wal`, `${restoring}-wal`);
+      if (fs.lstatSync(`${candidate.file}-wal`, { throwIfNoEntry: false })) fs.copyFileSync(`${candidate.file}-wal`, `${restoring}-wal`);
       const first = inspect(restoring, "integrity_check", false);
-      const reason = first.verdict === "incompatible" ? first
-        : first.verdict === "ok"
-          ? recorded.flatMap((incident) => incident.corruptFiles.includes(candidate.name) && incident.detail ? [schemaCompileFailure(incident.detail)] : [])
-            .find((failure) => failure !== null) ?? null
-          : null;
-      if (!reason) throw new Error(`it was not set aside for a statement SQLite could not compile (${first.verdict === "ok" ? "no such incident" : first.detail})`);
-      eligible = true;
+      const reason = first.verdict === "incompatible" ? first : recordedReason;
+      // An I/O failure proves neither damage nor ineligibility. Starting a
+      // store now could populate live state and prevent the next recovery.
+      if (first.verdict === "unknown") throw new Error(first.detail);
+      if (!reason) {
+        removeTrio(restoring);
+        console.error(`[state durability] ${candidate.name} not put back: it was not set aside for a statement SQLite could not compile (${first.verdict === "ok" ? "no such incident" : first.detail})`);
+        continue;
+      }
+      if (first.verdict === "corrupt") throw new Error(first.detail);
       if (first.verdict === "incompatible") {
         if (!database.rebuiltTriggers.includes(first.object)) throw new Error(describeSchemaCompileFailure(candidate.name, first));
         dropRebuiltTriggers(restoring, database.rebuiltTriggers, null);
@@ -751,12 +758,8 @@ export function recoverSchemaSetAside(
       recordIncident(options.stateDirectory, incident);
       return incident;
     } catch (error) {
-      if (eligible) {
-        throw new SchemaRecoveryError(`${database.name} schema recovery from ${candidate.name} failed: ${errorText(error)}. `
-          + "Startup stopped before initializing stores; the recovery candidate is kept for the next start.", { cause: error });
-      }
-      removeTrio(restoring);
-      console.error(`[state durability] ${candidate.name} not put back: ${errorText(error)}`);
+      throw new SchemaRecoveryError(`${database.name} schema recovery from ${candidate.name} failed: ${errorText(error)}. `
+        + "Startup stopped before initializing stores; the original and any prepared recovery files are kept for the next start.", { cause: error });
     }
   }
   return null;

@@ -776,7 +776,53 @@ test.each(["restore", "recovery-lock"] as const)("schema recovery refuses initia
   expect(fs.readFileSync(asidePath)).toEqual(original);
 });
 
-test.each(["publication", "lost-verdict"] as const)("the Viewer refuses stores after a recovery %s failure, and a fresh worker retries successfully", async failure => {
+test.each([[true, false], [false, false], [true, true], [false, true]])(
+  "schema recovery refuses a copy failure before validation (live file exists: %s, partial copy: %s)", (liveExists, partial) => {
+  const directory = sandbox();
+  const filename = path.join(directory, "state.sqlite");
+  const asideName = "state.sqlite.corrupt-2026-10-20T08-00-00-000Z";
+  const asidePath = path.join(directory, asideName);
+  const aside = new Database(asidePath);
+  try {
+    aside.exec("CREATE TABLE kept(value TEXT)");
+    aside.exec("INSERT INTO kept VALUES ('recovered')");
+  } finally { aside.close(); }
+  if (liveExists) new Database(filename).close();
+  const original = fs.readFileSync(asidePath);
+  writeJsonDurably(path.join(directory, "storage-incidents.json"), { version: 1, incidents: [{
+    kind: "database-fresh", database: "state.sqlite", at: "2026-10-20T08:00:00.000Z", message: "earlier release",
+    detail: 'SQLITE_CORRUPT: malformed database schema (pipeline_refs_insert) - near "ORDER": syntax error',
+    corruptFiles: [asideName], backup: null, backupAt: null, backupAgeMs: null,
+  }] });
+  const copyFile = fs.copyFileSync;
+  const copy = spyOn(fs, "copyFileSync").mockImplementation((from, to, ...rest) => {
+    if (String(from) === asidePath) {
+      if (partial) fs.writeFileSync(to, original.subarray(0, 100));
+      throw new Error("ENOSPC preparing recovery");
+    }
+    return copyFile(from, to, ...rest);
+  });
+  let initialized = false;
+  try {
+    expect(() => {
+      checkStateDatabasesAtActivation(directory, { now: new Date("2026-10-21T12:00:00.000Z") });
+      seedTasks(directory, ["fresh work"]);
+      initialized = true;
+    }).toThrow(SchemaRecoveryError);
+    expect(initialized).toBe(false);
+    expect(fs.readFileSync(asidePath)).toEqual(original);
+    expect(fs.existsSync(`${filename}.restoring`)).toBe(partial);
+    if (partial) expect(fs.readFileSync(`${filename}.restoring`)).toEqual(original.subarray(0, 100));
+    expect(fs.existsSync(filename)).toBe(liveExists);
+  } finally { copy.mockRestore(); }
+  expect(checkStateDatabasesAtActivation(directory, { now: new Date("2026-10-21T12:00:01.000Z") }).map(incident => incident.kind))
+    .toEqual(["database-recovered"]);
+  const live = new Database(filename, { readonly: true });
+  try { expect(live.query("SELECT value FROM kept").all()).toEqual([{ value: "recovered" }]); } finally { live.close(); }
+  expect(fs.readFileSync(asidePath)).toEqual(original);
+});
+
+test.each(["copy", "wal-copy", "wal-stat", "validation", "validation-unrecorded", "publication", "lost-verdict"] as const)("the Viewer refuses stores after a recovery %s failure, and a fresh worker rechecks the candidate", async failure => {
   const directory = sandbox();
   const filename = path.join(directory, "state.sqlite");
   const asideName = "state.sqlite.corrupt-2026-10-20T08-00-00-000Z";
@@ -788,14 +834,39 @@ test.each(["publication", "lost-verdict"] as const)("the Viewer refuses stores a
   } finally { aside.close(); }
   new Database(filename).close();
   const original = fs.readFileSync(asidePath);
-  writeJsonDurably(path.join(directory, "storage-incidents.json"), { version: 1, incidents: [{
+  if (failure !== "validation-unrecorded") writeJsonDurably(path.join(directory, "storage-incidents.json"), { version: 1, incidents: [{
     kind: "database-fresh", database: "state.sqlite", at: "2026-10-20T08:00:00.000Z", message: "earlier release",
     detail: 'SQLITE_CORRUPT: malformed database schema (pipeline_refs_insert) - near "ORDER": syntax error',
     corruptFiles: [asideName], backup: null, backupAt: null, backupAgeMs: null,
   }] });
+  if (failure === "wal-copy" || failure === "wal-stat") fs.writeFileSync(`${asidePath}-wal`, Buffer.alloc(0));
   const workerPath = path.join(directory, "refused-worker.ts");
   fs.writeFileSync(workerPath, `import fs from "node:fs";
+    import { Database } from "bun:sqlite";
+    const lstat = fs.lstatSync;
+    fs.lstatSync = (file, ...rest) => {
+      if (${JSON.stringify(failure)} === "wal-stat" && String(file) === ${JSON.stringify(`${asidePath}-wal`)}) {
+        throw Object.assign(new Error("EACCES checking recovery WAL"), { code: "EACCES" });
+      }
+      return lstat(file, ...rest);
+    };
+    const query = Database.prototype.query;
+    Database.prototype.query = function(sql, ...rest) {
+      if (${JSON.stringify(failure.startsWith("validation"))} && this.filename.endsWith(".restoring") && sql === "PRAGMA integrity_check") {
+        throw Object.assign(new Error("I/O error validating recovery"), { code: "SQLITE_IOERR" });
+      }
+      return query.call(this, sql, ...rest);
+    };
     if (${JSON.stringify(failure)} === "lost-verdict") process.stdout.write = () => { process.exit(73); };
+    const copy = fs.copyFileSync;
+    fs.copyFileSync = (from, to, ...rest) => {
+      if ((${JSON.stringify(failure)} === "copy" && String(from) === ${JSON.stringify(asidePath)})
+        || (${JSON.stringify(failure)} === "wal-copy" && String(from) === ${JSON.stringify(`${asidePath}-wal`)})) {
+        fs.writeFileSync(to, fs.readFileSync(from).subarray(0, 100));
+        throw new Error("ENOSPC preparing recovery");
+      }
+      return copy(from, to, ...rest);
+    };
     const rename = fs.renameSync;
     fs.renameSync = (from, to) => {
       if (String(from).endsWith(".restoring")) throw new Error("EACCES publishing recovery");
@@ -808,14 +879,30 @@ test.each(["publication", "lost-verdict"] as const)("the Viewer refuses stores a
   const launch = spyOn(helper, "spawnLeasedHelper").mockImplementation((name, spec, ...rest) =>
     spawn(name, { ...spec, command: process.execPath, args: [workerPath] }, ...rest));
   try {
-    await expect(checkStateDatabasesBeforeStores(directory)).rejects.toThrow(failure === "publication" ? "EACCES publishing recovery" : "the backup worker exited with 73");
+    await expect(checkStateDatabasesBeforeStores(directory)).rejects.toThrow(
+      failure === "copy" || failure === "wal-copy" ? "ENOSPC preparing recovery"
+        : failure === "wal-stat" ? "EACCES checking recovery WAL"
+          : failure.startsWith("validation") ? "I/O error validating recovery"
+            : failure === "publication" ? "EACCES publishing recovery" : "the backup worker exited with 73");
     expect(fs.readFileSync(asidePath)).toEqual(original);
-    expect(fs.existsSync(filename)).toBe(false);
+    expect(fs.existsSync(filename)).toBe(failure === "copy" || failure.startsWith("wal-") || failure.startsWith("validation"));
     expect(fs.existsSync(`${filename}.restoring`)).toBe(true);
+    if (failure === "copy") expect(fs.readFileSync(`${filename}.restoring`)).toEqual(original.subarray(0, 100));
+    if (failure === "wal-copy" || failure === "wal-stat") {
+      expect(fs.readFileSync(`${filename}.restoring`)).toEqual(original);
+      expect(fs.readFileSync(`${asidePath}-wal`)).toEqual(Buffer.alloc(0));
+    }
   } finally { launch.mockRestore(); }
   // The next real activation starts a fresh worker, with no inherited verdict.
   await checkStateDatabasesBeforeStores(directory);
   const live = new Database(filename, { readonly: true });
-  try { expect(live.query("SELECT value FROM kept").all()).toEqual([{ value: "recovered" }]); } finally { live.close(); }
+  try {
+    if (failure === "validation-unrecorded") {
+      // A successful check without schema-failure evidence makes this set
+      // ineligible. The worker must recheck rather than reuse its I/O failure.
+      expect(live.query("SELECT name FROM sqlite_master").all()).toEqual([]);
+      expect(fs.existsSync(`${filename}.restoring`)).toBe(false);
+    } else expect(live.query("SELECT value FROM kept").all()).toEqual([{ value: "recovered" }]);
+  } finally { live.close(); }
   expect(fs.readFileSync(asidePath)).toEqual(original);
 }, 60_000);
