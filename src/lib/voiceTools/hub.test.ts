@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
 import { VoiceToolHub, voiceToolEnvironment } from "./hub";
 import { VoiceToolsStore } from "./store";
 
@@ -132,7 +133,7 @@ test("probe cancellation and proposal replacement cannot publish a stale catalog
 
 test("stdio starts under the lease with a private environment, checks entry drift and is reaped", async () => {
   const { store, root } = await setup();
-  const entry = path.join(root, "fake.mjs");
+  const entry = path.join(root, "fake");
   const source = `import readline from 'node:readline';
 const input = readline.createInterface({input:process.stdin});
 input.on('line', line => { const m=JSON.parse(line); if(m.id===undefined)return;
@@ -140,6 +141,8 @@ input.on('line', line => { const m=JSON.parse(line); if(m.id===undefined)return;
  {tools:[{name:'search',description: Object.keys(process.env).some(k=>k.startsWith('LLV_')||k.startsWith('OPENAI_'))?'leaked-env':process.env.NODE_ENV==='development'?'Search':'wrong-env',inputSchema:{type:'object'}}]};
  console.log(JSON.stringify({jsonrpc:'2.0',id:m.id,result})); });`;
   await fs.writeFile(entry, source);
+  await expect(store.propose({ name: "music", title: "Music", capability: "Search", transport: { type: "stdio", command: "bun", args: ["--preload", entry, entry], env: {} },
+    entryFile: { path: entry, sha256: createHash("sha256").update(source).digest("hex") } }, actor)).rejects.toThrow("INVALID_PROPOSAL");
   await store.propose({ name: "music", title: "Music", capability: "Search", transport: { type: "stdio", command: "bun", args: [entry], env: { NODE_ENV: { value: "development" } } },
     entryFile: { path: entry, sha256: createHash("sha256").update(source).digest("hex") } }, actor);
   await new VoiceToolHub(store).dryRun("music", (await store.view()).servers.music.digest);
@@ -233,6 +236,50 @@ readline.createInterface({input:process.stdin}).on('line',line=>{const m=JSON.pa
   expect(JSON.stringify(await store.view())).not.toContain("synthetic-voice-credential");
   expect(await fs.readdir(path.join(root, "helpers"))).toEqual([]);
 }, 15_000);
+
+test("the real deadline settles HTTP, TERM-resistant stdio and blocked preparation under an independent watchdog", async () => {
+  const fixture = path.join(import.meta.dir, "hub.deadline.fixture.ts");
+  for (const scenario of ["http", "stdio", "prepare"]) {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "voice-tools-watchdog-")); roots.push(root);
+    const child = spawn(process.execPath, [fixture, scenario, root], { cwd: process.cwd(), env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+    let buffer = "";
+    const lines: string[] = [];
+    const waiters: { prefix: string; resolve: (line: string) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }[] = [];
+    const accept = (line: string) => {
+      lines.push(line);
+      const index = waiters.findIndex(waiter => line.startsWith(waiter.prefix));
+      if (index >= 0) { const [waiter] = waiters.splice(index, 1); clearTimeout(waiter.timer); waiter.resolve(line); }
+    };
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", chunk => { buffer += chunk; for (;;) { const end = buffer.indexOf("\n"); if (end < 0) break; accept(buffer.slice(0, end)); buffer = buffer.slice(end + 1); } });
+    const waitLine = (prefix: string, timeoutMs: number) => {
+      const found = lines.find(line => line.startsWith(prefix));
+      if (found) return Promise.resolve(found);
+      return new Promise<string>((resolve, reject) => {
+        const timer = setTimeout(() => { const index = waiters.findIndex(waiter => waiter.prefix === prefix); if (index >= 0) waiters.splice(index, 1); reject(new Error(`watchdog timed out waiting for ${prefix}`)); }, timeoutMs);
+        waiters.push({ prefix, resolve, reject, timer });
+      });
+    };
+    let closed = false;
+    child.once("close", () => { closed = true; });
+    try {
+      await waitLine("STARTED", 5_000);
+      if (scenario !== "prepare") await waitLine("PEER_READY", 3_000);
+      const result = await waitLine("RESULT:", 5_000);
+      expect(result).toMatch(/^RESULT:(TIMEOUT):HEARTBEATS:([1-9]\d*)$/);
+      expect(lines.some(line => line.startsWith("HEARTBEAT"))).toBe(true);
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("fixture did not exit after deadline cleanup")), 1_000);
+        child.once("close", code => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error(`fixture exited ${code}`)); });
+      });
+      const helpers = await fs.readdir(path.join(root, "helpers")).catch(() => []);
+      expect(helpers).toEqual([]);
+    } finally {
+      for (const waiter of waiters.splice(0)) { clearTimeout(waiter.timer); waiter.reject(new Error("fixture cleanup")); }
+      if (!closed) { child.kill("SIGTERM"); await new Promise<void>(resolve => child.once("close", () => resolve())); }
+    }
+  }
+}, 20_000);
 
 test.skipIf(!process.env.LLV_VOICE_TOOLS_BUILT_ROOT)("the production worker discovers tools and compiles schemas", async () => {
   const { store, root } = await setup(); const server = fake(); const expected = await propose(store, server.url);

@@ -119,6 +119,19 @@ test("invalid catalog or secret artifact fails closed; secrets cannot be introdu
   await expect(new VoiceToolsStore(root).view()).rejects.toThrow("REGISTRY_UNAVAILABLE");
 });
 
+test("a restarted store refuses a persisted catalog with invalid JSON Schema", async () => {
+  const { store, root } = await setup();
+  await store.propose(proposal(), actor);
+  await catalog(store);
+  const raw = JSON.parse(await fs.readFile(store.file, "utf8"));
+  raw.servers.music.catalog.tools[0].inputSchema = { type: "object", properties: { broken: { type: "invalid-type" } } };
+  raw.servers.music.catalog.digest = digest(raw.servers.music.catalog.tools);
+  await fs.writeFile(store.file, JSON.stringify(raw), { mode: 0o600 });
+  const restarted = new VoiceToolsStore(root, () => at);
+  await expect(restarted.view()).rejects.toThrow("REGISTRY_UNAVAILABLE");
+  await expect(restarted.operatorChange("music", "irrelevant", "approve")).rejects.toThrow("REGISTRY_UNAVAILABLE");
+});
+
 test("digest covers the selected catalog separately from ephemeral probe timestamps", async () => {
   const { store } = await setup(); await store.propose(proposal(), actor); await catalog(store);
   await store.saveSecrets({ "music-token": "synthetic-voice-credential" });
@@ -182,6 +195,28 @@ test("reserved names, relative working directories and unpinned script entries a
   await expect(store.propose(proposal("list_tasks"), actor)).rejects.toThrow("INVALID_PROPOSAL");
   await expect(store.propose({ ...proposal(), transport: { type: "stdio", command: "bun", args: [], cwd: "relative" } }, actor)).rejects.toThrow("INVALID_PROPOSAL");
   await expect(store.propose({ ...proposal(), transport: { type: "stdio", command: "bun", args: ["server.ts"] } }, actor)).rejects.toThrow("INVALID_PROPOSAL");
+});
+
+test("local stdio pins the actual explicit entry against its execution cwd", async () => {
+  const { store, root } = await setup();
+  const cwd = path.join(root, "voice-tools-data", "music");
+  const pinned = path.join(cwd, "server");
+  const decoy = path.join(cwd, "preload.mjs");
+  const pin = { path: pinned, sha256: "a".repeat(64) };
+  const config = (command: "bun" | "uv", args: string[], entryFile: typeof pin | null = pin) => ({
+    ...proposal(), transport: { type: "stdio" as const, command, args, cwd: null, env: {} }, entryFile,
+  });
+  await store.propose(config("bun", ["server" ]), actor);
+  await store.operatorChange("music", (await server(store)).digest, "remove");
+  await expect(store.propose(config("bun", ["--preload", decoy, pinned]), actor)).rejects.toThrow("INVALID_PROPOSAL");
+  await expect(store.propose(config("bun", ["server"], { ...pin, path: path.join(root, "server") }), actor)).rejects.toThrow("INVALID_PROPOSAL");
+  await store.propose(config("bun", ["server", "--mode", "voice"]), actor);
+  await store.operatorChange("music", (await server(store)).digest, "remove");
+  await store.propose(config("uv", ["run", "server.py", "--mode", "voice"], { ...pin, path: path.join(cwd, "server.py") }), actor);
+  await store.operatorChange("music", (await server(store)).digest, "remove");
+  await store.propose(config("bun", ["x", "@example/music-mcp"], null), actor);
+  await store.operatorChange("music", (await server(store)).digest, "remove");
+  await store.propose(config("uv", ["tool", "run", "music-mcp"], null), actor);
 });
 
 test("persisted defaults are normalized on load and invalid catalog shapes are refused", async () => {

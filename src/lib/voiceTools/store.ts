@@ -1,29 +1,40 @@
 import { constants } from "node:fs";
 import * as fs from "node:fs/promises";
 import path from "node:path";
+import { Worker } from "node:worker_threads";
 import { randomUUID } from "node:crypto";
 import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { COMPANION_TOOL_REGISTRY } from "@/lib/voiceCompanion/tools";
 import { verifyEntry } from "./entry";
 import { approvalDigest, digest, emptyRegistry, probeDigest, proposalSchema, secretsSchema, secretReferences,
-  selectionSchema, toolName, validateCatalog, voiceToolBounds, type ProbeResult, type VoiceToolServer, type VoiceToolsRegistry, type VoiceToolsView } from "./contracts";
+  selectionSchema, toolName, validateCatalog, voiceToolBounds, type ProbeResult, type Tool, type VoiceToolServer, type VoiceToolsRegistry, type VoiceToolsView } from "./contracts";
 
 export class VoiceToolsError extends Error {
   constructor(public code: string) { super(code); }
 }
 const fail = (code: string): never => { throw new VoiceToolsError(code); };
 const hasSecret = (secrets: Record<string, string>, ref: string) => Object.hasOwn(secrets, ref) && !!secrets[ref];
-function validProposal(input: unknown) {
+function validProposal(input: unknown, defaultCwd: string) {
   const parsed = proposalSchema.safeParse(input);
   if (!parsed.success) return null;
   const config = parsed.data;
   if (COMPANION_TOOL_REGISTRY.some(tool => tool.name === config.name)) return null;
   if (config.entryFile && !path.isAbsolute(config.entryFile.path)) return null;
-  if (config.transport.type === "stdio") {
+  if (config.transport.type === "stdio" && config.transport.cwd && !path.isAbsolute(config.transport.cwd)) return null;
+  if (config.transport.type === "stdio" && config.entryFile) {
     const transport = config.transport;
-    if (transport.cwd && !path.isAbsolute(transport.cwd)) return null;
-    const script = transport.args.find(arg => /\.(?:[cm]?[jt]s|py)$/.test(arg));
-    if (script && (!config.entryFile || path.resolve(transport.cwd ?? "/", script) !== config.entryFile.path)) return null;
+    const entry = transport.command === "bun"
+      ? transport.args[0] && !transport.args[0].startsWith("-") ? transport.args[0] : undefined
+      : transport.args[0] === "run" && transport.args[1] && !transport.args[1].startsWith("-") ? transport.args[1] : undefined;
+    const cwd = transport.cwd ?? defaultCwd;
+    if (!entry || path.resolve(cwd, entry) !== config.entryFile.path) return null;
+  } else if (config.transport.type === "stdio") {
+    // Package launchers are explicit; local scripts always carry an entry pin.
+    const args = config.transport.args;
+    const packageLaunch = config.transport.command === "bun"
+      ? args[0] === "x" && !!args[1] && !args[1].startsWith("-")
+      : args[0] === "tool" && args[1] === "run" && !!args[2] && !args[2].startsWith("-");
+    if (!packageLaunch) return null;
   }
   return config;
 }
@@ -60,15 +71,44 @@ function assertNoSecrets(value: unknown, secrets: Record<string, string>): void 
   const serialized = JSON.stringify(value);
   if (Object.values(secrets).some(secret => serialized.includes(secret) || serialized.includes(JSON.stringify(secret).slice(1, -1)))) fail("SECRET_ECHO");
 }
-function parseRegistry(input: unknown): VoiceToolsRegistry {
+async function validatePersistedCatalogs(catalogs: { name: string; tools: Tool[] }[]): Promise<void> {
+  const pending = catalogs.map(catalog => ({ ...catalog, cacheKey: `${catalog.name}:${digest(catalog.tools)}` }))
+    .filter(catalog => !validatedSchemaDigests.has(catalog.cacheKey));
+  if (!pending.length) return;
+  const worker = new Worker(`
+    const { parentPort, workerData } = require('node:worker_threads');
+    try {
+      const loaded = require('ajv');
+      const Ajv = loaded.default || loaded;
+      const ajv = new Ajv({ strict: false, allErrors: false, validateFormats: false });
+      for (const group of workerData) for (const schema of group.schemas) { ajv.removeSchema(); ajv.compile(schema); }
+      parentPort.postMessage(true);
+    } catch { parentPort.postMessage(false); }
+  `, { eval: true, workerData: pending.map(catalog => ({ schemas: catalog.tools.map(tool => tool.inputSchema) })) });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const valid = await new Promise<boolean>((resolve, reject) => {
+      worker.once("message", resolve);
+      worker.once("error", reject);
+      timer = setTimeout(() => reject(new Error("CATALOG_BOUNDS")), 2_000);
+    });
+    if (!valid) return fail("REGISTRY_UNAVAILABLE");
+    for (const catalog of pending) validatedSchemaDigests.set(catalog.cacheKey, true);
+    while (validatedSchemaDigests.size > 128) validatedSchemaDigests.delete(validatedSchemaDigests.keys().next().value!);
+  } catch { return fail("REGISTRY_UNAVAILABLE"); }
+  finally { if (timer) clearTimeout(timer); await worker.terminate(); }
+}
+const validatedSchemaDigests = new Map<string, true>();
+async function parseRegistry(input: unknown, directory: string): Promise<VoiceToolsRegistry> {
   if (input === null) return emptyRegistry();
   const registry = input as VoiceToolsRegistry;
   if (registry.version !== 1 || !Number.isSafeInteger(registry.revision) || registry.revision < 0 || !registry.servers || Array.isArray(registry.servers)
     || typeof registry.servers !== "object" || Object.keys(registry.servers).length > voiceToolBounds.servers
     || Object.keys(registry).some(key => !["version", "revision", "servers"].includes(key))) return fail("REGISTRY_UNAVAILABLE");
+  const catalogsToCompile: { name: string; tools: Tool[] }[] = [];
   for (const [name, raw] of Object.entries(registry.servers)) {
     const { generation, owner, audience, state, proposedBy, approval, tools, catalog, lastDryRun, ...config } = raw;
-    const proposal = validProposal({ name, ...config });
+    const proposal = validProposal({ name, ...config }, path.join(directory, "voice-tools-data", name));
     if (!proposal || Object.hasOwn(config, "name") || !Number.isSafeInteger(generation) || generation < 1 || owner !== "installation" || JSON.stringify(audience) !== '["voice"]' || !["pending", "enabled", "disabled", "rejected", "changed"].includes(state)
       || !proposedBy || !["operator", "conversation"].includes(proposedBy.kind) || typeof proposedBy.at !== "string"
       || !(proposedBy.conversationId === null || typeof proposedBy.conversationId === "string")
@@ -82,12 +122,14 @@ function parseRegistry(input: unknown): VoiceToolsRegistry {
       if (!catalog || typeof catalog !== "object") return fail("REGISTRY_UNAVAILABLE");
       const validated = validateCatalog(name, catalog.tools);
       if (catalog.digest !== digest(validated) || typeof catalog.fetchedAt !== "string" || JSON.stringify(validated) !== JSON.stringify(catalog.tools)) return fail("REGISTRY_UNAVAILABLE");
+      catalogsToCompile.push({ name, tools: validated });
     }
     if (Object.keys(tools).length > voiceToolBounds.tools || Object.keys(tools).some(tool => !catalog?.tools.some(t => t.name === tool))) return fail("REGISTRY_UNAVAILABLE");
     if (approval && approval.digest !== approvalDigest(name, raw) || state === "enabled" && !approval) {
       raw.state = "pending"; raw.approval = null;
     }
   }
+  await validatePersistedCatalogs(catalogsToCompile);
   return registry;
 }
 const probeCodes = new Set(["OK", "START_FAILED", "PROTOCOL_ERROR", "TIMEOUT", "CATALOG_BOUNDS", "SECRET_ECHO", "MISSING_SECRET", "ENTRY_CHANGED", "BUSY", "CANCELLED"]);
@@ -110,7 +152,7 @@ export class VoiceToolsStore {
     const [registry, secrets] = await Promise.all([readJson(this.file, voiceToolBounds.registryBytes), readJson(this.secretsFile, voiceToolBounds.secretBytes)]);
     const parsed = secretsSchema.safeParse(secrets ?? {});
     if (!parsed.success) return fail("REGISTRY_UNAVAILABLE");
-    const valid = parseRegistry(registry); assertNoSecrets(valid, parsed.data);
+    const valid = await parseRegistry(registry, this.directory); assertNoSecrets(valid, parsed.data);
     this.registry = valid; this.secrets = parsed.data;
   }
   async view(): Promise<VoiceToolsView> {
@@ -142,7 +184,8 @@ export class VoiceToolsStore {
     });
   }
   async propose(input: unknown, actor: VoiceToolServer["proposedBy"]): Promise<void> {
-    const parsed = validProposal(input);
+    const shape = proposalSchema.safeParse(input);
+    const parsed = shape.success ? validProposal(shape.data, path.join(this.directory, "voice-tools-data", shape.data.name)) : null;
     if (!parsed) return fail("INVALID_PROPOSAL");
     const { name, ...config } = parsed;
     await this.mutate(registry => {

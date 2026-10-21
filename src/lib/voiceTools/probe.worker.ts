@@ -33,6 +33,8 @@ class BoundedStdio implements Transport {
   async start(): Promise<void> {
     const transport = request.server.transport;
     if (transport.type !== "stdio") throw new Error("PROTOCOL_ERROR");
+    // Recheck after connection setup and immediately before the pinned file is executed.
+    await verifyEntry(request.server);
     const inherited = Object.fromEntries(["PATH", "LANG", "LC_ALL", "SYSTEMROOT", "WINDIR", "PATHEXT"].flatMap(name => process.env[name] ? [[name, process.env[name]]] : []));
     const child = this.child = spawn(transport.command, transport.args, { cwd: transport.cwd ?? request.home,
       env: { ...inherited, NODE_ENV: "production", XDG_CONFIG_HOME: `${request.home}/.config`, XDG_CACHE_HOME: `${request.home}/.cache`, TMPDIR: request.home,
