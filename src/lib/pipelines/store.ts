@@ -2163,6 +2163,21 @@ export function findPipelineRecord(pipelineId: string): Pipeline | null {
   return pipelineStore().get(pipelineId) ?? archiveStore().get(pipelineId);
 }
 
+/** Bounded feed for consumers that need task membership changes without loading
+ * the full pipeline registry. The cursor follows the active collection log. */
+export function pipelineTaskBindingSource() {
+  const collection = pipelineStore();
+  return {
+    revision: () => collection.revision(),
+    changesAfter: (revision: number, key: string, limit: number) => collection.changesAfter(revision, key, limit),
+    parse: (valueJson: string) => {
+      const pipeline = decodePipeline(JSON.parse(valueJson));
+      if (!pipeline) throw new PipelineStoreError("invalid pipeline row in task-binding feed");
+      return pipeline;
+    },
+  };
+}
+
 /** Validates durable task membership at the pipeline store seam. */
 export function pipelineTaskLinkError(
   pipeline: Pick<Pipeline, "project">,

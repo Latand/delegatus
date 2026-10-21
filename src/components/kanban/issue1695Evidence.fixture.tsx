@@ -62,6 +62,7 @@ import { prototypeReviewSummary, prototypeRoundsSuperseded } from "@/lib/prototy
 import type { PrototypeAnswer, PrototypeQuestion, PrototypeDeliveryPhase, PrototypeDeliveryState, PrototypeMediaView, PrototypeReviewSummary, PrototypeRoundView } from "@/lib/prototypeReview/types";
 import { fireTasksChanged } from "@/components/tasks/taskApi";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
+import type { TaskSpendAccount, TaskSpendProvider, TaskSpendSummary } from "@/lib/activity/taskLimitSpendTypes";
 import type { FileEntry } from "@/lib/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
 import { refreshTeamView } from "@/components/team/teamClient";
@@ -3241,6 +3242,57 @@ if (OVERVIEW_PERFORMANCE) {
    agent's renders have — a desktop board, a phone screen, a wide strip, a
    small crop — so the grid meets the aspect ratios it will meet. */
 const ALBUM = params.get("album") === "1";
+/* Task limit spend (`&spend=1`, docs/design/task-limit-spend.md §7.2): each
+   state the card's marks and popover draw, as `GET /api/task-spend` answers
+   them — one provider, two, several accounts of one provider, a tiny spend, a
+   large one with a lower bound, an account with no limit readings, and a task
+   still being counted (no rows yet). `&spend=guest` answers as it does to a
+   member who is not the owner: no account detail. */
+const SPEND = params.get("spend");
+function spendAccount(key: string, label: string, plan: string | null, weeklyPp: number | null, tokens: number, used: number | null, taskPp: number | null, sessionPp: number | null = null): TaskSpendAccount {
+  return { key, label, plan, weeklyPp, tokens, week: used === null ? null : { usedPercent: used, taskPp }, sessionPp };
+}
+function spendProvider(engine: "claude" | "codex", accounts: TaskSpendAccount[], bound: TaskSpendProvider["bound"] = "approx", floor: TaskSpendProvider["floor"] = null): TaskSpendProvider {
+  return { engine, bound, floor, accounts, weeklyPp: accounts.reduce((sum, a) => sum + (a.weeklyPp ?? 0), 0), tokens: accounts.reduce((sum, a) => sum + a.tokens, 0) };
+}
+const SPEND_TASKS: Record<string, TaskSpendSummary> = {
+  /* Two providers, the measured lane of the research rounded; Claude's first
+     account, named as an operator names one, is in its current 5-hour window. */
+  "t-search": { providers: [
+    spendProvider("claude", [spendAccount("claude:a", "Research workstation", "max", 2.1, 132_000_000, 53, 2.1, 12), spendAccount("claude:b", "B", "max", 1, 61_000_000, 31, 1)]),
+    spendProvider("codex", [spendAccount("codex:a", "A", "pro", 1.2, 24_000_000, 47, 1.2), spendAccount("codex:b", "B", "pro", 0.4, 9_000_000, 22, 0.4)]),
+  ] },
+  /* Several accounts of one provider, and a tiny Claude share. */
+  "t-export": { providers: [
+    spendProvider("claude", [spendAccount("claude:a", "A", "max", 0.4, 21_000_000, 53, 0.4)]),
+    spendProvider("codex", [spendAccount("codex:a", "A", "pro", 4.2, 88_000_000, 61, 4.2), spendAccount("codex:b", "B", "plus", 2.1, 12_000_000, 38, 2.1), spendAccount("codex:d", "D", "pro", 1, 19_000_000, 12, 1)]),
+  ] },
+  /* One provider. */
+  "t-upload": { providers: [spendProvider("codex", [spendAccount("codex:a", "A", "pro", 1.1, 23_000_000, 47, 1.1)])] },
+  /* A tiny spend. */
+  "t-links": { providers: [spendProvider("claude", [spendAccount("claude:b", "B", "max", 0.3, 17_000_000, 31, 0.3)])] },
+  /* A Claude account with no limit readings: tokens only. */
+  "t-disk": { providers: [
+    spendProvider("claude", [spendAccount("claude:c", "C", "max", null, 41_000_000, null, null)], "norate"),
+    spendProvider("codex", [spendAccount("codex:a", "A", "pro", 1, 21_000_000, 47, 1)]),
+  ] },
+  /* Still being counted: the task is known and has no rows yet, so the card draws nothing. */
+  "t-merge-a": { providers: [] },
+  /* A large spend; Claude's began before counting did, so it is a lower bound.
+     Its account carries a label at the 80-character cap. */
+  "t-interrupt": { providers: [
+    spendProvider("claude", [spendAccount("claude:a", "Research workstation in the second office, shared by the whole data team on site", "max", 12.4, 610_000_000, 66, 12.4)], "floor", "before-counting"),
+    spendProvider("codex", [spendAccount("codex:a", "A", "pro", 21.3, 402_000_000, 74, 21.3), spendAccount("codex:d", "D", "pro", 12.9, 250_000_000, 40, 12.9)]),
+  ] },
+};
+function spendAnswer(ids: readonly string[]): { generatedAt: number; tasks: Record<string, TaskSpendSummary> } {
+  const tasks: Record<string, TaskSpendSummary> = {};
+  for (const id of ids) {
+    const summary = SPEND_TASKS[id];
+    if (summary) tasks[id] = SPEND === "guest" ? { providers: summary.providers.map((provider) => ({ ...provider, accounts: null })) } : summary;
+  }
+  return { generatedAt: Date.now(), tasks };
+}
 /* `&olderfails=1`: the album's and the report log's older pages are refused,
    so «Show older» meets the line that says so beside it. */
 const OLDER_FAILS = params.get("olderfails") === "1";
@@ -3986,6 +4038,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       ...(PROTO === "elsewhere" ? { unavailable: "another-installation" } : {}),
     });
   }
+  if (SPEND && url.pathname === "/api/task-spend") return json(spendAnswer((url.searchParams.get("ids") ?? "").split(",").filter(Boolean)));
   if (ALBUM && url.pathname === "/api/task-album") {
     const ids = (url.searchParams.get("ids") ?? "").split(",").filter((id) => albumItems()[id]);
     return json({ tasks: Object.fromEntries(ids.map((id) => {

@@ -582,3 +582,26 @@ test("identical cached quota observations do not rewrite registry history", asyn
     expect(registry.quotaObservations("codex")[0]!.authCheckedAt).toBe(new Date(now).toISOString());
   } finally { registry.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+
+test("a Codex tick batches only authenticated live or transcript observations into forward history", async () => {
+  const { readHistory } = await import("@/lib/limitsHistoryStore");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(),"quota-history-"));
+  const now=Date.parse("2026-10-18T12:00:00Z");
+  try {
+    const registry=new AgentRegistry(path.join(root,"registry.json"));
+    const ids=["live-history","transcript-history","cached-history","unsigned-history"];
+    const accounts:CodexAccount[]=ids.map(id=>({id,label:"Fixture",kind:"managed",home:path.join(root,id),sessionsDir:path.join(root,id,"sessions"),authPresent:true,loginPane:null,createdAt:1}));
+    const controller=new QuotaController(registry,{
+      list:()=>accounts, active:()=>ids[0]!,credentialIdentity:()=>"stable-fixture",
+      async probe(engine,account) { return {engine,accountId:account.id,authenticated:account.id!==ids[3],authCheckedAt:now,
+        limits:{session:null,weekly:{usedPercent:25,resetsAt:now/1000+3600},plan:"pro",capturedAt:now/1000},
+        provenance:{source:account.id===ids[2]?"cache":account.id===ids[1]?"transcript":"live",reason:null,staleSince:null},observedAt:now}; },
+    },"fixture-boot",()=>now);
+    await controller.tick("codex");
+    const history=readHistory();
+    expect(history.series[`codex|${ids[0]}|weekly`]).toEqual([{t:now/1000,remaining:75}]);
+    expect(history.series[`codex|${ids[1]}|weekly`]).toEqual([{t:now/1000,remaining:75}]);
+    expect(history.series[`codex|${ids[2]}|weekly`]).toBeUndefined(); expect(history.series[`codex|${ids[3]}|weekly`]).toBeUndefined();
+  } finally {fs.rmSync(root,{recursive:true,force:true});}
+});
