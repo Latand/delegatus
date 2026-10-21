@@ -884,7 +884,8 @@ test.each(["merge", "no-verify", "fast-forward", "squash"])("B: original post-me
 });
 
 
-test("B: an octopus merge can prove creation when Git omits the ancestral lane head", async () => {
+test.each(["completes", "host dies after the ref update"] as const)(
+  "B: an octopus merge can prove creation when Git omits the ancestral lane head and %s", async ending => {
   const f = await fixture();
   try {
     const side = path.join(f.root, "own-side");
@@ -899,9 +900,12 @@ test("B: an octopus merge can prove creation when Git omits the ancestral lane h
     await f.git(f.foreign, "commit", "-m", "new main");
     await f.git(f.foreign, "push", "origin", "main");
     await f.own("fetch", "origin", "main");
-    await f.own("merge", "-m", "octopus merge", "origin/main", "own-side");
+    const octopus = ["merge", "-m", "octopus merge", "origin/main", "own-side"];
+    if (ending === "completes") await f.own(...octopus);
+    else await dieAfterRefUpdate(f, octopus);
     const head = await f.own("rev-parse", "HEAD");
     const parents = await f.own("show", "-s", "--format=%P", head);
+    expect(parents.split(" ")).toEqual([await f.own("rev-parse", "origin/main"), await f.own("rev-parse", "own-side")]);
     expect(parents.split(" ")).not.toContain(f.pipeline.baseRef);
     expect(await fs.readFile(path.join(f.receipt, "commits", head), "utf8")).toBe("");
     await f.push(); expect(await f.settle()).toEqual({ ok: true, sha: head });

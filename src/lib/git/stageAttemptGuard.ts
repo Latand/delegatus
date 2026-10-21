@@ -61,6 +61,7 @@ if [ "$hook" = reference-transaction ] && [ "\${1:-}" = prepared ] && process=$(
   # exactly the intent's tree and parents, gets a receipt. An invocation that
   # aborted (editor, commit-msg, author check) never reaches this point, and
   # a later reset, update-ref or unguarded commit is another process.
+  # Each line of the intent is one parent set Git may record for it.
   intent=$(cat "$receipt/intents/$process") || intent=
   if [ -n "$intent" ]; then
     printf '%s\\n' "$input" | while read -r old new ref; do
@@ -68,7 +69,7 @@ if [ "$hook" = reference-transaction ] && [ "\${1:-}" = prepared ] && process=$(
       case "$new" in *[!0-9a-f]*|'') continue ;; esac
       [ "\${#new}" = 40 ] || continue
       made=$(git show -s --no-show-signature --format='%T %P' "$new" 2>/dev/null) || continue
-      [ "$(printf '%s' "\${made% }" | tr ' ' '-')" = "$intent" ] || continue
+      printf '%s\\n' "$intent" | grep -qxF "$(printf '%s' "\${made% }" | tr ' ' '-')" || continue
       mkdir -p "$receipt/commits" && : > "$receipt/commits/$new"
       # One intent proves one commit.
       rm -f "$receipt/intents/$process"
@@ -95,11 +96,20 @@ if [ "$hook" = post-commit ] || [ "$hook" = post-merge ] || [ "$hook" = post-app
       if process=$(invocation) && mkdir -p "$receipt/intents" && copy=$(mktemp "$receipt/intents/.index-XXXXXX"); then
         if cp "$index" "$copy" && tree=$(GIT_INDEX_FILE=$copy git write-tree 2>/dev/null); then
           intent=$tree
-          if parent=$(git rev-parse -q --verify HEAD); then intent=$intent-$parent; fi
+          if parent=$(git rev-parse -q --verify HEAD); then intent=$intent-$parent; else parent=; fi
+          merges=
+          subsumed=false
           merge_file=$(git rev-parse --git-path MERGE_HEAD) || merge_file=
           if [ -n "$merge_file" ] && [ -f "$merge_file" ]; then
-            while read -r merged; do intent=$intent-$merged; done < "$merge_file"
+            while read -r merged; do
+              merges=$merges-$merged
+              [ -z "$parent" ] || ! git merge-base --is-ancestor "$parent" "$merged" 2>/dev/null || subsumed=true
+            done < "$merge_file"
           fi
+          intent=$intent$merges
+          # Without --no-ff Git leaves out a HEAD that one of the merged heads
+          # already contains, as in an octopus merge over the lane's own work.
+          [ "$subsumed" = false ] || intent=$(printf '%s\\n%s' "$intent" "$tree$merges")
           printf '%s\\n' "$intent" > "$copy" && mv "$copy" "$receipt/intents/$process" 2>/dev/null || :
         fi
         rm -f "$copy"
