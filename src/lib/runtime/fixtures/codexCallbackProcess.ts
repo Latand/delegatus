@@ -99,6 +99,7 @@ if (mode === "engine-socket") {
         case "initialize": reply({ userAgent: "fixture" }); break;
         case "account/read": reply({ account: { type: "chatgpt", planType: "pro" } }); break;
         case "config/read": reply({ config: { mcp_servers: {} } }); break;
+        case "mcpServerStatus/list": reply({ data: [{ name: "viewer", tools: { stage_report: {} } }], nextCursor: null }); break;
         case "model/list": reply({ data: [] }); break;
         case "thread/start":
         case "thread/resume":
