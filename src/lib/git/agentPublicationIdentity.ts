@@ -7,7 +7,16 @@ import { agentLessonPublicationEnv } from "@/lib/memory/roleStore";
     filtering. Git identity variables from that process never choose an agent's
     identity. Invalid settings refuse the launch without logging their values. */
 export function agentPublicationIdentityEnv(source: AgentEnvironment): Record<string, string | undefined> {
-  const { name, email } = agentPublicationIdentity(source);
+  const defaults = controllerCommitIdentityEnv();
+  const configuredName = source.DELEGATUS_PUBLICATION_NAME ?? source.LLV_PUBLICATION_NAME ?? defaults.GIT_AUTHOR_NAME!;
+  const name = configuredName.trim();
+  const email = source.DELEGATUS_PUBLICATION_EMAIL ?? source.LLV_PUBLICATION_EMAIL ?? defaults.GIT_AUTHOR_EMAIL!;
+  if (!name || configuredName.length > 80 || /[\x00-\x1f\x7f<>@/\\]/.test(configuredName)
+    || !/^(?:noreply|no-reply)@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}$/i.test(email)
+    // The publication gate requires graph proof for the forge merge composer.
+    || email.toLowerCase() === ["noreply", "github.com"].join("@")) {
+    throw new Error("Invalid agent publication identity: use a machine name and a no-reply role mailbox");
+  }
   /* Writes to a declared App repository go out as the App. Its Git entries
      come first: the history guard appends its own after them and has to stay
      the last one. */
@@ -21,21 +30,6 @@ export function agentPublicationIdentityEnv(source: AgentEnvironment): Record<st
     ...forge,
     ...agentHistoryGuardEnv({ ...source, ...forge }, name, email),
   };
-}
-
-/** The identity agent commits carry, without generating the launch's hooks. */
-export function agentPublicationIdentity(source: AgentEnvironment): { name: string; email: string } {
-  const defaults = controllerCommitIdentityEnv();
-  const configuredName = source.DELEGATUS_PUBLICATION_NAME ?? source.LLV_PUBLICATION_NAME ?? defaults.GIT_AUTHOR_NAME!;
-  const name = configuredName.trim();
-  const email = source.DELEGATUS_PUBLICATION_EMAIL ?? source.LLV_PUBLICATION_EMAIL ?? defaults.GIT_AUTHOR_EMAIL!;
-  if (!name || configuredName.length > 80 || /[\x00-\x1f\x7f<>@/\\]/.test(configuredName)
-    || !/^(?:noreply|no-reply)@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}$/i.test(email)
-    // The publication gate requires graph proof for the forge merge composer.
-    || email.toLowerCase() === ["noreply", "github.com"].join("@")) {
-    throw new Error("Invalid agent publication identity: use a machine name and a no-reply role mailbox");
-  }
-  return { name, email };
 }
 
 export function agentCodexPublicationPolicy(policy: unknown, source: AgentEnvironment): Record<string, unknown> {

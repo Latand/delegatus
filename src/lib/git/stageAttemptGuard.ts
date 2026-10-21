@@ -8,26 +8,12 @@ export function stageGitReceiptDirectory(launchId: string): string {
   return statePath("pipeline-git-attempts", crypto.createHash("sha256").update(launchId).digest("hex"));
 }
 
-/** Where the lane worktree's own HEAD reflog ends when the attempt starts.
- * Git appends to it under the same lock as the ref update, so a commit whose
- * hooks never ran (a `-c core.hooksPath` override, a kill before post-commit)
- * still leaves an entry after this offset. Null leaves hook receipts as the
- * only proof. */
-async function stageReflogStart(worktree: string, exec: ExecPort): Promise<{ path: string; offset: number } | null> {
-  const located = await exec("git", ["rev-parse", "--path-format=absolute", "--git-path", "logs/HEAD"], worktree);
-  const file = located.code === 0 ? located.stdout.trim() : "";
-  if (!path.isAbsolute(file)) return null;
-  try { return { path: file, offset: (await fs.stat(file)).size }; }
-  catch (error) { return (error as NodeJS.ErrnoException).code === "ENOENT" ? { path: file, offset: 0 } : null; }
-}
-
 export async function prepareStageGitGuard(launchId: string, worktree: string, exec: ExecPort, now: string): Promise<Record<string, string>> {
   const directory = stageGitReceiptDirectory(launchId);
   const head = await exec("git", ["rev-parse", "HEAD"], worktree);
   if (head.code !== 0 || !/^[0-9a-f]{40}$/.test(head.stdout.trim())) throw new Error("stage Git guard cannot read the starting head");
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
-  const start = { launchId, worktree, head: head.stdout.trim(), startedAt: now, commitReceiptVersion: 2,
-    reflog: await stageReflogStart(worktree, exec) };
+  const start = { launchId, worktree, head: head.stdout.trim(), startedAt: now, commitReceiptVersion: 1 };
   try { await fs.writeFile(path.join(directory, "start.json"), JSON.stringify(start), { flag: "wx", mode: 0o600 }); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
@@ -60,6 +46,35 @@ stage_refuse() {
   cat "$receipt/refused" >&2
   exit 1
 }
+# The Git process that runs a hook is its parent. Its PID with its start time
+# names one invocation, so a recorded intent cannot outlive it into a later one.
+invocation() {
+  started=$(cut -d' ' -f22 2>/dev/null < "/proc/$PPID/stat" | tr -dc '0-9') || started=
+  [ -n "$started" ] || started=$(ps -o lstart= -p "$PPID" 2>/dev/null | tr -c 'A-Za-z0-9\\n' '_') || started=
+  [ -n "$started" ] || return 1
+  printf '%s-%s\\n' "$PPID" "$started"
+}
+if [ "$hook" = reference-transaction ] && [ "\${1:-}" = prepared ] && process=$(invocation) && [ -f "$receipt/intents/$process" ]; then
+  # The commit or merge invocation whose prepare-commit-msg recorded this
+  # intent is now moving a branch, before the ref update and before any kill
+  # can skip post-commit or post-merge. Only the commit it is writing, with
+  # exactly the intent's tree and parents, gets a receipt. An invocation that
+  # aborted (editor, commit-msg, author check) never reaches this point, and
+  # a later reset, update-ref or unguarded commit is another process.
+  intent=$(cat "$receipt/intents/$process") || intent=
+  if [ -n "$intent" ]; then
+    printf '%s\\n' "$input" | while read -r old new ref; do
+      case "$ref" in HEAD|refs/heads/*) ;; *) continue ;; esac
+      case "$new" in *[!0-9a-f]*|'') continue ;; esac
+      [ "\${#new}" = 40 ] || continue
+      made=$(git show -s --no-show-signature --format='%T %P' "$new" 2>/dev/null) || continue
+      [ "$(printf '%s' "\${made% }" | tr ' ' '-')" = "$intent" ] || continue
+      mkdir -p "$receipt/commits" && : > "$receipt/commits/$new"
+      # One intent proves one commit.
+      rm -f "$receipt/intents/$process"
+    done
+  fi
+fi
 if [ "$hook" = post-commit ] || [ "$hook" = post-merge ] || [ "$hook" = post-applypatch ] || [ "$hook" = post-rewrite ] || [ "$hook" = prepare-commit-msg ]; then
   common=$(git rev-parse --path-format=absolute --git-common-dir) || exit 1
   lane_common=$(lane_git rev-parse --path-format=absolute --git-common-dir) || exit 1
@@ -73,11 +88,11 @@ if [ "$hook" = post-commit ] || [ "$hook" = post-merge ] || [ "$hook" = post-app
     fi
     if [ "$owned" = true ] && [ "$hook" = prepare-commit-msg ]; then
       # Commit and merge run this before the commit object and the ref update
-      # exist, --no-verify included. Its tree and parents prove a commit whose
-      # post-commit or post-merge never ran because the process was killed;
-      # a reset or update-ref runs no commit hook. Never refuse the commit.
+      # exist, --no-verify included, and the same process later runs the
+      # reference-transaction hook above. Record the tree and parents it is
+      # about to commit under that process. Never refuse the commit here.
       index=\${GIT_INDEX_FILE:-$(git rev-parse --git-path index)}
-      if mkdir -p "$receipt/intents" && copy=$(mktemp "$receipt/intents/.index-XXXXXX"); then
+      if process=$(invocation) && mkdir -p "$receipt/intents" && copy=$(mktemp "$receipt/intents/.index-XXXXXX"); then
         if cp "$index" "$copy" && tree=$(GIT_INDEX_FILE=$copy git write-tree 2>/dev/null); then
           intent=$tree
           if parent=$(git rev-parse -q --verify HEAD); then intent=$intent-$parent; fi
@@ -85,7 +100,7 @@ if [ "$hook" = post-commit ] || [ "$hook" = post-merge ] || [ "$hook" = post-app
           if [ -n "$merge_file" ] && [ -f "$merge_file" ]; then
             while read -r merged; do intent=$intent-$merged; done < "$merge_file"
           fi
-          : > "$receipt/intents/$intent" 2>/dev/null || :
+          printf '%s\\n' "$intent" > "$copy" && mv "$copy" "$receipt/intents/$process" 2>/dev/null || :
         fi
         rm -f "$copy"
       fi

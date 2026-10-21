@@ -119,7 +119,7 @@ function fixture() {
     cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 
-for (const suffix of ["proved", "lost receipt", "unrecorded", "divergent"] as const) test(`publish without acceptedSha retries a custody-parked stage (${suffix})`, async () => {
+for (const suffix of ["proved", "unrecorded", "divergent"] as const) test(`publish without acceptedSha retries a custody-parked stage (${suffix})`, async () => {
   const h = fixture();
   const launchId = `parked-successor-${suffix}`;
   try {
@@ -131,16 +131,14 @@ for (const suffix of ["proved", "lost receipt", "unrecorded", "divergent"] as co
     const guard = await prepareStageGitGuard(launchId, h.repo, realExec, now);
     const identity = agentPublicationIdentityEnv({ ...process.env, ...guard });
     const env = { ...identity, ...guard, GIT_AUTHOR_DATE: now, GIT_COMMITTER_DATE: now };
-    // An unrecorded head has neither a receipt nor a creation entry in the
-    // lane reflog: its object is written outside a commit command.
+    // An unrecorded head has no receipt: its object is written outside a
+    // commit command and HEAD reaches it by reset.
     const made = suffix === "unrecorded"
       ? await realExec("git", ["commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "passed successor output"], h.repo, env)
       : await realExec("git", ["commit", "--allow-empty", "-m", "passed successor output"], h.repo, env);
     expect(made.code, made.stderr).toBe(0);
     if (suffix === "unrecorded") h.git("reset", "-q", "--hard", made.stdout.trim());
     const head = h.git("rev-parse", "HEAD");
-    // A receipt lost after the commit leaves the reflog's creation entry.
-    if (suffix === "lost receipt") fs.unlinkSync(path.join(stageGitReceiptDirectory(launchId), "commits", head));
     if (suffix === "divergent") {
       h.git("checkout", "-q", "--detach", h.passed);
       h.git("commit", "-q", "--allow-empty", "-m", "foreign delivery output");
@@ -154,7 +152,7 @@ for (const suffix of ["proved", "lost receipt", "unrecorded", "divergent"] as co
     const ports = { ...h.ports, now: () => "2026-10-20T11:00:00.000Z" };
     expect((await patchPipeline(h.lane.id, { action: "publish" }, ports)).error).toBeUndefined();
     for (let n = 0; n < 3; n++) await tickPipelines([], ports);
-    if (suffix === "proved" || suffix === "lost receipt") {
+    if (suffix === "proved") {
       expect(h.current()).toMatchObject({ lastPassedCommit: head, publishedCommit: head, state: "completed" });
       expect(h.pushes()).toBe(1);
     } else {

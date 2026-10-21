@@ -102,16 +102,16 @@ test("B: a controller-created replacement link proves a completed parent without
   } finally { if (childLaunch) await fs.rm(stageGitReceiptDirectory(childLaunch), { recursive: true, force: true }); await f.close(); }
 });
 
-// A predecessor's own commit whose post-commit receipt was lost is proved by
-// its commit intent and the lane reflog's creation entry; one it reached by
-// reset, or made with the launch hooks overridden, stays unproved.
+// A predecessor's own commit whose host died before post-commit is proved by
+// the receipt its commit invocation wrote before moving the branch; one it
+// reached by reset, or made with the launch hooks overridden, stays unproved.
 test.each(["own commit, receipt lost", "own hooks-off commit", "imported commit"] as const)("review safety: manual silent retry preserves predecessor commit custody (%s)", async predecessor => {
   const f = await fixture();
   let childLaunch: string | null = null;
   try {
     const parent = { ...f.attempt, n: 1, state: "failed", completedAt: NOW, agentPath: "/stage/silent.jsonl" } as PipelineStageAttempt;
     if (predecessor === "own commit, receipt lost") {
-      await fs.rm(path.join(f.receipt, "commits", await f.commit("unreceipted predecessor")));
+      await commitThenDie(f, "unreceipted predecessor");
     } else if (predecessor === "own hooks-off commit") {
       await f.own("-c", "core.hooksPath=/dev/null", "commit", "--allow-empty", "-m", "unreceipted predecessor");
     } else {
@@ -184,7 +184,7 @@ test.each(["none", "foreign", "unrecorded"] as const)("the custody-to-committer 
 });
 
 test.each((["accepted", "accepted replacement", "published"] as const).flatMap(proof =>
-  (["valid", "lost receipt", "foreign suffix", "unrecorded suffix", "dropped history", "remote race", "head race"] as const).map(suffix => ({ proof, suffix }))))
+  (["valid", "host death", "foreign suffix", "unrecorded suffix", "dropped history", "remote race", "head race"] as const).map(suffix => ({ proof, suffix }))))
 ("recorded ancestry survives a later attempt ($proof, $suffix)", async ({ proof, suffix }) => {
   const f = await fixture();
   const childLaunch = `stage-proof-recorded-ancestry-${nextFixture}`;
@@ -224,9 +224,9 @@ test.each((["accepted", "accepted replacement", "published"] as const).flatMap(p
         restartContext: { previousAttempt: previous.n, transcriptPath: previous.agentPath, cause: "host-lost" },
       } : {}) } as PipelineStageAttempt;
     if (proof !== "published") await f.own("merge", "--no-ff", "-m", "restore accepted history", accepted);
-    let head = await f.commit("later attempt output");
-    // A lost receipt leaves the lane reflog's creation entry as proof.
-    if (suffix === "lost receipt") await fs.rm(path.join(stageGitReceiptDirectory(childLaunch), "commits", head));
+    // A host that dies after the ref update skips post-commit; the receipt
+    // its commit invocation wrote before the update proves it.
+    let head = suffix === "host death" ? await commitThenDie(f, "later attempt output") : await f.commit("later attempt output");
     if (suffix === "unrecorded suffix") {
       // No receipt and no creation entry: the object is written outside a
       // commit command and HEAD reaches it by reset.
@@ -266,7 +266,7 @@ test.each((["accepted", "accepted replacement", "published"] as const).flatMap(p
     };
     const result = await commitAndAdoptStageBranch(f.pipeline, "build", exec, () => [f.pipeline], undefined,
       () => {}, null, undefined, undefined, child, NOW);
-    if (suffix === "valid" || suffix === "lost receipt") {
+    if (suffix === "valid" || suffix === "host death") {
       expect(result).toEqual({ ok: true, sha: head });
       expect(await f.own("merge-base", "--is-ancestor", inherited, "HEAD")).toBe("");
       expect(await f.own("ls-remote", "--refs", "origin", "refs/heads/pipeline/proof")).toBe(`${inherited}\trefs/heads/pipeline/proof`);
@@ -660,9 +660,8 @@ test("B: rebase receipts include each rewritten commit and preserve the original
   } finally { await f.close(); }
 });
 
-// A rewrite runs prepare-commit-msg too, but its reflog entry is no creation
-// entry and an amend's parents differ from the intent's HEAD: once the
-// post-rewrite receipt is lost, the rewritten commit stays unproved.
+// Settlement has no second proof beside the receipts: once a rewritten
+// commit's receipt is gone, the commit stays unproved.
 test.each(["amend", "rebase"] as const)("B: an own %s whose rewrite receipt was lost stays unproved", async rewrite => {
   const f = await fixture();
   try {
@@ -826,8 +825,9 @@ test("B: a foreign shared-identity merge reached by update-ref with a merge refl
 });
 
 // A refresh of current main mid-attempt is a fast-forward onto verified base
-// history; the attempt's own commits after it stay provable from the reflog.
-test.each(["lost receipt", "forged reset"] as const)("A: main fast-forward followed by an own commit (%s)", async shape => {
+// history; the attempt's own commit after it settles even when its host died
+// before post-commit, while a foreign one reached by reset does not.
+test.each(["host death", "forged reset"] as const)("A: main fast-forward followed by an own commit (%s)", async shape => {
   const f = await fixture();
   try {
     await f.git(f.foreign, "commit", "--allow-empty", "-m", "new main");
@@ -835,9 +835,8 @@ test.each(["lost receipt", "forged reset"] as const)("A: main fast-forward follo
     await f.own("fetch", "origin", "main"); await f.own("merge", "--ff-only", "origin/main");
     expect(await f.own("reflog", "-1", "--format=%gs")).toBe("merge origin/main: Fast-forward");
     let head: string;
-    if (shape === "lost receipt") {
-      head = await f.commit("own after the refresh");
-      await fs.rm(path.join(f.receipt, "commits", head));
+    if (shape === "host death") {
+      head = await commitThenDie(f, "own after the refresh");
     } else {
       const foreignEnv: NodeJS.ProcessEnv = { ...f.env, GIT_CONFIG_COUNT: "0",
         LLV_STAGE_GIT_RECEIPT: undefined, LLV_STAGE_GIT_WORKTREE: undefined };
@@ -853,7 +852,7 @@ test.each(["lost receipt", "forged reset"] as const)("A: main fast-forward follo
     }
     await f.push();
     const settled = await f.settle();
-    if (shape === "lost receipt") expect(settled).toEqual({ ok: true, sha: head });
+    if (shape === "host death") expect(settled).toEqual({ ok: true, sha: head });
     else expect(settled).toMatchObject({ ok: false, error: expect.stringContaining(`commit ${head} was not created in the attempt worktree`) });
   } finally { await f.close(); }
 });
@@ -1218,9 +1217,7 @@ async function dieAfterRefUpdate(f: Awaited<ReturnType<typeof fixture>>, args: s
   await f.own("config", "--unset", "core.hooksPath");
   // The kill also skipped Git's own cleanup of the merge state.
   if ((await realExec("git", ["rev-parse", "-q", "--verify", "MERGE_HEAD"], f.lane, f.env)).code === 0) await f.own("merge", "--quit");
-  const head = await f.own("rev-parse", "HEAD");
-  expect(await fs.access(path.join(f.receipt, "commits", head)).then(() => true, () => false)).toBe(false);
-  return head;
+  return await f.own("rev-parse", "HEAD");
 }
 
 async function commitThenDie(f: Awaited<ReturnType<typeof fixture>>, message: string): Promise<string> {
@@ -1331,4 +1328,64 @@ test("a same-identity commit made in the lane after the attempt ended is still r
     await fs.rm(stageGitReceiptDirectory(childLaunch), { recursive: true, force: true });
     await f.close();
   }
+});
+
+// prepare-commit-msg records the tree and parents a commit invocation is about
+// to write, and the editor, commit-msg and the author check can still abort
+// that invocation. Another writer's later commit with the same tree, parents,
+// identity and time, made unguarded in the lane or imported by a reset whose
+// reflog message reads like a commit, must not inherit that intent.
+test.each((["editor", "commit-msg", "author check"] as const).flatMap(abort =>
+  (["unguarded lane commit", "imported by reset"] as const).map(later => ({ abort, later }))))
+("an intent from a commit aborted by its $abort proves no $later", async ({ abort, later }) => {
+  const f = await fixture();
+  try {
+    const parent = await f.commit("own work before the abort");
+    await f.push();
+    const hooks = path.join(f.root, "repository-hooks");
+    if (abort === "commit-msg") {
+      await fs.mkdir(hooks, { recursive: true });
+      await fs.writeFile(path.join(hooks, "commit-msg"), "#!/bin/sh\nexit 1\n", { mode: 0o700 });
+      await f.own("config", "core.hooksPath", hooks);
+    }
+    const aborted = await realExec("git", ["commit", "--allow-empty",
+      ...(abort === "editor" ? [] : ["-m", "updating HEAD"]),
+      ...(abort === "author check" ? ["--author", "Somebody Else <noreply@elsewhere.invalid>"] : [])],
+    f.lane, { ...f.env, GIT_EDITOR: "false" });
+    expect(aborted.code).not.toBe(0);
+    if (abort === "commit-msg") await f.own("config", "--unset", "core.hooksPath");
+    expect(await f.own("rev-parse", "HEAD")).toBe(parent);
+    // The aborted invocation did record an intent.
+    expect((await fs.readdir(path.join(f.receipt, "intents"))).filter(name => !name.startsWith(".")).length).toBeGreaterThan(0);
+
+    const unguarded: NodeJS.ProcessEnv = { ...f.env, GIT_CONFIG_COUNT: "0",
+      LLV_STAGE_GIT_RECEIPT: undefined, LLV_STAGE_GIT_WORKTREE: undefined };
+    if (later === "unguarded lane commit") {
+      const made = await realExec("git", ["commit", "--allow-empty", "-m", "updating HEAD"], f.lane, unguarded);
+      expect(made.code, made.stderr).toBe(0);
+    } else {
+      const other = path.join(f.root, "other-checkout");
+      await f.git(f.foreign, "fetch", "origin", "pipeline/proof");
+      await realExec("git", ["worktree", "add", "--detach", other, parent], f.foreign, unguarded);
+      const made = await realExec("git", ["commit", "--allow-empty", "-m", "updating HEAD"], other, unguarded);
+      expect(made.code, made.stderr).toBe(0);
+      await f.git(other, "push", "-f", "origin", "HEAD:refs/heads/pipeline/proof");
+      await f.own("fetch", "origin", "pipeline/proof");
+      const reset = await realExec("git", ["reset", "--hard", "FETCH_HEAD"], f.lane, { ...f.env, GIT_REFLOG_ACTION: "commit" });
+      expect(reset.code, reset.stderr).toBe(0);
+      expect(await f.own("reflog", "-1", "--format=%gs")).toBe("commit: updating HEAD");
+    }
+    const head = await f.own("rev-parse", "HEAD");
+    expect(head).not.toBe(parent);
+    expect(await f.own("show", "-s", "--format=%T %P", head)).toBe(await f.own("show", "-s", "--format=%T", parent) + " " + parent);
+    expect(await fs.access(path.join(f.receipt, "commits", head)).then(() => true, () => false)).toBe(false);
+    // The guarded pre-push would refuse the unguarded commit itself; deliver it
+    // the way its writer would, so only settlement judges custody.
+    if (later === "unguarded lane commit") {
+      const pushed = await realExec("git", ["push", "origin", "HEAD:refs/heads/pipeline/proof"], f.lane, unguarded);
+      expect(pushed.code, pushed.stderr).toBe(0);
+    } else await f.push();
+    expect(await fs.access(path.join(f.receipt, "refused")).then(() => true, () => false)).toBe(false);
+    expect(await f.settle()).toMatchObject({ ok: false, error: expect.stringContaining(`commit ${head} was not created in the attempt worktree`) });
+  } finally { await f.close(); }
 });

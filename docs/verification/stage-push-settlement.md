@@ -47,50 +47,43 @@ Hypotheses tested:
 
 ### Fix
 
-A start receipt is now version 2 and records the lane worktree's own HEAD
-reflog path and its byte length at launch (`stageReflogStart`,
-`src/lib/git/stageAttemptGuard.ts`). The launch's `prepare-commit-msg` hook
-now also writes a commit intent, `intents/<tree>-<parent>…`, naming the tree
-of the index being committed and the parents the commit will have (HEAD, then
-each `MERGE_HEAD` line). Git runs that hook for `commit` and for a merge that
-creates a commit, `--no-verify` included, before it writes the commit object
-or moves the branch. A reset, `update-ref` or fast-forward runs no commit hook.
+The receipt for a commit or merge is now written before Git moves the
+branch, by the invocation that writes the commit
+(`src/lib/git/stageAttemptGuard.ts:51-77` and `:89-105`). The launch's
+`prepare-commit-msg` hook records an intent: the tree of the index being
+committed and the parents the commit will have (HEAD, then each `MERGE_HEAD`
+line). Git runs that hook for `commit` and for a merge that creates a commit,
+`--no-verify` included, before it writes the commit object. The hook files
+the intent under the Git process that runs it, named by its PID and its start
+time from `/proc` (or `ps` where `/proc` is absent).
 
-When a commit has no receipt, settlement replays each attempt's reflog window
-(`reflogCreatedCommits`, `src/lib/pipelines/stageAttemptPush.ts`). The window
-runs from the attempt's recorded offset to the next attempt's offset, or to
-the end of the file for the settling attempt. The reflog message is text the
-caller controls (`GIT_REFLOG_ACTION=commit git reset` writes `commit:
-updating HEAD`; `update-ref -m` writes anything), so it only selects which
-entries to examine. Proof comes from the intent.
+The same process then runs the `reference-transaction` hook in its `prepared`
+phase, before the ref update. If an intent exists for that process, and the
+commit it is moving `HEAD` or a branch to has exactly the intent's tree and
+parents, the hook writes `commits/<sha>` and removes the intent. A kill after
+the ref update and before `post-commit` or `post-merge` therefore leaves the
+receipt in place. `src/lib/git/agentHistoryGuard.ts:73` now reads the
+transaction's input once for both guards.
 
-The window replays as one chain from the attempt's starting head. Each entry
-continues the previous one, and each entry does one of three things:
+An intent proves nothing outside its own invocation. Three things can abort
+a commit after `prepare-commit-msg` has run: a failing editor, a refusing
+`commit-msg` hook, or the guard's own author check. The aborted process never
+reaches the ref update, and its intent stays filed under a process that has
+exited. A later writer with the same tree, parents, identity and time is
+another process and gets no receipt. That covers an unguarded commit in the
+lane, a `reset` or `update-ref` (whatever its reflog message reads), and an
+import from another checkout. Settlement reads receipts only, exactly as on
+`a58ac024` (`src/lib/pipelines/stageAttemptPush.ts` is unchanged). The reflog
+replay the first round added proved commits from an intent keyed only by tree
+and parents, so an aborted invocation's intent could attest another writer's
+commit. That replay and its version 2 start receipt are removed.
 
-- leaves HEAD in place;
-- fast-forwards onto history the verified base branch already holds, whatever
-  its message, as when the attempt refreshes current main;
-- creates a commit on top of it (`commit`, `commit (merge)` or
-  `merge …: Merge made by the '…' strategy.`). Here the commit's first parent
-  is the entry's old head and a `commit` entry carries the commit's own first
-  line. The committer name, email and time equal the entry's and are the agent
-  publication identity. The same attempt's receipt directory must also hold an
-  intent for exactly that tree and those parents.
-
-Any other entry ends the window: a reset onto anything but verified base
-history, a checkout of another commit, an amend, a rebase, or an entry after
-the attempt ended. So commits that were imported, rewritten or made later
-stay unproved, even when their identity, time and subject match the entry.
-Another checkout or worktree never appends to this worktree's reflog. Hook
-receipts remain the first proof. Launches with version 1 receipts, and
-producer repair's receipt for the repaired head, are unchanged.
-
-A commit made with the launch hooks overridden (`-c core.hooksPath=…`) has
-neither a receipt nor an intent, and nothing Git records tells it apart from
-an imported commit reached with a forged reflog message. It stays unproved;
-both incident commits were of this kind. The builder rules ask for a plain
-`git commit`, and the park names the recovery below, which now accepts such a
-head in place.
+A commit made with the launch hooks overridden (`-c core.hooksPath=…`) runs
+none of the launch's hooks, so it has neither an intent nor a receipt.
+Nothing Git records tells it apart from an imported commit. It stays
+unproved; both incident commits were of this kind. The builder rules ask for
+a plain `git commit`, and the park names the recovery below, which now
+accepts such a head in place.
 
 When settlement still refuses, the park names the recovery. The lane's
 creator, its project's seat or the operator reviews the head and calls
@@ -120,14 +113,22 @@ settle:
 - a clean merge;
 - a clean merge concluded by `commit`;
 - a conflicted merge concluded by `commit`;
-- an ordinary commit, inherited by a host-lost replacement and by an operator
-  retry;
+- an ordinary commit, inherited by a host-lost replacement, by an operator
+  retry and by a manual silent retry;
+- an attempt's own commit after accepted or published history;
 - an own commit after a fast-forward of current main.
 
-Each of these failed on `a58ac024` with the incident's refusal.
+Each of these fails on `a58ac024` with the incident's refusal.
 
 These are refused:
 
+- a commit aborted by its editor, by `commit-msg` or by the author check,
+  followed by a same-tree, same-parents, same-identity commit, either made
+  unguarded in the lane or made in another checkout and imported by
+  `GIT_REFLOG_ACTION=commit git reset --hard` (reflog `commit: updating
+  HEAD`). All six cases were accepted with `{ ok: true }` by the first round
+  (`cff58910`). Keying intents by a constant instead of the process turns the
+  three reset cases red again;
 - a foreign shared-identity commit with the subject `updating HEAD`, reached
   by `GIT_REFLOG_ACTION=commit git reset --hard`, before and after a main
   fast-forward;
@@ -135,8 +136,7 @@ These are refused:
   origin/main: Merge made by the 'ort' strategy."`;
 - an ordinary commit and a clean merge made under a command-line hooks path
   override;
-- a same-identity commit made after the attempt ended.
-
+- a same-identity commit made after the attempt ended;
 - an own amend or rebase whose `post-rewrite` receipt was lost.
 
 The earlier forged-reflog, foreign-worktree, other-identity and
