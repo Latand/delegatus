@@ -19,6 +19,7 @@ import { telegramSessionReaderPath } from "@/lib/telegram/packaging";
 import { TELEGRAM_CONNECTOR_TOKEN_ENV, telegramSessionPath } from "@/lib/telegram/sessionStore";
 
 import { claudeTranscriptPath, headCwd } from "./transcript";
+import { normalizedClaudePermissionMode, readClaudePermissionModeSync } from "./claudePermissionMode";
 import { grantedMcpServers } from "./mcpAllowlist";
 import { grantedPlugins } from "./pluginAllowlist";
 import { normalizeClaudeLaunchModel } from "./models";
@@ -342,8 +343,7 @@ function pushClaudePolicyArgs(
 export function effectiveClaudePermissionMode(
   options: Pick<ResumeSpecOptions, "readOnly" | "permissionMode">,
 ): string {
-  if (options.permissionMode) return options.permissionMode;
-  return options.readOnly ? "plan" : "bypassPermissions";
+  return normalizedClaudePermissionMode(options.permissionMode) ?? (options.readOnly ? "plan" : "default");
 }
 
 /** Boot spec for a brand-new agent (no prior conversation) in a chosen directory. */
@@ -358,7 +358,9 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
     const args = [resolveBinary("claude")];
     /* Read-only rounds must not inherit the skip-permissions bypass: with it,
        denying Edit/Write still leaves Bash free to mutate the worktree. */
-    const permissionMode = effectiveClaudePermissionMode(options);
+    const permissionMode = effectiveClaudePermissionMode({
+      ...options, permissionMode: options.permissionMode ?? (options.readOnly ? "plan" : "bypassPermissions"),
+    });
     if (options.readOnly) args.push("--permission-mode", permissionMode, "--disallowedTools", `Edit,Write,NotebookEdit${options.operatorDecisionForms ? ",AskUserQuestion,ExitPlanMode" : ""}`);
     else if (permissionMode === "bypassPermissions") args.push("--dangerously-skip-permissions");
     else args.push("--permission-mode", permissionMode);
@@ -554,6 +556,7 @@ export function resumeSpecFor(root: string, pathname: string, options: ResumeSpe
   if (!eligibility.ok) return null;
   return resumeSpecForSession(eligibility.engine, eligibility.sessionId, eligibility.cwd, eligibility.home, {
     ...options, operatorDecisionForms: options.operatorDecisionForms || operatorDecisionFormsRequired(null, pathname),
+    permissionMode: options.permissionMode ?? (eligibility.engine === "claude" ? readClaudePermissionModeSync(pathname) : null),
   });
 }
 
@@ -589,10 +592,10 @@ export function resumeSpecForSession(
     const permissionMode = effectiveClaudePermissionMode(options);
     if (options.readOnly || permissionMode === "plan") {
       args.push("--permission-mode", "plan", "--disallowedTools", `Edit,Write,NotebookEdit${options.operatorDecisionForms ? ",AskUserQuestion,ExitPlanMode" : ""}`);
-    } else if (permissionMode !== "bypassPermissions" && /^[a-zA-Z-]+$/.test(permissionMode)) {
-      args.push("--permission-mode", permissionMode);
-    } else {
+    } else if (permissionMode === "bypassPermissions") {
       args.push("--dangerously-skip-permissions");
+    } else {
+      args.push("--permission-mode", permissionMode);
     }
     if (options.operatorDecisionForms && !options.readOnly && permissionMode !== "plan") args.push("--disallowedTools", "AskUserQuestion,ExitPlanMode");
     pushClaudePolicyArgs(args, policy);

@@ -265,6 +265,25 @@ for (const serviceTier of ["ultrafast", undefined]) {
   });
 }
 
+test.each(["default", "bypassPermissions", "plan"])("Claude attach preserves recorded %s permissions through path and receipt", (permissionMode) => {
+  const entry = file({ path: "/root.jsonl", cwd: WORKTREE });
+  const res = resolveAttachCommand(entry.path, deps([entry], {
+    launchProfileForPath: () => ({ permissionMode }),
+    resumeSpecFor: (_root, _path, options) => resumeSpecForSession("claude", SESSION_ID, WORKTREE, MCP_STUB_DIR, options),
+  }));
+  const launch = launchDeps();
+  const receipt = resolveLaunchAttachCommand({ ...launch, receipt: { ...launch.receipt!, engine: "claude",
+    key: { engine: "claude", sessionId: SESSION_ID }, launchProfile: { ...launch.receipt!.launchProfile, permissionMode } },
+    homeForAccount: () => MCP_STUB_DIR,
+  });
+  for (const result of [res, receipt]) {
+    expect(result.ok).toBeTrue();
+    if (!result.ok) throw new Error(result.error);
+    expect(result.value.command.includes("--dangerously-skip-permissions")).toBe(permissionMode === "bypassPermissions");
+    if (permissionMode !== "bypassPermissions") expect(result.value.command).toContain(`'--permission-mode' '${permissionMode}'`);
+  }
+});
+
 test("P1#6: a materialized transcript is preferred and resolved through the full path flow", () => {
   const byPath = { ok: true as const, value: { engine: "codex" as const, accountId: "work", accountLabel: "work · codex", cwd: "/repo/worktree", command: "codex resume from-path", cdCommand: "cd '/repo/worktree'", fullCommand: "cd '/repo/worktree' && codex resume from-path" } };
   const res = resolveLaunchAttachCommand(launchDeps({ materializedPath: "/repo/rollout.jsonl", resolveByPath: () => byPath }));

@@ -809,7 +809,9 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   }
 
   static async start(options: ClaudeStreamBrokerHostOptions): Promise<ClaudeStreamBrokerHost> {
-    return this.open(options.sessionId ?? crypto.randomUUID(), false, options);
+    return this.open(options.sessionId ?? crypto.randomUUID(), false, {
+      ...options, permissionMode: options.permissionMode ?? (options.readOnly ? "plan" : "bypassPermissions"),
+    });
   }
 
   static async adopt(sessionId: string, options: ClaudeStreamBrokerHostOptions): Promise<ClaudeStreamBrokerHost> {

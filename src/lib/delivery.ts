@@ -603,6 +603,8 @@ export async function resumeConversation(
     fast: profile?.fast,
     serviceTier: profile?.serviceTier,
     accountId: resumeAccount,
+    readOnly: profile?.readOnly,
+    permissionMode: profile?.permissionMode,
     allowSubagents: profile?.allowSubagents,
     plugins: profile?.plugins,
     /* The durable grant travels with the resume (#739). Omitting it silently
@@ -1254,6 +1256,8 @@ async function actuateConversationMessage(
       serviceTier: typeof message.resumeFast === "boolean"
         ? serviceTierForSpeed(entryProfile?.serviceTier, message.resumeFast) : entryProfile?.serviceTier,
       accountId: entryAccount,
+      readOnly: entryProfile?.readOnly,
+      permissionMode: entryProfile?.permissionMode,
       allowSubagents: entryProfile?.allowSubagents,
       plugins: entryProfile?.plugins,
       mcpServers: entryProfile?.mcpServers,
@@ -1300,6 +1304,8 @@ async function actuateConversationMessage(
       fast: rootProfile?.fast,
       serviceTier: rootProfile?.serviceTier,
       accountId: rootAccount,
+      readOnly: rootProfile?.readOnly,
+      permissionMode: rootProfile?.permissionMode,
       allowSubagents: rootProfile?.allowSubagents,
       plugins: rootProfile?.plugins,
       mcpServers: rootProfile?.mcpServers,

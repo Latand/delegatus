@@ -13,7 +13,7 @@ import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisi
  * attach reopens the identical conversation the viewer would have resumed.
  */
 
-import type { AgentEngine, ResumeSpec } from "./cli";
+import type { AgentEngine, ResumeSpec, ResumeSpecOptions } from "./cli";
 import type { IdentityMaterializationFence, SpawnReceipt } from "./registry";
 import type { FileEntry } from "@/lib/types";
 
@@ -68,6 +68,8 @@ export type AttachResolution =
 
 /** The registry facts a composed command must agree with. */
 export interface AttachLaunchProfile {
+  readOnly?: boolean | null;
+  permissionMode?: string | null;
   cwd?: string | null;
   model?: string | null;
   effort?: string | null;
@@ -78,7 +80,7 @@ export interface AttachLaunchProfile {
 
 export interface AttachResolverDeps {
   files: FileEntry[];
-  resumeSpecFor: (root: string, path: string, options?: { model?: string | null; effort?: string | null; serviceTier?: string | null; allowSubagents?: boolean; mcpServers?: readonly string[]; cwd?: string | null; hostTerminal?: boolean; accountId?: string | null }) => ResumeSpec | null;
+  resumeSpecFor: (root: string, path: string, options?: ResumeSpecOptions) => ResumeSpec | null;
   accountIdForPath: (path: string) => string;
   accountLabelFor: (engine: AgentEngine, accountId: string) => string;
   /** The conversation's live launch profile (#663). Authoritative for cwd,
@@ -125,6 +127,8 @@ export function resolveAttachCommand(path: string, deps: AttachResolverDeps): At
     model: profile?.model ?? target.entry.launchModel ?? target.entry.model,
     effort: profile?.effort ?? target.entry.effort,
     serviceTier: profile?.serviceTier,
+    readOnly: profile?.readOnly,
+    permissionMode: profile?.permissionMode,
     allowSubagents: profile?.allowSubagents ?? deps.allowSubagentsForPath?.(target.entry.path),
     mcpServers: profile?.mcpServers ?? deps.mcpServersForPath?.(target.entry.path),
     cwd: effectiveCwd,
@@ -155,7 +159,7 @@ export interface LaunchAttachReceipt {
   accountId: string | null;
   agentRole?: string | null;
   key: { engine: AgentEngine; sessionId: string } | null;
-  launchProfile: { model: string | null; effort: string | null; fast: boolean | null; serviceTier?: string | null; allowSubagents?: boolean; mcpServers?: readonly string[] };
+  launchProfile: { readOnly?: boolean | null; permissionMode?: string | null; model: string | null; effort: string | null; fast: boolean | null; serviceTier?: string | null; allowSubagents?: boolean; mcpServers?: readonly string[] };
   transport: SpawnReceipt["transport"];
   state: SpawnReceipt["state"];
   purpose: SpawnReceipt["purpose"];
@@ -174,7 +178,7 @@ export interface LaunchAttachDeps {
     sessionId: string,
     cwd: string,
     home: string,
-    options?: { model?: string | null; effort?: string | null; fast?: boolean | null; serviceTier?: string | null; allowSubagents?: boolean; operatorDecisionForms?: boolean; mcpServers?: readonly string[]; hostTerminal?: boolean },
+    options?: ResumeSpecOptions,
   ) => ResumeSpec | null;
   homeForAccount: (engine: AgentEngine, accountId: string) => string | null;
   accountLabelFor: (engine: AgentEngine, accountId: string) => string;
@@ -206,6 +210,8 @@ export function resolveLaunchAttachCommand(deps: LaunchAttachDeps): AttachResolu
     model: receipt.launchProfile.model,
     effort: receipt.launchProfile.effort,
     fast: receipt.launchProfile.fast,
+    readOnly: receipt.launchProfile.readOnly,
+    permissionMode: receipt.launchProfile.permissionMode,
     serviceTier: receipt.launchProfile.serviceTier,
     allowSubagents: receipt.launchProfile.allowSubagents,
     operatorDecisionForms: operatorDecisionFormsRequired(receipt.agentRole, receipt.artifactPath),

@@ -17,6 +17,7 @@ import { explicitLaunchProfileSandbox, launchProfileEngineReadOnly, type LaunchP
 import { learnedRulesForLaunchProfile, memoryStartIdentity } from "@/lib/memory/roleLaunch";
 import { codexNativeMemoryEnabled } from "@/lib/agent/codexSpawnPolicy";
 import type { SpawnAccountAdmission } from "@/lib/agent/accountLiveness";
+import { readClaudePermissionMode } from "@/lib/agent/claudePermissionMode";
 import { effectiveClaudePermissionMode, resolveCopilotBinary, type AgentEngine, type ResumeSpec } from "@/lib/agent/cli";
 import { identityMaterializationFence, resolveConversationAlias, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt, type StructuredHostColumns } from "@/lib/agent/registry";
 import { sessionKey, sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
@@ -2087,7 +2088,7 @@ export async function claudeStructuredHostOptions(
         : input.account.claudeProvider.model
       : profile.model ?? undefined,
     effort: profile.effort ?? undefined,
-    permissionMode: effectiveClaudePermissionMode(profile),
+    permissionMode: effectiveClaudePermissionMode({ ...profile, permissionMode: profile.permissionMode ?? await readClaudePermissionMode(input.spec.transcript) }),
     initialEventCursor,
     env: access.env,
     ...access.host,

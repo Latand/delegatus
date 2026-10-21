@@ -16,6 +16,7 @@ import { turnStateFromRecords } from "@/lib/accounts/migration/turnState";
 import { launchProfileEngineReadOnly, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { agentRegistry, conversationIdsResolvingTo, resolveConversationAlias, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt } from "@/lib/agent/registry";
 import { registryRowsMatching, registryConversationsForEntryKey } from "@/lib/agent/sqliteRegistryStore";
+import { readClaudePermissionMode } from "@/lib/agent/claudePermissionMode";
 import { effectiveClaudePermissionMode } from "@/lib/agent/cli";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { activeOrchestratorSeats, type OrchestratorSeat } from "@/lib/orchestrator/seats";
@@ -1969,7 +1970,7 @@ export async function claudeStartupHostOptions(
         : owner.claudeProvider.model
       : entry.launchProfile?.model ?? undefined,
     effort: entry.launchProfile?.effort ?? undefined,
-    permissionMode: effectiveClaudePermissionMode(entry.launchProfile ?? {}),
+    permissionMode: effectiveClaudePermissionMode({ ...entry.launchProfile, permissionMode: entry.launchProfile?.permissionMode ?? await readClaudePermissionMode(entry.artifactPath) }),
   };
 }
 

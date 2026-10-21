@@ -583,6 +583,8 @@ export async function sendToImplementer(
         flow.project,
       )
       : null,
+    readOnly: profile?.readOnly,
+    permissionMode: profile?.permissionMode,
     allowSubagents: profile?.allowSubagents,
     mcpServers: profile?.mcpServers,
     plugins: profile?.plugins,
