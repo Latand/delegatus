@@ -4831,8 +4831,12 @@ async function readRepairDelivery(pipeline: Pipeline, stage: PipelineStage, atte
   const worker = publicationRepairWorker(pipeline, attempt);
   if (!repair || !worker?.attempt.conversationId || !ports.stageRepairDelivery) return repair?.delivery;
   const key = repair.clientMessageId ?? `stage-publication-repair-${pipeline.id}-${stage.id}-${attempt.n}`;
-  try { return await ports.stageRepairDelivery(worker.attempt.conversationId, key, unixMs(repair.refusedAt) + COMMIT_REPAIR_WAIT_MS); }
-  catch { return { operationId: repair.delivery?.operationId ?? null, state: "unavailable" as const, safeToReplace: false }; }
+  const failed = repair.delivery?.state === "failed" ? repair.delivery : undefined;
+  try {
+    const current = await ports.stageRepairDelivery(worker.attempt.conversationId, key, unixMs(repair.refusedAt) + COMMIT_REPAIR_WAIT_MS);
+    // A read outage cannot erase a terminal receipt for this same operation.
+    return current.state === "unavailable" && failed && (!current.operationId || current.operationId === failed.operationId) ? failed : current;
+  } catch { return failed ?? { operationId: repair.delivery?.operationId ?? null, state: "unavailable" as const, safeToReplace: false }; }
 }
 
 type RepairProducerEvidence = { conversationId: string; active: boolean | null;
@@ -4879,9 +4883,12 @@ function publicationRepairProducerRefusal(pipeline: Pipeline, attempt: PipelineS
   const noDispatch = delivery?.safeToReplace === true && delivery.state === "unreserved"
     && evidence.delivery === delivery && !!repair
     && unixMs(ports.now()) >= unixMs(repair.refusedAt) + COMMIT_REPAIR_WAIT_MS;
-  if (active === true || durable?.turn === "busy" || ports.conversationDeliveryOutstanding?.(worker.conversationId)
+  // An orphan can retain an open transcript turn and queued projection. The
+  // current host's affirmative death evidence supersedes those stale markers.
+  const gone = !!repair && active === false;
+  if (!gone && (active === true || durable?.turn === "busy" || ports.conversationDeliveryOutstanding?.(worker.conversationId)
     || liveBackgroundTasks(durable?.backgroundTasks ?? [], unixMs(ports.now())).length > 0
-    || active !== false && !finished && !noDispatch && !failed) return refusal;
+    || active !== false && !finished && !noDispatch && !failed)) return refusal;
   if (repair) {
     if (delivery) repair.delivery = delivery;
     if (!repair.settledAt && (failed || noDispatch || active === false)) {

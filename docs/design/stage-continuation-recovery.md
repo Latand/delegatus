@@ -15,9 +15,12 @@ After a failed or expired repair, `resolve-decision` and `retry-stage` accept
 recovery when delivery failed, the producer is gone, the producer finished, or
 an expired reservation proves no dispatch. A failed delivery can retain
 duplicate-risk evidence from an earlier dispatch; that evidence alone does
-not keep the repair pending. An active turn, live background work or another
-outstanding message still refuses recovery. Unknown producer activity with an
-uncertain delivery also refuses. The refusal names the delivery operation and
+not keep the repair pending. A confirmed gone producer releases stale busy and
+queued markers from its old transcript and projection. Live or unverified
+producers retain the active-turn, background-work and outstanding-message
+guards. Unknown producer activity with an uncertain delivery also refuses.
+A stored failed receipt survives a read outage for the same operation.
+The refusal names the delivery operation and
 its current state. Producer and receipt reads occur outside the shared pipeline
 mutation lease; revision, attempt and repair identity guards apply afterwards.
 

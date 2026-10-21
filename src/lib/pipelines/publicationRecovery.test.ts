@@ -141,6 +141,49 @@ test.each(["resolve-decision", "retry-stage"] as const)("live queued repair stil
   } finally { f.close(); }
 });
 
+test.each((["resolve-decision", "retry-stage"] as const).flatMap(action =>
+  (["stale-turn", "failed-receipt", "unavailable-receipt", "different-operation"] as const).map(kind => ({ action, kind })),
+))("repair terminal evidence for $kind ($action)", async ({ action, kind }) => {
+  const f = await fixture();
+  try {
+    let clock = Date.parse("2026-10-16T10:00:00.000Z");
+    f.h.ports.now = () => new Date(clock).toISOString();
+    f.h.ports.resumeSeveredTurn = async () => true;
+    await f.commit("implementation"); f.refuse(); await f.finish();
+    clock += 21 * 60_000;
+    await tickPipelines([], f.h.ports);
+    const parked = current();
+    if (kind !== "stale-turn") {
+      parked.runs[0]!.attempts[0]!.publicationRepair!.delivery = {
+        operationId: "failed-repair", state: "failed", safeToReplace: false,
+      };
+      savePipelines([parked]);
+    }
+    f.h.ports.conversationAgentActive = async () => kind === "stale-turn" ? false : null;
+    f.h.ports.durableTurnEvidence = async () => kind === "stale-turn" ? { turn: "busy", message: null,
+      backgroundTasks: [{ id: "stale-command", kind: "command", startedAt: clock - 60_000, expiresAt: null }] } : null;
+    f.h.ports.conversationDeliveryOutstanding = () => kind === "stale-turn";
+    f.h.ports.stageRepairDelivery = async () => {
+      if (kind === "unavailable-receipt" || kind === "different-operation") return {
+        operationId: kind === "different-operation" ? "replacement-send" : "failed-repair", state: "unavailable", safeToReplace: false,
+      };
+      throw new Error("delivery store unavailable");
+    };
+    const result = await rawPatchPipeline(parked.id, { action,
+      ...(action === "resolve-decision" ? { clientRequestId: `terminal-${kind}`, answer: "Continue after the terminal repair.",
+        expectedStageId: "build", expectedAttempt: 1, expectedRevision: pipelineRevision(parked) } : {}),
+    }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
+    if (kind === "different-operation") {
+      expect(result.status).toBe(409);
+      expect(result.error).toContain("operation replacement-send; delivery unavailable");
+      expect(current().runs[0]!.attempts).toHaveLength(1);
+    } else {
+      expect(result.error).toBeUndefined();
+      expect(current().runs[0]!.attempts).toHaveLength(action === "resolve-decision" ? 2 : 1);
+    }
+  } finally { f.close(); }
+});
+
 test("retry rechecks repair identity after asynchronous delivery evidence", async () => {
   const f = await fixture();
   try {
