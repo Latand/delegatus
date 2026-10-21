@@ -54,6 +54,21 @@ test("records a remaining-quota sample per window and persists it", () => {
   expect(readHistory().series["claude|acct|session"]).toHaveLength(1);
 });
 
+test("legacy Codex samples are excluded and retained in quarantine on the next write", () => {
+  const file = path.join(dir, "limits-history.json"), t = 1_700_000_000;
+  const mixed = [{ t, remaining: 96 }, { t: t + 300, remaining: 85 }];
+  fs.writeFileSync(file, JSON.stringify({ version: 1, since: new Date(t * 1000).toISOString(), series: {
+    "codex|a|weekly": mixed, "claude|a|weekly": [{ t, remaining: 50 }],
+  } }));
+  expect(historySamples("codex", "a", "weekly", t + 600)).toEqual([]);
+  expect(historySamples("claude", "a", "weekly", t + 600)).toEqual([{ t, remaining: 50 }]);
+  recordLimitSample("codex", "a", limits(20, 30), (t + 600) * 1000);
+  expect(historySamples("codex", "a", "weekly", t + 600)).toEqual([{ t: t + 600, remaining: 70 }]);
+  expect(JSON.parse(fs.readFileSync(file, "utf8")).unattributedCodexSeries).toEqual({ "codex|a|weekly": mixed });
+  recordLimitSample("claude", "b", limits(10, 10), (t + 900) * 1000);
+  expect(JSON.parse(fs.readFileSync(file, "utf8")).unattributedCodexSeries).toEqual({ "codex|a|weekly": mixed });
+});
+
 test("downsamples samples closer than five minutes apart", () => {
   const t0 = 1_700_000_000_000;
   recordLimitSample("codex", "acct", limits(10, 10), t0);

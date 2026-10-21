@@ -23,6 +23,11 @@ const WINDOWS: WindowKey[] = ["session", "weekly"];
 
 interface HistoryFile {
   version: 1;
+  /** Only samples collected with account attribution enter Codex series. */
+  codexAttributionVersion: 1;
+  /** Legacy values have no recoverable per-reading identity. Retain them for
+   * inspection, outside every chart and calibration reader. */
+  unattributedCodexSeries: Record<string, LimitSample[]>;
   /** ISO of the first sample ever recorded — the "history builds from" hint. */
   since: string | null;
   /** `${engine}|${accountId}|${window}` → samples, oldest first. */
@@ -38,7 +43,7 @@ function seriesKey(engine: EngineName, accountId: string, window: WindowKey): st
 }
 
 function emptyHistory(): HistoryFile {
-  return { version: 1, since: null, series: {} };
+  return { version: 1, codexAttributionVersion: 1, unattributedCodexSeries: {}, since: null, series: {} };
 }
 
 function isSample(value: unknown): value is LimitSample {
@@ -52,10 +57,17 @@ export function readHistory(): HistoryFile {
     const raw = JSON.parse(fs.readFileSync(historyFile(), "utf8")) as Partial<HistoryFile>;
     if (raw.version !== 1 || !raw.series || typeof raw.series !== "object") return emptyHistory();
     const series: Record<string, LimitSample[]> = {};
-    for (const [key, value] of Object.entries(raw.series)) {
-      if (Array.isArray(value)) series[key] = value.filter(isSample);
+    const unattributedCodexSeries: Record<string, LimitSample[]> = {};
+    for (const [key, value] of Object.entries(raw.unattributedCodexSeries ?? {})) {
+      if (key.startsWith("codex|") && Array.isArray(value)) unattributedCodexSeries[key] = value.filter(isSample);
     }
-    return { version: 1, since: typeof raw.since === "string" ? raw.since : null, series };
+    for (const [key, value] of Object.entries(raw.series)) {
+      if (!Array.isArray(value)) continue;
+      const target = key.startsWith("codex|") && raw.codexAttributionVersion !== 1 ? unattributedCodexSeries : series;
+      target[key] = value.filter(isSample);
+    }
+    return { version: 1, codexAttributionVersion: 1, unattributedCodexSeries,
+      since: typeof raw.since === "string" ? raw.since : null, series };
   } catch {
     // A missing or unreadable history file is simply an empty series.
     return emptyHistory();

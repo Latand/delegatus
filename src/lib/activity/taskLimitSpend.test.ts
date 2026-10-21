@@ -6,6 +6,7 @@ import { ActivityStore, conversationDigest, type TurnOwner } from "./store";
 import { commitUsage, DAY, HOUR, maintainUsage } from "./tokenStore";
 import { usageRecord, USAGE_NOW } from "./tokenUsage.fixture";
 import { refreshTaskLimitSpend, readTaskLimitSpend, TASK_SPEND_DUE_SQL, type SpendDependencies } from "./taskLimitSpend";
+import { LIMIT_RATE_SCHEMA } from "./limitRates";
 import type { BoardTask } from "@/lib/tasks/types";
 
 let root: string, store: ActivityStore;
@@ -221,7 +222,7 @@ test("incomplete token coverage keeps a priced task total at a lower bound until
     store.db.query("INSERT INTO usage_limit_rates VALUES(?,?,?,?,?,?,?,?,?,?)")
       .run("claude:a","weekly",day,2,20,10,"own","max",1,USAGE_NOW);
     store.db.query(`UPDATE limit_spend_meta SET seed='done',task_revision=1,task_key='',pipeline_revision=1,pipeline_key='',pipeline_seed='done',
-      aggregate_schema=2,rate_schema=3,rates_hour=?`).run(Math.floor(USAGE_NOW/HOUR));
+      aggregate_schema=2,rate_schema=${LIMIT_RATE_SCHEMA},rates_hour=?`).run(Math.floor(USAGE_NOW/HOUR));
   });
   deps.observations=()=>new Map([["claude:a",{session:null,weekly:{usedPercent:30,resetsAt:USAGE_NOW/1000+7*86400},plan:"max",capturedAt:USAGE_NOW/1000}]]);
   await refreshTaskLimitSpend(store,deps);
@@ -248,7 +249,7 @@ test("a finalized task retains its persisted spend after hourly retention and an
   store.db.query("INSERT INTO usage_hours VALUES('',?,?,?,?,?,?,NULL,'builder','operator',NULL,NULL,1,1000000,0,0,0,0,0)")
     .run(oldHour,"expired","claude-sonnet-5","standard","claude:a","claude");
   store.db.query(`UPDATE limit_spend_meta SET seed='done',task_revision=1,task_key='',pipeline_revision=1,pipeline_key='',pipeline_seed='done',
-    aggregate_schema=2,rate_schema=3,rates_hour=?`).run(currentHour);
+    aggregate_schema=2,rate_schema=${LIMIT_RATE_SCHEMA},rates_hour=?`).run(currentHour);
   store.db.query("INSERT INTO limit_spend_rate_changes VALUES(?,?, '')").run("claude:a",new Date(now).toISOString().slice(0,10));
   store.transaction(()=>maintainUsage(store.db,now,"Europe/Kyiv"));
   expect(store.db.query("SELECT * FROM usage_hours WHERE conversation='expired'").all()).toEqual([]);
@@ -289,8 +290,56 @@ test("a failed rate refresh retries durably without advancing its hourly gate",a
   deps.history=()=>{throw new Error("fixture history unavailable");};
   await expect(refreshTaskLimitSpend(store,deps)).rejects.toThrow("fixture history unavailable");
   expect(store.db.query<{rates_hour:number},[]>("SELECT rates_hour FROM limit_spend_meta").get()!.rates_hour).toBe(-1);
+  expect(store.db.query<{rate_schema:number},[]>("SELECT rate_schema FROM limit_spend_meta").get()!.rate_schema).toBeLessThan(LIMIT_RATE_SCHEMA);
+  store.close(); store = ActivityStore.open(path.join(root, "records.sqlite"));
   deps.history=()=>({series:{}}); await refreshTaskLimitSpend(store,deps);
   expect(store.db.query<{rates_hour:number},[]>("SELECT rates_hour FROM limit_spend_meta").get()!.rates_hour).toBe(Math.floor(USAGE_NOW/3600000));
+  expect(store.db.query<{rate_schema:number},[]>("SELECT rate_schema FROM limit_spend_meta").get()!.rate_schema).toBe(LIMIT_RATE_SCHEMA);
+});
+
+test("corrected Codex history invalidates frozen rates in bounded pages across reopen and recalibrates task spend", async () => {
+  const now = Date.parse("2026-10-18T12:00:00Z"), day = Date.parse("2026-10-17T00:00:00Z");
+  const deps = world([task("a", ["work"])]); deps.now = () => now;
+  deps.observations = () => new Map([["codex:a", { session: null, weekly: null, plan: "pro", capturedAt: now / 1000 }]]);
+  deps.history = () => ({ series: { "codex|a|weekly": [
+    { t: (day - 6 * DAY) / 1000, remaining: 90 }, { t: (day + HOUR) / 1000, remaining: 70 },
+    { t: day / 1000 + 86400 - 60, remaining: 70 }, { t: now / 1000, remaining: 70 },
+  ] } });
+  const put = store.db.query("INSERT INTO usage_limit_rates VALUES(?,?,?,?,?,?,?,?,?,?)");
+  for (let i = 0; i < 201; i++) put.run("codex:retired", "weekly", new Date(now - (10 + i) * DAY).toISOString().slice(0,10), 99, 99, 1, "own", "pro", 1, now);
+  put.run("codex:a", "weekly", "2026-10-17", 99, 99, 1, "own", "pro", 1, now);
+  put.run("claude:unrelated", "weekly", "2026-01-01", 7, 14, 2, "own", "max", 1, now);
+  store.db.query("INSERT INTO usage_hours VALUES('',?,?,?,?,?,?,NULL,'builder','operator',NULL,NULL,1,1000000,0,0,0,0,0)")
+    .run(day / HOUR, conversationDigest("work"), "gpt-6.1-sol", "standard", "codex:a", "codex");
+  store.db.query("UPDATE usage_meta SET complete=1,pending_bytes=0,counted_from=?").run(now - 8 * DAY);
+  store.db.query("UPDATE limit_spend_meta SET rate_schema=3,rates_hour=?").run(Math.floor(now/HOUR));
+  await refreshTaskLimitSpend(store, deps);
+  expect(store.db.query<{n:number},[]>("SELECT COUNT(*) AS n FROM usage_limit_rates WHERE account LIKE 'codex:%'").get()!.n).toBe(2);
+  expect(store.db.query<{rate_schema:number},[]>("SELECT rate_schema FROM limit_spend_meta").get()!.rate_schema).toBe(3);
+  store.close(); store = ActivityStore.open(path.join(root, "records.sqlite"));
+  for (let i = 0; i < 4; i++) await refreshTaskLimitSpend(store, deps);
+  expect(store.db.query<{rate_schema:number},[]>("SELECT rate_schema FROM limit_spend_meta").get()!.rate_schema).toBe(4);
+  const row = store.db.query<{rise:number;rate:number;frozen:number},[]>("SELECT rise,rate,frozen FROM usage_limit_rates WHERE account='codex:a' AND window='weekly' AND day='2026-10-17'").get()!;
+  expect(row.rise).toBe(20); expect(row.rate).toBeGreaterThan(0); expect(row.rate).not.toBe(99); expect(row.frozen).toBe(1);
+  expect(store.db.query("SELECT * FROM usage_limit_rates WHERE account='codex:retired'").all()).toEqual([]);
+  expect(store.db.query<{rate:number},[]>("SELECT rate FROM usage_limit_rates WHERE account='claude:unrelated' AND day='2026-01-01'").get()!.rate).toBe(7);
+  const result = readTaskLimitSpend(store.db, ["a"], { canChoose: true }, deps).tasks.a!.providers[0]!;
+  expect(result.weeklyPp).toBeCloseTo(20);
+});
+
+test("rate correction refreshes a task that borrowed a retired account's rate from another day", async () => {
+  const deps = world([task("a", ["work"])]), hour = Math.floor(USAGE_NOW / HOUR) - 1;
+  store.db.query("INSERT INTO usage_hours VALUES('',?,?,?,?,?,?,NULL,'builder','operator',NULL,NULL,1,1000000,0,0,0,0,0)")
+    .run(hour, conversationDigest("work"), "gpt-6.1-sol", "standard", "codex:retired", "codex");
+  for (let i = 0; i < 4; i++) await refreshTaskLimitSpend(store, deps);
+  store.db.query("INSERT INTO usage_limit_rates VALUES(?,?,?,?,?,?,?,?,?,?)")
+    .run("codex:retired", "weekly", "2026-10-01", 99, 99, 1, "own", "pro", 1, USAGE_NOW);
+  store.db.query("UPDATE task_limit_spend SET weekly_pp=99,rated_weight=weight WHERE task='a'").run();
+  store.db.query("UPDATE limit_spend_meta SET rate_schema=3 WHERE singleton=1").run();
+  await refreshTaskLimitSpend(store, deps);
+  const provider = readTaskLimitSpend(store.db, ["a"], { canChoose: true }, deps).tasks.a!.providers[0]!;
+  expect(provider.bound).toBe("norate");
+  expect(provider.accounts![0]!.weeklyPp).toBeNull();
 });
 
 test("new owner usage after computation is kept dirty and cannot publish the stale total",async()=>{

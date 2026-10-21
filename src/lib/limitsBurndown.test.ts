@@ -1,10 +1,12 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 import { computePace } from "./burndown";
-import { buildSeries, collectCodexRateLimitSeries } from "./limits";
+import { buildSeries, collectCodexRateLimitSeries, readCodexLimits, readCodexTranscriptLimits } from "./limits";
+import { agentRegistry } from "./agent/registry";
+import { attributeQuotaFixture, updateQuotaRegistryFixture } from "./limitsQuota.fixture";
 
 let root: string;
 
@@ -17,7 +19,7 @@ afterEach(() => {
 });
 
 /** Write a Codex session JSONL under YYYY/MM/DD derived from `day`. */
-function writeSession(name: string, day: string, events: { ts: string; primary?: [number, number, number]; secondary?: [number, number, number] }[]): void {
+function writeSession(name: string, day: string, events: { ts: string; primary?: [number, number, number]; secondary?: [number, number, number] }[], attributed = true): void {
   const [y, m, d] = day.split("-");
   const dir = path.join(root, y, m, d);
   fs.mkdirSync(dir, { recursive: true });
@@ -30,6 +32,7 @@ function writeSession(name: string, day: string, events: { ts: string; primary?:
     }),
   );
   fs.writeFileSync(path.join(dir, name), lines.join("\n") + "\n", "utf8");
+  if (attributed) attributeQuotaFixture(path.join(dir, name), "fixture");
 }
 
 test("reconstructs primary/secondary curves across events with window metadata", () => {
@@ -39,7 +42,7 @@ test("reconstructs primary/secondary curves across events with window metadata",
     { ts: "2026-07-08T15:00:00.000Z", primary: [10, 300, reset5h], secondary: [40, 10080, resetWeek] },
     { ts: "2026-07-08T17:28:49.000Z", primary: [35, 300, reset5h], secondary: [58, 10080, resetWeek] },
   ]);
-  const series = collectCodexRateLimitSeries(root, 0);
+  const series = collectCodexRateLimitSeries(root, 0, "fixture");
   expect(series.session).toEqual([
     { t: Math.round(Date.parse("2026-07-08T15:00:00.000Z") / 1000), remaining: 90 },
     { t: Math.round(Date.parse("2026-07-08T17:28:49.000Z") / 1000), remaining: 65 },
@@ -60,7 +63,7 @@ test("a weekly-only stream backfills the weekly curve, not the 5h one", () => {
     { ts: "2026-07-08T15:00:00.000Z", primary: [15, 10080, resetWeek] },
     { ts: "2026-07-08T17:28:49.000Z", primary: [22, 10080, resetWeek] },
   ]);
-  const series = collectCodexRateLimitSeries(root, 0);
+  const series = collectCodexRateLimitSeries(root, 0, "fixture");
   expect(series.weekly.map((s) => s.remaining)).toEqual([85, 78]);
   expect(series.weeklyWindowSeconds).toBe(10080 * 60);
   expect(series.weeklyResetsAt).toBe(resetWeek);
@@ -77,15 +80,83 @@ test("drops events older than the cutoff and dedupes identical timestamps", () =
     { ts: "2026-07-08T12:00:00.000Z", primary: [99, 300, reset] }, // duplicate second → ignored
   ]);
   const cutoff = Math.round(Date.parse("2026-07-08T11:00:00.000Z") / 1000);
-  const series = collectCodexRateLimitSeries(root, cutoff);
+  const series = collectCodexRateLimitSeries(root, cutoff, "fixture");
   expect(series.session).toEqual([{ t: Math.round(Date.parse("2026-07-08T12:00:00.000Z") / 1000), remaining: 80 }]);
 });
 
 test("returns empty series for a sessions dir with no transcripts", () => {
-  const series = collectCodexRateLimitSeries(path.join(root, "missing"), 0);
+  const series = collectCodexRateLimitSeries(path.join(root, "missing"), 0, "fixture");
   expect(series.session).toEqual([]);
   expect(series.weekly).toEqual([]);
   expect(series.sessionResetsAt).toBeNull();
+});
+
+test("mixed-store backfill drops foreign, unknown and ambiguous account readings", () => {
+  const day = "2026-07-08", ts = `${day}T12:00:00.000Z`;
+  for (const [name, used] of [["own", 15], ["foreign", 96], ["unknown", 85], ["ambiguous", 99]] as const) {
+    writeSession(`${name}.jsonl`, day, [{ ts, primary: [used, 10080, 1_783_994_379] }], false);
+    if (name === "unknown") continue;
+    const file = path.join(root, "2026", "07", "08", `${name}.jsonl`);
+    const registry = agentRegistry();
+    const conversation = registry.ensureConversation("codex", file, name === "foreign" ? "b" : "a");
+    updateQuotaRegistryFixture(state => {
+      const generation = state.conversations[conversation.id]!.generations[0]!;
+      generation.createdAt = `${day}T00:00:00.000Z`;
+      generation.host = { kind: "codex-app-server", identity: "fixture-host", epoch: 1, verifiedAt: generation.createdAt };
+      if (name === "ambiguous") state.conversations[conversation.id]!.generations.push({ ...generation, id: "second", accountId: "b" });
+    });
+  }
+  expect(collectCodexRateLimitSeries(root, 0, "a").weekly).toEqual([{ t: Date.parse(ts) / 1000, remaining: 85 }]);
+  expect(collectCodexRateLimitSeries(root, 0, "b").weekly).toEqual([{ t: Date.parse(ts) / 1000, remaining: 4 }]);
+});
+
+test.each(["unverified", "before-start", "host-after-event", "archived", "continuity", "wrong-engine", "conflict", "unavailable"])("%s custody cannot enter backfill, live reconciliation or offline fallback", async kind => {
+  const ts = "2026-07-08T12:00:00.000Z", at = Date.parse(ts);
+  writeSession("untrusted.jsonl", "2026-07-08", [{ ts, primary: [100, 10080, at / 1000 + 86400] }]);
+  const file = path.join(root, "2026", "07", "08", "untrusted.jsonl"), registry = agentRegistry();
+  const conversation = registry.conversationForPath(file)!;
+  updateQuotaRegistryFixture(state => {
+    const row = state.conversations[conversation.id]!, generation = row.generations[0]!;
+    if (kind === "unverified") generation.host = null;
+    if (kind === "before-start") generation.createdAt = "2026-07-08T13:00:00.000Z";
+    if (kind === "host-after-event") generation.host!.verifiedAt = "2026-07-08T13:00:00.000Z";
+    if (kind === "archived") generation.archivedAt = ts;
+    if (kind === "continuity") { generation.path = path.join(root, "source.jsonl"); row.continuityPaths.push(file); }
+    if (kind === "wrong-engine") row.engine = "claude";
+    if (kind === "conflict") row.generations.push({ ...generation, id: "conflict", accountId: "foreign" });
+  });
+  fs.appendFileSync(file, JSON.stringify({ timestamp: ts, payload: { codex_error_info: "usage_limit_exceeded" } }) + "\n");
+  const refused = kind === "unavailable" ? spyOn(registry, "conversationForPath").mockImplementation(() => { throw new Error("fixture registry unavailable"); }) : null;
+  try {
+    expect(collectCodexRateLimitSeries(root, 0, "fixture").weekly).toEqual([]);
+    expect(readCodexTranscriptLimits(root, "fixture").data).toBeNull();
+    const account = { id: "fixture", kind: "managed" as const, home: path.dirname(root), sessionsDir: root };
+    const live = await readCodexLimits({ account, now: () => at, liveReader: async () => ({
+      primary: { usedPercent: 12, windowDurationMins: 10080, resetsAt: at / 1000 + 86400 }, secondary: null, planType: "pro",
+    }) });
+    expect(live.data?.weekly?.usedPercent).toBe(12);
+    const offline = await readCodexLimits({ account, now: () => at, liveReader: async () => { throw new Error("fixture offline"); } });
+    expect(offline.data).toBeNull();
+  } finally { refused?.mockRestore(); }
+});
+
+test("same-path account succession attributes events by their generation time", () => {
+  const ts = "2026-07-08T12:00:00.000Z", next = "2026-07-08T13:00:00.000Z";
+  writeSession("resumed.jsonl", "2026-07-08", [
+    { ts, primary: [15, 10080, 1_783_994_379] }, { ts: next, primary: [96, 10080, 1_783_994_379] },
+  ]);
+  const file = path.join(root, "2026", "07", "08", "resumed.jsonl"), registry = agentRegistry();
+  const conversation = registry.conversationForPath(file)!;
+  updateQuotaRegistryFixture(state => {
+    const row = state.conversations[conversation.id]!, first = row.generations[0]!;
+    first.archivedAt = next;
+    row.generations.push({ ...first, id: "successor", accountId: "b", createdAt: next, archivedAt: null,
+      host: { ...first.host!, verifiedAt: next } });
+  });
+  expect(collectCodexRateLimitSeries(root, 0, "fixture").weekly.map(s => s.remaining)).toEqual([85]);
+  expect(collectCodexRateLimitSeries(root, 0, "b").weekly.map(s => s.remaining)).toEqual([4]);
+  expect(readCodexTranscriptLimits(root, "fixture").data?.weekly?.usedPercent).toBe(15);
+  expect(readCodexTranscriptLimits(root, "b").data?.weekly?.usedPercent).toBe(96);
 });
 
 test("buildSeries drops pre-reset samples so a draining window after a rollover still projects", () => {
