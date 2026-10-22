@@ -1012,7 +1012,13 @@ test("a dropped call keeps its conversation on screen, offers the same call in o
     await click(document.querySelector("[data-voice-companion] [data-grip]"));
     await pause();
     expect(document.querySelector("[data-companion-transcript-view]")?.textContent).toContain("Check the search lane.");
+    /* The panel says the connection dropped, where a hung-up call says it ended. */
+    expect(document.querySelector(".vc-tr-sub")?.textContent).toContain("connection dropped");
+    expect(document.querySelector(".vc-tr-sub")?.textContent).not.toContain("ended");
     await click(document.querySelector("[data-voice-companion] [data-grip]"));
+    /* Reconnect is the one filled action while the call is offered; Talk, which starts a new call, steps back. */
+    expect(document.querySelector("[data-companion-resume]")?.hasAttribute("data-primary")).toBe(true);
+    expect(document.querySelector("[data-companion-talk]")?.hasAttribute("data-quiet")).toBe(true);
 
     /* One tap continues the same call. */
     await click(document.querySelector("[data-companion-resume]"));
@@ -1025,6 +1031,9 @@ test("a dropped call keeps its conversation on screen, offers the same call in o
     expect(document.querySelector<HTMLElement>("[data-voice-companion]")?.dataset.phase).not.toBe("offline");
     const restored = document.querySelector<HTMLElement>('[data-companion-notice][data-code="CONNECTION_RESTORED"]');
     expect(restored?.textContent).toContain(companionErrorMessage("CONNECTION_RESTORED", "en"));
+    /* The good news carries a confirming mark, not the alert's circled exclamation. */
+    expect(restored?.querySelector(".vc-notice-icon svg.lucide-check")).not.toBeNull();
+    expect(restored?.querySelector(".vc-notice-icon svg.lucide-circle-alert")).toBeNull();
     expect(document.querySelector('[data-companion-notice][data-code="CONNECTION_LOST"]')).toBeNull();
     expect(document.querySelector("[data-companion-resume]")).toBeNull();
     expect(document.querySelector("[data-companion-transcript]")?.textContent).toContain("Check the search lane.");

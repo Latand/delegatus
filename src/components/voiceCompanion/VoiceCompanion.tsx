@@ -1171,10 +1171,10 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     if (floater.kind === "notice") {
       return (
         <div className="vc-notice" role={floater.tone === "failure" ? "alert" : "status"} data-tone={floater.tone} data-code={floater.code} data-companion-notice>
-          <span className="vc-notice-icon" aria-hidden><CircleAlert size={14} /></span>
+          <span className="vc-notice-icon" aria-hidden>{floater.code === "CONNECTION_RESTORED" ? <Check size={14} /> : <CircleAlert size={14} />}</span>
           <span className="vc-notice-text">{companionErrorMessage(floater.code, speechLocaleOf(locale), { resetsAt: floater.resetsAt })}</span>
           {onOpenSettings && SETTINGS_FAILURES.has(floater.code) ? <button type="button" className="vc-act" data-companion-open-settings onClick={onOpenSettings}><Settings size={13} aria-hidden />{t("voiceCompanion.openSettings")}</button> : null}
-          {floater.code === "CONNECTION_LOST" && state.resumable ? <button type="button" className="vc-act" data-companion-resume disabled={starting} onClick={resume}><RotateCcw size={13} aria-hidden />{t("voiceCompanion.reconnect")}</button> : null}
+          {floater.code === "CONNECTION_LOST" && state.resumable ? <button type="button" className="vc-act" data-primary data-companion-resume disabled={starting} onClick={resume}><RotateCcw size={13} aria-hidden />{t("voiceCompanion.reconnect")}</button> : null}
         </div>
       );
     }
@@ -1300,7 +1300,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
       {typeof adapter.transcript === "function" ? <style>{TRANSCRIPT_CSS}</style> : null}
       {expanded && reading && readable && view ? (() => {
         const box = transcriptRect(viewportSize(), { ...at, ...block });
-        return <CompanionTranscript usage={state.usage ?? undefined} record={record ?? { entries: [], truncated: false }} left={box.x - at.x} top={box.y - at.y} width={box.width} height={box.height}
+        return <CompanionTranscript dropped={!connected && !starting && !!state.resumable} usage={state.usage ?? undefined} record={record ?? { entries: [], truncated: false }} left={box.x - at.x} top={box.y - at.y} width={box.width} height={box.height}
           onClose={() => { setReading(false); root.current?.querySelector<HTMLElement>("[data-grip]")?.focus(); }} />;
       })() : null}
       {expanded && shownLane ? (
@@ -1354,7 +1354,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
                 <button type="button" className="vc-btn" data-companion-end aria-label={t("voiceCompanion.end")} title={t("voiceCompanion.end")} onClick={end}><PhoneOff size={15} aria-hidden /></button>
               </>
             ) : (
-              <button type="button" className="vc-talk" data-companion-talk onClick={talk}><Mic size={13} aria-hidden />{t("voiceCompanion.talk")}</button>
+              <button type="button" className="vc-talk" data-quiet={state.resumable ? "" : undefined} data-companion-talk onClick={talk}><Mic size={13} aria-hidden />{t("voiceCompanion.talk")}</button>
             )}
             <button type="button" className="vc-btn" data-companion-collapse aria-label={t("voiceCompanion.collapse")} title={t("voiceCompanion.collapse")} aria-expanded onClick={() => toggle(true)}><Minimize2 size={15} aria-hidden /></button>
           </div>

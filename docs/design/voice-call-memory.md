@@ -645,8 +645,12 @@ The change (`src/lib/voiceCompanion/callResume.ts`):
   session's generations above the earlier ones, so the reducer's reconnect rule
   keeps settled lines and delivered work. The desktop lane keeps a "connection
   dropped" notice with **Reconnect** while the call is offered; the phone says it
-  in its bubble and puts **Reconnect** first in the head's menu. A reconnect says
-  "Connection restored" once.
+  in its bubble and puts **Reconnect** first in the head's menu. On the desktop
+  Reconnect is the filled action and **Talk**, which starts a new call, steps back
+  to an outline while the call is offered. The call's panel reads "connection
+  dropped · 0:14" in its header where a hung-up call reads "ended". A reconnect
+  says "Connection restored" once, with a check mark where a failure has the alert
+  icon.
 
 Speech still growing when the Viewer process dies is not in the journal, as
 before; a reconnect after such a restart continues from the last settled turn.

@@ -20,8 +20,8 @@ import type { SessionTranscriptRecord, TranscriptEntry } from "@/lib/voiceCompan
  */
 
 const LABELS = {
-  en: { title: "Conversation", live: "in progress", ended: "ended", close: "Close", args: "Arguments", result: "Result", toVoice: "Passed to the voice", open: "Show the conversation", empty: "Nothing said yet.", truncated: "Part of the conversation is not kept: the record reached its size limit.", request: "Request to the orchestrator", instruction: "Instruction", steps: "Delivery steps", copyMessage: "Copy message", showDetails: "Show details", hideDetails: "Hide details", reports: { message: "Message", progress: "Progress", result: "Result", question: "Question", blocked: "Blocked" } },
-  uk: { title: "Розмова", live: "триває", ended: "завершено", close: "Закрити", args: "Аргументи", result: "Результат", toVoice: "Передано голосу", open: "Показати розмову", empty: "Ще нічого не сказано.", truncated: "Частина розмови не збереглася: запис досяг межі розміру.", request: "Запит оркестратору", instruction: "Доручення", steps: "Кроки доставки", copyMessage: "Скопіювати повідомлення", showDetails: "Показати подробиці", hideDetails: "Сховати подробиці", reports: { message: "Повідомлення", progress: "Хід роботи", result: "Результат", question: "Питання", blocked: "Заблоковано" } },
+  en: { title: "Conversation", live: "in progress", ended: "ended", dropped: "connection dropped", close: "Close", args: "Arguments", result: "Result", toVoice: "Passed to the voice", open: "Show the conversation", empty: "Nothing said yet.", truncated: "Part of the conversation is not kept: the record reached its size limit.", request: "Request to the orchestrator", instruction: "Instruction", steps: "Delivery steps", copyMessage: "Copy message", showDetails: "Show details", hideDetails: "Hide details", reports: { message: "Message", progress: "Progress", result: "Result", question: "Question", blocked: "Blocked" } },
+  uk: { title: "Розмова", live: "триває", ended: "завершено", dropped: "зʼєднання обірвалося", close: "Закрити", args: "Аргументи", result: "Результат", toVoice: "Передано голосу", open: "Показати розмову", empty: "Ще нічого не сказано.", truncated: "Частина розмови не збереглася: запис досяг межі розміру.", request: "Запит оркестратору", instruction: "Доручення", steps: "Кроки доставки", copyMessage: "Скопіювати повідомлення", showDetails: "Показати подробиці", hideDetails: "Сховати подробиці", reports: { message: "Повідомлення", progress: "Хід роботи", result: "Результат", question: "Питання", blocked: "Заблоковано" } },
 } as const;
 export const transcriptLabels = (locale: string) => LABELS[locale === "uk" ? "uk" : "en"];
 
@@ -119,12 +119,14 @@ function Disclosure({ summary, children, name, label }: { summary: ReactNode; ch
   );
 }
 
-export function CompanionTranscript({ record, usage = record.usage, left, top, width, height, modal = false, onClose }: {
+export function CompanionTranscript({ record, usage = record.usage, left, top, width, height, modal = false, dropped = false, onClose }: {
   record: SessionTranscriptRecord;
   usage?: CompanionUsage;
   /* The box, from the companion's own corner. */
   left: number; top: number; width: number; height: number;
   modal?: boolean;
+  /* The call dropped and is offered again: the header says so, where a hung-up call says it ended. */
+  dropped?: boolean;
   onClose: () => void;
 }) {
   const { t, locale } = useLocale();
@@ -250,7 +252,7 @@ export function CompanionTranscript({ record, usage = record.usage, left, top, w
       <div className="vc-tr-head">
         <span className="vc-tr-title">{L.title}</span>
         {/* A Codex call's footer carries its length on the server clock, so the header does not add a second one. */}
-        <span className="vc-tr-sub">{ended ? L.ended : L.live}{usage?.backend === "codex" ? null : ` · ${clock(last)}`}</span>
+        <span className="vc-tr-sub">{dropped ? L.dropped : ended ? L.ended : L.live}{usage?.backend === "codex" ? null : ` · ${clock(last)}`}</span>
         <button type="button" className="vc-btn vc-tr-close" aria-label={L.close} title={L.close} data-transcript-close onClick={onClose}><X size={14} aria-hidden /></button>
       </div>
       <div ref={body} className="vc-tr-body" data-transcript-body onScroll={(event) => { const node = event.currentTarget; following.current = node.scrollTop + node.clientHeight >= node.scrollHeight - 40; }}>
