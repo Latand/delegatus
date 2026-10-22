@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 /** Static site names are the source map for a serving revision. Never pass
  * row identities, SQL text, paths or request arguments to this recorder. */
 export const performanceSites = [
+  "voice-tools.catalog", "voice-tools.spawn", "voice-tools.call",
   "state.write-wait", "state.sql-next", "state.json", "pipeline.validate", "pipeline.revive", "pipeline.identity",
   "pipeline.copy", "pipeline.yield", "pipeline.evidence", "pipeline.shared", "pipeline.refused",
   "registry.snapshot", "registry.headers", "registry.claims", "registry.row", "registry.keyed", "registry.prepare.slice", "registry.prepare.normalize", "registry.prepare.index", "registry.prepare.open",
