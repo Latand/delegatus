@@ -987,8 +987,15 @@ export async function registerViewerRuntime(): Promise<void> {
     await startManagedRetirementGuard(hotStateDirectory, activatedReleaseRevision);
     const durability = await startupBarrier.run(() => checkStateDatabasesBeforeStores(hotStateDirectory));
     assertStartupActive();
+    await startupBarrier.run(async () => {
+      const { prepareDeliveryLedgerIndexes } = await import("@/lib/memory/deliveryLedger");
+      await prepareDeliveryLedgerIndexes();
+    });
+    assertStartupActive();
     const { sweepOldLearnedRulesFiles } = await import("@/lib/memory/roleLaunch");
     try { sweepOldLearnedRulesFiles(); } catch { console.warn("[role-memory] old launch-file cleanup unavailable"); }
+    const { startRoleSelectionRetention } = await import("@/lib/memory/roleSelectionRetention");
+    startRoleSelectionRetention();
     const authority = await initializeHotStateStoresAtStartup(boundary, { signal: startupAbort.signal });
     const { ensureLegacyCollectionsImported } = await import("@/lib/state/legacyCollections");
     await ensureLegacyCollectionsImported();
