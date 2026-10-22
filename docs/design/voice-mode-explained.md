@@ -409,6 +409,18 @@ Browser  : microphone always open; voice audio plays; no local ducking
   the voice is silent and no backing turn runs (`codexProvider.ts:321-334`),
   because, in the code's words, "Standalone speech can be lost while a
   backing answer is being voiced" (`:321`).
+- **Report handoffs wait for recognized input and backend work.**
+  `CompanionLiveSessions` in `src/lib/voiceCompanion/liveSession.ts` holds due
+  parts from the first valid operator transcript fragment. An API delegation
+  keeps them held until its answer has been handed over and its work has
+  settled. A newer input generation survives an older delegation's completion.
+  For a direct voice answer, output starting at or after the latest input's
+  end releases the hold. Earlier overlapping output leaves it in place.
+  Live exposes no speech-start or turn-done event
+  ([transcript deltas](https://developers.openai.com/api/docs/guides/live-conversations#transcript-deltas)),
+  so this guard starts with recognized input. Microphone levels continue to
+  leave duplex audio alone. Every report part rechecks the hold; accepted
+  parts retain their `speechHanded` receipts and the rest resume in order.
 
 ---
 

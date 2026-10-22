@@ -44,7 +44,9 @@ phrase. It keeps your scope and sends independent requests separately.
 General knowledge, chat and content it can provide itself stay with the voice;
 it answers them or declines, even if you ask to send them to the orchestrator.
 It speaks the orchestrator's new reports once and keeps them in the call's
-transcript.
+transcript. Reports wait while it takes your request and handles its tools.
+After the answer, held report parts follow in order. You can still interrupt
+the voice and keep talking.
 
 - **Through the API (with a key).** The default. It uses your OpenAI API
   key, has a monthly spend cap, and shows what the call and the month cost.

@@ -172,6 +172,33 @@ test("reports wait through a backing turn and its later voice answer, and close 
   } finally { await f.close(); }
 });
 
+test("a report filed while the operator dictates waits for the voice's answer, then is voiced once", async () => {
+  const f = await fixture();
+  try {
+    f.replay(delta("user", "What tasks are"));
+    await until(() => f.admission.session(f.session.sessionId).inputs.length > 0);
+    await f.service.drain(f.session.sessionId);
+    f.reports.push({ id: "during-dictation", seq: 1, project: "fixture", at: "2026-10-11T00:00:00Z", class: "completed", body: "Held report.",
+      origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+    await f.service.events(f.session.sessionId, 0);
+    await Bun.sleep(50);
+    expect(f.wire().filter(row => row.method === "thread/realtime/appendSpeech")).toHaveLength(0);
+    expect(f.admission.reportSpeech(f.session.sessionId)).toMatchObject([{ reportId: "during-dictation", handed: 0 }]);
+    f.replay(delta("user", " open?"), done("user", "What tasks are open?"));
+    await until(() => f.admission.session(f.session.sessionId).inputs.some(row => row.final));
+    await f.service.events(f.session.sessionId, 0);
+    await Bun.sleep(50);
+    expect(f.wire().filter(row => row.method === "thread/realtime/appendSpeech")).toHaveLength(0);
+    await Bun.sleep(5);
+    f.replay(delta("assistant", "Nothing is open."), done("assistant", "Nothing is open."));
+    await until(() => f.wire().filter(row => row.method === "thread/realtime/appendSpeech").length === 1);
+    expect(f.wire().find(row => row.method === "thread/realtime/appendSpeech").params.text).toContain("Held report.");
+    await f.service.events(f.session.sessionId, 0);
+    await Bun.sleep(50);
+    expect(f.wire().filter(row => row.method === "thread/realtime/appendSpeech")).toHaveLength(1);
+  } finally { await f.close(); }
+}, 15_000);
+
 test("a project switch injects both model contexts once and the next projectless send uses the new project", async () => {
   const f = await fixture();
   try {
