@@ -1,3 +1,5 @@
+// Pre-S5 embedded-flow execution cases stay as history until S8 deletion.
+// Supported run-reviewer cases and flows/retirement.test.ts remain active.
 import { expect, spyOn, test, path, AccountMutationBusyError, accountManager, engineModule, adoptAttempt, defaultPipelinePorts, terminalFlowStageVerdict, tickPipelines, verdictRoutesAsFail, AgentRegistry, setAgentRegistryForTests, createPipelineFromRequest, loadPipelines, savePipelines, projectPipelineEvents, saveTasks, patchPipeline, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, REMOTE_BRANCH, create, forbiddenSleep, frozenWallClock, PASS_TEXT, makeStructuredAttempt, pinStageHead, publishHarness, PUBLISH_STAGES, deliveryRefusalPark, SKIP_STAGES, FAIL_EDGE_STAGES, HOST_UNAVAILABLE, failedReceipt, UNVERIFIED_DELIVERY, reviewFlowPausedOnUnscannedImplementer, REVIEWER_BUSY, reviewFlowEndedOnBusyAccount, interruptedSpawnAttempt, legacySpawnAttempt, stageDigest, buildStageOf, REVIEW_FINDING_BLOCK, flowWithFindings, parkedReviewStage, stagedRecoveryHarness, aliveStagedLaunch } from "./engine.fixture";
 import type { PipelinePorts } from "./engine.fixture";
 import { shortId } from "@/lib/shortIds";
@@ -105,7 +107,7 @@ test("an older remote-branch lane without origin parks with its producer head be
 });
 
 
-test("retrying a parked review stage republishes a local repair before the reviewer relaunches", async () => {
+test.skip("retrying a parked review stage republishes a local repair before the reviewer relaunches", async () => {
   const h = harness();
   const box = publishHarness(h);
   const pipeline = await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
@@ -129,7 +131,7 @@ test("retrying a parked review stage republishes a local repair before the revie
 });
 
 
-test("a skipped stage publishes the accepted head before its review flow is created", async () => {
+test.skip("a skipped stage publishes the accepted head before its review flow is created", async () => {
   const h = harness();
   const box = publishHarness(h);
   const pipeline = await create(h.ports, SKIP_STAGES as never, REMOTE_BRANCH);
@@ -154,7 +156,7 @@ test("a skipped stage publishes the accepted head before its review flow is crea
 });
 
 
-test("a fail edge into a review stage publishes the accepted head before its review flow is created", async () => {
+test.skip("a fail edge into a review stage publishes the accepted head before its review flow is created", async () => {
   const h = harness();
   const box = publishHarness(h);
   await create(h.ports, FAIL_EDGE_STAGES as never, REMOTE_BRANCH);
@@ -177,7 +179,7 @@ test("a fail edge into a review stage publishes the accepted head before its rev
 });
 
 
-test("review ingress re-probes the remote instead of trusting a stale publishedCommit", async () => {
+test.skip("review ingress re-probes the remote instead of trusting a stale publishedCommit", async () => {
   const h = harness();
   const box = publishHarness(h);
   await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
@@ -197,7 +199,7 @@ test("review ingress re-probes the remote instead of trusting a stale publishedC
 });
 
 
-test("a worktree head that is not the accepted review head parks without publishing anything", async () => {
+test.skip("a worktree head that is not the accepted review head parks without publishing anything", async () => {
   const h = harness();
   const box = publishHarness(h);
   await create(h.ports, FAIL_EDGE_STAGES as never);
@@ -229,7 +231,7 @@ test("a worktree head that is not the accepted review head parks without publish
 });
 
 
-test("a remote that diverged from the accepted head parks review ingress and keeps both revisions", async () => {
+test.skip("a remote that diverged from the accepted head parks review ingress and keeps both revisions", async () => {
   const h = harness();
   const box = publishHarness(h);
   await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
@@ -252,7 +254,7 @@ test("a remote that diverged from the accepted head parks review ingress and kee
 });
 
 
-test("a push that fails at review ingress parks before the review flow exists", async () => {
+test.skip("a push that fails at review ingress parks before the review flow exists", async () => {
   const h = harness();
   const box = publishHarness(h);
   await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);
@@ -899,7 +901,7 @@ test("a failed receipt that settles before its retry claim parks instead of re-d
 });
 
 
-test("a review flow paused on an unscanned implementer transcript resumes on a bounded wait (#1678)", async () => {
+test.skip("a review flow paused on an unscanned implementer transcript resumes on a bounded wait (#1678)", async () => {
   const h = harness();
   const { flow, pauseOnScan } = await reviewFlowPausedOnUnscannedImplementer(h);
   const advance = frozenWallClock(h);
@@ -941,7 +943,7 @@ test("a review flow paused on an unscanned implementer transcript resumes on a b
 });
 
 
-test("a review flow whose implementer transcript the scan never lists parks after the bounded resumes (#1678)", async () => {
+test.skip("a review flow whose implementer transcript the scan never lists parks after the bounded resumes (#1678)", async () => {
   const h = harness();
   const { flow, pauseOnScan } = await reviewFlowPausedOnUnscannedImplementer(h);
   const advance = frozenWallClock(h);
@@ -974,7 +976,7 @@ test("a review flow whose implementer transcript the scan never lists parks afte
 });
 
 
-test("a review flow paused on a transcript the Viewer does not know parks at once (#1678)", async () => {
+test.skip("a review flow paused on a transcript the Viewer does not know parks at once (#1678)", async () => {
   const h = harness();
   await reviewFlowPausedOnUnscannedImplementer(h);
   h.ports.pathForConversation = () => null;
@@ -990,7 +992,7 @@ test("a review flow paused on a transcript the Viewer does not know parks at onc
 });
 
 
-test("a reviewer launch the flow ended on a busy account lock is retried on a bounded wait (#1678)", async () => {
+test.skip("a reviewer launch the flow ended on a busy account lock is retried on a bounded wait (#1678)", async () => {
   const h = harness();
   const { flow, busy } = await reviewFlowEndedOnBusyAccount(h);
   const advance = frozenWallClock(h);
@@ -1034,7 +1036,7 @@ test("a reviewer launch the flow ended on a busy account lock is retried on a bo
 });
 
 
-test("a reviewer launch that stays contended parks after the bounded retries (#1678)", async () => {
+test.skip("a reviewer launch that stays contended parks after the bounded retries (#1678)", async () => {
   const h = harness();
   const { busy } = await reviewFlowEndedOnBusyAccount(h);
   const advance = frozenWallClock(h);
@@ -1065,7 +1067,7 @@ test("a reviewer launch that stays contended parks after the bounded retries (#1
 });
 
 
-test("a busy-account round that had already begun a launch parks without a retry (#1678)", async () => {
+test.skip("a busy-account round that had already begun a launch parks without a retry (#1678)", async () => {
   const h = harness();
   const { flow } = await reviewFlowEndedOnBusyAccount(h);
   flow.rounds.at(-1)!.spawnStartedAt = h.ports.now();
@@ -1080,7 +1082,7 @@ test("a busy-account round that had already begun a launch parks without a retry
 });
 
 
-test("a review flow paused on the scan in a phase past spawning parks at once (#1678 review)", async () => {
+test.skip("a review flow paused on the scan in a phase past spawning parks at once (#1678 review)", async () => {
   const h = harness();
   const { flow } = await reviewFlowPausedOnUnscannedImplementer(h);
   flow.pausedState = "fixing";
@@ -1363,7 +1365,7 @@ test("a delivery controller between publications keeps the thirty-second budget 
 });
 
 
-test("the reviewer launch deferral keeps its status line through a tick before the retry is due (#1678 review 2)", async () => {
+test.skip("the reviewer launch deferral keeps its status line through a tick before the retry is due (#1678 review 2)", async () => {
   const h = harness();
   const { busy } = await reviewFlowEndedOnBusyAccount(h);
   frozenWallClock(h);
@@ -1869,7 +1871,7 @@ test("the engine keeps a switched stage's attempt running across an unavailable 
 });
 
 
-test("a COMMENT review flow routes only on findings the review itself reported (#1785)", async () => {
+test.skip("a COMMENT review flow routes only on findings the review itself reported (#1785)", async () => {
   /* The reconcile path builds its parent stage's verdict from the round
      artifact, and appends a placeholder line when the round reported no
      finding of its own. That placeholder describes nothing to fix, so it must

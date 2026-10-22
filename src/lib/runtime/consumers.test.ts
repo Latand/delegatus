@@ -11,7 +11,7 @@ import { RuntimeJournal } from "@/runtime-host/journal";
 import { consumeRuntimeEvent, RuntimeConsumerDeferredError, type RuntimeConsumerPorts } from "./consumers";
 import { axesForEvent, runtimeScope, type RuntimeEvent, type RuntimeSessionAxes } from "./contracts";
 
-test("a hosted turn advances a flow without scanner polling", async () => {
+test("a hosted legacy flow turn is consumed without scheduling", async () => {
   const calls: string[] = [];
   const ports = {
     flowReady: (id: string, note: string | null) => { calls.push(`${id}:${note}`); },
@@ -33,10 +33,10 @@ test("a hosted turn advances a flow without scanner polling", async () => {
     correlationId: null,
   };
   await consumeRuntimeEvent(event, ports);
-  expect(calls).toEqual(["flow-1:REVIEW_READY: done"]);
+  expect(calls).toEqual([]);
 });
 
-test("a settled turn outside any flow reaches the completion-notice port, a flow turn only the flow (spawn-completion-notice §2)", async () => {
+test("a settled turn outside any flow reaches the completion-notice port; a flow turn is inert (spawn-completion-notice §2)", async () => {
   const seen: unknown[] = [];
   const flowReady: string[] = [];
   const ports = {
@@ -54,7 +54,7 @@ test("a settled turn outside any flow reaches the completion-notice port, a flow
   await consumeRuntimeEvent(event({ conversationId: "conversation_c", turnId: "t2", outcome: "completed", flowId: "flow-1" }), ports);
   await consumeRuntimeEvent(event({ conversationId: "conversation_c", turnId: "t3", outcome: "bogus" }), ports);
   expect(seen).toEqual([{ conversationId: "conversation_c", turnId: "t1", outcome: "error", startedAt: "2026-09-29T11:59:00.000Z", endedAt: "2026-09-29T12:00:00.000Z" }]);
-  expect(flowReady).toEqual(["flow-1"]);
+  expect(flowReady).toEqual([]);
 });
 
 test("issue 51 axes keep an active turn running through prose and item completion", () => {
@@ -81,8 +81,6 @@ test("every port's hot-state refusal is deferred under its own label; any other 
   const fenced = (): never => { throw new FileTransactionBusyError("hot state migration is waiting for release promotion"); };
   const ports: RuntimeConsumerPorts = { flowReady: fenced, workflowStageCompleted: fenced, taskDeliveryAcknowledged: fenced, spawnTurnEnded: fenced };
   const cases = [
-    ["flow readiness", runtimeEvent("turn-ended", { flowId: "flow-1", readyNote: "REVIEW_READY: done" })],
-    ["workflow stage completion", runtimeEvent("workflow.stage.completed", { workflowId: "workflow-1", stage: 0 })],
     ["task delivery", runtimeEvent("task.delivery.acked", { taskId: "task-1", assignmentId: "assignment-1" })],
     ["completion notice", runtimeEvent("turn-ended", { conversationId: "conversation_c", turnId: "t1", outcome: "completed" })],
   ] as const;
@@ -100,18 +98,19 @@ test("every port's hot-state refusal is deferred under its own label; any other 
   }
 });
 
-test("a fenced flow turn ahead of a fenced notice keeps the retry armed until both land, with no further call (#2867)", async () => {
+test("a retired flow turn is consumed while a fenced notice keeps retrying without another call (#2867)", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "runtime-consumer-retry-"));
   const journal = new RuntimeJournal(path.join(directory, "events.sqlite"));
   let fenced = true;
   let flowAttempts = 0;
+  let noticeAttempts = 0;
   const notices: string[] = [];
   const refuse = () => { throw new FileTransactionBusyError("hot state migration is waiting for release promotion"); };
   const host = new RuntimeHost(journal, {
     flowReady: () => { flowAttempts += 1; if (fenced) refuse(); },
     workflowStageCompleted: () => undefined,
     taskDeliveryAcknowledged: () => undefined,
-    spawnTurnEnded: (turn) => { if (fenced) refuse(); notices.push(turn.turnId); },
+    spawnTurnEnded: (turn) => { noticeAttempts++; if (fenced) refuse(); notices.push(turn.turnId); },
   }, undefined, undefined, undefined, undefined, undefined, 50);
   const append = (scope: string, turn: string, payload: Record<string, unknown>) => host.handle({ id: turn, method: "append", params: { event: {
     scope: runtimeScope("session", scope), kind: "turn-ended",
@@ -124,8 +123,9 @@ test("a fenced flow turn ahead of a fenced notice keeps the retry armed until bo
     /* The fence outlasts the first timed retry, which meets the flow turn
        first. */
     const outlast = Date.now() + 2_000;
-    while (flowAttempts < 3 && Date.now() < outlast) await Bun.sleep(10);
-    expect(flowAttempts).toBeGreaterThanOrEqual(2);
+    while (noticeAttempts < 3 && Date.now() < outlast) await Bun.sleep(10);
+    expect(flowAttempts).toBe(0);
+    expect(noticeAttempts).toBeGreaterThanOrEqual(2);
     fenced = false;
     /* Twenty retry intervals without a command, an append or a restart. */
     const deadline = Date.now() + 1_000;

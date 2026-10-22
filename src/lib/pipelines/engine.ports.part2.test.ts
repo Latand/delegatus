@@ -1,3 +1,5 @@
+// Pre-S5 embedded-flow execution cases stay as history until S8 deletion.
+// Supported run-reviewer cases and flows/retirement.test.ts remain active.
 import { startAutoAndSettle } from "./engineEnvironment.fixture";
 import { expect, spyOn, test, crypto, spawn, fs, os, path, activeDrain, DRAIN_LEASE_MS, initialAuto, writeAuto, initialCheck, SelfUpdateService, idleCheck, accountManager, realExec, engineModule, defaultPipelinePorts, tickPipelines, AgentRegistry, setAgentRegistryForTests, newRound, tickFlow, saveFlows, createPipelineFromRequest, registerPipelineTick, loadPipelines, savePipelines, pipelineIdentity, pipelineRevision, patchPipeline, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, REMOTE_BRANCH, finishReported, realWorktreeLane, create, publishHarness, PUBLISH_STAGES } from "./engine.fixture";
 import type { ServiceDeps, Snapshot } from "./engine.fixture";
@@ -513,7 +515,7 @@ test("fallback verdict preserves the pre-output PR head through real settlement 
 });
 
 
-test("a skipped legacy architect publishes its declared output to the review flow", async () => {
+test.skip("a skipped legacy architect publishes its declared output to the review flow", async () => {
   const fixture = await realWorktreeLane("legacy-architect-skip-review", [
     { id: "architect", kind: "run", role: { roleId: "architect" }, access: "read-only", outputs: ["fix.txt"], prompt: "Write fix", next: "review" },
     { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review fix", next: null },
@@ -549,7 +551,7 @@ test("a skipped legacy architect publishes its declared output to the review flo
 
 
 for (const publication of ["internal", "remote-branch"] as const) {
-test(`a legacy architect repair commits its declared output before ${publication} review`, async () => {
+test.skip(`a legacy architect repair commits its declared output before ${publication} review`, async () => {
   const fixture = await realWorktreeLane(`architect-review-repair-${publication}`, [
     { id: "architect", kind: "run", role: { roleId: "architect" }, access: "read-only", outputs: ["report.md"], prompt: "Write report", next: "review" },
     { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review report", next: null },
@@ -947,7 +949,7 @@ test("a failed CPU pressure sample admits the stage start", async () => {
 });
 
 
-test("automatic drain holds a new embedded legacy review stage and releases once", async () => {
+test.skip("automatic drain holds a new embedded legacy review stage and releases once", async () => {
   const h = harness();
   let held = false;
   h.ports.drainHold = () => held ? { id: "hold", target: "a".repeat(40), since: "2026-01-01T00:00:00Z", until: Number.MAX_SAFE_INTEGER } : null;

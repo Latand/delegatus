@@ -1,3 +1,5 @@
+// Pre-S5 execution expectations are retained until S8 removes the engine.
+// Active admission and archive invariants run in flows/retirement.test.ts.
 import { afterAll, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -54,7 +56,7 @@ afterAll(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-test.each(["local", "queued", "foreign", "timeout"] as const)("workflow stage admission under a %s holder", async kind => {
+test.skip.each(["local", "queued", "foreign", "timeout"] as const)("workflow stage admission under a %s holder", async kind => {
   const wf = buildWorkflow({
     id: `workflow-${kind}`, name: "Admission fixture", task: "Inspect the fixture",
     project: "workflow-fixture", repoDir: root, mode: "auto", now: new Date().toISOString(),
