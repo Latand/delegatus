@@ -285,7 +285,6 @@ test("other spawn errors retain immediate terminal behavior", async () => {
   expect(orchestratorSeatFor("atlas").history.at(-1)?.seat.intent.error).toBe("spawn transport failed");
 });
 
-
 for (const automatic of [false, true]) test(`a failed receipt after SQLite busy stays pending through ${automatic ? "automatic recovery" : "designation"} replay`, async () => {
   let failedReceipt = false;
   let calls = 0;
@@ -315,26 +314,31 @@ for (const automatic of [false, true]) test(`a failed receipt after SQLite busy 
   expect(orchestratorSeatFor("atlas").history).toEqual([]);
 });
 
-
 for (const terminal of [false, true]) test(`canonical seat request keeps its project through ${terminal ? "terminal failure" : "a busy retry and name change"}`, async () => {
   let target = "atlas";
-  const projects: unknown[] = [];
-  const deps = dependencies(async body => {
-    projects.push(body.project);
-    target = "other-project";
-    if (terminal) throw new Error("fixture terminal failure");
-    if (projects.length === 1) throw Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
-    return { status: 200, body: { ok: true, conversationId: "conversation_canonical_retry", path: null } };
-  });
+  let selections = 0;
+  const id = "conversation_canonical_retry";
+  const transcript = path.join(sandbox, "canonical-seat.jsonl");
+  fs.writeFileSync(transcript, "");
+  const deps = dependencies(async () => { throw new Error("fixture terminal failure"); });
   deps.resolveProject = () => ({ project: target, displayName: "Atlas Board" });
-  const result = await executeOrchestratorSeatRequest({ ...request, project: "Atlas Board", clientRequestId: "canonical-seat-request" }, deps);
+  deps.conversationTarget = () => {
+    if (++selections === 1) {
+      target = "other-project";
+      throw Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
+    }
+    return { kind: "eligible", conversationId: id, path: transcript, cwd: sandbox, project: "atlas", engine: "claude", model: "opus" };
+  };
+  const result = await executeOrchestratorSeatRequest({ ...request, project: "Atlas Board", clientRequestId: "canonical-seat-request",
+    ...(!terminal ? { conversationId: id } : {}),
+  }, deps);
   if (terminal) {
     expect(result.status).toBe(500);
     expect(orchestratorSeatFor("atlas")).toMatchObject({ active: null, pending: null, history: [{ seat: { intent: { error: "fixture terminal failure" } } }] });
   } else {
     expect(result.status).toBe(200);
-    expect(orchestratorSeatFor("atlas")).toMatchObject({ active: { conversationId: "conversation_canonical_retry" }, pending: null, history: [] });
-    expect(projects).toEqual(["atlas", "atlas"]);
+    expect(orchestratorSeatFor("atlas")).toMatchObject({ active: { conversationId: id }, pending: null, history: [] });
+    expect(selections).toBe(2);
   }
   expect(orchestratorSeatFor("other-project")).toMatchObject({ active: null, pending: null, history: [] });
 });
