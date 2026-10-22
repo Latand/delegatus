@@ -47,7 +47,7 @@ try {
   }, undefined, async (command, args, options, base) => {
     const diagnostic = path.join(root!, "wrapper.stderr");
     peerProcess = base(command, args, mode === "wrapped"
-      ? { ...options, env: { ...options.env, LLV_SIGNAL_DIAGNOSTIC: diagnostic } } : options);
+      ? { ...options, env: { ...options.env, NODE_ENV: options.env?.NODE_ENV ?? "test", LLV_SIGNAL_DIAGNOSTIC: diagnostic } } : options);
     if (mode === "wrapped") {
       while (!fs.existsSync(marker)) await Bun.sleep(10);
       fs.unlinkSync(diagnostic);
