@@ -181,6 +181,9 @@ export interface LessonRequestRow {
   ruleIds: string[];
   /** The one line an agent gave when it left no lesson. */
   none: string | null;
+  /** Self-reported use, validated against this attempt's delivery ledger. */
+  applied?: string[];
+  misled?: string[];
   rewrote?: string;
   problem?: ProblemInput;
   problemDeliveredAt?: string;

@@ -102,6 +102,7 @@ export function lessonRequestLines(handed: HandedFindings | null): string[] {
     "A rule is a generic instruction to do a check that changes behaviour on a different task. A concrete defect, inconsistency or documentation/specification mismatch in this project is a problem to report to its designated seat.",
     "- problem: {statement, evidence}, a short observed problem and the evidence for it. The seat decides whether to propose a task or issue and asks the operator; create none yourself. Concrete file paths and project-specific broken facts belong here; machine rules must hold across projects.",
     "No lesson may be about a task. What happened on this task alone (a pull request, commit, lane, id, incident, or one module's quirk) belongs in your stage report; leave_lesson refuses it and stores nothing.",
+    "Any answer may also carry applied and misled, each up to five distinct exact ids of rules this attempt received. applied changed what you did; misled was wrong or stale. Use each id in only one field.",
     ...(fixRound ? ["A mistake made in one file is a class when it can be made in another."] : []),
     "Every agent of a level reads all its rules: choose the narrowest true level:",
     "- role: only that role acts on it, in its own kind of work on this project; yours unless you name another. Reviewers and verifiers take no rules, so their own know-how has no memory scope.",
