@@ -3191,10 +3191,13 @@ export class SqliteAgentRegistryStore {
         const cursor = page?.after ? this.db.query<{ ending_ms: number | null; ending_text: string; operation_id: string }, [string]>(
           "SELECT ending_ms,ending_text,operation_id FROM registry_owner_endings WHERE operation_id=?").get(page.after) : null;
         const after = cursor ? { ms: cursor.ending_ms ?? Date.parse(cursor.ending_text), key: cursor.operation_id } : null;
+        // A redundant lower time bound makes SQLite seek from `since` again
+        // on every page. Once the cursor is in the window, seek by its tuple.
+        const range = after && after.ms >= ms ? after : null;
         const rows = this.db.query<{ operation_id: string; ending_ms: number }, (number | string)[]>(`SELECT e.operation_id,e.ending_ms FROM registry_owner_endings e
-          WHERE e.ending_ms>=? ${after ? "AND (e.ending_ms,e.operation_id)>(?,?)" : ""}
+          WHERE ${range ? "(e.ending_ms,e.operation_id)>(?,?)" : "e.ending_ms>=?"}
             AND EXISTS (SELECT 1 FROM registry_cold c WHERE c.collection='deliveryOperationOwners' AND c.row_key=e.operation_id)
-          ORDER BY e.ending_ms,e.operation_id LIMIT ?`).all(ms, ...(after ? [after.ms,after.key] : []), page?.limit ?? -1);
+          ORDER BY e.ending_ms,e.operation_id LIMIT ?`).all(...(range ? [range.ms,range.key] : [ms]), page?.limit ?? -1);
         for (const row of legacy) {
           const ending = Date.parse(row.ending_text);
           if (ending >= ms && (!after || ending > after.ms || (ending === after.ms && row.operation_id > after.key))) rows.push({ operation_id: row.operation_id, ending_ms: ending });

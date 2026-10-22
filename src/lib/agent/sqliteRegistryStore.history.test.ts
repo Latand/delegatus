@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { fullGC } from "bun:jsc";
 
@@ -539,7 +539,12 @@ test("archived endings page by normalized instant without fetching old owner pay
   expect(all.length).toBeGreaterThan(32);
   const page = archivedOwnersEndedSince(view, since, { limit: 16 })!;
   expect(page.length).toBe(16);
-  const next = archivedOwnersEndedSince(view, since, { limit: 16, after: page.at(-1)! })!;
+  const queries = spyOn(Database.prototype, "query");
+  let next: string[], pageSql: string | undefined;
+  try {
+    next = archivedOwnersEndedSince(view, since, { limit: 16, after: page.at(-1)! })!;
+    pageSql = queries.mock.calls.map(([sql]) => sql).find(sql => sql.includes("SELECT e.operation_id,e.ending_ms"));
+  } finally { queries.mockRestore(); }
   expect(next.length).toBe(16);
   expect(new Set([...page, ...next]).size).toBe(32);
   const db = new Database(dataset.filename, { readonly: true });
@@ -549,6 +554,13 @@ test("archived endings page by normalized instant without fetching old owner pay
     expect(plan).toContain("SEARCH");
     expect(plan).toContain("ending_ms>?");
     expect(plan).not.toContain("TEMP B-TREE");
+    // Inspect the actual paged reader: seeking only from `since` rescans all
+    // preceding pages. Both cursor columns must bound the index traversal.
+    expect(pageSql).toBeDefined();
+    const pagedPlan = db.query<{ detail: string }, number[]>(`EXPLAIN QUERY PLAN ${pageSql}`)
+      .all(...Array(pageSql!.match(/\?/g)!.length).fill(0)).map(row => row.detail).join(" ");
+    expect(pagedPlan).toContain("(ending_ms,operation_id)>(?,?)");
+    expect(pagedPlan).not.toContain("TEMP B-TREE");
   } finally { db.close(); }
 });
 
