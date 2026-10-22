@@ -4,7 +4,7 @@ import { statePath } from "@/lib/configDir";
 import { withFileTransactionSync } from "@/lib/state/fileTransaction";
 import { redactMonitorText } from "@/lib/monitor/redact";
 import type { CreatePipelineRequest } from "@/lib/pipelines/types";
-import type { ReleaseDecision } from "./policy";
+import type { ReleaseDecision, ReleaseOutcome } from "./policy";
 import type { ReleaseSettingChange } from "./settings";
 import type { SeatTickSettingsActor } from "@/lib/monitor/seatTickSettings";
 export interface ReleaseRun {
@@ -14,7 +14,7 @@ export interface ReleaseRun {
 }
 export interface ReleaseProject {
   live: ReleaseRun | null;
-  history: (ReleaseRun & { outcome: "published" | "failed" | "declined"; at: number })[];
+  history: (ReleaseRun & { outcome: ReleaseOutcome; at: number; reason?: string })[];
   request: { at: string; by: SeatTickSettingsActor; why: string | null; taskId?: string } | null;
   hold: { reason: string; at: string; by: SeatTickSettingsActor } | null;
   observation: (ReleaseDecision & { at: number; lastTag: string; nextEligibleAt: number }) | null;

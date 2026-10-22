@@ -7,7 +7,7 @@ import { effectiveSeatTickSettings } from "@/lib/monitor/seatTickSettings";
 import { ledgerDeployments } from "@/lib/runtime/deploymentLedger";
 import { repoDirForProject, viewerOwnProjectKeys, type SeatTickSources } from "@/lib/monitor/seatTickSources";
 import { createTask } from "@/lib/tasks/commands";
-import { mutateTasksFile } from "@/lib/tasks/store";
+import { loadTasksByIds, mutateTasksFile } from "@/lib/tasks/store";
 import { pipelineDeliveryLookup } from "@/lib/pipelines/store";
 import { createPipelineFromRequest } from "@/lib/pipelines/engine";
 import { productionReleaseController, releaseRequestDigest, type ReleasePorts } from "./run";
@@ -17,6 +17,46 @@ import { SEAT_TICK_WAKE_INTERVAL_MS } from "@/lib/monitor/seatTick";
 
 async function command(file: string, args: string[], cwd?: string): Promise<string> {
   return (await promisify(execFile)(file, args, { cwd, timeout: 30_000, maxBuffer: 4 * 1024 * 1024 })).stdout.trim();
+}
+/** Fetch before selecting: version order is independent of tagger clocks and backfills. */
+export async function latestReleaseTag(repoDir: string, run: typeof command = command) {
+  await run("git", ["fetch", "origin", "main", "--tags"], repoDir);
+  const lines = (await run("git", ["for-each-ref", "--sort=-version:refname", "--format=%(refname:short) %(creatordate:unix)", "refs/tags/v*"], repoDir)).split("\n");
+  const line = lines.find(line => /^v\d+\.\d+\.\d+ \d+$/.test(line));
+  if (!line) throw new Error("release waits for an existing version tag");
+  const [name, timestamp] = line.split(" ");
+  return { name, version: name.slice(1), at: Number(timestamp) * 1000 };
+}
+async function registryHasRelease(packageName: string, version: string): Promise<boolean> {
+  const response = await fetch(`https://registry.npmjs.org/${encodeURIComponent(packageName)}/${version}`, { signal: AbortSignal.timeout(15_000) });
+  if (!response.ok && response.status !== 404) throw new Error("release registry status is unreadable");
+  return response.ok && (await response.json() as { version?: string }).version === version;
+}
+/** A tag alone cannot prove publication, and an unrelated cut cannot supersede this run. */
+export async function supersedingReleaseTag(repoDir: string, saved: { cut: string; lastTag: string }, run: typeof command = command,
+  published: typeof registryHasRelease = registryHasRelease): Promise<string | null> {
+  const tag = await latestReleaseTag(repoDir, run);
+  const old = saved.lastTag.slice(1).split(".").map(BigInt);
+  const next = tag.version.split(".").map(BigInt);
+  const difference = next.findIndex((part, index) => part !== old[index]);
+  if (difference < 0 || next[difference] < old[difference]) return null;
+  const revision = await run("git", ["rev-parse", `${tag.name}^{commit}`], repoDir);
+  try { await run("git", ["merge-base", "--is-ancestor", saved.cut, revision], repoDir); }
+  catch (error) { if ((error as { code?: number }).code === 1) return null; throw error; }
+  const pkg = JSON.parse(await run("git", ["show", "origin/main:package.json"], repoDir));
+  return await published(pkg.name, tag.version) ? tag.name : null;
+}
+export async function changesSinceRelease(repoDir: string, tag: string, cut: string, run: typeof command = command): Promise<ReleaseChange[]> {
+  const git = (...args: string[]) => run("git", args, repoDir);
+  const changes: ReleaseChange[] = [];
+  const commits = (await git("log", "--first-parent", "--format=%H %s", `${tag}..${cut}`)).split("\n").filter(Boolean);
+  for (const line of commits) {
+    const space = line.indexOf(" "); const sha = line.slice(0, space); const subject = line.slice(space + 1);
+    if (!/(\(#\d+\)|Merge pull request #\d+)/.test(subject)) continue;
+    const files = (await git("diff", "--name-only", `${sha}^`, sha)).split("\n").filter(Boolean);
+    changes.push({ subject, files });
+  }
+  return changes;
 }
 /** `bun` is the host bridge in a container, just as it is for the capture agent.
     Never infer host tools from the image's filesystem or dev dependencies. */
@@ -104,13 +144,9 @@ export function releaseControllerForSources(sources: SeatTickSources) {
       const src = seat ? sources.registry().conversation(seat.conversationId as never)?.generations.at(-1)?.path : null;
       if (!src) throw new Error("release waits for an active seat transcript");
       const git = (...args: string[]) => command("git", args, repoDir);
-      await git("fetch", "origin", "main", "--tags");
+      const tag = await latestReleaseTag(repoDir);
       const main = await git("rev-parse", "origin/main");
-      const tagLines = (await git("for-each-ref", "--sort=-creatordate", "--format=%(refname:short) %(creatordate:unix)", "refs/tags/v*")).split("\n");
-      const tagLine = tagLines.find(line => /^v\d+\.\d+\.\d+ \d+$/.test(line));
-      if (!tagLine) throw new Error("release waits for an existing version tag");
-      const [name, timestamp] = tagLine.split(" ");
-      const version = name.slice(1); const at = Number(timestamp) * 1000;
+      const { name, version, at } = tag;
       const setting = { ...RELEASE_DEFAULTS, ...sources.settings(project).release };
       const isAncestor = async (a: string, b: string) => {
         try { await git("merge-base", "--is-ancestor", a, b); return true; }
@@ -122,20 +158,9 @@ export function releaseControllerForSources(sources: SeatTickSources) {
         if (d.phase === "succeeded" && d.terminal && await isAncestor(d.revision, main)) deployments.push({ revision: d.revision, at: Date.parse(d.updatedAt) });
       }
       const cut = frozenCut ? { revision: frozenCut } : await releaseCut(deployments, isAncestor, sources.now());
-      const changes: ReleaseChange[] = [];
-      if (cut) {
-        const commits = (await git("log", "--first-parent", "--format=%H %s", `${name}..${cut.revision}`)).split("\n").filter(Boolean);
-        for (const line of commits) {
-          const space = line.indexOf(" "); const sha = line.slice(0, space); const subject = line.slice(space + 1);
-          if (!/(\(#\d+\)|Merge pull request #\d+)/.test(subject)) continue;
-          const files = (await git("diff", "--name-only", `${sha}^`, sha)).split("\n").filter(Boolean);
-          changes.push({ subject, files });
-        }
-      }
+      const changes = cut ? await changesSinceRelease(repoDir, name, cut.revision) : [];
       const pkg = JSON.parse(await git("show", "origin/main:package.json"));
-      const response = await fetch(`https://registry.npmjs.org/${encodeURIComponent(pkg.name)}/${version}`, { signal: AbortSignal.timeout(15_000) });
-      if (!response.ok && response.status !== 404) throw new Error("release registry status is unreadable");
-      const registryHasTag = response.ok && (await response.json() as { version?: string }).version === version;
+      const registryHasTag = await registryHasRelease(pkg.name, version);
       const repo = await command("gh", ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"], repoDir);
       return { repoDir, src, policy: { now: sources.now(), enabled: setting.enabled, requested: false,
         tickEnabled: effectiveSeatTickSettings(sources.settings(project), sources.now(), SEAT_TICK_WAKE_INTERVAL_MS).enabled,
@@ -146,6 +171,13 @@ export function releaseControllerForSources(sources: SeatTickSources) {
         checks: await requiredReleaseChecks(repo, [main, ...(cut ? [cut.revision] : [])]), hold: null,
         draining: !!activeDrain(), deploying: ledger?.state === "ok" && !!ledger.value[0] && !ledger.value[0].terminal,
         tools: (await captureTools(repoDir)).missing, minChanges: setting.minChanges, minGapHours: setting.minGapHours, changes, deployments, isAncestor } };
+    },
+    taskDone: (project, id) => loadTasksByIds(new Set([id])).some(task => task.id === id
+      && canonicalOrchestratorProject(task.project) === project && task.status === "done"),
+    supersedingTag: async (project, run) => {
+      const repoDir = repoDirForProject(project, sources);
+      if (!repoDir) throw new Error("release repository is unavailable");
+      return supersedingReleaseTag(repoDir, run);
     },
     task: (project, run, adopted) => {
       if (adopted) {
