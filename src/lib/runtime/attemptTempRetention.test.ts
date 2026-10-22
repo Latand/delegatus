@@ -260,3 +260,21 @@ test("new arrivals cannot starve a due owner across helper restarts", async () =
   expect(await run(NOW + 60000)).toMatchObject({ checked: 1, removed: 1 });
   expect(fs.existsSync(old)).toBeFalse(); expect(fs.existsSync(arrival)).toBeTrue();
 }, 30000);
+
+
+test("the persisted total cap raises the default sweep budget, then returns to its normal bound", async () => {
+  const f = fixture();
+  const directories = Array.from({ length: 40 }, (_, n) => f.make(`capped-${n}`, (n + 2) * 86400000));
+  // Seed the same durable allocation projection a prior measurement writes;
+  // no large payload is needed to test the 100 GiB policy.
+  for (const directory of directories) f.store.measure(directory, 4 * 1024 ** 3);
+  f.store.close();
+  for (const expected of [32, 4]) {
+    const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "attemptTempRetention.fixture.ts"),
+      f.filename, String(NOW), "orphan", "--default-budget"], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+    expect(JSON.parse(stdout)).toMatchObject({ checked: expected, removed: expected, capBytes: 100 * 1024 ** 3 });
+  }
+  for (const [n, directory] of directories.entries()) expect(fs.existsSync(directory)).toBe(n < 4);
+}, 60000);

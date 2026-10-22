@@ -137,9 +137,43 @@ claim and changes no deployment or worktree-retirement policy.
 ## Verification
 
 Both behavioral regressions were run on base `6b5d8509` in scratch exports with
-isolated state: settlement left its fresh scratch present; a one-removal stale
+isolated state. The baseline export copied the production settlement and cap
+regressions into that revision, shared matching dependencies read-only, and ran:
+
+```sh
+bun run test src/lib/runtime/attemptTempProduction.test.ts src/lib/tempSweep.cap.test.ts -t 'production settlement|a capped stale sweep'
+```
+
+Both failed: settlement left its fresh scratch present, and the one-removal
 sweep selected the newer alphabetic root. The original 71 temp-sweep tests
-passed on that base. Focused checks cover real helper restarts, authority revocation before/after quarantine, process
-holders, evidence retention, symlink/inode replacement and recovery after a
-refused removal. The directory-reader race tests now inject at the streaming
-reader used by production. Final gate results are recorded in the stage report.
+also passed on that base.
+
+The full publication gate passed with zero failures in all 11 touched test
+files and all 17 scoped Linux test files. Types, privacy and changed-file
+ESLint passed. The command was:
+
+```sh
+gate-remote -- env LLV_OWNED_RUN_TIMEOUT_MS=1800000 bun scripts/local-gate.ts pre-push
+```
+
+The remote wrapper supplies private home, config, temp and state roots plus a
+closed control endpoint. Its comparator runs each explicit test file in fresh
+isolation. The shared quarantine consumer was also checked separately with
+`gate-remote -- bun scripts/local-gate-tests.ts --base 6b5d8509
+src/lib/pipelines/worktreeSweep.test.ts`: a complete green head needed no base
+sample.
+
+Coverage includes real helper restarts, arrival fairness, the default 100 GiB
+cap changing the removal budget from 32 back to four across restarted helpers,
+authority changes during filesystem inspection, late holders, idle checkout
+links, evidence retention, canonical path aliases, damaged Git metadata,
+quarantine replacement and recovery after a refused removal. Directory-reader
+races inject at the streaming reader used by production. The Unix-socket case
+uses a held directory descriptor so it also fits the comparator's deep roots.
+
+The remote runner has no Docker executable. The optional Docker case ran
+locally through the project gate in a scratch export with the locked dependency
+graph and isolated roots. A real container created a private 4 MiB payload
+owned by another uid. A pin retained it; after the pin was removed, namespace
+cleanup retired it and reported at least the payload's allocated bytes. No
+running installation or pre-existing directory was removed by these checks.
