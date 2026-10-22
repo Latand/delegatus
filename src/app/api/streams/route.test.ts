@@ -53,7 +53,7 @@ const connectionId = () => `route-connection-${String(++serial).padStart(4, "0")
 
 /** The connection as the browser's EventSource reads it. */
 function connect(id: string, headers: Record<string, string>) {
-  const response = GET(new NextRequest(`${ORIGIN}/api/streams?c=${id}`, { headers: { accept: "text/event-stream", ...headers } }));
+  const response = GET(new NextRequest(`${ORIGIN}/api/streams?c=${id}`, { headers: { host: "127.0.0.1:8898", accept: "text/event-stream", ...headers } }));
   expect(response.status).toBe(200);
   const reader = response.body!.getReader();
   const parser = createSseParser();
@@ -115,9 +115,9 @@ test("the proxy leaves this route to gate itself, and only this route", async ()
 
 test("without the access key the connection and its control are refused, as every other route is", async () => {
   process.env.LLV_TOKEN = "k".repeat(43);
-  expect(GET(new NextRequest(`${ORIGIN}/api/streams?c=${connectionId()}`)).status).toBe(403);
+  expect(GET(new NextRequest(`${ORIGIN}/api/streams?c=${connectionId()}`, { headers: { host: "127.0.0.1:8898" } })).status).toBe(403);
   expect((await POST(control(ops(connectionId()), {}))).status).toBe(403);
-  expect(GET(new NextRequest(`${ORIGIN}/api/streams?c=${connectionId()}`, { headers: { cookie: `llv_auth=${"k".repeat(43)}` } })).status).toBe(200);
+  expect(GET(new NextRequest(`${ORIGIN}/api/streams?c=${connectionId()}`, { headers: { host: "127.0.0.1:8898", cookie: `llv_auth=${"k".repeat(43)}` } })).status).toBe(200);
 });
 
 test("a member's channel opens while the session lives, and a control body that outlives it opens nothing", async () => {
@@ -201,3 +201,14 @@ function slowFrom(text: string): ReadableStream<Uint8Array> {
   body.end();
   return body.stream;
 }
+
+test("a foreign Host cannot open or control the multiplexed SSE connection", async () => {
+  const key = "test-access-key";
+  for (const keyed of [false, true]) {
+    if (keyed) process.env.LLV_TOKEN = key;
+    else delete process.env.LLV_TOKEN;
+    const headers = { host: "foreign.example.test:8898", ...(keyed ? { authorization: `Bearer ${key}` } : {}) };
+    expect(GET(new NextRequest(`${ORIGIN}/api/streams?c=${connectionId()}`, { headers })).status).toBe(403);
+    expect((await POST(control(ops(connectionId()), headers))).status).toBe(403);
+  }
+});

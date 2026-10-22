@@ -28,17 +28,20 @@ import { proxy } from "./proxy";
 
 const TOKEN = "t".repeat(43);
 const DESKTOP = { surface: "desktop" as const, browser: "chrome" as const };
-const previous = { token: process.env.LLV_TOKEN, state: process.env.LLV_STATE_DIR };
+const previous = { token: process.env.LLV_TOKEN, state: process.env.LLV_STATE_DIR, host: process.env.LLV_TS_HOST };
 let stateDir = "";
 
 beforeEach(() => {
   stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "llv-proxy-team-"));
   process.env.LLV_STATE_DIR = stateDir;
   process.env.LLV_TOKEN = TOKEN;
+  process.env.LLV_TS_HOST = "dev.example.net";
   resetTeamStoreForTests();
 });
 
 afterEach(() => {
+  if (previous.host === undefined) delete process.env.LLV_TS_HOST;
+  else process.env.LLV_TS_HOST = previous.host;
   resetTeamStoreForTests();
   if (previous.token === undefined) delete process.env.LLV_TOKEN;
   else process.env.LLV_TOKEN = previous.token;
@@ -57,11 +60,13 @@ describe("solo install", () => {
     expect(response.headers.get("x-middleware-next")).toBe("1");
   });
 
-  test("the deploy gate's keyless probe is refused at the perimeter", async () => {
+  test("the deploy gate's keyless probe reaches and is refused by the key gate", async () => {
     const probe = viewerHealthRequestPlan("https://dev.example.net", TOKEN, probeHeadersFrom(stateDir)).unauthorized!;
-    const response = proxy(new NextRequest(probe.url, { headers: probe.headers }));
+    const response = proxy(new NextRequest(probe.url, { headers: { host: new URL(probe.url).host, ...probe.headers } }));
     expect(response.status).toBe(403);
-    expect(viewerRefusesUnauthorized(response.status, await response.text())).toBe(true);
+    const body = await response.text();
+    expect(body).toContain("Access denied.");
+    expect(viewerRefusesUnauthorized(response.status, body)).toBe(true);
   });
 });
 
@@ -217,7 +222,9 @@ describe("team install: first-party callers name themselves and are checked", ()
       else delete process.env.LLV_TOKEN;
       const statuses: number[] = [];
       await requestRemotePipelineTick(async (input, init) => {
-        const response = proxy(new NextRequest(String(input), { method: init?.method, headers: init?.headers, body: init?.body as string }));
+        const headers = new Headers(init?.headers);
+        headers.set("host", new URL(String(input)).host);
+        const response = proxy(new NextRequest(String(input), { method: init?.method, headers, body: init?.body as string }));
         statuses.push(response.headers.get("x-middleware-next") === "1" ? 202 : response.status);
         return new Response("{}", { status: statuses.at(-1) });
       }, { LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:18898", ...(token ? { LLV_VIEWER_CONTROL_TOKEN: token } : {}) });
@@ -244,7 +251,9 @@ describe("team install: first-party callers name themselves and are checked", ()
         const reached: string[] = [];
         globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
           const url = String(input);
-          const response = proxy(new NextRequest(url, { method: init?.method, headers: init?.headers, body: init?.body as string }));
+          const headers = new Headers(init?.headers);
+          headers.set("host", new URL(url).host);
+          const response = proxy(new NextRequest(url, { method: init?.method, headers, body: init?.body as string }));
           if (response.headers.get("x-middleware-next") !== "1") return response;
           reached.push(`${init?.method ?? "GET"} ${new URL(url).pathname}`);
           return Response.json(init?.method === "POST" ? { deploymentId: "deploy-1", revision: SHA, state: "accepted" } : { tasks: [] });
@@ -271,12 +280,14 @@ describe("team install: first-party callers name themselves and are checked", ()
     }
   });
 
-  test("the deploy gate's keyless probe reads the team gate's refusal as refused", async () => {
+  test("the deploy gate's keyless probe reaches and is refused by the team gate", async () => {
     const plan = viewerHealthRequestPlan("https://dev.example.net", TOKEN, probeHeadersFrom(stateDir));
     const probe = plan.unauthorized!;
-    const response = proxy(new NextRequest(probe.url, { headers: probe.headers }));
+    const response = proxy(new NextRequest(probe.url, { headers: { host: new URL(probe.url).host, ...probe.headers } }));
     expect(response.status).toBe(401);
-    expect(viewerRefusesUnauthorized(response.status, await response.text())).toBe(true);
+    const body = await response.text();
+    expect(body).toContain("member_required");
+    expect(viewerRefusesUnauthorized(response.status, body)).toBe(true);
   });
 
   test("an anonymous browser write stays refused, with the key and without one", () => {
@@ -298,7 +309,7 @@ describe("team install: first-party callers name themselves and are checked", ()
       expect(proxy(get("/")).status).toBe(401);
       const plan = viewerHealthRequestPlan("https://dev.example.net", null, probeHeadersFrom(stateDir));
       for (const probe of [plan.root, plan.capability]) {
-        const response = proxy(new NextRequest(probe.url, { headers: probe.headers }));
+        const response = proxy(new NextRequest(probe.url, { headers: { host: new URL(probe.url).host, ...probe.headers } }));
         expect(response.headers.get("x-middleware-next")).toBe("1");
       }
     });
