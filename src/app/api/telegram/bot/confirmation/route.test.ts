@@ -33,7 +33,9 @@ let bootstrap: string;
 beforeEach(async () => {
   clock.mockReturnValue(Date.parse("2026-10-22T12:00:00Z"));
   transport = new FakeBotTransport();
+  let confirmationSequence = 0;
   service = new TelegramBotService({ ...productionTelegramBotDependencies(), transportFor: () => transport,
+    fileConfirmationId: () => `route-fixture-${++confirmationSequence}`,
     now: () => new Date(Date.now()), sleep: async () => {}, documentEnvironment: () => ({ home, stateDir: process.env.LLV_STATE_DIR! }) });
   setTelegramBotServiceForTests(service);
   setCallerConversationResolverForTests(digest => digest ? "conversation_fixture" : null);
@@ -164,7 +166,7 @@ test.each(["changed", "expired", "chat-revoked", "migrated", "uncertain"] as con
   expect(transport.callsOf("sendDocument")).toHaveLength(mode === "migrated" || mode === "uncertain" ? 1 : 0);
 });
 
-test("a changed photo album is refused before any image leaves", async () => {
+test("a changed photo is refused before any image leaves", async () => {
   const { view, filename } = await pending("media");
   await sharp({ create: { width: 2, height: 2, channels: 3, background: "red" } }).png().toFile(filename);
   const response = await POST(request("POST", { id: view.id, digest: view.digest, approve: true }));
