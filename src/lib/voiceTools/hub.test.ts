@@ -1,15 +1,21 @@
 import { afterEach, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { VoiceToolHub, resolveExecutable, voiceToolEnvironment } from "./hub";
 import { VoiceToolsStore } from "./store";
 import { approvalDigest, digest, type VoiceToolServer } from "./contracts";
 
 const roots: string[] = [];
 const listeners: ReturnType<typeof Bun.serve>[] = [];
+const stdioSandboxAvailable = process.platform === "linux" && ["/usr/bin/bwrap", "/bin/bwrap"].some(executable => {
+  if (!existsSync(executable)) return false;
+  return spawnSync(executable, ["--die-with-parent", "--unshare-user", "--ro-bind", "/", "/", "--", "true"], { stdio: "ignore", timeout: 2_000 }).status === 0;
+});
+const stdioSandboxTest = test.skipIf(!stdioSandboxAvailable);
 afterEach(async () => {
   for (const listener of listeners.splice(0)) await listener.stop(true);
   for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
@@ -143,7 +149,7 @@ test("probe cancellation and proposal replacement cannot publish a stale catalog
   await expect(new VoiceToolHub(store).dryRun("music", (await store.view()).servers.music.digest, preaborted.signal)).rejects.toThrow("CANCELLED");
 });
 
-test("stdio starts under the lease with a private environment, checks entry drift and is reaped", async () => {
+stdioSandboxTest("stdio starts under the lease with a private environment, checks entry drift and is reaped", async () => {
   const { store, root } = await setup();
   const entry = path.join(root, "fake");
   const changedCodeMarker = path.join(root, "changed-code-ran");
@@ -210,7 +216,7 @@ test("at most eight probes run, cancellation reaps them before admitting another
   } finally { controller.abort(); release.release(); await Promise.allSettled(pending); }
 }, 20_000);
 
-test("Bun pinned probes execute the pinned file through explicit file dispatch", async () => {
+stdioSandboxTest("Bun pinned probes execute the pinned file through explicit file dispatch", async () => {
   const cases = [
     { pinnedName: "exec", args: () => ["exec", `${process.execPath} ./actual.mjs`] },
     { pinnedName: "server", args: () => ["server"] },
@@ -253,7 +259,7 @@ test("missing credentials are recorded without starting the peer", async () => {
   expect(server.requests).toEqual([]);
 });
 
-test("a hanging stdio server that ignores TERM is reaped by its deadline without relaying stderr", async () => {
+stdioSandboxTest("a hanging stdio server that ignores TERM is reaped by its deadline without relaying stderr", async () => {
   const { store, root } = await setup(); const ready = barrier();
   const notify = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { ready.release(); return new Response("ready"); } }); listeners.push(notify);
   const entry = path.join(root, "hang.mjs");
@@ -280,7 +286,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{const m=JSON.pa
   expect(await fs.readdir(path.join(root, "helpers"))).toEqual([]);
 }, 15_000);
 
-test("the real deadline settles HTTP, TERM-resistant stdio and blocked preparation under an independent watchdog", async () => {
+stdioSandboxTest("the real deadline settles HTTP, TERM-resistant stdio and blocked preparation under an independent watchdog", async () => {
   const fixture = path.join(import.meta.dir, "hub.deadline.fixture.ts");
   for (const scenario of ["http", "stdio", "prepare"]) {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "voice-tools-watchdog-")); roots.push(root);
@@ -374,7 +380,7 @@ test("a proposal variable that would choose the binary, a preload or the Python 
   expect(await absent(preloadMarker)).toBe(true);
 });
 
-test("the probe worker launches the Viewer-resolved executable and drops launch variables a request still carries", async () => {
+stdioSandboxTest("the probe worker launches the Viewer-resolved executable and drops launch variables a request still carries", async () => {
   const { root } = await setup();
   const home = path.join(root, "home"), runDir = path.join(root, "run"); await fs.mkdir(home); await fs.mkdir(path.join(runDir, "cwd"), { recursive: true });
   await fs.writeFile(path.join(runDir, "config.toml"), "");
@@ -400,7 +406,7 @@ test("the probe worker launches the Viewer-resolved executable and drops launch 
   expect(await absent(preloadMarker)).toBe(true);
 }, 20_000);
 
-test("a bunfig preload and .env files in the working folder never run or load before a pinned Bun entry", async () => {
+stdioSandboxTest("a bunfig preload and .env files in the working folder never run or load before a pinned Bun entry", async () => {
   const { store, root } = await setup();
   const folder = path.join(root, "folder"); await fs.mkdir(folder);
   const marker = path.join(root, "preload-ran");
@@ -418,7 +424,7 @@ test("a bunfig preload and .env files in the working folder never run or load be
   expect(await absent(marker)).toBe(true);
 }, 20_000);
 
-test("bun x never runs a package binary planted in the proposed folder or the server's private home", async () => {
+stdioSandboxTest("bun x never runs a package binary planted in the proposed folder or the server's private home", async () => {
   const { store, root } = await setup();
   const marker = path.join(root, "planted-ran");
   const pkg = "delegatus-voice-tools-planted-probe-0";
@@ -442,7 +448,7 @@ test("bun x never runs a package binary planted in the proposed folder or the se
   expect(await fs.readdir(path.join(root, "voice-tools-runs")).catch(() => [])).toEqual([]);
 }, 20_000);
 
-test.skipIf(!Bun.which("uv"))("uv run neither builds a project nor starts a virtual environment found from the working folder", async () => {
+test.skipIf(!stdioSandboxAvailable || !Bun.which("uv"))("uv run neither builds a project nor starts a virtual environment found from the working folder", async () => {
   for (const scenario of ["project", "venv"] as const) {
     const { store, root } = await setup();
     const folder = path.join(root, "folder"); await fs.mkdir(folder);
@@ -510,7 +516,7 @@ else { ${pinnedServer("'Registry'").replace("import readline from 'node:readline
 `, { mode: 0o755 });
 }
 
-test.skipIf(process.platform === "win32")("the real probe worker refuses non-registry package targets before spawning the launcher", async () => {
+test.skipIf(process.platform === "win32" || !stdioSandboxAvailable)("the real probe worker refuses non-registry package targets before spawning the launcher", async () => {
   const { root } = await setup();
   const home = path.join(root, "home"), runRoot = path.join(root, "run"), runDir = path.join(runRoot, "cwd");
   await fs.mkdir(home); await fs.mkdir(runDir, { recursive: true });
@@ -590,7 +596,7 @@ test.each([
   expect(await absent(marker)).toBe(true);
 });
 
-test.skipIf(process.platform === "win32")("bun package resolution never executes echo from inherited PATH or a global bin", async () => {
+test.skipIf(process.platform === "win32" || !stdioSandboxAvailable)("bun package resolution never executes echo from inherited PATH or a global bin", async () => {
   const { store, root } = await setup();
   const marker = path.join(root, "path-echo-ran");
   const entry = path.join(root, "path-server.mjs");
@@ -611,7 +617,7 @@ test.skipIf(process.platform === "win32")("bun package resolution never executes
   } finally { if (previous === undefined) delete process.env.PATH; else process.env.PATH = previous; }
 }, 20_000);
 
-test.skipIf(process.platform === "win32")("registry controls discover and approve through the real store, hub and worker", async () => {
+test.skipIf(process.platform === "win32" || !stdioSandboxAvailable)("registry controls discover and approve through the real store, hub and worker", async () => {
   const { root, store } = await setup();
   const bin = path.join(root, "bin"); await fs.mkdir(bin);
   const marker = path.join(await externalRoot(), "launches");
@@ -639,7 +645,7 @@ test.skipIf(process.platform === "win32")("registry controls discover and approv
 }, 20_000);
 
 
-test.skipIf(process.platform === "win32")("the hub deadline reaps a TERM-resistant package installer before any entry runs", async () => {
+test.skipIf(process.platform === "win32" || !stdioSandboxAvailable)("the hub deadline reaps a TERM-resistant package installer before any entry runs", async () => {
   const { root, store } = await setup();
   const ready = barrier();
   const listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { ready.release(); return new Response("ready"); } });
@@ -667,7 +673,7 @@ test.skipIf(process.platform === "win32")("the hub deadline reaps a TERM-resista
   } finally { if (previous === undefined) delete process.env.PATH; else process.env.PATH = previous; }
 }, 20_000);
 
-test.skipIf(process.env.LLV_VOICE_REGISTRY_NETWORK_TEST !== "1")("public registry controls install, discover and approve with the real launchers", async () => {
+test.skipIf(process.env.LLV_VOICE_REGISTRY_NETWORK_TEST !== "1" || !stdioSandboxAvailable)("public registry controls install, discover and approve with the real launchers", async () => {
   for (const [command, args] of [
     ["bun", ["x", "@modelcontextprotocol/server-memory@2025.8.4"]],
     ["uv", ["tool", "run", "mcp-server-time==2026.10.19"]],
@@ -704,7 +710,7 @@ test("a proposal-chosen stdio dry run cannot read or send secrets saved for anot
   await store.propose({ name: "other", title: "Other", capability: "Search", transport: { type: "stdio", command: "bun", args: ["run", entry] },
     entryFile: { path: entry, sha256: sha(source) } }, actor);
   await new VoiceToolHub(store).dryRun("other", (await store.view()).servers.other.digest);
-  expect((await store.view()).servers.other.lastDryRun?.code).toBe("OK");
+  expect((await store.view()).servers.other.lastDryRun?.code).toBe(stdioSandboxAvailable ? "OK" : "START_FAILED");
   expect(received).toBeNull();
 });
 
