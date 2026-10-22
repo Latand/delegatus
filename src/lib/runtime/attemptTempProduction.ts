@@ -13,7 +13,7 @@ export async function attemptTempState(owner: AttemptTempOwner): Promise<Attempt
   const reader = pipelineRecordReader(owner.pipelineId), version = reader.version();
   const pipeline = reader.read();
   if (!pipeline) return "orphan";
-  if (pipeline.state === "closed") return "closed";
+  if (pipeline.state === "closed" || pipeline.state === "completed") return "closed";
   const matches = (attempt: PipelineStageAttempt) => attempt.launchId === owner.launchId
     || attempt.retiredLaunches?.some(retired => retired.launchId === owner.launchId);
   const run = pipeline.runs.find(run => run.attempts.some(matches));

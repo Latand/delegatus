@@ -81,10 +81,11 @@ Both child config variables resolve inside that root; forwarded forge config
 keeps its existing contract.
 
 Passed, failed, skipped and parked attempts are eligible after their last live
-process leaves. Checkout symlinks into an attempt root keep it through lane
+process leaves. Checkout symlinks into an attempt root keep it through lane completion or explicit
 close, including idle intervals between stages. Explicitly retired startup launches are matched in the
-attempt's retained launch history. Declared stage outputs retain their scratch until explicit lane
-close. Config sandboxes can retire at settlement. Published prototype media is
+attempt's retained launch history. Declared stage outputs retain their scratch until lane completion or explicit
+close. Both completed and explicitly closed lanes use the terminal cleanup
+state; remaining process holders still retain their roots. Config sandboxes can retire at settlement. Published prototype media is
 already copied into the durable publication store and remains governed by that
 store. Missing lane records are orphan candidates after the configured age;
 an unreadable owner or unmatched launch stays held. A registered owner marker
@@ -105,7 +106,11 @@ The separate `attempt-temp.sqlite` ledger selects due rows through an index.
 A normal minute tick examines at most four roots; measured usage above the cap
 raises that bound to 32. The due checkpoint commits before asynchronous work,
 so helper restarts preserve fairness. New roots enter at their creation time,
-so arrivals cannot jump ahead of a due retry. Registered roots use streamed native
+so arrivals cannot jump ahead of a due retry. A process-shared asynchronous
+file transaction owns each tick through its journal writes. Overlapping Viewer
+generations serialize their workers; a dead worker's lock is recovered using
+the existing process-identity check. Admission waits are bounded and recorded.
+Registered roots use streamed native
 inspection and allocation commands, each
 bounded to 15 seconds. Legacy snapshots and Windows inspection retain their
 200,000-entry ceiling. A constrained cleanup container can inspect and remove
@@ -165,6 +170,7 @@ sample.
 
 Coverage includes real helper restarts, arrival fairness, the default 100 GiB
 cap changing the removal budget from 32 back to four across restarted helpers,
+concurrent helper admission and recovery after the lock owner is killed,
 authority changes during filesystem inspection, late holders, idle checkout
 links, evidence retention, canonical path aliases, damaged Git metadata,
 quarantine replacement and recovery after a refused removal. Directory-reader

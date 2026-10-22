@@ -29,7 +29,7 @@ for await (const line of createInterface({ input: process.stdin })) {
   }
   if (kind === "attempt-temp") {
     fs.appendFileSync(path.join(directory, "requests"), kind + "\n");
-    process.stdout.write(JSON.stringify({ report: await runAttemptTempSweep({ scan: directories => scanProcesses("/proc", directories) }) }) + "\n");
+    process.stdout.write(JSON.stringify({ report: await runAttemptTempSweep({ scan: directories => scanProcesses("/proc", directories) }, { ...process.env, LLV_TEMP_SWEEP: "on" }) }) + "\n");
     continue;
   }
   if (kind === "temp" || kind === "disk-pressure") {

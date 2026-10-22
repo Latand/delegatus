@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Database } from "bun:sqlite";
 import { statePath } from "@/lib/configDir";
+import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { attemptTempJournalPath, sweepStaleTempDirs, isGateTempName, type ProcessScan } from "@/lib/tempSweep";
 import { allocatedAttemptBytes, attemptReferencesClear, inspectAttemptTree, removeAttemptTree } from "./attemptTempFilesystem";
 
@@ -65,6 +66,7 @@ export type AttemptTempSweepOptions = {
   now?: () => number;
   state: (owner: AttemptTempOwner) => Promise<AttemptTempState>;
   scan: (directories: readonly string[]) => ProcessScan;
+  references?: (original: string, current: string, scan: ProcessScan) => Promise<boolean>;
   maxRoots?: number;
   maxAgeMs?: number;
   capBytes?: number;
@@ -72,6 +74,12 @@ export type AttemptTempSweepOptions = {
   onRetired?: (count: number, bytes: number) => void;
 };
 export async function sweepAttemptTemps(store: AttemptTempStore, options: AttemptTempSweepOptions) {
+  // Serving generations may overlap. One process-shared owner must retain the
+  // journal through every await; the existing async lock recovers dead owners.
+  return withFileTransactionAsync(store.filename + ".sweep", "attempt-temp sweep admission", () => sweepOwnedAttemptTemps(store, options));
+}
+
+async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptTempSweepOptions) {
   const now = options.now ?? Date.now;
   const capBytes = options.capBytes ?? DEFAULT_ATTEMPT_TEMP_CAP_BYTES;
   const report = { checked: 0, removed: 0, removedBytes: 0, held: 0, errors: 0, bytes: store.bytes(), capBytes, overCapBytes: 0 };
@@ -95,7 +103,7 @@ export async function sweepAttemptTemps(store: AttemptTempStore, options: Attemp
         const settled = state === "closed" || state === "settled" && !owner.retainUntilClose
           || state === "orphan" && now() - owner.createdAt >= (options.maxAgeMs ?? 86400000);
         if (!settled || !await inspectAttemptTree(directory, owner.directory)) return false;
-        if (!await attemptReferencesClear(owner.directory, directory, scan())) return false;
+        if (!await (options.references ?? attemptReferencesClear)(owner.directory, directory, scan())) return false;
         // Native/container observations can await I/O. Ownership must still
         // agree after them, at the same dispatch boundary.
         const authority = await options.state(owner);

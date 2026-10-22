@@ -2,6 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, test } from "bun:test";
+import { attemptReferencesClear } from "./attemptTempFilesystem";
+import type { ProcessScan } from "@/lib/tempSweep";
 import { AttemptTempStore, sweepAttemptTemps, type AttemptTempState } from "./attemptTempRetention";
 
 const roots: string[] = [];
@@ -18,7 +20,8 @@ function fixture() {
     return directory;
   };
   const sweep = (state: AttemptTempState = "settled", options = {}) => sweepAttemptTemps(store, {
-    now: () => NOW, state: async () => state, scan: () => ({ ownNamespace: null, processes: [] }), ...options,
+    now: () => NOW, state: async () => state, scan: () => ({ ownNamespace: null, processes: [] }),
+    references: (original: string, current: string, scan: ProcessScan) => attemptReferencesClear(original, current, scan, async () => true), ...options,
   });
   return { root, filename, store, make, sweep };
 }
@@ -278,3 +281,33 @@ test("the persisted total cap raises the default sweep budget, then returns to i
   }
   for (const [n, directory] of directories.entries()) expect(fs.existsSync(directory)).toBe(n < 4);
 }, 60000);
+
+test.each([false, true])("concurrent helpers serialize retirement and recover an exited owner (crash=%s)", async crash => {
+  const f = fixture(); const directory = f.make("concurrent"); f.store.close();
+  const spawn = (now: number, state: string) => Bun.spawn([process.execPath,
+    path.join(import.meta.dir, "attemptTempRetention.fixture.ts"), f.filename, String(now), state],
+  { env: { ...process.env }, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  const first = spawn(NOW, "hold-state"); let second: ReturnType<typeof spawn> | undefined;
+  try {
+    const reader = first.stdout.getReader();
+    const ready = await reader.read(); reader.releaseLock();
+    expect(new TextDecoder().decode(ready.value)).toBe("ready\n");
+    second = spawn(NOW + 60000, "settled");
+    const deadline = performance.now() + 5000;
+    const queue = f.filename + ".sweep.write-locks";
+    while ((!fs.existsSync(queue) || fs.readdirSync(queue).length < 2) && performance.now() < deadline && second.exitCode === null)
+      await Bun.sleep(10);
+    expect(fs.existsSync(directory)).toBeTrue();
+    expect(fs.existsSync(queue) && fs.readdirSync(queue).length >= 2).toBeTrue();
+    if (crash) first.kill("SIGKILL"); else first.stdin.end();
+    await first.exited;
+    const [stdout, stderr, code] = await Promise.all([new Response(second.stdout).text(), new Response(second.stderr).text(), second.exited]);
+    expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+    expect(JSON.parse(stdout)).toMatchObject({ removed: crash ? 1 : 0 });
+    expect(fs.existsSync(directory)).toBeFalse();
+  } finally {
+    for (const child of [first, second]) if (child) {
+      child.stdin.end(); if (child.exitCode === null) child.kill("SIGKILL"); await child.exited;
+    }
+  }
+}, 20000);

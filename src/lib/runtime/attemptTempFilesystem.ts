@@ -32,7 +32,8 @@ export async function repositoryReferencesAttemptTemp(repository: string, origin
 
 /** Idle processes can still depend on a symlink in their checkout. Resolve
  * links without descending through them, including currently dangling links. */
-export async function attemptReferencesClear(original: string, current: string, scan: ProcessScan): Promise<boolean> {
+export async function attemptReferencesClear(original: string, current: string, scan: ProcessScan,
+  containers: (roots: readonly string[]) => Promise<boolean> = containerMountsClear): Promise<boolean> {
   const roots = [...new Set([original, current, resolvePhysicalPath(original), resolvePhysicalPath(current)])];
   const referenced = (file: string) => [file, resolvePhysicalPath(file)].some(file => roots.some(root => inside(file, root)));
   if (scan.processes.some(process => process.paths.some(referenced))) return false;
@@ -54,7 +55,7 @@ export async function attemptReferencesClear(original: string, current: string, 
   for (const repository of repositories) {
     if (await repositoryReferencesAttemptTemp(repository, original, current)) return false;
   }
-  return process.platform !== "linux" || await containerMountsClear([original, current]);
+  return process.platform !== "linux" || await containers([original, current]);
 }
 
 async function containerMountsClear(roots: readonly string[]): Promise<boolean> {

@@ -103,6 +103,8 @@ test.each(["passed", "failed", "needs_decision", "skipped", "committing"] as con
   pipeline.stages[0]!.outputs = ["evidence"]; savePipelines([pipeline]);
   expect(await attemptTempState(owner)).toBe("live");
   expect(await attemptTempState({ ...owner, directory: path.join(root, "llv-stage-config-fixture") })).toBe(state === "committing" ? "live" : "settled");
-  pipeline.state = "closed"; pipeline.cursor = null; pipeline.closedAt = "2026-10-22T12:02:00Z"; savePipelines([pipeline]);
-  expect(await attemptTempState(owner)).toBe("closed");
+  for (const terminal of ["completed", "closed"] as const) {
+    pipeline.state = terminal; pipeline.cursor = null; pipeline.closedAt = "2026-10-22T12:02:00Z"; savePipelines([pipeline]);
+    expect(await attemptTempState(owner)).toBe("closed");
+  }
 });
