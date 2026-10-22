@@ -6246,13 +6246,16 @@ export class AgentRegistry {
 
   reportFailedLaunch(receipt: SpawnReceipt, options: { announce?: boolean; now?: number } = {}): void {
     const launcherId = receipt.launcher?.conversationId;
-    const file = this.readOnlySnapshot();
-    const canonical = launcherId ? resolveConversationAlias(file, launcherId) : null;
-    const launcherProject = canonical
-      ? file.memberships[canonical]?.find(membership => membership.kind === "orchestrator")?.containerId
-      : undefined;
+    const launcher = launcherId ? this.readKeyed(file => {
+      const canonical = resolveConversationAlias(file, launcherId);
+      return {
+        project: file.memberships[canonical]?.find(membership => membership.kind === "orchestrator")?.containerId,
+        superseded: Boolean(file.conversations[canonical]?.supersededBy),
+      };
+    }, { skipColdKeyInitialization: true }) : null;
+    const launcherProject = launcher?.project;
     settleFailedLaunch(receipt, undefined, { ...options,
-      ...(canonical && file.conversations[canonical]?.supersededBy ? { announce: false } : {}),
+      ...(launcher?.superseded ? { announce: false } : {}),
       launcherProject, onProgress: progress => {
         this.deliveryWriteNow({ label: "spawn.failure-report", operationId: receipt.launchId }, () => this.mutate(current => {
           const row = current.receipts[receipt.launchId];

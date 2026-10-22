@@ -270,7 +270,7 @@ async function bindStructuredHostPersistence(
      goes ahead as it always did. A capture the registry refused answers
      false, so the child keeps running and keeps its own fence. */
   host.setTerminationCapture?.((rootPid, tree) => registry.deliveryWriteOrBusy({ label: "registry.host-stop-capture" }, () => {
-    const entry = registry.readOnlySnapshot().entries[sessionKeyId(key)];
+    const entry = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
     const root = entry?.structuredHost?.process ?? null;
     if (!entry || !root || root.pid !== rootPid) return true;
     if (entry.claimOwner !== claimOwner || entry.claimEpoch !== writerClaimEpoch
@@ -473,13 +473,13 @@ async function endHostStopCapture(
     && entry!.structuredHost?.process != null
     && sameRecordedProcessIdentity(entry!.structuredHost.process, root)
     && (entry!.claimOwner === null || (entry!.claimOwner === claimOwner && entry!.claimEpoch === claimEpoch));
-  const entry = registry.readOnlySnapshot().entries[sessionKeyId(key)];
+  const entry = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
   const root = entry?.structuredHost?.process ?? null;
   if (!entry || !root || !ours(entry, root)) return "lost";
   if ((entry.structuredTerminationSurvivors?.length ?? 0) === 0) return "settled";
   if (await endRecordedStructuredTree(registry, key, root, HOST_STOP_SOURCE,
     (current) => ours(current, root), dependencies)) return "settled";
-  return ours(registry.readOnlySnapshot().entries[sessionKeyId(key)], root) ? "retry" : "lost";
+  return ours(startupHostSnapshot(registry, key).entries[sessionKeyId(key)], root) ? "retry" : "lost";
 }
 
 export async function bindCodexHostPersistence(
@@ -679,12 +679,12 @@ async function endRecordedStructuredTree(
   if (engine !== "claude" && engine !== "codex" && engine !== "copilot") return false;
   const { terminateStructuredHostTree } = await import("./structuredHostControl");
   const root: ProcessIdentity = { pid: processIdentity.pid, startIdentity, bootEpoch };
-  const recordedDomain = registry.readOnlySnapshot().entries[sessionKeyId(key)]?.structuredHost?.signalDomain;
+  const recordedDomain = startupHostSnapshot(registry, key).entries[sessionKeyId(key)]?.structuredHost?.signalDomain;
   const domainProcesses = recordedDomain ? verifiedSignalDomainProcesses(recordedDomain) : [];
   if (!domainProcesses || (recordedDomain && !sameRecordedProcessIdentity(recordedDomain.native, root))) return false;
   let capture: StructuredTerminationCapture | null = null;
   const authorize = (): { status: 409; error: string } | null => {
-    const current = registry.readOnlySnapshot().entries[sessionKeyId(key)];
+    const current = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
     const recorded = current?.structuredHost?.process ?? null;
     if (!current || !recorded || !sameRecordedProcessIdentity(recorded, root)) {
       return { status: 409, error: "the row no longer records this process" };
@@ -696,7 +696,7 @@ async function endRecordedStructuredTree(
     kind: "structured", pid: root.pid, startIdentity, bootEpoch, engine, sessionId: key.sessionId, conversationId: null,
     seat: null, turnBusy: null, owned: false, lastActiveAt: null,
   }, {
-    retainedSurvivors: [...registry.readOnlySnapshot().entries[sessionKeyId(key)]?.structuredTerminationSurvivors ?? [], ...domainProcesses],
+    retainedSurvivors: [...startupHostSnapshot(registry, key).entries[sessionKeyId(key)]?.structuredTerminationSurvivors ?? [], ...domainProcesses],
     authorize,
     /* No runtime holds this tree: an orphan's claim owner is gone, and a
        host stop's own child has already exited. */
@@ -738,7 +738,7 @@ export async function stopTerminalStructuredOrphan(
   key: SessionKey,
   dependencies: StructuredOrphanStopDependencies = {},
 ): Promise<boolean> {
-  const entry = registry.readOnlySnapshot().entries[sessionKeyId(key)];
+  const entry = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
   const orphan = entry?.structuredHost?.process ?? null;
   if (!entry || !orphan || (entry.status !== "dead" && entry.status !== "unhosted")) return false;
   return terminateVerifiedStructuredOrphan(registry, key, orphan, entry.claimOwner ?? null, dependencies);
@@ -768,7 +768,7 @@ export async function reapSeveredStructuredHost(
   key: SessionKey,
   dependencies: TurnLivenessDependencies = {},
 ): Promise<{ reaped: boolean; reason: string } | null> {
-  const entry = registry.readOnlySnapshot().entries[sessionKeyId(key)];
+  const entry = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
   const structuredProcess = entry?.structuredHost?.process;
   if (!structuredProcess) return null;
   const liveness = await conversationTurnLiveness(registry, conversationId, dependencies);
@@ -899,6 +899,7 @@ export async function adoptCodexRegistryHosts(
 ): Promise<AdoptedCodexHost[]> {
   if (!structuredHostsEnabled(env)) return [];
   const candidate: StructuredHostAdoptionFilter = entry => !codexBootAdoptionRetired(entry) && shouldAdopt(entry);
+  if (typeof registry.prepareReadOnlySnapshot === "function") await registry.prepareReadOnlySnapshot();
   const rows = registry.structuredHostEntries().filter((entry) =>
     entry.key.engine === "codex"
     && entry.structuredHost?.kind === "codex-app-server"
@@ -909,13 +910,13 @@ export async function adoptCodexRegistryHosts(
     const owner = captureProcessIdentity(process.pid);
     try {
       await registry.withOperationLock(entry.key, owner, async () => {
-        const current = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
+        const current = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
         if (!current?.structuredHost || !candidate(current)) return;
         const socketOwner = current.structuredHost.process && verifiedCodexSocketOwner({ endpoint: current.structuredHost.endpoint, process: current.structuredHost.process })
           ? { endpoint: current.structuredHost.endpoint, process: current.structuredHost.process, signalDomain: current.structuredHost.signalDomain, signalBoundary: current.structuredHost.signalBoundary } : undefined;
         let claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, entry.key, owner, { allowUnhosted: true, reconnectCodex: socketOwner }))));
         if (!claimed && !socketOwner) {
-          const current = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
+          const current = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
           const orphan = current?.structuredHost?.kind === "codex-app-server"
             ? current.structuredHost.process
             : null;
@@ -923,7 +924,7 @@ export async function adoptCodexRegistryHosts(
             && current
             && candidate(current)
             && await terminateVerifiedStructuredOrphan(registry, entry.key, orphan, current.claimOwner ?? null, dependencies.orphanStop)) {
-            const retry = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
+            const retry = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
             if (!retry?.structuredHost || !candidate(retry)) return;
             claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, entry.key, owner, { allowUnhosted: true }))));
           }
@@ -936,7 +937,9 @@ export async function adoptCodexRegistryHosts(
         /* M.4 seam 4: reopening the process is new work for every task the
            conversation holds; one that runs on another linked machine leaves
            the row stopped and opens nothing. */
-        const refused = (dependencies.admit ?? adoptionRefusal)(claimed, registry.readOnlySnapshot());
+        const admissionSnapshot = typeof registry.prepareReadOnlySnapshot === "function"
+          ? await registry.prepareReadOnlySnapshot() : registry.readOnlySnapshot();
+        const refused = (dependencies.admit ?? adoptionRefusal)(claimed, admissionSnapshot);
         if (refused) {
           console.error(`[linked boards] boot adoption of ${sessionKeyId(entry.key)} refused: ${refused.error}`);
           if (socketOwner) {
@@ -962,7 +965,8 @@ export async function adoptCodexRegistryHosts(
           };
           // Preparing memory can wait for state admission. Recheck both the
           // writer claim and admission before opening a new engine generation.
-          const fresh = registry.readOnlySnapshot();
+          const fresh = typeof registry.prepareReadOnlySnapshot === "function"
+            ? await registry.prepareReadOnlySnapshot() : registry.readOnlySnapshot();
           const current = fresh.entries[sessionKeyId(entry.key)];
           if (!current || !registry.ownsStructuredHostClaim(entry.key, claimed.claimOwner!, claimed.claimEpoch)
             || !candidate(current) || (dependencies.admit ?? adoptionRefusal)(current, fresh)) {
@@ -1052,6 +1056,7 @@ export async function adoptClaudeRegistryHosts(
   } = {},
 ): Promise<AdoptedClaudeHost[]> {
   if (!structuredHostsEnabled(env)) return [];
+  if (typeof registry.prepareReadOnlySnapshot === "function") await registry.prepareReadOnlySnapshot();
   const rows = registry.structuredHostEntries().filter((entry) =>
     entry.key.engine === "claude"
     && entry.structuredHost?.kind === "claude-broker"
@@ -1062,11 +1067,11 @@ export async function adoptClaudeRegistryHosts(
     const owner = captureProcessIdentity(process.pid);
     try {
       await registry.withOperationLock(entry.key, owner, async () => {
-        const eligible = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
+        const eligible = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
         if (!eligible?.structuredHost || !shouldAdopt(eligible)) return;
         let claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, entry.key, owner, { allowUnhosted: true }))));
         if (!claimed) {
-          const current = registry.readOnlySnapshot().entries[`claude:${entry.key.sessionId}`];
+          const current = startupHostSnapshot(registry, entry.key).entries[`claude:${entry.key.sessionId}`];
           const orphan = current?.structuredHost?.kind === "claude-broker"
             ? current.structuredHost.process
             : null;
@@ -1074,7 +1079,7 @@ export async function adoptClaudeRegistryHosts(
             && current
             && shouldAdopt(current)
             && await terminateVerifiedStructuredOrphan(registry, entry.key, orphan, current.claimOwner ?? null, dependencies.orphanStop)) {
-            const retry = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
+            const retry = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
             if (!retry?.structuredHost || !shouldAdopt(retry)) return;
             claimed = (dependencies.claimHost ? await dependencies.claimHost(entry, owner) : (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, entry.key, owner, { allowUnhosted: true }))));
           }
@@ -1087,7 +1092,9 @@ export async function adoptClaudeRegistryHosts(
         /* M.4 seam 4: reopening the process is new work for every task the
            conversation holds; one that runs on another linked machine leaves
            the row stopped and opens nothing. */
-        const refused = (dependencies.admit ?? adoptionRefusal)(claimed, registry.readOnlySnapshot());
+        const admissionSnapshot = typeof registry.prepareReadOnlySnapshot === "function"
+          ? await registry.prepareReadOnlySnapshot() : registry.readOnlySnapshot();
+        const refused = (dependencies.admit ?? adoptionRefusal)(claimed, admissionSnapshot);
         if (refused) {
           console.error(`[linked boards] boot adoption of ${sessionKeyId(entry.key)} refused: ${refused.error}`);
           (await registry.deliveryWriteOrBusy({ label: "registry.setStructuredHostClaimed" }, registry.setStructuredHostClaimed.bind(registry, entry.key, {
@@ -1107,7 +1114,8 @@ export async function adoptClaudeRegistryHosts(
           };
           // Preparing memory can wait for state admission. Recheck both the
           // writer claim and admission before opening a new engine generation.
-          const fresh = registry.readOnlySnapshot();
+          const fresh = typeof registry.prepareReadOnlySnapshot === "function"
+            ? await registry.prepareReadOnlySnapshot() : registry.readOnlySnapshot();
           const current = fresh.entries[sessionKeyId(entry.key)];
           if (!current || !registry.ownsStructuredHostClaim(entry.key, claimed.claimOwner!, claimed.claimEpoch)
             || !shouldAdopt(current) || (dependencies.admit ?? adoptionRefusal)(current, fresh)) {
@@ -1168,7 +1176,7 @@ export async function adoptClaudeRegistryHosts(
 export async function detachCodexHostForViewerRestart(registry: AgentRegistry, key: SessionKey, host: import("./engineHost").EngineHost): Promise<boolean> {
   if (!(host instanceof CodexAppServerHost)) return false;
   const state = await host.health();
-  const entry = registry.readOnlySnapshot().entries[sessionKeyId(key)];
+  const entry = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
   if (!entry?.claimOwner || !entry.structuredHost?.process
     || state.pid !== entry.structuredHost.process.pid
     || state.processStartIdentity !== entry.structuredHost.process.startIdentity

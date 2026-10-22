@@ -263,3 +263,22 @@ test("a synchronous startup visitor refusal joins the work already started", asy
   expect(settled).toBe(false);
   release.resolve();await expect(pending).rejects.toThrow("synchronous refusal");
 });
+
+
+test("orphan authorization uses keyed evidence and preserves a protected owner", async () => {
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),"startup-orphan-keyed-"));
+  const { captureProcessIdentity }=await import("@/lib/processIdentity");
+  const { stopTerminalStructuredOrphan }=await import("./registry");
+  const filename=path.join(root,"registry.json");
+  const initial=seeded(root,1);const entry=initial.entries["codex:reader-0"]!;
+  entry.status="dead";entry.structuredHost!.process=captureProcessIdentity(process.pid);
+  fs.writeFileSync(filename,JSON.stringify(initial));
+  const registry=new AgentRegistry(filename,undefined,undefined,{sqliteMode:"sqlite"});
+  const original=registry.readOnlySnapshot.bind(registry);let signals=0;
+  registry.readOnlySnapshot=()=>{throw new Error("orphan authorization rebuilt the registry");};
+  try {
+    expect(await stopTerminalStructuredOrphan(registry,entry.key,{protectedPids:()=>new Set([process.pid]),signal:()=>{signals++;}})).toBe(false);
+    expect(signals).toBe(0);
+    expect(registry.startupHostSnapshot(entry.key).entries["codex:reader-0"]!.structuredHost!.process).toEqual(entry.structuredHost!.process);
+  } finally {registry.readOnlySnapshot=original;registry.close();fs.rmSync(root,{recursive:true,force:true});}
+});

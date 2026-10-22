@@ -43,7 +43,7 @@ import {
 } from "./registry";
 import { isRuntimeHostTransportFailure, RuntimeHostUnavailableError, runtimeHostClient, type RuntimeHostClient } from "./client";
 import { RUNTIME_STARTUP_READ_DEADLINE_MS } from "./deadlines";
-import { forEachStartupBatch } from "./startupWork";
+import { forEachStartupBatch, STRUCTURED_STARTUP_PASS_DEADLINE_MS } from "./startupWork";
 import type { RuntimeSession } from "./contracts";
 import { terminalRetryOperationId, type RuntimeOperationResult } from "./contracts";
 import {
@@ -2107,7 +2107,7 @@ function startStructuredHostPass(
     if (replaced && client) await bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true });
     const scope = replaced ? new Set(Object.keys(registry.readOnlySnapshot().entries)
       .filter((key) => !current.ready!.some((item) => sessionKeyId(item.key) === key))) : resumeDeferred;
-    const hosts = await startupReadBudget.run({ signal: dependencies.signal, assertActive: dependencies.assertActive, deadline: performance.now() + 180_000 }, () => withViewerOperation(isolatedRowRetry ? "runtime.startup-row" : "runtime.startup", () =>
+    const hosts = await startupReadBudget.run({ signal: dependencies.signal, assertActive: dependencies.assertActive, deadline: performance.now() + STRUCTURED_STARTUP_PASS_DEADLINE_MS }, () => withViewerOperation(isolatedRowRetry ? "runtime.startup-row" : "runtime.startup", () =>
       withStartupRowScope(registry, isolatedRowRetry ? scope : null, () =>
         adoptStructuredHostsPass({ ...dependencies, registry, client }, scope, admitHeldPendingWork, isolatedRowRetry, dependencies))));
     current.generation = generation;
@@ -2124,7 +2124,7 @@ async function adoptStructuredHostsPass(
   rowRetry = false,
   retryDependencies = dependencies,
 ): Promise<AdoptedStructuredHost[]> {
-  const passDeadline = startupReadBudget.getStore()?.deadline ?? performance.now() + 180_000;
+  const passDeadline = startupReadBudget.getStore()?.deadline ?? performance.now() + STRUCTURED_STARTUP_PASS_DEADLINE_MS;
   const assertActive = () => {
     dependencies.signal?.throwIfAborted();
     dependencies.assertActive?.();
