@@ -25349,6 +25349,114 @@ describe("floating voice companion", () => {
     }
   }, 1_800_000);
 
+  /* GitHub #2975: after a call the owner reads what the voice did. The page opens as after a reload, with no call of
+     its own (`&history=1`, `sampleCallHistory`): the character opens the newest retained call, the panel's picker
+     opens each earlier one, and an opened request says why it was not sent or delivered and links the orchestrator
+     conversation it went to. Every text the case names is measured whole inside the panel's body and the viewport,
+     from its text ranges. `LLV_VOICE_COMPANION_ONLY` runs it when it names `history`. Images go to
+     `<hand-off>/history`, never into the tree. */
+  browserTest("call history after a reload: the newest retained call, a picker for each earlier one, and a request's reason and orchestrator link, 1440 and 1000, en and uk, light and dark", async () => {
+    if (ONLY && !ONLY.includes("history")) return;
+    const out = path.join(HANDOFF, "history");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const { browser, close } = await launchOwned();
+    const readings: unknown[] = [];
+    /** Whether each text range of each element is whole inside the panel's body (or, for the picker row, the panel) and the viewport. */
+    const whole = (page: Page, selectors: string[]) => page.evaluate((list) => {
+      const view = document.querySelector<HTMLElement>("[data-companion-transcript-view]")!;
+      const body = view.querySelector<HTMLElement>("[data-transcript-body]")!;
+      const result: Record<string, { found: boolean; whole: boolean; text: string }> = {};
+      for (const selector of list) {
+        const element = view.querySelector<HTMLElement>(selector);
+        if (!element) { result[selector] = { found: false, whole: false, text: "" }; continue; }
+        const clip = (body.contains(element) ? body : view).getBoundingClientRect();
+        const range = document.createRange(); range.selectNodeContents(element);
+        const rects = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+        /* Nothing else stands over the text: the topmost element at each piece's middle is the element itself. */
+        const uncovered = rects.every((rect) => { const top = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2); return !!top && (element === top || element.contains(top)); });
+        result[selector] = { found: true, text: element.innerText, whole: rects.length > 0 && uncovered && rects.every((rect) => rect.top >= clip.top - 0.5 && rect.bottom <= clip.bottom + 0.5
+          && rect.left >= clip.left - 0.5 && rect.right <= clip.right + 0.5 && rect.top >= 0 && rect.bottom <= innerHeight && rect.left >= 0 && rect.right <= innerWidth) };
+      }
+      /* A closed select draws its chosen option's text itself: measured with its own font against its content box. */
+      const picker = view.querySelector<HTMLSelectElement>("select[data-transcript-calls]")!;
+      const style = getComputedStyle(picker);
+      const context = document.createElement("canvas").getContext("2d")!;
+      context.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+      const label = picker.selectedOptions[0]?.textContent ?? "";
+      const room = picker.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - 20;
+      const box = view.getBoundingClientRect(); const pick = picker.getBoundingClientRect();
+      return { result, picker: { label, fits: context.measureText(label).width <= room, height: pick.height, inside: pick.left >= box.left && pick.right <= box.right && pick.top >= box.top && pick.bottom <= box.bottom
+          && document.elementFromPoint(pick.left + pick.width / 2, pick.top + pick.height / 2) === picker },
+        panelInside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, sideways: body.scrollWidth - body.clientWidth };
+    }, selectors);
+    /** Opens the shown call's request and scrolls its line to the top of the body. */
+    const openRequest = async (page: Page) => {
+      const request = page.locator('[data-companion-transcript-view] [data-transcript-call="request_orchestrator_delegation"]');
+      await request.locator("[data-transcript-toggle]").click();
+      await request.locator("[data-transcript-detail]").waitFor();
+      await request.evaluate((element) => { const body = element.closest<HTMLElement>("[data-transcript-body]")!; body.scrollTop += element.getBoundingClientRect().top - body.getBoundingClientRect().top - 8; });
+      await page.waitForTimeout(150);
+    };
+    try {
+      for (const viewport of SIZES) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const label = `${viewport.width}-${lang}-${scheme}`;
+        const { context, page, pageErrors } = await openVoice(browser, server.base, "&history=1", { viewport, scheme, lang, motion: "reduce" });
+        try {
+          /* The fixture's own attention notices are the page's, not the panel's: they are dismissed as in the cases above. */
+          for (let notice = 0; notice < 3 && await page.locator("[data-attention-toast-dismiss]").count(); notice++) await page.locator("[data-attention-toast-dismiss]").first().click();
+          const grip = page.locator("[data-voice-companion] [data-grip]");
+          await page.waitForFunction(() => document.querySelector("[data-voice-companion] [data-grip]")?.getAttribute("aria-expanded") === "false", null, { timeout: 10_000 });
+          expect(await page.locator("[data-companion-talk]").count(), `${label}: no call runs`).toBe(1);
+          await grip.focus();
+          await page.keyboard.press("Enter");
+          const panel = page.locator("[data-companion-transcript-view]");
+          const picker = panel.locator("select[data-transcript-calls]");
+          await picker.waitFor({ timeout: 5_000 });
+          await page.waitForTimeout(250);
+          const options = await picker.locator("option").allTextContents();
+          expect(options.length, `${label}: three retained calls`).toBe(3);
+          expect(await picker.inputValue(), `${label}: the newest call opens`).toBe("call_delegation");
+          expect(await panel.locator("[data-transcript-request]").first().getAttribute("data-stage")).toBe("delivered");
+          const newest = await whole(page, [".vc-tr-title", ".vc-tr-sub"]);
+          await page.screenshot({ path: path.join(out, `history-${label}-1-newest.png`) });
+
+          await picker.selectOption("call_failed_delivery");
+          await panel.locator('[data-transcript-request][data-stage="failed"]').waitFor({ timeout: 5_000 });
+          await openRequest(page);
+          const failed = await whole(page, ['[data-transcript-request][data-stage="failed"] .vc-call-state', "[data-transcript-reason]", "a[data-transcript-orchestrator]"]);
+          expect(failed.result["[data-transcript-reason]"]!.text, `${label}: the delivery failure says why`).toContain(lang === "uk" ? "нічого не надіслано" : "nothing was sent");
+          expect(failed.result["a[data-transcript-orchestrator]"]!.text, `${label}: the orchestrator link names its project`).toBe("Atlas");
+          await page.screenshot({ path: path.join(out, `history-${label}-2-failed.png`) });
+
+          await picker.selectOption("call_refused");
+          await panel.locator('[data-transcript-request][data-stage="refused"]').waitFor({ timeout: 5_000 });
+          await openRequest(page);
+          const refused = await whole(page, ['[data-transcript-request][data-stage="refused"] .vc-call-state', "[data-transcript-reason]"]);
+          expect(refused.result["[data-transcript-reason]"]!.text, `${label}: the refusal says why`).toContain(lang === "uk" ? "немає призначеного оркестратора" : "no designated orchestrator");
+          expect(await panel.locator("a[data-transcript-orchestrator]").count(), `${label}: a refusal before any orchestrator links none`).toBe(0);
+          await page.screenshot({ path: path.join(out, `history-${label}-3-refused.png`) });
+
+          for (const [step, reading] of [["newest", newest], ["failed", failed], ["refused", refused]] as const) {
+            expect(Object.entries(reading.result).filter(([, value]) => !value.found || !value.whole).map(([selector]) => selector), `${label} ${step}: every named text is whole`).toEqual([]);
+            expect([reading.panelInside, reading.picker.inside, reading.picker.fits, reading.sideways <= 1], `${label} ${step}: panel, picker and its label fit`).toEqual([true, true, true, true]);
+          }
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("[data-companion-transcript-view]", { state: "detached", timeout: 5_000 });
+          expect(pageErrors, label).toEqual([]);
+          readings.push({ viewport: viewport.width, lang, scheme, options, newest, failed, refused });
+        } finally { await context.close(); }
+      }
+    } finally {
+      fs.writeFileSync(path.join(out, "readings.json"), `${JSON.stringify(readings, null, 2)}\n`);
+      server.stop();
+      const processes = await close();
+      expect(processes.leftAfterClose, "every browser process this case started has exited").toBe(0);
+      if (!ONLY) record("call-history.json", { driver: DRIVER, issue: 2975, fixture: "?scenario=voice-companion&history=1", synthetic: true,
+        rule: "after a reload the character opens the newest retained call; the panel's picker opens each retained call, named by its time, project and number of actions; an opened request says in the owner's language why it was not sent or delivered and links the orchestrator conversation it went to", processes, readings });
+    }
+  }, 1_800_000);
+
   /* A call that ran on Codex V3 (docs/design/voice-codex-subscription.md, Spend and limit display): the same footer,
      variant 2's two figures above a thin meter, with the call's length on the server clock and the plan window of
      the account it ran on. The meter is that window's use, its teal share the call's rise; the label and the hint

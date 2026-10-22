@@ -24,6 +24,33 @@ export function deliveryFailureReason(code?: string): string {
   return code ? `The orchestrator's conversation refused the message (${code.replaceAll("_", " ").toLowerCase()}), so nothing was sent.`
     : "The delivery failed. Nothing reached the orchestrator.";
 }
+/** The same reasons as the owner reads them in Ukrainian. The model and the record keep the English ones. */
+const DELEGATION_REASONS_UK: Record<DelegationCode, string> = {
+  no_orchestrator: "У цього проєкту немає призначеного оркестратора, тож нічого не надіслано.",
+  invalid_instruction: "Текст запиту порожній або задовгий.", empty_instruction: "Текст запиту порожній або задовгий.",
+  already_requested: "Цей запит уже надсилали. Нічого нового не надіслано.",
+  not_admitted: "Запит не вдалося прийняти.", session_closed: "Голосову розмову завершено.",
+  duplicate_proposal: "Запит із цієї репліки вже чекає.", proposal_unavailable: "Цей запит більше недоступний.",
+  proposal_changed: "Запит застарів, змінився або змінився його оркестратор до підтвердження.",
+  operator_cancelled: "Ви відхилили запит.", confirmation_expired: "На підтвердження не відповіли вчасно.",
+  source_changed: "Ви забрали запит назад.", retracted: "Ви забрали запит назад.",
+  no_input: "Немає вашої репліки.", not_final: "Ваша репліка ще надходить.",
+  stale_input: "Запит стосується давнішої репліки.", negated: "Ви просили нічого не надсилати.",
+  conditional: "Запит був умовним.", question: "Репліка була питанням про надсилання.", quoted: "Прохання надіслати було цитатою.",
+  not_imperative: "Репліка не просить нічого надіслати.", not_addressed: "Запит не адресовано оркестратору.",
+  not_confirmed: "Підтвердження має прийти в наступній вашій репліці.", not_requested: "Ви не просили нічого надсилати.",
+  operator_refused: "Ви просили нічого не надсилати.",
+  request_not_waiting: "Той давніший запит не чекає звіту: його не надіслали або доставка не вдалася. Нічого не надіслано.",
+  request_other_project: "Той запит, що чекає, пішов оркестратору іншого проєкту, тож це прохання не є його повтором. Нічого не надіслано.",
+};
+/** Why a request ended as it did, in the owner's language, from the code its record keeps; null when its stage
+ * needs no reason or the code is not one of these, and the recorded reason then stands as it is. */
+export function delegationReason(code: string | null | undefined, stage: string, locale: "en" | "uk"): string | null {
+  if (stage === "failed") return locale === "uk" ? (code ? `Розмова оркестратора відхилила повідомлення (${code.replaceAll("_", " ").toLowerCase()}), тож нічого не надіслано.`
+    : "Доставка не вдалася. До оркестратора нічого не дійшло.") : deliveryFailureReason(code ?? undefined);
+  if (!code || !Object.hasOwn(DELEGATION_REASONS, code)) return null;
+  return (locale === "uk" ? DELEGATION_REASONS_UK : DELEGATION_REASONS)[code as DelegationCode];
+}
 
 const SPOKEN_CUT = " The rest of the answer was left out.";
 /** Text Live can take in one append. A longer one keeps its whole sentences

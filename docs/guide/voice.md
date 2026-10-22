@@ -54,6 +54,17 @@ transcript.
   removes it and ends a live call; **Show voice** in the ⋯ menu brings it
   back.
 
+### What a call did
+
+A tap on the character (on a phone, **Conversation** in the head's menu)
+opens the call's transcript, also after a page reload or a Delegatus restart.
+When more than one call is kept, a list at the top of the transcript opens any
+of them; each entry shows the call's time, project and number of actions. Each
+request to the orchestrator shows whether it was delivered, queued, refused or
+failed, and why nothing was sent when it was not. An opened request links to the
+orchestrator conversation it went to. Delegatus keeps your last 50 calls, each
+for up to 30 days.
+
 ### Call memory
 
 After each call Claude Haiku, on one of your Claude subscription accounts,

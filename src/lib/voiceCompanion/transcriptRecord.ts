@@ -18,7 +18,8 @@ export interface TranscriptEntry {
   /** First occurrence, retained when fragments or delivery states update. */
   order?: number;
 }
-export interface SessionTranscriptRecord { entries: TranscriptEntry[]; truncated: boolean; usage?: CompanionUsage }
+/** `sessionId`: the call the session route served it for. */
+export interface SessionTranscriptRecord { entries: TranscriptEntry[]; truncated: boolean; usage?: CompanionUsage; sessionId?: string }
 const MAX_BYTES = 4 * 1024 * 1024;
 const CLOSE_RESERVE = 8192;
 const TRUNCATION_MARKER = JSON.stringify({ type: "transcript_truncated", version: 1 }) + "\n";
@@ -95,6 +96,13 @@ export class CompanionTranscriptRecords {
       try { fs.writeSync(fd, JSON.stringify(entry) + "\n"); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
       held.persisted.add(entry.id);
     }
+  }
+  /** The settled journal's identity on disk, so a reader may reuse what it derived from it; null while this
+   * process holds the call's entries in memory, or when there is no journal. */
+  stamp(id: string): string | null {
+    if (this.active.has(id)) return null;
+    try { const stat = fs.statSync(this.file(id)); return `${stat.dev}:${stat.ino}:${stat.mtimeMs}:${stat.size}`; }
+    catch { return null; }
   }
   read(id: string): SessionTranscriptRecord {
     const held = this.active.get(id) ?? this.load(id);

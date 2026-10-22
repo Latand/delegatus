@@ -489,3 +489,75 @@ test("a Codex call's footer shows its length and the account's plan window, with
     }
   } finally { await act(async () => setLocale("en")); }
 });
+
+test("after a call the owner picks any retained call, and an opened request says in their language why it was not sent or delivered and links its orchestrator", async () => {
+  const { setLocale } = await import("@/lib/i18n");
+  const { translate } = await import("@/lib/i18n/core");
+  const { delegationReason } = await import("@/lib/voiceCompanion/delegationOutcome");
+  const { sampleCallHistory } = await import("./transcriptSample.fixture");
+  for (const locale of ["en", "uk"] as const) {
+    await act(async () => setLocale(locale));
+    const { calls, records } = sampleCallHistory(locale);
+    const chosen: string[] = [];
+    let closed = 0;
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    mounted = { root, host };
+    const show = async (sessionId: string) => act(async () => root.render(<CompanionTranscript record={records[sessionId]!} calls={calls} current={sessionId}
+      onChoose={(id) => chosen.push(id)} left={0} top={0} width={360} height={560} onClose={() => { closed += 1; }} />));
+    await show(calls[0]!.sessionId);
+    const picker = host.querySelector<HTMLSelectElement>("select[data-transcript-calls]")!;
+    expect(picker.getAttribute("aria-label")).toBe(locale === "uk" ? "Розмова" : "Call");
+    expect([...picker.options].map((option) => option.value)).toEqual(calls.map((call) => call.sessionId));
+    expect(picker.value).toBe(calls[0]!.sessionId);
+    /* Each option names when, where and how much the call did. */
+    const labels = [...picker.options].map((option) => option.textContent!);
+    expect(labels[0]).toContain("Atlas");
+    expect(labels[0]).toContain(translate(locale, "voiceCompanion.history.actions", { count: 3 }));
+    expect(labels[2]).toContain(locale === "uk" ? "Сад" : "Garden");
+    expect(labels[2]).toContain(translate(locale, "voiceCompanion.history.actions", { count: 1 }));
+    expect(new Set(labels).size).toBe(3);
+    await act(async () => { picker.value = calls[2]!.sessionId; picker.dispatchEvent(new Event("change", { bubbles: true })); });
+    expect(chosen).toEqual([calls[2]!.sessionId]);
+
+    /* The delivered request links the conversation it went to, by the project the list names. */
+    const opened = async () => {
+      const request = host.querySelector<HTMLElement>('[data-transcript-call="request_orchestrator_delegation"]')!;
+      await click(request.querySelector("[data-transcript-toggle]"));
+      return request;
+    };
+    let request = await opened();
+    let link = request.querySelector<HTMLAnchorElement>("a[data-transcript-orchestrator]")!;
+    expect(link.getAttribute("href")).toBe("#c=conversation_orchestrator");
+    expect(link.textContent).toBe("Atlas");
+    expect(request.querySelector("[data-transcript-reason]")).toBeNull();
+
+    await show(calls[1]!.sessionId);
+    request = host.querySelector<HTMLElement>('[data-transcript-call="request_orchestrator_delegation"]')!;
+    expect(request.querySelector("[data-transcript-request]")?.getAttribute("data-stage")).toBe("failed");
+    expect(request.textContent).toContain(translate(locale, "voiceCompanion.stage.failed"));
+    if (!request.querySelector("[data-transcript-detail]")) await click(request.querySelector("[data-transcript-toggle]"));
+    expect(request.querySelector("[data-transcript-reason]")?.textContent).toBe(delegationReason("conversation_busy", "failed", locale)!);
+    link = request.querySelector<HTMLAnchorElement>("a[data-transcript-orchestrator]")!;
+    expect(link.textContent).toBe("Atlas");
+    await click(link);
+    expect(closed).toBe(1);
+
+    await show(calls[2]!.sessionId);
+    request = host.querySelector<HTMLElement>('[data-transcript-call="request_orchestrator_delegation"]')!;
+    expect(request.textContent).toContain(translate(locale, "voiceCompanion.stage.refused"));
+    if (!request.querySelector("[data-transcript-detail]")) await click(request.querySelector("[data-transcript-toggle]"));
+    expect(request.querySelector("[data-transcript-reason]")?.textContent).toBe(delegationReason("no_orchestrator", "refused", locale)!);
+    /* Refused before any orchestrator was found: nothing to link. */
+    expect(request.querySelector("a[data-transcript-orchestrator]")).toBeNull();
+
+    /* One retained call, or a list that does not hold the shown one: no picker. */
+    await act(async () => root.render(<CompanionTranscript record={records[calls[0]!.sessionId]!} calls={calls.slice(0, 1)} current={calls[0]!.sessionId} onChoose={() => {}} left={0} top={0} width={360} height={560} onClose={() => {}} />));
+    expect(host.querySelector("select[data-transcript-calls]")).toBeNull();
+    await act(async () => root.render(<CompanionTranscript record={records[calls[0]!.sessionId]!} calls={calls} current="call_unlisted" onChoose={() => {}} left={0} top={0} width={360} height={560} onClose={() => {}} />));
+    expect(host.querySelector("select[data-transcript-calls]")).toBeNull();
+    await act(async () => root.unmount()); host.remove(); mounted = null;
+  }
+  await act(async () => setLocale("en"));
+});

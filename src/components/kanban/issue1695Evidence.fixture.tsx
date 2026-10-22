@@ -30,7 +30,7 @@ import { RulesWindow } from "@/components/roleMemory/LearnedRules";
 import type { AttentionDismissalMark, DismissalTarget } from "@/lib/attention/dismissalTypes";
 import { COMPANION_PROTECT, COMPANION_ROWS, companionReserved, companionShellReady } from "@/components/voiceCompanion/hostSurfaces";
 import { VoiceCompanion } from "@/components/voiceCompanion/VoiceCompanion";
-import { sampleTranscript, sampleOrchestratorMessage } from "@/components/voiceCompanion/transcriptSample.fixture";
+import { sampleCallHistory, sampleTranscript, sampleOrchestratorMessage } from "@/components/voiceCompanion/transcriptSample.fixture";
 import type { CompanionEvent, CompanionPlan } from "@/lib/voiceCompanion/contract";
 import { DEMO_IDS, SCENARIO_PLAYBACK_PAUSE, demoAnswer, demoInstruction, isScenario, scenarioScript } from "@/lib/voiceCompanion/scenarios";
 import { createSimulatedCompanion, realClock } from "@/lib/voiceCompanion/simulator";
@@ -4917,6 +4917,9 @@ function voiceCompanionScene() {
   const script = params.get("script");
   const failure = params.get("failure");
   const readsTranscript = params.get("transcript") === "1";
+  /* `history=1`: the page opens after a reload, with no call of its own; the operator's retained calls are
+     `sampleCallHistory`'s three, which the character opens from the conversation panel's picker. */
+  const history = params.get("history") === "1" ? sampleCallHistory(UK ? "uk" : "en", PROJECT) : null;
   const clock = realClock();
   let pauseFrame = false;
   const adapter = createSimulatedCompanion({
@@ -4962,7 +4965,12 @@ function voiceCompanionScene() {
       if (sendLost && command.type === "confirmation" && command.decision === "send") { sendLost = false; throw new Error("COMPANION_UNAVAILABLE"); }
       return adapter.command(command);
     },
-    ...(readsTranscript ? { transcript: async () => {
+    ...(history ? {
+      calls: async () => history.calls, transcript: async (sessionId?: string) => {
+        const record = history.records[sessionId ?? history.calls[0]!.sessionId];
+        return record ? { ...record, usage: { callUsd: 0.19, callFinal: true, callIncomplete: false, month: "2026-10", monthUsd: 0.51, monthCapUsd: 20 } } : null;
+      },
+    } : readsTranscript ? { transcript: async () => {
       const record = sampleTranscript(UK ? "uk" : "en", PROJECT);
       record.entries.push({ id: "standalone-report", kind: "report", atMs: 90_000, order: 100,
         data: { project: PROJECT, projectName: "Atlas", status: "result", text: UK ? "Усі перевірки завершено. Звіт збережено після завершення розмови." : "All checks completed. This report remains saved after the call ended." } });

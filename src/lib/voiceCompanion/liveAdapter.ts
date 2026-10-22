@@ -3,6 +3,7 @@
 import type { CompanionCommand, CompanionEvent, CompanionUsage, Locale, Payload, VoiceCompanionAdapter } from "./contract";
 import { createBrowserCues, type CompanionCues } from "./cues";
 import type { SessionTranscriptRecord } from "./transcriptRecord";
+import type { RetainedCall } from "./callHistoryTypes";
 import { BrowserCompanionMedia, type CompanionMedia, type MediaCallbacks } from "./media";
 
 interface AdapterOptions {
@@ -175,7 +176,8 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
           if (this.timer) clearTimeout(this.timer); this.timer = null;
         }
       }
-      if (result.usage && typeof result.usage === "object") this.emit({ type: "usage.updated", usage: result.usage as CompanionUsage });
+      /* Another call's figures are that call's own: they come with its record and never reach this call's state. */
+    if (sessionId === this.observedId && result.usage && typeof result.usage === "object") this.emit({ type: "usage.updated", usage: result.usage as CompanionUsage });
       this.schedule(epoch);
     })();
     this.poll = promise;
@@ -300,13 +302,19 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
     this.emit({ type: "error", code, recoverable: false });
     void this.close().catch(() => undefined);
   }
-  async transcript(): Promise<SessionTranscriptRecord | null> {
-    const sessionId = this.observedId;
+  async transcript(chosen?: string): Promise<SessionTranscriptRecord | null> {
+    const sessionId = chosen ?? this.observedId;
     if (!sessionId) return null;
     const result = await this.request(undefined, `?sessionId=${encodeURIComponent(sessionId)}&view=transcript`);
     if (!Array.isArray(result.entries)) return null;
     if (result.usage && typeof result.usage === "object") this.emit({ type: "usage.updated", usage: result.usage as CompanionUsage });
     return result as unknown as SessionTranscriptRecord;
+  }
+  async calls(): Promise<RetainedCall[]> {
+    const response = await (this.options.fetch ?? fetch)("/api/voice-companion/calls", { cache: "no-store", signal: AbortSignal.timeout(40_000) });
+    const result = await response.json() as { calls?: unknown; code?: unknown };
+    if (!response.ok || !Array.isArray(result.calls)) throw new Error(typeof result.code === "string" && /^[A-Z_]{1,40}$/.test(result.code) ? result.code : "COMPANION_UNAVAILABLE");
+    return result.calls as RetainedCall[];
   }
   async refresh(): Promise<void> { await this.readEvents(); this.schedule(this.epoch); }
   private stopObserver(): void {

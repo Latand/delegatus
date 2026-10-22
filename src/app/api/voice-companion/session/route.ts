@@ -68,7 +68,7 @@ export async function GET(req: NextRequest) {
       // Opening an ended call is also its bounded report reconciliation path.
       // The shared event path speaks only while the provider call is active.
       await service.events(sessionId, after);
-      return NextResponse.json({ ...service.transcriptRecord(sessionId), usage: service.storage.usageFor(sessionId) }, { headers });
+      return NextResponse.json({ sessionId, ...service.transcriptRecord(sessionId), usage: service.storage.usageFor(sessionId) }, { headers });
     }
     return NextResponse.json({ events: await service.events(sessionId, after), usage: service.storage.usageFor(sessionId) }, { headers });
   } catch (error) { return companionFailure(error); }

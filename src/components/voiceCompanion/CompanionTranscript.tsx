@@ -5,7 +5,10 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode }
 
 import { EngineMark } from "@/components/EngineMark";
 import { CopyButton } from "@/components/feed/CopyButton";
+import { Select } from "@/components/ui/Select";
 import type { CompanionUsage } from "@/lib/voiceCompanion/contract";
+import { REQUEST_STAGES, requestStage, type RetainedCall } from "@/lib/voiceCompanion/callHistoryTypes";
+import { delegationReason } from "@/lib/voiceCompanion/delegationOutcome";
 import { CompanionSpend } from "./CompanionSpend";
 import { useLocale } from "@/lib/i18n";
 import { laneLayout, type Rect, type Size } from "@/lib/voiceCompanion/placement";
@@ -17,11 +20,15 @@ import type { SessionTranscriptRecord, TranscriptEntry } from "@/lib/voiceCompan
  * the character reads the session's transcript record: speech as bubbles with the speaker and the time over each
  * line and a copy control of its own, and every tool call and every request to the orchestrator as ONE line (the
  * tool and its outcome) that opens to its arguments, its result and its delivery steps. Text selects and copies.
+ * With more than one retained call a picker over the body opens any of them (GitHub #2975), also after a reload; a
+ * request opened names why it was not sent or delivered and links the orchestrator conversation it went to.
  */
 
 const LABELS = {
-  en: { title: "Conversation", live: "in progress", ended: "ended", close: "Close", args: "Arguments", result: "Result", toVoice: "Passed to the voice", open: "Show the conversation", empty: "Nothing said yet.", truncated: "Part of the conversation is not kept: the record reached its size limit.", request: "Request to the orchestrator", instruction: "Instruction", steps: "Delivery steps", copyMessage: "Copy message", showDetails: "Show details", hideDetails: "Hide details", reports: { message: "Message", progress: "Progress", result: "Result", question: "Question", blocked: "Blocked" } },
-  uk: { title: "Розмова", live: "триває", ended: "завершено", close: "Закрити", args: "Аргументи", result: "Результат", toVoice: "Передано голосу", open: "Показати розмову", empty: "Ще нічого не сказано.", truncated: "Частина розмови не збереглася: запис досяг межі розміру.", request: "Запит оркестратору", instruction: "Доручення", steps: "Кроки доставки", copyMessage: "Скопіювати повідомлення", showDetails: "Показати подробиці", hideDetails: "Сховати подробиці", reports: { message: "Повідомлення", progress: "Хід роботи", result: "Результат", question: "Питання", blocked: "Заблоковано" } },
+  en: { title: "Conversation", live: "in progress", ended: "ended", close: "Close", args: "Arguments", result: "Result", toVoice: "Passed to the voice", open: "Show the conversation", empty: "Nothing said yet.", truncated: "Part of the conversation is not kept: the record reached its size limit.", request: "Request to the orchestrator", instruction: "Instruction", steps: "Delivery steps", copyMessage: "Copy message", showDetails: "Show details", hideDetails: "Hide details", reports: { message: "Message", progress: "Progress", result: "Result", question: "Question", blocked: "Blocked" },
+    calls: "Call", orchestrator: "Orchestrator", openConversation: "Open its conversation", unavailable: "record unavailable" },
+  uk: { title: "Розмова", live: "триває", ended: "завершено", close: "Закрити", args: "Аргументи", result: "Результат", toVoice: "Передано голосу", open: "Показати розмову", empty: "Ще нічого не сказано.", truncated: "Частина розмови не збереглася: запис досяг межі розміру.", request: "Запит оркестратору", instruction: "Доручення", steps: "Кроки доставки", copyMessage: "Скопіювати повідомлення", showDetails: "Показати подробиці", hideDetails: "Сховати подробиці", reports: { message: "Повідомлення", progress: "Хід роботи", result: "Результат", question: "Питання", blocked: "Заблоковано" },
+    calls: "Розмова", orchestrator: "Оркестратор", openConversation: "Відкрити його розмову", unavailable: "запис недоступний" },
 } as const;
 export const transcriptLabels = (locale: string) => LABELS[locale === "uk" ? "uk" : "en"];
 
@@ -38,11 +45,11 @@ type Row =
   | { kind: "speech"; key: string; atMs: number; speaker: "operator" | "companion"; text: string }
   | { kind: "report"; key: string; atMs: number; project: string | null; status: string | null; text: string }
   | { kind: "call"; key: string; atMs: number; name: string; status: Status; args: string; result: string | null; reason: string | null; handoffs: string[] }
-  | { kind: "request"; key: string; atMs: number; instruction: string; stage: string; reason: string | null; engine: "claude" | "codex" | null;
+  | { kind: "request"; key: string; atMs: number; instruction: string; stage: string; reason: string | null; code: string | null; engine: "claude" | "codex" | null;
+      project: string | null; conversationId: string | null;
       states: Array<{ atMs: number; status: string }>; args: string | null; result: string | null; answers: Array<{ key: string; atMs: number; text: string; status: string | null }> };
 
 const str = (value: unknown) => (typeof value === "string" ? value : null);
-const STAGE: Record<string, string> = { proposed: "proposed", sending: "sending", awaiting_confirmation: "awaiting-confirmation", queued: "queued", delivered: "delivered", unknown: "unknown", failed: "failed", refused: "refused", cancelled: "cancelled", sent: "delivered" };
 
 /** The record as rows: speech, each call with what was passed to the voice after it, and each request with
     its own call, its delivery and every report it brought back, in order, together. A call no request row holds (the spoken answer to a
@@ -69,10 +76,10 @@ export function transcriptRows(entries: readonly TranscriptEntry[]): Row[] {
     } else if (entry.kind === "request") {
       const callId = str(data.callId) ?? entry.id;
       const tool = tools.get(callId);
-      const recipient = data.recipient as { engine?: "claude" | "codex" } | undefined;
+      const recipient = data.recipient as { engine?: "claude" | "codex"; conversationId?: unknown } | undefined;
       const row: Extract<Row, { kind: "request" }> = {
-        kind: "request", key: entry.id, atMs: entry.atMs, instruction: str(data.instruction) ?? "", stage: STAGE[str(data.status) ?? ""] ?? "proposed", reason: str(data.reason),
-        engine: recipient?.engine ?? null, states: Array.isArray(data.states) ? (data.states as Array<{ atMs: number; status: string }>) : [],
+        kind: "request", key: entry.id, atMs: entry.atMs, instruction: str(data.instruction) ?? "", stage: requestStage(data.status), reason: str(data.reason), code: str(data.code),
+        engine: recipient?.engine ?? null, project: str(data.projectName), conversationId: str(recipient?.conversationId), states: Array.isArray(data.states) ? (data.states as Array<{ atMs: number; status: string }>) : [],
         args: tool ? str(tool.data.arguments) : null, result: tool ? str(tool.data.result) : null, answers: [],
       };
       rows.push(row);
@@ -115,16 +122,27 @@ function Disclosure({ summary, children, name, label }: { summary: ReactNode; ch
   );
 }
 
-export function CompanionTranscript({ record, usage = record.usage, left, top, width, height, modal = false, onClose }: {
+export function CompanionTranscript({ record, usage = record.usage, left, top, width, height, modal = false, calls = null, current = null, onChoose, onClose }: {
   record: SessionTranscriptRecord;
   usage?: CompanionUsage;
   /* The box, from the companion's own corner. */
   left: number; top: number; width: number; height: number;
   modal?: boolean;
+  /** The operator's retained calls, newest first, and the one shown; with more than one a picker opens each. */
+  calls?: readonly RetainedCall[] | null;
+  current?: string | null;
+  onChoose?: (sessionId: string) => void;
   onClose: () => void;
 }) {
   const { t, locale } = useLocale();
   const L = transcriptLabels(locale);
+  const shown = calls?.find((call) => call.sessionId === current) ?? null;
+  const picking = !!onChoose && !!shown && calls!.length > 1;
+  const when = new Intl.DateTimeFormat(locale, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+  const callLabel = (call: RetainedCall) => [when.format(call.startedAt), call.project,
+    call.actions ? t("voiceCompanion.history.actions", { count: call.actions.filter((action) => action.kind !== "report").length }) : L.unavailable].join(" · ");
+  /* A record written before requests named their project: the list names it from the same journal. */
+  const listedProject = (key: string) => shown?.actions?.find((action) => action.id === key)?.project ?? null;
   const rows = useMemo(() => transcriptRows(record.entries), [record.entries]);
   const ended = record.entries.some((entry) => entry.kind === "session_end");
   const last = record.entries.reduce((max, entry) => Math.max(max, entry.atMs, typeof entry.data.endMs === "number" ? entry.data.endMs : 0), 0);
@@ -164,6 +182,8 @@ export function CompanionTranscript({ record, usage = record.usage, left, top, w
   /* A request to the orchestrator: one line with its delivery outcome; opened, the instruction, each delivery step and the raw call. */
   const request = (row: Extract<Row, { kind: "request" }>) => {
     const failed = row.stage === "failed" || row.stage === "refused" || row.stage === "unknown";
+    /* Why nothing was sent or delivered, in the owner's language when the record keeps its code. */
+    const why = (["failed", "refused", "cancelled"].includes(row.stage) ? delegationReason(row.code, row.stage, locale === "uk" ? "uk" : "en") : null) ?? row.reason;
     return (
       <>
         <Disclosure
@@ -180,9 +200,15 @@ export function CompanionTranscript({ record, usage = record.usage, left, top, w
         >
           <span className="vc-tr-label">{L.instruction}</span>
           <p className="vc-instruction">{row.instruction}</p>
-          {row.reason ? <p className="vc-deleg-note">{row.reason}</p> : null}
+          {why ? <p className="vc-deleg-note" data-transcript-reason>{why}</p> : null}
+          {row.conversationId ? <>
+            <span className="vc-tr-label">{L.orchestrator}</span>
+            {/* The conversation the request went to, where its answer comes from. The app's own link handling opens
+                it (on the phone through its navigation store); the panel gives way to it. */}
+            <a className="vc-tr-link" href={`#c=${encodeURIComponent(row.conversationId)}`} data-transcript-orchestrator onClick={onClose}>{row.project ?? listedProject(row.key) ?? L.openConversation}</a>
+          </> : null}
           <span className="vc-tr-label">{L.steps}</span>
-          <ol className="vc-tr-states">{row.states.map((state, index) => <li key={index}><span className="vc-tr-time">{clock(state.atMs)}</span>{stageLine(STAGE[state.status] ?? state.status)}</li>)}</ol>
+          <ol className="vc-tr-states">{row.states.map((state, index) => <li key={index}><span className="vc-tr-time">{clock(state.atMs)}</span>{stageLine(REQUEST_STAGES[state.status] ?? state.status)}</li>)}</ol>
           {row.args ? <><span className="vc-tr-label">{L.args}</span><pre className="vc-tr-pre">{row.args}</pre></> : null}
           {row.args && row.result ? <><span className="vc-tr-label">{L.result}</span><pre className="vc-tr-pre">{row.result}</pre></> : null}
         </Disclosure>
@@ -244,6 +270,13 @@ export function CompanionTranscript({ record, usage = record.usage, left, top, w
         <span className="vc-tr-sub">{ended ? L.ended : L.live}{usage?.backend === "codex" ? null : ` · ${clock(last)}`}</span>
         <button type="button" className="vc-btn vc-tr-close" aria-label={L.close} title={L.close} data-transcript-close onClick={onClose}><X size={14} aria-hidden /></button>
       </div>
+      {picking ? (
+        <div className="vc-tr-calls">
+          <Select aria-label={L.calls} data-transcript-calls value={shown!.sessionId} onChange={(event) => onChoose!(event.target.value)} className="vc-tr-pick">
+            {calls!.map((call) => <option key={call.sessionId} value={call.sessionId}>{callLabel(call)}</option>)}
+          </Select>
+        </div>
+      ) : null}
       <div ref={body} className="vc-tr-body" data-transcript-body onScroll={(event) => { const node = event.currentTarget; following.current = node.scrollTop + node.clientHeight >= node.scrollHeight - 40; }}>
         {record.truncated ? <p className="vc-deleg-note vc-deleg-wait">{L.truncated}</p> : null}
         {rows.length ? <ol className="vc-tr-list">{rows.map(item)}</ol> : <p className="vc-deleg-note vc-deleg-wait">{L.empty}</p>}
@@ -269,6 +302,11 @@ export const TRANSCRIPT_CSS = `
 .vc-tr-title { font-size: 13px; font-weight: 700; }
 .vc-tr-sub { font-size: 11.5px; color: var(--color-secondary); white-space: nowrap; }
 .vc-tr-close { margin-left: auto; width: 26px; height: 26px; box-shadow: none; }
+.vc-tr-calls { display: flex; flex: none; padding: 8px 12px; border-bottom: 1px solid var(--color-border); }
+.vc-tr-pick { width: 100%; }
+.vc-tr-link { display: inline-flex; align-items: center; min-height: 24px; align-self: flex-start; max-width: 100%; margin: 0 0 4px; font-size: 12px; line-height: 16px; font-weight: 600; color: var(--color-accent); text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; border-radius: 4px; }
+.vc-tr-link:hover { color: var(--color-primary); }
+.vc-tr-link:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 .vc-tr-spend { flex: none; padding: 8px 14px 10px; border-top: 1px solid var(--color-border); font-size: 11.5px; line-height: 16px; font-variant-numeric: tabular-nums; color: var(--color-secondary); }
 .vc-tr-spend-amounts { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 8px; }
 .vc-tr-spend-meter { position: relative; height: 3px; margin-top: 6px; border-radius: 2px; overflow: hidden; background: var(--color-border); }

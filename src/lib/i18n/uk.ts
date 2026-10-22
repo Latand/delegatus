@@ -2428,6 +2428,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "voiceCompanion.tool.agent_activity": "Хто зараз працює",
   "voiceCompanion.tool.conversation_messages": "Останні повідомлення агента",
   "voiceCompanion.tool.end_conversation": "Завершую розмову",
+  "voiceCompanion.history.actions": { one: "{count} дія", few: "{count} дії", many: "{count} дій", other: "{count} дії" },
   "voiceCompanion.tool.failed": "не вдалося прочитати",
   "voiceCompanion.memory.scroll": "Довгі підсумки прокручуються в цьому списку.",
   "voiceCompanion.memory.pending": "Створюю підсумок дзвінка…",
