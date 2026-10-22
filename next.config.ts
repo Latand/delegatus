@@ -51,7 +51,8 @@ const nextConfig: NextConfig = {
       // masks in JavaScript when `bufferutil` is absent. A CommonJS external
       // keeps the importing modules synchronous; `serverExternalPackages`
       // emits `import("ws")` and turns every importer into an async module.
-      config.externals = [...[config.externals ?? []].flat(), { ws: "commonjs ws" }];
+      // The provenance verifier also runs under Node and resolves its installed graph.
+      config.externals = [...[config.externals ?? []].flat(), { ws: "commonjs ws", "@sigstore/bundle": "commonjs @sigstore/bundle", "@sigstore/tuf": "commonjs @sigstore/tuf", "@sigstore/verify": "commonjs @sigstore/verify" }];
       const originalEntry = config.entry;
       config.entry = async () => ({
         ...(typeof originalEntry === "function" ? await originalEntry() : originalEntry),

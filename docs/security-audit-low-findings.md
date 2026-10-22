@@ -81,3 +81,39 @@ session cookie. Refusal fixtures remain unauthenticated. The scoped publication
 comparator also checks these callers against the task base and retains existing
 failures separately from regressions. Five additional credential-inheritance regressions failed before the launcher edits and now pass, including real terminal children with unchanged arguments and stdin.
 
+## 8. Package update provenance
+
+Before the fix, `src/lib/selfUpdate/package.ts:95` installed a registry version
+without verifying its build attestation. The new runner test observed an
+installer call for an unsigned release before production edits.
+
+The fetch step now verifies the npm SLSA attestation with Sigstore, pins the
+issuer and release workflow identity, checks the attested repository and
+revision, and compares both the signed SHA-512 subject and registry integrity
+to the downloaded archive. Metadata, attestation and archive reads have size
+limits, a deadline and refused redirects. The installer receives that local
+archive, closing a second registry lookup between verification and install.
+Missing provenance, invalid signatures, identity mismatches and changed bytes
+refuse before installation. The existing failed-step log carries the reason.
+
+The official Sigstore bundle, trust-root and verifier packages are pinned to
+compatible releases supporting the Node versions declared by this package.
+The Node child applies the issuer and subject policy directly to the verifier.
+Cryptographic verification runs in an owned
+Node child with a 45-second limit: the pinned Bun rejected TUF root signatures
+that Node verified. The server keeps this dependency external so the child
+reads the installed dependency graph. Archive handling remains in the updater.
+
+Callers checked: package registry discovery, automatic/operator/seat update
+start, retry, release-pointer publication and the packaged runtime checks.
+Checkout and managed deployment runners retain their existing mechanisms.
+
+Validation: 19 package/provenance tests passed remotely. They cover signature
+refusal, absent attestation, altered revision/workflow/subject/digest/integrity,
+foreign attestation URLs, registry refusal, oversized metadata, archive cleanup
+and successful installer/runtime verification with the real Bun installer.
+A separate isolated live probe
+verified the published 1.15.0 attestation and complete archive through the
+production function; it installed nothing. A tampered-signature probe was
+refused by the same production function. Verification follows the
+[npm provenance model](https://github.com/npm/provenance#verifying-attestations-with-npm-audit-signatures).

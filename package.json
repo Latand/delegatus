@@ -49,6 +49,9 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.0",
+    "@sigstore/bundle": "3.1.0",
+    "@sigstore/tuf": "3.1.1",
+    "@sigstore/verify": "2.1.1",
     "@simplewebauthn/browser": "14.0.0",
     "@simplewebauthn/server": "14.0.3",
     "entities": "^8.0.0",
@@ -61,8 +64,8 @@
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "sharp": "0.35.5",
-    "zod": "4.4.3",
-    "ws": "8.21.0"
+    "ws": "8.21.0",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@eslint/compat": "2.1.1",
