@@ -163,6 +163,13 @@ test("a lane and a task read off the stores the way the report needs them", () =
   });
   expect(reportLaneFrom({ ...pipeline, state: "completed", closedAt: "2026-09-27T19:20:00.000Z" } as Pipeline)).toMatchObject({ open: false, completed: true, failure: null });
 
+  const replacement = structuredClone(pipeline);
+  replacement.runs[0]!.attempts.push({ n: 2, state: "pending", startedAt: null, completedAt: null, error: null } as never);
+  replacement.stateDetail = "stage spawn deferred: waiting for the delivery controller (unbound)";
+  expect(reportLaneFrom(replacement)).toMatchObject({ attempt: 2, failure: null, wait: replacement.stateDetail });
+  replacement.stateDetail = null;
+  expect(reportLaneFrom(replacement).wait).toBe("waiting for stage launch admission");
+
   const task = {
     id: "task-1", project: "project-a", status: "assigned", text: "Title line\nmore", details: "see #42", placement: "unplaced",
     assignments: [{ conversationId: "conversation_a", path: null, panePid: null, state: "delivered", error: null, at: "" }, { conversationId: "conversation_a", path: null, panePid: null, state: "linked", error: null, at: "" }],

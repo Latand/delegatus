@@ -6447,6 +6447,26 @@ function activationFence(pipeline: Pipeline): string {
     ...(pipeline.controlGeneration === undefined ? [] : [pipeline.controlGeneration])]);
 }
 
+function unstartedPendingAttempt(attempt: PipelineStageAttempt | null | undefined): boolean {
+  return !!attempt && attempt.state === "pending" && !attempt.startedAt && !attempt.launchId
+    && !attempt.conversationId && !attempt.agentPath && !attempt.paneId
+    && !attempt.completedAt && !attempt.report && !attempt.verdict;
+}
+
+function pendingLaunchDetail(attempt: PipelineStageAttempt, ports: PipelinePorts, activationPending = !!attempt.activation): string {
+  const publication = ports.structuredDeliveryPublication?.() ?? "ready";
+  if (publication !== "ready") return `stage spawn deferred: waiting for the delivery controller (${publication})`;
+  if (activationPending) return "stage spawn deferred: reconciling the original stage activation";
+  const now = unixMs(ports.now());
+  if (unixMs(attempt.controllerWait?.retryAfter ?? "") > now) {
+    return `stage spawn deferred: waiting for the launch controller; retry at ${attempt.controllerWait!.retryAfter}`;
+  }
+  if (unixMs(attempt.providerWait?.resumeAt ?? "") > now) {
+    return `stage spawn deferred: waiting for provider capacity; retry at ${attempt.providerWait!.resumeAt}`;
+  }
+  return "stage spawn deferred: waiting for stage launch admission";
+}
+
 /** Each reservation has one process owner. Unknown owner liveness never grants
  * takeover; a dead owner recovers only the stored downstream key. */
 const activationExecutors = globalThis as unknown as { __llvActivationExecutors?: Set<string> };
@@ -6574,17 +6594,54 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
                 accountId: attempt.accountId });
               if (!current.completedAt && !current.verdict) current.state = attempt.state;
             } else {
-              current.state = "pending";
-              current.startedAt = null;
-              current.definition = null;
-              if (live.cursor?.stageId === run.stageId) live.cursor.state = "pending";
+              // A cancelled callback can follow registry admission. Bind its
+              // receipt before dropping activation custody, or the next tick
+              // could reserve another launch under a fresh handshake key.
+              const receipt = current.activation.phase === "reserving"
+                ? agentRegistry().spawnReceiptForClientAttempt(current.activation.clientAttemptId) : null;
+              if (receipt && (receipt.engine !== current.activation.input.role.engine || receipt.cwd !== current.activation.input.cwd
+                || receipt.transport !== "structured" || !agentRegistry().conversationMemberships(receipt.conversationId).some(member =>
+                  member.kind === "pipeline" && member.containerId === live.id && member.stageId === run.stageId
+                  && member.slot === `${run.stageId}:${current.n}` && member.round === current.n
+                  && member.role === current.activation!.input.membership.role))) {
+                // A client key alone cannot adopt another operation's host.
+                delete current.activation.owner;
+                live.stateDetail = "stage spawn deferred: waiting for the original stage membership, runtime and worktree to reconcile; original activation retained";
+                await persist([live]);
+                return;
+              }
+              const controlsCursor = live.cursor?.stageId === run.stageId && currentAttempt(live, run.stageId)?.n === current.n;
+              const settled = !!(current.completedAt || current.verdict || current.report)
+                || ["passed", "failed", "needs_decision", "skipped"].includes(current.state);
+              if (receipt) {
+                Object.assign(current, { launchId: receipt.launchId, conversationId: receipt.conversationId,
+                  accountId: receipt.accountId ?? current.accountId ?? null });
+                if (!settled) { current.state = "spawning"; current.startedAt ??= activation.startedAt; }
+                if (controlsCursor && !settled) live.cursor!.state = "spawning";
+                if (live.state === "running") live.stateDetail = "stage spawn deferred: reconciling the original launch receipt";
+                if (!controlsCursor || settled) {
+                  // An earlier attempt's uncertain launch still fences the
+                  // replacement. Only receipt settlement releases this key.
+                  current.activation.phase = "dispatching";
+                  delete current.activation.owner;
+                  await persist([live]);
+                  return;
+                }
+              } else if (!settled) {
+                current.state = "pending";
+                current.startedAt = null;
+                current.definition = null;
+                if (controlsCursor) live.cursor!.state = "pending";
+              }
             }
             // The activation's captured cursor may still say spawning after a
             // privacy retry was checkpointed. Without launch evidence, keep
             // that durable wait eligible for the next controller tick.
-            if (current.roleMemoryWait && !current.launchId && !current.conversationId && !current.agentPath && !current.paneId) {
+            if (current.roleMemoryWait && !current.completedAt && !current.verdict && !current.report
+              && !["passed", "failed", "needs_decision", "skipped"].includes(current.state)
+              && !current.launchId && !current.conversationId && !current.agentPath && !current.paneId) {
               current.state = "pending";
-              if (live.cursor?.stageId === run.stageId) live.cursor.state = "pending";
+              if (live.cursor?.stageId === run.stageId && currentAttempt(live, run.stageId)?.n === current.n) live.cursor.state = "pending";
             }
             delete current.activation;
             await persist([live]);
@@ -7560,7 +7617,14 @@ async function tickRunStage(
   const attempt = pipeline.cursor?.state === "pending" && prior && ["passed", "failed", "needs_decision", "skipped"].includes(prior.state)
     ? await newAttempt(pipeline, stage)
     : prior ?? await newAttempt(pipeline, stage);
-  if (!attempt || pipeline.state === "needs_decision" || attempt.activation) return;
+  if (!attempt || pipeline.state === "needs_decision") return;
+  if (attempt.activation || unstartedPendingAttempt(attempt) && pipelineHasActivation(pipeline)) {
+    if (!attempt.launchId && !attempt.conversationId && !attempt.report && !attempt.verdict) {
+      const detail = pendingLaunchDetail(attempt, ports, true);
+      if (pipeline.stateDetail !== detail) { pipeline.stateDetail = detail; await persist(); }
+    }
+    return;
+  }
   if (openRuntimeSwitch(attempt)) {
     const switchRecord = openRuntimeSwitch(attempt)!;
     const beforeCut = switchRecord.phase === "requested" && attempt.agentPath
@@ -7603,7 +7667,12 @@ async function tickRunStage(
        pass ends on a pending cursor, which wakes the process that owns the
        controller (requestPipelineTick), and it activates the same attempt. */
     const publication = ports.structuredDeliveryPublication?.() ?? "ready";
-    if (publication === "unbound") { ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline)); return; }
+    if (publication === "unbound") {
+      const detail = pendingLaunchDetail(attempt, ports);
+      if (pipeline.stateDetail !== detail) { pipeline.stateDetail = detail; await persist(); }
+      ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline));
+      return;
+    }
     if (await holdStageLaunchForUpdate(pipeline, ports, persist)) return;
     if (await waitForMemory(pipeline, stage, attempt, ports)) {
       ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline));
@@ -7613,6 +7682,10 @@ async function tickRunStage(
     /* A wait booked by an earlier tick is not due yet. */
     if (unixMs(attempt.controllerWait?.retryAfter ?? "") > unixMs(activationNow)
       || unixMs(attempt.providerWait?.resumeAt ?? "") > unixMs(activationNow)) {
+      if (pipeline.stateDetail?.includes("waiting for the delivery controller")) {
+        pipeline.stateDetail = pendingLaunchDetail(attempt, ports);
+        await persist();
+      }
       ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline));
       return;
     }
@@ -7705,7 +7778,7 @@ async function tickRunStage(
          cannot mistake the wait for one an earlier engine left mid-spawn. */
       attempt.spawnCalls ??= uncountedSpawnCallFloor(attempt);
       if (bookControllerWaitRound(attempt, activationNow, activationNow, ports) === "waiting") {
-        syncControllerWaitStateDetail(pipeline, attempt, null);
+        pipeline.stateDetail = `${pendingLaunchDetail(attempt, ports)}; retry at ${attempt.controllerWait!.retryAfter}`;
         await persist();
         return;
       }
@@ -10479,6 +10552,7 @@ function controllerWaitParkDetail(attempt: PipelineStageAttempt, now: string, fa
     as work to re-tick immediately would spin the controller through passes that
     can only defer it again (#1191). */
 function stageActivationIsWaiting(pipeline: Pipeline, nowMs: number): boolean {
+  if (pipelineHasActivation(pipeline)) return true;
   const stageId = pipeline.cursor?.stageId;
   if (!stageId) return false;
   const attempt = currentAttempt(pipeline, stageId);
@@ -12098,10 +12172,12 @@ function stageGuardShapeError(req: PatchPipelineRequest): PipelinePatchResult | 
  */
 function expectedStageRefusal(pipeline: Pipeline, req: PatchPipelineRequest): PipelinePatchResult | null {
   if (req.expectedStageId === undefined) return null;
+  const pendingRetry = req.action === "retry-stage" && ["running", "paused"].includes(pipeline.state)
+    && pipeline.cursor?.state === "pending" && unstartedPendingAttempt(currentAttempt(pipeline, pipeline.cursor.stageId));
   const waiting = pipeline.state === "needs_decision" || (req.action === "retry-stage"
     && (pipeline.state === "running" && ["running", "spawning"].includes(pipeline.cursor?.state ?? "")
       || pipeline.state === "paused" && pipeline.cursor?.state === "spawning")
-    && ["running", "spawning"].includes(currentAttempt(pipeline, pipeline.cursor!.stageId)?.state ?? ""))
+    && ["running", "spawning"].includes(currentAttempt(pipeline, pipeline.cursor!.stageId)?.state ?? "")) || pendingRetry
     ? pipeline.cursor?.stageId ?? null : null;
   if (waiting !== req.expectedStageId) {
     const repair = pipeline.cursor ? currentAttempt(pipeline, pipeline.cursor.stageId)?.publicationRepair : undefined;
@@ -14225,7 +14301,9 @@ export async function patchPipeline(
         }
         return { pipeline };
       }
-      if (pipeline.runs.some((run) => run.attempts.some((item) => item.activation))) {
+      const unstartedPending = stage?.kind === "run" && pipeline.cursor?.state === "pending" && unstartedPendingAttempt(attempt)
+        && ["running", "paused", "needs_decision"].includes(pipeline.state);
+      if (!unstartedPending && pipelineHasActivation(pipeline)) {
         return { error: "the original stage activation is still reconciling", status: 409 };
       }
       const explicitReceiptRetry = req.stageId !== undefined || req.launchId !== undefined;
@@ -14257,6 +14335,16 @@ export async function patchPipeline(
       }
       const survivorRefusal = pipelineSurvivorRefusal(pipeline);
       if (survivorRefusal) return survivorRefusal;
+      if (unstartedPending && attempt) {
+        // Wake the existing reservation. Its owner and downstream receipt key
+        // remain authoritative; retry never grants another dispatch permit.
+        if (pipeline.state !== "paused") {
+          pipeline.state = "running";
+          pipeline.stateDetail = pendingLaunchDetail(attempt, ports, pipelineHasActivation(pipeline));
+        }
+        await persist(); requestPipelineTick();
+        return { pipeline };
+      }
       if (stage?.kind === "run" && attempt && !attempt.report && !attempt.verdict && ["running", "needs_decision"].includes(pipeline.state)
         && (attempt.suspension || stageAccountBlocked(pipeline, attempt, ports))) {
         if (attempt.suspension?.operatorStoppedAt) {
