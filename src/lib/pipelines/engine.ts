@@ -6632,7 +6632,9 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
             // The activation's captured cursor may still say spawning after a
             // privacy retry was checkpointed. Without launch evidence, keep
             // that durable wait eligible for the next controller tick.
-            if (current.state === "pending" && current.roleMemoryWait && !current.launchId && !current.conversationId && !current.agentPath && !current.paneId) {
+            if (current.roleMemoryWait && !current.completedAt && !current.verdict && !current.report
+              && !["passed", "failed", "needs_decision", "skipped"].includes(current.state)
+              && !current.launchId && !current.conversationId && !current.agentPath && !current.paneId) {
               current.state = "pending";
               if (live.cursor?.stageId === run.stageId && currentAttempt(live, run.stageId)?.n === current.n) live.cursor.state = "pending";
             }
