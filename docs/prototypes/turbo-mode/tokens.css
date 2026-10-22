@@ -1,0 +1,457 @@
+/* Generated from src/styles/tokens.css at commit 1478924e: the one change is
+   `@theme static {` written as `:root {`, so a plain browser reads it.
+   Never edited by hand. The seat tick ramp below is copied from
+   src/app/globals.css (`--tick-0`..`--tick-3`). */
+/* Viewer design system — issue #155 token set (design doc §1).
+
+   The single source of truth for type, spacing, radius, surfaces, color roles,
+   and motion. Imported first from globals.css so every Tailwind `@theme` utility
+   (bg-*, text-*, rounded-*, shadow-*) is generated from here.
+
+   Slice 3 adds the dark palette (design doc §1.5): the light role table lives in
+   the `@theme static` block below; the dark values override the same custom
+   properties under `prefers-color-scheme: dark` (with a `data-theme` escape
+   hatch). Because every alias and component resolves through these role tokens,
+   flipping the OS theme re-tints the whole app in one place — no component holds
+   a light-only literal (the raw-hex sweep, doc §5 slice 3, enforces that). */
+
+/* Use `@theme static` because a production `next build` prunes unused custom
+   properties from a plain `@theme`, which would drop tokens referenced by name
+   before any utility uses them (e.g. `--surface-raised`, `--color-warning-soft`).
+   `static` emits the whole token contract to `:root` unconditionally. */
+:root {
+  /* ── §1.1 Type ─────────────────────────────────────────────────────────── */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto,
+    sans-serif;
+  --font-mono: ui-monospace, "JetBrains Mono", Menlo, monospace;
+
+  --text-caption: 10px; /* counters, badge text, receipt chips   */
+  --text-label: 11px; /*   meta rows, chips, section headers    */
+  --text-ui: 12px; /*      buttons, inputs, secondary content */
+  --text-body: 13px; /*    feed prose, card titles, list rows  */
+  --text-title: 15px; /*   page/project title, sheet headers    */
+
+  /* ── §1.2 Spacing — 4px grid + three semantic paddings ─────────────────────
+     The allowed step scale (2,4,6,8,12,16,24,32) is Tailwind's default; only the
+     semantic paddings need tokens. Shorthand values (`y x`) so a card header and
+     a list row read as one rule each. */
+  --pad-card: 10px 12px; /*  card header / composer padding        */
+  --pad-row: 6px 12px; /*    list & strip rows                     */
+  --gutter-feed: 12px; /*    feed horizontal gutter (compact pane) */
+
+  /* ── §1.3 Radius — exactly two values ──────────────────────────────────── */
+  --radius-control: 8px; /* buttons, inputs, menu items, chips-as-rect */
+  --radius-surface: 12px; /* cards, panes, menus, sheets, tool bodies   */
+
+  /* ── §1.4 Surfaces & elevation ─────────────────────────────────────────── */
+  /* The doc-canonical `--surface-*` names carry the literal values (design doc
+     §1.4); the `--color-*` forms below alias them so Tailwind still emits
+     bg-canvas/bg-card/bg-sunken/bg-raised utilities from the color namespace.
+     Light surfaces are the Delegatus warm paper and dark ones lean towards the
+     emblem's slate; every text role keeps its 4.5:1 floor on all of them
+     (tokens.contrast.test), the tightest being text-muted on the well. */
+  --surface-canvas: #f4f1ec; /* app background; darker than before so cards lift */
+  --surface-card: #fffdfa; /*   the ONE primary surface (panes, rows, composer) */
+  --surface-sunken: #f8f5f0; /* code blocks, collapsed strips, canvas bands     */
+  --surface-raised: #fffdfa; /* menus, popovers, sheets, toasts                 */
+
+  /* ── Depth ladder (issue #962): scheme canvas → container well → card ──────
+     Three fixed levels so a dense board reads by depth, not by outline. The
+     board surface matches the canvas in light mode and dips slightly deeper in
+     dark; a well is the faint filled interior of a pipeline/branch container;
+     quiet is the receded surface of an inactive card. Each value clears the
+     4.5:1 small-text floor for muted/success/warning (tokens.contrast.test). */
+  --surface-board: #f4f1ec; /* scheme canvas behind the dot grid              */
+  --surface-well: #f2efe9; /*  container-well fill under grouped cards        */
+  --surface-quiet: #faf8f4; /* inactive card, no attention: recedes off white */
+
+  --color-canvas: var(--surface-canvas);
+  --color-card: var(--surface-card);
+  --color-sunken: var(--surface-sunken);
+  --color-raised: var(--surface-raised);
+  --color-board: var(--surface-board);
+  --color-well: var(--surface-well);
+  --color-quiet: var(--surface-quiet);
+
+  --shadow-1: 0 1px 2px rgb(20 20 30 / 0.05); /* card  */
+  --shadow-2: 0 8px 32px rgb(20 20 30 / 0.16), 0 1px 2px rgb(20 20 30 / 0.06); /* raised */
+
+  /* ── §1.5 Color roles ──────────────────────────────────────────────────── */
+  --color-primary: #1c1c22; /*   text-primary  */
+  --color-secondary: #55555f; /* text-secondary */
+  /* Issue #700: state text carried this role at 3.37:1 on the card and 3.05:1
+     on the canvas — below the 4.5:1 small-text floor, on the labels an operator
+     reads to decide what needs attention. Darkened to clear it on all three
+     light surfaces (5.17 / 4.67 / 4.84). */
+  --color-muted: #6c6c79; /*     text-muted     */
+  /* Border roles: literals on the doc-canonical `--border-*` names (design doc
+     §1.5); `--color-*` aliases keep border-border/border-strong utilities. */
+  --border-default: #e5dfd5;
+  --border-strong: #cbc3b7;
+  --color-border: var(--border-default);
+  --color-strong: var(--border-strong);
+
+  --color-accent: #5a51e0;
+  --color-accent-soft: #ecebfb;
+  /* Delegatus brand fill (the mascot emblem's slate and cream): the filled
+     primary action — `bg-brand text-on-brand`. The accent above stays the
+     link, focus and running-state colour, so a brand button never reads as a
+     state and the danger red stays the only red in the chrome. 12.3:1 in both
+     schemes, pinned by tokens.contrast.test. */
+  --color-brand: #262a36;
+  --color-on-brand: #fbebdd;
+  /* Same floor, same reason (issue #700): "working…"/"live tail" measured
+     4.42:1 and "waiting"/"waiting for a reply" 4.30:1, both also used as text
+     on their own -soft fills. Now 4.83:1 and 5.17:1 at their worst surface. */
+  --color-success: #177a37;
+  --color-success-soft: #e5f6ea;
+  --color-warning: #8a5f00;
+  --color-warning-soft: #fff4dd;
+  /* Tool-call context weight, band 10 000–19 999 tokens (docs/design/tool-call-tokens.md):
+     between `--color-warning` and `--color-danger`, with no soft fill. */
+  --color-caution: #b24a0a;
+  /* Crown favorites accent (issue #224): a true gold/yellow, distinct from the
+     browny `--color-warning`, so a crowned card reads as regal, not as a
+     warning. Tuned for contrast on the light `--surface-card`. */
+  --color-crown: #e0a400;
+  --color-crown-soft: #fdf1cf;
+  --color-danger: #c62828;
+  --color-danger-soft: #fdeeee;
+  --color-info: #0d9488; /* link / handoff teal */
+  --color-info-soft: #e5f5f3;
+  /* The pinstripe of a task another machine runs (docs/design/synced-task-card.md
+     §5.2). It resolves through --color-info, which the dark blocks below
+     override, so it serves both schemes. 6% is the ceiling: muted text stays
+     at 4.5:1 over its darkest pixel. */
+  --remote-stripe: color-mix(in srgb, var(--color-info) 6%, transparent);
+
+  /* Engine identity tints (kept; model-family shifts live in utils.ts). */
+  --color-codex: #2f6fd0;
+  --color-codex-soft: #e8f0fb;
+  --color-claude: #d97757;
+  --color-claude-soft: #faeee9;
+  --color-openclaw: #b3407a;
+  --color-openclaw-soft: #fbeaf3;
+  /* Engine MARK colours (#1743): the identity tints above are chip fills, and
+     Claude's orange falls under the 3:1 floor for a graphical mark on the light
+     tinted surfaces. The mark tokens are the stroke/fill of the shared engine
+     mark and of the filled effort steps beside it; the dark theme reuses the
+     identity tints, which already clear 5.6:1 there. */
+  --color-claude-mark: #c96442;
+  --color-codex-mark: var(--color-codex);
+  /* The ink a mark takes INSIDE a filled engine avatar (#1743). White on the
+     dark theme's engine tints measures 2.6:1 — under the 3:1 floor a graphical
+     object has — because those tints are light by design there. */
+  /* The UNLIT steps of the effort ladder (#1743). The border token measures
+     1.2:1 on the card, so at low effort the ladder read as one short bar with
+     no denominator behind it: the five-step scale was invisible. This is the
+     3:1 floor a graphical object has (3.08:1 light, 3.03:1 dark), still well
+     under the lit steps' own ~5.2:1, so lit and unlit stay two readings. */
+  --engine-fill-ink: #ffffff;
+  --effort-empty: #93939d;
+  /* Model glyphs (docs/design/model-glyphs.md): the Claude family takes the
+     Claude mark; the Codex line is its sky. Sol's yellow cannot clear 3:1 on
+     the light paper as a fill, so its disc is outlined and its rays drawn in
+     the deeper amber edge; the dark theme needs no edge. Terra's rim holds the
+     disc against the card on both themes. */
+  --glyph-claude: var(--color-claude-mark);
+  --glyph-sol: #f7b500;
+  --glyph-sol-edge: #9b6500;
+  --glyph-astra: #1764e8;
+  --glyph-astra-core: #d9e9ff;
+  --glyph-terra-sea: #2a78cf;
+  --glyph-terra-land: #2b9a4f;
+  --glyph-terra-rim: #1d5aa3;
+  --glyph-luna: #66728f;
+  --glyph-luna-glow: #9fb3d9;
+  /* The running halo: how far past the glyph it reaches and how strong it is
+     at its heart. Astra, the brightest sun, takes the strong peak. */
+  --glyph-halo-reach: 3px;
+  --glyph-halo-peak: 40%;
+  --glyph-halo-peak-strong: 50%;
+
+  /* Activity chart marks (docs/design/activity-dashboard-v2.md, "Colour"):
+     you are the accent, agents the info teal, each with one lighter step
+     validated as an ordinal pair with its base. The light steps sit under
+     3:1, so every value they carry is also printed. Texture means one thing
+     on that page, "your input was not read": the stripe over the unattended
+     step (unclear) and the hatch over the track (not read). */
+  --mark-you: var(--color-accent);
+  --mark-you-half: #9ca2f0;
+  --mark-supervised: var(--color-info);
+  --mark-unattended: #79b9ae;
+  --mark-track: #f1ede6;
+  --mark-hatch: var(--border-strong);
+  --mark-stripe: rgb(255 253 250 / 0.78);
+  /* Token usage (docs/design/activity-token-usage.md §9.1): the
+     dataviz reference categorical order, validated on the card surface in
+     both themes (adjacent CVD ΔE ≥ 8.4, normal-vision ΔE ≥ 19.3). Three light
+     steps sit under 3:1, so every value they carry is also printed. Slots
+     past eight fold into «other». */
+  --mark-series-1: #2a78d6;
+  --mark-series-2: #eb6834;
+  --mark-series-3: #1baf7a;
+  --mark-series-4: #eda100;
+  --mark-series-5: #e87ba4;
+  --mark-series-6: #008300;
+  --mark-series-7: #6250d6;
+  --mark-series-8: #e34948;
+  /* «Other» is a slate that clears 3:1 on the card (4.3:1) and sits apart
+     from the warm kind ramp; the dark theme swaps to a taupe (4.8:1) for the
+     cool kind ramp there. */
+  --mark-series-other: #6b7a90;
+  /* The four token kinds are a neutral ink ramp, so a kind never reads as a
+     model, role or person: cache reads (most of every total) are the quietest
+     step, output the darkest. Every kind is also printed with its number.
+     Fresh input clears 3:1 on the card; neighbouring steps sit at least 2:1
+     apart. */
+  --mark-kind-1: #c4c0b7;
+  --mark-kind-2: #928e85;
+  --mark-kind-3: #5e5b55;
+  --mark-kind-4: #2f2e2b;
+
+  /* ── §1.6 Motion ───────────────────────────────────────────────────────── */
+  --motion-fast: 120ms; /* hover, press, chip state         */
+  --motion-base: 200ms; /* expand/collapse, fades, popovers */
+  --motion-slow: 320ms; /* sheets, overlays, deck moves     */
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+
+  /* ── Durable extra roles (referenced by name in components) ────────────────
+     The user-message bubble keeps a distinct fill (design doc §3.4); it is a
+     first-class token, not a legacy alias, so it gets a dark value below. */
+  --color-user: #ede7de;
+
+  /* Slice 3 deletes the legacy `--color-*` aliases (design doc §1, §5): every
+     component now names a role directly (bg-card/text-muted/border-border/…),
+     the raw-hex sweep is complete, and the dark palette lands below — so nothing
+     forwards through a compatibility name anymore. */
+
+  /* ── Diff / syntax structural tokens (issue #9 §4) — dark values below. */
+  --color-diff-add: #1a7f37;
+  --color-diff-add-soft: #e6ffec;
+  --color-diff-add-strong: #b7ebc6;
+  --color-diff-del: #cf222e;
+  --color-diff-del-soft: #ffebe9;
+  --color-diff-del-strong: #ffd1cf;
+
+  /* ── «Needs you» filter (docs/design/needs-me-filter.md) ───────────────────
+     What a card that does not wait on the operator recedes to while the filter
+     is on. The opacity is the lowest that keeps text-primary at 4.5:1 over the
+     canvas (4.58:1 light, 5.04:1 dark); the saturation drains the warning,
+     colour-label and model hues so the lit cards are the only coloured ones. */
+  --needs-dim-opacity: 0.6;
+  --needs-dim-saturate: 0.35;
+}
+
+/* Default light scheme so `light-dark()` (model-tint foregrounds, utils.ts)
+   resolves to its light value; the dark selectors below flip it to `dark`. */
+:root {
+  color-scheme: light;
+}
+
+/* ── Dark palette (design doc §1.5) ─────────────────────────────────────────
+   Overrides the same custom properties the light theme set. Applied when the OS
+   asks for dark AND the app hasn't been pinned light, or when `data-theme=dark`
+   is set explicitly. `color-scheme` flips native form controls, scrollbars, and
+   the default canvas so nothing renders as a light island. The alias tokens are
+   `var()` forwards, so they inherit these automatically — only literals move. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    --surface-canvas: #111218;
+    --surface-card: #191b23;
+    --surface-sunken: #14151b;
+    --surface-raised: #20232c;
+
+    /* Dark depth ladder: the board dips below the canvas so cards and wells
+       climb from it — board < well < card. */
+    --surface-board: #0d0e13;
+    --surface-well: #15161d;
+    --surface-quiet: #16181e;
+
+    --shadow-1: 0 1px 2px rgb(0 0 0 / 0.4);
+    --shadow-2: 0 8px 32px rgb(0 0 0 / 0.55), 0 1px 2px rgb(0 0 0 / 0.4);
+
+    --color-primary: #e8e8ec;
+    --color-secondary: #a2a2ae;
+    --color-muted: #8b8b98; /* issue #700: 3.60:1 on the dark card → 5.31:1 */
+    --border-default: #292c36;
+    --border-strong: #3c404c;
+
+    --color-accent: #8f88ff;
+    --color-accent-soft: #262347;
+    --color-brand: #fbebdd;
+    --color-on-brand: #262a36;
+    --color-success: #4fc36f;
+    --color-success-soft: #14261a;
+    --color-warning: #e0ae45;
+    --color-warning-soft: #2b2312;
+    --color-caution: #f08a4b;
+    --color-crown: #f5c542;
+    --color-crown-soft: #2e2611;
+    --color-danger: #f07171;
+    --color-danger-soft: #2c1616;
+    --color-info: #2dd4bf;
+    --color-info-soft: #10241f;
+
+    --color-codex: #6ba2e8;
+    --color-codex-soft: #152238;
+    --color-claude: #e08a6d;
+    --color-claude-soft: #2b1c15;
+    --color-openclaw: #e888b6;
+    --color-openclaw-soft: #2e1622;
+    --color-claude-mark: var(--color-claude);
+    --color-codex-mark: var(--color-codex);
+    --engine-fill-ink: #121620;
+    --effort-empty: #64646f;
+    --glyph-sol: #ffcd38;
+    --glyph-sol-edge: #ffcd38;
+    --glyph-astra: #4da3ff;
+    --glyph-astra-core: #f2f8ff;
+    --glyph-terra-sea: #4a9cf0;
+    --glyph-terra-land: #5ccf80;
+    --glyph-terra-rim: #8cc2f7;
+    --glyph-luna: #d3daea;
+    --glyph-luna-glow: #c9d6f2;
+    --glyph-halo-reach: 5px;
+    --glyph-halo-peak: 45%;
+    --glyph-halo-peak-strong: 55%;
+
+    /* The app's dark accent and info sit above the chart lightness band;
+       these steps are inside it. */
+    --mark-you: #7f79e6;
+    --mark-you-half: #4a4786;
+    --mark-supervised: #20a896;
+    --mark-unattended: #296b65;
+    --mark-track: #1f222b;
+    --mark-hatch: #3c404c;
+    --mark-stripe: rgb(25 27 35 / 0.8);
+    --mark-series-1: #3987e5;
+    --mark-series-2: #d95926;
+    --mark-series-3: #199e70;
+    --mark-series-4: #c98500;
+    --mark-series-5: #d55181;
+    --mark-series-6: #008300;
+    --mark-series-7: #9085e9;
+    --mark-series-8: #e66767;
+    --mark-series-other: #8f8678;
+    --mark-kind-1: #454955;
+    --mark-kind-2: #6c7180;
+    --mark-kind-3: #9ba0ad;
+    --mark-kind-4: #dfe1e7;
+
+    --color-user: #262a36;
+
+    --color-diff-add: #3fb950;
+    --color-diff-add-soft: #12261a;
+    --color-diff-add-strong: #1f4d2e;
+    --color-diff-del: #f85149;
+    --color-diff-del-soft: #2d1416;
+    --color-diff-del-strong: #5c2626;
+    --needs-dim-opacity: 0.55;
+  }
+}
+
+/* Explicit `data-theme="dark"` mirrors the media block for a future in-app
+   toggle; the media query above handles the OS-driven case. Kept in sync with
+   the light table in `@theme static`. */
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --surface-canvas: #111218;
+  --surface-card: #191b23;
+  --surface-sunken: #14151b;
+  --surface-raised: #20232c;
+
+  /* Dark depth ladder: the board dips below the canvas so cards and wells
+     climb from it — board < well < card. */
+  --surface-board: #0d0e13;
+  --surface-well: #15161d;
+  --surface-quiet: #16181e;
+
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-2: 0 8px 32px rgb(0 0 0 / 0.55), 0 1px 2px rgb(0 0 0 / 0.4);
+
+  --color-primary: #e8e8ec;
+  --color-secondary: #a2a2ae;
+  --color-muted: #8b8b98; /* issue #700: 3.60:1 on the dark card → 5.31:1 */
+  --border-default: #292c36;
+  --border-strong: #3c404c;
+
+  --color-accent: #8f88ff;
+  --color-accent-soft: #262347;
+  --color-brand: #fbebdd;
+  --color-on-brand: #262a36;
+  --color-success: #4fc36f;
+  --color-success-soft: #14261a;
+  --color-warning: #e0ae45;
+  --color-warning-soft: #2b2312;
+  --color-caution: #f08a4b;
+  --color-crown: #f5c542;
+  --color-crown-soft: #2e2611;
+  --color-danger: #f07171;
+  --color-danger-soft: #2c1616;
+  --color-info: #2dd4bf;
+  --color-info-soft: #10241f;
+
+  --color-codex: #6ba2e8;
+  --color-codex-soft: #152238;
+  --color-claude: #e08a6d;
+  --color-claude-soft: #2b1c15;
+  --color-openclaw: #e888b6;
+  --color-openclaw-soft: #2e1622;
+  --color-claude-mark: var(--color-claude);
+  --color-codex-mark: var(--color-codex);
+  --engine-fill-ink: #121620;
+  --effort-empty: #64646f;
+  --glyph-sol: #ffcd38;
+  --glyph-sol-edge: #ffcd38;
+  --glyph-astra: #4da3ff;
+  --glyph-astra-core: #f2f8ff;
+  --glyph-terra-sea: #4a9cf0;
+  --glyph-terra-land: #5ccf80;
+  --glyph-terra-rim: #8cc2f7;
+  --glyph-luna: #d3daea;
+  --glyph-luna-glow: #c9d6f2;
+  --glyph-halo-reach: 5px;
+  --glyph-halo-peak: 45%;
+  --glyph-halo-peak-strong: 55%;
+
+  --mark-you: #7f79e6;
+  --mark-you-half: #4a4786;
+  --mark-supervised: #20a896;
+  --mark-unattended: #296b65;
+  --mark-track: #1f222b;
+  --mark-hatch: #3c404c;
+  --mark-stripe: rgb(25 27 35 / 0.8);
+  --mark-series-1: #3987e5;
+  --mark-series-2: #d95926;
+  --mark-series-3: #199e70;
+  --mark-series-4: #c98500;
+  --mark-series-5: #d55181;
+  --mark-series-6: #008300;
+  --mark-series-7: #9085e9;
+  --mark-series-8: #e66767;
+  --mark-series-other: #8f8678;
+  --mark-kind-1: #454955;
+  --mark-kind-2: #6c7180;
+  --mark-kind-3: #9ba0ad;
+  --mark-kind-4: #dfe1e7;
+
+  --color-user: #262a36;
+
+  --color-diff-add: #3fb950;
+  --color-diff-add-soft: #12261a;
+  --color-diff-add-strong: #1f4d2e;
+  --color-diff-del: #f85149;
+  --color-diff-del-soft: #2d1416;
+  --color-diff-del-strong: #5c2626;
+  --needs-dim-opacity: 0.55;
+}
+:root {
+  --tick-0: var(--effort-empty);
+  --tick-1: color-mix(in oklch, var(--color-accent) 55%, var(--color-info));
+  --tick-2: var(--color-accent);
+  --tick-3: color-mix(in oklch, var(--color-accent) 35%, var(--color-openclaw));
+}

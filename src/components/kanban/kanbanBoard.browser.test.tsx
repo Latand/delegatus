@@ -34763,6 +34763,221 @@ describe("full autonomy", () => {
 });
 
 
+describe("turbo mode «Форсаж»", () => {
+  browserTest("turbo: the switch beside Full autonomy, the confirmation with its credit approval, and every state on board, dock and phone", async () => {
+    const out = path.resolve(process.env.LLV_TURBO_FRAMES ?? ".artifacts/turbo-mode");
+    fs.mkdirSync(out, { recursive: true });
+    const { defaultSeatTickSettings, writeSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+    const { seatTickSettingsAnswer } = await import("@/lib/monitor/seatTickSettingsAnswer");
+    const gateway = { kind: "gateway" as const, project: null, conversationId: null, seatEpoch: null };
+    type TurboState = "off" | "switching" | "on" | "on-credits" | "ending" | "disabled";
+    let state: TurboState = "off";
+    const plan = [
+      { accountId: "acct-a", label: "Account A", plan: "promax", tiers: { "gpt-6.1-sol": "ultrafast" as const, "gpt-6-astra": "ultrafast" as const, "gpt-6-luna": "priority" as const }, hadCredits: true },
+      { accountId: "acct-b", label: "Account B", plan: "pro", tiers: { "gpt-6.1-sol": "priority" as const }, hadCredits: true },
+      { accountId: "acct-c", label: "Account C", plan: "prolite", tiers: { "gpt-6.1-sol": "priority" as const }, hadCredits: false },
+    ];
+    const turbo = () => {
+      if (state === "off" || state === "disabled") return { active: false, episode: null, history: [], available: state === "off", unavailableReason: state === "off" ? null : "no-faster-tier", progress: null };
+      const minutes = state === "ending" ? 8 : 115;
+      const paid = state === "on-credits";
+      const episode = { enabled: true, startedAt: new Date(Date.now() - 5 * 60_000).toISOString(), until: new Date(Date.now() + minutes * 60_000).toISOString(), endedAt: null, endReason: null,
+        updatedAt: new Date().toISOString(), setBy: gateway, why: null, plan,
+        credits: { approved: paid, accounts: paid ? ["acct-a", "acct-b"] : [], approvedAt: paid ? new Date().toISOString() : null, withdrawnAt: null, withdrawnBy: null, withdrawnWhy: null },
+        switches: state === "on" ? [{ conversationId: "conversation_failed", accountId: "acct-a", model: "gpt-6.1-sol", from: "default", to: "ultrafast", state: "failed", reason: "native tier update refused", at: new Date().toISOString() }] : [] };
+      const pending = state === "switching" ? 5 : 0;
+      return { active: true, episode, history: [], titles: { conversation_failed: "Review issue #913" }, available: true, unavailableReason: null, progress: { total: 7, switched: 7 - pending - (state === "on" ? 1 : 0), armed: 0, skipped: 0, failed: state === "on" ? 1 : 0, pending, reverted: 0 } };
+    };
+    const preview = { accounts: [
+      { accountId: "acct-a", label: "Account A", plan: "promax", tiers: plan[0]!.tiers, weeklyPercent: 36, weeklyResetsAt: Math.floor(Date.parse("2026-10-27T00:00:00Z") / 1000), balance: "412", holdsCredits: true, otherProjects: 0, unavailable: null },
+      { accountId: "acct-b", label: "Account B", plan: "pro", tiers: plan[1]!.tiers, weeklyPercent: 58, weeklyResetsAt: Math.floor(Date.parse("2026-10-25T00:00:00Z") / 1000), balance: "75", holdsCredits: true, otherProjects: 2, unavailable: null },
+      { accountId: "acct-c", label: "Account C", plan: "prolite", tiers: plan[2]!.tiers, weeklyPercent: 12, weeklyResetsAt: Math.floor(Date.parse("2026-10-28T00:00:00Z") / 1000), balance: null, holdsCredits: false, otherProjects: 0, unavailable: null },
+    ], conversations: { total: 7, stages: 3, agents: 4 } };
+    const writes: unknown[] = [];
+    const answer = (project: string, withPreview = false) => {
+      writeSeatTickSettings(project, { ...defaultSeatTickSettings(project), project });
+      const read = seatTickSettingsAnswer(project, false, gateway, { now: Date.now });
+      return { ...read, turbo: { ...turbo(), ...(withPreview ? { preview } : {}) } };
+    };
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/monitor/seat-tick/settings": async (request: Request) => {
+        const url = new URL(request.url);
+        const project = url.searchParams.get("project") ?? "atlas";
+        if (request.method !== "PUT") return Response.json(answer(project, url.searchParams.get("turboPreview") === "1"));
+        const body = await request.json() as { project: string; turbo?: { enabled?: boolean; credits?: boolean } };
+        writes.push(body);
+        if (body.turbo) state = body.turbo.enabled === false ? "off" : body.turbo.credits ? "on-credits" : "switching";
+        return Response.json({ ...answer(body.project), changed: true });
+      },
+      "/api/roles": { revision: "fixture", health: "ok", launchChoices: [], roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "claude", model: "opus", effort: "high" } }] },
+    });
+    const browserTemp = fs.mkdtempSync(path.join(os.tmpdir(), "turbo-browser-"));
+    const browserTempFd = fs.openSync(browserTemp, "r");
+    const socketRoot = process.platform === "linux" ? `/proc/${process.pid}/fd/${browserTempFd}` : browserTemp;
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: socketRoot } });
+    const readings: unknown[] = [];
+    const chipSelector = '[role="slider"][data-seat-tick-switch]';
+    const freeze = (page: Page) => page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = 600; } });
+    try {
+      for (const surface of ["board", "tablet", "dock-440", "dock-360", "phone"] as const) for (const scheme of ["light", "dark"] as const) for (const lang of ["uk", "en"] as const) {
+        const phone = surface === "phone";
+        const dockWidth = surface === "dock-440" ? 440 : surface === "dock-360" ? 360 : null;
+        const width = phone ? 390 : surface === "tablet" ? 915 : 1440;
+        const host = phone ? '[data-mobile2-sheet="seat"]' : dockWidth ? "[data-orchestrator-dock]" : "[data-kanban-seat]:not(.side)";
+        const label = `${width}-${scheme}-${lang}${dockWidth ? `-${surface}` : ""}`;
+        for (const shot of ["off", "dialog", "dialog-credits", "switching", "on", "on-credits", "ending", "disabled"] as const) {
+          state = shot === "dialog" || shot === "dialog-credits" ? "off" : shot;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&tick=driver${dockWidth ? `&dockWidth=${dockWidth}` : ""}`, { width, height: phone ? 844 : 900 }, scheme, lang, "no-preference", phone);
+          try {
+            await page.evaluate(value => document.documentElement.setAttribute("data-role-frame", value), DEFAULT_ROLE_FRAME);
+            const toastDismiss = page.locator("[data-attention-toast-dismiss]");
+            await toastDismiss.waitFor({ timeout: 2000 }).catch(error => { if (error.name !== "TimeoutError") throw error; });
+            if (await toastDismiss.isVisible()) await toastDismiss.click();
+            if (phone) await page.locator("[data-mobile2-open=seat]").first().click();
+            await page.locator(host).waitFor();
+            const chip = page.locator(`${host} ${chipSelector}:visible`).first();
+            await chip.waitFor();
+            const on = shot !== "off" && shot !== "dialog" && shot !== "dialog-credits" && shot !== "disabled";
+            if (on) await chip.locator("[data-seat-tick-turbo-mark]").waitFor();
+            await chip.locator("[data-seat-tick-thumb]").click();
+            const control = page.locator("[data-turbo-control]:visible").first();
+            await control.waitFor();
+            expect(await control.getAttribute("aria-checked")).toBe(String(on));
+            expect(await control.getAttribute("data-turbo")).toBe(shot === "dialog" || shot === "dialog-credits" ? "off" : shot === "on-credits" ? "on" : shot);
+            // The control sits in the autonomy section, which leads the editable sections.
+            const section = await page.locator("[data-seat-tick-autonomy-section]:visible").first().evaluate((node, turboSelector) => ({
+              holdsControl: !!node.querySelector(turboSelector),
+              beforeWakes: !!node.compareDocumentPosition(document.querySelector("[data-seat-tick-enabled]")!) && (node.compareDocumentPosition(document.querySelector("[data-seat-tick-enabled]")!) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+            }), "[data-turbo-control]");
+            expect(section).toEqual({ holdsControl: true, beforeWakes: true });
+            if (shot === "dialog" || shot === "dialog-credits") {
+              await control.click();
+              const dialog = page.locator("[data-turbo-dialog]");
+              await dialog.waitFor();
+              await page.locator("[data-turbo-account]").first().waitFor();
+              if (shot === "dialog-credits") await page.locator("[data-turbo-credits-toggle]").check();
+              const fit = await dialog.evaluate(node => {
+                const box = node.getBoundingClientRect();
+                const confirm = node.querySelector("[data-turbo-confirm]")!.getBoundingClientRect();
+                const foot = node.querySelector("[data-turbo-credits] p:last-of-type") as HTMLElement | null;
+                const credits = node.querySelector("[data-turbo-credits]") as HTMLElement | null;
+                const colorText = getComputedStyle(foot!).color;
+                const backgroundText = getComputedStyle(credits!).backgroundColor;
+                const channels = (value: string) => {
+                  const parsed = value.match(/[\d.]+/g)!.slice(0, 3).map(Number);
+                  if (value.startsWith("color(srgb ")) return parsed.map(channel => channel * 255);
+                  if (value.startsWith("oklab(")) {
+                    const [lightness, a, b] = parsed;
+                    const l = (lightness! + 0.3963377774 * a! + 0.2158037573 * b!) ** 3;
+                    const m = (lightness! - 0.1055613458 * a! - 0.0638541728 * b!) ** 3;
+                    const s = (lightness! - 0.0894841775 * a! - 1.291485548 * b!) ** 3;
+                    return [4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+                      -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+                      -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s]
+                      .map(channel => (channel <= 0.0031308 ? 12.92 * channel : 1.055 * channel ** (1 / 2.4) - 0.055) * 255);
+                  }
+                  return parsed;
+                };
+                const color = channels(colorText);
+                const background = channels(backgroundText);
+                const luminance = (rgb: number[]) => rgb.map(value => value / 255).map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4).reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index]!, 0);
+                const [a, b] = [luminance(color), luminance(background)].sort((left, right) => right - left);
+                /* Every payer row and the foot, measured from text ranges, sit whole above the pinned button bar. */
+                const barTop = node.querySelector("[data-turbo-confirm]")!.parentElement!.getBoundingClientRect().top;
+                const bodyTop = node.querySelector("[data-turbo-dialog-body]")!.getBoundingClientRect().top;
+                const lines = [...node.querySelectorAll("[data-turbo-payers] li"), ...(foot ? [foot] : [])].flatMap(item => {
+                  const range = document.createRange(); range.selectNodeContents(item);
+                  return [...range.getClientRects()].map(rect => ({ top: rect.top, bottom: rect.bottom }));
+                });
+                const approvalCut = lines.filter(line => line.bottom > barTop + 0.5 || line.top < bodyTop - 0.5).length;
+                return { approvalCut, approvalLines: lines.length, top: box.top, bottom: box.bottom, viewport: innerHeight, confirmVisible: confirm.bottom <= innerHeight && confirm.top >= 0,
+                  checked: (node.querySelector("[data-turbo-credits-toggle]") as HTMLInputElement | null)?.checked ?? null, footContrast: (a + 0.05) / (b + 0.05), colorText, backgroundText };
+              });
+              expect(fit.top).toBeGreaterThanOrEqual(0);
+              expect(fit.bottom).toBeLessThanOrEqual(fit.viewport + 0.5);
+              expect(fit.confirmVisible).toBe(true);
+              expect(fit.checked).toBe(shot === "dialog-credits");
+              if (shot === "dialog-credits") { expect(fit.approvalLines).toBeGreaterThan(0); expect(fit.approvalCut).toBe(0); }
+              if (shot === "dialog-credits") expect(fit.footContrast, `${fit.colorText} on ${fit.backgroundText}`).toBeGreaterThanOrEqual(4.5);
+              await freeze(page);
+              await page.screenshot({ path: path.join(out, `${label}-${shot}.png`) });
+              readings.push({ surface, scheme, lang, shot, fit, pageErrors: [...pageErrors] });
+            } else {
+              await freeze(page);
+              await control.scrollIntoViewIfNeeded();
+              const status = on ? await page.locator("[data-turbo-status]:visible").first().textContent() : null;
+              const caption = await page.locator("[data-turbo-about]:visible").first().textContent();
+              await page.screenshot({ path: path.join(out, `${label}-${shot}.png`) });
+              if (dockWidth) await page.locator(host).screenshot({ path: path.join(out, `${label}-${shot}-host.png`) });
+              /* The autonomy section head keeps one line beside its toggle, in uk too. */
+              const headLines = await page.locator("[data-seat-tick-autonomy-section]:visible").first().evaluate(node => {
+                const range = document.createRange(); range.selectNodeContents(node.querySelector("p")!);
+                return range.getClientRects().length;
+              });
+              expect(headLines).toBe(1);
+              if (shot === "on") expect(status).toContain(lang === "uk" ? "не перемкнено: 1" : "not switched: 1");
+              else if (on) expect(status).not.toMatch(/не перемкнено|not switched/);
+              readings.push({ surface, scheme, lang, shot, status, caption, headLines, pageErrors: [...pageErrors] });
+              if (shot === "on") {
+                await page.locator("[data-seat-tick-details]:visible > summary").click();
+                const detail = page.locator("[data-turbo-switch-details]:visible");
+                await detail.scrollIntoViewIfNeeded();
+                const detailText = (await detail.textContent()) ?? "";
+                expect(detailText).toContain("Review issue #913");
+                expect(detailText).toContain(lang === "uk" ? "типово → Ultrafast" : "standard → Ultrafast");
+                expect(detailText).toContain(lang === "uk" ? "Перемикання відхилено" : "The switch was refused");
+                expect(detailText).not.toMatch(/native tier update refused|gpt-6\.1-sol|conversation_failed/);
+                await page.screenshot({ path: path.join(out, `${label}-switch-details.png`) });
+              }
+            }
+            expect(pageErrors).toEqual([]);
+          } catch (error) {
+            await page.screenshot({ path: path.join(out, `${label}-${shot}-failure.png`) });
+            fs.writeFileSync(path.join(out, "failure.json"), JSON.stringify({ label, shot, writes, body: await page.locator("body").innerText() }, null, 2));
+            throw error;
+          } finally { await context.close(); }
+        }
+      }
+      // The shortest desktop window: the Turbo row and its caption stay above the popover's scroll edge, and the dialog fits whole.
+      for (const turboState of ["off", "on"] as const) {
+        state = turboState;
+        const { context, page } = await openFixture(browser, `${server.base}?scenario=seat-head&tick=driver&dockWidth=440`, { width: 1000, height: 700 }, "light", "en");
+        try {
+          const chip = page.locator(`[data-orchestrator-dock] ${chipSelector}:visible`).first();
+          await chip.waitFor();
+          await chip.locator("[data-seat-tick-thumb]").click();
+          await page.locator("[data-turbo-control]:visible").first().waitFor();
+          const edge = await page.evaluate(() => {
+            const popover = document.querySelector("[data-seat-tick-popover]")!;
+            let scroller: Element | null = popover;
+            for (const node of [popover, ...popover.querySelectorAll("*")]) if (/(auto|scroll)/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight) { scroller = node; break; }
+            const visibleBottom = Math.min(scroller!.getBoundingClientRect().bottom, innerHeight);
+            const caption = document.querySelector("[data-turbo-about]")!.getBoundingClientRect();
+            const control = document.querySelector("[data-turbo-control]")!.getBoundingClientRect();
+            return { visibleBottom, captionBottom: caption.bottom, controlBottom: control.bottom, scrollTop: scroller!.scrollTop };
+          });
+          expect(edge.scrollTop).toBe(0);
+          expect(edge.controlBottom).toBeLessThanOrEqual(edge.visibleBottom);
+          expect(edge.captionBottom).toBeLessThanOrEqual(edge.visibleBottom);
+          if (turboState === "off") {
+            await page.locator("[data-turbo-control]:visible").first().click();
+            await page.locator("[data-turbo-account]").first().waitFor();
+            const body = await page.locator("[data-turbo-dialog-body]").evaluate(node => ({ scrollHeight: node.scrollHeight, clientHeight: node.clientHeight }));
+            expect(body.scrollHeight).toBeLessThanOrEqual(body.clientHeight + 1);
+          }
+          await freeze(page);
+          await page.screenshot({ path: path.join(out, `1000x700-light-en-${turboState}.png`) });
+          readings.push({ surface: "board-1000x700", turboState, edge });
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ readings, writes }, null, 2) + "\n");
+    } finally {
+      await browser.close(); server.stop(); fs.closeSync(browserTempFd);
+      fs.rmSync(browserTemp, { recursive: true, force: true });
+    }
+  }, 900_000);
+});
+
 describe("pipeline repository initialization", () => {
   browserTest("the picker admits a new folder and shows a concrete refusal", async () => {
     const out = path.resolve(".artifacts/pipeline-repository-initialization");
