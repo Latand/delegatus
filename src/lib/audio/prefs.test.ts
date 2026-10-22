@@ -11,6 +11,7 @@ import {
   readAudioPrefs,
   setAudioPrefs,
   subscribeAudioPrefs,
+  TYPING_ENABLED_KEY,
   VIEWER_LOOP_ENABLED_KEY,
   type PrefStorage,
 } from "./prefs";
@@ -188,5 +189,26 @@ describe("volumes", () => {
     setAudioPrefs({ cueVolume: 0.75 });
 
     expect(seen).toEqual([0.25]);
+  });
+});
+
+describe("«Agent typing», the one frequent layer's own switch", () => {
+  test("a device that has never chosen hears the typing", () => {
+    expect(readAudioPrefs(device()).typingEnabled).toBe(true);
+  });
+
+  test("turning it off is stored on this device and leaves the master on", () => {
+    const desk = device();
+    configureAudioPrefsStorage(desk);
+    setAudioPrefs({ typingEnabled: false });
+    expect(desk.dump()[TYPING_ENABLED_KEY]).toBe("off");
+    expect(readAudioPrefs(desk)).toMatchObject({ typingEnabled: false, cuesEnabled: true });
+    /* Another device keeps its own answer. */
+    expect(readAudioPrefs(device()).typingEnabled).toBe(true);
+  });
+
+  test("a stored answer survives a reload, and an unreadable one falls back to on", () => {
+    expect(readAudioPrefs(device({ [TYPING_ENABLED_KEY]: "off" })).typingEnabled).toBe(false);
+    expect(readAudioPrefs(device({ [TYPING_ENABLED_KEY]: "maybe" })).typingEnabled).toBe(true);
   });
 });

@@ -30,14 +30,11 @@ import type { CueRequest } from "./cues";
  *   player answers "already considered".
  */
 
-/** A Viewer MCP call is the agent reaching back into this viewer; it gets its
-    own cue, one tier above ordinary tool texture. */
-function cueFor(event: ToolEvent): CueRequest["cue"] {
-  return event.mcp ? "viewer-mcp" : "tool-tick";
-}
-
+/** Every tool call is typing, a Viewer MCP call included: a distinct cue at
+    continuous rates for orchestration plumbing was noise (critique row 4 of
+    docs/design/sound-redesign.md). */
 function requestFor(event: ToolEvent, conversation: string, pan: number): CueRequest {
-  return { cue: cueFor(event), eventId: `tool:${conversation}:${event.id}`, pan };
+  return { cue: "typing", eventId: `tool:${conversation}:${event.id}`, pan };
 }
 
 /** Walks every tool event in one feed snapshot, folded command groups

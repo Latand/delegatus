@@ -591,7 +591,7 @@ export function useDictation({ onError, onUnclaimedText, onLiveCommit }: UseDict
         elapsedRef.current = next;
         setElapsed(next);
         const cues = dictationCues(prev, next, MAX_SECONDS);
-        /* Near-cap warning: announce once, then the single ping once. */
+        /* Near-cap warning: announce once, then the two pings once. */
         if (cues.warn) setSrMessage(t("dictation.capWarn"));
         if (cues.ping) chime("dictWarn", 0);
         if (cues.capped) {
