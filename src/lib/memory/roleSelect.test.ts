@@ -137,10 +137,16 @@ test.each(["a", "ж", "界", "😀"])("shadow packing reserves kept rules and re
   expect(result.scores.map(([id]) => id)).toEqual(chosen.filter(rule => !rule.keptByOperatorAt).map(rule => rule.id));
 });
 
-test("a missing brief shadows whole-scope delivery without a scoring budget", async () => {
+test("a missing brief records whole mode without scoring candidates", async () => {
   const pool = Array.from({ length: 60 }, (_, i) => rule(`r_${i.toString(16).padStart(16, "0")}`, "a".repeat(240)));
   const result = await selectRoleMemory([{ scope: "machine", rules: pool }], "", { apiKey: null });
-  expect(result).toMatchObject({ selector: "whole", reason: "no-brief", scores: [], shadowIds: pool.map(rule => rule.id) });
+  expect(result).toMatchObject({ selector: "whole", reason: "no-brief", scores: [], shadowIds: [] });
+});
+
+test("an expired BM25 deadline returns a bounded shadow result", async () => {
+  const pool = Array.from({ length: 1_500 }, (_, i) => rule(`r_${i.toString(16).padStart(16, "0")}`, `ownership receipts ${"rule text ".repeat(25)}${i}`));
+  const result = await selectRoleMemory([{ scope: "machine", rules: pool }], brief, { apiKey: null, timeoutMs: 0 });
+  expect(result).toMatchObject({ selector: "whole", reason: "selector-timeout", scores: [], shadowIds: [] });
 });
 
 test("a changed key after provider admission sends no rules", async () => {

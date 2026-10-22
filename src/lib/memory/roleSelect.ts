@@ -21,9 +21,6 @@ const points = (text: string) => [...text].length;
 const safe = (text: string) => redactForClassifier(text.replace(/^.*(?:api[_-]?key|token|password|secret|credential)\s*[:=].*$/gim, "<credential line>"));
 const record = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const failure = (reason: string): ShadowSelection => ({ selector: "whole", selectorVersion: "1", reason, scores: [], shadowIds: [] });
-function wholeShadow(scopes: Scopes, reason: string): ShadowSelection {
-  return { ...failure(reason), shadowIds: renderLearnedRulesSelection(scopes, SHADOW_BLOCK_MAX_BYTES).rules.map(rule => rule.id) };
-}
 function alwaysOn(rules: readonly RoleMemoryRule[]): Set<string> {
   let reserved = 0;
   return new Set(rules.filter(rule => {
@@ -97,7 +94,7 @@ export async function selectRoleMemory(scopes: Scopes, brief: string, options: O
       const fallback = await pack(scopes, rules, scores, -Infinity, signal);
       const suffix = scores.some(score => score > 0) ? "bm25" : "bm25-no-match";
       const result = (reason: string): ShadowSelection => ({ selector: "bm25", selectorVersion: "bm25-1", reason: `${reason},${suffix}`, ...fallback });
-      if (!brief.trim()) return wholeShadow(scopes, "no-brief");
+      if (!brief.trim()) return failure("no-brief");
       if (points(candidates.map(ruleLine).join("\n")) > 120_000) return result("jev-pool");
       let reservation: Awaited<ReturnType<typeof reserveSelectionSpend>> = null;
       try {
@@ -151,7 +148,7 @@ export async function selectRoleMemory(scopes: Scopes, brief: string, options: O
       } catch (error) {
         return result(signal.aborted ? "jev-timeout" : error instanceof SyntaxError ? "jev-shape" : "jev-network");
       }
-    } catch { return wholeShadow(scopes, "selector-error"); }
+    } catch { return failure(signal.aborted ? "selector-timeout" : "selector-error"); }
     finally { clearTimeout(timer); signal.removeEventListener("abort", abort); controller.abort(); }
   });
 }

@@ -7,7 +7,7 @@ import path from "node:path";
 import { stateLockWaitsInFlight } from "@/lib/state/lockWait";
 import { assertStateChildSuccess } from "@/lib/state/stateChildResult.fixture";
 import { learnedRulesForLaunchProfile } from "./roleLaunch";
-import { DELIVERY_LEDGER_STARTS, engineMemoryVersion, memoryDeliveries, type MemoryEngineStart } from "./deliveryLedger";
+import { DELIVERY_LEDGER_STARTS, engineMemoryVersion, memoryDeliveries, prepareDeliveryLedgerIndexes, type MemoryEngineStart } from "./deliveryLedger";
 import { learnedRulesSnapshot, leaveLessons, recordLessonRequest, roleMemoryCollection } from "./roleStore";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-delivery-test-"));
 let draw = 0;
@@ -29,6 +29,31 @@ async function runChild(script: string): Promise<void> {
     assertStateChildSuccess(code, stderr);
   } finally { if (timer) clearTimeout(timer); }
 }
+
+test("an upgrade builds delivery indexes off-loop before the first writer", async () => {
+  const directory = path.join(process.env.LLV_STATE_DIR!, "role-memory");
+  fs.mkdirSync(directory, { recursive: true });
+  const filename = path.join(directory, "delivery.sqlite");
+  const db = new Database(filename);
+  try {
+    db.exec("CREATE TABLE deliveries (sequence INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL); CREATE TABLE versions (hash TEXT PRIMARY KEY, content BLOB NOT NULL); CREATE TABLE files (sequence INTEGER REFERENCES deliveries(sequence) ON DELETE CASCADE, hash TEXT REFERENCES versions(hash), PRIMARY KEY(sequence, hash)); BEGIN IMMEDIATE");
+    const insert = db.query("INSERT INTO deliveries(body) VALUES (?)");
+    const body = JSON.stringify({ attempt: { pipelineId: "prior-pipeline", stageId: "build", attempt: 1 }, conversationId: "prior-conversation", retained: "history".repeat(128) });
+    for (let i = 0; i < 4_000; i++) insert.run(body);
+    db.exec("COMMIT");
+  } finally { db.close(); }
+
+  let ticks = 0;
+  const timer = setInterval(() => { ticks++; }, 5);
+  try { await prepareDeliveryLedgerIndexes(); }
+  finally { clearInterval(timer); }
+  const check = new Database(filename, { readonly: true });
+  try {
+    expect(check.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM deliveries").get()!.count).toBe(4_000);
+    expect(check.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='index'").all().map(row => row.name)).toEqual(expect.arrayContaining(["files_hash", "deliveries_attempt"]));
+    expect(ticks).toBeGreaterThan(0);
+  } finally { check.close(); }
+});
 function lesson(rule: string, attempt = 1, rewrite?: string) {
   const source = { project: "ledger-project", pipelineId: "ledger-pipeline", stageId: "build", attempt, roleId: "builder", fixRound: false, conversationId: "conversation_ledger" };
   recordLessonRequest({ ...source, at: "2026-10-16T00:00:00.000Z" });

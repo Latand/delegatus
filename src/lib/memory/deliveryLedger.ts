@@ -8,6 +8,8 @@ import { statePath } from "@/lib/configDir";
 import { stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { repositoryRootForPath } from "@/lib/projects/identity";
+import { spawnLeasedHelper } from "@/lib/helperLease";
+import { assertStateStartupMutation } from "@/lib/stateOwnership";
 import type { learnedRulesSnapshot } from "./roleStore";
 
 export const DELIVERY_LEDGER_STARTS = 10_000;
@@ -122,12 +124,68 @@ const deliveryLedgerIndexes = declaredIndexes([
   `CREATE INDEX IF NOT EXISTS files_hash ON files(hash)`,
   `CREATE INDEX IF NOT EXISTS deliveries_attempt ON deliveries(json_extract(body,'$.attempt.pipelineId'), json_extract(body,'$.attempt.stageId'), json_extract(body,'$.attempt.attempt'), json_extract(body,'$.conversationId'))`,
 ]);
+const indexPreparations = new Map<string, Promise<void>>();
+
+function deliveryLedgerIndexWorkerPath(cwd = process.cwd()): string {
+  const bundled = path.join(cwd, ".next/server/role-memory-delivery-index-worker.js");
+  return fs.existsSync(bundled) ? bundled : path.join(cwd, "src/lib/roleMemoryDeliveryIndex.worker.ts");
+}
+
+/** Build retained-history indexes in a leased worker before a launch uses the ledger. */
+export async function prepareDeliveryLedgerIndexes(): Promise<void> {
+  const requestedDirectory = statePath("role-memory");
+  await fs.promises.mkdir(requestedDirectory, { recursive: true, mode: 0o700 });
+  const directory = await fs.promises.realpath(requestedDirectory);
+  if (repositoryRootForPath(directory)) throw Error("memory delivery archive requires state outside a checkout");
+  assertStateStartupMutation(directory, "memory delivery index preparation");
+  const filename = path.join(directory, "delivery.sqlite");
+  try {
+    const stat = await fs.promises.lstat(filename);
+    if (!stat.isFile() || stat.nlink !== 1) throw Error("memory delivery archive must be an unlinked regular file");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const Database = sqliteDatabase();
+  try {
+    if (fs.existsSync(filename)) {
+      const db = new Database(filename, { readonly: true });
+      try {
+        const indexes = new Set(db.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='index'").all().map(row => row.name));
+        if (deliveryLedgerIndexes.ready(indexes)) return;
+      } finally { db.close(); }
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const pending = indexPreparations.get(filename);
+  if (pending) return pending;
+  const preparation = new Promise<void>((resolve, reject) => {
+    const child = spawnLeasedHelper("role-memory-delivery-index", {
+      command: process.execPath,
+      args: [deliveryLedgerIndexWorkerPath()],
+      cwd: process.cwd(),
+      env: { ...process.env, LLV_ROLE_MEMORY_DELIVERY_DIRECTORY: directory },
+    }, statePath());
+    let settled = false;
+    const settle = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      indexPreparations.delete(filename);
+      error ? reject(error) : resolve();
+    };
+    child.once("error", error => settle(error));
+    child.once("exit", (code, signal) => settle(code === 0 ? undefined : Error(`memory delivery index worker exited with ${code ?? signal}`)));
+  });
+  indexPreparations.set(filename, preparation);
+  return preparation;
+}
 
 /** One owner, no module cache: rows, private content-addressed copies and their
  * eviction commit together. Readers page by sequence. No ledger content is
  * included in prompts, known values, or public API responses. */
 export async function recordMemoryDelivery(start: MemoryEngineStart, clean: boolean, select: () => Selection | undefined): Promise<string | undefined> {
   return withViewerOperation("memory.engine-start", async () => {
+    await prepareDeliveryLedgerIndexes();
     const directory = statePath("role-memory");
     await fs.promises.mkdir(directory, { recursive: true, mode: 0o700 });
     const canonicalDirectory = await fs.promises.realpath(directory);
@@ -152,7 +210,8 @@ export async function recordMemoryDelivery(start: MemoryEngineStart, clean: bool
             db.exec("CREATE TABLE IF NOT EXISTS deliveries (sequence INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL)");
             db.exec("CREATE TABLE IF NOT EXISTS versions (hash TEXT PRIMARY KEY, content BLOB NOT NULL)");
             db.exec("CREATE TABLE IF NOT EXISTS files (sequence INTEGER REFERENCES deliveries(sequence) ON DELETE CASCADE, hash TEXT REFERENCES versions(hash), PRIMARY KEY(sequence, hash))");
-            deliveryLedgerIndexes.install(db, path.dirname(filename));
+            const indexes = new Set(db.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='index'").all().map(row => row.name));
+            if (!deliveryLedgerIndexes.ready(indexes)) throw Error("memory delivery indexes are not prepared");
             // Select after asynchronous admission; rules and their ordered metadata
             // are captured together, including omissions at the byte ceiling.
             const selection = select();
