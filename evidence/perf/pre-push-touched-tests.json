@@ -203342,6 +203342,76 @@
       "allPriorRowsUnchanged": true,
       "allRawLogAndCpuDigestsVerified": true,
       "finalManagedSupervisorQuiescent": true
+    },
+    "publicationRepair": {
+      "observedAt": "2026-10-22T06:16:26.752608+00:00",
+      "reason": "Remote refused the optional Windows workflow command changes without workflow permission; restore the published workflow contents.",
+      "source": {
+        "sourceCommit": "a40ccffbf03527ddd9fb54ea34fd69cb3e60068b",
+        "baseAtExport": "026855f8509021cdff0450deafcd28e5ff9a782f",
+        "sourceCodeDigest": "cb0015974b40140d80f4abcd82a5f0b4c7fc586c8691ef18c86bc3e89e07edbe",
+        "digestPaths": [
+          "src",
+          "scripts",
+          "bin",
+          ".githooks",
+          "package.json",
+          "bun.lock",
+          "bunfig.toml",
+          "test-preload.ts",
+          "tsconfig.json",
+          "tsconfig.production.json",
+          "next.config.ts",
+          ".github/workflows/platform-tests.yml"
+        ],
+        "digestProcedure": "sha256 of git ls-tree -r -z HEAD -- followed by digestPaths",
+        "workflowMatchesPublishedMain": true,
+        "preservesAllPriorCommits": true
+      },
+      "fullGate": {
+        "command": [
+          "bun",
+          "scripts/local-gate.ts",
+          "pre-push"
+        ],
+        "startedAtUnix": 1792649389.3853216,
+        "elapsedSeconds": 326.1611874103546,
+        "exitCode": 0,
+        "namedChecks": [
+          "pre-push: audit retry tests: passed in 3 s",
+          "pre-push: supply chain: passed in 0 s",
+          "pre-push: types: passed in 247 s",
+          "pre-push: eslint: passed in 9 s",
+          "pre-push: touched tests: passed in 318 s",
+          "pre-push: Linux backend: passed in 0 s",
+          "pre-push: Linux tests: passed in 4 s"
+        ],
+        "classifiedFailures": [
+          "PRE-EXISTING src/lib/pipelines/engine.controllerPass.test.ts: a bounded reconciliation preserves another lane's CPU ticket and FIFO age"
+        ],
+        "newFailures": 0,
+        "logSha256": "176709133b00e6abc9dd60d6774105724d1ba22cfce3b66305c4bdd51a6a789b"
+      },
+      "install": {
+        "command": [
+          "bun",
+          "install",
+          "--frozen-lockfile",
+          "--ignore-scripts"
+        ],
+        "startedAtUnix": 1792649365.1900122,
+        "elapsedSeconds": 2.1731667518615723,
+        "exitCode": 0,
+        "logSha256": "ff2d1532e8b8e8ecbd0203a9b9046c7114facdbb0e679dc0500d309d40b6cb06"
+      },
+      "acceptedProductCodeUnchanged": true,
+      "campaignMeasurementsUnchanged": true,
+      "allHistoryPreservedThrough": "fc3e77daa",
+      "acceptedCommitPreserved": "c1d4c2f5b",
+      "workflowBlob": "33ab665ab66725324dde6f0f0ba10ac3630a8d01",
+      "workflowTreeMatchesMain": true,
+      "managedSupervisorQuiescent": true,
+      "pushed": false
     }
   }
 }

@@ -800,3 +800,9 @@ Final qualifying sample: 30/30 after and 10/10 before. After P90 is 472.8 s, aga
 The isolated integration pre-push on merged source `132932cd96db` completed with exit 0 in 319.6 s including admission, following a fresh frozen-lockfile install. The gate retained its fresh baseline classification; the new-failure count was 0. Source, commands, classifications and log digests are recorded in `engineLoadCampaign.finalQuietWindowContinuation`.
 
 All 63 recorded test services and 5 padding scopes from this window are quiescent. All 63 raw and published records reconcile, and earlier evidence rows remain unchanged. The verified code digest matches the final product source. Dispatch is closed; other lanes' processes were untouched.
+
+### Workflow publication repair
+
+The publisher completed its checks and the remote refused the optional Windows workflow command changes because the publishing App lacks workflow permission. The repair restores `.github/workflows/platform-tests.yml` to the published main contents and defers those two CI command changes. The accepted gate implementation, test partitions, 30/10 campaign records and all prior commits are retained.
+
+A fresh frozen-lockfile install and the full isolated `bun scripts/local-gate.ts pre-push` on source `a40ccffbf035` passed in 326.2 s including admission. Privacy, types, lint, touched tests, Linux checks, audit and supply chain passed. The controllerPass failure reproduced on the fresh baseline; there were zero NEW failures. The managed supervisor is inactive. Source and log digests are recorded in `engineLoadCampaign.publicationRepair`. Publication is left to the controller.
