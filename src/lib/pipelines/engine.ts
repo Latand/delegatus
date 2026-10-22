@@ -1296,11 +1296,13 @@ function settledStageHostBusy(entry: AgentRegistryEntry | undefined, blockingFla
     || blockingFlags(host?.activeFlags ?? []).length > 0;
 }
 
-/** Whether the runtime's own session read shows work: a turn, a question, or
-    an open operation the host has yet to run. */
-function runtimeSessionBusy(session: import("@/lib/runtime/contracts").RuntimeSession): boolean {
-  return session.turn !== "idle" || session.activeTurnId !== null || session.attentionIds.length > 0
-    || session.retirementBlocked === true;
+/** Whether the runtime's own session read affirms work: a running turn, a
+    question, or an open operation the host has yet to run. A turn the runtime
+    reads as `unknown` affirms nothing: a disconnected or degraded host reads
+    that way with no turn at all, and waiting on it never ends. */
+function runtimeSessionWorking(session: import("@/lib/runtime/contracts").RuntimeSession): boolean {
+  return session.turn === "running" || session.turn === "interrupt_requested" || session.activeTurnId !== null
+    || session.attentionIds.length > 0 || session.retirementBlocked === true;
 }
 
 /**
@@ -1313,9 +1315,15 @@ function runtimeSessionBusy(session: import("@/lib/runtime/contracts").RuntimeSe
  *
  * - where the runtime host reads the session idle, a conditional kill fenced
  *   on that read, which the runtime refuses once a turn has begun;
- * - otherwise (no runtime, a runtime that does not hold this host, or an
- *   engine already gone) the recorded identities, through the identity-fenced
- *   ladder that escalates from SIGTERM to SIGKILL.
+ * - where the runtime holds the host and reads its turn unknown, nothing: the
+ *   try is spent, so the lane parks once the tries run out;
+ * - otherwise (no runtime, a runtime that does not hold this host, a
+ *   disconnected or degraded one included, or an engine already gone) the
+ *   recorded identities, through the identity-fenced ladder that escalates
+ *   from SIGTERM to SIGKILL.
+ *
+ * Only affirmative work (a running turn, a question, a queued operation, in
+ * the registry or the runtime) answers `deferred`.
  *
  * The registry's turn evidence is read again after every await and one step
  * before each local signal, the grace between SIGTERM and SIGKILL included;
@@ -1347,18 +1355,25 @@ export async function stopSettledPipelineStageWriter(
     const read = async () => client?.readSession
       ? await client.readSession({ conversationId: probe.conversationId }).catch(() => null) : null;
     const session = await read();
-    if (guard() || session && runtimeSessionBusy(session)) return { outcome: "deferred" };
+    if (guard() || session && runtimeSessionWorking(session)) return { outcome: "deferred" };
     /* A runtime that cannot read this host idle cannot fence a kill on it, and
-       one that does not hold it cannot deliver it a turn either. */
+       one that does not hold it (disconnected, degraded, another artifact)
+       cannot deliver it a turn either. */
     if (!session || session.host !== "hosted" || session.retirementBlocked !== false || !session.writerClaim
       || session.artifactPath !== probe.transcriptPath) return await byIdentity();
+    /* A runtime that holds the host and cannot say whether it is idle can
+       neither fence a kill on it nor rule out a turn it delivers next: no
+       signal, and the try is spent so the lane parks once they run out. */
+    if (session.turn !== "idle") {
+      return { outcome: "failed", error: `the runtime host holds the stage host but reads its turn as ${session.turn}, so no stop could be fenced on it` };
+    }
     const stopped = settle(await stopPipelineStageAgent(target, { ...probes, client, automatic: true,
       onlyIfIdle: { revision: session.revision, writerClaim: session.writerClaim }, observationGuard: guard }));
     if (stopped.outcome !== "deferred" || turnBegan) return stopped;
     /* The conditional kill was refused or did not answer. A turn that began
        explains it; a host still idle does not, and that try is spent. */
     const after = await read();
-    if (guard() || after && runtimeSessionBusy(after)) return { outcome: "deferred" };
+    if (guard() || after && runtimeSessionWorking(after)) return { outcome: "deferred" };
     return { outcome: "failed", error: "the runtime host did not stop the idle stage host" };
   } catch (error) {
     return { outcome: "failed", error: error instanceof Error ? error.message : String(error) };
@@ -7779,7 +7794,7 @@ async function endSettledPriorWriters(
       continue;
     }
     const tries = sequence?.tries ?? 0;
-    const spent = (stopped: number, error: string | null) => `${running}; ${stopped} automatic stop${stopped === 1 ? "" : "s"} by their recorded identities (SIGTERM, then SIGKILL) left them running${error ? ` (last: ${error})` : ""}; stop those processes, then retry the stage`;
+    const spent = (stopped: number, error: string | null) => `${running}; ${stopped} automatic stop${stopped === 1 ? "" : "s"} left them running${error ? ` (last: ${error})` : ""}; stop those processes, then retry the stage`;
     if (tries >= PRIOR_WRITER_STOP_TRIES) return { park: true, detail: `${PRIOR_WRITER_PARK_PREFIX}${spent(tries, sequence?.error ?? null)}` };
     if (sequence && unixMs(ports.now()) - unixMs(sequence.lastAt) < PRIOR_WRITER_WAIT_MS) {
       waiting ??= `${running}; automatic stop ${tries} of ${PRIOR_WRITER_STOP_TRIES} left them running, next at ${new Date(unixMs(sequence.lastAt) + PRIOR_WRITER_WAIT_MS).toISOString()}`;
