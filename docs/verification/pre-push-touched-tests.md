@@ -14,8 +14,12 @@ including when one rejects. An occurrence retires after a complete paired round.
 Missing assertions, unexpected runner diagnostics, incomplete baseline evidence
 and failed ownership cleanup retain their refusal paths. Same-name occurrences
 remain separate; Bun's name filter can execute a retired occurrence alongside
-an unresolved occurrence with the same name. No result survives a comparator
-process, and no baseline result is cached.
+an unresolved occurrence with the same name. Only the initial baseline assertion
+sample can survive a comparator process.
+It is reused after two matching complete fresh observations on the same base,
+file, filter, origin, dependency inputs, comparator sources, Bun binary and
+environment. Diagnostics and incomplete runs are never cached; confirmation
+rounds always run fresh. Entries expire after 24 hours.
 
 The consumers are the pre-push touched and Linux selections in
 `scripts/local-gate.ts`, direct review comparisons, and local shared native

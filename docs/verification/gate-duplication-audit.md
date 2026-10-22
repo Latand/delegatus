@@ -5,8 +5,9 @@
 > are not needed and do unnecessary work; expected result: faster checks
 > without needless duplication and runs.
 
-Source: the pinned task specification. This document is its acceptance item 1,
-the audit. Nothing in the product changed, and every number is an aggregate.
+Source: the pinned task specification. Sections 1–5 record the initial audit
+and ranked proposals for acceptance item 1. Section 6 records the implementation
+and its verification. Every measurement is an aggregate.
 
 ## Method
 
@@ -308,3 +309,50 @@ are unchanged. *Proved by* `scripts/eslint-changes.test.ts`:
 - An edited file, an edited configuration or another lockfile digest forces a
   fresh lint.
 - The base half never reads the cache.
+
+## 6. Implemented removals and verification
+
+All four ranked removals are implemented. The merge-base selection, sibling
+test rule, hosted required checks and local privacy/runtime requirements stay
+as measured in the audit.
+
+- **Step passes:** `scripts/local-gate.ts` records successful, completed
+  steps in the clone's common Git directory. The key binds the head commit,
+  branch, tree, merge base, command, executable bytes, installed dependency
+  bytes, gate source closure and effective environment. It also hashes ignored
+  checkout inputs, including generated declarations and symlink destinations.
+  Git metadata and the compiler's incremental output are excluded. A dirty
+  tree or a Git index concealment flag disables reuse. Inputs are rechecked
+  before reuse and after a check finishes. Failed, stopped, deferred,
+  cancelled or leaking checks certify no pass. The runtime build and its
+  consumers reuse as a complete group. Privacy, frozen install and advisory
+  checks always run fresh. Transport, caller identity and private isolation
+  roots do not distinguish producer from publication; functional inputs do.
+- **Baseline samples:** `scripts/local-gate-tests.ts` needs two matching
+  fresh complete assertion observations before a third comparison can reuse
+  an initial base sample. Confirmation rounds stay fresh. Runner errors,
+  incomplete samples and local/workspace dependencies receive no cached
+  allowance. An observed flaky result invalidates its entry. Base commit,
+  selected file, failing-name filter, origin, dependency inputs, comparator
+  sources, Bun bytes, environment and budgets bind each entry.
+- **Lint:** `scripts/eslint-changes.ts` reads base text only for files with
+  head errors. Its native content cache uses separate generations for
+  dependency and configuration bytes. Corrupt or unavailable optional cache
+  storage falls back to fresh checks; source and configuration failures still
+  refuse publication.
+- **Bounds:** `scripts/gate-cache.ts` owns pass and baseline records under
+  `delegatus-gate` in the common Git directory. Each family retains at most
+  256 entries and 32 MiB, including abandoned atomic writes; pass entries
+  expire after seven days and baseline entries after 24 hours. ESLint retains
+  eight generations of at most 4 MiB. Concurrent writers can briefly exceed a
+  bound until the next write. Existing gate sandbox cleanup is preserved.
+
+Red tests preceded each behavior change. The real hook fixtures in
+`scripts/local-gate.receipts.test.ts` exercise fresh processes for reuse,
+different trees, dirty/index-hidden inputs, ignored declarations, base/tool
+and environment changes, malformed records, failed checks and always-fresh
+privacy/install/advisory checks. `scripts/local-gate-tests.test.ts` covers
+independent baseline observations, filters, dependency/origin/source changes
+and flaky/error refusal. `scripts/eslint-changes.test.ts` covers both sides
+of the lint skip and content-cache invalidation. `scripts/gate-cache.test.ts`
+covers restart, corruption, expiry, bounds and unavailable storage.
