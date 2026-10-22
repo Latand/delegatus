@@ -3398,6 +3398,18 @@ export class SqliteAgentRegistryStore {
     });
   }
 
+  /** Called inside the keyed reader's transaction. Preserve collection order
+      across the session and artifact fallback without loading other rows. */
+  conversationKeysForHost(entryKey: string, artifactPath: string): string[] | undefined {
+    if (!this.changesReady || !this.generationIdentitiesReady) return undefined;
+    return this.db.query<{ conversation_id: string }, [string, string]>(`SELECT conversation_id FROM (
+      SELECT i.conversation_id, (SELECT r.row_order FROM ${this.recordsSource} r
+        WHERE r.collection='conversations' AND r.row_key=i.conversation_id) AS row_order
+      FROM (SELECT conversation_id FROM registry_generation_identities WHERE entry_key=?
+        UNION SELECT conversation_id FROM registry_conversation_paths WHERE path=?) i)
+      WHERE row_order IS NOT NULL ORDER BY row_order`).all(entryKey, artifactPath).map(row => row.conversation_id);
+  }
+
   read<T>(reader: (file: RegistryFile) => T, options: { skipColdKeyInitialization?: boolean } = {}): T {
     const admitted = this.writerHeld;
     if (!admitted) this.db.exec("BEGIN");

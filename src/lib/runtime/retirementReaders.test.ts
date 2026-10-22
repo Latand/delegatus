@@ -380,18 +380,21 @@ for (const engine of ["codex", "claude"] as const) test(`${engine} adoption prep
 });
 
 
-test("keyed admission evidence retains path aliases as well as session identity", () => {
+for (const sqliteMode of ["off", "sqlite"] as const) test(`keyed admission evidence retains path aliases as well as session identity (${sqliteMode})`, () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-admission-alias-"));
   const initial = seeded(root, 1);
   initial.conversations["conversation_reader_1"]!.generations[0]!.path = initial.entries["codex:reader-0"]!.artifactPath;
+  initial.conversations = { conversation_reader_1: initial.conversations["conversation_reader_1"]!,
+    conversation_reader_0: initial.conversations["conversation_reader_0"]! };
   const filename = path.join(root, "registry.json");
   fs.writeFileSync(filename, JSON.stringify(initial));
-  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode });
   try {
     const key = initial.entries["codex:reader-0"]!.key;
     expect(registry.startupHostSnapshot(key).conversations["conversation_reader_1"]).toBeUndefined();
     const admission = registry.startupHostSnapshot(key, true);
     expect(admission.conversations["conversation_reader_1"]?.id).toBe("conversation_reader_1");
     expect(admission.memberships["conversation_reader_1"]?.[0]?.containerId).toBe("lane-1");
+    expect(Object.keys(admission.conversations)).toEqual(Object.keys(registry.readOnlySnapshot().conversations));
   } finally { registry.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });

@@ -6140,13 +6140,21 @@ export class AgentRegistry {
       if (entry) result.entries[entryKey] = clone(entry);
       // Linked-task admission also recognizes a generation by its artifact.
       // Keep that existing path fallback without enumerating other hosts.
-      const conversations = [...registryConversationsForEntryKey(file, entryKey),
-        ...(includeArtifactPath && entry ? registryConversationsForPath(file, entry.artifactPath) : [])];
+      const selectedKeys = includeArtifactPath && entry && this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
+        ? this.sqliteStore.conversationKeysForHost(entryKey, entry.artifactPath) : undefined;
+      const conversations = includeArtifactPath && entry
+        ? selectedKeys ? selectedKeys.flatMap(id => file.conversations[id] ? [file.conversations[id]!] : [])
+          : Object.values(file.conversations).filter(conversation => conversation.generations.some(generation =>
+            (conversation.engine === key.engine && generation.id === key.sessionId) || generation.path === entry.artifactPath))
+        : registryConversationsForEntryKey(file, entryKey);
+      // Admission's path fallback chooses in collection order. Insert those
+      // matches before expanding aliases, which may have another identity.
+      if (includeArtifactPath) for (const conversation of conversations) result.conversations[conversation.id] = clone(conversation);
       for (const conversation of conversations) {
         const canonical = resolveConversationAlias(file, conversation.id);
         for (const id of conversationIdsResolvingTo(file, canonical)) {
           if (file.conversationAliases[id]) result.conversationAliases[id] = file.conversationAliases[id]!;
-          if (file.conversations[id]) result.conversations[id] = clone(file.conversations[id]!);
+          if (file.conversations[id] && !result.conversations[id]) result.conversations[id] = clone(file.conversations[id]!);
           if (file.memberships[id]) result.memberships[id] = clone(file.memberships[id]!);
         }
       }
