@@ -19,7 +19,7 @@ import { procBackend } from "@/lib/proc";
 import { processMatches, terminateHeadlessReviewerGroup } from "@/lib/agent/headless";
 import type { AccountContext } from "@/lib/accounts/contracts";
 import { createManagedClaudeAccount } from "@/lib/accounts/claude";
-import { advertisedSlots, completeRelayRequest, HANDOFF_DETAIL, memberLimitDetail, runClaimedRequest, runningCount } from "./runner";
+import { advertisedSlots, completeRelayRequest, HANDOFF_DETAIL, memberLimitDetail, runClaimedRequest as runClaimedRequestWithLeaseWorker, runningCount } from "./runner";
 import { relayActivity } from "./activity";
 import { dropRun, externalRelayFile, readRunLedger, reserveRun, updateRelayStore, type PairedRelay } from "./store";
 import { confirmRelayPairing } from "./pairing";
@@ -102,6 +102,11 @@ function relay(api_base: string): PairedRelay {
   };
 }
 
+type RunnerRuntime = NonNullable<Parameters<typeof runClaimedRequestWithLeaseWorker>[3]>;
+function runClaimedRequest(relayValue: PairedRelay, requestValue: unknown, onFreed?: () => void, runtime?: RunnerRuntime) {
+  return runClaimedRequestWithLeaseWorker(relayValue, requestValue, onFreed, { ...runtime, leaseWorker: false });
+}
+
 test("capacity transition retains zero targets in the journal and ignores confirmed stop custody", () => {
   const paired = relay("http://127.0.0.1:1/v1"); paired.targets[0]!.concurrency = 3;
   const row = { requestId: "slot-old-a", leaseId: "fixture", relayId: paired.id, targetId: "target_1",
@@ -165,7 +170,7 @@ for (const refusalBeforeAck of [false, true]) test(`accepted completion releases
   updateRelayStore(s => ({ ...s, relays: [paired] })); setRelaySwitch("chain_conversations", true);
   const request = { ...contextRequest, request_id: "slot-completion-race", chat: { key: "capacity-fixture" }, liveness: { ...contextRequest.liveness, heartbeat_interval_s: 2 },
     input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } };
-  const pending = runClaimedRequest(paired, request, undefined, { ownerPorts: {
+  const pending = runClaimedRequestWithLeaseWorker(paired, request, undefined, { leaseWorker: true, ownerPorts: {
     launch: async () => ({ status: 202, body: { conversationId: "conversation_slot-completion" } }),
     observe: async () => ({ state: "ended", finalText: "Done" }), stop: async () => { throw Error("settled work must not be stopped"); },
   } }).then(value => ({ value }), error => ({ error }));
@@ -902,10 +907,10 @@ test("an acknowledged heartbeat still keeps the run alive after a delayed respon
     `const a=process.argv.slice(2);await Bun.stdin.text();await Bun.sleep(12000);await Bun.write(a[a.indexOf('--output-last-message')+1],JSON.stringify({action:'reply',text:'Done',reply_to:null}));`,
   );
   try {
-    const outcome = await runClaimedRequest(relay(`${server.origin}/v1`), {
+    const outcome = await runClaimedRequestWithLeaseWorker(relay(`${server.origin}/v1`), {
       ...sampleRequest, request_id: "rq_late_ack",
       liveness: { ...sampleRequest.liveness, heartbeat_interval_s: 2, stall_window_s: 10 },
-    }, undefined, { command: script, timeoutMs: 18000 });
+    }, undefined, { command: script, timeoutMs: 18000, leaseWorker: true });
     expect(outcome?.outcome).toBe("answered");
     expect(completions).toHaveLength(1);
   } finally {

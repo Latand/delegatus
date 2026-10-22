@@ -340,6 +340,7 @@ async function refreshRelayDescriptorFeaturesNow(id: string, options: { quiet?: 
   }
 }
 const PRUNE_INTERVAL_MS = 60 * 60 * 1000;
+const activeRelayRequests = new Set<Promise<void>>();
 async function poll(
   relay: PairedRelay,
   loop: PollLoop,
@@ -366,11 +367,15 @@ async function poll(
       if (!loop.stopped) loop.state = "polling";
       backoff = 5000;
       const current = readRelayStore().relays.find((item) => item.id === relay.id);
-      if (result.status === 200 && result.body?.request)
-      void runClaimedRequest(current && controller.armed ? current : { ...relay, paused: true }, result.body.request, () =>
+      if (result.status === 200 && result.body?.request) {
+        let leaseReady!: () => void;
+        const firstHeartbeat = new Promise<void>(resolve => { leaseReady = resolve; });
+        const run = runClaimedRequest(current && controller.armed ? current : { ...relay, paused: true }, result.body.request, () =>
           wakeExternalRelayPoller(relay.id),
-          { onUnknownFeature: () => refreshRelayDescriptorFeatures(relay.id, 0, { force: true }) },
-        )
+          { onUnknownFeature: () => refreshRelayDescriptorFeatures(relay.id, 0, { force: true }), onLeaseReady: leaseReady },
+        );
+        void run.then(leaseReady, leaseReady);
+        const trackedRun = run
           .then((outcome) => {
             noteRelayOutcome(
               relay.id,
@@ -381,7 +386,13 @@ async function poll(
           })
           .catch(() => {
             noteRelayOutcome(relay.id, "local_error");
-          });
+          })
+          .finally(() => activeRelayRequests.delete(trackedRun));
+        activeRelayRequests.add(trackedRun);
+        // Do not issue the next claim before the accepted request's first
+        // heartbeat (and any required feature refresh) has settled.
+        await firstHeartbeat;
+      }
       if (loop.stopped || !current) break;
     } catch (error) {
       if (loop.stopped) break;
@@ -423,6 +434,9 @@ export function ensureExternalRelayPollers(): void {
     return;
   }
   refreshExternalRelayPollers();
+}
+export async function waitForExternalRelayRuns(): Promise<void> {
+  while (activeRelayRequests.size) await Promise.allSettled([...activeRelayRequests]);
 }
 async function sweepAndRefresh(): Promise<void> {
   try {
