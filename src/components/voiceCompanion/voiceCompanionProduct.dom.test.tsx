@@ -407,8 +407,13 @@ async function liveHarness() {
   /* The cues' tones: every oscillator any AudioContext was asked for, by the frequency it was given. */
   const tones: number[] = [];
   const stream = { getTracks: () => [track], getAudioTracks: () => [track] };
+  /* Every peer the media opened, so a test can lose the browser's connection as a network drop does. */
+  const peers: Array<{ connectionState: string; changed: Array<() => void> }> = [];
   const stand: Record<string, unknown> = {
     RTCPeerConnection: class extends EventTarget {
+      changed: Array<() => void> = [];
+      constructor() { super(); peers.push(this); }
+      addEventListener(type: string, listener: () => void) { if (type === "connectionstatechange") this.changed.push(listener); }
       iceGatheringState = "complete"; connectionState = "connected"; localDescription = { sdp: "v=0\r\n" };
       addTrack() {} createDataChannel() { return Object.assign(new EventTarget(), { close() {} }); }
       async createOffer() { return {}; } async setLocalDescription() {} async setRemoteDescription() {} close() {}
@@ -438,6 +443,10 @@ async function liveHarness() {
     if (target.pathname === "/api/orchestrator/seat") {
       const project = target.searchParams.get("project");
       return jsonResponse({ seat: { project, conversationId: `conversation_${project}`, seatEpoch: 1, engine: "claude" }, pending: null, lastFailure: null, exists: true, viewerMcpRegistered: true, previous: [], currentTask: null, all: null });
+    }
+    if (target.pathname === "/api/voice-companion/resume") {
+      const resume = await import("@/app/api/voice-companion/resume/route");
+      return resume.GET(new NextRequest(`http://127.0.0.1${target.pathname}${target.search}`, { method: "GET", headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin" } }));
     }
     if (target.pathname !== "/api/voice-companion/session") return jsonResponse({ error: "not routed in this test" }, 404);
     const body = typeof init?.body === "string" ? JSON.parse(init.body) as { action?: string } : null;
@@ -474,7 +483,14 @@ async function liveHarness() {
       const id = `report-${reportList.length + 1}`;
       reportList.push({ id, key: id, seq: reportList.length + 1, at: new Date(Date.now() + 1).toISOString(), class: "completed", body, project, correlatesDirective: sent[sent.length - 1],
         origin: { kind: "manager", conversationId: `conversation_${project}`, role: "orchestrator" } });
-    }, service, holding, trackStops: () => track.stops, trackEnabled: () => track.enabled, tones,
+    }, service, holding, trackStops: () => track.stops,
+    /** The browser's network goes: its newest peer connection fails. */
+    dropMedia() { const peer = peers.at(-1)!; peer.connectionState = "failed"; for (const listener of peer.changed) listener(); },
+    /** Operator and voice speech on a provider session, each turn its own timed fragment. */
+    say(providerId: string, turns: Array<["operator" | "voice", string]>, from = 0) {
+      turns.forEach(([speaker, text], index) => provider.replay(providerId, { type: speaker === "operator" ? "session.input_transcript.delta" : "session.output_transcript.delta",
+        event_id: `${providerId}-turn-${from + index}`, delta: text, start_ms: (from + index) * 4000, end_ms: (from + index) * 4000 + 3000 }));
+    }, trackEnabled: () => track.enabled, tones,
     starts: () => harness.calls.filter((call) => (call.body as { action?: string } | null)?.action === "start").length,
     async release() {
       for (const row of Object.values(storage.read().sessions)) if (!row.closed) await service.close(row.id);
@@ -847,6 +863,54 @@ test("a tap on the character opens the whole conversation from the session recor
   } finally { await unmountNow(); await live.release(); }
 });
 
+test("a dropped call keeps its conversation on screen, offers the same call in one tap, and the reconnect continues it with its context", async () => {
+  const live = await liveHarness();
+  try {
+    await mount(<VoiceCompanionHost project="project-a" mobile={false} />);
+    await click(document.querySelector("[data-companion-talk]"));
+    await pause();
+    const first = live.provider.sessions[0].id;
+    live.say(first, [["operator", "Check the search lane."], ["voice", "The search lane passed its verifier."]]);
+    await pause(700);
+    /* The provider's session ends mid-call. */
+    live.provider.disconnect(first);
+    await pause(700);
+    const lost = document.querySelector<HTMLElement>('[data-companion-notice][data-code="CONNECTION_LOST"]');
+    expect(lost?.textContent).toContain(companionErrorMessage("CONNECTION_LOST", "en"));
+    expect(document.querySelector('[data-companion-notice][data-code="PROVIDER_ERROR"]')).toBeNull();
+    /* What was said stays: in the lane's record and in the call's whole record. */
+    expect(document.querySelector("[data-companion-transcript]")?.textContent).toContain("Check the search lane.");
+    await click(document.querySelector("[data-voice-companion] [data-grip]"));
+    await pause();
+    expect(document.querySelector("[data-companion-transcript-view]")?.textContent).toContain("Check the search lane.");
+    await click(document.querySelector("[data-voice-companion] [data-grip]"));
+
+    /* One tap continues the same call. */
+    await click(document.querySelector("[data-companion-resume]"));
+    await pause(300);
+    const starts = sessionCalls().map((call) => call.body as { action?: string; resume?: string } | null).filter((body) => body?.action === "start");
+    expect(starts.at(-1)?.resume).toBe(Object.values(live.storage.read().sessions).find((row) => row.providerId === first)?.id);
+    expect(live.provider.sessions).toHaveLength(2);
+    expect(live.provider.sessions[1].memory).toContain("operator: Check the search lane.");
+    expect(live.provider.sessions[1].memory).toContain("voice: The search lane passed its verifier.");
+    expect(document.querySelector<HTMLElement>("[data-voice-companion]")?.dataset.phase).not.toBe("offline");
+    const restored = document.querySelector<HTMLElement>('[data-companion-notice][data-code="CONNECTION_RESTORED"]');
+    expect(restored?.textContent).toContain(companionErrorMessage("CONNECTION_RESTORED", "en"));
+    expect(document.querySelector('[data-companion-notice][data-code="CONNECTION_LOST"]')).toBeNull();
+    expect(document.querySelector("[data-companion-resume]")).toBeNull();
+    expect(document.querySelector("[data-companion-transcript]")?.textContent).toContain("Check the search lane.");
+    /* The record now holds both parts of the call and marks the reconnect between them. */
+    live.say(live.provider.sessions[1].id, [["operator", "Then deploy it."]], 5);
+    await pause(700);
+    await click(document.querySelector("[data-voice-companion] [data-grip]"));
+    await pause();
+    const view = document.querySelector<HTMLElement>("[data-companion-transcript-view]")!;
+    expect(view.textContent).toContain("Check the search lane.");
+    expect(view.textContent).toContain("Then deploy it.");
+    expect(view.querySelector("[data-transcript-resumed]")?.textContent).toBe(translate("en", "voiceCompanion.reconnected"));
+  } finally { await unmountNow(); await live.release(); }
+});
+
 test("review: a transcript stays current when the orchestrator answers after the voice session ended", async () => {
   const live = await liveHarness();
   try {
@@ -1176,6 +1240,47 @@ test("phone: Hide during a call ends it: the microphone is muted and stopped, th
     expect(held.trackStops()).toBeGreaterThan(0);
     expect(held.starts()).toBe(1);
   } finally { release(); await unmountNow(); await held.release(); }
+});
+
+test("phone: a lost network keeps the call's history, the menu offers Reconnect, and after a reload the dropped call is still offered, readable and resumed", async () => {
+  const live = await liveHarness();
+  try {
+    await mount(<VoiceCompanionHost project="project-a" mobile />);
+    await phoneRow("talk");
+    await pause(200);
+    const first = live.provider.sessions[0].id;
+    live.say(first, [["operator", "Check the search lane."], ["voice", "The search lane passed its verifier."]]);
+    await pause(700);
+    /* The browser's network goes: the peer connection fails, and the Viewer is told the call dropped. */
+    live.dropMedia();
+    await pause(700);
+    const closes = sessionCalls().map((call) => call.body as { action?: string; reason?: string } | null).filter((body) => body?.action === "close");
+    expect(closes.at(-1)?.reason).toBe("transport");
+    expect(document.querySelector("[data-phone-voice-bubble]")?.textContent).toBe(companionErrorMessage("CONNECTION_LOST", "en"));
+    await click(document.querySelector("[data-phone-voice-head]"));
+    expect(document.querySelector("[data-phone-voice-resume]")).toBeTruthy();
+    await click(document.querySelector("[data-phone-voice-transcript]"));
+    await pause();
+    expect(document.querySelector("[data-companion-transcript-view]")?.textContent).toContain("Check the search lane.");
+    await unmountNow();
+
+    /* A reload: a new head, a new adapter, nothing in memory. The Viewer still offers the call and its record. */
+    await mount(<VoiceCompanionHost project="project-a" mobile />);
+    await pause(200);
+    await click(document.querySelector("[data-phone-voice-head]"));
+    expect(document.querySelector("[data-phone-voice-resume]")).toBeTruthy();
+    await click(document.querySelector("[data-phone-voice-transcript]"));
+    await pause();
+    expect(document.querySelector("[data-companion-transcript-view]")?.textContent).toContain("Check the search lane.");
+    await act(async () => { document.querySelector("[data-companion-transcript-view]")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    await click(document.querySelector("[data-phone-voice-head]"));
+    await click(document.querySelector("[data-phone-voice-resume]"));
+    await pause(300);
+    expect(live.provider.sessions).toHaveLength(2);
+    expect(live.provider.sessions[1].memory).toContain("operator: Check the search lane.");
+    expect(phoneHead()?.dataset.phase).not.toBe("offline");
+    expect(document.querySelector("[data-phone-voice-bubble]")?.textContent).toBe(companionErrorMessage("CONNECTION_RESTORED", "en"));
+  } finally { await unmountNow(); await live.release(); }
 });
 
 test("phone: a project change, and a view with no project, keep the same head and the same live call", async () => {
