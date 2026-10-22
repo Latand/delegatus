@@ -421,3 +421,84 @@ test("a replacement refused at launch by a fresh exhausted reading launches agai
     restartContext: { previousAttempt: 1, transcriptPath: f.attempt.agentPath } });
   expect(f.attempts()[1]!.suspension).toBeUndefined();
 });
+
+test("a replacement never returns to an account its predecessor left held, over 80 ticks of refreshed and aged readings", async () => {
+  const f = await guardedAccountClock(["account-a", "account-b"]);
+  f.read("account-b", 100);
+  await tickPipelines([], f.h.ports);
+  expect(f.attempts()).toHaveLength(1);
+  // Both readings age into "unknown": B is no held account, so it takes the stage.
+  f.advance(6 * 60_000);
+  await tickPipelines([], f.h.ports);
+  await tickPipelines([], f.h.ports);
+  expect(f.attempts()[1]).toMatchObject({ accountId: "account-b", launchId: expect.any(String) });
+  f.read("account-b", 100);
+  await tickPipelines([], f.h.ports);
+  let most = f.attempts().length;
+  for (let tick = 0; tick < 80; tick++) {
+    if (tick % 4 === 0) { f.read("account-a", 100); f.read("account-b", 100); }
+    f.advance(120_000);
+    await tickPipelines([], f.h.ports);
+    most = Math.max(most, f.attempts().length);
+  }
+  expect(most).toBe(2);
+  expect(f.attempts().slice(1).map(attempt => attempt.accountId)).toEqual(["account-b"]);
+  expect(f.attempts()[0]!.suspension?.hold).toMatchObject({ accountId: "account-a", resetsAt: f.resetsAt });
+  expect(f.attempts()[1]).toMatchObject({ suspension: { hold: { accountId: "account-b", resetsAt: f.resetsAt } } });
+  expect(f.current().stateDetail).toContain(`waiting for account account-b to reset at ${new Date(f.resetsAt * 1_000).toISOString()}`);
+});
+
+test("a never-launched attempt that launches again on another account keeps its own hold", async () => {
+  const f = await guardedAccountClock(["account-a", "account-b"]);
+  const laterReset = f.resetsAt + 2 * 3_600;
+  f.read("account-b", 100, laterReset);
+  await tickPipelines([], f.h.ports);
+  f.advance(6 * 60_000);
+  f.read("account-b", 100, laterReset); // B is fresh again when its replacement launches
+  await tickPipelines([], f.h.ports);
+  expect(f.attempts()).toHaveLength(1);
+  f.advance(6 * 60_000);
+  await tickPipelines([], f.h.ports);
+  f.read("account-b", 100, laterReset);
+  await tickPipelines([], f.h.ports);
+  await tickPipelines([], f.h.ports);
+  expect(f.attempts()).toHaveLength(2);
+  expect(f.attempts()[1]).toMatchObject({ accountId: "account-b", launchId: null,
+    suspension: { hold: { accountId: "account-b", resetsAt: laterReset } } });
+
+  // A resets first: the never-launched attempt launches there and keeps B held.
+  f.advance(f.resetsAt * 1_000 - f.now() + 60_000);
+  for (let tick = 0; tick < 3; tick++) { await tickPipelines([], f.h.ports); f.advance(120_000); }
+  expect(f.attempts()).toHaveLength(2);
+  expect(f.attempts()[1]).toMatchObject({ accountId: "account-a", launchId: expect.any(String),
+    accountHolds: [{ accountId: "account-b", resetsAt: laterReset }] });
+  // A runs out again before B resets: the stage waits, B stays held.
+  const againReset = laterReset + 3_600;
+  for (let tick = 0; tick < 20; tick++) {
+    if (tick % 4 === 0) f.read("account-a", 100, againReset);
+    await tickPipelines([], f.h.ports);
+    f.advance(120_000);
+  }
+  expect(f.attempts()).toHaveLength(2);
+  expect(f.attempts()[1]).toMatchObject({ accountId: "account-a", suspension: { hold: { accountId: "account-a", resetsAt: againReset } } });
+});
+
+test("the same exhausted reading, still fresh when its reset passes, keeps the reset and the hold ends there", async () => {
+  const f = await guardedAccountClock();
+  await tickPipelines([], f.h.ports);
+  expect(f.attempts()[0]!.suspension?.hold).toMatchObject({ resetsAt: f.resetsAt });
+  f.advance(f.resetsAt * 1_000 - f.now() - 60_000);
+  f.read("account-a", 100);
+  await tickPipelines([], f.h.ports);
+  f.advance(120_000);
+  await tickPipelines([], f.h.ports);
+  expect(f.attempts()).toHaveLength(1);
+  expect(f.attempts()[0]!.suspension?.hold).toBeUndefined();
+  // No new reading: once the old one ages, one replacement launches.
+  f.advance(10 * 60_000);
+  await tickPipelines([], f.h.ports);
+  await tickPipelines([], f.h.ports);
+  expect(f.attempts()).toHaveLength(2);
+  expect(f.attempts()[1]).toMatchObject({ accountId: "account-a", state: "running", launchId: expect.any(String),
+    restartContext: { previousAttempt: 1, transcriptPath: f.attempt.agentPath } });
+});

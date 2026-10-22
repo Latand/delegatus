@@ -379,14 +379,19 @@ export type PipelineRuntimeSwitch = {
   handoff?: { prompt: string; digest: string; bytes: number };
 };
 
+/** A confirmed usage exhaustion of one account. It stands while later reads
+    only age that reading, and ends at its reset (unix seconds) or when a
+    reading newer than `observedAt` shows capacity (issue #3158). */
+export type PipelineAccountHold = { accountId: string; resetsAt: number | null; observedAt: string | null };
+
 export type PipelineStageAttempt = {
   n: number;
   /** Stop custody for pause or account evacuation. A replacement keeps this checkout. */
   suspension?: { reason: "pause" | "account"; detail: string; requestedAt: string; stoppedAt?: string; stopRevision?: number; operatorStoppedAt?: string;
-    /** A confirmed usage exhaustion of this account. It stands while later
-        reads only age that reading, and ends at its reset (unix seconds) or
-        when a reading newer than `observedAt` shows capacity (issue #3158). */
-    hold?: { accountId: string; resetsAt: number | null; observedAt: string | null } };
+    hold?: PipelineAccountHold };
+  /** Holds an account suspension of this attempt confirmed, kept when the
+      attempt, never launched, launches again on another account. */
+  accountHolds?: PipelineAccountHold[];
   runtimeSwitches?: PipelineRuntimeSwitch[];
   /** Monotonic verdict fence survives bounded switch-history retention. */
   runtimeEvidenceSince?: string;
