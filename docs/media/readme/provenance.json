@@ -28,7 +28,7 @@
         "meanDifference": 0.199,
         "ringsClipped": 0
       },
-      "sha256": "b3d41092f02abb0c3370b271199d8cbc67aeddd55b978f0385112916ef906628"
+      "sha256": "4408b50842ee730e3f045d99b20a368dd84987ccc7831b78b7ac75dd665fd75e"
     },
     {
       "path": "orchestrator.svg",
@@ -51,7 +51,7 @@
         "meanDifference": 0.625,
         "ringsClipped": 1
       },
-      "sha256": "cb48808783bca404fd2bf5e33a7b54cc36792903f6df76c9479d5f0fd46a847e"
+      "sha256": "ac538f12d2444e1b40faec84331186afdc07a8b8ecba6692487d1a34f2e411b7"
     },
     {
       "path": "conversation.svg",
@@ -70,11 +70,11 @@
       "rasterTiles": 16,
       "renderBack": {
         "worstTileMean": 14.152,
-        "changedTileShare": 0.007,
-        "meanDifference": 0.368,
+        "changedTileShare": 0.016,
+        "meanDifference": 0.681,
         "ringsClipped": 2
       },
-      "sha256": "895d557a88c92656271fa48b937fdf3c4887dce4dac40cb7d70121e906916271"
+      "sha256": "6ab0cfdb29dff586f91ff261b80f66ec09e0ab114ad01fc17cc63f55892e7083"
     },
     {
       "path": "pipeline.svg",
@@ -94,10 +94,10 @@
       "renderBack": {
         "worstTileMean": 9.363,
         "changedTileShare": 0.001,
-        "meanDifference": 0.271,
+        "meanDifference": 0.272,
         "ringsClipped": 0
       },
-      "sha256": "58c87364d85b86ca61fc4a9cfca0b03191229110106ba149eee6f15f7ebd4b49"
+      "sha256": "3256665cc3c2cf3982dde0f9609294c493684d88c8501cfd447d0cefa32b2d98"
     },
     {
       "path": "card-menu.svg",
@@ -120,7 +120,7 @@
         "meanDifference": 0.312,
         "ringsClipped": 0
       },
-      "sha256": "87940bdd8ca3f5d109ff282103403652ec446213da0b84b0908ac2a57ca0c523"
+      "sha256": "5293f15d851c63f8aadd4225f5215cea30e5f738ca55993f7f70edcdfedc903f"
     },
     {
       "path": "accounts.svg",
@@ -140,10 +140,10 @@
       "renderBack": {
         "worstTileMean": 3.062,
         "changedTileShare": 0,
-        "meanDifference": 0.259,
+        "meanDifference": 0.264,
         "ringsClipped": 0
       },
-      "sha256": "92fc0951ffaa2da710a0a2ad5d130a669fe1a7ff33f8a5479e6383062f870991"
+      "sha256": "58ae87ad4fbca9e2ac7a1ce17be6db7331f4930862a13b4458a700313861ab1f"
     },
     {
       "path": "phone-conversation.svg",
@@ -157,10 +157,10 @@
       "renderBack": {
         "worstTileMean": 11.912,
         "changedTileShare": 0.016,
-        "meanDifference": 0.756,
+        "meanDifference": 0.757,
         "ringsClipped": 0
       },
-      "sha256": "c5d83f007ff1c7b9024f67b0ebb44a1e2c36a8b3bc6bb1f7fdc1dec8d4a31443"
+      "sha256": "fa8eb5097c83a15e2ba7b5e1c22bcf3779efa1d4e0382834ed3cf8c9741fcfec"
     },
     {
       "path": "phone-board.svg",
@@ -173,11 +173,11 @@
       "rasterTiles": 10,
       "renderBack": {
         "worstTileMean": 12.37,
-        "changedTileShare": 0.022,
-        "meanDifference": 0.422,
+        "changedTileShare": 0.021,
+        "meanDifference": 0.419,
         "ringsClipped": 0
       },
-      "sha256": "592feef247fd068a8c5e3b02f3cf0d0d040a1fcca096364c0c4a53d1a2656d06"
+      "sha256": "6fcecc696f2925af2913293fc3996ea3c0a355993c5e51ec23e8d61aca6d161c"
     }
   ]
 }
