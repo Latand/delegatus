@@ -1092,14 +1092,19 @@ async function legacyPublication(h: ReturnType<typeof fixture>) {
   savePipelines([h.lane]);
 }
 
-async function restartedPublicationController(clock = "2026-10-19T10:00:00.000Z") {
+async function restartedPublicationController(clock = "2026-10-19T10:00:00.000Z", bounded = false) {
   const script = `const { realExec } = await import(${JSON.stringify(path.join(import.meta.dir, "../workflows/provision.ts"))});
     const { defaultPipelinePorts, tickPipelines } = await import(${JSON.stringify(path.join(import.meta.dir, "engine.ts"))});
     const ports = { ...defaultPipelinePorts(), exec: ${publicationFixtureExec.toString()},
       now: () => ${JSON.stringify(clock)}, scheduleTick: () => {},
       conversationAgentActive: async () => false, stageHostResident: async () => false,
       paneAgentAlive: async () => false, getFlow: () => null, worktreePresent: () => true };
-    for (let n = 0; n < 8; n++) await tickPipelines([], ports);`;
+    const { tickPipelinesController } = await import(${JSON.stringify(path.join(import.meta.dir, "controllerPass.ts"))});
+    const { settlePipelineControllerJobs } = await import(${JSON.stringify(path.join(import.meta.dir, "controllerJobs.ts"))});
+    for (let n = 0; n < 8; n++) {
+      if (${bounded}) { await tickPipelinesController([], ports); await settlePipelineControllerJobs(); }
+      else await tickPipelines([], ports);
+    }`;
   const result = await realExec(process.execPath, ["-e", script], process.cwd(), process.env, { timeoutMs: 30_000 });
   expect(result.code, result.stderr).toBe(0);
 }
@@ -1135,16 +1140,57 @@ async function leaveDeadPublication(h: ReturnType<typeof fixture>) {
   expect(fs.existsSync(interrupted.executor!.lock)).toBe(true);
 }
 
-test("startup retries a parked publication left by a dead Viewer generation", async () => {
+test.each([false, true])("startup retries a parked publication left by a dead Viewer generation (bounded controller: %s)", async bounded => {
   const h = fixture();
   try {
     await leaveDeadPublication(h);
-    await restartedPublicationController();
+    await restartedPublicationController(undefined, bounded);
     expect(h.current()).toMatchObject({ state: "completed", lastPassedCommit: h.passed, publishedCommit: h.passed });
     expect(h.current().runs[0]!.attempts).toHaveLength(1);
     expect(h.git("ls-remote", "origin", `refs/heads/${h.lane.branch}`).split(/\s/)[0]).toBe(h.passed);
   } finally { h.cleanup(); }
 }, 90_000);
+
+test("bounded startup returns during publication recovery and labels its remote wait", async () => {
+  const h = fixture();
+  const { tickPipelinesController } = await import("./controllerPass");
+  const { settlePipelineControllerJobs, pipelineControllerJobLanes } = await import("./controllerJobs");
+  const { viewerLoopMonitor } = await import("@/lib/viewerLoopMonitor");
+  let enter!: () => void, release!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const released = new Promise<void>(resolve => { release = resolve; });
+  let reads = 0, label: string | undefined;
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await leaveDeadPublication(h);
+    const ports = { ...h.ports, now: () => "2026-10-19T10:00:00.000Z", scheduleTick: () => {},
+      exec: async (...args: Parameters<typeof realExec>) => {
+        if (args[0] === "git" && args[1][0] === "ls-remote") {
+          reads++;
+          label = viewerLoopMonitor.current();
+          enter();
+          await released;
+        }
+        return h.ports.exec(...args);
+      } };
+    // The phase completes before the remote observation is allowed to finish.
+    await Promise.race([
+      Promise.all([tickPipelinesController([], ports), entered]),
+      new Promise<never>((_, reject) => { deadline = setTimeout(() => reject(new Error("publication recovery did not reach its remote wait")), 10_000); }),
+    ]);
+    clearTimeout(deadline);
+    expect(label).toBe("pipelines.publication-recovery");
+    expect(pipelineControllerJobLanes()).toEqual([h.lane.id]);
+    await tickPipelinesController([], ports);
+    expect(reads).toBe(1);
+    expect(h.current().delivery!.operation!.state).toBe("running");
+  } finally {
+    clearTimeout(deadline);
+    release();
+    await settlePipelineControllerJobs();
+    h.cleanup();
+  }
+});
 
 test("takeover reconciles the departed publisher generation before changing its epoch", async () => {
   const h = fixture();
