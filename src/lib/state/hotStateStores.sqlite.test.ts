@@ -553,6 +553,7 @@ test("incremental reads return one committed snapshot across a concurrent writer
   }
 });
 
+// Exercise all 1,040 durable revisions under the same budget as minimum-SQLite CI.
 test("bounded change retention forces a stale reader through a full reload", () => {
   const previous = process.env.LLV_STATE_DIR;
   const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-state-retention-"));
@@ -587,7 +588,7 @@ test("bounded change retention forces a stale reader through a full reload", () 
     else process.env.LLV_STATE_DIR = previous;
     fs.rmSync(sandbox, { recursive: true, force: true });
   }
-});
+}, 60_000);
 
 test("portable process identity preserves inconclusive owners and reclaims proven pid reuse", () => {
   const previous = process.env.LLV_STATE_DIR;
