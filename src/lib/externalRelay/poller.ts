@@ -21,6 +21,7 @@ import {
   externalRelayTempRoot,
   runClaimedRequest,
   runningCount,
+  relayRequestInFlight,
 } from "./runner";
 import {
   dropRun,
@@ -102,6 +103,14 @@ export function wakeExternalRelayPoller(id: string) {
 export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Promise<void> {
   assertStateStartupMutation(externalRelayFile("runs"), "external-relay-sweep");
   for (const run of readRunLedger().runs) {
+    // Accepted completion already ended execution. Finish abandoned cleanup
+    // without controlling a host or sending a second service completion.
+    if (run.capacityReleased) {
+      if (relayRequestInFlight(run.requestId) || run.ownerPid !== process.pid && processMatches(run.ownerPid, run.ownerIdentity)) continue;
+      removeRunDirectory(run.runDir);
+      dropRun(run.requestId);
+      continue;
+    }
     const ownerAlive = processMatches(run.ownerPid, run.ownerIdentity);
     if (run.ownerTurn) {
       if (ownerAlive && !run.ownerTurn.cancel) continue;
@@ -144,16 +153,16 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
           delivery = "refused";
       }
     }
-    if (
-      path.dirname(path.resolve(run.runDir)) === externalRelayTempRoot() &&
-      path.basename(run.runDir).startsWith("llv-external-relay-")
-    )
-      fs.rmSync(run.runDir, { recursive: true, force: true });
+    removeRunDirectory(run.runDir);
     settleInterruptedAnswer(run.relayId, run.targetId, run.requestId, delivery,
       run.ownerTurn ? readRunLedger().runs.find(r => r.requestId === run.requestId)?.conversationId : undefined);
     dropRun(run.requestId);
   }
   await sweepConversationsAsync(readRelayStore().relays, Date.now(), Date.now() + 5_000);
+}
+function removeRunDirectory(directory: string): void {
+  if (path.dirname(path.resolve(directory)) === externalRelayTempRoot() && path.basename(directory).startsWith("llv-external-relay-"))
+    fs.rmSync(directory, { recursive: true, force: true });
 }
 /* A paired relay's targets come from endpoint 6 whenever the settings page
    reads them (at most every 30 s), every 5 min from the claim loop, and once
@@ -331,6 +340,7 @@ async function refreshRelayDescriptorFeaturesNow(id: string, options: { quiet?: 
   }
 }
 const PRUNE_INTERVAL_MS = 60 * 60 * 1000;
+const activeRelayRequests = new Set<Promise<void>>();
 async function poll(
   relay: PairedRelay,
   loop: PollLoop,
@@ -357,11 +367,15 @@ async function poll(
       if (!loop.stopped) loop.state = "polling";
       backoff = 5000;
       const current = readRelayStore().relays.find((item) => item.id === relay.id);
-      if (result.status === 200 && result.body?.request)
-      void runClaimedRequest(current && controller.armed ? current : { ...relay, paused: true }, result.body.request, () =>
+      if (result.status === 200 && result.body?.request) {
+        let leaseReady!: () => void;
+        const firstHeartbeat = new Promise<void>(resolve => { leaseReady = resolve; });
+        const run = runClaimedRequest(current && controller.armed ? current : { ...relay, paused: true }, result.body.request, () =>
           wakeExternalRelayPoller(relay.id),
-          { onUnknownFeature: () => refreshRelayDescriptorFeatures(relay.id, 0, { force: true }) },
-        )
+          { onUnknownFeature: () => refreshRelayDescriptorFeatures(relay.id, 0, { force: true }), onLeaseReady: leaseReady },
+        );
+        void run.then(leaseReady, leaseReady);
+        const trackedRun = run
           .then((outcome) => {
             noteRelayOutcome(
               relay.id,
@@ -372,7 +386,13 @@ async function poll(
           })
           .catch(() => {
             noteRelayOutcome(relay.id, "local_error");
-          });
+          })
+          .finally(() => activeRelayRequests.delete(trackedRun));
+        activeRelayRequests.add(trackedRun);
+        // Do not issue the next claim before the accepted request's first
+        // heartbeat (and any required feature refresh) has settled.
+        await firstHeartbeat;
+      }
       if (loop.stopped || !current) break;
     } catch (error) {
       if (loop.stopped) break;
@@ -414,6 +434,9 @@ export function ensureExternalRelayPollers(): void {
     return;
   }
   refreshExternalRelayPollers();
+}
+export async function waitForExternalRelayRuns(): Promise<void> {
+  while (activeRelayRequests.size) await Promise.allSettled([...activeRelayRequests]);
 }
 async function sweepAndRefresh(): Promise<void> {
   try {

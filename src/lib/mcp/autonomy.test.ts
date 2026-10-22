@@ -33,6 +33,32 @@ function binding(project: string, kind: "manager" | "agent" = "manager") {
   } as never);
 }
 
+test("MCP carries the child flag, refuses agent enable and permits seat disable", async () => {
+  setSystemTime(now);
+  const project = "proactive-tool";
+  const initial = seed(project);
+  expect((await binding(project).seat_tick_settings({ clientRequestId: "proactive-default" })).autonomy).toMatchObject({ proactive: { enabled: false } });
+  const args = { clientRequestId: "proactive-enable", autonomy: { proactive: { enabled: true }, why: "Operator asked" } };
+  expect(TOOL_INPUT_SCHEMAS.seat_tick_settings.safeParse(args).success).toBe(true);
+  expect(TOOL_INPUT_SCHEMAS.seat_tick_settings.safeParse({ ...args, autonomy: { proactive: { enabled: true, cap: 5 } } }).success).toBe(false);
+  for (const kind of ["manager", "agent"] as const) {
+    await expect(binding(project, kind).seat_tick_settings({ ...args, clientRequestId: `proactive-refused-${kind}` })).rejects.toThrow("only the operator");
+  }
+  const root = viewerMcpBindings(undefined, undefined, {
+    callerAttribution: () => ({ kind: "gateway", conversationId: "conversation_seat" }),
+    callerProject: () => project, authorizedSeats: () => [{ conversationId: "conversation_seat", project, path: null }],
+  } as never);
+  await expect(root.seat_tick_settings({ ...args, clientRequestId: "proactive-refused-root" })).rejects.toThrow("only the operator");
+  expect(readSeatTickSettings(project).autonomy?.proactive?.enabled ?? false).toBe(false);
+  const enabled = applySeatTickSettingsChange(initial, args, { at, actor: operator });
+  if (!enabled.ok) throw new Error(enabled.error);
+  writeSeatTickSettings(project, enabled.settings);
+  expect((await binding(project).seat_tick_settings({ clientRequestId: "proactive-read-compact" })).autonomy).toMatchObject({ active: true, proactive: { enabled: true } });
+  expect((await binding(project).seat_tick_settings({ clientRequestId: "proactive-read", verbose: true })).autonomy).toMatchObject({ proactive: { enabled: true }, episode: { proactive: { enabled: true } } });
+  await binding(project).seat_tick_settings({ clientRequestId: "proactive-stop", autonomy: { proactive: { enabled: false }, why: "Reserve requested capacity" } });
+  expect((await binding(project).seat_tick_settings({ clientRequestId: "proactive-stopped" })).autonomy).toMatchObject({ active: true, proactive: { enabled: false } });
+});
+
 test("browser API persists default duration and extension; MCP seat can only shorten", async () => {
   setSystemTime(now);
   const project = "autonomy-api";
