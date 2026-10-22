@@ -1121,14 +1121,21 @@ off Linux, as `scripts/gate-slot.test.ts:101` does.
 | T22 | `provision.sh --print-settings` with 16 CPUs and `MemTotal` 32,083,512 kB, and with 32 CPUs and 128 GiB | The slots differ from 3 and 8, or `MemoryHigh` differs from `MemTotal` − 4 GiB. |
 | T23 | The client's config lookup (through `machineHome()`) and the shell branch's, run with `HOME` and `XDG_CONFIG_HOME` set to temporary directories | Either resolves under `HOME`, or under anything other than field 6 of `getent passwd <uid>`. |
 
-The cases live in `scripts/gate-runner/client.test.ts` (selection, streams,
-archives, health cache, T13, T17, T18, T22, T23), `remote.test.ts` (T1–T5,
-T21), `remoteTree.test.ts` (T9, T12, T15, T19), `remoteFaults.test.ts` (T6–T8, T20) and
-`remoteLifecycle.test.ts` (T10, T11, T14). The stub records every process
-group it starts, and each test stops and waits for them, because the runner
-side outlives a killed session as it would on a real host. The privacy gate refuses any changed symlink, so T4's symlink case ships
-through `ship()` and the real `serve.ts run` without the scan. T14's size
-bound uses the test-only `LLV_GATE_RUNNER_RETURN_LIMIT`.
+The cases live in `scripts/gate-runner/`: `client.test.ts` holds the fast
+ones (selection, streams, archives, health cache, T13, T17, T18, T22, T23),
+and the stub-runner files hold at most three cases each, so every file stays
+under half the comparator's 300 s file budget on a loaded runner:
+`remote.test.ts` (T1–T3, T21), `remoteCheckout.test.ts` (T4, T5),
+`remoteTree.test.ts` (T9, T12), `remoteExport.test.ts` (T15, T19),
+`remoteFaults.test.ts` (T6, T7), `remoteControl.test.ts` (T8, T20),
+`remoteLifecycle.test.ts` (T10, T11), `remoteOutputs.test.ts` (T14) and
+`remoteShip.test.ts`. The stub records every process group it starts, and
+each test stops and waits for them, because the runner side outlives a
+killed session as it would on a real host. The privacy gate refuses any
+changed symlink, so T4's symlink case is in `remoteShip.test.ts`, which ships
+through `ship()` and the real `serve.ts run` without the scan, as does T19's
+check of what an export bundle carries. T14's size bound uses the test-only
+`LLV_GATE_RUNNER_RETURN_LIMIT`.
 
 ### 8.12 Rehearsal on the real runner and rollout
 

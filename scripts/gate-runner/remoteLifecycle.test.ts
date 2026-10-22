@@ -1,13 +1,13 @@
-// Cancellation, cleanup, returned outputs and shipping of a remote gate run
-// against the stub runner (harness.fixture.ts).
+// Stub-runner runs: cancellation, cleanup and the sweep (T10, T11).
+// The remote command really runs, under a temporary runner home, through the
+// real serve.ts (harness.fixture.ts); every file stays well under the 300 s
+// file budget on a loaded runner, so each holds at most three cases.
 import { afterEach, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { ship } from "./client";
-import { cleanGitEnv, git, makeHarness, testFile, type Harness } from "./harness.fixture";
-import { ustarEntry } from "./serve";
+import { makeHarness, testFile, type Harness } from "./harness.fixture";
 
 const linux = process.platform === "linux";
 /** Several stub runs, each a full checkout, install and owned test run; slow under load. */
@@ -59,115 +59,4 @@ test.if(linux)("SIGTERM stops the remote unit and removes the run; every finishe
   } finally {
     spawnSync("systemctl", ["--user", "stop", `gate-run-${live}`]);
   }
-}, E2E_TIMEOUT);
-
-// T14
-test.if(linux)("a driver's declared outputs come back; nothing else does, and a hostile return writes nothing", () => {
-  const h = harness();
-  const outDir = path.join(h.root, "pd-out");
-  fs.mkdirSync(outDir);
-  fs.writeFileSync(path.join(h.root, "pd-sibling.txt"), "untouched");
-  const driver = testFile(h, "outputs.browser.test.tsx", `
-import fs from "node:fs";
-test("writes outputs", () => {
-  fs.mkdirSync("evidence/gate-runner-x", { recursive: true });
-  fs.writeFileSync("evidence/gate-runner-x/a.json", "{\\"a\\":1}");
-  fs.mkdirSync(".artifacts/gate-runner-y", { recursive: true });
-  fs.writeFileSync(".artifacts/gate-runner-y/b.png", "png");
-  fs.writeFileSync(".artifacts/gate-runner-y/large.bin", Buffer.alloc(2 * 1024 * 1024, 7));
-  fs.writeFileSync(process.env.PD_OUT + "/f.txt", "outside");
-  fs.appendFileSync(".githooks/pre-push", "\\necho planted\\n");
-  fs.appendFileSync("package.json", " ");
-});`);
-  const hashes = () => {
-    const out: Record<string, string> = {};
-    for (const file of git(h.fixture, "ls-files", "-z", "--cached", "--others").split("\0").filter(Boolean)) {
-      const full = path.join(h.fixture, file);
-      if (fs.lstatSync(full, { throwIfNoEntry: false })?.isFile()) out[file] = createHash("sha1").update(fs.readFileSync(full)).digest("hex");
-    }
-    for (const name of fs.readdirSync(h.root)) if (name.startsWith("pd-")) out[`root/${name}`] = fs.lstatSync(path.join(h.root, name)).isFile() ? fs.readFileSync(path.join(h.root, name), "utf8") : "dir";
-    return out;
-  };
-  const before = hashes();
-  const result = h.run(["bun", "test", driver], { env: h.env({ PD_OUT: outDir }) });
-  expect(result.stderr).toMatch(RUNNING);
-  expect(result.code).toBe(0);
-  const after = hashes();
-  expect(fs.readFileSync(path.join(h.fixture, "evidence/gate-runner-x/a.json"), "utf8")).toBe(`{"a":1}`);
-  expect(fs.readFileSync(path.join(h.fixture, ".artifacts/gate-runner-y/b.png"), "utf8")).toBe("png");
-  expect(fs.readFileSync(path.join(outDir, "f.txt"), "utf8")).toBe("outside");
-  const changed = Object.keys({ ...before, ...after }).filter(key => before[key] !== after[key]).sort();
-  // Larger than a pipe buffer: the archive must arrive whole.
-  expect(fs.readFileSync(path.join(h.fixture, ".artifacts/gate-runner-y/large.bin")).equals(Buffer.alloc(2 * 1024 * 1024, 7))).toBeTrue();
-  expect(changed).toEqual([".artifacts/gate-runner-y/b.png", ".artifacts/gate-runner-y/large.bin", "evidence/gate-runner-x/a.json"]);
-  expect(fs.readdirSync(path.join(h.root, "pd-out"))).toEqual(["f.txt"]);
-
-  for (const [name, archive] of [
-    ["traversal", Buffer.concat([ustarEntry("tree/../escaped", Buffer.from("x")), Buffer.alloc(1024)])],
-    ["hook", Buffer.concat([ustarEntry("tree/evidence/ok.json", Buffer.from("ok")), ustarEntry("tree/.githooks/pre-push", Buffer.from("planted")), Buffer.alloc(1024)])],
-    ["large", Buffer.concat([ustarEntry("tree/evidence/big.bin", Buffer.alloc(64 * 1024)), Buffer.alloc(1024)])],
-  ] as const) {
-    const pack = path.join(h.root, `pack-${name}.tar`);
-    fs.writeFileSync(pack, archive);
-    h.settings({ packFile: pack });
-    fs.rmSync(path.join(h.cache, "runner-health.json"), { force: true });
-    const snapshot = hashes();
-    const hostile = h.run(["bun", "test", driver], { env: h.env({ PD_OUT: outDir, LLV_GATE_RUNNER_RETURN_LIMIT: String(32 * 1024) }) });
-    expect(hostile.code).toBe(75);
-    expect(hostile.stderr).toMatch(/^gate-runner: no verdict: outputs were not returned \(.+\)$/m);
-    expect(hashes()).toEqual(snapshot);
-    expect(fs.existsSync(path.join(h.root, "escaped"))).toBeFalse();
-    expect(fs.existsSync(path.join(h.fixture, "evidence", "ok.json"))).toBeFalse();
-  }
-}, E2E_TIMEOUT);
-
-// T4 (symlink) and T19 (what a bundle carries): ship() and the real serve.ts,
-// without the privacy scan, which refuses any changed symlink.
-test.if(linux)("a shipped tree keeps a symlink, and an export's bundle carries one gate-run commit on main", async () => {
-  const h = harness();
-  fs.symlinkSync("README.md", path.join(h.fixture, "readme-link"));
-  const scratch = path.join(h.root, "ship"); fs.mkdirSync(scratch);
-  const shipment = ship({ kind: "git", root: h.fixture }, scratch, h.base);
-  const id = randomBytes(6).toString("hex");
-  const dir = path.join(h.runnerHome, "runs", id);
-  fs.mkdirSync(dir);
-  fs.copyFileSync(shipment.bundle, path.join(dir, "run.bundle"));
-  fs.copyFileSync(path.join(import.meta.dir, "serve.ts"), path.join(dir, "serve.ts"));
-  const file = testFile(h, "link.test.ts", `import fs from "node:fs"; test("link", () => expect(fs.readlinkSync("readme-link")).toBe("README.md"));`);
-  // The fixture file joins the tree after capture, so capture again.
-  fs.rmSync(scratch, { recursive: true }); fs.mkdirSync(scratch);
-  const again = ship({ kind: "git", root: h.fixture }, scratch, h.base);
-  fs.copyFileSync(again.bundle, path.join(dir, "run.bundle"));
-  fs.writeFileSync(path.join(dir, "manifest.json"), JSON.stringify({ version: 1, id, kind: "git", tree: again.tree, head: again.head, base: again.base, argv: ["bun", "test", file], cwd: ".", shape: "test", env: {}, outputs: [], chrome: false }));
-  const nonce = randomBytes(32).toString("hex");
-  // Standard input stays open as a client's does: end of file means the
-  // client is gone, and serve.ts then stops the run.
-  const session = spawn(process.execPath, [path.join(dir, "serve.ts"), "run", dir], {
-    stdio: ["pipe", "pipe", "pipe"],
-    env: { HOME: h.runnerHome, PATH: process.env.PATH, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS, LLV_GATE_RUNNER_NODE_MODULES: fs.realpathSync(path.join(h.fixture, "node_modules")) } as unknown as NodeJS.ProcessEnv,
-  });
-  let stderr = "";
-  session.stderr!.on("data", chunk => { stderr += chunk; });
-  session.stdout!.resume();
-  session.stdin!.write(`${nonce} -\n`);
-  await new Promise(resolve => session.on("close", resolve));
-  const run = { stderr };
-  expect(run.stderr).toContain(`${nonce} started`);
-  expect(run.stderr).toContain(`${nonce} end 0 ${again.tree}`);
-  expect(shipment.tree).not.toBe(again.tree);
-
-  // An export: one commit, its message "gate-run", on main's merge base.
-  const exportRoot = path.join(h.root, "export"), checkout = path.join(exportRoot, "checkout");
-  fs.mkdirSync(checkout, { recursive: true });
-  spawnSync("bash", ["-c", `git -C ${h.fixture} archive ${h.head} | tar -x -C ${checkout}`], { env: cleanGitEnv() });
-  fs.appendFileSync(path.join(checkout, "README.md"), "\nexport edit\n");
-  const exportScratch = path.join(h.root, "ship-export"); fs.mkdirSync(exportScratch);
-  const exported = ship({ kind: "export", root: checkout, record: { version: 1, checkout, head: h.head, repository: path.join(h.fixture, ".git") } }, exportScratch, h.base);
-  const shipGit = (...args: string[]) => git(exportScratch, "--git-dir", path.join(exportScratch, "ship.git"), ...args);
-  expect(exported.parent).toBe(h.base);
-  expect(shipGit("rev-list", "refs/gate/tree", "--not", exported.parent!).split("\n")).toEqual([exported.commit]);
-  expect(shipGit("log", "-1", "--format=%s|%an|%P", exported.commit)).toBe(`gate-run|gate-run|${h.base}`);
-  expect(shipGit("bundle", "list-heads", exported.bundle)).toBe(`${exported.commit} refs/gate/tree`);
-  expect(exported.changed).toContain("README.md");
-  expect(fs.readdirSync(exportRoot)).toEqual(["checkout"]);
 }, E2E_TIMEOUT);
