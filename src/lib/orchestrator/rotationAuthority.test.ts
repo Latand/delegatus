@@ -199,6 +199,7 @@ function seatSeeded(project = "proj-a", conversationId = SEAT_ID, runtime: { eng
 function dependencies(): { deps: SeatCommandDependencies; spawns: Record<string, unknown>[] } {
   const spawns: Record<string, unknown>[] = [];
   const deps: SeatCommandDependencies = {
+    resolveProject: project => ({ project, displayName: project }),
     spawn: async (body) => {
       spawns.push(body);
       return { status: 200, body: { ok: true, conversationId: SUCCESSOR_ID, path: "/tmp/successor.jsonl" } };

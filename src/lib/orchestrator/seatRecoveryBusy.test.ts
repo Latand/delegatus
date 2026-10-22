@@ -28,6 +28,7 @@ const AT = "2026-10-11T17:11:00.000Z";
 const conversationId = () => `conversation_${randomUUID()}`;
 function dependencies(spawn: SeatCommandDependencies["spawn"], waitMs?: number): SeatCommandDependencies {
   return {
+    resolveProject: project => ({ project, displayName: project }),
     spawn, deliver: async () => ({ ok: true, outcome: "delivered" }), conversationTarget: () => null,
     summarizeHandoffs: async () => ({ kind: "fallback", reason: "unavailable" }),
     launchSettlement: () => ({ kind: "unknown" }), stampRegistryIdentity: () => {},

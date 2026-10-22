@@ -206,6 +206,7 @@ function dependencies(): { asks: SpawnAsk[]; resolved: string[] } {
   const asks: SpawnAsk[] = [];
   const resolved: string[] = [];
   const deps: SeatCommandDependencies = {
+    resolveProject: project => ({ project, displayName: project }),
     spawn: async (body) => {
       asks.push({ accountId: body.accountId, project: body.project, engine: body.engine });
       try {

@@ -1,3 +1,8 @@
+import { canonicalProject, projectAliasSnapshot } from "@/lib/projects/aliases";
+import { projectCurationSnapshot } from "@/lib/projects/curation";
+import { isCanonicalProjectId } from "@/lib/projects/identity";
+import { resolveSeatProject } from "@/lib/orchestrator/seatProjectIdentity";
+import { ProjectNameRefusal } from "@/lib/projects/nameResolution";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
 import os from "node:os";
@@ -26,6 +31,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 interface SeatStatus {
+  project: string;
+  displayName: string;
   seat: OrchestratorSeat | null;
   pending: OrchestratorSeat | null;
   /** The latest terminal failure still needing attention. Its durable history
@@ -81,11 +88,24 @@ interface SeatFailure {
 
 export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | SeatConversationsAnswer | ApiError>> {
   return withViewerOperation("seat.panel", async () => {
-  const project = req.nextUrl.searchParams.get("project")?.trim() ?? "";
+  let project = req.nextUrl.searchParams.get("project")?.trim() ?? "";
+  let displayName = project;
   if (req.nextUrl.searchParams.get("scope")?.trim() === "all") {
     return NextResponse.json({ all: withDeputyRefs(allSeatConversationsIn(readOrchestratorSeatFileOrNull()), readDeputyFileOrNull()) });
   }
   if (!project) return NextResponse.json({ error: "project is required" }, { status: 400 });
+  try {
+    project = canonicalProject(project);
+    if (isCanonicalProjectId(project)) {
+      displayName = projectAliasSnapshot().displayNames[project]
+        ?? projectCurationSnapshot().manualProjects.find(row => canonicalProject(row.project) === project)?.displayName ?? project;
+    } else ({ project, displayName } = resolveSeatProject(project));
+  }
+  catch (error) {
+    // Historical unknown keys remain readable while their identity is unproven.
+    if (!(error instanceof ProjectNameRefusal)) throw error;
+    if (error.details.code !== "unknown_project") return NextResponse.json({ error: error.message, ...error.details }, { status: 400 });
+  }
   const cwd = req.nextUrl.searchParams.get("cwd")?.trim() || undefined;
   const home = process.env.HOME?.trim() || os.homedir();
   /* ONE read of the seat record for the whole answer. Every part of it — this
@@ -134,6 +154,7 @@ export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | S
     return { ...seat, title: task?.title ?? null, taskId: task?.taskId ?? null, hasNotes: task?.hasNotes ?? false };
   });
   return NextResponse.json({
+    project, displayName,
     seat: active,
     pending,
     lastFailure: currentSeatFailure(failure, active, hostObservation),
