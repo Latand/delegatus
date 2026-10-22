@@ -9,6 +9,53 @@ import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIden
 const binary = process.env.LLV_CODEX_BINARY ?? "codex";
 const version = spawnSync(binary, ["--version"], { encoding: "utf8", timeout: 5_000 }).stdout?.trim();
 
+for (const mode of ["exit", "wrapped", "large", "boundary", "signal", "missing", "timeout", "ownership", "success"] as const) {
+  test.skipIf(process.platform !== "linux")(`callback startup ${mode} preserves a bounded redacted cause on repeated launches`, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "callback-"));
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        fs.rmSync(path.join(root, "ready"), { force: true });
+        fs.rmSync(path.join(root, "ready.release"), { force: true });
+        const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "codexSocketTransport.fixture.ts"), root, mode], {
+          env: { ...process.env, DELEGATUS_CPU_PRESSURE: "off" }, stdout: "pipe", stderr: "pipe",
+        });
+        const output = new Response(child.stdout).text();
+        const stderr = new Response(child.stderr).text();
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([child.exited, new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error("owned callback fixture exceeded its parent deadline")), 15_000);
+          })]);
+          expect(child.exitCode, await stderr).toBe(0);
+          const message = JSON.parse(await output).error as string;
+          if (mode === "success") {
+            expect(message).toBe("connected: probe");
+            continue;
+          }
+          if (mode === "missing") {
+            expect(message).toContain("ENOENT");
+            expect(message).not.toContain(root);
+            expect(message).toStartWith("Codex callback listener failed before dispatch: ");
+            continue;
+          }
+          expect(message).toContain(mode === "ownership" ? "ownership could not be verified"
+            : mode === "timeout" ? "timed out after 10000ms" : mode === "signal" ? "exited on signal SIGTERM" : "exited with code 23");
+          expect(message).toContain("EADDRINUSE: callback bind refused");
+          expect(message).not.toContain("private".repeat(8));
+          expect(message).not.toContain(root);
+          if (mode === "large" || mode === "boundary") expect(message).toContain("[stderr clipped]");
+          expect(message.length).toBeLessThanOrEqual(2400);
+          expect(message.startsWith("Codex callback listener failed before dispatch: ")).toBe(mode !== "ownership");
+        } finally {
+          if (timer) clearTimeout(timer);
+          if (child.exitCode === null) child.kill("SIGKILL");
+          await child.exited;
+        }
+      }
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  }, 40_000);
+}
+
 // Every reviewed pin exposes the native private socket transport.
 test.skipIf(process.platform === "win32" || !["codex-cli 0.154.0", "codex-cli 0.159.0", "codex-cli 0.162.1", "codex-cli 0.163.0"].includes(version))("native Codex replays a pending approval on reconnect and resolves its answer once", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cb-native-"));

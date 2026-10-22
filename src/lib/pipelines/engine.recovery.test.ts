@@ -3,6 +3,8 @@
 import { expect, spyOn, test, path, AccountMutationBusyError, accountManager, engineModule, adoptAttempt, defaultPipelinePorts, terminalFlowStageVerdict, tickPipelines, verdictRoutesAsFail, AgentRegistry, setAgentRegistryForTests, createPipelineFromRequest, loadPipelines, savePipelines, projectPipelineEvents, saveTasks, patchPipeline, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, REMOTE_BRANCH, create, forbiddenSleep, frozenWallClock, PASS_TEXT, makeStructuredAttempt, pinStageHead, publishHarness, PUBLISH_STAGES, deliveryRefusalPark, SKIP_STAGES, FAIL_EDGE_STAGES, HOST_UNAVAILABLE, failedReceipt, UNVERIFIED_DELIVERY, reviewFlowPausedOnUnscannedImplementer, REVIEWER_BUSY, reviewFlowEndedOnBusyAccount, interruptedSpawnAttempt, legacySpawnAttempt, stageDigest, buildStageOf, REVIEW_FINDING_BLOCK, flowWithFindings, parkedReviewStage, stagedRecoveryHarness, aliveStagedLaunch } from "./engine.fixture";
 import type { PipelinePorts } from "./engine.fixture";
 import { shortId } from "@/lib/shortIds";
+import fs from "node:fs";
+import os from "node:os";
 
 test("a pass whose commit failed retries settlement without rerunning stage work before publishing", async () => {
   const h = harness();
@@ -302,7 +304,64 @@ test("a pipeline without a recorded task adopts the fallback task its admission 
 });
 
 
-test("a runtime-host transport failure after reservation retries the same attempt from its failed receipt (#1678)", async () => {
+const CALLBACK_EXIT = "Codex callback listener failed before dispatch: exited with code 23; stderr: EADDRINUSE: callback bind refused";
+const CALLBACK_TIMEOUT = "Codex callback listener failed before dispatch: timed out after 10000ms; stderr: callback bind pending";
+
+test.skipIf(!process.env.LLV_CALLBACK_REPLAY_FILE)("callback persisted budget checkpoint", async () => {
+  const checkpoint = JSON.parse(fs.readFileSync(process.env.LLV_CALLBACK_REPLAY_FILE!, "utf8"));
+  const h = harness();
+  h.ports.now = () => checkpoint.at;
+  savePipelines([checkpoint.pipeline]);
+  let calls = 0;
+  h.ports.spawnAgent = async (_input, onReserved) => {
+    calls++;
+    await onReserved({ launchId: "launch-after-restart", conversationId: "conversation_after_restart" });
+    throw new Error(CALLBACK_EXIT);
+  };
+  h.ports.spawnReceipt = () => failedReceipt("launch-after-restart", "conversation_after_restart", CALLBACK_EXIT);
+  await tickPipelines([], h.ports);
+  expect(calls).toBe(1);
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision",
+    stateDetail: `stage spawn failed after 1 retries over 600s: ${CALLBACK_EXIT}` });
+});
+
+test("callback retry budget survives a real controller process restart", async () => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  frozenWallClock(h);
+  h.ports.spawnAgent = async (_input, onReserved) => {
+    await onReserved({ launchId: "launch-before-restart", conversationId: "conversation_before_restart" });
+    throw new Error(CALLBACK_EXIT);
+  };
+  h.ports.spawnReceipt = () => failedReceipt("launch-before-restart", "conversation_before_restart", CALLBACK_EXIT);
+  await tickPipelines([], h.ports);
+  const pipeline = loadPipelines()[0]!;
+  expect(pipeline.runs[0]!.attempts[0]!.controllerWait?.rounds).toBe(1);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "callback-replay-"));
+  const checkpoint = path.join(root, "checkpoint.json");
+  fs.writeFileSync(checkpoint, JSON.stringify({ pipeline,
+    at: new Date(Date.parse(pipeline.runs[0]!.attempts[0]!.controllerWait!.startedAt) + 600_000).toISOString() }));
+  const child = Bun.spawn([process.execPath, "test", import.meta.path, "--test-name-pattern", "^callback persisted budget checkpoint$"], {
+    env: { ...process.env, LLV_CALLBACK_REPLAY_FILE: checkpoint, DELEGATUS_CPU_PRESSURE: "off" }, stdout: "pipe", stderr: "pipe",
+  });
+  const output = new Response(child.stdout).text();
+  const stderr = new Response(child.stderr).text();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([child.exited, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("owned controller restart fixture exceeded its deadline")), 60_000);
+    })]);
+    expect(child.exitCode, await output + await stderr).toBe(0);
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (child.exitCode === null) child.kill("SIGKILL");
+    await child.exited;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}, 70_000);
+
+test.each([HOST_UNAVAILABLE, CALLBACK_EXIT, CALLBACK_TIMEOUT])("a transient transport failure after reservation retries the same attempt from its failed receipt: %s", async (failure) => {
   const h = harness();
   const created = await create(h.ports);
   await tickPipelines([], h.ports);
@@ -318,8 +377,8 @@ test("a runtime-host transport failure after reservation retries the same attemp
     clientAttemptIds.push(input.clientAttemptId);
     if (spawnCalls === 1) {
       await onReserved({ launchId: "launch-host-1", conversationId: "conversation_host_1" });
-      receipts.set("launch-host-1", failedReceipt("launch-host-1", "conversation_host_1", HOST_UNAVAILABLE));
-      throw new Error(HOST_UNAVAILABLE);
+      receipts.set("launch-host-1", failedReceipt("launch-host-1", "conversation_host_1", failure));
+      throw new Error(failure);
     }
     return baseSpawn(input, onReserved);
   };
@@ -339,7 +398,7 @@ test("a runtime-host transport failure after reservation retries the same attemp
   expect(claims).toEqual([`launch-host-1:${created.id}:plan:launch-host-1`]);
   expect(pipeline).toMatchObject({
     state: "running",
-    stateDetail: expect.stringMatching(/^stage spawn deferred: pipeline structured runtime host is unavailable; start agent-log-viewer through its CLI and check the CLI log for the host startup failure; retry at /),
+    stateDetail: expect.stringContaining(failure),
     cursor: { stageId: "plan", state: "pending" },
   });
   const waiting = pipeline.runs[0]!.attempts.at(-1)!;
@@ -349,7 +408,7 @@ test("a runtime-host transport failure after reservation retries the same attemp
   expect(waiting.retiredLaunches).toEqual([{
     launchId: "launch-host-1",
     conversationId: "conversation_host_1",
-    error: HOST_UNAVAILABLE,
+    error: failure,
     retiredAt: expect.any(String),
   }]);
   expect(scheduled).toEqual([1_000]);
@@ -369,6 +428,31 @@ test("a runtime-host transport failure after reservation retries the same attemp
     retiredLaunches: [{ launchId: "launch-host-1", conversationId: "conversation_host_1" }],
   });
   expect(pipeline.runs[0]!.attempts[0]!.controllerWait).toBeUndefined();
+});
+
+test.each([
+  "Codex callback listener ownership could not be verified; stderr: EACCES",
+  "Codex callback listener ownership could not be verified; stderr: runtime host is unavailable; structured initial message",
+  "Codex callback setup cleanup identity could not be verified",
+  "Codex callback listener did not start or its ownership could not be verified",
+])("callback ownership and ambiguous legacy failures stay refused: %s", async (failure) => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  let calls = 0;
+  const claims: string[] = [];
+  h.ports.spawnAgent = async (_input, onReserved) => {
+    calls++;
+    await onReserved({ launchId: "launch-unverified", conversationId: "conversation_unverified" });
+    throw new Error(failure);
+  };
+  h.ports.spawnReceipt = () => failedReceipt("launch-unverified", "conversation_unverified", failure);
+  h.ports.claimSpawnRetry = id => { claims.push(id); return "claimed"; };
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  expect(calls).toBe(1);
+  expect(claims).toEqual([]);
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: failure });
 });
 
 
@@ -410,8 +494,27 @@ test.each([
   expect(parked.runs[0]!.attempts[0]!.retiredLaunches).toBeUndefined();
 });
 
+test.each([null, "starting"] as const)("a callback launch with %s evidence stays fenced", async (state) => {
+  const h = harness();
+  await create(h.ports);
+  await tickPipelines([], h.ports);
+  let calls = 0;
+  const claims: string[] = [];
+  h.ports.spawnAgent = async (_input, onReserved) => {
+    calls++;
+    await onReserved({ launchId: "launch-callback", conversationId: "conversation_callback" });
+    throw new Error(CALLBACK_EXIT);
+  };
+  h.ports.spawnReceipt = () => state === null ? null : { ...failedReceipt("launch-callback", "conversation_callback", CALLBACK_EXIT), state };
+  h.ports.claimSpawnRetry = id => { claims.push(id); return "claimed"; };
+  await tickPipelines([], h.ports);
+  expect(calls).toBe(1);
+  expect(claims).toEqual([]);
+  expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: CALLBACK_EXIT });
+});
 
-test("runtime-host retries are bounded and park with the wait they spent (#1678)", async () => {
+
+test.each([HOST_UNAVAILABLE, CALLBACK_EXIT])("transport retries are bounded and preserve repeated causes: %s", async (failure) => {
   const h = harness();
   await create(h.ports);
   await tickPipelines([], h.ports);
@@ -421,9 +524,9 @@ test("runtime-host retries are bounded and park with the wait they spent (#1678)
   h.ports.spawnAgent = async (_input, onReserved) => {
     spawnCalls += 1;
     await onReserved({ launchId: `launch-host-${spawnCalls}`, conversationId: `conversation_host_${spawnCalls}` });
-    throw new Error(HOST_UNAVAILABLE);
+    throw new Error(failure);
   };
-  h.ports.spawnReceipt = (launchId) => failedReceipt(launchId, launchId.replace("launch-host-", "conversation_host_"), HOST_UNAVAILABLE);
+  h.ports.spawnReceipt = (launchId) => failedReceipt(launchId, launchId.replace("launch-host-", "conversation_host_"), failure);
   Object.assign(h.ports, {
     scheduleTick: (delayMs: number) => { scheduled.push(delayMs); },
     sleep: forbiddenSleep,
@@ -443,7 +546,7 @@ test("runtime-host retries are bounded and park with the wait they spent (#1678)
   expect(scheduled).toEqual([1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000, 60_000, 60_000, 60_000, 60_000, 60_000, 60_000, 57_000]);
   expect(parked).toMatchObject({
     state: "needs_decision",
-    stateDetail: `stage spawn failed after 15 retries over 600s: ${HOST_UNAVAILABLE}`,
+    stateDetail: `stage spawn failed after 15 retries over 600s: ${failure}`,
     cursor: { stageId: "plan", state: "spawning" },
   });
   expect(parked.runs[0]!.attempts).toHaveLength(1);
@@ -457,6 +560,7 @@ test("runtime-host retries are bounded and park with the wait they spent (#1678)
   });
   expect(parked.runs[0]!.attempts[0]!.retiredLaunches).toHaveLength(15);
   expect(parked.runs[0]!.attempts[0]!.retiredLaunches!.at(-1)).toMatchObject({ launchId: "launch-host-15" });
+  expect(parked.runs[0]!.attempts[0]!.retiredLaunches!.every(launch => launch.error === failure)).toBe(true);
 });
 
 
@@ -868,7 +972,7 @@ test("a non-transient spawn failure still parks at once (#1750)", async () => {
 });
 
 
-test("a failed receipt that settles before its retry claim parks instead of re-dispatching (#1678)", async () => {
+test.each([HOST_UNAVAILABLE, CALLBACK_EXIT])("a failed receipt that settles before its retry claim parks instead of re-dispatching: %s", async (failure) => {
   const h = harness();
   await create(h.ports);
   await tickPipelines([], h.ports);
@@ -877,9 +981,9 @@ test("a failed receipt that settles before its retry claim parks instead of re-d
   h.ports.spawnAgent = async (_input, onReserved) => {
     spawnCalls += 1;
     await onReserved({ launchId: "launch-host-settled", conversationId: "conversation_host_settled" });
-    throw new Error(HOST_UNAVAILABLE);
+    throw new Error(failure);
   };
-  h.ports.spawnReceipt = () => failedReceipt("launch-host-settled", "conversation_host_settled", HOST_UNAVAILABLE);
+  h.ports.spawnReceipt = () => failedReceipt("launch-host-settled", "conversation_host_settled", failure);
   h.ports.claimSpawnRetry = () => "settled";
   Object.assign(h.ports, {
     scheduleTick: (delayMs: number) => { scheduled.push(delayMs); },
@@ -891,7 +995,7 @@ test("a failed receipt that settles before its retry claim parks instead of re-d
   const parked = loadPipelines()[0]!;
   expect(spawnCalls).toBe(1);
   expect(scheduled).toEqual([]);
-  expect(parked).toMatchObject({ state: "needs_decision", stateDetail: HOST_UNAVAILABLE });
+  expect(parked).toMatchObject({ state: "needs_decision", stateDetail: failure });
   expect(parked.runs[0]!.attempts[0]).toMatchObject({
     state: "needs_decision",
     launchId: "launch-host-settled",

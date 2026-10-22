@@ -10129,6 +10129,9 @@ function isStructuredDeliveryControllerFailure(failure: string): boolean {
     refusal "structured host ownership is unavailable" is a different sentence
     and a different class, and stays out. */
 function isRuntimeHostUnavailableSpawnFailure(failure: string): boolean {
+  // A callback startup failure uses the same receipt fence and persisted host
+  // wait budget. Ownership and cleanup refusals retain their separate class.
+  if (failure.startsWith("Codex callback ")) return failure.startsWith("Codex callback listener failed before dispatch: ");
   return failure.includes("runtime host is unavailable");
 }
 
@@ -10355,6 +10358,8 @@ function isLaunchAdmissionContention(error: unknown): boolean {
 }
 
 function isTransientStructuredSpawnFailure(failure: string): boolean {
+  // Diagnostic stderr cannot turn an ownership or cleanup refusal into a retry.
+  if (failure.startsWith("Codex callback ")) return isRuntimeHostUnavailableSpawnFailure(failure);
   return failure === SEND_LOST_REASON || isStructuredDeliveryControllerFailure(failure)
     || isAccountMutationContention(failure)
     || isRuntimeHostUnavailableSpawnFailure(failure)
