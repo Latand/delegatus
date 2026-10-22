@@ -348,3 +348,50 @@ test("spawn recovery selection services timers between keyed batches without los
       .rejects.toThrow("cancelled spawn selection");
   } finally { registry.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+
+for (const engine of ["codex", "claude"] as const) test(`${engine} adoption prepares selection once and checks each admission with keyed evidence`, async () => {
+  const { adoptCodexRegistryHosts, adoptClaudeRegistryHosts } = await import("./registry");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-admission-selection-"));
+  try {
+    const file = seeded(root, 1);
+    const rows = Object.values(file.entries).map(entry => ({ ...entry, key: { ...entry.key, engine },
+      status: "idle" as const, claimOwner: { pid: 990001, startIdentity: "fixture", bootEpoch: "fixture" }, claimEpoch: 1,
+      structuredHost: { ...file.entries["codex:reader-0"]!.structuredHost!, kind: engine === "codex" ? "codex-app-server" as const : "claude-broker" as const,
+        process: null, endpoint: "stdio:released" } }));
+    const view = { ...file, entries: Object.fromEntries(rows.map(entry => [`${engine}:${entry.key.sessionId}`, entry])) };
+    let preparations = 0, admissions = 0;
+    const registry = {
+      prepareReadOnlySnapshot: async () => { if (++preparations > 1) throw new Error("admission repeated the registry preparation"); return view; },
+      structuredHostEntries: () => rows,
+      startupHostSnapshot: () => view,
+      withOperationLock: async (_key: unknown, _owner: unknown, work: () => Promise<void>) => work(),
+      deliveryWriteOrBusy: async (_options: unknown, work: () => unknown) => work(),
+      setStructuredHostClaimed: () => null,
+    } as unknown as AgentRegistry;
+    const adopt = engine === "codex" ? adoptCodexRegistryHosts : adoptClaudeRegistryHosts;
+    await adopt(registry, async () => { throw new Error("refused admission reached options"); }, {}, () => true, undefined, {
+      claimHost: async entry => entry,
+      admit: () => { admissions++; return { error: "fixture admission refused" }; },
+    });
+    expect(preparations).toBe(1);
+    expect(admissions).toBe(rows.length);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("keyed admission evidence retains path aliases as well as session identity", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-admission-alias-"));
+  const initial = seeded(root, 1);
+  initial.conversations["conversation_reader_1"]!.generations[0]!.path = initial.entries["codex:reader-0"]!.artifactPath;
+  const filename = path.join(root, "registry.json");
+  fs.writeFileSync(filename, JSON.stringify(initial));
+  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+  try {
+    const key = initial.entries["codex:reader-0"]!.key;
+    expect(registry.startupHostSnapshot(key).conversations["conversation_reader_1"]).toBeUndefined();
+    const admission = registry.startupHostSnapshot(key, true);
+    expect(admission.conversations["conversation_reader_1"]?.id).toBe("conversation_reader_1");
+    expect(admission.memberships["conversation_reader_1"]?.[0]?.containerId).toBe("lane-1");
+  } finally { registry.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});

@@ -6130,13 +6130,19 @@ export class AgentRegistry {
   }
 
   /** One startup host and its membership identities, under a keyed read
-      transaction. No lazy row or lookup escapes into the ownership callback. */
-  startupHostSnapshot(key: SessionKey): RegistryFile {
+      transaction. Linked-task admission optionally includes path identities.
+      No lazy row or lookup escapes into the ownership callback. */
+  startupHostSnapshot(key: SessionKey, includeArtifactPath = false): RegistryFile {
     return this.readKeyed(file => {
       const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
       const entryKey = sessionKeyId(key);
-      if (file.entries[entryKey]) result.entries[entryKey] = clone(file.entries[entryKey]!);
-      for (const conversation of registryConversationsForEntryKey(file, entryKey)) {
+      const entry = file.entries[entryKey];
+      if (entry) result.entries[entryKey] = clone(entry);
+      // Linked-task admission also recognizes a generation by its artifact.
+      // Keep that existing path fallback without enumerating other hosts.
+      const conversations = [...registryConversationsForEntryKey(file, entryKey),
+        ...(includeArtifactPath && entry ? registryConversationsForPath(file, entry.artifactPath) : [])];
+      for (const conversation of conversations) {
         const canonical = resolveConversationAlias(file, conversation.id);
         for (const id of conversationIdsResolvingTo(file, canonical)) {
           if (file.conversationAliases[id]) result.conversationAliases[id] = file.conversationAliases[id]!;

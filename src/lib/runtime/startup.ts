@@ -2502,7 +2502,7 @@ async function adoptStructuredHostsPass(
           ? conversation.agentRole
           : null;
         const seatMembership = conversation
-          ? startupSnapshot(registry).memberships[conversation.id]?.find(row => row.kind === "orchestrator" && row.role === memoryRole)
+          ? startupHostSnapshot(registry, entry.key, true).memberships[conversation.id]?.find(row => row.kind === "orchestrator" && row.role === memoryRole)
           : null;
         const seatProject = seatMembership?.containerId ?? null;
         const memoryProject = seatProject ?? conversation?.projectOwnership?.project ?? entry.launchProfile?.project;
@@ -2575,7 +2575,7 @@ async function adoptStructuredHostsPass(
           ? conversation.agentRole
           : null;
         const seatMembership = conversation
-          ? startupSnapshot(registry).memberships[conversation.id]?.find(row => row.kind === "orchestrator" && row.role === memoryRole)
+          ? startupHostSnapshot(registry, entry.key, true).memberships[conversation.id]?.find(row => row.kind === "orchestrator" && row.role === memoryRole)
           : null;
         const seatProject = seatMembership?.containerId ?? null;
         const memoryProject = seatProject ?? conversation?.projectOwnership?.project ?? entry.launchProfile?.project;

@@ -937,8 +937,7 @@ export async function adoptCodexRegistryHosts(
         /* M.4 seam 4: reopening the process is new work for every task the
            conversation holds; one that runs on another linked machine leaves
            the row stopped and opens nothing. */
-        const admissionSnapshot = typeof registry.prepareReadOnlySnapshot === "function"
-          ? await registry.prepareReadOnlySnapshot() : registry.readOnlySnapshot();
+        const admissionSnapshot = startupHostSnapshot(registry, entry.key, true);
         const refused = (dependencies.admit ?? adoptionRefusal)(claimed, admissionSnapshot);
         if (refused) {
           console.error(`[linked boards] boot adoption of ${sessionKeyId(entry.key)} refused: ${refused.error}`);
@@ -965,8 +964,7 @@ export async function adoptCodexRegistryHosts(
           };
           // Preparing memory can wait for state admission. Recheck both the
           // writer claim and admission before opening a new engine generation.
-          const fresh = typeof registry.prepareReadOnlySnapshot === "function"
-            ? await registry.prepareReadOnlySnapshot() : registry.readOnlySnapshot();
+          const fresh = startupHostSnapshot(registry, entry.key, true);
           const current = fresh.entries[sessionKeyId(entry.key)];
           if (!current || !registry.ownsStructuredHostClaim(entry.key, claimed.claimOwner!, claimed.claimEpoch)
             || !candidate(current) || (dependencies.admit ?? adoptionRefusal)(current, fresh)) {
@@ -1092,8 +1090,7 @@ export async function adoptClaudeRegistryHosts(
         /* M.4 seam 4: reopening the process is new work for every task the
            conversation holds; one that runs on another linked machine leaves
            the row stopped and opens nothing. */
-        const admissionSnapshot = typeof registry.prepareReadOnlySnapshot === "function"
-          ? await registry.prepareReadOnlySnapshot() : registry.readOnlySnapshot();
+        const admissionSnapshot = startupHostSnapshot(registry, entry.key, true);
         const refused = (dependencies.admit ?? adoptionRefusal)(claimed, admissionSnapshot);
         if (refused) {
           console.error(`[linked boards] boot adoption of ${sessionKeyId(entry.key)} refused: ${refused.error}`);
@@ -1114,8 +1111,7 @@ export async function adoptClaudeRegistryHosts(
           };
           // Preparing memory can wait for state admission. Recheck both the
           // writer claim and admission before opening a new engine generation.
-          const fresh = typeof registry.prepareReadOnlySnapshot === "function"
-            ? await registry.prepareReadOnlySnapshot() : registry.readOnlySnapshot();
+          const fresh = startupHostSnapshot(registry, entry.key, true);
           const current = fresh.entries[sessionKeyId(entry.key)];
           if (!current || !registry.ownsStructuredHostClaim(entry.key, claimed.claimOwner!, claimed.claimEpoch)
             || !shouldAdopt(current) || (dependencies.admit ?? adoptionRefusal)(current, fresh)) {

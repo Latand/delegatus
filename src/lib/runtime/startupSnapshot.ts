@@ -48,6 +48,6 @@ export function startupSnapshot(registry: AgentRegistry): RegistryFile {
 
 
 /** Authorization at a host boundary does not refresh the bulk selection. */
-export function startupHostSnapshot(registry: AgentRegistry, key: SessionKey): RegistryFile {
-  return typeof registry.startupHostSnapshot === "function" ? registry.startupHostSnapshot(key) : startupSnapshot(registry);
+export function startupHostSnapshot(registry: AgentRegistry, key: SessionKey, includeArtifactPath = false): RegistryFile {
+  return typeof registry.startupHostSnapshot === "function" ? registry.startupHostSnapshot(key, includeArtifactPath) : startupSnapshot(registry);
 }
