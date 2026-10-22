@@ -548,7 +548,7 @@ test("invalid compact completion retries end at the captured request deadline", 
   const clock = spyOn(Date, "now").mockImplementation(() => now);
   let attempts = 0, accept = false, settled = false;
   const server = await startTestRelay(() => {
-    attempts++; now += 121000;
+    attempts++; now += 601000;
     return accept ? { body: { status: "ok" } } : { status: 503, body: { error: { code: "unavailable" } } };
   });
   const pending = runClaimedRequest(relay(`${server.origin}/v1`), { kind: "compact", request_id: "invalid-compact-deadline", lease_id: sampleRequest.lease_id })
@@ -588,6 +588,7 @@ test("an early decline keeps heartbeats during delivery without renewing its dea
   const previousSelection = accountManager.resolveHeadlessSpawn;
   accountManager.resolveHeadlessSpawn = (() => ({ kind: "exhausted", resetsAt: null })) as typeof previousSelection;
   const request = { ...sampleRequest, request_id: "early_decline_completion_retry",
+    deadline_at: new Date(now + 120_000).toISOString(),
     liveness: { ...sampleRequest.liveness, heartbeat_interval_s: 2, stall_window_s: 120 } };
   const pending = runClaimedRequest(paired, request).then(outcome => { settled = true; return outcome; });
   try {
@@ -1104,7 +1105,7 @@ test("an immediately admitted owner can answer in the final ten seconds", async 
   } finally { await server.close(); }
 }, 10000);
 
-test("a confirmed owner run keeps its configured hard cap and may answer after the request deadline", async () => {
+test("a confirmed owner run completes a readable timeout at the service deadline", async () => {
   const completions: unknown[] = [];
   const stops: string[] = [];
   const server = await startTestRelay((req, body) => {
@@ -1124,8 +1125,8 @@ test("a confirmed owner run keeps its configured hard cap and may answer after t
         stop: async (_id, action) => { stops.push(action); }, pollMs: 5,
       },
     });
-    expect(result).toMatchObject({ outcome: "answered", answer: { text: "Done" } });
-    expect(stops).toEqual([]);
+    expect(result).toMatchObject({ outcome: "failed", reason: "hard_cap", detail: expect.stringMatching(/ran out of time/i) });
+    expect(stops).toEqual(["interrupt"]);
     expect(completions).toHaveLength(1);
   } finally { await server.close(); }
 }, 10000);
