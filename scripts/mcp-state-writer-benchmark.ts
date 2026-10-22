@@ -60,7 +60,6 @@ export async function stateWriterChild(mode: string): Promise<void> {
       if (begun.kind !== "created") throw new Error("fixture admission failed");
       capabilities.push(registry.rotateSpawnCapabilityForReceipt(begun.receipt.launchId));
     }
-    fs.writeFileSync(process.env.MCP_BENCH_READY!, JSON.stringify(capabilities), { mode: 0o600 });
     const { Database } = await import("bun:sqlite");
     const verify = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), { readonly: true });
     try {
@@ -69,6 +68,8 @@ export async function stateWriterChild(mode: string): Promise<void> {
         || counts.find(row => row.collection === "task_tombstones")?.count !== 100) throw new Error("seed row counts differ from the declared fixture");
       fs.writeFileSync(`${process.env.MCP_BENCH_READY}.counts.json`, JSON.stringify(counts));
     } finally { verify.close(); }
+    // Publish readiness only after every declared collection was verified.
+    fs.writeFileSync(process.env.MCP_BENCH_READY!, JSON.stringify(capabilities), { mode: 0o600 });
     return;
   }
   if (mode === "viewer") {
