@@ -317,9 +317,16 @@ more frame over the same world, reached by the product's own controls:
 
 | Section | Frame | Views (`data-view`) |
 | --- | --- | --- |
-| Full autonomy | `.live-auto`, 900×760 | `autonomy`: the tick switch in the seat's head opens its panel (the phone: the seat sheet, then its tick row); `decisions`: the same panel with Details open, scrolled to the decision log |
-| Learned rules | `.live-mem`, 1180×760 | `rules`: the board's ⋯, «Learned rules», «All rules», the Orchestrator chip, its first rule expanded (the phone: the menu's project rules); `curator`: the builder's rule, the curator's passes and what it archived |
-| Limits | `.live-use`, 1444×760 (without the rail the board is 1404 px wide and holds its balanced columns, with the rail 1194 px and it scrolls: either way no card title breaks inside a word) | `spend`: the board with the seat folded, every card's marks; `task`: one card's spend popover (the phone: the task screen at its Limits); `history`: the rail's Claude week button opens the burndown |
+| Full autonomy | `.live-auto`, 908×760, `data-exact` (the board is scrolled to its In progress column, so the frame's edge falls in the gap after it on every screen) | `autonomy`: the tick switch in the seat's head opens its panel, which spans the chat's column so no word of the chat stands beside it (the phone: the seat sheet, shortened until its last row is whole, then its tick row); `decisions`: the same panel with Details open, standing at the panel's top so the view opens on a heading |
+| Learned rules | `.live-mem`, 1180×760 | `rules`: the board's ⋯, «Learned rules», «All rules», the Orchestrator chip, its first rule expanded (the phone: the menu's project rules); `curator`: the builder's rule, the curator's passes and what it archived; the window's close control takes no focus ring |
+| Limits | `.live-use`, 1444×760 (without the rail the board is 1404 px wide and holds its balanced columns, with the rail 1194 px and it scrolls: either way no card title breaks inside a word) | `spend`: the board with the seat folded, every card's marks; `task`: one card's spend popover (the phone: the task screen at its Limits), drawn larger as the page shrinks the frame and slid to where it covers whole lines or none; `history`: the rail's Claude week button opens the burndown, which takes the board's place beside the rail on a page drawn larger as the frame shrinks |
+
+A frame is drawn at 0.62 of its size on a 1000 px page. `setFrameZoom()` in
+`demo.tsx` reads the iframe's drawn width over its own and sets `--demo-zoom`
+(1 at full size, up to 1.8), which the spend popover and the burndown
+use, so their text stays at about 10 px rendered at every desktop width.
+`data-exact` on a frame (`main.js`) keeps its logical width at every page width
+instead of widening it to the page's.
 
 `autonomy=1` in a frame's query turns full autonomy on for that frame alone:
 at step 5 the orchestrator has answered the retry window itself, so that

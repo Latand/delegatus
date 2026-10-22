@@ -104,7 +104,7 @@ code and what was measured).
 |---|---|---|---|---|---|
 | 1 | hero | unchanged | — | drawn | — |
 | 2 | run | unchanged copy | `.sec-run` | `.live-run` 1180×780 / 390×700 | Build, Review, Verify · A decision |
-| 3 | **autonomy** `sec-auto` | new | side copy, like `.sec-open` (`.open-side` + frame) | `.live-auto` 900×760 / 390×740 | `autonomy` · `decisions` |
+| 3 | **autonomy** `sec-auto` | new | side copy, like `.sec-open` (`.open-side` + frame) | `.live-auto` 908×760 (exact) / 390×740 | `autonomy` · `decisions` |
 | 4 | **memory** `sec-mem` | new | full width, like `.sec-run` (`.sec-head` + `.stage-wrap` + `.seg`) | `.live-mem` 1180×760 / 390×740 | `rules` · `curator` |
 | 5 | open | unchanged | `.sec-open` | `.live-open` | conversation · search · accounts · overview |
 | 6 | **usage** `sec-use` | new | full width, like `.sec-run` | `.live-use` 1180×760 / 390×740 | `spend` · `task` · `history` (desktop only, §6.3) |

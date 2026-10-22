@@ -421,7 +421,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       effective: { enabled: true, wakeIntervalMinutes: 60, reason: null, monitorPrompt: null, until: null, isDefault: true, configured: false, lapsed: false, updatedAt: null },
       policy: { checkIntervalMinutes: 5, staleAfterMinutes: 15, retryGuardWakes: 2 },
       state: { lastCheckAt: ago(3), lastWakeAt: ago(41), lastWakeReasons: ["interval"], outstandingWake: null, retryGuard: [], sourceGap: null, accountingGap: null },
-      stateError: null, lastRun: { at: ago(3), verdict: "quiet", reasons: [], delivery: null, detail: "nothing owed" }, lastDelivery: { at: ago(41), outcome: "landed" },
+      stateError: null, lastRun: null, lastDelivery: { at: ago(41), outcome: "landed" },
       autonomy: { active: episode !== null, until: episode?.until ?? null, startedAt: episode?.startedAt ?? null, episode },
       /* The curator's own block; its last pass is the one the learned rules window lists first. */
       curation: {
@@ -598,7 +598,7 @@ function scroller(target: Element): HTMLElement | null {
   }
   return null;
 }
-/** Every line of text drawn in `box`, as viewport rectangles. */
+/** Every line of text drawn in `box`, and every control with no text of its own (a switch, a field), as viewport rectangles. */
 function textLines(box: HTMLElement): DOMRect[] {
   const range = document.createRange();
   const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT);
@@ -607,6 +607,9 @@ function textLines(box: HTMLElement): DOMRect[] {
     if (!node.textContent?.trim()) continue;
     range.selectNodeContents(node);
     lines.push(...range.getClientRects());
+  }
+  for (const control of box.querySelectorAll<HTMLElement>('select, input, textarea, [role="switch"]')) {
+    if (control.getClientRects().length) lines.push(control.getBoundingClientRect());
   }
   return lines;
 }
@@ -660,8 +663,119 @@ function scrollToTop(target: Element, gap = 8) {
   wholeLines(box);
 }
 
+/** Scrolls the box that scrolls `target` until `target` is its first line. A target near the end of the content has no scroll left to give, so the box is padded below until it has. A line the top edge still cuts is scrolled away. */
+function headToTop(target: Element, gap = 4) {
+  const box = scroller(target);
+  if (!box) return;
+  const toGo = () => target.getBoundingClientRect().top - (box.getBoundingClientRect().top + box.clientTop) - gap;
+  box.scrollTop += toGo();
+  const short = toGo();
+  if (short > 0.5) {
+    box.style.paddingBottom = `${parseFloat(getComputedStyle(box).paddingBottom) + Math.ceil(short)}px`;
+    box.scrollTop += toGo();
+  }
+  const top = box.getBoundingClientRect().top + box.clientTop;
+  for (let pass = 0; pass < 4; pass += 1) {
+    const cut = lineAcross(box, top);
+    if (!cut) return;
+    box.scrollTop += cut.bottom - top + 1;
+  }
+}
+/** A sheet that shows part of a long panel ends between two rows, and its top edge falls between two lines of the page behind it: its top edge comes down by the least that makes both so. */
+function fitSheet(box: HTMLElement, gap = 6) {
+  let sheet = box.parentElement;
+  while (sheet && getComputedStyle(sheet).maxHeight === "none") sheet = sheet.parentElement;
+  if (!sheet) return;
+  const top = box.getBoundingClientRect().top + box.clientTop;
+  const bottom = top + box.clientHeight;
+  const edge = sheet.getBoundingClientRect();
+  const behind = pageLines(sheet).filter((line) => line.right > edge.left && line.left < edge.right);
+  /* The sheet's content moves down with its top edge while its bottom edge stays: what the bottom edge meets now is the row at `bottom - cut`. */
+  const whole = (cut: number) =>
+    !lineAcross(box, bottom - cut) && !lineAcross(box, bottom - cut - gap) &&
+    !behind.some((line) => line.top < edge.top + cut - 0.5 && line.bottom > edge.top + cut + 0.5);
+  for (let cut = 0; cut <= 160 && bottom - cut > top + 80; cut += 1) {
+    if (!whole(cut)) continue;
+    if (cut > 0) sheet.style.maxHeight = `${Math.floor(edge.height - cut)}px`;
+    return;
+  }
+}
+
+/** The lines of text on the page outside `overlay` that a viewer sees, each as the part of it that its own scrolling boxes and the window leave showing. */
+function pageLines(overlay: Element): DOMRect[] {
+  const range = document.createRange();
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  const lines: DOMRect[] = [];
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const element = node.parentElement;
+    if (!node.textContent?.trim() || !element || overlay.contains(element) || element.closest("script, style")) continue;
+    const style = getComputedStyle(element);
+    if (style.visibility === "hidden" || style.display === "none") continue;
+    let clip = { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight };
+    for (let box: Element | null = element; box && box !== document.documentElement; box = box.parentElement) {
+      const own = getComputedStyle(box);
+      const x = own.overflowX !== "visible";
+      const y = own.overflowY !== "visible";
+      if (!x && !y) continue;
+      const rect = box.getBoundingClientRect();
+      clip = {
+        left: x ? Math.max(clip.left, rect.left) : clip.left, right: x ? Math.min(clip.right, rect.right) : clip.right,
+        top: y ? Math.max(clip.top, rect.top) : clip.top, bottom: y ? Math.min(clip.bottom, rect.bottom) : clip.bottom,
+      };
+    }
+    range.selectNodeContents(node);
+    for (const line of range.getClientRects()) {
+      const shown = new DOMRect(Math.max(line.left, clip.left), Math.max(line.top, clip.top), 0, 0);
+      shown.width = Math.min(line.right, clip.right) - shown.x;
+      shown.height = Math.min(line.bottom, clip.bottom) - shown.y;
+      if (shown.width > 0.5 && shown.height > 0.5) lines.push(shown);
+    }
+  }
+  return lines;
+}
+/** Moves `overlay` by its own `translate` (no layout moves with it) the shortest way that leaves no line of text half under it: every line it touches is under it whole or not at all, and it stays inside the window. */
+function keepClear(overlay: HTMLElement, reachX: number, reachY: number, margin = 8) {
+  overlay.style.translate = "0px 0px";
+  const at = overlay.getBoundingClientRect();
+  const lines = pageLines(overlay);
+  const half = (dx: number, dy: number) => {
+    let count = 0;
+    for (const line of lines) {
+      const width = Math.min(line.right, at.right + dx) - Math.max(line.left, at.left + dx);
+      const height = Math.min(line.bottom, at.bottom + dy) - Math.max(line.top, at.top + dy);
+      if (width > 0.5 && height > 0.5 && width * height < 0.97 * line.width * line.height) count += 1;
+    }
+    return count;
+  };
+  let best: { dx: number; dy: number; count: number } | null = null;
+  for (let dy = -reachY; dy <= reachY; dy += 2) {
+    for (let dx = -reachX; dx <= reachX; dx += 2) {
+      const left = at.left + dx;
+      const top = at.top + dy;
+      if (left < margin || top < margin || left + at.width > window.innerWidth - margin || top + at.height > window.innerHeight - margin) continue;
+      const count = half(dx, dy);
+      const nearer = !best || Math.hypot(dx, dy) < Math.hypot(best.dx, best.dy);
+      if (!best || count < best.count || (count === best.count && nearer)) best = { dx, dy, count };
+    }
+  }
+  if (best) overlay.style.translate = `${best.dx}px ${best.dy}px`;
+}
+/** How far the page shrinks this frame, and so how much the product's own overlays are drawn larger to stay readable at the size the visitor sees. */
+function setFrameZoom() {
+  let scale = 1;
+  try { scale = (window.frameElement?.getBoundingClientRect().width ?? window.innerWidth) / window.innerWidth; } catch { /* a frame the page does not own draws unscaled */ }
+  document.documentElement.style.setProperty("--demo-zoom", Math.min(1.8, Math.max(1, 0.98 / (scale || 1))).toFixed(3));
+}
+
 /* ── the seat tick, the learned rules and the limits, by their own controls ── */
 
+/** The board scrolled to put the In progress column first: with the orchestrator beside it, the frame's edge then falls in the gap after that column, so no card is cut by it. */
+function showInProgress() {
+  const column = document.querySelector<HTMLElement>('.column[data-status="assigned"]');
+  const board = column?.closest<HTMLElement>(".board");
+  if (!column || !board) return;
+  board.scrollTo({ left: board.scrollLeft + column.getBoundingClientRect().left - board.getBoundingClientRect().left - 8, behavior: "instant" });
+}
 /** The seat tick's panel: the popover from the switch in the seat's head, or on the phone the tick's sheet from the seat sheet. */
 async function openSeatTick(): Promise<HTMLElement> {
   if (PHONE) {
@@ -680,16 +794,37 @@ async function openSeatTick(): Promise<HTMLElement> {
   }
   return waitFor(ready);
 }
-/** The panel at its top, ending on a whole line. */
+/** The panel at its top, ending on a whole line. On a desktop it takes the orchestrator's whole column, so no word of the chat stands beside it; on the phone the sheet ends between two rows. */
 function settleAutonomy(panel: HTMLElement) {
   const box = scroller(panel.querySelector("[data-seat-tick-autonomy-summary]")!);
+  if (PHONE) {
+    if (box) {
+      box.scrollTop = 0;
+      fitSheet(box);
+    }
+    return;
+  }
+  coverChat(panel);
   if (box) wholeLines(box);
 }
-/** Its decision log: Details opened, scrolled until the log's heading is the first line. */
+/** The popover from the tick switch is a narrow card over the left of the chat; here it spans the chat's column, and slides to where no line of the chat is half under it. */
+function coverChat(panel: HTMLElement) {
+  const chat = document.querySelector<HTMLElement>("[data-orchestrator-panel]");
+  if (!chat) return;
+  const column = chat.getBoundingClientRect();
+  panel.style.setProperty("--demo-cover-left", `${column.left}px`);
+  panel.style.setProperty("--demo-cover-width", `${column.width}px`);
+  panel.dataset.demoCover = "";
+  keepClear(panel, 0, 48);
+}
+/** Its decision log: Details opened and standing at the top of the panel, so the view opens on a heading. */
 async function showDecisions(panel: HTMLElement) {
   const details = await waitFor(() => panel.querySelector<HTMLDetailsElement>("details[data-seat-tick-details]"));
   details.open = true;
-  scrollToTop(await waitFor(() => panel.querySelector("[data-seat-tick-autonomy-log]")));
+  await waitFor(() => panel.querySelector("[data-seat-tick-autonomy-log]"));
+  if (!PHONE) coverChat(panel);
+  headToTop(details.querySelector("summary")!, 6);
+  if (PHONE) fitSheet(scroller(details)!);
 }
 /** The learned rules window from the board's ⋯ (on the phone, the menu's project rules), on All rules with one role chosen. */
 async function openRules(role: string, expand: string | null): Promise<HTMLElement> {
@@ -705,6 +840,8 @@ async function openRules(role: string, expand: string | null): Promise<HTMLEleme
   await press(() => [...rulesWindow.querySelectorAll<HTMLElement>("nav button")].find((button) => button.textContent === label("memoryProfile.allRules")));
   await press(() => rulesWindow.querySelector<HTMLElement>(`[data-rules-role="${role}"]`));
   if (expand) await press(() => rulesWindow.querySelector<HTMLElement>(`[data-learned-rule="${expand}"] button[aria-expanded]`));
+  /* The window's close control took the focus when it opened; a picture needs no ring on it. */
+  (document.activeElement as HTMLElement | null)?.blur();
   return rulesWindow;
 }
 
@@ -763,7 +900,7 @@ async function navigateView(view: string) {
       const rulesWindow = await openRules("builder", null);
       rulesWindow.querySelector<HTMLDetailsElement>("details[data-curation-history]")!.open = true;
       await press(() => rulesWindow.querySelector<HTMLElement>('[data-rules-history="project"][aria-expanded="false"]'));
-      scrollToTop(rulesWindow.querySelector('[data-rules-section="project"]')!);
+      headToTop(rulesWindow.querySelector('[data-rules-section="project"]')!, 6);
     }
     /* The phone has no limit history; its frame shows the cards instead. */
     if (view === "spend" || view === "history") {
@@ -795,6 +932,7 @@ async function navigateView(view: string) {
       toggle.click();
       await waitFor(() => document.querySelector<HTMLElement>("[data-seat-placement]")?.dataset.seatPlacement === want, 20).catch(() => null);
     }
+    if (view === "autonomy" || view === "decisions") showInProgress();
     if (view === "autonomy") settleAutonomy(await openSeatTick());
     if (view === "decisions") await showDecisions(await openSeatTick());
     return;
@@ -821,13 +959,27 @@ async function navigateView(view: string) {
   }
   if (view === "task") {
     if (!document.querySelector('[data-spend-pop="t-refunds"]')) await press(() => document.querySelector<HTMLElement>('[data-spend="t-refunds"][role="button"]'));
-    await waitFor(() => document.querySelector('[data-spend-pop="t-refunds"]'));
+    const lines = await waitFor(() => document.querySelector<HTMLElement>('[data-spend-pop="t-refunds"]'));
+    /* The bubble is placed a frame after it mounts; it then slides to where it covers whole lines or none. */
+    const bubble = lines.closest<HTMLElement>('[role="tooltip"]');
+    if (bubble) {
+      await waitFor(() => bubble.style.visibility !== "hidden" && bubble.style.left !== "-9999px");
+      keepClear(bubble, 300, 300);
+    }
     return;
   }
   if (view === "history") {
     const name = label("burndown.openAria", { engine: "Claude" });
     await press(() => byLabel(name));
-    await waitFor(() => document.querySelector(`[role="dialog"][aria-label="${CSS.escape(name)}"] svg path`));
+    const chart = await waitFor(() => document.querySelector<HTMLElement>(`[role="dialog"][aria-label="${CSS.escape(name)}"]`));
+    await waitFor(() => chart.querySelector("svg path"));
+    const rail = document.querySelector<HTMLElement>(`nav[aria-label="${CSS.escape(label("rail.projects"))}"]`);
+    if (rail) {
+      document.documentElement.style.setProperty("--demo-rail-right", `${Math.round(rail.getBoundingClientRect().right)}px`);
+      chart.dataset.demoChart = "";
+    }
+    /* The chart's own close control took the focus when it opened; a picture needs no ring on it. */
+    (document.activeElement as HTMLElement | null)?.blur();
     return;
   }
   if (view === "pipeline" || view === "decision") {
@@ -950,6 +1102,18 @@ html[data-demo-quiet-hints] [role="tooltip"] { display: none; }
 [data-demo-docked] .overflow-y-auto { max-height: none !important; }
 [data-demo-docked] { position: fixed !important; margin: 0 !important; inset: 0 0 0 var(--demo-rail-right) !important; width: auto !important; max-width: none !important; max-height: none !important; translate: none !important; transform: none !important; border-radius: 0 !important; }
 html[data-demo-phone] [aria-label="${label("feed.copyMd")}"] { display: none; }
+/* The tick popover over the orchestrator spans the chat's column (coverChat). */
+[data-seat-tick-popover][data-demo-cover] { left: var(--demo-cover-left) !important; width: var(--demo-cover-width) !important; max-width: none !important; }
+/* A page that shrinks a frame to 0.6 would draw a task's spend lines at 6 px: they are drawn as much larger as the frame is smaller (setFrameZoom). */
+[data-spend-pop] { zoom: var(--demo-zoom, 1); }
+.spend-pop, .spend-pop:has(.meter) { max-width: calc(320px * var(--demo-zoom, 1)); }
+/* The burndown takes the board's place beside the rail, as the accounts do, so no card is half under it. */
+[data-demo-chart] {
+  position: fixed !important; zoom: var(--demo-zoom, 1); top: 0 !important; right: 0 !important; bottom: 0 !important;
+  left: calc(var(--demo-rail-right, 0px) / var(--demo-zoom, 1)) !important; width: auto !important; max-width: none !important;
+  margin: 0 !important; translate: none !important; transform: none !important; border-radius: 0 !important;
+}
+[data-demo-chart] svg[role="img"] { height: 280px; }
 .kb .gsheet-scrim { padding: 0; }
 .kb .gsheet { border-radius: 0; }
 html .kb .agent-window { top: 0; left: 0; width: 100vw; height: 100vh; border-radius: 0; box-shadow: none; }
@@ -977,6 +1141,9 @@ html .kb .agent-window { top: 0; left: 0; width: 100vw; height: 100vh; border-ra
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; } }`;
 document.head.appendChild(frameFill);
 
+setFrameZoom();
+window.addEventListener("resize", setFrameZoom);
+try { window.parent.addEventListener("resize", setFrameZoom); } catch { /* a page that is not ours */ }
 setLocale(LANG);
 localStorage.setItem("llvProject", PROJECT);
 if (!location.hash) location.hash = `#p=${PROJECT}`;

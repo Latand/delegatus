@@ -360,7 +360,9 @@
     const visibleHeight = window.visualViewport?.height ?? window.innerHeight;
     if (live.root) live.root.style.maxHeight = full && phone ? `${visibleHeight}px` : "";
     const width = (full ? live.host.clientWidth : live.el.clientWidth) || 1;
-    const lw = phone ? Number(d.pw) : full ? width : Math.max(Number(d.lw), width);
+    // A frame marked data-exact keeps its logical width at every page width, so a
+    // picture whose edge falls between two columns does so on every screen.
+    const lw = phone ? Number(d.pw) : full ? width : "exact" in d ? Number(d.lw) : Math.max(Number(d.lw), width);
     const lh = phone ? Number(d.ph) : full ? live.host.clientHeight || 1 : Number(d.lh);
     // Embedded frames size against the layout viewport, which holds still
     // while the browser's toolbar collapses or the keyboard opens, so the
