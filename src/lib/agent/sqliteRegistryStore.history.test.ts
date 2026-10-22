@@ -621,3 +621,16 @@ test("ending preparation resumes a committed partial cursor in a fresh process",
     expect(complete.query<{ value: string }, []>("SELECT value FROM registry_meta WHERE key='owner_endings_cursor'").get()!.value).toBe("complete");
   } finally { complete.close(); }
 });
+
+
+test("cooperative hot loading bounds candidate keys before excluding cold history", async () => {
+  const { dataset, open } = history();
+  const store = open();
+  // Observe the generator's real read boundary. More retained cold keys must
+  // create more bounded steps, rather than hide inside a 16-result SQL call.
+  const reader = store as unknown as { loadHotSteps(): Generator<void, unknown> };
+  const steps = reader.loadHotSteps();
+  let count = 0;
+  for (let next = steps.next(); !next.done; next = steps.next()) count++;
+  expect(count).toBeGreaterThan(dataset.rows);
+});

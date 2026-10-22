@@ -1,3 +1,4 @@
+import { startupHostSnapshot } from "./startupSnapshot";
 import { forEachCooperatively, yieldToRuntime } from "@/lib/cooperative";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
@@ -586,7 +587,7 @@ export function reconcileDeadStructuredRegistryHost(
   conversationId: RegistryConversation["id"],
   key: SessionKey,
 ): boolean {
-  const entry = registry.readOnlySnapshot().entries[sessionKeyId(key)];
+  const entry = startupHostSnapshot(registry, key).entries[sessionKeyId(key)];
   const structuredProcess = entry?.structuredHost?.process;
   if (!entry || !structuredProcess) return false;
   return Boolean(registry.terminateInactiveStructuredHost(conversationId, key, {
@@ -783,6 +784,7 @@ export async function demoteSkippedStructuredRegistryHosts(
   admit: <T>(entry: AgentRegistryEntry, mutation: () => T) => Promise<T | undefined> = async (_entry, mutation) => registry.deliveryWriteOrBusy({ label: "registry.startup-demote" }, mutation),
   orphanStop: StructuredOrphanStopDependencies = {},
 ): Promise<void> {
+  if (typeof registry.prepareReadOnlySnapshot === "function") await registry.prepareReadOnlySnapshot(orphanStop.signal);
   const rows: AgentRegistryEntry[] = [];
   await withViewerOperation("runtime.startup", () => forEachCooperatively(registry.structuredHostEntries(), entry => {
     performanceSpans.sync("runtime.startup.select", () => {
@@ -807,7 +809,7 @@ export async function demoteSkippedStructuredRegistryHosts(
     const conversation = registry.conversationForPath(entry.artifactPath);
     if (conversation) {
       const reconciled = await admit(entry, () => {
-        const latest = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
+        const latest = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
         return latest && !shouldAdopt(latest) ? reconcileDeadStructuredRegistryHost(registry, conversation.id, entry.key) : undefined;
       });
       if (reconciled === undefined || reconciled) continue;
@@ -815,27 +817,27 @@ export async function demoteSkippedStructuredRegistryHosts(
     const owner = captureProcessIdentity(process.pid);
     try {
       await registry.withOperationLock(entry.key, owner, async () => {
-        const current = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
+        const current = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
         if (!current?.structuredHost || shouldAdopt(current)) return;
         /* A PID-only claim cannot prove ownership across reboot. Runtime and
            transcript signals already excluded this row from adoption, so the
            startup demotion may replace that unverifiable owner and settle the
            retained receipt through the ordinary terminal path. */
         let claimed = await admit(entry, () => {
-          const latest = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
+          const latest = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
           if (!latest?.structuredHost || structuredCustodyIdentity(latest) !== structuredCustodyIdentity(current) || shouldAdopt(latest)) return undefined;
           return registry.claimStructuredHost(entry.key, owner, { allowUnhosted: true, reclaimUnverifiedOwner: true });
         });
         if (claimed === undefined) return;
         if (!claimed) {
-          const current = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
+          const current = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
           const orphan = current?.structuredHost?.kind === "claude-broker"
             ? current.structuredHost.process
             : null;
           if (orphan && current && !shouldAdopt(current)
             && await terminateVerifiedStructuredOrphan(registry, entry.key, orphan, current.claimOwner ?? null, orphanStop)) {
             claimed = await admit(entry, () => {
-              const latest = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
+              const latest = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
               if (!latest?.structuredHost || structuredCustodyIdentity(latest) !== structuredCustodyIdentity(current) || shouldAdopt(latest)) return undefined;
               return registry.claimStructuredHost(entry.key, owner, { allowUnhosted: true, reclaimUnverifiedOwner: true });
             });
@@ -845,7 +847,7 @@ export async function demoteSkippedStructuredRegistryHosts(
         const claim = claimed;
         const columns = claimed.structuredHost;
         const demoted = await admit(entry, () => {
-          const latest = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
+          const latest = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
           if (!latest?.structuredHost || shouldAdopt(latest)) return undefined;
           return registry.setStructuredHostClaimed(entry.key, {
           ...columns,
@@ -1180,10 +1182,10 @@ export async function reconcileDeadStructuredRegistryHostOffLoop(
   registry: AgentRegistry, conversationId: RegistryConversation["id"], key: SessionKey,
   assertActive: () => void = () => {},
 ): Promise<boolean> {
-  const observed = structuredCustodyIdentity(registry.readOnlySnapshot().entries[sessionKeyId(key)]);
+  const observed = structuredCustodyIdentity(startupHostSnapshot(registry, key).entries[sessionKeyId(key)]);
   return registry.deliveryWriteOrBusy({ label: "registry.dead-host" }, () => {
     assertActive();
-    if (structuredCustodyIdentity(registry.readOnlySnapshot().entries[sessionKeyId(key)]) !== observed) return false;
+    if (structuredCustodyIdentity(startupHostSnapshot(registry, key).entries[sessionKeyId(key)]) !== observed) return false;
     return reconcileDeadStructuredRegistryHost(registry, conversationId, key);
   });
 }
@@ -1193,13 +1195,15 @@ export async function reconcileDeadStructuredRegistryHostsOffLoop(
   shouldRetain: StructuredHostAdoptionFilter = entry => restartCutEvidenceHolds(sessionKeyId(entry.key)),
   assertActive: () => void = () => {},
 ): Promise<void> {
+  await registry.prepareReadOnlySnapshot();
+  assertActive();
   const rows = registry.structuredHostEntries();
   for (const [index, observed] of rows.entries()) {
     if (!observed.structuredHost?.process) continue;
     if (index > 0 && index % 16 === 0) await new Promise<void>(resolve => setTimeout(resolve, 0));
     await registry.deliveryWriteOrBusy({ label: "registry.dead-hosts" }, () => {
       assertActive();
-      const snapshot = registry.readOnlySnapshot();
+      const snapshot = startupHostSnapshot(registry, observed.key);
       const key = sessionKeyId(observed.key);
       const entry = snapshot.entries[key];
       if (!entry?.structuredHost?.process || structuredCustodyIdentity(entry) !== structuredCustodyIdentity(observed) || shouldRetain(entry)) return;

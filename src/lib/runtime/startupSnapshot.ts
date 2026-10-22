@@ -1,6 +1,7 @@
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { conversationIdsResolvingTo, type AgentRegistry, type RegistryFile } from "@/lib/agent/registry";
+import type { SessionKey } from "@/lib/agent/sessionKey";
 import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 
 const scope = new AsyncLocalStorage<{ registry: AgentRegistry; keys: ReadonlySet<string> } | null>();
@@ -43,4 +44,10 @@ export function startupSnapshot(registry: AgentRegistry): RegistryFile {
     heldDeliveries: related("heldDeliveries"), receipts: related("receipts"),
     memberships: Object.fromEntries([...ids].filter(id => snapshot.memberships[id]).map(id => [id, snapshot.memberships[id]])),
   };
+}
+
+
+/** Authorization at a host boundary does not refresh the bulk selection. */
+export function startupHostSnapshot(registry: AgentRegistry, key: SessionKey): RegistryFile {
+  return typeof registry.startupHostSnapshot === "function" ? registry.startupHostSnapshot(key) : startupSnapshot(registry);
 }

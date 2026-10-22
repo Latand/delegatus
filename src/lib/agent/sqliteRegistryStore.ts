@@ -128,6 +128,7 @@ interface RegistryFileReaders {
   entryKey: WeakMap<RegistryFile, (entryKey: string) => string[]>;
   coldKey: WeakMap<RegistryFile, (collection: RowCollection) => ReadonlySet<string> | undefined>;
   endedOwner: WeakMap<RegistryFile, (since: string, page?: { limit: number; after?: string }) => string[]>;
+  startupSelection: WeakMap<RegistryFile, () => boolean>;
   projection: WeakMap<object, ProjectionReader>;
   liveness: WeakMap<RegistryFile, () => { entries: AgentRegistryEntry[]; receipts: RegistryFile["receipts"][string][] }>;
 }
@@ -142,7 +143,7 @@ interface RegistryFileReaders {
    registry itself does. */
 const readerState = process as typeof process & { __llvRegistryFileReaders?: RegistryFileReaders };
 const fileReaders = readerState.__llvRegistryFileReaders ??= {
-  keyed: new WeakMap(), bounded: new WeakMap(), path: new WeakMap(), entryKey: new WeakMap(), coldKey: new WeakMap(), endedOwner: new WeakMap(), projection: new WeakMap(), liveness: new WeakMap(),
+  keyed: new WeakMap(), bounded: new WeakMap(), path: new WeakMap(), entryKey: new WeakMap(), coldKey: new WeakMap(), endedOwner: new WeakMap(), startupSelection: new WeakMap(), projection: new WeakMap(), liveness: new WeakMap(),
 };
 const keyedReaders = fileReaders.keyed;
 const boundedReaders = fileReaders.bounded;
@@ -150,6 +151,7 @@ const pathReaders = fileReaders.path;
 const entryKeyReaders = fileReaders.entryKey;
 const coldKeyReaders = fileReaders.coldKey;
 const endedOwnerReaders = fileReaders.endedOwner;
+const startupSelectionReaders = fileReaders.startupSelection ??= new WeakMap();
 const projectionReaders = fileReaders.projection;
 const livenessReaders = fileReaders.liveness;
 
@@ -421,6 +423,29 @@ export function hotRegistryRows<C extends RowCollection>(file: RegistryFile, col
  */
 export function archivedOwnersEndedSince(file: RegistryFile, since: string, page?: { limit: number; after?: string }): string[] | undefined {
   return endedOwnerReaders.get(file)?.(since, page);
+}
+
+/** Whether this view's membership selection still describes current state.
+    Unrelated host progress does not change a selection. A missing or capped
+    journal proves nothing, so the caller must prepare another view. */
+export function registryStartupSelectionUnchanged(file: RegistryFile): boolean | undefined {
+  return startupSelectionReaders.get(file)?.();
+}
+
+const startupSelectionCollections = new Set(["entries", "conversations", "receipts", "memberships", "conversationAliases"]);
+function startupSelectionFacts(collection: string, row: unknown): string {
+  if (row === undefined) return "absent";
+  if (collection === "memberships" || collection === "conversationAliases") return JSON.stringify(row);
+  const value = row as Record<string, unknown>;
+  if (collection === "entries") {
+    const host = value.structuredHost as { kind?: unknown } | null;
+    const key = value.key as { engine?: unknown; sessionId?: unknown } | null;
+    return JSON.stringify([host?.kind, key?.engine, key?.sessionId]);
+  }
+  if (collection === "conversations") return JSON.stringify([value.id, value.engine,
+    (value.generations as Array<{ id: unknown }> | undefined)?.map(generation => generation.id)]);
+  const pending = ["starting", "path-pending", "pane-bound", "host-verified", "prompt-delivered"].includes(String(value.state));
+  return JSON.stringify(pending ? [value.conversationId] : []);
 }
 
 /** Whether entry-key lookups on this file read the generation identity index. */
@@ -1890,15 +1915,21 @@ export class SqliteAgentRegistryStore {
       const values: Record<string, unknown> = {};
       let after = -1;
       for (;;) {
-        const rows = this.db.query<Pick<StoredRow,"row_key"|"value_json"|"row_order">, [string, number]>(
-          "SELECT row_key,value_json,row_order FROM registry_hot_rows WHERE collection=? AND row_order>? ORDER BY row_order LIMIT 16").all(collection, after);
-        this.onRowPayloadRead?.(collection,rows.length);
-        for (const row of rows) {
-          values[row.row_key] = this.parseRow(collection,row.row_key,row.value_json,true);
-          after = row.row_order;
+        // A limit on hot results can scan thousands of cold compatibility
+        // rows before finding sixteen matches. Bound candidate headers first.
+        const headers = this.db.query<Pick<StoredRow,"row_key"|"row_order">, [string, number]>(
+          "SELECT row_key,row_order FROM registry_rows WHERE collection=? AND row_order>? ORDER BY row_order LIMIT 16").all(collection, after);
+        const payload = this.db.query<{ value_json: string }, [string, string]>("SELECT value_json FROM registry_rows WHERE collection=? AND row_key=?");
+        for (const header of headers) {
+          after = header.row_order;
+          if (!this.coldKeys.has(grantDecisionKey(collection, header.row_key))) {
+            const row = payload.get(collection, header.row_key)!;
+            this.onRowPayloadRead?.(collection,1);
+            values[header.row_key] = this.parseRow(collection,header.row_key,row.value_json,true);
+          }
           yield;
         }
-        if (rows.length < 16) break;
+        if (headers.length < 16) break;
       }
       input[collection] = values;
     }
@@ -2975,6 +3006,40 @@ export class SqliteAgentRegistryStore {
       ?? this.constantReader(deliveryDescriptor.value as RegistryFile["heldDeliveries"]);
     this.coldViewCache = nextCache;
     this.coldGrantCursor = { changeId: coldGrantChangeId,stamp: snapshot.stamp };
+    let startupSelectionChecked = coldGrantChangeId;
+    let startupSelectionRefused = false;
+    if (this.changesReady) startupSelectionReaders.set(file, () => {
+      if (startupSelectionRefused) return false;
+      if (databaseFileIdentity(this.filename) !== identity) return false;
+      try {
+        const current = this.db.transaction(() => {
+          const last = this.changeId();
+          const first = this.db.query<{ seq: number }, []>("SELECT COALESCE(MIN(seq),0) AS seq FROM registry_changes").get()!.seq;
+          if (last < startupSelectionChecked || first > startupSelectionChecked + 1) return false;
+          if (last === startupSelectionChecked) return true;
+          const changes = this.db.query<{ collection: RowCollection; row_key: string }, [number]>(
+            "SELECT collection,row_key FROM registry_changes WHERE seq>? ORDER BY seq LIMIT 129").all(startupSelectionChecked);
+          if (changes.length > 128) return false;
+          const read = this.db.query<{ value_json: string }, [string, string]>(`SELECT value_json FROM ${this.recordsSource} WHERE collection=? AND row_key=?`);
+          const seen = new Set<string>();
+          for (const change of changes) {
+            if (!startupSelectionCollections.has(change.collection)) continue;
+            const key = JSON.stringify([change.collection, change.row_key]);
+            if (seen.has(key)) continue;
+            seen.add(key);
+            const raw = read.get(change.collection,change.row_key);
+            this.onRowPayloadRead?.(change.collection,raw ? 1 : 0);
+            const current = raw ? parseSqliteJson(raw.value_json,this.db) : undefined;
+            const previous = (file[change.collection] as Record<string, unknown>)[change.row_key];
+            if (startupSelectionFacts(change.collection,current) !== startupSelectionFacts(change.collection,previous)) return false;
+          }
+          startupSelectionChecked = last;
+          return true;
+        })();
+        if (!current) startupSelectionRefused = true;
+        return current;
+      } catch { startupSelectionRefused = true; return false; } // Unreadable evidence never validates a selection.
+    });
     const pinnedReceipts = this.changesReady ? this.pinnedRowKeys(file, "receipts", coldGrantChangeId, identity, this.collectionOrders.get("receipts")?.orders) : null;
     const pinnedDeliveries = this.changesReady ? this.pinnedRowKeys(file, "heldDeliveries", coldGrantChangeId, identity) : null;
     const pinnedOwners = this.changesReady ? this.pinnedRowKeys(file, "deliveryOperationOwners", coldGrantChangeId, identity) : null;

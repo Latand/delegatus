@@ -6352,3 +6352,43 @@ test("a refused pass logs its process once, preserves pipeline members and adopt
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+
+test("a membership moved while waiting for the registry writer refuses the startup claim", async () => {
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),"startup-membership-write-race-"));
+  const previous=process.env.LLV_STATE_DIR;process.env.LLV_STATE_DIR=directory;
+  const {registry,conversation}=structuredRestartFixture(directory,"codex","unhosted");
+  const journal=new RuntimeJournal(path.join(directory,"runtime.sqlite"),{structuredHosts:true});
+  const pipeline=buildPipeline({id:"future-claim-owner",task:"future ownership",project:"fixture",repoDir:directory,
+    stages:[{id:"build",kind:"run",prompt:"build",next:null,effectiveRole:{roleId:null,engine:"codex",model:"gpt-5.6-sol",effort:"high",access:"read-write",promptScaffold:null}}],
+    srcPath:null,srcConversationId:null,now:"2026-10-22T00:00:00.000Z"});
+  savePipelines([pipeline]);
+  const db=new (await import("bun:sqlite")).Database(path.join(directory,"state.sqlite"));
+  db.run("UPDATE state_rows SET value_json=json_set(value_json,'$.state','future-owner') WHERE collection='pipelines'");db.close();
+  registry.holdDelivery(conversation.id,"owed fixture","membership-race-key","text",[],null,{operationId:"membership-race-operation",kind:"send",policy:"queue",turnId:null});
+  const write=registry.deliveryWriteOrBusy.bind(registry);
+  let moved=false,attempted=false;
+  registry.deliveryWriteOrBusy=async (correlation,operation)=>{
+    if(correlation.label==="registry.claimStructuredHost"&&!moved){
+      await Promise.resolve();
+      registry.rememberMembership(conversation.id,{kind:"pipeline",containerId:pipeline.id,role:"builder",slot:"build",stageId:"build",stageOrder:0,round:1,parentConversationId:null});
+      moved=true;
+    }
+    return write(correlation,operation);
+  };
+  try {
+    await adoptStructuredHostsAtStartup({registry,client:runtimeJournalClient(journal),orchestratorSeats:()=>[],refreshTranscriptState:async()=>{},
+      adopt:async(received,_options,_env,_filter,_processed,hooks)=>{
+        const entry=Object.values(received.readOnlySnapshot().entries)[0]!;attempted=true;
+        expect(await hooks!.claimHost!(entry,captureProcessIdentity(process.pid))).toBeNull();
+        return [];
+      },adoptClaude:async()=>[],schedule:()=>({unref(){}})});
+    expect(attempted).toBe(true);expect(moved).toBe(true);
+    expect(registry.readOnlySnapshot().entries[`codex:${"aaaaaaaa-aaaa-0aaa-0aaa-aaaaaaaaaaaa"}`]!.claimOwner).toBeNull();
+  } finally {
+    registry.deliveryWriteOrBusy=write;
+    await bindStructuredDeliveryQueue([],{registry,client:null});journal.close();registry.close();
+    if(previous===undefined)delete process.env.LLV_STATE_DIR;else process.env.LLV_STATE_DIR=previous;
+    fs.rmSync(directory,{recursive:true,force:true});
+  }
+});

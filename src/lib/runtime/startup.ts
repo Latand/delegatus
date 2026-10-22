@@ -1,5 +1,5 @@
 import { registryOpenSpawnReceipts } from "@/lib/agent/registry";
-import { startupSnapshot, withStartupRowScope, startupHostInScope } from "./startupSnapshot";
+import { startupSnapshot, startupHostSnapshot, withStartupRowScope, startupHostInScope } from "./startupSnapshot";
 import { startupRowRetries, startupRowReason, startupRowNotice, type StartupRowReason } from "./startupRowRetries";
 import { verifiedCodexSocketOwner } from "./codexSocketTransport";
 import { waitForStateLock } from "@/lib/state/lockWait";
@@ -18,7 +18,7 @@ import { accountManager } from "@/lib/accounts/manager";
 import { turnStateFromRecords } from "@/lib/accounts/migration/turnState";
 import { launchProfileEngineReadOnly, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { agentRegistry, conversationIdsResolvingTo, resolveConversationAlias, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt } from "@/lib/agent/registry";
-import { registryRowsMatching, registryConversationsForEntryKey, hotRegistryRows } from "@/lib/agent/sqliteRegistryStore";
+import { registryRowsMatching, registryConversationsForEntryKey, hotRegistryRows, registryStartupSelectionUnchanged } from "@/lib/agent/sqliteRegistryStore";
 import { readClaudePermissionMode } from "@/lib/agent/claudePermissionMode";
 import { effectiveClaudePermissionMode } from "@/lib/agent/cli";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
@@ -1806,12 +1806,15 @@ const SETTLED_STAGE_ATTEMPT_STATES = new Set(["passed", "failed", "needs_decisio
 interface PipelineStartupEvidence {
   settled: ReadonlySet<string>;
   deferred: ReadonlySet<string>;
+  changed?: boolean;
+  membershipIdentity?: string;
 }
 
 function* pipelineStartupMembershipSteps(registry: AgentRegistry, host?: AgentRegistryEntry) {
+  const sourceSnapshot = host ? startupHostSnapshot(registry, host.key) : registry.readOnlySnapshot();
   // Only hosts this pass may adopt need membership evidence. Keyed generation
   // lookups keep retained conversations and memberships off the retry loop.
-  const snapshot = startupSnapshot(registry);
+  const snapshot = host ? sourceSnapshot : startupSnapshot(registry);
   const memberships: RegistryFile["memberships"] = {};
   const canonicalIds = new Map<string, ViewerConversationId>();
   const take = (conversationId: ViewerConversationId) => {
@@ -1840,7 +1843,7 @@ function* pipelineStartupMembershipSteps(registry: AgentRegistry, host?: AgentRe
     ids.push(id); byPipeline.set(entry.containerId, ids);
     yield;
   }
-  return { memberships, resolve, byPipeline, selectedIds: new Set(canonicalIds.keys()) };
+  return { memberships, resolve, byPipeline, selectedIds: new Set(canonicalIds.keys()), snapshot: sourceSnapshot };
 }
 
 /** Fresh keyed checks never enumerate the other hosts or pending launches. */
@@ -1858,7 +1861,7 @@ export async function pipelineStartupMembershipsAsync(registry: AgentRegistry, b
     const check = () => {
       budget.signal?.throwIfAborted();
       if (budget.deadline !== undefined && performance.now() >= budget.deadline) throw new Error("startup membership deadline exceeded");
-      if (registry.readOnlySnapshot() !== snapshot) throw new Error("startup membership revision changed");
+      if (!(registryStartupSelectionUnchanged(snapshot) ?? registry.readOnlySnapshot() === snapshot)) throw new Error("startup membership revision changed");
     };
     try {
       await yieldToRuntime();
@@ -1880,13 +1883,18 @@ export async function pipelineStartupMembershipsAsync(registry: AgentRegistry, b
   });
 }
 
+function startupMembershipIdentity(selection: ReturnType<typeof pipelineStartupMemberships>): string {
+  return JSON.stringify([...selection.selectedIds].map(id => [id, selection.resolve(id), selection.memberships[id] ?? []]));
+}
+
 async function deferredPipelineStartupEvidence(registry: AgentRegistry, host?: AgentRegistryEntry): Promise<PipelineStartupEvidence> {
   const deferred = new Set<string>();
-  const { memberships, resolve } = host ? pipelineStartupMemberships(registry, host) : await pipelineStartupMembershipsAsync(registry);
+  const selection = host ? pipelineStartupMemberships(registry, host) : await pipelineStartupMembershipsAsync(registry);
+  const { memberships, resolve } = selection;
   for (const [id, entries] of Object.entries(memberships)) {
     if (entries.some((membership) => membership.kind === "pipeline")) deferred.add(resolve(id));
   }
-  return { settled: new Set(), deferred };
+  return { settled: new Set(), deferred, membershipIdentity: host ? startupMembershipIdentity(selection) : undefined };
 }
 
 function reportPipelineStartupRefusal(error: unknown): void {
@@ -1903,8 +1911,7 @@ async function pipelineStartupEvidence(registry: AgentRegistry, available = true
   if (!available) return deferredPipelineStartupEvidence(registry, host);
   const settled = new Set<string>();
   const deferred = new Set<string>();
-  const { memberships, resolve, byPipeline, selectedIds } = selection ?? (host ? pipelineStartupMemberships(registry, host) : await pipelineStartupMembershipsAsync(registry));
-  const snapshot = registry.readOnlySnapshot();
+  const { memberships, resolve, byPipeline, selectedIds, snapshot } = selection ?? (host ? pipelineStartupMemberships(registry, host) : await pipelineStartupMembershipsAsync(registry));
   let pipelines;
   let preservedIds: Set<string>;
   try {
@@ -1914,7 +1921,12 @@ async function pipelineStartupEvidence(registry: AgentRegistry, available = true
     reportPipelineStartupRefusal(error);
     return deferredPipelineStartupEvidence(registry, host);
   }
-  if (registry.readOnlySnapshot() !== snapshot) return deferredPipelineStartupEvidence(registry, host);
+  if (host) {
+    const current = pipelineStartupMemberships(registry, host);
+    if (startupMembershipIdentity(current) !== startupMembershipIdentity({ memberships, resolve, byPipeline, selectedIds, snapshot })) {
+      return { ...await deferredPipelineStartupEvidence(registry, host), changed: true };
+    }
+  } else if (!(registryStartupSelectionUnchanged(snapshot) ?? registry.readOnlySnapshot() === snapshot)) return deferredPipelineStartupEvidence(registry);
   for (const [id, entries] of Object.entries(memberships)) {
     if (entries.some((entry) => entry.kind === "pipeline" && preservedIds.has(entry.containerId))) {
       deferred.add(resolve(id));
@@ -1935,7 +1947,7 @@ async function pipelineStartupEvidence(registry: AgentRegistry, available = true
       if (blocked) deferred.add(id);
     }
   }
-  return { settled, deferred };
+  return { settled, deferred, membershipIdentity: host ? startupMembershipIdentity({ memberships, resolve, byPipeline, selectedIds, snapshot }) : undefined };
 }
 
 export interface StructuredStartupDependencies {
@@ -2270,13 +2282,16 @@ async function adoptStructuredHostsPass(
   const readEvidence = async (entry?: AgentRegistryEntry) => {
     if (dependencies.pipelineEvidence) return dependencies.pipelineEvidence(registry);
     if (entry) return pipelineStartupEvidence(registry, true, entry);
-    const snapshot = registry.readOnlySnapshot();
-    if (membershipSelection?.snapshot !== snapshot) {
+    const current = membershipSelection && (registryStartupSelectionUnchanged(membershipSelection.snapshot)
+      ?? registry.readOnlySnapshot() === membershipSelection.snapshot);
+    if (!current) {
+      await registry.prepareReadOnlySnapshot(dependencies.signal);
+      assertActive();
       const value = await pipelineStartupMembershipsAsync(registry, { signal: dependencies.signal, deadline: membershipDeadline });
       assertActive();
-      membershipSelection = { snapshot, value };
+      membershipSelection = { snapshot: value.snapshot, value };
     }
-    return pipelineStartupEvidence(registry, true, undefined, membershipSelection.value);
+    return pipelineStartupEvidence(registry, true, undefined, membershipSelection!.value);
   };
   let pipelineEvidence = await admitState(async (available) =>
     available ? readEvidence() : pipelineStartupEvidence(registry, false));
@@ -2402,6 +2417,11 @@ async function adoptStructuredHostsPass(
       admitState(async (available) => {
         assertActive();
         const evidence = await (available ? readEvidence(entry) : pipelineStartupEvidence(registry, false, entry));
+        if (evidence.changed) {
+          skippedHostKeys.add(sessionKeyId(entry.key));
+          deferredHostKeys.add(sessionKeyId(entry.key));
+          return null;
+        }
         const conversation = registry.conversationForPath(entry.artifactPath);
         const id = conversation && registry.canonicalConversationId(conversation.id);
         // Selection deliberately admits owed work on already-settled stages.
@@ -2414,11 +2434,21 @@ async function adoptStructuredHostsPass(
           if (evidence.deferred.has(id)) deferredHostKeys.add(key);
           return null;
         }
-        const current = startupSnapshot(registry).entries[sessionKeyId(entry.key)];
+        const current = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
         if (!current || !shouldAdopt(current)) return null;
         const socketOwner = current.structuredHost?.process && verifiedCodexSocketOwner({ endpoint: current.structuredHost.endpoint, process: current.structuredHost.process })
           ? { endpoint: current.structuredHost.endpoint, process: current.structuredHost.process, signalDomain: current.structuredHost.signalDomain, signalBoundary: current.structuredHost.signalBoundary } : undefined;
-        return (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, entry.key, owner, { allowUnhosted: true, reconnectCodex: socketOwner })));
+        return registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, () => {
+          assertActive();
+          if (evidence.membershipIdentity !== undefined && evidence.membershipIdentity !== startupMembershipIdentity(pipelineStartupMemberships(registry, entry))) {
+            skippedHostKeys.add(sessionKeyId(entry.key));
+            deferredHostKeys.add(sessionKeyId(entry.key));
+            return null;
+          }
+          const latest = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
+          if (!latest || !shouldAdopt(latest)) return null;
+          return registry.claimStructuredHost(entry.key, owner, { allowUnhosted: true, reconnectCodex: socketOwner });
+        });
       }, "claiming startup host");
     const codexCandidateCount = adoptionCandidates.filter((entry) => entry.key.engine === "codex").length;
     const claudeCandidateCount = adoptionCandidates.length - codexCandidateCount;
@@ -2641,6 +2671,11 @@ async function adoptStructuredHostsPass(
       admitState(async (available) => {
         assertActive();
         const evidence = await (available ? readEvidence(entry) : pipelineStartupEvidence(registry, false, entry));
+        if (evidence.changed) {
+          skippedHostKeys.add(sessionKeyId(entry.key));
+          deferredHostKeys.add(sessionKeyId(entry.key));
+          return;
+        }
         const conversation = registry.conversationForPath(entry.artifactPath);
         if (conversation && evidence.deferred.has(registry.canonicalConversationId(conversation.id))) {
           deferredHostKeys.add(sessionKeyId(entry.key));
@@ -2648,14 +2683,19 @@ async function adoptStructuredHostsPass(
           return;
         }
         /* Before the claim and before the write that retires the row. */
-        const current = startupSnapshot(registry).entries[sessionKeyId(entry.key)];
+        const current = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
         if (current && evidenceMoved(current)) {
           skippedHostKeys.add(sessionKeyId(entry.key));
           return;
         }
         return registry.deliveryWriteOrBusy({ label: "registry.startup-demote" }, () => {
           assertActive();
-          const latest = startupSnapshot(registry).entries[sessionKeyId(entry.key)];
+          if (evidence.membershipIdentity !== undefined && evidence.membershipIdentity !== startupMembershipIdentity(pipelineStartupMemberships(registry, entry))) {
+            deferredHostKeys.add(sessionKeyId(entry.key));
+            return;
+          }
+          assertActive();
+          const latest = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
           if (!latest || evidenceMoved(latest)) return undefined;
           return mutation();
         });

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { AgentRegistry, normalizeRegistry, type RegistryFile } from "@/lib/agent/registry";
-import { SqliteAgentRegistryStore } from "@/lib/agent/sqliteRegistryStore";
+import { SqliteAgentRegistryStore, registryStartupSelectionUnchanged } from "@/lib/agent/sqliteRegistryStore";
 import { runStructuredHostRetirementSweep } from "./structuredHostRetirement";
 import { pipelineStartupMemberships, pipelineStartupMembershipsAsync, startupConversationRows } from "./startup";
 import { demoteSkippedStructuredRegistryHosts } from "./registry";
@@ -151,4 +151,77 @@ test("retained startup conversation traversal yields without omitting history an
       for await (const _row of startupConversationRows(file, { signal: abort.signal })) { /* no effect */ }
     })()).rejects.toThrow("cancelled history traversal");
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("bulk selection survives unrelated registry writes but refuses moved membership", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-selection-revision-"));
+  try {
+    const initial = seeded(root, 32);
+    const store = new SqliteAgentRegistryStore(path.join(root,"registry.sqlite"), { initialSnapshot: initial, normalize: normalizeRegistry });
+    try {
+      await store.prepareReadOnlySnapshot();
+      const registry = { readOnlySnapshot: () => store.readOnlySnapshot().file } as AgentRegistry;
+      setImmediate(() => store.mutate(file => { file.entries["codex:reader-0"]!.updatedAt = "2026-10-22T00:00:00.000Z"; }, false));
+      const selected = await pipelineStartupMembershipsAsync(registry);
+      expect(selected.byPipeline.has("lane-0")).toBe(true);
+      setImmediate(() => store.mutate(file => { file.memberships["conversation_reader_0"]![0]!.containerId = "moved-lane"; }, false));
+      await expect(pipelineStartupMembershipsAsync(registry)).rejects.toThrow("changed");
+    } finally { store.close(); }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("selection validation covers every membership input and refuses a lost or capped journal", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-input-revisions-"));
+  const cases: Array<(file: RegistryFile) => void> = [
+    file => { file.entries["codex:reader-0"]!.structuredHost = null; },
+    file => { file.conversations["conversation_reader_0"]!.generations[0]!.id = "replacement-generation"; },
+    file => { file.memberships["conversation_reader_0"]![0]!.containerId = "replacement-owner"; },
+    file => { file.conversationAliases["conversation_reader_alias"] = "conversation_reader_1"; },
+    file => { file.receipts.pending!.state = "completed"; },
+  ];
+  try {
+    for (const [index, change] of cases.entries()) {
+      const directory = path.join(root,String(index));fs.mkdirSync(directory);
+      const store = new SqliteAgentRegistryStore(path.join(directory,"registry.sqlite"), { initialSnapshot: seeded(directory,8), normalize: normalizeRegistry });
+      try {
+        const view = (await store.prepareReadOnlySnapshot()).file;
+        expect(registryStartupSelectionUnchanged(view)).toBe(true);
+        store.mutate(change,false);
+        expect(registryStartupSelectionUnchanged(view)).toBe(false);
+      } finally { store.close(); }
+    }
+    const directory=path.join(root,"journal");fs.mkdirSync(directory);
+    const filename=path.join(directory,"registry.sqlite");
+    const store=new SqliteAgentRegistryStore(filename,{initialSnapshot:seeded(directory,8),normalize:normalizeRegistry});
+    const {Database}=await import("bun:sqlite");const db=new Database(filename);
+    try {
+      let view=(await store.prepareReadOnlySnapshot()).file;
+      db.run("DELETE FROM registry_changes");
+      expect(registryStartupSelectionUnchanged(view)).toBe(false);
+      view=(await store.prepareReadOnlySnapshot()).file;
+      db.transaction(()=>{ for(let i=0;i<129;i++) db.run("INSERT INTO registry_changes(collection,row_key) VALUES ('meta','selection-fixture')"); })();
+      expect(registryStartupSelectionUnchanged(view)).toBe(false);
+    } finally {db.close();store.close();}
+  } finally {fs.rmSync(root,{recursive:true,force:true});}
+});
+
+
+test("a production host membership recheck never rebuilds the global snapshot", async () => {
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),"startup-keyed-snapshot-"));
+  const filename=path.join(root,"source.json");
+  fs.writeFileSync(filename,JSON.stringify(seeded(root,16)));
+  const registry=new AgentRegistry(filename,undefined,undefined,{sqliteMode:"sqlite",sqliteFilename:path.join(root,"registry.sqlite")});
+  try {
+    await registry.prepareReadOnlySnapshot();
+    const entry=registry.readOnlySnapshot().entries["codex:reader-0"]!;
+    const read=registry.readOnlySnapshot;
+    registry.readOnlySnapshot=()=>{throw new Error("global snapshot rebuilt during keyed recheck");};
+    try {
+      const selected=pipelineStartupMemberships(registry,entry);
+      expect([...selected.selectedIds]).toEqual(["conversation_reader_0","conversation_reader_alias"]);
+      expect([...selected.byPipeline.keys()]).toEqual(["lane-0"]);
+    } finally {registry.readOnlySnapshot=read;}
+  } finally {registry.close();fs.rmSync(root,{recursive:true,force:true});}
 });

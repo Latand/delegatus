@@ -6128,6 +6128,25 @@ export class AgentRegistry {
     });
   }
 
+  /** One startup host and its membership identities, under a keyed read
+      transaction. No lazy row or lookup escapes into the ownership callback. */
+  startupHostSnapshot(key: SessionKey): RegistryFile {
+    return this.readKeyed(file => {
+      const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
+      const entryKey = sessionKeyId(key);
+      if (file.entries[entryKey]) result.entries[entryKey] = clone(file.entries[entryKey]!);
+      for (const conversation of registryConversationsForEntryKey(file, entryKey)) {
+        const canonical = resolveConversationAlias(file, conversation.id);
+        for (const id of conversationIdsResolvingTo(file, canonical)) {
+          if (file.conversationAliases[id]) result.conversationAliases[id] = file.conversationAliases[id]!;
+          if (file.conversations[id]) result.conversations[id] = clone(file.conversations[id]!);
+          if (file.memberships[id]) result.memberships[id] = clone(file.memberships[id]!);
+        }
+      }
+      return result;
+    }, { skipColdKeyInitialization: true });
+  }
+
   /** Existing reaper hygiene owns these bounded storage-only moves. */
   archiveInactiveRows(limit?: number): number {
     assertStateStartupMutation(path.dirname(this.filename),"agent registry archive");
