@@ -209,6 +209,14 @@ test("decision PATCH explicitly attributes requests without an agent capability 
   expect(forwardedActor).toEqual({ kind: "operator" });
 });
 
+test("publish passes the admitted caller, which a custody acceptance authorizes", async () => {
+  forwardedActor = undefined;
+  const response = await PATCH(new NextRequest("http://127.0.0.1/api/pipelines/pipeline-1", { method: "PATCH", headers: { host: "127.0.0.1" },
+    body: JSON.stringify({ action: "publish", acceptedSha: "a".repeat(40) }) }), { params: Promise.resolve({ id: "pipeline-1" }) });
+  expect(response.status).toBe(200);
+  expect(forwardedActor).toEqual({ kind: "operator" });
+});
+
 test("pipeline PATCH forwards repository-admission fields from final revalidation", async () => {
   const response = await PATCH(
     new NextRequest("http://127.0.0.1/api/pipelines/pipeline-1", {
