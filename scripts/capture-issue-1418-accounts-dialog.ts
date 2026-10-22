@@ -26,8 +26,8 @@
  * block per engine — the active account's card — with Refresh, the reset
  * control only on Codex and enabled only while that card holds a credit, every
  * meter filled with what REMAINS (its value equals the row's own «n% left»),
- * the corner naming one of the card's own windows and carrying the tightest of
- * them, 44px targets and no horizontal scroll. Transfer checklist (install
+ * no corner number repeating the week the card lists, 44px targets and no
+ * horizontal scroll. Transfer checklist (install
  * transfer slice 2): two accounts an import brought, signed out, one per
  * engine; each dialog lists its one row with its state, «Sign in» and «Not
  * needed here» in en/light and uk/dark, nothing overflowing. Shots land in
@@ -100,6 +100,11 @@ async function seedHome(): Promise<void> {
   fs.mkdirSync(path.join(BASE, "tmp", `claude-${process.getuid?.() ?? 1000}`), { recursive: true });
   fs.mkdirSync(path.join(BASE, "tmux"), { recursive: true });
   fs.mkdirSync(STATE, { recursive: true });
+  /* The setup guide opens by itself on a home with no Viewer state and covers
+     the account buttons; this home stands for an install already set up. */
+  fs.writeFileSync(path.join(STATE, "onboarding.json"), JSON.stringify({
+    schemaVersion: 1, completedAt: null, dismissedAt: new Date().toISOString(), reason: "existing-install", steps: {}, lastHealth: null, walk: "skipped",
+  }));
   fs.mkdirSync(path.join(HOME, ".codex", "sessions"), { recursive: true });
   fs.mkdirSync(path.join(HOME, ".claude", "projects"), { recursive: true });
   seedProject();
@@ -238,7 +243,7 @@ async function dialogFacts(page: Page, engine: "Codex" | "Claude"): Promise<Dial
       refreshButtons: dialog.querySelectorAll("[data-account-refresh-limits]").length,
       resetButtons: dialog.querySelectorAll("[data-account-use-reset]").length,
       resetEnabled: [...dialog.querySelectorAll<HTMLButtonElement>("[data-account-use-reset]")].filter((button) => !button.disabled).map((button) => button.getAttribute("data-account-use-reset")!),
-      flagshipRows: [...dialog.querySelectorAll("[data-limit-row='flagship']")].map((row) => row.closest("[data-account-limits]")!.getAttribute("data-account-limits")!),
+      flagshipRows: [...dialog.querySelectorAll("[data-limit-row^='tier:']")].map((row) => row.closest("[data-account-limits]")!.getAttribute("data-account-limits")!),
       bottom: Math.round(dialog.getBoundingClientRect().bottom),
       viewport: window.innerHeight,
       scrollWidth: document.documentElement.scrollWidth,
@@ -364,7 +369,7 @@ async function screenFacts(page: Page): Promise<ScreenFacts> {
           refreshButtons: section.querySelectorAll("[data-account-refresh-limits]").length,
           resetButtons: section.querySelectorAll("[data-account-use-reset]").length,
           resetEnabled: [...section.querySelectorAll<HTMLButtonElement>("[data-account-use-reset]")].filter((button) => !button.disabled).map((button) => button.getAttribute("data-account-use-reset")!),
-          flagshipRows: [...section.querySelectorAll("[data-limit-row='flagship']")].map((row) => row.closest("[data-account-limits]")!.getAttribute("data-account-limits")!),
+          flagshipRows: [...section.querySelectorAll("[data-limit-row^='tier:']")].map((row) => row.closest("[data-account-limits]")!.getAttribute("data-account-limits")!),
           rows: [...section.querySelectorAll("[data-limit-row]")].map((row) => ({
             row: row.getAttribute("data-limit-row")!,
             /* The row reads «<window> <meter> n% left», then its reset line
@@ -413,11 +418,9 @@ function checkScreen(facts: ScreenFacts): void {
       /* One meaning per meter: the fill IS what the row says is left. */
       if (row.printed !== row.meter) throw new Error(`${at}: the ${row.row} meter is at ${row.meter}% while its row reads ${row.printed}% left`);
     }
-    const corner = engine.corner;
-    if (!corner) throw new Error(`${at}: the active card has no corner number`);
-    if (!corner.windows.includes(corner.window)) throw new Error(`${at}: the corner names «${corner.window}», which is none of the card's windows [${corner.windows.join(", ")}]`);
-    const tightest = Math.min(...engine.rows.map((row) => row.printed));
-    if (corner.left !== tightest) throw new Error(`${at}: the corner reads ${corner.left}% left, the tightest window has ${tightest}%`);
+    /* Since #2776 the active card lists its week right below its head, so the
+       head carries no corner number that would say it twice. */
+    if (engine.corner) throw new Error(`${at}: the active card repeats its week in a corner number («${engine.corner.window}»)`);
   }
   if (facts.minTarget < 44) throw new Error(`${where}: a control is ${facts.minTarget}px tall, under the 44px floor`);
   if (facts.scrollWidth > facts.innerWidth) throw new Error(`${where}: the document scrolls to ${facts.scrollWidth}px at ${facts.innerWidth}px`);
@@ -425,12 +428,13 @@ function checkScreen(facts: ScreenFacts): void {
 
 /** Board ▸ ⋯ ▸ Accounts & limits — the phone's one route to its accounts. */
 async function openAccountsScreen(page: Page, baseUrl: string, projectId: string): Promise<void> {
-  await page.goto(`${baseUrl}/#p=${encodeURIComponent(projectId)}`, { waitUntil: "networkidle" });
+  await page.goto(`${baseUrl}/#p=${encodeURIComponent(projectId)}`, { waitUntil: "load" });
   await page.waitForSelector('[data-mobile2-screen="board"]', { timeout: 20_000 });
   await page.click('[data-mobile2-open="menu"]');
   await page.waitForSelector('[data-mobile2-sheet="menu"]');
   await page.click('[data-mobile2-go="accounts"]');
   await page.waitForSelector(PHONE_SCREEN, { timeout: 20_000 });
+  await page.waitForSelector(`${PHONE_SCREEN} [data-limit-row]`, { timeout: 30_000 });
   await page.waitForTimeout(400);
 }
 
@@ -443,7 +447,11 @@ async function seededProject(baseUrl: string): Promise<string> {
 }
 
 async function openDialog(page: Page, engine: "Codex" | "Claude"): Promise<void> {
-  await page.click(engine === "Codex" ? codexTrigger : claudeTrigger);
+  const trigger = engine === "Codex" ? codexTrigger : claudeTrigger;
+  /* The page counts as loaded before the limits read lands; the trigger names
+     the active account's tightest window once it has. */
+  await page.waitForFunction((selector) => !document.querySelector(selector)?.getAttribute("title")?.includes("Loading"), trigger, { timeout: 30_000 });
+  await page.click(trigger);
   await page.waitForSelector(dialogFor(engine));
   await page.waitForTimeout(250);
 }
@@ -486,7 +494,7 @@ async function main(): Promise<void> {
     console.log(`screenshots: ${OUT_DIR}`);
 
     const desktop = await browser.newPage({ viewport: DESKTOP });
-    await desktop.goto(baseUrl, { waitUntil: "networkidle" });
+    await desktop.goto(baseUrl, { waitUntil: "load" });
     await desktop.waitForSelector(codexTrigger);
     for (const engine of ["Codex", "Claude"] as const) {
       await openDialog(desktop, engine);
@@ -514,10 +522,15 @@ async function main(): Promise<void> {
       const context = await browser.newContext({ viewport: DESKTOP, colorScheme, reducedMotion: "reduce" });
       await context.addInitScript((lang: string) => { localStorage.setItem("llv_lang", lang); }, locale);
       const page = await context.newPage();
-      await page.goto(baseUrl, { waitUntil: "networkidle" });
+      await page.goto(baseUrl, { waitUntil: "load" });
+      /* The first-run install-ping notice sits over the dialog's lower edge. */
+      const notice = page.locator("[data-telemetry-notice] button", { hasText: locale === "en" ? "Got it" : "Зрозуміло" });
+      if (await notice.waitFor({ state: "visible", timeout: 5_000 }).then(() => true, () => false)) await notice.click();
       for (const engine of ["Codex", "Claude"] as const) {
         await page.click(TRIGGER[locale](engine));
         await page.waitForSelector(CHECKLIST_DIALOG);
+        /* The shot shows the checklist above the cards it belongs to. */
+        await page.waitForSelector(`${CHECKLIST_DIALOG} [data-account-limits]`, { timeout: 30_000 });
         await page.waitForTimeout(250);
         checkChecklist(engine, locale, await checklistFacts(page));
         const file = path.join(OUT_DIR, `1418-desktop-${engine.toLowerCase()}-transfer-${locale}-${colorScheme}.png`);
