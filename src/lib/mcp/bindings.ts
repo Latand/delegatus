@@ -17,6 +17,7 @@ import { findPrototypeRound } from "@/lib/prototypeReview/store";
 import { autonomyActive, autonomyMandate, autonomyReportKey, pendingAutonomyReports } from "@/lib/monitor/autonomy";
 import { changeSeatTickSettings, markAutonomyReported, markAutonomyDecisionReview } from "@/lib/monitor/seatTickSettings";
 import { pipelinePublishesRemoteBranch } from "@/lib/pipelines/publication";
+import { recordSeatProjectSuccessions, seatLaunchCwd } from "@/lib/orchestrator/seatProjectIdentity";
 import { namedProjectDirectory, resolveNamedProject, ProjectNameRefusal } from "@/lib/projects/nameResolution";
 import { releaseStatus } from "@/lib/release/answer";
 import { releaseControlChange } from "@/lib/release/store";
@@ -4397,7 +4398,10 @@ function orchestratorDispatchRefusal(error: unknown): McpDispatchNotExecutedErro
 
 /** Resolve names through the directory shared with voice and transcript search. */
 function resolveOrchestratorToolProject(named: string, dependencies: ViewerMcpDomainDependencies, requireActiveSeat = true): string {
-  try { return resolveNamedProject(named, namedProjectDirectory(dependencies), requireActiveSeat); }
+  try {
+    recordSeatProjectSuccessions(seatLaunchCwd, true);
+    return resolveNamedProject(named, namedProjectDirectory(dependencies), requireActiveSeat);
+  }
   catch (error) {
     if (error instanceof ProjectNameRefusal) throw new McpToolRefusal(error.message, error.details);
     throw error;
@@ -5425,6 +5429,7 @@ async function createOrchestrator(args: McpToolArgs, control: ViewerControlDepen
     project: typeof (result.seat as { project?: unknown } | undefined)?.project === "string"
       ? (result.seat as { project: string }).project
       : project,
+    ...(typeof result.displayName === "string" ? { displayName: result.displayName } : {}),
     conversationId: result.conversationId ?? null,
     transcriptPath: result.path ?? null,
     seat: result.seat ?? null,

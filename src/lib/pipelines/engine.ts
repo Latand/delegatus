@@ -11316,7 +11316,13 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
           && operation.epoch === pipeline.delivery?.epoch
           && !deliveryOwnerError(pipeline, pipelineDeliveryLookup({ ...pipeline.delivery!.target, active: true }))
           && (pipeline.stateDetail?.split("\n", 1)[0] === `publishing the passed stage: publisher ${pipeline.delivery!.ownerId} at epoch ${pipeline.delivery!.epoch} is in flight or uncertain`
-            || (operation.state === "settled" && pipeline.stateDetail?.startsWith(`publishing the passed stage: publication ${operation.id} has no progress for `)));
+            || (operation.state === "settled" && pipeline.stateDetail?.startsWith(`publishing the passed stage: publication ${operation.id} has no progress for `))
+            // Reconciliation replaces the old park text with its durable
+            // result. Resume only that publication's park, preserving other
+            // decisions and the attempt's exhausted retry budget.
+            || (operation.state === "settled" && operation.passedStage === true
+              && operation.result?.ok === false && publicationNotLanded(operation.result)
+              && pipeline.stateDetail === operation.result.error && !passed?.publicationRetry?.exhausted));
         if (pipeline.state === "needs_decision" && passed && stageHeadAccepted(passed)
           && (deliveryRefusalCleared || publicationSucceeded || interruptedPublicationCleared)) {
           passed.state = "passed";
