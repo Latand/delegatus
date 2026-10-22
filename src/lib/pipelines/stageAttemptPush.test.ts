@@ -11,7 +11,7 @@ import type { Pipeline, PipelineStageAttempt } from "./types";
 
 const START = "2026-10-16T08:00:00.000Z", NOW = "2026-10-16T12:00:00.000Z";
 let nextFixture = 0;
-async function fixture(legacy = false, successor = false) {
+async function fixture(legacy = false, successor = false, prBase?: { mainBeforeCreation?: boolean }) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "stage-proof-"));
   const lane = path.join(root, "lane"), remote = path.join(root, "remote.git"), foreign = path.join(root, "foreign");
   const baseEnv = { ...process.env, ...Object.fromEntries(Object.keys(process.env).filter(key => key.startsWith("GIT_")).map(key => [key, undefined])),
@@ -42,9 +42,14 @@ async function fixture(legacy = false, successor = false) {
   await git(foreign, "config", "user.name", "Fixture");
   await git(foreign, "config", "user.email", ["noreply", "example.invalid"].join("@"));
   await git(foreign, "config", "commit.gpgSign", "false");
+  if (prBase) await git(lane, "push", "origin", "HEAD:refs/heads/pipeline/proof");
+  if (prBase?.mainBeforeCreation) {
+    await git(foreign, "commit", "--allow-empty", "-m", "main before lane creation");
+    await git(foreign, "push", "origin", "main");
+  }
   const launchId = `stage-proof-fixture-${++nextFixture}`;
   const attempt = { launchId, startedAt: START, completedAt: null } as PipelineStageAttempt;
-  const pipeline = { id: "proof", worktreeDir: lane, branch: "pipeline/proof", baseBranch: "main", baseRef: base, lastPassedCommit: base,
+  const pipeline = { id: "proof", worktreeDir: lane, branch: "pipeline/proof", baseBranch: prBase ? "pipeline/proof" : "main", baseRef: base, lastPassedCommit: base,
     delivery: { active: true, disposition: "owner", ownerId: "proof", publish: "enabled",
       target: { remote, branch: "refs/heads/pipeline/proof" } } } as Pipeline;
   if (!legacy) {
@@ -58,6 +63,94 @@ async function fixture(legacy = false, successor = false) {
   return { root, lane, remote, foreign, env, git, own, commit, push, settle, pipeline, attempt, receipt: stageGitReceiptDirectory(launchId),
     close: async () => { await fs.rm(root, { recursive: true, force: true }); await fs.rm(stageGitReceiptDirectory(launchId), { recursive: true, force: true }); } };
 }
+
+test.each(["before", "after"] as const)("PR-base successor settles a merge of main advanced %s lane creation", async timing => {
+  const f = await fixture(false, true, { mainBeforeCreation: timing === "before" });
+  try {
+    // A successor's explicit base branch can be its PR branch. Main remains
+    // independent of that branch, even when main moved before provisioning.
+    f.pipeline.delivery!.target.pr = 1;
+    if (timing === "after") {
+      await f.git(f.foreign, "commit", "--allow-empty", "-m", "main after lane creation");
+      await f.git(f.foreign, "push", "origin", "main");
+    }
+    const main = await f.git(f.foreign, "rev-parse", "HEAD");
+    await f.own("fetch", "origin", "main");
+    await f.own("merge", "--no-ff", "-m", "integrate main", "origin/main");
+    const head = await f.own("rev-parse", "HEAD");
+    // Reproduce the controller's stale cache as well as the PR-base mismatch.
+    await f.own("update-ref", "refs/remotes/origin/main", await f.own("rev-parse", `${main}^`));
+    f.pipeline.repoDir = f.lane;
+    expect(await commitAndAdoptStageBranch(f.pipeline, "build", realExec, () => [f.pipeline], undefined,
+      () => {}, null, undefined, undefined, f.attempt, NOW)).toEqual({ ok: true, sha: head });
+    expect(await f.own("rev-parse", "HEAD")).toBe(head);
+  } finally { await f.close(); }
+});
+
+test.each(["local", "pushed", "repair"] as const)("PR-base successor refuses a foreign merge parent during %s settlement", async mode => {
+  const f = await fixture(false, true, {});
+  try {
+    f.pipeline.delivery!.target.pr = 1;
+    await f.git(f.foreign, "commit", "--allow-empty", "-m", "foreign branch work");
+    const foreign = await f.git(f.foreign, "rev-parse", "HEAD");
+    await f.own("fetch", f.foreign, "HEAD");
+    await f.own("update-ref", "refs/remotes/origin/main", foreign);
+    await f.own("merge", "--no-ff", "-m", "own merge of foreign work", "origin/main");
+    const head = await f.own("rev-parse", "HEAD");
+    if (mode === "pushed") await f.push();
+    const tip = await f.git(f.remote, "rev-parse", "refs/heads/pipeline/proof");
+    const result = await settleStageAttemptPush(f.pipeline, f.attempt, realExec, NOW,
+      mode === "repair" ? { acceptedHead: f.pipeline.baseRef } : undefined);
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining(`commit ${foreign} was not created`) });
+    expect(await f.own("rev-parse", "HEAD")).toBe(head);
+    expect(await f.git(f.remote, "rev-parse", "refs/heads/pipeline/proof")).toBe(tip);
+  } finally { await f.close(); }
+});
+
+test.each(["pushed", "repair"] as const)("PR-base successor verifies current origin main during %s settlement", async mode => {
+  const f = await fixture(false, true, { mainBeforeCreation: true });
+  try {
+    await f.own("fetch", "origin", "main");
+    await f.own("merge", "--no-ff", "-m", "integrate main", "origin/main");
+    const head = await f.own("rev-parse", "HEAD");
+    if (mode === "pushed") await f.push();
+    expect(await settleStageAttemptPush(f.pipeline, f.attempt, realExec, NOW,
+      mode === "repair" ? { acceptedHead: f.pipeline.baseRef } : undefined)).toEqual({ ok: true, sha: head });
+  } finally { await f.close(); }
+});
+
+test.each(["lookup timeout", "fetch timeout", "missing main", "malformed tip"] as const)("PR-base successor preserves tips on %s", async fault => {
+  const f = await fixture(false, true, { mainBeforeCreation: true });
+  try {
+    await f.own("fetch", "origin", "main");
+    await f.own("merge", "--no-ff", "-m", "integrate main", "origin/main");
+    const head = await f.own("rev-parse", "HEAD");
+    const tip = await f.git(f.remote, "rev-parse", "refs/heads/pipeline/proof");
+    let reads = 0, fetches = 0;
+    const exec: typeof realExec = async (command, args, cwd, env, options) => {
+      if (command === "git" && args.join(" ") === "ls-remote --refs origin refs/heads/main") {
+        reads++;
+        expect(options?.timeoutMs).toBe(5000);
+        if (fault === "lookup timeout") return { code: 124, stdout: "", stderr: "fixture timeout" };
+        if (fault === "missing main") return { code: 0, stdout: "", stderr: "" };
+        if (fault === "malformed tip") return { code: 0, stdout: `${head}\trefs/heads/other\n`, stderr: "" };
+      }
+      if (command === "git" && args[0] === "fetch" && args[2] === "origin") {
+        fetches++;
+        expect(options?.timeoutMs).toBe(10000);
+        if (fault === "fetch timeout") return { code: 124, stdout: "", stderr: "fixture timeout" };
+      }
+      return realExec(command, args, cwd, env, options);
+    };
+    const result = await settleStageAttemptPush(f.pipeline, f.attempt, exec, NOW);
+    expect(result?.ok).toBe(false);
+    if (fault.endsWith("timeout")) expect(result).toMatchObject({ deferred: true });
+    expect(reads).toBe(1);
+    expect(fetches).toBe(fault === "fetch timeout" ? 1 : 0);
+    expect(await f.own("rev-parse", "HEAD")).toBe(head);
+    expect(await f.git(f.remote, "rev-parse", "refs/heads/pipeline/proof")).toBe(tip);
+  } finally { await f.close(); }
+});
 
 for (const divergent of [false, true]) test(`successor settlement preserves an older delivery tip (divergent: ${divergent})`, async () => {
   const f = await fixture(false, true);

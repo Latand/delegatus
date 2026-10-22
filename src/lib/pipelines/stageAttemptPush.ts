@@ -5,7 +5,7 @@ import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity"
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { rollupChecksWithIdentity } from "@/lib/forge/checkRollup";
 import type { ExecPort } from "@/lib/workflows/provision";
-import { pipelineLiteralGitEnv, verifyPassedHeadIntegration, type PipelineGitResult } from "./git";
+import { DEFAULT_PIPELINE_BASE_BRANCH, pipelineLiteralGitEnv, verifyPassedHeadIntegration, type PipelineGitResult } from "./git";
 import type { Pipeline, PipelineStageAttempt } from "./types";
 
 class StagePushRemoteUnavailable extends Error {}
@@ -342,13 +342,16 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
     let integrationBase: string | null = null;
     const verifiedBase = async (): Promise<string | null> => {
       if (baseTip !== undefined) return baseTip;
-      const baseRef = `refs/heads/${pipeline.baseBranch}`;
-      const found = await exec("git", ["ls-remote", "--refs", remote, baseRef], pipeline.worktreeDir, undefined, { timeoutMs: 5000 });
+      // The provisioning base may be the PR branch being published. It
+      // cannot attest its own imported commits. Read origin's main directly;
+      // neither the lane's pinned base nor a movable tracking ref proves it.
+      const baseRef = `refs/heads/${DEFAULT_PIPELINE_BASE_BRANCH}`;
+      const found = await exec("git", ["ls-remote", "--refs", "origin", baseRef], pipeline.worktreeDir, undefined, { timeoutMs: 5000 });
       if (found.code !== 0) throw new StagePushRemoteUnavailable();
       const [sha, name] = found.stdout.trim().split(/\s+/);
       if (!found.stdout.trim()) return baseTip = null;
       if (name !== baseRef || !/^[0-9a-f]{40}$/.test(sha) || found.stdout.trim().split("\n").length !== 1) throw new Error("base branch has no exact tip");
-      const fetched = await exec("git", ["fetch", "--no-tags", remote, sha], pipeline.worktreeDir, undefined, { timeoutMs: 10000 });
+      const fetched = await exec("git", ["fetch", "--no-tags", "origin", sha], pipeline.worktreeDir, undefined, { timeoutMs: 10000 });
       if (fetched.code !== 0) throw new StagePushRemoteUnavailable();
       return baseTip = sha;
     };
