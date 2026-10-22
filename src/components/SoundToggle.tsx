@@ -12,7 +12,7 @@ import { handleOverlayEscape } from "@/lib/overlay";
 /**
  * The header's sound cluster: the master switch, and the levels behind it.
  *
- * The master governs ALL product audio — the semantic earcons and the
+ * The master governs ALL product audio — the sound map's cues and the
  * background music alike. One switch, because a mute that leaves something still
  * making noise is the mute people remember. Everything here is DEVICE-LOCAL: the
  * phone in the kitchen and the desk keep their own answers, which is the whole
@@ -49,7 +49,7 @@ export function SoundToggle({ ambientAvailable, variant = "cluster", rowClassNam
     setAudioPrefs({ cuesEnabled });
     /* Turning sound on previews what the operator just asked for; the bed picks
        itself back up if a call is already live. */
-    if (cuesEnabled) playCue({ cue: "success", eventId: `preview:${Date.now()}` });
+    if (cuesEnabled) playCue({ cue: "step", eventId: `preview:${Date.now()}`, preview: true });
     ensureAmbientLoop();
   };
 
@@ -73,6 +73,19 @@ export function SoundToggle({ ambientAvailable, variant = "cluster", rowClassNam
           onChange={(event) => setLevel({ cueVolume: Number(event.target.value) })}
           className="w-full accent-accent"
         />
+      </label>
+
+      {/* The one frequent layer, so the one an operator may want off while
+          keeping results and questions (docs/design/sound-redesign.md §9). */}
+      <label className="flex items-center gap-2">
+        <input
+          type="checkbox"
+          data-testid="typing-enabled"
+          checked={prefs.typingEnabled}
+          onChange={(event) => setAudioPrefs({ typingEnabled: event.target.checked })}
+          className="accent-accent"
+        />
+        <span className="text-[11px] font-semibold text-secondary">{t("sound.typing")}</span>
       </label>
 
       {/* No asset, no rows. */}

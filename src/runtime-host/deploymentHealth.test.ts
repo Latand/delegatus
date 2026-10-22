@@ -28,6 +28,7 @@ import {
   viewerDeploymentRegistryBackendMode,
   viewerDeploymentReleaseReady,
   viewerDeploymentStructuredHostStartup,
+  viewerRefusesUnauthorized,
   viewerHealthFailureDetail,
   type ViewerHealthRequest,
   viewerHealthRequestPlan,
@@ -69,6 +70,10 @@ function runtimeClient(journal: RuntimeJournal): RuntimeHostClient {
     transitionOperation: async (operationId, status, details) =>
       journal.transitionOperation(operationId, status, details),
   } as RuntimeHostClient;
+}
+
+function proxyHealthRequest(url: string, headers: Record<string, string>): Response {
+  return proxy(new NextRequest(url, { headers: { host: new URL(url).host, ...headers } }));
 }
 
 test("candidate readiness polls through delayed startup until routes and assets pass", async () => {
@@ -119,13 +124,13 @@ test("explicitly bounded readiness callers retain their wall-clock bound", async
   expect(now).toBe(300_000);
 });
 
-test("health request plan exercises remote authorization and rejection", () => {
+test("health request plan exercises remote authorization and rejection", async () => {
   process.env.LLV_TOKEN = "viewer-token";
   const plan = viewerHealthRequestPlan("http://127.0.0.1:18001", "viewer-token");
   if (!plan.authenticated || !plan.unauthorized) throw new Error("authenticated request plan is missing");
 
-  const authorized = proxy(new NextRequest(plan.authenticated.url, { headers: plan.authenticated.headers }));
-  const unauthorized = proxy(new NextRequest(plan.unauthorized.url, { headers: plan.unauthorized.headers }));
+  const authorized = proxyHealthRequest(plan.authenticated.url, plan.authenticated.headers);
+  const unauthorized = proxyHealthRequest(plan.unauthorized.url, plan.unauthorized.headers);
 
   const bearer = plan.authenticated.headers.authorization;
   expect(bearer?.startsWith("Bearer ")).toBe(true);
@@ -136,6 +141,7 @@ test("health request plan exercises remote authorization and rejection", () => {
   });
   expect(authorized.headers.get("x-middleware-next")).toBe("1");
   expect(unauthorized.status).toBe(403);
+  expect(viewerRefusesUnauthorized(unauthorized.status, await unauthorized.text())).toBe(true);
 });
 
 test("deployment capability requires the candidate-owned versioned endpoint", async () => {
@@ -463,11 +469,13 @@ test("a token-configured readiness plan requires no unauthenticated success", ()
   ];
 
   const refused = mustSucceed
-    .filter(([, request]) => proxy(new NextRequest(request.url, { headers: request.headers })).status === 403)
+    .filter(([, request]) => proxyHealthRequest(request.url, request.headers).status === 403)
     .map(([name]) => name);
 
   expect(refused).toEqual([]);
-  expect(proxy(new NextRequest(plan.unauthorized.url, { headers: plan.unauthorized.headers })).status).toBe(403);
+  expect(proxyHealthRequest(plan.unauthorized.url, plan.unauthorized.headers).status).toBe(403);
+  expect(viewerRefusesUnauthorized(403, '{"error":"forbidden: cross-origin request"}')).toBe(false);
+  expect(viewerRefusesUnauthorized(200, 'x-middleware-next')).toBe(false);
 });
 
 test("a tokenless readiness plan still requires a plain 200 on root", () => {
@@ -477,7 +485,7 @@ test("a tokenless readiness plan still requires a plain 200 on root", () => {
   expect(plan.root).toEqual({ url: "http://127.0.0.1:18001/", headers: {} });
   expect(plan.authenticated).toBeNull();
   expect(plan.unauthorized).toBeNull();
-  expect(proxy(new NextRequest(plan.root.url, { headers: plan.root.headers }))
+  expect(proxyHealthRequest(plan.root.url, plan.root.headers)
     .headers.get("x-middleware-next")).toBe("1");
 });
 
