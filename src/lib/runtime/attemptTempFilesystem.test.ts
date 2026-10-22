@@ -14,11 +14,17 @@ afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(
 const root = () => { const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-filesystem-")); roots.push(directory); return directory; };
 
 test.skipIf(process.platform !== "linux")("a bound Unix socket keeps its attempt root", async () => {
-  const directory = root(); const socket = path.join(directory, "held.sock");
+  const directory = root();
+  const fd = fs.openSync(directory, "r");
+  const socket = `/proc/self/fd/${fd}/held.sock`;
   const server = net.createServer();
-  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
-  try { expect(await attemptReferencesClear(directory, directory, { ownNamespace: null, processes: [] })).toBeFalse(); }
-  finally { await new Promise<void>(resolve => server.close(() => resolve())); }
+  try {
+    await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(socket, resolve); });
+    expect(await attemptReferencesClear(directory, directory, { ownNamespace: null, processes: [] })).toBeFalse();
+  } finally {
+    if (server.listening) await new Promise<void>(resolve => server.close(() => resolve()));
+    fs.closeSync(fd);
+  }
 });
 
 test.skipIf(process.platform !== "linux")("registered inspection streams beyond the legacy entry ceiling", async () => {

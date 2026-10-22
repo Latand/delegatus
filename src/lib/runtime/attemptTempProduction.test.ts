@@ -72,7 +72,7 @@ test("interrupted gate roots are adopted in bounded batches and retire as old or
 test.each(["passed", "failed", "needs_decision", "skipped", "committing"] as const)("production authority handles %s and holds declared evidence until close", async state => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-production-state-")); roots.push(root);
   const role = { roleId: null, engine: "codex", model: null, effort: null, access: "read-write", promptScaffold: null } as const;
-  const pipeline = buildPipeline({ id: "state-lane", task: "Temp authority", project: "fixture", repoDir: root,
+  const pipeline = buildPipeline({ id: "state-lane", task: "Temp authority", project: "fixture", repoDir: path.join(root, "repo"),
     stages: [{ id: "build", kind: "run", prompt: "Fixture", next: null, effectiveRole: role }],
     srcPath: null, srcConversationId: null, now: "2026-10-22T12:00:00Z" });
   pipeline.state = "running";
@@ -87,6 +87,9 @@ test.each(["passed", "failed", "needs_decision", "skipped", "committing"] as con
     error: "startup retired", retiredAt: "2026-10-22T12:01:00Z" }]; savePipelines([pipeline]);
   expect(await attemptTempState({ ...owner, launchId: "prior-launch" })).toBe("settled");
   expect(await attemptTempState({ ...owner, launchId: "unrecorded-launch" })).toBe("unknown");
+  fs.mkdirSync(path.join(pipeline.worktreeDir!, "nested"), { recursive: true });
+  fs.symlinkSync(path.join(owner.directory, "packages"), path.join(pipeline.worktreeDir!, "nested/node_modules"), "dir");
+  expect(await attemptTempState(owner)).toBe("live");
   pipeline.stages[0]!.effectiveRole = { ...role, access: "read-only" };
   pipeline.stages[0]!.outputs = ["evidence"]; savePipelines([pipeline]);
   expect(await attemptTempState(owner)).toBe("live");

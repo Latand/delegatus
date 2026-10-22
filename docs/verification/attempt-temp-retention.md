@@ -2,7 +2,7 @@
 
 ## Observation before implementation
 
-Read-only observations on 2026-10-22, approximately 16:12–16:26 UTC, against
+Read-only observations on 2026-10-22, approximately 16:15–16:26 UTC, against
 base `6b5d8509`. Another cleanup was running concurrently. Directory counts
 and samples describe discovery time; a disappearing entry made some `du`
 invocations exit 1. Those byte counts are lower bounds. Nothing in this lane
@@ -81,7 +81,8 @@ Both child config variables resolve inside that root; forwarded forge config
 keeps its existing contract.
 
 Passed, failed, skipped and parked attempts are eligible after their last live
-process leaves. Explicitly retired startup launches are matched in the
+process leaves. Checkout symlinks into an attempt root keep it through lane
+close, including idle intervals between stages. Explicitly retired startup launches are matched in the
 attempt's retained launch history. Declared stage outputs retain their scratch until explicit lane
 close. Config sandboxes can retire at settlement. Published prototype media is
 already copied into the durable publication store and remains governed by that
@@ -108,7 +109,7 @@ so arrivals cannot jump ahead of a due retry. Registered roots use streamed nati
 inspection and allocation commands, each
 bounded to 15 seconds. Legacy snapshots and Windows inspection retain their
 200,000-entry ceiling. A constrained cleanup container can inspect and remove
-container-owned files; its own 12-second watchdog also runs after helper loss.
+container-owned files and measure their allocations; its own 12-second watchdog also runs after helper loss.
 Registered roots and recovery intents use point reads; the
 tick does not enumerate sibling roots or load the pipeline registry. Ownership
 reads address one lane. The leased helper has a 60-second attempt-tick deadline

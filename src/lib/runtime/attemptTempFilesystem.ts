@@ -19,6 +19,17 @@ async function repositoryLinks(directory: string): Promise<string[]> {
   return links;
 }
 
+/** A durable checkout link remains a dependency while its lane is open,
+ * including between stages when no process has that checkout as its cwd. */
+export async function repositoryReferencesAttemptTemp(repository: string, original: string, current = original): Promise<boolean> {
+  const roots = [...new Set([original, current, resolvePhysicalPath(original), resolvePhysicalPath(current)])];
+  for (const link of await repositoryLinks(repository)) {
+    const target = path.resolve(path.dirname(link), fs.readlinkSync(link));
+    if ([target, resolvePhysicalPath(target)].some(target => roots.some(root => inside(target, root)))) return true;
+  }
+  return false;
+}
+
 /** Idle processes can still depend on a symlink in their checkout. Resolve
  * links without descending through them, including currently dangling links. */
 export async function attemptReferencesClear(original: string, current: string, scan: ProcessScan): Promise<boolean> {
@@ -40,10 +51,7 @@ export async function attemptReferencesClear(original: string, current: string, 
   }
   if (repositories.size > 32) return false;
   for (const repository of repositories) {
-    for (const link of await repositoryLinks(repository)) {
-      const target = path.resolve(path.dirname(link), fs.readlinkSync(link));
-      if ([target, resolvePhysicalPath(target)].some(target => inside(target, original) || inside(target, current))) return false;
-    }
+    if (await repositoryReferencesAttemptTemp(repository, original, current)) return false;
   }
   return process.platform !== "linux" || await containerMountsClear([original, current]);
 }

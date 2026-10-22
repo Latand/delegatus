@@ -1,17 +1,19 @@
 import { statePath } from "@/lib/configDir";
 import { AttemptTempStore, sweepAttemptTemps, type AttemptTempOwner, type AttemptTempState, type AttemptTempSweepOptions } from "./attemptTempRetention";
 import { findPipelineRecord } from "@/lib/pipelines/store";
+import type { PipelineStageAttempt } from "@/lib/pipelines/types";
 import { tempSweepMode, isGateTempName, type TempSweepRoot } from "@/lib/tempSweep";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import path from "node:path";
 import fs from "node:fs";
+import { repositoryReferencesAttemptTemp } from "./attemptTempFilesystem";
 
 export async function attemptTempState(owner: AttemptTempOwner): Promise<AttemptTempState> {
   if (!owner.pipelineId) return "orphan";
   const pipeline = findPipelineRecord(owner.pipelineId);
   if (!pipeline) return "orphan";
   if (pipeline.state === "closed") return "closed";
-  const matches = (attempt: typeof pipeline.runs[number]["attempts"][number]) => attempt.launchId === owner.launchId
+  const matches = (attempt: PipelineStageAttempt) => attempt.launchId === owner.launchId
     || attempt.retiredLaunches?.some(retired => retired.launchId === owner.launchId);
   const run = pipeline.runs.find(run => run.attempts.some(matches));
   const attempt = run?.attempts.find(matches);
@@ -19,8 +21,12 @@ export async function attemptTempState(owner: AttemptTempOwner): Promise<Attempt
   const stage = pipeline.stages.find(stage => stage.id === run!.stageId);
   if (!path.basename(owner.directory).startsWith("llv-stage-config-")
     && (attempt.definition?.outputs?.length || stage?.outputs?.length || stage?.effectiveRole.roleId === "visual-critic")) return "live";
-  if (attempt.retiredLaunches?.some(retired => retired.launchId === owner.launchId)) return "settled";
-  if (["passed", "failed", "skipped", "needs_decision"].includes(attempt.state)) return "settled";
+  if (attempt.retiredLaunches?.some(retired => retired.launchId === owner.launchId)
+    || ["passed", "failed", "skipped", "needs_decision"].includes(attempt.state)) {
+    if (pipeline.worktreeDir && fs.existsSync(pipeline.worktreeDir)
+      && await repositoryReferencesAttemptTemp(pipeline.worktreeDir, owner.directory)) return "live";
+    return "settled";
+  }
   return "live";
 }
 /** Hourly discovery borrows the existing root inventory. Only known gate
