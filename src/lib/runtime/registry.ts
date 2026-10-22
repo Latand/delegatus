@@ -784,7 +784,7 @@ export async function demoteSkippedStructuredRegistryHosts(
   admit: <T>(entry: AgentRegistryEntry, mutation: () => T) => Promise<T | undefined> = async (_entry, mutation) => registry.deliveryWriteOrBusy({ label: "registry.startup-demote" }, mutation),
   orphanStop: StructuredOrphanStopDependencies = {},
 ): Promise<void> {
-  if (typeof registry.prepareReadOnlySnapshot === "function") await registry.prepareReadOnlySnapshot(orphanStop.signal);
+  if (typeof registry.prepareReadOnlySnapshot === "function") await registry.prepareReadOnlySnapshot();
   const rows: AgentRegistryEntry[] = [];
   await withViewerOperation("runtime.startup", () => forEachCooperatively(registry.structuredHostEntries(), entry => {
     performanceSpans.sync("runtime.startup.select", () => {
