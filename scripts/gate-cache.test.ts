@@ -10,7 +10,7 @@ const fixture = () => { const root = mkdtempSync(path.join(tmpdir(), "gate-cache
 const valid = (value: unknown): value is { passed: true } => !!value && typeof value === "object" && "passed" in value && value.passed === true;
 
 test("effective Git configuration binds receipts while invocation metadata does not", () => {
-  const first = { NODE_ENV: "test", GIT_CONFIG_GLOBAL: "first-config" };
+  const first = { NODE_ENV: "test" as const, GIT_CONFIG_GLOBAL: "first-config" };
   expect(environmentFingerprint(first)).not.toBe(environmentFingerprint({ ...first, GIT_CONFIG_GLOBAL: "second-config" }));
   expect(environmentFingerprint(first)).toBe(environmentFingerprint({ ...first, LLV_GATE_PUSH_DEADLINE: "1000", CODEX_THREAD_ID: "second-thread" }));
   const config = path.join(fixture(), "gitconfig");

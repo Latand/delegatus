@@ -685,7 +685,8 @@ test("pre-push hook resolves an explicit base and runs named touched tests in a 
   execFileSync("git", ["init", "--bare", "-b", "main", remote], { stdio: "pipe", env: f.env });
   execFileSync("git", ["--git-dir", remote, "fetch", f.dir, "origin/main:main"], { stdio: "pipe", env: f.env });
   f.git("remote", "add", "origin", remote);
-  const result = spawnSync("git", ["push", "origin", "HEAD:main"], { cwd: f.dir, env: f.env, encoding: "utf8" });
+  // Keep main at the base: both pushes must still contain a guarded change.
+  const result = spawnSync("git", ["push", "origin", "HEAD:feature"], { cwd: f.dir, env: f.env, encoding: "utf8" });
   expect(result.status).toBe(0);
   expect(result.stderr).toContain("pre-push: CPU admission for publication checks");
   expect(result.stderr).toMatch(/pre-push: publication checks CPU wait: \d+ ms \(excluded from execution budget\)/);

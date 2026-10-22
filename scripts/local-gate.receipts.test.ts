@@ -86,7 +86,7 @@ test("hook receipts invalidate base, tool and environment drift, and malformed r
   expect(run()).toBeTrue();
 }, 120_000);
 
-test("a failed hook step is run again while successful peer receipts survive", () => {
+test("a failed hook step is run again on retry", () => {
   const f = hookFixture();
   writeFileSync(path.join(f.dir, ".gitignore"), "commands.jsonl\nadmission.sqlite*\nllv-heavy-gate.*\nbudget-*/\n");
   writeFileSync(path.join(f.dir, "example.ts"), "export const value = 2;\n");
