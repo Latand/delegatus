@@ -284,6 +284,29 @@ function receiptOf(active: Fixture, operationId: string) {
   return sendReceiptFor(active.registry.readOnlySnapshot(), operationId);
 }
 
+for (const status of ["delivered", "failed"] as const) test(`journal ${status} settlement rereads only its operation after I/O`, async () => {
+  const now = Date.parse("2026-10-22T00:00:00Z");
+  const active = fixture(`keyed-journal-${status}`, { sqlite: true, now: () => now });
+  const original = active.registry.readOnlySnapshot.bind(active.registry);
+  try {
+    const { operationId } = acceptSend(active, { clientMessageId: `keyed-journal-${status}`, operationId: `operation-keyed-${status}` });
+    active.journal.transitionOperation(operationId, "delivering");
+    active.journal.transitionOperation(operationId, status, status === "failed" ? { reason: "executor refused" } : {});
+    const client = { ...active.client, operationStatus: async (...args: Parameters<RuntimeHostClient["operationStatus"]>) => {
+      const result = await active.client.operationStatus(...args);
+      active.registry.readOnlySnapshot = () => { throw new Error("settlement rebuilt registry history after journal I/O"); };
+      return result;
+    } };
+    expect(await resolveSendReceipt(operationId, { registry: active.registry, client, now: () => now, progress: null }))
+      .toMatchObject({ operationId, state: status, evidence: "delivery-journal" });
+    expect(sendReceiptFor(active.registry.deliverySnapshotForOperation(operationId), operationId)?.state).toBe(status);
+  } finally {
+    active.registry.readOnlySnapshot = original;
+    active.registry.close();
+    active.close();
+  }
+});
+
 test("an accepted send that the journal delivered reconciles rather than being reported lost", async () => {
   const active = fixture("delivered");
   try {

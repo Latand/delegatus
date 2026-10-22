@@ -1620,7 +1620,7 @@ export async function bindStructuredDeliveryQueue(
          next sweep, and the rest of this one is left for then too. */
       try { session = listed ? listed.get(conversationId) ?? null : await client.readSession!({ conversationId }); }
       catch { break; }
-      const current = hostlessConversationEvidence(registry.readOnlySnapshot(), conversationId);
+      const current = hostlessConversationEvidence(registry.conversationRetentionSnapshot(conversationId), conversationId);
       if (!current || current.key !== row.key || current.endedAt !== row.endedAt || registrations.has(row.key)) continue;
       if (session && sessionClaimsOpenTurn(session)) {
         /* A write the journal refused or never received settles nothing, as

@@ -92,6 +92,31 @@ function end(fixture: { id: string; key: { engine: "codex"; sessionId: string } 
 
 const closed = (id: string) => ({ conversationId: id, host: "dead", turn: "unknown", activeTurnId: null });
 
+test("an ended host recheck stays keyed after its awaited session read", async () => {
+  const fixture = hosted(deadProcess);
+  end(fixture);
+  registry.close();
+  registry = new AgentRegistry(join(directory, "registry.json"), undefined, undefined, { sqliteMode: "sqlite" });
+  await bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true,
+    watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
+  const original = registry.readOnlySnapshot.bind(registry);
+  const read = client.readSession!;
+  client.readSession = async identity => {
+    await Promise.resolve();
+    registry.readOnlySnapshot = () => { throw new Error("ended host recheck rebuilt registry history"); };
+    return read(identity);
+  };
+  try {
+    expect(await settleHostlessSessionProjections()).toBe(1);
+    expect(keyedReads).toEqual([fixture.id]);
+    expect(appended).toEqual([closed(fixture.id)]);
+  } finally {
+    registry.readOnlySnapshot = original;
+    await bindStructuredDeliveryQueue([], { registry, client: null });
+    registry.close();
+  }
+});
+
 async function until(condition: () => boolean, label: string): Promise<void> {
   const deadline = Date.now() + 5_000;
   while (!condition()) {

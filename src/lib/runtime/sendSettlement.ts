@@ -1033,7 +1033,7 @@ async function settleProjection(
   evidence: SendReceipt["evidence"] = "delivery-journal",
   route: DeliveryRoute | null = null,
 ): Promise<SendReceipt> {
-  const file = registry.readOnlySnapshot();
+  const file = registry.deliverySnapshotForOperation(operationId);
   /* A retry attempt settles on its OWN row. Its reservation belongs to the
      attempt it replaces and is already terminal from it, so writing this
      verdict there would overwrite what that earlier attempt proved with what
@@ -1042,7 +1042,7 @@ async function settleProjection(
     if (!await registry.settleDeliveryRetryAttemptOffLoop(operationId, verdict.state, verdict.reason, verdict.disposition, route)) {
       return projected;
     }
-    const reconciled = sendReceiptFor(registry.readOnlySnapshot(), operationId);
+    const reconciled = sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId);
     if (reconciled) return { ...reconciled, evidence };
   }
   if (verdict.reason === SEND_DISCARDED_REASON && projected.conversationId?.startsWith("conversation_")) {
@@ -1059,14 +1059,14 @@ async function settleProjection(
         verdict.state, verdict.reason, verdict.disposition, route)
       : await registry.recordDeliveryOutcomeOffLoop(operationId, delivery.id, verdict.state, verdict.reason, verdict.disposition, route);
     if (!written) return projected;
-    const reconciled = sendReceiptFor(registry.readOnlySnapshot(), operationId);
+    const reconciled = sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId);
     if (reconciled) return { ...reconciled, evidence };
   }
   if (verdict.state === "delivered") {
     if (projected.conversationId?.startsWith("conversation_")) {
       if (!await registry.recordDeliveryOutcomeForOperationOffLoop(projected.conversationId as ViewerConversationId,
         operationId, "delivered", null, "delivered", route)) return projected;
-      const reconciled = sendReceiptFor(registry.readOnlySnapshot(), operationId);
+      const reconciled = sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId);
       if (reconciled) return { ...reconciled, evidence };
     }
     return { ...projected, state: "delivered", reason: null, duplicateRisk: false, resend: "not-needed", evidence, ...routeFields(route) };
