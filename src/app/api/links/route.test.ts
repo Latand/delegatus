@@ -14,7 +14,7 @@ import { POST as selfCheckRoute } from "@/app/api/peer/v1/self-check/route";
 
 import { GET, POST } from "./route";
 
-const names = ["LLV_STATE_DIR", "XDG_CONFIG_HOME", "LLV_TOKEN", "LLV_PUBLIC_HOST"] as const;
+const names = ["LLV_STATE_DIR", "XDG_CONFIG_HOME", "LLV_TOKEN", "LLV_PUBLIC_HOST", "HOSTNAME"] as const;
 const prior = Object.fromEntries(names.map((name) => [name, process.env[name]]));
 let root: string;
 beforeEach(() => {
@@ -24,6 +24,7 @@ beforeEach(() => {
   resetTeamStoreForTests();
   delete process.env.LLV_TOKEN;
   delete process.env.LLV_PUBLIC_HOST;
+  delete process.env.HOSTNAME;
 });
 afterEach(() => {
   resetTeamStoreForTests();
@@ -62,7 +63,7 @@ test("the settings route refuses a network address until its key is on", async (
   expect((await httpPublic.json()).error).toBe("http-public");
 });
 
-test("an authenticated public origin bootstraps its own Host pin through Settings", async () => {
+test("an authenticated configured public origin saves its Host pin through Settings", async () => {
   process.env.LLV_TOKEN = "test-access-key";
   const publicHost = "board.example.test";
   const settings = (method: "GET" | "POST", body?: object, headers: Record<string, string> = {}) =>
@@ -72,10 +73,13 @@ test("an authenticated public origin bootstraps its own Host pin through Setting
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
   expect(rejectCrossOrigin(settings("GET"))?.status).toBe(403);
+  expect((await GET(settings("GET"))).status).toBe(403);
+  expect(proxy(settings("GET")).status).toBe(403);
+  process.env.HOSTNAME = publicHost;
   const initial = await GET(settings("GET"));
   expect(initial.status).toBe(200);
   expect(await initial.json()).toMatchObject({ self: null, keyOn: true });
-  expect((await GET(settings("GET", undefined, { cookie: "" }))).status).toBe(403);
+  expect(proxy(settings("GET", undefined, { cookie: "" })).status).toBe(403);
   expect((await POST(settings("POST", { action: "save", publicUrl: "https://board.example.test" },
     { origin: "https://other.example.test" }))).status).toBe(403);
   const saved = await POST(settings("POST", { action: "save", publicUrl: "https://board.example.test" }));
@@ -85,7 +89,7 @@ test("an authenticated public origin bootstraps its own Host pin through Setting
   expect((await GET(settings("GET", undefined, { host: "other.example.test" }))).status).toBe(403);
 });
 
-test("a team owner can bootstrap the first public Host with a member session", async () => {
+test("a team owner can bootstrap a configured public Host with a member session", async () => {
   process.env.LLV_TOKEN = "test-access-key";
   const owner = claimInstall(teamStore(), "Owner", { surface: "desktop", browser: "chrome" });
   const publicHost = "board.example.test";
@@ -95,10 +99,13 @@ test("a team owner can bootstrap the first public Host with a member session", a
         ...(body ? { "content-type": "application/json" } : {}) },
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
+  expect(proxy(settings("GET")).status).toBe(403);
+  expect((await GET(settings("GET"))).status).toBe(403);
+  process.env.HOSTNAME = publicHost;
   expect(proxy(settings("GET")).headers.get("x-middleware-next")).toBe("1");
-  expect(rejectCrossOrigin(settings("GET"))?.status).toBe(403);
+  expect(rejectCrossOrigin(settings("GET"))).toBeNull();
   expect((await GET(settings("GET"))).status).toBe(200);
-  expect((await GET(settings("GET", undefined, "invalid"))).status).toBe(403);
+  expect(proxy(settings("GET", undefined, "invalid")).status).toBe(401);
   const saved = await POST(settings("POST", { action: "save", publicUrl: `https://${publicHost}` }));
   expect(saved.status).toBe(200);
   expect((await saved.json()).self.publicUrl).toBe(`https://${publicHost}`);

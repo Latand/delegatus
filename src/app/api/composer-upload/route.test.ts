@@ -45,6 +45,13 @@ test.each(foreignUploadHeaders)("foreign upload requests refuse before their bod
   expect(incoming.bodyUsed).toBe(false);
 });
 
+test.each([false, true])("foreign Host is refused for an upload with key=%s", async keyed => {
+  if (keyed) process.env.LLV_TOKEN = "test";
+  const incoming = request({ host: "foreign.example", ...(keyed ? { authorization: "Bearer test" } : {}) });
+  expect((await POST(incoming)).status).toBe(403);
+  expect(incoming.bodyUsed).toBe(false);
+});
+
 test("excluding the automatic body clone retains the real access-key perimeter", async () => {
   process.env.LLV_TOKEN = "test";
   const incoming = request();

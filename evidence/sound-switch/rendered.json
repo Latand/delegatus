@@ -1,0 +1,360 @@
+{
+  "capturedAt": "2026-10-22T09:44:38.875Z",
+  "command": "CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t \"Agent typing\" (isolated roots, scripts/gate-slot.sh)",
+  "sourceDigests": {
+    "src/components/SoundToggle.tsx": "3ddb34d317ef4b4ec7de7131ed0e52780be1858a3029a91da76c6cfdcda359f0",
+    "src/lib/i18n/en.ts": "e42cb41d6f4dd078af05978f898fed7e99cf4969769a77ed5c63ca60073f0fdc",
+    "src/lib/i18n/uk.ts": "e2d05593518b10a11a44aab60c0549c23f6ac3bca537d1263512b3f8661b32c9"
+  },
+  "readings": [
+    {
+      "surface": "desktop",
+      "width": 1440,
+      "height": 900,
+      "lang": "en",
+      "theme": "light",
+      "frame": "desktop-1440-en-light.png",
+      "text": "Agent typing",
+      "checked": true,
+      "rect": [
+        1073.6,
+        249.3,
+        1140.8,
+        261.3
+      ],
+      "clip": [
+        0,
+        0,
+        1440,
+        900
+      ],
+      "whole": true,
+      "onTop": true,
+      "labelHeight": 15.9,
+      "stored": {
+        "typing": "off",
+        "sound": null
+      }
+    },
+    {
+      "surface": "desktop",
+      "width": 1000,
+      "height": 700,
+      "lang": "en",
+      "theme": "light",
+      "frame": "desktop-1000-en-light.png",
+      "text": "Agent typing",
+      "checked": true,
+      "rect": [
+        637.6,
+        249.3,
+        704.8,
+        261.3
+      ],
+      "clip": [
+        0,
+        0,
+        1000,
+        700
+      ],
+      "whole": true,
+      "onTop": true,
+      "labelHeight": 15.9,
+      "stored": {
+        "typing": "off",
+        "sound": null
+      }
+    },
+    {
+      "surface": "phone",
+      "width": 390,
+      "height": 844,
+      "lang": "en",
+      "theme": "light",
+      "frame": "phone-390-en-light.png",
+      "text": "Agent typing",
+      "checked": true,
+      "rect": [
+        180,
+        438.4,
+        247.2,
+        450.4
+      ],
+      "clip": [
+        0,
+        282.9,
+        390,
+        838
+      ],
+      "whole": true,
+      "onTop": true,
+      "labelHeight": 16.5,
+      "stored": {
+        "typing": "off",
+        "sound": null
+      }
+    },
+    {
+      "surface": "desktop",
+      "width": 1440,
+      "height": 900,
+      "lang": "en",
+      "theme": "dark",
+      "frame": "desktop-1440-en-dark.png",
+      "text": "Agent typing",
+      "checked": true,
+      "rect": [
+        1073.6,
+        249.3,
+        1140.8,
+        261.3
+      ],
+      "clip": [
+        0,
+        0,
+        1440,
+        900
+      ],
+      "whole": true,
+      "onTop": true,
+      "labelHeight": 15.9,
+      "stored": {
+        "typing": "off",
+        "sound": null
+      }
+    },
+    {
+      "surface": "desktop",
+      "width": 1000,
+      "height": 700,
+      "lang": "en",
+      "theme": "dark",
+      "frame": "desktop-1000-en-dark.png",
+      "text": "Agent typing",
+      "checked": true,
+      "rect": [
+        637.6,
+        249.3,
+        704.8,
+        261.3
+      ],
+      "clip": [
+        0,
+        0,
+        1000,
+        700
+      ],
+      "whole": true,
+      "onTop": true,
+      "labelHeight": 15.9,
+      "stored": {
+        "typing": "off",
+        "sound": null
+      }
+    },
+    {
+      "surface": "phone",
+      "width": 390,
+      "height": 844,
+      "lang": "en",
+      "theme": "dark",
+      "frame": "phone-390-en-dark.png",
+      "text": "Agent typing",
+      "checked": true,
+      "rect": [
+        180,
+        438.4,
+        247.2,
+        450.4
+      ],
+      "clip": [
+        0,
+        282.9,
+        390,
+        838
+      ],
+      "whole": true,
+      "onTop": true,
+      "labelHeight": 16.5,
+      "stored": {
+        "typing": "off",
+        "sound": null
+      }
+    },
+    {
+      "surface": "desktop",
+      "width": 1440,
+      "height": 900,
+      "lang": "uk",
+      "theme": "light",
+      "frame": "desktop-1440-uk-light.png",
+      "text": "Звук роботи агентів",
+      "checked": true,
+      "rect": [
+        1066,
+        249.3,
+        1174.6,
+        261.3
+      ],
+      "clip": [
+        0,
+        0,
+        1440,
+        900
+      ],
+      "whole": true,
+      "onTop": true,
+      "labelHeight": 15.9,
+      "stored": {
+        "typing": "off",
+        "sound": null
+      }
+    },
+    {
+      "surface": "desktop",
+      "width": 1000,
+      "height": 700,
+      "lang": "uk",
+      "theme": "light",
+      "frame": "desktop-1000-uk-light.png",
+      "text": "Звук роботи агентів",
+      "checked": true,
+      "rect": [
+        630,
+        249.3,
+        738.6,
+        261.3
+      ],
+      "clip": [
+        0,
+        0,
+        1000,
+        700
+      ],
+      "whole": true,
+      "onTop": true,
+      "labelHeight": 15.9,
+      "stored": {
+        "typing": "off",
+        "sound": null
+      }
+    },
+    {
+      "surface": "phone",
+      "width": 390,
+      "height": 844,
+      "lang": "uk",
+      "theme": "light",
+      "frame": "phone-390-uk-light.png",
+      "text": "Звук роботи агентів",
+      "checked": true,
+      "rect": [
+        180,
+        438.4,
+        288.6,
+        450.4
+      ],
+      "clip": [
+        0,
+        282.9,
+        390,
+        838
+      ],
+      "whole": true,
+      "onTop": true,
+      "labelHeight": 16.5,
+      "stored": {
+        "typing": "off",
+        "sound": null
+      }
+    },
+    {
+      "surface": "desktop",
+      "width": 1440,
+      "height": 900,
+      "lang": "uk",
+      "theme": "dark",
+      "frame": "desktop-1440-uk-dark.png",
+      "text": "Звук роботи агентів",
+      "checked": true,
+      "rect": [
+        1066,
+        249.3,
+        1174.6,
+        261.3
+      ],
+      "clip": [
+        0,
+        0,
+        1440,
+        900
+      ],
+      "whole": true,
+      "onTop": true,
+      "labelHeight": 15.9,
+      "stored": {
+        "typing": "off",
+        "sound": null
+      }
+    },
+    {
+      "surface": "desktop",
+      "width": 1000,
+      "height": 700,
+      "lang": "uk",
+      "theme": "dark",
+      "frame": "desktop-1000-uk-dark.png",
+      "text": "Звук роботи агентів",
+      "checked": true,
+      "rect": [
+        630,
+        249.3,
+        738.6,
+        261.3
+      ],
+      "clip": [
+        0,
+        0,
+        1000,
+        700
+      ],
+      "whole": true,
+      "onTop": true,
+      "labelHeight": 15.9,
+      "stored": {
+        "typing": "off",
+        "sound": null
+      }
+    },
+    {
+      "surface": "phone",
+      "width": 390,
+      "height": 844,
+      "lang": "uk",
+      "theme": "dark",
+      "frame": "phone-390-uk-dark.png",
+      "text": "Звук роботи агентів",
+      "checked": true,
+      "rect": [
+        180,
+        438.4,
+        288.6,
+        450.4
+      ],
+      "clip": [
+        0,
+        282.9,
+        390,
+        838
+      ],
+      "whole": true,
+      "onTop": true,
+      "labelHeight": 16.5,
+      "stored": {
+        "typing": "off",
+        "sound": null
+      }
+    }
+  ],
+  "failures": []
+}
