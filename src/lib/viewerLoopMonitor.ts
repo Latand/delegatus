@@ -37,6 +37,7 @@ export type ViewerOperation = "state.index-repair" | "temp.sweep" | "resources.r
   | "memory.search" | "memory.open"
   | "codex.protocol-admission" | "mcp.page-cursors"
   | "pipelines.controller-job" | "pipelines.controller-lane" | "pipelines.controller-schedule"
+  | "pipelines.controller-artifacts"
   | "telegram.membership-check" | "telegram.outbound-state" | "telegram.outbound-publication" | "links.telegram-publication" | "orchestrator.recipient-authority" | "orchestrator.seat-channel"
   | "seat-tick.pause-conditions" | "structured-user.publish" | "structured-user.provenance" | "structured-user.retention";
 type Operation = { name: ViewerOperation; start: number; end?: number };

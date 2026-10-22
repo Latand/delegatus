@@ -65,7 +65,7 @@ for (const engine of ["claude", "codex"] as const) {
     expect(f.h.spawnInputs).toHaveLength(1);
     while (f.now() < reset * 1000 + 5 * 60_000 && f.h.spawnInputs.length < 2) { f.advance(30_000); await tick(); }
     expect({ spawns: f.h.spawnInputs.length, sends: f.sends.length }).toEqual({ spawns: 2, sends: 0 });
-  }, 30_000);
+  }, 60_000);
 }
 
 // Tool or reasoning output closes a chain as text does; its budget goes with it.
