@@ -1322,10 +1322,11 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     promise: Promise<DeliveryReceipt>;
   }>();
   private readonly pendingCompactions = new Map<string, PendingCompaction>();
+  private readonly compactCalls = new Map<string, Promise<RuntimeCompactOutcome>>();
   /** Tool items in progress, by item id, with their turn: a boundary tier cut waits for them. */
   private readonly openToolItems = new Map<string, string>();
   private armedTierCut: { operationId: string; turnId: string; authorizeDispatch?: () => void; interrupting?: boolean; resolve: (cut: RuntimeTierCut) => void } | null = null;
-  private tierTail: Promise<unknown> = Promise.resolve();
+  private threadControlTail: Promise<unknown> = Promise.resolve();
   private tierRequests = 0;
   private readonly tierOutcomes = new Map<string, { tier: string | null; cut: string; outcome: RuntimeTierOutcome }>();
   private echoedServiceTier: { tier: string | null } | null = null;
@@ -2495,7 +2496,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   async setTier(request: RuntimeTierRequest): Promise<RuntimeTierOutcome> {
     if (this.tierRequests >= 8) throw new Error("Codex tier switch queue is full");
     this.tierRequests++;
-    const work = this.tierTail.catch(() => undefined).then(async () => {
+    const work = this.threadControlTail.catch(() => undefined).then(async () => {
       request.authorizeDispatch?.();
       const previous = this.tierOutcomes.get(request.operationId);
       if (previous) {
@@ -2507,7 +2508,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       while (this.tierOutcomes.size > 64) this.tierOutcomes.delete(this.tierOutcomes.keys().next().value!);
       return outcome;
     });
-    this.tierTail = work;
+    this.threadControlTail = work;
     try { return await work; } finally { this.tierRequests--; }
   }
 
@@ -2516,7 +2517,27 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       throw new Error("Codex app-server host is unavailable");
     }
     if (request.serviceTier !== null) assertCatalogOffersTier(this.modelCatalog, this.currentImageModel(), request.serviceTier);
+    /* A boundary interrupt already sent owns its terminal evidence and its
+       continuation. Let the old operation settle before another tier can
+       replace the armed record. */
+    while (this.armedTierCut?.interrupting) {
+      await this.armedSettled;
+      request.authorizeDispatch?.();
+      if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
+        throw new Error("Codex app-server host is unavailable");
+      }
+    }
     if (this.armedTierCut && this.armedTierCut.operationId !== request.operationId) this.settleArmedTierCut("cancelled");
+    /* A live compaction has its own native turn and must settle before tier
+       settings or an interrupt can touch the thread. Recheck authority after
+       every wait. */
+    while (this.pendingCompactions.size) {
+      await Promise.allSettled([...this.pendingCompactions.values()].map(item => item.promise));
+      request.authorizeDispatch?.();
+      if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
+        throw new Error("Codex app-server host is unavailable");
+      }
+    }
     this.echoedServiceTier = null;
     await this.rpc("thread/settings/update", { threadId: this.identity.threadId, serviceTier: request.serviceTier }, this.requestTimeoutMs, true);
     if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
@@ -2531,6 +2552,10 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     if (request.cut === "none") return { ...outcome, cut: "none" };
     if (!turnId) return { ...outcome, cut: "none", reason: "no turn is running" };
     if (this.hasBlockingAttention()) return { ...outcome, cut: "none", reason: "the turn is waiting for an answer" };
+    while (this.pendingCompactions.size) {
+      await Promise.allSettled([...this.pendingCompactions.values()].map(item => item.promise));
+      request.authorizeDispatch?.();
+    }
     await request.beforeCut?.(turnId);
     try { request.authorizeDispatch?.(); }
     catch { return { ...outcome, cut: "none", reason: "the switch authority ended before the cut" }; }
@@ -2554,6 +2579,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
   /** Withdraw a cut that has not happened; the tier stays set for the next turn. */
   cancelArmedTierCut(operationId: string): boolean {
     if (this.armedTierCut?.operationId !== operationId) return false;
+    if (this.armedTierCut.interrupting) return false;
     this.settleArmedTierCut("cancelled");
     return true;
   }
@@ -2608,6 +2634,19 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
    * back on the request leg.
    */
   async compact(request: RuntimeCompactRequest): Promise<RuntimeCompactOutcome> {
+    const existing = this.compactCalls.get(request.operationId);
+    if (existing) return existing;
+    if (this.compactCalls.size > 0) {
+      throw new StructuredCompactError("a compaction is already running on this thread", "refused");
+    }
+    const work = this.threadControlTail.catch(() => undefined).then(() => this.runCompact(request));
+    this.threadControlTail = work;
+    this.compactCalls.set(request.operationId, work);
+    void work.finally(() => { if (this.compactCalls.get(request.operationId) === work) this.compactCalls.delete(request.operationId); }).catch(() => undefined);
+    return work;
+  }
+
+  private async runCompact(request: RuntimeCompactRequest): Promise<RuntimeCompactOutcome> {
     if (this.dead || this.releasing || this.released || !this.writerFenceAllowsActuation()) {
       throw new StructuredCompactError("Codex app-server host is unavailable", "refused");
     }

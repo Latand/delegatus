@@ -65,7 +65,12 @@ export async function switchConversationTier(conversationId: string, operationId
         const generation = registry.conversation(id)?.generations.at(-1);
         if (generation?.id !== before.id || generation.accountId !== before.accountId || generation.launchProfile.model !== before.launchProfile.model) throw new Error("the conversation generation changed while recording the tier");
         const latest = generation.launchProfile;
-        registry.updateConversationLaunchProfile(id, { model: latest.model, effort: latest.effort, fast: latest.fast, serviceTier: outcome.appliedTier });
+        registry.updateConversationLaunchProfile(id, {
+          model: latest.model,
+          effort: latest.effort,
+          fast: outcome.appliedTier === "priority",
+          serviceTier: outcome.appliedTier,
+        });
       });
   }
   if (outcome.cut === "armed") {

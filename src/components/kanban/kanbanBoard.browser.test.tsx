@@ -34804,10 +34804,10 @@ describe("turbo mode «Форсаж»", () => {
     const chipSelector = '[role="slider"][data-seat-tick-switch]';
     const freeze = (page: Page) => page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = 600; } });
     try {
-      for (const surface of ["board", "dock-440", "dock-360", "phone"] as const) for (const scheme of ["light", "dark"] as const) for (const lang of ["uk", "en"] as const) {
+      for (const surface of ["board", "tablet", "dock-440", "dock-360", "phone"] as const) for (const scheme of ["light", "dark"] as const) for (const lang of ["uk", "en"] as const) {
         const phone = surface === "phone";
         const dockWidth = surface === "dock-440" ? 440 : surface === "dock-360" ? 360 : null;
-        const width = phone ? 390 : 1440;
+        const width = phone ? 390 : surface === "tablet" ? 915 : 1440;
         const host = phone ? '[data-mobile2-sheet="seat"]' : dockWidth ? "[data-orchestrator-dock]" : "[data-kanban-seat]:not(.side)";
         const label = `${width}-${scheme}-${lang}${dockWidth ? `-${surface}` : ""}`;
         for (const shot of ["off", "dialog", "dialog-credits", "switching", "on", "on-credits", "ending", "disabled"] as const) {
@@ -34844,12 +34844,37 @@ describe("turbo mode «Форсаж»", () => {
               const fit = await dialog.evaluate(node => {
                 const box = node.getBoundingClientRect();
                 const confirm = node.querySelector("[data-turbo-confirm]")!.getBoundingClientRect();
-                return { top: box.top, bottom: box.bottom, viewport: innerHeight, confirmVisible: confirm.bottom <= innerHeight && confirm.top >= 0, checked: (node.querySelector("[data-turbo-credits-toggle]") as HTMLInputElement | null)?.checked ?? null };
+                const foot = node.querySelector("[data-turbo-credits] p:last-of-type") as HTMLElement | null;
+                const credits = node.querySelector("[data-turbo-credits]") as HTMLElement | null;
+                const colorText = getComputedStyle(foot!).color;
+                const backgroundText = getComputedStyle(credits!).backgroundColor;
+                const channels = (value: string) => {
+                  const parsed = value.match(/[\d.]+/g)!.slice(0, 3).map(Number);
+                  if (value.startsWith("color(srgb ")) return parsed.map(channel => channel * 255);
+                  if (value.startsWith("oklab(")) {
+                    const [lightness, a, b] = parsed;
+                    const l = (lightness! + 0.3963377774 * a! + 0.2158037573 * b!) ** 3;
+                    const m = (lightness! - 0.1055613458 * a! - 0.0638541728 * b!) ** 3;
+                    const s = (lightness! - 0.0894841775 * a! - 1.291485548 * b!) ** 3;
+                    return [4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+                      -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+                      -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s]
+                      .map(channel => (channel <= 0.0031308 ? 12.92 * channel : 1.055 * channel ** (1 / 2.4) - 0.055) * 255);
+                  }
+                  return parsed;
+                };
+                const color = channels(colorText);
+                const background = channels(backgroundText);
+                const luminance = (rgb: number[]) => rgb.map(value => value / 255).map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4).reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index]!, 0);
+                const [a, b] = [luminance(color), luminance(background)].sort((left, right) => right - left);
+                return { top: box.top, bottom: box.bottom, viewport: innerHeight, confirmVisible: confirm.bottom <= innerHeight && confirm.top >= 0,
+                  checked: (node.querySelector("[data-turbo-credits-toggle]") as HTMLInputElement | null)?.checked ?? null, footContrast: (a + 0.05) / (b + 0.05), colorText, backgroundText };
               });
               expect(fit.top).toBeGreaterThanOrEqual(0);
               expect(fit.bottom).toBeLessThanOrEqual(fit.viewport + 0.5);
               expect(fit.confirmVisible).toBe(true);
               expect(fit.checked).toBe(shot === "dialog-credits");
+              if (shot === "dialog-credits") expect(fit.footContrast, `${fit.colorText} on ${fit.backgroundText}`).toBeGreaterThanOrEqual(4.5);
               await freeze(page);
               await page.screenshot({ path: path.join(out, `${label}-${shot}.png`) });
               readings.push({ surface, scheme, lang, shot, fit, pageErrors: [...pageErrors] });

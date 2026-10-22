@@ -2563,6 +2563,24 @@ test("in-place: Turbo clears the thread tier on revert even when the role now de
   expect(h.continuations).toHaveLength(0);
 });
 
+test("in-place: Turbo returns on the live account while preserving a newer future account pin", async () => {
+  const h = await inPlaceHarness();
+  const turboKey = "turbo:2026-10-21T12:00:00.000Z";
+  expect((await h.request({ turbo: turboKey, applyNowCut: "boundary" })).error).toBeUndefined();
+  await tickPipelines([], h.ports);
+  const pin = await h.request({ account: "other", serviceTier: null, applyNow: false, expectedAttempt: undefined, expectedConversationId: undefined, turbo: turboKey });
+  expect(pin.error).toBeUndefined();
+  const returned = await h.request({ serviceTier: null, applyNowCut: "none", turbo: turboKey });
+  expect(returned.error).toBeUndefined();
+  expect(returned.runtimeSwitch?.to).toMatchObject({ accountId: "default", serviceTier: null });
+  await tickPipelines([], h.ports);
+  const attempt = loadPipelines()[0]!.runs[0]!.attempts[0]!;
+  expect(attempt.runtimeSwitches?.at(-1)?.phase).toBe("committed");
+  expect(loadPipelines()[0]!.stages.find(stage => stage.id === "plan")!.account).toBe("other");
+  expect(h.tierCalls.at(-1)).toMatchObject({ conversationId: STAGE_CONVERSATION, serviceTier: null, cut: "none" });
+  expect(h.spawnCount()).toBe(1);
+});
+
 test("in-place: an armed cut waits for the tool call, then continues; a turn that ends first is not continued", async () => {
   const h = await inPlaceHarness();
   h.answer("armed");
@@ -2585,16 +2603,19 @@ test("in-place: an armed cut waits for the tool call, then continues; a turn tha
   expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches![0]).toMatchObject({ phase: "committed", tierCut: "turn-ended" });
   expect(ended.continuations).toHaveLength(0);
 
-  // A restart that lost the arm commits the tier without a continuation; the budget cancels a stuck arm.
+  // An unresolved cancellation keeps the operation open until terminal evidence arrives.
   const lost = await inPlaceHarness();
   lost.answer("armed");
   expect((await lost.request()).error).toBeUndefined();
   await tickPipelines([], lost.ports);
   lost.advance(11 * 60_000);
   await tickPipelines([], lost.ports);
-  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches![0]).toMatchObject({ phase: "committed", tierCut: "cancelled" });
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches![0]).toMatchObject({ phase: "switching", tierCut: "armed" });
   expect(lost.cancelled).toHaveLength(1);
   expect(lost.continuations).toHaveLength(0);
+  lost.cutState("cancelled");
+  await tickPipelines([], lost.ports);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.runtimeSwitches![0]).toMatchObject({ phase: "committed", tierCut: "cancelled" });
 });
 
 test("in-place: Turbo's revert asks for no cut; a refusal fails the switch without a restart", async () => {
@@ -2618,7 +2639,7 @@ test("in-place: Turbo's revert asks for no cut; a refusal fails the switch witho
   expect(refused.spawnCount()).toBe(1);
 });
 
-test("in-place: expiry awaits cancellation before committing an armed cut as withdrawn", async () => {
+test("in-place: expiry rechecks native cut evidence after cancellation", async () => {
   const h = await inPlaceHarness();
   h.answer("armed");
   expect((await h.request()).error).toBeUndefined();
@@ -2632,7 +2653,7 @@ test("in-place: expiry awaits cancellation before committing an armed cut as wit
   const entered = new Promise<void>(resolve => { enter = resolve; });
   const held = new Promise<void>(resolve => { release = resolve; });
   const events: string[] = [];
-  h.ports.cancelRuntimeSwitchTierCut = async () => { events.push("cancel-entered"); enter(); await held; events.push("cancelled"); };
+  h.ports.cancelRuntimeSwitchTierCut = async () => { events.push("cancel-entered"); enter(); await held; h.cutState("cut"); events.push("cancelled"); };
   const { driveRuntimeSwitch } = await import("./runtimeSwitch");
   const work = driveRuntimeSwitch(pipeline, stage, attempt, h.ports, () => {
     if (attempt.runtimeSwitches!.at(-1)!.phase === "committed") events.push("committed");
@@ -2640,8 +2661,9 @@ test("in-place: expiry awaits cancellation before committing an armed cut as wit
   await entered;
   release();
   await work;
-  expect(events).toEqual(["cancel-entered", "cancelled", "committed"]);
-  expect(h.continuations).toHaveLength(0);
+  expect(events).toEqual(["cancel-entered", "cancelled"]);
+  expect(h.continuations).toHaveLength(1);
+  expect(attempt.runtimeSwitches!.at(-1)).toMatchObject({ phase: "continuing", tierCut: "cut" });
 });
 
 test("in-place applies only to a tier-only change; a model change still forks", async () => {

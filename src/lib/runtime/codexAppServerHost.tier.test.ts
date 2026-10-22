@@ -39,6 +39,10 @@ class TierAppServer extends EventEmitter {
   /** What `thread/settings/updated` reports back; the 0.162.1 server echoes the request. */
   echo: (tier: unknown) => unknown = tier => tier;
   echoBeforeResponse = true;
+  holdSettingsUpdate = false;
+  private heldSettingsUpdate: { id: number; tier: unknown } | null = null;
+  holdInterrupt = false;
+  private heldInterrupt: { id: number; params: Record<string, unknown> } | null = null;
   private turn = 0;
 
   constructor(readonly threadId = "tier-thread", readonly tiers: string[] = ["priority", "ultrafast"]) {
@@ -60,6 +64,19 @@ class TierAppServer extends EventEmitter {
   notify(method: string, params: Record<string, unknown>): void { this.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", method, params })}\n`); }
   serverRequest(id: number, method: string, params: Record<string, unknown>): void { this.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`); }
   methods(): string[] { return this.requests.map(request => request.method); }
+  releaseInterrupt(): void {
+    const held = this.heldInterrupt;
+    if (!held) throw new Error("no interrupt is held");
+    this.heldInterrupt = null;
+    this.respond(held.id, {});
+  }
+  releaseSettingsUpdate(): void {
+    const held = this.heldSettingsUpdate;
+    if (!held) throw new Error("no settings update is held");
+    this.heldSettingsUpdate = null;
+    this.notify("thread/settings/updated", { threadId: this.threadId, threadSettings: { serviceTier: this.echo(held.tier) } });
+    this.respond(held.id, {});
+  }
 
   private accept(message: Record<string, unknown>): void {
     if (typeof message.id !== "number" || typeof message.method !== "string") return;
@@ -88,6 +105,7 @@ class TierAppServer extends EventEmitter {
       return;
     }
     if (method === "thread/settings/update") {
+      if (this.holdSettingsUpdate) { this.heldSettingsUpdate = { id: message.id as number, tier: params.serviceTier }; return; }
       const echoed = () => this.notify("thread/settings/updated", { threadId: this.threadId, threadSettings: { serviceTier: this.echo(params.serviceTier) } });
       if (this.echoBeforeResponse) echoed();
       this.respond(message.id, {});
@@ -95,9 +113,11 @@ class TierAppServer extends EventEmitter {
       return;
     }
     if (method === "turn/interrupt") {
+      if (this.holdInterrupt) { this.heldInterrupt = { id: message.id as number, params }; return; }
       this.respond(message.id, {});
       this.notify("turn/completed", { threadId: this.threadId, turn: { id: params.turnId, status: "interrupted" } });
     }
+    if (method === "thread/compact/start") return this.respond(message.id, {});
   }
 
   private respond(id: number, result: Record<string, unknown>): void { this.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`); }
@@ -262,6 +282,70 @@ test("boundary waits for an in-progress command to complete, then interrupts bef
     server.notify("item/completed", { threadId: server.threadId, turnId: "turn-1", item: { id: "cmd-1", type: "commandExecution", command: "bun test", exitCode: 0 } });
     expect(await outcome.settled).toBe("cut");
     expect(server.methods().filter(method => method === "turn/interrupt")).toHaveLength(1);
+  } finally { await host.release(); }
+});
+
+test("a sent boundary interrupt stays owed when cancellation races its reply", async () => {
+  const server = new TierAppServer();
+  server.holdInterrupt = true;
+  const host = await startHost(server);
+  try {
+    await startTurn(host, server);
+    server.notify("item/started", { threadId: server.threadId, turnId: "turn-1", item: { id: "cmd-1", type: "commandExecution" } });
+    const armed = await host.setTier({ operationId: "turbo-owed", serviceTier: "ultrafast", cut: "boundary" });
+    server.notify("item/completed", { threadId: server.threadId, turnId: "turn-1", item: { id: "cmd-1", type: "commandExecution" } });
+    await Bun.sleep(0);
+    expect(server.methods().filter(method => method === "turn/interrupt")).toHaveLength(1);
+    expect(host.cancelArmedTierCut("turbo-owed")).toBe(false);
+    const next = host.setTier({ operationId: "turbo-after-owed", serviceTier: "priority", cut: "none" });
+    await Bun.sleep(0);
+    expect(tierUpdates(server)).toHaveLength(1);
+    server.notify("turn/completed", { threadId: server.threadId, turn: { id: "turn-1", status: "interrupted" } });
+    expect(await armed.settled).toBe("cut");
+    server.releaseInterrupt();
+    expect((await next).appliedTier).toBe("priority");
+    expect(tierUpdates(server)).toHaveLength(2);
+  } finally { await host.release(); }
+});
+
+test("tier settings wait for compaction settlement and proceed after either outcome", async () => {
+  for (const status of ["completed", "failed"] as const) {
+    const server = new TierAppServer();
+    const host = await startHost(server);
+    try {
+      const compact = host.compact({ operationId: `compact-${status}`, threadId: server.threadId });
+      while (!server.methods().includes("thread/compact/start")) await Bun.sleep(0);
+      server.notify("turn/started", { threadId: server.threadId, turn: { id: `compact-turn-${status}` } });
+      server.notify("item/started", { threadId: server.threadId, turnId: `compact-turn-${status}`, item: { id: `compact-item-${status}`, type: "contextCompaction" } });
+      const switchWork = host.setTier({ operationId: `turbo-after-compact-${status}`, serviceTier: "ultrafast", cut: "none" });
+      await Bun.sleep(0);
+      expect(tierUpdates(server)).toHaveLength(0);
+      server.notify("item/completed", { threadId: server.threadId, turnId: `compact-turn-${status}`, item: { id: `compact-item-${status}`, type: "contextCompaction", status } });
+      await compact;
+      expect((await switchWork).appliedTier).toBe("ultrafast");
+      expect(server.methods().indexOf("thread/settings/update")).toBeGreaterThan(server.methods().indexOf("thread/compact/start"));
+    } finally { await host.release(); }
+  }
+});
+
+test("compaction and tier changes share one control queue", async () => {
+  const server = new TierAppServer();
+  server.holdSettingsUpdate = true;
+  const host = await startHost(server);
+  try {
+    const switchWork = host.setTier({ operationId: "tier-before-compact", serviceTier: "ultrafast", cut: "none" });
+    while (!server.methods().includes("thread/settings/update")) await Bun.sleep(0);
+    const compact = host.compact({ operationId: "compact-after-tier", threadId: server.threadId });
+    await Bun.sleep(0);
+    expect(server.methods()).not.toContain("thread/compact/start");
+    server.releaseSettingsUpdate();
+    expect((await switchWork).appliedTier).toBe("ultrafast");
+    while (!server.methods().includes("thread/compact/start")) await Bun.sleep(0);
+    server.notify("turn/started", { threadId: server.threadId, turn: { id: "compact-turn" } });
+    server.notify("item/started", { threadId: server.threadId, turnId: "compact-turn", item: { id: "compact-item", type: "contextCompaction" } });
+    server.notify("item/completed", { threadId: server.threadId, turnId: "compact-turn", item: { id: "compact-item", type: "contextCompaction", status: "completed" } });
+    await compact;
+    expect(server.methods().indexOf("thread/settings/update")).toBeLessThan(server.methods().indexOf("thread/compact/start"));
   } finally { await host.release(); }
 });
 

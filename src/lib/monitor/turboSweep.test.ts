@@ -154,6 +154,32 @@ test("an armed cut whose process-local receipt was lost resumes from its recorde
   expect(w.turbo().switches[0]!.state).toBe("switched");
 });
 
+test("turning Turbo off keeps an in-flight boundary cut owed until it settles, then continues once", async () => {
+  const w = world([agent(1)]);
+  let cutState: "armed" | "cut" = "armed";
+  w.ports.setTier = async (conversationId, _operationId, tier, cut, _authorize, _expected, beforeCut) => {
+    w.calls.push({ conversationId, tier, cut, at: w.clock.now() });
+    w.tiers.set(conversationId, tier);
+    if (cut === "boundary") await beforeCut?.("turn-cut");
+    return { cut: cut === "none" ? "none" : "armed" };
+  };
+  w.ports.cutState = () => cutState;
+  w.ports.cancelCut = async () => {};
+  w.change({ turbo: { enabled: true } });
+  await new TurboSweep(w.ports).kick(project);
+  expect(w.turbo().switches[0]!.state).toBe("armed");
+  w.change({ turbo: { enabled: false } });
+  await new TurboSweep(w.ports).kick(project);
+  expect(w.turbo().switches[0]!.state).toBe("reverting");
+  expect(w.turbo().revertedAt).toBeUndefined();
+  expect(w.continued).toHaveLength(0);
+  cutState = "cut";
+  await new TurboSweep(w.ports).kick(project);
+  expect(w.turbo().switches[0]!.state).toBe("reverted");
+  expect(w.turbo().revertedAt).toBeDefined();
+  expect(w.continued).toHaveLength(1);
+});
+
 test("an offline stage returns its saved profile and definition before its next host resumes", async () => {
   const w = world([agent(1, { stage: { pipelineId: "pipeline-offline", stageId: "build", attempt: 1, definitionTier: null, switchOpen: false } })]);
   w.change({ turbo: { enabled: true } });

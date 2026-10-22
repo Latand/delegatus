@@ -72,6 +72,15 @@ test("a tier switch records the applied tier while preserving a newer effort cho
   expect(f.generation().launchProfile).toMatchObject({ effort: "high", serviceTier: "ultrafast" });
 });
 
+test("a native null tier clears the legacy fast flag without overwriting concurrent profile fields", async () => {
+  const f = fixture();
+  f.replace({ launchProfile: { ...f.generation().launchProfile, fast: true, serviceTier: "priority" } });
+  f.beforeWrite(() => f.replace({ launchProfile: { ...f.generation().launchProfile, effort: "high" } }));
+  const result = await switchConversationTier(id, "tier-clear", null, "none", f.dependencies);
+  expect(result.appliedTier).toBeNull();
+  expect(f.generation().launchProfile).toMatchObject({ fast: false, serviceTier: null, effort: "high" });
+});
+
 test("a runtime that changed after Turbo planned it is refused before native dispatch", async () => {
   const f = fixture();
   await expect(switchConversationTier(id, "tier-one", "ultrafast", "boundary", {

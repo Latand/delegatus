@@ -273,7 +273,7 @@ export async function driveRuntimeSwitch(
         record.tierCut = how; record.continuedAt ??= now;
         delete attempt.effectiveRole.preferredServiceTier; delete attempt.effectiveRole.serviceTierSource;
         attempt.effectiveRole.serviceTier = (record.appliedServiceTier === undefined ? record.to.serviceTier : record.appliedServiceTier) ?? undefined;
-        attempt.runtimeAccountPin = record.to.accountPinned ? record.to.accountId : null;
+        if (!record.turbo) attempt.runtimeAccountPin = record.to.accountPinned ? record.to.accountId : null;
         await settle("committed", `service tier ${record.to.serviceTier ?? "default"} applies from the next turn; the running turn was not cut`);
       };
       if (record.phase === "cutting" && record.cutTurnId) {
@@ -301,7 +301,13 @@ export async function driveRuntimeSwitch(
       }
       const state = await ports.runtimeSwitchTierCut?.(conversationId, tierKey, record.cutTurnId) ?? "unknown";
       if (state === "armed") {
-        if (expired) { await ports.cancelRuntimeSwitchTierCut?.(conversationId, tierKey); await commitInPlace("cancelled"); }
+        if (expired) {
+          await ports.cancelRuntimeSwitchTierCut?.(conversationId, tierKey);
+          const afterCancel = await ports.runtimeSwitchTierCut?.(conversationId, tierKey, record.cutTurnId) ?? "unknown";
+          if (afterCancel === "cut") { record.tierCut = "cut"; record.cutAt = now; record.phase = "continuing"; await persist(); await resume(continueKey); }
+          else if (afterCancel === "cancelled" || afterCancel === "turn-ended") await commitInPlace(afterCancel);
+          else { await persist(); ports.scheduleTick?.(1000); }
+        }
         else { await persist(); ports.scheduleTick?.(1000); }
         return;
       }

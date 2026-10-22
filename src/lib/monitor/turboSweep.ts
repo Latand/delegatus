@@ -382,6 +382,12 @@ export class TurboSweep {
         const operationId = `${key}:${row.conversationId}`;
         let note = reason;
         if (row.state === "armed" && !row.stage) await this.ports.cancelCut(row.conversationId, operationId);
+        if (!row.stage && row.cutTurnId) {
+          const cut = await this.ports.cutState(operationId, row.conversationId, row.cutTurnId);
+          if (cut === "armed" || cut === "unknown") {
+            throw new Error("the boundary interrupt is still settling");
+          }
+        }
         const live = await this.ports.liveTier(row.conversationId, row);
         const applied = row.appliedTier === undefined ? row.to : row.appliedTier;
         if (row.stage) {

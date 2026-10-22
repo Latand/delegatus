@@ -341,7 +341,7 @@ function OpenTurboDialog({ control, phone, locale }: { control: TurboControl; ph
               </li>
             ))}
           </ul>
-          <p className="text-caption leading-4 text-muted">{t("seatTick.turbo.dialog.creditsFoot")}</p>
+          <p className="text-caption leading-4 text-secondary">{t("seatTick.turbo.dialog.creditsFoot")}</p>
         </div>
       ) : (
         <p data-turbo-credits="none" className="text-caption leading-4 text-muted">{t("seatTick.turbo.dialog.creditsNone")}</p>

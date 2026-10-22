@@ -14648,7 +14648,9 @@ export async function patchPipeline(
           ...(offers?.lacking ?? []),
         ];
         let migrationTarget: AccountContext | undefined;
-        let accountId = target.account ?? (allowed(preferredId) ? preferredId : null);
+        let accountId = turboTierOnly && req.applyNowCut === "none"
+          ? preferredId
+          : target.account ?? (allowed(preferredId) ? preferredId : null);
         /* Returning a tier changes no account and dispatches no turn. Capacity
            admission must not prevent undo after the paid approval ends. */
         if (ports.resolveProjectSpawn && !(turboTierOnly && req.applyNowCut === "none")) {
