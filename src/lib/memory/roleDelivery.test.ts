@@ -33,7 +33,7 @@ test("the host renders its text-free launch marker into instructions without wri
   expect(fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "role-memory", "launch"))).toBe(false);
 });
 
-test.each(["codex", "claude"] as const)("%s fresh and resumed starts reload rules from a profile saved in engines mode", async engine => {
+test.each(["codex", "claude"] as const)("%s fresh and resumed starts freeze rules from a profile saved in engines mode", async engine => {
   for (const resumed of [false, true]) {
     const cwd = fs.mkdtempSync(path.join(sandbox, "host-"));
     const project = `delivery-${engine}-${resumed}`;
@@ -69,14 +69,13 @@ test.each(["codex", "claude"] as const)("%s fresh and resumed starts reload rule
       await expect(defaultStartHost(input, "fixture-capability")).rejects.toThrow("captured delivery options");
       const channel = engine === "codex" ? "developerInstructions" : "appendSystemPrompt";
       expect((seen[0] as Record<string, string>)[channel]).toContain(text);
-      expect((seen[1] as Record<string, string>)[channel]).toContain(rewritten);
-      expect((seen[1] as Record<string, string>)[channel]).not.toContain(text);
+      expect((seen[1] as Record<string, string>)[channel]).toBe((seen[0] as Record<string, string>)[channel]);
       expect(resumed ? adopt.mock.calls.length : start.mock.calls.length).toBe(2);
       const rows = memoryDeliveries().filter(row => row.delivery.conversationId === begun.receipt.conversationId);
       expect(rows).toHaveLength(2);
       expect(rows.map(row => row.delivery.engine)).toEqual([engine, engine]);
       expect(rows.map(row => row.delivery.attempt)).toEqual(Array.from({ length: 2 }, () => ({ pipelineId: project, stageId: "build", attempt: 1 })));
-      expect(rows.map(row => row.delivery.rules.find(item => item.id === rule.id)?.hash)).toEqual([text, rewritten].map(value => crypto.createHash("sha256").update(value).digest("hex")));
+      expect(rows.map(row => row.delivery.rules.find(item => item.id === rule.id)?.hash)).toEqual([text, text].map(value => crypto.createHash("sha256").update(value).digest("hex")));
       expect(rows[1].delivery.bytes).toBe(Buffer.byteLength((seen[1] as Record<string, string>)[channel]));
       expect(fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "role-memory", "launch"))).toBe(false);
     } finally { chooseSource("unchosen"); start.mockRestore(); adopt.mockRestore(); }

@@ -150,10 +150,9 @@ export async function evidenceFromPipelineCooperatively(
   };
 }
 
-function flowState(state: string): EvidenceState {
-  if (state === "approved" || state === "done_comment" || state === "closed") return "terminal";
-  if (state === "needs_decision" || state === "paused" || state === "waiting_ready") return "inert";
-  return "active";
+function flowState(_state: string): EvidenceState {
+  // Frozen history cannot fund active work or a current completion claim.
+  return "inert";
 }
 
 export function evidenceFromFlows(flows: readonly FlowSummary[]): EvidenceItem[] {

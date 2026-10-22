@@ -19,9 +19,10 @@ user@<uid>.service
    ├─ delegatus.service              production, CPUWeight=1000 (after the installation files)
    └─ delegatus-agents.slice         memory budget for every agent (MemoryMax set at runtime)
       ├─ delegatus-agent-*.scope     operator hosts and tmux panes: CPUWeight=1000, no CPU ceiling
+      ├─ delegatus-release-*.scope   release preparation: CPUWeight=1000, no CPU ceiling
       └─ delegatus-agents-work.slice CPUWeight=100, CPUQuota=75% of the online CPUs
          ├─ delegatus-agent-*.scope  pipeline and flow hosts, headless runs, work tmux panes: CPUWeight=100, CPUQuota=300%
-         ├─ delegatus-work-*.scope   publication install and push, release install and build, workflow setup
+         ├─ delegatus-work-*.scope   publication install and push, workflow setup
          └─ run-*.scope              gates from scripts/gate-slot.sh
 ```
 
@@ -45,11 +46,12 @@ pipeline scopes there are.
 | Account-migration successors (Codex and Claude) | `publishCodexSuccessorHost` and `publishClaudeSuccessorHost` in `src/lib/accounts/migration/provider.ts`, through `structuredHostCell` | by the conversation's membership, as above | as above |
 | Headless runs: flow reviewers, the external relay agent, the handoff digest | `launchDetached` in `src/lib/agent/headless.ts` | `delegatus-agents-work.slice/delegatus-agent-headless-<id>.scope` | weight 100, 300% |
 | Every command an agent runs: tools, MCP servers, subagents, test runs, detached and orphaned children | descendants of the host process | the host's scope (cgroup membership survives reparenting) | the host's |
-| Gates: hook steps marked capped, `scripts/local-gate.ts`, anything an agent runs through `scripts/gate-slot.sh` | `scripts/gate-slot.sh` | `delegatus-agents-work.slice/run-<id>.scope` | weight 100, 300%, `MemoryMax=8G` |
-| Merger gates: every local gate, the bisect runs and the trusted privacy checks of `scripts/merge-batch.ts` | `gateCommand` and `trustedPrivacy`, through the `gate-slot.sh` beside the script | `delegatus-agents-work.slice/run-<id>.scope` | weight 100, 300%, `MemoryMax=8G` |
+| Gates: hook steps marked capped, `scripts/local-gate.ts`, anything an agent runs through `scripts/gate-slot.sh` | `scripts/gate-slot.sh` | `delegatus-agents-work.slice/delegatus-gate-<id>.service`, also for an agent in a signal domain, whose command enters the agent's namespaces | weight 100, 300%, `MemoryMax=8G` |
+| Merger gates: every local gate, the bisect runs and the trusted privacy checks of `scripts/merge-batch.ts` | `gateCommand` and `trustedPrivacy`, through the `gate-slot.sh` beside the script | `delegatus-agents-work.slice/delegatus-gate-<id>.service`, also for an agent in a signal domain, whose command enters the agent's namespaces | weight 100, 300%, `MemoryMax=8G` |
 | Workflow setup (`bun install` in the built-in template, any command a template names) | `startSetup` in `src/lib/workflows/provision.ts` | `delegatus-agents-work.slice/delegatus-work-workflow-setup-<id>.scope` | weight 100, 300% |
 | Pipeline publication: `bun install --frozen-lockfile` and `git push` with every pre-push hook | `fencedExec` in `src/lib/pipelines/git.ts` | `delegatus-agents-work.slice/delegatus-work-publish-{install,push}-<id>.scope` | weight 100, 300% |
-| Self-update install and build of a new release; the package install of a packaged release | `realPorts().run` in `src/lib/selfUpdate/steps.ts` | `delegatus-agents-work.slice/delegatus-work-update-{install,build,package}-<id>.scope` | weight 100, 300% |
+| Package install of a packaged release | `realPorts().run` in `src/lib/selfUpdate/steps.ts` | `delegatus-agents-work.slice/delegatus-work-update-package-<id>.scope` | weight 100, 300% |
+| Self-update dependency install and compilation | `realPorts().run` / `wrapReleaseCommand` | `delegatus-agents.slice/delegatus-release-<id>.scope` | weight 1000, no CPU ceiling; immediate admission |
 | Viewer, runtime host, launcher, scan and search workers, recovery controller, self-update git fetch and checkout, pipeline and workflow provisioning git, observation of a running setup | production | `delegatus.service` | the service's (weight 1000 after the installation files) |
 | Operator tmux panes: board task spawns (`src/app/api/tasks/[id]/spawn/route.ts`), sibling agents (`src/lib/view/siblings.ts`), resumed terminal agents (`src/lib/agent/transcriptHost.ts`) and the tmux transport of `spawn_agent` (`src/lib/agent/spawnCommand.ts`, `src/lib/runtime/structuredSpawn.ts`), whenever the conversation holds no `pipeline` or `flow` membership | `spawnAgentWithPrompt` in `src/lib/tmux.ts`, through `placePaneInCpuScope` | `delegatus-agents.slice/delegatus-agent-<engine>-pane-<id>.scope` | weight 1000 |
 | Work tmux panes: workflow stage agents and fixers (`src/lib/workflows/engine.ts`), pane reviewers of a flow (`src/lib/flows/engine.ts`), any tmux launch whose conversation holds a `pipeline` or `flow` membership | same | `delegatus-agents-work.slice/delegatus-agent-<engine>-pane-<id>.scope` | weight 100, 300% |
@@ -422,16 +424,18 @@ The affinity regressions pin to the first CPU in the test's own
   launches each once after ten seconds below the release threshold, never holds
   a launched setup or stage, and admits on a failed sample.
 - `src/lib/selfUpdate/steps.test.ts`: a missing mechanism fails the install or
-  build step with the reason and no child; sustained pressure starts no child,
+  build step with the reason and no child; package pressure starts no child,
   a recovered window starts the step once, a failed sample starts it with the
-  quotas, and abort ends a held start.
+  quotas, and abort ends a held start. Install and compilation bypass the pressure hold
+  in its high-weight scope; progress, silence and total deadlines, process
+  restart and TERM-resistant child cleanup have regression coverage.
 - `src/lib/runtime/cpuPlacement.scope.test.ts`: real transient scopes. An
   operator scope reads `cpu.weight 1000` and `cpu.max max 100000`; a work scope
   reads `cpu.max 60000 20000` under a slice reading `360000 20000`, with its
   memory ceiling and `memory.swap.max 0`; an ordinary descendant and an
   intentionally orphaned `setsid` child keep the work cgroup, and stopping the
   unit by its recorded name ends all of them; memory mode off still gets the
-  quota; publication, release build, a headless run and `gate-slot.sh` land in
+  quota; publication, a headless run and `gate-slot.sh` land in
   the work slice with the same controls.
 - `src/lib/runtime/structuredSpawn.cpuPlacement.test.ts`: the real
   `defaultStartHost` gives pipeline and flow members the work placement and
@@ -465,3 +469,33 @@ The affinity regressions pin to the first CPU in the test's own
 - `src/lib/runtime/cpuPlacement.test.ts`, `cpuPressure.test.ts`,
   `agentMemory.test.ts`, `bin/install-cpu-placement.test.ts`,
   `src/lib/selfUpdate/steps.test.ts`, `scripts/local-gate.test.ts`.
+
+## Release build admission and deadlines
+
+Checkout self-updates install and compile with immediate admission in the release scope above.
+Its weight competes with the entire low-weight agent work slice, outside that
+slice's aggregate quota. Automatic release preparation keeps normal scheduling priority.
+Package updates retain pressure admission and work quotas. CPU placement
+still refuses a missing Linux mechanism; the explicit opt-out and platforms where
+placement does not apply retain their existing behavior.
+
+`UpdateRunner` renews a 30-minute silence deadline on nonempty command output.
+Separate total deadlines (one hour for install, two hours for compilation) bound
+a command that keeps printing without finishing. Each starts with its step;
+release preparation has no CPU queue wait.
+Expiry stops the exact generated release scope, including descendants whose
+leader has exited. Its control-group kill policy allows two seconds before KILL.
+The asynchronous stop call has a five-second bound; a failed stop gets one
+five-second LoadState read to recognize an already collected empty scope.
+Without scopes, cleanup sends TERM, waits up to two seconds, then checks the
+recorded identity before KILL and another two-second exit wait.
+Cleanup failure retains the original timeout cause in the deployment error. A restored running update fails
+as interrupted and cannot acquire a fresh budget by restarting the Viewer.
+Fetch, checkout and ready deadlines are unchanged.
+
+The failed step and cause travel through the apply intent into the durable
+checkout deployment record. A build timeout records elapsed minutes, whether
+silence or the total bound expired, and the one-minute load and logical CPU count
+at expiry. Older records with only timeout minutes remain readable.
+`scripts/deploy-checkout.py` switches an already built and verified release;
+it creates no build child and sets no build deadline.

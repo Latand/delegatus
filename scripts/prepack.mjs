@@ -1,4 +1,4 @@
-import { cp, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
@@ -26,18 +26,27 @@ const standaloneServerBootstrap = `const { spawn } = require("node:child_process
 if (process.versions.bun) {
   require("./server.bun.js");
 } else {
-  const bun = process.env.LLV_BUN_EXECUTABLE || "bun";
-  const child = spawn(bun, ["--bun", __filename, ...process.argv.slice(2)], {
-    env: withoutUnsupportedApiCredentials(process.env),
-    stdio: "inherit",
-  });
-  child.once("error", (error) => {
-    console.error(\`Failed to start the Bun server runtime: \${error.message}\`);
+  import("./bin/server-runtime.mjs").then(({ withoutUnsupportedApiCredentials }) => {
+    const bun = process.env.LLV_BUN_EXECUTABLE || "bun";
+    const child = spawn(bun, ["--bun", __filename, ...process.argv.slice(2)], {
+      env: withoutUnsupportedApiCredentials(process.env),
+      stdio: "inherit",
+    });
+    const signals = ["SIGINT", "SIGTERM"];
+    const forward = signal => child.kill(signal);
+    for (const signal of signals) process.on(signal, forward);
+    child.once("error", (error) => {
+      console.error(\`Failed to start the Bun server runtime: \${error.message}\`);
+      process.exitCode = 1;
+    });
+    child.once("exit", (code, signal) => {
+      for (const signal of signals) process.removeListener(signal, forward);
+      if (signal) process.kill(process.pid, signal);
+      else process.exitCode = code ?? 1;
+    });
+  }).catch(error => {
+    console.error(\`Failed to load the Bun server runtime: \${error.message}\`);
     process.exitCode = 1;
-  });
-  child.once("exit", (code, signal) => {
-    if (signal) process.kill(process.pid, signal);
-    else process.exitCode = code ?? 1;
   });
 }
 `;
@@ -113,6 +122,15 @@ function runRuntimeHostBuild() {
   });
 }
 
+async function runGateBuild() {
+  await new Promise((resolve, reject) => {
+    const bun = process.env.LLV_BUN_EXECUTABLE || "bun";
+    const child = spawn(bun, ["scripts/build-gate.ts"], viewerChildProcessOptions({ cwd: root, env: withoutUnsupportedApiCredentials(process.env), stdio: "inherit" }));
+    child.once("error", reject);
+    child.once("exit", code => code === 0 ? resolve() : reject(new Error("Gate bundle failed")));
+  });
+}
+
 async function findStandaloneServer(dir) {
   const directServer = join(dir, "server.js");
   if (existsSync(directServer)) {
@@ -153,6 +171,19 @@ async function main() {
   await writeFile(join(distStandaloneDir, "server.js"), standaloneServerBootstrap);
   await runRuntimeHostBuild();
   await runMcpBuild();
+  await runGateBuild();
+
+  // Next traces route imports, so it misses file-based launcher dependencies
+  // and public URLs. Assemble these complete runtime inputs explicitly. The
+  // MCP launcher resolves dist/mcp-server.mjs relative to its own bin directory.
+  for (const directory of ["bin", "public", "vendor"]) {
+    await cp(join(root, directory), join(distStandaloneDir, directory), { recursive: true });
+  }
+  const standaloneBundles = join(distStandaloneDir, "dist");
+  await mkdir(standaloneBundles, { recursive: true });
+  for (const bundle of ["mcp-server.mjs", "runtime-host.mjs", "gate"]) {
+    await cp(join(distDir, bundle), join(standaloneBundles, bundle), { recursive: true });
+  }
 
   if (!existsSync(join(distStandaloneDir, "server.js")) || !existsSync(runtimeHostBundle)) {
     throw new Error("Prepack did not produce the standalone server and runtime host bundles.");

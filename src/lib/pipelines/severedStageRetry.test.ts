@@ -36,6 +36,7 @@ const { conversationTurnLiveness, LIVENESS_CPU_PROGRESS_WINDOW_MS } = await impo
 const { ClaudeStreamBrokerHost } = await import("@/lib/runtime/claudeStreamBrokerHost");
 const { bindClaudeHostPersistence, claudeHostColumns } = await import("@/lib/runtime/registry");
 const { orphanWriterTree } = await import("@/lib/runtime/fixtures/orphanWriterTree");
+const { startUnreapedChild } = await import("@/lib/testing/unreapedChild");
 const { createPipelineFromRequest, defaultPipelinePorts, patchPipeline, reportStageCompletion, stopPipelineStageAgent, stopSettledPipelineStageWriter, tickPipelines } = await import("./engine");
 const { loadPipelines, savePipelines } = await import("./store");
 const { registerPipelineTick } = await import("./controllerSignal");
@@ -1057,5 +1058,68 @@ test("a settled stage's host that is in a turn is never signalled: the next atte
     expect(lane.stateDetail).toBe(`waiting for an earlier stage agent to stop before a new attempt starts in its worktree: ${stage.conversationId}: processes ${fixture.root.pid}, ${fixture.helperIdentity.pid} captured from its stopped host may still be running; its agent is in a turn, so it is left to finish`);
   } finally {
     await fixture?.cleanup();
+  }
+}, 30_000);
+
+/* #2967: a host stop captures its whole tree, and a member that has already
+   exited stays in the process table as a zombie until its parent reaps it,
+   with its pid and start token intact. It cannot write to the worktree, so it
+   no longer holds the next attempt; a live member captured beside it still
+   does, and the launch waits for that one alone. */
+test.skipIf(process.platform !== "linux")("a zombie captured from the earlier attempt's host does not hold the next attempt, while a live sibling does (#2967)", async () => {
+  const stage = severedStage();
+  const unreaped = await startUnreapedChild();
+  const sibling = Bun.spawn(["sleep", "300"], { stdout: "ignore", stderr: "ignore" });
+  const siblingIdentity = captureProcessIdentity(sibling.pid);
+  try {
+    const spawns: string[] = [];
+    let interrupted: "dead" | null = null;
+    const base = stagePorts(stage, spawns) as PipelinePorts & { advanceWallClock(ms: number): void };
+    const ports: PipelinePorts = {
+      ...base,
+      conversationTurnInterrupted: async () => interrupted,
+      restartRecoveryBootStartedAt: () => Date.now() - 60 * 60_000,
+      stopInterruptedStageAgent: undefined,
+      stageHostTreeStillRunning: defaultPipelinePorts().stageHostTreeStillRunning,
+      cpuPressureHold: () => null,
+      conversationOperatorStopped: async () => false,
+    };
+    savePipelines([]);
+    const created = await createPipelineFromRequest({
+      task: "Build after a zombie writer", spec: "AC1", repoDir: stage.worktreeDir, src: stage.transcript,
+      stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", ["prompt"]: "Build it", next: null }],
+    } as never, ports);
+    if (!created.pipeline) throw new Error(created.error ?? "pipeline creation was unavailable");
+    await tickPipelines([], ports);
+    await tickPipelines([], ports);
+    expect(loadPipelines()[0]!.runs[0]!.attempts[0]).toMatchObject({ state: "running", conversationId: stage.conversationId });
+
+    const rowKey = `claude:${stage.key.sessionId}`;
+    const root = stage.registry.readOnlySnapshot().entries[rowKey]!.structuredHost!.process!;
+    expect(stage.registry.captureStructuredTerminationSurvivors(stage.key, root, [unreaped.zombie, siblingIdentity])).not.toBeNull();
+    stage.child.kill();
+    await settles(() => processIdentityStatus(root) === "dead", "the engine's exit");
+    stage.registry.upsert({ ...stage.registry.readOnlySnapshot().entries[rowKey]!, status: "dead" });
+    interrupted = "dead";
+    await tickPipelines([], ports);
+    await tickPipelines([], ports);
+    await tickPipelines([], ports);
+    const held = loadPipelines()[0]!;
+    expect(spawns).toHaveLength(1);
+    expect(held.runs[0]!.attempts.at(-1)).toMatchObject({ n: 2, state: "pending" });
+    expect(held.stateDetail).toBe(`waiting for an earlier stage agent to stop before a new attempt starts in its worktree: ${stage.conversationId}: process ${sibling.pid} captured from its stopped host may still be running`);
+
+    sibling.kill("SIGKILL");
+    await sibling.exited;
+    /* The zombie is still in the process table, unreaped, when the launch goes. */
+    expect(procBackend.processExited(unreaped.zombie.pid)).toBeTrue();
+    expect(processIdentityStatus(unreaped.zombie)).toBe("alive");
+    await tickPipelines([], ports);
+    expect(spawns).toHaveLength(2);
+    expect(loadPipelines()[0]!.stateDetail ?? "").not.toContain("waiting for an earlier stage agent");
+  } finally {
+    stage.child.kill();
+    try { sibling.kill("SIGKILL"); } catch { /* gone */ }
+    await Promise.all([stage.child.exited, sibling.exited, unreaped.stop()]);
   }
 }, 30_000);

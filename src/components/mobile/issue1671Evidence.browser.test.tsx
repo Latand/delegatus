@@ -18,6 +18,7 @@ import { heldDeliveryOccurrences, orchestratorMandateDeliveries } from "@/lib/ru
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import { deliveredMessageOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
 import type { FileEntry } from "@/lib/types";
+import type { TranscriptEntry } from "@/lib/voiceCompanion/transcriptRecord";
 import { captureAttentionRing, captureWorkerLimitFrames, capturePrototypeQuestions, captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
 import { playPath, recordDrag } from "@/components/kanban/dragFrameMeter";
 import { measureStageChain, stageChainFailures, type StageChainLane } from "@/components/pipelines/stageChainMeasure";
@@ -7453,7 +7454,9 @@ browserTest("composer context mode: the toggle, auto switching and the context r
           const chip = document.querySelector<HTMLElement>("[data-composer-context-toggle]")?.getBoundingClientRect() ?? null;
           const overlaps = controls.some(({ box: a }, i) => controls.some(({ box: b }, j) => i < j
             && a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5));
-          const row = document.querySelector<HTMLElement>("[data-composer-context-toggle]")?.parentElement?.closest<HTMLElement>("div") ?? null;
+          /* The phone's whole tools row, which holds the toggle inside its settings group since #1484. */
+          const toggle = document.querySelector<HTMLElement>("[data-composer-context-toggle]");
+          const row = toggle?.closest<HTMLElement>("[data-mobile2-tools]") ?? toggle?.parentElement?.closest<HTMLElement>("div") ?? null;
           return {
             pageOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
             toolsRow: row ? { scrollWidth: row.scrollWidth, clientWidth: row.clientWidth } : null,
@@ -11362,6 +11365,168 @@ describe("phone orchestrator reads", () => {
   }, 180_000);
 });
 
+describe("phone voice drop", () => {
+  /*
+   * A call whose connection drops keeps what was said, offers the same call back in one tap, still does after a
+   * reload, and goes on with its history (docs/design/voice-call-memory.md, "A dropped call resumes"). The phone
+   * head runs the product's own adapter (`?voice=drop`); its session and resume routes are answered here with a
+   * synthetic call, and `window.phoneVoice.lose()` fails its peer connection as a lost network does.
+   *
+   *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=<chrome> bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "phone voice drop"
+   *
+   * Frames go to `.artifacts/voice-companion/phone-drop/` and are never committed.
+   */
+  browserTest("history after a drop, the one-tap reconnect, a reload, and the restored call at 390 px", async () => {
+    const out = path.resolve(".artifacts/voice-companion/phone-drop");
+    fs.mkdirSync(out, { recursive: true });
+    const { base, stop } = await serveFixture();
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    const readings: unknown[] = [];
+    try {
+      for (const [lang, scheme] of [["uk", "light"], ["en", "dark"]] as const) {
+        const size = { width: 390, height: 844 };
+        const said = lang === "uk"
+          ? [["operator", "Як там лінія пошуку?"], ["companion", "Лінія пошуку пройшла перевірку з другої спроби."], ["operator", "А перегляд дошки на телефоні?"]]
+          : [["operator", "How is the search lane?"], ["companion", "The search lane passed its verifier on the second attempt."], ["operator", "And the phone board review?"]];
+        const after = lang === "uk" ? "Перегляд дошки на другому колі." : "The phone board review is on its second round.";
+        /* The synthetic Viewer: one call per start, its events by sequence, and the call's record joined across its parts
+           by the product's own `chainRecord`, the second part starting 20 s after the first. */
+        const { chainRecord } = await import("@/lib/voiceCompanion/callResume");
+        type Call = { id: string; resumes: string | null; createdAt: number; events: Array<Record<string, unknown>>; entries: TranscriptEntry[]; closed: string | null };
+        const calls: Call[] = [];
+        const starts: Array<Record<string, unknown>> = [];
+        const closes: Array<Record<string, unknown>> = [];
+        const event = (call: Call, payload: Record<string, unknown>) => call.events.push({ ...payload, version: 1, sessionId: call.id, generation: 1, eventId: `${call.id}-${call.events.length + 1}`, seq: call.events.length + 1, atMs: call.events.length * 10 });
+        const parts = (call: Call): Call[] => [...(call.resumes ? parts(calls.find((row) => row.id === call.resumes)!) : []), call];
+        const record = (call: Call) => chainRecord(parts(call).map((part) => ({ id: part.id, createdAt: part.createdAt, entries: part.entries, truncated: false }))).entries;
+        const context = await browser.newContext({ viewport: size, hasTouch: true, isMobile: true, colorScheme: scheme });
+        try {
+          await context.addInitScript((language) => localStorage.setItem("llv_lang", language), lang);
+          await context.route("**/api/voice-companion/resume", (route) => {
+            const last = calls.at(-1);
+            return route.fulfill({ json: { resumable: last && last.closed === "transport" ? { sessionId: last.id, project: "atlas", endedAt: 1 } : null } });
+          });
+          await context.route("**/api/voice-companion/session**", async (route) => {
+            const request = route.request();
+            const url = new URL(request.url());
+            if (request.method() === "POST") {
+              const body = JSON.parse(request.postData() ?? "{}") as Record<string, unknown>;
+              if (body.action === "start") {
+                starts.push(body);
+                const call: Call = { id: `drop-call-${calls.length + 1}`, resumes: typeof body.resume === "string" ? body.resume : null, createdAt: calls.length * 20_000, events: [], entries: [], closed: null };
+                calls.push(call);
+                event(call, { type: "session.ready", mode: "official-realtime" });
+                call.entries.push({ id: "start", kind: "session_start", atMs: 0, order: 0, data: call.resumes ? { resumes: call.resumes } : {} });
+                const lines = call.resumes ? [["companion", after]] : said;
+                lines.forEach(([speaker, text], index) => {
+                  event(call, { type: "transcript.snapshot", speaker, itemId: `${call.id}-line-${index}`, text, final: true });
+                  call.entries.push({ id: `line-${index}`, kind: speaker === "operator" ? "utterance" : "reply", atMs: 2000 + index * 4000, order: call.entries.length, data: { text, final: true } });
+                });
+                return route.fulfill({ status: 201, json: { sessionId: call.id, sdp: "v=0\r\n" } });
+              }
+              if (body.action === "close") {
+                closes.push(body);
+                const call = calls.find((row) => row.id === body.sessionId);
+                if (call && !call.closed) {
+                  call.closed = body.reason === "transport" ? "transport" : "operator";
+                  event(call, { type: "session.closed", reason: call.closed, incomplete: false });
+                  call.entries.push({ id: "end", kind: "session_end", atMs: 14_000, order: call.entries.length, data: { reason: call.closed } });
+                }
+              }
+              return route.fulfill({ json: { ok: true } });
+            }
+            const call = calls.find((row) => row.id === url.searchParams.get("sessionId"));
+            if (!call) return route.fulfill({ status: 409, json: { code: "SESSION_UNAVAILABLE" } });
+            if (url.searchParams.get("view") === "transcript") return route.fulfill({ json: { entries: record(call), truncated: false } });
+            const from = Number(url.searchParams.get("after") ?? 0);
+            return route.fulfill({ json: { events: call.events.filter((row) => (row.seq as number) > from) } });
+          });
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on("pageerror", (error) => errors.push(error.message));
+          const prefix = `${size.width}x${size.height}-${lang}-${scheme}`;
+          const head = page.locator("[data-phone-voice-head]");
+          const voice = page.locator("[data-phone-voice]");
+          const bubble = page.locator("[data-phone-voice-bubble]");
+          const panel = page.locator("[data-companion-transcript-view]");
+          const settled = () => page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); const end = animation.effect?.getComputedTiming().endTime; animation.currentTime = typeof end === "number" && Number.isFinite(end) ? end : 0; } });
+          const inside = (box: { x: number; y: number; width: number; height: number } | null) => !!box && box.x >= 0 && box.y >= 0 && box.x + box.width <= size.width + 0.5 && box.y + box.height <= size.height + 0.5;
+          const readHistory = async (frame: string, expected: string[]) => {
+            await head.tap(); await page.locator("[data-phone-voice-transcript]").tap();
+            await panel.locator("[data-transcript-text]").first().waitFor();
+            await page.waitForFunction((last) => document.querySelector("[data-companion-transcript-view]")?.textContent?.includes(last), expected.at(-1)!);
+            await settled();
+            const texts = await panel.locator("[data-transcript-text]").allTextContents();
+            for (const text of expected) expect(texts).toContain(text);
+            const box = await panel.boundingBox();
+            expect(inside(box)).toBe(true);
+            expect(await panel.locator("[data-transcript-body]").evaluate((node) => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
+            await page.screenshot({ path: path.join(out, `${prefix}-${frame}.png`) });
+            const divider = await panel.locator("[data-transcript-resumed]").allTextContents();
+            const dividerTimes = await panel.locator("[data-kind=resumed] .vc-tr-time").allTextContents();
+            await page.keyboard.press("Escape"); await panel.waitFor({ state: "detached" });
+            return { frame, texts, divider, dividerTimes, box };
+          };
+
+          await page.goto(`${base}/?voice=drop&voice-long=1&seatnoise=ii&runtime=structured#c=conversation_running`);
+          await head.waitFor(); await page.locator("[data-mobile-message=agent]").first().waitFor(); await pause(page, 600);
+          await head.tap(); await page.locator("[data-phone-voice-talk]").tap();
+          await page.waitForFunction(() => document.querySelector("[data-phone-voice]")?.getAttribute("data-phase") !== "offline");
+          await pause(page, 900);
+
+          /* The network goes mid-call. */
+          await page.evaluate(() => (window as unknown as { phoneVoice: { lose(): void } }).phoneVoice.lose());
+          await page.waitForFunction(() => document.querySelector("[data-phone-voice]")?.getAttribute("data-phase") === "offline");
+          await bubble.waitFor();
+          expect(closes.at(-1)).toMatchObject({ action: "close", sessionId: "drop-call-1", reason: "transport" });
+          const lost = (await bubble.textContent())?.replace(/\u00a0/gu, " ");
+          expect(lost).toBe(lang === "uk" ? "Зʼєднання обірвалося. Сказане збережено." : "The connection dropped. What was said is kept.");
+          expect(inside(await bubble.boundingBox())).toBe(true);
+          await settled();
+          await page.screenshot({ path: path.join(out, `${prefix}-1-dropped.png`) });
+          await head.tap();
+          const resumeRow = page.locator("[data-phone-voice-resume]");
+          await resumeRow.waitFor();
+          expect(await resumeRow.textContent()).toBe(lang === "uk" ? "Відновити розмову" : "Reconnect");
+          expect(inside(await page.locator("[data-phone-voice-pop]").boundingBox())).toBe(true);
+          await settled();
+          await page.screenshot({ path: path.join(out, `${prefix}-2-menu.png`) });
+          await head.tap();
+          const dropped = await readHistory("3-history", said.map(([, text]) => text));
+
+          /* A reload: nothing in the page's memory, the call still offered and readable. */
+          await page.reload();
+          await head.waitFor(); await pause(page, 900);
+          await head.tap(); await resumeRow.waitFor();
+          await settled();
+          await page.screenshot({ path: path.join(out, `${prefix}-4-reloaded-menu.png`) });
+          await head.tap();
+          const reloaded = await readHistory("5-reloaded-history", said.map(([, text]) => text));
+
+          /* One tap continues the same call. */
+          await head.tap(); await resumeRow.tap();
+          await page.waitForFunction(() => document.querySelector("[data-phone-voice]")?.getAttribute("data-phase") !== "offline");
+          expect(starts.at(-1)).toMatchObject({ action: "start", resume: "drop-call-1" });
+          await bubble.waitFor();
+          await page.waitForFunction((text) => document.querySelector("[data-phone-voice-bubble]")?.textContent?.replace(/\u00a0/gu, " ") === text,
+            lang === "uk" ? "Зʼєднання відновлено. Розмова триває з того місця, де обірвалася." : "Connection restored. The conversation goes on where it stopped.");
+          expect(inside(await bubble.boundingBox())).toBe(true);
+          await settled();
+          await page.screenshot({ path: path.join(out, `${prefix}-6-restored.png`) });
+          expect(await voice.getAttribute("data-phase")).not.toBe("offline");
+          const restored = await readHistory("7-restored-history", [...said.map(([, text]) => text), after]);
+          expect(restored.divider).toEqual([lang === "uk" ? "Зʼєднання обірвалося · відновлено" : "Connection dropped · reconnected"]);
+          /* One clock across the parts: the reconnect stands at 0:20, after the dropped part's last line at 0:10. */
+          expect(restored.dividerTimes).toEqual(["0:20"]);
+          expect(errors).toEqual([]);
+          readings.push({ viewport: size, lang, scheme, dropped, reloaded, restored, closes, starts: starts.map((row) => ({ resume: row.resume ?? null })), errors });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); stop(); }
+    fs.writeFileSync(path.join(out, "readings.json"), `${JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", readings }, null, 2)}\n`);
+  }, 240_000);
+});
+
 describe("seat recovery failure history", () => {
   browserTest("healthy seats clear stale failures and the phone dates a current failure", async () => {
     const out = path.resolve(".artifacts/seat-recovery"); fs.mkdirSync(out, { recursive: true });
@@ -12330,5 +12495,139 @@ describe("Telegram multiple bots", () => {
       fs.mkdirSync("evidence/telegram-multi-bot", { recursive: true });
       fs.writeFileSync("evidence/telegram-multi-bot/phone.json", JSON.stringify({ readings }, null, 2) + "\n");
     } finally { await browser.close(); if (tempFd !== null) fs.closeSync(tempFd); server.stop(); }
+  }, 300_000);
+});
+
+/*
+ * #1484: the phone composer's tools row lays the settings (model/effort chip,
+ * Context toggle) out at the box's left edge and the actions (attach, dictate,
+ * mic, send slot) at its right edge, on one line, every control a 44 px box.
+ * Read at both named phone widths and one between them, plus a landscape phone
+ * (either axis under 640 × 600 takes the phone shell), with an empty field,
+ * with a draft and while dictating (Chromium's fake microphone), in both
+ * languages and both schemes. Recording takes the settings off the row so the
+ * meter has width; the actions keep the right edge. Two conversations: a
+ * structured Claude one (the chip alone) and the Codex one that offers context
+ * mode (the chip and the Context toggle).
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=… LLV_PHONE_TOOLS_OUT=<scratch> \
+ *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "phone composer tools row"
+ *
+ * Frames and the fixture bundle go to `$LLV_PHONE_TOOLS_OUT` (default
+ * `.artifacts/phone-composer-tools`); the readings are kept in
+ * `evidence/phone-composer-tools/row.json`.
+ */
+describe("phone composer tools row", () => {
+  browserTest("settings at the left edge, actions at the right, one line of 44 px controls (#1484)", async () => {
+    const out = path.resolve(process.env.LLV_PHONE_TOOLS_OUT ?? ".artifacts/phone-composer-tools");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, "src/components/mobile/issue1671Evidence.fixture.tsx");
+    const base = served.base.replace(/\/$/, "");
+    const browser = await chromium.launch({ headless: true, args: ["--no-sandbox", "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+    const readings: Array<Record<string, unknown>> = [];
+    const failures: string[] = [];
+    const viewports = [{ width: 390, height: 844 }, { width: 375, height: 812 }, { width: 360, height: 780 }, { width: 844, height: 390 }] as const;
+    try {
+      for (const scene of ["structured", "context"] as const) for (const viewport of viewports) for (const scheme of ["light", "dark"] as const) for (const locale of ["en", "uk"] as const) {
+        const query = scene === "context" ? "?context-mode=1" : "?runtime=structured";
+        const { page, context, pageErrors } = await openFixture(browser, `${base}/${query}#c=conversation_running`, viewport, scheme, locale, "reduce", true);
+        try {
+          await context.grantPermissions(["microphone"]);
+          await page.waitForSelector("[data-mobile2-tools]", { timeout: 15_000 });
+          await pause(page, 600);
+          for (const draft of ["empty", "draft", "recording"] as const) {
+            if (draft === "draft") {
+              await page.locator("[data-mobile2-composer] textarea").fill(locale === "uk" ? "Перевір останній результат рев'ю" : "Check the last review result");
+              await pause(page, 300);
+            }
+            if (draft === "recording") {
+              await page.locator(`[data-mobile2-tools] button[aria-label="${translate(locale, "mic.dictate")}"]`).click();
+              await page.locator(`[data-mobile2-tools] button[aria-label="${translate(locale, "mic.stopRecognize")}"]`).waitFor({ timeout: 10_000 });
+              await pause(page, 1_200);
+            }
+            const reading = await page.evaluate(() => {
+              const box = (element: Element | null) => {
+                if (!element) return null;
+                const r = element.getBoundingClientRect();
+                return { left: Math.round(r.left * 10) / 10, right: Math.round(r.right * 10) / 10, top: Math.round(r.top * 10) / 10, bottom: Math.round(r.bottom * 10) / 10, width: Math.round(r.width * 10) / 10, height: Math.round(r.height * 10) / 10 };
+              };
+              const row = document.querySelector("[data-mobile2-tools]")!;
+              const settings = row.querySelector("[data-mobile2-tools-settings]");
+              const actions = row.querySelector("[data-mobile2-tools-actions]");
+              const name = (element: Element) => element.getAttribute("aria-label") ?? element.textContent?.trim() ?? element.tagName;
+              const controls = [...row.querySelectorAll("button")].filter((element) => element.getClientRects().length > 0)
+                .map((element) => ({ name: name(element), toggle: element.hasAttribute("data-composer-context-toggle"), voiceCall: element.getAttribute("data-testid") === "voice-call-button", group: settings?.contains(element) ? "settings" : actions?.contains(element) ? "actions" : "row", box: box(element)! }));
+              /* Text measured from its ranges, not its element boxes: each line of
+                 visible text on the row and whether its own box clips it. */
+              const range = document.createRange();
+              const texts: Array<{ text: string; lines: number; box: ReturnType<typeof box>; clipped: boolean }> = [];
+              const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+              for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                const parent = node.parentElement!;
+                if (!node.textContent?.trim() || parent.closest(".sr-only, [hidden]")) continue;
+                range.selectNodeContents(node);
+                const rects = [...range.getClientRects()];
+                if (!rects.length) continue;
+                const left = Math.min(...rects.map((r) => r.left)), right = Math.max(...rects.map((r) => r.right));
+                const top = Math.min(...rects.map((r) => r.top)), bottom = Math.max(...rects.map((r) => r.bottom));
+                texts.push({ text: node.textContent.trim(), lines: new Set(rects.map((r) => Math.round(r.top))).size,
+                  box: { left, right, top, bottom, width: right - left, height: bottom - top }, clipped: parent.scrollWidth > parent.clientWidth + 0.5 });
+              }
+              const unit = document.querySelector("[data-mobile2-composer]");
+              return {
+                row: box(row), settings: box(settings), actions: box(actions), unit: box(unit),
+                rowStyle: { paddingLeft: getComputedStyle(unit!).paddingLeft, paddingRight: getComputedStyle(unit!).paddingRight },
+                rowOverflow: row.scrollWidth > row.clientWidth + 0.5,
+                pageOverflow: document.documentElement.scrollWidth > innerWidth,
+                slot: document.querySelector("[data-mobile2-composer]")?.getAttribute("data-mobile2-composer") ?? null,
+                controls, texts,
+                window: { width: innerWidth, height: innerHeight },
+              };
+            });
+            const at = `${scene} ${viewport.width}x${viewport.height} ${scheme} ${locale} ${draft}`;
+            const shot = `${scene}-${viewport.width}x${viewport.height}-${scheme}-${locale}-${draft}`;
+            await page.screenshot({ path: path.join(out, `${shot}.png`) });
+            /* A close crop of the box, so the row reads at full size. */
+            const unitBox = reading.unit;
+            if (unitBox) await page.screenshot({ path: path.join(out, `${shot}-unit.png`), clip: { x: 0, y: Math.max(0, unitBox.top - 8), width: viewport.width, height: Math.min(viewport.height - Math.max(0, unitBox.top - 8), unitBox.height + 16) } });
+            const { row, settings, actions } = reading;
+            if (!row || !actions) { failures.push(`${at}: the tools row is not whole`); continue; }
+            if (scene === "context" && draft !== "recording" && !reading.controls.some((control) => control.group === "settings" && control.toggle)) failures.push(`${at}: the Context toggle is not in the settings group`);
+            if (draft === "recording" ? settings : !settings) failures.push(`${at}: ${settings ? "settings stay on the row while recording" : "no settings group on the row"}`);
+            if (settings && settings.left - row.left > 1) failures.push(`${at}: settings start ${settings.left - row.left}px in from the row's left edge`);
+            if (row.right - actions.right > 1) failures.push(`${at}: actions end ${row.right - actions.right}px short of the row's right edge`);
+            if (settings && settings.right > actions.left + 0.5) failures.push(`${at}: settings run into the actions`);
+            if (reading.rowOverflow || reading.pageOverflow) failures.push(`${at}: the row or the page overflows sideways`);
+            /* The landscape phone's row already ended 5 px under the fold before
+               #1484 (the same 351–395 on the base); that height is not this
+               row's to fix, so landscape is held sideways only. */
+            const landscape = viewport.width > viewport.height;
+            if (row.left < 0 || row.right > viewport.width + 0.5 || (!landscape && row.bottom > viewport.height + 0.5)) failures.push(`${at}: the row leaves the viewport`);
+            const wanted = ["actions"].concat(settings ? ["settings"] : []);
+            for (const group of wanted) if (!reading.controls.some((control) => control.group === group)) failures.push(`${at}: no control in ${group}`);
+            for (const control of reading.controls) {
+              /* The voice-call button was 32 px on the phone before #1484 and
+                 belongs to the voice lane; its size stays in the readings. */
+              if (!control.voiceCall && (control.box.width < 44 - 0.5 || control.box.height < 44 - 0.5)) failures.push(`${at}: «${control.name}» is ${control.box.width}×${control.box.height}`);
+              if (control.box.top < row.top - 0.5 || control.box.bottom > row.bottom + 0.5) failures.push(`${at}: «${control.name}» leaves the row's line`);
+              if (control.group === "row") failures.push(`${at}: «${control.name}» belongs to neither group`);
+            }
+            const ordered = [...reading.controls].sort((a, b) => a.box.left - b.box.left);
+            for (let index = 1; index < ordered.length; index += 1) {
+              if (ordered[index]!.box.left < ordered[index - 1]!.box.right - 0.5) failures.push(`${at}: «${ordered[index - 1]!.name}» and «${ordered[index]!.name}» overlap`);
+            }
+            for (const text of reading.texts) {
+              if (text.lines > 1) failures.push(`${at}: «${text.text}» wraps onto ${text.lines} lines`);
+              if (text.box && (text.box.left < row.left - 0.5 || text.box.right > row.right + 0.5)) failures.push(`${at}: «${text.text}» leaves the row`);
+            }
+            if (pageErrors.length) failures.push(`${at}: page errors ${JSON.stringify(pageErrors)}`);
+            readings.push({ scene, viewport, scheme, locale, draft, frame: `${shot}.png`, ...reading });
+          }
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/phone-composer-tools", { recursive: true });
+      fs.writeFileSync("evidence/phone-composer-tools/row.json", JSON.stringify(readings, null, 2) + "\n");
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); served.stop(); }
   }, 300_000);
 });

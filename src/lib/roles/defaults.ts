@@ -121,6 +121,11 @@ const SHARED_PATHS_JUDGING = "Shared paths: a contract change with an unlisted p
 const SERVER_RULES = "Long-lived servers and hot paths (when the work touches one): the main loop never waits synchronously on a shared resource; a wait is asynchronous under one deadline and recorded with its origin. Work per request, poll or tick scales with what changed; a whole-store read per tick is a defect. Every cache has a bound, an eviction rule and one owner, and large payloads stream. Startup and first requests answer from a persisted, validated artifact and refine afterwards. Slow or blocking work carries a label that monitoring can report. A change on such a path carries its before/after measurement, or claims no gain.";
 const SERVER_JUDGING = "Long-lived servers and hot paths: a synchronous wait on a main loop, per-tick work proportional to total data, an unbounded or duplicated cache, a cold path that rebuilds derived state before its first answer, an unlabelled slow operation, and a hot-path change without its measurement are findings.";
 
+/* Agent scopes run under a 4–8 GB memory cap; a suite, typecheck or build
+   run beside the agent is what the OOM killer takes, with the agent's commit
+   custody in flight. The second sentence keeps that custody provable. */
+const COMMAND_RULES = "Heavy commands: run test suites, typecheck and builds through the heavy-command wrapper by default, one at a time, because agent scopes have a 4–8 GB memory cap: the gate wrapper the stage brief names, or the one the project's instruction files name; run one directly only when neither exists, and say so. Commit with a plain git commit in the stage worktree: the launch already runs the repository's own hooks, and a -c core.hooksPath or other hook override skips the receipts that prove the commit is the stage's own.";
+
 /** The builder's finish line, and a fix round's in its place: a fix round's
     brief is a list of findings, and the reviewer judges the lane against the
     pinned specification (review of #2301). `roleScaffoldBody` swaps them. */
@@ -128,7 +133,7 @@ export const BUILDER_FINISH_LINE = "You are done when every acceptance criterion
 export const FIX_ROUND_FINISH_LINE = "You are done when each is fixed, or left unfixed with the evidence in your summary that it is wrong, and the project's own checks for what you touched pass.";
 /** The builder's work blocks; `roleScaffoldBody` puts mode and domain
     guidance in front of them. */
-export const BUILDER_WORK_RULES = [TESTS_RULES, SHARED_PATHS_RULES, SERVER_RULES].join("\n");
+export const BUILDER_WORK_RULES = [TESTS_RULES, COMMAND_RULES, SHARED_PATHS_RULES, SERVER_RULES].join("\n");
 
 /* Delegatus mechanics, once per launch path (role-prompts-rewrite.md §3.3):
    the tools behind working rules 3, 4, 7 and 16. The stage wrapper carries

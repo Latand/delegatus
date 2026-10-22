@@ -17,6 +17,45 @@ import {
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-flow-pipeline-controller-"));
 
+test("incomplete ticks log their start, age and one completion with exact suppressed checks", async () => {
+  const previous = process.env.LLV_QUIET_DIAGNOSTICS;
+  delete process.env.LLV_QUIET_DIAGNOSTICS;
+  const lines: string[] = [];
+  const info = spyOn(console, "info").mockImplementation(line => { lines.push(String(line)); });
+  let now = 0, complete = false;
+  const controller = new FlowPipelineController({
+    now: () => now,
+    scan: async () => ({ files: [], complete }),
+    tickPipelines: async () => ({ changed: false }),
+  }, { maxPasses: 1 });
+  try {
+    for (let tick = 0; tick < 5; tick++) { await controller.tick(); now += 5_000; }
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("still scanning: started");
+    now = 59_999;
+    await controller.tick();
+    expect(lines).toHaveLength(1);
+    now = 60_000;
+    await controller.tick();
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).toContain("still scanning: ageMs=60000 incompleteChecks=7 suppressedCount=5");
+    complete = true;
+    now = 65_000;
+    await controller.tick();
+    await controller.tick();
+    expect(lines).toHaveLength(3);
+    expect(lines[2]).toContain("scan completed: ageMs=65000 incompleteChecks=7 suppressedCount=5");
+    complete = false;
+    await controller.tick();
+    expect(lines).toHaveLength(4);
+    expect(lines[3]).toContain("still scanning: started");
+  } finally {
+    info.mockRestore();
+    if (previous === undefined) delete process.env.LLV_QUIET_DIAGNOSTICS;
+    else process.env.LLV_QUIET_DIAGNOSTICS = previous;
+  }
+});
+
 test("an incomplete catalog defers flows quietly under the CLI and still reports actual failures", async () => {
   const previous = process.env.LLV_QUIET_DIAGNOSTICS;
   const info = spyOn(console, "info").mockImplementation(() => {});
@@ -41,6 +80,38 @@ test("an incomplete catalog defers flows quietly under the CLI and still reports
     expect(error).toHaveBeenCalledWith("[flow pipeline controller] pipelines phase failed", expect.any(Error));
   } finally {
     info.mockRestore(); error.mockRestore();
+    if (previous === undefined) delete process.env.LLV_QUIET_DIAGNOSTICS;
+    else process.env.LLV_QUIET_DIAGNOSTICS = previous;
+  }
+});
+
+test("a scan failure preserves its incomplete episode and cannot announce completion", async () => {
+  const previous = process.env.LLV_QUIET_DIAGNOSTICS;
+  delete process.env.LLV_QUIET_DIAGNOSTICS;
+  const lines: string[] = [], errors: unknown[] = [];
+  const info = spyOn(console, "info").mockImplementation(line => { lines.push(String(line)); });
+  let now = 0, scan: "incomplete" | "failed" | "complete" = "incomplete";
+  const failure = new Error("scan unavailable");
+  const controller = new FlowPipelineController({ now: () => now,
+    scan: async () => { if (scan === "failed") throw failure; return { files: [], complete: scan === "complete" }; },
+    tickPipelines: async () => ({ changed: false }),
+    log: (_, error) => { errors.push(error); },
+  }, { maxPasses: 1 });
+  try {
+    await controller.tick();
+    now = 1_000; scan = "failed";
+    await expect(controller.tick()).rejects.toBe(failure);
+    expect(errors).toEqual([failure]);
+    expect(lines).toHaveLength(1);
+    now = 2_000; scan = "incomplete";
+    await controller.tick();
+    expect(lines).toHaveLength(1);
+    now = 3_000; scan = "complete";
+    await controller.tick();
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).toContain("scan completed: ageMs=3000 incompleteChecks=2 suppressedCount=1");
+  } finally {
+    info.mockRestore();
     if (previous === undefined) delete process.env.LLV_QUIET_DIAGNOSTICS;
     else process.env.LLV_QUIET_DIAGNOSTICS = previous;
   }
@@ -94,7 +165,7 @@ function accountControllerWedgedInRuntime(): Promise<void> {
   return runtimeStarted;
 }
 
-test("a terminal event advances once and launches one reviewer while the account runtime phase is wedged", async () => {
+test("a terminal event advances once and launches one run reviewer while the account runtime phase is wedged", async () => {
   await accountControllerWedgedInRuntime();
   let state: "terminal" | "review-pending" | "review-spawning" | "reviewing" = "terminal";
   let passTransitions = 0;
@@ -110,9 +181,6 @@ test("a terminal event advances once and launches one reviewer while the account
         state = "review-spawning";
         return { changed: true };
       }
-      return { changed: false };
-    },
-    tickFlows: async () => {
       if (state === "review-spawning") {
         state = "reviewing";
         reviewerLaunches += 1;
@@ -145,11 +213,11 @@ test("a phase deadline releases the controller and later watchdog ticks keep pip
   const flowStarted = new Promise<void>((resolve) => { markFlowStarted = resolve; });
   const wedged = new Promise<never>(() => {});
   const ports: FlowPipelineControllerPorts = {
-    tickPipelines: async () => {
+    tickFlows: async () => {
       pipelineCalls += 1;
       return { changed: false };
     },
-    tickFlows: async () => {
+    tickPipelines: async () => {
       flowCalls += 1;
       markFlowStarted();
       return wedged;
@@ -175,15 +243,15 @@ test("a phase deadline releases the controller and later watchdog ticks keep pip
   await first;
 
   expect(flowCalls).toBe(1);
-  expect(pipelineCalls).toBe(2);
+  expect(pipelineCalls).toBe(0);
   expect(heartbeats).toContainEqual(expect.objectContaining({
-    phase: "flows",
+    phase: "pipelines",
     state: "timed-out",
     ageMs: 500,
     deadlineMs: 500,
   }));
   expect(JSON.parse(fs.readFileSync(heartbeatFile, "utf8"))).toMatchObject({
-    phase: "flows",
+    phase: "pipelines",
     state: "blocked",
     ageMs: 500,
     deadlineMs: 500,
@@ -191,15 +259,15 @@ test("a phase deadline releases the controller and later watchdog ticks keep pip
 
   await controller.poll();
   expect(flowCalls).toBe(1);
-  expect(pipelineCalls).toBe(4);
+  expect(pipelineCalls).toBe(0);
   expect(heartbeats).toContainEqual(expect.objectContaining({
-    phase: "flows",
+    phase: "pipelines",
     state: "blocked",
     ageMs: 500,
   }));
 });
 
-test("a blocked flow phase still lets the completed scan feed pipeline settlement (#529)", async () => {
+test("a retired flow port cannot block completed scans or pipeline settlement", async () => {
   type ManualTimer = { active: boolean; callback: () => void };
   const timers: ManualTimer[] = [];
   const entry = { path: "/sessions/completed-builder.jsonl" } as never;
@@ -230,8 +298,6 @@ test("a blocked flow phase still lets the completed scan feed pipeline settlemen
   }, { phaseDeadlineMs: 500 });
 
   const tick = controller.tick("durable-pass-verdict");
-  await flowStarted;
-  timers.find((timer) => timer.active)!.callback();
   await tick;
 
   expect(scans).toBe(1);
@@ -340,7 +406,7 @@ test("controller runtime registers startup recovery and one deterministic watchd
   expect(calls).toEqual(["startup", "watchdog", "signal", "startup"]);
 });
 
-test("pipeline settlement leads the cycle and one scanner snapshot feeds every flow pass", async () => {
+test("pipeline settlement leads the cycle and one scanner snapshot feeds the next pipeline pass", async () => {
   const entry = { path: "/sessions/reviewer.jsonl" };
   const calls: string[] = [];
   let pipelineChanged = true;
@@ -369,9 +435,7 @@ test("pipeline settlement leads the cycle and one scanner snapshot feeds every f
   expect(calls).toEqual([
     "pipelines:0",
     "scan",
-    "flows:1",
     "pipelines:1",
-    "flows:1",
   ]);
 });
 
@@ -391,6 +455,40 @@ test("every settled cycle starts the spawn completion-notice sweep, and a sweep 
   expect(logged).toContain("[flow pipeline controller] spawn notice sweep failed to start");
 });
 
+
+test("a failed scan still starts independent sweeps and a later tick recovers", async () => {
+  const failure = new Error("fixture scan failure");
+  const sweeps: string[] = [];
+  const heartbeats: FlowPipelineControllerHeartbeat[] = [];
+  let scans = 0;
+  let flows = 0;
+  const controller = new FlowPipelineController({
+    now: () => 1_000,
+    tickPipelines: async () => ({ changed: false }),
+    scan: async () => {
+      if (++scans === 1) throw failure;
+      return { files: [], complete: true };
+    },
+    tickFlows: async () => { flows++; return { changed: false }; },
+    sweepForgeLinks: () => { sweeps.push("forge"); },
+    sweepAutoMerge: () => { sweeps.push("merge"); },
+    sweepSpawnNotices: () => { sweeps.push("notice"); },
+    publishHeartbeat: (heartbeat) => { heartbeats.push(heartbeat); },
+    log: () => {},
+  }, { maxPasses: 2 });
+
+  await expect(controller.tick()).rejects.toBe(failure);
+  expect(sweeps).toEqual(["forge", "merge", "notice"]);
+  expect(flows).toBe(0);
+  expect(heartbeats.at(-1)).toMatchObject({ phase: "scan", state: "failed" });
+  expect(controller.idle()).toBe(true);
+
+  await controller.tick();
+  expect(scans).toBe(2);
+  expect(flows).toBe(0);
+  expect(sweeps).toEqual(["forge", "merge", "notice", "forge", "merge", "notice"]);
+  expect(heartbeats.at(-1)).toMatchObject({ phase: "idle", state: "idle" });
+});
 
 test("one failed cycle settles before trailing success, with one phase failure", async () => {
   let reject!: (error: Error) => void;
@@ -451,9 +549,6 @@ test("a tick after the second cycle snapshot gets a paced retained dispatch", as
     tickPipelines: async () => {
       pipelineRevisions.push(revision);
       if (revision === 1) revisionOneSeen();
-      return { changed: pipelineRevisions.length === 1 };
-    },
-    tickFlows: async () => {
       flowCalls += 1;
       if (flowCalls === 1) {
         firstFlowStarted();
@@ -463,7 +558,7 @@ test("a tick after the second cycle snapshot gets a paced retained dispatch", as
         secondFlowStarted();
         await secondFlow;
       }
-      return { changed: false };
+      return { changed: pipelineRevisions.length === 1 };
     },
     scheduleTimeout: (callback, delayMs) => {
       const timer = { active: true, callback, delayMs };
@@ -564,7 +659,7 @@ test.each([1, 2, 3])("one deferred error with 953 wakes, 31 polls and 9 remote w
 test("initial and trailing cycles share the same request deadline", async () => {
   let now = 0, calls = 0;
   const controller: FlowPipelineController = new FlowPipelineController({ now: () => now,
-    tickPipelines: async () => { calls++; now += 6; controller.tick("more"); return { changed: false }; },
+    tickPipelines: async () => { calls++; now += 12; controller.tick("more"); return { changed: false }; },
     tickFlows: async () => { now += 6; return { changed: false }; },
   }, { maxPasses: 1, requestDeadlineMs: 10 });
   await controller.tick();

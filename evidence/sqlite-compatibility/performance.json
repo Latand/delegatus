@@ -1,0 +1,532 @@
+{
+  "version": 1,
+  "recordedAt": "2026-10-21T14:34:32.392202+00:00",
+  "baseline": "4df56467",
+  "bun": "1.4.0",
+  "sourceSha256": {
+    "src/lib/state/pipelineControllerReferences.ts": "27531dfc254114966c047811aa9b1bbf7f28c6d20052f9f955c96207ad73d477",
+    "src/lib/state/historyProjection.ts": "0598dc24a5e5024b098f76d3c6d369839bcfa85fe9d51a2078ea39c464016dfe",
+    "src/lib/state/sqliteStateStore.ts": "e666e28ba52c0073df9ee68b4512cec5ab935d833206c32cef4987cc8aaabcac",
+    "src/runtime-host/journal.ts": "69e3a22e86190c73f4dc48d382e484e328389a680912373d1acd783b44133e34",
+    "src/lib/sqliteReadAttribution.ts": "a3ccf10bc0321f363db040e3b5fb1246d99a0b3f55913399a667a42738087b96"
+  },
+  "workload": {
+    "pipelines": 48,
+    "attemptsPerPipeline": 12,
+    "bytesPerPipeline": 59402,
+    "cyclesPerTrial": 8,
+    "warmupCycles": 1,
+    "trialsPerVariant": 3,
+    "assertedBuilderAttempts": 576
+  },
+  "benchmark": {
+    "source": "const { initializeStateCollections, SqliteStateCollection } = await import(process.cwd()+\"/src/lib/state/sqliteStateStore.ts\");\nconst { buildPipeline, isStoredPipeline } = await import(process.cwd()+\"/src/lib/pipelines/store.ts\");\nconst { readHistoryProjection, historyAttemptCounts } = await import(process.cwd()+\"/src/lib/state/historyProjection.ts\");\nimport { Database } from \"bun:sqlite\";\nimport path from \"node:path\";\nconst now=\"2026-10-21T12:00:00.000Z\";\nconst role={roleId:\"builder\",engine:\"codex\",model:null,effort:null,access:\"read-write\",promptScaffold:\"fixture\"};\nconst rows=Array.from({length:48},(_,i)=>{\n const p=buildPipeline({id:`pipeline_${String(i).padStart(3,\"0\")}`,project:\"fixture\",task:\"fixture\",repoDir:\"/repo\",srcPath:null,srcConversationId:null,now,stages:[{id:\"build\",kind:\"run\",prompt:\"x\".repeat(4096),role:{roleId:\"builder\"},effectiveRole:role,next:null}] } as never);\n p.state=\"running\";p.runs[0]!.attempts=Array.from({length:12},(_,n)=>({n:n+1,state:n===11?\"running\":\"passed\",effectiveRole:role,launchId:null,sessionId:null,flowId:null,input:null,activatedBy:null,output:null,conversationId:`conversation_${i}_${n}`,agentPath:`fixture-${i}-${n}.jsonl`,paneId:null,startedAt:now,completedAt:n===11?null:now,verdict:n===11?null:{status:\"pass\"},error:\"x\".repeat(4096)})) as never;\n return p;\n});\nif(!rows.every(isStoredPipeline)) throw new Error(\"invalid benchmark pipeline\");\nconst spec={collection:\"pipelines\",schemaVersion:1,busyMessage:\"busy\",key:(p:typeof rows[number])=>p.id,decode:(r:unknown)=>r as typeof rows[number],clone:structuredClone};\nconst filename=path.join(process.env.LLV_STATE_DIR!,\"bench.sqlite\");\ninitializeStateCollections(filename,[{...spec,migrationId:\"bench\",loadRecords:()=>rows}]);const store=new SqliteStateCollection(filename,spec);\nconst samples=[];\nfor(let cycle=0;cycle<8;cycle++){\n const start=performance.now();\n for(const row of rows){row.runs[0]!.attempts[11]!.state=cycle%2?\"running\":\"pending\";store.boundedPatch(1,tx=>tx.put(row));}\n const written=performance.now();\n const count=await readHistoryProjection(db=>historyAttemptCounts(db,\"fixture\",Date.parse(now)),{filename});\n if(!count || count.builder!==576)throw new Error(JSON.stringify(count));\n const end=performance.now();if(cycle)samples.push({write:written-start,history:end-written,total:end-start});\n}\nconsole.log(JSON.stringify({sqlite:new Database(\":memory:\").query(\"SELECT sqlite_version() AS version\").get(),rows:48,attempts:12,payloadBytes:JSON.stringify(rows[0]).length,samples}));\n",
+    "command": "bash scripts/gate-slot.sh bun \"$TMPDIR/bench.ts\"",
+    "environment": "Fresh isolated HOME, XDG_CONFIG_HOME, TMPDIR, LLV_STATE_DIR and LLV_VIEWER_CONTROL_URL=http://127.0.0.1:1 for each process; benchmark source saved outside each export."
+  },
+  "medianMs": {
+    "base": {
+      "write": 622.65,
+      "history": 150.053,
+      "total": 770.919
+    },
+    "head": {
+      "write": 584.226,
+      "history": 144.039,
+      "total": 736.939
+    }
+  },
+  "runs": [
+    {
+      "variant": "base",
+      "trial": 1,
+      "sqlite": "3.53.2",
+      "samplesMs": [
+        {
+          "write": 552.666,
+          "history": 153.689,
+          "total": 706.355
+        },
+        {
+          "write": 635.29,
+          "history": 150.182,
+          "total": 785.472
+        },
+        {
+          "write": 655.515,
+          "history": 156.83,
+          "total": 812.346
+        },
+        {
+          "write": 944.074,
+          "history": 156.526,
+          "total": 1100.599
+        },
+        {
+          "write": 749.446,
+          "history": 165.467,
+          "total": 914.913
+        },
+        {
+          "write": 664.0,
+          "history": 182.949,
+          "total": 846.949
+        },
+        {
+          "write": 750.154,
+          "history": 182.952,
+          "total": 933.106
+        }
+      ]
+    },
+    {
+      "variant": "head",
+      "trial": 1,
+      "sqlite": "3.53.2",
+      "samplesMs": [
+        {
+          "write": 493.669,
+          "history": 142.049,
+          "total": 635.717
+        },
+        {
+          "write": 560.525,
+          "history": 144.039,
+          "total": 704.564
+        },
+        {
+          "write": 628.174,
+          "history": 155.293,
+          "total": 783.466
+        },
+        {
+          "write": 532.497,
+          "history": 136.619,
+          "total": 669.116
+        },
+        {
+          "write": 605.912,
+          "history": 142.495,
+          "total": 748.408
+        },
+        {
+          "write": 661.659,
+          "history": 143.986,
+          "total": 805.644
+        },
+        {
+          "write": 812.777,
+          "history": 272.257,
+          "total": 1085.034
+        }
+      ]
+    },
+    {
+      "variant": "head",
+      "trial": 2,
+      "sqlite": "3.53.2",
+      "samplesMs": [
+        {
+          "write": 722.032,
+          "history": 163.001,
+          "total": 885.033
+        },
+        {
+          "write": 689.205,
+          "history": 162.461,
+          "total": 851.666
+        },
+        {
+          "write": 584.226,
+          "history": 152.713,
+          "total": 736.939
+        },
+        {
+          "write": 560.752,
+          "history": 118.114,
+          "total": 678.866
+        },
+        {
+          "write": 524.253,
+          "history": 142.634,
+          "total": 666.887
+        },
+        {
+          "write": 522.083,
+          "history": 115.062,
+          "total": 637.145
+        },
+        {
+          "write": 534.624,
+          "history": 131.436,
+          "total": 666.061
+        }
+      ]
+    },
+    {
+      "variant": "base",
+      "trial": 2,
+      "sqlite": "3.53.2",
+      "samplesMs": [
+        {
+          "write": 514.046,
+          "history": 134.227,
+          "total": 648.272
+        },
+        {
+          "write": 604.837,
+          "history": 135.189,
+          "total": 740.026
+        },
+        {
+          "write": 628.819,
+          "history": 136.845,
+          "total": 765.663
+        },
+        {
+          "write": 604.685,
+          "history": 166.801,
+          "total": 771.485
+        },
+        {
+          "write": 579.533,
+          "history": 122.292,
+          "total": 701.825
+        },
+        {
+          "write": 603.775,
+          "history": 148.376,
+          "total": 752.151
+        },
+        {
+          "write": 619.749,
+          "history": 130.397,
+          "total": 750.146
+        }
+      ]
+    },
+    {
+      "variant": "base",
+      "trial": 3,
+      "sqlite": "3.53.2",
+      "samplesMs": [
+        {
+          "write": 559.958,
+          "history": 157.012,
+          "total": 716.971
+        },
+        {
+          "write": 550.425,
+          "history": 119.199,
+          "total": 669.624
+        },
+        {
+          "write": 690.265,
+          "history": 226.052,
+          "total": 916.316
+        },
+        {
+          "write": 706.135,
+          "history": 138.377,
+          "total": 844.513
+        },
+        {
+          "write": 622.65,
+          "history": 148.269,
+          "total": 770.919
+        },
+        {
+          "write": 616.057,
+          "history": 144.9,
+          "total": 760.958
+        },
+        {
+          "write": 626.959,
+          "history": 150.053,
+          "total": 777.012
+        }
+      ]
+    },
+    {
+      "variant": "head",
+      "trial": 3,
+      "sqlite": "3.53.2",
+      "samplesMs": [
+        {
+          "write": 603.006,
+          "history": 147.597,
+          "total": 750.603
+        },
+        {
+          "write": 575.687,
+          "history": 175.337,
+          "total": 751.025
+        },
+        {
+          "write": 659.835,
+          "history": 130.811,
+          "total": 790.646
+        },
+        {
+          "write": 588.383,
+          "history": 130.305,
+          "total": 718.688
+        },
+        {
+          "write": 544.108,
+          "history": 167.011,
+          "total": 711.119
+        },
+        {
+          "write": 710.779,
+          "history": 153.796,
+          "total": 864.576
+        },
+        {
+          "write": 550.115,
+          "history": 148.635,
+          "total": 698.75
+        }
+      ]
+    }
+  ],
+  "interpretation": "Interleaved runs on the same shared Linux machine under one admitted gate. No measured regression for this workload; no performance gain claimed.",
+  "largeRetainedHistories": {
+    "recordedAt": "2026-10-21T16:39:35.125806+00:00",
+    "baseline": "4df56467",
+    "candidateBase": "ead953448",
+    "bun": "1.4.0",
+    "sqlite": "3.53.2",
+    "procedure": {
+      "command": "bun test src/lib/state/sqliteStateStore.bounded.test.ts -t 'output-only old-writer edits leave compact references intact as retained history grows' --timeout 60000",
+      "samples": "Three alternating baseline/head fresh isolated processes under one scripts/gate-slot.sh admission; LLV_CONTROLLER_WRITE_EVIDENCE collects the unchanged test output.",
+      "workload": "32, 1024 and 4096 attempts in one pipeline, each with 512 output characters; three output-only updates followed by one ownership update and rollback; assertions verify reference writes and owner visibility."
+    },
+    "sourceSha256": {
+      "baseline": {
+        "src/lib/state/pipelineControllerReferences.ts": "3bfa6abc57c444e6268aa6539259905dfe18d29bd5aca019bc4b8e84b602416f",
+        "src/lib/state/sqliteStateStore.bounded.test.ts": "e2b5851e4ea890a0d2d130087df53ca5dd73fde6d507916910ba5a4a0c136eb7"
+      },
+      "head": {
+        "src/lib/state/pipelineControllerReferences.ts": "0b7e56d21124357694a3a8625c72fb39816a854dcfb0d83fe36b10d6fec3f112",
+        "src/lib/state/sqliteStateStore.bounded.test.ts": "e2b5851e4ea890a0d2d130087df53ca5dd73fde6d507916910ba5a4a0c136eb7"
+      }
+    },
+    "runs": {
+      "baseline": [
+        [
+          {
+            "history": 32,
+            "outputMs": [
+              2.8247269999999958,
+              1.1931529999999952,
+              0.9127710000000206
+            ],
+            "ownershipMs": 4.556076000000019
+          },
+          {
+            "history": 1024,
+            "outputMs": [
+              22.004222000000027,
+              17.036152000000016,
+              15.898590000000013
+            ],
+            "ownershipMs": 41.00550999999996
+          },
+          {
+            "history": 4096,
+            "outputMs": [
+              84.98966700000005,
+              74.56615599999998,
+              75.20983100000012
+            ],
+            "ownershipMs": 513.903726
+          }
+        ],
+        [
+          {
+            "history": 32,
+            "outputMs": [
+              1.9308560000000057,
+              0.6738770000000045,
+              0.5754759999999806
+            ],
+            "ownershipMs": 2.670133999999962
+          },
+          {
+            "history": 1024,
+            "outputMs": [
+              14.615070000000003,
+              20.041021,
+              13.519367000000045
+            ],
+            "ownershipMs": 55.82162900000003
+          },
+          {
+            "history": 4096,
+            "outputMs": [
+              57.59076399999992,
+              57.95032900000001,
+              63.959168999999974
+            ],
+            "ownershipMs": 306.0589420000001
+          }
+        ],
+        [
+          {
+            "history": 32,
+            "outputMs": [
+              1.8945769999999982,
+              0.7109389999999962,
+              0.6751439999999889
+            ],
+            "ownershipMs": 2.8579090000000065
+          },
+          {
+            "history": 1024,
+            "outputMs": [
+              19.104404000000045,
+              15.341426000000013,
+              14.85224599999998
+            ],
+            "ownershipMs": 36.10226799999998
+          },
+          {
+            "history": 4096,
+            "outputMs": [
+              67.29911700000002,
+              98.18747300000007,
+              70.55697699999996
+            ],
+            "ownershipMs": 564.7097430000001
+          }
+        ]
+      ],
+      "head": [
+        [
+          {
+            "history": 32,
+            "outputMs": [
+              2.5302619999999933,
+              0.7947570000000042,
+              0.6010809999999935
+            ],
+            "ownershipMs": 3.059118000000012
+          },
+          {
+            "history": 1024,
+            "outputMs": [
+              19.666518999999994,
+              15.093484999999987,
+              14.217382000000043
+            ],
+            "ownershipMs": 32.643294000000026
+          },
+          {
+            "history": 4096,
+            "outputMs": [
+              63.38247899999999,
+              80.774856,
+              69.07050100000004
+            ],
+            "ownershipMs": 161.96679599999993
+          }
+        ],
+        [
+          {
+            "history": 32,
+            "outputMs": [
+              1.7368309999999951,
+              0.6277929999999969,
+              0.5569290000000251
+            ],
+            "ownershipMs": 2.7072310000000073
+          },
+          {
+            "history": 1024,
+            "outputMs": [
+              14.792314999999974,
+              14.287184000000025,
+              12.485071000000005
+            ],
+            "ownershipMs": 29.252595000000042
+          },
+          {
+            "history": 4096,
+            "outputMs": [
+              109.57486200000005,
+              92.69700699999999,
+              65.94769599999995
+            ],
+            "ownershipMs": 128.57440199999996
+          }
+        ],
+        [
+          {
+            "history": 32,
+            "outputMs": [
+              2.490356999999989,
+              0.7050690000000088,
+              0.666577000000018
+            ],
+            "ownershipMs": 2.347619000000009
+          },
+          {
+            "history": 1024,
+            "outputMs": [
+              16.619770000000017,
+              15.986875999999995,
+              12.16811899999999
+            ],
+            "ownershipMs": 30.775652999999977
+          },
+          {
+            "history": 4096,
+            "outputMs": [
+              63.49196600000005,
+              52.52396400000009,
+              57.18496200000004
+            ],
+            "ownershipMs": 125.02632700000004
+          }
+        ]
+      ]
+    },
+    "medians": [
+      {
+        "attempts": 32,
+        "baseline": {
+          "ownershipMs": 2.8579090000000065,
+          "outputMs": 0.9127710000000206
+        },
+        "head": {
+          "ownershipMs": 2.7072310000000073,
+          "outputMs": 0.7050690000000088
+        }
+      },
+      {
+        "attempts": 1024,
+        "baseline": {
+          "ownershipMs": 41.00550999999996,
+          "outputMs": 15.898590000000013
+        },
+        "head": {
+          "ownershipMs": 30.775652999999977,
+          "outputMs": 14.792314999999974
+        }
+      },
+      {
+        "attempts": 4096,
+        "baseline": {
+          "ownershipMs": 513.903726,
+          "outputMs": 70.55697699999996
+        },
+        "head": {
+          "ownershipMs": 128.57440199999996,
+          "outputMs": 65.94769599999995
+        }
+      }
+    ],
+    "interpretation": "At every retained-history size the fixed Linux ownership write retains baseline performance. Shared-machine timing varies; no speed gain is claimed."
+  }
+}

@@ -4,8 +4,8 @@ import * as childProcess from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { builtRevision, prepareExistingRelease, realPorts, releaseBuilt, UpdateRunner, type StepPorts } from "./steps";
+import { basename, join } from "node:path";
+import { builtRevision, prepareExistingRelease, realPorts, releaseBuilt, UpdateRunner, updateFailureDetail, type StepPorts } from "./steps";
 import { releaseDirFor } from "./release";
 import { runGit } from "./git";
 import { setCpuPortsForTests } from "@/lib/runtime/cpuPlacement";
@@ -42,7 +42,7 @@ interface Script { lines?: string[]; exit?: number }
 
 /* A stubbed spawn: each step's command is recognised by its argv and answers
    with scripted lines and an exit code. Nothing real runs. */
-function harness(scripts: Partial<Record<StepName, Script>>, overrides: Partial<StepPorts> = {}, stepTimeoutMs?: Partial<Record<StepName, number>>, livenessPollMs?: number) {
+function harness(scripts: Partial<Record<StepName, Script>>, overrides: Partial<StepPorts> = {}, stepTimeoutMs?: Partial<Record<StepName, number>>, livenessPollMs?: number, releaseIdleTimeoutMs?: number) {
   const logDir = mkdtempSync(join(tmpdir(), "llv-self-update-steps-"));
   roots.push(logDir);
   const calls: string[][] = [];
@@ -68,7 +68,7 @@ function harness(scripts: Partial<Record<StepName, Script>>, overrides: Partial<
     ...overrides,
   };
   const runner = new UpdateRunner(
-    { checkout: CHECKOUT, remote: "/var/tmp/remote.git", branch: "main", bun: "/opt/bun", logDir, releasesDir: RELEASES, env: { PATH: "/usr/bin" }, stepTimeoutMs, livenessPollMs },
+    { checkout: CHECKOUT, remote: "/var/tmp/remote.git", branch: "main", bun: "/opt/bun", logDir, releasesDir: RELEASES, env: { PATH: "/usr/bin" }, stepTimeoutMs, livenessPollMs, releaseIdleTimeoutMs },
     ports,
     () => {},
   );
@@ -86,6 +86,280 @@ function stepOf(command: string[]): StepName {
 async function flushPromises() {
   for (let turn = 0; turn < 40; turn += 1) await Promise.resolve();
 }
+
+test.each(["fetch", "checkout", "install", "build"] as const)("deployment diagnostics retain the %s phase and exit cause", async name => {
+  const { runner } = harness({ [name]: { exit: 7 } });
+  await runner.start(TARGET);
+  expect(updateFailureDetail(runner.state)).toBe(`Release ${name} failed: exit 7`);
+});
+
+test.each(["install", "build"])("%s output renews its deadline beyond the old total limit", async name => {
+  let output: (line: string) => void = () => {};
+  let finish: (code: number) => void = () => {};
+  let entered = () => {};
+  const building = new Promise<void>(resolve => { entered = resolve; });
+  jest.useFakeTimers();
+  try {
+    const { runner } = harness({}, { now: () => Date.now(), run: async (command, options) => {
+      if (!command.includes(name)) return 0;
+      output = options.onLine;
+      return new Promise<number>(resolve => { finish = resolve; entered(); });
+    } });
+    const done = runner.start(TARGET);
+    await building;
+    for (let phase = 0; phase < 2; phase++) {
+      jest.advanceTimersByTime(29 * 60_000);
+      output(`completed phase ${phase}`);
+      await flushPromises();
+      expect(runner.state.state).toBe("running");
+    }
+    finish(0); await done;
+    expect(runner.state.state).toBe("done");
+  } finally { finish(0); jest.useRealTimers(); }
+});
+
+test.each((["install", "build"] as const).flatMap(name => (["silence", "total"] as const).map(reason => ({ name, reason }))))("$name has a bounded $reason deadline with load and elapsed evidence", async ({ name, reason }) => {
+  let output: (line: string) => void = () => {};
+  let finish: (code: number) => void = () => {};
+  let entered = () => {};
+  const building = new Promise<void>(resolve => { entered = resolve; });
+  let aborts = 0;
+  jest.useFakeTimers();
+  try {
+    const { runner, logDir } = harness({}, { now: () => Date.now(), cpuLoad: () => ({ load1: 23.5, cpus: 24 }), abort: () => { aborts++; },
+      run: async (command, options) => {
+        if (!command.includes(name)) return 0;
+        output = options.onLine;
+        return new Promise<number>(resolve => { finish = resolve; entered(); });
+      },
+    });
+    const done = runner.start(TARGET); await building;
+    const totalMinutes = name === "install" ? 60 : 120;
+    const rounds = reason === "silence" ? 1 : Math.floor(totalMinutes / 29);
+    for (let phase = 0; phase < rounds; phase++) {
+      jest.advanceTimersByTime(29 * 60_000); output(`phase ${phase}`); await flushPromises();
+      expect(runner.state.state).toBe("running");
+    }
+    jest.advanceTimersByTime((reason === "silence" ? 30 : totalMinutes - rounds * 29) * 60_000);
+    await done;
+    const minutes = reason === "silence" ? 59 : totalMinutes;
+    expect(runner.state.steps.find(step => step.name === name)?.failure).toMatchObject({ kind: "timeout", reason, minutes, load1: 23.5, cpus: 24 });
+    expect(updateFailureDetail(runner.state)).toContain(`Release ${name} failed: timeout after ${minutes} minutes`);
+    expect(updateFailureDetail(runner.state)).toContain("load avg1 23.50 on 24 CPUs");
+    expect(readFileSync(join(logDir, `${name}.log`), "utf8")).toContain("timeout after");
+    expect(aborts).toBe(1);
+    const saved = JSON.stringify(runner.state);
+    output("late success"); finish(0); await flushPromises();
+    expect(JSON.stringify(runner.state)).toBe(saved);
+  } finally { finish(0); jest.useRealTimers(); }
+});
+
+test.each(["install", "build"])("%s silence expiry preserves a queued successful exit", async name => {
+  let finish: (code: number) => void = () => {};
+  let waiting = false;
+  jest.useFakeTimers();
+  try {
+    const { runner } = harness({}, { now: Date.now, childAlive: () => waiting ? null : true,
+      run: async command => {
+        if (!command.includes(name)) return 0;
+        waiting = true;
+        return new Promise<number>(resolve => { finish = code => { waiting = false; resolve(code); }; });
+      },
+    }, {}, 10, 100);
+    const done = runner.start(TARGET); await flushPromises();
+    jest.advanceTimersByTime(100); await flushPromises();
+    expect(runner.state.state).toBe("running");
+    finish(0); await done;
+    expect(runner.state.state).toBe("done");
+  } finally { finish(0); jest.useRealTimers(); }
+});
+
+test("a refused timeout cleanup keeps the timeout cause in deployment diagnostics", async () => {
+  let finish: (code: number) => void = () => {};
+  jest.useFakeTimers();
+  try {
+    const { runner } = harness({}, { now: Date.now,
+      run: async command => command.includes("build") ? new Promise<number>(resolve => { finish = resolve; }) : 0,
+      abort: async () => { throw new Error("scope stop refused"); },
+    }, { build: 100 });
+    const done = runner.start(TARGET); await flushPromises();
+    jest.advanceTimersByTime(100); await done;
+    expect(updateFailureDetail(runner.state)).toContain("Release build failed: timeout after");
+    expect(updateFailureDetail(runner.state)).toContain("scope stop refused");
+  } finally { finish(0); jest.useRealTimers(); }
+});
+
+test.each(["install", "build"])("a real process restart interrupts %s without renewing its budget", async name => {
+  const root = mkdtempSync(join(tmpdir(), "release-build-restart-")); roots.push(root);
+  const saved = join(root, "saved.json");
+  const code = `
+    import { UpdateRunner } from ${JSON.stringify(join(import.meta.dir, "steps.ts"))};
+    import { readFileSync, writeFileSync } from "node:fs";
+    const runner = new UpdateRunner({ checkout: ${JSON.stringify(root)}, remote: "fixture", branch: "main", bun: "bun",
+      logDir: ${JSON.stringify(join(root, "logs"))}, releasesDir: ${JSON.stringify(join(root, "releases"))}, env: {} }, {
+      run: async command => { if (command.includes(${JSON.stringify(name)})) { writeFileSync(${JSON.stringify(saved)}, JSON.stringify(runner.state)); process.exit(0); } return 0; },
+      memAvailableMb: () => 8192, revParse: async () => ${JSON.stringify(TARGET)}, exists: () => false,
+      buildIdReadable: () => true, publish: () => {}, now: () => 1000,
+    }, () => {});
+    if (process.env.FIXTURE_GENERATION === "first") await runner.start(${JSON.stringify(TARGET)});
+    else { runner.restore(JSON.parse(readFileSync(${JSON.stringify(saved)}, "utf8"))); console.log(JSON.stringify(runner.state)); }
+  `;
+  const run = async (generation: string) => {
+    const child = Bun.spawn([process.execPath, "-e", code], { cwd: root, env: { ...process.env, FIXTURE_GENERATION: generation }, stdout: "pipe", stderr: "pipe" });
+    const [status, output, error] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    expect({ status, error }).toEqual({ status: 0, error: "" });
+    return output;
+  };
+  await run("first");
+  const restored = JSON.parse(await run("second"));
+  expect(restored.state).toBe("failed");
+  expect(restored.steps.find((step: { name: string }) => step.name === name).failure).toEqual({ kind: "interrupted" });
+});
+
+test.skipIf(process.platform !== "linux")("a timeout retains its cause while the real build child exits during cleanup", async () => {
+  const base = mkdtempSync(join(tmpdir(), "release-timeout-cause-")); roots.push(base);
+  const real = realPorts(() => {});
+  const { runner } = harness({}, {
+    now: Date.now, childAlive: real.childAlive, abort: real.abort,
+    run: (command, options) => command.includes("build")
+      ? real.run([process.execPath, "-e", 'console.log("compiling"); setInterval(() => {}, 1000);'], { ...options, work: undefined, cwd: base, env: { ...process.env, TMPDIR: base } as Record<string, string> })
+      : Promise.resolve(0),
+  }, { build: 100 });
+  try {
+    await runner.start(TARGET);
+    expect(runner.state.steps.find(step => step.name === "build")?.failure).toMatchObject({ kind: "timeout", reason: "total" });
+  } finally { await real.abort(); }
+});
+
+test.skipIf(process.platform !== "linux").each(([["install", "silence"], ["install", "total"], ["build", "silence"], ["build", "total"]] as const))(
+  "a parent observes UpdateRunner terminate a real %s child on its %s deadline",
+  async (name, reason) => {
+    const base = mkdtempSync(join(tmpdir(), "release-deadline-child-")); roots.push(base);
+    const ownedFile = join(base, "owned-child.json");
+    const source = `
+      import { UpdateRunner, realPorts, updateFailureDetail } from ${JSON.stringify(join(import.meta.dir, "steps.ts"))};
+      import { setCpuPortsForTests } from ${JSON.stringify(join(import.meta.dir, "../runtime/cpuPlacement.ts"))};
+      import { readStartIdentity } from ${JSON.stringify(join(import.meta.dir, "pid.ts"))};
+      import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+      const base = process.argv[1], name = process.argv[2], reason = process.argv[3], ownedFile = process.argv[4];
+      process.env.DELEGATUS_AGENT_CPU = "off";
+      process.env.FIXTURE_REASON = reason;
+      const fixtureBun = base + "/fixture-bun";
+      writeFileSync(fixtureBun, '#!/bin/sh\\nprintf "CHILD_PID=%s\\n" "$$"\\n' +
+        'if [ "$FIXTURE_REASON" = "total" ]; then\\n  while :; do printf "progress\\n"; sleep 0.02; done\\n' +
+        'else\\n  while :; do sleep 1; done\\nfi\\n');
+      chmodSync(fixtureBun, 0o755);
+      setCpuPortsForTests({ probe: () => ({ kind: "not-applicable", reason: "isolated process fixture" }) });
+      const published = [];
+      const ports = realPorts(release => { published.push(release); });
+      const runner = new UpdateRunner({ checkout: base, remote: "fixture", branch: "main", bun: fixtureBun,
+        logDir: base + "/logs", releasesDir: base + "/releases", env: { ...process.env, TMPDIR: base },
+        stepTimeoutMs: { [name]: 300 }, releaseIdleTimeoutMs: 100, livenessPollMs: 10 }, {
+        ...ports,
+        async run(command, options) {
+          if (!command.includes(name)) return 0;
+          mkdirSync(options.cwd, { recursive: true });
+          return ports.run(command, {
+            ...options,
+            onLine(line) {
+              if (line.startsWith("CHILD_PID=")) {
+                const pid = Number(line.slice(10));
+                writeFileSync(ownedFile, JSON.stringify({ pid, startIdentity: readStartIdentity(pid) }));
+              }
+              options.onLine(line);
+            },
+          });
+        },
+        memAvailableMb: () => 8192, revParse: async () => ${JSON.stringify(TARGET)}, exists: () => false,
+        buildIdReadable: () => true,
+      }, () => {});
+      await runner.start(${JSON.stringify(TARGET)});
+      process.stdout.write(JSON.stringify({ state: runner.state.state, failure: runner.state.steps.find(step => step.name === name).failure,
+        detail: updateFailureDetail(runner.state), published }));
+    `;
+    const env = { ...process.env, DELEGATUS_AGENT_CPU: "off", TMPDIR: base, HOME: join(base, "home"),
+      XDG_CONFIG_HOME: join(base, "config"), LLV_STATE_DIR: join(base, "state") };
+    mkdirSync(env.HOME); mkdirSync(env.XDG_CONFIG_HOME); mkdirSync(env.LLV_STATE_DIR);
+    const child = Bun.spawn([process.execPath, "-e", source, base, name, reason, ownedFile], {
+      cwd: base, env, stdout: "pipe", stderr: "pipe", detached: true,
+    });
+    const owner = child.pid ? { pid: child.pid, startIdentity: pid.readStartIdentity(child.pid)! } : null;
+    let guard: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([
+        Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]).then(([status, stdout, stderr]) => ({ status, stdout, stderr })),
+        new Promise<never>((_, reject) => { guard = setTimeout(() => reject(new Error(`independent ${reason} deadline guard expired`)), 2_000); }),
+      ]);
+      if (result.status !== 0) throw new Error(JSON.stringify({ status: result.status, stdout: result.stdout, stderr: result.stderr }));
+      const observed = JSON.parse(result.stdout);
+      expect(observed.state).toBe("failed");
+      expect(observed.failure).toMatchObject({ kind: "timeout", reason });
+      expect(observed.detail).toContain(`Release ${name} failed: timeout after`);
+      expect(observed.published).toEqual([]);
+      const owned = JSON.parse(readFileSync(ownedFile, "utf8")) as pid.RecordedPid;
+      expect(owned.startIdentity).toBeTruthy();
+      expect(pid.sameProcess(owned)).toBe(false);
+    } finally {
+      if (guard) clearTimeout(guard);
+      const recorded = existsSync(ownedFile) ? JSON.parse(readFileSync(ownedFile, "utf8")) as pid.RecordedPid : null;
+      if (recorded?.startIdentity) pid.signalGroup(recorded, "SIGKILL");
+      if (owner && pid.sameProcess(owner)) pid.signalGroup(owner, "SIGKILL");
+      await child.exited;
+    }
+  },
+);
+
+test.skipIf(process.platform !== "linux")("CPU placement off never treats a command argument as an owned scope", async () => {
+  const base = mkdtempSync(join(tmpdir(), "release-scope-argument-")); roots.push(base);
+  const previous = process.env.DELEGATUS_AGENT_CPU;
+  const unitArgument = `--unit=delegatus-test-${basename(base)}.scope`;
+  process.env.DELEGATUS_AGENT_CPU = "off";
+  let ready = () => {};
+  const started = new Promise<void>(resolve => { ready = resolve; });
+  let owned: pid.RecordedPid | null = null;
+  const ports = realPorts(() => {});
+  const done = ports.run(["/bin/sh", "-c", "echo $$; exec sleep 600", unitArgument], {
+    cwd: base, env: { ...process.env, TMPDIR: base } as Record<string, string>, work: "update-build", onLine: line => {
+      const child = Number(line);
+      if (child > 0) { owned = { pid: child, startIdentity: pid.readStartIdentity(child)! }; ready(); }
+    },
+  }).catch(error => error);
+  const control = spyOn(childProcess, "execFile").mockImplementation(((_command: string, _args: string[], _options: unknown,
+    callback: (error: Error | null, stdout: string, stderr: string) => void) => { callback(null, "", ""); return {}; }) as unknown as typeof childProcess.execFile);
+  try {
+    await started;
+    await ports.abort();
+    expect(control).not.toHaveBeenCalled();
+  } finally {
+    control.mockRestore();
+    if (owned) pid.signalGroup(owned, "SIGKILL");
+    await done;
+    if (previous === undefined) delete process.env.DELEGATUS_AGENT_CPU; else process.env.DELEGATUS_AGENT_CPU = previous;
+  }
+});
+
+test.skipIf(process.platform !== "linux")("abort reaps a build child that ignores TERM before returning", async () => {
+  const base = mkdtempSync(join(tmpdir(), "release-hung-child-")); roots.push(base);
+  let ready = () => {};
+  const started = new Promise<void>(resolve => { ready = resolve; });
+  let owned: pid.RecordedPid | null = null;
+  const ports = realPorts(() => {});
+  const done = ports.run([process.execPath, "-e", 'process.on("SIGTERM", () => {}); console.log(process.pid); setInterval(() => {}, 1000);'], {
+    cwd: base, env: { ...process.env, TMPDIR: base } as Record<string, string>, onLine: line => {
+      const child = Number(line);
+      if (child > 0) { owned = { pid: child, startIdentity: pid.readStartIdentity(child)! }; ready(); }
+    },
+  }).catch(error => error);
+  try {
+    await started;
+    await ports.abort();
+    const stillOwned = (): boolean | null => owned && pid.sameProcess(owned);
+    expect(stillOwned()).toBe(false);
+  } finally {
+    if (owned) pid.signalGroup(owned, "SIGKILL");
+    await done;
+  }
+}, 10_000);
 
 describe("child exit while command output is draining", () => {
   // A missing PID can still have a normal exit event queued. The deadline
@@ -442,7 +716,7 @@ describe("child exit while command output is draining", () => {
     const abandoned = real.run(["fixture"], options).catch((error: unknown) => error);
     old.emit("exit", null, "SIGTERM");
     jest.useFakeTimers();
-    const retried = real.run(["fixture"], { ...options, work: "update-build" });
+    const retried = real.run(["fixture"], { ...options, work: "update-package" });
     try {
       await flushPromises();
       expect(spawn).toHaveBeenCalledTimes(1);
@@ -555,13 +829,14 @@ describe("UpdateRunner", () => {
     const install = runner.state.steps.find((step) => step.name === "install")!;
     expect(install.state).toBe("failed");
     expect(install.failure).toEqual({ kind: "memory", availableMb: 2048, neededMb: 4096 });
+    expect(updateFailureDetail(runner.state)).toBe("Release install failed: only 2048 MB available; 4096 MB required");
     /* The sentence is for the log file; the surface words the fact. */
     expect(install.tail).toEqual([]);
     expect(readFileSync(join(logDir, "install.log"), "utf8")).toContain("Not enough free memory (2048 MB available, 4096 needed)");
     expect(calls.map(stepOf)).toEqual(["fetch", "checkout"]);
   });
 
-  test("install and build run as work; git steps stay in the service", async () => {
+  test("install and build carry release labels; git steps stay in the service", async () => {
     const work: (string | undefined)[][] = [];
     const { runner } = harness({}, { run: async (command, options) => { work.push([command[1], options.work]); return 0; } });
     await runner.start(TARGET);
@@ -707,14 +982,14 @@ describe("UpdateRunner", () => {
     } finally { release(0); jest.useRealTimers(); }
   });
 
-  test("only automatic builds ask spawned commands for lower priority", async () => {
+  test("automatic maintenance lowers priority while release preparation keeps priority", async () => {
     const priorities: Array<boolean | undefined> = [];
     const port = { run: async (_command: string[], options: { lowPriority?: boolean }) => { priorities.push(options.lowPriority); return 0; } } as Partial<StepPorts>;
     await harness({}, port).runner.start(TARGET);
     expect(priorities).toEqual([false, false, false, false]);
     priorities.length = 0;
     await harness({}, port).runner.start(TARGET, { trigger: "auto" });
-    expect(priorities).toEqual([true, true, true, true]);
+    expect(priorities).toEqual([true, true, false, false]);
   });
 });
 
@@ -849,20 +1124,39 @@ describe("release install and build admission", () => {
     });
   });
 
-  test("sustained CPU pressure starts no child; a recovered window starts the step once", async () => {
+  test.each(["update-install", "update-build"])("%s starts ahead of pressure-held tests in a high-weight scope", async work => {
+    const base = dir(); const { marker, argv, env } = launch(base);
+    const held = new CpuPressureGate(DEFAULT_CPU_PRESSURE_POLICY, { sample: () => 90, now: () => 0 });
+    await withCpu(available, async () => {
+      let reads = 0;
+      const ports = realPorts(() => {}, { pressure: () => { reads++; return held; } });
+      const done = ports.run(argv, { cwd: base, env, onLine: () => {}, work });
+      try {
+        expect(reads).toBe(0);
+        expect(await done).toBe(0);
+        expect(readFileSync(marker, "utf8")).toBe("run\n");
+        const args = readFileSync(join(base, "bin", "args"), "utf8").split("\n");
+        expect(args).toContain("--slice=delegatus-agents.slice");
+        expect(args).toContain("CPUWeight=1000");
+        expect(args.some(arg => arg.startsWith("CPUQuota="))).toBe(false);
+      } finally { ports.abort(); await done; }
+    });
+  });
+
+  test("package pressure admission starts no child; a recovered window starts the step once", async () => {
     const base = dir(); const { marker, argv, env } = launch(base);
     let pressure = 80; let clock = 0; let samples = 0;
     const gate = new CpuPressureGate(DEFAULT_CPU_PRESSURE_POLICY, { sample: () => { samples += 1; return pressure; }, now: () => clock });
     await withCpu(available, async () => {
       const lines: string[] = [];
-      const done = realPorts(() => {}, { pressure: () => gate, pollMs: 5 }).run(argv, { cwd: base, env, onLine: (line) => lines.push(line), work: "update-build" });
+      const done = realPorts(() => {}, { pressure: () => gate, pollMs: 5 }).run(argv, { cwd: base, env, onLine: (line) => lines.push(line), work: "update-package" });
       await Bun.sleep(60);
       expect(existsSync(marker)).toBe(false);
-      expect(lines).toEqual(["update-build held for CPU pressure since 1970-01-01T00:00:00.000Z (avg10 80% ≥ 30%)"]);
+      expect(lines).toEqual(["update-package held for CPU pressure since 1970-01-01T00:00:00.000Z (avg10 80% ≥ 30%)"]);
       clock = 120_000;
       await Bun.sleep(60);
       expect(existsSync(marker)).toBe(false);
-      expect(lines[1]).toStartWith("update-build deferred by CPU pressure: held since 1970-01-01T00:00:00.000Z");
+      expect(lines[1]).toStartWith("update-package deferred by CPU pressure: held since 1970-01-01T00:00:00.000Z");
       pressure = 25; clock = 200_000; // between the thresholds the hold stays
       await Bun.sleep(60);
       pressure = 5; clock = 201_000;
@@ -880,7 +1174,7 @@ describe("release install and build admission", () => {
     await withCpu(available, async () => {
       const held = new CpuPressureGate(DEFAULT_CPU_PRESSURE_POLICY, { sample: () => 90, now: Date.now });
       const ports = realPorts(() => {}, { pressure: () => held, pollMs: 60_000 });
-      const waiting = ports.run(argv, { cwd: base, env, onLine: () => {}, work: "update-install" });
+      const waiting = ports.run(argv, { cwd: base, env, onLine: () => {}, work: "update-package" });
       await Bun.sleep(20);
       expect(ports.childAlive!()).toBe(true);
       ports.abort();
@@ -888,7 +1182,7 @@ describe("release install and build admission", () => {
       expect(existsSync(marker)).toBe(false);
       const blind = new CpuPressureGate(DEFAULT_CPU_PRESSURE_POLICY, { sample: () => { throw new Error("EACCES"); }, now: Date.now });
       const lines: string[] = [];
-      expect(await realPorts(() => {}, { pressure: () => blind }).run(argv, { cwd: base, env, onLine: (line) => lines.push(line), work: "update-install" })).toBe(0);
+      expect(await realPorts(() => {}, { pressure: () => blind }).run(argv, { cwd: base, env, onLine: (line) => lines.push(line), work: "update-package" })).toBe(0);
       expect(lines).toEqual([]);
       expect(readFileSync(marker, "utf8")).toBe("run\n");
       const args = readFileSync(join(base, "bin", "args"), "utf8").split("\n");

@@ -15,8 +15,10 @@ import { useOperatorDecisions } from "./useOperatorDecisions";
 /*
  * Variant 3 of docs/design/operator-decision-forms.md: the column beside the
  * seat conversation holds two tabs, «Рішення» with every open decision of the
- * project and «Звіти» with the report log as it was. One decision stands open
- * as its form; the rest are folded to their titles and open on a press. A saved
+ * project and «Звіти» with the report log as it was. The newest decision is
+ * listed first. One decision stands open as its form; the rest are folded to
+ * their titles and open on a press, and a press on the open form's header folds
+ * it too, until the operator opens one again or a request names one. A saved
  * answer returns as a record while delivery needs attention; confirmed
  * delivery leaves the column, and the seat's feed keeps its record.
  */
@@ -26,6 +28,13 @@ export type DecisionTab = "decisions" | "reports";
 /** The column's tab when the operator has not picked one: decisions while any wait. */
 export function defaultDecisionTab(open: number): DecisionTab {
   return open > 0 ? "decisions" : "reports";
+}
+
+/** The column's order: the newest asked first. The read lists them oldest
+    first, so equal times keep the later one of the read on top. */
+export function newestDecisionsFirst(decisions: readonly OperatorDecisionView[]): OperatorDecisionView[] {
+  const at = (decision: OperatorDecisionView) => { const time = Date.parse(decision.createdAt); return Number.isNaN(time) ? 0 : time; };
+  return [...decisions].reverse().sort((a, b) => at(b) - at(a));
 }
 
 /** How many decisions wait in a project: the page's one poll already counts them. */
@@ -46,6 +55,10 @@ export function DecisionList({ project, active = true, focus, touch = false, ini
   const { t } = useLocale();
   const read = useOperatorDecisions(project, active, initial);
   const [picked, setPicked] = useState<string | null>(focus?.reviewId ?? null);
+  /* Folded by the operator: a view state for this list only, never an answer. */
+  const [collapsed, setCollapsed] = useState(false);
+  /* The control a press on a row or a header hands the keyboard focus to. */
+  const follow = useRef<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
   useEffect(() => {
@@ -59,10 +72,18 @@ export function DecisionList({ project, active = true, focus, touch = false, ini
   const [seenFocus, setSeenFocus] = useState(focus?.nonce ?? null);
   if (focus && focus.nonce !== seenFocus) {
     setSeenFocus(focus.nonce);
-    if (focus.reviewId) setPicked(focus.reviewId);
+    if (focus.reviewId) {
+      setPicked(focus.reviewId);
+      setCollapsed(false);
+    }
   }
-  const decisions = read.decisions ?? [];
-  const expanded = decisions.find((decision) => decision.id === picked) ?? decisions[0] ?? null;
+  /* The form last shown stays open while reads add newer ones above it; the
+     newest is the default only on the first draw and once the shown form leaves. */
+  const [held, setHeld] = useState<string | null>(null);
+  const decisions = newestDecisionsFirst(read.decisions ?? []);
+  const expanded = collapsed ? null : decisions.find((decision) => decision.id === picked)
+    ?? decisions.find((decision) => decision.id === held) ?? decisions[0] ?? null;
+  if (expanded && expanded.id !== held) setHeld(expanded.id);
   /* A request that named a form brings it into the column's view; a first
      paint scrolls nothing, so the board around the column stays put. */
   const expandedId = expanded?.id ?? null;
@@ -70,6 +91,18 @@ export function DecisionList({ project, active = true, focus, touch = false, ini
     if (seenFocus === null || !expandedId) return;
     listRef.current?.querySelector<HTMLElement>(`[data-decision-review="${expandedId}"]`)?.scrollIntoView?.({ block: "nearest" });
   }, [seenFocus, expandedId]);
+  /* The pressed row or header leaves the page as it turns: its counterpart takes the focus. */
+  useEffect(() => {
+    const id = follow.current;
+    if (!id) return;
+    follow.current = null;
+    const target = expandedId === id
+      ? listRef.current?.querySelector<HTMLElement>(`[data-decision-review="${id}"] [data-decision-collapse]`)
+      : listRef.current?.querySelector<HTMLElement>(`[data-decision-row="${id}"]`);
+    target?.focus({ preventScroll: true });
+  }, [expandedId]);
+  const open = (id: string) => { follow.current = id; setPicked(id); setCollapsed(false); };
+  const collapse = (id: string) => { follow.current = id; setCollapsed(true); };
   /* The card is the column's width less its gutter; a narrow column keeps the title. */
   const narrow = touch || (width > 0 && width < 460);
   const columns = width >= 624 && !touch ? 2 : 1;
@@ -81,14 +114,14 @@ export function DecisionList({ project, active = true, focus, touch = false, ini
   } else {
     body = decisions.map((decision) => decision.id === expanded?.id
       ? decision.decision
-        ? <DecisionRecord key={decision.id} decision={decision}
+        ? <DecisionRecord key={decision.id} decision={decision} onCollapse={() => collapse(decision.id)}
           onRetry={() => void read.answer(decision.id, { retry: true }, decision)}
           retryError={read.error?.reviewId === decision.id && read.error.kind !== "revoke" ? read.error.message : null}
           onRevoke={() => read.answer(decision.id, { chosen: [], comment: "",
           answers: (decision.questions ?? []).map(question => ({ questionId: question.id, options: [0] })) }, decision)}
           revokeError={read.error?.reviewId === decision.id && read.error.kind !== "retry" ? read.error.message : null} />
-        : <DecisionCard key={decision.id} decision={decision} narrow={narrow} columns={columns} onAnswer={read.answer} error={read.error?.reviewId === decision.id ? read.error.message : null} />
-      : <DecisionRow key={decision.id} decision={decision} onOpen={() => setPicked(decision.id)} />);
+        : <DecisionCard key={decision.id} decision={decision} narrow={narrow} columns={columns} onAnswer={read.answer} error={read.error?.reviewId === decision.id ? read.error.message : null} onCollapse={() => collapse(decision.id)} />
+      : <DecisionRow key={decision.id} decision={decision} onOpen={() => open(decision.id)} />);
   }
   return (
     <div
@@ -96,6 +129,7 @@ export function DecisionList({ project, active = true, focus, touch = false, ini
       role="region"
       aria-label={t("decisions.listAria")}
       data-decision-list={decisions.length}
+      data-decision-expanded={expandedId ?? ""}
       className={`flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto overscroll-y-contain ${touch ? "px-3 pb-4 pt-3" : "p-3"}`}
     >
       {body}

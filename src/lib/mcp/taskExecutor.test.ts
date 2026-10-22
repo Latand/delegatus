@@ -24,6 +24,7 @@ process.env.TMPDIR = root;
 process.env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
 let capability: string;
 let capabilities: string[];
+let seed: Awaited<ReturnType<typeof readSeed>>;
 const executors: McpTaskExecutor[] = [];
 const create = (env?: Partial<NodeJS.ProcessEnv>) => {
   const executor = new McpTaskExecutor({ ...(process.env.LLV_MCP_TASK_WORKER_BUNDLE
@@ -37,6 +38,7 @@ beforeAll(async () => {
   await (await import("../../../scripts/mcp-state-writer-benchmark")).stateWriterChild("seed");
   capabilities = JSON.parse(fs.readFileSync(process.env.MCP_BENCH_READY, "utf8"));
   capability = capabilities[0]!;
+  seed = await readSeed();
 });
 afterEach(async () => {
   await Promise.all(executors.splice(0).map(executor => executor.close()));
@@ -44,6 +46,59 @@ afterEach(async () => {
 afterAll(async () => {
   await reapFixtureChildren();
   fs.rmSync(root, { recursive: true, force: true });
+});
+
+async function readSeed() {
+  const { TASKS_FILE, loadTasks } = await import("@/lib/tasks/store");
+  const { Database } = await import("bun:sqlite");
+  const database = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), { readonly: true });
+  try {
+    return {
+      storeDirectory: path.dirname(TASKS_FILE), stateDirectory: process.env.LLV_STATE_DIR!,
+      counts: database.query<{ collection: string; count: number }, []>(
+        "SELECT collection, count(*) AS count FROM state_rows GROUP BY collection",
+      ).all(),
+      tasks: loadTasks(),
+    };
+  } finally { database.close(); }
+}
+
+test("the state-writer seed and executor share the declared fixture", async () => {
+  // Capture before other cases mutate the shared fixture, so these assertions
+  // are independent of test order. Static imports must retain the seed root.
+  expect(seed.storeDirectory).toBe(seed.stateDirectory);
+  expect(capabilities).toHaveLength(37);
+  expect(new Set(capabilities).size).toBe(37);
+  for (const [collection, count] of [["tasks", 1037], ["pipelines", 900], ["task_tombstones", 100]] as const) {
+    expect(seed.counts.find(row => row.collection === collection)?.count).toBe(count);
+  }
+  expect(seed.tasks.filter(task => task.project === "fixture")).toHaveLength(1000);
+  expect(seed.tasks.filter(task => task.project === "fixture" && task.board === "shown")).toHaveLength(37);
+  expect(seed.tasks.filter(task => task.assignments.length)).toHaveLength(37);
+  const result = await call(create(), "get_task", { taskId: seedTaskId });
+  expect(result.ok).toBe(true);
+});
+
+test("a seed with split store roots fails before announcing readiness", async () => {
+  const sandbox = fs.mkdtempSync(path.join(root, "seed-refusal-"));
+  const initial = path.join(sandbox, "initial"), retargeted = path.join(sandbox, "retargeted");
+  fs.mkdirSync(initial); fs.mkdirSync(retargeted);
+  const ready = path.join(sandbox, "ready.json");
+  const child = Bun.spawn([process.execPath, "-e", `
+    await import("@/lib/tasks/store");
+    process.env.LLV_STATE_DIR = ${JSON.stringify(retargeted)};
+    await (await import("./scripts/mcp-state-writer-benchmark")).stateWriterChild("seed");
+  `], { env: { ...process.env, LLV_STATE_DIR: initial, MCP_BENCH_READY: ready }, stdout: "ignore", stderr: "pipe" });
+  try {
+    const error = new Response(child.stderr).text();
+    expect(await child.exited).not.toBe(0);
+    expect(await error).toContain("seed row counts differ from the declared fixture");
+    expect(fs.existsSync(ready)).toBe(false);
+  } finally {
+    if (child.exitCode === null) child.kill("SIGKILL");
+    await child.exited;
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  }
 });
 
 async function privateChannel(executor: McpTaskExecutor, token = capability) {

@@ -70,7 +70,7 @@ type FileScanCacheSlot = {
   pinnedGenerations?: Map<string, number>;
   requestCount?: number;
   lastScan?: FileScanDiagnostic;
-  lastScanError?: unknown;
+  lastScanError?: { error: unknown; generation: number; failedAt: number };
   ordinaryRefreshRequestedAt?: number;
   membership?: string;
   membershipProbe?: Promise<string | null>;
@@ -94,6 +94,7 @@ export type CachedFileScan = {
 };
 
 const FILE_SCAN_FRESH_MS = 1_000;
+const FILE_SCAN_BOOTSTRAP_RETRY_MS = 5_000;
 /** Poll-driven attempts share the client's fallback cadence, including failures. */
 const FILE_SCAN_ORDINARY_REFRESH_MS = 300_000;
 /** New catalog members coalesce within one board scan interval. */
@@ -491,6 +492,10 @@ function normalizeFileScanCacheSlot(value: unknown): FileScanCacheSlot {
     const slot = value as FileScanCacheSlot;
     /* A slot a build before #2072 created counts without a named epoch. */
     if (typeof slot.epoch !== "string") slot.epoch = newFileScanEpoch();
+    // A hot-reloaded older bundle retained only the raw error. Its age and
+    // generation are unknown; let a new scan establish a reportable outcome.
+    if (slot.lastScanError && (!Number.isSafeInteger(slot.lastScanError.generation)
+      || !Number.isFinite(slot.lastScanError.failedAt))) slot.lastScanError = undefined;
     const pending = refreshPromise(slot.refresh);
     if (pending && (!slot.refresh?.controller || !Number.isSafeInteger(slot.refresh.subscribers))) {
       installFileScanRefresh(slot, slot.refresh?.generation ?? 0, pending);
@@ -540,7 +545,7 @@ async function instrumentFileScan(
     // The final subscriber intentionally aborts a shared generation. That
     // cancellation is local to its readers and must not poison later reads
     // while a replacement generation is running.
-    if (!isAbortError(error)) slot.lastScanError = error;
+    if (!isAbortError(error)) slot.lastScanError = { error, generation, failedAt: Date.now() };
     slot.lastScan = { generation, reason, status: "failed", durationMs: performance.now() - startedAt };
     throw error;
   }
@@ -810,12 +815,30 @@ function continueRefreshInBackground(refresh: Promise<FileScanSnapshot>): void {
   void refresh.catch(() => undefined);
 }
 
-function deferFileScan(slot: FileScanCacheSlot, refresh: FileScanRefresh): never {
+export class RetainedFileScanError extends Error {
+  readonly generation: number;
+  readonly failedAt: number;
+  readonly ageMs: number;
+  readonly refreshingGeneration?: number;
+
+  constructor(failure: NonNullable<FileScanCacheSlot["lastScanError"]>, refreshingGeneration?: number) {
+    const ageMs = Math.max(0, Date.now() - failure.failedAt);
+    const detail = failure.error instanceof Error ? failure.error.message : String(failure.error);
+    super(`file scan generation ${failure.generation} failed ${ageMs} ms ago${refreshingGeneration === undefined ? "" : `; refreshing generation ${refreshingGeneration}`}: ${detail}`, { cause: failure.error });
+    this.name = "RetainedFileScanError";
+    this.generation = failure.generation;
+    this.failedAt = failure.failedAt;
+    this.ageMs = ageMs;
+    this.refreshingGeneration = refreshingGeneration;
+  }
+}
+
+function deferFileScan(slot: FileScanCacheSlot, refresh?: FileScanRefresh): never {
   // Keep the shared generation alive independently of this caller. The
   // instrumented scan retains unexpected errors for the next read.
-  continueRefreshInBackground(waitForFileScanRefresh(refresh));
-  if (slot.lastScanError !== undefined && !isFileScanIncompleteError(slot.lastScanError)) {
-    throw slot.lastScanError;
+  if (refresh) continueRefreshInBackground(waitForFileScanRefresh(refresh));
+  if (slot.lastScanError !== undefined && !isFileScanIncompleteError(slot.lastScanError.error)) {
+    throw new RetainedFileScanError(slot.lastScanError, refresh?.generation);
   }
   throw new FileScanIncompleteError();
 }
@@ -1101,6 +1124,12 @@ export async function completedFileScan(
     return completedScan(slot, undefined, slot.snapshotGeneration);
   }
 
+  // A refused bootstrap must not turn a burst of non-waiting controller
+  // wakes into a burst of worker launches. Explicit waiting readers can retry.
+  if (!wait && !slot.refresh && slot.lastScanError && !isFileScanIncompleteError(slot.lastScanError.error)
+    && Date.now() - slot.lastScanError.failedAt < FILE_SCAN_BOOTSTRAP_RETRY_MS) {
+    return deferFileScan(slot);
+  }
   const targetGeneration = slot.refresh?.generation ?? nextGeneration(slot);
   const refresh = slot.refresh ?? beginFileScanRefresh(slot, targetGeneration, "cold");
   if (!wait) return deferFileScan(slot, refresh);

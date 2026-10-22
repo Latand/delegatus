@@ -8,6 +8,7 @@ import {
   canonicalProject,
   durableProjectAliasCandidates,
   persistProjectAliases,
+  projectAliasKeys,
   projectAliasSnapshot,
   recordedProjectRemote,
   resetProjectAliasesForTests,
@@ -60,6 +61,22 @@ test("a conflicting legacy alias fails closed without changing the durable map",
     { source: "legacy-bucket", target: second, displayName: "second" },
   ])).toBe(false);
   expect(canonicalProject("legacy-bucket")).toBe(first);
+});
+
+test("a project key family includes chained predecessors once and excludes unrelated projects", () => {
+  expect(projectAliasKeys("current")).toEqual(["current"]);
+  expect(persistProjectAliases([
+    { source: "old", target: "middle", displayName: "Project" },
+    { source: "middle", target: "current", displayName: "Project" },
+    { source: "sibling", target: "current", displayName: "Project" },
+    { source: "foreign", target: "elsewhere", displayName: "Other project" },
+  ])).toBe(true);
+  for (const key of ["old", "middle", "current", "sibling"]) {
+    const keys = projectAliasKeys(key);
+    expect(keys[0]).toBe("current");
+    expect(keys.slice(1).sort()).toEqual(["middle", "old", "sibling"]);
+  }
+  expect(projectAliasKeys("foreign")).toEqual(["elsewhere", "foreign"]);
 });
 
 test("current-production durable records provide repository-backed aliases", () => {

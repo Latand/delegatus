@@ -12,12 +12,19 @@ export const firstLine = (value: string, max = 160) => value.split("\n", 1)[0]!.
 
 export { compactFlow } from "@/lib/reviewHistory/listAnswers";
 
+function compactProactive(value: BoardTask["proactive"]) {
+  if (!value) return undefined;
+  return { episode: value.episode, candidateKey: value.candidateKey, score: value.score,
+    scopeHash: value.scopeHash, scopeRevision: value.scopeRevision, sourcesOmitted: value.sources.length };
+}
+
 export function compactTask(task: BoardTask & { pipelineIds?: string[] }) {
   return {
     id: task.id, project: task.project, status: task.status, text: firstLine(task.text),
     updatedAt: task.updatedAt, revision: taskRevision(task), placement: task.placement,
     ...(task.pipelineIds ? { pipelineIds: task.pipelineIds.slice(0, 20), pipelineIdsOmitted: Math.max(0, task.pipelineIds.length - 20) } : {}), assignmentCount: task.assignments?.length ?? 0,
     ...(task.note ? { note: task.note } : {}),
+    ...(task.proactive ? { proactive: compactProactive(task.proactive) } : {}),
     detailsLength: task.details?.length ?? 0, textLength: task.text.length,
     ...(task.board ? { board: task.board } : {}),
     ...(task.color ? { color: task.color } : {}),
@@ -52,6 +59,7 @@ export function taskAcknowledgement(task: BoardTask, args: Record<string, unknow
     ...(fields.includes("details") ? { detailsLength: task.details?.length ?? 0 } : {}),
     changes: Object.fromEntries(fields.filter(key => !["id", "project", "revision", "updatedAt", "createdAt"].includes(key)).map(key => {
       const value = (task as unknown as Record<string, unknown>)[key];
+      if (key === "proactive") return [key, compactProactive(task.proactive) ?? null];
       if (key === "details") return [key, { length: typeof value === "string" ? value.length : 0 }];
       if (typeof value === "string") return [key, firstLine(value) === value ? value : { preview: firstLine(value), length: value.length, truncated: true }];
       if (Array.isArray(value)) return [key, { count: value.length, omittedCount: value.length }];

@@ -62,6 +62,7 @@ import { prototypeReviewSummary, prototypeRoundsSuperseded } from "@/lib/prototy
 import type { PrototypeAnswer, PrototypeQuestion, PrototypeDeliveryPhase, PrototypeDeliveryState, PrototypeMediaView, PrototypeReviewSummary, PrototypeRoundView } from "@/lib/prototypeReview/types";
 import { fireTasksChanged } from "@/components/tasks/taskApi";
 import type { BoardTask, TaskStatus } from "@/lib/tasks/types";
+import type { TaskSpendAccount, TaskSpendProvider, TaskSpendSummary } from "@/lib/activity/taskLimitSpendTypes";
 import type { FileEntry } from "@/lib/types";
 import type { BoardProjectStateV1 } from "@/lib/view/types";
 import { refreshTeamView } from "@/components/team/teamClient";
@@ -219,6 +220,72 @@ const voiceSettings = {
   lastSession: { usd: 0.4, seconds: 471, endedAt: Date.UTC(2026, 9, 10), incomplete: false },
   month: "2026-10", usageUsd: Number(new URLSearchParams(location.search).get("usage") ?? 0), reservedUsd: 0, incomplete: false,
 };
+/* `&voicetools=<state>`: the voice settings' Tools section (docs/design/voice-extensible-tools.md §4.8 item 1) over
+   the record `/api/voice-tools` answers, kept in memory so a press changes it as the route does: `empty`, `pending`
+   (a server waits with a secret still needed and no dry run), `review` (its dry run passed and the operator is
+   choosing tools), `failed` (a local script's dry run timed out), `approved` and `approved-ask` (approved with
+   «ask before acting» off and on), `rejected` and `disabled` (a proposal the operator rejected, and an approved
+   server they turned off), `long` (every operator-visible field at its schema maximum), and two whose next
+   press is refused: `approved-refused` (the switch's change and re-approval meet the selection bound) and
+   `dry-run-busy` (the hub already runs eight dry runs). */
+const VOICE_TOOLS = new URLSearchParams(location.search).get("voicetools");
+type FixtureVoiceTool = Record<string, unknown> & { state: string; digest: string; askBeforeActing: boolean; tools: Record<string, { enabled: boolean; acts: boolean }>;
+  missingSecrets: string[]; secretRefs: string[]; catalog: { digest: string; fetchedAt: string; tools: Array<{ name: string; description: string; annotations?: { readOnlyHint?: boolean } }> } | null;
+  lastDryRun: { code: string; at: string; digest: string } | null };
+const voiceToolsState = { revision: 7, servers: {} as Record<string, FixtureVoiceTool> };
+/* One refusal per action, answered before the record changes, as the route answers a refused mutation. */
+const voiceToolsRefuse: Record<string, string> = VOICE_TOOLS === "approved-refused" ? { configure: "SELECTION_BOUNDS" } : VOICE_TOOLS === "dry-run-busy" ? { "dry-run": "BUSY" } : {};
+const voiceToolDigest = (seed: number) => `sha256:${seed.toString(16).padStart(64, "0")}`;
+const voiceToolAt = (minutesAgo: number) => new Date((VOICE_LOADED - minutesAgo * 60) * 1000).toISOString();
+const spotifyCatalog = () => ({ digest: voiceToolDigest(901), fetchedAt: voiceToolAt(4), tools: [
+  { name: "search", description: L("Search Spotify for tracks, albums, artists and playlists.", "Шукати в Spotify треки, альбоми, виконавців і плейлисти."), annotations: { readOnlyHint: true } },
+  { name: "now_playing", description: L("Read what is playing on the active device.", "Прочитати, що грає на активному пристрої."), annotations: { readOnlyHint: true } },
+  { name: "play", description: L("Start or resume playback of a track, album or playlist.", "Почати або продовжити відтворення треку, альбому чи плейлиста.") },
+  { name: "pause", description: L("Pause playback on the active device.", "Призупинити відтворення на активному пристрої.") },
+  { name: "skip", description: L("Skip to the next track.", "Перейти до наступного треку.") },
+] });
+function seedVoiceTools() {
+  const spotify = (over: Partial<FixtureVoiceTool>): FixtureVoiceTool => ({
+    title: "Spotify", capability: L("Music: play, pause, skip and search the operator's Spotify.", "Музика: вмикати, ставити на паузу, перемикати й шукати у Spotify оператора."),
+    transport: { type: "stdio", command: "uv", args: ["tool", "run", "spotify-mcp-example"], cwd: null, envNames: ["SPOTIFY_CLIENT_ID", "SPOTIFY_REDIRECT_URI"],
+      envValues: { SPOTIFY_REDIRECT_URI: "http://127.0.0.1:8888/callback" } },
+    entryFile: null, private: false, askBeforeActing: false, callTimeoutMs: 15_000, generation: 6, owner: "installation", audience: ["voice"], state: "pending",
+    proposedBy: { kind: "conversation", conversationId: "conv_fixture_orchestrator", at: voiceToolAt(12) }, approval: null, tools: {}, catalog: null, lastDryRun: null,
+    digest: voiceToolDigest(1), missingSecrets: [], secretRefs: ["spotify-client-id"], ...over,
+  });
+  const chosen = { search: { enabled: true, acts: false }, now_playing: { enabled: true, acts: false }, play: { enabled: true, acts: true }, pause: { enabled: false, acts: true }, skip: { enabled: false, acts: true } };
+  const ok = { code: "OK", at: voiceToolAt(4), digest: voiceToolDigest(501) };
+  if (VOICE_TOOLS === "pending") voiceToolsState.servers.spotify = spotify({ missingSecrets: ["spotify-client-id"] });
+  if (VOICE_TOOLS === "review") voiceToolsState.servers.spotify = spotify({ catalog: spotifyCatalog(), lastDryRun: ok, tools: { ...chosen, play: { enabled: false, acts: true } } });
+  if (VOICE_TOOLS === "dry-run-busy") voiceToolsState.servers.spotify = spotify({});
+  if (VOICE_TOOLS === "rejected") voiceToolsState.servers.spotify = spotify({ state: "rejected" });
+  if (VOICE_TOOLS === "disabled") voiceToolsState.servers.spotify = spotify({ state: "disabled", catalog: spotifyCatalog(), lastDryRun: ok, tools: chosen });
+  if (VOICE_TOOLS === "approved" || VOICE_TOOLS === "approved-ask" || VOICE_TOOLS === "approved-refused") voiceToolsState.servers.spotify = spotify({ state: "enabled", catalog: spotifyCatalog(), lastDryRun: ok, tools: chosen,
+    askBeforeActing: VOICE_TOOLS === "approved-ask", approval: { by: "operator", at: voiceToolAt(2), digest: voiceToolDigest(1) } });
+  if (VOICE_TOOLS === "failed") voiceToolsState.servers.notes = {
+    title: L("Notes", "Нотатки"), capability: L("Reads and appends to the operator's plain-text notes folder.", "Читає й доповнює теку текстових нотаток оператора."),
+    transport: { type: "stdio", command: "bun", args: ["run", "/srv/delegatus/mcp-servers/notes/server.ts", "--notes", "/srv/notes"], cwd: "/srv/delegatus/mcp-servers/notes", envNames: ["NOTES_FORMAT"], envValues: { NOTES_FORMAT: "markdown" } },
+    entryFile: { path: "/srv/delegatus/mcp-servers/notes/server.ts", sha256: "4f9c1d2e8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d" },
+    private: true, askBeforeActing: false, callTimeoutMs: 15_000, generation: 7, owner: "installation", audience: ["voice"], state: "pending",
+    proposedBy: { kind: "conversation", conversationId: "conv_fixture_worker", at: voiceToolAt(30) }, approval: null, tools: {}, catalog: null,
+    lastDryRun: { code: "TIMEOUT", at: voiceToolAt(3), digest: voiceToolDigest(502) }, digest: voiceToolDigest(2), missingSecrets: [], secretRefs: [],
+  };
+  if (VOICE_TOOLS === "long") voiceToolsState.servers.a234567890123456789012_x = {
+    title: "T".repeat(60) + " " + "Т".repeat(59), capability: L("A capability sentence at its full length of one hundred sixty characters, so this row shows how the longest one the schema admits wraps inside the settings dialog.", "Речення можливостей на повну довжину в сто шістдесят символів, щоб цей рядок показав, як найдовше речення, яке допускає схема, переноситься всередині вікна налаштувань.").slice(0, 160),
+    transport: { type: "http", url: `https://mcp.example.test/${"segment/".repeat(40)}endpoint`, headerNames: ["Authorization", "X-Request-Source", "X-Workspace-Identifier-With-A-Long-Name"],
+      headerValues: { "X-Request-Source": "delegatus-voice", "X-Workspace-Identifier-With-A-Long-Name": `workspace-${"0123456789abcdef".repeat(16)}` } },
+    entryFile: null, private: false, askBeforeActing: true, callTimeoutMs: 60_000, generation: 9, owner: "installation", audience: ["voice"], state: "changed",
+    proposedBy: { kind: "operator", conversationId: null, at: voiceToolAt(90) }, approval: null,
+    tools: { ["t".repeat(128)]: { enabled: true, acts: true }, read_status: { enabled: false, acts: false } },
+    catalog: { digest: voiceToolDigest(903), fetchedAt: voiceToolAt(5), tools: [
+      { name: "t".repeat(128), description: "D".repeat(1024) },
+      { name: "read_status", description: L("Read the workspace status.", "Прочитати стан робочого простору."), annotations: { readOnlyHint: true } },
+    ] },
+    lastDryRun: { code: "OK", at: voiceToolAt(5), digest: voiceToolDigest(503) }, digest: voiceToolDigest(3),
+    missingSecrets: ["workspace-token-with-the-longest-reference-name-allowed-by-the-schema-x".slice(0, 64)], secretRefs: ["workspace-token-with-the-longest-reference-name-allowed-by-the-schema-x".slice(0, 64)],
+  };
+}
+if (VOICE && VOICE_TOOLS) seedVoiceTools();
 const VOICE_RELAY_UUID = "engine_message_voice_delegation";
 const VOICE_INTERNAL_UUID = "engine_message_reviewer_relay";
 const voiceInternalText = () => L("Review of the retry banner is done: approved on the fifth pass.", "Рев’ю банера повтору завершено: схвалено з п’ятого проходу.");
@@ -3241,6 +3308,57 @@ if (OVERVIEW_PERFORMANCE) {
    agent's renders have — a desktop board, a phone screen, a wide strip, a
    small crop — so the grid meets the aspect ratios it will meet. */
 const ALBUM = params.get("album") === "1";
+/* Task limit spend (`&spend=1`, docs/design/task-limit-spend.md §7.2): each
+   state the card's marks and popover draw, as `GET /api/task-spend` answers
+   them — one provider, two, several accounts of one provider, a tiny spend, a
+   large one with a lower bound, an account with no limit readings, and a task
+   still being counted (no rows yet). `&spend=guest` answers as it does to a
+   member who is not the owner: no account detail. */
+const SPEND = params.get("spend");
+function spendAccount(key: string, label: string, plan: string | null, weeklyPp: number | null, tokens: number, used: number | null, taskPp: number | null, sessionPp: number | null = null): TaskSpendAccount {
+  return { key, label, plan, weeklyPp, tokens, week: used === null ? null : { usedPercent: used, taskPp }, sessionPp };
+}
+function spendProvider(engine: "claude" | "codex", accounts: TaskSpendAccount[], bound: TaskSpendProvider["bound"] = "approx", floor: TaskSpendProvider["floor"] = null): TaskSpendProvider {
+  return { engine, bound, floor, accounts, weeklyPp: accounts.reduce((sum, a) => sum + (a.weeklyPp ?? 0), 0), tokens: accounts.reduce((sum, a) => sum + a.tokens, 0) };
+}
+const SPEND_TASKS: Record<string, TaskSpendSummary> = {
+  /* Two providers, the measured lane of the research rounded; Claude's first
+     account, named as an operator names one, is in its current 5-hour window. */
+  "t-search": { providers: [
+    spendProvider("claude", [spendAccount("claude:a", "Research workstation", "max", 2.1, 132_000_000, 53, 2.1, 12), spendAccount("claude:b", "B", "max", 1, 61_000_000, 31, 1)]),
+    spendProvider("codex", [spendAccount("codex:a", "A", "pro", 1.2, 24_000_000, 47, 1.2), spendAccount("codex:b", "B", "pro", 0.4, 9_000_000, 22, 0.4)]),
+  ] },
+  /* Several accounts of one provider, and a tiny Claude share. */
+  "t-export": { providers: [
+    spendProvider("claude", [spendAccount("claude:a", "A", "max", 0.4, 21_000_000, 53, 0.4)]),
+    spendProvider("codex", [spendAccount("codex:a", "A", "pro", 4.2, 88_000_000, 61, 4.2), spendAccount("codex:b", "B", "plus", 2.1, 12_000_000, 38, 2.1), spendAccount("codex:d", "D", "pro", 1, 19_000_000, 12, 1)]),
+  ] },
+  /* One provider. */
+  "t-upload": { providers: [spendProvider("codex", [spendAccount("codex:a", "A", "pro", 1.1, 23_000_000, 47, 1.1)])] },
+  /* A tiny spend. */
+  "t-links": { providers: [spendProvider("claude", [spendAccount("claude:b", "B", "max", 0.3, 17_000_000, 31, 0.3)])] },
+  /* A Claude account with no limit readings: tokens only. */
+  "t-disk": { providers: [
+    spendProvider("claude", [spendAccount("claude:c", "C", "max", null, 41_000_000, null, null)], "norate"),
+    spendProvider("codex", [spendAccount("codex:a", "A", "pro", 1, 21_000_000, 47, 1)]),
+  ] },
+  /* Still being counted: the task is known and has no rows yet, so the card draws nothing. */
+  "t-merge-a": { providers: [] },
+  /* A large spend; Claude's began before counting did, so it is a lower bound.
+     Its account carries a label at the 80-character cap. */
+  "t-interrupt": { providers: [
+    spendProvider("claude", [spendAccount("claude:a", "Research workstation in the second office, shared by the whole data team on site", "max", 12.4, 610_000_000, 66, 12.4)], "floor", "before-counting"),
+    spendProvider("codex", [spendAccount("codex:a", "A", "pro", 21.3, 402_000_000, 74, 21.3), spendAccount("codex:d", "D", "pro", 12.9, 250_000_000, 40, 12.9)]),
+  ] },
+};
+function spendAnswer(ids: readonly string[]): { generatedAt: number; tasks: Record<string, TaskSpendSummary> } {
+  const tasks: Record<string, TaskSpendSummary> = {};
+  for (const id of ids) {
+    const summary = SPEND_TASKS[id];
+    if (summary) tasks[id] = SPEND === "guest" ? { providers: summary.providers.map((provider) => ({ ...provider, accounts: null })) } : summary;
+  }
+  return { generatedAt: Date.now(), tasks };
+}
 /* `&olderfails=1`: the album's and the report log's older pages are refused,
    so «Show older» meets the line that says so beside it. */
 const OLDER_FAILS = params.get("olderfails") === "1";
@@ -3833,7 +3951,7 @@ const workerAnswer = (project: string | null) => ({
   project: project ? { key: project, value: workerProject, effective: workerProject ?? workerMachine, source: workerSource() } : null,
   running: { here: project ? workerRunning : null, machine: WORKER_SCENE ? 19 : 0 },
 });
-const HEADER_ROUTES = ["/api/telemetry", "/api/memory/settings", "/api/asks-you/key", "/api/team"];
+const HEADER_ROUTES = ["/api/telemetry", "/api/subscription-api-consent", "/api/memory/settings", "/api/asks-you/key", "/api/team"];
 /* Team workspaces (docs/design/workspaces.md §13.9): `?scenario=workspaces` is the Viewer over the rail's
    projects (`&rail=1`) on a team install; `workspaces-team` and `workspaces-page` mount the Team page's
    Workspaces tab and one workspace's page. `&member=1` signs the member in, `&ws=client|research|long|all`
@@ -3986,6 +4104,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       ...(PROTO === "elsewhere" ? { unavailable: "another-installation" } : {}),
     });
   }
+  if (SPEND && url.pathname === "/api/task-spend") return json(spendAnswer((url.searchParams.get("ids") ?? "").split(",").filter(Boolean)));
   if (ALBUM && url.pathname === "/api/task-album") {
     const ids = (url.searchParams.get("ids") ?? "").split(",").filter((id) => albumItems()[id]);
     return json({ tasks: Object.fromEntries(ids.map((id) => {
@@ -4570,6 +4689,39 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (method === "PUT" && SETTINGS_REFUSE) return json({ code: "COMPANION_UNAVAILABLE" }, 503);
     if (method === "PUT") { const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>; voice.settingsWrites.push(body); Object.assign(voiceSettings, body); }
     return json(voiceSettings);
+  }
+  /* The Tools section's route, as `/api/voice-tools` answers: the view on a read and after each write, and a fixed
+     code on a refusal. A dry run of the timed-out script times out again; the Spotify server's passes. */
+  if (VOICE && url.pathname === "/api/voice-tools") {
+    if (method === "POST") {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { action: string; name?: string; digest?: string; tools?: FixtureVoiceTool["tools"]; askBeforeActing?: boolean; reapprove?: true; secrets?: Record<string, string> };
+      const server = body.name ? voiceToolsState.servers[body.name] : undefined;
+      const refused = voiceToolsRefuse[body.action];
+      if (refused) { delete voiceToolsRefuse[body.action]; return json({ code: refused }, 409); }
+      voiceToolsState.revision += 1;
+      const next = voiceToolDigest(voiceToolsState.revision * 10);
+      if (body.action === "secrets") {
+        for (const entry of Object.values(voiceToolsState.servers)) entry.missingSecrets = entry.missingSecrets.filter(ref => !Object.hasOwn(body.secrets ?? {}, ref));
+      } else if (!server) return json({ code: "SERVER_NOT_FOUND" }, 409);
+      else if (server.digest !== body.digest) return json({ code: "STALE_APPROVAL" }, 409);
+      else if (body.action === "dry-run") {
+        server.lastDryRun = { code: body.name === "notes" ? "TIMEOUT" : "OK", at: voiceToolAt(0), digest: voiceToolDigest(504) };
+        if (body.name !== "notes") { server.catalog = spotifyCatalog(); server.tools = Object.fromEntries(server.catalog.tools.map(tool => [tool.name, server.tools[tool.name] ?? { enabled: false, acts: tool.annotations?.readOnlyHint !== true }])); }
+        server.digest = next;
+      } else if (body.action === "configure") {
+        if (body.reapprove && server.state !== "enabled") return json({ code: "STALE_APPROVAL" }, 409);
+        if (body.tools) server.tools = body.tools;
+        if (body.askBeforeActing !== undefined) server.askBeforeActing = body.askBeforeActing;
+        server.digest = next;
+        if (body.reapprove) { server.state = "enabled"; server.approval = { by: "operator", at: voiceToolAt(0), digest: next }; }
+        else { server.state = "pending"; server.approval = null; }
+      } else if (body.action === "approve") {
+        if (server.lastDryRun?.code !== "OK") return json({ code: "DRY_RUN_REQUIRED" }, 409);
+        server.state = "enabled"; server.approval = { by: "operator", at: voiceToolAt(0), digest: server.digest };
+      } else if (body.action === "remove") delete voiceToolsState.servers[body.name!];
+      else { server.state = body.action === "reject" ? "rejected" : "disabled"; server.approval = null; server.digest = next; }
+    }
+    return json({ version: 1, revision: voiceToolsState.revision, servers: voiceToolsState.servers });
   }
   if (VOICE && url.pathname === "/api/voice-companion/session" && method === "POST" && voiceSettings.backend === "codex") {
     const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;

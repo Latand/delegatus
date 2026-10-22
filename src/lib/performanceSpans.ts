@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 /** Static site names are the source map for a serving revision. Never pass
  * row identities, SQL text, paths or request arguments to this recorder. */
 export const performanceSites = [
+  "voice-tools.catalog", "voice-tools.spawn", "voice-tools.call",
   "state.write-wait", "state.sql-next", "state.json", "pipeline.validate", "pipeline.revive", "pipeline.identity",
   "pipeline.copy", "pipeline.yield", "pipeline.evidence", "pipeline.shared", "pipeline.refused",
   "registry.snapshot", "registry.headers", "registry.claims", "registry.row", "registry.keyed", "registry.prepare.slice", "registry.prepare.normalize", "registry.prepare.index", "registry.prepare.open",
@@ -21,7 +22,7 @@ export const performanceSites = [
   "transcript.feed", "transcript.index", "memory.discovery", "memory.refresh",
   "http.render", "privacy.compile", "privacy.match", "privacy.worker",
   "seat-tick.prepare", "seat-tick.liveness", "seat-tick.worker-asks", "seat-tick.rule-reports", "seat-tick.reports",
-  "mcp.caller-enumeration", "liveness.snapshot", "proc.scan", "self-update.bytes",
+  "mcp.caller-enumeration", "liveness.snapshot", "proc.scan", "self-update.bytes", "self-update.trash-inventory",
   "runtime-journal.retention-map",
   "memory.project-view",
   "memory.import",

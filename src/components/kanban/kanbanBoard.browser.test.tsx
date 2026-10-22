@@ -43,8 +43,7 @@ import { sampleAnswer, sampleMemory } from "@/lib/memory/profile.fixture";
 import { createProfileService } from "@/lib/memory/profileService";
 import type { MemoryProfileView, ProfileRow } from "@/lib/memory/profileTypes";
 import type { RoleMemoryProjectView } from "@/lib/memory/roleTypes";
-import { directProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profileModel";
-import { readClaudeCredentials } from "@/lib/accounts/claudeCredentials";
+import { prepareProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profileModel";
 
 /*
  * The one rendered-evidence driver for the kanban board. Every case here runs
@@ -1002,16 +1001,68 @@ describe("CPU admission queue", () => {
   }, 120_000);
 });
 
+describe("subscription API consent", () => {
+  browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1")("consent is reviewable in both languages and themes", async () => {
+    const out = path.resolve(".artifacts/subscription-api"); fs.mkdirSync(out, { recursive: true });
+    let enabled = false;
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/telemetry": { enabled: false, locked: false, noticeDismissed: true },
+      "/api/subscription-api-consent": async (request: Request) => {
+        if (request.method === "PUT") enabled = (await request.json()).enabled;
+        return Response.json({ version: 1, enabled, source: "operator" });
+      },
+    });
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const phone of [false, true]) {
+        enabled = false;
+        const viewport = phone ? { width: 390, height: 844 } : { width: 1000, height: 700 };
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-settings&header=1&lang=${lang}`, viewport, theme, lang, "reduce", phone);
+        try {
+          await page.locator(phone ? '[data-mobile2-open="menu"]' : "[data-rail-menu]").first().click();
+          await page.locator(phone ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]").click();
+          await page.locator(phone ? '[data-mobile2-menu-row="ping"]' : "[data-rail-menu-ping]").click();
+          const section = page.locator("[data-subscription-api]"); await section.waitFor();
+          expect(await section.locator("h3").innerText()).toBe(translate(lang, "subscriptionApi.title"));
+          const toggle = section.getByRole("switch");
+          await toggle.waitFor({ state: "visible" });
+          expect(await toggle.isChecked()).toBe(false);
+          const geometry = await section.evaluate(element => {
+            const panel = element.closest("[data-telemetry-settings]")!;
+            const button = element.querySelector("input")!;
+            const label = button.closest("label")!;
+            const box = label.getBoundingClientRect(), edge = panel.getBoundingClientRect();
+            return { visible: box.top >= edge.top && box.bottom <= edge.bottom, overflow: element.scrollWidth > element.clientWidth, scrolls: panel.scrollHeight > panel.clientHeight };
+          });
+          expect(geometry.visible).toBe(true); expect(geometry.overflow).toBe(false);
+          expect(await section.innerText()).toContain("api.anthropic.com/api/oauth/usage");
+          await page.screenshot({ path: path.join(out, `${phone ? "phone" : "desktop"}-${lang}-${theme}.png`) });
+          await toggle.click();
+          await page.waitForFunction(() => document.querySelector<HTMLInputElement>('[data-subscription-api] input')?.checked === true);
+          await toggle.click();
+          await page.waitForFunction(() => document.querySelector<HTMLInputElement>('[data-subscription-api] input')?.checked === false);
+          expect(pageErrors).toEqual([]);
+          readings.push({ lang, theme, viewport, ...geometry });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/subscription-api", { recursive: true });
+      const sources = ["src/components/telemetry/SubscriptionApiSetting.tsx", "src/components/telemetry/TelemetrySettings.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts"];
+      fs.writeFileSync("evidence/subscription-api/readings.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx",
+        revision: process.env.LLV_EVIDENCE_REVISION ?? "working-tree", recordedAt: new Date().toISOString(),
+        command: "LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<browser> bun test src/components/kanban/kanbanBoard.browser.test.tsx -t 'subscription API consent'",
+        sources: Object.fromEntries(sources.map(source => [source, createHash("sha256").update(fs.readFileSync(source)).digest("hex")])), readings }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});
+
 describe("memory profile", () => {
-  browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1" && !!process.env.MEMORY_PROFILE_BENCHMARK)("direct-call timings reach the visible page", async () => {
+  browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1" && !!process.env.MEMORY_PROFILE_BENCHMARK)("CLI timings reach the visible page", async () => {
     // Explicit private input is supplied only for an opt-in local timing run. No source text is captured.
-    const input = JSON.parse(fs.readFileSync(process.env.MEMORY_PROFILE_BENCHMARK!, "utf8")) as { rules: RoleMemoryProjectView; credentialHome: string };
-    const credentials = readClaudeCredentials(input.credentialHome);
-    const token = credentials.state === "present" ? credentials.document.claudeAiOauth?.accessToken : null;
-    if (typeof token !== "string") throw Error("benchmark credential unavailable");
+    const input = JSON.parse(fs.readFileSync(process.env.MEMORY_PROFILE_BENCHMARK!, "utf8")) as { rules: RoleMemoryProjectView };
     const out = path.resolve(".artifacts/memory-profile"); fs.mkdirSync(out, { recursive: true });
     const rows = new Map<string, ProfileRow>();
-    const service = createProfileService({ rules: () => input.rules, read: (_, locale) => structuredClone(rows.get(locale) ?? null), write: row => rows.set(row.locale, structuredClone(row)), model: MEMORY_PROFILE_MODEL, prepare: async () => directProfileCaller(token, MEMORY_PROFILE_MODEL) });
+    const service = createProfileService({ rules: () => input.rules, read: (_, locale) => structuredClone(rows.get(locale) ?? null), write: row => rows.set(row.locale, structuredClone(row)), model: MEMORY_PROFILE_MODEL, prepare: prepareProfileCaller });
     const server = await serveEvidenceFixture(out, undefined, {
       "/api/role-memory": () => Response.json(input.rules),
       "/api/role-memory/profile": async (request: Request) => {
@@ -7320,7 +7371,7 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
             await page.keyboard.press("Escape");
             if (await page.locator(PANEL).count() || !await page.evaluate(() => document.activeElement?.hasAttribute("data-rail-menu"))) failures.push(`${tag}: Escape from the keys page did not close the menu onto ⋯`);
             await page.keyboard.press("Enter");
-            /* Once per frame: «Install ping» opens the product's dialog, which keeps the ping alone. */
+            /* Once per frame: «Install ping» opens the product's dialog, which keeps the install ping and subscription API consent. */
             await page.locator("[data-rail-menu-settings]").click();
             await page.locator("[data-rail-menu-ping]").click();
             const dialog = page.locator("[data-telemetry-settings]");
@@ -15406,6 +15457,271 @@ describe("the orchestrator's parallel self in the seat's feed", () => {
   }, 600_000);
 });
 
+describe("task limit spend: a scale on the card's state line, the numbers in its popover", () => {
+  /*
+   * docs/design/task-limit-spend.md §7.2, variant 2 as approved: each provider
+   * that did work on a task draws its engine mark and a four-cell scale at the
+   * end of the card's state line, with no digits; the popover lists each
+   * provider's weekly estimate (≈, ≥, <1%), each account's figure beside its
+   * week so far, the 5-hour share while it lasts and the ±30 % note. The phone's
+   * card face carries the marks passively and reads them into its label; the
+   * task screen lists the numbers as one section. States: one provider, two,
+   * several accounts of one provider, tiny, large with a lower bound, no limit
+   * readings, still counting (nothing drawn), and the answer a non-owner gets.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chromium> bun test src/components/kanban/kanbanBoard.browser.test.tsx -t 'task limit spend'
+   *
+   * Frames go to TASK_SPEND_PNG_DIR (default `.artifacts/task-spend/`) with
+   * `readings.json` beside them; nothing is written into the tree.
+   */
+  const CASES = {
+    "t-upload": { state: "one provider", marks: [["codex", "num", 1]], pop: [/Codex ≈1%/] },
+    "t-search": { state: "two providers", marks: [["claude", "num", 1], ["codex", "num", 1]], pop: [/Claude ≈3%/, /Codex ≈2%/, /0[.,]4%/, /5-(hour|годин)/] },
+    "t-export": { state: "several accounts", marks: [["claude", "tiny", 0], ["codex", "num", 2]], pop: [/Claude <1%/, /Codex ≈7%/, /A · Pro/, /B · Plus/, /D · Pro/] },
+    "t-links": { state: "tiny", marks: [["claude", "tiny", 0]], pop: [/Claude <1%/, /0[.,]3%/] },
+    "t-interrupt": { state: "large, lower bound", marks: [["claude", "floor", 2], ["codex", "num", 4]], pop: [/Claude ≥12%/, /Codex ≈34%/, /(task|задача) ≥ ?12%/] },
+    "t-disk": { state: "no limit readings", marks: [["claude", "norate", null], ["codex", "num", 1]], pop: [/Claude — /, /41/, /Codex ≈1%/] },
+  } as const;
+  const COUNTING = "t-merge-a";
+  const WIDTHS = [1440, 1280, 820, 390] as const;
+
+  browserTest("every state at 1440, 1280, 820 and 390, en and uk, light and dark", async () => {
+    const out = path.resolve(process.env.TASK_SPEND_PNG_DIR ?? ".artifacts/task-spend");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const failures: string[] = [];
+    const readings: unknown[] = [];
+    /* The marks of one card: each provider's engine, kind and filled cells, and how the line fits. */
+    const marksReading = (page: Page, selector: string) => page.evaluate((selector) => {
+      const host = document.querySelector<HTMLElement>(selector);
+      const spend = host?.querySelector<HTMLElement>(".spend");
+      if (!host || !spend) return null;
+      const box = (r: DOMRect) => ({ left: r.left, right: r.right, top: r.top, bottom: r.bottom });
+      const words = host.querySelector(".card-state-words");
+      const ranges: ReturnType<typeof box>[] = [];
+      if (words) { const range = document.createRange(); range.selectNodeContents(words); for (const r of range.getClientRects()) if (r.width > 0) ranges.push(box(r)); }
+      const own = box(spend.getBoundingClientRect());
+      const hit = (a: ReturnType<typeof box>, b: ReturnType<typeof box>) => a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5;
+      const cardBox = box((host.closest(".card, [data-phone-card]") ?? host).getBoundingClientRect());
+      return {
+        role: spend.getAttribute("role"), label: spend.getAttribute("aria-label"), hidden: spend.getAttribute("aria-hidden"),
+        providers: [...spend.querySelectorAll<HTMLElement>(".spend-p")].map((p) => ({
+          engine: p.dataset.engine, kind: p.dataset.kind,
+          cells: p.querySelector("svg.scale") ? p.querySelectorAll("svg.scale rect.on").length : null,
+          word: p.querySelector(".spend-n")?.textContent ?? null, floorSign: Boolean(p.querySelector(".scale-floor")),
+        })),
+        digits: /\d/.test(spend.textContent ?? ""),
+        overlapsWords: ranges.some((r) => hit(r, own)),
+        insideCard: own.left >= cardBox.left - 0.5 && own.right <= cardBox.right + 0.5 && own.top >= cardBox.top - 0.5 && own.bottom <= cardBox.bottom + 0.5,
+        own,
+      };
+    }, selector);
+    const popReading = (page: Page, id: string) => page.evaluate((id) => {
+      const pop = document.querySelector<HTMLElement>(`[data-spend-pop="${id}"]`)!.closest<HTMLElement>("[role=tooltip]")!;
+      const r = pop.getBoundingClientRect();
+      const lines = [...pop.querySelectorAll<HTMLElement>(".pop-title, .pop-main, .meter, .meter-note, .pop-note")].map((el) => el.innerText.replace(/\s+/g, " ").trim());
+      /* No line is cut: an account label, whatever its length, is printed whole. */
+      const clipped = [...pop.querySelectorAll<HTMLElement>(".meter-label, .meter-value, .pop-main")].filter((el) => el.scrollWidth > el.clientWidth + 1).length;
+      const labels = [...pop.querySelectorAll<HTMLElement>(".meter-label")].map((el) => ({ text: el.textContent ?? "", lines: new Set([...el.getClientRects()].map((b) => Math.round(b.top))).size, height: el.getBoundingClientRect().height }));
+      /* Every account line, its label's text, its value and its bar stay inside the bubble. */
+      const textRects = [...pop.querySelectorAll<HTMLElement>(".meter-label")].flatMap((el) => { const range = document.createRange(); range.selectNodeContents(el); return [...range.getClientRects()]; });
+      const outside = [...[...pop.querySelectorAll<HTMLElement>(".meter, .meter-figure, .meter-value, .meter-bar")].map((el) => el.getBoundingClientRect()), ...textRects].filter((b) =>
+        b.left < r.left - 0.5 || b.right > r.right + 0.5 || b.top < r.top - 0.5 || b.bottom > r.bottom + 0.5).length;
+      /* The task figure's digits start at one x on every account line. */
+      const numX = [...pop.querySelectorAll<HTMLElement>(".meter-num")].map((el) => Math.round(el.getBoundingClientRect().left));
+      return { box: { left: r.left, right: r.right, top: r.top, bottom: r.bottom }, viewport: { width: innerWidth, height: innerHeight }, lines, clipped, labels, outside, numX, bg: getComputedStyle(pop).backgroundColor };
+    }, id);
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of WIDTHS) {
+        const phone = width === 390;
+        const label = `${lang}-${theme}-${width}`;
+        const height = phone ? 844 : 900;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?spend=1`, { width, height }, theme, lang, "reduce", phone);
+        try {
+          if (!phone) {
+            await page.locator(`${card("t-search")} [data-spend="t-search"]`).waitFor({ state: "attached", timeout: 30_000 });
+            /* Under the seat the board is a strip of columns, or one column behind tabs below 768 px of board. */
+            const column = async (id: string) => {
+              if (await page.locator(card(id)).isVisible()) return;
+              const status = await page.locator(card(id)).evaluate((element) => element.closest<HTMLElement>(".column")?.dataset.status ?? "");
+              await page.locator(`.tabs-nav [data-tab="${status}"]`).first().click();
+            };
+            await column("t-search");
+            /* The seat stands over the board: a tall window shows both, then the case goes on at the named height. */
+            await page.setViewportSize({ width, height: 1900 });
+            await page.locator("[data-kanban-board]").scrollIntoViewIfNeeded();
+            await page.screenshot({ path: path.join(out, `${label}-board.png`) });
+            await page.setViewportSize({ width, height });
+            const counting = await page.locator(`${card(COUNTING)} .spend`).count();
+            if (counting) failures.push(`${label}: the still-counting task draws marks`);
+            for (const [id, expected] of Object.entries(CASES)) {
+              const host = page.locator(card(id));
+              await column(id);
+              await host.scrollIntoViewIfNeeded();
+              await host.screenshot({ path: path.join(out, `${label}-${id}-card.png`) });
+              const marks = await marksReading(page, `${card(id)} .card-state`);
+              readings.push({ label, id, state: expected.state, marks });
+              if (!marks) { failures.push(`${label} ${id}: no marks`); continue; }
+              const got = marks.providers.map((p) => [p.engine, p.kind, p.cells]);
+              if (JSON.stringify(got) !== JSON.stringify(expected.marks)) failures.push(`${label} ${id}: marks ${JSON.stringify(got)} ≠ ${JSON.stringify(expected.marks)}`);
+              if (marks.digits) failures.push(`${label} ${id}: the card's marks carry digits`);
+              if (marks.overlapsWords) failures.push(`${label} ${id}: the marks overlap the state sentence`);
+              if (!marks.insideCard) failures.push(`${label} ${id}: the marks leave the card ${JSON.stringify(marks.own)}`);
+              if (marks.role !== "button" || !marks.label) failures.push(`${label} ${id}: the marks are no labelled control`);
+              const trigger = page.locator(`[data-spend="${id}"]`);
+              await trigger.hover();
+              await page.locator(`[data-spend-pop="${id}"]`).waitFor({ timeout: 5_000 });
+              const pop = await popReading(page, id);
+              readings.push({ label, id, popover: pop });
+              const text = pop.lines.join("\n");
+              for (const want of expected.pop) if (!want.test(text)) failures.push(`${label} ${id}: the popover lacks ${want}:\n${text}`);
+              if (!/±30%/.test(text)) failures.push(`${label} ${id}: no ±30% note`);
+              if (pop.clipped) failures.push(`${label} ${id}: ${pop.clipped} popover lines are cut`);
+              if (pop.outside) failures.push(`${label} ${id}: ${pop.outside} account lines or bars leave the bubble`);
+              /* The fixture's 80-character label cannot share a line with its figure: it is printed whole, on lines of its own. */
+              if (id === "t-interrupt" && !pop.labels.some((l) => l.text.length > 80 && text.includes(l.text.replace(/\s+/g, " ")))) failures.push(`${label} ${id}: the 80-character account label is not printed whole: ${JSON.stringify(pop.labels)}`);
+              if (new Set(pop.numX).size > 1) failures.push(`${label} ${id}: account figures start at ${pop.numX.join(", ")}`);
+              if (pop.box.left < 0 || pop.box.top < 0 || pop.box.right > pop.viewport.width || pop.box.bottom > pop.viewport.height) failures.push(`${label} ${id}: the popover leaves the window ${JSON.stringify(pop.box)}`);
+              const cardBox = (await host.boundingBox())!;
+              const clip = { x: Math.max(0, Math.min(cardBox.x, pop.box.left) - 8), y: Math.max(0, Math.min(cardBox.y, pop.box.top) - 8) };
+              await page.screenshot({ path: path.join(out, `${label}-${id}-popover.png`), clip: { ...clip,
+                width: Math.min(width, Math.max(cardBox.x + cardBox.width, pop.box.right) + 8) - clip.x,
+                height: Math.min(height, Math.max(cardBox.y + cardBox.height, pop.box.bottom) + 8) - clip.y } });
+              await page.mouse.move(0, 0);
+              await page.locator(`[data-spend-pop="${id}"]`).waitFor({ state: "detached", timeout: 5_000 });
+            }
+            /* The keyboard: focus opens it, Escape closes it. */
+            await column("t-search");
+            await page.locator('[data-spend="t-search"]').focus();
+            await page.locator('[data-spend-pop="t-search"]').waitFor({ timeout: 5_000 });
+            await page.keyboard.press("Escape");
+            await page.locator('[data-spend-pop="t-search"]').waitFor({ state: "detached", timeout: 5_000 });
+          } else {
+            for (const [tab, ids] of [["assigned", ["t-search", "t-export", "t-upload", "t-links", "t-disk"]], ["done", ["t-interrupt"]]] as const) {
+              await page.locator(`[data-phone-kanban-tab="${tab}"]`).click();
+              await page.locator(`[data-phone-card="task:${ids[0]}"] .spend`).waitFor({ timeout: 30_000 });
+              if (tab === "assigned" && await page.locator(`[data-phone-card="task:${COUNTING}"] .spend`).count()) failures.push(`${label}: the still-counting task draws marks`);
+              for (const id of ids) {
+                const face = page.locator(`[data-phone-card="task:${id}"]`);
+                await face.scrollIntoViewIfNeeded();
+                await page.screenshot({ path: path.join(out, `${label}-${tab}-${id}.png`) });
+                const marks = await marksReading(page, `[data-phone-card="task:${id}"] .card-state`);
+                const faceLabel = await face.getAttribute("aria-label");
+                readings.push({ label, id, state: CASES[id].state, marks, faceLabel });
+                if (!marks) { failures.push(`${label} ${id}: no marks on the phone card`); continue; }
+                const got = marks.providers.map((p) => [p.engine, p.kind, p.cells]);
+                if (JSON.stringify(got) !== JSON.stringify(CASES[id].marks)) failures.push(`${label} ${id}: phone marks ${JSON.stringify(got)}`);
+                if (marks.role !== null || marks.hidden !== "true") failures.push(`${label} ${id}: the phone face's marks are not passive`);
+                if (marks.overlapsWords || !marks.insideCard || marks.digits) failures.push(`${label} ${id}: phone marks ${JSON.stringify(marks)}`);
+                if (!faceLabel?.includes(translate(lang, "taskSpend.aria", { parts: "" }).trim())) failures.push(`${label} ${id}: the face's label does not read the spend: ${faceLabel}`);
+              }
+            }
+            /* The task screen's section, for two tasks: two providers, and the lower bound. */
+            for (const [tab, id] of [["assigned", "t-search"], ["done", "t-interrupt"], ["assigned", "t-disk"]] as const) {
+              await page.locator(`[data-phone-kanban-tab="${tab}"]`).click();
+              await page.locator(`[data-phone-card="task:${id}"]`).click();
+              const section = page.locator(`[data-phone-task-spend="${id}"]`);
+              await section.waitFor({ timeout: 10_000 });
+              await section.scrollIntoViewIfNeeded();
+              const box = (await section.boundingBox())!;
+              if (box.x < 0 || box.x + box.width > width || box.y < 0 || box.y + box.height > height) failures.push(`${label} ${id}: the Limits section is not whole on screen ${JSON.stringify(box)}`);
+              const text = (await section.innerText()).replace(/[ \t]+/g, " ");
+              /* As in the popover: every account label whole, inside the section, and the digits at one x. */
+              const fit = await section.evaluate((el) => {
+                const r = el.getBoundingClientRect();
+                const cut = [...el.querySelectorAll<HTMLElement>(".meter-label, .meter-value, .pop-main")].filter((node) => node.scrollWidth > node.clientWidth + 1).length;
+                const rects = [...el.querySelectorAll<HTMLElement>(".meter-label")].flatMap((node) => { const range = document.createRange(); range.selectNodeContents(node); return [...range.getClientRects()]; });
+                const outside = [...[...el.querySelectorAll<HTMLElement>(".meter, .meter-figure, .meter-value, .meter-bar")].map((node) => node.getBoundingClientRect()), ...rects].filter((b) => b.left < r.left - 0.5 || b.right > r.right + 0.5).length;
+                const numX = [...el.querySelectorAll<HTMLElement>(".meter-num")].map((node) => Math.round(node.getBoundingClientRect().left));
+                return { cut, outside, numX, labels: [...el.querySelectorAll<HTMLElement>(".meter-label")].map((node) => node.textContent ?? "") };
+              });
+              readings.push({ label, id, section: text, fit });
+              if (fit.cut) failures.push(`${label} ${id}: ${fit.cut} Limits lines are cut`);
+              if (fit.outside) failures.push(`${label} ${id}: ${fit.outside} account lines leave the Limits section`);
+              if (new Set(fit.numX).size > 1) failures.push(`${label} ${id}: Limits figures start at ${fit.numX.join(", ")}`);
+              if (id === "t-interrupt" && !fit.labels.some((l) => l.length > 80)) failures.push(`${label} ${id}: the 80-character account label is not whole in the Limits section: ${JSON.stringify(fit.labels)}`);
+              for (const want of CASES[id].pop) if (!want.test(text)) failures.push(`${label} ${id}: the Limits section lacks ${want}`);
+              await page.screenshot({ path: path.join(out, `${label}-task-${id}.png`) });
+              await page.goBack();
+              await page.locator(`[data-phone-kanban-tab="${tab}"]`).waitFor({ timeout: 10_000 });
+            }
+          }
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join("; ")}`);
+        } finally { await context.close(); }
+      }
+      /* A member who is not the owner gets each provider's figure and no account detail. */
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        const label = `guest-${lang}-${theme}-1440`;
+        const { context, page } = await openFixture(browser, `${server.base}?spend=guest`, VIEWPORT, theme, lang, "reduce");
+        try {
+          await page.locator('[data-spend="t-search"]').waitFor({ timeout: 30_000 });
+          await page.locator('[data-spend="t-search"]').hover();
+          await page.locator('[data-spend-pop="t-search"]').waitFor({ timeout: 5_000 });
+          const pop = await popReading(page, "t-search");
+          readings.push({ label, popover: pop });
+          if (pop.lines.some((line) => / · (Max|Pro)/.test(line)) || pop.numX.length) failures.push(`${label}: account detail reached a guest: ${pop.lines.join(" | ")}`);
+          const cardBox = (await page.locator(card("t-search")).boundingBox())!;
+          await page.screenshot({ path: path.join(out, `${label}-popover.png`), clip: { x: cardBox.x - 8, y: Math.max(0, pop.box.top - 8), width: cardBox.width + 16, height: cardBox.y + cardBox.height - pop.box.top + 16 } });
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+      fs.writeFileSync(path.join(out, "readings.json"), `${JSON.stringify({ capturedAt: new Date().toISOString(), readings, failures }, null, 2)}\n`);
+    }
+    expect(failures).toEqual([]);
+  }, 900_000);
+
+  browserTest("a touch screen at desktop width: a tap opens the marks' popover and the state dot's, a second tap or a tap outside closes them", async () => {
+    const out = path.resolve(process.env.TASK_SPEND_PNG_DIR ?? ".artifacts/task-spend");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const failures: string[] = [];
+    try {
+      for (const width of [820, 1280] as const) for (const lang of ["en", "uk"] as const) {
+        const label = `touch-${lang}-${width}`;
+        /* A tablet: a touch screen with no mouse, at a width that draws the desktop board. */
+        const context = await browser.newContext({ viewport: { width, height: 900 }, hasTouch: true, colorScheme: "light", reducedMotion: "reduce" });
+        await context.addInitScript(`try { localStorage.setItem("llv_lang", ${JSON.stringify(lang)}); } catch {}`);
+        try {
+          const page = await context.newPage();
+          await page.goto(`${server.base}?spend=1`);
+          const host = page.locator(card("t-search"));
+          await host.locator('[data-spend="t-search"]').waitFor({ state: "attached", timeout: 30_000 });
+          if (!await host.isVisible()) {
+            const status = await host.evaluate((element) => element.closest<HTMLElement>(".column")?.dataset.status ?? "");
+            await page.locator(`.tabs-nav [data-tab="${status}"]`).first().tap();
+          }
+          await host.scrollIntoViewIfNeeded();
+          for (const [name, trigger, pop] of [
+            ["marks", host.locator('[data-spend="t-search"]'), page.locator('[data-spend-pop="t-search"]')],
+            ["state dot", host.locator("[data-card-state-dot]"), page.locator("[data-card-state-pop]")],
+          ] as const) {
+            const shows = (open: boolean) => pop.waitFor({ state: open ? "attached" : "detached", timeout: 3_000 }).then(() => true, () => false);
+            await trigger.tap();
+            if (!await shows(true)) { failures.push(`${label}: a tap on the ${name} opens nothing (aria-expanded=${await trigger.getAttribute("aria-expanded")})`); continue; }
+            if (await trigger.getAttribute("aria-expanded") !== "true") failures.push(`${label}: the open ${name} do not say so`);
+            if (name === "marks") await page.screenshot({ path: path.join(out, `${label}-t-search-tap.png`) });
+            await trigger.tap();
+            if (!await shows(false)) failures.push(`${label}: a second tap on the ${name} leaves it open`);
+            await trigger.tap();
+            if (!await shows(true)) failures.push(`${label}: a third tap on the ${name} opens nothing`);
+            /* Outside: a column's heading, plain text. */
+            await page.locator(".kb .col-head h2:visible").first().tap();
+            if (!await shows(false)) failures.push(`${label}: a tap outside leaves the ${name} open`);
+          }
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    expect(failures).toEqual([]);
+  }, 600_000);
+});
+
 describe("a task's album: every picture its agents made, one click from the card", () => {
   /*
    * The album button sits in a task card's foot with the picture count and a
@@ -22602,7 +22918,158 @@ describe("floating voice companion", () => {
       fs.mkdirSync("evidence/voice-companion",{ recursive:true });
       fs.writeFileSync("evidence/voice-companion/call-memory.json",JSON.stringify({ driver:"src/components/kanban/kanbanBoard.browser.test.tsx",synthetic:true,viewportBasis:"configured scene width",measurements },null,2)+"\n");
     } finally { await browser.close(); server.stop(); }
-  });
+    /* 32 page loads ran 77 s on a loaded machine before the Tools section joined the dialog: past the 90 s default once it did. */
+  }, 300_000);
+
+  /*
+   * The Tools section of the voice settings (docs/design/voice-extensible-tools.md §4.8 item 1,
+   * `&voicetools=<state>`): no servers, a pending proposal with a secret still needed, a passed
+   * dry run with tools being chosen, a failed dry run, an approval with «ask before acting» off and
+   * on, a rejected proposal, a server turned off, every visible field at its schema maximum, and two refused presses: «ask before acting» on an
+   * approved server whose change and re-approval are refused together (the row stays approved and the
+   * switch flips back) and Run dry run refused by the hub's limit. Each state is read at 1440, 820 and 390,
+   * in both languages and themes: its defining words are whole on screen once the section is
+   * scrolled to, no text range leaves the dialog or the window, the page never scrolls sideways,
+   * and every control is at least 24 px tall (44 on the phone). Wherever Run dry run starts a command,
+   * the line saying that it runs the program as the operator's OS user is whole beside it. Approving a chosen tool and
+   * flipping «ask before acting» on an approved server are pressed for real (a tap on the phone).
+   * Frames go to `$LLV_VOICE_TOOLS_OUT` (default `.artifacts/voice-tools`), never committed.
+   */
+  browserTest("voice tools settings render every state on desktop and phone", async () => {
+    const out = path.resolve(process.env.LLV_VOICE_TOOLS_OUT ?? ".artifacts/voice-tools");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
+    const failures: string[] = [];
+    const measurements: unknown[] = [];
+    const dryRun = (lang: "en" | "uk") => [translate(lang, "voiceCompanion.tools.action.dryRun"), translate(lang, "voiceCompanion.tools.dryRunHint")];
+    /* Each state's defining words: those of a row's head once the row is scrolled to, those of its tool list once
+       that list's end is, then those of its foot once its action row is. A row taller than the phone's dialog is
+       read in these frames. */
+    const defining: Record<string, (lang: "en" | "uk") => { head: string[]; tools?: string[]; foot: string[] }> = {
+      empty: lang => ({ head: [translate(lang, "voiceCompanion.tools.empty")], foot: [] }),
+      pending: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example",
+        translate(lang, "voiceCompanion.tools.secretValue", { name: "SPOTIFY_CLIENT_ID" }), "SPOTIFY_REDIRECT_URI=http://127.0.0.1:8888/callback"],
+        foot: [translate(lang, "voiceCompanion.tools.secretNeeded"), translate(lang, "voiceCompanion.tools.dryRun.none"), ...dryRun(lang), translate(lang, "voiceCompanion.tools.action.reject")] }),
+      review: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example"],
+        tools: ["skip"], foot: [translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.approve"), ...dryRun(lang)] }),
+      failed: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "--notes", "/srv/delegatus/mcp-servers/notes/server.ts", "NOTES_FORMAT=markdown"],
+        foot: [translate(lang, "voiceCompanion.tools.dryRun.TIMEOUT"), ...dryRun(lang)] }),
+      approved: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.enabled"), "spotify-mcp-example"],
+        foot: [translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.disable"), translate(lang, "voiceCompanion.tools.action.remove")] }),
+      "approved-ask": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.enabled"), "spotify-mcp-example"],
+        foot: [translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.disable"), translate(lang, "voiceCompanion.tools.action.remove")] }),
+      long: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.changed"), "a234567890123456789012_x", "X-Request-Source=delegatus-voice"],
+        foot: [translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.reject")] }),
+      "approved-refused": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.enabled"), "spotify-mcp-example"],
+        foot: [translate(lang, "voiceCompanion.tools.refused.SELECTION_BOUNDS"), translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.disable")] }),
+      "dry-run-busy": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example"],
+        foot: [...dryRun(lang), translate(lang, "voiceCompanion.tools.refused.dryRun.BUSY")] }),
+      rejected: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.rejected"), "spotify-mcp-example"],
+        foot: [...dryRun(lang), translate(lang, "voiceCompanion.tools.action.remove")] }),
+      disabled: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.disabled"), "spotify-mcp-example"],
+        foot: [translate(lang, "voiceCompanion.tools.ask"), ...dryRun(lang), translate(lang, "voiceCompanion.tools.action.approve"), translate(lang, "voiceCompanion.tools.action.remove")] }),
+    };
+    /* The refused states are read after their press, which every language and theme makes. */
+    const refusedPress: Record<string, string> = { "approved-refused": "[data-voice-tool-ask]", "dry-run-busy": "[data-voice-tool-action='dry-run']" };
+    try {
+      for (const width of [1440, 820, 390]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const state of Object.keys(defining)) {
+        const label = `${width}-${lang}-${scheme}-${state}`;
+        const phone = width === 390;
+        const { context, page, pageErrors } = await openVoice(browser, server.base, `&mount=product&backend=codex&voicetools=${state}`, { viewport: { width, height: 844 }, lang, scheme, product: true, phone, motion: "reduce" });
+        try {
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-voice-companion-settings")));
+          const section = page.locator("[data-voice-tools]");
+          await section.waitFor();
+          await page.waitForFunction(() => !document.querySelector("[data-voice-tools-status]")?.textContent?.includes("…"));
+          const row = page.locator("[data-voice-tool-server]").first();
+          if (refusedPress[state]) {
+            const control = page.locator(refusedPress[state]);
+            await control.scrollIntoViewIfNeeded();
+            if (phone) await control.tap(); else await control.click();
+            await page.waitForSelector("[data-voice-tools-refused]");
+            await page.waitForFunction(selector => !(document.querySelector(selector) as HTMLInputElement | HTMLButtonElement).disabled, refusedPress[state]);
+            if (state === "approved-refused") {
+              expect(await page.locator("[data-voice-tool-ask]").isChecked()).toBe(false);
+              expect(await page.locator("[data-voice-tool-state]").getAttribute("data-voice-tool-state")).toBe("enabled");
+            }
+          }
+          for (const part of ["head", "tools", "foot"] as const) {
+            const words = defining[state](lang)[part] ?? [];
+            if (!words.length) continue;
+            if (state === "empty") await section.scrollIntoViewIfNeeded();
+            /* The head: the row's top at the dialog's top. The tools: the list's end at the dialog's bottom. The foot: its last line (the action row, or a line or refusal under it) at the dialog's bottom. */
+            else await page.evaluate(([selector, top]) => document.querySelector(selector)!.scrollIntoView({ block: top ? "start" : "end" }), [part === "head" ? "[data-voice-tool-server]" : part === "tools" ? "[data-voice-tool-tools]" : "[data-voice-tool-server] > :last-child", part === "head"] as const);
+            await page.screenshot({ path: path.join(out, `${label}-${part}.png`) });
+            const read = await page.evaluate(({ words, phone }) => {
+              const dialog = document.querySelector<HTMLElement>("[data-voice-companion-settings]")!;
+              const box = dialog.getBoundingClientRect();
+              const section = document.querySelector<HTMLElement>("[data-voice-tools]")!;
+              const inside = (rect: DOMRect) => rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5 && rect.right <= innerWidth + 0.5;
+              const walker = document.createTreeWalker(section, NodeFilter.SHOW_TEXT);
+              let outside = 0;
+              for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                if (!node.textContent?.trim()) continue;
+                const range = document.createRange(); range.selectNodeContents(node);
+                for (const rect of range.getClientRects()) if (rect.width > 0 && !inside(rect)) outside++;
+              }
+              /* Each defining phrase: every text range of it inside the dialog's visible box and the window; a short word on one line. */
+              const shown = words.map(word => {
+                const all = document.createTreeWalker(section, NodeFilter.SHOW_TEXT);
+                for (let node = all.nextNode(); node; node = all.nextNode()) {
+                  const at = node.textContent?.indexOf(word) ?? -1;
+                  if (at < 0) continue;
+                  const range = document.createRange(); range.setStart(node, at); range.setEnd(node, at + word.length);
+                  const rects = [...range.getClientRects()].filter(rect => rect.width > 0);
+                  return rects.length > 0 && rects.every(rect => rect.top >= Math.max(0, box.top) - 0.5 && rect.bottom <= Math.min(innerHeight, box.bottom) + 0.5 && inside(rect))
+                    && (word.includes(" ") || word.length > 32 || new Set(rects.map(rect => Math.round(rect.top))).size === 1);
+                }
+                return false;
+              });
+              const small = [...section.querySelectorAll<HTMLElement>("button, input, [role=switch]")].filter(control => {
+                const rect = (control.closest("label") ?? control).getBoundingClientRect();
+                return rect.height < (phone ? 44 : 24) - 0.5;
+              }).map(control => control.outerHTML.slice(0, 80));
+              return { viewportOverflow: document.documentElement.scrollWidth > innerWidth + 1, dialogOverflow: dialog.scrollWidth > dialog.clientWidth + 1, outside, shown, small,
+                background: getComputedStyle(dialog).backgroundColor, rows: section.querySelectorAll("[data-voice-tool-server]").length };
+            }, { words, phone });
+            measurements.push({ label: `${label}-${part}`, ...read });
+            if (read.viewportOverflow || read.dialogOverflow) failures.push(`${label}: scrolls sideways`);
+            if (read.outside) failures.push(`${label}: ${read.outside} text box(es) outside the dialog`);
+            read.shown.forEach((whole, at) => { if (!whole) failures.push(`${label}-${part}: «${words[at]}» is not whole on screen`); });
+            if (read.small.length) failures.push(`${label}: small targets ${read.small.join(" | ")}`);
+          }
+          expect(await row.count()).toBe(state === "empty" ? 0 : 1);
+          if (state === "approved" || state === "approved-ask") {
+            const ask = page.locator("[data-voice-tool-ask]");
+            expect(await ask.isChecked()).toBe(state === "approved-ask");
+            if (lang === "en" && scheme === "light") {
+              if (phone) await ask.tap(); else await ask.click();
+              await page.waitForFunction(checked => (document.querySelector("[data-voice-tool-ask]") as HTMLInputElement | null)?.checked === checked && !(document.querySelector("[data-voice-tool-ask]") as HTMLInputElement).disabled, state !== "approved-ask");
+              expect(await page.locator("[data-voice-tool-state]").getAttribute("data-voice-tool-state")).toBe("enabled");
+              await page.locator("[data-voice-tool-actions]").evaluate(element => element.scrollIntoView({ block: "end" }));
+              await page.screenshot({ path: path.join(out, `${label}-flipped.png`) });
+            }
+          }
+          if (state === "review" && lang === "en" && scheme === "light") {
+            const play = page.locator("[data-voice-tool='play'] input");
+            if (phone) await play.tap(); else await play.click();
+            await page.waitForFunction(() => (document.querySelector("[data-voice-tool='play'] input") as HTMLInputElement | null)?.checked === true && !(document.querySelector("[data-voice-tool='play'] input") as HTMLInputElement).disabled);
+            const approve = page.locator("[data-voice-tool-action='approve']");
+            await approve.scrollIntoViewIfNeeded();
+            if (phone) await approve.tap(); else await approve.click();
+            await page.waitForSelector("[data-voice-tool-state='enabled']");
+            await page.locator("[data-voice-tool-server]").evaluate(element => element.scrollIntoView({ block: "start" }));
+            await page.screenshot({ path: path.join(out, `${label}-approved.png`) });
+          }
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/voice-companion", { recursive: true });
+      fs.writeFileSync("evidence/voice-companion/voice-tools.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", synthetic: true, viewportBasis: "configured scene width", failures, measurements }, null, 2) + "\n");
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 900_000);
 
   /*
    * Audit B24: a press on a voice setting flips at once, and a refusal brings it
@@ -30520,6 +30987,7 @@ describe("operator decision forms: the «Рішення» column beside the seat
   const OUT = path.resolve(process.env.OPERATOR_DECISIONS_PNG_DIR ?? ".artifacts/operator-decisions");
   const SEAT_ASK = `pr_${"d".repeat(32)}`;
   const LANE_ROUND = `pr_${"c".repeat(32)}`;
+  const SEAT_SECOND = `pr_${"e".repeat(32)}`;
   browserTest("question skip: inline card and feed record at desktop and 390 in both languages", async () => {
     const out = path.resolve(process.env.QUESTION_SKIP_CARD_PNG_DIR ?? ".artifacts/operator-decisions/question-skip"); fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
@@ -30616,6 +31084,10 @@ describe("operator decision forms: the «Рішення» column beside the seat
           try {
             await page.waitForSelector('[data-decision-column="decisions"] [data-decision-list="3"]', { timeout: 30_000 });
             await page.waitForSelector("[data-decision-pointer-open]", { timeout: 30_000 });
+            /* The newest question stands open first; the lane's older round opens from its row. */
+            const newest = await page.locator('[data-decision-column] [data-decision-card="open"]').getAttribute("data-decision-review");
+            if (newest !== SEAT_SECOND) fail(`the column opened ${newest} first, expected the newest`);
+            await page.locator(`[data-decision-column] [data-decision-row="${LANE_ROUND}"]`).click();
             await page.mouse.move(0, 0);
             await page.waitForTimeout(600);
             const lane = await readForm(page, "[data-decision-column]");
@@ -30672,12 +31144,16 @@ describe("operator decision forms: the «Рішення» column beside the seat
             if (strip?.trim() !== t("decisions.waiting", { count: 3 })) fail(`the line reads «${strip}»`);
             await page.locator("[data-decision-strip]").click();
             await page.waitForSelector('[data-decision-column="decisions"] [data-decision-list="3"]', { timeout: 10_000 });
+            /* The lane's round, with its two thumbnails, opens from its row under the newest question. */
+            await page.locator(`[data-decision-column] [data-decision-row="${LANE_ROUND}"]`).click();
+            await page.waitForSelector(`[data-decision-column] [data-decision-card="open"][data-decision-review="${LANE_ROUND}"]`, { timeout: 10_000 });
+            await page.mouse.move(0, 0);
             await page.waitForTimeout(400);
             const column = await readForm(page, "[data-decision-column]");
             const composer = await page.evaluate(() => Boolean(document.querySelector("[data-orchestrator-panel] textarea")));
             readings[`${label}-open`] = { ...column, composer };
             await page.screenshot({ path: path.join(OUT, `${label}-open.png`) });
-            if (!column.sendReachable || column.minOptionHeight < 36 || column.titleCut || column.horizontalOverflow || column.thumbsOverlap || !composer) fail(`the column in place reads ${JSON.stringify({ ...column, composer })}`);
+            if (column.review !== LANE_ROUND || column.thumbs.length !== 2 || !column.sendReachable || column.minOptionHeight < 36 || column.titleCut || column.horizontalOverflow || column.thumbsOverlap || !composer) fail(`the column in place reads ${JSON.stringify({ ...column, composer })}`);
             if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
           } catch (error) {
             fail(error instanceof Error ? error.message.split("\n")[0]! : String(error));
@@ -30703,12 +31179,14 @@ describe("operator decision forms: the «Рішення» column beside the seat
             if (line.height < 44 || line.text !== t("decisions.waiting", { count: 3 })) fail(`the line reads ${JSON.stringify(line)}`);
             await page.locator("[data-decision-strip]").click();
             await page.waitForSelector('[data-mobile2-sheet="decisions"] [data-decision-list="3"]', { timeout: 10_000 });
+            await page.locator(`[data-mobile2-sheet="decisions"] [data-decision-row="${LANE_ROUND}"]`).click();
+            await page.waitForSelector(`[data-mobile2-sheet="decisions"] [data-decision-card="open"][data-decision-review="${LANE_ROUND}"]`, { timeout: 10_000 });
             await page.waitForTimeout(500);
             const sheet = await readForm(page, '[data-mobile2-sheet="decisions"]');
             const tabs = await page.locator('[data-mobile2-sheet="decisions"] [data-decision-tab]').count();
             readings[`${label}-sheet`] = { ...sheet, tabs };
             await page.screenshot({ path: path.join(OUT, `${label}-sheet.png`) });
-            if (tabs !== 2 || !sheet.sendReachable || sheet.minOptionHeight < 44 || sheet.titleCut || sheet.horizontalOverflow || sheet.thumbsOverlap) fail(`the sheet reads ${JSON.stringify({ ...sheet, tabs })}`);
+            if (tabs !== 2 || sheet.review !== LANE_ROUND || sheet.thumbs.length !== 2 || !sheet.sendReachable || sheet.minOptionHeight < 44 || sheet.titleCut || sheet.horizontalOverflow || sheet.thumbsOverlap) fail(`the sheet reads ${JSON.stringify({ ...sheet, tabs })}`);
             await page.locator('[data-mobile2-sheet="decisions"] [data-decision-tab="reports"]').click();
             await page.waitForSelector('[data-mobile2-sheet="decisions"] [data-report-log]', { timeout: 10_000 });
             await page.screenshot({ path: path.join(OUT, `${label}-reports.png`) });
@@ -30725,6 +31203,159 @@ describe("operator decision forms: the «Рішення» column beside the seat
     }
     fs.mkdirSync("evidence/operator-decisions", { recursive: true });
     fs.writeFileSync("evidence/operator-decisions/column.json", `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 900_000);
+
+  /*
+   * The open form folds and the newest decision comes first, over
+   * `&decisions=long` (the first seat question carries a ninety-character
+   * title): at 1440 in the column beside the chat, at 1000 in the transcript's
+   * place, and at 390 in the phone's sheet, uk and en, light and dark. Each
+   * frame reads the list newest first with the newest form open; a press on its
+   * header folds it, every row reads folded, the keyboard lands on the folded
+   * row, and nothing is answered; Enter opens it again and Space folds it. The
+   * long-titled form, opened from its row, keeps its title whole and its time
+   * and fold mark clear of it. At 1440 the feed's pointer opens its own form in
+   * the folded column.
+   *
+   *   CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "folds back to its row"
+   *
+   * Readings go to `evidence/operator-decisions/fold.json`; frames to
+   * OPERATOR_DECISIONS_PNG_DIR or `.artifacts/operator-decisions/`, never committed.
+   */
+  browserTest("the open form folds back to its row and the newest decision is listed first at 1440, 1000 and 390", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(path.join(OUT, "bundle-root-fold"));
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const ORDER = [SEAT_SECOND, SEAT_ASK, LANE_ROUND];
+    /* The list as drawn: its order, which form stands open, each row whole, the open header's parts apart. */
+    const readFold = (page: Page, scope: string) => page.evaluate((root) => {
+      const within = document.querySelector<HTMLElement>(root);
+      const list = within?.querySelector<HTMLElement>("[data-decision-list]") ?? null;
+      const frame = list?.getBoundingClientRect();
+      const box = (rect: DOMRect) => ({ x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) });
+      const apart = (a: DOMRect, b: DOMRect) => a.right <= b.left + 0.5 || b.right <= a.left + 0.5 || a.bottom <= b.top + 0.5 || b.bottom <= a.top + 0.5;
+      const textRects = (node: Element) => { const range = document.createRange(); range.selectNodeContents(node); return [...range.getClientRects()]; };
+      const rows = [...list?.querySelectorAll<HTMLElement>("[data-decision-row]") ?? []].map((row) => {
+        const rect = row.getBoundingClientRect();
+        /* A folded title ends in «…» by design: its box stays inside the row and its line is whole in height. */
+        const title = row.querySelector<HTMLElement>("span.flex-1");
+        const span = title?.getBoundingClientRect();
+        const lines = title ? new Set(textRects(title).map((part) => Math.round(part.top))).size : 0;
+        return { id: row.dataset.decisionRow, expanded: row.getAttribute("aria-expanded"), label: row.getAttribute("aria-label"), text: title?.textContent ?? "", ...box(rect),
+          inside: Boolean(frame && rect.top >= frame.top - 0.5 && rect.bottom <= frame.bottom + 0.5 && rect.left >= frame.left - 0.5 && rect.right <= frame.right + 0.5),
+          truncated: title ? title.scrollWidth > title.clientWidth + 0.5 : null,
+          titleInside: Boolean(span && lines === 1 && span.left >= rect.left && span.right <= rect.right + 0.5 && span.top >= rect.top && span.bottom <= rect.bottom + 0.5) };
+      });
+      const card = list?.querySelector<HTMLElement>("[data-decision-card]") ?? null;
+      const fold = card?.querySelector<HTMLElement>("[data-decision-collapse]") ?? null;
+      const header = fold?.getBoundingClientRect();
+      const title = card?.querySelector<HTMLElement>("[data-decision-title]") ?? null;
+      const time = fold?.querySelector("time")?.getBoundingClientRect();
+      const mark = fold?.querySelector("svg:last-child")?.getBoundingClientRect();
+      const titleRects = title ? textRects(title) : [];
+      const hit = header ? document.elementFromPoint(header.left + header.width / 2, header.top + Math.min(header.height / 2, 12)) : null;
+      return {
+        order: [...list?.querySelectorAll<HTMLElement>("[data-decision-row], [data-decision-card]") ?? []].map((node) => node.dataset.decisionRow ?? node.dataset.decisionReview),
+        expanded: list?.dataset.decisionExpanded ?? null,
+        rows,
+        open: card && fold && header ? {
+          review: card.dataset.decisionReview, ariaExpanded: fold.getAttribute("aria-expanded"), label: fold.getAttribute("aria-label"), header: box(header),
+          title: title?.textContent ?? "", titleWhole: titleRects.length > 0 && titleRects.every((part) => part.right <= header.right + 0.5 && part.bottom <= header.bottom + 0.5),
+          timeApart: Boolean(time && titleRects.every((part) => apart(part, time))), markApart: Boolean(mark && time && apart(mark, time) && titleRects.every((part) => apart(part, mark))),
+          markInside: Boolean(mark && mark.right <= header.right + 0.5 && mark.top >= header.top), uncovered: Boolean(hit && fold.contains(hit)),
+        } : null,
+        focused: (document.activeElement as HTMLElement | null)?.dataset.decisionRow ?? ((document.activeElement as HTMLElement | null)?.hasAttribute("data-decision-collapse") ? `fold:${document.activeElement!.closest<HTMLElement>("[data-decision-review]")?.dataset.decisionReview}` : document.activeElement?.tagName ?? null),
+        horizontalOverflow: document.documentElement.scrollWidth > innerWidth,
+      };
+    }, scope);
+    try {
+      for (const width of [1440, 1000, 390] as const) for (const lang of ["uk", "en"] as const) for (const scheme of ["light", "dark"] as const) {
+        const t = (key: string, vars?: Record<string, string | number>) => translate(lang, key as never, vars);
+        const phone = width === 390;
+        const label = `fold-${width}-${lang}-${scheme}`;
+        const fail = (text: string) => failures.push(`${label}: ${text}`);
+        const scope = phone ? '[data-mobile2-sheet="decisions"]' : '[data-decision-column="decisions"]';
+        const titles: Record<string, string> = {
+          [SEAT_SECOND]: lang === "uk" ? "Акаунт для нічних лейнів Codex" : "Account for the night Codex lanes",
+          [SEAT_ASK]: lang === "uk" ? "Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту" : "Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project",
+          [LANE_ROUND]: lang === "uk" ? "Вікно підтвердження оновлення" : "Update confirmation window",
+        };
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?decisions=long`, phone ? { width: 390, height: 844 } : { width, height: 900 }, scheme, lang, "reduce", phone);
+        const shot = (state: string) => page.screenshot({ path: path.join(OUT, `${label}-${state}.png`) });
+        try {
+          if (phone) {
+            await page.click("[data-mobile2-seat-open]", { timeout: 30_000 });
+            await page.locator("[data-decision-strip]").click({ timeout: 30_000 });
+          } else if (width === 1000) await page.locator('[data-orchestrator-panel] [data-decision-strip="3"]').click({ timeout: 30_000 });
+          await page.waitForSelector(`${scope} [data-decision-list="3"]`, { timeout: 30_000 });
+          await page.mouse.move(0, 0);
+          await page.waitForTimeout(500);
+          /* Newest first, and the newest stands open. */
+          const first = await readFold(page, scope);
+          readings[`${label}-expanded`] = first;
+          await shot("expanded");
+          if (JSON.stringify(first.order) !== JSON.stringify(ORDER) || first.expanded !== SEAT_SECOND) fail(`the list opens ${JSON.stringify({ order: first.order, expanded: first.expanded })}`);
+          if (!first.open || first.open.ariaExpanded !== "true" || first.open.label !== t("decisions.collapseAria", { title: titles[SEAT_SECOND]! }) || !first.open.titleWhole || !first.open.timeApart || !first.open.markApart || !first.open.markInside || !first.open.uncovered || (phone && first.open.header.h < 44)) fail(`the open header reads ${JSON.stringify(first.open)}`);
+          /* A press on the header's title folds it; nothing is answered. */
+          await page.locator(`${scope} [data-decision-review="${SEAT_SECOND}"] [data-decision-title]`).click();
+          await page.waitForSelector(`${scope} [data-decision-card]`, { state: "detached", timeout: 5_000 });
+          const folded = await readFold(page, scope);
+          readings[`${label}-collapsed`] = folded;
+          await shot("collapsed");
+          const posts = await page.evaluate(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts.length);
+          if (JSON.stringify(folded.rows.map((row) => row.id)) !== JSON.stringify(ORDER) || folded.expanded !== "" || folded.open || posts) fail(`folded, the list reads ${JSON.stringify({ ...folded, posts })}`);
+          for (const row of folded.rows) {
+            if (row.expanded !== "false" || row.label !== t("decisions.expandAria", { title: titles[row.id!]! }) || row.text !== titles[row.id!] || !row.inside || !row.titleInside || row.h < 44) fail(`the row of ${row.id} reads ${JSON.stringify(row)}`);
+          }
+          if (folded.focused !== SEAT_SECOND) fail(`the keyboard landed on ${folded.focused}`);
+          if (folded.horizontalOverflow) fail("the folded list scrolls sideways");
+          /* The keyboard: Enter opens the folded row, Space folds it again. */
+          await page.keyboard.press("Enter");
+          await page.waitForSelector(`${scope} [data-decision-card="open"][data-decision-review="${SEAT_SECOND}"]`, { timeout: 5_000 });
+          const reopened = await readFold(page, scope);
+          if (reopened.focused !== `fold:${SEAT_SECOND}`) fail(`after Enter the keyboard is on ${reopened.focused}`);
+          await page.keyboard.press("Space");
+          await page.waitForSelector(`${scope} [data-decision-card]`, { state: "detached", timeout: 5_000 });
+          readings[`${label}-keyboard`] = { reopened: reopened.focused, refolded: (await readFold(page, scope)).focused };
+          /* The long-titled form opens from its row: its title whole, its time and fold mark clear of it. */
+          await page.locator(`${scope} [data-decision-row="${SEAT_ASK}"]`).click();
+          await page.waitForSelector(`${scope} [data-decision-card="open"][data-decision-review="${SEAT_ASK}"]`, { timeout: 5_000 });
+          await page.locator(`${scope} [data-decision-review="${SEAT_ASK}"] [data-decision-collapse]`).scrollIntoViewIfNeeded();
+          await page.waitForTimeout(300);
+          const long = await readFold(page, scope);
+          readings[`${label}-long`] = long;
+          await shot("long-open");
+          if (!long.open || long.open.review !== SEAT_ASK || long.open.title !== titles[SEAT_ASK] || !long.open.titleWhole || !long.open.timeApart || !long.open.markApart || !long.open.markInside || long.horizontalOverflow) fail(`the long form's header reads ${JSON.stringify(long.open)}`);
+          /* A request from the feed opens its form in the folded column. */
+          if (width === 1440) {
+            await page.locator(`${scope} [data-decision-review="${SEAT_ASK}"] [data-decision-collapse]`).click();
+            await page.waitForSelector(`${scope} [data-decision-card]`, { state: "detached", timeout: 5_000 });
+            await page.locator("[data-decision-pointer-open]").click();
+            await page.waitForSelector(`${scope} [data-decision-card="open"][data-decision-review="${SEAT_ASK}"]`, { timeout: 5_000 });
+            await page.waitForTimeout(300);
+            const requested = await readFold(page, scope);
+            readings[`${label}-requested`] = requested;
+            await shot("requested");
+            if (requested.expanded !== SEAT_ASK) fail(`the pointer opened ${requested.expanded}`);
+          }
+          const sent = await page.evaluate(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts.length);
+          if (sent) fail(`${sent} answers were posted while folding`);
+          if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          fail(error instanceof Error ? error.message.split("\n")[0]! : String(error));
+          await shot("failed").catch(() => {});
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/operator-decisions", { recursive: true });
+    fs.writeFileSync("evidence/operator-decisions/fold.json", `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings, failures }, null, 2)}\n`);
     if (failures.length) throw new Error(failures.join("\n"));
   }, 900_000);
 
@@ -30779,6 +31410,8 @@ describe("operator decision forms: the «Рішення» column beside the seat
           try {
             if (!phone) await page.waitForSelector("[data-decision-pointer-open]", { timeout: 30_000 });
             await openList(page);
+            await page.locator(`${scope} [data-decision-row="${LANE_ROUND}"]`).click();
+            await page.waitForSelector(`${scope} [data-decision-card="open"][data-decision-review="${LANE_ROUND}"]`);
             const lane = await readParts(page, scope);
             if (!lane.source || !lane.source.whole || /[…]|\.\.\./.test(lane.source.text) || /\d+\s*(variant|варіант)/i.test(lane.source.text) || !lane.source.text.includes("Restore search results") && !lane.source.text.includes("Відновити")) fail(`the lane's source line reads ${JSON.stringify(lane.source)}`);
             if (lane.horizontalOverflow) fail("the lane's round scrolls sideways");
@@ -30865,7 +31498,6 @@ describe("operator decision forms: the «Рішення» column beside the seat
    * the next read of the board takes its row and its count away as well.
    * Readings go to `evidence/operator-decisions/mirror.json`.
    */
-  const SEAT_SECOND = `pr_${"e".repeat(32)}`;
   const waitingCount = (page: Page, phone: boolean) => page.evaluate((onPhone) => onPhone
     ? Number(document.querySelector<HTMLElement>("[data-mobile2-attention-count]")?.dataset.mobile2AttentionCount ?? "0")
     : Number((document.querySelector("[data-attention-count] .tabular-nums")?.textContent ?? document.querySelector("[data-needs-you-title]")?.textContent?.match(/\d+\s*$/)?.[0] ?? "0")), phone);
@@ -31014,7 +31646,9 @@ describe("operator decision forms: the «Рішення» column beside the seat
             await page.locator("[data-decision-strip]").click({ timeout: 30_000 });
           }
           await page.waitForSelector(`${scope} [data-decision-list="3"]`, { timeout: 30_000 });
-          await page.locator(`${scope} [data-decision-row="${SEAT_SECOND}"]`).click();
+          /* The newest round stands open first; a row is pressed only where it is folded. */
+          const folded = page.locator(`${scope} [data-decision-row="${SEAT_SECOND}"]`);
+          if (await folded.count()) await folded.click();
           const card = `${scope} [data-decision-card="open"][data-decision-review="${SEAT_SECOND}"]`;
           await page.waitForSelector(card, { timeout: 10_000 });
           await page.locator(`${card} [data-prototype-option="account:1"]`).click();
@@ -33014,6 +33648,9 @@ describe("operator decision forms: rejecting the task's prototype variants", () 
             await page.locator("[data-mobile2-seat-open]").click();
             await page.locator("[data-decision-strip]").click();
           }
+          const lane = page.locator(`[data-decision-row="pr_${"c".repeat(32)}"]`);
+          await lane.waitFor({ timeout: 30_000 });
+          await lane.click();
           const card = page.locator('[data-decision-card="open"]');
           await card.waitFor({ timeout: 30_000 });
           const reject = card.locator("[data-decision-reject]");
@@ -34201,6 +34838,8 @@ describe("saved decision delivery", () => {
             const folded = column.locator(`[data-decision-row="${id}"]`);
             if (await folded.count()) await folded.click();
             await column.locator(`[data-decision-review="${id}"] [data-decision-retry]`).click();
+            /* The delivered record leaves and the newest left opens in its place: wait, or the next row turns under the press. */
+            await column.locator(`[data-decision-review="${id}"], [data-decision-row="${id}"]`).first().waitFor({ state: "detached" });
           }
           await column.locator("[data-decision-list-empty]").waitFor();
           await column.locator("[data-decision-tab-count]").waitFor({ state: "hidden" });
@@ -35212,4 +35851,123 @@ describe("Telegram multiple bots", () => {
       fs.writeFileSync("evidence/telegram-multi-bot/desktop.json", JSON.stringify({ readings }, null, 2) + "\n");
     } finally { await browser.close(); if (tempFd !== null) fs.closeSync(tempFd); server.stop(); }
   }, 300_000);
+});
+
+describe("the sound map's one control: «Agent typing»", () => {
+  /*
+   * docs/design/sound-redesign.md §9: the sound levels gain one switch,
+   * «Звук роботи агентів» / "Agent typing", which turns the typing on screen
+   * and the murmur of agents off screen off together. On the desktop it sits
+   * in the board's ⋯ (Sound levels, opened in place), on the phone in the
+   * header menu's Settings page (Sound, its levels dialog).
+   *
+   * Desktop at 1440×900 and the shortest desktop window, 1000×700; the phone
+   * at 390×844 with a coarse pointer; en and uk, light and dark. It fails when
+   * the switch's label is cut by its scroller or the window, when another
+   * control covers it, when it is not on, or when one click does not store
+   * "off" on this device while leaving sound itself on.
+   *
+   * Frames go to `LLV_SOUND_SWITCH_OUT` (default `.artifacts/sound-switch/`,
+   * never committed), the readings to `evidence/sound-switch/rendered.json`.
+   *
+   *   CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "Agent typing"
+   */
+  const DESKTOP = [{ width: 1440, height: 900 }, { width: 1000, height: 700 }] as const;
+  const PHONE = { width: 390, height: 844 } as const;
+
+  /** Where the label's text is drawn, against what may clip it and what is drawn on top of it. */
+  async function measure(page: Page, panel: string) {
+    return page.evaluate((panelSelector) => {
+      const input = document.querySelector<HTMLInputElement>(`${panelSelector} [data-testid="typing-enabled"]`);
+      const label = input?.closest("label");
+      const text = label?.querySelector("span");
+      if (!input || !label || !text) return null;
+      const range = document.createRange();
+      range.selectNodeContents(text);
+      const rect = range.getBoundingClientRect();
+      let clip = { top: 0, left: 0, right: window.innerWidth, bottom: window.innerHeight };
+      for (let node = label.parentElement; node; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        if (!/(auto|scroll|hidden|clip)/.test(style.overflowY + style.overflowX)) continue;
+        const box = node.getBoundingClientRect();
+        clip = { top: Math.max(clip.top, box.top), left: Math.max(clip.left, box.left), right: Math.min(clip.right, box.right), bottom: Math.min(clip.bottom, box.bottom) };
+      }
+      const centre = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      const box = label.getBoundingClientRect();
+      return {
+        text: text.textContent ?? "",
+        checked: input.checked,
+        rect: [rect.left, rect.top, rect.right, rect.bottom].map((value) => Math.round(value * 10) / 10),
+        clip: [clip.left, clip.top, clip.right, clip.bottom].map((value) => Math.round(value * 10) / 10),
+        whole: rect.top >= clip.top - 0.5 && rect.bottom <= clip.bottom + 0.5 && rect.left >= clip.left - 0.5 && rect.right <= clip.right + 0.5,
+        onTop: Boolean(centre && label.contains(centre)),
+        labelHeight: Math.round(box.height * 10) / 10,
+      };
+    }, panel);
+  }
+
+  browserTest("the switch is whole, on, and stores «off» in both layouts, languages and themes", async () => {
+    const out = path.resolve(process.env.LLV_SOUND_SWITCH_OUT ?? ".artifacts/sound-switch");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    const failures: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        const expected = translate(lang, "sound.typing");
+        for (const viewport of [...DESKTOP, PHONE]) {
+          const phone = viewport === PHONE;
+          const tag = `${phone ? "phone" : "desktop"} ${viewport.width}×${viewport.height} ${lang} ${theme}`;
+          const { context, page, pageErrors } = await openFixture(browser, server.base, viewport, theme, lang, "reduce", phone);
+          try {
+            let panel: string;
+            if (phone) {
+              await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
+              await page.locator('[data-mobile2-open="menu"]').first().click();
+              await page.locator("[data-mobile2-sheet='menu'] [data-mobile2-menu-row='settings']").click();
+              await page.locator("[data-mobile2-sheet='menu'] [data-testid='sound-settings-trigger']").click();
+              panel = "[data-mobile2-sheet='menu'] [data-testid='sound-settings']";
+            } else {
+              await page.locator("[data-kanban-board]").waitFor({ timeout: 30_000 });
+              await openBoardMenu(page);
+              await page.locator("[data-bar-more-menu] [data-testid='sound-settings-trigger']").click();
+              panel = "[data-bar-more-menu] [data-testid='sound-settings']";
+            }
+            await page.locator(`${panel} [data-testid="typing-enabled"]`).scrollIntoViewIfNeeded();
+            const reading = await measure(page, panel);
+            if (!reading) throw new Error("the switch is not drawn");
+            const frame = `${phone ? "phone" : "desktop"}-${viewport.width}-${lang}-${theme}.png`;
+            await page.screenshot({ path: path.join(out, frame) });
+            if (reading.text !== expected) failures.push(`${tag}: label «${reading.text}», expected «${expected}»`);
+            if (!reading.checked) failures.push(`${tag}: the switch starts off`);
+            if (!reading.whole) failures.push(`${tag}: label ${reading.rect} is cut by ${reading.clip}`);
+            if (!reading.onTop) failures.push(`${tag}: something is drawn over the label`);
+            await page.locator(`${panel} [data-testid="typing-enabled"]`).click();
+            const stored = await page.evaluate(() => ({ typing: localStorage.getItem("llvAudioTypingEnabled"), sound: localStorage.getItem("llvSound") }));
+            if (stored.typing !== "off" || stored.sound === "off") failures.push(`${tag}: one click stored ${JSON.stringify(stored)}`);
+            const after = await measure(page, panel);
+            if (after?.checked !== false) failures.push(`${tag}: the switch still reads on after the click`);
+            await page.screenshot({ path: path.join(out, `off-${frame}`) });
+            if (pageErrors.length) failures.push(`${tag}: page errors ${pageErrors.join(" | ")}`);
+            readings.push({ surface: phone ? "phone" : "desktop", ...viewport, lang, theme, frame, ...reading, stored });
+          } catch (error) {
+            failures.push(`${tag}: ${String(error).split("\n")[0]}`);
+            await page.screenshot({ path: path.join(out, `failed-${viewport.width}-${lang}-${theme}.png`) }).catch(() => {});
+          } finally { await context.close(); }
+        }
+      }
+      fs.mkdirSync("evidence/sound-switch", { recursive: true });
+      const sources = ["src/components/SoundToggle.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts"];
+      fs.writeFileSync("evidence/sound-switch/rendered.json", JSON.stringify({
+        capturedAt: new Date().toISOString(),
+        command: "CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t \"Agent typing\" (isolated roots, scripts/gate-slot.sh)",
+        sourceDigests: Object.fromEntries(sources.map((file) => [file, createHash("sha256").update(fs.readFileSync(file)).digest("hex")])),
+        readings,
+        failures,
+      }, null, 2) + "\n");
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 900_000);
 });

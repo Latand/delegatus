@@ -4,7 +4,9 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { captureProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
+import * as updatePid from "@/lib/selfUpdate/pid";
+import { procBackend } from "@/lib/proc";
+import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
 import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
 
 import { GIB, planAgentMemory, setAgentMemoryPortsForTests, wrapAgentCommand } from "./agentMemory";
@@ -140,14 +142,14 @@ scopeTest("memory mode off still gets the work scope's CPU quota", () => {
   expect([seen.max, seen.memory, seen.parentMax]).toEqual(["60000 20000", "max", "360000 20000"]);
 });
 
-scopeTest("a publication push or release build runs in its own work scope", async () => {
+scopeTest.each(["update-install", "update-build"])("publication keeps its work quota while %s gets a high-weight sibling scope", async work => {
   const wrapped = wrapWorkCommand("/bin/sh", ["-c", REPORT], { label: "publish-push", env, ports });
   units.push(wrapped.args.find((arg) => arg.startsWith("--unit="))!.slice("--unit=".length));
   const seen = report(spawnSync(wrapped.command, wrapped.args, { encoding: "utf8" }).stdout);
   expect(seen.group).toMatch(new RegExp(`/${slices.work}/delegatus-work-publish-push-[0-9a-f-]{12}\\.scope$`));
   expect([seen.weight, seen.max, seen.parentMax]).toEqual(["100", "60000 20000", "360000 20000"]);
 
-  // The self-update port wraps install and build the same way.
+  // Compilation competes with the complete work slice at operator weight.
   const { realPorts } = await import("@/lib/selfUpdate/steps");
   const { buildEnv } = await import("@/lib/selfUpdate/env");
   const previous = process.env.LLV_AGENT_CPU;
@@ -155,16 +157,49 @@ scopeTest("a publication push or release build runs in its own work scope", asyn
   setCpuPortsForTests(ports);
   const lines: string[] = [];
   try {
-    const code = await realPorts(() => {}).run(["/bin/sh", "-c", REPORT], { cwd: sandbox, env: { ...buildEnv(sandbox), TMPDIR: sandbox }, onLine: (line) => lines.push(line), work: "update-build" });
+    const code = await realPorts(() => {}).run(["/bin/sh", "-c", REPORT], { cwd: sandbox, env: { ...buildEnv(sandbox), TMPDIR: sandbox }, onLine: (line) => lines.push(line), work });
     expect(code).toBe(0);
   } finally {
     setCpuPortsForTests(null);
     if (previous === undefined) delete process.env.LLV_AGENT_CPU; else process.env.LLV_AGENT_CPU = previous;
   }
   const build = report(lines.join("\n"));
-  expect(build.group).toMatch(new RegExp(`/${slices.work}/delegatus-work-update-build-[0-9a-f-]{12}\\.scope$`));
-  expect(build.max).toBe("60000 20000");
+  expect(build.group).toMatch(new RegExp(`/${slices.agents}/delegatus-release-[0-9a-f-]{12}\\.scope$`));
+  expect([build.weight, build.max, build.parentMax]).toEqual(["1000", "max 100000", "max 100000"]);
 });
+
+scopeTest.each([false, true])("release cleanup reaps descendants when leader identity is unreadable: %p", async unreadable => {
+  const { realPorts } = await import("@/lib/selfUpdate/steps");
+  const { buildEnv } = await import("@/lib/selfUpdate/env");
+  const previous = process.env.LLV_AGENT_CPU;
+  process.env.LLV_AGENT_CPU = "auto";
+  setCpuPortsForTests(ports);
+  let ready = () => {};
+  const started = new Promise<void>(resolve => { ready = resolve; });
+  let descendant: ProcessIdentity | null = null;
+  let leader: ProcessIdentity | null = null;
+  const identity = unreadable ? spyOn(updatePid, "readStartIdentity").mockReturnValue(null) : null;
+  const real = realPorts(() => {});
+  const childCode = 'process.on("SIGTERM", () => {}); console.log("child " + process.pid); setInterval(() => {}, 1000);';
+  const code = `const { spawn } = require("node:child_process"); console.log("leader " + process.pid); spawn(process.execPath, ["-e", ${JSON.stringify(childCode)}], {stdio:["ignore","inherit","inherit"]}); setInterval(() => {}, 1000);`;
+  const done = real.run([process.execPath, "-e", code], { cwd: sandbox, env: buildEnv(sandbox), work: "update-build", onLine: line => {
+    if (line.startsWith("leader ")) leader = captureProcessIdentity(Number(line.slice(7)));
+    if (line.startsWith("child ")) { descendant = captureProcessIdentity(Number(line.slice(6))); ready(); }
+  } }).catch(error => error);
+  try {
+    await started;
+    await real.abort();
+    const survived = (): boolean => descendant !== null && processIdentityStatus(descendant) !== "dead" && !procBackend.processExited(descendant.pid);
+    expect(survived()).toBe(false);
+  } finally {
+    if (descendant) await stopFixtureIdentity(descendant);
+    if (leader) await stopFixtureIdentity(leader);
+    await done;
+    identity?.mockRestore();
+    setCpuPortsForTests(null);
+    if (previous === undefined) delete process.env.LLV_AGENT_CPU; else process.env.LLV_AGENT_CPU = previous;
+  }
+}, 15_000);
 
 scopeTest("a headless review run launches into the work slice", async () => {
   const { launchDetached } = await import("@/lib/agent/headless");
@@ -343,8 +378,8 @@ const tmuxScopeTest = reachable && spawnSync("tmux", ["-V"]).status === 0 ? test
  * intentionally orphaned `setsid` child, then waits. The operator's tmux
  * server and its panes are never addressed.
  */
-tmuxScopeTest("tmux launches place the pane, the agent, its descendants and an orphan in the classified CPU scope", async () => {
-  const { spawnAgentWithPrompt } = await import("@/lib/tmux");
+tmuxScopeTest("tmux launches retain classified limits with the pane outside the private agent scope", async () => {
+  const { spawnAgentWithPrompt, panePidMap, resolveTarget } = await import("@/lib/tmux");
   const { agentRegistry } = await import("@/lib/agent/registry");
   // Unix socket names must fit even when the gate nests a long TMPDIR.
   const tmuxTmpdir = fs.mkdtempSync("/tmp/llv-cpu-tmux-");
@@ -355,15 +390,16 @@ tmuxScopeTest("tmux launches place the pane, the agent, its descendants and an o
   fs.writeFileSync(fake, [
     "#!/bin/bash",
     'out="$LLV_FAKE_CODEX_OUT"',
-    'sleep 600 & echo "$!" > "$out.descendant"',
-    '(setsid sleep 600 </dev/null >/dev/null 2>&1 & echo "$!" > "$out.orphan")',
-    'echo "$$" > "$out.agent"',
+    `python3 -c 'import json,os; c=json.loads(os.environ["LLV_SIGNAL_SANDBOX"]); open(os.environ["LLV_FAKE_CODEX_OUT"]+".descendant","w").write(os.readlink(c["hostProc"]+"/self")); os.execl("/bin/sleep","sleep","600")' &`,
+    `(setsid python3 -c 'import json,os; c=json.loads(os.environ["LLV_SIGNAL_SANDBOX"]); open(os.environ["LLV_FAKE_CODEX_OUT"]+".orphan","w").write(os.readlink(c["hostProc"]+"/self")); os.execl("/bin/sleep","sleep","600")' </dev/null >/dev/null 2>&1 &)`,
+    `python3 -c 'import json,os; c=json.loads(os.environ["LLV_SIGNAL_SANDBOX"]); print(next(x.split(":")[1].strip() for x in open(c["hostProc"]+"/self/status") if x.startswith("PPid:")))' > "$out.agent"`,
     "stty -echo",
     "printf '\\n› \\n  ? for shortcuts\\n'",
     "exec -a codex sleep 600",
   ].join("\n") + "\n", { mode: 0o700 });
   const saved = { TMUX_TMPDIR: process.env.TMUX_TMPDIR, LLV_AGENT_CPU: process.env.LLV_AGENT_CPU, LLV_AGENT_MEMORY: process.env.LLV_AGENT_MEMORY, LLV_WORK_CPU_QUOTA: process.env.LLV_WORK_CPU_QUOTA };
-  const tmuxEnv = { ...process.env, TMUX_TMPDIR: tmuxTmpdir, HOME: sandbox, SHELL: "/bin/bash" };
+  const tmuxEnv: NodeJS.ProcessEnv = { ...process.env, TMUX_TMPDIR: tmuxTmpdir, HOME: sandbox, SHELL: "/bin/bash" };
+  delete tmuxEnv.LLV_GATE_SLOT_LEASE;
   const tmux = (...args: string[]) => spawnSync("tmux", args, { env: tmuxEnv, encoding: "utf8" });
   let serverIdentity: ProcessIdentity | null = null;
   const identities: ProcessIdentity[] = [];
@@ -398,13 +434,21 @@ tmuxScopeTest("tmux launches place the pane, the agent, its descendants and an o
       const read = (suffix: string) => Number(fs.readFileSync(`${out}.${suffix}`, "utf8").trim());
       const agent = read("agent"), descendant = read("descendant"), orphan = read("orphan");
       identities.push(...[pane.panePid!, agent, descendant, orphan].map(pid => captureProcessIdentity(pid)));
-      const group = cgroupOf(pane.panePid!);
-      units.push(path.basename(group));
+      const paneGroup = cgroupOf(pane.panePid!);
+      const group = cgroupOf(agent);
+      await panePidMap(true);
+      expect(await resolveTarget(agent)).toBe(pane.display);
+      units.push(path.basename(paneGroup), path.basename(path.dirname(group)));
       expect(ppid(descendant)).toBe(agent);
       expect(ppid(orphan)).not.toBe(agent);
       for (const pid of [agent, descendant, orphan]) expect(cgroupOf(pid)).toBe(group);
-      expect(group).toMatch(/\/delegatus-agent-codex-pane-[0-9a-f-]{12}\.scope$/);
-      return group;
+      expect(paneGroup).toMatch(/\/delegatus-agent-codex-pane-[0-9a-f-]{12}\.scope$/);
+      expect(group).toMatch(/\/delegatus-signal-[0-9a-f]{32}\.scope\/agent$/);
+      expect(group.startsWith(paneGroup + "/")).toBeFalse();
+      const scope = path.dirname(group);
+      expect(control(scope, "cpu.max")).toBe(control(paneGroup, "cpu.max"));
+      expect(control(scope, "cpu.weight")).toBe(control(paneGroup, "cpu.weight"));
+      return scope;
     };
 
     // A workflow stage names its class; a pane reviewer and a tmux pipeline

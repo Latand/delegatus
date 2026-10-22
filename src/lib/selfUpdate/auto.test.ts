@@ -1759,3 +1759,45 @@ test("retention skips while a build runs", async () => {
   h.deps.createRunner = () => ({ state: update, restore: () => {}, start: async () => {}, retry: async () => {}, logPath: () => "" });
   try { await h.service.snapshot(); expect(h.prunes()).toBe(0); } finally { h.service.stop(); }
 });
+
+test("startup drains retention with automatic updates disabled and does not wait for cleanup", async () => {
+  const h = scenario();
+  writeAuto(join(h.dir, "auto.json"), { ...initialAuto(), enabled: false });
+  let entered!: () => void; let release!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  h.deps.prune = async () => { entered(); await held; };
+  const service = new SelfUpdateService(h.deps);
+  try {
+    service.startAuto();
+    await started;
+    expect(await service.startUpdate("retention-startup")).toMatchObject({ ok: false, code: "busy-update" });
+    release();
+    await service.retentionTick();
+  } finally { release(); service.stop(); }
+});
+
+test("a stopped owner cannot start retention after its mode read completes", async () => {
+  const h = scenario(); let release!: () => void;
+  h.deps.mode = () => new Promise(resolve => { release = () => resolve({ mode: "checkout", reason: null, record: h.record }); });
+  const service = new SelfUpdateService(h.deps);
+  const tick = service.retentionTick();
+  service.stop(); release(); await tick;
+  expect(h.prunes()).toBe(0);
+});
+
+test("the retention cadence survives real service-process restarts", () => {
+  const h = scenario();
+  writeFileSync(join(h.dir, "launcher.json"), JSON.stringify(h.record));
+  const tick = (at: number) => {
+    const result = spawnSync(process.execPath, [join(import.meta.dir, "retentionCadence.fixture.ts"), h.dir, String(at)], {
+      env: { ...process.env, HOME: join(h.dir, "home"), XDG_CONFIG_HOME: join(h.dir, "config"),
+        LLV_STATE_DIR: join(h.dir, "state"), TMPDIR: h.dir, LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" }, encoding: "utf8",
+    });
+    expect(result.stderr).toBe(""); expect(result.status).toBe(0);
+  };
+  tick(h.deps.now()); tick(h.deps.now());
+  expect(readFileSync(join(h.dir, "passes"), "utf8")).toBe("pass\n");
+  tick(h.deps.now() + 60_000);
+  expect(readFileSync(join(h.dir, "passes"), "utf8")).toBe("pass\npass\n");
+});

@@ -4,6 +4,36 @@ Status: implemented, 2026-10-10. Builds on `relay.md` (§A.6, §A.8, §B.4–§B
 `relay-slice3.md` (per-chat conversations) and the reserved branch in
 `src/lib/externalRelay/profile.ts:4-15`. Nothing here changes the wire.
 
+## Document attachment fallback
+
+The service's 2026-10-21 document projection appends this marker to the
+conversation message's `text`, after any caption or description:
+
+```text
+[Document attached; filename=notes.md; mime_type=text/markdown; byte_size=42]
+```
+
+The shape comes from the service's `relay_answer_input.py` document projection
+(revision `81c42634b8`), reproduced with invented content in
+`src/lib/externalRelay/ownerAttachment.test.ts`. `resolveOwnerReplyContext`
+retains the message text verbatim, so the marker survives without adding wire
+fields. Negotiated `Message.media` entries carry `ref`, `kind`, `filename`,
+`mime_type`, `byte_size` and `availability`; extracted `Input.documents`
+entries carry `title`, `text`, `message_id`, `media_ref` and `extraction`.
+The existing service-wire tool fixture describes `get_media` as a direct read
+with a required `message_id` argument.
+The marker's MIME value may include parameters such as `charset=utf-8`.
+
+For a marked owner message or its explicit reply target, the initial and
+continuation prompts instruct the agent to fetch the attachment with direct
+`get_media` before answering when its content is absent from `<documents>`.
+Content is matched by message or media reference; legacy entries without
+references use the marker's filename and document title. Empty or unavailable
+extractions still need the fallback. Other messages do not trigger it, and
+the instruction is omitted when the direct read is unavailable. The generated
+instruction contains only validated message IDs; the marker and file contents
+remain data under the existing owner prompt rules.
+
 ## Originating requirement
 
 The operator, 2026-10-10 about 07:50 Kyiv time, by voice, in Russian,
@@ -118,7 +148,7 @@ Up to the launch it is shared by every request; the launch is the restricted
 | Tools | engine web search; Celestia tools through the runner's round loop (up to 8 rounds) | `runner.ts:379-484`, `toolLoop.ts` |
 | Tripwires | Claude's `init` must list exactly `StructuredOutput` (+ `WebSearch`) and no MCP server; any other tool use or Codex item kills the run as `profile_violation` | `progress.ts:18-25`, `:46-58`, `:68-69` |
 | Time | `hardCapMs = target.hardCapMinutes × 60 000` (route bounds 1–240 min, default 30); `launchDetached` arms one timer that kills the group | `runner.ts:418`, `ephemeral.ts:146-151`, `:378`, `relays/[id]/route.ts:87-89`, `store.ts:251-266` |
-| Liveness | heartbeat every `heartbeat_interval_s`; a heartbeat older than `stall_window_s` or a 404 / 409 `lease_lost` cancels the run | `runner.ts:337-378`, `:458-466` |
+| Liveness | `relay-lease-worker.ts` sends heartbeat and completion HTTP from its own leased helper process; a 404 / 409 `lease_lost` cancels the run, and a stale acknowledged heartbeat cancels it after `stall_window_s` | `relayLease.worker.ts`, `relayLeaseTransport.ts`, `runner.ts` |
 | Answer | Codex `answer.json`, Claude `structured_output`; `checkedAnswer` validates action, length and `reply_to` | `ephemeral.ts:383-415`, `protocol.ts:255-288` |
 | Record | `answers/<relay>/<target>/<ms>_<request>.json`, begun when the child launches, finished with the local decision | `answers.ts`, `runner.ts:189-226`, `:439` |
 | Restart | the orphan sweep kills a live child by recorded pid and identity and completes `failed` / `install_restarted` | `poller.ts:73-115` |
@@ -498,7 +528,7 @@ These are the limits an owner run works within:
 
 | Limit | Value | Source | What it does to an owner run |
 |---|---|---|---|
-| Heartbeats | every `heartbeat_interval_s` (default 10 s); stall after `stall_window_s` (default 45 s) | `protocol.ts:39-45`, `runner.ts:337-378` | sent by the runner on its timer, so a long tool call never stalls the lease |
+| Heartbeats | every `heartbeat_interval_s` (default 10 s); stall after `stall_window_s` (default 45 s) | `protocol.ts:39-45`, `relayLease.worker.ts` | a leased helper process owns heartbeat scheduling and the completion POST, so synchronous Viewer work cannot delay either request |
 | First heartbeat | within `ack_window_s` (default 10 s) | `relay.md` §A.6 F2b | why `runOwnerAgent` returns before the spawn admission ends |
 | Install hard cap | `target.hardCapMinutes`, 1–240, default 30 | `relays/[id]/route.ts:87-89`, `store.ts:251-266` | the turn is interrupted; `failed` / `hard_cap` |
 | The chat's next request | held up to 120 s, then the service falls back (with `chat_conversations`) | `relay-slice3.md` §4.7 | the prompt's "about two minutes" |
@@ -539,9 +569,38 @@ conversation later with no lease to answer; the prompt asks for
   conversation even after cancellation, and retains an unconfirmed stop.
   Control attempts have a one-second deadline and three attempts per sweep,
   separated by 250 ms. An accepted-but-pending receipt does not prove stop.
-  Confirmed control or terminal liveness permits cleanup. Otherwise the
+  Confirmed control or terminal liveness permits cleanup. After retiring the
+  exact first prompt or continuation, recovery can also confirm a stop from
+  the registry's positive proof that execution custody ended. The current
+  generation must have a dead or unhosted entry. Every retained generation
+  and artifact owner must lack a host, claim, pending action and termination
+  survivors; launch receipts must be terminal with no admission owner or
+  queued launch. Applying switches, unfinished migrations and recoverable
+  deliveries retain custody. Missing or unreadable proof retains it too.
+  This check runs after asynchronous prompt cleanup and needs no readable
+  final transcript. It confirms cancellation only; it accepts no answer.
+  Recovery preserves the continuation operation id when observing a refused
+  control. The ordinary orphan sweep then drops confirmed run custody,
+  restores advertised capacity and releases the reply-chain reservation.
+  No manual ledger edit or transcript deletion is required. Otherwise the
   settings status reports `owner_stop_pending`, the ordinary conversation
   remains on the board, and the orphan sweep retries after a Viewer restart.
+
+  Target capacity counts execution separately from retained cleanup custody.
+  An accepted completion durably marks `capacityReleased` before waiting for
+  claim settlement or chain/file cleanup. If the marker write is refused,
+  the local runner retries it with capped exponential backoff independently
+  of conversation cleanup and keeps its active slot until the marker is
+  durable. Heartbeat scheduling stops after the helper accepts completion.
+  Both reservation paths and claim advertisements ignore that marker and
+  confirmed owner stops. Old rows without either proof still count. An
+  in-flight heartbeat refused after acceptance is journaled as
+  `post_completion`; the accepted answer stays accepted. The sweep finishes
+  abandoned completed cleanup once its local runner has returned, including
+  under the same Viewer process, without controlling a host or completing
+  the request again. A zero-capacity enabled target stays in the claim body
+  and emits `External relay target capacity` with its concurrency, running,
+  retained and waiting counts and the `full` or `drain` reason.
 
 
 ### 6.2 Where it sits

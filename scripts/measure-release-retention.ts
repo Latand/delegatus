@@ -44,6 +44,7 @@ const record: LauncherRecord = { version: 1, checkout: seed, releasesDir: seed, 
 fs.writeFileSync(record.releasePointer, JSON.stringify({ dir: dirs[0], sha: heads.get(dirs[0]!) }));
 let scans = 0;
 const ports: RetentionPorts = {
+  maxCandidates: 128, // This explicit replay measures all 87 copied trees.
   // Keep the same legacy /proc collector on both sides so this replay measures
   // full passes, independently of stricter production refusal on unreadable proc.
   scan: () => { scans++; return scanProcesses(); },

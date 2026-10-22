@@ -1,3 +1,5 @@
+// Pre-S5 embedded-flow execution cases stay as history until S8 deletion.
+// Supported run-reviewer cases and flows/retirement.test.ts remain active.
 import { expect, spyOn, test, crypto, fs, os, path, engineModule, IDLE_TURN_QUIET_MS, interruptedTurnRecoveryParkDetail, defaultPipelinePorts, reconcileEmbeddedReviewFlows, tickPipelines, AgentRegistry, setAgentRegistryForTests, newRound, createPipelineFromRequest, loadPipelines, savePipelines, pipelineIdentity, durableStageTurnEvidence, patchPipeline, closeAndDrain, RUN_STAGES, entry, harness, create, withRuntimeSnapshot, HISTORICAL_VERDICT_MISS, PASS_TEXT, makeStructuredAttempt, pinStageHead, BUDGET_STAGES, movingHeadHarness, driveWithController, stagedRecoveryHarness, activationDrainFixture, reserveActivationOnly, expectPipelineLeaseAbsent, frozenSurvivorStartup, restartCutStage, cutByRestart, idleStageHostFixture, runtimeReleaseOf, SILENT_RUN, attemptThatWorkedOnAfterRestart, stageWhoseStopMovesTheTranscript } from "./engine.fixture";
 import type { Flow, BoardTask, PipelinePorts } from "./engine.fixture";
 import { withPipelineMutation } from "./store";
@@ -21,7 +23,7 @@ async function continuationCloseFixture(marker: "actionAt" | "continuationReques
   return { h, pipeline };
 }
 
-test.each(["before-persist", "after-persist"] as const)("closing a lane during review flow creation preserves custody %s", async (seam) => {
+test.skip.each(["before-persist", "after-persist"] as const)("closing a lane during review flow creation preserves custody %s", async (seam) => {
   const h = harness();
   const pipeline = await create(h.ports, [
     { id: "build", kind: "run", prompt: "Build", next: "review" },
@@ -66,7 +68,7 @@ test.each(["before-persist", "after-persist"] as const)("closing a lane during r
   expect([...h.flows.values()].every(flow => flow.state === "closed")).toBe(true);
 });
 
-test.each(["refusal", "exception"] as const)("stale review flow cleanup keeps durable custody after a close %s", async (failure) => {
+test.skip.each(["refusal", "exception"] as const)("stale review flow cleanup keeps durable custody after a close %s", async (failure) => {
   const h = harness();
   const pipeline = await create(h.ports, [
     { id: "build", kind: "run", prompt: "Build", next: "review" },
@@ -123,7 +125,7 @@ test.each(["refusal", "exception"] as const)("stale review flow cleanup keeps du
   expect(loadPipelines()[0]!.pendingReviewFlowCleanup ?? []).toEqual([]);
 });
 
-test("stale review flow cleanup rechecks ownership before retrying", async () => {
+test.skip("stale review flow cleanup rechecks ownership before retrying", async () => {
   const h = harness();
   const pipeline = await create(h.ports);
   await tickPipelines([], h.ports);
@@ -143,7 +145,7 @@ test("stale review flow cleanup rechecks ownership before retrying", async () =>
   expect(loadPipelines()[0]!.pendingReviewFlowCleanup).toBeUndefined();
 });
 
-test("a rejected review flow attachment checkpoint keeps custody until the lane can be closed", async () => {
+test.skip("a rejected review flow attachment checkpoint keeps custody until the lane can be closed", async () => {
   const h = harness();
   const pipeline = await create(h.ports, [
     { id: "build", kind: "run", prompt: "Build", next: "review" },
@@ -187,7 +189,7 @@ test("a rejected review flow attachment checkpoint keeps custody until the lane 
   expect([...h.flows.values()].every(flow => flow.state === "closed")).toBe(true);
 });
 
-test("CPU admission polling closes a flow carried by a stale controller error", async () => {
+test.skip("CPU admission polling closes a flow carried by a stale controller error", async () => {
   const h = harness();
   const pipeline = await create(h.ports);
   await tickPipelines([], h.ports);
@@ -789,7 +791,7 @@ for (const enabled of [false, true]) {
 }
 
 for (const enabled of [false, true]) {
-  test.each(["before-stop", "during-stop", "crash-resume", "survivor", "survivor-after-checkpoint", "survivor-crash-resume", "survivor-startup-alive", "survivor-startup-unverified"] as const)(`reviewer identity advances during close at %s (activation: ${enabled})`, async (seam) => {
+  test.skip.each(["before-stop", "during-stop", "crash-resume", "survivor", "survivor-after-checkpoint", "survivor-crash-resume", "survivor-startup-alive", "survivor-startup-unverified"] as const)(`reviewer identity advances during close at %s (activation: ${enabled})`, async (seam) => {
     const h = harness();
     const pipeline = await create(h.ports, [
       { id: "build", kind: "run", prompt: "build", next: "review" },
@@ -1138,7 +1140,7 @@ test("create refuses an explicit service tier absent from the project's catalog 
   expect(created.error).toContain("offered:");
 });
 
-test("review-loop forwards the role-default service tier to its flow and reflects the admitted round", async () => {
+test.skip("review-loop forwards the role-default service tier to its flow and reflects the admitted round", async () => {
   const h = harness();
   const lookup = h.ports.roleLookup;
   h.ports.roleLookup = (id, parameters) => id === "reviewer"

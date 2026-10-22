@@ -450,7 +450,7 @@ function snapshotTree(directory: string): TreeSnapshot {
 }
 
 /** Missing paths are allowed after an interrupted recursive remove; additions and changed extant files are held. */
-function matchesSnapshot(directory: string, snapshot: TreeSnapshot): boolean {
+export function matchesSnapshot(directory: string, snapshot: TreeSnapshot): boolean {
   try {
     const current = snapshotTree(directory);
     for (const [relative, entry] of Object.entries(current.entries)) {

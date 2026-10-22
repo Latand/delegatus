@@ -1,3 +1,5 @@
+import * as headlessCli from "@/lib/agent/claudeHeadless";
+import { setSubscriptionApiConsent } from "@/lib/accounts/subscriptionApiConsent";
 import { afterAll, afterEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -14,6 +16,9 @@ const OLD_ENV = {
   LLV_CLAUDE_HOME: process.env.LLV_CLAUDE_HOME,
 };
 process.env.LLV_STATE_DIR = path.join(SANDBOX, "state");
+setSubscriptionApiConsent(true);
+const cliFallback = spyOn(headlessCli, "runHeadlessClaudeOnce").mockResolvedValue({ status: "failed", records: [] });
+
 process.env.LLV_CODEX_HOME = path.join(SANDBOX, "legacy-codex");
 process.env.LLV_CLAUDE_HOME = path.join(SANDBOX, "legacy-claude");
 fs.mkdirSync(process.env.LLV_CLAUDE_HOME, { recursive: true });
@@ -26,6 +31,7 @@ const limitsRoute = await import("@/app/api/limits/route");
 const historyRoute = await import("@/app/api/limits/history/route");
 
 afterAll(() => {
+  cliFallback.mockRestore();
   for (const [key, value] of Object.entries(OLD_ENV)) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;

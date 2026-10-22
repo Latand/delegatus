@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
 import { clampPercent, type WindowKey } from "@/lib/burndown";
-import type { EngineLimits, LimitSample } from "@/lib/types";
+import type { EngineLimits, LimitSample, LimitsSource, LimitWindow } from "@/lib/types";
 
 /** Forward poll history for the burndown chart. Claude quota is a live-only
     snapshot with no transcript record, so its curve can only be built by
@@ -23,6 +23,11 @@ const WINDOWS: WindowKey[] = ["session", "weekly"];
 
 interface HistoryFile {
   version: 1;
+  /** Only samples collected with account attribution enter Codex series. */
+  codexAttributionVersion: 1;
+  /** Legacy values have no recoverable per-reading identity. Retain them for
+   * inspection, outside every chart and calibration reader. */
+  unattributedCodexSeries: Record<string, LimitSample[]>;
   /** ISO of the first sample ever recorded — the "history builds from" hint. */
   since: string | null;
   /** `${engine}|${accountId}|${window}` → samples, oldest first. */
@@ -38,7 +43,7 @@ function seriesKey(engine: EngineName, accountId: string, window: WindowKey): st
 }
 
 function emptyHistory(): HistoryFile {
-  return { version: 1, since: null, series: {} };
+  return { version: 1, codexAttributionVersion: 1, unattributedCodexSeries: {}, since: null, series: {} };
 }
 
 function isSample(value: unknown): value is LimitSample {
@@ -52,10 +57,17 @@ export function readHistory(): HistoryFile {
     const raw = JSON.parse(fs.readFileSync(historyFile(), "utf8")) as Partial<HistoryFile>;
     if (raw.version !== 1 || !raw.series || typeof raw.series !== "object") return emptyHistory();
     const series: Record<string, LimitSample[]> = {};
-    for (const [key, value] of Object.entries(raw.series)) {
-      if (Array.isArray(value)) series[key] = value.filter(isSample);
+    const unattributedCodexSeries: Record<string, LimitSample[]> = {};
+    for (const [key, value] of Object.entries(raw.unattributedCodexSeries ?? {})) {
+      if (key.startsWith("codex|") && Array.isArray(value)) unattributedCodexSeries[key] = value.filter(isSample);
     }
-    return { version: 1, since: typeof raw.since === "string" ? raw.since : null, series };
+    for (const [key, value] of Object.entries(raw.series)) {
+      if (!Array.isArray(value)) continue;
+      const target = key.startsWith("codex|") && raw.codexAttributionVersion !== 1 ? unattributedCodexSeries : series;
+      target[key] = value.filter(isSample);
+    }
+    return { version: 1, codexAttributionVersion: 1, unattributedCodexSeries,
+      since: typeof raw.since === "string" ? raw.since : null, series };
   } catch {
     // A missing or unreadable history file is simply an empty series.
     return emptyHistory();
@@ -83,16 +95,32 @@ export function historySamples(engine: EngineName, accountId: string, window: Wi
   return arr.filter((s) => s.t >= cutoff);
 }
 
-/** Append the current live remaining-quota values for an engine/account, one
+/** Whether a window may enter forward history. A Codex window read from a
+    transcript rests on registry custody that a later unverified rebind
+    quarantines, and a stored point keeps no path back to that custody, so only
+    the account's own live probe answer is recorded. Transcript readings reach
+    the chart through the backfill, which rechecks custody on every read.
+    `source` is the read's provenance, for windows that carry none of their own. */
+function recordable(engine: EngineName, win: LimitWindow, source: LimitsSource): boolean {
+  return engine !== "codex" || (win.source ?? source) === "live";
+}
+
+/** Append the current remaining-quota values for an engine/account, one
     point per window. Downsampled to {@link MIN_GAP_S}, pruned to the retention
     window and capped, so the file stays small across a long-running viewer. */
-export function recordLimitSample(engine: EngineName, accountId: string, limits: EngineLimits, nowMs = Date.now()): void {
+export function recordLimitSample(engine: EngineName, accountId: string, limits: EngineLimits, source: LimitsSource, nowMs = Date.now()): void {
+  recordLimitSamples(engine, [{ accountId, limits, source }], nowMs);
+}
+
+/** The account controller records one whole tick with one read and rename. */
+export function recordLimitSamples(engine: EngineName, entries: readonly { accountId: string; limits: EngineLimits; source: LimitsSource }[], nowMs = Date.now()): void {
+  if (!entries.length) return;
   const nowS = Math.round(nowMs / 1000);
   const history = readHistory();
   let changed = false;
-  for (const window of WINDOWS) {
+  for (const { accountId, limits, source } of entries) for (const window of WINDOWS) {
     const win = limits[window];
-    if (!win || typeof win.usedPercent !== "number") continue;
+    if (!win || !Number.isFinite(win.usedPercent) || !recordable(engine, win, source)) continue;
     const key = seriesKey(engine, accountId, window);
     const arr = history.series[key] ?? (history.series[key] = []);
     const last = arr[arr.length - 1];

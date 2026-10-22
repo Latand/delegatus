@@ -191,3 +191,20 @@ export function viewerControlToken(env: ControlEnvironment, origin: string): str
   if (!addressesOwnViewer(env, origin, target)) return null;
   return credential(env.LLV_TOKEN) ?? releaseCredential(stateDir, target) ?? machineKey(env);
 }
+
+export interface ViewerCredentialFile { path: string; format: "compose" | "text" }
+
+/** Host-side hooks carry these locations, and read their contents at call time. */
+export function viewerControlCredentialFiles(env: ControlEnvironment, origin: string): ViewerCredentialFile[] {
+  if (env.LLV_VIEWER_CONTROL_URL?.trim()
+    && (!env.LLV_VIEWER_DEPLOY_TARGET?.trim() || !env.LLV_VIEWER_PORT?.trim())) return [];
+  const directory = stateDirectory(env);
+  const target = readJsonRecord(releaseTargetFile(env, directory));
+  if (!addressesOwnViewer(env, origin, target)) return [];
+  const files: ViewerCredentialFile[] = [];
+  if (typeof target?.container === "string" && target.container.trim()) {
+    files.push({ path: viewerComposeSnapshotPath(directory, target.container), format: "compose" });
+  }
+  files.push({ path: path.join(appDirIn(configRoot(env)), "token"), format: "text" });
+  return files;
+}
