@@ -356,3 +356,62 @@ independent baseline observations, filters, dependency/origin/source changes
 and flaky/error refusal. `scripts/eslint-changes.test.ts` covers both sides
 of the lint skip and content-cache invalidation. `scripts/gate-cache.test.ts`
 covers restart, corruption, expiry, bounds and unavailable storage.
+
+### Execution-phase comparison on fixed product inputs
+
+The implemented gate at `f61c6aa84` was compared with `e12215c01` on the
+remote test runner on 2026-10-22. Both arms ran in the same admitted scope,
+with the same CPU/memory limits and separate isolated check roots. The
+procedure was `scripts/measure-local-gate.ts`: export the old gate source,
+use immutable product commits, run the old and new planner/runner twice in
+separate clones, and sample host load1 and CPU PSI every five seconds.
+Fetch and outer CPU admission are excluded. File privacy remains enabled;
+the commit-history scan is excluded from both arms so the original historical
+commits can be used without rewriting identities. The normal pre-push hook
+is verified separately, including commit history.
+
+Product inputs: docs `99211e151` against its parent; small product change
+`db528f4d8` against its parent; merge of main `5a3442aa0` against its second
+parent, which is its merge base with main. The merge changes two files and
+selects four test files. It is separate from the audit's 60-file merge.
+Each before/after pair uses the exact same product commit, tree, base and
+installed dependencies. No scratch commit is created.
+
+| Input | Version | First / repeat, seconds | Median load1, first / repeat | Median PSI, first / repeat | Repeat passes reused |
+| --- | --- | --- | --- | --- | --- |
+| Docs | Before | 1.08 / 0.85 | 23.7 / 23.7 | 11.3 / 11.3 | 0 |
+| Docs | After | 1.62 / 1.18 | 23.2 / 23.2 | 11.6 / 12.2 | 0 |
+| Small product change | Before | 170.24 / 63.47 | 22.0 / 15.6 | 16.8 / 6.1 | 0 |
+| Small product change | After | 159.88 / 11.35 | 14.5 / 11.1 | 6.3 / 2.2 | 5 |
+| Merge of main | Before | 92.02 / 16.50 | 9.6 / 9.7 | 2.2 / 4.0 | 0 |
+| Merge of main | After | 145.52 / 8.42 | 19.9 / 36.1 | 43.5 / 52.5 | 3 |
+
+All twelve runs exited zero. The new repeats logged the reused step, tree,
+base and reason; every run logged a privacy pass. The cold measurements have
+uneven load and establish no cold-run speedup. Docs-only execution remains
+about one second. The small repeat reused types, lint, touched tests and both
+Linux checks; the merge repeat reused types, lint and touched tests.
+
+A previous probe of the audit's 60-file merge using the old gate refused:
+1,284 seconds, median load1 11.8 and PSI 34.1, with 167 pre-existing failures,
+61 flaky cases, a surviving-child diagnostic and a runner timeout. It is a
+refused measurement, not evidence of a successful speed comparison.
+
+### Correctness checks
+
+The focused command, through `gate-remote` and `scripts/gate-slot.sh`, was:
+
+```sh
+bun run test ./scripts/local-gate.test.ts ./scripts/local-gate.receipts.test.ts ./scripts/local-gate-tests.test.ts ./scripts/eslint-changes.test.ts ./scripts/gate-cache.test.ts
+```
+
+It passed 161 tests with zero failures in 390 seconds. A further prose-only
+output test was run red, then green through the same wrapper: one pass, zero
+failures. It proves both the skip explanation and that a following source
+change executes types, lint and touched tests. The runtime-group eviction
+regression was also observed red before its fix and passed in the focused
+suite. Commit hooks ran whitespace, privacy and lint with no bypass.
+
+The runtime group retains its complete validated verdict for one invocation,
+so optional cache eviction cannot run a consumer after its build was skipped.
+All existing gate temp-root prefixes and cleanup behavior are preserved.
