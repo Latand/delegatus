@@ -134,7 +134,10 @@ export async function retireLegacyCodexMemoryHooks(home: string, backupRoot: str
   const directory = path.join(home, ".llv", "hooks");
   const hookTarget = await fs.realpath(hookFile).catch(error => { if (error.code === "ENOENT") return null; throw error; });
   const original = hookTarget === null ? null : await read(hookTarget);
+  const canonicalHome = await fs.realpath(home).catch(error => { if (error.code === "ENOENT") return home; throw error; });
+  const hookSources = [...new Set([hookFile, path.join(canonicalHome, "hooks.json"), hookTarget].filter((file): file is string => file !== null))];
   const files = await fs.readdir(directory).catch(error => { if (error.code === "ENOENT") return []; throw error; });
+  const directories = [...new Set([directory, await fs.realpath(directory).catch(error => { if (error.code === "ENOENT") return directory; throw error; })])];
   const generated = new Map<string, string>();
   for (const name of files.filter(name => generatedName.test(name))) {
     const bytes = await read(path.join(directory, name));
@@ -155,11 +158,13 @@ export async function retireLegacyCodexMemoryHooks(home: string, backupRoot: str
   for (const name of generated.keys()) {
     const originalName = /^(shared-memory-[a-f0-9]{12}\.mjs)(?:\.|$)/.exec(name)?.[1];
     if (!originalName) continue;
-    const command = `bun ${quote(path.join(directory, originalName))} 2>/dev/null || true`;
-    orphanHashes.add(Object.values(codexMemoryHookConfig({ type: "command", command, timeout: 2, additionalContextLimit: 40000 }).state)[0].trusted_hash);
+    for (const directory of directories) {
+      const command = `bun ${quote(path.join(directory, originalName))} 2>/dev/null || true`;
+      orphanHashes.add(Object.values(codexMemoryHookConfig({ type: "command", command, timeout: 2, additionalContextLimit: 40000 }).state)[0].trusted_hash);
+    }
   }
   for (const [key, state] of Object.entries(states)) {
-    if (key.startsWith(`${hookFile}:user_prompt_submit:`) && state.trusted_hash && orphanHashes.has(state.trusted_hash)) ownedKeys.add(key);
+    if (hookSources.some(source => key.startsWith(`${source}:user_prompt_submit:`)) && state.trusted_hash && orphanHashes.has(state.trusted_hash)) ownedKeys.add(key);
   }
   const groupArray = tree?.properties?.get("hooks")?.properties?.get("UserPromptSubmit");
   const groups = groupArray?.items ?? [];
@@ -169,28 +174,28 @@ export async function retireLegacyCodexMemoryHooks(home: string, backupRoot: str
     const selected = new Set<number>();
     for (const [index, handler] of handlers.entries()) {
       const entry = JSON.parse(original!.slice(handler.start, handler.end));
-      if (!entry || entry.type !== "command" || !legacyCommand(entry.command, directory)) continue;
+      if (!entry || entry.type !== "command" || !directories.some(directory => legacyCommand(entry.command, directory))) continue;
       selected.add(index);
-      ownedKeys.add(`${hookFile}:user_prompt_submit:${groupIndex}:${index}`);
+      for (const source of hookSources) ownedKeys.add(`${source}:user_prompt_submit:${groupIndex}:${index}`);
     }
     const retained = handlers.map((span, index) => ({ span, index })).filter(entry => !selected.has(entry.index));
-    const sourceKey = (index: number) => `${hookFile}:user_prompt_submit:${groupIndex}:${index}`;
-    if (selected.size && retained.some((entry, index) => index !== entry.index && states[sourceKey(entry.index)])) {
+    const sourceKey = (source: string, index: number) => `${source}:user_prompt_submit:${groupIndex}:${index}`;
+    if (selected.size && retained.some((entry, index) => index !== entry.index && hookSources.some(source => states[sourceKey(source, entry.index)]))) {
       // A user may have put personal handlers beside ours. Move the surviving
       // group to a free index and copy its trust there, retaining every byte of
       // the original personal declarations and state tables. Native trust hashes
       // depend on the declaration/matcher, not on the group/handler indices.
       let target = groups.length + appendedGroups.length;
-      const key = (index: number) => `${hookFile}:user_prompt_submit:${target}:${index}`;
-      while (retained.some((entry, index) => states[key(index)] && (states[key(index)].enabled !== states[sourceKey(entry.index)]?.enabled || states[key(index)].trusted_hash !== states[sourceKey(entry.index)]?.trusted_hash))) {
+      const key = (source: string, index: number) => `${source}:user_prompt_submit:${target}:${index}`;
+      while (retained.some((entry, index) => hookSources.some(source => states[key(source, index)] && (states[key(source, index)].enabled !== states[sourceKey(source, entry.index)]?.enabled || states[key(source, index)].trusted_hash !== states[sourceKey(source, entry.index)]?.trusted_hash)))) {
         appendedGroups.push('{"hooks":[]}'); target++;
       }
       const raw = original!.slice(group.start, group.end);
       appendedGroups.push(edit(raw, removeArrayItems(handlers, selected).map(range => ({ start: range.start - group.start, end: range.end - group.start }))));
-      for (const [index, entry] of retained.entries()) {
-        const state = states[sourceKey(entry.index)];
-        if (!state || states[key(index)]) continue;
-        aliases.push(`[hooks.state.${JSON.stringify(key(index))}]\n${state.enabled === undefined ? "" : `enabled = ${state.enabled}\n`}${state.trusted_hash === undefined ? "" : `trusted_hash = ${JSON.stringify(state.trusted_hash)}\n`}`);
+      for (const [index, entry] of retained.entries()) for (const source of hookSources) {
+        const state = states[sourceKey(source, entry.index)];
+        if (!state || states[key(source, index)]) continue;
+        aliases.push(`[hooks.state.${JSON.stringify(key(source, index))}]\n${state.enabled === undefined ? "" : `enabled = ${state.enabled}\n`}${state.trusted_hash === undefined ? "" : `trusted_hash = ${JSON.stringify(state.trusted_hash)}\n`}`);
       }
       edits.push(...removeArrayItems(handlers, new Set(handlers.map((_, index) => index))));
     } else edits.push(...removeArrayItems(handlers, selected));

@@ -55,13 +55,15 @@ trusted_hash = "legacy-hash"
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test("orphaned legacy trust is retired from the generated command's declaration hash", async () => {
+for (const linkedHome of [false, true]) test(`orphaned legacy trust is retired from the generated command's declaration hash (symlinked home: ${linkedHome})`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-hook-orphan-"));
-  const home = path.join(root, "codex"), directory = path.join(home, ".llv", "hooks"); fs.mkdirSync(directory, { recursive: true });
+  const home = path.join(root, "codex"), directory = path.join(home, ".llv", "hooks");
+  if (linkedHome) { const actual = path.join(root, "actual"); fs.mkdirSync(actual); fs.symlinkSync(actual, home, "dir"); }
+  fs.mkdirSync(directory, { recursive: true });
   const file = path.join(directory, `shared-memory-${"b".repeat(12)}.mjs`); fs.writeFileSync(file, "Legacy source");
   const command = `bun '${file}' 2>/dev/null || true`;
   const hash = Object.values(codexMemoryHookConfig({ type: "command", command, timeout: 2, additionalContextLimit: 40000 }).state)[0].trusted_hash;
-  fs.writeFileSync(path.join(home, "config.toml"), `model="personal-model"\n[hooks.state.${JSON.stringify(home + "/hooks.json:user_prompt_submit:3:0")}]\ntrusted_hash=${JSON.stringify(hash)}\n`);
+  fs.writeFileSync(path.join(home, "config.toml"), `model="personal-model"\n[hooks.state.${JSON.stringify(fs.realpathSync(home) + "/hooks.json:user_prompt_submit:3:0")}]\ntrusted_hash=${JSON.stringify(hash)}\n`);
   try {
     await retireLegacyCodexMemoryHooks(home, path.join(root, "backup"));
     expect(fs.readFileSync(path.join(home, "config.toml"), "utf8")).toBe('model="personal-model"\n');
@@ -169,6 +171,35 @@ test("personal hooks in a mixed group keep their original declarations and trust
       const key = `${home}/hooks.json:user_prompt_submit:${group}:${handler}`;
       expect(state[key]?.trusted_hash).toBe(value.command === "personal-one" ? "personal-1" : "personal-2");
     }
+    await retireLegacyCodexMemoryHooks(home, path.join(root, "backup"));
+    expect(fs.readFileSync(path.join(home, "config.toml"), "utf8")).toBe(config);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+for (const layout of ["logical command", "canonical command", "mixed group"] as const) test(`a symlinked Codex home retires canonical native trust and preserves personal hooks (${layout})`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-hook-home-link-"));
+  const actual = path.join(root, "actual"), home = path.join(root, "codex"); fs.mkdirSync(actual); fs.symlinkSync(actual, home, "dir");
+  const canonical = fs.realpathSync(home), source = path.join(canonical, "hooks.json");
+  const directory = path.join(home, ".llv", "hooks"); fs.mkdirSync(directory, { recursive: true });
+  const file = path.join(directory, `shared-memory-${"d".repeat(12)}.mjs`); fs.writeFileSync(file, "Legacy source");
+  const commandFile = layout === "canonical command" ? fs.realpathSync(file) : file;
+  const own = { type: "command", command: `bun '${commandFile}' 2>/dev/null || true` };
+  const personal = ["personal-one", "personal-two"].map(command => ({ type: "command", command }));
+  const mixed = layout === "mixed group";
+  fs.writeFileSync(path.join(home, "hooks.json"), JSON.stringify({ hooks: { UserPromptSubmit: mixed ? [{ hooks: [own, ...personal] }] : [{ hooks: [own] }, { hooks: personal }] } }));
+  const personalConfig = personal.map((_, i) => `[hooks.state.${JSON.stringify(source + `:user_prompt_submit:${mixed ? 0 : 1}:${mixed ? i + 1 : i}`)}]\ntrusted_hash="personal-${i + 1}"\n`).join("\n");
+  fs.writeFileSync(path.join(home, "config.toml"), `[hooks.state.${JSON.stringify(source + ":user_prompt_submit:0:0")}]\ntrusted_hash="legacy-memory"\n` + personalConfig);
+  try {
+    await retireLegacyCodexMemoryHooks(home, path.join(root, "backup"));
+    const config = fs.readFileSync(path.join(home, "config.toml"), "utf8");
+    expect(config).not.toContain("legacy-memory"); expect(config).toContain(personalConfig);
+    const state = (Bun.TOML.parse(config) as { hooks: { state: Record<string, { trusted_hash: string }> } }).hooks.state;
+    const hooks = fs.readFileSync(path.join(home, "hooks.json"), "utf8"); expect(hooks).not.toContain("shared-memory-");
+    const groups = JSON.parse(hooks).hooks.UserPromptSubmit as Array<{ hooks: Array<{ command: string }> }>;
+    for (const [group, entry] of groups.entries()) for (const [index, handler] of entry.hooks.entries()) {
+      expect(state[`${source}:user_prompt_submit:${group}:${index}`]?.trusted_hash).toBe(handler.command === "personal-one" ? "personal-1" : "personal-2");
+    }
+    expect(fs.existsSync(file)).toBe(false);
     await retireLegacyCodexMemoryHooks(home, path.join(root, "backup"));
     expect(fs.readFileSync(path.join(home, "config.toml"), "utf8")).toBe(config);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }

@@ -732,7 +732,7 @@ test("managed Codex commands pin file-backed credential storage", () => {
   expect(resumeSpecFor("codex-sessions", transcript)?.command).toContain("cli_auth_credentials_store=file");
   expect(fresh.command.indexOf("cli_auth_credentials_store=file")).toBeLessThan(fresh.command.indexOf("gpt-5"));
   const resumed = resumeSpecFor("codex-sessions", transcript)?.command ?? "";
-  expect(resumed.indexOf("cli_auth_credentials_store=file")).toBeLessThan(resumed.indexOf("resume"));
+  expect(resumed.indexOf("cli_auth_credentials_store=file")).toBeLessThan(resumed.indexOf(" resume "));
 });
 
 test("managed Claude fresh and resume commands pin the transcript owner and scrub shadowing env", () => {

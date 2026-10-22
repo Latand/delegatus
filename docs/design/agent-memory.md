@@ -260,7 +260,8 @@ the control client's credential-forwarding restrictions.
 
 Upgrade migration runs before host adoption. It removes the old memory
 handlers, their trust tables and all old generated memory/setup programs for
-the default, managed and archived Codex homes. It keeps personal declaration
+the default, managed and archived Codex homes, matching both configured and
+canonical paths for symlinked homes. It keeps personal declaration
 and state bytes, shared config symlinks, and empty groups that preserve native
 trust indices. If personal handlers share a group with an old memory handler,
 their declaration moves to a free group and receives a copy of its existing
