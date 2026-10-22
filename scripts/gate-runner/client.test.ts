@@ -4,9 +4,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isolatedEnvironment } from "../local-gate";
-import { applyReturn, configFile, type Env, Demux, health, mapArguments, markUnhealthy, parseControl, parseProbe, readUstar, remoteEnvironment, resolveTarget, returnPlan, shapeOf, UNHEALTHY_MS, type Control, type Tree } from "./client";
+import { applyReturn, configFile, type Env, Demux, health, mapArguments, markUnhealthy, parseControl, parseProbe, readUstar, redact, remoteEnvironment, resolveTarget, returnPlan, shapeOf, sshFailure, UNHEALTHY_MS, type Control, type Tree } from "./client";
 import { envClass } from "./env-classes";
-import { ISOLATED_KEYS, PERSISTENT_KEYS, ustarEntry } from "./serve";
+import { completion, ISOLATED_KEYS, PERSISTENT_KEYS, ustarEntry } from "./serve";
 
 const made: string[] = [];
 afterEach(() => { for (const dir of made.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
@@ -151,6 +151,24 @@ test("control records are removed with their leading newline, across chunk bound
   expect(records).toEqual([{ kind: "started" }, { kind: "end", code: 3, tree: "c".repeat(40) }]);
   expect(parseControl("setup-failed tree check the runner checked out tree x for y")).toEqual({ kind: "setup-failed", step: "tree check", detail: "the runner checked out tree x for y" });
   expect(parseControl("setup-failed containment systemctl exited 1")).toEqual({ kind: "setup-failed", step: "containment", detail: "systemctl exited 1" });
+  expect(parseControl("no-verdict the run's completion record disagrees with its unit (unit exit 255)")).toEqual({ kind: "no-verdict", reason: "the run's completion record disagrees with its unit (unit exit 255)" });
+});
+
+// The verdict is the unit's code, and the command's writable record only tells
+// a real 0 from a clean-signal death or a stopped unit.
+test("a completion record the command could plant never turns into a verdict the unit did not give", () => {
+  expect(completion(0, "0\n")).toEqual({ code: 0 });
+  expect(completion(3, "3\n")).toEqual({ code: 3 });
+  expect(completion(69, "69\n")).toEqual({ code: 69 });
+  // exec killed by SIGKILL after the command planted 0: systemd-run exits 255.
+  expect(completion(255, "0\n")).toHaveProperty("reason");
+  // exec ended by a clean-exit signal, or the unit stopped: systemd-run exits 0 and exec wrote nothing.
+  expect(completion(0, null)).toHaveProperty("reason");
+  // A record rewritten after exec wrote its own.
+  expect(completion(1, "0\n")).toHaveProperty("reason");
+  expect(completion(0, "0")).toHaveProperty("reason");
+  expect(completion(0, "0\n0\n")).toHaveProperty("reason");
+  expect(completion(null, "0\n")).toHaveProperty("reason");
 });
 
 // T14 (archive side).
@@ -192,6 +210,67 @@ test("a returned archive is refused whole unless every entry is a regular file u
   expect(() => returnPlan(readUstar(Buffer.concat([regular("tree/evidence/escape/f"), end])), root, {})).toThrow("other than a directory");
 });
 
+const snapshot = (dirs: string[]) => {
+  const out: Record<string, string> = {};
+  const walk = (dir: string) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isSymbolicLink()) out[full] = `link:${fs.readlinkSync(full)}`;
+      else if (entry.isDirectory()) { out[full] = "dir"; walk(full); } else out[full] = fs.readFileSync(full, "utf8");
+    }
+  };
+  for (const dir of dirs) walk(dir);
+  return out;
+};
+
+// §8.8: entries are checked against each other, not only against the disk.
+test("entries that conflict with each other, and output directories that overlap, write nothing", () => {
+  const root = scratch(), out = scratch(), other = scratch();
+  const end = Buffer.alloc(1024);
+  const regular = (name: string) => ustarEntry(name, Buffer.from(name));
+  fs.mkdirSync(path.join(root, "evidence"));
+  fs.writeFileSync(path.join(root, "evidence", "kept.json"), "original");
+  fs.writeFileSync(path.join(out, "kept.txt"), "original");
+  const link = path.join(other, "into-tree");
+  fs.symlinkSync(path.join(root, "evidence"), link);
+  const before = snapshot([root, out, other]);
+  for (const names of [
+    ["tree/evidence/kept.json", "tree/evidence/collision", "tree/evidence/collision/child"],
+    ["tree/evidence/kept.json", "tree/evidence/collision/child", "tree/evidence/collision"],
+    ["tree/evidence/kept.json", "tree/evidence/same", "tree/evidence/same"],
+    ["out/PD_OUT/kept.txt", "out/PD_OUT/a", "out/PD_OUT/a/b/c"],
+  ]) {
+    const archive = Buffer.concat([...names.map(regular), end]);
+    expect(() => returnPlan(readUstar(archive), root, { PD_OUT: out })).toThrow("refused");
+    expect(snapshot([root, out, other])).toEqual(before);
+  }
+  // Two variables naming the same directory, a nested one, one inside the
+  // checkout through a link, and one holding the checkout.
+  const overlapping: Record<string, string>[] = [{ PD_OUT: out, SEND_PAINT_OUT: out }, { PD_OUT: out, SEND_PAINT_OUT: path.join(out, "nested") }, { PD_OUT: link }, { PD_OUT: path.dirname(root) }];
+  for (const outputs of overlapping) {
+    const archive = Buffer.concat([regular("out/PD_OUT/kept.txt"), end]);
+    expect(() => returnPlan(readUstar(archive), root, outputs)).toThrow("refused");
+    expect(remoteEnvironment(outputs, root, root)).toHaveProperty("reason");
+    expect(snapshot([root, out, other])).toEqual(before);
+  }
+});
+
+test("a write that fails part-way leaves every original file and no staged file behind", () => {
+  const root = scratch();
+  const evidence = path.join(root, "evidence");
+  fs.mkdirSync(path.join(evidence, "locked"), { recursive: true });
+  fs.writeFileSync(path.join(evidence, "first.json"), "original");
+  fs.chmodSync(path.join(evidence, "locked"), 0o555);
+  try {
+    const before = snapshot([root]);
+    const plan = returnPlan(readUstar(Buffer.concat([ustarEntry("tree/evidence/first.json", Buffer.from("new")), ustarEntry("tree/evidence/fresh/x.json", Buffer.from("new")), ustarEntry("tree/evidence/locked/y.json", Buffer.from("new")), Buffer.alloc(1024)])), root, {});
+    expect(() => applyReturn(plan)).toThrow();
+    expect(snapshot([root])).toEqual(before);
+  } finally {
+    fs.chmodSync(path.join(evidence, "locked"), 0o755);
+  }
+});
+
 // T6/T7 (cache side).
 test("a probe answer is cached for a minute, and a failed run keeps every caller here for 30 minutes", () => {
   const cache = scratch();
@@ -211,6 +290,40 @@ test("a probe answer is cached for a minute, and a failed run keeps every caller
   expect(health(env, "r", now + 62_000 + UNHEALTHY_MS + 1)).toMatchObject({ healthy: true });
   expect(count()).toBe(3);
   expect(parseProbe(`bun=0.0.1\ndisk=1\nmain=\n`, "1.4.0")).toMatchObject({ healthy: false });
+});
+
+// SSH's own diagnostics name the host, the account and its address.
+test("a failing runner's reason keeps its kind and drops hosts, accounts, addresses and paths everywhere it is written", () => {
+  const dir = scratch();
+  const host = "gate-sentinel-host.example.net", account = "sentinel-account", address = "203.0.113.77";
+  const stderrs = [
+    `ssh: Could not resolve hostname ${host}: Name or service not known`,
+    `${account}@${host}: Permission denied (publickey).`,
+    `@@@@@@@@@@@@@@@@@@@@\nWARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!\nOffending ECDSA key in /home/${account}/.ssh/known_hosts:3\nHost key for ${host} (${address}) has changed\nHost key verification failed.`,
+    `ssh: connect to host ${address} port 22: Connection refused`,
+  ];
+  const kinds = ["the runner's host name does not resolve", "the runner refused this machine's key", "the runner's host key is not the pinned one", "the runner refused the connection"];
+  for (const [index, stderr] of stderrs.entries()) {
+    const cache = path.join(dir, `cache-${index}`), ssh = path.join(dir, `ssh-${index}`), decision = path.join(dir, `decision-${index}`);
+    fs.writeFileSync(ssh, `#!/bin/sh\ncat <<'EOF' >&2\n${stderr}\nEOF\nexit 255\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(dir, "gate-runner.json"), JSON.stringify({ ssh: "runner-alias" }));
+    const run = spawnSync(process.execPath, [path.join(import.meta.dir, "client.ts"), "bun", "test", "scripts/gate-runner/client.test.ts"], {
+      cwd: REPO, encoding: "utf8", timeout: 60_000,
+      env: { PATH: process.env.PATH, HOME: path.join(dir, "home"), TMPDIR: dir, LLV_STATE_DIR: path.join(dir, "state"), LLV_GATE_RUNNER_CONFIG: path.join(dir, "gate-runner.json"), LLV_GATE_RUNNER_CACHE: cache, LLV_GATE_RUNNER_SSH: ssh, LLV_GATE_RUNNER_DECISION: decision } as unknown as NodeJS.ProcessEnv,
+    });
+    expect(run.status).toBe(0);
+    expect(fs.readFileSync(decision, "utf8")).toBe("here\n");
+    expect(run.stderr).toContain(`gate-runner: running here: the runner is unavailable: ssh exited 255: ${kinds[index]}`);
+    const written = [run.stdout, run.stderr, ...fs.readdirSync(cache).map(name => fs.readFileSync(path.join(cache, name), "utf8"))].join("\n");
+    expect(written).toContain(kinds[index]!);
+    for (const sentinel of [host, account, address, "/home/", "known_hosts"]) expect(written).not.toContain(sentinel);
+  }
+  expect(sshFailure(null, "", true)).toBe("ssh did not answer within 10 s");
+  expect(sshFailure(255, "something else entirely", false)).toBe("ssh exited 255");
+  expect(redact(`clone failed: fatal: repository '/srv/${account}/mirror.git' does not exist; see https://${host}/x`)).toBe("clone failed: fatal: repository '<path>' does not exist; see <url>");
+  expect(redact(`Timeout, server ${host} not responding. ${account}@${host} ${address}:22 fe80::1:2`)).toBe("Timeout, server <host> not responding. <account>@<host> <address> <address>");
+  // Reasons the client itself writes keep every word.
+  for (const reason of ["containment failed: systemctl --user set-property exited 1: refused by policy", `tree check failed: the runner checked out tree ${"a".repeat(40)} for ${"b".repeat(40)}`, "marked unhealthy until 05:44Z"]) expect(redact(reason)).toBe(reason);
 });
 
 // T22

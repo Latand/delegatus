@@ -67,3 +67,32 @@ test.if(linux)("a shipped tree keeps a symlink, and an export's bundle carries o
   expect(exported.changed).toContain("README.md");
   expect(fs.readdirSync(exportRoot)).toEqual(["checkout"]);
 }, E2E_TIMEOUT);
+
+// T4 (index flags): the capture reads every file, whatever the index claims.
+test.if(linux)("an assume-unchanged edit is captured, a skip-worktree entry runs here, and the caller's index stays byte for byte", () => {
+  const h = harness();
+  const indexFile = path.join(h.fixture, ".git", "index");
+  git(h.fixture, "update-index", "--assume-unchanged", "README.md");
+  fs.appendFileSync(path.join(h.fixture, "README.md"), "\nedited while assumed unchanged\n");
+  const before = fs.readFileSync(indexFile);
+  const scratch = path.join(h.root, "ship"); fs.mkdirSync(scratch);
+  const shipment = ship({ kind: "git", root: h.fixture }, scratch, h.base);
+  const shipped = git(h.root, "--git-dir", path.join(scratch, "ship.git"), "rev-parse", `${shipment.tree}:README.md`);
+  expect(shipped).toBe(git(h.fixture, "hash-object", "README.md"));
+  expect(shipped).not.toBe(git(h.fixture, "rev-parse", "HEAD:README.md"));
+  expect(fs.readFileSync(indexFile).equals(before)).toBeTrue();
+
+  git(h.fixture, "update-index", "--skip-worktree", "CONTRIBUTING.md");
+  fs.appendFileSync(path.join(h.fixture, "CONTRIBUTING.md"), "\nedited while skipped\n");
+  const skipped = fs.readFileSync(indexFile);
+  const other = path.join(h.root, "ship-2"); fs.mkdirSync(other);
+  expect(() => ship({ kind: "git", root: h.fixture }, other, h.base)).toThrow("skip-worktree");
+  expect(fs.readFileSync(indexFile).equals(skipped)).toBeTrue();
+  const file = testFile(h, "where.test.ts", `test("where", () => console.log("cwd=" + process.cwd()));`);
+  const result = h.run(["bun", "test", file]);
+  expect(result.code).toBe(0);
+  expect(result.stderr).toMatch(/^gate-runner: running here: capturing the tree failed: capture: the checkout has skip-worktree entries/m);
+  expect(result.stdout).toContain(`cwd=${h.fixture}`);
+  expect(h.calls().filter(call => !call.command.includes("manager=ok"))).toEqual([]);
+  expect(fs.readFileSync(indexFile).equals(skipped)).toBeTrue();
+}, E2E_TIMEOUT);

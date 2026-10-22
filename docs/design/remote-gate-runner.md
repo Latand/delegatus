@@ -632,6 +632,21 @@ so a local run carries no extra process. Everything else is the client's job,
    - the user manager answers;
    - the mirror exists.
 
+   A failed probe keeps only the kind of failure, never ssh's own text,
+   which names the host, the account, its address and the key's path: `ssh
+   exited <n>` followed by one of "the runner's host name does not
+   resolve", "the runner's host key is not the pinned one", "the runner
+   refused this machine's key", "the runner refused the connection", "the
+   connection to the runner timed out", "the runner's network is
+   unreachable" or "the runner closed the connection". Every other reason
+   the client prints, keeps in the health file or appends to the decision
+   log (a setup step's last line from the runner, a capture error) passes
+   through one redaction first, which replaces absolute and home-relative
+   paths, `account@host` pairs, host names after `host`, `server` or `to`,
+   IP addresses and URLs with `<path>`, `<account>@<host>`, `<host>`,
+   `<address>` and `<url>`. The run session itself uses `LogLevel=QUIET`,
+   since its standard error is the command's.
+
    Every runner-side failure, before or after `started` (§8.6, §8.7), writes
    `unhealthyUntil` = now + 30 minutes into the same file, and the client
    treats the runner as unhealthy until then without probing. 30 minutes
@@ -642,19 +657,38 @@ so a local run carries no extra process. Everything else is the client's job,
    callers. The file is replaced by write and rename. When the cache
    directory cannot be written, caching is off and each call probes.
 3. **Capture and bundle (§8.4).** Nothing leaves this machine yet.
-4. **Privacy.** The tree's own `scripts/privacy-publication-gate.ts` runs
-   here with `--require-known-values`, the hook's privacy environment
+4. **Privacy.** The scan's subject is the shipment, never the live checkout:
+   an edit made after capture must neither hide a value from it nor change
+   what a cached answer stands for. The capture's tree `T` is checked out
+   from the capture's own objects into a scratch directory, and the gate
+   that runs is `T`'s own `scripts/privacy-publication-gate.ts` with `T`'s
+   fingerprints, `--require-known-values`, the hook's privacy environment
    (`local-gate.ts:795-799`) and the caller's `LLV_PRIVACY_KNOWN_VALUES_FILE`:
-   - in a git work tree, with `--base <merge-base HEAD origin/main> --check-commits`;
-   - in a review export, with `--repository <export> --paths <the files that
-     differ between the bundle's parent and C>` (§8.4). No commit message of
-     the lane travels from an export, so there is nothing for
-     `--check-commits` to read.
+   - in a git work tree, the scratch checkout is a repository whose `HEAD`
+     is the bundle's head and whose index and files are `T`, scanned with
+     `--base <merge-base head origin/main> --check-commits`;
+   - in a review export, a plain directory holding `T`, scanned with
+     `--paths <the files that differ between the bundle's parent and C>`
+     (§8.4). No commit message of the lane travels from an export, so there
+     is nothing for `--check-commits` to read.
 
-   Its result is cached by tree id, head and base (parent, for an export), at
-   most 256 entries, oldest evicted first. A refusal or a configuration error
-   runs the command here. That includes a changed media file in an export,
-   whose provenance the scan cannot read without git.
+   The bundle also carries what that scan does not read: in a git work tree,
+   every blob of every lane commit, including a version a later commit
+   replaced or deleted. Every blob the bundle carries outside the scanned
+   paths of `T` (`git rev-list --objects` of its tips, minus the mirror's
+   main and the local `origin/main`, which are public) is written under the
+   name it travelled with and scanned with `--paths`. So is a list of every
+   path name the transmitted commits touch. A finding in any of them runs
+   the command here: a private value one commit added and a later one
+   deleted never leaves this machine.
+
+   The answer is cached by object ids only: the kind, `C`, head, base or
+   parent, the bundle's prerequisite and the known-value digests, at most
+   256 entries, oldest evicted first. A refusal or a configuration error
+   runs the command here; only a refusal by the gate itself is cached. That
+   includes a changed media file in an export, whose provenance the scan
+   cannot read without git, and a media file whose earlier version a lane
+   commit replaced, whose manifest is not beside the old version.
 5. **Upload.** `tar` of `manifest.json`, `run.bundle` and the client's own
    sibling `serve.ts` is piped into
    `ssh <alias> 'mkdir -p ~/runs/<id> && tar -xf - -C ~/runs/<id>'`. The run id
@@ -671,7 +705,9 @@ so a local run carries no extra process. Everything else is the client's job,
    arrives, minus control records (§8.6).
 7. **Outputs**, for driver shapes only (§8.8).
 8. **Remove.** `ssh <alias> '~/.bun/bin/bun ~/runs/<id>/serve.ts remove ~/runs/<id>'`
-   runs after every run, with any result.
+   runs after every run, with any result, bounded at 60 s. Its result is
+   checked (§8.9): a run is reported as passed only once the runner has
+   confirmed that it is gone.
 9. **Exit** with the code from §8.6.
 
 The manifest carries:
@@ -718,6 +754,17 @@ directory, which is removed afterwards. **In a git work tree:**
 
    Copying the index matters: a fresh empty index drops tracked files that
    match an ignore rule and gives a different id (measured in §7).
+
+   The copy must not let git trust what the index claims about a file. It
+   keeps the original's modification time (to the millisecond, so never
+   later), because git rereads every entry as new as the index file. `add`
+   runs with `core.fsmonitor=false`, `core.ignoreStat=false` and
+   `core.checkStat=default`. An entry marked assume-unchanged keeps its old
+   blob whatever the file holds, so that flag is cleared in the copy before
+   `add`. An entry marked skip-worktree stands for a file this checkout does
+   not have (a sparse checkout): neither its old blob nor a deletion is the
+   tree here, so such a checkout runs here with `capturing the tree failed:
+   … skip-worktree entries`. The caller's index is never written.
 3. `git --git-dir <tmp>/ship.git commit-tree T -p HEAD -m gate-run`, with
    `GIT_AUTHOR_*` and `GIT_COMMITTER_*` set to `gate-run <gate-run@invalid>`,
    so no identity travels. The result is commit `C`. A clean tree gives
@@ -867,7 +914,22 @@ same protocol.
    `gate-slot.sh` admission, slots, work slice, 300% scope quota,
    `MemoryMax=8G` units and owned runner apply, because they come from the
    shipped tree (`gate-slot.sh:88-143`, `owned-runner.ts:145-159`).
-9. **End.** Write the record `end <exit code> <T>` when the unit ends.
+9. **End.** When the unit ends, write the record `end <exit code> <T>`, or
+   `no-verdict <reason>` when the code cannot be trusted. The command runs
+   as the same account, so it can write any file of the run, including the
+   `exit` record that `serve.ts exec` writes after its child ends; it cannot
+   change the code its unit reports. That code is the verdict:
+   `systemd-run --wait` exits with the unit's main process's own code.
+   `systemd-run` also exits 0 when that process dies by `SIGTERM`, `SIGHUP`,
+   `SIGINT` or `SIGPIPE`, or when the unit is stopped (measured under
+   systemd 255), so the `exit` record only tells a real 0 from those. The
+   end record is written only when both name the same code. `serve.ts exec`
+   forwards `SIGTERM`, `SIGHUP` and `SIGINT` to the command and ignores
+   `SIGPIPE`, so none of them ends it without its record; it removes
+   whatever the command left at the record's name before writing its own.
+   A record planted before `exec` is killed, or rewritten after it wrote its
+   own, therefore gives `no-verdict`, never a pass. A stop the client asked
+   for gives no record at all.
 
 Setup output (git, install, the containment checks) goes to
 `<dir>/setup.log`. On a setup failure, `serve.ts` writes the record
@@ -943,19 +1005,25 @@ port 22 from this machine only.
   `publicationHistory.ts:12-19`).
 - **Control records.** `serve.ts run` writes each record to standard error
   as a newline, the nonce, a space, the record and a newline: `started`,
-  `setup-failed <step> <detail>` or `end <code> <tree>`. The leading newline
+  `setup-failed <step> <detail>`, `end <code> <tree>` or
+  `no-verdict <reason>`. The leading newline
   makes a record start a line even when the command's last line had none.
   The client removes each record together with that leading newline, so the
   caller receives the command's bytes unchanged, an unterminated last line
   included. The nonce reaches `serve.ts run` only on its standard input
-  (§8.5 step 2), so the command cannot forge a record.
+  (§8.5 step 2), so the command cannot forge a record, and the code an
+  end record carries comes from the command's unit, which the command cannot
+  set (§8.5 step 9).
 
 | Outcome | Client exit | Line on standard error |
 | --- | --- | --- |
 | End record with code N, 69 included | N | — |
 | Setup failure before `started` (upload, bundle, clone, install, tree check, containment, disk) | runs here (§8.7) | `gate-runner: running here: <step> failed: <detail>` |
 | Session lost, or the stream ends without an end record, after `started` | 75 | `gate-runner: no verdict: the connection to the runner was lost after <n> s; nothing was judged` |
+| The unit's code and the run's `exit` record disagree, or the record is missing (§8.5 step 9) | 75 | `gate-runner: no verdict: <reason>; nothing was judged` |
 | Driver outputs refused or not returned | 75 | `gate-runner: no verdict: outputs were not returned (<reason>)` |
+| End record with code 0, and the runner did not confirm the run's removal (§8.9) | 75 | `gate-runner: no verdict: the run passed, but its cleanup on the runner was not confirmed (<cause>)` |
+| End record with code N ≠ 0, and the removal not confirmed | N | `gate-runner: cleanup on the runner was not confirmed (<cause>); run <id> stays there until the runner's sweep removes it` |
 | Cancelled and stop confirmed | 143 (`SIGTERM`) or 130 (`SIGINT`) | — |
 | Cancelled and stop not confirmed within 15 s | 75 | `gate-runner: no verdict: cancellation was not confirmed on the runner` |
 
@@ -1029,9 +1097,22 @@ reads the stream with its own header reader into a temporary file, at most
   names in the manifest's output map.
 
 After the whole stream has passed, it checks every destination before
-writing any: a parent that already exists as a symlink, or as something other
-than a directory, refuses the return. Then it writes each file, mode 0644. A
-refused or oversized return writes nothing and ends the run with 75 (§8.6).
+writing any, against this machine's files and against the other entries:
+
+- a parent that already exists as a symlink, or as something other than a
+  directory, refuses the return;
+- two entries with the same destination, or one entry whose destination is
+  a parent directory of another's (`tree/evidence/c` beside
+  `tree/evidence/c/child`, in either order), refuse it;
+- output directories that are the same directory, lie one inside the other,
+  or overlap the checkout, resolved through symlinks, refuse it. The client
+  already runs such a call here at eligibility, so the return only rechecks.
+
+Then it stages every file beside its destination (creating missing
+directories) and, once all are staged, renames each into place, mode 0644.
+A failure while staging removes what was staged and the directories it
+made; a failed rename puts back the files already replaced. A refused or
+oversized return writes nothing and ends the run with 75 (§8.6).
 
 ### 8.9 Cancellation and cleanup
 
@@ -1047,12 +1128,28 @@ refused or oversized return writes nothing and ends the run with 75 (§8.6).
   (`owned-runner.ts:122-125`).
 - **Cleanup.** `serve.ts remove` deletes `~/runs/<id>` after every run, with
   any result. That includes the clone, `node_modules`, the isolation
-  directories, the temporary directory and the outputs. Anything a dead
-  client left behind is removed by the next run's sweep, 30 minutes after its
-  lease stops being touched. The health probe reports how many run
-  directories exist, and the fallback reason names a full disk. The manual
-  run's leftover `~/runs/e2e-…` directory has no lease, so the first sweep
-  removes it.
+  directories, the temporary directory and the outputs. It deletes only a
+  run whose unit is proven inactive: `systemctl --user is-active
+  gate-run-<id>` answering `inactive` or `failed`, after a
+  `systemctl --user stop` when it was active. A stop that fails, or a user
+  manager that gives no answer, leaves the directory and its lease and
+  exits 3. The sweep applies the same test.
+- **Unconfirmed cleanup.** The client checks the removal's result. When the
+  removal's connection fails, it does not finish within 60 s, or
+  `serve.ts remove` refuses, the client marks the runner unhealthy for 30
+  minutes, prints `gate-runner: cleanup on the runner was not confirmed
+  (<cause>); run <id> stays there until the runner's sweep removes it`, and
+  reports a passing run as no verdict (exit 75, §8.6). A failing code stays
+  decisive. The lease is then no longer touched, so the first run after the
+  mark expires sweeps that directory once its unit is inactive, and nothing
+  else.
+- **Leftovers.** Anything a dead client left behind is removed by the next
+  run's sweep, 30 minutes after its lease stops being touched. The health
+  probe reports how many run directories exist, and the fallback reason
+  names a full disk. The sweep reads only names of this protocol (12
+  lowercase hex characters), so the provisioning agent's `~/runs/e2e-…`
+  directory and the `run-…` directories of the interim `gate-remote` tool
+  stay; whoever made them removes them.
 
 ### 8.10 Edits to existing files
 
@@ -1100,13 +1197,13 @@ off Linux, as `scripts/gate-slot.test.ts:101` does.
 | T1 | No configuration | The stub records any invocation, or the command's output differs from today's. |
 | T2 | `LLV_GATE_RUNNER=off`; a nested call holding a slot; `NODE_ENV=test`; an ineligible shape; an isolated environment | Any invocation is recorded. |
 | T3 | Eligible and healthy, with a fixture test file that passes and one that fails | The exit code or the output (minus `gate-runner:` lines) differs from a local run of the same tree, or more than one run happens. |
-| T4 | Exact tree: staged edit, unstaged edit, untracked file, deleted file, mode change, symlink, tracked file that matches an ignore rule | The runner's verify step (`add -A`, then `write-tree`) gives an id other than `T`; or the local index bytes, `git for-each-ref` output or loose-object count change. |
+| T4 | Exact tree: staged edit, unstaged edit, untracked file, deleted file, mode change, symlink, tracked file that matches an ignore rule; an edit to an assume-unchanged file; an edit to a skip-worktree file | The runner's verify step (`add -A`, then `write-tree`) gives an id other than `T`; the assume-unchanged file's shipped blob differs from the file's bytes; the skip-worktree checkout uploads anything or does not run here; or the local index bytes, `git for-each-ref` output or loose-object count change. |
 | T5 | Mirror behind the local `origin/main`, and mirror ahead of it | Either run fails to verify its bundle. |
 | T6 | Health probe fails (stub exits 255) | The command does not run here exactly once with the `running here` line, or a second call within 60 s probes again. |
-| T7 | Session killed after `started`, then a second invocation, then a third after the mark in the health file is moved back 31 minutes | The first exits other than 75, lacks the `no verdict` line, or reruns here. The second probes, uploads, or does not run here with the `running here` line. The third does not go remote. |
+| T7 | Session killed after `started` at a handshake: the stub cuts it when the command's first line arrives, while the command waits for a release file the test writes only after the first run returns. Then a second invocation, then a third after the mark in the health file is moved back 31 minutes | The first exits other than 75, lacks the `no verdict` line, or reruns here. The second probes, uploads, or does not run here with the `running here` line. The third does not go remote. |
 | T8 | The command reads `../manifest.json` and `/proc/<pid>/environ` and `cmdline` of `serve.ts run` and prints them, prints a forged `end 0` line, ends its last standard error line without a newline, and then the stream is cut. A second command ends its last standard error line without a newline and exits 3. | The nonce appears in anything the command read; the first run exits 0; the second exits other than 3, or its last line reaches the caller changed or lost. |
 | T9 | The stub alters one file in the runner's tree after install, before verify | The command starts, or it does not run here with `running here: … the runner checked out tree`. Red against a verify step that runs `write-tree` alone. |
-| T10 | `SIGTERM` during a sleeping fixture test | `gate-run-<id>` is still active after 15 s, the run directory remains, or the exit is not 143. |
+| T10 | `SIGTERM` during a fixture test that has printed from inside its unit (the test waits for that line, never for a delay) | `gate-run-<id>` is still active after 15 s, the run directory remains, or the exit is not 143. |
 | T11 | Cleanup after pass, fail and cancel; a stale directory with an old lease; a directory with an active unit | A run directory survives its run, the stale one survives the next run, or the active one is removed. |
 | T12 | `GH_TOKEN`, `LLV_TOKEN`, `LLV_PRIVACY_KNOWN_VALUES_FILE`, `OPENROUTER_API_KEY` and a driver switch set locally | A secret appears in the remote command's environment, or the switch is missing. Also red when `LLV_GATE_PUSH_DEADLINE` there is more than 2 s off the local remaining budget. |
 | T13 | The env classification table | Any `process.env.NAME` in the four drivers or `scripts/local-gate*.ts` is unclassified. |
@@ -1119,22 +1216,34 @@ off Linux, as `scripts/gate-slot.test.ts:101` does.
 | T20 | Containment refused: a stub `systemctl` on the runner's `PATH` refuses `set-property`; in a second case the probe unit exits 69; in a third, the command itself exits 69 after `started` | In the first two, any line from the runner reaches the caller before `gate-runner: running here: containment failed`, the command does not run here, or a `started` record is written. In the third, the client does anything but exit 69. |
 | T21 | `bun test $PWD/<fixture>.test.ts`, and `bun test` with an absolute path outside the tree | The first gives an exit or output (minus `gate-runner:` lines) different from a local run, or its manifest argv holds an absolute path. The second records any invocation. |
 | T22 | `provision.sh --print-settings` with 16 CPUs and `MemTotal` 32,083,512 kB, and with 32 CPUs and 128 GiB | The slots differ from 3 and 8, or `MemoryHigh` differs from `MemTotal` − 4 GiB. |
+| T24 | A fixture writes `../exit` = 0, sends `SIGKILL` to its own run's `serve.ts exec`, and fails an assertion; a second sends it `SIGPIPE` instead | The first exits other than 75 with `no verdict: the run's completion record disagrees with its unit`; the second exits other than 1; either reports a pass. `completion()` is also checked alone for a planted 0 against unit codes 255, 0 without a record, and 1. |
+| T25 | A lane commit adds a file holding a known value and the next commit deletes it | Anything but the probe reaches the runner, or the command does not run here with the privacy line. Without the known value the same history runs remotely. |
+| T26 | A passing run whose removal's connection fails; a failing run whose removal never answers (bound lowered by the test-only `LLV_GATE_RUNNER_REMOVE_TIMEOUT_MS`); a passing run whose unit the runner cannot stop (a stub `systemctl`); then a run after their leases are 31 minutes old, beside a live run and a foreign directory | A pass exits other than 75, the failing run other than 1, a retained directory lacks its lease, the health file is not marked, or the last run's sweep removes anything but the three retained runs. |
+| T27 | `ship()` then `privacy()` with a known value in a new file (git work tree) and an edited file (export), the value removed from the live files after capture; then the same private tree captured again | Either scan passes, or the second capture of the same tree is answered from a cached pass. |
+| T28 | Probe failures whose ssh text names a sentinel host, account, address and key path: host name not resolving, key refused, changed host key, connection refused | The `running here` line lacks the failure's kind, or a sentinel appears in the client's output, the health file or the decision log. |
+| T29 | Returns with `tree/evidence/c` and `tree/evidence/c/child` in both orders, a duplicate entry, nested `out/` entries; output maps naming one directory twice, a nested directory, a link into the checkout, and the checkout's parent; a staged write that fails part-way | Any return is accepted, eligibility admits an overlapping map, or any file or directory changes. |
 | T23 | The client's config lookup (through `machineHome()`) and the shell branch's, run with `HOME` and `XDG_CONFIG_HOME` set to temporary directories | Either resolves under `HOME`, or under anything other than field 6 of `getent passwd <uid>`. |
 
 The cases live in `scripts/gate-runner/`: `client.test.ts` holds the fast
-ones (selection, streams, archives, health cache, T13, T17, T18, T22, T23),
-and the stub-runner files hold at most three cases each, so every file stays
-under half the comparator's 300 s file budget on a loaded runner:
-`remote.test.ts` (T1–T3, T21), `remoteCheckout.test.ts` (T4, T5),
-`remoteTree.test.ts` (T9, T12), `remoteExport.test.ts` (T15, T19),
-`remoteFaults.test.ts` (T6, T7), `remoteControl.test.ts` (T8, T20),
-`remoteLifecycle.test.ts` (T10, T11), `remoteOutputs.test.ts` (T14) and
-`remoteShip.test.ts`. The stub records every process group it starts, and
-each test stops and waits for them, because the runner side outlives a
-killed session as it would on a real host. The privacy gate refuses any
-changed symlink, so T4's symlink case is in `remoteShip.test.ts`, which ships
-through `ship()` and the real `serve.ts run` without the scan, as does T19's
-check of what an export bundle carries. T14's size bound uses the test-only
+ones (selection, streams, archives, health cache, T13, T17, T18, T22, T23,
+T28, T29 and T24's `completion()` half), and the stub-runner files hold at
+most three cases each, so every file stays under half the comparator's
+300 s file budget on a loaded runner: `remote.test.ts` (T1–T3, T21),
+`remoteCheckout.test.ts` (T4, T5), `remoteTree.test.ts` (T9, T12),
+`remoteExport.test.ts` (T15, T19), `remoteFaults.test.ts` (T6, T7),
+`remoteControl.test.ts` (T8, T20), `remoteLifecycle.test.ts` (T10, T11),
+`remoteOutputs.test.ts` (T14), `remoteShip.test.ts` (T4's symlink and index
+flags), `remoteVerdict.test.ts` (T24, T25), `remoteCleanup.test.ts` (T26) and
+`remotePrivacy.test.ts` (T27). The stub records every process group it
+starts, and each test stops and waits for them, because the runner side
+outlives a killed session as it would on a real host. A test that interrupts
+a run does so at a line the command prints, and a deadline in a fixture is
+a guard against a hang, never the event the test waits for. A fixture never
+embeds an absolute path: the privacy scan reads it as a home path and runs
+the command here. The privacy gate refuses any changed symlink, so T4's
+symlink case is in `remoteShip.test.ts`, which ships through `ship()` and the
+real `serve.ts run` without the scan, as does T19's check of what an export
+bundle carries. T14's size bound uses the test-only
 `LLV_GATE_RUNNER_RETURN_LIMIT`.
 
 ### 8.12 Rehearsal on the real runner and rollout

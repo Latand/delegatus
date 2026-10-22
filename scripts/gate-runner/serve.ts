@@ -41,9 +41,13 @@ export function runDirectory(argument: string | undefined): string {
   return dir;
 }
 
-function unitActive(id: string): boolean {
-  const result = spawnSync("systemctl", ["--user", "is-active", "--quiet", `gate-run-${id}`], { stdio: "ignore", timeout: 10_000 });
-  return result.status === 0;
+/** "unknown" when the user manager gives no answer: nothing is removed then. */
+export function unitState(id: string): "active" | "inactive" | "unknown" {
+  const result = spawnSync("systemctl", ["--user", "is-active", `gate-run-${id}`], { encoding: "utf8", timeout: 10_000 });
+  const state = String(result.stdout ?? "").trim();
+  if (state === "inactive" || state === "failed") return "inactive";
+  if (/^(?:active|activating|deactivating|reloading|refreshing)$/.test(state)) return "active";
+  return "unknown";
 }
 
 /** Removes run directories of this protocol whose lease stopped being touched
@@ -59,7 +63,7 @@ export function sweep(except: string, now = Date.now()): string[] {
     let touched: number;
     try { touched = fs.statSync(path.join(dir, "lease")).mtimeMs; }
     catch { try { touched = fs.statSync(dir).mtimeMs; } catch { continue; } }
-    if (now - touched < LEASE_STALE_MS || unitActive(name)) continue;
+    if (now - touched < LEASE_STALE_MS || unitState(name) !== "inactive") continue;
     fs.rmSync(dir, { recursive: true, force: true });
     removed.push(name);
   }
@@ -277,13 +281,31 @@ async function run(dir: string): Promise<number> {
   record("started");
   const unit = spawn("systemd-run", ["--user", "--quiet", "--collect", "--wait", "--pipe", `--unit=gate-run-${id}`, "-p", "TimeoutStopSec=15s", `--setenv=HOME=${home()}`,
     "--", process.execPath, path.join(dir, "serve.ts"), "exec", dir], { stdio: ["ignore", "inherit", "inherit"], env: { ...process.env, ...pick(env, ["XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"]) } });
-  const unitCode = await new Promise<number>(resolve => unit.on("exit", (code, signal) => resolve(code ?? (signal ? 128 + (os.constants.signals[signal] ?? 0) : 1))));
+  const unitCode = await new Promise<number | null>(resolve => unit.on("exit", code => resolve(code)));
   clearInterval(touch);
-  let code = unitCode;
-  try { code = Number(fs.readFileSync(path.join(dir, "exit"), "utf8").trim()); } catch { /* the unit was stopped before its command ended */ }
-  if (stopRequested && !fs.existsSync(path.join(dir, "exit"))) return 0;
-  record(`end ${code} ${manifest.tree}`);
+  if (stopRequested) return 0;
+  const verdict = completion(unitCode, readExitRecord(dir));
+  record("code" in verdict ? `end ${verdict.code} ${manifest.tree}` : `no-verdict ${verdict.reason}`);
   return 0;
+}
+
+function readExitRecord(dir: string): string | null {
+  try { return fs.readFileSync(path.join(dir, "exit"), "utf8"); } catch { return null; }
+}
+
+/** The verdict comes from the supervised unit: `systemd-run --wait` exits with
+ * the main process's own code. It also exits 0 when that process dies by
+ * SIGTERM, SIGHUP, SIGINT or SIGPIPE, or when the unit is stopped, so the
+ * `exit` record that `serve.ts exec` writes tells a real 0 from those. The
+ * command runs as the same account and can write that record, never the
+ * unit's code, so the two must agree: a record planted before `exec` dies,
+ * or rewritten after it wrote its own, gives no verdict, never a pass. */
+export function completion(unitCode: number | null, record: string | null): { code: number } | { reason: string } {
+  if (unitCode === null) return { reason: "the run's unit ended without an exit code" };
+  const recorded = record === null ? null : /^(\d{1,3})\n$/.exec(record);
+  if (!recorded) return { reason: `the run's command left no completion record (unit exit ${unitCode})` };
+  if (Number(recorded[1]) !== unitCode) return { reason: `the run's completion record disagrees with its unit (unit exit ${unitCode})` };
+  return { code: unitCode };
 }
 
 function pick(source: Record<string, string>, keys: string[]): Record<string, string> {
@@ -292,10 +314,18 @@ function pick(source: Record<string, string>, keys: string[]): Record<string, st
 
 async function exec(dir: string): Promise<number> {
   const command = JSON.parse(fs.readFileSync(path.join(dir, "command.json"), "utf8")) as { argv: string[]; cwd: string; env: Record<string, string> };
-  const child = spawn("/bin/bash", [path.join(dir, "tree", "scripts", "gate-slot.sh"), ...command.argv], { cwd: command.cwd, env: command.env as NodeJS.ProcessEnv, stdio: ["ignore", "inherit", "inherit"] });
-  for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) process.on(signal, () => { try { child.kill(signal); } catch { /* gone */ } });
-  const code = await new Promise<number>(resolve => child.on("exit", (exit, signal) => resolve(exit ?? 128 + (signal ? os.constants.signals[signal] ?? 0 : 1))));
-  fs.writeFileSync(path.join(dir, "exit"), `${code}\n`);
+  let child: ReturnType<typeof spawn> | null = null;
+  for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) process.on(signal, () => { try { child?.kill(signal); } catch { /* gone */ } });
+  // A clean-exit signal would end this process with no record and a unit
+  // code of 0 (completion() then refuses); the forwarded ones above end the
+  // command instead, and this one changes nothing.
+  process.on("SIGPIPE", () => { /* ignored */ });
+  child = spawn("/bin/bash", [path.join(dir, "tree", "scripts", "gate-slot.sh"), ...command.argv], { cwd: command.cwd, env: command.env as NodeJS.ProcessEnv, stdio: ["ignore", "inherit", "inherit"] });
+  const code = await new Promise<number>(resolve => child!.on("exit", (exit, signal) => resolve(exit ?? 128 + (signal ? os.constants.signals[signal] ?? 0 : 1))));
+  // Whatever the command left at this name, link or file, is replaced.
+  const record = path.join(dir, "exit");
+  fs.rmSync(record, { force: true });
+  fs.writeFileSync(record, `${code}\n`, { flag: "wx" });
   return code;
 }
 
@@ -366,9 +396,23 @@ async function packOutputs(dir: string): Promise<number> {
   return 0;
 }
 
+/** Deletes the run only once its unit is proven stopped; otherwise the
+ * directory and its lease stay for a retry or the sweep. */
 function remove(dir: string): number {
   const id = path.basename(dir);
-  if (unitActive(id)) spawnSync("systemctl", ["--user", "stop", `gate-run-${id}`], { stdio: "ignore", timeout: 30_000 });
+  let state = unitState(id);
+  if (state === "active") {
+    const stop = spawnSync("systemctl", ["--user", "stop", `gate-run-${id}`], { stdio: "ignore", timeout: 30_000 });
+    state = unitState(id);
+    if (stop.status !== 0 && state !== "inactive") {
+      process.stderr.write(`gate-runner serve: stopping the run's unit failed (systemctl exited ${stop.status ?? "on timeout"})\n`);
+      return 3;
+    }
+  }
+  if (state !== "inactive") {
+    process.stderr.write(`gate-runner serve: the run's unit is ${state}; the run directory stays\n`);
+    return 3;
+  }
   fs.rmSync(dir, { recursive: true, force: true });
   return 0;
 }

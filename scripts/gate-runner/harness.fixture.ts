@@ -26,10 +26,12 @@ export function git(cwd: string, ...args: string[]): string {
 export interface StubSettings {
   /** Probes exit 255. */
   failProbe?: boolean;
-  /** Kill the ssh session this many ms after the run's `started` record. */
-  killAfterStartedMs?: number;
   /** Kill the ssh session once the run's output contains this text. */
   killOn?: string;
+  /** A command containing this text exits 255 without running, as a lost connection does. */
+  failOn?: string;
+  /** A command containing this text never answers, as a hung connection does. */
+  hangOn?: string;
   /** Serve this file for pack-outputs instead of the runner's archive. */
   packFile?: string;
   /** Extra environment for the runner side, as the runner host would have it. */
@@ -58,6 +60,8 @@ const alias = args[index], command = args.slice(index + 1).join(" ");
 const record = { alias, command, stdin: 0, head: "" };
 const flush = () => fs.appendFileSync(logFile, JSON.stringify(record) + "\\n");
 if (settings.failProbe && command.includes("manager=ok")) { flush(); process.exit(255); }
+if (settings.failOn && command.includes(settings.failOn)) { flush(); process.exit(255); }
+if (settings.hangOn && command.includes(settings.hangOn)) { flush(); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 600000); process.exit(1); }
 if (settings.packFile && command.includes("pack-outputs")) { flush(); process.stdout.write(fs.readFileSync(settings.packFile)); process.exit(0); }
 const env = { HOME: runnerHome, USER: process.env.USER, LANG: "C.UTF-8",
   PATH: [...(settings.remotePath ?? []), "/usr/local/bin", "/usr/bin", "/bin"].join(":"),
@@ -77,15 +81,7 @@ process.stdin.on("data", chunk => { if (record.stdin < 200) record.head += chunk
 process.stdin.on("end", () => child.stdin.end());
 child.stdin.on("error", () => {});
 child.stdout.on("data", chunk => { process.stdout.write(chunk); watch(chunk); });
-let seen = "";
-child.stderr.on("data", chunk => {
-  process.stderr.write(chunk);
-  watch(chunk);
-  if (settings.killAfterStartedMs !== undefined && command.includes("serve.ts run")) {
-    seen += chunk.toString();
-    if (/ started\\n/.test(seen)) { const delay = settings.killAfterStartedMs; settings.killAfterStartedMs = undefined; setTimeout(() => { flush(); process.kill(process.pid, "SIGKILL"); }, delay); }
-  }
-});
+child.stderr.on("data", chunk => { process.stderr.write(chunk); watch(chunk); });
 child.on("close", code => { flush(); process.exit(code ?? 1); });
 `;
 

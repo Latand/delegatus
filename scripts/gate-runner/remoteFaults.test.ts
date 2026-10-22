@@ -31,14 +31,34 @@ test.if(linux)("an unreachable runner runs the command here once, and the answer
 }, E2E_TIMEOUT);
 
 // T7
+// The session is cut at a handshake, never after a delay: the command prints
+// its first line, then waits for a release file the test writes only after
+// the first run has ended, so the cut always falls while the command runs.
 test.if(linux)("a session lost after started gives no verdict, and the next calls run here until the mark expires", () => {
   const h = harness();
-  h.settings({ killAfterStartedMs: 1500 });
-  const file = testFile(h, "slow.test.ts", `test("slow", async () => { console.log("remote-started"); await Bun.sleep(8000); console.log("remote-finished"); }, 20000);`);
+  h.settings({ killOn: "remote-started" });
+  // Found by walking up from the command's directory, which lies under the
+  // harness root on both ends: an absolute path in the tree would be a home
+  // path to the privacy scan.
+  const release = path.join(h.root, "gate-runner-release");
+  const file = testFile(h, "slow.test.ts", `
+import fs from "node:fs";
+import path from "node:path";
+const released = () => { for (let dir = process.cwd(); dir !== path.dirname(dir); dir = path.dirname(dir)) if (fs.existsSync(path.join(dir, "gate-runner-release"))) return true; return false; };
+test("slow", async () => {
+  // Unbuffered, so the line leaves before the command waits.
+  fs.writeSync(1, "remote-started\\n");
+  // A guard only: the test releases the command long before it.
+  const until = Date.now() + 120000;
+  while (!released() && Date.now() < until) await Bun.sleep(20);
+  console.log("remote-finished");
+}, 150000);`);
   const first = h.run(["bun", "test", file]);
   expect(first.code).toBe(75);
   expect(first.stderr).toMatch(/^gate-runner: no verdict: the connection to the runner was lost after \d+ s; nothing was judged$/m);
+  expect(first.stdout).toContain("remote-started");
   expect(first.stdout).not.toContain("remote-finished");
+  fs.writeFileSync(release, "");
   const calls = h.calls().length;
   h.settings({});
   const second = h.run(["bun", "test", file]);

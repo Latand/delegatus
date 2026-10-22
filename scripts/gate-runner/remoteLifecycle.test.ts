@@ -36,15 +36,19 @@ test.if(linux)("SIGTERM stops the remote unit and removes the run; every finishe
   const holder = spawnSync("systemd-run", ["--user", "--quiet", "--collect", `--unit=gate-run-${live}`, "sleep", "120"]);
   expect(holder.status).toBe(0);
   try {
-    const slow = testFile(h, "slow.test.ts", `test("slow", async () => { console.log("sleeping"); await Bun.sleep(60000); }, 90000);`);
+    // The command says it is running and then waits; the deadline below is a
+    // guard against a hang, never the signal the test acts on.
+    const slow = testFile(h, "slow.test.ts", `test("slow", async () => { console.log("sleeping"); await Bun.sleep(120000); }, 150000);`);
     const child = spawn(process.execPath, [path.join(h.fixture, "scripts", "gate-runner", "client.ts"), "bun", "test", slow], { cwd: h.fixture, env: h.env(), stdio: ["ignore", "pipe", "pipe"] });
-    let stderr = "";
+    let stderr = "", stdout = "";
     child.stderr.on("data", chunk => { stderr += chunk; });
+    child.stdout.on("data", chunk => { stdout += chunk; });
     const exited = new Promise<number | null>(resolve => child.on("exit", code => resolve(code)));
-    const deadline = Date.now() + 60_000;
-    while (!RUNNING.test(stderr) && Date.now() < deadline) await Bun.sleep(100);
+    const deadline = Date.now() + 150_000;
+    while (!stdout.includes("sleeping") && Date.now() < deadline) await Bun.sleep(20);
+    expect(stdout).toContain("sleeping");
     const id = RUNNING.exec(stderr)![1]!;
-    await Bun.sleep(1500);
+    // The command printed from inside the run's unit, so the unit is active now.
     expect(unitActive(id)).toBeTrue();
     // The sweep ran when this run started.
     expect(fs.existsSync(path.join(runs, stale))).toBeFalse();
