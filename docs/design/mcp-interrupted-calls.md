@@ -65,3 +65,37 @@ while advancing abort and deadline callbacks without elapsed-time waits.
 processes around claim insertion, binding effects and committed receipts for
 both persistent adapters, and exercises real stdio EOF and signal draining
 with lifecycle payload checks. These checks claim no performance improvement.
+
+## HTTP discovery after legacy-state migration
+
+A synthetic July version-2 registry, migrated through the existing importer
+and reached through the legacy config symlink, reproduced a worker exiting
+before caller lookup. Its eager task service tried to install missing receipt
+indexes as the MCP owner. The startup ownership fence refused that repair;
+the HTTP boundary then reported an unreadable registry. Restarting the worker
+repeated the failure even though the registry itself had migrated successfully.
+
+Viewer hot-state startup now prepares the existing MCP receipt schema and
+legacy import under its startup authority, then closes the handle. The worker
+opens its task service only when a tool call needs it. Initialization and tool
+discovery need no receipt store, and a rejected task-service promise is evicted
+so owner preparation can repair a later call in the same worker.
+
+Caller identification waits asynchronously for owner-only startup work,
+SQLite admission, or backend publication, for at most five seconds and no
+longer than the request deadline. Each attempt resolves the current capability.
+An unpublished backend never authorizes a reader to choose a store or migrate
+it. Malformed descriptors fail immediately; unknown and rotated capabilities
+remain refused. Expiry returns the existing refusal with `Retry-After: 1`.
+Private-channel identification retains its synchronous admission contract.
+
+Both the HTTP boundary and worker record the caller-identification phase and
+exception. Error text is redacted before its 700-character bound; credentials,
+the presented capability and private paths are removed. Arguments, registry
+rows, raw stacks and unrelated active-claim lists are excluded. A wait logs
+its first underlying error once, and logs a terminal failure if one occurs.
+
+`src/lib/mcp/callerIdentification.test.ts` exercises real worker restarts,
+owner startup, the import/publication handoff, deadlines, rotation during a
+wait, service recovery, redaction and SDK HTTP discovery. These checks use
+synthetic state and claim no performance improvement.

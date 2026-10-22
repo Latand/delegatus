@@ -40,3 +40,29 @@ The first start shows a notice in the product and start output. The ping carries
 no paths, host or user names, projects, accounts, engines or usage. Linked-install
 traffic still travels directly between the peers you connect; agent providers
 and explicitly configured integrations receive the requests you ask them to run.
+
+Memory profiles send selected learned rules to Anthropic through a headless
+Claude Code run (`api.anthropic.com/v1/messages`): Opus, with one Haiku fallback.
+Voice-call memory sends the safe, bounded call text and any previous summary to
+Haiku through the same CLI. These runs have no tools, MCP servers or custom
+hooks, and do not save a CLI session. Existing profile and call-summary schema,
+language, privacy and length checks still apply before storage. A separate
+watchdog bounds each model invocation to 30 seconds (20 seconds for calls),
+plus owned process cleanup; a Viewer restart does not remove that deadline.
+
+For Claude limits, Delegatus runs Claude Code `/usage` in print mode with no
+model turns. Claude Code handles authentication and requests Anthropic account
+usage. The local reader uses its structured usage report. An unavailable or
+unsupported CLI report leaves limits unknown unless the following fallback is on.
+
+**Direct Anthropic API calls with my subscription**, under **Settings → Install
+ping → What leaves my machine**, permits Delegatus itself to send an authenticated
+GET to `https://api.anthropic.com/api/oauth/usage` when CLI usage is unavailable.
+It carries the account's subscription OAuth token; it carries no rules, call
+text or transcript. Each endpoint request has an eight-second deadline. The
+switch starts off on new installations. Migration preserves on for installations
+with successful direct Claude readings in the previous limits cache, including
+an installation already using that path. A saved off choice always wins. A
+corrupt consent file fails closed. Turning it off stops subsequent direct
+requests; a request already sent can finish. Memory summaries always use Claude
+Code regardless of this switch.

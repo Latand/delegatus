@@ -158,20 +158,21 @@ test("deputy registration repeats seat authority inside admission", async () => 
   } finally { f.registry.close(); }
 });
 
-for (const shared of [false, true]) test(`flow reservation rechecks its revision after registry and account admission (shared=${shared})`, async () => {
+for (const shared of [false, true]) test(`retired flow reservation refuses before registry and account admission (shared=${shared})`, async () => {
   const f = fixture(shared); f.seed();
   const owner = f.registry.conversationForPath(f.artifactPath)!;
-  const flow = { id: shared ? "admitted-flow-shared" : "admitted-flow-isolated", project: "fixture", cwd: "/repo", implementerPath: f.artifactPath,
+  const flow = { id: shared ? "retired-flow-shared" : "retired-flow-isolated", project: "fixture", cwd: "/repo", implementerPath: f.artifactPath,
     implementerConversationId: owner.id, roles: { reviewer: { engine: "codex", model: null, effort: "high" } }, rounds: [] } as unknown as Flow;
   const round = newRound(flow, "button", null); round.reviewerBindingId = "fixed-reviewer-binding";
-  let current = true;
-  const reserve = () => reserveReviewerSpawnOffLoop(flow, round, flow.roles.reviewer, null, f.registry, () => current);
+  const before = f.registry.snapshot();
+  const holder = registryLockHolder(f.sqliteFilename);
   try {
-    expect((await held(f, reserve))?.kind).toBe("created");
-    const revision = f.registry.storageDiagnostics().revision;
-    expect(await held(f, reserve, () => { current = false; })).toBeNull();
-    expect(f.registry.storageDiagnostics().revision).toBe(revision);
-  } finally { f.registry.close(); }
+    await holder.hold();
+    await expect(reserveReviewerSpawnOffLoop(flow, round, flow.roles.reviewer, null, f.registry, () => {
+      throw new Error("retired reservation reached its admission callback");
+    })).rejects.toMatchObject({ code: "FLOW_RETIRED" });
+    expect(f.registry.snapshot()).toEqual(before);
+  } finally { await holder.close(); f.registry.close(); }
 });
 
 for (const shared of [false, true]) test(`account selection keeps catalog and routing aligned through a child-held writer (shared=${shared})`, async () => {
@@ -191,7 +192,8 @@ for (const shared of [false, true]) test(`account selection keeps catalog and ro
 });
 
 for (const family of ["flow", "resume"] as const) for (const phase of ["reservation", "task", "recorded"] as const) {
-  test(`${family} revocation after ${phase} admission durably retires its unactuated receipt`, async () => {
+  // Pre-freeze flow execution cases remain until S8; retirement is covered above.
+  (family === "flow" ? test.skip : test)(`${family} revocation after ${phase} admission durably retires its unactuated receipt`, async () => {
     const f = fixture(); f.seed();
     let revoked = false;
     const current = () => {
@@ -228,7 +230,7 @@ for (const family of ["flow", "resume"] as const) for (const phase of ["reservat
   });
 }
 
-for (const family of ["flow", "resume"] as const) test(`${family} reports refused revocation cleanup and a reopened writer can finish it`, async () => {
+for (const family of ["flow", "resume"] as const) (family === "flow" ? test.skip : test)(`${family} reports refused revocation cleanup and a reopened writer can finish it`, async () => {
   const f = fixture(false, 1_000); f.seed();
   const peer = new Database(f.sqliteFilename);
   let locked = false;

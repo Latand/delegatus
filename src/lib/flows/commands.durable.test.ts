@@ -1,3 +1,5 @@
+// Pre-S5 execution expectations are retained until S8 removes the engine.
+// Active admission and archive invariants run in flows/retirement.test.ts.
 import { afterAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -28,7 +30,7 @@ afterAll(() => {
   fs.rmSync(sandbox, { recursive: true, force: true });
 });
 
-test("durable implementer identity creates a flow without scanner or live-host evidence", async () => {
+test.skip("durable implementer identity creates a flow without scanner or live-host evidence", async () => {
   saveFlows([]);
   const transcript = path.join(import.meta.dir, "fixtures", "codex-review-2026-07-12.jsonl");
   const implementer = registry.ensureConversation("codex", transcript, null);
@@ -62,7 +64,7 @@ test("durable implementer identity creates a flow without scanner or live-host e
   });
 });
 
-test("concurrent flow creation admits one active flow for a durable implementer", async () => {
+test.skip("concurrent flow creation admits one active flow for a durable implementer", async () => {
   saveFlows([]);
   const transcript = path.join(import.meta.dir, "fixtures", "codex-review-2026-07-12.jsonl");
   const implementer = registry.ensureConversation("codex", transcript, null);
@@ -88,7 +90,7 @@ test("concurrent flow creation admits one active flow for a durable implementer"
   expect(loadFlows().filter((flow) => flow.closedAt === null && flow.state !== "closed")).toHaveLength(1);
 });
 
-test("flow creation returns the catalog error before persisting an unknown reviewer model", async () => {
+test.skip("flow creation returns the catalog error before persisting an unknown reviewer model", async () => {
   saveFlows([]);
   const transcript = path.join(import.meta.dir, "fixtures", "codex-review-2026-07-12.jsonl");
   const implementer = registry.ensureConversation("codex", transcript, null);
@@ -115,7 +117,7 @@ test("flow creation returns the catalog error before persisting an unknown revie
   expect(loadFlows()).toEqual([]);
 });
 
-test("closeFlow rejects a replacement reviewer binding while preserving concurrent flows", async () => {
+test.skip("closeFlow rejects a replacement reviewer binding while preserving concurrent flows", async () => {
   saveFlows([]);
   const executablePath = path.join(sandbox, "delayed-reviewer");
   fs.writeFileSync(executablePath, `#!${process.execPath}\nprocess.on("SIGTERM", () => setTimeout(() => process.exit(0), 100));\nsetInterval(() => {}, 1_000);\n`, { mode: 0o700 });
@@ -169,7 +171,7 @@ test("closeFlow rejects a replacement reviewer binding while preserving concurre
   });
 });
 
-test("cancelRound rejects a replacement reviewer binding while preserving concurrent flows", async () => {
+test.skip("cancelRound rejects a replacement reviewer binding while preserving concurrent flows", async () => {
   saveFlows([]);
   const executablePath = path.join(sandbox, "delayed-reviewer-cancel");
   fs.writeFileSync(executablePath, `#!${process.execPath}\nprocess.on("SIGTERM", () => setTimeout(() => process.exit(0), 100));\nsetInterval(() => {}, 1_000);\n`, { mode: 0o700 });
@@ -213,7 +215,7 @@ test("cancelRound rejects a replacement reviewer binding while preserving concur
   });
 });
 
-test("malformed target SHAs return 400 without persisting a flow (#522)", async () => {
+test.skip("malformed target SHAs return 400 without persisting a flow (#522)", async () => {
   const transcript = path.join(import.meta.dir, "fixtures", "codex-review-2026-07-12.jsonl");
   const implementer = registry.ensureConversation("codex", transcript, null);
   const request = {
@@ -239,7 +241,7 @@ test("malformed target SHAs return 400 without persisting a flow (#522)", async 
   }
 });
 
-test("issue 1065: advance rescues a flow wedged in fixing on an uncorroborated structured relay", async () => {
+test.skip("issue 1065: advance rescues a flow wedged in fixing on an uncorroborated structured relay", async () => {
   saveFlows([]);
   const transcript = path.join(import.meta.dir, "fixtures", "codex-review-2026-07-12.jsonl");
   const implementer = registry.ensureConversation("codex", transcript, null);
@@ -295,7 +297,7 @@ test("issue 1065: advance rescues a flow wedged in fixing on an uncorroborated s
   });
 });
 
-test("issue 1065: advance still refuses a fixing flow whose relay the delivery journal corroborated", async () => {
+test.skip("issue 1065: advance still refuses a fixing flow whose relay the delivery journal corroborated", async () => {
   saveFlows([]);
   const transcript = path.join(import.meta.dir, "fixtures", "codex-review-2026-07-12.jsonl");
   const implementer = registry.ensureConversation("codex", transcript, null);
@@ -336,7 +338,7 @@ test("issue 1065: advance still refuses a fixing flow whose relay the delivery j
   expect(loadFlows()[0]).toMatchObject({ state: "fixing", rounds: [{ relayedAt: "2026-08-20T16:47:52.921Z" }] });
 });
 
-test.each([undefined, 0, 7])("flow creation defaults to 3 and preserves explicit limit %s", async (roundLimit) => {
+test.skip.each([undefined, 0, 7])("flow creation defaults to 3 and preserves explicit limit %s", async (roundLimit) => {
   saveFlows([]);
   const transcript = path.join(import.meta.dir, "fixtures", "codex-review-2026-07-12.jsonl");
   const implementer = registry.ensureConversation("codex", transcript, null);

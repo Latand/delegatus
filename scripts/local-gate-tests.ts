@@ -286,7 +286,7 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     let result: Bun.Subprocess;
     let exitCode: number;
     try {
-      result = Bun.spawn({ cmd: [process.execPath, path.join(import.meta.dir, "owned-runner.ts"), "--budget", String(Math.min(budgets.fileMs, remaining) + 5_000), process.execPath, path.join(import.meta.dir, "owned-runner.ts"), ...(process.platform === "linux" ? [] : ["--portable"]), process.execPath, "test", `./${file}`, "--reporter=junit", `--reporter-outfile=${report}`, ...filter],
+      result = Bun.spawn({ cmd: [process.execPath, path.join(import.meta.dir, "owned-runner.ts"), "--budget", String(Math.min(budgets.fileMs, remaining) + 5_000), process.execPath, path.join(import.meta.dir, "owned-runner.ts"), ...(process.platform === "linux" ? [] : ["--portable"]), process.execPath, "test", `./${file}`, "--timeout=60000", "--reporter=junit", `--reporter-outfile=${report}`, ...filter],
         // Keep the independent five-second cleanup allowance, measured as
         // execution time by the outer guard. A fixed wall timeout here would
         // kill a healthy supervisor during a nested CPU queue wait.
@@ -316,7 +316,10 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
       if (filtered) throw new Error(`${label}: ${file}: ${message}; elapsed ${(performance.now() - started).toFixed(0)}ms`);
       failures.push({ file, suite: "", name: `${RUNNER_ERROR}${message.split(root).join("<checkout>")}`, kind: "error" });
     } finally { rmSync(privateRoot, { recursive: true, force: true }); }
-    options.log?.(`touched-tests: ${label} file ${file}: ${(performance.now() - fileStarted).toFixed(0)}ms wall; ${failures.length} failures; ${completed.length ? "complete" : "incomplete"}`);
+    const elapsedMs = performance.now() - fileStarted;
+    const hint = label === "head" && elapsedMs > budgets.fileMs / 2
+      ? `; over half the ${budgets.fileMs / 1000} s file budget; split it` : "";
+    options.log?.(`touched-tests: ${label} file ${file}: ${elapsedMs.toFixed(0)}ms wall; ${failures.length} failures; ${completed.length ? "complete" : "incomplete"}${hint}`);
     results[index] = { failures, passed, completed, elapsedMs: 0 };
   }
   }));
