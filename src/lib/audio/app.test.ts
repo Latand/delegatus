@@ -30,15 +30,25 @@ afterEach(() => {
 
 describe("no audio graph", () => {
   test("every cue is refused quietly, and the identity is still spent", () => {
-    expect(playCue({ cue: "attention", eventId: "a1" })).toBe("blocked");
-    expect(playCue({ cue: "attention", eventId: "a1" })).toBe("deduped");
-    expect(playCue({ cue: "tool-tick", eventId: "t1" })).toBe("blocked");
+    /* An event sound enters the lane and finds no graph when its window
+       closes; typing finds none at once. */
+    expect(playCue({ cue: "your-move", eventId: "a1" })).toBe("scheduled");
+    expect(playCue({ cue: "your-move", eventId: "a1" })).toBe("deduped");
+    expect(playCue({ cue: "typing", eventId: "t1" })).toBe("blocked");
+    expect(playCue({ cue: "step", eventId: "preview", preview: true })).toBe("blocked");
+  });
+
+  test("a lane with no graph to play on stays free, and throws nothing", async () => {
+    expect(playCue({ cue: "released", eventId: "r1" })).toBe("scheduled");
+    expect(playCue({ cue: "released", eventId: "r2" })).toBe("scheduled");
+    await Bun.sleep(5);
   });
 
   test("a mute is honoured before anything else is attempted", () => {
     configureAudioPrefsStorage({ getItem: () => "off", setItem: () => undefined });
     resetAppAudioForTests();
-    expect(playCue({ cue: "failure", eventId: "f1" })).toBe("disabled");
+    expect(playCue({ cue: "fault", eventId: "f1" })).toBe("disabled");
+    expect(playCue({ cue: "typing", eventId: "t1" })).toBe("disabled");
   });
 
   test("connecting and disconnecting a call is safe and leaves nothing playing", () => {

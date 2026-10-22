@@ -27,10 +27,28 @@ export function useToolActivityCues(
   path: string | null,
   windowEnd: number,
   ready: boolean,
+  /** The feed stopped polling (off screen, dormant). */
+  paused = false,
 ): void {
   const scannerRef = useRef<{ key: string; scanner: ToolCueScanner } | null>(null);
+  /** The window the scanner last heard before a pause, while it waits for the first parse after it. */
+  const resumeRef = useRef<{ windowEnd: number; items: readonly FeedEntry[] } | null>(null);
   useEffect(() => {
     if (!conversation || !path || !ready) return;
+    /* A paused feed stops parsing, and every call appended meanwhile was
+       already heard as the distant murmur. So the first parse after the
+       pause re-baselines silently instead of ringing that backlog as a burst
+       (§4.4 of docs/design/sound-redesign.md). */
+    if (paused) {
+      resumeRef.current ??= { windowEnd, items };
+      return;
+    }
+    const resumed = resumeRef.current;
+    if (resumed) {
+      if (resumed.windowEnd === windowEnd && resumed.items === items) return;
+      resumeRef.current = null;
+      scannerRef.current = { key: `${conversation}\n${path}`, scanner: createToolCueScanner(conversation) };
+    }
     /* The window-end floor only means something within one transcript's line
        stream, so the scanner lives exactly as long as one path in one pane.
        The conversation identity, by contrast, names the cue events — it can
@@ -50,5 +68,5 @@ export function useToolActivityCues(
     }
     const requests = scannerRef.current.scanner.scan(items, windowEnd, panForPane(conversation));
     for (const request of requests) playCue(request);
-  }, [items, conversation, path, windowEnd, ready]);
+  }, [items, conversation, path, windowEnd, ready, paused]);
 }

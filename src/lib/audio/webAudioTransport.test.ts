@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { createWebAudioTransports, type AudioContextLike, type AudioParamLike } from "./webAudioTransport";
+import { createWebAudioTransports, type AudioContextLike, type AudioParamLike, type CueEngine } from "./webAudioTransport";
 
 /**
  * A fake Web Audio graph that records the wiring.
@@ -83,17 +83,6 @@ function fakeContext(state = "running", scheduledSetterUpdatesValue = true) {
       gains.push(gain);
       return gain;
     },
-    createStereoPanner() {
-      return {
-        pan: {
-          value: 0,
-          cancelScheduledValues: () => undefined,
-          setValueAtTime: () => undefined,
-          linearRampToValueAtTime: () => undefined,
-        },
-        connect: () => undefined,
-      };
-    },
     decodeAudioData: async () => ({ duration: 26.666 }),
     sources,
     gains,
@@ -138,9 +127,33 @@ function fakeClock() {
   };
 }
 
+/**
+ * The synthesis side, recorded: which slice and which sound were asked for,
+ * at what context time. The graph itself is the render check's business
+ * (synth.browser.test.ts, in a real browser).
+ */
+function fakeEngine(settledAt = 10.15) {
+  const slices: { at: number; gain: number; pan: number; distant?: boolean; ended: (() => void) | null; stopped: boolean }[] = [];
+  const sounds: { id: string; at: number; volume: number; batch: number; cutAt: number | null }[] = [];
+  const engine: CueEngine = {
+    settledAt: () => settledAt,
+    slice(_context, _buffer, options) {
+      const slice = { ...options, ended: null as (() => void) | null, stopped: false };
+      slices.push(slice);
+      return { stop: () => { slice.stopped = true; }, onEnded: (run) => { slice.ended = run; } };
+    },
+    sound(_context, id, options) {
+      const sound = { id, at: options.at, volume: options.volume, batch: options.batch, cutAt: null as number | null };
+      sounds.push(sound);
+      return { cut: (at) => { sound.cutAt = at; } };
+    },
+  };
+  return { engine, slices, sounds };
+}
+
 /** Decode is async; a start attempt kicks it and the next one succeeds. */
-async function warmed(context: AudioContextLike, src: string, clock = fakeClock()) {
-  const transports = createWebAudioTransports(() => context, okFetch(), clock.timers);
+async function warmed(context: AudioContextLike, src: string, clock = fakeClock(), engine: CueEngine = fakeEngine().engine) {
+  const transports = createWebAudioTransports(() => context, okFetch(), clock.timers, engine);
   transports.warm([src]);
   await Promise.resolve();
   await Promise.resolve();
@@ -149,7 +162,7 @@ async function warmed(context: AudioContextLike, src: string, clock = fakeClock(
 }
 
 const LOOP = "/audio/ambient/voice-call-loop.wav";
-const CUE = "/audio/cues/attention.mp3";
+const CUE = "/audio/cues/tool-tick-1.mp3";
 
 describe("the ambient bed loops without a seam", () => {
   test("the decoded buffer loops on the audio clock, end to end", async () => {
@@ -407,29 +420,49 @@ describe("levels move as ramps on the audio clock", () => {
 });
 
 describe("cues", () => {
-  test("a cue plays its own gain and pan, once, and reports its end", async () => {
-    const context = fakeContext();
-    const transports = await warmed(context, CUE);
-    let ended = 0;
-
-    const voice = transports.cues.start({
-      cue: "attention", src: CUE, gain: 0.7, pan: -0.5, delaySeconds: 0, onEnded: () => { ended += 1; },
-    });
-
-    expect(voice).not.toBeNull();
-    expect(context.gains[0].gain.value).toBe(0.7);
-    expect(context.sources[0].loop).toBe(false);
-    (context.sources[0].onended as () => void)();
-    expect(ended).toBe(1);
+  const typing = (over: Partial<Parameters<ReturnType<typeof createWebAudioTransports>["cues"]["startTyping"]>[0]> = {}) => ({
+    src: CUE, gain: 0.5, pan: 0, delaySeconds: 0, distant: false, onEnded: () => undefined, ...over,
   });
 
-  test("a staggered cue is scheduled ahead on the audio clock, not with a timer", async () => {
+  test("a typing slice plays its own gain and pan, once, after the graph settles, and reports its end", async () => {
     const context = fakeContext();
-    const transports = await warmed(context, CUE);
+    const synth = fakeEngine();
+    const transports = await warmed(context, CUE, fakeClock(), synth.engine);
+    let ended = 0;
 
-    transports.cues.start({ cue: "success", src: CUE, gain: 0.5, pan: 0, delaySeconds: 0.22, onEnded: () => undefined });
+    const voice = transports.cues.startTyping(typing({ gain: 0.7, pan: -0.5, onEnded: () => { ended += 1; } }));
 
-    expect(context.sources[0].started).toEqual([10.22]);
+    expect(voice).not.toBeNull();
+    expect(synth.slices[0]).toMatchObject({ at: 10.15, gain: 0.7, pan: -0.5, distant: false });
+    synth.slices[0]!.ended!();
+    expect(ended).toBe(1);
+    voice!.stop();
+    expect(synth.slices[0]!.stopped).toBe(true);
+  });
+
+  test("a staggered slice is scheduled ahead on the audio clock, not with a timer", async () => {
+    const context = fakeContext();
+    const synth = fakeEngine(0);
+    const transports = await warmed(context, CUE, fakeClock(), synth.engine);
+
+    transports.cues.startTyping(typing({ delaySeconds: 0.22, distant: true }));
+
+    expect(synth.slices[0]).toMatchObject({ at: 10.22, distant: true });
+  });
+
+  test("an event sound is synthesized now, never before the limiter has settled, and can be cut", async () => {
+    const context = fakeContext();
+    const synth = fakeEngine();
+    const transports = createWebAudioTransports(() => context, okFetch(), fakeClock().timers, synth.engine);
+
+    const voice = transports.cues.startEvent({ sound: "landed", volume: 0.4, pan: 0, batch: 3 });
+
+    expect(synth.sounds).toEqual([{ id: "landed", at: 10.15, volume: 0.4, batch: 3, cutAt: null }]);
+    context.currentTime = 10.5;
+    voice!.cut();
+    expect(synth.sounds[0]!.cutAt).toBe(10.5);
+    /* Nothing was fetched for it: event sounds are code. */
+    expect(context.sources).toEqual([]);
   });
 });
 /**
@@ -666,33 +699,50 @@ describe("the bed opens in silence and only ever comes UP (#728)", () => {
 });
 
 describe("degradation", () => {
+  const typing = { src: CUE, gain: 1, pan: 0, delaySeconds: 0, distant: false, onEnded: () => undefined };
+
   test("a locked context plays nothing, throws nothing, and asks for a resume", async () => {
     const context = fakeContext("suspended");
-    const transports = createWebAudioTransports(() => context, okFetch());
+    const synth = fakeEngine();
+    const transports = createWebAudioTransports(() => context, okFetch(), fakeClock().timers, synth.engine);
 
-    expect(transports.cues.start({ cue: "attention", src: CUE, gain: 1, pan: 0, delaySeconds: 0, onEnded: () => undefined })).toBeNull();
+    expect(transports.cues.startTyping(typing)).toBeNull();
+    expect(transports.cues.startEvent({ sound: "your-move", volume: 1, pan: 0, batch: 1 })).toBeNull();
     expect(transports.loop.start({ src: LOOP, gain: 0 })).toBeNull();
     expect(context.resumed()).toBeGreaterThan(0);
     expect(context.sources).toEqual([]);
+    expect(synth.sounds).toEqual([]);
   });
 
   test("no audio graph at all is simply silence", () => {
-    const transports = createWebAudioTransports(() => null, okFetch());
-    expect(transports.cues.start({ cue: "failure", src: CUE, gain: 1, pan: 0, delaySeconds: 0, onEnded: () => undefined })).toBeNull();
+    const transports = createWebAudioTransports(() => null, okFetch(), fakeClock().timers, fakeEngine().engine);
+    expect(transports.cues.startTyping(typing)).toBeNull();
+    expect(transports.cues.startEvent({ sound: "fault", volume: 1, pan: 0, batch: 1 })).toBeNull();
     expect(transports.loop.start({ src: LOOP, gain: 0 })).toBeNull();
     expect(() => transports.warm([CUE])).not.toThrow();
   });
 
-  test("the first cue before the buffer exists is dropped, and it kicks the decode", async () => {
+  test("an engine that throws is silence too", () => {
     const context = fakeContext();
-    const transports = createWebAudioTransports(() => context, okFetch());
+    const broken: CueEngine = {
+      settledAt: () => 0,
+      slice: () => { throw new Error("graph gone"); },
+      sound: () => { throw new Error("graph gone"); },
+    };
+    const transports = createWebAudioTransports(() => context, okFetch(), fakeClock().timers, broken);
+    expect(transports.cues.startEvent({ sound: "reply", volume: 1, pan: 0, batch: 1 })).toBeNull();
+  });
 
-    expect(transports.cues.start({ cue: "launch", src: CUE, gain: 1, pan: 0, delaySeconds: 0, onEnded: () => undefined })).toBeNull();
+  test("the first slice before the buffer exists is dropped, and it kicks the decode", async () => {
+    const context = fakeContext();
+    const transports = createWebAudioTransports(() => context, okFetch(), fakeClock().timers, fakeEngine().engine);
+
+    expect(transports.cues.startTyping(typing)).toBeNull();
     await Promise.resolve();
     await Promise.resolve();
     await Promise.resolve();
     /* The next event lands, because the miss started the decode. */
-    expect(transports.cues.start({ cue: "launch", src: CUE, gain: 1, pan: 0, delaySeconds: 0, onEnded: () => undefined })).not.toBeNull();
+    expect(transports.cues.startTyping(typing)).not.toBeNull();
   });
 
   test("a missing asset fails once and is never re-requested", async () => {
@@ -701,10 +751,10 @@ describe("degradation", () => {
     const transports = createWebAudioTransports(() => context, (async () => {
       requests += 1;
       return { ok: false, status: 404, arrayBuffer: async () => new ArrayBuffer(0) };
-    }) as unknown as typeof fetch);
+    }) as unknown as typeof fetch, fakeClock().timers, fakeEngine().engine);
 
     for (let attempt = 0; attempt < 4; attempt += 1) {
-      expect(transports.cues.start({ cue: "tool-tick", src: CUE, gain: 1, pan: 0, delaySeconds: 0, onEnded: () => undefined })).toBeNull();
+      expect(transports.cues.startTyping(typing)).toBeNull();
       await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();

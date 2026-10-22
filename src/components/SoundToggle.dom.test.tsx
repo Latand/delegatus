@@ -27,6 +27,7 @@ const {
   CUE_VOLUME_KEY,
   LOOP_ENABLED_KEY,
   LOOP_VOLUME_KEY,
+  TYPING_ENABLED_KEY,
   VIEWER_LOOP_ENABLED_KEY,
 } = await import("@/lib/audio/prefs");
 const { AMBIENT_LOOP_ASSET } = await import("@/lib/audio/loopAsset");
@@ -181,6 +182,31 @@ describe("levels are device-local and independent", () => {
     /* Both on, one level — there is no second slider to go looking for. */
     expect(settings).toMatchObject({ viewerLoopEnabled: true, loopEnabled: true, loopVolume: 0.6 });
     expect(host.querySelectorAll('[data-testid="ambient-volume"]')).toHaveLength(1);
+  });
+});
+
+describe("«Agent typing» turns the one frequent layer off", () => {
+  test("the switch starts on, and turning it off keeps sound itself on", async () => {
+    await render({ ambientAvailable: false });
+    await openPanel();
+    const typing = find("typing-enabled") as HTMLInputElement;
+    expect(typing.checked).toBe(true);
+    expect(host.textContent).toContain("Agent typing");
+
+    await click(typing);
+
+    expect(storage.dump()[TYPING_ENABLED_KEY]).toBe("off");
+    expect(readAudioPrefs(storage)).toMatchObject({ typingEnabled: false, cuesEnabled: true });
+    expect((find("typing-enabled") as HTMLInputElement).checked).toBe(false);
+  });
+
+  test("it sits in the levels in both layouts, the desktop menu included", async () => {
+    host = dom.document.createElement("div") as unknown as HTMLElement;
+    dom.document.body.appendChild(host as never);
+    root = createRoot(host);
+    await act(async () => root!.render(<SoundToggle variant="menu" ambientAvailable={false} />));
+    await openPanel();
+    expect(find("typing-enabled")).not.toBeNull();
   });
 });
 

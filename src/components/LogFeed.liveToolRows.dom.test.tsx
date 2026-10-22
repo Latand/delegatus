@@ -174,6 +174,7 @@ mock.module("@/hooks/useToolActivityCues", () => ({
 
 const { LogFeed } = await import("./LogFeed");
 const { resetCanonicalAssistantClaimsForTests } = await import("./conversation/liveTurnHandoff");
+const { hasLiveFeed } = await import("@/lib/chime");
 
 const roots = new Set<Root>();
 beforeEach(() => {
@@ -920,4 +921,26 @@ test("a bound reply keeps its transcript place before the reasoning that follows
     expect(order(fresh.host).length).toBeGreaterThan(3);
     expect(order(watched.host)).toEqual(order(fresh.host));
   } finally { file.engine = "claude"; file.fmt = "claude"; }
+});
+
+test("a running feed is where its conversation's typing is heard; paused, the conversation is the distant murmur's", () => {
+  /* Sound map S1/S2 (docs/design/sound-redesign.md §4.4): every live session
+     is heard through exactly one of them, and only a running feed parses. */
+  const host = dom.document.createElement("div");
+  dom.document.body.append(host);
+  const root = createRoot(host as unknown as HTMLElement);
+  roots.add(root);
+  const paint = (paused: boolean) => flushSync(() => {
+    root.render(<LogFeed file={file} showSvc={false} lineFilter="" onStatus={() => undefined} paused={paused} follow={false} setFollow={() => undefined} />);
+  });
+  expect(hasLiveFeed(CONVERSATION_ID)).toBe(false);
+  paint(false);
+  expect(hasLiveFeed(CONVERSATION_ID)).toBe(true);
+  paint(true);
+  expect(hasLiveFeed(CONVERSATION_ID)).toBe(false);
+  paint(false);
+  expect(hasLiveFeed(CONVERSATION_ID)).toBe(true);
+  flushSync(() => root.unmount());
+  roots.delete(root);
+  expect(hasLiveFeed(CONVERSATION_ID)).toBe(false);
 });

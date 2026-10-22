@@ -1,10 +1,11 @@
 /*
  * The audio files the demo's Viewer can request, and their copy into dist/.
  *
- * The Viewer asks for its cues at the site root (`/audio/cues/…`, warmed on
- * the visitor's first gesture). The list comes from the product's own table, so
- * a cue added to the product is copied by the next build, and a file the table
- * names but `public/` lacks fails the build.
+ * The Viewer asks for its typing slices at the site root (`/audio/cues/…`,
+ * warmed on the visitor's first gesture); every other sound is synthesized and
+ * requests nothing. The list comes from the product's own table, so a file
+ * added to it is copied by the next build, and a file the table names but
+ * `public/` lacks fails the build.
  *
  * The music bed (`/audio/ambient/…`, a 5 MB lossless WAV) stays out of the
  * landing: the demo bundle swaps the product's loop-asset module for
@@ -15,11 +16,10 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { CUES, cueAssetAll, type AudioCue } from "@/lib/audio/cues";
+import { typingAssetAll } from "@/lib/audio/cues";
 
 export function demoAudioUrls(): string[] {
-  const urls = Object.keys(CUES).flatMap((cue) => cueAssetAll(cue as AudioCue));
-  return [...new Set(urls)];
+  return [...new Set(typingAssetAll())];
 }
 
 /** Path suffix of the product module the demo bundle replaces. */

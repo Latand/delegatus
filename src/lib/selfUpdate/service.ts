@@ -32,7 +32,7 @@ import type { ObservedReads } from "./workReads";
 import { activeRestartGate, ownsRestartGate, beginRestartGate, endRestartGate, restartGateFile } from "./restartGate";
 import { headOf, releaseDirFor } from "./release";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
-import { memAvailableMb, releaseBuilt } from "./steps";
+import { memAvailableMb, releaseBuilt, updateFailureDetail } from "./steps";
 import { isRuntimeHostTransportFailure } from "@/lib/runtime/client";
 
 import type { RuntimeHostHealth } from "@/lib/runtime/client";
@@ -1597,7 +1597,7 @@ export class SelfUpdateService {
   }
 
   private async applyBuilt(): Promise<void> {
-    if (this.runner?.state.state !== "done") { this.failApply("The release build failed"); return; }
+    if (this.runner?.state.state !== "done") { this.failApply(updateFailureDetail(this.runner?.state)); return; }
     if (this.slice.available?.sha === this.runner.state.target) this.slice = { ...this.slice, installed: this.slice.available, available: null,
       check: { ...this.slice.check, state: "up-to-date", relation: "equal", ahead: 0, behind: 0, delta: null } };
     this.saveNow();

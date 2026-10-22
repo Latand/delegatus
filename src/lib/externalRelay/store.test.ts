@@ -19,6 +19,25 @@ import {
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-store-test-"));
 process.env.LLV_STATE_DIR = root;
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
+test("retained completed and confirmed stop rows do not consume admission capacity", async () => {
+  const row = { requestId: "capacity-completed", leaseId: "fixture", relayId: "capacity-fixture", targetId: "fixture",
+    childPid: null, childIdentity: null, ownerPid: process.pid, ownerIdentity: null, runDir: "", startedAt: "2026-01-01T00:00:00.000Z" };
+  try {
+    expect(reserveRun({ ...row, capacityReleased: true })).toBe("added");
+    expect(reserveRun({ ...row, requestId: "capacity-stopped", ownerTurn: { clientAttemptId: "fixture", cancel: "interrupt", confirmed: true } })).toBe("added");
+    expect(reserveRun({ ...row, requestId: "capacity-next" }, 1)).toBe("added");
+    dropRun("capacity-next");
+    expect(await reserveRunAsync({ ...row, requestId: "capacity-next" }, 1, Date.now() + 5000)).toBe("added");
+    expect(await reserveRunAsync({ ...row, requestId: "capacity-overflow" }, 1, Date.now() + 5000)).toBe("full");
+    dropRun("capacity-next");
+    const child = Bun.spawn([process.execPath, "-e", `
+      import { reserveRunAsync } from "./src/lib/externalRelay/store";
+      console.log(await reserveRunAsync(${JSON.stringify({ ...row, requestId: "capacity-next" })}, 1, Date.now() + 5000));
+    `], { cwd: process.cwd(), env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+    const [output, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect({ output: output.trim(), error, code }).toEqual({ output: "added", error: "", code: 0 });
+  } finally { for (const id of ["capacity-completed", "capacity-stopped", "capacity-next", "capacity-overflow"]) dropRun(id); }
+});
 test("ledger records a request once and removes it", () => {
   const row = {
     requestId: "r1",
