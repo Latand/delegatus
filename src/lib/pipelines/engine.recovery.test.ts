@@ -305,6 +305,7 @@ test("a pipeline without a recorded task adopts the fallback task its admission 
 
 
 const CALLBACK_EXIT = "Codex callback listener failed before dispatch: exited with code 23; stderr: EADDRINUSE: callback bind refused";
+const CALLBACK_SIGNAL = "Codex callback listener failed before dispatch: exited on signal SIGTERM; stderr: EADDRINUSE: callback bind refused";
 const CALLBACK_TIMEOUT = "Codex callback listener failed before dispatch: timed out after 10000ms; stderr: callback bind pending";
 
 test.skipIf(!process.env.LLV_CALLBACK_REPLAY_FILE)("callback persisted budget checkpoint", async () => {
@@ -361,7 +362,7 @@ test("callback retry budget survives a real controller process restart", async (
   }
 }, 70_000);
 
-test.each([HOST_UNAVAILABLE, CALLBACK_EXIT, CALLBACK_TIMEOUT])("a transient transport failure after reservation retries the same attempt from its failed receipt: %s", async (failure) => {
+test.each([HOST_UNAVAILABLE, CALLBACK_EXIT, CALLBACK_TIMEOUT, CALLBACK_SIGNAL])("a transient transport failure after reservation retries the same attempt from its failed receipt: %s", async (failure) => {
   const h = harness();
   const created = await create(h.ports);
   await tickPipelines([], h.ports);
@@ -514,7 +515,7 @@ test.each([null, "starting"] as const)("a callback launch with %s evidence stays
 });
 
 
-test.each([HOST_UNAVAILABLE, CALLBACK_EXIT])("transport retries are bounded and preserve repeated causes: %s", async (failure) => {
+test.each([HOST_UNAVAILABLE, CALLBACK_EXIT, CALLBACK_SIGNAL])("transport retries are bounded and preserve repeated causes: %s", async (failure) => {
   const h = harness();
   await create(h.ports);
   await tickPipelines([], h.ports);

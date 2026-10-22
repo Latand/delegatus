@@ -9,7 +9,7 @@ import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIden
 const binary = process.env.LLV_CODEX_BINARY ?? "codex";
 const version = spawnSync(binary, ["--version"], { encoding: "utf8", timeout: 5_000 }).stdout?.trim();
 
-for (const mode of ["exit", "wrapped", "large", "boundary", "signal", "missing", "timeout", "ownership", "success"] as const) {
+for (const mode of ["exit", "wrapped", "large", "boundary", "secret", "signal", "wrappedsignal", "missing", "timeout", "ownership", "success", "chatty"] as const) {
   test.skipIf(process.platform !== "linux")(`callback startup ${mode} preserves a bounded redacted cause on repeated launches`, async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "callback-"));
     try {
@@ -32,6 +32,14 @@ for (const mode of ["exit", "wrapped", "large", "boundary", "signal", "missing",
             expect(message).toBe("connected: probe");
             continue;
           }
+          if (mode === "chatty") {
+            // Writes before and after readiness and after the Viewer disconnected stay bounded.
+            expect(message).toMatch(/^connected: probe; flooded; sink \d+\/\d+$/);
+            const [afterConnected, final] = message.match(/\d+/g)!.map(Number);
+            expect(afterConnected).toBeLessThanOrEqual(16 * 1024);
+            expect(final).toBeLessThanOrEqual(16 * 1024);
+            continue;
+          }
           if (mode === "missing") {
             expect(message).toContain("ENOENT");
             expect(message).not.toContain(root);
@@ -39,11 +47,16 @@ for (const mode of ["exit", "wrapped", "large", "boundary", "signal", "missing",
             continue;
           }
           expect(message).toContain(mode === "ownership" ? "ownership could not be verified"
-            : mode === "timeout" ? "timed out after 10000ms" : mode === "signal" ? "exited on signal SIGTERM" : "exited with code 23");
+            : mode === "timeout" ? "timed out after 10000ms" : mode === "signal" || mode === "wrappedsignal" ? "exited on signal SIGTERM" : "exited with code 23");
           expect(message).toContain("EADDRINUSE: callback bind refused");
           expect(message).not.toContain("private".repeat(8));
           expect(message).not.toContain(root);
           if (mode === "large" || mode === "boundary") expect(message).toContain("[stderr clipped]");
+          if (mode === "secret") {
+            expect(message).not.toContain("KEYPAYLOAD");
+            expect(message).not.toContain("PRIVATE KEY");
+            expect(message).toContain("[redacted]");
+          }
           expect(message.length).toBeLessThanOrEqual(2400);
           expect(message.startsWith("Codex callback listener failed before dispatch: ")).toBe(mode !== "ownership");
         } finally {
