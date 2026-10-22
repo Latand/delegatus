@@ -755,6 +755,7 @@ for (const pendingReplay of [false, true]) test(`real nested spawn validation ${
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
     const reply = await executeOrchestratorSeatRequest(await request.json(), {
       ...productionSeatCommandDependencies,
+      resolveProject: project => ({ project, displayName: project }),
       engineReadiness: () => "connected",
       spawn: async (body) => {
         const response = await executeSpawnRequest({ headers: new Headers({ host: "127.0.0.1", [VIEWER_SPAWN_CAPABILITY_HEADER]: ensureOperatorSpawnCapability() }), json: async () => body } as unknown as NextRequest, {
@@ -800,7 +801,10 @@ for (const probe of [
 ] as const) {
   test(`real ${probe.tool} ${probe.status} refusal is not executed with its original cause`, async () => {
     asCapabilityCaller();
-    if ("operator" in probe) delete process.env.LLV_SPAWN_CAPABILITY;
+    if ("operator" in probe) {
+      delete process.env.LLV_SPAWN_CAPABILITY;
+      persistProjectAliases([{ source: "project-a", target: "dir-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", displayName: "Example project" }]);
+    }
     setDeputyRootResolverForTests(() => probe.gateway ? "conversation_worker" : "conversation_root");
     let posts = 0;
     const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
@@ -851,6 +855,7 @@ for (const tool of ["create_orchestrator", "send_message_to_orchestrator"] as co
   test(`${tool} never permits a new request after an admitted spawn loses activation`, async () => {
     let admitted = 0;
     const deps: SeatCommandDependencies = {
+      resolveProject: project => ({ project, displayName: project }),
       spawn: async (body) => {
         admitted++;
         failOrchestratorSeatIntent("project-a", String(body.clientAttemptId), "superseded", AT);
