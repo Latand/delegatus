@@ -53976,13 +53976,13 @@
         "medianOuterAdmissionSeconds": 3.207244027988054
       },
       "after": {
-        "count": 29,
-        "p90Seconds": 476.3504060138948,
-        "medianSeconds": 414.40343541814946,
+        "count": 30,
+        "p90Seconds": 472.8332873051986,
+        "medianSeconds": 413.34828720556106,
         "expirations": 0,
         "new": 0,
         "refusals": 0,
-        "medianOuterAdmissionSeconds": 3.205953507917002
+        "medianOuterAdmissionSeconds": 3.263686974416487
       }
     },
     "runs": [
@@ -199481,9 +199481,2098 @@
           ],
           "observedAt": "2026-10-22T05:05:06.194743+00:00"
         }
+      },
+      {
+        "loadPaddingPolicy": {
+          "kind": "sampled-load-feedback",
+          "intervalSeconds": 30,
+          "maxActiveScopes": 12,
+          "maxStopScopesPerInterval": 2,
+          "lowLoadStartupSeconds": 90,
+          "targetBand": [
+            25,
+            30
+          ]
+        },
+        "loadPaddingEvents": [
+          {
+            "elapsed": 9.295491748023778,
+            "load": 10.60888671875,
+            "kind": "start",
+            "scopeOrdinal": 0,
+            "activeScopesRequested": 1
+          },
+          {
+            "elapsed": 9.295828595058993,
+            "load": 10.60888671875,
+            "kind": "start",
+            "scopeOrdinal": 1,
+            "activeScopesRequested": 2
+          },
+          {
+            "elapsed": 9.296073511941358,
+            "load": 10.60888671875,
+            "kind": "start",
+            "scopeOrdinal": 2,
+            "activeScopesRequested": 3
+          },
+          {
+            "elapsed": 9.29632224701345,
+            "load": 10.60888671875,
+            "kind": "start",
+            "scopeOrdinal": 3,
+            "activeScopesRequested": 4
+          },
+          {
+            "elapsed": 100.09304821002297,
+            "load": 32.63623046875,
+            "kind": "stop-request",
+            "scopeOrdinal": 3,
+            "activeScopesRequested": 3
+          },
+          {
+            "elapsed": 130.11277311015874,
+            "load": 32.2138671875,
+            "kind": "stop-request",
+            "scopeOrdinal": 2,
+            "activeScopesRequested": 2
+          },
+          {
+            "elapsed": 160.1315692991484,
+            "load": 30.47021484375,
+            "kind": "stop-request",
+            "scopeOrdinal": 1,
+            "activeScopesRequested": 1
+          },
+          {
+            "elapsed": 250.18099339911714,
+            "load": 23.5244140625,
+            "kind": "start",
+            "scopeOrdinal": 4,
+            "activeScopesRequested": 2
+          },
+          {
+            "elapsed": 310.2074472401291,
+            "load": 30.21484375,
+            "kind": "stop-request",
+            "scopeOrdinal": 4,
+            "activeScopesRequested": 1
+          },
+          {
+            "elapsed": 370.2379591469653,
+            "load": 31.43798828125,
+            "kind": "stop-request",
+            "scopeOrdinal": 0,
+            "activeScopesRequested": 0
+          }
+        ],
+        "loadScopesStarted": 5,
+        "campaignCooldownSeconds": 180.03728366014548,
+        "sourceAtStart": {
+          "runtimeVersion": "1.4.0",
+          "indexTree": "474167f125c23e7d8d6b2c0664e0ac89e49665b6",
+          "trackedTreeClean": true,
+          "engineSha256": "3d22afe884ba1cb66ef4187a6e19838751340ab05390dc439dadd14e4527a433",
+          "testSourceSha256": {
+            "src/lib/pipelines/engine.ports.part3.test.ts": "55db20a108cfb4439d5674f6006efa38c37b49410b9811c8150483001090d7ef",
+            "src/lib/pipelines/engine.providerReset.part2.test.ts": "0ccabe07174d857c498da5d573b42e599d89f64a7f4cd5fd8b16ef5f6e3e49a2"
+          },
+          "controlSha256": null
+        },
+        "indexTreeAtFinish": "474167f125c23e7d8d6b2c0664e0ac89e49665b6",
+        "trackedTreeCleanAtFinish": true,
+        "measurementDriverSha256": "16a4e0a316ef11fb4d036cc2510dfdc899e2c0f317db70db56774b2d293abf3e",
+        "logicalRun": 30,
+        "main": "04df47ce70421effa77b1590d023438c77e5e990",
+        "sourceLaneHead": "262b7363e11540ecd1127ad219deb93ef306a78a",
+        "mergedTree": "474167f125c23e7d8d6b2c0664e0ac89e49665b6",
+        "gateSourceSha256": {
+          "scripts/local-gate.ts": "8b38fde81177011eb42f122e28b85c197ef615939097c0cdaa9e970dd7a57f63",
+          "scripts/local-gate-tests.ts": "451abc67114b50c1836fa4c101a69d884c60ac4114a417db44999b0b34921804",
+          "scripts/gate-slot.sh": "6ac5728ddc87d13ef5e3fb1ea7ad534b9c8b8da0d166def646a6d00ab1986f31",
+          "scripts/owned-runner.ts": "c8728247bcafe3ab4ac9b7276c1a4de4a8a3b36d9c8268786bee0338082e939f",
+          "bunfig.toml": "ed8f2ed463f820d1a9c844bce4578391aee3b6eeff1a635d81d08d9cac62d71c",
+          "package.json": "6ef16a2360fbeb6580cf8326f4a739a9d99f9bfa9361038512564819796197d1"
+        },
+        "id": "after-30",
+        "side": "after",
+        "branchIndex": 2,
+        "control": null,
+        "exit": 0,
+        "ambientAtAdmission": 10.60888671875,
+        "burnerScopes": 4,
+        "paddingForegroundCpuEstimate": 8,
+        "outerAdmissionSeconds": 9.294866664102301,
+        "completeGateSeconds": 390.43912389385514,
+        "load": {
+          "min": 10.60888671875,
+          "median": 28.44921875,
+          "max": 33.224609375
+        },
+        "counted": true,
+        "files": [
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.cpuQueue.test.ts",
+            "wallMs": 2981,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.controllerSnapshot.test.ts",
+            "wallMs": 7083,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.pauseMetadata.test.ts",
+            "wallMs": 1511,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/controllerArtifacts.test.ts",
+            "wallMs": 11322,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.accountGuard.test.ts",
+            "wallMs": 17442,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.creation.test.ts",
+            "wallMs": 46438,
+            "failures": 1,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.controllerPass.test.ts",
+            "wallMs": 64600,
+            "failures": 1,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.containment.test.ts",
+            "wallMs": 70329,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.activation.test.ts",
+            "wallMs": 71760,
+            "failures": 1,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.ports.part2.test.ts",
+            "wallMs": 78879,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.providerBudget.test.ts",
+            "wallMs": 44917,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.cpuAdmissionPolling.test.ts",
+            "wallMs": 95225,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.ports.part3.test.ts",
+            "wallMs": 90499,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.ports.test.ts",
+            "wallMs": 85164,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.providerBudgetKinds.test.ts",
+            "wallMs": 39726,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.providerBudgetChains.part2.test.ts",
+            "wallMs": 75744,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.providerBudgetChains.part3.test.ts",
+            "wallMs": 73489,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.providerBudgetChains.test.ts",
+            "wallMs": 75297,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.providerBudgetOutput.part2.test.ts",
+            "wallMs": 78040,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.providerBudgetOutput.part3.test.ts",
+            "wallMs": 79530,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.providerBudgetOutput.test.ts",
+            "wallMs": 76298,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.providerBudgetPoolOutput.part2.test.ts",
+            "wallMs": 80027,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.providerChains.part2.test.ts",
+            "wallMs": 49068,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.providerBudgetPoolOutput.part3.test.ts",
+            "wallMs": 77894,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.providerChains.test.ts",
+            "wallMs": 64475,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.providerBudgetPoolOutput.test.ts",
+            "wallMs": 75917,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.publication.test.ts",
+            "wallMs": 17037,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.providerSignals.test.ts",
+            "wallMs": 50256,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.provisioning.test.ts",
+            "wallMs": 59172,
+            "failures": 1,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.recovery.part2.test.ts",
+            "wallMs": 56333,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.providerReset.part3.test.ts",
+            "wallMs": 99469,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.recovery.test.ts",
+            "wallMs": 58887,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.providerReset.part2.test.ts",
+            "wallMs": 104175,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.providerReset.test.ts",
+            "wallMs": 102598,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.recoveryAdmission.test.ts",
+            "wallMs": 54754,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.recoveryAdmission.part2.test.ts",
+            "wallMs": 69566,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.rolePrivacy.test.ts",
+            "wallMs": 26726,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.spawnSilence.test.ts",
+            "wallMs": 24716,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.watchdogRegression.test.ts",
+            "wallMs": 5038,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/stageInputExec.test.ts",
+            "wallMs": 898,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/viewerLoopMonitor.test.ts",
+            "wallMs": 358,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.recoveryAuthority.part2.test.ts",
+            "wallMs": 80023,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.recoveryAuthority.test.ts",
+            "wallMs": 86367,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.routing.test.ts",
+            "wallMs": 100300,
+            "failures": 2,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.settlement.test.ts",
+            "wallMs": 99345,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.succession.part2.test.ts",
+            "wallMs": 94865,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.succession.test.ts",
+            "wallMs": 81896,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/pipelines/engine.succession.part3.test.ts",
+            "wallMs": 91876,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "baseline",
+            "file": "src/lib/pipelines/engine.creation.test.ts",
+            "wallMs": 597,
+            "failures": 1,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "baseline",
+            "file": "src/lib/pipelines/engine.controllerPass.test.ts",
+            "wallMs": 837,
+            "failures": 1,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "baseline",
+            "file": "src/lib/pipelines/engine.activation.test.ts",
+            "wallMs": 947,
+            "failures": 1,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "baseline",
+            "file": "src/lib/pipelines/engine.provisioning.test.ts",
+            "wallMs": 957,
+            "failures": 1,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "baseline",
+            "file": "src/lib/pipelines/engine.routing.test.ts",
+            "wallMs": 1193,
+            "failures": 2,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/proc/memory.test.ts",
+            "wallMs": 452,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/proc/index.test.ts",
+            "wallMs": 464,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/platformHome.test.ts",
+            "wallMs": 470,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/proc/darwinIdentity.test.ts",
+            "wallMs": 509,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/proc/portable.test.ts",
+            "wallMs": 516,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/proc/windows.test.ts",
+            "wallMs": 546,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "bin/bind-guard.test.ts",
+            "wallMs": 611,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/proc/windowsIdentity.test.ts",
+            "wallMs": 402,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/proc/windowsCwd.test.ts",
+            "wallMs": 440,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/proc/windowsSnapshot.test.ts",
+            "wallMs": 432,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/runtime/localEndpoint.test.ts",
+            "wallMs": 427,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/processGroup.test.ts",
+            "wallMs": 441,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/state/durableJson.test.ts",
+            "wallMs": 371,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/runtime-host/runtimeHostFence.test.ts",
+            "wallMs": 383,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/runtime-host/socket.test.ts",
+            "wallMs": 441,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "bin/server-runtime.test.ts",
+            "wallMs": 1870,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          },
+          {
+            "phase": "head",
+            "file": "src/lib/scanner/describe.test.ts",
+            "wallMs": 3071,
+            "failures": 0,
+            "complete": true,
+            "halfBudgetHint": false
+          }
+        ],
+        "timing": [
+          "touched-tests: timing 386269ms wall; 52686ms CPU admission; 333583ms execution",
+          "touched-tests: timing 3640ms wall; 0ms CPU admission; 3640ms execution"
+        ],
+        "phases": [
+          "touched-tests: head 383575ms",
+          "touched-tests: baseline run 2655ms (tests 2032ms; 5 failing file(s))",
+          "touched-tests: head 3620ms"
+        ],
+        "new": [],
+        "verdict": [
+          "touched-tests: 0 new failures, 6 pre-existing failures, 0 fixed, 0 removed/skipped, 0 flaky",
+          "touched-tests: green head; no baseline checkout or sample needed"
+        ],
+        "expirations": [],
+        "sampleCount": 200,
+        "startedAt": "2026-10-22T05:50:24.831201+00:00",
+        "finishedAt": "2026-10-22T05:57:04.565192+00:00",
+        "cpuEvidence": {
+          "observedWorkQuotas": [
+            "360000 20000"
+          ],
+          "services": [
+            {
+              "unit": "service-001",
+              "file": "src/lib/pipelines/engine.cpuQueue.test.ts",
+              "first": 10.074249999132007,
+              "last": 12.017541556153446,
+              "cpu": {
+                "usage_usec": 1950810,
+                "user_usec": 1708826,
+                "system_usec": 241984,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 116,
+                "nr_throttled": 0,
+                "throttled_usec": 0,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 270308,
+                "full": 123884
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 12.017541556153446,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-002",
+              "file": "src/lib/pipelines/engine.controllerSnapshot.test.ts",
+              "first": 10.074249999132007,
+              "last": 16.053226741030812,
+              "cpu": {
+                "usage_usec": 5384721,
+                "user_usec": 4857469,
+                "system_usec": 527251,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 313,
+                "nr_throttled": 0,
+                "throttled_usec": 0,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 625707,
+                "full": 386195
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 16.053226741030812,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-003",
+              "file": "src/lib/pipelines/engine.containment.test.ts",
+              "first": 10.074249999132007,
+              "last": 78.08185152104124,
+              "cpu": {
+                "usage_usec": 57258210,
+                "user_usec": 54022783,
+                "system_usec": 3235426,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 3418,
+                "nr_throttled": 0,
+                "throttled_usec": 0,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 2194114,
+                "full": 1773552
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 78.08185152104124,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-004",
+              "file": "src/lib/pipelines/engine.controllerPass.test.ts",
+              "first": 10.074249999132007,
+              "last": 72.07966789393686,
+              "cpu": {
+                "usage_usec": 37562530,
+                "user_usec": 33491940,
+                "system_usec": 4070589,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 2995,
+                "nr_throttled": 0,
+                "throttled_usec": 0,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 2086903,
+                "full": 1574108
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 72.07966789393686,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-005",
+              "file": "src/lib/pipelines/engine.cpuAdmissionPolling.test.ts",
+              "first": 10.074249999132007,
+              "last": 104.09284552303143,
+              "cpu": {
+                "usage_usec": 83780046,
+                "user_usec": 73702043,
+                "system_usec": 10078003,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 4721,
+                "nr_throttled": 0,
+                "throttled_usec": 0,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 4168157,
+                "full": 3501593
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 104.09284552303143,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-006",
+              "file": "src/lib/pipelines/engine.accountGuard.test.ts",
+              "first": 10.074249999132007,
+              "last": 26.033786033978686,
+              "cpu": {
+                "usage_usec": 13718883,
+                "user_usec": 12791314,
+                "system_usec": 927568,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 815,
+                "nr_throttled": 0,
+                "throttled_usec": 0,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 651165,
+                "full": 480864
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 26.033786033978686,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-007",
+              "file": "src/lib/pipelines/engine.activation.test.ts",
+              "first": 10.074249999132007,
+              "last": 80.07864721911028,
+              "cpu": {
+                "usage_usec": 58933806,
+                "user_usec": 55471191,
+                "system_usec": 3462615,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 3520,
+                "nr_throttled": 0,
+                "throttled_usec": 0,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 2227767,
+                "full": 1763403
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 80.07864721911028,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-008",
+              "file": "src/lib/pipelines/controllerArtifacts.test.ts",
+              "first": 10.074249999132007,
+              "last": 20.025462904013693,
+              "cpu": {
+                "usage_usec": 6853429,
+                "user_usec": 3109528,
+                "system_usec": 3743900,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 488,
+                "nr_throttled": 0,
+                "throttled_usec": 0,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 631440,
+                "full": 504654
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 20.025462904013693,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-009",
+              "file": "src/lib/pipelines/engine.creation.test.ts",
+              "first": 14.022634787950665,
+              "last": 58.06797440513037,
+              "cpu": {
+                "usage_usec": 34392515,
+                "user_usec": 30950668,
+                "system_usec": 3441846,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 2231,
+                "nr_throttled": 0,
+                "throttled_usec": 0,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 1454730,
+                "full": 1130294
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 58.06797440513037,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-010",
+              "file": "src/lib/pipelines/engine.ports.part2.test.ts",
+              "first": 20.025462904013693,
+              "last": 96.09104956313968,
+              "cpu": {
+                "usage_usec": 58765000,
+                "user_usec": 46442356,
+                "system_usec": 12322643,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 3898,
+                "nr_throttled": 1,
+                "throttled_usec": 703,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 2756290,
+                "full": 2386099
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 96.09104956313968,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-011",
+              "file": "src/lib/pipelines/engine.ports.part3.test.ts",
+              "first": 22.038462257944047,
+              "last": 110.10103394114412,
+              "cpu": {
+                "usage_usec": 55072713,
+                "user_usec": 24375373,
+                "system_usec": 30697340,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 4455,
+                "nr_throttled": 0,
+                "throttled_usec": 0,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 3598638,
+                "full": 3250181
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 110.10103394114412,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-012",
+              "file": "src/lib/pipelines/engine.ports.test.ts",
+              "first": 28.028996278066188,
+              "last": 110.10103394114412,
+              "cpu": {
+                "usage_usec": 63520738,
+                "user_usec": 48994384,
+                "system_usec": 14526354,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 4152,
+                "nr_throttled": 1,
+                "throttled_usec": 1416,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 2895860,
+                "full": 2501657
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 110.10103394114412,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-013",
+              "file": "src/lib/pipelines/engine.providerBudget.test.ts",
+              "first": 60.07050836808048,
+              "last": 102.09325036313385,
+              "cpu": {
+                "usage_usec": 36019176,
+                "user_usec": 33262566,
+                "system_usec": 2756610,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 2155,
+                "nr_throttled": 0,
+                "throttled_usec": 0,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 1604671,
+                "full": 1264636
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 102.09325036313385,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-014",
+              "file": "src/lib/pipelines/engine.providerBudgetChains.part2.test.ts",
+              "first": 76.07807888113894,
+              "last": 148.1203812949825,
+              "cpu": {
+                "usage_usec": 68587939,
+                "user_usec": 65224938,
+                "system_usec": 3363001,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 3699,
+                "nr_throttled": 0,
+                "throttled_usec": 0,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 1922663,
+                "full": 1432555
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 148.1203812949825,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-015",
+              "file": "src/lib/pipelines/engine.providerBudgetChains.part3.test.ts",
+              "first": 80.07864721911028,
+              "last": 152.12560149794444,
+              "cpu": {
+                "usage_usec": 66688553,
+                "user_usec": 63106911,
+                "system_usec": 3581641,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 3609,
+                "nr_throttled": 0,
+                "throttled_usec": 0,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 1678836,
+                "full": 1233728
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 152.12560149794444,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-016",
+              "file": "src/lib/pipelines/engine.providerBudgetChains.test.ts",
+              "first": 82.07947343098931,
+              "last": 156.12773671094328,
+              "cpu": {
+                "usage_usec": 69763909,
+                "user_usec": 66202152,
+                "system_usec": 3561756,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 3738,
+                "nr_throttled": 0,
+                "throttled_usec": 0,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 2242377,
+                "full": 1416015
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 156.12773671094328,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-017",
+              "file": "src/lib/pipelines/engine.providerBudgetKinds.test.ts",
+              "first": 98.09130897000432,
+              "last": 136.1185617770534,
+              "cpu": {
+                "usage_usec": 36622849,
+                "user_usec": 34508672,
+                "system_usec": 2114177,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 1954,
+                "nr_throttled": 0,
+                "throttled_usec": 0,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 720579,
+                "full": 522573
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 136.1185617770534,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-018",
+              "file": "src/lib/pipelines/engine.providerBudgetOutput.part2.test.ts",
+              "first": 104.09284552303143,
+              "last": 180.14151223702356,
+              "cpu": {
+                "usage_usec": 75783492,
+                "user_usec": 72403809,
+                "system_usec": 3379682,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 3813,
+                "nr_throttled": 1,
+                "throttled_usec": 1493,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 963946,
+                "full": 689452
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 180.14151223702356,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-019",
+              "file": "src/lib/pipelines/engine.providerBudgetOutput.part3.test.ts",
+              "first": 106.0958947581239,
+              "last": 184.1501451090444,
+              "cpu": {
+                "usage_usec": 78444916,
+                "user_usec": 74738865,
+                "system_usec": 3706051,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 3968,
+                "nr_throttled": 2,
+                "throttled_usec": 688,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 1292020,
+                "full": 828876
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 184.1501451090444,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-020",
+              "file": "src/lib/pipelines/engine.providerBudgetOutput.test.ts",
+              "first": 112.09726466913708,
+              "last": 186.14499982492998,
+              "cpu": {
+                "usage_usec": 74724709,
+                "user_usec": 71404874,
+                "system_usec": 3319835,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 3739,
+                "nr_throttled": 0,
+                "throttled_usec": 0,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 1094226,
+                "full": 674068
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 186.14499982492998,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-021",
+              "file": "src/lib/pipelines/engine.providerBudgetPoolOutput.part2.test.ts",
+              "first": 114.10597149794921,
+              "last": 190.14625248801894,
+              "cpu": {
+                "usage_usec": 78109066,
+                "user_usec": 74720787,
+                "system_usec": 3388279,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 3900,
+                "nr_throttled": 0,
+                "throttled_usec": 0,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 899290,
+                "full": 576615
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 190.14625248801894,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-022",
+              "file": "src/lib/pipelines/engine.providerBudgetPoolOutput.part3.test.ts",
+              "first": 138.1146889331285,
+              "last": 214.15878007211722,
+              "cpu": {
+                "usage_usec": 77906448,
+                "user_usec": 74160591,
+                "system_usec": 3745857,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 3871,
+                "nr_throttled": 1,
+                "throttled_usec": 3555,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 722936,
+                "full": 457516
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 214.15878007211722,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-023",
+              "file": "src/lib/pipelines/engine.providerBudgetPoolOutput.test.ts",
+              "first": 150.12478006910533,
+              "last": 224.160490316106,
+              "cpu": {
+                "usage_usec": 75350541,
+                "user_usec": 72035916,
+                "system_usec": 3314624,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 3714,
+                "nr_throttled": 2,
+                "throttled_usec": 24344,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 537665,
+                "full": 381605
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 224.160490316106,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-024",
+              "file": "src/lib/pipelines/engine.providerChains.part2.test.ts",
+              "first": 154.12665009708144,
+              "last": 202.15071739908308,
+              "cpu": {
+                "usage_usec": 52430227,
+                "user_usec": 43074826,
+                "system_usec": 9355401,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 2440,
+                "nr_throttled": 0,
+                "throttled_usec": 0,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 795792,
+                "full": 495570
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 202.15071739908308,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-025",
+              "file": "src/lib/pipelines/engine.providerChains.test.ts",
+              "first": 158.12801392702386,
+              "last": 220.15821823012084,
+              "cpu": {
+                "usage_usec": 63505974,
+                "user_usec": 60200254,
+                "system_usec": 3305719,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 3177,
+                "nr_throttled": 0,
+                "throttled_usec": 0,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 499388,
+                "full": 375845
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 220.15821823012084,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-026",
+              "file": "src/lib/pipelines/engine.providerReset.part2.test.ts",
+              "first": 182.14385998505168,
+              "last": 284.19417035300285,
+              "cpu": {
+                "usage_usec": 99098979,
+                "user_usec": 94389088,
+                "system_usec": 4709891,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 5113,
+                "nr_throttled": 2,
+                "throttled_usec": 21315,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 925197,
+                "full": 787697
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 284.19417035300285,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-027",
+              "file": "src/lib/pipelines/engine.providerReset.part3.test.ts",
+              "first": 186.14499982492998,
+              "last": 282.19098401698284,
+              "cpu": {
+                "usage_usec": 96117868,
+                "user_usec": 91740039,
+                "system_usec": 4377829,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 4894,
+                "nr_throttled": 2,
+                "throttled_usec": 17654,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 978162,
+                "full": 761272
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 282.19098401698284,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-028",
+              "file": "src/lib/pipelines/engine.providerReset.test.ts",
+              "first": 188.15097944415174,
+              "last": 288.2006852950435,
+              "cpu": {
+                "usage_usec": 99335129,
+                "user_usec": 94865148,
+                "system_usec": 4469981,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 5026,
+                "nr_throttled": 3,
+                "throttled_usec": 16011,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 1218349,
+                "full": 918094
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 288.2006852950435,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-029",
+              "file": "src/lib/pipelines/engine.providerSignals.test.ts",
+              "first": 194.14898247015662,
+              "last": 242.17111859214492,
+              "cpu": {
+                "usage_usec": 56364750,
+                "user_usec": 48725457,
+                "system_usec": 7639292,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 2500,
+                "nr_throttled": 3,
+                "throttled_usec": 18796,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 337453,
+                "full": 236717
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 242.17111859214492,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-030",
+              "file": "src/lib/pipelines/engine.provisioning.test.ts",
+              "first": 204.15293207508512,
+              "last": 260.183725801995,
+              "cpu": {
+                "usage_usec": 54947278,
+                "user_usec": 51507716,
+                "system_usec": 3439562,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 2839,
+                "nr_throttled": 8,
+                "throttled_usec": 72123,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 521717,
+                "full": 444164
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 260.183725801995,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-031",
+              "file": "src/lib/pipelines/engine.publication.test.ts",
+              "first": 216.1572410510853,
+              "last": 230.1638864830602,
+              "cpu": {
+                "usage_usec": 16466137,
+                "user_usec": 13789099,
+                "system_usec": 2677037,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 775,
+                "nr_throttled": 2,
+                "throttled_usec": 14589,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 110408,
+                "full": 75961
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 230.1638864830602,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-032",
+              "file": "src/lib/pipelines/engine.recovery.part2.test.ts",
+              "first": 222.15995977493003,
+              "last": 276.19027545512654,
+              "cpu": {
+                "usage_usec": 53561654,
+                "user_usec": 49267137,
+                "system_usec": 4294517,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 2756,
+                "nr_throttled": 9,
+                "throttled_usec": 33885,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 740917,
+                "full": 572637
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 276.19027545512654,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-033",
+              "file": "src/lib/pipelines/engine.recovery.test.ts",
+              "first": 226.1617203161586,
+              "last": 284.19417035300285,
+              "cpu": {
+                "usage_usec": 54537839,
+                "user_usec": 51198585,
+                "system_usec": 3339254,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 2919,
+                "nr_throttled": 3,
+                "throttled_usec": 28079,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 885514,
+                "full": 776152
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 284.19417035300285,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-034",
+              "file": "src/lib/pipelines/engine.recoveryAdmission.part2.test.ts",
+              "first": 232.16489814594388,
+              "last": 300.20400670496747,
+              "cpu": {
+                "usage_usec": 63202121,
+                "user_usec": 59670977,
+                "system_usec": 3531144,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 3427,
+                "nr_throttled": 3,
+                "throttled_usec": 11343,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 1129354,
+                "full": 988112
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 300.20400670496747,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-035",
+              "file": "src/lib/pipelines/engine.recoveryAdmission.test.ts",
+              "first": 244.16943773603998,
+              "last": 296.20076798903756,
+              "cpu": {
+                "usage_usec": 49098123,
+                "user_usec": 46306479,
+                "system_usec": 2791644,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 2688,
+                "nr_throttled": 3,
+                "throttled_usec": 20871,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 1055484,
+                "full": 901420
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 296.20076798903756,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-036",
+              "file": "src/lib/pipelines/engine.recoveryAuthority.part2.test.ts",
+              "first": 262.1873965100385,
+              "last": 340.2214085259475,
+              "cpu": {
+                "usage_usec": 71771620,
+                "user_usec": 66628677,
+                "system_usec": 5142943,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 3929,
+                "nr_throttled": 0,
+                "throttled_usec": 0,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 1593159,
+                "full": 1243059
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 340.2214085259475,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-037",
+              "file": "src/lib/pipelines/engine.recoveryAuthority.test.ts",
+              "first": 278.19196430197917,
+              "last": 362.24806692893617,
+              "cpu": {
+                "usage_usec": 77199359,
+                "user_usec": 72218564,
+                "system_usec": 4980795,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 4242,
+                "nr_throttled": 1,
+                "throttled_usec": 3202,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 1401688,
+                "full": 1149105
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 362.24806692893617,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-038",
+              "file": "src/lib/pipelines/engine.rolePrivacy.test.ts",
+              "first": 284.19417035300285,
+              "last": 310.2069488631096,
+              "cpu": {
+                "usage_usec": 16532173,
+                "user_usec": 14292554,
+                "system_usec": 2239619,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 1176,
+                "nr_throttled": 0,
+                "throttled_usec": 0,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 765450,
+                "full": 497961
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 310.2069488631096,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-039",
+              "file": "src/lib/pipelines/engine.routing.test.ts",
+              "first": 286.20444832812063,
+              "last": 384.2456779500935,
+              "cpu": {
+                "usage_usec": 93830846,
+                "user_usec": 87095157,
+                "system_usec": 6735689,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 4975,
+                "nr_throttled": 6,
+                "throttled_usec": 33933,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 1318329,
+                "full": 1017433
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 384.2456779500935,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-040",
+              "file": "src/lib/pipelines/engine.settlement.test.ts",
+              "first": 286.20444832812063,
+              "last": 384.2456779500935,
+              "cpu": {
+                "usage_usec": 92285783,
+                "user_usec": 86815753,
+                "system_usec": 5470029,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 4907,
+                "nr_throttled": 2,
+                "throttled_usec": 19484,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 1014081,
+                "full": 784524
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 384.2456779500935,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-041",
+              "file": "src/lib/pipelines/engine.spawnSilence.test.ts",
+              "first": 292.19921561703086,
+              "last": 314.21059640008025,
+              "cpu": {
+                "usage_usec": 19905308,
+                "user_usec": 17902407,
+                "system_usec": 2002900,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 1164,
+                "nr_throttled": 0,
+                "throttled_usec": 0,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 555406,
+                "full": 351417
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 314.21059640008025,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-042",
+              "file": "src/lib/pipelines/engine.succession.part2.test.ts",
+              "first": 298.19922080403194,
+              "last": 390.2492008849513,
+              "cpu": {
+                "usage_usec": 88989191,
+                "user_usec": 84070066,
+                "system_usec": 4919125,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 4652,
+                "nr_throttled": 0,
+                "throttled_usec": 0,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 1012544,
+                "full": 814222
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 390.2492008849513,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-043",
+              "file": "<campaign>/after-2/src/lib/pipelines/engine.rolePrivacy.test.ts",
+              "first": 300.20400670496747,
+              "last": 300.20400670496747,
+              "cpu": {
+                "usage_usec": 630470,
+                "user_usec": 550317,
+                "system_usec": 80152,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 33,
+                "nr_throttled": 0,
+                "throttled_usec": 0,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 87897,
+                "full": 28018
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 300.20400670496747,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-044",
+              "file": "<campaign>/after-2/src/lib/pipelines/engine.rolePrivacy.test.ts",
+              "first": 302.211412968114,
+              "last": 302.211412968114,
+              "cpu": {
+                "usage_usec": 1594724,
+                "user_usec": 1424866,
+                "system_usec": 169858,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 69,
+                "nr_throttled": 1,
+                "throttled_usec": 250,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 48939,
+                "full": 22020
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 302.211412968114,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-045",
+              "file": "src/lib/pipelines/engine.succession.part3.test.ts",
+              "first": 302.211412968114,
+              "last": 392.24727082112804,
+              "cpu": {
+                "usage_usec": 87316543,
+                "user_usec": 82202798,
+                "system_usec": 5113744,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 4549,
+                "nr_throttled": 0,
+                "throttled_usec": 0,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 882899,
+                "full": 678375
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 392.24727082112804,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-046",
+              "file": "<campaign>/after-2/src/lib/pipelines/engine.rolePrivacy.test.ts",
+              "first": 304.2212313320488,
+              "last": 304.2212313320488,
+              "cpu": {
+                "usage_usec": 1574194,
+                "user_usec": 1374059,
+                "system_usec": 200134,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 67,
+                "nr_throttled": 2,
+                "throttled_usec": 1910,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 74751,
+                "full": 39424
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 304.2212313320488,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-047",
+              "file": "<campaign>/after-2/src/lib/pipelines/engine.rolePrivacy.test.ts",
+              "first": 306.20905181695707,
+              "last": 306.20905181695707,
+              "cpu": {
+                "usage_usec": 1222794,
+                "user_usec": 1068827,
+                "system_usec": 153966,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 56,
+                "nr_throttled": 0,
+                "throttled_usec": 0,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 89100,
+                "full": 17944
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 306.20905181695707,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-048",
+              "file": "<campaign>/after-2/src/lib/pipelines/engine.rolePrivacy.test.ts",
+              "first": 308.20662012603134,
+              "last": 308.20662012603134,
+              "cpu": {
+                "usage_usec": 982422,
+                "user_usec": 873043,
+                "system_usec": 109379,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 49,
+                "nr_throttled": 0,
+                "throttled_usec": 0,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 58772,
+                "full": 16704
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 308.20662012603134,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-049",
+              "file": "src/lib/pipelines/engine.succession.test.ts",
+              "first": 312.20966070494615,
+              "last": 392.24727082112804,
+              "cpu": {
+                "usage_usec": 81095225,
+                "user_usec": 77067280,
+                "system_usec": 4027944,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 4087,
+                "nr_throttled": 1,
+                "throttled_usec": 285,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 719447,
+                "full": 526351
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 392.24727082112804,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-050",
+              "file": "src/lib/pipelines/engine.watchdogRegression.test.ts",
+              "first": 316.21402856102213,
+              "last": 318.2141394871287,
+              "cpu": {
+                "usage_usec": 3360831,
+                "user_usec": 2957610,
+                "system_usec": 403220,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 159,
+                "nr_throttled": 1,
+                "throttled_usec": 469,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 74342,
+                "full": 32433
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 318.2141394871287,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-051",
+              "file": "src/lib/pipelines/stageInputExec.test.ts",
+              "first": 320.2123812669888,
+              "last": 320.2123812669888,
+              "cpu": {
+                "usage_usec": 234049,
+                "user_usec": 180350,
+                "system_usec": 53699,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 10,
+                "nr_throttled": 0,
+                "throttled_usec": 0,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 60702,
+                "full": 7236
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 320.2123812669888,
+              "directTestProcessConfirmed": false
+            },
+            {
+              "unit": "service-052",
+              "file": "src/lib/pipelines/engine.creation.test.ts",
+              "first": 394.2517388591077,
+              "last": 394.2517388591077,
+              "cpu": {
+                "usage_usec": 841745,
+                "user_usec": 681039,
+                "system_usec": 160705,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 25,
+                "nr_throttled": 2,
+                "throttled_usec": 13805,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 6662,
+                "full": 2865
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 394.2517388591077,
+              "directTestProcessConfirmed": false
+            },
+            {
+              "unit": "service-053",
+              "file": "src/lib/pipelines/engine.controllerPass.test.ts",
+              "first": 394.2517388591077,
+              "last": 394.2517388591077,
+              "cpu": {
+                "usage_usec": 889122,
+                "user_usec": 749921,
+                "system_usec": 139201,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 25,
+                "nr_throttled": 3,
+                "throttled_usec": 17890,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 6248,
+                "full": 4231
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 394.2517388591077,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-054",
+              "file": "src/lib/pipelines/engine.activation.test.ts",
+              "first": 394.2517388591077,
+              "last": 394.2517388591077,
+              "cpu": {
+                "usage_usec": 848340,
+                "user_usec": 723257,
+                "system_usec": 125082,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 26,
+                "nr_throttled": 1,
+                "throttled_usec": 8494,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 5288,
+                "full": 2512
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 394.2517388591077,
+              "directTestProcessConfirmed": true
+            },
+            {
+              "unit": "service-055",
+              "file": "src/lib/scanner/describe.test.ts",
+              "first": 398.2506000210997,
+              "last": 398.2506000210997,
+              "cpu": {
+                "usage_usec": 1884404,
+                "user_usec": 1523603,
+                "system_usec": 360800,
+                "core_sched.force_idle_usec": 0,
+                "nr_periods": 76,
+                "nr_throttled": 1,
+                "throttled_usec": 4575,
+                "nr_bursts": 0,
+                "burst_usec": 0
+              },
+              "pressure": {
+                "some": 14347,
+                "full": 8251
+              },
+              "quota": "60000 20000",
+              "lastCpuChange": 398.2506000210997,
+              "directTestProcessConfirmed": true
+            }
+          ],
+          "excludedSupervisors": [],
+          "wholeWorkSliceCounterDelta": {
+            "usage_usec": 4426891604,
+            "user_usec": 3722231690,
+            "system_usec": 704659914,
+            "core_sched.force_idle_usec": 0,
+            "nr_periods": 19412,
+            "nr_throttled": 2,
+            "throttled_usec": 4385,
+            "nr_bursts": 0,
+            "burst_usec": 0
+          },
+          "rawSampleSha256": "49a69855aab7484f0ea5167bf0f30f8e610f4205f5537b35347081d7ccb29b22"
+        },
+        "rawHookLogSha256": "cdefb6644eaa5ebf6fbc9b3a8b6809c4202730c5a27c5b7ec6eba3a29f30ef0e",
+        "measurementEpoch": "sampled-load-feedback",
+        "managedRunnerContext": "host-identity-translated",
+        "headFileInvocations": 65,
+        "uniqueHeadFiles": 65,
+        "engineHeadFiles": 45,
+        "ancestorBudgetLedgersPreserved": true,
+        "loadPaddingCleanupAudit": {
+          "id": "after-30",
+          "scopeCount": 5,
+          "allQuiescent": true,
+          "states": [
+            {
+              "scopeOrdinal": 0,
+              "activeState": "inactive",
+              "populated": false
+            },
+            {
+              "scopeOrdinal": 1,
+              "activeState": "inactive",
+              "populated": false
+            },
+            {
+              "scopeOrdinal": 2,
+              "activeState": "inactive",
+              "populated": false
+            },
+            {
+              "scopeOrdinal": 3,
+              "activeState": "inactive",
+              "populated": false
+            },
+            {
+              "scopeOrdinal": 4,
+              "activeState": "inactive",
+              "populated": false
+            }
+          ],
+          "observedAt": "2026-10-22T05:57:05.308282+00:00"
+        }
       }
     ],
-    "status": "window-ended-second-quiet-window",
+    "status": "complete",
     "discardedRuns": [
       {
         "id": "before-06",
@@ -199640,9 +201729,9 @@
       },
       "priorCampaignProcessesExited": true
     },
-    "latestCheckpointAt": "2026-10-22T05:06:21.998766+00:00",
+    "latestCheckpointAt": "2026-10-22T05:58:29.846162+00:00",
     "integrationHead": "51d851863f7dbfba06ecf9d601736814dea1c882",
-    "checkpointSourceHead": "75369593ceb77876de5f3b3b308fe108cf5bcd08",
+    "checkpointSourceHead": "132932cd96db4ed7bebc3fe0c0aa6450c679506e",
     "protocol": {
       "command": "bun scripts/local-gate.ts pre-push",
       "sampleSeconds": 2,
@@ -200174,6 +202263,15 @@
         ],
         "qualifyingAfter": 0,
         "qualifyingBefore": 1,
+        "finished": true
+      },
+      {
+        "id": "batch-30",
+        "attempts": [
+          "after-30"
+        ],
+        "qualifyingAfter": 1,
+        "qualifyingBefore": 0,
         "finished": true
       }
     ],
@@ -201103,6 +203201,147 @@
         "newHooksForbidden": true,
         "seatStopReceived": false
       }
+    },
+    "finalQuietWindowContinuation": {
+      "window": {
+        "start": "2026-10-22T05:40:00Z",
+        "dispatchCutoffUtc": "2026-10-22T06:25:00Z",
+        "seatStopOverrides": true
+      },
+      "integrationSource": {
+        "sourceCommit": "132932cd96db4ed7bebc3fe0c0aa6450c679506e",
+        "baseAtExport": "026855f8509021cdff0450deafcd28e5ff9a782f",
+        "sourceCodeDigest": "d474a26544326efe2fba31504cb7acd92b57ff50337dc6ebc7e914913ff552a6",
+        "digestProcedure": "sha256 of git ls-tree -r -z HEAD -- followed by digestPaths",
+        "digestPaths": [
+          "src",
+          "scripts",
+          "bin",
+          ".githooks",
+          "package.json",
+          "bun.lock",
+          "bunfig.toml",
+          "test-preload.ts",
+          "tsconfig.json",
+          "tsconfig.production.json",
+          "next.config.ts",
+          ".github/workflows/platform-tests.yml"
+        ],
+        "packageManifestSha256": "2f8262452c743fbf86922bae1e71b3d6d0eb34f1f4579b501a815bddb87d07ab",
+        "bunLockSha256": "81cc5be1e8850c459b550b5b735b1d330bda657d9601f4f982e8b076ab8ef3f5",
+        "basePinnedInLocalBareOrigin": true,
+        "dependencySetup": "Fresh bun install --frozen-lockfile --ignore-scripts succeeded in the isolated source clone",
+        "installedSdkVersion": "1.32.0"
+      },
+      "integrationChecks": {
+        "install": {
+          "command": [
+            "bun",
+            "install",
+            "--frozen-lockfile",
+            "--ignore-scripts"
+          ],
+          "startedAtUnix": 1792647632.7771971,
+          "elapsedSeconds": 2.070485830307007,
+          "exitCode": 0,
+          "logSha256": "1a6c76c77198a134f769a9aa9bd657a2a8b54ab02b05b19344046c3b8c27fa27"
+        },
+        "gate": {
+          "command": [
+            "bun",
+            "scripts/local-gate.ts",
+            "pre-push"
+          ],
+          "startedAtUnix": 1792647647.5251849,
+          "elapsedSeconds": 319.643860578537,
+          "exitCode": 0,
+          "logSha256": "004a84dc703747999508ae10d053bbff773cbccc8882cfb02bc7b7e8b008a531",
+          "namedChecks": [
+            "pre-push: audit retry tests: passed in 3 s",
+            "pre-push: supply chain: passed in 0 s",
+            "pre-push: types: passed in 235 s",
+            "pre-push: eslint: passed in 9 s",
+            "pre-push: touched tests: passed in 312 s",
+            "pre-push: Linux backend: passed in 0 s",
+            "pre-push: Linux tests: passed in 4 s"
+          ],
+          "newFailures": 0,
+          "classifiedFailures": [
+            "PRE-EXISTING src/lib/pipelines/engine.controllerPass.test.ts: a bounded reconciliation preserves another lane's CPU ticket and FIFO age"
+          ]
+        }
+      },
+      "before06Excluded": true,
+      "frozenDriverUnchanged": true,
+      "remaining": {
+        "after": 0,
+        "before": 0
+      },
+      "outerWrapper": {
+        "revision": "80620828df6b",
+        "sha256": "06c286d5b8b37b0738951dbcd33a0817c94c9254563e0824ec8d02f3e8ba2de9"
+      },
+      "managedAdapterSha256": "bde1eed6b7c5c03afe514fbe33479ce6de96b5f30350e159d220c348f5d0247c",
+      "finalAudit": {
+        "observedAt": "2026-10-22T05:58:04.081371+00:00",
+        "newCompletedAttempts": 1,
+        "allRecordedFileServicesQuiescent": true,
+        "recordedFileServiceCount": 63,
+        "allOwnedPaddingScopesQuiescent": true,
+        "paddingScopeCount": 5,
+        "sourceDigestMatchesSuccessfulIntegration": true,
+        "cutoffRespected": true,
+        "before06Excluded": true,
+        "rawAndPublishedRecordsReconciled": 63,
+        "summary": {
+          "before": {
+            "count": 10,
+            "p90Seconds": 1006.807657069061,
+            "medianSeconds": 931.059529896942,
+            "expirations": 7,
+            "new": 2,
+            "refusals": 5,
+            "medianOuterAdmissionSeconds": 3.207244027988054
+          },
+          "after": {
+            "count": 30,
+            "p90Seconds": 472.8332873051986,
+            "medianSeconds": 413.34828720556106,
+            "expirations": 0,
+            "new": 0,
+            "refusals": 0,
+            "medianOuterAdmissionSeconds": 3.263686974416487
+          }
+        }
+      },
+      "windowClose": {
+        "at": "2026-10-22T05:58:03.664971+00:00",
+        "reason": "All required qualifying runs complete",
+        "dispatchClosed": true,
+        "finalRun": "after-30",
+        "activeRunCompleted": true,
+        "startNoNewRuns": true
+      },
+      "runnerProvenance": {
+        "outerWrapperSha256": "06c286d5b8b37b0738951dbcd33a0817c94c9254563e0824ec8d02f3e8ba2de9",
+        "managedAdapterSha256": "bde1eed6b7c5c03afe514fbe33479ce6de96b5f30350e159d220c348f5d0247c",
+        "frozenDriverSha256": "16a4e0a316ef11fb4d036cc2510dfdc899e2c0f317db70db56774b2d293abf3e",
+        "dispatchGuards": {
+          "one-run-v2.py": "4c54a04a333158b89234af2924b9d47dc7542c427dd74548f4e7305326f0828c",
+          "one-v2.py": "066bbf0de03b637d5e7158483d2a659f7e99464095e36de24267c9ddb3b291ce"
+        },
+        "guardChange": "Only approved dispatch cutoff changed to 2026-10-22T06:25:00Z; frozen measurement driver and managed adapter unchanged",
+        "campaignWindow": {
+          "start": "2026-10-22T05:40:00Z",
+          "dispatchCutoffUtc": "2026-10-22T06:25:00Z",
+          "seatStopOverrides": true
+        }
+      },
+      "finalFileInventoryMatchesPriorBranch": true,
+      "finalHeadFileInvocations": 65,
+      "allPriorRowsUnchanged": true,
+      "allRawLogAndCpuDigestsVerified": true,
+      "finalManagedSupervisorQuiescent": true
     }
   }
 }
