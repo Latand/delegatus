@@ -68,6 +68,7 @@ import {
   RelayStoreBusy,
   readRunLedger,
   runHoldsCapacity,
+  ownerStopPending,
   settleRelayRequestClaimAsync,
   type PairedRelay,
   type RelayTargetSettings,
@@ -945,16 +946,28 @@ export async function runClaimedRequest(
       return null;
     }
     if (callAbort.signal.aborted) return null;
+    if (owner && !diagnostic) {
+      // Record, journal and hand the first failure to durable owner custody
+      // before cancelling: the stop below may wait for host confirmation.
+      const value = ownerTurnDiagnostic("exception", error, [relay.credential]);
+      recordDiagnostic(value);
+      console.error("Owner relay turn failed", JSON.stringify({ requestId, diagnostic: value }));
+    }
+    if (owner && diagnostic && run) {
+      run.diagnose?.(diagnostic);
+      // Durable custody keeps the reason even if host control never confirms.
+      // Awaited before the stop: its synchronous cutoff write must not contend
+      // with this write's file lock.
+      const value = diagnostic;
+      try { await changeRunAsync(requestId, current => current.ownerTurn && !current.ownerTurn.diagnostic
+        ? { ...current, ownerTurn: { ...current.ownerTurn, diagnostic: value } } : current, Date.now() + 5000); }
+      catch { console.error("Owner relay diagnostic persistence unavailable; the stop cutoff retries it"); }
+    }
     if (run) {
       if (!runFinished) run.cancel();
       await run.done;
     }
     if (owner) {
-      if (!diagnostic) {
-        const value = ownerTurnDiagnostic("exception", error, [relay.credential]);
-        recordDiagnostic(value);
-        console.error("Owner relay turn failed", JSON.stringify({ requestId, diagnostic: value }));
-      }
       failureReply = true;
       stagedAttachments = [];
       if (allowOwnerReply?.()) return await finish({ lease_id: leaseId, outcome: "answered",
@@ -979,7 +992,7 @@ export async function runClaimedRequest(
       if (conversation && owner) {
         try {
           const custody = readRunLedger().runs.find(r => r.requestId === requestId)?.ownerTurn;
-          releasePin = !(custody?.cancel && !custody.confirmed);
+          releasePin = !(custody?.cancel && !custody.confirmed && !custody.released);
         } catch { releasePin = false; } // Unreadable custody cannot admit a peer turn.
       }
       if (conversation && releasePin) {
@@ -995,14 +1008,15 @@ export async function runClaimedRequest(
         recorder.finish({ outcome: "lease_lost", answer: null, delivery: null, ...loopRecord() });
       try {
         const held = readRunLedger().runs.find(r => r.requestId === requestId);
-        const custodyPending = !!held?.ownerTurn?.cancel && !held.ownerTurn.confirmed;
+        // Pending stops and released owner stops both keep their custody record.
+        const custodyPending = !!held && ownerStopPending(held) || !!held?.ownerTurn?.released;
         if (recorded && !custodyPending && !(completionAccepted && !capacityReleased)) await dropRunAsync(requestId, Date.now() + 5000);
       } catch (error) {
         console.error("External relay run ledger cleanup failed", error instanceof Error ? error.name : "unknown");
       }
       try {
         const held = readRunLedger().runs.find(r => r.requestId === requestId);
-        if (runDir && !(held?.ownerTurn?.cancel && !held.ownerTurn.confirmed)) await fs.promises.rm(runDir, { recursive: true, force: true });
+        if (runDir && !(held && ownerStopPending(held))) await fs.promises.rm(runDir, { recursive: true, force: true });
       } catch (error) {
         console.error("External relay run directory cleanup failed", error instanceof Error ? error.name : "unknown");
       }

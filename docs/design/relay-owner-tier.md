@@ -601,6 +601,20 @@ conversation later with no lease to answer; the prompt asks for
   delivery guard still requires the bound request, enabled target and current
   owner-tier permission. Agent tools and queued sends remain revoked.
 
+  A pending stop never holds its target slot without bound. When admission
+  completed, the spawn receipt failed before any session, pane or verified
+  host was bound, its first prompt is not pending and the registry has no
+  conversation for its id, nothing exists to stop: the stop counts as
+  confirmed without host control. Otherwise, ten minutes after the cutoff
+  was first written (`cancelledAt`; an older row is stamped when a stop
+  first sees it), an unconfirmed stop stops holding the slot without
+  becoming confirmed. Both
+  mark `capacityReleased` and `ownerTurn.released` with the time and reason
+  (`no_execution` or `stop_unconfirmed`). The journal names the request,
+  conversation, reason and diagnostic. The custody record, its cutoff and
+  its diagnostic stay in the run ledger for 24 hours. The sweep does not
+  retry control for a released row and drops it after that retention.
+
   Target capacity counts execution separately from retained cleanup custody.
   An accepted completion durably marks `capacityReleased` before waiting for
   claim settlement or chain/file cleanup. If the marker write is refused,

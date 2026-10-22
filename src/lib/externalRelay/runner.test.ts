@@ -3239,6 +3239,257 @@ for (const worker of [false, true]) test(`owner ${failure} keeps its reason in t
   } finally { logging.mockRestore(); await service.close(); }
 });
 
+for (const worker of [false, true]) test(`owner runner exception is recorded before the stop wait and answered after confirmed stop (worker=${worker})`, async () => {
+  const relayStore = await import("./store");
+  const completions: unknown[] = [], journal: unknown[][] = [];
+  const service = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  paired.targets[0]!.fallback = "none";
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const requestId = `owner_runner_exception_${worker}`;
+  const unsafe = `fixture ledger write refused ${paired.credential} /srv/fixture/private.txt`;
+  const conversationId = `conversation_runner_exception_${worker}`;
+  const write = relayStore.changeRunAsync;
+  let armed = false, writes = 0, stops = 0;
+  let stopReached!: () => void, confirm!: () => void;
+  const stopping = new Promise<void>(r => { stopReached = r; });
+  const confirmed = new Promise<void>(r => { confirm = r; });
+  const writer = spyOn(relayStore, "changeRunAsync").mockImplementation(async (...args) => {
+    if (armed && ++writes === 1) throw Error(unsafe);
+    return write(...args);
+  });
+  const logging = spyOn(console, "error").mockImplementation((...args) => { journal.push(args); });
+  let done: ReturnType<typeof runClaimedRequestWithLeaseWorker> | undefined, finished = false;
+  try {
+    done = runClaimedRequestWithLeaseWorker(paired, { ...contextRequest, request_id: requestId,
+      answer: { ...contextRequest.answer, max_chars: 4000 },
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {
+      leaseWorker: worker,
+      ownerPorts: { launch: async () => { armed = true; return { status: 202, body: { conversationId } }; },
+        observe: async () => ({ state: "running", conversationId }),
+        stop: async () => { stops++; stopReached(); await confirmed; }, stopRetryMs: 1, pollMs: 1 },
+    });
+    void done.then(() => { finished = true; });
+    await stopping;
+    await new Promise<void>(r => setImmediate(r));
+    // While host control is still unconfirmed the first failure is already
+    // readable in the answer record, the journal and durable owner custody.
+    expect(writes).toBeGreaterThan(1); expect(finished).toBe(false); expect(completions).toEqual([]);
+    expect(readAnswerRecord(paired.id, "target_1", requestId)).toMatchObject({ diagnostic: { source: "exception", message: expect.stringContaining("fixture ledger write refused") } });
+    expect(JSON.stringify(journal)).toContain(requestId);
+    expect(JSON.stringify(journal)).toContain("fixture ledger write refused");
+    expect(readRunLedger().runs.find(r => r.requestId === requestId)).toMatchObject({ ownerTurn: { cancel: expect.any(String),
+      diagnostic: { source: "exception", message: expect.stringContaining("fixture ledger write refused") } } });
+    expect(readRunLedger().runs.find(r => r.requestId === requestId)!.ownerTurn!.confirmed).not.toBe(true);
+    confirm();
+    const completion = await done;
+    expect(stops).toBeGreaterThan(0);
+    expect(completion).toMatchObject({ outcome: "answered", answer: { action: "reply", text: expect.stringContaining("fixture ledger write refused") } });
+    expect(completions).toHaveLength(1);
+    expect(completions[0]).toMatchObject({ outcome: "answered", answer: { text: expect.stringContaining("fixture ledger write refused") } });
+    const record = readAnswerRecord(paired.id, "target_1", requestId);
+    expect(record).toMatchObject({ diagnostic: { source: "exception" }, answer: { text: expect.stringContaining("fixture ledger write refused") } });
+    for (const surface of [completion, record, journal, completions]) {
+      expect(JSON.stringify(surface)).not.toContain(paired.credential);
+      expect(JSON.stringify(surface)).not.toContain("/srv/fixture/private.txt");
+    }
+  } finally {
+    confirm(); await done; writer.mockRestore(); logging.mockRestore();
+    dropRun(requestId); await service.close();
+  }
+});
+
+for (const seam of ["continuation-receipt", "fresh-receipt"] as const)
+for (const worker of [false, true]) test(`owner ${seam} failure keeps its runtime reason through the production observation (worker=${worker})`, async () => {
+  const { AgentRegistry } = await import("@/lib/agent/registry");
+  const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
+  const { observeOwnerContinuation, observeOwnerTurn } = await import("./ownerRun");
+  const completions: unknown[] = [], journal: unknown[][] = [];
+  const service = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  paired.targets[0]!.fallback = "none";
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  if (seam === "continuation-receipt") setRelaySwitch("chain_conversations", true);
+  const reason = `fixture runtime rejected the ${seam}`;
+  const unsafe = `${reason} ${paired.credential} /srv/fixture/private.txt`;
+  const cwd = fs.mkdtempSync(path.join(root, "owner-observation-"));
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const sources = { registry: () => registry, now: () => Date.now(),
+    liveness: async () => [{ reason: "host_gone_turn_open" }] } as unknown as Parameters<typeof observeOwnerTurn>[1];
+  const prefix = `${seam}-${worker}`;
+  const first = { ...contextRequest, request_id: `${prefix}-first`, chat: { key: `fixture-${prefix}` },
+    input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } };
+  const requestId = seam === "continuation-receipt" ? `${prefix}-next` : `${prefix}-fresh`;
+  let launched: string | null = null;
+  const ports: import("./ownerRun").OwnerRunPorts = {
+    launch: async () => {
+      if (seam === "continuation-receipt") return { status: 202, body: { conversationId: `conversation_${prefix}` } };
+      const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd, transport: "structured", clientAttemptId: `relay-owner-${requestId}` });
+      if (begun.kind !== "created") throw Error("owner receipt fixture unavailable");
+      registry.failSpawn(begun.receipt.launchId, unsafe);
+      launched = begun.receipt.conversationId;
+      return { status: 202, body: { conversationId: launched } };
+    },
+    continue: async turn => ({ ok: true, structured: true, target: turn.conversationId!, outcome: "held", operationId: turn.clientAttemptId }),
+    observe: async turn => !turn.continuation
+      ? seam === "fresh-receipt" ? observeOwnerTurn(turn, sources) : { state: "ended", finalText: "Done" }
+      : observeOwnerContinuation(turn, sources, async () => ({ state: "failed", acceptedAt: null, settledAt: new Date().toISOString(), conversationId: turn.conversationId!, reason: unsafe })),
+    stop: async () => {}, stopRetryMs: 1, pollMs: 1,
+  };
+  const logging = spyOn(console, "error").mockImplementation((...args) => { journal.push(args); });
+  try {
+    if (seam === "continuation-receipt") {
+      expect((await runClaimedRequestWithLeaseWorker(paired, first, undefined, { leaseWorker: worker, ownerPorts: ports }))?.outcome).toBe("answered");
+      completions.length = 0;
+    }
+    const answer = { ...contextRequest.answer, max_chars: 4000 };
+    const request = seam === "continuation-receipt"
+      ? { ...first, answer, request_id: requestId, claimed_at: new Date().toISOString(), deadline_at: new Date(Date.now() + 20_000).toISOString(),
+        input: { ...first.input, respond_to: "next", conversation: [{ ...first.input.conversation[0]!, id: "next", reply_to: first.input.respond_to }] } }
+      : { ...contextRequest, answer, request_id: requestId, input: first.input };
+    const completion = await runClaimedRequestWithLeaseWorker(paired, request, undefined, { leaseWorker: worker, ownerPorts: ports });
+    if (seam === "fresh-receipt") {
+      expect(launched).not.toBeNull();
+      // Host-died evidence is kept beside the original receipt error.
+      expect(await observeOwnerTurn({ clientAttemptId: `relay-owner-${requestId}`, conversationId: launched, claimedAt: new Date().toISOString() }, sources))
+        .toMatchObject({ state: "failed", failure: { kind: "host-died", detail: expect.stringContaining(reason) } });
+    }
+    const record = readAnswerRecord(paired.id, "target_1", requestId);
+    expect(record).toMatchObject({ diagnostic: { source: "observation", message: expect.stringContaining(reason) } });
+    expect(completion).toMatchObject({ outcome: "answered", answer: { action: "reply", text: expect.stringContaining(reason) } });
+    expect(completions).toHaveLength(1);
+    expect(JSON.stringify(journal)).toContain(requestId);
+    expect(JSON.stringify(journal)).toContain(reason);
+    for (const surface of [completion, record, journal, completions]) {
+      expect(JSON.stringify(surface)).not.toContain(paired.credential);
+      expect(JSON.stringify(surface)).not.toContain("/srv/fixture/private.txt");
+    }
+  } finally {
+    logging.mockRestore(); registry.close(); setRelaySwitch("chain_conversations", false);
+    fs.rmSync(cwd, { recursive: true, force: true }); await service.close();
+  }
+});
+
+test("owner stop custody with no registered execution releases the target on the next sweep and keeps its record", async () => {
+  const { AgentRegistry } = await import("@/lib/agent/registry");
+  const { beginLegacySpawnFixture } = await import("@/lib/agent/registryTestFixtures");
+  const { ownerAttemptHasNoExecution } = await import("./ownerRun");
+  const { relayPollerStatus } = await import("./poller");
+  const relayStore = await import("./store");
+  const service = await startTestRelay(() => ({ body: { status: "ok" } }));
+  const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  paired.targets[0]!.engine = "claude"; paired.targets[0]!.model = "opus";
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const cwd = fs.mkdtempSync(path.join(root, "owner-no-execution-"));
+  const registry = new AgentRegistry(path.join(cwd, "registry.json"), undefined, undefined, { sqliteMode: "off" });
+  const journal: unknown[][] = [];
+  const logging = spyOn(console, "error").mockImplementation((...args) => { journal.push(args); });
+  // The two failed runs exactly as the run ledger kept them: admission
+  // complete, kill cutoff, no capacity release, no confirmation, a
+  // conversation the Viewer never registered, and an owner process that is gone.
+  const rows = ["incident-row-a", "incident-row-b"].map((requestId, index) => {
+    const clientAttemptId = `relay-owner-${requestId}`;
+    const begun = beginLegacySpawnFixture(registry, { engine: "claude", cwd, transport: "structured", clientAttemptId });
+    if (begun.kind !== "created") throw Error("owner receipt fixture unavailable");
+    registry.failSpawn(begun.receipt.launchId, "structured spawn runtime snapshot has no session after 300000ms");
+    const row: import("./store").RunRecord = { requestId, leaseId: `lease-${index}`, relayId: paired.id, targetId: "target_1",
+      childPid: null, childIdentity: null, ownerPid: 999999999, ownerIdentity: "gone", runDir: "",
+      startedAt: new Date(Date.now() - (index + 1) * 60_000).toISOString(), conversationId: begun.receipt.conversationId,
+      ownerTurn: { clientAttemptId, admissionComplete: true, cancel: "kill" } };
+    return row;
+  });
+  relayStore.updateRunLedger(ledger => ({ ...ledger, runs: rows }));
+  let stops = 0;
+  const ports: import("./ownerRun").OwnerRunPorts = {
+    launch: async () => { throw Error("must not launch"); },
+    observe: async () => ({ state: "running", firstMessagePending: true }),
+    stop: async () => { stops++; throw Error("owner relay conversation control refused"); },
+    noExecution: async run => ownerAttemptHasNoExecution(run, registry), stopRetryMs: 1,
+  };
+  try {
+    for (const row of rows) expect(registry.conversation(row.conversationId as `conversation_${string}`)).toBeNull();
+    expect(advertisedSlots(paired)[0]!.free).toBe(0);
+    await sweepExternalRelayOrphans(ports);
+    expect(stops).toBe(0);
+    // The next claim tick advertises the slot and a new request reserves it.
+    expect(advertisedSlots(paired)[0]!.free).toBe(1);
+    expect(reserveRun({ ...rows[0]!, requestId: "next-claim", ownerTurn: undefined, conversationId: undefined, ownerPid: process.pid, ownerIdentity: null }, 1)).toBe("added");
+    dropRun("next-claim");
+    // Each custody record stays with its cutoff, and the journal says why its slot was released.
+    for (const row of rows) {
+      expect(readRunLedger().runs.find(r => r.requestId === row.requestId)).toMatchObject({ capacityReleased: true, conversationId: row.conversationId,
+        ownerTurn: { cancel: "kill", admissionComplete: true, confirmed: true, released: { reason: "no_execution" } } });
+      expect(JSON.stringify(journal)).toContain(row.requestId);
+    }
+    expect(JSON.stringify(journal)).toContain("no_execution");
+    expect(JSON.stringify(journal)).not.toContain("stop remains pending");
+    expect(relayPollerStatus(paired.id).lastOutcome).not.toBe("owner_stop_pending");
+    // A later sweep neither retries control nor drops the retained record.
+    await sweepExternalRelayOrphans(ports);
+    expect(stops).toBe(0); expect(readRunLedger().runs).toHaveLength(2);
+    // Retention is bounded.
+    relayStore.updateRunLedger(ledger => ({ ...ledger, runs: ledger.runs.map(r => ({ ...r, ownerTurn: { ...r.ownerTurn!,
+      released: { ...r.ownerTurn!.released!, at: new Date(Date.now() - relayStore.OWNER_RELEASED_CUSTODY_RETENTION_MS - 1).toISOString() } } })) }));
+    await sweepExternalRelayOrphans(ports);
+    expect(readRunLedger().runs).toEqual([]);
+  } finally {
+    logging.mockRestore(); registry.close();
+    relayStore.updateRunLedger(ledger => ({ ...ledger, runs: ledger.runs.filter(r => !rows.some(row => row.requestId === r.requestId)) }));
+    fs.rmSync(cwd, { recursive: true, force: true }); await service.close();
+  }
+});
+
+for (const age of ["within", "past"] as const) test(`owner stop that stays unconfirmed ${age} its bound ${age === "past" ? "releases" : "keeps"} the target slot`, async () => {
+  const relayStore = await import("./store");
+  const { OWNER_STOP_PENDING_LIMIT_MS } = await import("./ownerRun");
+  const service = await startTestRelay(() => ({ body: { status: "ok" } }));
+  const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const now = Date.parse("2026-10-22T16:00:00Z");
+  const cancelledAt = new Date(now - OWNER_STOP_PENDING_LIMIT_MS + (age === "past" ? -1 : 60_000)).toISOString();
+  const requestId = `unconfirmed-${age}`;
+  const journal: unknown[][] = [];
+  const logging = spyOn(console, "error").mockImplementation((...args) => { journal.push(args); });
+  relayStore.updateRunLedger(ledger => ({ ...ledger, runs: [{ requestId, leaseId: "lease", relayId: paired.id, targetId: "target_1",
+    childPid: null, childIdentity: null, ownerPid: 999999999, ownerIdentity: "gone", runDir: "", startedAt: "2026-10-22T15:00:00Z",
+    conversationId: "conversation_unconfirmed", ownerTurn: { clientAttemptId: `relay-owner-${requestId}`, admissionComplete: true, cancel: "kill", cancelledAt,
+      diagnostic: { source: "launch", message: "fixture launch failed" } } }] }));
+  let stops = 0;
+  const ports: import("./ownerRun").OwnerRunPorts = {
+    launch: async () => { throw Error("must not launch"); },
+    observe: async () => ({ state: "running", firstMessagePending: true }),
+    stop: async () => { stops++; throw Error("owner relay conversation control refused"); },
+    noExecution: async () => false, stopRetryMs: 1, now: () => now,
+  };
+  try {
+    await sweepExternalRelayOrphans(ports);
+    expect(stops).toBe(3);
+    const row = readRunLedger().runs.find(r => r.requestId === requestId);
+    if (age === "within") {
+      expect(advertisedSlots(paired)[0]!.free).toBe(0);
+      expect(row?.capacityReleased).toBeUndefined(); expect(row?.ownerTurn?.released).toBeUndefined();
+      expect(JSON.stringify(journal)).toContain("stop remains pending");
+    } else {
+      expect(advertisedSlots(paired)[0]!.free).toBe(1);
+      expect(row).toMatchObject({ capacityReleased: true, ownerTurn: { cancel: "kill", diagnostic: { message: "fixture launch failed" },
+        released: { reason: "stop_unconfirmed", at: new Date(now).toISOString() } } });
+      // An unconfirmed release keeps agent tools revoked and is no confirmed stop.
+      expect(row?.ownerTurn?.confirmed).toBeUndefined();
+      expect(JSON.stringify(journal)).toContain("stop_unconfirmed");
+      await sweepExternalRelayOrphans(ports);
+      expect(stops).toBe(3);
+    }
+  } finally {
+    logging.mockRestore(); dropRun(requestId); await service.close();
+  }
+});
+
 for (const worker of [false, true])
 for (const state of ["confirmed", "unconfirmed", "undiagnosed", "paused", "disabled", "removed", "unbound"] as const)
 test(`owner failure delivery checks durable authority (${state}, worker=${worker})`, async () => {

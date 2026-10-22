@@ -1,5 +1,5 @@
 import { confirmOwnerStop, type OwnerRunPorts } from "./ownerRun";
-import { changeRun } from "./store";
+import { changeRun, OWNER_RELEASED_CUSTODY_RETENTION_MS, ownerStopPending } from "./store";
 import { sweepConversationsAsync } from "./conversations";
 import { readRelaySwitches } from "./switches";
 import fs from "node:fs";
@@ -87,7 +87,7 @@ export function relayPollerStatus(id: string) {
   const loop = loops.get(id);
   const status = { state: loop ? loop.state : ("paused" as const), ...relayActivity(id) };
   try {
-    const pending = readRunLedger().runs.find(run => run.relayId === id && run.ownerTurn?.cancel && !run.ownerTurn.confirmed);
+    const pending = readRunLedger().runs.find(run => run.relayId === id && ownerStopPending(run));
     return { ...status, ...(pending ? { lastOutcome: "owner_stop_pending", lastOutcomeAt: pending.startedAt } : {}) };
   } catch {
     console.error("External relay cancellation custody unreadable; run ledger preserved");
@@ -107,6 +107,9 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
     // without controlling a host or sending a second service completion.
     if (run.capacityReleased) {
       if (relayRequestInFlight(run.requestId) || run.ownerPid !== process.pid && processMatches(run.ownerPid, run.ownerIdentity)) continue;
+      // Released owner custody keeps its cutoff and diagnostic readable for a bounded time.
+      const released = run.ownerTurn?.released ? Date.parse(run.ownerTurn.released.at) : NaN;
+      if (Number.isFinite(released) && Date.now() - released < OWNER_RELEASED_CUSTODY_RETENTION_MS) continue;
       removeRunDirectory(run.runDir);
       dropRun(run.requestId);
       continue;
@@ -123,7 +126,9 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
       }
       if (!run.ownerTurn.cancel) {
         run.ownerTurn.cancel = "kill";
-        changeRun(run.requestId, r => ({ ...r, ownerTurn: { ...r.ownerTurn!, cancel: "kill" } }));
+        run.ownerTurn.cancelledAt ??= new Date().toISOString();
+        const cancelledAt = run.ownerTurn.cancelledAt;
+        changeRun(run.requestId, r => ({ ...r, ownerTurn: { ...r.ownerTurn!, cancel: "kill", cancelledAt: r.ownerTurn?.cancelledAt ?? cancelledAt } }));
       }
       if (!run.ownerTurn.confirmed && !await confirmOwnerStop(run, ownerPorts)) continue;
       noteRelayOutcome(run.relayId, "failed:cancelled");
@@ -157,9 +162,10 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
       }
     }
     removeRunDirectory(run.runDir);
-    settleInterruptedAnswer(run.relayId, run.targetId, run.requestId, delivery,
-      run.ownerTurn ? readRunLedger().runs.find(r => r.requestId === run.requestId)?.conversationId : undefined);
-    dropRun(run.requestId);
+    const current = run.ownerTurn ? readRunLedger().runs.find(r => r.requestId === run.requestId) : undefined;
+    settleInterruptedAnswer(run.relayId, run.targetId, run.requestId, delivery, current?.conversationId);
+    // A released owner stop keeps its custody record until retention ends.
+    if (!current?.ownerTurn?.released) dropRun(run.requestId);
   }
   await sweepConversationsAsync(readRelayStore().relays, Date.now(), Date.now() + 5_000);
 }

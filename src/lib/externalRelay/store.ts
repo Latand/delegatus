@@ -98,7 +98,11 @@ export type RunRecord = {
   /** Present only on a full owner run, bound by the Viewer to its spawn receipt. */
   conversationId?: string;
   /** Durable custody survives a lost lease, cutoff, or Viewer restart. */
-  ownerTurn?: { diagnostic?: OwnerTurnDiagnostic; continuation?: { operationId: string }; clientAttemptId: string; prototype?: true; request?: { text: string; requestText: string | null }; bridgeReport?: OwnerBridgeContext; admissionComplete?: boolean; cancel?: "interrupt" | "kill"; confirmed?: boolean };
+  ownerTurn?: { diagnostic?: OwnerTurnDiagnostic; continuation?: { operationId: string }; clientAttemptId: string; prototype?: true; request?: { text: string; requestText: string | null }; bridgeReport?: OwnerBridgeContext; admissionComplete?: boolean; cancel?: "interrupt" | "kill"; confirmed?: boolean;
+    /** When the cutoff was first written; older rows fall back to startedAt. */
+    cancelledAt?: string;
+    /** The target slot was released while this custody record is retained. */
+    released?: OwnerStopRelease };
   requestId: string;
   leaseId: string;
   relayId: string;
@@ -111,6 +115,15 @@ export type RunRecord = {
   startedAt: string;
 };
 export type RunLedger = { v: 1; runs: RunRecord[] };
+/** `no_execution`: the attempt provably never had a session to stop.
+ * `stop_unconfirmed`: stop control stayed unconfirmed past its bound. */
+export type OwnerStopRelease = { at: string; reason: "no_execution" | "stop_unconfirmed" };
+/** Released owner custody stays readable this long before the sweep drops it. */
+export const OWNER_RELEASED_CUSTODY_RETENTION_MS = 24 * 60 * 60_000;
+/** An unreleased cutoff whose stop is still unconfirmed holds its slot. */
+export function ownerStopPending(run: RunRecord): boolean {
+  return !!run.ownerTurn?.cancel && !run.ownerTurn.confirmed && !run.ownerTurn.released;
+}
 export function runHoldsCapacity(run: RunRecord): boolean {
   return !run.capacityReleased && !run.ownerTurn?.confirmed;
 }
@@ -205,19 +218,22 @@ export function readRunLedger(): RunLedger {
 }
 export function updateRunLedger(
   change: (ledger: RunLedger) => RunLedger,
+  waitMs?: number,
 ): RunLedger {
   const file = externalRelayFile("runs");
   return withFileLock(file, () => {
     const next = change(readRunLedger());
     writeRelayFile(file, next);
     return next;
-  });
+  }, waitMs);
 }
-export function withFileLock<T>(file: string, action: () => T): T {
+/** The wait blocks the event loop, so an in-process async holder cannot
+ * release during it; callers with their own retry pass a short wait. */
+export function withFileLock<T>(file: string, action: () => T, waitMs = 5_000): T {
   const lock = `${file}.lock`;
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   let fd: number | null = null;
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + waitMs;
   while (fd === null) {
     try {
       fd = fs.openSync(lock, "wx", 0o600);
@@ -344,13 +360,14 @@ export function reserveRun(
 export function changeRun(
   requestId: string,
   change: (record: RunRecord) => RunRecord,
+  waitMs?: number,
 ): void {
   updateRunLedger((ledger) => ({
     ...ledger,
     runs: ledger.runs.map((run) =>
       run.requestId === requestId ? change(run) : run,
     ),
-  }));
+  }), waitMs);
 }
 export function dropRun(requestId: string): void {
   updateRunLedger((ledger) => ({

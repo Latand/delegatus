@@ -68,6 +68,8 @@ export type EphemeralAgentRun = {
   identity: string | null;
   done: Promise<EphemeralAgentResult>;
   cancel(): void;
+  /** Owner runs only: adopt a failure the caller already journaled, before it cancels. */
+  diagnose?(diagnostic: OwnerTurnDiagnostic): void;
 };
 export type EphemeralCommand = {
   command: string;

@@ -18,7 +18,7 @@ import { resolveConversationAlias, type AgentRegistry } from "@/lib/agent/regist
 import type { SeatTickSources } from "@/lib/monitor/seatTickSources";
 import { spawnNoticeFinalMessage, transcriptErrorFromRecords } from "@/lib/spawnNotice/production";
 import { scrubOwnerOutput } from "./ownerOutput";
-import { changeRun, changeRunAsync, readRunLedger, type RunRecord } from "./store";
+import { changeRun, changeRunAsync, readRunLedger, type OwnerStopRelease, type RunRecord } from "./store";
 import { ownerRelayAuthorized } from "./ownerAuthority";
 import { noteRelayOutcome } from "./activity";
 import { offersHandoff, type ExternalRelayRequest, type ExternalRelayDecision, type ExternalRelayAnswer } from "./protocol";
@@ -193,8 +193,11 @@ export interface OwnerRunPorts {
   continue?(run: OwnerSpawnedTurn, prompt: string, target: RelayTargetSettings, authorize: () => void): Promise<StructuredMessageResult | null>;
   observe(run: OwnerSpawnedTurn, progressSteps?: boolean): Promise<OwnerTurnObservation>;
   stop(conversationId: string, action: "interrupt" | "kill", clientAttemptId?: string): Promise<void>;
+  /** Proof from durable registry evidence that the attempt never had a session. */
+  noExecution?(run: RunRecord): Promise<boolean>;
   pollMs?: number;
   stopRetryMs?: number;
+  now?(): number;
 }
 export async function sendOwnerContinuation(run: OwnerSpawnedTurn, prompt: string, target: RelayTargetSettings, authorize: () => void): Promise<StructuredMessageResult | null> {
   const [{ agentRegistry }, { accountManager }, { enqueueStructuredMessage }, { listClaudeAccounts }, { listCodexAccounts }] = await Promise.all([
@@ -262,7 +265,27 @@ const productionPorts: OwnerRunPorts = {
       if (result.status !== 200) throw new Error("owner relay conversation control refused");
     } finally { if (!prompt.confirmed) throw new OwnerPromptCleanupPending(); }
   },
+  async noExecution(run) {
+    const { agentRegistry } = await import("@/lib/agent/registry");
+    return ownerAttemptHasNoExecution(run, agentRegistry());
+  },
 };
+
+/** A fresh owner launch whose receipt failed before any session, host or pane
+ * was bound, whose first prompt is not pending and whose conversation the
+ * registry never registered has nothing a stop could reach. */
+export function ownerAttemptHasNoExecution(run: RunRecord, registry: AgentRegistry): boolean {
+  if (!run.ownerTurn?.admissionComplete || run.ownerTurn.continuation) return false;
+  const receipt = registry.spawnReceiptForClientAttempt(run.ownerTurn.clientAttemptId);
+  if (!receipt || receipt.state !== "failed" || receipt.key || receipt.pane || receipt.verifiedHost || receipt.queuedPinnedSpawn) return false;
+  if (run.conversationId && receipt.conversationId !== run.conversationId) return false;
+  const operationId = `spawn_message_${receipt.launchId}`;
+  const snapshot = registry.deliverySnapshotForOperation(operationId);
+  const promptOwner = snapshot.deliveryOperationOwners[operationId];
+  const prompt = promptOwner ? snapshot.heldDeliveries[promptOwner.deliveryId] : undefined;
+  if (prompt && prompt.state !== "delivered" && !(prompt.state === "failed" && !prompt.text)) return false;
+  return !registry.conversation(receipt.conversationId as `conversation_${string}`);
+}
 
 /** Stopping needs proof of no executor; an unreadable final answer is irrelevant.
  * Read again after prompt cleanup, including historical generations and aliases.
@@ -285,6 +308,9 @@ function ownerStopHasNoExecutionCustody(run: RunRecord | undefined, registry: Ag
 
 class OwnerPromptCleanupPending extends Error {}
 export const OWNER_STOP_RECOVERY_GRACE_MS = 60_000;
+/** Past this time after its cutoff, an unconfirmed stop stops holding the target. */
+export const OWNER_STOP_PENDING_LIMIT_MS = 10 * 60_000;
+const OWNER_STOP_LEDGER_WAIT_MS = 50;
 export async function observeOwnerTurn(run: SpawnedTurn, sources: Pick<SeatTickSources, "registry" | "liveness" | "now">, progressSteps = false): Promise<OwnerTurnObservation> {
   let finalTextChanged = false;
   const observed: OwnerTurnObservation = { ...await observeSpawnedTurn(run, sources, child => spawnNoticeFinalMessage(child, text => {
@@ -307,7 +333,7 @@ export async function observeOwnerTurn(run: SpawnedTurn, sources: Pick<SeatTickS
   if (observed.failure?.kind === "launch-failed" && observed.conversationId) {
     const live = (await sources.liveness({ conversationId: observed.conversationId, stallAfterMs: 30 * 60_000, limit: 1 }))[0];
     if (live?.reason === "host_gone_turn_open" || live?.reason === "host_gone_turn_settled")
-      return { ...observed, failure: { kind: "host-died", detail: "owner host is gone" } };
+      return { ...observed, failure: { kind: "host-died", detail: `${observed.failure.detail}; owner host is gone` } };
     // A failed structured launch can leave a session binding whose transcript
     // was never created. Such a conversation has no catalog liveness row.
     // After a grace period, its exact registry entry proves that no launcher,
@@ -326,7 +352,7 @@ export async function observeOwnerTurn(run: SpawnedTurn, sources: Pick<SeatTickS
       if (!promptPending && conversation?.generations.at(-1)?.id === receipt.key.sessionId && entry &&
         entry.structuredHostOperationId === receipt.launchId && !entry.host && !entry.structuredHost &&
         !entry.claimOwner && !entry.pendingAction && !entry.structuredTerminationSurvivors?.length)
-        return { ...observed, failure: { kind: "host-died", detail: "failed owner launch has no remaining execution custody" } };
+        return { ...observed, failure: { kind: "host-died", detail: `${observed.failure.detail}; failed owner launch has no remaining execution custody` } };
     }
   }
   return observed;
@@ -367,12 +393,13 @@ export async function settleOwnerContinuation(operationId: string, conversationI
 }
 
 export async function observeOwnerContinuation(run: OwnerSpawnedTurn, sources: Pick<SeatTickSources, "registry" | "liveness" | "now">,
-  receipt: (operationId: string) => Promise<Pick<SendReceipt, "state" | "acceptedAt" | "settledAt" | "conversationId"> | null> = async operationId => {
+  receipt: (operationId: string) => Promise<Pick<SendReceipt, "state" | "acceptedAt" | "settledAt" | "conversationId"> & Partial<Pick<SendReceipt, "reason">> | null> = async operationId => {
     const { resolveSendReceipt } = await import("@/lib/runtime/sendSettlement"); return resolveSendReceipt(operationId);
   }): Promise<OwnerTurnObservation> {
   const id = run.conversationId!;
   const sent = await receipt(run.continuation!.operationId);
-  if (sent?.state === "failed") return { state: "failed", conversationId: id };
+  if (sent?.state === "failed") return { state: "failed", conversationId: id,
+    failure: { kind: "launch-failed", detail: sent.reason?.trim() ? sent.reason : "owner continuation delivery failed" } };
   if (sent?.state !== "delivered" || sent.conversationId !== id) return { state: "running", firstMessagePending: true };
   const live = (await sources.liveness({ conversationId: id, stallAfterMs: 30 * 60_000, limit: 1 }))[0];
   if (live?.reason === "host_gone_turn_open") return { state: "failed", failure: { kind: "host-died", detail: "owner host is gone" }, conversationId: id };
@@ -380,7 +407,7 @@ export async function observeOwnerContinuation(run: OwnerSpawnedTurn, sources: P
     Date.parse(live.lastRecordAt) < Date.parse(sent.acceptedAt ?? run.claimedAt)) return { state: "running", firstMessagePending: false };
   const conversation = sources.registry().conversation(id as `conversation_${string}`);
   const generation = conversation?.generations.at(-1);
-  if (!conversation || !generation) return { state: "failed", conversationId: id };
+  if (!conversation || !generation) return { state: "failed", conversationId: id, failure: { kind: "launch-failed", detail: "owner conversation has no transcript generation" } };
   const stat = await fs.promises.stat(generation.path);
   const root = conversation.engine === "claude" ? "claude-projects" : "codex-sessions";
   const transcript = await readDeliveredTurn(generation.path, stat.size, root, conversation.engine, Date.parse(sent.acceptedAt ?? run.claimedAt));
@@ -463,6 +490,20 @@ export function confirmOwnerStop(run: RunRecord, ports: OwnerRunPorts = producti
   if (existing) return existing;
   const work = (async () => {
     if (!run.ownerTurn?.cancel) return false;
+    if (run.ownerTurn.released) return true;
+    try {
+      if (run.ownerTurn.admissionComplete && await bounded(ports.noExecution?.(run) ?? Promise.resolve(false), 1000)) {
+        releaseOwnerStop(run, "no_execution", ports);
+        return true;
+      }
+    } catch { /* Without the proof the stop attempts below decide. */ }
+    if (!run.ownerTurn.cancelledAt) {
+      // Older cutoffs carry no time; their bound starts when a stop first sees them.
+      const cancelledAt = new Date(ports.now?.() ?? Date.now()).toISOString();
+      run.ownerTurn = { ...run.ownerTurn, cancelledAt };
+      try { changeRun(run.requestId, r => r.ownerTurn ? { ...r, ownerTurn: { ...r.ownerTurn, cancelledAt: r.ownerTurn.cancelledAt ?? cancelledAt } } : r); }
+      catch { /* The next attempt stamps it again. */ }
+    }
     let conversationId = run.conversationId;
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
@@ -500,6 +541,11 @@ export function confirmOwnerStop(run: RunRecord, ports: OwnerRunPorts = producti
       }
       if (attempt < 2) await sleep(ports.stopRetryMs ?? 250);
     }
+    const cancelledAt = Date.parse(run.ownerTurn.cancelledAt ?? "");
+    if (!Number.isFinite(cancelledAt) || (ports.now?.() ?? Date.now()) - cancelledAt >= OWNER_STOP_PENDING_LIMIT_MS) {
+      releaseOwnerStop(run, "stop_unconfirmed", ports);
+      return true;
+    }
     noteRelayOutcome(run.relayId, "owner_stop_pending");
     console.error("Owner relay stop remains pending; durable custody retained");
     return false;
@@ -511,6 +557,23 @@ export function confirmOwnerStop(run: RunRecord, ports: OwnerRunPorts = producti
   stopping.set(run.requestId, work);
   void work.finally(() => { if (stopping.get(run.requestId) === work) stopping.delete(run.requestId); });
   return work;
+}
+/** Frees the target slot and keeps the custody record, its cutoff and its
+ * diagnostic. Only proven absence of execution also counts as a confirmed stop;
+ * agent tools stay revoked by the cutoff either way. */
+function releaseOwnerStop(run: RunRecord, reason: OwnerStopRelease["reason"], ports: OwnerRunPorts): void {
+  const release: OwnerStopRelease = { at: new Date(ports.now?.() ?? Date.now()).toISOString(), reason };
+  let found = false;
+  changeRun(run.requestId, r => {
+    found = true;
+    return { ...r, capacityReleased: true, ownerTurn: { ...r.ownerTurn!, released: r.ownerTurn?.released ?? release,
+      ...(reason === "no_execution" ? { confirmed: true } : {}) } };
+  });
+  if (!found) throw new Error("owner cancellation custody missing");
+  run.ownerTurn = { ...run.ownerTurn!, released: release, ...(reason === "no_execution" ? { confirmed: true } : {}) };
+  run.capacityReleased = true;
+  console.error("Owner relay stop released target capacity; custody record retained", JSON.stringify({
+    requestId: run.requestId, conversationId: run.conversationId ?? null, reason, diagnostic: run.ownerTurn.diagnostic ?? null }));
 }
 /** A stop receipt cannot release custody until its cutoff and attribution are durable. */
 function confirmStopPersistence(run: RunRecord, conversationId?: string): void {
@@ -541,7 +604,7 @@ export async function revokeOwnerRuns(relayId: string): Promise<void> {
     if (run.relayId !== relayId || !run.ownerTurn || ownerRelayAuthorized(relayId, run.targetId, run.requestId)) continue;
     const cancel = cancels.get(run.requestId);
     if (cancel) continue;
-    const cutoff: RunRecord = { ...run, ownerTurn: { ...run.ownerTurn,
+    const cutoff: RunRecord = { ...run, ownerTurn: { ...run.ownerTurn, cancelledAt: run.ownerTurn.cancelledAt ?? new Date().toISOString(),
       cancel: run.ownerTurn.continuation ? "interrupt" : run.ownerTurn.cancel ?? (run.ownerTurn.admissionComplete ? "interrupt" : "kill") } };
     try { changeRun(run.requestId, () => cutoff); }
     catch { /* The known host still receives control independently of persistence. */ }
@@ -576,12 +639,17 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
   let settled = false, admitted = false, launchAttempted = false;
   let firstMessagePending = true;
   let diagnostic: OwnerTurnDiagnostic | undefined;
-  const diagnose = (source: OwnerTurnDiagnostic["source"], reason: unknown, details: Partial<Omit<OwnerTurnDiagnostic, "source" | "message">> = {}) => {
+  // The first failure wins: a stop that stays pending cannot hide it and a
+  // later cutoff cannot replace it. Every stop cutoff persists it (persistStop).
+  const adopt = (value: OwnerTurnDiagnostic, journaled = false) => {
     if (diagnostic) return;
-    diagnostic = { ...ownerTurnDiagnostic(source, reason, input.credentials), ...details };
-    console.error("Owner relay turn failed", JSON.stringify({ requestId: input.request.request_id, conversationId: turn.conversationId ?? null, diagnostic }));
+    diagnostic = value;
+    if (!journaled) console.error("Owner relay turn failed", JSON.stringify({ requestId: input.request.request_id, conversationId: turn.conversationId ?? null, diagnostic }));
     input.onDiagnostic?.(diagnostic);
+    if (custody?.ownerTurn) custody = { ...custody, ownerTurn: { ...custody.ownerTurn, diagnostic: custody.ownerTurn.diagnostic ?? diagnostic } };
   };
+  const diagnose = (source: OwnerTurnDiagnostic["source"], reason: unknown, details: Partial<Omit<OwnerTurnDiagnostic, "source" | "message">> = {}) =>
+    adopt({ ...ownerTurnDiagnostic(source, reason, input.credentials), ...details });
   const deadline = input.deadline ?? relayRequestDeadline(input.request, started);
   let stopped: "interrupt" | "kill" | null = null;
   let cancelStatus: "timeout" | "cancelled" | "failed" = "cancelled";
@@ -602,15 +670,19 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
     resolve({ status, answer, ...(diagnostic ? { diagnostic } : {}), durationMs: Date.now() - started, code: null, signal: null });
   };
   const persistStop = (): boolean => {
+    const cancelledAt = custody?.ownerTurn?.cancelledAt ?? new Date().toISOString();
     if (custody) custody = { ...custody, ...(turn.conversationId ? { conversationId: turn.conversationId } : {}),
-      ownerTurn: { ...custody.ownerTurn!, ...(diagnostic ? { diagnostic } : {}), cancel: stopped!, admissionComplete: admitted } };
+      ownerTurn: { ...custody.ownerTurn!, ...(diagnostic ? { diagnostic } : {}), cancel: stopped!, admissionComplete: admitted, cancelledAt } };
     let found = false;
     try {
+      // A short wait: an in-flight async ledger write cannot release while this
+      // blocks, and applyStop persists the cutoff again before it settles.
       changeRun(input.request.request_id, r => {
         found = true;
         return { ...r, ...(turn.conversationId ? { conversationId: turn.conversationId } : {}),
-          ownerTurn: { ...r.ownerTurn!, ...(diagnostic ? { diagnostic: r.ownerTurn?.diagnostic ?? diagnostic } : {}), cancel: stopped!, admissionComplete: admitted } };
-      });
+          ownerTurn: { ...r.ownerTurn!, ...(diagnostic ? { diagnostic: r.ownerTurn?.diagnostic ?? diagnostic } : {}), cancel: stopped!, admissionComplete: admitted,
+            cancelledAt: r.ownerTurn?.cancelledAt ?? cancelledAt } };
+      }, OWNER_STOP_LEDGER_WAIT_MS);
       return found || !custody;
     } catch {
       console.error("Owner relay cancellation ledger unavailable; stopping host work");
@@ -789,5 +861,5 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
       }
     }
   })();
-  return { pid: null, identity: null, done, cancel: () => cancel("cancelled") };
+  return { pid: null, identity: null, done, cancel: () => cancel("cancelled"), diagnose: value => adopt(value, true) };
 }
