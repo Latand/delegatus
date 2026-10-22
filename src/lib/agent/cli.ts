@@ -13,7 +13,7 @@ import { claudeProviderForHome, claudeProviderLauncherPath, claudeSettingsPath, 
 import { homeDirectory } from "@/lib/platformHome";
 import { agentCodexPublicationArgs, agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { readCodexShellPolicy } from "@/lib/git/codexShellPolicy";
-import { codexTerminalMemorySetup } from "@/lib/memory/hook";
+import { codexMemoryHookArgs, installCodexMemoryHook } from "@/lib/memory/hook";
 import { isUnderClaudeSubagentsDir } from "@/lib/scanner/claudeNative";
 import { telegramSessionReaderPath } from "@/lib/telegram/packaging";
 import { TELEGRAM_CONNECTOR_TOKEN_ENV, telegramSessionPath } from "@/lib/telegram/sessionStore";
@@ -26,7 +26,7 @@ import { normalizeClaudeLaunchModel } from "./models";
 import { applyClaudeSpawnPolicy, claudeSpawnPolicyPaths, VIEWER_SPAWN_CAPABILITY_ENV } from "./spawnPolicy";
 import { explicitLaunchProfileSandbox, launchProfileCodexSandbox, launchProfileEngineReadOnly, type LaunchProfile } from "@/lib/accounts/migration/contracts";
 import { codexSubagentArgs } from "./codexSpawnPolicy";
-import { codexProcessCleanupArgs } from "./processCleanupPolicy";
+import { codexProcessCleanupArgs, codexProcessCleanupConfig } from "./processCleanupPolicy";
 
 export { ENGINE_EFFORTS, isEngineEffort } from "./efforts";
 
@@ -149,7 +149,7 @@ export interface ResumeSpec {
   printMode?: true;
   launchProfile?: LaunchProfile;
   /** Only legacy launches probe native policy; structured hosts read it themselves. */
-  codexPublication?: { home: string; command: string; mcpServers: string[]; subcommand?: string };
+  codexPublication?: { home: string; command: string; mcpServers: string[]; operatorDecisionForms?: boolean; subcommand?: string };
   claudeTerminalPolicy?: { home: string; options: Parameters<typeof applyClaudeSpawnPolicy>[1] };
 }
 
@@ -167,17 +167,25 @@ export function withSpawnCapability(spec: ResumeSpec, capability: string, source
   const identity = Object.entries(agentPublicationIdentityEnv(source))
     .map(([key, value]) => `${key}=${shellQuote(value!)}; export ${key};`).join(" ");
   const publicationEnv = { ...source, LLV_SPAWN_CAPABILITY: capability };
-  let memorySetup = "";
+  let command = spec.command;
   try {
     if (spec.claudeTerminalPolicy) {
       const policy = spec.claudeTerminalPolicy;
       applyClaudeSpawnPolicy(policy.home, { ...policy.options, publicationEnv });
     }
-    if (spec.codexPublication) memorySetup = codexTerminalMemorySetup(spec.codexPublication.home, spec.cwd, resolveHostBinary("codex"), publicationEnv);
+    if (spec.codexPublication && !spec.launchProfile?.cleanMemory) {
+      const input = spec.codexPublication;
+      const hook = installCodexMemoryHook(input.home, publicationEnv);
+      if (hook) {
+        const policy = input.operatorDecisionForms ? codexOperatorQuestionPolicy(input.home).config : codexProcessCleanupConfig(input.home);
+        const args = codexMemoryHookArgs(hook, policy.hooks.state).map(shellQuote).join(" ");
+        command = command.replace(input.command, `${input.command} ${args}`);
+      }
+    }
   } catch { /* optional memory setup cannot stop terminal launch */ }
   return {
     ...spec,
-    command: `( ${VIEWER_SPAWN_CAPABILITY_ENV}=${shellQuote(capability)}; export ${VIEWER_SPAWN_CAPABILITY_ENV}; ${identity} ${memorySetup} ${spec.command} )`,
+    command: `( ${VIEWER_SPAWN_CAPABILITY_ENV}=${shellQuote(capability)}; export ${VIEWER_SPAWN_CAPABILITY_ENV}; ${identity} ${command} )`,
   };
 }
 
@@ -480,7 +488,7 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
   const command = args.map(shellQuote).join(" ");
   return {
     command: telegramScopedCommand(`${codexEnvPrefix(home, mcpServers)} ${command}`, mcpServers),
-    codexPublication: { home, command, mcpServers },
+    codexPublication: { home, command, mcpServers, operatorDecisionForms: options.operatorDecisionForms },
     cwd,
     windowName: "codex-new",
     engine: "codex",
@@ -645,7 +653,7 @@ export function resumeSpecForSession(
   const subcommand = ` resume ${sessionId}`;
   return {
     command: telegramScopedCommand(`${codexEnvPrefix(home, mcpServers)} ${command}${subcommand}`, mcpServers),
-    codexPublication: { home, command, mcpServers, subcommand },
+    codexPublication: { home, command, mcpServers, subcommand, operatorDecisionForms: options.operatorDecisionForms },
     cwd,
     windowName: "codex-resume",
     engine: "codex",
