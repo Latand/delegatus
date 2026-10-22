@@ -791,6 +791,19 @@ neither, and so is any lane with an attempt on a legacy generation (4.6). Review
 | Evictions | budget archives, never-curated and curated separately | Guard |
 | Import | candidates adopted, dropped by reason, adopted rules archived later in the window | Reported |
 
+`scripts/memory-weekly-metrics.ts --state-dir <dir>` computes this table, the
+load of 6.4, the guards of 6.5 and the decision of 6.6 from `VACUUM INTO`
+copies of the state database and the delivery ledger; with no `--baseline`
+and `--window` it takes the windows from `memory-source.json`. The keyword
+classes, the verdict reading per writer (`stage_report`, the fenced JSON
+fallback, a review-loop outcome, a retried attempt, a `needs_decision` routed
+along a fail edge, which counts as a fail) and the intervals (Wilson; Newcombe
+for a difference of shares; a seeded bootstrap over lanes for fix rounds) are
+defined in `src/lib/memory/weeklyMetrics.ts`. Held-still changes that no record
+dates (the lesson request text, the curator brief, the budgets) are passed as
+`--held-change <time>`; a builder or reviewer scaffold that changes inside a
+window is detected from the attempts.
+
 ### 6.3 What the baseline looks like now
 
 From the 16:10 UTC read, the most recent complete week (2026-10-08 16:10 to
