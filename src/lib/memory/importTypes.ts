@@ -14,6 +14,9 @@ export interface ImportRequest {
   at?: string;
   advance?: boolean;
   rescan?: boolean;
+  /** The periodic sync of memory-source-switch.md §4.9: a capped delta scan of
+      a ready import while the engines' memory is selected. */
+  sync?: boolean;
 }
 export type ImportWriter = { kind: "seat" | "stage" | "operator" | "unknown"; roleId: string | null };
 export interface ImportOccurrence {
@@ -69,9 +72,19 @@ export interface ImportRecord {
   legacyGenerations?: string[];
   remainingGenerations?: string[];
   lastScanAt?: string;
+  /** The last periodic sync attempt (§4.9); its time drives the schedule across restarts. */
+  sync?: ImportSyncRun;
   /** Durable trigger, evaluated once each project finishes its initial import. */
   raisedOrchestratorProjects?: string[];
   reason?: "integrity" | "backup_refused" | "source_changed" | "interrupted" | "failed";
+}
+export interface ImportSyncRun {
+  lastAt: string;
+  /** "running" from the lock on; a helper the deadline ended leaves it behind. */
+  result: "running" | "ok" | "capped" | "failed";
+  /** Candidate parts this run added that did not inherit a disposition. */
+  added: number;
+  reason?: NonNullable<ImportRecord["reason"]>;
 }
 export interface ImportManifestFile {
   file: string;

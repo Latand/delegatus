@@ -70,3 +70,26 @@ test("large private root inventories stay in state while the leased helper retur
   expect(result.state).toBe("ready"); expect(result.roots).toBeUndefined();
   expect(readImportRecord(id)?.roots?.claudeHomes).toHaveLength(homes.length);
 });
+
+test("the refresh cadence starts a due sync through the leased helper in the engines position, once per interval", async () => {
+  const fixtureHome = await fixture();
+  const id = "sync-schedule";
+  await fs.writeFile(path.join(fixtureHome.memory, "topic.md"), "Fixture topic.\n");
+  await fs.writeFile(path.join(process.env.LLV_STATE_DIR!, "memory-source.json"), JSON.stringify({ schemaVersion: 1, source: "delegatus", phase: "importing", importId: id, changedAt: at }));
+  expect((await runMemoryImport({ importId: id, previous: null, at, roots: fixtureHome.roots })).state).toBe("ready");
+  const { scheduleMemoryImport } = await import("./importController");
+  await fs.writeFile(path.join(process.env.LLV_STATE_DIR!, "memory-source.json"), JSON.stringify({ schemaVersion: 1, source: "engines", phase: "importing", importId: id, changedAt: at }));
+  const late = "A note written while the engines' memory is on.\n";
+  await fs.writeFile(path.join(fixtureHome.memory, "late.md"), late);
+  await scheduleMemoryImport();
+  const synced = readImportRecord(id)!;
+  expect(synced.sync).toMatchObject({ result: "ok", added: 1 });
+  expect(readImportCandidates(id).candidates.some(row => row.body === late)).toBe(true);
+  // Within the interval the cadence starts nothing, even with a new note on disk.
+  await fs.writeFile(path.join(fixtureHome.memory, "later.md"), "Another note, for the next day.\n");
+  await scheduleMemoryImport(() => Date.parse(synced.sync!.lastAt) + 60_000);
+  expect(readImportRecord(id)!.sync).toEqual(synced.sync);
+  await scheduleMemoryImport(() => Date.parse(synced.sync!.lastAt) + 25 * 3600_000);
+  expect(readImportRecord(id)!.sync!.lastAt).not.toBe(synced.sync!.lastAt);
+  expect(readImportCandidates(id).candidates.some(row => row.body.startsWith("Another note"))).toBe(true);
+});

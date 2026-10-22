@@ -4,17 +4,26 @@ import { readMemorySourceFile } from "./source";
 import { readImportRecord } from "./importStore";
 import { runMemoryImport } from "./importJob";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { memorySyncDue } from "./importSync";
 
 const owner = globalThis as typeof globalThis & { __delegatusImportSchedule?: { root: string; done: Promise<void> } };
 /** One deferred job at a time across Next bundles. The scanner retries after
- * restart or refusal; no timer, source traversal or hashing runs on a request. */
-export function scheduleMemoryImport(): Promise<void> {
+ * restart or refusal; no timer, source traversal or hashing runs on a request.
+ * The same cadence runs the periodic sync while the engines' memory is on. */
+export function scheduleMemoryImport(now: () => number = Date.now): Promise<void> {
   const root = stateDir();
   const active = owner.__delegatusImportSchedule;
   if (active) return active.done;
   const done = new Promise<void>(resolve => setImmediate(resolve)).then(async () => {
     if (stateDir() !== root) return;
     const source = readMemorySourceFile();
+    // The engines position: a due periodic sync extends the ready import (§4.9).
+    if (source?.source === "engines" && source.importId) {
+      const record = readImportRecord(source.importId);
+      if (!memorySyncDue(record, now())) return;
+      await withViewerOperation("memory.import.sync", () => runMemoryImport({ importId: source.importId!, previous: record!.previous, sync: true }));
+      return;
+    }
     if (source?.source !== "delegatus" || !source.importId) return;
     const record = readImportRecord(source.importId);
     if (source.phase === "active" && !record) return;

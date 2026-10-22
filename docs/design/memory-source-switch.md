@@ -660,7 +660,10 @@ already runs on the transcript-scan cadence and already calls
 the setting and the import record. Due means the record's last sync attempt
 (`sync.lastAt`, durable, so a restart neither repeats nor skips one) is at
 least the interval old; a run that stopped at its cap is due again at the
-next refresh; a failed run is retried after one hour. The interval is
+next refresh; a failed run is retried after one hour. A run records its
+start (`result: "running"`) before it copies anything, so a helper its
+five-minute deadline or a crash ended also waits that hour, and the state line
+names it interrupted once ten minutes have passed. The interval is
 `memory-sync.json` under the state directory, `intervalHours` 1 to 168,
 default 24 (daily) when the file is absent, 0 for off. `PUT
 /api/memory/source` with `syncIntervalHours` writes it under the same guards
@@ -698,11 +701,12 @@ Switching back to Delegatus starts a new import as in 4.7; everything the sync
 already dispositioned is inherited there and not offered again.
 
 **State line.** `GET /api/memory/source` gains `sync`: `{ intervalHours,
-lastAt, nextAt, added, pending, capped, failure }`, counts only. The Settings
-row of slice 5 shows it in the engines position's off state, after the
-existing words: "New Claude and Codex notes are imported daily (last 3 hours
-ago); 4 wait for the curator." / "Нові нотатки Claude і Codex імпортуються
-щодня (востаннє 3 години тому); 4 чекають на куратора." With the sync off:
+lastAt, nextAt, added, capped, failure }`, counts only; `added` counts the
+files of the last run that the curator had not seen. The Settings row of
+slice 5 shows it in the engines position's off state, after the existing
+words: "New Claude and Codex notes are imported daily (last 3 hours ago, 4
+new)." / "Нові нотатки Claude і Codex імпортуються щодня (востаннє 3 години
+тому, 4 нові)." With the sync off:
 "Their new notes are not imported." / "Їхні нові нотатки не імпортуються." A
 failed run names its reason in place of the time.
 
