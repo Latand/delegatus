@@ -103,6 +103,7 @@ const put = (body: unknown, headers: Record<string, string> = browser) =>
   PUT(new NextRequest(URL_BASE, { method: "PUT", headers, body: JSON.stringify(body) }));
 
 test("proactive enable requires the operator browser and returns persisted effective permission", async () => {
+  setSystemTime(new Date("2026-10-22T00:00:00.000Z"));
   const autonomy = { enabled: true, proactive: { enabled: true } };
   for (const headers of [
     { host: "127.0.0.1:8898", "content-type": "application/json" },
