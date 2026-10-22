@@ -189,24 +189,29 @@ test("the workflow writer fixture waits for template role reads before writing",
   let stderr = "";
   const drain = (async () => {
     const decoder = new TextDecoder();
+    const reader = child.stderr.getReader();
     let pending = "";
-    for await (const chunk of child.stderr) {
-      const text = decoder.decode(chunk, { stream: true });
-      stderr += text;
-      pending += text;
-      const lines = pending.split("\n");
-      pending = lines.pop()!;
-      for (const line of lines) {
-        const prefix = "[blocking-wait] ";
-        if (!line.startsWith(prefix)) continue;
-        const sample = JSON.parse(line.slice(prefix.length));
-        if (sample.stateWait?.callSite === "state.marker" && peer.inTransaction) {
-          observedWait = sample.stateWait.outcome === "waiting";
-          peer.exec("ROLLBACK");
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const text = decoder.decode(value, { stream: true });
+        stderr += text;
+        pending += text;
+        const lines = pending.split("\n");
+        pending = lines.pop()!;
+        for (const line of lines) {
+          const prefix = "[blocking-wait] ";
+          if (!line.startsWith(prefix)) continue;
+          const sample = JSON.parse(line.slice(prefix.length));
+          if (sample.stateWait?.callSite === "state.marker" && peer.inTransaction) {
+            observedWait = sample.stateWait.outcome === "waiting";
+            peer.exec("ROLLBACK");
+          }
         }
       }
-    }
-    stderr += decoder.decode();
+      stderr += decoder.decode();
+    } finally { reader.releaseLock(); }
   })();
   try {
     await waitForFiles([ready]);
