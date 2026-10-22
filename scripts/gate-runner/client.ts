@@ -370,7 +370,7 @@ function writePrivacyCache(env: Env, cache: Record<string, { ok: boolean; at: nu
  * earlier version a later commit replaced or deleted) and every path name it
  * carries are scanned as well. The cache key names only object ids, so an
  * edit made after capture can neither change the subject nor seed an entry. */
-export function privacy(tree: Tree, shipment: Shipment, env: Env): { ok: true } | { ok: false; line: string } {
+export function privacy(tree: Tree, shipment: Shipment, env: Env): { ok: true } | { ok: false; line: string; unfinished?: true } {
   const knownValues = env.LLV_PRIVACY_KNOWN_VALUES_FILE;
   let digest = "none";
   try { if (knownValues) digest = createHash("sha256").update(fs.readFileSync(knownValues)).digest("hex"); } catch { digest = "unreadable"; }
@@ -379,16 +379,30 @@ export function privacy(tree: Tree, shipment: Shipment, env: Env): { ok: true } 
   const cache = readPrivacyCache(env);
   const hit = cache[key];
   if (hit) return hit.ok ? { ok: true } : { ok: false, line: hit.line ?? "refused" };
-  const verdict = scanShipment(tree, shipment, env);
-  // A configuration error or an unreadable capture says nothing about the tree.
+  const budget = scanBudgetMs(env);
+  const verdict = scanShipment(tree, shipment, env, Date.now() + budget, budget);
+  // A configuration error, an unreadable capture or a scan that ran out of
+  // time says nothing about the tree.
   if (verdict.ok || verdict.cacheable) cache[key] = { ok: verdict.ok, at: Date.now(), ...(verdict.ok ? {} : { line: verdict.line }) };
   writePrivacyCache(env, cache);
-  return verdict.ok ? { ok: true } : { ok: false, line: verdict.line };
+  return verdict.ok ? { ok: true } : { ok: false, line: verdict.line, ...(verdict.unfinished ? { unfinished: true as const } : {}) };
 }
 
-type ScanVerdict = { ok: true } | { ok: false; line: string; cacheable: boolean };
+/** How long the scan may take. The tree's own gate needs about 150
+ * CPU-seconds for a large lane, longer on a busy machine (§8.12), so it gets
+ * what is left of the push budget less a minute for the run, or the
+ * publication budget when there is none. Tests shorten it. */
+export function scanBudgetMs(env: Env, now = Date.now()): number {
+  const override = Number(env.LLV_GATE_RUNNER_SCAN_TIMEOUT_MS);
+  if (override > 0) return override;
+  const deadline = Number(env.LLV_GATE_PUSH_DEADLINE);
+  if (env.LLV_GATE_PUSH_DEADLINE && Number.isFinite(deadline)) return Math.max(30_000, Math.floor(deadline - now - 60_000));
+  return 15 * 60_000;
+}
 
-function scanShipment(tree: Tree, shipment: Shipment, env: Env): ScanVerdict {
+type ScanVerdict = { ok: true } | { ok: false; line: string; cacheable: boolean; unfinished?: true };
+
+function scanShipment(tree: Tree, shipment: Shipment, env: Env, until: number, budget: number): ScanVerdict {
   const scratch = fs.mkdtempSync(path.join(path.dirname(shipment.gitDir), "privacy-"));
   try {
     const base = gitEnvironment(process.env);
@@ -417,12 +431,16 @@ function scanShipment(tree: Tree, shipment: Shipment, env: Env): ScanVerdict {
       if (!checkout.ok) return { ok: false, line: "the capture could not be checked out for the scan", cacheable: false };
       gateArgs = shipment.changed.length ? ["--repository", scan, "--require-known-values", "--paths", ...shipment.changed] : [];
     }
+    const unfinished = (): ScanVerdict => ({ ok: false, line: `it did not finish within ${Math.round(budget / 1000)} s`, cacheable: false, unfinished: true });
     const gate = (args: string[]): ScanVerdict => {
+      const left = until - Date.now();
+      if (left <= 0) return unfinished();
       const result = spawnSync(process.execPath, [path.join(scan, "scripts", "privacy-publication-gate.ts"), ...args], {
-        cwd: scan, encoding: "utf8", timeout: 180_000, maxBuffer: 64 * 1024 * 1024,
+        cwd: scan, encoding: "utf8", timeout: left, killSignal: "SIGKILL", maxBuffer: 64 * 1024 * 1024,
         env: asProcessEnv({ ...gitEnvironment(env), LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: path.join(scan, "scripts", "privacy-known-value-fingerprints.json"), LLV_PRIVACY_OCR_LANGUAGES: "eng+ukr", LLV_GATE_RUNNER: "off" }),
       });
       if (result.status === 0) return { ok: true };
+      if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT" || Date.now() >= until) return unfinished();
       const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
       const line = output.split("\n").map(text => text.trim()).filter(Boolean).at(-1) ?? `exit ${result.status ?? result.signal}`;
       return { ok: false, line: line.slice(0, 200), cacheable: result.status === 1 && !/configuration_error/.test(output) };
@@ -799,7 +817,7 @@ async function main(argv: string[]): Promise<number> {
     catch (error) { return here(`capturing the tree failed: ${(error as Error).message}`, "here"); }
     if (cancelled) return -1;
     const verdict = privacy(tree, shipment, env);
-    if (!verdict.ok) return here(`the privacy scan refused the tree: ${verdict.line}`, "here");
+    if (!verdict.ok) return here(verdict.unfinished ? `the privacy scan did not finish: ${verdict.line}` : `the privacy scan refused the tree: ${verdict.line}`, "here");
     if (cancelled) return -1;
     const manifest = {
       version: 1, id, kind: tree.kind, tree: shipment.tree,

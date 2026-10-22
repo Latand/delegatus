@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isolatedEnvironment } from "../local-gate";
-import { applyReturn, configFile, type Env, Demux, health, mapArguments, markUnhealthy, parseControl, parseProbe, readUstar, redact, remoteEnvironment, resolveTarget, returnPlan, shapeOf, sshFailure, UNHEALTHY_MS, type Control, type Tree } from "./client";
+import { applyReturn, configFile, type Env, Demux, health, mapArguments, markUnhealthy, parseControl, parseProbe, readUstar, redact, remoteEnvironment, resolveTarget, returnPlan, scanBudgetMs, shapeOf, sshFailure, UNHEALTHY_MS, type Control, type Tree } from "./client";
 import { envClass } from "./env-classes";
 import { completion, ISOLATED_KEYS, PERSISTENT_KEYS, ustarEntry } from "./serve";
 
@@ -290,6 +290,17 @@ test("a probe answer is cached for a minute, and a failed run keeps every caller
   expect(health(env, "r", now + 62_000 + UNHEALTHY_MS + 1)).toMatchObject({ healthy: true });
   expect(count()).toBe(3);
   expect(parseProbe(`bun=0.0.1\ndisk=1\nmain=\n`, "1.4.0")).toMatchObject({ healthy: false });
+});
+
+// T28 (budget side).
+test("the privacy scan gets what is left of the push budget less a minute, at least 30 s, or the publication budget", () => {
+  const now = 1_800_000_000_000;
+  expect(scanBudgetMs({}, now)).toBe(15 * 60_000);
+  expect(scanBudgetMs({ LLV_GATE_PUSH_DEADLINE: String(now + 25 * 60_000) }, now)).toBe(24 * 60_000);
+  expect(scanBudgetMs({ LLV_GATE_PUSH_DEADLINE: String(now + 45_000) }, now)).toBe(30_000);
+  expect(scanBudgetMs({ LLV_GATE_PUSH_DEADLINE: String(now - 1) }, now)).toBe(30_000);
+  expect(scanBudgetMs({ LLV_GATE_PUSH_DEADLINE: "soon" }, now)).toBe(15 * 60_000);
+  expect(scanBudgetMs({ LLV_GATE_PUSH_DEADLINE: String(now + 25 * 60_000), LLV_GATE_RUNNER_SCAN_TIMEOUT_MS: "1000" }, now)).toBe(1000);
 });
 
 // SSH's own diagnostics name the host, the account and its address.

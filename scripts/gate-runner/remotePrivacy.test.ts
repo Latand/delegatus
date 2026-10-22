@@ -52,3 +52,27 @@ test.if(linux)("an edit after capture neither hides a private value from the sca
   expect(exportAgain.tree).toBe(exportCapture.tree);
   expect(privacy(exportTree, exportAgain, env)).toMatchObject({ ok: false });
 }, TIMEOUT);
+
+// T28
+test.if(linux)("a scan that runs out of time is no refusal and leaves no cached answer, and the same capture is scanned again", () => {
+  const h = harness();
+  // The captured tree's own gate is the one that runs, so a slow gate in the
+  // tree makes a slow scan.
+  const gate = path.join(h.fixture, "scripts", "privacy-publication-gate.ts");
+  const original = fs.readFileSync(gate, "utf8");
+  fs.writeFileSync(gate, `await Bun.sleep(15_000);\n${original}`);
+  const checkout: Tree = { kind: "git", root: h.fixture };
+  let scratches = 0;
+  const scratch = () => { const dir = path.join(h.root, `ship-${scratches++}`); fs.mkdirSync(dir); return dir; };
+  const captured = ship(checkout, scratch(), h.base);
+  const started = Date.now();
+  expect(privacy(checkout, captured, h.env({ LLV_GATE_RUNNER_SCAN_TIMEOUT_MS: "1000" }))).toEqual({ ok: false, line: "it did not finish within 1 s", unfinished: true });
+  // The gate was stopped at its bound, never waited out.
+  expect(Date.now() - started).toBeLessThan(12_000);
+  const cache = path.join(h.cache, "privacy-cache.json");
+  const cached = () => fs.existsSync(cache) ? Object.keys(JSON.parse(fs.readFileSync(cache, "utf8"))) : [];
+  expect(cached()).toEqual([]);
+  // With its full budget the same capture is scanned again, slow gate and all.
+  expect(privacy(checkout, captured, h.env())).toEqual({ ok: true });
+  expect(cached()).toHaveLength(1);
+}, TIMEOUT);
