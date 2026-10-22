@@ -5774,10 +5774,10 @@ export class AgentRegistry {
   }
 
   /** Production boot and the candidate gate share the cooperative first view. */
-  async prepareReadOnlySnapshot(signal?: AbortSignal): Promise<RegistryFile> {
+  async prepareReadOnlySnapshot(signal?: AbortSignal, options: { recoveryIndexes?: boolean } = {}): Promise<RegistryFile> {
     signal?.throwIfAborted();
     if (this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")) {
-      return (await this.sqliteStore.prepareReadOnlySnapshot(signal)).file;
+      return (await this.sqliteStore.prepareReadOnlySnapshot(signal, options)).file;
     }
     return this.readOnlySnapshot();
   }
@@ -5926,7 +5926,7 @@ export class AgentRegistry {
     });
   }
 
-  deliverySnapshotForOperation(operationId: string): RegistryFile {
+  deliverySnapshotForOperation(operationId: string, options: { recipientEvidence?: boolean } = {}): RegistryFile {
     return this.readKeyed(file => {
       const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
       const owner = file.deliveryOperationOwners[operationId];
@@ -5936,11 +5936,31 @@ export class AgentRegistry {
         if (delivery) result.heldDeliveries[delivery.id] = clone(delivery);
       }
       for (const delivery of registryRowsMatching(file, "heldDeliveries", "command.operationId", operationId)) result.heldDeliveries[delivery.id] = clone(delivery);
-      /* A held send's receipt names what it waits for, which the owning
-         conversation's switch phase decides. */
-      for (const delivery of Object.values(result.heldDeliveries)) {
-        const conversation = delivery.state === "held" ? file.conversations[delivery.conversationId] : undefined;
-        if (conversation) result.conversations[conversation.id] = clone(conversation);
+      /* Receipt-only readers need a held conversation's switch phase.
+         Settlement also needs the recipient generations and host turn state,
+         including a compacted attempt's old generation after succession. */
+      const ids = new Set(Object.values(result.heldDeliveries)
+        .filter(delivery => options.recipientEvidence || delivery.state === "held")
+        .map(delivery => delivery.conversationId));
+      if (options.recipientEvidence && owner) ids.add(owner.conversationId);
+      for (const id of ids) {
+        const canonical = resolveConversationAlias(file, id);
+        const conversation = file.conversations[canonical];
+        for (const identity of conversationIdentities(file, canonical)) {
+          if (file.conversationAliases[identity]) result.conversationAliases[identity] = file.conversationAliases[identity]!;
+        }
+        if (!conversation) continue;
+        result.conversations[canonical] = clone(conversation);
+        if (!options.recipientEvidence) continue;
+        for (const generation of conversation.generations) {
+          const key = `${conversation.engine}:${generation.id}`;
+          if (file.entries[key]) result.entries[key] = clone(file.entries[key]!);
+        }
+        for (const pathname of new Set([...conversation.generations.map(generation => generation.path), ...conversation.continuityPaths])) {
+          for (const entry of registryRowsMatching(file, "entries", "artifactPath", pathname)) {
+            result.entries[sessionKeyId(entry.key)] = clone(entry);
+          }
+        }
       }
       return result;
     });
@@ -6188,8 +6208,8 @@ export class AgentRegistry {
   }
 
   /** Structured ownership rows, including released rows needed by recovery. */
-  structuredHostEntries(): AgentRegistryEntry[] {
-    const file = this.readOnlySnapshot();
+  structuredHostEntries(prepared?: RegistryFile): AgentRegistryEntry[] {
+    const file = prepared ?? this.readOnlySnapshot();
     return registryRowsMatching(file, "entries", "structuredHost.kind",
       ["codex-app-server", "claude-broker", "copilot-acp"]).map(entry => clone(entry));
   }

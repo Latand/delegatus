@@ -70,7 +70,7 @@ import {
 import { structuredHostKillRefFromRegistry, terminateStructuredHostTree } from "./structuredHostControl";
 import { publishFilesRevision } from "./filesRevision";
 import { setStructuredDeliveryKick } from "./structuredDeliverySignal";
-import { confirmJournalDelivery, deliveryRouteOf, journalVerdict, mirrorSettledReceipts, SEND_DISCARDED_REASON, sendIsSettled, settleDueSends } from "./sendSettlement";
+import { confirmJournalDelivery, deliveryRouteOf, journalVerdict, mirrorSettledReceiptsAsync, SEND_DISCARDED_REASON, sendIsSettled, settleDueSends } from "./sendSettlement";
 import { runtimeImageCapability } from "./runtimeImageStore";
 import { noteVoiceWorkBoundary } from "./voiceViewBinding";
 import { STRUCTURED_IMAGE_CAPABILITY } from "./structuredContent";
@@ -466,8 +466,12 @@ async function reconcileTerminalDeliveries(
   registry: AgentRegistry,
   client: RuntimeHostClient,
   isCurrent: () => boolean,
+  assertActive: () => void,
 ): Promise<void> {
-  const snapshot = registry.readOnlySnapshot();
+  assertActive();
+  const snapshot = await registry.prepareReadOnlySnapshot(AbortSignal.timeout(30_000));
+  assertActive();
+  if (!isCurrent()) return;
   const unsettledDeliveries = Object.values(snapshot.heldDeliveries)
     .filter((delivery) => delivery.state === "delivery-uncertain" || delivery.state === "failed");
   const pendingOutcomes: Parameters<AgentRegistry["recordDeliveryOutcomesForOperations"]>[0][number][] = [];
@@ -2122,7 +2126,7 @@ export async function bindStructuredDeliveryQueue(
         return;
       }
       await phase("reconciling terminal delivery receipts");
-      await reconcileTerminalDeliveries(registry, client, () => !stopped && state.activeQueue === queue);
+      await reconcileTerminalDeliveries(registry, client, () => !stopped && state.activeQueue === queue, assertActive);
       await phase("draining startup delivery queue");
       assertActive();
       startupPending = false;
@@ -2187,9 +2191,11 @@ export async function bindStructuredDeliveryQueue(
           if (stopped || state.activeQueue !== queue) throw new Error("delivery restoration owner retired");
         };
         try {
-          const complete = await restoreMissingRecordsAsync(registry, progressStore, sweptAt, active);
+          const deadline = performance.now() + 30_000;
+          const complete = await restoreMissingRecordsAsync(registry, progressStore, sweptAt, active, deadline);
           active();
-          mirrorSettledReceipts(registry, progressStore);
+          await mirrorSettledReceiptsAsync(registry, progressStore, sweptAt, active, deadline);
+          active();
           if (complete) progressStore.checkpoint(sweptAt - sweepMs);
         } catch (error) {
           if (!stopped && state.activeQueue === queue) controllerDiagnosticError("[structured delivery] progress restoration failed", { error: error instanceof Error ? error.message : String(error) });

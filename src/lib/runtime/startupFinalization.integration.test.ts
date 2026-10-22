@@ -795,15 +795,54 @@ test("marker repair and historical publication share one prepared selection", as
     await bindStructuredDeliveryQueue([], { registry: f.registry, client: f.client, deferStartupWork: true,
       watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
     f.registry.prepareReadOnlySnapshot = async signal => {
-      if (++preparations > 1) throw new Error("historical publication repeated complete registry preparation");
+      if (++preparations > 2) throw new Error("historical publication repeated complete registry preparation per row");
       return original(signal);
     };
     await completeStructuredDeliveryQueueStartup([]);
-    expect(preparations).toBe(1);
+    expect(preparations).toBe(2);
     expect(f.journal.readSession({ conversationId: "conversation_history_39" })).not.toBeNull();
   } finally {
     f.registry.prepareReadOnlySnapshot = original;
     await bindStructuredDeliveryQueue([], { registry: f.registry, client: null });
     f.journal.close(); f.registry.close();
+  }
+});
+
+
+test("phase boundaries prepare invalidated registry views after runtime reads", async () => {
+  const f = fixture(0, true, 40);
+  const peer = new AgentRegistry(f.registry.filename, undefined, undefined, { sqliteMode: "sqlite" });
+  const entry = peer.structuredHostEntries()[0]!;
+  const read = f.registry.readOnlySnapshot.bind(f.registry);
+  const prepare = f.registry.prepareReadOnlySnapshot.bind(f.registry);
+  let prepared = true, writes = 0;
+  const moved = () => {
+    peer.upsert({ ...entry, claimEpoch: entry.claimEpoch + ++writes });
+    prepared = false;
+  };
+  f.registry.readOnlySnapshot = () => {
+    if (!prepared) throw new Error("phase attempted a synchronous refresh after an external write");
+    return read();
+  };
+  f.registry.prepareReadOnlySnapshot = async signal => {
+    const snapshot = await prepare(signal); prepared = true; return snapshot;
+  };
+  const client = new Proxy(f.client, { get(target, property) {
+    const value = Reflect.get(target, property);
+    if (!["readSession", "snapshot", "readSnapshot", "effectBatch"].includes(String(property)) || typeof value !== "function") return value;
+    return async (...args: unknown[]) => { const result = await value.apply(target, args); moved(); return result; };
+  } });
+  try {
+    const retries: number[] = [];
+    await runStructuredHostStartup(() => adoptStructuredHostsAtStartup({ registry: f.registry, client,
+      refreshTranscriptState: async () => { moved(); }, adopt: async () => [], adoptClaude: async () => [], orchestratorSeats: () => [] }),
+      () => {}, { schedule: (_callback, ms) => { retries.push(ms); return { unref() {} }; } });
+    expect(retries).toEqual([]);
+    expect(writes).toBeGreaterThan(0);
+    expect(structuredStartupStatus()?.state).toBe("ready");
+  } finally {
+    f.registry.readOnlySnapshot = read; f.registry.prepareReadOnlySnapshot = prepare;
+    await bindStructuredDeliveryQueue([], { registry: f.registry, client: null });
+    peer.close(); f.registry.close(); f.journal.close();
   }
 });

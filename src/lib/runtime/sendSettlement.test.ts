@@ -41,6 +41,7 @@ const {
   sendReceiptFor,
   settleDueSends,
   mirrorSettledReceipts,
+  mirrorSettledReceiptsAsync,
 } = await import("./sendSettlement");
 const { handleRuntimeOperationQuery, handleRuntimeRetry } = await import("./http");
 const { NextRequest } = await import("next/server");
@@ -2900,4 +2901,53 @@ test("seat inbox registry binding is atomic and a subsequent single dispatch cle
     expect(await reopened.bindDeliveryOperationGenerationOffLoop(members[0]!.id, active.generationId)).toBe(true);
     expect(new AgentRegistry(active.registryPath).readOnlySnapshot().deliveryOperationOwners[members[0]!.id]!.batchId).toBeUndefined();
   } finally { active.close(); }
+});
+
+for (const refuses of [false, true]) test(`settlement sweep prepares selection and uses keyed receipts (refusal=${refuses})`, async () => {
+  const active = fixture(`prepared-sweep-${refuses}`, { sqlite: true, now: () => Date.parse("2026-10-22T00:00:00Z") });
+  const read = active.registry.readOnlySnapshot.bind(active.registry);
+  const prepare = active.registry.prepareReadOnlySnapshot.bind(active.registry);
+  try {
+    const { operationId } = acceptSend(active, { clientMessageId: "prepared-sweep", operationId: "operation-prepared-sweep" });
+    active.journal.transitionOperation(operationId, "delivering");
+    active.journal.transitionOperation(operationId, "delivered");
+    const file = await prepare();
+    let preparations = 0;
+    active.registry.prepareReadOnlySnapshot = async () => { preparations++; if (refuses) throw new Error("selection unavailable"); return file; };
+    active.registry.readOnlySnapshot = () => { throw new Error("settlement sweep refreshed the whole registry synchronously"); };
+    const sweep = settleDueSends({ registry: active.registry, client: active.client, now: () => Date.parse("2026-10-23T00:00:00Z"), progress: null });
+    if (refuses) {
+      await expect(sweep).rejects.toThrow("selection unavailable");
+      expect(sendReceiptFor(active.registry.deliverySnapshotForOperation(operationId), operationId)?.state).toBe("in-flight");
+    } else {
+      expect((await sweep).settled).toEqual([{ operationId, state: "delivered", duplicateRisk: false }]);
+      mirrorSettledReceipts(active.registry, { open: () => [{ operationId } as import("./deliveryProgress").DeliveryProgressRecord], uncertain: () => [], settle: () => {} });
+    }
+    expect(preparations).toBe(1);
+  } finally {
+    active.registry.readOnlySnapshot = read; active.registry.prepareReadOnlySnapshot = prepare;
+    active.registry.close(); active.close();
+  }
+});
+
+for (const expired of [false, true]) test(`progress mirror rechecks its owner and deadline between slices (expired=${expired})`, async () => {
+  const active = fixture(`mirror-slices-${expired}`, { sqlite: true });
+  const read = active.registry.readOnlySnapshot.bind(active.registry);
+  let turn: ReturnType<typeof setImmediate> | undefined;
+  try {
+    const { operationId } = acceptSend(active, { clientMessageId: "mirror-slices", operationId: "operation-mirror-slices" });
+    active.journal.transitionOperation(operationId, "delivering"); active.journal.transitionOperation(operationId, "delivered");
+    await resolveSendReceipt(operationId, { registry: active.registry, client: active.client, progress: null });
+    active.registry.readOnlySnapshot = () => { throw new Error("progress mirror rebuilt history"); };
+    let owned = true, settled = 0;
+    const progress = { open: () => Array.from({ length: 33 }, () => ({ operationId } as import("./deliveryProgress").DeliveryProgressRecord)),
+      uncertain: () => [], settle: () => { settled++; if (settled === 1) turn = setImmediate(() => { owned = false; }); } };
+    await expect(mirrorSettledReceiptsAsync(active.registry, progress, Date.parse("2026-10-22T00:00:00Z"), () => {
+      if (!owned) throw new Error("owner retired");
+    }, expired ? 0 : performance.now() + 30_000)).rejects.toThrow(expired ? "deadline exceeded" : "owner retired");
+    expect(expired ? settled === 0 : settled > 0 && settled <= 16).toBe(true);
+  } finally {
+    if (turn) clearImmediate(turn);
+    active.registry.readOnlySnapshot = read; active.registry.close(); active.close();
+  }
 });

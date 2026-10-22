@@ -442,3 +442,21 @@ test("startup connector admission rereads only its keyed host and still refuses 
   const { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH } = await import("./telegramConnectorEnv");
   expect(check).toThrow(TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH);
 });
+
+
+test("startup signal selection and post-RPC evidence prepare snapshots instead of refreshing synchronously", async () => {
+  const { structuredStartupSignals } = await import("./startup");
+  const file = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
+  let preparations = 0;
+  const registry = {
+    readOnlySnapshot: () => { throw new Error("startup phase refreshed synchronously"); },
+    prepareReadOnlySnapshot: async () => { preparations++; return file; },
+    canonicalConversationId: (id: string) => id,
+  } as unknown as AgentRegistry;
+  const client = { readSession: async () => null, effectBatch: async () => [] } as unknown as import("./client").RuntimeHostClient;
+  const signals = await structuredStartupSignals(registry, client);
+  expect(signals.pendingOperationConversationIds.size).toBe(0);
+  expect(preparations).toBe(2);
+  registry.prepareReadOnlySnapshot = async () => { throw new Error("phase snapshot refused"); };
+  await expect(structuredStartupSignals(registry, client)).rejects.toThrow("phase snapshot refused");
+});

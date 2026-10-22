@@ -1,8 +1,8 @@
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { conversationIdsResolvingTo, type AgentRegistry, type RegistryFile } from "@/lib/agent/registry";
+import { conversationIdsResolvingTo, resolveConversationAlias, type AgentRegistry, type RegistryFile } from "@/lib/agent/registry";
 import type { SessionKey } from "@/lib/agent/sessionKey";
-import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
+import { registryConversationsForPath, registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 
 const scope = new AsyncLocalStorage<{ registry: AgentRegistry; keys: ReadonlySet<string> } | null>();
 
@@ -18,8 +18,8 @@ export function startupHostInScope(registry: AgentRegistry, key: string): boolea
   return !selected || selected.registry !== registry || selected.keys.has(key);
 }
 
-export function startupSnapshot(registry: AgentRegistry): RegistryFile {
-  const snapshot = registry.readOnlySnapshot();
+export function startupSnapshot(registry: AgentRegistry, prepared?: RegistryFile): RegistryFile {
+  const snapshot = prepared ?? registry.readOnlySnapshot();
   const selected = scope.getStore();
   if (!selected || selected.registry !== registry) return snapshot;
   const entries: RegistryFile["entries"] = {};
@@ -29,9 +29,9 @@ export function startupSnapshot(registry: AgentRegistry): RegistryFile {
     const entry = snapshot.entries[key];
     if (!entry) continue;
     entries[key] = entry;
-    const conversation = registry.conversationForPath(entry.artifactPath);
+    const conversation = registryConversationsForPath(snapshot, entry.artifactPath)[0];
     if (!conversation) continue;
-    const canonical = registry.canonicalConversationId(conversation.id);
+    const canonical = resolveConversationAlias(snapshot, conversation.id);
     for (const id of conversationIdsResolvingTo(snapshot, canonical)) {
       ids.add(id);
       if (snapshot.conversations[id]) conversations[id] = snapshot.conversations[id];

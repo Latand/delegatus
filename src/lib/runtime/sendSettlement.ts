@@ -1,3 +1,5 @@
+import { forEachCooperatively, yieldToRuntime } from "@/lib/cooperative";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { SEND_SEAT_REVOKED_REASON, seatChannelRecord } from "@/lib/orchestrator/seatChannel";
 export { SEND_SEAT_REVOKED_REASON } from "@/lib/orchestrator/seatChannel";
 import {
@@ -706,57 +708,69 @@ export async function settleDueSends(
     limit?: number;
   } = {},
 ): Promise<SettlementSweepResult> {
-  const registry = ports.registry ?? agentRegistry();
-  const file = registry.readOnlySnapshot();
-  const now = (ports.now ?? Date.now)();
-  const operations = new Set<string>();
-  /* Open sends are never archived: only hot rows can be due (#2761). */
-  for (const [, delivery] of hotRegistryRows(file, "heldDeliveries")) {
-    if (!SETTLEABLE_DELIVERY_STATES.has(delivery.state) || !delivery.command.operationId) continue;
-    operations.add(delivery.command.operationId);
-  }
-  for (const [operationId, owner] of hotRegistryRows(file, "deliveryOperationOwners")) {
-    if (ownsItsSettlement(owner) && owner.terminalState === null) operations.add(operationId);
-  }
-  const result: SettlementSweepResult = { examined: 0, settled: [] };
-  const running = ports.running ?? new Set<string>();
-  const limit = ports.limit ?? 64;
-  const due = new Map<string, string[]>();
-  let started = 0;
-  for (const operationId of operations) {
-    const subject = settlementSubject(retryAttemptOwner(file, operationId), deliveryForOperation(file, operationId));
-    if (!subject) continue;
-    result.examined += 1;
-    const deadline = settlementDeadline(registry, file, subject, ports);
-    ports.onDeadline?.(operationId, subject.conversationId, deadline);
-    if (deadline && Date.parse(deadline.deadlineAt) > now) continue;
-    if (!pastSettlementDeadline(registry, file, subject, ports)) continue;
-    if (running.has(subject.conversationId) || started >= limit) continue;
-    started += 1;
-    due.set(subject.conversationId, [...due.get(subject.conversationId) ?? [], operationId]);
-  }
-  await Promise.all([...due].map(async ([conversationId, operationIds]) => {
-    running.add(conversationId);
-    try {
-      for (const operationId of operationIds) {
-        try {
-          const receipt = await resolveSendReceipt(operationId, ports);
-          if (!receipt || receipt.state === "in-flight") continue;
-          const settled: SettledSend = { operationId, state: receipt.state, duplicateRisk: receipt.duplicateRisk };
-          result.settled.push(settled);
-          ports.onSettled?.(settled);
-        } catch (error) {
-          console.error("[send settlement] background settlement failed", {
-            operationId,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      }
-    } finally {
-      running.delete(conversationId);
+  return withViewerOperation("delivery-progress.restore", async () => {
+    const registry = ports.registry ?? agentRegistry();
+    const selectionDeadline = performance.now() + 30_000;
+    const file = await registry.prepareReadOnlySnapshot(AbortSignal.timeout(30_000), { recoveryIndexes: false });
+    let sliceStarted = performance.now(), sliceCount = 0;
+    const selectionTurn = async () => {
+      if (performance.now() >= selectionDeadline) throw new Error("send settlement selection deadline exceeded");
+      if (++sliceCount < 16 && performance.now() - sliceStarted < 8) return;
+      await yieldToRuntime(); sliceStarted = performance.now(); sliceCount = 0;
+    };
+    const now = (ports.now ?? Date.now)();
+    const operations = new Set<string>();
+    /* Open sends are never archived: only hot rows can be due (#2761). */
+    for (const [, delivery] of hotRegistryRows(file, "heldDeliveries")) {
+      await selectionTurn();
+      if (!SETTLEABLE_DELIVERY_STATES.has(delivery.state) || !delivery.command.operationId) continue;
+      operations.add(delivery.command.operationId);
     }
-  }));
-  return result;
+    for (const [operationId, owner] of hotRegistryRows(file, "deliveryOperationOwners")) {
+      await selectionTurn();
+      if (ownsItsSettlement(owner) && owner.terminalState === null) operations.add(operationId);
+    }
+    const result: SettlementSweepResult = { examined: 0, settled: [] };
+    const running = ports.running ?? new Set<string>();
+    const limit = ports.limit ?? 64;
+    const due = new Map<string, string[]>();
+    let started = 0;
+    for (const operationId of operations) {
+      await selectionTurn();
+      const subject = settlementSubject(retryAttemptOwner(file, operationId), deliveryForOperation(file, operationId));
+      if (!subject) continue;
+      result.examined += 1;
+      const deadline = settlementDeadline(registry, file, subject, ports);
+      ports.onDeadline?.(operationId, subject.conversationId, deadline);
+      if (deadline && Date.parse(deadline.deadlineAt) > now) continue;
+      if (!pastSettlementDeadline(registry, file, subject, ports)) continue;
+      if (running.has(subject.conversationId) || started >= limit) continue;
+      started += 1;
+      due.set(subject.conversationId, [...due.get(subject.conversationId) ?? [], operationId]);
+    }
+    await Promise.all([...due].map(async ([conversationId, operationIds]) => {
+      running.add(conversationId);
+      try {
+        for (const operationId of operationIds) {
+          try {
+            const receipt = await resolveSendReceipt(operationId, ports);
+            if (!receipt || receipt.state === "in-flight") continue;
+            const settled: SettledSend = { operationId, state: receipt.state, duplicateRisk: receipt.duplicateRisk };
+            result.settled.push(settled);
+            ports.onSettled?.(settled);
+          } catch (error) {
+            console.error("[send settlement] background settlement failed", {
+              operationId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+      } finally {
+        running.delete(conversationId);
+      }
+    }));
+    return result;
+  });
 }
 
 /**
@@ -766,7 +780,7 @@ export async function settleDueSends(
  */
 export function sendSettlementDue(operationId: string, ports: SendSettlementPorts = {}): boolean {
   const registry = ports.registry ?? agentRegistry();
-  const file = registry.readOnlySnapshot();
+  const file = registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true });
   const subject = settlementSubject(retryAttemptOwner(file, operationId), deliveryForOperation(file, operationId));
   return subject !== null && pastSettlementDeadline(registry, file, subject, ports);
 }
@@ -801,7 +815,7 @@ export function settlementDeadlineForRow(
     or null for one nothing settles. */
 export function sendSettlementDeadline(operationId: string, ports: SendSettlementPorts = {}): SettlementDeadline | null {
   const registry = ports.registry ?? agentRegistry();
-  const file = registry.readOnlySnapshot();
+  const file = registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true });
   const subject = settlementSubject(retryAttemptOwner(file, operationId), deliveryForOperation(file, operationId));
   return subject ? settlementDeadline(registry, file, subject, ports) : null;
 }
@@ -836,7 +850,7 @@ export async function resolveSendReceipt(
     const redirect = seatChannelRecord(targetOperation);
     if (!redirect || redirect.class !== "channel" || redirect.outcome === "dropped") break;
     if (redirect.outcome !== "redirected" || !redirect.toOperationId || !redirect.toConversationId) {
-      const original = sendReceiptFor((ports.registry ?? agentRegistry()).readOnlySnapshot(), operationId);
+      const original = sendReceiptFor((ports.registry ?? agentRegistry()).deliverySnapshotForOperation(operationId), operationId);
       return original ? { ...original, state: "in-flight", reason: "awaiting delivery to the current orchestrator", resend: "verify-first", duplicateRisk: false } : null;
     }
     targetOperation = redirect.toOperationId;
@@ -845,12 +859,12 @@ export async function resolveSendReceipt(
   if (redirectedTo && seen.size === 32) {
     const tail = seatChannelRecord(targetOperation);
     if (tail?.class === "channel" && tail.outcome !== "dropped") {
-      const original = sendReceiptFor((ports.registry ?? agentRegistry()).readOnlySnapshot(), operationId);
+      const original = sendReceiptFor((ports.registry ?? agentRegistry()).deliverySnapshotForOperation(operationId), operationId);
       return original ? { ...original, state: "in-flight", reason: "redirect evidence exceeds the read budget", resend: "verify-first", duplicateRisk: false } : null;
     }
   }
   if (redirectedTo) {
-    const original = sendReceiptFor((ports.registry ?? agentRegistry()).readOnlySnapshot(), operationId);
+    const original = sendReceiptFor((ports.registry ?? agentRegistry()).deliverySnapshotForOperation(operationId), operationId);
     const target = await settleSendReceipt(targetOperation, ports);
     return original && target ? { ...target, operationId, conversationId: original.conversationId,
       clientMessageId: original.clientMessageId, redirectedTo } : null;
@@ -897,15 +911,32 @@ export function mirrorSettledReceipts(
   progress: Pick<DeliveryProgressSink, "settle" | "open"> & { uncertain(): DeliveryProgressRecord[] },
   now = Date.now(),
 ): void {
-  const file = registry.readOnlySnapshot();
   const records = [
     ...progress.open(),
     ...progress.uncertain().filter((record) => Date.parse(record.updatedAt) >= now - LATE_ACKNOWLEDGEMENT_MIRROR_MS),
   ];
   for (const record of records) {
-    const receipt = sendReceiptFor(file, record.operationId);
+    const receipt = sendReceiptFor(registry.deliverySnapshotForOperation(record.operationId), record.operationId);
     if (receipt && receipt.state !== "in-flight") mirrorReceiptProgress(receipt, progress);
   }
+}
+
+/** The controller owns one restoration deadline across this mirror and backfill. */
+export async function mirrorSettledReceiptsAsync(
+  registry: AgentRegistry,
+  progress: Pick<DeliveryProgressSink, "settle" | "open"> & { uncertain(): DeliveryProgressRecord[] },
+  now: number, assertActive: () => void, deadline: number,
+): Promise<void> {
+  await withViewerOperation("delivery-progress.restore", () => forEachCooperatively([
+    ...progress.open(),
+    ...progress.uncertain().filter(record => Date.parse(record.updatedAt) >= now - LATE_ACKNOWLEDGEMENT_MIRROR_MS),
+  ], record => {
+    assertActive();
+    if (performance.now() >= deadline) throw new Error("delivery progress mirror deadline exceeded");
+    const receipt = sendReceiptFor(registry.deliverySnapshotForOperation(record.operationId), record.operationId);
+    if (receipt && receipt.state !== "in-flight") mirrorReceiptProgress(receipt, progress);
+  }, { batchSize: 16, timeBudgetMs: 8 }));
+  assertActive();
 }
 
 async function settleSendReceipt(
@@ -913,7 +944,7 @@ async function settleSendReceipt(
   ports: SendSettlementPorts,
 ): Promise<SendReceipt | null> {
   const registry = ports.registry ?? agentRegistry();
-  const snapshot = registry.readOnlySnapshot();
+  const snapshot = registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true });
   const projected = sendReceiptFor(snapshot, operationId);
   if (!projected || projected.state === "delivered") return projected;
   const client = ports.client === undefined ? runtimeHostClient() : ports.client;
@@ -934,7 +965,7 @@ async function settleSendReceipt(
         "canonical delivery acknowledgement is unavailable");
       if (!decision.readable || !decision.value) return projected;
       const settled = await settleProjection(registry, operationId, projected, decision.value.verdict, "delivery-journal");
-      const durable = sendReceiptFor(registry.deliverySnapshotForOperation(operationId), operationId);
+      const durable = sendReceiptFor(registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true }), operationId);
       if (durable && durable.state !== "in-flight" && durable.state === settled.state && durable.reason === settled.reason) {
         try { await client.acknowledgeTerminalProjection?.([decision.value.operationId]); }
         catch { /* The retained receipt remains owed for the controller's repair. */ }
@@ -961,7 +992,7 @@ async function settleSendReceipt(
   const verdict = journalVerdict(status, receipt?.reason);
   if (verdict) return settleProjection(registry, operationId, projected, verdict, "delivery-journal", deliveryRouteOf(receipt));
 
-  const file = registry.readOnlySnapshot();
+  const file = registry.deliverySnapshotForOperation(operationId, { recipientEvidence: true });
   const subject = settlementSubject(retryAttemptOwner(file, operationId), deliveryForOperation(file, operationId));
   /* Still in flight: the journal's receipt already says how this send is
      reaching a running turn, recorded when its delivery began. */

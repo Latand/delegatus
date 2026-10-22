@@ -1644,8 +1644,11 @@ export class SqliteAgentRegistryStore {
   /** Prepare an immutable view without holding the writer connection across
       a yield. One read transaction pins rows, grants and revision together;
       the complete view becomes visible only after validation. */
-  prepareReadOnlySnapshot(signal?: AbortSignal): Promise<SqliteRegistrySnapshot> {
-    return withViewerOperation("registry.prepare", () => this.prepareReadOnlySnapshotWork(signal));
+  prepareReadOnlySnapshot(signal?: AbortSignal, options: { recoveryIndexes?: boolean } = {}): Promise<SqliteRegistrySnapshot> {
+    return withViewerOperation("registry.prepare", async () => {
+      if (options.recoveryIndexes !== false) await this.prepareRecoveryIndexes(signal);
+      return this.prepareReadOnlySnapshotWork(signal);
+    });
   }
 
   private prepareReadOnlySnapshotWork(signal?: AbortSignal): Promise<SqliteRegistrySnapshot> {
@@ -1661,7 +1664,6 @@ export class SqliteAgentRegistryStore {
     }
     if (this.preparingReader) return this.preparingReader;
     const run = (async () => {
-      await this.prepareRecoveryIndexes(signal);
       // Let the tick after constructor/schema work run before opening and
       // materializing the read connection in the next bounded slice.
       await yieldToRuntime();

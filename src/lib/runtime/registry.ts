@@ -784,9 +784,9 @@ export async function demoteSkippedStructuredRegistryHosts(
   admit: <T>(entry: AgentRegistryEntry, mutation: () => T) => Promise<T | undefined> = async (_entry, mutation) => registry.deliveryWriteOrBusy({ label: "registry.startup-demote" }, mutation),
   orphanStop: StructuredOrphanStopDependencies = {},
 ): Promise<void> {
-  if (typeof registry.prepareReadOnlySnapshot === "function") await registry.prepareReadOnlySnapshot();
+  const prepared = typeof registry.prepareReadOnlySnapshot === "function" ? await registry.prepareReadOnlySnapshot() : undefined;
   const rows: AgentRegistryEntry[] = [];
-  await withViewerOperation("runtime.startup", () => forEachCooperatively(registry.structuredHostEntries(), entry => {
+  await withViewerOperation("runtime.startup", () => forEachCooperatively(registry.structuredHostEntries(prepared), entry => {
     performanceSpans.sync("runtime.startup.select", () => {
       if (entry.structuredHost && !shouldAdopt(entry)) rows.push(entry);
     });
@@ -899,8 +899,8 @@ export async function adoptCodexRegistryHosts(
 ): Promise<AdoptedCodexHost[]> {
   if (!structuredHostsEnabled(env)) return [];
   const candidate: StructuredHostAdoptionFilter = entry => !codexBootAdoptionRetired(entry) && shouldAdopt(entry);
-  if (typeof registry.prepareReadOnlySnapshot === "function") await registry.prepareReadOnlySnapshot();
-  const rows = registry.structuredHostEntries().filter((entry) =>
+  const prepared = typeof registry.prepareReadOnlySnapshot === "function" ? await registry.prepareReadOnlySnapshot() : undefined;
+  const rows = registry.structuredHostEntries(prepared).filter((entry) =>
     entry.key.engine === "codex"
     && entry.structuredHost?.kind === "codex-app-server"
     && candidate(entry));
@@ -1054,8 +1054,8 @@ export async function adoptClaudeRegistryHosts(
   } = {},
 ): Promise<AdoptedClaudeHost[]> {
   if (!structuredHostsEnabled(env)) return [];
-  if (typeof registry.prepareReadOnlySnapshot === "function") await registry.prepareReadOnlySnapshot();
-  const rows = registry.structuredHostEntries().filter((entry) =>
+  const prepared = typeof registry.prepareReadOnlySnapshot === "function" ? await registry.prepareReadOnlySnapshot() : undefined;
+  const rows = registry.structuredHostEntries(prepared).filter((entry) =>
     entry.key.engine === "claude"
     && entry.structuredHost?.kind === "claude-broker"
     && shouldAdopt(entry));
@@ -1199,8 +1199,8 @@ export async function reconcileDeadStructuredRegistryHostsOffLoop(
   shouldRetain: StructuredHostAdoptionFilter = entry => restartCutEvidenceHolds(sessionKeyId(entry.key)),
   assertActive: () => void = () => {},
 ): Promise<void> {
-  await registry.prepareReadOnlySnapshot();
-  const rows = registry.structuredHostEntries();
+  const prepared = await registry.prepareReadOnlySnapshot();
+  const rows = registry.structuredHostEntries(prepared);
   for (const [index, observed] of rows.entries()) {
     if (!observed.structuredHost?.process) continue;
     if (index > 0 && index % 16 === 0) await new Promise<void>(resolve => setTimeout(resolve, 0));
