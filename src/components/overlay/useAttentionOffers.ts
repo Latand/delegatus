@@ -370,7 +370,7 @@ export function useAttentionOffers({
        learns it was shown — so a hidden tab stays as silent as it is honest. The
        request id is the identity: this poll runs every few seconds and the offer
        stays in the record until it is answered. */
-    playCue({ cue: "attention", eventId: `attention:${pending.request.id}` });
+    playCue({ cue: "your-move", eventId: `attention:${pending.request.id}`, obligation: `attention:${pending.request.id}` });
     await post(pending.request.id, { kind: "offer", deviceId });
     const second = await read();
     if (second) noteWithdrawals(applyPushedRecords(second.records, appliedRecords.current));

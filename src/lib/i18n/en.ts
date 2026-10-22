@@ -1761,6 +1761,7 @@ export const en = {
   "sound.unmute": "Enable sound notifications",
   "sound.settings": "Sound levels",
   "sound.cueVolume": "Notification cues",
+  "sound.typing": "Agent typing",
   "sound.ambientViewer": "Background music in Delegatus",
   "sound.ambient": "Background music during a call",
   "sound.ambientVolume": "Music level",

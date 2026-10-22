@@ -1,14 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import crypto from "node:crypto";
-import { viewerControlOrigin, viewerControlToken } from "@/lib/mcp/controlEndpoint";
+import { viewerControlOrigin, viewerControlToken, viewerControlCredentialFiles, type ViewerCredentialFile } from "@/lib/mcp/controlEndpoint";
+import { viewerMcpStateContext } from "../../../bin/mcp-state-paths.mjs";
+import { assertStateStartupMutation } from "@/lib/stateOwnership";
 
 export function memoryHookOutput(block: string, _engine: string) {
   return block ? { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: block } } : {};
 }
 
 /** Self-contained because engines run on the host, outside the Viewer image. */
-async function runHook(endpoint: string, token: string | null, queue: string | null) {
+async function runHook(endpoint: string, credentials: readonly ViewerCredentialFile[], queue: string | null) {
   const deadline = performance.now() + 1500;
   const expires = Date.now() + 1500;
   const hookId = process.getBuiltinModule("crypto").randomUUID();
@@ -38,6 +41,18 @@ async function runHook(endpoint: string, token: string | null, queue: string | n
     }
     const capability = process.env.LLV_SPAWN_CAPABILITY;
     if (!capability || performance.now() >= deadline) return;
+    // Credentials are read for this invocation, never serialized into the hook.
+    let token: string | undefined;
+    for (const credential of credentials) {
+      if (token) break;
+      try {
+        const raw = process.getBuiltinModule("fs").readFileSync(credential.path, "utf8");
+        const value = credential.format === "compose" ? JSON.parse(raw)?.services?.viewer?.environment?.LLV_TOKEN : raw;
+        const normalized = typeof value === "string" ? value.trim() : "";
+        if (normalized && !/[^\x20-\x7e]/.test(normalized)) token = normalized;
+      } catch { /* An installation without a key sends no bearer. */ }
+    }
+    if (performance.now() >= deadline) return;
     const headers = { "Content-Type": "application/json", "x-llv-spawn-capability": capability,
       "x-llv-memory-deadline": String(expires), "x-llv-memory-hook": hookId, ...(token ? { Authorization: `Bearer ${token}` } : {}) };
     const response = await fetch(endpoint + "/api/memory/inject", { method: "POST", signal: abort.signal, headers, body: JSON.stringify(input) });
@@ -56,86 +71,67 @@ async function runHook(endpoint: string, token: string | null, queue: string | n
   } catch { /* fail open, with no prompt or credential in diagnostics */ }
   finally { clearTimeout(timer); abort.abort(); }
 }
-export function memoryHookSource(endpoint: string, token: string | null = null, queue: string | null = null) { return `(${runHook.toString()})(${JSON.stringify(endpoint)}, ${JSON.stringify(token)}, ${JSON.stringify(queue)}).catch(() => {}).finally(() => { process.exitCode = 0; });\n`; }
+export function memoryHookSource(endpoint: string, credentials: readonly ViewerCredentialFile[] | null = null, queue: string | null = null) { return `(${runHook.toString()})(${JSON.stringify(endpoint)}, ${JSON.stringify(credentials ?? [])}, ${JSON.stringify(queue)}).catch(() => {}).finally(() => { process.exitCode = 0; });\n`; }
 const quote = (s: string) => "'" + s.replaceAll("'", "'\\''") + "'";
 
-export function installMemoryHook(home: string, env: NodeJS.ProcessEnv = process.env, queue: string | null = null) {
+export function installMemoryHook(home: string, env: NodeJS.ProcessEnv = process.env, queue: string | null = null, prefix = "shared-memory") {
   if (!env.LLV_SPAWN_CAPABILITY) return null;
   const endpoint = env.LLV_VIEWER_PORT ? `http://127.0.0.1:${Number(env.LLV_VIEWER_PORT)}` : viewerControlOrigin(env);
   const suffix = crypto.createHash("sha256").update(endpoint + (queue ?? "")).digest("hex").slice(0, 12);
-  const file = path.join(home, ".llv", "hooks", `shared-memory-${suffix}.mjs`);
+  const file = path.join(home, ".llv", "hooks", `${prefix}-${suffix}.mjs`);
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const source = memoryHookSource(endpoint, viewerControlToken(env, endpoint), queue);
+  const credentials = viewerControlCredentialFiles(env, endpoint);
+  // An environment-only install has no existing credential file for the host
+  // to read after the agent environment is scrubbed. Keep that credential in
+  // protected Delegatus state, subject to the control client's origin policy.
+  const explicit = env.LLV_VIEWER_CONTROL_TOKEN || env.LLV_TOKEN ? viewerControlToken(env, endpoint) : null;
+  if (explicit) {
+    const state = viewerMcpStateContext(env, path.join(os.homedir(), ".config")).stateDirectory;
+    assertStateStartupMutation(state, "memory hook credential", env);
+    const directory = path.join(state, "memory-hook-credentials");
+    const inside = (root: string, target: string) => {
+      const relative = path.relative(root, target);
+      return relative === "" || relative !== ".." && !relative.startsWith(".." + path.sep) && !path.isAbsolute(relative);
+    };
+    const refusal = "memory hook credentials require Delegatus state outside the engine home";
+    if (inside(path.resolve(home), path.resolve(directory))) throw new Error(refusal);
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    if (inside(fs.realpathSync(home), fs.realpathSync(directory))) throw new Error(refusal);
+    const file = path.join(directory, crypto.createHash("sha256").update(endpoint).digest("hex").slice(0, 12));
+    const temporary = `${file}.${crypto.randomUUID()}.tmp`;
+    try { fs.writeFileSync(temporary, explicit, { mode: 0o600 }); fs.renameSync(temporary, file); }
+    finally { fs.rmSync(temporary, { force: true }); }
+    credentials.unshift({ path: file, format: "text" });
+  }
+  const source = memoryHookSource(endpoint, credentials, queue);
   if (!fs.existsSync(file) || fs.readFileSync(file, "utf8") !== source) {
     const temporary = `${file}.${crypto.randomUUID()}.tmp`;
-    fs.writeFileSync(temporary, source, { mode: 0o600 }); fs.renameSync(temporary, file);
+    try { fs.writeFileSync(temporary, source, { mode: 0o600 }); fs.renameSync(temporary, file); }
+    finally { fs.rmSync(temporary, { force: true }); }
   }
   return { type: "command", command: `bun ${quote(file)} 2>/dev/null || true`, timeout: 2, additionalContextLimit: 40000 };
 }
 
-/** Preserve native hooks. Trust is granted later only to this exact handler. */
+/** Launch-scoped declaration; the account's native configuration is untouched. */
 export function installCodexMemoryHook(home: string, env: NodeJS.ProcessEnv) {
-  const hook = installMemoryHook(home, env);
-  if (!hook) return null;
-  const file = path.join(home, "hooks.json");
-  const config = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {};
-  const hooks = config.hooks ??= {};
-  const groups = hooks.UserPromptSubmit ?? [];
-  if (!Array.isArray(groups)) return null;
-  if (!groups.some(g => g.hooks?.some((h: { command?: string }) => h.command === hook.command))) {
-    hooks.UserPromptSubmit = [...groups, { hooks: [hook] }];
-    const temporary = `${file}.${crypto.randomUUID()}.tmp`;
-    fs.writeFileSync(temporary, JSON.stringify(config), { mode: 0o600 }); fs.renameSync(temporary, file);
-  }
-  return hook;
+  return installMemoryHook(home, env, null, "memory-launch");
 }
 
-/** Metadata-only setup for the native terminal, before it reads hook trust. */
-async function trustTerminalHook(binary: string, home: string, cwd: string, command: string) {
-  const child = process.getBuiltinModule("child_process").spawn(binary, ["app-server"], {
-    cwd, env: { ...process.env, CODEX_HOME: home }, stdio: ["pipe", "pipe", "ignore"],
-  });
-  const pending = new Map(); let nextId = 0, buffer = "";
-  const fail = () => { for (const p of pending.values()) p.reject(Error("optional hook setup unavailable")); pending.clear(); };
-  child.on("error", fail); child.on("close", fail); child.stdin.on("error", fail);
-  child.stdout.on("data", chunk => {
-    buffer += String(chunk);
-    if (buffer.length > 256000) { fail(); return; }
-    for (;;) {
-      const end = buffer.indexOf("\n"); if (end < 0) break;
-      const line = buffer.slice(0, end); buffer = buffer.slice(end + 1);
-      try {
-        const response = JSON.parse(line), p = pending.get(response.id);
-        if (!p) continue;
-        pending.delete(response.id);
-        if (response.error) p.reject(Error("optional hook setup refused")); else p.resolve(response.result);
-      } catch { fail(); }
-    }
-  });
-  const rpc = (method: string, params: object) => new Promise<unknown>((resolve, reject) => {
-    const id = ++nextId; pending.set(id, { resolve, reject });
-    child.stdin.write(JSON.stringify({ id, method, params }) + "\n");
-  });
-  const timer = setTimeout(() => { fail(); child.kill("SIGKILL"); }, 500);
-  try {
-    await rpc("initialize", { clientInfo: { name: "delegatus", version: "1" }, capabilities: { experimentalApi: true } });
-    child.stdin.write(JSON.stringify({ method: "initialized" }) + "\n");
-    const listed = await rpc("hooks/list", { cwds: [cwd] }) as { data: Array<{ hooks: Array<{ key: string; command?: string; currentHash: string }> }> };
-    for (const hook of listed.data.flatMap(d => d.hooks)) {
-      if (hook.command !== command || !/^sha256:[a-f0-9]{64}$/i.test(hook.currentHash)) continue;
-      await rpc("config/value/write", { keyPath: `hooks.state.${JSON.stringify(hook.key)}.trusted_hash`, value: hook.currentHash, mergeStrategy: "replace" });
-    }
-  } catch { /* setup cannot block the terminal */ }
-  finally { clearTimeout(timer); child.stdin.end(); child.kill("SIGKILL"); }
+/** Codex normalizes through TOML, whose map keys are sorted and omit nulls.
+ * Verified against the installed 0.162.1 hooks/list before implementation. */
+export function codexMemoryHookConfig(hook: NonNullable<ReturnType<typeof installCodexMemoryHook>>) {
+  const handler = { additionalContextLimit: hook.additionalContextLimit, async: false, command: hook.command, timeout: hook.timeout, type: hook.type };
+  const trusted_hash = "sha256:" + crypto.createHash("sha256").update(JSON.stringify({ event_name: "user_prompt_submit", hooks: [handler] })).digest("hex");
+  return { UserPromptSubmit: [{ hooks: [hook] }], state: {
+    "/<session-flags>/config.toml:user_prompt_submit:0:0": { enabled: true, trusted_hash },
+  } };
 }
 
-export function codexTerminalMemorySetup(home: string, cwd: string, binary: string, env: NodeJS.ProcessEnv) {
-  const hook = installCodexMemoryHook(home, env);
-  if (!hook) return "";
-  const suffix = crypto.createHash("sha256").update(JSON.stringify([binary, cwd, hook.command])).digest("hex").slice(0, 12);
-  const file = path.join(home, ".llv", "hooks", `shared-memory-trust-${suffix}.mjs`);
-  const temporary = `${file}.${crypto.randomUUID()}.tmp`;
-  fs.writeFileSync(temporary, `(${trustTerminalHook.toString()})(${JSON.stringify(binary)}, ${JSON.stringify(home)}, ${JSON.stringify(cwd)}, ${JSON.stringify(hook.command)}).catch(() => {}).finally(() => { process.exitCode = 0; });\n`, { mode: 0o600 });
-  fs.renameSync(temporary, file);
-  return `bun ${quote(file)} 2>/dev/null || true;`;
+/** A dotted state key contains dots itself; pass its entire inline table. */
+export function codexMemoryHookArgs(hook: NonNullable<ReturnType<typeof installCodexMemoryHook>>, existingState: Record<string, { enabled: boolean; trusted_hash: string }> = {}): string[] {
+  const config = codexMemoryHookConfig(hook);
+  return ["-c", "features.hooks=true", "-c", "features.codex_hooks=true", "-c",
+    `hooks.UserPromptSubmit=[{hooks=[{type="command",command=${JSON.stringify(hook.command)},timeout=2,additionalContextLimit=40000}]}]`,
+    "-c", `hooks.state={${Object.entries({ ...existingState, ...config.state }).map(([key, state]) => `${JSON.stringify(key)}={enabled=${state.enabled},trusted_hash=${JSON.stringify(state.trusted_hash)}}`).join(",")}}`,
+  ];
 }

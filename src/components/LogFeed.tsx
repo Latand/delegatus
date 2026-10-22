@@ -9,6 +9,7 @@ import { ArrowDown, ChevronUp, Sparkle } from "@/components/icons";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useRuntimeSessionForConversation } from "@/hooks/useRuntime";
 import { useToolActivityCues } from "@/hooks/useToolActivityCues";
+import { registerLiveFeed } from "@/lib/chime";
 import { accountIdFromPath } from "@/lib/accounts/badge";
 import { MOBILE_LAYOUT_QUERY } from "@/lib/attention/eligibility";
 import { conversationIdentity, isLaunchPlaceholder } from "@/lib/accounts/identity";
@@ -882,7 +883,10 @@ export function LogFeed({ file, showSvc, lineFilter, onStatus, paused, follow, s
      stay silent. The window end anchors "newly appended" to the tail stream;
      loading gates the baseline so an unloaded feed is not mistaken for an
      empty conversation. */
-  useToolActivityCues(unsplitFeed.items, memoryKey, tailPath, tail.linesStart + tail.lines.length, Boolean(file) && !tail.loading);
+  useToolActivityCues(unsplitFeed.items, memoryKey, tailPath, tail.linesStart + tail.lines.length, Boolean(file) && !tail.loading, paused);
+  /* A running feed is where this conversation's typing is heard; while it is
+     paused (off screen, dormant) its tool calls are the distant murmur. */
+  useEffect(() => (paused || !paneConversationId ? undefined : registerLiveFeed(paneConversationId)), [paused, paneConversationId]);
   /* Delivered-message authorship (#1117): joins the Claude delivery ledger by
      engine message id server-side, and on both engines joins each settled
      delivery occurrence (registry receipt or flow round: content digest,

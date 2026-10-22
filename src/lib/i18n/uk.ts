@@ -1736,6 +1736,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "sound.unmute": "Увімкнути звукові сповіщення",
   "sound.settings": "Рівні звуку",
   "sound.cueVolume": "Звукові сигнали",
+  "sound.typing": "Звук роботи агентів",
   "sound.ambientViewer": "Фонова музика в Delegatus",
   "sound.ambient": "Фонова музика під час дзвінка",
   "sound.ambientVolume": "Рівень музики",

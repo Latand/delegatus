@@ -11,7 +11,7 @@ import {
   type LoopTransport,
   type LoopVoiceHandle,
 } from "./ambientLoop";
-import { cueGain } from "./cues";
+import { TYPING_GAIN } from "./cues";
 import { AMBIENT_LOOP_ASSET } from "./loopAsset";
 import { DEFAULT_AUDIO_PREFS, type AudioPrefs } from "./prefs";
 import { speakingFromLines } from "./speech";
@@ -168,7 +168,7 @@ describe("eligibility", () => {
 
     bed.setVoiceConnected(true);
     bed.setSpeaking("agent");
-    bed.duckForCue("attention");
+    bed.duckForCue("your-move");
     bed.refresh();
 
     expect(bed.configured()).toBe(false);
@@ -348,7 +348,7 @@ describe("the toggle matrix", () => {
 
     harness.bed.refresh();
     harness.bed.setVoiceConnected(true);
-    harness.bed.duckForCue("attention");
+    harness.bed.duckForCue("your-move");
     harness.bed.setVoiceConnected(false);
 
     expect(harness.bed.wanted()).toBe(false);
@@ -417,14 +417,14 @@ describe("ducking", () => {
     }
   });
 
-  test("attention and failure duck the bed, then release it", () => {
+  test("«your move» and a fault duck the bed, then release it", () => {
     const prefs = enabled({ loopVolume: 1 });
     const sink = recorder();
     const harness = loop(prefs, sink);
     harness.bed.setVoiceConnected(true);
     const full = loopGain(1);
 
-    for (const cue of ["attention", "failure"] as const) {
+    for (const cue of ["your-move", "fault"] as const) {
       harness.bed.duckForCue(cue);
       expect(sink.last()!.gain).toBeCloseTo(full * CUE_DUCK, 6);
       expect(sink.last()!.seconds).toBeGreaterThan(0);
@@ -442,9 +442,12 @@ describe("ducking", () => {
     harness.bed.setVoiceConnected(true);
     const before = sink.ramps.length;
 
-    harness.bed.duckForCue("tool-tick");
-    harness.bed.duckForCue("viewer-mcp");
-    harness.bed.duckForCue("success");
+    harness.bed.duckForCue("typing");
+    harness.bed.duckForCue("distant-typing");
+    harness.bed.duckForCue("landed");
+    harness.bed.duckForCue("released");
+    harness.bed.duckForCue("reply");
+    harness.bed.duckForCue("step");
 
     expect(sink.ramps).toHaveLength(before);
     expect(harness.bed.state().ducked).toBe(false);
@@ -457,7 +460,7 @@ describe("ducking", () => {
     const harness = loop(prefs, sink);
     harness.bed.setVoiceConnected(true);
 
-    harness.bed.duckForCue("attention");
+    harness.bed.duckForCue("your-move");
     harness.bed.setSpeaking("agent");
     harness.runTimers();
 
@@ -472,7 +475,7 @@ describe("ducking", () => {
 
     harness.bed.setVoiceConnected(true);
     harness.bed.setSpeaking("operator");
-    harness.bed.duckForCue("failure");
+    harness.bed.duckForCue("fault");
     harness.bed.setVoiceConnected(false);
     harness.bed.setVoiceConnected(true);
 
@@ -484,8 +487,8 @@ describe("ducking", () => {
 });
 
 describe("levels", () => {
-  test("the bed stays under every cue tier, even at full slider", () => {
-    const quietest = cueGain("tool-tick", 1);
+  test("the bed stays under the typing, the quietest cue, even at full slider", () => {
+    const quietest = TYPING_GAIN;
     expect(loopGain(1)).toBeLessThan(quietest);
     /* And the shipped default is a whisper by comparison. */
     expect(loopGain(DEFAULT_AUDIO_PREFS.loopVolume)).toBeLessThan(loopGain(1));
@@ -503,7 +506,7 @@ describe("levels", () => {
 
     expect(sink.last()!.gain).toBeCloseTo(loopGain(1), 6);
     /* The cue side read the same prefs object and did not budge. */
-    expect(cueGain("attention", prefs.cueVolume)).toBeCloseTo(0.9, 6);
+    expect(prefs.cueVolume).toBe(0.9);
   });
 
   test("a muted ambient slider keeps the voice running at zero, not stopped", () => {

@@ -25,7 +25,7 @@ test.each([false, true])("production activity and owner admission preserve alias
   try {
     await once(server, "listening");
     const client = new UnixRuntimeHostClient(socketPath);
-    for (const [firstTurn, lastTurn, active] of [["running", "idle", true], ["idle", "running", null]] as const) {
+    for (const [firstTurn, lastTurn] of [["running", "idle"], ["idle", "running"]] as const) {
       for (const [id, turn] of [["a-legacy-slot", firstTurn], ["published-session", lastTurn]] as const) {
         journal.append({ scope: { type: "session", id }, kind: "session-status",
           payload: { conversationId: "published-session", sessionKey: { engine: "codex", sessionId: id },
@@ -35,7 +35,7 @@ test.each([false, true])("production activity and owner admission preserve alias
       const full = await client.snapshot();
       expect(full.sessions.map(row => row.sessionKey.sessionId)).toEqual(["a-legacy-slot", "published-session"]);
       expect(full.sessions.map(row => row.turn)).toEqual([firstTurn, lastTurn]);
-      expect(await defaultPipelinePorts().conversationAgentActive("published-session")).toBe(active);
+      expect(await defaultPipelinePorts().conversationAgentActive("published-session")).toBe(true);
       expect((await client.readSnapshot("activity", ["published-session"])).sessions.map(row => row.turn))
         .toEqual(full.sessions.map(row => row.turn));
 
