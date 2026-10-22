@@ -114,7 +114,55 @@
       </div>
     </section>
 
-    <!-- 3. Nothing is hidden -->
+    <!-- 3. It keeps going without you -->
+    <section class="sec sec-auto" data-section="auto">
+      <div class="open-side">
+        <h2 data-i18n="auto.title">It can keep going without you.</h2>
+        <ul class="caps">
+          <li><i class="dot"></i><span data-i18n="auto.c1">Turn on full autonomy for 8, 12 or 24 hours, or with no end. The orchestrator answers its own questions and keeps the work moving.</span></li>
+          <li><i class="dot"></i><span data-i18n="auto.c2">Every decision it makes is logged with why, and how to undo it.</span></li>
+          <li><i class="dot dot-amber"></i><span data-i18n="auto.c3">Accounts, spending, other projects and public posts stay off limits. You get one report when it ends.</span></li>
+        </ul>
+        <div class="seg" role="tablist" data-i18n-aria="auto.views" aria-label="Full autonomy">
+          <button type="button" role="tab" data-view="autonomy" aria-selected="true" data-i18n="auto.tab1">Settings</button>
+          <button type="button" role="tab" data-view="decisions" aria-selected="false" tabindex="-1" data-i18n="auto.tab2">Its decisions</button>
+        </div>
+      </div>
+      <div class="live live-auto" data-live="auto" data-lw="908" data-exact data-lh="760" data-pw="390" data-ph="740"
+           data-query="step=5&autonomy=1&view=autonomy" data-phone-query="step=5&phone=1&autonomy=1&view=autonomy"
+           role="region" data-i18n-aria="auto.alt" aria-label="The orchestrator’s tick settings in Delegatus, with invented data: full autonomy on with hours left, and the decisions it made, each with why and how to undo it.">
+        <div class="live-frame"></div>
+      </div>
+    </section>
+
+    <!-- 4. It gets better at it -->
+    <section class="sec sec-mem" data-section="mem">
+      <div class="sec-head">
+        <h2 data-i18n="mem.title">Each new agent starts with what the last ones learned.</h2>
+        <ul class="caps caps-grid">
+          <li><i class="dot"></i><span data-i18n="mem.c1">When an agent finishes a stage, it can leave one short rule for the next one.</span></li>
+          <li><i class="dot"></i><span data-i18n="mem.c2">Rules live at three levels: a role, a project, or every project on this machine.</span></li>
+          <li><i class="dot"></i><span data-i18n="mem.c3">A curator merges repeats, makes rules general and archives one-off ones. You can undo any of it.</span></li>
+          <li><i class="dot"></i><span data-i18n="mem.c4">Delete a rule with one tap, or bring back an earlier version.</span></li>
+        </ul>
+      </div>
+      <div class="stage-wrap">
+        <div class="stage-bar">
+          <div class="seg" role="tablist" data-i18n-aria="mem.views" aria-label="Learned rules">
+            <button type="button" role="tab" data-view="rules" aria-selected="true" data-i18n="mem.tab1">Rules</button>
+            <button type="button" role="tab" data-view="curator" aria-selected="false" tabindex="-1" data-i18n="mem.tab2">Curator</button>
+          </div>
+        </div>
+        <div class="live live-mem" data-live="mem" data-lw="1180" data-lh="760" data-pw="390" data-ph="775"
+             data-query="step=5&view=rules" data-phone-query="step=5&phone=1&view=rules"
+             role="region" data-i18n-aria="mem.alt" aria-label="Learned rules in Delegatus: rules for the orchestrator, the project and the machine, with why each exists, and the curator’s passes with their undo.">
+          <div class="live-frame"></div>
+        </div>
+      </div>
+      <p class="promise" data-i18n="mem.note">Example rules adapted from real agent memory; everything else is invented.</p>
+    </section>
+
+    <!-- 5. Nothing is hidden -->
     <section class="sec sec-open" data-section="open">
       <div class="open-side">
         <h2 data-i18n="open.title">Every conversation, open.</h2>
@@ -136,7 +184,33 @@
       </div>
     </section>
 
-    <!-- 4. It reaches you -->
+    <!-- 6. What it cost -->
+    <section class="sec sec-use" data-section="use">
+      <div class="sec-head">
+        <h2 data-i18n="use.title">Know what each task spent.</h2>
+        <ul class="caps caps-grid">
+          <li><i class="dot"></i><span data-i18n="use.c1">Every card estimates how much of your weekly Claude and Codex limits its task used, within about 30%.</span></li>
+          <li><i class="dot"></i><span data-i18n="use.c2">Open the marks for each account: the task’s share and how much of the week is gone.</span></li>
+          <li><i class="dot"></i><span data-i18n="use.c3">On a computer, the account in use draws its week and its 5 hours against an even pace.</span></li>
+        </ul>
+      </div>
+      <div class="stage-wrap">
+        <div class="stage-bar">
+          <div class="seg" role="tablist" data-i18n-aria="use.views" aria-label="Limits">
+            <button type="button" role="tab" data-view="spend" aria-selected="true" data-i18n="use.tab1">On the cards</button>
+            <button type="button" role="tab" data-view="task" aria-selected="false" tabindex="-1" data-i18n="use.tab2">One task</button>
+            <button type="button" role="tab" data-view="history" aria-selected="false" tabindex="-1" data-desktop-only data-phone-view="spend" data-i18n="use.tab3">History</button>
+          </div>
+        </div>
+        <div class="live live-use" data-live="use" data-lw="1444" data-lh="760" data-pw="390" data-ph="740"
+             data-query="step=5&view=spend" data-phone-query="step=5&phone=1&view=spend"
+             role="region" data-i18n-aria="use.alt" aria-label="The Delegatus board with invented data: each task’s estimated share of the weekly Claude and Codex limits, one task’s accounts, and an account’s weekly burndown.">
+          <div class="live-frame"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 7. It reaches you -->
     <section class="sec sec-reach" data-section="reach">
       <div class="sec-copy">
         <h2 data-i18n="reach.title">It finds you when it needs you.</h2>
@@ -163,7 +237,7 @@
       </div>
     </section>
 
-    <!-- 5. The questions people ask first -->
+    <!-- 8. The questions people ask first -->
     <section class="sec sec-faq" data-section="faq">
       <h2 data-i18n="faq.title">Questions people ask first.</h2>
       <div class="faq">
