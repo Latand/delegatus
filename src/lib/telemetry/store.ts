@@ -38,9 +38,9 @@ export function updatePreferences(update: { enabled?: boolean; noticeDismissed?:
   }
 }
 export function environmentOff(env: Readonly<Record<string, string | undefined>>): boolean {
-  const telemetry = env.LLV_TELEMETRY_OVERRIDE || env.DELEGATUS_TELEMETRY || env.LLV_TELEMETRY;
+  const telemetry = env.DELEGATUS_TELEMETRY_OVERRIDE || env.LLV_TELEMETRY_OVERRIDE || env.DELEGATUS_TELEMETRY || env.LLV_TELEMETRY;
   const doNotTrack = env.DO_NOT_TRACK_OVERRIDE || env.DO_NOT_TRACK;
-  return telemetry === "0" || doNotTrack === "1";
+  return ["0", "false", "off", "no"].includes(telemetry?.trim().toLowerCase() ?? "") || doNotTrack === "1";
 }
 export function telemetryStatus(env: Readonly<Record<string, string | undefined>> = process.env) {
   const p = preferences();

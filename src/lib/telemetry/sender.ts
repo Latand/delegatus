@@ -38,6 +38,7 @@ export async function sendInstallPing(ports: PingPorts): Promise<void> {
 let started = false;
 export function startInstallPing(mode: ModePorts): void {
   if (started || !productionViewer(process.env) || process.argv.includes("dev") || process.argv.includes("test")) return;
+  if (environmentOff(process.env)) return;
   started = true;
   try {
     const marker = telemetryFile("notice-output");
@@ -47,7 +48,6 @@ export function startInstallPing(mode: ModePorts): void {
       fs.writeFileSync(marker, "1", { mode: 0o600 });
     }
   } catch { console.warn("[telemetry] notice state unavailable"); }
-  if (environmentOff(process.env)) return;
   const tick = async () => {
     try {
       await sendInstallPing({ env: process.env, now: () => new Date(), fetch,
