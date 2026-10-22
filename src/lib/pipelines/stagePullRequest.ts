@@ -184,7 +184,7 @@ export async function ensureStagePullRequest(pipeline: Pipeline, attempt: Pipeli
         const written = await exec("gh", creating
           ? ["pr", "create", "--repo", repository, "--title", title, "--body-file", bodyFile,
             "--base", pipeline.baseBranch, "--head", branch]
-          : ["pr", "edit", String(number), "--repo", repository, "--body-file", bodyFile],
+          : ["api", "-X", "PATCH", `repos/${repository}/pulls/${number}`, "-F", `body=@${bodyFile}`],
         pipeline.worktreeDir, engineForgeWriteEnv(), { timeoutMs: 60_000 });
         // A timeout/status is no proof of whether a write landed. Read the
         // branch and, for a refresh, the body before accepting or retrying.
