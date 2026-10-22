@@ -18,7 +18,7 @@ const { loadFlows, saveFlows, reconcileFlowConversationOwnership, reconcileFlowC
 const { createFlowFromRequest, patchFlow, cancelRound, closeFlow } = await import("./commands");
 const { tickFlow, tickFlows, reserveReviewerSpawnOffLoop, enforceHeadlessAccountCreditGuard } = await import("./engine");
 const { submitFlowDecision } = await import("./decisions");
-const { savePipelines, loadPipelines, buildPipeline, pipelineIdentity } = await import("@/lib/pipelines/store");
+const { savePipelines, loadPipelines, buildPipeline, pipelineIdentity, pipelineRevision } = await import("@/lib/pipelines/store");
 const { createPipelineFromRequest, patchPipeline, normalizeStages, tickPipelines, defaultPipelinePorts, reconcileEmbeddedReviewFlows, preparePipelineReviewRepair, reportStageCompletion, pipelineAttemptTargetForSource, adoptAttempt } = await import("@/lib/pipelines/engine");
 const { queuePipelineCreation, queuedPipelineCreationStatus, queuedPipelineCreationMessage } = await import("@/lib/pipelines/creationQueue");
 const { registerPipelineTick } = await import("@/lib/pipelines/controllerSignal");
@@ -282,6 +282,46 @@ test("controller leaves retained legacy publication lanes untouched and does not
   expect(retained.delivery).toBeUndefined();
   expect(retained.publication).toBe("remote-branch");
   expect(retained.state).toBe("paused");
+});
+
+test("set-delivery-remote refuses a legacy graph restored while its Git read is pending", async () => {
+  const lane = legacyLane();
+  lane.delivery = {
+    target: { repository: "fixture", remote: "", branch: "refs/heads/retired" },
+    disposition: "owner", publish: "enabled", ownerId: lane.id, epoch: 1, active: true, journal: [],
+  };
+  savePipelines([lane]);
+  let startGit!: () => void;
+  let releaseGit!: () => void;
+  const gitStarted = new Promise<void>(resolve => { startGit = resolve; });
+  const heldGit = new Promise<void>(resolve => { releaseGit = resolve; });
+  const ports = { ...defaultPipelinePorts(), exec: (async () => {
+    startGit(); await heldGit;
+    return { code: 0, stdout: "https://example.invalid/repo.git", stderr: "" };
+  }) as never };
+
+  try {
+    const converted = await patchPipeline(lane.id, {
+      action: "convert-legacy-review", clientRequestId: "race-convert", expectedRevision: pipelineRevision(lane),
+    } as never, ports);
+    if (!converted.pipeline) throw new Error(converted.error);
+    const conversionRevision = pipelineRevision(converted.pipeline);
+    const adopting = patchPipeline(lane.id, { action: "set-delivery-remote" } as never, ports);
+    await gitStarted;
+    const reverted = await patchPipeline(lane.id, {
+      action: "revert-legacy-review", clientRequestId: "race-revert", stageId: "review", expectedRevision: conversionRevision,
+    } as never, ports);
+    expect(reverted.error).toBeUndefined();
+    expect(reverted.pipeline?.stages.some(stage => stage.kind === "review-loop")).toBe(true);
+    const retainedRows = rows();
+
+    releaseGit();
+    expect(await adopting).toMatchObject(STAGE_RETIREMENT);
+    expect(rows()).toBe(retainedRows);
+    expect(loadPipelines()[0]?.delivery).toMatchObject({ target: { remote: "" }, epoch: 1 });
+  } finally {
+    releaseGit();
+  }
 });
 
 test("delivery admission rechecks the graph after its Git read before claiming ownership", async () => {

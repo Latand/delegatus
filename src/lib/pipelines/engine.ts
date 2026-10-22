@@ -13484,6 +13484,7 @@ export async function patchPipeline(
     return withPipelineMutation(async (pipelines, persist) => {
       const pipeline = pipelines.find((item) => item.id === id);
       if (!pipeline) return { error: "pipeline not found", status: 404 };
+      if (legacyAction(pipeline)) return STAGE_RETIREMENT;
       if (pipeline.remoteAction?.state === "pending") {
         const pending = pipeline.remoteAction;
         const sameActor = JSON.stringify(pending.actor) === JSON.stringify(actor);
@@ -13538,6 +13539,7 @@ export async function patchPipeline(
     const result = await withDeliveryMutationAsync<PipelinePatchResult>((tx) => {
       const current = tx.get(id);
       if (!current) return { error: "pipeline not found", status: 404 };
+      if (legacyAction(current)) return STAGE_RETIREMENT;
       if (current.repoDir !== snapshot.repoDir) return { error: "repository changed while resolving delivery; read the lane again", status: 409 };
       if (current.state === "closed" || current.state === "completed" || current.closedAt || current.hiddenAt) return { error: "a closed, completed or hidden lane cannot adopt a delivery remote", status: 409 };
       const delivery = current.delivery;
@@ -13615,7 +13617,9 @@ export async function patchPipeline(
     }
     return withPipelineMutation(async (pipelines, persist) => {
       const current = pipelines.find((item) => item.id === id);
-      if (!current || current.delivery?.epoch !== pipeline.delivery?.epoch) return { error: "delivery changed before publication admission", status: 409 };
+      if (!current) return { error: "pipeline not found", status: 404 };
+      if (legacyAction(current)) return STAGE_RETIREMENT;
+      if (current.delivery?.epoch !== pipeline.delivery?.epoch) return { error: "delivery changed before publication admission", status: 409 };
       if (current.delivery && !current.delivery.target.remote) return { error: LOCAL_DELIVERY_PUBLISH_REFUSAL, status: 409 };
       if (current.state === "closed" || current.closedAt || current.hiddenAt) return { error: "a closed lane cannot publish", status: 409 };
       if ((moved || req.acceptedSha !== undefined) && (remoteActionFence(current) !== publicationFence || passedPublicationEvidence(current) !== publicationEvidence)) {
