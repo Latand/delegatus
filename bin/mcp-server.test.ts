@@ -143,7 +143,7 @@ interface TestRpcResponse {
 }
 
 function stdioSession(command: string, launcher: string, root: string, env: Record<string, string>) {
-  const process = spawn(command, [launcher], { cwd: root, env: { ...globalThis.process.env, ...env, LLV_BUN_EXECUTABLE: globalThis.process.execPath }, stdio: ["pipe", "pipe", "pipe"] });
+  const process = spawn(command, [launcher], { cwd: root, env: { ...globalThis.process.env, ...env, LLV_BUN_EXECUTABLE: env.LLV_BUN_EXECUTABLE ?? globalThis.process.execPath }, stdio: ["pipe", "pipe", "pipe"] });
   let buffer = "";
   const messages: TestRpcResponse[] = [];
   const waiting = new Set<() => void>();
@@ -197,6 +197,160 @@ function installedPackage(serverSource = `
   fs.writeFileSync(path.join(root, "dist", "mcp-server.mjs"), serverSource, "utf8");
   return { root, launcher: path.join(root, "bin", "mcp-server.mjs") };
 }
+
+test("an empty tools/list is a protocol error naming the selected state directory", async () => {
+  const { root, launcher } = installedPackage(`
+    const { createInterface } = await import("node:readline");
+    createInterface({ input: process.stdin }).on("line", line => {
+      const request = JSON.parse(line);
+      if (request.id === undefined) return;
+      const result = request.method === "initialize"
+        ? { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "viewer", version: "1" } }
+        : { tools: [] };
+      console.log(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }));
+    });
+  `);
+  const state = path.join(root, "state");
+  const session = stdioSession(process.execPath, launcher, root, { HOME: root, XDG_CONFIG_HOME: root,
+    LLV_STATE_DIR: state, LLV_STRUCTURED_HOST: "", LLV_SPAWN_CAPABILITY: "", LLV_VIEWER_DEPLOY_TARGET: "" });
+  try {
+    expect((await session.call(1, "initialize")).error).toBeUndefined();
+    const listed = await session.call(2, "tools/list");
+    expect(listed.result).toBeUndefined();
+    expect(JSON.stringify(listed.error)).toContain("empty tools/list");
+    expect(listed.error).toMatchObject({ code: -32002, message: expect.stringContaining(state) });
+  } finally {
+    session.process.stdin.end();
+    await new Promise<void>(resolve => session.process.once("close", () => resolve()));
+  }
+});
+
+test.each([
+  ["linux", (root: string) => path.join(root, "tmp", "llv-spawn-sandbox", ".claude", "config")],
+  ["darwin", (root: string) => path.join(root, "private", "var", "folders", "tmp", "llv-spawn-sandbox", ".claude", "config")],
+])("%s: the packaged MCP launcher preserves an explicit state beside sandboxed config", async (_layout, sandboxConfig) => {
+  const { root, launcher } = installedPackage(`
+    const { createInterface } = await import("node:readline");
+    createInterface({ input: process.stdin }).on("line", line => {
+      const request = JSON.parse(line);
+      if (request.id === undefined) return;
+      const result = request.method === "initialize"
+        ? { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: process.env.LLV_STATE_DIR, version: "1" } }
+        : { tools: [{ name: "probe", inputSchema: { type: "object" } }] };
+      console.log(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }));
+    });
+  `);
+  const explicitState = path.join(root, "isolated-state");
+  const session = stdioSession(process.execPath, launcher, root, {
+    HOME: root,
+    XDG_CONFIG_HOME: sandboxConfig(root),
+    LLV_STATE_DIR: explicitState,
+    LLV_STRUCTURED_HOST: path.join(root, "real-install", "delegatus", "state"),
+    LLV_SPAWN_CAPABILITY: "",
+    LLV_VIEWER_DEPLOY_TARGET: "",
+  });
+  try {
+    expect((await session.call(1, "initialize")).result.serverInfo.name).toBe(explicitState);
+  } finally {
+    session.process.stdin.end();
+    await new Promise<void>(resolve => session.process.once("close", () => resolve()));
+  }
+});
+
+test.each(["node", "bun"])("%s: an explicit missing release target fails initialize after startup with the state directory and missing path", async runtime => {
+  const { root, launcher } = installedPackage();
+  const target = path.join(root, "missing-release.json");
+  const state = path.join(root, "state");
+  const session = stdioSession(Bun.which(runtime)!, launcher, root, { HOME: root, XDG_CONFIG_HOME: root, LLV_STATE_DIR: state,
+    LLV_STRUCTURED_HOST: "", LLV_SPAWN_CAPABILITY: "", LLV_VIEWER_DEPLOY_TARGET: target });
+  let stderr = "";
+  let sawStartup!: () => void;
+  const startup = new Promise<void>(resolve => { sawStartup = resolve; });
+  session.process.stderr.on("data", chunk => {
+    stderr += String(chunk);
+    if (stderr.includes(target) && stderr.includes("missing")) sawStartup();
+  });
+  try {
+    // The request cannot itself satisfy this barrier: the launcher has already
+    // selected and diagnosed its target before the client initializes.
+    await startup;
+    const response = await session.call(1, "initialize");
+    expect((response.error as { message: string }).message).toContain(state);
+    expect((response.error as { message: string }).message).toContain(target);
+    expect(response.result).toBeUndefined();
+  } finally {
+    session.process.stdin.end();
+    if (session.process.exitCode === null && session.process.signalCode === null) {
+      await new Promise<void>(resolve => session.process.once("close", () => resolve()));
+    }
+  }
+});
+
+test.each(["linux", "darwin"])("a direct %s sandbox launcher uses the real host state stamp", async layout => {
+  const { root, launcher } = installedPackage(`
+    const { createInterface } = await import("node:readline");
+    createInterface({ input: process.stdin }).on("line", line => {
+      const request = JSON.parse(line);
+      if (request.id === undefined) return;
+      console.log(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: {
+        protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: process.env.LLV_STATE_DIR, version: "1" },
+      } }));
+    });
+  `);
+  const state = path.join(root, "operator", "state");
+  const config = path.join(root, layout === "darwin" ? "private/var/folders/example/T" : "tmp", "llv-spawn-sandbox/.claude/config");
+  const session = stdioSession(process.execPath, launcher, root, { HOME: root, XDG_CONFIG_HOME: config,
+    LLV_STATE_DIR: path.join(config, "agent-log-viewer/state"), LLV_STRUCTURED_HOST: state, LLV_SPAWN_CAPABILITY: "", LLV_VIEWER_DEPLOY_TARGET: "" });
+  try {
+    expect((await session.call(1, "initialize")).result.serverInfo.name).toBe(state);
+    expect(fs.existsSync(config)).toBe(false);
+  } finally {
+    session.process.stdin.end();
+    await new Promise<void>(resolve => session.process.once("close", () => resolve()));
+  }
+});
+
+test.each(["linux", "darwin"])("the %s sandbox launcher authenticates initialize from the stamped install config", async layout => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-authenticated-mcp-"));
+  sandboxes.push(root);
+  const realConfig = path.join(root, "operator", "config");
+  const realApp = path.join(realConfig, "agent-log-viewer");
+  const state = path.join(realApp, "state");
+  const sandboxConfig = path.join(root, layout === "darwin" ? "private/var/folders/example/T" : "tmp", "llv-spawn-sandbox/.claude/config");
+  fs.mkdirSync(state, { recursive: true });
+  const key = "isolated-install-key";
+  fs.writeFileSync(path.join(realApp, "token"), key);
+  const control = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request =>
+    request.headers.get("authorization") === `Bearer ${key}` ? new Response("initialized") : new Response("credential required", { status: 403 }),
+  });
+  const { launcher } = installedPackage(`
+    import fs from "node:fs";
+    import path from "node:path";
+    import { createInterface } from "node:readline";
+    createInterface({ input: process.stdin }).on("line", async line => {
+      const request = JSON.parse(line);
+      if (request.id === undefined) return;
+      if (request.method === "initialize") {
+        const token = fs.readFileSync(path.join(process.env.XDG_CONFIG_HOME, "agent-log-viewer", "token"), "utf8");
+        const response = await fetch("http://127.0.0.1:${control.port}", { headers: { authorization: "Bearer " + token } });
+        if (!response.ok) return console.log(JSON.stringify({ jsonrpc: "2.0", id: request.id, error: { code: -32002, message: "authenticated initialize refused" } }));
+        return console.log(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "viewer", version: "1" } } }));
+      }
+      console.log(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: { tools: [{ name: "stage_report" }] } }));
+    });
+  `);
+  const session = stdioSession(process.execPath, launcher, root, { HOME: root, XDG_CONFIG_HOME: sandboxConfig,
+    LLV_STATE_DIR: path.join(sandboxConfig, "agent-log-viewer", "state"), LLV_STRUCTURED_HOST: state,
+    LLV_VIEWER_PORT: String(control.port), LLV_SPAWN_CAPABILITY: "", LLV_VIEWER_DEPLOY_TARGET: "" });
+  try {
+    expect((await session.call(1, "initialize")).result.serverInfo.name).toBe("viewer");
+    expect(fs.existsSync(sandboxConfig)).toBe(false);
+  } finally {
+    control.stop(true);
+    session.process.stdin.end();
+    await new Promise<void>(resolve => session.process.once("close", () => resolve()));
+  }
+});
 
 function git(cwd: string, ...args: string[]): string {
   const result = spawnSync("git", ["-c", "user.name=Fixture", "-c", "user.email=noreply", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8" });
@@ -262,11 +416,22 @@ test.skipIf(process.env.LLV_CODEX_MCP_ENV_TEST !== "1")("native Codex forwards t
   const stateDir = path.join(root, "state");
   const capability = "S".repeat(43);
   fs.mkdirSync(path.join(root, ".codex"));
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.writeFileSync(path.join(stateDir, "viewer-release.json"), JSON.stringify({
+    revision: "4".repeat(40), image: "viewer:fixture", container: "viewer-fixture", endpoint: "http://127.0.0.1:1",
+  }));
   const digest = createHash("sha256").update(capability).digest("hex");
   const receipt = { spawnCapabilityDigest: digest, createdAt: new Date(Date.now() - 30 * 60_000).toISOString() };
-  const config = headlessCodexThreadConfig({ config: { mcp_servers: {
-    viewer: { command: process.execPath, args: [launcher], env: { LLV_STATE_DIR: stateDir } },
-  } } });
+  const previousState = process.env.LLV_STATE_DIR;
+  let config: Record<string, unknown>;
+  try {
+    process.env.LLV_STATE_DIR = stateDir;
+    config = headlessCodexThreadConfig({ config: { mcp_servers: {
+      viewer: { command: process.execPath, args: [launcher], env: { LLV_STATE_DIR: stateDir } },
+    } } });
+  } finally {
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+  }
   const session = stdioSession(process.env.LLV_CODEX_BINARY ?? "codex", "app-server", root, {
     HOME: root, CODEX_HOME: path.join(root, ".codex"), XDG_CONFIG_HOME: path.join(root, "config"),
     LLV_STATE_DIR: stateDir, LLV_SPAWN_CAPABILITY: capability,
@@ -307,11 +472,11 @@ test("self-update pointer selects the installed MCP bundle and falls back only a
   const { root, launcher, stateDir, pointer, release, env } = fixture;
   const installed = release("first", "process.stdout.write('release\\n');");
   const run = () => launchFrom(root, launcher, env, "", "bun");
-  expect(await run()).toMatchObject({ exitCode: 0, stdout: "checkout:none\n", stderr: "" });
+  expect(await run()).toMatchObject({ exitCode: 0, stdout: "checkout:none\n", stderr: expect.stringContaining("[mcp lifecycle]") });
   fs.writeFileSync(pointer, "{invalid json");
-  expect(await run()).toMatchObject({ exitCode: 0, stdout: "checkout:none\n", stderr: "" });
+  expect(await run()).toMatchObject({ exitCode: 0, stdout: "checkout:none\n", stderr: expect.stringContaining("[mcp lifecycle]") });
   fs.writeFileSync(pointer, JSON.stringify(installed));
-  expect(await run()).toMatchObject({ exitCode: 0, stdout: "release\n", stderr: "" });
+  expect(await run()).toMatchObject({ exitCode: 0, stdout: "release\n", stderr: expect.stringContaining("[mcp lifecycle]") });
 
   const revision = "7".repeat(40);
   const releaseId = `deploy-${revision}`;
@@ -323,15 +488,15 @@ test("self-update pointer selects the installed MCP bundle and falls back only a
     revision, image: "viewer:managed", container: "viewer-managed", endpoint: "http://127.0.0.1:1",
     mcpRuntime: { source: "managed", revision, releaseId, artifactDigest: createHash("sha256").update(managedBundle).digest("hex"), stagedAt: "2026-07-23T08:00:00.000Z" },
   }));
-  expect(await run()).toMatchObject({ exitCode: 0, stdout: `managed:${revision}\n`, stderr: "" });
+  expect(await run()).toMatchObject({ exitCode: 0, stdout: `managed:${revision}\n`, stderr: expect.stringContaining("[mcp lifecycle]") });
   fs.writeFileSync(path.join(stateDir, "viewer-release.json"), JSON.stringify({
     revision, image: "viewer:managed", container: "viewer-managed", endpoint: "http://127.0.0.1:1",
   }));
-  expect(await run()).toMatchObject({ exitCode: 0, stdout: `checkout:${revision}\n`, stderr: "" });
+  expect(await run()).toMatchObject({ exitCode: 0, stdout: `checkout:${revision}\n`, stderr: expect.stringContaining("[mcp lifecycle]") });
 
   fs.unlinkSync(path.join(stateDir, "viewer-release.json"));
   git(root, "commit", "--allow-empty", "-m", "checkout moved");
-  expect(await run()).toMatchObject({ exitCode: 0, stdout: "checkout:none\n", stderr: "" });
+  expect(await run()).toMatchObject({ exitCode: 0, stdout: "checkout:none\n", stderr: expect.stringContaining("[mcp lifecycle]") });
 }, 15_000);
 
 test("one MCP session starts the next installed release when the self-update pointer changes", async () => {
@@ -458,7 +623,7 @@ test("fresh Claude and Codex hosts load the exact MCP runtime named by the promo
       LLV_STATE_DIR: stateDir,
       LLV_VIEWER_DEPLOY_TARGET: targetFile,
     }, `${host}-initialize\n`, "bun");
-    expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+    expect(result).toMatchObject({ exitCode: 0, stderr: expect.stringContaining("[mcp lifecycle]") });
     const [runtime, handshake] = result.stdout.trim().split("\n");
     expect(JSON.parse(runtime!)).toEqual({
       revision: candidateRevision,
@@ -784,7 +949,7 @@ test("the installed MCP launcher selects Bun for Bun-only Viewer configuration a
   ];
   for (const env of configurations) {
     const result = await launchInstalled(env);
-    expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+    expect(result).toMatchObject({ exitCode: 0, stderr: expect.stringContaining("[mcp lifecycle]") });
     const [runtime, handshake] = result.stdout.trim().split("\n");
     expect(JSON.parse(runtime!)).toMatchObject({ bun: expect.any(String) });
     expect(handshake).toBe("initialize-handshake");
@@ -876,7 +1041,7 @@ test("the installed MCP launcher forwards escalating signals until its Bun child
   child.kill("SIGTERM");
   const exitCode = await child.exited;
   const stderr = await new Response(child.stderr).text();
-  expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
+  expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: expect.stringContaining("[mcp lifecycle]") });
   expect(fs.readFileSync(signalPath, "utf8")).toBe("SIGINT\nSIGTERM\n");
 }, 15_000);
 
@@ -1033,3 +1198,107 @@ test("one stdio MCP session keeps its tools through endpoint loss and a newly pu
     reader.releaseLock();
   }
 }, 20_000);
+
+for (const teardown of ["release", "eof", "timeout"]) {
+const runDrainTest = teardown === "eof" ? test.skipIf(process.platform === "win32") : test;
+runDrainTest(`launcher drains an admitted call before ${teardown} teardown`, async () => {
+  const fixture = selfUpdateFixture(`
+    import fs from "node:fs";
+    import { createInterface } from "node:readline";
+    createInterface({ input: process.stdin }).on("line", async line => {
+      const request = JSON.parse(line);
+      if (request.id == null) return;
+      if (request.method === "tools/call") {
+        fs.writeFileSync(process.env.LLV_TEST_STARTED, "ready");
+        while (!fs.existsSync(process.env.LLV_TEST_RELEASE)) await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      const result = request.method === "initialize"
+        ? { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "viewer", version: "1" } }
+        : { content: [{ type: "text", text: "committed" }] };
+      process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }) + "\\n");
+    });
+  `);
+  const started = path.join(fixture.root, "started"), release = path.join(fixture.root, "release");
+  const runtime = teardown === "release" ? process.execPath : Bun.which("node")!;
+  const timerArmed = path.join(fixture.root, "shutdown-timer-armed");
+  const timerAdvanced = path.join(fixture.root, "shutdown-timer-advanced");
+  const preload = path.join(fixture.root, "controlled-timers.mjs");
+  if (teardown !== "release") fs.writeFileSync(preload, `
+    import fs from "node:fs";
+    const originalSetTimeout = globalThis.setTimeout;
+    const originalClearTimeout = globalThis.clearTimeout;
+    const controlled = new Set();
+    let stdinEnded = false;
+    process.stdin.once("end", () => { stdinEnded = true; });
+    globalThis.setTimeout = (callback, delay, ...args) => {
+      if (process.argv[1] === ${JSON.stringify(fixture.launcher)} && stdinEnded
+        && delay === Number(process.env.LLV_TEST_DRAIN_DELAY)
+        && !fs.existsSync(${JSON.stringify(release)})) {
+        const timer = { callback, args, cancelled: false };
+        controlled.add(timer);
+        fs.writeFileSync(${JSON.stringify(timerArmed)}, String(delay));
+        return timer;
+      }
+      return originalSetTimeout(callback, delay, ...args);
+    };
+    globalThis.clearTimeout = timer => {
+      if (controlled.has(timer)) { timer.cancelled = true; controlled.delete(timer); return; }
+      return originalClearTimeout(timer);
+    };
+    process.on("SIGUSR2", () => {
+      fs.writeFileSync(${JSON.stringify(timerAdvanced)}, "advanced");
+      for (const timer of controlled) if (!timer.cancelled) timer.callback(...timer.args);
+      controlled.clear();
+    });
+  `);
+  const session = stdioSession(runtime, fixture.launcher, fixture.root, {
+    ...fixture.env, TMPDIR: fixture.root, LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1",
+    LLV_TEST_STARTED: started, LLV_TEST_RELEASE: release,
+    ...(teardown !== "release" ? {
+      NODE_OPTIONS: `--import=${preload}`, LLV_BUN_EXECUTABLE: process.execPath,
+      LLV_TEST_DRAIN_DELAY: teardown === "timeout" ? "35000" : "1000",
+    } : {}),
+  });
+  let diagnostics = "";
+  session.process.stderr?.on("data", chunk => { diagnostics += String(chunk); });
+  const until = async (ready: () => boolean) => {
+    const deadline = Date.now() + 5000;
+    while (!ready() && Date.now() < deadline) await Bun.sleep(10);
+    expect(ready()).toBe(true);
+  };
+  try {
+    try { await session.call(1, "initialize"); }
+    catch (error) { throw new Error(`${String(error)}\n${diagnostics}`); }
+    session.process.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "hold", arguments: {} } }) + "\n");
+    const admitted = session.responseFor(2, 40_000);
+    await until(() => fs.existsSync(started));
+    if (teardown === "release") {
+      const second = fixture.release("next", mcpBundle("next"));
+      fs.writeFileSync(fixture.pointer, JSON.stringify(second));
+      expect((await session.call(3, "tools/list")).result?.isError ?? true).toBe(true);
+    } else {
+      session.process.stdin.end();
+      if (teardown === "timeout") {
+        await until(() => fs.existsSync(timerArmed));
+        expect(fs.readFileSync(timerArmed, "utf8")).toBe("35000");
+        process.kill(session.process.pid!, "SIGUSR2");
+        await until(() => fs.existsSync(timerAdvanced));
+        expect((await admitted).result.content[0].text).toContain("did not drain before shutdown deadline");
+        return;
+      }
+      await until(() => diagnostics.includes('"reason":"stdio-eof"'));
+      if (fs.existsSync(timerArmed)) {
+        process.kill(session.process.pid!, "SIGUSR2");
+        await until(() => fs.existsSync(timerAdvanced));
+      }
+      expect(fs.existsSync(timerArmed)).toBe(false);
+    }
+    fs.writeFileSync(release, "go");
+    expect((await admitted).result.content[0].text).toBe("committed");
+  } finally {
+    fs.writeFileSync(release, "go");
+    session.process.stdin.end();
+    if (session.process.exitCode === null) await new Promise<void>(resolve => session.process.once("close", () => resolve()));
+  }
+}, 45_000);
+}

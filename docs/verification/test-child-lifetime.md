@@ -296,7 +296,7 @@ readiness report to establish ownership. Disposition **synchronous**: the
 caller waits for the command; the runner contains any descendants if the
 synchronous call or its parent is interrupted.
 
-The reconciled census contains 270 files: 176 with asynchronous primitives and
+The reconciled census contains 272 files: 178 with asynchronous primitives and
 94 with only synchronous primitives. These dispositions describe the verified
 Linux path.
 
@@ -336,6 +336,7 @@ repeated for this inventory correction.
 | `scripts/fixtures/detachedChildParent.fixture.ts` | 5 | contained helper |
 | `scripts/fixtures/nestedTestRunner.fixture.ts` | 7 | contained helper |
 | `scripts/fixtures/ownedRunner.fixture.ts` | 9, 14 | contained helper |
+| `scripts/gate-slot.namespace.integration.test.ts` | 19, 177, 230, 231 | owned; synchronous user-manager probe and private-slice revert and stop. The namespaced caller (the nested launcher, or the production launcher's handle on a host) is awaited under a 90-second kill bound; its namespace teardown ends the gate's command, and its fixture scope is removed once empty |
 | `scripts/gate-slot.test.ts` | 37, 53, 55 | owned |
 | `scripts/install-mcp.test.ts` | 30, 82, 173 | owned |
 | `scripts/local-gate.noproc.test.ts` | 37; forwarded synchronous ps probes | owned; deadline root handles retained from spawn and reaped after bounded identity cleanup; helper PID/start/boot identity captured while alive |
@@ -345,7 +346,7 @@ repeated for this inventory correction.
 | `scripts/npm-package-smoke.mjs` | 109, 485, 520 | contained helper; commands have a 30-second handle timeout, startup/restart waits 30 seconds, observation 60 seconds, and the caller has a 150-second deadline. Direct and CLI server handles stop with bounded TERM/KILL; runtime-host restart pins the fence start identity. The owning service contains descendants on interruption |
 | `scripts/npm-package-smoke.test.ts` | 32, 34, 61 | owned |
 | `scripts/owned-runner.integration.test.ts` | 56, 59, 64, 106, 108 | owned |
-| `scripts/owned-runner.ts` | 27, 29, 56, 88, 98 | contained helper; immediate original handles, private service capability, finite command and service deadlines, two-second cgroup TERM/KILL bound; portable limitations stated below |
+| `scripts/owned-runner.ts` | 33, 59, 64, 106, 131, 141, 159, 169 | contained helper; immediate original handles, private service capability, finite command and service deadlines, two-second cgroup TERM/KILL bound; portable limitations stated below |
 | `scripts/privacy-publication-gate.test.ts` | 448, 955, 2175, 2282, 2559, 2572, 2587, 2608, 2682, 2970, 3603, 3778, 3822, 3872, 3922, 3971, 4018, 4065, 4112, 4158, 4203, 4745 | owned |
 | `scripts/privacy-test-process.ts` | 22 | owned helper; existing 20-second deadline and finally join retained |
 | `scripts/probe-realtime-v3.ts` | 230, 276 | contained helper |
@@ -449,6 +450,7 @@ repeated for this inventory correction.
 | `src/lib/runtime/permissionGuard.test.ts` | 82 | owned |
 | `src/lib/runtime/releaseInterruption.test.ts` | 415 | owned |
 | `src/lib/runtime/runtimeImageStore.test.ts` | 453, 489 | owned |
+| `src/lib/runtime/sandboxGateRunner.integration.test.ts` | 57, 58, 116, 135 | owned; synchronous private-slice revert and stop; host gate handles awaited in finally, namespaced callers ended through their recorded signal domain |
 | `src/lib/runtime/severedHostReap.test.ts` | 51 | owned |
 | `src/lib/runtime/startup.test.ts` | 2474, 2580, 2600 | owned |
 | `src/lib/runtime/startupFinalization.integration.test.ts` | 282, 519, 600 | owned |

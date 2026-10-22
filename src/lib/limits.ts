@@ -1,3 +1,5 @@
+import { subscriptionApiConsent } from "@/lib/accounts/subscriptionApiConsent";
+import { runHeadlessClaudeOnce } from "@/lib/agent/claudeHeadless";
 import { readClaudeCredentials } from "@/lib/accounts/claudeCredentials";
 import { paidCredits } from "@/lib/accounts/creditGuard";
 import { claudeTierDisplayName, normalizeClaudeLaunchModel } from "@/lib/agent/models";
@@ -7,6 +9,7 @@ import path from "node:path";
 import { accountForSpawn, UnknownAccountError, type CodexAccount } from "@/lib/accounts/codex";
 import { claudeAccountForSpawn, UnknownClaudeAccountError, type ClaudeAccount } from "@/lib/accounts/claude";
 import { managedCodexRuntime } from "@/lib/accounts/codexRuntime";
+import { agentRegistry } from "@/lib/agent/registry";
 import { activeCopilotAccountId, listCopilotAccounts } from "@/lib/accounts/copilot";
 import { readCopilotTranscriptLimits } from "@/lib/limits/copilotTranscriptLimits";
 import type { AppServerRateLimits } from "@/lib/accounts/codexAppServer";
@@ -75,7 +78,9 @@ type LimitsCache = { version: 2; engines: Record<EngineName, Record<string, Engi
     would otherwise let it rest, so the very next read goes to the provider
     instead of resting on a snapshot whose tier list an old parser emptied.
     The cache must never be the thing that hides a tier. */
-const CLAUDE_PARSER_VERSION = 2;
+const CLAUDE_PARSER_VERSION = 3;
+/** Earlier Codex cache entries could contain another account's transcript. */
+const CODEX_ATTRIBUTION_VERSION = 1;
 export type LimitRead = {
   data: EngineLimits | null;
   /** The reading `data` would have been without a rejection projected onto it,
@@ -96,20 +101,6 @@ const globalStore = globalThis as unknown as {
   __llvLimitsCacheDisk?: { of: LimitsCache; mtimeMs: number };
   __llvLimitsInflight?: Map<string, Promise<ResolvedRead>>;
 };
-
-function isProvenance(value: unknown): value is { claude: LimitsProvenance; codex: LimitsProvenance } {
-  if (!value || typeof value !== "object") return false;
-  const record = value as { claude?: Partial<LimitsProvenance>; codex?: Partial<LimitsProvenance> };
-  const valid = (meta: Partial<LimitsProvenance> | undefined): meta is LimitsProvenance => {
-    if (!meta) return false;
-    return (meta.source === "live" || meta.source === "transcript" || meta.source === "cache" || meta.source === "unavailable") &&
-      (typeof meta.reason === "string" || meta.reason === null) &&
-      (typeof meta.staleSince === "string" || meta.staleSince === null) &&
-      (meta.retryAt === undefined || typeof meta.retryAt === "string" || meta.retryAt === null) &&
-      (meta.throttleAt === undefined || typeof meta.throttleAt === "string" || meta.throttleAt === null);
-  };
-  return valid(record.claude) && valid(record.codex);
-}
 
 function emptyCache(): LimitsCache {
   return { version: 2, engines: { claude: {}, codex: {} } };
@@ -146,6 +137,9 @@ function withCurrentParser(entry: EngineCacheEntry): EngineCacheEntry {
 }
 
 function readDiskCache(): LimitsCache {
+  // A refused consent migration must not become an empty cache that another
+  // engine could persist over the prior-use evidence.
+  subscriptionApiConsent();
   try {
     const raw = (readJsonCache(limitsCacheFile()) ?? {}) as Partial<LimitsCache> & { at?: unknown; accountId?: unknown; data?: LimitsPayload };
     if (raw.version === 2 && raw.engines && typeof raw.engines === "object") {
@@ -158,6 +152,7 @@ function readDiskCache(): LimitsCache {
           // Snapshots written before the horizon fix can carry a weekly window
           // under `session`; relabel on read so a degraded account still shows
           // its number under the horizon that number actually has.
+          if (engine === "codex" && (valid?.data || valid?.baseData) && valid.parser !== CODEX_ATTRIBUTION_VERSION) continue;
           if (valid) cache.engines[engine][id] = engine === "codex"
             ? { ...valid, data: relabelCachedWindows(valid.data), ...(valid.baseData === undefined ? {} : { baseData: relabelCachedWindows(valid.baseData) }) }
             : withCurrentParser(valid);
@@ -165,11 +160,7 @@ function readDiskCache(): LimitsCache {
       }
       return cache;
     }
-    // Preserve the usable half of a pre-v2 cache during the one-time upgrade.
-    if (typeof raw.at === "number" && typeof raw.accountId === "string" && raw.data?.codex) {
-      const provenance = isProvenance(raw.data.provenance) ? raw.data.provenance.codex : { source: "cache" as const, reason: "legacy cache provenance unavailable", staleSince: raw.data.staleSince ?? null };
-      return { version: 2, engines: { claude: {}, codex: { [raw.accountId]: { at: raw.at, data: relabelCachedWindows(raw.data.codex), provenance } } } };
-    }
+    // Pre-v2 Codex snapshots have no recoverable attribution proof.
   } catch {
     // An unreadable cache is a cache miss; the source accounts remain usable.
   }
@@ -275,15 +266,16 @@ function remember(engine: EngineName, accountId: string, resolved: ResolvedRead,
     retryAt: resolved.retryAt,
     consecutive429s: resolved.consecutive429s,
     consecutiveInitializeTimeouts: resolved.consecutiveInitializeTimeouts,
-    ...(engine === "claude" ? { parser: CLAUDE_PARSER_VERSION } : {}),
+    parser: engine === "claude" ? CLAUDE_PARSER_VERSION : CODEX_ATTRIBUTION_VERSION,
     ...(resolved.observedAt !== null ? { observedAt: resolved.observedAt } : {}),
   };
   writeDiskCache(cache());
   if (!resolved.data || (resolved.meta.source !== "live" && resolved.meta.source !== "transcript")) return;
-  // A fresh live/transcript value is also a burndown sample. The browser's 60s
-  // poll drives this, so forward history accrues without a separate sampler.
+  // A fresh read is also a burndown sample; the store keeps only live Codex
+  // windows. The browser's 60s poll drives this, so forward history accrues
+  // without a separate sampler.
   try {
-    recordLimitSample(engine, accountId, resolved.data);
+    recordLimitSample(engine, accountId, resolved.data, resolved.meta.source, now);
   } catch (err) {
     console.warn("[limits] failed to record burndown sample", err);
   }
@@ -540,29 +532,50 @@ interface OauthWindow {
 }
 
 /**
- * Live usage from the same OAuth endpoint the Claude Code CLI uses. The token
- * from the account-scoped credential store stays inside the server process; the
- * browser only ever sees percentages.
+ * Read Claude Code usage first. Only an installation with direct subscription
+ * API consent may fall back to the OAuth endpoint. Token handling on that
+ * fallback stays server-side; callers see validated percentages.
  */
 export async function fetchClaudeLimits(
   credentialsPath: string,
   clock: () => number = Date.now,
   timeoutMs = 8_000,
+  ports: { run?: typeof runHeadlessClaudeOnce } = {},
 ): Promise<LimitRead> {
-  // Keep this local named for its role: an `accessToken = …` line reads as a
-  // credential assignment to the publication gate and fails the scan.
-  let oauthToken = "";
-  let plan: string | null = null;
+  // Freeze migration before a CLI result can create the first new cache entry.
+  subscriptionApiConsent();
+  try {
+    const home = path.dirname(credentialsPath);
+    const cli = await (ports.run ?? runHeadlessClaudeOnce)({ account: { engine: "claude", accountId: "usage", kind: "managed", home,
+      transcriptRoot: path.join(home, "projects"), env: process.env }, prompt: "/usage", timeoutMs });
+    const terminal = cli.records.filter(row => row.type === "result").at(-1);
+    if (cli.status === "done" && terminal?.subtype === "success" && terminal.is_error !== true && terminal.local_command === "usage" && terminal.num_turns === 0) {
+      const data = claudeCliWindows(cli.records, clock());
+      if (data) {
+        const metadata = readClaudeCredentials(home);
+        const plan = metadata.state === "present" ? metadata.document.claudeAiOauth?.subscriptionType : null;
+        return { data: { ...data, plan: typeof plan === "string" ? plan : null }, reason: null, source: "live" };
+      }
+    }
+  } catch { /* Unavailable CLI data can use only the explicitly enabled fallback. */ }
+  if (!subscriptionApiConsent().enabled) return { data: null, reason: "Claude CLI limits unavailable; direct subscription API calls are off", source: "unavailable" };
+  // Read after the CLI wait: it may have refreshed or rotated credentials.
+  // These values remain in this server closure and never reach a child argv.
   const credentials = readClaudeCredentials(path.dirname(credentialsPath));
   if (credentials.state !== "present") {
     return { data: null, reason: credentials.state === "absent" ? "credentials absent" : "credential store unavailable", source: "unavailable" };
   }
   const oauth = credentials.document.claudeAiOauth;
-  if (typeof oauth?.accessToken === "string") oauthToken = oauth.accessToken;
-  if (typeof oauth?.subscriptionType === "string") plan = oauth.subscriptionType;
-  if (!oauthToken) return { data: null, reason: "credentials missing access token", source: "unavailable" };
+  if (typeof oauth?.accessToken !== "string" || !oauth.accessToken) return { data: null, reason: "credentials missing access token", source: "unavailable" };
+
+  // Keep this local named for its role: a credential assignment reads as a
+  // secret to the publication gate.
+  const oauthToken = oauth.accessToken;
+  const plan = typeof oauth.subscriptionType === "string" ? oauth.subscriptionType : null;
   try {
+    if (!subscriptionApiConsent().enabled) return { data: null, reason: "direct subscription API calls are off", source: "unavailable" };
     const res = await fetch(OAUTH_USAGE_URL, {
+      redirect: "error",
       headers: {
         authorization: "Bearer " + oauthToken,
         "anthropic-beta": "oauth-2025-04-20",
@@ -582,9 +595,30 @@ export async function fetchClaudeLimits(
     };
     if (!data.session && !data.weekly) return { data: null, reason: "oauth usage response had no windows", source: "unavailable" };
     return { data, reason: null, source: "live" };
-  } catch (err) {
-    return { data: null, reason: `oauth usage fetch failed: ${err instanceof Error ? err.message : String(err)}`, source: "unavailable" };
+  } catch {
+    return { data: null, reason: "oauth usage fetch failed", source: "unavailable" };
   }
+}
+
+/** The CLI validates usage_report; still validate every numeric field at this
+ * boundary. Meter kinds decide the general windows; labels never do. */
+function claudeCliWindows(records: Record<string, unknown>[], now: number): EngineLimits | null {
+  for (const record of [...records].reverse()) {
+    const report = record.usage_report ?? record.usageReport;
+    if (!report || typeof report !== "object") continue;
+    const rateLimits = (report as { rate_limits?: { limits?: unknown } }).rate_limits;
+    if (!Array.isArray(rateLimits?.limits)) continue;
+    const rows = rateLimits.limits.filter((row): row is Record<string, unknown> => Boolean(row && typeof row === "object" && !Array.isArray(row)));
+    const general = (kind: string, minutes: number): LimitWindow | null => {
+      const row = rows.find(row => row.kind === kind && typeof row.percent === "number" && Number.isFinite(row.percent) && row.percent >= 0);
+      return row ? oauthWindow({ utilization: row.percent, resets_at: row.resets_at }, minutes) : null;
+    };
+    const session = general("session", SESSION_WINDOW_MINUTES);
+    const weekly = general("weekly_all", WEEKLY_WINDOW_MINUTES);
+    if (!session && !weekly) continue;
+    return { session, weekly, tiers: oauthTierWindows({ limits: rows }), plan: null, capturedAt: Math.floor(now / 1000) };
+  }
+  return null;
 }
 
 function retryAfterAt(value: string | null, now: number): number | undefined {
@@ -824,7 +858,7 @@ export async function readCodexLimits(options: {
 } = {}): Promise<LimitRead> {
   const account = options.account ?? accountForSpawn();
   const clock = options.now ?? Date.now;
-  const transcript = readCodexTranscriptLimits(account.sessionsDir);
+  const transcript = readCodexTranscriptLimits(account.sessionsDir, account.id);
   try {
     const rateLimits = await (options.liveReader ?? ((candidate) => managedCodexRuntime().readRateLimits(candidate as CodexAccount)))(account);
     const observedAt = clock() / 1000;
@@ -894,13 +928,13 @@ export async function readCodexLimits(options: {
 }
 
 /** Compatibility reader for legacy homes and unavailable app-server children. */
-export function readCodexTranscriptLimits(sessionsDir = accountForSpawn().sessionsDir): LimitRead {
+export function readCodexTranscriptLimits(sessionsDir = accountForSpawn().sessionsDir, accountId = accountForSpawn().id): LimitRead {
   let scanned = 0;
   let latest: EngineLimits | null = null;
   let rejectedAt: number | null = null;
   for (const file of latestSessionFiles(sessionsDir)) {
     scanned += 1;
-    const scan = lastRateLimits(file);
+    const scan = lastRateLimits(file, codexReadingOwner(file, accountId));
     if (scan.rejectedAt !== null && (rejectedAt === null || scan.rejectedAt > rejectedAt)) rejectedAt = scan.rejectedAt;
     if (scan.data && (!latest || latest.capturedAt === null || (scan.data.capturedAt !== null && scan.data.capturedAt > latest.capturedAt))) latest = scan.data;
   }
@@ -1048,7 +1082,33 @@ function isCodexUsageLimitInfo(value: unknown): boolean {
   return value === "usage_limit" || value === "usage_limit_exceeded";
 }
 
-function lastRateLimits(file: string): { data: EngineLimits | null; rejectedAt: number | null } {
+/** A directory, plan label or continuity copy cannot prove who paid for a
+ * reading. Only an exact generation path with verified host custody, within
+ * the immutable account/artifact binding recorded when its verified host was
+ * committed, within that generation's lifetime, can attribute a transcript
+ * event. An unverified rebind quarantines that entire custody interval: its
+ * endedAt records discovery, which cannot prove when the account changed.
+ * Inventory's current path/account cannot restore that proof. */
+function codexReadingOwner(file: string, accountId: string): (at: number) => boolean {
+  try {
+    const conversation = agentRegistry().conversationForPath(file);
+    if (conversation?.engine !== "codex") return () => false;
+    const generations = conversation.generations;
+    return at => {
+      if (!Number.isFinite(at)) return false;
+      const owners = generations.filter(g => g.path === file && g.host?.kind === "codex-app-server"
+        && g.quotaCustody?.artifactPath === file
+        && g.accountId === g.quotaCustody.accountId && g.quotaCustody.endedAt === undefined
+        && Date.parse(g.createdAt) <= at && Date.parse(g.host.verifiedAt) <= at
+        && (g.archivedAt === null || Date.parse(g.archivedAt) > at));
+      return owners.length === 1 && owners[0]?.quotaCustody?.accountId === accountId;
+    };
+  } catch {
+    return () => false;
+  }
+}
+
+function lastRateLimits(file: string, owns: (at: number) => boolean): { data: EngineLimits | null; rejectedAt: number | null } {
   const text = readTail(file, TAIL_BYTES);
   if (!text) return { data: null, rejectedAt: null };
   const lines = text.split("\n");
@@ -1065,6 +1125,7 @@ function lastRateLimits(file: string): { data: EngineLimits | null; rejectedAt: 
       };
       const ts = typeof row.timestamp === "string" ? Date.parse(row.timestamp) : NaN;
       const capturedAt = Number.isFinite(ts) ? ts / 1000 : null;
+      if (!owns(ts)) continue;
       if (isCodexUsageLimitInfo(row.payload?.codex_error_info) || isCodexUsageLimitInfo(row.payload?.error?.codex_error_info)) {
         if (capturedAt !== null && (rejectedAt === null || capturedAt > rejectedAt)) rejectedAt = capturedAt;
         continue;
@@ -1211,7 +1272,7 @@ export interface CodexTranscriptSeries {
     `sinceUnix`, reconstructing the weekly/5h remaining-quota curves retroactively
     so the chart is populated on first open. Files whose mtime predates the
     window are skipped unread; the newest event fixes each window's diagonal. */
-export function collectCodexRateLimitSeries(sessionsDir: string, sinceUnix: number): CodexTranscriptSeries {
+export function collectCodexRateLimitSeries(sessionsDir: string, sinceUnix: number, accountId: string): CodexTranscriptSeries {
   const session: LimitSample[] = [];
   const weekly: LimitSample[] = [];
   const seen = new Set<number>();
@@ -1222,6 +1283,7 @@ export function collectCodexRateLimitSeries(sessionsDir: string, sinceUnix: numb
   let weeklyResetsAt: number | null = null;
   for (const { p, m } of sessionFiles(sessionsDir, SERIES_MAX_FILES)) {
     if (m / 1000 < sinceUnix) continue;
+    const owns = codexReadingOwner(p, accountId);
     const text = readAll(p);
     if (!text) continue;
     for (const line of text.split("\n")) {
@@ -1231,7 +1293,7 @@ export function collectCodexRateLimitSeries(sessionsDir: string, sinceUnix: numb
         const rl = row.payload?.rate_limits;
         if (!rl) continue;
         const ts = typeof row.timestamp === "string" ? Date.parse(row.timestamp) : NaN;
-        if (!Number.isFinite(ts)) continue;
+        if (!Number.isFinite(ts) || !owns(ts)) continue;
         const t = Math.round(ts / 1000);
         if (t < sinceUnix || seen.has(t)) continue;
         // Each event's windows go to the horizon their own `window_minutes`
@@ -1333,7 +1395,7 @@ export async function readBurndown(options: { codexLiveReader?: CodexLiveLimitsR
   let codex: EngineBurndown | null = null;
   const codexAccount = payload.codexAccountId ? listedAccount(() => accountForSpawn(payload.codexAccountId)) : null;
   if (payload.codexAccountId && codexAccount) {
-    const backfill = collectCodexRateLimitSeries(codexAccount.sessionsDir, since);
+    const backfill = collectCodexRateLimitSeries(codexAccount.sessionsDir, since, codexAccount.id);
     codex = buildEngineBurndown("codex", payload.codexAccountId, payload.codex, now, backfill);
   }
   return {

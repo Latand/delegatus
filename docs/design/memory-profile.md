@@ -1,5 +1,10 @@
 # Memory profile
 
+Transport updated 2026-10-21: profiles and call summaries run through Claude
+Code. The verification record below describes the earlier direct transport.
+See [Subscription API consent](subscription-api-consent.md) for the CLI
+observation, account selection and direct usage fallback consent.
+
 Approved 2026-10-11: variant 2, “Profile: summary, slices below”. The profile
 belongs to this project and covers everything its agents start with. The
 operator chose generation only on “Підсумувати” / “Оновити”, with a “застарів”
@@ -22,32 +27,30 @@ and a rule link from a stage still opens that view on the referenced rule.
 
 ## Generation and speed
 
-One button action starts independent direct Messages calls for all changed
+One button action starts independent headless Claude Code runs for all changed
 slices and the overall summary in parallel. The overall reads the source rules,
-with their scope labels, independently of the slice answers. There are no tools
-or agent loop. Each completed part is stored and streamed as a complete snapshot
-to the page. Closing the window leaves generation running; reopening reads it.
+with their scope labels, independently of the slice answers. Runs have no tools,
+MCP servers or custom hooks. Each completed part is stored and streamed as a
+complete snapshot to the page. Closing the window leaves generation running;
+reopening reads it.
 
-The target on this machine is a first visible result around 3 seconds and a
-whole profile around 10 seconds. Measure the real project’s rules and report
-cold and cached timings in the PR. Each slice is cached by a hash of its rule
+The earlier direct-caller timing target was a first visible result around
+3 seconds and a whole profile around 10 seconds. Its measurements below apply
+to that transport. Each slice is cached by a hash of its rule
 content and short why lines, plus model, prompt version and locale. Unchanged
 slices return immediately on Refresh; only changed slices and the overall
 regenerate. A failed part retains its previous summary and can be retried.
 
-One model constant pins the catalogue’s Claude Haiku 5.5 entry. There is no
-automatic fallback to an older model. A project Claude account
-is selected through the existing account admission policy. Its current OAuth
-credential stays inside the direct caller. Provider accounts and expired
-credentials are excluded. Unavailable capacity or no eligible credential
-produces the account error. No API-key fallback.
-Subscription requests include the static Claude Code client identity in a
-system text block, independently of the memory data in the user message.
-Each call has a 30-second deadline and a maximum token budget of 2,048 for a
-slice and 4,096 for the overall summary, including thinking. The prose limits
-below still bound the displayed answer.
-Haiku 5.5 uses low effort. The caller reads text blocks and discards thinking
-and redacted-thinking blocks; tool calls and incomplete responses still fail.
+The pinned primary model is Claude Opus 5.5, with one Haiku 5.5 fallback for
+unavailable capacity, failure or timeout. Each invocation selects and rechecks
+a project Claude account through the existing headless admission policy;
+provider accounts are excluded. Claude Code owns authentication. There is no
+API-key fallback or fabricated client identity block.
+Each invocation has a 30-second watchdog deadline, which survives Viewer
+restart, plus owned process cleanup. Opus has an output ceiling of 4,096 for
+a slice and 8,192 for the overall summary; Haiku uses 2,048 and 4,096. Both use
+low effort and JSON-schema output. Existing schema, language and prose checks
+still run before storage. Incomplete or invalid output fails.
 This follows the [Haiku 5.5 migration guide](https://platform.claude.com/docs/en/models/haiku-5-5/migration-guide).
 
 ## Input, answer and validation

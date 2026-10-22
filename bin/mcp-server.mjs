@@ -12,8 +12,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
 
-import { appDirIn } from "./appDir.mjs";
+import { viewerMcpStateContext } from "./mcp-state-paths.mjs";
 import { mcpProcessIdentity, watchMcpOwner } from "./mcp-lifetime.mjs";
+import { installMcpLifecycle, logMcpLifecycle } from "./mcp-lifecycle.mjs";
 import {
   cliRuntimeHostConfig,
   discardUnsupportedApiCredentials,
@@ -21,6 +22,7 @@ import {
   viewerServerBunRuntime,
 } from "./server-runtime.mjs";
 
+installMcpLifecycle("mcp-launcher");
 discardUnsupportedApiCredentials();
 import { installedRelease, isGitCheckout, selfUpdatePaths } from "./self-update-supervisor.mjs";
 
@@ -28,7 +30,12 @@ process.env.LLV_STATE_OWNER = "mcp";
 
 const nativeHookMode = process.argv.includes("--native-caller-hook");
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
-const stateDir = process.env.LLV_STATE_DIR || join(appDirIn(process.env.XDG_CONFIG_HOME || join(homedir(), ".config")), "state");
+// A direct launcher invocation from the agent shell has no per-server env
+// overlay. Use its host stamp only for that sandbox layout; explicit isolated
+// roots remain authoritative for tests, builds and standalone clients.
+const { configRoot, stateDirectory: stateDir } = viewerMcpStateContext(process.env, join(homedir(), ".config"));
+process.env.XDG_CONFIG_HOME = configRoot;
+process.env.LLV_STATE_DIR = stateDir;
 const targetFile = process.env.LLV_VIEWER_DEPLOY_TARGET || join(stateDir, "viewer-release.json");
 const selfUpdateConfig = isGitCheckout(packageRoot) ? cliRuntimeHostConfig(packageRoot) : null;
 const selfUpdatePointer = selfUpdateConfig
@@ -73,7 +80,10 @@ function deployedPackageRoot() {
   try {
     target = JSON.parse(readFileSync(targetFile, "utf8"));
   } catch (error) {
-    if (error?.code === "ENOENT") return null;
+    if (error?.code === "ENOENT") {
+      if (process.env.LLV_VIEWER_DEPLOY_TARGET?.trim()) throw new Error(`Viewer release target is missing: ${targetFile}`);
+      return null;
+    }
     throw new Error(`Could not read the Viewer release target: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (!target
@@ -155,6 +165,7 @@ function selectedRuntime() {
     releaseId: selected.releaseId,
     entry: existsSync(bundled) ? bundled : source,
   };
+  if (!existsSync(runtime.entry)) throw new Error(`Viewer MCP runtime entry is missing: ${runtime.entry}; release target ${targetFile}`);
   cachedTargetSignature = signature;
   cachedRuntime = runtime;
   return runtime;
@@ -189,6 +200,8 @@ let initializationTimer = null;
 const PROTOCOL_PROBE_INTERVAL_MS = 30_000;
 const PROTOCOL_PROBE_TIMEOUT_MS = 10_000;
 const CHILD_SHUTDOWN_GRACE_MS = 1_000;
+const CALL_DRAIN_GRACE_MS = 35_000;
+let drainTimer = null;
 // Keep ownership until exit, including children displaced by a release change.
 const ownedChildren = new Map();
 
@@ -210,7 +223,20 @@ function stopChild(current, signal = null) {
   }
 }
 
+function pendingClaimDiagnostics() {
+  return [...pending.values()].filter(request => request.method === "tools/call").map(request => {
+    const tool = typeof request.params?.name === "string" ? request.params.name : "unknown";
+    const key = typeof request.params?.arguments?.clientRequestId === "string" ? request.params.arguments.clientRequestId : "unkeyed";
+    return { claim: createHash("sha256").update(`${tool}:${key}`).digest("hex") };
+  });
+}
+
 function shutdown(signal = null) {
+  if (closing) {
+    if (signal) for (const current of ownedChildren.keys()) stopChild(current, signal);
+    return;
+  }
+  logMcpLifecycle(signal ? "signal" : "stdio-eof", { signal, pendingCalls: pending.size, pendingClaims: pendingClaimDiagnostics() });
   closing = true;
   stopWatchingOwner?.();
   clearInterval(heartbeatTimer);
@@ -218,7 +244,13 @@ function shutdown(signal = null) {
   if (restartTimer) clearTimeout(restartTimer);
   if (initializationTimer) clearTimeout(initializationTimer);
   if (protocolProbe) clearTimeout(protocolProbe.timer);
-  for (const current of ownedChildren.keys()) stopChild(current, signal);
+  // Let admitted calls answer before EOF reaches the child. Its own deadlines
+  // bound work; owner death still enforces containment through the preload.
+  if (!pending.size) for (const current of ownedChildren.keys()) stopChild(current, signal);
+  else drainTimer = setTimeout(() => {
+    logMcpLifecycle("drain-deadline", { pendingCalls: pending.size, pendingClaims: pendingClaimDiagnostics() });
+    if (child) disconnect(child, "Viewer MCP calls did not drain before shutdown deadline");
+  }, CALL_DRAIN_GRACE_MS);
   finishShutdown();
 }
 
@@ -245,7 +277,7 @@ function transportFailure(result, protocolError) {
 }
 
 function probeProtocol(current) {
-  if (child !== current || !ready || protocolProbe) return;
+  if (child !== current || !ready || protocolProbe || closing) return;
   const id = `llv-probe-${process.pid}-${Date.now()}`;
   const timer = setTimeout(() => {
     disconnect(current, "Viewer MCP child stopped responding");
@@ -264,6 +296,9 @@ function writeChild(current, line) {
 }
 
 function reply(value) { process.stdout.write(`${JSON.stringify(value)}\n`); }
+function startupError(detail) {
+  return `Viewer MCP: ${detail}; state directory ${stateDir}`;
+}
 function unavailable(request, detail = "Viewer MCP is reconnecting after a release change") {
   if (request.id === undefined || request.id === null) return;
   if (request.method === "tools/list" && toolsList) {
@@ -288,12 +323,14 @@ function scheduleRestart() {
 }
 function finishShutdown() {
   if (!closing || ownedChildren.size) return;
+  if (drainTimer) clearTimeout(drainTimer);
   input.close();
   process.stdin.destroy();
   process.stdout.end();
 }
 function disconnect(current, detail, planned = false) {
   if (child !== current) return;
+  logMcpLifecycle("child-disconnect", { childPid: current.pid, childRole: "mcp-stdio", detail, planned, pendingCalls: pending.size, pendingClaims: pendingClaimDiagnostics() });
   stopChild(current, "SIGTERM");
   if (protocolProbe) clearTimeout(protocolProbe.timer);
   protocolProbe = null;
@@ -347,7 +384,10 @@ function start(selected) {
     disconnect(current, `Viewer MCP child could not start: ${error.message}`);
     finishShutdown();
   });
-  current.once("exit", () => {
+  current.once("exit", (code, signal) => {
+    logMcpLifecycle("child-exit", { childPid: current.pid, childRole: "mcp-stdio", code, signal,
+      pendingCalls: child === current ? pending.size : 0,
+      pendingClaims: child === current ? pendingClaimDiagnostics() : [] });
     forget();
     disconnect(current, "Viewer MCP child exited");
     finishShutdown();
@@ -385,6 +425,11 @@ function start(selected) {
         if (child !== current) return;
         reply({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
       } else {
+        if (!initializationComplete) {
+          reply({ jsonrpc: "2.0", id: message.id,
+            error: { code: -32002, message: startupError(message.error?.message || "initialization failed") } });
+          initialization = null;
+        }
         disconnect(current, "Viewer MCP initialization failed");
       }
       heartbeat();
@@ -393,7 +438,15 @@ function start(selected) {
     const request = pending.get(JSON.stringify(message.id));
     if (request) {
       pending.delete(JSON.stringify(message.id));
-      if (request.method === "tools/list" && message.result) toolsList = message.result;
+      if (request.method === "tools/list" && message.result) {
+        if (!Array.isArray(message.result.tools) || (message.result.tools.length === 0 && !request.params?.cursor)) {
+          transportUnverified = true;
+          unreadySince ??= new Date().toISOString();
+          heartbeat();
+          line = JSON.stringify({ jsonrpc: "2.0", id: request.id, error: { code: -32002,
+            message: startupError(`empty tools/list from ${current.spawnargs.at(-1)}; check the release target ${targetFile} and spawn capability`) } });
+        } else if (!request.params?.cursor) toolsList = message.result;
+      }
       if (request.method === "tools/call") {
         if (transportFailure(message.result, message.error)) failedCalls += 1;
         else if (message.result && !message.result.isError) {
@@ -410,6 +463,7 @@ function start(selected) {
       }
     }
     process.stdout.write(`${line}\n`);
+    if (closing && !pending.size) for (const owned of ownedChildren.keys()) stopChild(owned);
   });
   if (!protocolProbeTimer) {
     protocolProbeTimer = setInterval(() => { if (child) probeProtocol(child); }, PROTOCOL_PROBE_INTERVAL_MS);
@@ -422,6 +476,7 @@ function ensureChild() {
   let selected;
   try { selected = selectedRuntime(); }
   catch (error) {
+    if (child && pending.size) return { message: "Viewer MCP release target is unreadable; admitted calls are draining" };
     if (child) {
       const old = child;
       disconnect(old, "Viewer MCP release target is unreadable");
@@ -430,6 +485,7 @@ function ensureChild() {
   }
   const key = `${selected.root}\0${selected.revision}`;
   if (child && childKey !== key) {
+    if (pending.size) return { message: "Viewer MCP release changed; admitted calls are draining" };
     const old = child;
     disconnect(old, "Viewer MCP release changed", true);
     nextStartAt = 0;
@@ -468,6 +524,7 @@ const input = createInterface({ input: process.stdin }).on("line", (line) => {
   if (request?.method === "notifications/initialized") initialized = request;
   const error = ensureChild();
   if (request?.method === "initialize") {
+    if (error && !error.recoverable) unavailable(request, startupError(error.message));
     if (!error && child) {
       if (!ready) sendInitialization(child);
       else {
@@ -484,7 +541,7 @@ const input = createInterface({ input: process.stdin }).on("line", (line) => {
     return;
   }
   if (error || !child || !ready) {
-    if (request) unavailable(request, error?.message || "Viewer MCP child is starting");
+    if (request) unavailable(request, error ? startupError(error.message) : "Viewer MCP child is starting");
     return;
   }
   if (request?.id !== undefined && request?.id !== null) pending.set(JSON.stringify(request.id), request);
@@ -494,7 +551,7 @@ const input = createInterface({ input: process.stdin }).on("line", (line) => {
 });
 for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => shutdown(signal));
 let stopWatchingOwner;
-stopWatchingOwner = watchMcpOwner(() => shutdown("SIGTERM"));
+stopWatchingOwner = watchMcpOwner(() => { logMcpLifecycle("parent-exit", { pendingCalls: pending.size }); shutdown("SIGTERM"); });
 process.on("beforeExit", () => {
   if (!heartbeatPath) return;
   try {
@@ -504,10 +561,11 @@ process.on("beforeExit", () => {
 });
 const initialError = ensureChild();
 if (initialError) {
-  console.error(initialError.message);
+  console.error(startupError(initialError.message));
   if (initialError.recoverable) scheduleRestart();
   else {
     process.exitCode = 1;
-    process.stdin.destroy();
+    // Keep the pipe until initialize can receive the diagnostic. Destroying
+    // stdin here makes a Node launcher exit before the client can ask.
   }
 }

@@ -4,6 +4,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, w
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { admitPortableTestRunner } from "../src/lib/testing/portableTestAdmission";
+import { withoutInheritedGate } from "../src/lib/testing/inheritedGateEnv";
 
 for (const platform of ["darwin", "win32"] as const) test(`portable ${platform} admission warns once and permits best-effort execution`, () => {
   const env: NodeJS.ProcessEnv = { NODE_ENV: "test" };
@@ -34,6 +35,9 @@ function fixture(systemd: boolean) {
     writeFileSync(join(root, "service-stub.ts"), 'import fs from "node:fs"; const cfg = JSON.parse(fs.readFileSync(process.argv[2]!, "utf8")); const result = Bun.spawnSync(cfg.command, { cwd: cfg.cwd, env: cfg.env, stdio: ["inherit", "inherit", "inherit"] }); process.exit(result.exitCode);');
   }
   const env = { ...process.env, PATH: root, LLV_GATE_BUN: process.execPath, SLOT_BUN: process.execPath, SLOT_SERVICE_STUB: join(root, "service-stub.ts"), LLV_GATE_LOCK_DIR: root, LLV_GATE_SLOTS: "1", SLOT_LOG: join(root, "log") };
+  // The stubbed systemd runs no real service or namespace: start outside a
+  // run's gate and outside a signal-sandboxed stage's domain.
+  withoutInheritedGate(env);
   const run = (script: string) => spawnSync("/bin/bash", [join(import.meta.dir, "gate-slot.sh"), "/bin/bash", "-c", script], { env, encoding: "utf8", timeout: 10_000 });
   return { root, run, env };
 }
@@ -86,6 +90,9 @@ function cpuFixture(options: { manager: boolean; refuseQuota?: boolean; kernel?:
   if (options.manager) Object.assign(env, fakeCgroup(root, `${WORK_GROUP}/run-fixture.scope`, options.kernel ?? { scope: "60000 20000", slice: "360000 20000" }));
   // Inherited gate and CPU settings (a hook's own gate) must not steer the fixture.
   for (const key of Object.keys(env)) if (/^(?:LLV|DELEGATUS)_(?:GATE_SLICE|GATE_PSI_|WORK_|CPU_PRESSURE_)/.test(key)) delete env[key];
+  // The stubbed systemd runs no real service or namespace: start outside a
+  // run's gate and outside a signal-sandboxed stage's domain.
+  withoutInheritedGate(env);
   env.LLV_GATE_PSI_FILE = join(root, "pressure"); env.LLV_GATE_POLL_SECONDS = "0.1";
   const marker = join(root, "ran");
   const script = `echo run >> "${marker}"`;

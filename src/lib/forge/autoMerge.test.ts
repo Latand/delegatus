@@ -777,6 +777,43 @@ describe("merge runner (#2187 §4.3-§4.4)", () => {
   });
 });
 
+test("large completed prefixes yield before scanning the full auto-merge sweep", async () => {
+  const { performanceSpans, performanceSites } = await import("@/lib/performanceSpans");
+  let stateReads = 0;
+  let queueRowsVisited = 0;
+  let resolveQueueTurn!: (visits: number) => void;
+  const queueTurn = new Promise<number>(resolve => { resolveQueueTurn = resolve; });
+  let queueTurnScheduled = false;
+  performanceSpans.observeSite(site => {
+    if (performanceSites[site] !== "forge.auto-merge.queue") return;
+    queueRowsVisited++;
+    if (!queueTurnScheduled) {
+      queueTurnScheduled = true;
+      setImmediate(() => resolveQueueTurn(queueRowsVisited));
+    }
+  });
+  const rows = Array.from({ length: 804 }, (_, index) => {
+    const row = {
+      ...lane(`bounded-${index}`),
+      merge: { state: "queued", repository: REPO, requestedAt: iso(T0 + index), nextReadAt: iso(T0 + 60_000), refresh: null },
+    } as unknown as Pipeline;
+    Object.defineProperty(row, "state", { enumerable: true, get: () => { stateReads++; return "completed"; } });
+    return row;
+  });
+  const ports = {
+    now: () => T0, run: async () => "", write: async () => "", loadPipelines: () => rows,
+    mutate: async () => false, setting: () => ({ enabled: true, changedAt: iso(T0 - 60_000), changedBy: "operator" }),
+    pullRequestOf: () => null, cachedState: () => null, finishTask: () => "missing" as const,
+  } as unknown as Parameters<typeof sweepAutoMerge>[0];
+  try {
+    const sweep = sweepAutoMerge(ports);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(stateReads).toBeLessThan(40);
+    await sweep;
+    expect(await queueTurn).toBeLessThan(40);
+  } finally { performanceSpans.observeSite(); }
+});
+
 describe("eligibility (#2187 §4.2)", () => {
   test("a passed review is eligible; no review stage, or one still failed, is not", () => {
     expect(mergeEligible(lane("ok"))).toBe(true);

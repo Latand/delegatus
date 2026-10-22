@@ -1892,6 +1892,9 @@ describe("agent registry", () => {
       store.conversation(conversation.id)!.migration!.operationId, store.conversation(conversation.id)!.migration!.providerReceipt!);
     expect(final.id).toBe(conversation.id);
     expect(final.generations.map((generation) => generation.path)).toEqual(["/a.jsonl", "/b.jsonl", "/a2.jsonl"]);
+    expect(final.generations.slice(1).map((generation) => generation.quotaCustody)).toEqual([
+      { accountId: "b", artifactPath: "/b.jsonl" }, { accountId: "a", artifactPath: "/a2.jsonl" },
+    ]);
     expect(store.canonicalPath("/a.jsonl")).toBe("/a2.jsonl");
   });
 

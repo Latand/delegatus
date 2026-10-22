@@ -172,6 +172,67 @@ test("workflows serialize two cross-process writers", async () => {
   await runTwoWriters("workflows", () => loadWorkflows().map((workflow) => workflow.id));
 });
 
+test("the workflow writer fixture waits for template role reads before writing", async () => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "workflow-template-admission-"));
+  const ready = path.join(sandbox, "ready");
+  const release = path.join(sandbox, "release");
+  const peer = new Database(path.join(sandbox, "state.sqlite"));
+  // A rollback-journal exclusive lock blocks the role marker read itself.
+  // Release only when the child reports admission, without racing a sleep.
+  peer.exec("CREATE TABLE lock_probe(n INTEGER)");
+  peer.exec("BEGIN EXCLUSIVE");
+  const child = Bun.spawn([process.execPath, CHILD, "workflows", "a", ready, release], {
+    env: { ...process.env, LLV_STATE_DIR: sandbox }, stdout: "ignore", stderr: "pipe",
+  });
+  const deadline = setTimeout(() => child.kill("SIGKILL"), 10_000);
+  let observedWait = false;
+  let stderr = "";
+  const drain = (async () => {
+    const decoder = new TextDecoder();
+    const reader = child.stderr.getReader();
+    let pending = "";
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const text = decoder.decode(value, { stream: true });
+        stderr += text;
+        pending += text;
+        const lines = pending.split("\n");
+        pending = lines.pop()!;
+        for (const line of lines) {
+          const prefix = "[blocking-wait] ";
+          if (!line.startsWith(prefix)) continue;
+          const sample = JSON.parse(line.slice(prefix.length));
+          if (sample.stateWait?.callSite === "state.marker" && peer.inTransaction) {
+            observedWait = sample.stateWait.outcome === "waiting";
+            peer.exec("ROLLBACK");
+          }
+        }
+      }
+      stderr += decoder.decode();
+    } finally { reader.releaseLock(); }
+  })();
+  try {
+    await waitForFiles([ready]);
+    fs.writeFileSync(release, "release");
+    const [code] = await Promise.all([child.exited, drain]);
+    expect({ code, stderr: code === 0 ? "" : stderr }).toEqual({ code: 0, stderr: "" });
+    expect(observedWait).toBe(true);
+    const db = new Database(path.join(sandbox, "state.sqlite"), { readonly: true });
+    try {
+      expect(db.query("SELECT row_key FROM state_rows WHERE collection='workflows'").all()).toEqual([{ row_key: "work-a" }]);
+    } finally { db.close(); }
+  } finally {
+    clearTimeout(deadline);
+    if (child.exitCode === null) child.kill("SIGKILL");
+    await Promise.allSettled([child.exited, drain]);
+    if (peer.inTransaction) peer.exec("ROLLBACK");
+    peer.close();
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  }
+}, 20_000);
+
 test("promotion captures a retiring legacy write and demotion publishes later SQLite state", async () => {
   const previous = process.env.LLV_STATE_DIR;
   const previousPort = process.env.PORT;

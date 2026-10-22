@@ -5,7 +5,6 @@ import path from "node:path";
 
 import { statePath } from "@/lib/configDir";
 import { writeJsonDurably } from "@/lib/state/durableJson";
-import { tickFlows } from "@/lib/flows/engine";
 import { scheduleAutoMerge } from "@/lib/forge/autoMerge";
 import { scheduleForgeSweep } from "@/lib/forge/sweep";
 import { loadTasksForList } from "@/lib/tasks/store";
@@ -55,7 +54,8 @@ export interface FlowPipelineControllerPorts {
   handoffHeld?: () => boolean;
   scan?: () => Promise<{ files: FileEntry[]; complete: boolean }>;
   tickPipelines: (entries: FileEntry[]) => Promise<TickResult>;
-  tickFlows: (entries: FileEntry[]) => Promise<TickResult>;
+  /** Retained for old injectors; the controller never invokes this port. */
+  tickFlows?: (entries: FileEntry[]) => Promise<TickResult>;
   now?: () => number;
   monotonicNow?: () => number;
   scheduleTimeout?: (callback: () => void, delayMs: number) => TimeoutHandle;
@@ -119,7 +119,6 @@ function productionPorts(): FlowPipelineControllerPorts {
     // cache starts stale revalidation in the background for the next pass.
     scan: controllerFileScan,
     tickPipelines: tickPipelinesController,
-    tickFlows,
     handoffHeld: autoHandoffHeld,
     publishHeartbeat: writeFlowPipelineControllerHeartbeat,
     sweepForgeLinks: () => scheduleForgeSweep({ loadPipelines: loadPipelinesForList, loadTasks: loadTasksForList }),
@@ -146,7 +145,7 @@ export class FlowPipelineController {
   private cycle = 0;
   private lastArchiveSweepAt = 0;
   private readonly activePhases = new Map<Exclude<FlowPipelineControllerPhase, "idle">, ActivePhase>();
-  private readonly ports: Required<FlowPipelineControllerPorts>;
+  private readonly ports: Required<Omit<FlowPipelineControllerPorts, "tickFlows">>;
   private readonly phaseDeadlineMs: number;
   private readonly maxPasses: number;
   private readonly requestDeadlineMs: number;
@@ -239,7 +238,7 @@ export class FlowPipelineController {
     const cycle = ++this.cycle;
     let lastPass = 0;
     let entries: FileEntry[] = [];
-    let scanComplete = false;
+    let scanFailure: { error: unknown } | undefined;
     for (let pass = 1; pass <= this.maxPasses; pass += 1) {
       if (this.ports.handoffHeld() || this.ports.monotonicNow() >= this.requestDeadline) return;
       lastPass = pass;
@@ -253,22 +252,20 @@ export class FlowPipelineController {
       const scanOutcome = pass === 1
         ? await this.runPhase("scan", cycle, pass, trigger, this.ports.scan)
         : null;
-      if (scanOutcome?.state === "failed") throw scanOutcome.error;
+      if (scanOutcome?.state === "failed") {
+        // The catalog cannot feed scan-dependent work, but its failure must
+        // not starve the independently paced sweeps below. Report it after
+        // dispatching those sweeps so HTTP callers still receive a refusal.
+        scanFailure = scanOutcome;
+        break;
+      }
       if (scanOutcome?.state === "completed" && scanOutcome.value.complete) {
         entries = scanOutcome.value.files;
-        scanComplete = true;
       } else if (scanOutcome?.state === "completed") {
         startupDiagnostic("info", `[flow pipeline controller] scan-dependent flow phase skipped: still scanning, retry in ${FILE_SCAN_RETRY_SECONDS} s`);
       }
-      const flowOutcome = scanComplete
-        ? await this.runPhase("flows", cycle, pass, trigger, () => this.ports.tickFlows(entries))
-        : null;
-      const failure = pipelineOutcome.state === "failed"
-        ? pipelineOutcome.error
-        : flowOutcome?.state === "failed" ? flowOutcome.error : null;
-      if (failure !== null) throw failure;
+      if (pipelineOutcome.state === "failed") throw pipelineOutcome.error;
       const changed = (pipelineOutcome.state === "completed" && (pipelineOutcome.value.changed || pipelineOutcome.value.readyWork))
-        || (flowOutcome?.state === "completed" && flowOutcome.value.changed)
         || (scanOutcome?.state === "completed" && scanOutcome.value.complete);
       if (!changed) break;
     }
@@ -294,6 +291,7 @@ export class FlowPipelineController {
     } catch (error) {
       this.ports.log("[flow pipeline controller] spawn notice sweep failed to start", error);
     }
+    if (scanFailure) throw scanFailure.error;
     const blocked = [...this.activePhases.entries()]
       .sort((left, right) => left[1].startedAt - right[1].startedAt)[0];
     if (blocked) {

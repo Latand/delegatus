@@ -45,8 +45,8 @@ pipeline scopes there are.
 | Account-migration successors (Codex and Claude) | `publishCodexSuccessorHost` and `publishClaudeSuccessorHost` in `src/lib/accounts/migration/provider.ts`, through `structuredHostCell` | by the conversation's membership, as above | as above |
 | Headless runs: flow reviewers, the external relay agent, the handoff digest | `launchDetached` in `src/lib/agent/headless.ts` | `delegatus-agents-work.slice/delegatus-agent-headless-<id>.scope` | weight 100, 300% |
 | Every command an agent runs: tools, MCP servers, subagents, test runs, detached and orphaned children | descendants of the host process | the host's scope (cgroup membership survives reparenting) | the host's |
-| Gates: hook steps marked capped, `scripts/local-gate.ts`, anything an agent runs through `scripts/gate-slot.sh` | `scripts/gate-slot.sh` | `delegatus-agents-work.slice/run-<id>.scope` | weight 100, 300%, `MemoryMax=8G` |
-| Merger gates: every local gate, the bisect runs and the trusted privacy checks of `scripts/merge-batch.ts` | `gateCommand` and `trustedPrivacy`, through the `gate-slot.sh` beside the script | `delegatus-agents-work.slice/run-<id>.scope` | weight 100, 300%, `MemoryMax=8G` |
+| Gates: hook steps marked capped, `scripts/local-gate.ts`, anything an agent runs through `scripts/gate-slot.sh` | `scripts/gate-slot.sh` | `delegatus-agents-work.slice/delegatus-gate-<id>.service`, also for an agent in a signal domain, whose command enters the agent's namespaces | weight 100, 300%, `MemoryMax=8G` |
+| Merger gates: every local gate, the bisect runs and the trusted privacy checks of `scripts/merge-batch.ts` | `gateCommand` and `trustedPrivacy`, through the `gate-slot.sh` beside the script | `delegatus-agents-work.slice/delegatus-gate-<id>.service`, also for an agent in a signal domain, whose command enters the agent's namespaces | weight 100, 300%, `MemoryMax=8G` |
 | Workflow setup (`bun install` in the built-in template, any command a template names) | `startSetup` in `src/lib/workflows/provision.ts` | `delegatus-agents-work.slice/delegatus-work-workflow-setup-<id>.scope` | weight 100, 300% |
 | Pipeline publication: `bun install --frozen-lockfile` and `git push` with every pre-push hook | `fencedExec` in `src/lib/pipelines/git.ts` | `delegatus-agents-work.slice/delegatus-work-publish-{install,push}-<id>.scope` | weight 100, 300% |
 | Self-update install and build of a new release; the package install of a packaged release | `realPorts().run` in `src/lib/selfUpdate/steps.ts` | `delegatus-agents-work.slice/delegatus-work-update-{install,build,package}-<id>.scope` | weight 100, 300% |
@@ -133,9 +133,21 @@ gate does.
 
 ## CPU-pressure admission
 
-Pipeline stage starts and heavy commands share one durable FIFO queue
-(`src/lib/runtime/cpuAdmission.ts`, `scripts/cpu-admission.ts`). The head starts
-when pressure allows it, or once its own queue wait reaches ten minutes.
+Pipeline stage starts and heavy commands share one durable priority queue
+(`src/lib/runtime/cpuAdmission.ts`, `scripts/cpu-admission.ts`). Tickets sort
+high, normal, low, then by their original insertion sequence within that level.
+A lane uses the highest priority among its linked board tasks;
+unlinked work is normal. Each admission refreshes waiting bindings with indexed
+lookups of those task rows' priority fields. Priority changes retain the ticket's
+sequence and age. Stage agents, publication installs, commit hooks and push gates
+carry the installation's task binding across sandboxed child environments.
+The binding and priority persist alongside the ticket for restart recovery.
+After gate admission, the test preload drops that binding before fixtures run,
+so their priority reads stay inside their own state roots.
+Starvation handling and per-stage urgency remain follow-ups.
+
+The head starts when pressure allows it, or once its own queue wait reaches ten
+minutes.
 Admissions are separated by two seconds, including when pressure never drops.
 The pressure sensor holds at `some avg10` of 30% and releases after ten seconds
 below 20%; a failed sample permits the head. CPU quotas still bound admitted work.
@@ -194,23 +206,23 @@ release reconciles only its own namespace.
 
 When the head is past its ten-minute bound and nothing has been admitted for
 a minute since, the wait no longer promises minutes: the state detail reads
-`Waiting for the CPU queue · 7th · stalled for 62 min`, the card says the
+`Waiting for the CPU queue · 7th · stalled for 62 min · high priority`, the card says the
 queue is stalled, and gate-slot prints the same line.
 
 A stage waits before its spawn reservation and wakes every five seconds. Its
 state detail and board card name the queue position and remaining whole minutes:
-`Waiting for the CPU queue · 2nd · up to 7 min`, or
-`Чекає черги CPU · 2-й · до 7 хв`. A waiting card suppresses the generic working
+`Waiting for the CPU queue · 2nd · up to 7 min · high priority`, or
+`Чекає черги CPU · 2-й · до 7 хв · Високий`. A waiting card suppresses the generic working
 caption. A launched stage continues reconciliation without asking for admission.
 
 Heavy checks retain their ticket until a slot is locked and their admission is
-committed, so a younger check cannot overtake one waiting for a slot. Waiting
+committed, so a younger check at the same priority cannot overtake one waiting for a slot. Waiting
 uses no heavy slot. The owned runner's execution deadline starts after admission.
 On Linux, nested work continues its parent's existing admission only while the
 kernel proves the owner's start identity, lock inode and exclusive descriptor
 lock. The owned runner carries that proof through service handoff. This keeps
 dependent work from waiting for the slot its own parent holds; fresh jobs still
-join FIFO, and every command retains owned process cleanup.
+join the priority queue, and every command retains owned process cleanup.
 Nested waits report heartbeat intervals to private ledgers owned by bounded
 callers; concurrent intervals count once. The Git executor, hook plan and owned
 runner exclude those intervals from their finite execution budgets. Per-file

@@ -367,7 +367,8 @@ test("a truncated HTTP success stays pending across a service restart", async ()
   let httpCalls = 0;
   const dependencies = {
     ...productionTelegramBotDependencies(),
-    transportFor: () => createBotApiTransport(TOKEN, async () => {
+    transportFor: () => createBotApiTransport(TOKEN, async (url) => {
+      if (url.endsWith("/getChatMember")) return Response.json({ ok: true, result: { status: "administrator" } });
       httpCalls += 1;
       return new Response('{"ok":true,"result":[', { status: 200 });
     }),
@@ -1046,6 +1047,12 @@ test("Telegram's refusals map to codes: 403 forbidden, 429 rate_limited, entity 
   expect(forbidden).toMatchObject({ code: "forbidden", retryable: false });
   expect(forbidden.message).toContain("never wrote to it");
 
+  // A refusal now caches the bot as unable to post. An explicit refresh
+  // confirms it was added back before testing the next refusal class.
+  transport.script("getMe", me());
+  transport.script("getChatMember", ok({ status: "administrator" }));
+  await service.refresh();
+  await service.stopPoller();
   transport.script("sendMessage", refused(429, "Too Many Requests: retry after 9", { retryAfterSeconds: 9 }));
   const limited = await refusal(() => service.send({ conversationId: null, clientRequestId: "r2", chat: "team-reports", text: "a" }));
   expect(limited).toMatchObject({ code: "rate_limited", retryable: true, extra: { retryAfterSeconds: 9 } });
@@ -1140,7 +1147,7 @@ test("a chat added by id is stored allowed and postable with no update received,
   /* The bot was asked about the chat and its own membership, nothing else:
      no getUpdates, no poller, no message stored. */
   const lookups = transport.calls.slice(before).map((call) => call.method);
-  expect(lookups).toEqual(["getChat", "getChatMember"]);
+  expect(lookups).toEqual(["getChat", "getChatMember", "getChatMember"]);
   expect(transport.callsOf("getUpdates")).toEqual([]);
   expect(transport.callsOf("getChat")[0]!.params).toEqual({ chat_id: -1000000000404 });
   expect(transport.callsOf("getChatMember")[0]!.params).toEqual({ chat_id: -1000000000404, user_id: BOT_ID });

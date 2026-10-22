@@ -270,6 +270,21 @@ Three consequences worth keeping:
 The runtime host is this repository's critical runtime: changes to it, to
 deploys and to the Bun pin are high risk and take three review rounds.
 
+# macOS runs the SQLite Apple ships: first-party SQL compiles on 3.39
+
+On macOS bun:sqlite loads the system SQLite (3.39.5 on macOS 13, the oldest
+macOS Bun supports; 3.43.2 on 14 and 15). On Linux and Windows Bun links its
+own newer SQLite, so SQL that needs 3.42+ (`subsec`), 3.44+ (aggregate
+`ORDER BY`, `concat`) or 3.45+ (`jsonb_*`) passes every local check and fails
+only on a user's Mac. Releases 1.13.0 to 1.15.0 shipped such triggers and
+stopped macOS installs from starting. `src/lib/state/minimumSqlite.test.ts`
+builds 3.39.4 from the official amalgamation and runs the state store on it.
+`--preload ./src/lib/state/minimumSqlite.preload.ts` runs any other suite on
+it. The `Minimum macOS SQLite` job in `platform-tests.yml` does both. A
+schema statement the running SQLite cannot compile is never treated as a
+corrupt database (`src/lib/state/schemaCompatibility.ts`,
+`docs/design/state-sqlite-migration.md` §7.4).
+
 # Host deploy command and team authentication
 
 `scripts/rebuild.sh [full-commit-sha]` uses `scripts/rebuild-http.ts` for both

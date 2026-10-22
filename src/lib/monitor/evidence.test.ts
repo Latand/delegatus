@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -11,7 +11,7 @@ process.env.XDG_CONFIG_HOME = path.join(SANDBOX, "config");
 process.env.TMPDIR = path.join(SANDBOX, "tmp");
 fs.mkdirSync(process.env.TMPDIR, { recursive: true });
 
-const { evidenceFromFlows, evidenceFromGithub, evidenceFromPipelines, evidenceFromTasks } = await import("./evidence");
+const { evidenceFromFlows, evidenceFromGithub, evidenceFromPipelineCooperatively, evidenceFromPipelines, evidenceFromTasks } = await import("./evidence");
 import type { FlowSummary, PipelineSummary, TaskSummary } from "./viewerApi";
 
 afterAll(() => {
@@ -35,6 +35,42 @@ function flow(overrides: Partial<FlowSummary>): FlowSummary {
 }
 
 describe("evidence projection", () => {
+  test("cooperative pipeline evidence matches the regular projection across chunk boundaries", async () => {
+    const spec = `${"x".repeat(8 * 1024 * 1024 - 4)} #123456 ${"y".repeat(8 * 1024 * 1024)} #987`;
+    const source = pipeline({ task: "Pipeline title", spec, activityAt: ["2026-07-27T10:00:00Z", "bad"] });
+    let yields = 0;
+    const projection = evidenceFromPipelineCooperatively(source, async () => { yields++; });
+    expect(await projection).toEqual(evidenceFromPipelines([source])[0]);
+    expect(yields).toBeGreaterThan(1);
+  });
+
+  test("large projections yield at fixed chunk boundaries when the clock does not advance", async () => {
+    const spec = `${"\n".repeat(256 * 1024)}Meaningful title #123 ${"x".repeat(256 * 1024)}`;
+    const source = pipeline({ task: "", spec });
+    const clock = spyOn(performance, "now").mockReturnValue(42);
+    let turns = 0;
+    try {
+      const actual = await evidenceFromPipelineCooperatively(source, async () => {
+        turns++;
+        await new Promise<void>(resolve => setImmediate(resolve));
+      });
+      expect(actual).toEqual(evidenceFromPipelines([source])[0]);
+      expect(actual.title).toStartWith("Meaningful title #123");
+      expect(turns).toBeGreaterThanOrEqual(2);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  test("cooperative projection keeps the first meaningful title beyond the former scan limit", async () => {
+    const source = pipeline({ task: "", spec: `${"\n".repeat(9000)}Meaningful title #123` });
+    let yields = 0;
+    const actual = await evidenceFromPipelineCooperatively(source, async () => { yields++; });
+    expect(actual).toEqual(evidenceFromPipelines([source])[0]);
+    expect(actual.title).toBe("Meaningful title #123");
+    expect(yields).toBeGreaterThan(0);
+  });
+
   test("a task's first line is its title and its status becomes a lifecycle position", () => {
     const [inbox, done, blocked] = evidenceFromTasks([
       task({ id: "a" }),
@@ -67,9 +103,9 @@ describe("evidence projection", () => {
     expect(evidenceFromPipelines([pipeline({ state: "running" })])[0]!.state).toBe("active");
     expect(evidenceFromPipelines([pipeline({ state: "needs_decision" })])[0]!.state).toBe("inert");
     expect(evidenceFromPipelines([pipeline({ state: "completed" })])[0]!.state).toBe("terminal");
-    expect(evidenceFromFlows([flow({ state: "reviewing" })])[0]!.state).toBe("active");
+    expect(evidenceFromFlows([flow({ state: "reviewing" })])[0]!.state).toBe("inert");
     expect(evidenceFromFlows([flow({ state: "paused" })])[0]!.state).toBe("inert");
-    expect(evidenceFromFlows([flow({ state: "approved" })])[0]!.state).toBe("terminal");
+    expect(evidenceFromFlows([flow({ state: "approved" })])[0]!.state).toBe("inert");
   });
 
   test("issue references travel with the item so a request naming one correlates", () => {

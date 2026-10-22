@@ -75,7 +75,7 @@ class FakeAppServer extends EventEmitter {
     if (method === "mcpServerStatus/list") {
       if (this.statusError) return this.respondError(message.id, this.statusError);
       return this.respond(message.id, {
-        data: ["viewer", "playwright", ...this.pluginServers].map((name) => ({ name, tools: {} })),
+        data: ["viewer", "playwright", ...this.pluginServers].map((name) => ({ name, tools: name === "viewer" ? { stage_report: {} } : {} })),
       });
     }
   }
@@ -132,7 +132,7 @@ test("a granted thread turns the plugin subsystem on for itself and allowlists c
     "computer-use@openai-bundled": { enabled: true },
     "browser@openai-bundled": { enabled: false },
   });
-  expect(server.requests.find(request => request.method === "mcpServerStatus/list")?.params).toEqual({});
+  expect(server.requests.find(request => request.method === "mcpServerStatus/list")?.params).toEqual({ threadId: "thread-687", detail: "toolsAndAuthOnly" });
   await host.release();
 });
 
@@ -148,8 +148,9 @@ test("a session without a grant leaves the plugin subsystem off", async () => {
     ?.params as { config: Record<string, unknown> }).config;
   expect(config.features).toMatchObject({ plugins: false });
   expect(config).not.toHaveProperty("plugins");
-  /* No grant, no desktop reach: the verification RPC is not even asked for. */
-  expect(server.requests.some((request) => request.method === "mcpServerStatus/list")).toBe(false);
+  const discovery = server.requests.filter(request => request.method === "mcpServerStatus/list");
+  expect(discovery).toHaveLength(1);
+  expect(discovery[0]?.params).toMatchObject({ threadId: "thread-687", serverName: "viewer", detail: "toolsAndAuthOnly" });
   await host.release();
 });
 

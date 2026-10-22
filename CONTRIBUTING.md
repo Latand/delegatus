@@ -170,6 +170,11 @@ alias the operator defined with `gh alias set` is not expanded.
 - **Batch landing** (`scripts/merge-batch.ts`) checks its principal against an
   installation endpoint. Run from a launched agent in a declared repository,
   that check and the merge both go through the shim.
+  A refused check names the missing App routing and asks the installation
+  owner to declare the repository, then launch a new merger: an existing
+  agent keeps its launch environment. When routing is already declared, the
+  refusal asks the owner to check the encrypted App credential and repository
+  installation. Child-command diagnostics are withheld.
 
 The App's registration and its verified installation id live in the operator's
 encrypted Secret Service collection, as one item with the attributes
@@ -428,7 +433,11 @@ refuses with exit 69 unless `DELEGATUS_AGENT_CPU=off`
 (`LLV_OWNED_RUN_TIMEOUT_MS`, default fifteen minutes) and a kernel watchdog. A recorded caller start
 identity detects a hard-killed wrapper; detached descendants stay owned by the
 service. Surviving children fail the command before the manager reaps them.
-Linux requires a reachable user systemd manager. macOS and Windows use an
+Linux requires a reachable user systemd manager. A stage agent in a signal
+domain gets the same service and limits: the service runs its command inside
+the agent's own namespaces. Only without a reachable manager does such a gate
+run in a leaf of the agent's scope, under the agent's memory cap, and it says
+so on stderr. macOS and Windows use an
 independent identity-bound guardian with best-effort execution and one warning
 per owning run; a detached child can escape between guardian polls. The strong
 lifetime guarantee applies to Linux native containment, as recorded in
@@ -440,7 +449,7 @@ they neither contend on another build's `.next/lock` nor consume its output.
 The hook labels CPU admission for publication checks and prints its measured
 queue wait, excluded from the execution budget.
 
-Run an individual test as `bash scripts/gate-slot.sh bun test <file>` with an
+Run an individual test as `bash scripts/gate-slot.sh bun run test <file>` with an
 isolated home, config, state and temporary root. The preload registers real
 Node and Bun children before spawn returns, checks for survivors, and reaps
 them before deleting its temporary root. Direct and nested Linux test runners
@@ -494,3 +503,12 @@ After this workflow switch, a merge already waiting on a removed check name
 may need to be re-armed once. Main's branch protection requires exactly three
 checks, `privacy-publication`, `privacy-tracker-audit` and `runtime-gate`, with
 strict updates enabled.
+
+## Running selected tests
+
+Use `bun run test <explicit test files>` through `scripts/gate-slot.sh`, with
+private HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR and a closed
+LLV_VIEWER_CONTROL_URL. The package command passes a 60-second default timeout
+to every file. Bun ignores a `[test] timeout` key, and a preload timeout reaches
+only its first file on the pinned runtime. Explicit per-test timeouts still
+apply. The pre-push comparator and merger pass the same CLI timeout.

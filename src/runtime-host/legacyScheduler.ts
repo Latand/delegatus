@@ -1,9 +1,7 @@
 import { createHash } from "node:crypto";
 
-import { tickFlows } from "@/lib/flows/engine";
 import { listFiles } from "@/lib/scanner";
 import { LegacyRuntimeScheduler } from "@/lib/runtime/legacyScheduler";
-import { tickWorkflows } from "@/lib/workflows/engine";
 
 import { RuntimeJournal } from "./journal";
 
@@ -23,13 +21,11 @@ export function filesEvidence(entries: Awaited<ReturnType<typeof listFiles>>): s
   })))).digest("hex");
 }
 
-/** The host owns the legacy safety sweep until structured consumers replace it. */
+/** File hydration only: the host no longer registers retired executors. */
 export function createLegacyRuntimeScheduler(journal: RuntimeJournal): LegacyRuntimeScheduler {
   let previousEvidence: string | null = null;
   return new LegacyRuntimeScheduler({
     scan: listFiles,
-    tickFlows,
-    tickWorkflows,
     publishFiles(entries) {
       const evidence = filesEvidence(entries);
       if (evidence === previousEvidence) return;

@@ -1,4 +1,5 @@
 import type { HostMemoryState } from "./agentMemory";
+import type { AgentSignalDomain, SignalBoundaryOff } from "./agentSignalSandbox";
 import type { HostEndCause } from "./hostEndCause";
 import type { NativeQueueHost } from "./nativeQueueExecutor";
 
@@ -132,6 +133,9 @@ export type RuntimeEvent =
   | { kind: "session-status"; status: "active" | "idle" | "unhosted" | "dead"; activeFlags?: string[]; seq: number };
 
 export interface HostState {
+  signalDomain?: AgentSignalDomain;
+  /** Present when this launch runs without the signal boundary. */
+  signalBoundary?: SignalBoundaryOff;
   memory?: HostMemoryState;
   /** Why the host ended; absent while it runs and for hosts that record none. */
   ended?: HostEndCause;

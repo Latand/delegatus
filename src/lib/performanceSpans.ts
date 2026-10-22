@@ -5,9 +5,10 @@ import { randomUUID } from "node:crypto";
 /** Static site names are the source map for a serving revision. Never pass
  * row identities, SQL text, paths or request arguments to this recorder. */
 export const performanceSites = [
+  "voice-tools.catalog", "voice-tools.spawn", "voice-tools.call",
   "state.write-wait", "state.sql-next", "state.json", "pipeline.validate", "pipeline.revive", "pipeline.identity",
   "pipeline.copy", "pipeline.yield", "pipeline.evidence", "pipeline.shared", "pipeline.refused",
-  "registry.snapshot", "registry.headers", "registry.claims", "registry.row", "registry.keyed", "registry.prepare.slice", "registry.prepare.index",
+  "registry.snapshot", "registry.headers", "registry.claims", "registry.row", "registry.keyed", "registry.prepare.slice", "registry.prepare.normalize", "registry.prepare.index", "registry.prepare.open",
   "runtime.collect", "runtime.stringify", "runtime.parse", "runtime.handler", "runtime.commit",
   "rpc.dispatch", "rpc.connect", "rpc.send", "rpc.receive", "rpc.first-byte", "rpc.frame", "rpc.finish", "rpc.deadline",
   "files.scan", "files.key", "files.queue", "files.worker", "files.clone", "files.delta", "files.encode",
@@ -16,15 +17,16 @@ export const performanceSites = [
   "http.dispatch", "http.response-ready",
   "pipeline.git-guard-prepare", "pipeline.attempt-push-proof", "pipeline.pull-request",
   "orchestrator.seat-stat", "orchestrator.seat-read", "orchestrator.seat-parse", "orchestrator.seat-index",
-  "registry.writer-snapshot",
+  "registry.writer-snapshot", "registry.delivery-key", "relay.select", "authority.facts", "memory.delivery-evidence",
   "scanner.ipc-frame", "scanner.ipc-decode", "scanner.publication", "scanner.cache-encode", "scanner.cache-persist",
   "transcript.feed", "transcript.index", "memory.discovery", "memory.refresh",
   "http.render", "privacy.compile", "privacy.match", "privacy.worker",
   "seat-tick.prepare", "seat-tick.liveness", "seat-tick.worker-asks", "seat-tick.rule-reports", "seat-tick.reports",
-  "mcp.caller-enumeration", "liveness.snapshot", "proc.scan", "self-update.bytes",
+  "mcp.caller-enumeration", "liveness.snapshot", "proc.scan", "self-update.bytes", "self-update.trash-inventory",
   "runtime-journal.retention-map",
   "memory.project-view",
   "memory.import",
+  "seat-tick.check", "seat-tick.hash", "seat-tick.project", "forge.auto-merge.read", "forge.auto-merge.prune", "forge.auto-merge.admit", "forge.auto-merge.queue", "forge.auto-merge.step",
 ] as const;
 export type PerformanceSite = typeof performanceSites[number];
 type Slice = { sequence: number; span: number; parent: number; site: number; kind: "sync" | "await" | "event";

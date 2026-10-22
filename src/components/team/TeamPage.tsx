@@ -10,19 +10,22 @@ import type { TeamView } from "@/lib/team/contract";
 import { ActivityTab } from "./ActivityTab";
 import { MembersTab } from "./MembersTab";
 import { SessionsTab } from "./SessionsTab";
+import { WorkspacesTab } from "./WorkspacesTab";
 import { refreshTeamView, useTeamView } from "./teamClient";
 import { BUTTON, Field, INPUT, teamRequest } from "./ui";
 import { errorText } from "./SignInCard";
 
 /*
  * `/team` (sign-in-and-team §6.2, §6.8, §6.9). Inside the app like
- * `/activity`: the same back link and header, three tabs. On a solo install
- * it is one card that sets up a team, and nothing else.
+ * `/activity`: the same back link and header, four tabs (Workspaces is
+ * docs/design/workspaces.md §13.5 D4). On a solo install it is one card that
+ * sets up a team, and nothing else.
  */
 
-export type TeamTab = "members" | "activity" | "sessions";
+export type TeamTab = "members" | "workspaces" | "activity" | "sessions";
+export const TEAM_TABS: readonly TeamTab[] = ["members", "workspaces", "activity", "sessions"];
 
-export function TeamPage({ initialTab }: { initialTab: TeamTab }) {
+export function TeamPage({ initialTab, initialCreate = false }: { initialTab: TeamTab; initialCreate?: boolean }) {
   const { t } = useLocale();
   const view = useTeamView();
   const [tab, setTab] = useState<TeamTab>(initialTab);
@@ -30,6 +33,8 @@ export function TeamPage({ initialTab }: { initialTab: TeamTab }) {
   useEffect(() => {
     const url = new URL(window.location.href);
     url.searchParams.set("tab", tab);
+    /* `?create=1` opened the New workspace dialog once; a reload does not reopen it. */
+    url.searchParams.delete("create");
     if (url.href !== window.location.href) window.history.replaceState(window.history.state, "", url);
   }, [tab]);
 
@@ -70,7 +75,7 @@ export function TeamPage({ initialTab }: { initialTab: TeamTab }) {
         ) : (
           <>
             <div role="tablist" aria-label={t("team.title")} className="flex gap-1 border-b border-border">
-              {(["members", "activity", "sessions"] as const).map((key) => (
+              {TEAM_TABS.map((key) => (
                 <button
                   key={key}
                   type="button"
@@ -84,7 +89,10 @@ export function TeamPage({ initialTab }: { initialTab: TeamTab }) {
                 </button>
               ))}
             </div>
-            {tab === "members" ? <MembersTab view={team} /> : tab === "activity" ? <ActivityTab view={team} /> : <SessionsTab view={team} />}
+            {tab === "members" ? <MembersTab view={team} />
+              : tab === "workspaces" ? <WorkspacesTab initialCreate={initialCreate} />
+              : tab === "activity" ? <ActivityTab view={team} />
+              : <SessionsTab view={team} />}
           </>
         )}
       </div>

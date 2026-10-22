@@ -91,6 +91,47 @@ test("a structured send carries its attachment as an inbox path in the delivered
   fs.rmSync(path.dirname(written), { recursive: true, force: true });
 });
 
+test("a streamed 200 MiB batch reaches the agent as two complete inbox paths", async () => {
+  const { receiveComposerUpload } = await import("@/lib/composerUploads");
+  const stream = (bytes: number) => {
+    let left = bytes;
+    const chunk = new Uint8Array(64 * 1024).fill(97);
+    return new ReadableStream<Uint8Array>({ pull(controller) {
+      if (!left) { controller.close(); return; }
+      const value = chunk.subarray(0, Math.min(left, chunk.length));
+      left -= value.length; controller.enqueue(value);
+    } });
+  };
+  const size = 100 * 1024 * 1024;
+  const first = await receiveComposerUpload(stream(size), "operator");
+  const second = await receiveComposerUpload(stream(size), "operator");
+  const files = [
+    { name: "recording.ogg", base64: "", upload: first },
+    { name: "archive.bin", base64: "", upload: second },
+  ];
+  let delivered = "";
+  const accept = dependencies(async input => {
+    delivered = String(input.text);
+    return { ok: true, structured: true, outcome: "queued", operationId: "op_streamed", target: "conversation_attach",
+      receipt: { operationId: "op_streamed", status: "queued" } } as never;
+  });
+  try {
+    const answer = await handleRuntimeCommand(request({ conversationId: "conversation_attach", text: "inspect", idempotencyKey: "streamed-pair", files }), "send", accept);
+    expect(answer.status).toBe(202);
+    const paths = delivered.split("\n").slice(1);
+    expect(paths.map(file => path.basename(file))).toEqual(["recording.ogg", "archive.bin"]);
+    expect(paths.map(file => fs.statSync(file).size)).toEqual([size, size]);
+    expect(paths.every(file => file.startsWith(inboxFilesDir() + path.sep))).toBe(true);
+    const extra = await receiveComposerUpload(stream(1), "operator");
+    const refused = await handleRuntimeCommand(request({ conversationId: "conversation_attach", text: "inspect", idempotencyKey: "streamed-over-batch", files: [...files, { name: "extra.bin", base64: "", upload: extra }] }), "send", accept);
+    expect(refused.status).toBe(413);
+    expect((await refused.json()).error).toContain("200 MB");
+  } finally {
+    const { inboxFileBatchToken } = await import("@/lib/inboxFiles");
+    fs.rmSync(path.join(inboxFilesDir(), inboxFileBatchToken("streamed-pair")), { recursive: true, force: true });
+  }
+});
+
 test("an attachment-only structured send is delivered rather than rejected as empty text", async () => {
   const admitted: Record<string, unknown>[] = [];
   const response = await handleRuntimeCommand(request({

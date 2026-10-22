@@ -108,6 +108,27 @@ function completedLane(id: string): Pipeline {
   } as unknown as Pipeline;
 }
 
+test("merge mutations yield after releasing the selected lane and recover after a refused change", async () => {
+  const first = completedLane("bounded-merge-first"), second = completedLane("bounded-merge-second");
+  savePipelines([first, second]);
+  const ports = productionAutoMergePorts({ loadPipelines: loadPipelinesForList });
+  let timerRan = false;
+  expect(await ports.mutate(first.id, live => {
+    expect(controllerPipelineKeys()).toEqual([first.id]);
+    live.stateDetail = "first bounded mutation";
+    setImmediate(() => { timerRan = true; });
+    return true;
+  })).toBe(true);
+  expect(timerRan).toBe(true);
+  await expect(ports.mutate(second.id, live => {
+    live.stateDetail = "must roll back";
+    throw Error("refused mutation");
+  })).rejects.toThrow("refused mutation");
+  expect(loadPipelinesForList().find(row => row.id === second.id)?.stateDetail).toBeNull();
+  expect(await ports.mutate(second.id, live => { live.stateDetail = "recovered mutation"; return true; })).toBe(true);
+  expect(loadPipelinesForList().find(row => row.id === first.id)?.stateDetail).toBe("first bounded mutation");
+});
+
 describe("global merge admission", () => {
   const settingsFile = path.join(sandbox, "project-settings.json");
   let previousSettings: Buffer | null;

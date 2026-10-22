@@ -304,3 +304,78 @@ export function safeNextPath(value: unknown): string {
   if (/[\u0000-\u001f]/.test(value)) return "/";
   return value.slice(0, 2048);
 }
+
+/* ---- workspaces (docs/design/workspaces.md §13) --------------------------- */
+
+/** A named set of projects (slice (a): a filter, restricting nobody). */
+export interface Workspace {
+  /** "w_" + 16 random bytes, hex, minted by the client so a retry is safe. */
+  id: string;
+  /** 1–40 characters. */
+  name: string;
+  color: MemberColor;
+  createdAt: string;
+  /** Canonical project keys, sorted. */
+  projects: string[];
+}
+
+/** One project the Team page can place: one row per canonical key. */
+export interface WorkspaceCatalogProject {
+  project: string;
+  displayName: string;
+  /** Unix seconds of the newest conversation, or of the manual project's creation. */
+  smt: number;
+}
+
+/** `GET /api/team/workspaces`. */
+export type WorkspacesView =
+  | { mode: "solo" }
+  | {
+    mode: "team";
+    /** The owner's: only the owner creates, renames, deletes and places. */
+    canManage: boolean;
+    /** Sorted by name in the installation's locale. */
+    workspaces: Workspace[];
+    /** Only with `?catalog=1`: every project the installation knows. */
+    catalog?: { ready: boolean; projects: WorkspaceCatalogProject[] };
+  };
+
+export const WORKSPACE_LIMIT = 64;
+export const WORKSPACE_NAME_MAX = 40;
+export const WORKSPACE_CREATE_PROJECTS_MAX = 500;
+export const WORKSPACE_PROJECT_KEY_MAX = 200;
+/** The rail's Overview row, which is not a project (`projectModel.ts`). */
+const OVERVIEW_SENTINEL = "__overview__";
+
+export function isWorkspaceId(value: unknown): value is string {
+  return typeof value === "string" && /^w_[0-9a-f]{32}$/.test(value);
+}
+
+/** A workspace name as stored: control bytes and runs of whitespace become
+    one space, trimmed. Null when nothing is left; the length is the
+    caller's check, so a long name is refused rather than cut. */
+export function cleanWorkspaceName(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  // eslint-disable-next-line no-control-regex
+  const name = value.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+  return name || null;
+}
+
+/** What makes two names the same name: NFKC, case, and invisible
+    characters, which the key drops (the name keeps them, an emoji's
+    joiner among them). */
+export function workspaceNameKey(name: string): string {
+  return name.normalize("NFKC").replace(/[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu, "").toLocaleLowerCase("en-US");
+}
+
+/** A project key a workspace may hold: trimmed, 1–200 characters, no C0
+    control characters, never the Overview sentinel. The shape is not
+    checked further, because manual and legacy names are projects too. */
+export function cleanWorkspaceProject(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const key = value.trim();
+  if (!key || key.length > WORKSPACE_PROJECT_KEY_MAX || key === OVERVIEW_SENTINEL) return null;
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(key)) return null;
+  return key;
+}

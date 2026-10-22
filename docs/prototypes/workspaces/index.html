@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Delegatus workspaces · prototype</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<main class="idx">
+  <h1>Team workspaces · prototype</h1>
+  <p>Four variants, numbered as the isolation levels in <code>docs/design/workspaces.md</code> §6. Each link opens the clickable prototype; the bar at the bottom right jumps between its numbered states. «Storyboard» shows every state at once, as on the frames.</p>
+  <p lang="uk">Чотири варіанти, пронумеровані як рівні ізоляції в <code>docs/design/workspaces.md</code> §6. Кожне посилання відкриває клікабельний прототип; панель унизу праворуч перемикає його пронумеровані стани. «Розкадровка» показує всі стани одразу, як на кадрах.</p>
+  <div id="list"></div>
+</main>
+<script>
+  const names = {
+    1: ["Workspace as a rail filter · level 1", "Простір як фільтр бічної панелі · рівень 1"],
+    2: ["Workspace with settings and an agent fence · level 2 (recommended)", "Простір із налаштуваннями й огорожею для агентів · рівень 2 (рекомендовано)"],
+    3: ["One Delegatus per workspace, same computer user · level 3", "Окремий Delegatus для кожного простору, той самий користувач · рівень 3"],
+    4: ["One computer user per workspace · level 4", "Окремий користувач комп’ютера для кожного простору · рівень 4"],
+  };
+  document.getElementById("list").innerHTML = [1, 2, 3, 4].map((n) => {
+    const links = [];
+    for (const lang of ["en", "uk"]) for (const theme of ["light", "dark"]) {
+      links.push(`<a href="variant-${n}.html?lang=${lang}&theme=${theme}">${lang} · ${theme}</a>`);
+      links.push(`<a href="variant-${n}.html?story&lang=${lang}&theme=${theme}">${lang} · ${theme} · storyboard</a>`);
+    }
+    return `<section class="v"><h2>${n}. ${names[n][0]}</h2><p lang="uk" style="margin:0">${names[n][1]}</p><div class="links">${links.join("")}</div></section>`;
+  }).join("");
+</script>
+</body>
+</html>

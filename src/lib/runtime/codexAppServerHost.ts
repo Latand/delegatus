@@ -1,3 +1,4 @@
+import { nativeProcessId, signalDomain, signalAgentDomain, signalBoundaryOff, spawnManagedEngine } from "./agentSignalSandbox";
 import { engineMemoryOff } from "@/lib/memory/source";
 import { CodexSocketTransport, type CodexTransport, type CodexSocketOwner } from "./codexSocketTransport";
 import { codexOperatorQuestionPolicy } from "@/lib/agent/operatorQuestionPolicy";
@@ -22,7 +23,6 @@ import { NativeCodexQueue, NativeQueueProtocolRefusal } from "./nativeCodexQueue
 import { readCodexDeliveryHistory, findCodexHistoryDelivery, type CodexDeliveryHistoryResult } from "./codexHistoryReader";
 import type { NativeQueueHost } from "./nativeQueueExecutor";
 import type { NativeQueueRecord } from "./nativeQueueContracts";
-import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from "node:child_process";
 import { createHash, randomUUID, type Hash } from "node:crypto";
 import fs from "node:fs";
@@ -48,6 +48,7 @@ import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES, runtimeImageStore } from "./runtime
 import { STRUCTURED_IMAGE_CAPABILITY, type StructuredImageRef } from "./structuredContent";
 import { NATIVE_INJECT_CAPABILITY, NATIVE_QUEUE_CAPABILITY, NATIVE_TURN_PROFILE_CAPABILITY } from "./codexCapabilityFlags";
 import { withAgentConfigSandbox } from "./agentConfigSandbox";
+import { assertViewerMcpTools } from "./viewerMcpLaunch";
 import { resolveTelegramLaunchGrant, TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE, type TelegramLaunchGrant } from "./telegramConnectorEnv";
 import {
   normalizeVoiceDeliveries,
@@ -306,6 +307,7 @@ const CHILD_ENV_ALLOWLIST = [
   "SSL_CERT_FILE",
   "SSL_CERT_DIR",
   "LLV_SPAWN_CAPABILITY",
+  "LLV_GATE_CPU_PRIORITY_SOURCE",
   /* The re-hosted Viewer MCP launcher resolves the current release and the
      runtime host's stable listener from these non-secret inputs. */
   "LLV_STATE_DIR",
@@ -1423,7 +1425,7 @@ export class CodexAppServerHost implements EngineHost {
     this.processIdentity = options.processIdentity ?? ((pid) => procBackend.processIdentity(pid));
     this.pidAlive = options.pidAlive ?? ((pid) => procBackend.pidAlive(pid));
     this.releaseCleanup = options.releaseCleanup ?? null;
-    this.childStartIdentity = child.pid ? this.processIdentity(child.pid) : null;
+    this.childStartIdentity = nativeProcessId(child) ? this.processIdentity(nativeProcessId(child)!) : null;
     this.onEventCursorRecovery = options.onEventCursorRecovery;
     this.resolveImagePath = options.resolveImagePath ?? ((ref) => {
       const store = runtimeImageStore();
@@ -1473,8 +1475,6 @@ export class CodexAppServerHost implements EngineHost {
     let memoryHook: ReturnType<typeof installCodexMemoryHook> = null;
     try { if (!options.socketOwner && options.codexHome && !options.cleanMemory) memoryHook = installCodexMemoryHook(options.codexHome, options.env ?? process.env); }
     catch { /* optional memory must never stop a launch */ }
-    const spawnProcess = options.memoryCell?.wrapSpawn(options.spawnProcess) ?? options.spawnProcess ?? ((command, args, spawnOptions) =>
-      spawn(command, args, { ...spawnOptions, stdio: ["pipe", "pipe", "pipe"] }));
     const binary = options.binary ?? process.env.LLV_CODEX_BINARY ?? "codex";
     let protocol: CodexPinnedProtocol;
     try { protocol = await resolveCodexProtocol((options.readProtocolVersion ?? installedCodexVersion)(binary, options.env ?? process.env), binary, options.env ?? process.env, options.generateProtocolSchemas); }
@@ -1536,8 +1536,9 @@ export class CodexAppServerHost implements EngineHost {
         ? await CodexSocketTransport.reconnect(options.socketOwner)
         : process.platform !== "win32"
           && (options.persistentCallbacks ?? !options.spawnProcess)
-          ? await CodexSocketTransport.launch(binary, args, spawnOptions, options.memoryCell ? base => options.memoryCell!.wrapSpawn(base) : undefined)
-          : spawnProcess(binary, args, spawnOptions);
+          ? await CodexSocketTransport.launch(binary, args, spawnOptions, undefined,
+            (command, argv, opts, base) => spawnManagedEngine(command, argv, opts, options.memoryCell, options.spawnProcess, options.env ?? process.env, base))
+          : await spawnManagedEngine(binary, args, spawnOptions, options.memoryCell, options.spawnProcess, options.env ?? process.env);
       if (options.socketOwner && child.pid) options.memoryCell?.attach(child.pid);
     } catch (error) {
       options.releaseCleanup?.();
@@ -1680,6 +1681,7 @@ export class CodexAppServerHost implements EngineHost {
       if (threadId) provisional.reconcileThreadHistory(result);
       provisional.reconcileAfterOpen(threadStatus(result), resumedActiveTurnId(result));
       provisional.endBufferedNotificationReconciliation();
+      if (!options.socketOwner) await provisional.verifyViewerMcp();
       provisional.selectModel(provisional.currentImageModel());
       await provisional.initializeNativeQueue();
       await provisional.negotiateHistoryCapability();
@@ -1700,6 +1702,37 @@ export class CodexAppServerHost implements EngineHost {
     }
   }
 
+  private async verifyViewerMcp(): Promise<void> {
+    try {
+      const deadline = Date.now() + this.requestTimeoutMs;
+      let cursor: string | undefined;
+      const seen = new Set<string>();
+      for (let page = 0; page < 32; page++) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) throw new Error("Viewer tool discovery timed out");
+        const result = record(await this.rpc("mcpServerStatus/list", {
+          threadId: this.identity.threadId,
+          detail: "toolsAndAuthOnly",
+          ...(this.protocol.hasRequestField("mcpServerStatus/list", "serverName") ? { serverName: "viewer" } : {}),
+          ...(cursor ? { cursor } : {}),
+        }, remaining));
+        const entries = result?.data;
+        if (Array.isArray(entries) && entries.some(entry => stringField(entry, "name") === "viewer")) {
+          assertViewerMcpTools(entries, structuredHostStamp());
+          return;
+        }
+        const next = stringField(result, "nextCursor");
+        if (!next || seen.has(next)) break;
+        seen.add(next);
+        cursor = next;
+      }
+      assertViewerMcpTools([], structuredHostStamp());
+    } catch (error) {
+      const reason = safeError(error);
+      throw new Error(reason.startsWith("Viewer MCP launch failed") ? reason : `Viewer MCP launch failed: ${reason}`);
+    }
+  }
+
   /**
    * Fails a granted thread closed when its realized tool surface is wider than
    * the grant (issue #687). Codex resolves plugins from the global config, so
@@ -1713,7 +1746,7 @@ export class CodexAppServerHost implements EngineHost {
     const allowed = new Set(grantedPluginServerNames(granted));
     let listed: unknown;
     try {
-      listed = await this.rpc("mcpServerStatus/list", {});
+      listed = await this.rpc("mcpServerStatus/list", { threadId: this.identity.threadId, detail: "toolsAndAuthOnly" });
     } catch (error) {
       throw new Error(`Codex plugin grant could not be verified: ${safeError(error)}`);
     }
@@ -3080,7 +3113,7 @@ export class CodexAppServerHost implements EngineHost {
   }
 
   private currentState(): HostState {
-    const pid = this.reaped || this.released ? null : this.child.pid ?? null;
+    const pid = this.reaped || this.released ? null : nativeProcessId(this.child) ?? null;
     const processStartIdentity = pid && this.childProcessOwnership() === "owned"
       ? this.childStartIdentity
       : null;
@@ -3095,6 +3128,8 @@ export class CodexAppServerHost implements EngineHost {
       endpoint: pid ? this.child instanceof CodexSocketTransport ? this.child.endpoint : `stdio:${pid}` : "stdio:released",
       pid,
       processStartIdentity,
+      ...(signalDomain(this.child) ? { signalDomain: signalDomain(this.child) } : {}),
+      ...(signalBoundaryOff(this.child) ? { signalBoundary: signalBoundaryOff(this.child) } : {}),
       eventCursor: this.cursor,
       protocolVersion: this.protocolVersion,
       activeTurnRef: this.activeTurnId,
@@ -3171,7 +3206,7 @@ export class CodexAppServerHost implements EngineHost {
   /** Ends this host only while its child still has the exact kernel identity
       carried by the operator's resource row. */
   async releaseIfOwned(expected: Readonly<ProcessIdentity>): Promise<boolean> {
-    const pid = this.child.pid;
+    const pid = nativeProcessId(this.child);
     if (this.released || this.releasing || this.releasePromise !== null
       || !pid || expected.startIdentity === null
       || pid !== expected.pid
@@ -3249,6 +3284,14 @@ export class CodexAppServerHost implements EngineHost {
 
   private async finishReleaseAfterGroupCleanup(): Promise<void> {
     await this.terminationPromise;
+    const domain = signalDomain(this.child);
+    if (domain && domain.retired !== true) {
+      const deadline = Date.now() + this.shutdownGraceMs;
+      while (signalDomain(this.child)?.retired !== true) {
+        if (Date.now() >= deadline) throw new Error("Codex signal domain cleanup did not settle");
+        await new Promise<void>(resolve => setTimeout(resolve, 10));
+      }
+    }
     this.finishRelease();
   }
 
@@ -3279,8 +3322,9 @@ export class CodexAppServerHost implements EngineHost {
       this.terminationTimer = null;
     }
     try {
-      if (!this.memoryCell?.fatalMemoryExit && this.childProcessOwnership() === "gone") {
-        signalProcessGroup(this.child.pid, "SIGKILL", this.signalProcess);
+      if (signalDomain(this.child)) { signalAgentDomain(this.child, "SIGKILL"); }
+      else if (!this.memoryCell?.fatalMemoryExit && this.childProcessOwnership() === "gone") {
+        signalProcessGroup(nativeProcessId(this.child), "SIGKILL", this.signalProcess);
       }
     } finally {
       this.resolveTermination();
@@ -3304,9 +3348,15 @@ export class CodexAppServerHost implements EngineHost {
     if (this.terminationStarted) return true;
     try { this.child.stdin.end(); } catch { /* already closed */ }
     const ownership = this.childProcessOwnership();
+    if (signalDomain(this.child) && ownership === "gone") {
+      signalAgentDomain(this.child, "SIGKILL");
+      this.terminationStarted = true;
+      this.terminationPromise = Promise.resolve();
+      return true;
+    }
     if (ownership === "gone") {
-      signalProcessGroup(this.child.pid, "SIGTERM", this.signalProcess);
-      signalProcessGroup(this.child.pid, "SIGKILL", this.signalProcess);
+      signalProcessGroup(nativeProcessId(this.child), "SIGTERM", this.signalProcess);
+      signalProcessGroup(nativeProcessId(this.child), "SIGKILL", this.signalProcess);
       this.terminationStarted = true;
       this.terminationPromise = Promise.resolve();
       return true;
@@ -3328,7 +3378,7 @@ export class CodexAppServerHost implements EngineHost {
   }
 
   private childProcessOwnership(): ChildProcessOwnership {
-    const pid = this.child.pid;
+    const pid = nativeProcessId(this.child);
     if (!pid || !Number.isInteger(pid) || pid <= 0 || !this.pidAlive(pid)) return "gone";
     const observedIdentity = this.processIdentity(pid);
     if (this.childStartIdentity === null || observedIdentity === null) return "unknown";
@@ -3338,9 +3388,11 @@ export class CodexAppServerHost implements EngineHost {
   private signalTermination(signal: NodeJS.Signals): TerminationSignalResult {
     // Fatal OOM cleanup is owned by the cell, without legacy group signals.
     if (this.memoryCell?.fatalMemoryExit) return "attempted";
+    const protectedSignal = signalAgentDomain(this.child, signal);
+    if (protectedSignal !== undefined) return protectedSignal ? "attempted" : "unsafe";
     const ownership = this.childProcessOwnership();
     if (ownership === "gone") {
-      signalProcessGroup(this.child.pid, signal, this.signalProcess);
+      signalProcessGroup(nativeProcessId(this.child), signal, this.signalProcess);
       return "attempted";
     }
     if (this.reaped || ownership !== "owned") return "unsafe";

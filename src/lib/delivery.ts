@@ -240,6 +240,7 @@ export async function reconfigureConversation(
     accountId: resumeAccount,
     readOnly: profile?.readOnly ?? null,
     permissionMode: profile?.permissionMode ?? null,
+    sandbox: profile?.sandbox ?? null,
     allowSubagents: profile?.allowSubagents ?? false,
     plugins: profile?.plugins,
     /* Every relaunch carries the durable grant (#739); dropping it here rebuilt
@@ -603,6 +604,9 @@ export async function resumeConversation(
     fast: profile?.fast,
     serviceTier: profile?.serviceTier,
     accountId: resumeAccount,
+    readOnly: profile?.readOnly,
+    permissionMode: profile?.permissionMode,
+    sandbox: profile?.sandbox,
     allowSubagents: profile?.allowSubagents,
     plugins: profile?.plugins,
     /* The durable grant travels with the resume (#739). Omitting it silently
@@ -1254,6 +1258,9 @@ async function actuateConversationMessage(
       serviceTier: typeof message.resumeFast === "boolean"
         ? serviceTierForSpeed(entryProfile?.serviceTier, message.resumeFast) : entryProfile?.serviceTier,
       accountId: entryAccount,
+      readOnly: entryProfile?.readOnly,
+      permissionMode: entryProfile?.permissionMode,
+      sandbox: entryProfile?.sandbox,
       allowSubagents: entryProfile?.allowSubagents,
       plugins: entryProfile?.plugins,
       mcpServers: entryProfile?.mcpServers,
@@ -1300,6 +1307,9 @@ async function actuateConversationMessage(
       fast: rootProfile?.fast,
       serviceTier: rootProfile?.serviceTier,
       accountId: rootAccount,
+      readOnly: rootProfile?.readOnly,
+      permissionMode: rootProfile?.permissionMode,
+      sandbox: rootProfile?.sandbox,
       allowSubagents: rootProfile?.allowSubagents,
       plugins: rootProfile?.plugins,
       mcpServers: rootProfile?.mcpServers,

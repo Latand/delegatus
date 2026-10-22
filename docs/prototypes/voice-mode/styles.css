@@ -1,0 +1,397 @@
+/* Voice mode explainer (docs/design/voice-mode-explained.md, docs/design/voice-extensible-tools.md).
+   Static diagrams: no product code. Surfaces and colour roles are the product's dark
+   tokens (src/styles/tokens.css); the type is set larger than the product's because
+   these are diagrams to be read at a glance. */
+
+:root {
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, "Noto Sans", sans-serif;
+  --font-mono: ui-monospace, "JetBrains Mono", Menlo, "DejaVu Sans Mono", monospace;
+  --radius-control: 8px;
+  --radius-surface: 12px;
+
+  --canvas: #111218;
+  --card: #191b23;
+  --sunken: #14151b;
+  --raised: #20232c;
+  --board: #0d0e13;
+  --well: #15161d;
+  --primary: #e8e8ec;
+  --secondary: #a2a2ae;
+  --muted: #8b8b98;
+  --border: #292c36;
+  --strong: #3c404c;
+  --accent: #8f88ff;
+  --accent-soft: #262347;
+  --brand: #fbebdd;
+  --on-brand: #262a36;
+  --success: #4fc36f;
+  --success-soft: #14261a;
+  --warning: #e0ae45;
+  --warning-soft: #2b2312;
+  --danger: #f07171;
+  --danger-soft: #2c1616;
+  --info: #2dd4bf;
+  --info-soft: #10241f;
+  color-scheme: dark;
+
+  --gap: 16px;
+  --pad: 40px;
+  font-size: 18px;
+}
+
+@media (max-width: 900px) {
+  :root { --pad: 24px; }
+}
+@media (max-width: 700px) {
+  :root { --gap: 10px; --pad: 14px; font-size: 15px; }
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--board);
+  color: var(--primary);
+  font-family: var(--font-sans);
+  line-height: 1.4;
+}
+code, .mono { font-family: var(--font-mono); font-size: 0.86em; color: var(--secondary); overflow-wrap: anywhere; }
+b, strong { font-weight: 650; color: var(--primary); }
+p { margin: 0; }
+ul { margin: 0; padding-left: 1.1em; }
+li + li { margin-top: 4px; }
+
+/* ── Frame: one picture ─────────────────────────────────────────────────── */
+.frame {
+  background: var(--canvas);
+  padding: var(--pad);
+  border-bottom: 2px solid var(--border);
+}
+.kicker { color: var(--muted); font-size: 0.9rem; font-weight: 600; letter-spacing: 0.02em; }
+.frame h1 { font-size: 1.75rem; line-height: 1.2; margin: 6px 0 10px; font-weight: 700; }
+.lede { color: var(--secondary); font-size: 1.05rem; max-width: 62em; margin-bottom: 26px; }
+.lede b { color: var(--primary); }
+.frame h2 { font-size: 1.2rem; margin: 30px 0 12px; font-weight: 700; }
+.frame h2 .num { margin-right: 6px; }
+@media (max-width: 700px) {
+  .frame h1 { font-size: 1.4rem; }
+  .lede { font-size: 1rem; margin-bottom: 18px; }
+  .frame h2 { font-size: 1.1rem; margin-top: 22px; }
+}
+
+/* ── Shared pieces ──────────────────────────────────────────────────────── */
+.num {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  min-width: 1.6em; height: 1.6em; padding: 0 0.3em; border-radius: 999px;
+  background: var(--accent); color: #12121a; font-weight: 750; font-size: 0.95rem; line-height: 1;
+}
+.num.alt { background: var(--brand); color: var(--on-brand); }
+/* Step cards take the colour of the timeline lane the step sits on. */
+.num.vo { background: var(--info); }
+.num.be { background: var(--warning); }
+.tag {
+  display: inline-block; font-size: 0.78rem; font-weight: 700; letter-spacing: 0.04em;
+  padding: 2px 7px; border-radius: 6px; border: 1px solid currentColor; line-height: 1.3;
+}
+.t-audio { color: var(--info); }
+.t-text { color: var(--accent); }
+.t-tool { color: var(--warning); }
+.t-report { color: var(--success); }
+.t-no { color: var(--danger); }
+
+.node {
+  background: var(--card);
+  border: 1px solid var(--strong);
+  border-radius: var(--radius-surface);
+  padding: 14px 16px;
+}
+.node h3 { margin: 0 0 6px; font-size: 1.15rem; line-height: 1.25; }
+.node .sub { color: var(--muted); font-size: 0.92rem; margin-bottom: 8px; }
+.node ul { color: var(--secondary); }
+.node ul b { color: var(--primary); }
+.node .inner { background: var(--raised); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 10px 12px; }
+.node .inner + .inner { margin-top: 10px; }
+.node .inner h4 { margin: 0 0 4px; font-size: 1.02rem; }
+.node .inner p { color: var(--secondary); }
+.node.vendor { border-color: color-mix(in oklch, var(--info) 45%, var(--strong)); }
+.node.viewer { border-color: color-mix(in oklch, var(--accent) 60%, var(--strong)); }
+
+.note {
+  border-left: 4px solid var(--warning);
+  background: var(--warning-soft);
+  border-radius: var(--radius-control);
+  padding: 12px 14px;
+  color: var(--primary);
+}
+.note.info { border-left-color: var(--info); background: var(--info-soft); }
+.note.good { border-left-color: var(--success); background: var(--success-soft); }
+.note.bad { border-left-color: var(--danger); background: var(--danger-soft); }
+.note + .note { margin-top: 10px; }
+.note .h { font-weight: 700; display: block; margin-bottom: 2px; }
+
+/* Arrow sprites are drawn pointing right; .v turns them to point down. Below
+   1000px the components map is one column, so horizontal links turn too. */
+.arr { width: 44px; height: 18px; flex: none; color: var(--muted); }
+.link.v .arr { transform: rotate(90deg); width: 30px; }
+@media (max-width: 1000px) {
+  .link .arr { transform: rotate(90deg); width: 30px; }
+}
+
+/* Inline arrows inside labels: the text font draws → and ⇄ too small to read. */
+.ia { display: inline-block; width: 1.3em; height: 0.75em; vertical-align: 0.05em; margin: 0 0.2em; color: currentColor; }
+
+/* ── Link: one numbered connection between two boxes ───────────────────── */
+.link {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-control);
+  background: var(--sunken);
+  border: 1px dashed var(--strong);
+}
+.link .body { min-width: 0; }
+.link .ends { font-weight: 700; display: block; }
+.link .what { color: var(--secondary); font-size: 0.95rem; display: block; }
+.link.audio { border-color: color-mix(in oklch, var(--info) 55%, transparent); }
+.link.audio .arr { color: var(--info); }
+.link.text { border-color: color-mix(in oklch, var(--accent) 55%, transparent); }
+.link.text .arr { color: var(--accent); }
+.link.tool .arr { color: var(--warning); }
+.link.tool { border-color: color-mix(in oklch, var(--warning) 55%, transparent); }
+.link.report .arr { color: var(--success); }
+.link.report { border-color: color-mix(in oklch, var(--success) 55%, transparent); }
+.links { display: flex; flex-direction: column; gap: 10px; justify-content: center; }
+
+/* ── Frame 1: components map ───────────────────────────────────────────── */
+.map {
+  display: grid;
+  grid-template-columns: 1fr 0.95fr 1fr;
+  grid-template-areas:
+    ".    op   ."
+    ".    l1   ."
+    "br   br   br"
+    "l2   .    l3"
+    "oa   mid  vw"
+    "nt   nt   l67"
+    "nt   nt   orc";
+  gap: var(--gap) 22px;
+  align-items: stretch;
+}
+.map .op { grid-area: op; }
+.map .l1 { grid-area: l1; }
+.map .br { grid-area: br; }
+.map .l2 { grid-area: l2; }
+.map .l3 { grid-area: l3; }
+.map .oa { grid-area: oa; }
+.map .mid { grid-area: mid; }
+.map .vw { grid-area: vw; }
+.map .l67 { grid-area: l67; }
+.map .orc { grid-area: orc; }
+.map .nt { grid-area: nt; align-self: start; }
+.map .br ul { columns: 3; column-gap: 28px; }
+.map .br li { break-inside: avoid; }
+@media (max-width: 1100px) {
+  .map .br ul { columns: 1; }
+}
+/* One column below 1000px: the link cards in the middle column get too narrow.
+   The source order puts every link between the two blocks it names. */
+@media (max-width: 1000px) {
+  .map { grid-template-columns: 1fr; grid-template-areas: none; }
+  .map > * { grid-area: auto !important; }
+}
+
+/* ── Frame 2: timeline ─────────────────────────────────────────────────── */
+.timeline {
+  display: grid;
+  grid-template-columns: 170px repeat(16, 1fr);
+  grid-template-rows: auto minmax(64px, auto) auto minmax(64px, auto) minmax(56px, auto) minmax(56px, auto) auto;
+  gap: 8px 6px;
+  position: relative;
+  background: var(--well);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-surface);
+  padding: 14px;
+}
+.timeline .lane { grid-column: 1; display: flex; flex-direction: column; justify-content: center; font-weight: 700; padding-right: 8px; }
+.timeline .lane small { color: var(--muted); font-weight: 500; font-size: 0.82rem; }
+.timeline .axis { grid-column: 2 / -1; grid-row: 1; color: var(--muted); font-size: 0.9rem; display: flex; align-items: center; gap: 8px; min-height: 0; }
+.timeline .axis svg { flex: 1; height: 14px; color: var(--strong); }
+.timeline .tick { grid-row: 1; text-align: center; color: var(--muted); font-size: 0.82rem; align-self: end; }
+.bar {
+  position: relative; z-index: 1;
+  display: flex; align-items: center; gap: 8px;
+  border-radius: var(--radius-control);
+  padding: 6px 10px;
+  font-size: 0.95rem;
+  border: 1px solid transparent;
+}
+.bar .num { font-size: 0.85rem; }
+.bar.op { background: color-mix(in oklch, var(--brand) 18%, var(--card)); border-color: color-mix(in oklch, var(--brand) 45%, transparent); }
+.bar.op .num { background: var(--brand); color: var(--on-brand); }
+.bar.vo { background: color-mix(in oklch, var(--info) 18%, var(--card)); border-color: color-mix(in oklch, var(--info) 55%, transparent); }
+.bar.vo .num { background: var(--info); }
+.bar.be { background: color-mix(in oklch, var(--warning) 16%, var(--card)); border-color: color-mix(in oklch, var(--warning) 50%, transparent); }
+.bar.be .num { background: var(--warning); }
+.bar.cut { border-right: 4px solid var(--danger); }
+.bar .cutmark { margin-left: auto; color: var(--danger); font-weight: 750; white-space: nowrap; }
+.bar.mic { background: transparent; border: 1px dashed color-mix(in oklch, var(--brand) 45%, transparent); color: var(--secondary); font-size: 0.85rem; padding: 2px 10px; min-height: 0; justify-content: space-between; }
+.bar.mic span { white-space: nowrap; }
+.band {
+  grid-row: 2 / 7; z-index: 0;
+  background: color-mix(in oklch, var(--danger) 14%, transparent);
+  border: 1px dashed color-mix(in oklch, var(--danger) 60%, transparent);
+  border-radius: var(--radius-control);
+  margin: -4px -3px;
+}
+.band.duplex { background: color-mix(in oklch, var(--info) 10%, transparent); border-color: color-mix(in oklch, var(--info) 50%, transparent); }
+.bandlabel { grid-row: 7; font-size: 0.85rem; font-weight: 700; text-align: center; align-self: start; }
+.bandlabel.cutl { color: var(--danger); grid-column: 5 / 14; }
+.bandlabel.dupl { color: var(--info); }
+/* A bar carries its full line on wide screens and a short one from 700px up;
+   below 700px only its number, and the step cards say the rest. */
+.bar .say.short { display: none; }
+@media (max-width: 1100px) {
+  .timeline { grid-template-columns: 112px repeat(16, 1fr); gap: 8px 5px; }
+  .timeline .lane small { font-size: 0.72rem; }
+  .bar { padding: 4px 6px; gap: 4px 6px; flex-wrap: wrap; align-content: center; font-size: 0.85rem; line-height: 1.2; }
+  .timeline .lane { padding-right: 4px; }
+  .bar .say.long { display: none; }
+  .bar .say.short { display: inline; }
+}
+@media (max-width: 700px) {
+  .timeline { grid-template-columns: 70px repeat(16, 1fr); gap: 6px 3px; padding: 8px; grid-template-rows: auto minmax(44px, auto) auto minmax(44px, auto) minmax(40px, auto) minmax(40px, auto) auto; }
+  .bar { padding: 4px; justify-content: center; flex-wrap: nowrap; }
+  .bar .say, .bar .say.short, .bar .cutmark { display: none; }
+  .bandlabel.cutl { grid-column: 2 / -1; }
+  .timeline .lane { font-size: 0.82rem; padding-right: 4px; }
+  .timeline .lane small { display: none; }
+  .bar.mic { font-size: 0.75rem; padding: 2px 4px; line-height: 1.2; }
+  /* Each half of the label wraps word by word, so it ends clear of the interruption band. */
+  .bar.mic span { white-space: normal; width: min-content; }
+  .bar.mic span + span { text-align: right; }
+  .bandlabel { font-size: 0.8rem; }
+}
+
+/* ── Numbered step cards ───────────────────────────────────────────────── */
+.steps { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 18px; counter-reset: none; }
+.steps.one { grid-template-columns: 1fr; }
+.step {
+  display: flex; gap: 12px; align-items: flex-start;
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-surface);
+  padding: 12px 14px;
+}
+.step .who { display: block; font-size: 0.85rem; color: var(--muted); font-weight: 700; margin-bottom: 2px; }
+.step p { color: var(--primary); }
+.step p + p { margin-top: 4px; color: var(--secondary); }
+@media (max-width: 700px) {
+  .steps { grid-template-columns: 1fr; }
+}
+
+/* ── Frame 3: message stream ───────────────────────────────────────────── */
+.stream { display: grid; grid-template-columns: 2.2em 1.25fr 1fr 1fr; border: 1px solid var(--border); border-radius: var(--radius-surface); overflow: hidden; }
+.stream > div { padding: 10px 12px; border-top: 1px solid var(--border); }
+.stream .hd { border-top: 0; background: var(--raised); font-weight: 700; color: var(--secondary); font-size: 0.92rem; }
+.stream .n { display: flex; justify-content: center; align-items: flex-start; padding-left: 6px; padding-right: 0; }
+.stream .what b { margin-right: 8px; }
+.stream .what .ex { display: block; margin-top: 3px; color: var(--secondary); font-size: 0.95rem; }
+.stream .see { font-size: 0.95rem; color: var(--secondary); }
+.stream .see .tag { margin-right: 6px; }
+.stream .row-alt { background: var(--well); }
+.stream .lbl { display: none; }
+@media (max-width: 700px) {
+  .stream { grid-template-columns: 2em 1fr; }
+  .stream .hd { display: none; }
+  .stream .hd.first { display: none; }
+  .stream .n { grid-row: span 3; }
+  .stream .see { border-top: 0; padding-top: 2px; }
+  .stream .lbl { display: inline; font-weight: 700; color: var(--primary); margin-right: 4px; }
+}
+.places { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.places .node h3 { display: flex; gap: 10px; align-items: center; }
+@media (max-width: 700px) { .places { grid-template-columns: 1fr; } }
+
+/* ── Option frames: where things run ───────────────────────────────────── */
+.chain { display: flex; align-items: stretch; gap: 10px; flex-wrap: nowrap; }
+.chain .node { flex: 1; }
+.chain .arrbox { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 4px; color: var(--muted); font-size: 0.85rem; text-align: center; max-width: 9em; }
+.chain .arrbox .arr { width: 64px; height: 20px; color: var(--accent); }
+.chain .node.off { flex: 0 1 10em; border-style: dashed; border-color: color-mix(in oklch, var(--danger) 60%, transparent); }
+.chain .node.new { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+/* Stacked, every arrow of a chain sits on the boxes' centre line and its label beside it. */
+@media (max-width: 1100px) {
+  .chain { flex-direction: column; }
+  .chain .arrbox { max-width: none; display: grid; grid-template-columns: 1fr 30px 1fr; column-gap: 12px; align-items: center; text-align: left; }
+  .chain .arrbox .arr { grid-column: 2; transform: rotate(90deg); width: 30px; }
+  .chain .arrbox > span { grid-column: 3; }
+}
+/* A title with a status badge wraps as a row: the badge starts at the title's left edge when it wraps. */
+.frame h1.flagged { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.flag { display: inline-block; font-size: 0.8rem; font-weight: 750; padding: 3px 9px; border-radius: 999px; background: var(--success); color: #0b1a10; }
+.flag.no { background: var(--danger-soft); color: var(--danger); border: 1px solid var(--danger); }
+.flag.maybe { background: var(--warning-soft); color: var(--warning); border: 1px solid var(--warning); }
+
+/* ── Option frames: sequence over lanes ────────────────────────────────── */
+.seq {
+  --n: 5;
+  display: grid;
+  grid-template-columns: repeat(var(--n), 1fr);
+  gap: 10px 0;
+  position: relative;
+  padding: 0 0 6px;
+  background-image: repeating-linear-gradient(90deg,
+    transparent 0 calc(50% / var(--n) - 1px),
+    var(--strong) calc(50% / var(--n) - 1px) calc(50% / var(--n) + 1px),
+    transparent calc(50% / var(--n) + 1px) calc(100% / var(--n)));
+}
+.seq .lanehd {
+  position: sticky; top: 0;
+  margin: 0 5px; padding: 8px 6px; text-align: center; font-weight: 750;
+  background: var(--raised); border: 1px solid var(--strong); border-radius: var(--radius-control);
+}
+.seq .lanehd small { display: block; color: var(--muted); font-weight: 500; font-size: 0.8rem; }
+.seq .phase {
+  grid-column: 1 / -1;
+  margin-top: 8px;
+  padding: 6px 12px; border-radius: var(--radius-control);
+  background: var(--accent-soft); color: var(--primary); font-weight: 750;
+}
+.seq .phase.next { background: var(--success-soft); }
+.sc {
+  margin: 0 5px;
+  display: flex; gap: 10px; align-items: flex-start;
+  background: var(--card); border: 1px solid var(--strong); border-radius: var(--radius-surface);
+  padding: 10px 12px;
+  position: relative; z-index: 1;
+}
+.sc .dir { display: flex; align-items: center; gap: 6px; font-size: 0.85rem; font-weight: 750; color: var(--accent); margin-bottom: 3px; flex-wrap: wrap; }
+.sc .dir .arr { width: 26px; height: 12px; color: var(--accent); transform: none; }
+.sc .dir.back .arr { transform: scaleX(-1); }
+.sc p { color: var(--primary); }
+.sc p + p { margin-top: 4px; color: var(--secondary); font-size: 0.95rem; }
+.sc.op { border-color: color-mix(in oklch, var(--brand) 50%, var(--strong)); }
+.sc.op .num { background: var(--brand); color: var(--on-brand); }
+.sc.warn { border-color: var(--danger); background: color-mix(in oklch, var(--danger) 8%, var(--card)); }
+.sc.warn .num { background: var(--danger); }
+.sc.key { border-color: var(--accent); }
+/* A step inside one lane reaches halfway into its neighbours, so it is not squeezed into one lane's width. */
+.sc.solo { margin: 0 -28%; }
+@media (max-width: 1100px) {
+  .seq { grid-template-columns: 1fr; background-image: none; gap: 8px; }
+  .seq .lanehd { display: none; }
+  .seq > .sc { grid-column: 1 !important; margin: 0; }
+  .sc .dir .arr { transform: none !important; }
+  .sc .dir.back .arr { transform: scaleX(-1) !important; }
+}
+
+.pros { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 18px; }
+@media (max-width: 700px) { .pros { grid-template-columns: 1fr; } }
+
+/* ── Index ─────────────────────────────────────────────────────────────── */
+.index a { color: var(--accent); }
+.index li { margin-top: 10px; }
+.chain .arrbox.gap { max-width: 7em; border-left: 2px dashed var(--strong); padding-left: 12px; font-weight: 700; color: var(--secondary); }
+@media (max-width: 1100px) {
+  .chain .node.off { flex: none; }
+  .chain .arrbox.gap { display: block; max-width: none; border-left: 0; border-top: 2px dashed var(--strong); padding: 10px 0 0; }
+}
+.chain .arrbox code { font-size: 1em; }
+.nw { white-space: nowrap; }
+.pros .note + .note { margin-top: 0; }

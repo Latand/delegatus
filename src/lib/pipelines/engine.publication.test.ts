@@ -1,3 +1,5 @@
+// Pre-S5 embedded-flow execution cases stay as history until S8 deletion.
+// Supported run-reviewer cases and flows/retirement.test.ts remain active.
 import { expect, test, spawn, fs, path, tickPipelines, createPipelineFromRequest, loadPipelines, savePipelines, patchPipeline, harness, create } from "./engine.fixture";
 import { os, engineModule, finishReported, realExec, pipelineIdentity } from "./engine.fixture";
 import { realProvisionExec } from "./git";
@@ -191,7 +193,8 @@ for (const refusal of ["unknown", "running", "owned", "redirect", "closed", "hid
       lane.runs[1]!.attempts = [attempt]; lane.cursor!.stageId = "review";
     }
     savePipelines([lane, ...owners]); const before = structuredClone(f.current().delivery);
-    expect(await engineModule.patchPipeline(lane.id, { action: "set-delivery-remote", remote: refusal === "unknown" ? "missing" : "origin" }, f.h.ports)).toMatchObject({ status: 409 });
+    expect(await engineModule.patchPipeline(lane.id, { action: "set-delivery-remote", remote: refusal === "unknown" ? "missing" : "origin" }, f.h.ports))
+      .toMatchObject(refusal === "review-flow" ? { status: 410, code: "STAGE_KIND_RETIRED" } : { status: 409 });
     expect(f.current().delivery).toEqual(before);
   } finally { f.cleanup(); }
 });
@@ -282,7 +285,7 @@ test("a local comparison takeover keeps its new owner local until a remote is ad
   } finally { f.cleanup(); }
 });
 
-test("legacy review delivery keeps the origin fetch repository fence with a separate push URL", async () => {
+test("legacy review creation refuses even with a separate origin push URL", async () => {
   const f = await repository();
   try {
     await f.addRemote(); const pushRemote = await f.addRemote("push-target");
@@ -291,7 +294,7 @@ test("legacy review delivery keeps the origin fetch repository fence with a sepa
       { id: "plan", kind: "run", role: { roleId: "architect" }, prompt: "Plan", next: "review" },
       { id: "review", kind: "review-loop", role: { roleId: "reviewer" }, prompt: "Review", next: null },
     ] });
-    expect(result).toMatchObject({ status: 400, error: expect.stringContaining("origin repository") });
+    expect(result).toMatchObject({ status: 410, code: "STAGE_KIND_RETIRED" });
     expect(loadPipelines()).toHaveLength(0);
   } finally { f.cleanup(); }
 });
@@ -304,10 +307,12 @@ const legacyReviewStages = [
 test.each([
   { label: "origin push URL", remote: undefined, splitOrigin: true },
   { label: "named remote", remote: "delivery", splitOrigin: false },
-] as const)("remote adoption refuses a legacy review target outside origin fetch repository via $label", async ({ remote, splitOrigin }) => {
+] as const)("retired legacy review refuses remote adoption via $label", async ({ remote, splitOrigin }) => {
   const f = await repository();
   try {
-    const lane = await f.start({ publication: "internal", stages: structuredClone(legacyReviewStages) as unknown as CreatePipelineRequest["stages"] });
+    const lane = await f.start({ publication: "internal" });
+    lane.stages[1]!.kind = "review-loop";
+    savePipelines([lane]);
     await f.addRemote();
     const other = await f.addRemote("other");
     if (splitOrigin) await f.git(f.repo, "remote", "set-url", "--push", "origin", other);
@@ -315,24 +320,19 @@ test.each([
     const before = structuredClone(f.current().delivery);
 
     expect(await engineModule.patchPipeline(lane.id, { action: "set-delivery-remote", ...(remote ? { remote } : {}) }, f.h.ports))
-      .toMatchObject({ status: 400, error: expect.stringContaining("origin repository") });
+      .toMatchObject({ status: 410, code: "STAGE_KIND_RETIRED" });
     expect(f.current().delivery).toEqual(before);
     expect(f.current().delivery!.epoch).toBe(1);
   } finally { f.cleanup(); }
 });
 
-test("legacy review adoption from origin publishes the accepted head and launches review", async () => {
+test("legacy review creation refuses before any stage or delivery is admitted", async () => {
   const f = await repository();
   try {
-    const lane = await f.start({ publication: "internal", stages: structuredClone(legacyReviewStages) as unknown as CreatePipelineRequest["stages"] });
-    lane.publication = "remote-branch";
-    savePipelines([lane]);
-    const origin = await f.addRemote();
-    expect((await engineModule.patchPipeline(lane.id, { action: "set-delivery-remote" }, f.h.ports)).error).toBeUndefined();
-    await f.pass(1);
-    expect(f.current()).toMatchObject({ cursor: { stageId: "review", state: "reviewing" } });
-    expect(f.h.flowRequests).toHaveLength(1);
-    expect(f.h.flowRequests[0]).toMatchObject({ targetSha: f.current().lastPassedCommit, headRef: lane.branch, requireRemoteHead: true });
-    expect(await f.git(origin, "rev-parse", `refs/heads/${lane.branch}`)).toBe(f.current().lastPassedCommit);
+    expect(await f.create({ publication: "internal", stages: structuredClone(legacyReviewStages) as unknown as CreatePipelineRequest["stages"] }))
+      .toMatchObject({ status: 410, code: "STAGE_KIND_RETIRED" });
+    expect(loadPipelines()).toHaveLength(0);
+    expect(f.h.spawnInputs).toHaveLength(0);
+    expect(f.h.flowRequests).toHaveLength(0);
   } finally { f.cleanup(); }
 });

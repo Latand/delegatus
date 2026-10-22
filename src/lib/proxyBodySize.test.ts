@@ -1,15 +1,24 @@
+import "next/dist/server/node-environment-baseline";
 import { expect, test } from "bun:test";
 import type { IncomingMessage } from "node:http";
 import { Readable } from "node:stream";
 import { getCloneableBody } from "next/dist/server/body-streams";
 import { PHASE_DEVELOPMENT_SERVER } from "next/constants";
+import { unstable_doesMiddlewareMatch as doesProxyMatch } from "next/experimental/testing/server";
+import { config as proxyConfig } from "@/proxy";
 
 import configureNext from "../../next.config";
-import { MAX_INBOX_FILES_TOTAL_BYTES } from "./filePolicy";
+import { MAX_INLINE_INBOX_FILE_BYTES } from "./filePolicy";
 import { admitRuntimeImagePayload } from "./runtime/runtimeImageAdmission";
 import { MAX_STRUCTURED_IMAGE_TOTAL_BYTES } from "./runtime/runtimeImageStore";
 
 const nextConfig = configureNext(PHASE_DEVELOPMENT_SERVER);
+
+test("raw composer uploads bypass Next's body clone while message routes retain it", () => {
+  expect(nextConfig.experimental?.proxyClientMaxBodySize).toBe(80 * 1024 * 1024);
+  expect(doesProxyMatch({ config: proxyConfig, nextConfig, url: "/api/composer-upload" })).toBe(false);
+  expect(doesProxyMatch({ config: proxyConfig, nextConfig, url: "/api/runtime/send" })).toBe(true);
+});
 
 function png(bytes: number) {
   const data = Buffer.alloc(bytes);
@@ -50,7 +59,7 @@ test("the combined supported image and file payload reaches the route intact", a
   const images = Array.from({ length: 4 }, () => png(MAX_STRUCTURED_IMAGE_TOTAL_BYTES / 4));
   const files = Array.from({ length: 2 }, (_, i) => ({
     name: `attachment-${i}.bin`, mime: "application/octet-stream",
-    base64: Buffer.alloc(MAX_INBOX_FILES_TOTAL_BYTES / 2).toString("base64"),
+    base64: Buffer.alloc(MAX_INLINE_INBOX_FILE_BYTES).toString("base64"),
   }));
   const received = await throughProxy({ text: "Inspect attachments", images, files });
   expect(received.images.map((image: { base64: string }) => image.base64.length))

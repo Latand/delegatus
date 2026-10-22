@@ -8,6 +8,7 @@ import { PrePollCpuAdmissionQueue } from "./cpuAdmission.prePoll.fixture";
 import { CpuAdmissionQueue, cpuAdmissionFile, CPU_QUEUE_ABANDONED_MS, CPU_QUEUE_MAX_WAIT_MS, CPU_QUEUE_SPACING_MS, CPU_QUEUE_STALE_GRACE_MS, CPU_QUEUE_UNPOLLED_MS } from "./cpuAdmission";
 import { cpuQueueDetail, ordinal, parseCpuQueueDetail } from "./cpuQueueText";
 import { captureProcessIdentity } from "../processIdentity";
+import { CPU_TASK_PRIORITY_SQL, cpuPriorityEnv, cpuPriorityFromEnv, readCpuPriority } from "./cpuPriority";
 
 const directories: string[] = [];
 const queues: { close(): void }[] = [];
@@ -23,6 +24,186 @@ function fixture(unpolledMs = Number.POSITIVE_INFINITY) {
   return { open, file, at: (value: number) => { now = value; } };
 }
 const FOREIGN = `stage:${"b".repeat(64)}:895e3de4:plan:1`, LIVE = `stage:${"0".repeat(64)}:762633d8:build:1`;
+
+test("priority orders levels strictly and preserves FIFO within each level despite reverse polling", () => {
+  const f = fixture(), q = f.open(), tasks = priorityTasks(f.file);
+  const entries = [["low-first", "low"], ["normal-first", "normal"], ["high-first", "high"], ["low-second", "low"], ["normal-second", "normal"], ["high-second", "high"]] as const;
+  for (const [key, priority] of entries) { tasks.set(key, priority); q.check(key, false, undefined, true, tasks.source([key])); }
+  const order = ["high-first", "high-second", "normal-first", "normal-second", "low-first", "low-second"];
+  for (const key of [...order].reverse()) expect(q.check(key, false)?.position).toBe(order.indexOf(key) + 1);
+  for (const [index, key] of order.entries()) {
+    f.at(index * CPU_QUEUE_SPACING_MS);
+    expect(q.check(key, true)).toBeNull();
+  }
+  tasks.close();
+});
+
+function priorityTasks(file: string) {
+  const database = `${file}.tasks`;
+  const db = new Database(database, { create: true });
+  let closed = false;
+  const close = () => { if (!closed) { db.close(); closed = true; } };
+  queues.push({ close });
+  db.exec("CREATE TABLE state_rows (collection TEXT, row_key TEXT, value_json TEXT, PRIMARY KEY(collection, row_key))");
+  const set = (id: string, priority: string) => db.query("INSERT OR REPLACE INTO state_rows VALUES ('tasks', ?, ?)").run(`t:${id}`, JSON.stringify({ priority }));
+  set("first", "normal"); set("raised", "low");
+  return { database, db, set, close, source: (taskIds: string[]) => ({ database, taskIds }) };
+}
+
+test("a waiting task raised by another writer moves ahead before its own next poll, retaining FIFO age", () => {
+  const f = fixture(), q = f.open(), tasks = priorityTasks(f.file);
+  try {
+    q.check("stage:first", false, undefined, true, tasks.source(["first"]));
+    f.at(10);
+    q.check("stage:raised", false, undefined, true, tasks.source(["raised"]));
+    tasks.set("raised", "high");
+    expect(q.check("stage:first", true)).toMatchObject({ position: 2 });
+    expect(q.check("stage:raised", false)).toMatchObject({ position: 1, priority: "high", since: 10 });
+    tasks.set("raised", "low");
+    expect(q.check("stage:raised", false)).toMatchObject({ position: 2, priority: "low", since: 10 });
+  } finally { tasks.close(); }
+});
+
+test("a pre-upgrade gate cannot admit normal work ahead of an observed high-priority stage", () => {
+  const m = mixed(), older = m.older(), q = m.open(), tasks = priorityTasks(m.file);
+  tasks.set("first", "high");
+  q.check("stage:high", false, undefined, true, tasks.source(["first"]));
+
+  // This is the pinned older helper: its SQL knows only seq and ignores the
+  // priority/source columns introduced by the upgraded release.
+  expect(older.check("command:normal", true, captureProcessIdentity(process.pid))).toMatchObject({ position: 2 });
+  expect(older.check("command:normal-second", true, captureProcessIdentity(process.pid))).toMatchObject({ position: 3 });
+  expect(q.check("stage:high", false)?.position).toBe(1);
+  expect(q.check("command:normal", false, captureProcessIdentity(process.pid))?.position).toBe(2);
+  expect(q.check("command:normal-second", false, captureProcessIdentity(process.pid))?.position).toBe(3);
+  tasks.close();
+});
+
+test("legacy inserts restore priority and FIFO seq order even when the new normal rank is unchanged", () => {
+  const m = mixed(), older = m.older(), q = m.open(), tasks = priorityTasks(m.file);
+  try {
+    tasks.set("first", "low");
+    q.check("stage:low-first", false, undefined, true, tasks.source(["first"]));
+    // The older helper inserts normal rows without knowing about priority or
+    // fifo_seq. That insertion must still repair the fixed seq view.
+    expect(older.check("command:normal-first", false, captureProcessIdentity(process.pid))).toMatchObject({ position: 1 });
+    expect(older.check("command:normal-second", false, captureProcessIdentity(process.pid))).toMatchObject({ position: 2 });
+    expect(m.read<{ key: string; seq: number; priority: number }>("SELECT key, seq, priority FROM tickets ORDER BY seq")).toEqual([
+      { key: "command:normal-first", seq: 1, priority: 1 },
+      { key: "command:normal-second", seq: 2, priority: 1 },
+      { key: "stage:low-first", seq: 3, priority: 2 },
+    ]);
+    expect(older.check("command:normal-first", true, captureProcessIdentity(process.pid))).toBeNull();
+
+    m.at(CPU_QUEUE_SPACING_MS);
+    tasks.set("raised", "normal");
+    expect(q.check("stage:normal-first", false, undefined, true, tasks.source(["raised"]))).toMatchObject({ position: 2 });
+    m.at(CPU_QUEUE_SPACING_MS + 1);
+    expect(older.check("command:normal-second", false, captureProcessIdentity(process.pid))).toMatchObject({ position: 1 });
+
+    q.close(); queues.splice(queues.indexOf(q), 1);
+    const reopened = m.open();
+    expect(reopened.check("command:normal-second", false, captureProcessIdentity(process.pid))).toMatchObject({ position: 1 });
+    tasks.set("first", "high");
+    expect(reopened.check("stage:low-first", false, undefined, false, tasks.source(["first"]))).toMatchObject({ position: 1, priority: "high" });
+    expect(reopened.check("command:normal-second", false, captureProcessIdentity(process.pid))).toMatchObject({ position: 2 });
+    expect(reopened.check("stage:normal-first", false, undefined, false, tasks.source(["raised"]))).toMatchObject({ position: 3 });
+    expect(older.check("command:normal-second", false, captureProcessIdentity(process.pid))).toMatchObject({ position: 2 });
+  } finally { tasks.close(); }
+});
+
+test("opening a queue repairs the legacy sequence order left by an earlier checker", () => {
+  const f = fixture(), q = f.open(), tasks = priorityTasks(f.file);
+  try {
+    tasks.set("first", "low");
+    q.check("stage:low", false, undefined, true, tasks.source(["first"]));
+    q.close(); queues.splice(queues.indexOf(q), 1);
+    const older = new PrePollCpuAdmissionQueue(f.file); queues.push(older);
+    expect(older.check("command:normal", false, captureProcessIdentity(process.pid))).toMatchObject({ position: 1 });
+    older.close(); queues.splice(queues.indexOf(older), 1);
+    const legacyDb = new Database(f.file);
+    legacyDb.exec("UPDATE tickets SET seq = seq + 10");
+    legacyDb.query("UPDATE tickets SET seq = 1 WHERE key = ?").run("stage:low");
+    legacyDb.query("UPDATE tickets SET seq = 2 WHERE key = ?").run("command:normal");
+    legacyDb.close();
+
+    const reopened = f.open();
+    expect(reopened.check("command:normal", true, captureProcessIdentity(process.pid))).toBeNull();
+    expect(reopened.check("stage:low", false, undefined, false, tasks.source(["first"]))).toMatchObject({ position: 1 });
+  } finally { tasks.close(); }
+});
+
+test("task priority reads only primary-key priorities, with normal defaults and the highest linked task", () => {
+  const f = fixture(), tasks = priorityTasks(f.file);
+  try {
+    // Invalid unrelated payloads prove this lookup never decodes task history.
+    tasks.db.transaction(() => { for (let i = 0; i < 5000; i++) tasks.db.query("INSERT INTO state_rows VALUES ('tasks', ?, 'unreadable')").run(`t:history-${i}`); })();
+    expect(readCpuPriority(tasks.source([]))).toBe("normal");
+    expect(readCpuPriority(tasks.source(["missing"]))).toBe("normal");
+    expect(readCpuPriority(tasks.source(["raised", "missing"]))).toBe("low");
+    expect(readCpuPriority(tasks.source(["raised", "first", "raised"]))).toBe("normal");
+    tasks.set("first", "high");
+    expect(readCpuPriority(tasks.source(["raised", "first"]))).toBe("high");
+    const plan = tasks.db.query<{ detail: string }, [string]>(`EXPLAIN QUERY PLAN ${CPU_TASK_PRIORITY_SQL}`).all("t:first");
+    expect(plan.map(row => row.detail).join(" ")).toContain("SEARCH state_rows USING INDEX sqlite_autoindex_state_rows_1 (collection=? AND row_key=?)");
+    expect(cpuPriorityFromEnv(cpuPriorityEnv(tasks.source(["first"])))).toEqual(tasks.source(["first"]));
+    expect(cpuPriorityFromEnv({})).toEqual({ database: "", taskIds: [] });
+    expect(() => cpuPriorityFromEnv({ LLV_GATE_CPU_PRIORITY_SOURCE: '{"priority":"urgent"}' })).toThrow("Invalid CPU task priority binding");
+  } finally { tasks.close(); }
+});
+
+test("unavailable task priority refuses admission and recovers without replacing the ticket", () => {
+  const f = fixture(), q = f.open(), tasks = priorityTasks(f.file);
+  q.check("stage:one", false, undefined, true, tasks.source(["first"]));
+  tasks.db.exec("BEGIN EXCLUSIVE");
+  try { expect(() => q.check("stage:one", true)).toThrow(); }
+  finally { tasks.db.exec("ROLLBACK"); }
+  expect(q.check("stage:one", false)).toMatchObject({ since: 0, position: 1 });
+  tasks.close();
+});
+
+test("a real checker restart and pending-stage recovery preserve priority, sequence and age", async () => {
+  const f = fixture(), q = f.open(), tasks = priorityTasks(f.file);
+  q.check("stage:normal", false);
+  q.check("stage:high-first", false, undefined, true, tasks.source(["first"]));
+  tasks.set("raised", "high");
+  q.check("stage:high-second", false, undefined, true, tasks.source(["raised"]));
+  tasks.set("first", "high");
+  tasks.close();
+  const script = `const { CpuAdmissionQueue } = await import(process.argv[1]); const q = new CpuAdmissionQueue(process.argv[2], () => 1); q.reconcile('stage:', new Set(['stage:normal', 'stage:high-first', 'stage:high-second'])); console.log(JSON.stringify(['stage:normal', 'stage:high-second', 'stage:high-first'].map(key => q.check(key, false)))); q.close();`;
+  const child = Bun.spawn([process.execPath, "-e", script, path.join(import.meta.dir, "cpuAdmission.ts"), f.file], { stdout: "pipe", stderr: "pipe" });
+  const [out, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect(error).toBe(""); expect(code).toBe(0);
+  expect(JSON.parse(out).map((wait: { position: number; since: number }) => [wait.position, wait.since])).toEqual([[3, 0], [2, 0], [1, 0]]);
+});
+
+test("the gate helper inherits a publication's task binding through wait and fresh claim processes", async () => {
+  const f = fixture(), tasks = priorityTasks(f.file), directory = path.dirname(f.file);
+  let observerTime = 0;
+  const q = new CpuAdmissionQueue(path.join(directory, "admission.sqlite"), () => observerTime); queues.push(q);
+  const owner = captureProcessIdentity(process.pid);
+  const env = { ...process.env, ...cpuPriorityEnv(tasks.source(["first"])), LLV_GATE_LOCK_DIR: directory,
+    LLV_GATE_SLOTS: "1", LLV_GATE_SLOT_LEASE: "", DELEGATUS_CPU_PRESSURE: "off" };
+  const run = async (mode: string) => {
+    const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "../../../scripts/cpu-admission.ts"), mode, "command:publication-gate", String(process.pid)], { env, stdout: "pipe", stderr: "pipe" });
+    const [out, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect(out).toBe(""); expect(error).toBe(""); return code;
+  };
+  try {
+    q.check("command:normal", false, owner);
+    tasks.set("first", "high");
+    expect(await run("--wait")).toBe(0);
+    observerTime = CPU_QUEUE_SPACING_MS + 1;
+    // Read the durable wait state without attempting admission: that check
+    // would legitimately admit this entry after the spacing window elapsed.
+    expect(q.check("command:normal", false, owner)?.position).toBe(2);
+    tasks.set("first", "low");
+    expect(await run("--claim")).toBe(75);
+    tasks.set("first", "high");
+    expect(await run("--claim")).toBe(0);
+    expect(q.check("command:normal", false, owner)?.position).toBe(1);
+  } finally { tasks.close(); }
+});
 
 test("a direct test invocation resolves its default queue inside its chosen state", () => {
   const environment = { ...process.env }, directory = fs.mkdtempSync(path.join(os.tmpdir(), "cpu-test-routing-"));
@@ -123,9 +304,9 @@ test("slot readiness leaves the head durable until claim; cancellation frees onl
 });
 
 test("queue details carry remaining whole minutes and English ordinals", () => {
-  expect(cpuQueueDetail(2, 61_000)).toBe("Waiting for the CPU queue · 2nd · up to 2 min");
-  expect(parseCpuQueueDetail(cpuQueueDetail(12, 0))).toEqual({ position: 12, minutes: 0 });
-  expect(parseCpuQueueDetail(`${cpuQueueDetail(2, 61_000)} · Viewer publication: owner; owner viewer, epoch 1`)).toEqual({ position: 2, minutes: 2 });
+  expect(cpuQueueDetail(2, 61_000)).toBe("Waiting for the CPU queue · 2nd · up to 2 min · normal priority");
+  expect(parseCpuQueueDetail(cpuQueueDetail(12, 0))).toEqual({ position: 12, minutes: 0, priority: "normal" });
+  expect(parseCpuQueueDetail(`${cpuQueueDetail(2, 61_000)} · Viewer publication: owner; owner viewer, epoch 1`)).toEqual({ position: 2, minutes: 2, priority: "normal" });
   expect(parseCpuQueueDetail(`${cpuQueueDetail(2, 61_000)} · unknown detail`)).toBeNull();
   expect([1, 2, 3, 4, 11, 12, 13, 21].map(ordinal)).toEqual(["1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st"]);
 });
@@ -396,7 +577,7 @@ test("releases racing to open an older queue describe it once and keep its live 
   // Every racer queued behind the command and the live stage, none in its place.
   expect(waits.sort()).toEqual([3, 4, 5, 6, 7, 8]);
   expect(m.row(LIVE)).toEqual(first);
-  expect(m.read<{ n: number }>("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'trigger'")).toEqual([{ n: 6 }]);
+  expect(m.read<{ n: number }>("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'trigger'")).toEqual([{ n: 7 }]);
   expect(older.check(LIVE, true)).toMatchObject({ since: 0, position: 2 });
 });
 
@@ -414,7 +595,7 @@ test("a queue the first cut of this change left half-described keeps its live ti
   expect(q.check("stage:later", true)).toMatchObject({ position: 2 });
   expect(m.row(LIVE)).toEqual(first);
   expect(m.read("SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name")).toEqual(
-    ["suspended_hold", "suspended_keep", "suspended_release", "tickets_gone", "tickets_poll", "tickets_queued"].map(name => ({ name })));
+    ["suspended_hold", "suspended_keep", "suspended_release", "tickets_fifo", "tickets_gone", "tickets_poll", "tickets_queued"].map(name => ({ name })));
   m.at(2 * CPU_QUEUE_ABANDONED_MS + CPU_QUEUE_UNPOLLED_MS + 1);
   expect(q.check("stage:later", true)).toBeNull();
 });
@@ -464,7 +645,7 @@ test("a head past its bound while nothing is admitted reads as a stalled queue",
   q.check("command:holder", true, holder, false);
   const wait = q.check(LIVE, true)!;
   expect(wait).toMatchObject({ position: 2, stalledMs: 62 * 60_000 });
-  expect(cpuQueueDetail(wait.position, wait.remainingMs, wait.stalledMs)).toBe("Waiting for the CPU queue · 2nd · stalled for 62 min");
+  expect(cpuQueueDetail(wait.position, wait.remainingMs, wait.stalledMs)).toBe("Waiting for the CPU queue · 2nd · stalled for 62 min · normal priority");
   // Admission moving again clears the reading at once.
   expect(q.check("command:holder", true, holder)).toBeNull();
   expect(q.check(LIVE, true)).toEqual({ since: 0, position: 1, remainingMs: CPU_QUEUE_SPACING_MS });
@@ -472,7 +653,12 @@ test("a head past its bound while nothing is admitted reads as a stalled queue",
 
 test("the stalled wait detail parses beside the bounded one", () => {
   expect(parseCpuQueueDetail("Waiting for the CPU queue · 2nd · up to 7 min")).toEqual({ position: 2, minutes: 7 });
-  expect(parseCpuQueueDetail(cpuQueueDetail(7, 1, 62 * 60_000))).toEqual({ position: 7, minutes: 62, stalled: true });
-  expect(parseCpuQueueDetail(`${cpuQueueDetail(7, 1, 90_000)} · Viewer publication: owner; owner viewer, epoch 1`)).toEqual({ position: 7, minutes: 1, stalled: true });
+  expect(parseCpuQueueDetail(cpuQueueDetail(7, 1, 62 * 60_000))).toEqual({ position: 7, minutes: 62, priority: "normal", stalled: true });
+  expect(parseCpuQueueDetail(`${cpuQueueDetail(7, 1, 90_000)} · Viewer publication: owner; owner viewer, epoch 1`)).toEqual({ position: 7, minutes: 1, priority: "normal", stalled: true });
   expect(parseCpuQueueDetail("Waiting for the CPU queue · 2nd · stalled for 3 min · unknown detail")).toBeNull();
 });
+
+ test.each(["high", "normal", "low"] as const)("new %s queue text round-trips beside legacy text", priority => {
+  expect(parseCpuQueueDetail(cpuQueueDetail(3, 120_000, undefined, priority))).toEqual({ position: 3, minutes: 2, priority });
+  expect(parseCpuQueueDetail(cpuQueueDetail(3, 0, 180_000, priority))).toEqual({ position: 3, minutes: 3, priority, stalled: true });
+ });

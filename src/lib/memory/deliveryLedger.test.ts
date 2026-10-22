@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { stateLockWaitsInFlight } from "@/lib/state/lockWait";
+import { assertStateChildSuccess } from "@/lib/state/stateChildResult.fixture";
 import { learnedRulesForLaunchProfile } from "./roleLaunch";
 import { DELIVERY_LEDGER_STARTS, engineMemoryVersion, memoryDeliveries, type MemoryEngineStart } from "./deliveryLedger";
 import { learnedRulesSnapshot, leaveLessons, recordLessonRequest, roleMemoryCollection } from "./roleStore";
@@ -25,7 +26,7 @@ async function runChild(script: string): Promise<void> {
     const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => { child.kill("SIGKILL"); void child.exited.then(() => reject(Error("memory-ledger child exceeded its deadline"))); }, 30_000); });
     const result = Promise.all([child.exited, new Response(child.stderr).text()]);
     const [code, stderr] = await Promise.race([result, timeout]);
-    expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+    assertStateChildSuccess(code, stderr);
   } finally { if (timer) clearTimeout(timer); }
 }
 function lesson(rule: string, attempt = 1, rewrite?: string) {
@@ -119,7 +120,7 @@ test("retention survives a real process restart and removes only unreferenced fi
 import { learnedRulesForLaunchProfile } from ${JSON.stringify(path.join(import.meta.dir, "roleLaunch.ts"))}; await learnedRulesForLaunchProfile(${JSON.stringify(profile)}, ${JSON.stringify(input)});`;
   const child = Bun.spawn([process.execPath, "-e", script], { env: { ...process.env, HOME: input.home, XDG_CONFIG_HOME: path.join(input.home!, "config") }, stdout: "pipe", stderr: "pipe" });
   const [code, error] = await Promise.all([child.exited, new Response(child.stderr).text()]);
-  expect(error).toBe(""); expect(code).toBe(0);
+  assertStateChildSuccess(code, error);
   expect(memoryDeliveries()[0]!.sequence).toBe(DELIVERY_LEDGER_STARTS);
   expect(memoryDeliveries()[1]!.delivery.engineMemory[0]!.hash).toBe(digest("Current engine version."));
   expect(engineMemoryVersion(oldHash)).toBeNull();
