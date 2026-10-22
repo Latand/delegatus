@@ -12,6 +12,9 @@ import { ownerRelayAuthorized } from "./ownerAuthority";
 export type TransportResult = { body: ExternalRelayCompletion; delivery: RelayAnswerDelivery };
 type Frame = { type: "ready" } | { type: "heartbeat"; seq: number; phase: "attempt" | "acknowledged" | "failed" | "completion_pending" | "post_completion"; status: number; code?: string }
   | { type: "completion"; result?: TransportResult; error?: true } | { type: "refresh_features" } | { type: "drained" };
+// A validated 128 KB answer may expand to 768 KB when JSON escapes control
+// characters. Keep an explicit per-frame cap with room for the envelope.
+const MAX_FRAME_BYTES = 1024 * 1024;
 export function relayLeaseTransportLaunch(cwd = process.cwd()) {
   const source = path.join(cwd, "src/lib/externalRelay/relayLease.worker.ts");
   const bundled = path.join(cwd, ".next/server/relay-lease-worker.js");
@@ -63,10 +66,10 @@ export class RelayLeaseTransport {
 
   private read(chunk: string) {
     this.buffer += chunk;
-    if (Buffer.byteLength(this.buffer) > 64 * 1024) { this.fail(new Error("relay lease helper exceeded its frame bound")); endLeasedHelper(this.child); return; }
     let end: number;
     while ((end = this.buffer.indexOf("\n")) >= 0) {
       const line = this.buffer.slice(0, end); this.buffer = this.buffer.slice(end + 1);
+      if (Buffer.byteLength(line) > MAX_FRAME_BYTES) { this.fail(new Error("relay lease helper exceeded its frame bound")); endLeasedHelper(this.child); return; }
       try {
         const frame = JSON.parse(line) as Frame;
         if (frame.type === "ready") { this.readyResolve(); continue; }
@@ -81,6 +84,7 @@ export class RelayLeaseTransport {
         throw new Error("invalid relay lease helper frame");
       } catch { this.fail(new Error("invalid relay lease helper response")); endLeasedHelper(this.child); return; }
     }
+    if (Buffer.byteLength(this.buffer) > MAX_FRAME_BYTES) { this.fail(new Error("relay lease helper exceeded its frame bound")); endLeasedHelper(this.child); }
   }
 
   progress(progress: ExternalRelayProgress | null) { this.send({ type: "progress", progress }); }

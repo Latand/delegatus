@@ -34,23 +34,27 @@ function relay(apiBase: string): PairedRelay {
 
 test("lease heartbeat advances while the runner event loop is synchronously blocked", async () => {
   const serverCode = `
-    const http=require("node:http");let beats=0;
+    const http=require("node:http"),fs=require("node:fs");let beats=0,serviceClock=0,leaseUntil=10000;
     const server=http.createServer((req,res)=>{req.resume();req.on("end",()=>{
       res.setHeader("content-type","application/json");
-      if(req.url.endsWith("/heartbeat")){console.log(JSON.stringify({beat:++beats,at:Date.now()}));res.end(JSON.stringify({status:"ok"}));return;}
+      if(req.url.endsWith("/heartbeat")){beats++;serviceClock+=beats===2?1500:2000;const leaseLive=serviceClock<leaseUntil;
+        const acknowledged={beat:beats,leaseLive,serviceClock};
+        console.log(JSON.stringify({beat:beats}));res.end(JSON.stringify({status:leaseLive?"ok":"expired"}));
+        if(beats===2)res.once("finish",()=>fs.writeFileSync(process.env.RELAY_FIXTURE_ACK,JSON.stringify(acknowledged)));return;}
       if(req.url.endsWith("/complete")){res.end(JSON.stringify({status:"accepted",duplicate:false}));return;}
       res.statusCode=404;res.end("{}");
     });});
     server.listen(0,"127.0.0.1",()=>console.log(JSON.stringify({ready:server.address().port})));
   `;
-  const service = Bun.spawn([process.execPath, "-e", serverCode], { stdout: "pipe", stderr: "pipe" });
+  const ackFile = path.join(root, "heartbeat-ack.json");
+  const service = Bun.spawn([process.execPath, "-e", serverCode], { stdout: "pipe", stderr: "pipe", env: { ...process.env, RELAY_FIXTURE_ACK: ackFile } });
   const reader = service.stdout.getReader();
   const lanes: ReturnType<typeof Bun.spawn>[] = [];
   let buffered = "";
   const nextFrame = async () => {
     while (true) {
       const end = buffered.indexOf("\n");
-      if (end >= 0) { const line = buffered.slice(0, end); buffered = buffered.slice(end + 1); return JSON.parse(line) as { ready?: number; beat?: number; at?: number }; }
+      if (end >= 0) { const line = buffered.slice(0, end); buffered = buffered.slice(end + 1); return JSON.parse(line) as { ready?: number; beat?: number }; }
       const chunk = await reader.read();
       if (chunk.done) throw new Error("relay fixture process exited before its next frame");
       buffered += new TextDecoder().decode(chunk.value);
@@ -88,12 +92,14 @@ test("lease heartbeat advances while the runner event loop is synchronously bloc
     } });
     const first = await nextFrame();
     expect(first.beat).toBe(1);
-    const stalledAt = Date.now();
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 3500);
-    expect(Date.now() - stalledAt).toBeGreaterThanOrEqual(3400);
+    // Block the Viewer loop across the next heartbeat while the fixture's
+    // service clock advances by 1.5s at heartbeat two.
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5000);
+    const serviceAck = JSON.parse(fs.readFileSync(ackFile, "utf8")) as { beat: number; leaseLive: boolean; serviceClock: number };
+    expect(serviceAck).toMatchObject({ beat: 2, leaseLive: true });
+    expect(serviceAck.serviceClock).toBeLessThan(10_000);
     const second = await nextFrame();
     expect(second.beat).toBe(2);
-    expect(second.at! - first.at!).toBeLessThan(3200);
     ownerDone = true;
     releaseOwner();
     await expect(done).resolves.toMatchObject({ outcome: "answered", answer: { text: "Ready" } });

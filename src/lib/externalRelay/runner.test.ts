@@ -30,6 +30,9 @@ import { saveTasks, loadTasks } from "@/lib/tasks/store";
 import { telegramRound, telegramTask } from "@/lib/prototypeReview/telegram.fixture";
 import { prototypeCopyLine, prototypeReference } from "@/lib/prototypeReview/telegramAnswer";
 import { prototypeDecisionText } from "@/lib/prototypeReview/decision";
+import { RelayLeaseTransport } from "./relayLeaseTransport";
+import { answerCapabilities, checkedAnswerV2 } from "./answerV2";
+import { richRequest } from "./rich.fixture";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-runner-test-"));
 process.env.LLV_STATE_DIR = path.join(root, "state");
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -122,6 +125,46 @@ test("capacity transition retains zero targets in the journal and ignores confir
       ownerTurn: { clientAttemptId: requestId, cancel: "interrupt", confirmed: true } });
     expect(advertisedSlots(paired)).toEqual([{ target_id: "target_1", free: 3 }]);
   } finally { journal.mockRestore(); for (const id of ["slot-old-a", "slot-old-b", "slot-current"]) dropRun(id); }
+});
+
+for (const downgrade of [false, true]) test(`production lease helper preserves a valid large Unicode completion${downgrade ? " through attachment downgrade" : ""}`, async () => {
+  const request = richRequest(true);
+  const text = "😀".repeat(20_000);
+  const answer = checkedAnswerV2({ action: "reply", text, reply_to: "m1", format: "rich_markdown", buttons: [] }, request,
+    answerCapabilities(request, "codex"), { handoff: true, ignore: true, stagedAttachments: 1 });
+  expect(answer).not.toBeNull();
+  expect(Buffer.byteLength(answer!.text)).toBe(80_000);
+  const body = { lease_id: request.lease_id, outcome: "answered" as const, duration_ms: 0, answer: {
+    action: "reply" as const, text, reply_to: "m1", format: "rich_markdown" as const, buttons: [],
+    ...(downgrade ? { attachments: [{ attachment_id: "fixture_attachment", kind: "document" as const }] } : {}),
+  } };
+  const posts: typeof body[] = [];
+  const server = await startTestRelay((req, value) => {
+    if (req.url?.endsWith("/heartbeat")) return { body: { status: "ok" } };
+    if (req.url?.endsWith("/complete")) {
+      posts.push(value as typeof body);
+      if (downgrade && posts.length === 1) return { status: 422, body: { error: { code: "attachment_not_ready", message: "not ready" } } };
+      return { body: { status: "accepted", duplicate: false } };
+    }
+    return { status: 404, body: {} };
+  });
+  const paired = relay(`${server.origin}/v1`);
+  const transport = new RelayLeaseTransport(paired, request.request_id, request.target_id, request.lease_id, 10_000, () => {});
+  try {
+    await transport.ready;
+    const result = await transport.complete(body, Date.now() + 10_000, 4000);
+    expect(result.delivery).toBe("accepted");
+    expect(result.body.outcome).toBe("answered");
+    if (result.body.outcome !== "answered") throw new Error("accepted fixture returned no answer");
+    expect(result.body.answer.text).toBe(text);
+    expect(result.body.answer.attachments).toBeUndefined();
+    expect(posts).toHaveLength(downgrade ? 2 : 1);
+    expect(posts.at(-1)?.answer.text).toBe(text);
+    expect(posts.at(-1)?.answer.attachments).toBeUndefined();
+  } finally {
+    await transport.close();
+    await server.close();
+  }
 });
 
 for (const refusalBeforeAck of [false, true]) test(`accepted completion releases capacity before chain cleanup and labels a racing heartbeat refusal (${refusalBeforeAck})`, async () => {
