@@ -1,3 +1,4 @@
+import { fileConfirmationText } from "@/lib/telegram/bot/fileConfirmationContract";
 import { describe, expect } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -5633,5 +5634,106 @@ describe("streamed composer attachments", () => {
       try { await browser?.close(); }
       finally { served.stop(); if (scratchFd !== undefined) fs.closeSync(scratchFd); }
     }
+  }, 120_000);
+});
+
+
+describe("owner confirmation of one Telegram file send", () => {
+  browserTest("the file, destination, warnings and decisions fit both languages and themes", async () => {
+    const output = path.resolve(".artifacts/telegram-file-confirmation");
+    fs.mkdirSync(output, { recursive: true });
+    const served = await serveEvidenceFixture(output, FIXTURE);
+    let browser: Browser | null = null;
+    const evidence: Array<Record<string, unknown>> = [];
+    try {
+      browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+      for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 900 }]) {
+        for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+          for (const state of ["pending", "sent", "rejected", "expired", "uncertain", "failed", "unavailable", "owner"] as const) {
+            const name = `${viewport.width}-${lang}-${theme}-${state}`;
+            const { context, page, pageErrors } = await openFixture(browser, `${served.base}?case=file-confirmation&state=${state}&lang=${lang}&id=fixture-confirmation`, viewport, theme, lang);
+            try {
+              const words = fileConfirmationText[lang];
+              const status = page.getByRole("status");
+              await page.waitForFunction(() => !/Loading|Завантаження/.test(document.querySelector('[role="status"]')?.textContent ?? "Loading"));
+              // Measure the opening screen before any action or scroll can hide a misplaced state.
+              expect(await status.textContent()).toBe(words[state]);
+              const initialStatus = await status.boundingBox();
+              expect(initialStatus).not.toBeNull();
+              expect(initialStatus!.x).toBeGreaterThanOrEqual(0);
+              expect(initialStatus!.y).toBeGreaterThanOrEqual(0);
+              expect(initialStatus!.x + initialStatus!.width).toBeLessThanOrEqual(viewport.width);
+              expect(initialStatus!.y + initialStatus!.height).toBeLessThanOrEqual(viewport.height);
+              expect(await page.locator("main").evaluate(node => node.scrollTop)).toBe(0);
+              if (state !== "pending") {
+                expect(await page.getByRole("heading", { name: words.title, exact: true }).count()).toBe(0);
+                expect(await page.getByText(words.intro, { exact: true }).count()).toBe(0);
+              }
+              if (state === "pending") {
+                expect(await page.getByText("b".repeat(64), { exact: false }).count()).toBe(1);
+                expect(await page.getByText("document_secret", { exact: false }).count()).toBe(1);
+                expect(await page.getByText(`${words.requestedPath}: /sandbox/handoff/weekly-report.json`, { exact: true }).count()).toBe(1);
+                expect(await page.getByText(`${words.resolvedPath}: /sandbox/.codex/auth.json`, { exact: true }).count()).toBe(1);
+                expect(await page.getByText(words.replyTo, { exact: true }).count()).toBe(1);
+                expect(await page.getByText("42", { exact: true }).count()).toBe(1);
+                expect(await page.getByText(words.format, { exact: true }).count()).toBe(1);
+                expect(await page.getByText(words.silent, { exact: true }).count()).toBe(1);
+                expect(await page.getByText("HTML", { exact: true }).count()).toBe(1);
+                expect(await page.getByText(words.yes, { exact: true }).count()).toBe(1);
+                await page.screenshot({ path: path.join(output, `${name}-top.png`) });
+                const resolved = page.locator("[data-resolved-path]");
+                await resolved.scrollIntoViewIfNeeded();
+                await page.screenshot({ path: path.join(output, `${name}-paths.png`) });
+                const warnings = page.getByRole("region", { name: words.reasons });
+                await warnings.scrollIntoViewIfNeeded();
+                const warningText = await warnings.textContent();
+                expect(warningText).toContain("/sandbox/.codex/auth.json");
+                expect(warningText).toContain(".codex");
+                await page.screenshot({ path: path.join(output, `${name}-warnings.png`) });
+                const approve = page.getByRole("button", { name: words.approve, exact: true });
+                await approve.scrollIntoViewIfNeeded();
+                expect(await approve.isEnabled()).toBe(true);
+                await page.screenshot({ path: path.join(output, `${name}-decision.png`) });
+                await approve.click();
+                await page.getByText(words.sent, { exact: true }).waitFor();
+                await page.waitForFunction(() => {
+                  const status = document.querySelector('[role="status"]')!.getBoundingClientRect();
+                  return status.top >= 0 && status.bottom <= innerHeight;
+                });
+                await page.screenshot({ path: path.join(output, `${name}-sent.png`) });
+                expect(await page.evaluate(() => (window as unknown as { fileConfirmationSends(): number }).fileConfirmationSends())).toBe(1);
+                expect(await page.getByRole("button", { name: words.approve, exact: true }).count()).toBe(0);
+              } else {
+                await page.getByText(words[state], { exact: true }).waitFor();
+                expect(await page.getByRole("button", { name: words.approve, exact: true }).count()).toBe(0);
+                await page.screenshot({ path: path.join(output, `${name}.png`) });
+              }
+              const reading = await page.evaluate(() => {
+                const main = document.querySelector("main")!;
+                const bounds = main.getBoundingClientRect();
+                const walker = document.createTreeWalker(main, NodeFilter.SHOW_TEXT);
+                const clippedText: string[] = [];
+                while (walker.nextNode()) {
+                  const node = walker.currentNode;
+                  if (!node.textContent?.trim()) continue;
+                  const range = document.createRange(); range.selectNodeContents(node);
+                  if ([...range.getClientRects()].some(rect => rect.left < bounds.left - 1 || rect.right > bounds.right + 1)) clippedText.push(node.textContent);
+                }
+                return { overflow: main.scrollWidth - main.clientWidth, clippedText, text: main.textContent, background: getComputedStyle(main).backgroundColor };
+              });
+              expect(reading.overflow).toBeLessThanOrEqual(1);
+              expect(reading.clippedText).toEqual([]);
+              expect(reading.background).not.toBe("rgba(0, 0, 0, 0)");
+              expect(pageErrors).toEqual([]);
+              evidence.push({ frame: name, initialStatus, initialStatusText: words[state], ...reading });
+            } finally { await context.close(); }
+          }
+        }
+      }
+    } finally { await browser?.close(); served.stop(); }
+    fs.mkdirSync("evidence/telegram-file-confirmation", { recursive: true });
+    const { createHash } = await import("node:crypto");
+    const sources = ["src/components/telegram/TelegramFileConfirmation.tsx", "src/lib/telegram/bot/fileConfirmationContract.ts", "src/components/conversation/conversationWindowEvidence.fixture.tsx", "src/components/conversation/conversationWindow.browser.test.tsx"].map(file => ({ path: file, sha256: createHash("sha256").update(fs.readFileSync(file)).digest("hex") }));
+    fs.writeFileSync("evidence/telegram-file-confirmation/geometry.json", JSON.stringify({ sources, frames: evidence }, null, 2) + "\n");
   }, 120_000);
 });
