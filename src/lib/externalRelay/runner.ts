@@ -10,7 +10,7 @@ import { waitForStateLock } from "@/lib/state/lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { resolveOwnerOutboundContext } from "./ownerOutboundContext";
 import { capacityWaiters, olderCapacityWaiter, enterRelayHold, leaveRelayHold, releasingRelayHolds, type RelayHoldCause } from "./hold";
-import { relayRequestDeadline } from "./deadline";
+import { relayRequestDeadline, remainingMs } from "./deadline";
 import { ownerRelayAuthorized, ownerRelayAuthorizedAsync } from "./ownerAuthority";
 import { matchPrototypeAnswer } from "@/lib/prototypeReview/telegramAnswer";
 import { runPrototypeAnswer } from "./prototypeAnswer";
@@ -132,6 +132,7 @@ const declined = (
 });
 /** The line a hand-off carries (§A.8). It is the install's own words: nothing the model wrote. */
 export const HANDOFF_DETAIL = "The agent handed this request to the service's own assistant.";
+export const OWNER_REQUEST_TIMEOUT_DETAIL = "Delegatus ran out of time before the work finished. Check the relay conversation for progress before retrying.";
 export const memberLimitDetail = (limit: number) =>
   `This member reached ${limit} ${limit === 1 ? "answer" : "answers"} in the last hour in this chat.`;
 const failed = (lease_id: string, reason: string): ExternalRelayCompletion => ({
@@ -724,10 +725,11 @@ export async function runClaimedRequest(
         }
         const roundPrompt = loop ? toolRoundPrompt(request, rounds, { results: loop.results, callsLeft: loop.callsLeft(), final, actionSent: loop.actionSent }, target.engine) : answerPrompt(request, target.engine);
         const frame = roundPrompt.slice(roundPrompt.lastIndexOf("[Answer with one JSON object"));
-        if (conversation && rounds === 1) turn = owner ? ownerContinuationPrompt(request, owner, target.hardCapMinutes, conversation) : conversationTurnPrompt(request, conversation, frame);
+        const ownerTarget = owner ? { ...target, hardCapMinutes: Math.max(1, Math.ceil(remainingMs(deadline) / 60_000)) } : target;
+        if (conversation && rounds === 1) turn = owner ? ownerContinuationPrompt(request, owner, ownerTarget.hardCapMinutes, conversation) : conversationTurnPrompt(request, conversation, frame);
         const persistentPrompt = conversation ? rounds === 1 ? turn!.prompt : conversationRoundPrompt(loop!.results.filter((r) => r.round === rounds - 1), frame) : roundPrompt;
         if (conversation) {
-          const promptBytes = Buffer.byteLength(owner ? conversation.conversationId ? turn!.prompt : ownerRunPrompt(request, owner, target.hardCapMinutes) : persistentPrompt);
+          const promptBytes = Buffer.byteLength(owner ? conversation.conversationId ? turn!.prompt : ownerRunPrompt(request, owner, ownerTarget.hardCapMinutes) : persistentPrompt);
           chain = rounds === 1 ? { continued: owner ? !!conversation.conversationId : !!conversation.sessionId, promptBytes }
             : { continued: chain!.continued, promptBytes: chain!.promptBytes + promptBytes };
         }
@@ -754,13 +756,13 @@ export async function runClaimedRequest(
           authorize: () => { if (leaseUnavailable || callAbort.signal.aborted || !allowOwnerReply!()) throw new Error("owner relay authorization revoked"); },
           credentials: [relay.credential],
           inboundContext: inbound?.prompt,
-          request, owner, target, deadline, accountId: selectedAccount().accountId,
-          hardCapMs: Math.min(target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity), ports: runtime?.ownerPorts,
+          request, owner, target: ownerTarget, deadline, accountId: selectedAccount().accountId,
+          hardCapMs: Math.min(remainingMs(deadline), runtime?.timeoutMs ?? Infinity), ports: runtime?.ownerPorts,
           onConversation: async (conversationId, initialPrompt) => {
             await changeRunAsync(requestId, current => ({ ...current, conversationId }), Date.now() + 5000);
             if (conversation) {
               conversation.conversationId = conversationId;
-              const cursor = initialPrompt ? ownerInitialCursor(request, owner!, target.hardCapMinutes) : null;
+              const cursor = initialPrompt ? ownerInitialCursor(request, owner!, ownerTarget.hardCapMinutes) : null;
               if (cursor) turn = { prompt: "", ...cursor };
               const patch = { conversationId, state: "running" as const, runningRequestId: requestId,
                 ...(initialPrompt && cursor ? { pendingCursor: { operationId: initialPrompt.operationId, seen: cursor.seen, staticDigest: cursor.digest } } : {}) };
@@ -829,9 +831,20 @@ export async function runClaimedRequest(
           identityTimers.push(timer);
         }
       if (leaseUnavailable) launchedRun.cancel();
-      // The request deadline bounds admission and delivery retries. A run
-      // already launched remains protected by its lease and configured cap.
-      try { result = await launchedRun.done; }
+      // An owner turn gets the remaining request window, including when the
+      // target's ordinary-agent cap is shorter. Delivery cannot wait for stop
+      // recovery; its durable custody keeps recovering after the completion.
+      let requestTimer: ReturnType<typeof setTimeout> | undefined;
+      let requestExpired = false;
+      const expired = owner && !prototype ? new Promise<Awaited<typeof launchedRun.done>>(resolve => {
+        requestTimer = setTimeout(() => {
+          requestExpired = true;
+          launchedRun.cancel();
+          resolve({ status: "timeout", answer: null, durationMs: Date.now() - started, code: null, signal: null });
+        }, remainingMs(deadline));
+        requestTimer.unref();
+      }) : null;
+      try { result = await (expired ? Promise.race([launchedRun.done, expired]) : launchedRun.done); }
       catch (error) {
         if (!(error instanceof OwnerContinuationRefused) || !conversation || !owner) throw error;
         run = null;
@@ -856,6 +869,9 @@ export async function runClaimedRequest(
         }
         rounds--; continue;
       }
+      finally { if (requestTimer) clearTimeout(requestTimer); }
+      if (owner && !prototype && (requestExpired || result.status === "timeout" && remainingMs(deadline) === 0))
+        return await finish({ lease_id: leaseId, outcome: "failed", reason: "hard_cap", detail: OWNER_REQUEST_TIMEOUT_DETAIL });
       ownerParts?.close();
       if (ownerParts) { stagedAttachments = ownerParts.parts().attachments; answerDrops.push(...ownerParts.drops); }
       await ownerTools?.close(result.status);

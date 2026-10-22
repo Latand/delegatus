@@ -2,7 +2,7 @@ import { z } from "zod";
 
 /** Optional request field negotiated by the request_deadline feature. */
 export const RELAY_DEADLINE_PATH: readonly string[] = ["deadline_at"];
-export const RELAY_REQUEST_WINDOW_MS = 120_000;
+export const RELAY_REQUEST_WINDOW_MS = 600_000;
 export const RELAY_BUSY_DECLINE_MARGIN_MS = 10_000;
 export type RelayRequestDeadline = Readonly<{
   receivedAt: number;
