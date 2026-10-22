@@ -17,10 +17,34 @@ const { claimInstall, createInvite, redeemJoin } = await import("@/lib/team/memb
 const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
 const { MEMBER_COOKIE, mintSession } = await import("@/lib/team/sessions");
 const { POST: claimPOST } = await import("@/app/api/team/claim/route");
+const { POST: registerPOST } = await import("@/app/api/team/passkeys/route");
+const { POST: passkeySignInPOST } = await import("@/app/api/team/session/passkey/route");
+const { SoftwareAuthenticator } = await import("@/lib/team/softwareAuthenticator.test-support");
+const { updateRelayStore } = await import("@/lib/externalRelay/store");
+const { knownRelay } = await import("@/lib/externalRelay/knownRelays");
+const PAIRED_OWNER_ID = "700001";
+function seedPairedOwner() {
+  updateRelayStore((store) => ({ ...store, relays: [
+    ...store.relays.filter((relay) => relay.id !== "voice-tools-test-pairing"),
+    {
+      id: "voice-tools-test-pairing", origin: knownRelay("celestia")!.origin, api_base: "https://relay.example.test/v1",
+      name: "Test pairing", description: "", credential: "x".repeat(43),
+      owner: { namespace: "telegram", id: PAIRED_OWNER_ID, display_name: "Owner", handle: null },
+      pairedAt: "2026-01-01T00:00:00.000Z", paused: false,
+      limits: { max_response_bytes: 1_048_576, max_wait_s: 25, max_answer_chars: 4000 },
+      targets: [{ id: "voice-tools-test-target", name: "Test target", answered_by: "install", fallback: "none", enabled: true,
+        engine: "codex", model: "test", effort: "low", project: null, concurrency: 1, hardCapMinutes: 1 }],
+    },
+  ] }));
+}
 afterAll(async () => { setVoiceToolHubForTests(undefined); resetTeamStoreForTests(); await fs.rm(root, { recursive: true, force: true }); });
 function authenticatedOwner() {
   const claimed = claimInstall(teamStore(), "Owner", { surface: "desktop", browser: "chrome" });
-  const session = mintSession(teamStore(), claimed.member.id, "passkey", { surface: "desktop", browser: "chrome" });
+  seedPairedOwner();
+  teamStore().updateMember({ ...claimed.member, telegram: {
+    userId: PAIRED_OWNER_ID, username: "paired-owner", firstName: "Owner", linkedAt: claimed.session.createdAt,
+  } });
+  const session = mintSession(teamStore(), claimed.member.id, "telegram", { surface: "desktop", browser: "chrome" });
   return { ...claimed, cookie: session.value, session: session.session };
 }
 const browserOwner = authenticatedOwner();
@@ -160,7 +184,7 @@ test("both proposal routes and approval refuse a secret sent to another origin",
   expect(response.status).toBe(200);
 });
 
-test("team mode admits only an active owner, and rechecks after the request body wait", async () => {
+test("team mode admits only the paired owner, and rechecks after the request body wait", async () => {
   resetTeamStoreForTests();
   process.env.LLV_STATE_DIR = path.join(root, "team-state");
   const owner = authenticatedOwner();
@@ -169,8 +193,8 @@ test("team mode admits only an active owner, and rechecks after the request body
   const ownerHeaders = { cookie: `${MEMBER_COOKIE}=${owner.cookie}` };
   const memberHeaders = { cookie: `${MEMBER_COOKIE}=${member.cookie}` };
   expect((await GET(request("GET", undefined, { cookie: "" }))).status).toBe(401);
-  expect((await GET(request("GET", undefined, memberHeaders))).status).toBe(403);
-  expect((await POST(request("POST", { action: "propose", proposal }, memberHeaders))).status).toBe(403);
+  expect((await GET(request("GET", undefined, memberHeaders))).status).toBe(401);
+  expect((await POST(request("POST", { action: "propose", proposal }, memberHeaders))).status).toBe(401);
   expect((await GET(request("GET", undefined, ownerHeaders))).status).toBe(200);
   const hub = new VoiceToolHub(new VoiceToolsStore(path.join(root, "state")));
   const view = hub.store.view.bind(hub.store);
@@ -243,6 +267,7 @@ test("a same-origin local client cannot approve a successfully probed server", a
 test("claiming an unclaimed install does not authorize voice tool proposal, dry run or approval", async () => {
   resetTeamStoreForTests();
   process.env.LLV_STATE_DIR = path.join(root, "claim-attack-state");
+  seedPairedOwner();
   const store = new VoiceToolsStore(process.env.LLV_STATE_DIR);
   setVoiceToolHubForTests(new VoiceToolHub(store));
   let contacts = 0;
@@ -294,6 +319,89 @@ test("claiming an unclaimed install does not authorize voice tool proposal, dry 
     resetTeamStoreForTests();
     process.env.LLV_STATE_DIR = path.join(root, "state");
     setVoiceToolHubForTests(new VoiceToolHub(new VoiceToolsStore(path.join(root, "state"))));
+  }
+});
+
+test("claim-only passkey registration and sign-in cannot authorize voice management", async () => {
+  const previousStateDir = process.env.LLV_STATE_DIR;
+  const previousTailnet = process.env.LLV_TS_URL;
+  const previousTailnetHost = process.env.LLV_TS_HOST;
+  resetTeamStoreForTests();
+  process.env.LLV_STATE_DIR = path.join(root, "full-claim-passkey-state");
+  process.env.LLV_TS_URL = "https://voice.example.test";
+  process.env.LLV_TS_HOST = "voice.example.test";
+  setVoiceToolHubForTests(new VoiceToolHub(new VoiceToolsStore(process.env.LLV_STATE_DIR)));
+  seedPairedOwner();
+  const peerSawCredentialHeader: boolean[] = [];
+  const peer = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
+    if (req.method !== "POST") return new Response(null, { status: 405 });
+    if (req.headers.has("authorization")) peerSawCredentialHeader.push(true);
+    const message = await req.json() as { id?: number; method: string };
+    if (message.id === undefined) return new Response(null, { status: 202 });
+    const result = message.method === "initialize" ? { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "fake", version: "1" } }
+      : { tools: [{ name: "search", description: "Search", inputSchema: { type: "object" } }] };
+    return Response.json({ jsonrpc: "2.0", id: message.id, result });
+  } });
+  const teamRequest = (pathname: string, body?: unknown, cookie?: string) => new NextRequest(`https://voice.example.test${pathname}`, {
+    method: "POST",
+    headers: { host: "voice.example.test", "x-forwarded-proto": "https", origin: "https://voice.example.test",
+      "sec-fetch-site": "same-origin", "user-agent": "Mozilla/5.0 Chrome/126.0", "content-type": "application/json",
+      ...(cookie ? { cookie: `${MEMBER_COOKIE}=${cookie}` } : {}) },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  try {
+    const claim = await claimPOST(teamRequest("/api/team/claim", { name: "Self-claimed owner" }));
+    expect(claim.status).toBe(200);
+    const claimCookie = claim.cookies.get(MEMBER_COOKIE)?.value;
+    expect(claimCookie).toBeTruthy();
+
+    const registrationOptions = await registerPOST(teamRequest("/api/team/passkeys", { step: "options" }, claimCookie));
+    expect(registrationOptions.status).toBe(200);
+    const registration = await registrationOptions.json() as { id: string; options: { challenge: string; rp: { id?: string }; user: { id: string } } };
+    const authenticator = await new SoftwareAuthenticator().init();
+    const registrationVerify = await registerPOST(teamRequest("/api/team/passkeys", {
+      step: "verify", id: registration.id,
+      response: await authenticator.register(registration.options, "https://voice.example.test"),
+    }, claimCookie));
+    expect(registrationVerify.status).toBe(200);
+
+    const signInOptionsResponse = await passkeySignInPOST(teamRequest("/api/team/session/passkey", { step: "options" }));
+    expect(signInOptionsResponse.status).toBe(200);
+    const signIn = await signInOptionsResponse.json() as { id: string; options: { challenge: string } };
+    const signInResponse = await passkeySignInPOST(teamRequest("/api/team/session/passkey", {
+      step: "verify", id: signIn.id,
+      response: await authenticator.assert(signIn.options, "voice.example.test", "https://voice.example.test", registration.options.user.id),
+    }));
+    expect(signInResponse.status).toBe(200);
+    const passkeyCookie = signInResponse.cookies.get(MEMBER_COOKIE)?.value;
+    expect(passkeyCookie).toBeTruthy();
+
+    const localProposal = { ...proposal, transport: { type: "http", url: `http://127.0.0.1:${peer.port}/mcp`,
+      headers: { Authorization: { secretRef: "claim-token" } } } };
+    const browserHeaders = { cookie: `${MEMBER_COOKIE}=${passkeyCookie}` };
+    const voiceProposal = await POST(request("POST", { action: "propose", proposal: localProposal }, browserHeaders));
+    const proposalRoute = await proposalPOST(request("POST", {
+      action: "propose", proposal: localProposal,
+      clientRequestId: "self-claim-proposal", conversationId: "conversation_worker",
+    }, internalServiceHeaders("mcp")));
+    expect(proposalRoute.status).toBe(200);
+    const pending = (await proposalRoute.json()).servers.music;
+    const secretBinding = await POST(request("POST", { action: "secrets", secrets: {
+      "claim-token": { value: "synthetic-claim-credential", destinations: [`http://127.0.0.1:${peer.port}`] },
+    } }, browserHeaders));
+    const dryRun = await POST(request("POST", { action: "dry-run", name: "music", digest: pending.digest }, browserHeaders));
+    const afterDryRun = await new VoiceToolsStore(process.env.LLV_STATE_DIR).view();
+    const approval = await POST(request("POST", { action: "approve", name: "music", digest: afterDryRun.servers.music.digest }, browserHeaders));
+    const state = (await new VoiceToolsStore(process.env.LLV_STATE_DIR).view()).servers.music.state;
+
+    expect({ statuses: [voiceProposal.status, secretBinding.status, dryRun.status, approval.status], state, peerSawCredentialHeader })
+      .toEqual({ statuses: [401, 401, 401, 401], state: "pending", peerSawCredentialHeader: [] });
+  } finally {
+    await peer.stop(true);
+    resetTeamStoreForTests();
+    process.env.LLV_STATE_DIR = previousStateDir;
+    if (previousTailnet === undefined) delete process.env.LLV_TS_URL; else process.env.LLV_TS_URL = previousTailnet;
+    if (previousTailnetHost === undefined) delete process.env.LLV_TS_HOST; else process.env.LLV_TS_HOST = previousTailnetHost;
   }
 });
 

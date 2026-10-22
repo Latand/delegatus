@@ -1060,19 +1060,19 @@ HTTP headers). These references describe the pre-fix code.
 
 ### Authority and restart behavior
 
-`src/lib/voiceTools/http.ts#voiceToolsOperator` requires a live member session
-whose active member is the installation owner, in addition to the existing
-origin and agent/service exclusions. For this surface, the session must also
-come from a verified passkey assertion or the owner's linked Telegram account.
-The install-claim endpoint still creates the first owner and a `claim` session,
-but that bootstrap session cannot manage voice tools. The owner establishes
-voice-tool authority by completing a passkey ceremony or signing in through
-the already linked Telegram identity. Invite, claim, recovery and device
-approval sessions do not satisfy this additional proof. Fetch Metadata, an
-absent capability header and a loopback address supply no authenticated owner
-proof. Body reads, lock admission, dispatch and final writes recheck owner
-authority. The MCP proposal route still has only list, status and propose
-branches.
+`src/lib/voiceTools/http.ts#voiceToolsOperator` requires an authenticated owner
+session matching the Telegram identity in the active Celestia owner pairing,
+alongside the existing origin and agent/service checks. A passkey session alone
+does not establish this identity, even when its credential was enrolled after
+the owner used the solo install-claim flow. Claim, invite, recovery and device
+approval sessions therefore cannot approve a server, dry-run it or bind a secret
+destination. The paired Telegram owner signs in through the existing Telegram
+challenge before managing voice tools. Installations without that independent
+pairing keep the approval surface closed until one exists. Fetch Metadata, an
+absent capability header, a loopback address and a newly registered passkey
+supply no independent owner proof. Body reads, lock admission, dispatch and
+final writes recheck owner authority. The MCP proposal route still has only
+list, status and propose branches.
 
 `src/lib/voiceTools/seal.ts` holds a random MAC key in the Viewer process.
 Approvals authenticate their digest, timestamp, server name, destination policy and store scope.
@@ -1154,7 +1154,7 @@ owner-session revocation and successful authorized HTTP discovery.
 
 
 The existing board browser driver records the destination controls in
-`evidence/voice-companion/voice-tools.json`: 496 measurements, zero geometry
+`evidence/voice-companion/voice-tools.json`: 624 measurements, zero geometry
 failures, EN/UK, light/dark, widths 1440, 1000, 820 and 390, including a
 1000×700 desktop window. The unchanged base reproduced all 264 previously
 committed measurements exactly. The record includes the command and hashes

@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { ownerReviewDestination } from "@/lib/externalRelay/telegramPublication";
+import { authenticatedOwner } from "@/lib/team";
 import { companionOperator } from "@/lib/voiceCompanion/http";
-import { requestSession } from "@/lib/team/sessions";
-import { existingTeamStore } from "@/lib/team/store";
 import { internalServiceClaim } from "@/lib/agent/callerClaims";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { voiceToolHub } from "./hub";
@@ -12,11 +12,10 @@ import { VoiceToolsError } from "./store";
 export function voiceToolsOperator(req: NextRequest): NextResponse | null {
   const rejection = companionOperator(req);
   if (rejection) return rejection;
-  const session = requestSession(req);
-  if (!session) return failure("OPERATOR_REQUIRED", 401);
-  const member = existingTeamStore()?.member(session.member.id);
-  if (!member || member.status !== "active" || member.role !== "owner") return failure("OPERATOR_REQUIRED", 403);
-  if (!["passkey", "telegram"].includes(session.session.method)) return failure("OPERATOR_REQUIRED", 401);
+  let pairedOwner: string | undefined;
+  try { pairedOwner = ownerReviewDestination().chatId; }
+  catch { return failure("OPERATOR_REQUIRED", 401); }
+  if (!authenticatedOwner(req, pairedOwner)) return failure("OPERATOR_REQUIRED", 401);
   return null;
 }
 const common = { name: serverName, digest: z.string().regex(/^sha256:[a-f0-9]{64}$/) };
