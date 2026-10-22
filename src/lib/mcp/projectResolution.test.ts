@@ -6,6 +6,7 @@ import path from "node:path";
 import { AgentRegistry, agentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { externalRelayFile, writeRelayFile } from "@/lib/externalRelay/store";
 import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
+import { shortId } from "@/lib/shortIds";
 import { procBackend } from "@/lib/proc";
 import { persistProjectAliases } from "@/lib/projects/aliases";
 import { projectForCwd } from "@/lib/scanner/describe";
@@ -348,7 +349,6 @@ for (const tool of ["spawn_agent", "create_pipeline"] as const) {
   });
 }
 
-
 for (const route of ["get_orchestrator", "send_message_to_orchestrator", "owner-relay"] as const) {
   test(`${route} refuses case-colliding project keys before selecting a seat`, async () => {
     seat("CaseProject", "First Board", "conversation_first");
@@ -359,7 +359,6 @@ for (const route of ["get_orchestrator", "send_message_to_orchestrator", "owner-
     expect(h.scans()).toBe(0);
   });
 }
-
 
 test("a fresh name lookup after succession selects the current seat", async () => {
   seat("target-project", "Example Board", "conversation_retired");
@@ -418,7 +417,6 @@ for (const tool of ["spawn_agent", "create_pipeline"] as const) {
   });
 }
 
-
 test("MCP folds a deleted conventional worktree before comparing its designated seat", async () => {
   const root = path.join(directory, "OrionRepo");
   fs.mkdirSync(path.join(root, ".git"), { recursive: true });
@@ -444,7 +442,6 @@ test("MCP prefers the one designated seat among unrelated same-name members", as
   expect(h.scans()).toBe(0);
 });
 
-
 test("retained conversation worktree markers cannot retarget an authoritative member project", async () => {
   const root = path.join(directory, "OrionParent");
   fs.mkdirSync(path.join(root, ".git"), { recursive: true });
@@ -460,4 +457,18 @@ test("retained conversation worktree markers cannot retarget an authoritative me
     cwd: path.join(root, ".worktrees", "gone"), worktree: "gone" } as import("@/lib/types").FileEntry] }) });
   expect(await h.call("get_orchestrator", "Orion Member")).toMatchObject({ ok: true, project: "orion-member", conversationId: "conversation_member" });
   expect(h.scans()).toBe(0);
+});
+
+test("create_orchestrator resolves display name, repository name and folder before dispatch", async () => {
+  const { createManualProject } = await import("@/lib/projects/curation");
+  const root = path.join(directory, "SeatRepo");
+  fs.mkdirSync(root);
+  const project = projectForCwd(root)!;
+  expect(createManualProject("Seat Board", root, new Set(), { allowedRoots: [directory] }).ok).toBe(true);
+  const h = harness();
+  for (const [index, name] of ["Seat Board", "SeatRepo", root].entries()) {
+    const result = await h.service.callTool("create_orchestrator", { project: name, cwd: root, clientRequestId: `seat-named-${index}` });
+    expect(result).toMatchObject({ ok: true, project: shortId(project) });
+    expect(h.posts.at(-1)).toMatchObject({ pathname: "/api/orchestrator/seat", body: { project } });
+  }
 });

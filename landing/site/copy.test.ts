@@ -2,6 +2,8 @@ import { expect, test } from "bun:test";
 import fs from "node:fs";
 import vm from "node:vm";
 import { telemetryNotice } from "../../bin/telemetry-notice.mjs";
+import { lessonTextLength, RULE_MAX_CHARS, RULE_MIN_CHARS, WHY_MAX_CHARS } from "../../src/lib/memory/roleTypes";
+import { buildRoleMemory, EXAMPLE_RULES } from "./demo/world";
 
 export function installPrompt(agent: string, lang = "en"): string {
   const context = { window: { DLG: {} as { copy?: { prompt: (agent: string, lang: string) => string } } } };
@@ -104,4 +106,32 @@ test("a phone frame takes no touch outside full screen and no script scrolls the
     expect(source).not.toMatch(/scrollBy\(/);
   }
   expect(demo).not.toContain('"touchmove"');
+});
+
+test("the memory frame's example rules fit the product's limits in both languages and cover every level", () => {
+  for (const [key, { rule, why }] of Object.entries(EXAMPLE_RULES)) {
+    for (const text of rule) {
+      expect(lessonTextLength(text), `${key} rule`).toBeLessThanOrEqual(RULE_MAX_CHARS);
+      expect(lessonTextLength(text), `${key} rule`).toBeGreaterThanOrEqual(RULE_MIN_CHARS);
+    }
+    for (const text of why) expect(lessonTextLength(text), `${key} why`).toBeLessThanOrEqual(WHY_MAX_CHARS);
+    /* Cleaned for a public page: no paths, no rule ids, no handles. */
+    for (const text of [...rule, ...why]) expect(text, key).not.toMatch(/[/\\~@]|\br_[0-9a-f]{6,}/);
+  }
+  for (const lang of ["en", "uk"] as const) {
+    const scopes = buildRoleMemory(lang, 1_800_000_000).scopes;
+    expect(new Set(scopes.map((scope) => scope.kind))).toEqual(new Set(["role", "project", "machine"]));
+    const active = scopes.flatMap((scope) => scope.active);
+    expect(active.length).toBeGreaterThanOrEqual(4);
+    expect(active.length).toBeLessThanOrEqual(8);
+    expect(new Set(scopes.filter((scope) => scope.kind === "role").map((scope) => scope.roleId))).toEqual(new Set(["orchestrator", "builder", "reviewer"]));
+  }
+});
+
+test("the new sections' fallback text is the English copy", () => {
+  const { en } = strings();
+  const html = fs.readFileSync(new URL("./index.html", import.meta.url), "utf8");
+  for (const key of Object.keys(en).filter((name) => /^(auto|mem|use)\.(title|c\d|tab\d|note)$/.test(name))) {
+    expect(html, key).toContain(`data-i18n="${key}">${en[key]}<`);
+  }
 });

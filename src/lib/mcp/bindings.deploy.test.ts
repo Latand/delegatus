@@ -11,6 +11,9 @@ import { productionViewerControlDependencies, viewerMcpBindings, type ViewerCont
 import { createMcpToolService, SqliteMcpReceiptStore } from "./server";
 import { recordSeatDeploymentAdmission, seatDeploymentsFor } from "@/lib/orchestrator/seatDeployments";
 
+// The owner test must outlast every bounded restart and its awaited teardown.
+// Cold imports under the publication gate can exceed Bun's default five seconds.
+const REPLAY_CHILD_TIMEOUT_MS = 15_000;
 const SHA = "a".repeat(40);
 const SEAT = "conversation_deploy_seat";
 const PROJECT = "deploy-project";
@@ -78,7 +81,7 @@ test("admission survives a control timeout with its id in the first reply and re
       } finally { store.close(); }
     `;
     const child = await promisify(execFile)(process.execPath, ["--eval", script, receiptFile, JSON.stringify(args)], {
-      cwd: process.cwd(), env: { ...process.env }, timeout: 15_000,
+      cwd: process.cwd(), env: { ...process.env }, timeout: REPLAY_CHILD_TIMEOUT_MS,
     });
     const replay = JSON.parse(child.stdout);
     expect(replay).toMatchObject({ ok: true, state: "accepted", deploymentId, wakeOnSettle: true });
@@ -94,7 +97,7 @@ test("admission survives a control timeout with its id in the first reply and re
     else process.env.LLV_VIEWER_CONTROL_URL = previous;
     fs.rmSync(root, { recursive: true, force: true });
   }
-});
+}, REPLAY_CHILD_TIMEOUT_MS + 15_000);
 
 test("a reconnect refusal after admission returns the recovered id on the first reply", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "deploy-reconnect-refusal-"));

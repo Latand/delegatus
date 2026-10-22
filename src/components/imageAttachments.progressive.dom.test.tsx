@@ -77,8 +77,8 @@ const waitFor = async (condition: () => boolean, timeoutMs = 1000): Promise<void
 const captured: { api: UseImageAttachmentsReturn | null; errors: string[] } = { api: null, errors: [] };
 const api = () => captured.api!;
 
-function Harness() {
-  const attachments = useImageAttachments({ onError: (message) => captured.errors.push(message) });
+function Harness({ acceptFiles = false }: { acceptFiles?: boolean }) {
+  const attachments = useImageAttachments({ acceptFiles, onError: (message) => captured.errors.push(message) });
   /* eslint-disable-next-line react-hooks/immutability -- test harness exposing the hook return for assertions */
   captured.api = attachments;
   return <ImagePreviewStrip attachments={attachments.attachments} onRemove={attachments.remove} onRetry={attachments.retry} onClearAll={attachments.clearAll} />;
@@ -102,13 +102,82 @@ afterAll(async () => {
 beforeEach(() => { dom.document.body.replaceChildren(); roots = []; captured.api = null; captured.errors = []; DeferredReader.queue = []; });
 afterEach(async () => { for (const r of roots) flushSync(() => r.unmount()); roots = []; await tick(); });
 
-function mount() {
+function mount(acceptFiles = false) {
   const host = dom.document.createElement("div");
   dom.document.body.appendChild(host);
   const root = createRoot(host as unknown as Element);
-  flushSync(() => root.render(<Harness />));
+  flushSync(() => root.render(<Harness acceptFiles={acceptFiles} />));
   roots.push(root);
 }
+
+test("a large recording shows progress, retains failure for retry, and submits only a completed reference", async () => {
+  const saved = G.XMLHttpRequest;
+  const requests: UploadRequest[] = [];
+  class UploadRequest {
+    upload: { onprogress?: (event: { lengthComputable: boolean; loaded: number; total: number }) => void } = {};
+    status = 200;
+    responseText = "";
+    onload?: () => void;
+    onerror?: () => void;
+    onabort?: () => void;
+    timeout = 0;
+    body: unknown;
+    aborted = false;
+    open(method: string, url: string) { expect([method, url]).toEqual(["POST", "/api/composer-upload"]); }
+    setRequestHeader() {}
+    send(body: unknown) { this.body = body; requests.push(this); }
+    abort() { this.aborted = true; this.onabort?.(); }
+  }
+  G.XMLHttpRequest = UploadRequest;
+  try {
+    mount(true);
+    const recording = new dom.File(["synthetic"], "recording.ogg", { type: "audio/ogg" });
+    Object.defineProperty(recording, "size", { value: 100 * 1024 * 1024 });
+    flushSync(() => api().addFiles([recording as unknown as File]));
+    expect(requests[0]!.body).toBe(recording);
+    expect(api().hasReading).toBe(true);
+    flushSync(() => requests[0]!.upload.onprogress?.({ lengthComputable: true, loaded: 50, total: 100 }));
+    expect(dom.document.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("50");
+    requests[0]!.onerror?.();
+    await waitFor(() => api().hasError);
+    expect(statusesOf()).toEqual(["error"]);
+    expect(api().files).toEqual([]);
+    expect(dom.document.querySelector('[role="status"]')?.getAttribute("aria-label")).toContain("retry");
+    flushSync(() => api().retry(api().attachments[0]!.id));
+    const upload = { id: "a".repeat(32), bytes: 100 * 1024 * 1024, sha256: "b".repeat(64) };
+    requests[1]!.responseText = JSON.stringify({ upload });
+    requests[1]!.onload?.();
+    await waitFor(() => api().files.length === 1);
+    expect(api().files[0]!.base64).toBe("");
+    expect(api().files[0]!.upload).toEqual(upload);
+    expect(api().hasReading).toBe(false);
+    expect(api().hasError).toBe(false);
+    expect(DeferredReader.queue).toEqual([]);
+    // A restored reference still weighs its original bytes against the batch.
+    flushSync(() => api().replace([], api().files));
+    expect(api().files[0]!.upload).toEqual(upload);
+    flushSync(() => api().addFiles([recording as unknown as File, recording as unknown as File]));
+    expect(captured.errors.join("\n")).toContain("200 MB");
+    const reading = api().attachments.find(slot => slot.status === "reading")!;
+    flushSync(() => api().remove(reading.id));
+    expect(requests.at(-1)!.aborted).toBe(true);
+    flushSync(() => api().addFiles([recording as unknown as File]));
+    requests.at(-1)!.responseText = JSON.stringify({ upload: { ...upload, bytes: upload.bytes - 1 } });
+    requests.at(-1)!.onload?.();
+    await waitFor(() => api().hasError);
+    expect(api().files).toHaveLength(1);
+    const failedId = api().attachments.find(slot => slot.status === "error")!.id;
+    flushSync(() => api().addFiles([recording as unknown as File]));
+    const requestsBeforeRetry = requests.length;
+    flushSync(() => api().retry(failedId));
+    expect(requests).toHaveLength(requestsBeforeRetry);
+    expect(captured.errors.at(-1)).toContain("200 MB");
+    flushSync(() => api().clearAll());
+  } finally {
+    if (saved === undefined) delete G.XMLHttpRequest;
+    else G.XMLHttpRequest = saved;
+  }
+});
 
 test("placeholders commit synchronously in selection order before any read settles", () => {
   mount();

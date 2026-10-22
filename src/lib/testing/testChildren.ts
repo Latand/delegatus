@@ -1,7 +1,6 @@
 import { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll } from "bun:test";
 import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
 import { procBackend } from "@/lib/proc";
 import { stopFixtureProcess } from "./fixtureProcess";
@@ -10,8 +9,9 @@ import { admitPortableTestRunner } from "./portableTestAdmission";
 /** The preload owns real subprocess handles before spawn returns. This covers
  * imported aliases, fork/execFile and product helpers exercised by a test, too.
  * A separate guardian retains the identities if the test runner is SIGKILLed.
+ * The caller awaits the returned teardown before releasing this root.
  */
-export function beginTestChildOwnership(root: string): void {
+export function beginTestChildOwnership(root: string): () => Promise<void> {
   if (process.platform !== "linux") admitPortableTestRunner();
   const owner = captureProcessIdentity(process.pid);
   const supervisor = captureProcessIdentity(process.ppid);
@@ -71,7 +71,7 @@ export function beginTestChildOwnership(root: string): void {
   // Fixtures bind to this recorded runner, including a parent that exits
   // before the fixture's first import. Explicit fixture env overrides win.
   process.env.LLV_FIXTURE_PARENT_IDENTITY = JSON.stringify(owner);
-  afterAll(async () => {
+  return async () => {
     prototype.spawn = rawNodeSpawn; Bun.spawn = rawBunSpawn; Bun.spawnSync = rawBunSpawnSync;
     const survivors = [...nodeChildren].filter(([, identity]) => processIdentityStatus(identity) === "alive").map(([child]) => child);
     const bunSurvivors = [...bunChildren].filter(([, identity]) => processIdentityStatus(identity) === "alive").map(([child]) => child);
@@ -101,5 +101,5 @@ export function beginTestChildOwnership(root: string): void {
     if (survivors.length || bunSurvivors.length || (guardian && guardian.exitCode !== 0)) {
       throw new Error(`owned test children survived teardown: ${[...survivors, ...bunSurvivors].map(child => child.pid).join(", ")}; guardian=${guardian?.exitCode ?? "kernel"}`);
     }
-  });
+  };
 }

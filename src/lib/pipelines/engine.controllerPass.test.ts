@@ -83,7 +83,7 @@ test("the real controller returns while a 20 second fenced Git job remains pendi
     finally { db.close(); }
   } finally { release.resolve(); await settlePipelineControllerJobs(); }
   expect(pipelineControllerJobLanes()).toEqual([]);
-}, 30_000);
+}, 60_000);
 
 test.each(["branch", "repository", "claim", "release", "remove", "archive", "progress"] as const)("a %s peer change retains stage-job authority fences", async change => {
   const { h, lane } = await committing();

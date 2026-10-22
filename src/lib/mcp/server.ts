@@ -66,10 +66,12 @@ import {
 import { runWithMcpCallerResolution, runAsMcpHttpCaller, type McpHttpCaller } from "./callerContext";
 import type { McpToolPolicy } from "./toolAllowlist";
 import { MCP_TOOL_CATALOG_CAPABILITY } from "./toolCatalog";
+import { proposalSchema as voiceToolProposalSchema } from "@/lib/voiceTools/contracts";
 
 export const MCP_SERVER_NAME = "viewer";
 
 export const MCP_TOOL_NAMES = [
+  "voice_tools",
   "spawn_agent",
   "send_message",
   "message_receipt",
@@ -137,6 +139,7 @@ export type McpToolName = typeof MCP_TOOL_NAMES[number];
 type ReceiptRetention = "bounded" | "durable";
 
 export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
+  "voice_tools",
   "backfill_worktree_projects",
   "spawn_agent",
   "send_message",
@@ -2758,8 +2761,12 @@ export function createMcpToolService(
           const payload = await bindings[typedTool](effectiveArgs, context);
           return finish({ ...payload, ok: true, toolName: typedTool, clientRequestId: requestId, replayed: payload.replayed === true }, "success");
         } catch (error) {
-          return finish(failure(typedTool, requestId, "tool_failed", error instanceof Error ? error.message : String(error), false, false,
-            { outcome: "unknown", nextAction: "original-key-lookup" }), "failure");
+          // Accepted historical decisions replay above after the binding checks
+          // their owner. New retired operations enter ordinary durable receipts.
+          if (!(error instanceof McpToolRefusal && error.details.code === "FLOW_RETIRED")) {
+            return finish(failure(typedTool, requestId, "tool_failed", error instanceof Error ? error.message : String(error), false, false,
+              { outcome: "unknown", nextAction: "original-key-lookup" }), "failure");
+          }
         }
       }
       const recoverable = options.recovery?.[typedTool] ?? null;
@@ -3497,6 +3504,9 @@ export function createMcpToolService(
               || ["create_orchestrator", "rotate_orchestrator", "ask_orchestrator_in_parallel", "deploy_exact_sha"].includes(typedTool)
               || error.details.code === "CONVERSATION_NOT_FOUND" && error.details.retryable === false)
             ? { code: error.details.code, retryable: error.details.retryable } : null;
+          const retiredRefusal = error instanceof McpToolRefusal
+            && (error.details.code === "FLOW_RETIRED" || error.details.code === "STAGE_KIND_RETIRED")
+            ? { code: error.details.code, retryable: false } : null;
           unadmitted = error instanceof McpUnadmittedRefusal;
           // Tools without a downstream recovery reader still preserve an
           // uncertain dispatch as unknown. Cache that answer under the original
@@ -3511,9 +3521,9 @@ export function createMcpToolService(
             : failure(
             typedTool,
             requestId,
-            taskCode ?? botRefusal?.code ?? namedRefusal?.code ?? "tool_failed",
+            taskCode ?? retiredRefusal?.code ?? botRefusal?.code ?? namedRefusal?.code ?? "tool_failed",
             error instanceof Error ? error.message : String(error),
-            botRefusal ? botRefusal.retryable : namedRefusal ? namedRefusal.retryable : taskCode === null,
+            retiredRefusal ? false : botRefusal ? botRefusal.retryable : namedRefusal ? namedRefusal.retryable : taskCode === null,
             false,
             error instanceof McpToolRefusal ? error.details : undefined,
           );
@@ -3646,7 +3656,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "`taskIds` binds the pipeline to existing board tasks in the same call (#1720): every stage launch reads that list and joins those tasks, and a pipeline created without it is given a placeholder task of its own.",
     "`finishesTask` marks this pipeline as the one that finishes its tasks (#2187): true for every linked task, or a list of ids from taskIds (others are dropped and named in `finishesTaskDropped`). With the project's merge setting on, a marked lane's task moves to Done when its PR merges; with it off, when the lane completes. Either way it waits for every other started pipeline on the task to end. Default off; set it only when this lane's PR delivers the whole task.",
     "Stages are a graph, not a list: each stage names its pass successor with `next` (a stage id, or null to end the chain), and a run stage may name a fail successor with `onFail` ({to, maxRounds?, onExhausted?}). `maxRounds` defaults to 3; more requires an explicit value. What happens when the last review fails is `onExhausted`. advance (default): the fix stage (`to`) takes the last findings. After that fix, the gate follows its pass edge or completes when next:null, with no further review. stop-after-fix: after that fix the lane waits for the operator in needs_review. park: stop before the fix. A fail loop from another gate permits a fresh handoff; the round count remains cumulative. `next` defaults to null, so a plan whose stages never set it is a set of disconnected stages, not a chain.",
-    "A review is a run stage with role reviewer (read-only by its role) whose onFail names a fix stage, and the fix stage's next is the reviewer, so every round gets a fresh reviewer on the new head. The fixer is builder mode=apply-fixes: it fixes every handed finding and every in-spec discovery immediately, adds focused checks, and leaves grading to reviewers. It never returns fail for its own discovery: it fixes it or lists an outside-spec observation under Notes. It returns fail only when blocked, setting blocked:true and blockedReason. A self-fail with a new committed head, without blocked:true, proceeds to review with the fixer's findings as notes for the reviewer; a fail with no new head still parks with its reason. `review-loop` is a legacy kind kept for stored lanes, and one must still be pass-reachable from a run stage through `next` edges: a new one is stored as a read-only reviewer and a fix stage with an advance fail edge, the answer's `convertedStages` names each pair as {reviewer, fixer}, and `legacyReview` lists any stage kept as sent with the refusals that kept it.",
+    "A review is a run stage with role reviewer (read-only by its role) whose onFail names a fix stage, and the fix stage's next is the reviewer, so every round gets a fresh reviewer on the new head. The fixer is builder mode=apply-fixes: it fixes every handed finding and every in-spec discovery immediately, adds focused checks, and leaves grading to reviewers. It never returns fail for its own discovery: it fixes it or lists an outside-spec observation under Notes. It returns fail only when blocked, setting blocked:true and blockedReason. A self-fail with a new committed head, without blocked:true, proceeds to review with the fixer's findings as notes for the reviewer; a fail with no new head still parks with its reason. New `review-loop` definitions refuse with STAGE_KIND_RETIRED. Stored legacy definitions remain readable and support explicit conversion preview before start.",
     "Runtime overrides (engine, model, effort, access) belong on the stage; `role` carries only `roleId` and its `params`. access is the repository-mutation policy enforced at settlement. sandbox is the independent tool/network boundary, defaults to full, and never changes the repository policy.",
     "A read-only stage may name repository-relative outputs. It can write those paths, while the controller refuses undeclared worktree changes and agent-created commits and records only the declared outputs.",
     "autoStart:false creates a draft the operator starts from the board; a draft that pins `baseBranch` must also pass `baseRef` (a draft is not provisioned, so the caller resolves the SHA).",
@@ -3656,14 +3666,14 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "An invalid call is answered once with every violated constraint, each naming its field and expected shape.",
     "A refusal that happened before anything was admitted — the pipeline registry lock was never taken — does not consume the `clientRequestId` (#1766): it answers `retryable: true` with `outcome: not-executed` and `nextAction: retry-same-key`, and repeating the identical call under the SAME id runs the create instead of replaying the refusal. Every other refusal keeps its receipt, so a repeat replays it.",
   ].join(" "),
-  pipeline_action: "set-delivery-remote adopts a configured Git remote (remote, default origin) for an open owner lane with an empty delivery target. It never redirects an existing target; an in-flight publisher, another owner or a live legacy review flow refuses adoption. A passed-stage publication park resumes for publication on the next tick. Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record. revision fingerprints the returned record; guarded graph edits still use stageDigests/graphDigest. Apply a supported action to an existing pipeline. Every accepted action answers pipelineId, state, cursor, closedAt and revision; graph edits or full:true include stageDigests and graphDigest. A close includes `close`; a graph edit includes `graphEdit`. get_pipeline reads the full record with full:true. Close persists immediately; close.status=pending and close.pending list the outstanding teardown, and get_pipeline returns closeReport with final per-host outcomes. Graph edits (add-stage, reorder-stage, set-edge, override-stage) are accepted on a running, paused or parked pipeline and refused once it is completed or closed, since nothing runs them there; remove-stage stays draft-only. An attempt binds its stage's prompt, role, runtime and account when it starts, so edits apply from the next attempt. override-stage with applyNow:true stops the current turn and continues the same attempt, worktree, branch and receipts on the edited runtime. Same engine uses native fork/resume; an engine change uses a bounded handoff. Only engine/model/effort/serviceTier/account may accompany applyNow. Progress is in get_pipeline stageId → runtimeSwitch. set-edge takes {stageId, edge: pass | fail, to, maxRounds?, onExhausted?: advance | stop-after-fix | park}; maxRounds defaults to 3; more requires an explicit value. The last two apply to fail edges only, and a fail edge freezes once traversed. advance (default): the fix stage takes the last findings; after that fix, the gate follows its pass edge or completes when next:null, with no further review. stop-after-fix: after that fix the lane waits for the operator in needs_review. park: stop before the fix. add-stage preserves supplied edges and changes no other stage unless after names the pass edge to splice; index controls displayed order only. add-stage with a `review-loop` stage stores it as a read-only reviewer and a fix stage (role builder, mode apply-fixes, with its predecessor's domain and size, so its runtime comes from the fix row), joined by an advance fail edge, and answers convertedStages [{reviewer, fixer}]; when that needs a guess (no read-write predecessor, no free stage slot) the stage is stored as sent and the answer carries legacyReview [{stageId, refusals}]. Pass expectedStageDigest from get_pipeline to refuse a stale write with STAGE_CHANGED: stageDigests[stageId] for override-stage and set-edge, graphDigest for add-stage, remove-stage and reorder-stage. Stages run along pass edges; array order is presentation, and a stage that has started or holds the cursor keeps its place, so add-stage may not insert before it. Every accepted edit is recorded in the pipeline's graphEdits with the calling conversation. A refusal raised before the action was admitted — the pipeline registry lock was never taken — does not consume the clientRequestId (#1766): repeat the identical call under the same id.",
+  pipeline_action: "set-delivery-remote adopts a configured Git remote (remote, default origin) for an open owner lane with an empty delivery target. It never redirects an existing target; an in-flight publisher, another owner or a live legacy review flow refuses adoption. A passed-stage publication park resumes for publication on the next tick. Compact acknowledgement by default with ids, revision and changedFields; full:true includes the complete record. revision fingerprints the returned record; guarded graph edits still use stageDigests/graphDigest. Apply a supported action to an existing pipeline. Every accepted action answers pipelineId, state, cursor, closedAt and revision; graph edits or full:true include stageDigests and graphDigest. A close includes `close`; a graph edit includes `graphEdit`. get_pipeline reads the full record with full:true. Close persists immediately; close.status=pending and close.pending list the outstanding teardown, and get_pipeline returns closeReport with final per-host outcomes. Graph edits (add-stage, reorder-stage, set-edge, override-stage) are accepted on a running, paused or parked pipeline and refused once it is completed or closed, since nothing runs them there; remove-stage stays draft-only. An attempt binds its stage's prompt, role, runtime and account when it starts, so edits apply from the next attempt. override-stage with applyNow:true stops the current turn and continues the same attempt, worktree, branch and receipts on the edited runtime. Same engine uses native fork/resume; an engine change uses a bounded handoff. Only engine/model/effort/serviceTier/account may accompany applyNow. Progress is in get_pipeline stageId → runtimeSwitch. set-edge takes {stageId, edge: pass | fail, to, maxRounds?, onExhausted?: advance | stop-after-fix | park}; maxRounds defaults to 3; more requires an explicit value. The last two apply to fail edges only, and a fail edge freezes once traversed. advance (default): the fix stage takes the last findings; after that fix, the gate follows its pass edge or completes when next:null, with no further review. stop-after-fix: after that fix the lane waits for the operator in needs_review. park: stop before the fix. add-stage preserves supplied edges and changes no other stage unless after names the pass edge to splice; index controls displayed order only. New review-loop definitions, including add-stage, refuse with STAGE_KIND_RETIRED. Preview and explicitly convert a stored legacy definition before starting it. Pass expectedStageDigest from get_pipeline to refuse a stale write with STAGE_CHANGED: stageDigests[stageId] for override-stage and set-edge, graphDigest for add-stage, remove-stage and reorder-stage. Stages run along pass edges; array order is presentation, and a stage that has started or holds the cursor keeps its place, so add-stage may not insert before it. Every accepted edit is recorded in the pipeline's graphEdits with the calling conversation. A refusal raised before the action was admitted — the pipeline registry lock was never taken — does not consume the clientRequestId (#1766): repeat the identical call under the same id.",
   stage_report: [
     "Report the completion of the pipeline run stage THIS conversation is running.",
     "Completion fields: verdict (pass | fail | needs_decision), findings as [{ severity: P0 | P1 | P2 | P3, text }], a short summary, and optional blocked/blockedReason. Set blocked:true only when a fixer cannot proceed (cannot build, cannot run required checks, or a handed finding is impossible within the specification); it requires fail and a non-empty blockedReason. Prose never classifies blocked state.",
     "A successful acknowledgement carries the completion metadata and a bounded severity count; use get_pipeline with pipelineId and stageId to read the stored findings and summary. Pass cannot carry findings. Notes that block nothing go in the summary. A needs_decision puts its question, options and recommendation in the summary and carries no findings: a needs_decision that carries findings on a stage with a fail edge is routed to that stage as a fail.",
     "A fixable defect is fail, however partial your confidence in the call is; needs_decision is for what only the operator can unblock.",
     "The server resolves the calling conversation to its own live attempt, so stageId is needed only when one conversation holds more than one live stage, and a conversation that holds no live attempt is refused.",
-    "A review-loop stage is refused: its completion is the outcome of its review flow, which the server reads itself.",
+    "A retained legacy review-loop stage refuses completion with STAGE_KIND_RETIRED. Convert its definition before starting any new attempt.",
     "Provenance is collected by the server, never taken from you: the answer records pending provenance, then bounded asynchronous checks observe the worktree HEAD, branch pull request and declared outputs. Read get_pipeline with stageId for the settled observation.",
     "The call records your intent. The stage settles when your turn ends, so you may keep working after it; calling again before settlement replaces the report, and a call after it is refused.",
     "This call is the stage's only completion channel: a fenced JSON verdict in the final turn is the fallback, written only when this call returned an error or the tool is absent from the session, and when both exist this call wins.",
@@ -3672,6 +3682,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   ].join(" "),
   curate_rules: "Only the machine's live scheduled curator conversation may call. read lists this pass's scopes and import batch; scope imports reads up to 40 candidate parts / 64 KB, with every occurrence; adopt/drop/defer account for that entire batch. adopt orders use adopt:<candidate>:<index>. Ordinary scope reads page its active rules, versions, budget archives, recent departures, role scaffold, role attempts and other-project evidence within 24 KB (follow cursor). apply accounts for every active rule of the named scopes at their read revisions, orders survivors best first, and can rewrite, merge, move, split, archive with reasons or restore. Every change needs a note; role moves up to project or machine require why every role there acts on it. Split placeholders: split:<source-id>:1 for the second part and so on; the first keeps its id. Refused calls store nothing; after CURATE_STALE read again. problem [{id, statement, evidence, note}] transfers a concrete defect or mismatch to its original project seat agenda and archives it reversibly. The seat decides whether to propose a task or issue and asks the operator; create none yourself. Writes stay local. Operator-kept rules remain whole and active. Earlier texts and pass history are immutable and reversible from the learned-rules window.",
   leave_lesson: [
+    "Any stage answer may include applied and misled, each up to five distinct exact ids of rules this attempt received: applied changed what you did; misled was wrong or stale. An id may appear in only one field. These measurements are optional and may accompany none, lesson, rewrite or problem.",
     "A project's designated orchestrator seat may also call unasked, with lesson or rewrite, for a practice that can come back; a defect goes to a board task (create_task). Write no names of people, accounts, emails, tokens, ids or absolute paths.",
     "Answer the lesson request after stage_report exactly once with rewrite {id, rule, why}, lesson {scope, role?, rule, why}, problem {statement, evidence}, or none (usual for a stage handed no findings; on a fix round, say why the class cannot recur).",
     "A new lesson must change what this role does on a different task and use the narrowest true level: own-role work here; every role in this project; or every role in every project on this machine. The curator alone widens role rules across projects.",
@@ -3690,9 +3701,9 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
   deploy_exact_sha: "Deploy the serving Delegatus application by commit SHA or unique prefix of at least 7 characters on the tracked branch. Never a branch name. Only its server-attributed designated seat deploys; other projects cannot deploy through this tool. Idempotent by clientRequestId; deployments serialize at admission. After a control timeout, the first reply returns the accepted id when reconciliation proves admission. Otherwise it answers outcome_unknown: read deployment_status and replay the original clientRequestId to resolve admission. A matching SHA already deploying joins that deployment; a different SHA stays busy. An accepted deploy records wakeOnSettle:true for the seat: end the turn, and its next wake reports the terminal phase and paused lanes.",
   get_pipeline: "Read one pipeline by durable id, with stageDigests and graphDigest for a guarded graph edit. Use full:true for delivery ownership, closeReport, work links and retained bodies. Compact by default; full:true or compact:false returns the whole record, prompts, role scaffolds and attempt transcripts included. `stageId` narrows the answer to that stage and one attempt (the latest by default, or `attempt`): its verdict, findings, reported summary, conversation and error, with no prompts or transcripts. `compact: true` answers the list_pipelines compact row plus the digests.",
   board_snapshot: "Read a bounded, redacted snapshot of the Delegatus board, durable placement, and the selected project's hidden conversation count.",
-  list_flows: "List durable implement-review flows newest-created first, compact by default, with a 24 KB row budget and cursor pagination. Rows include identity, state, revision, spec title/length and round count. omittedCount counts matching records outside this page; omittedRecordCount counts compacted records. Follow nextCursor with the same filters and a fresh clientRequestId until hasMore is false. full:true or compact:false returns complete records; get_flow(flowId) reads one full record. A single explicit full record can exceed the budget. Unknown states are ignored; limits clamp and invalid or mismatched cursors restart with cursorReset:true.",
-  get_flow: "Read one implement-review flow by durable id.",
-  flow_action: "Apply a supported action to an implement-review flow. agent-decision durably submits an owner decision for one exact revision, HEAD, round, turn and optional pipeline stage attempt. Use submit-review, continue-fixing, stop or completed with a reason. Accepted decisions await authoritative completion of that same turn. Replay the original clientRequestId to recover its receipt. completed records a comment outcome and never grants review approval.",
+  list_flows: "Read retired flow history newest-created first, compact by default, with a 24 KB row budget and cursor pagination. Rows include identity, state, revision, spec title/length and round count. omittedCount counts matching records outside this page; omittedRecordCount counts compacted records. Follow nextCursor with the same filters and a fresh clientRequestId until hasMore is false. full:true or compact:false returns complete records; get_flow(flowId) reads one full record. A single explicit full record can exceed the budget. Unknown states are ignored; limits clamp and invalid or mismatched cursors restart with cursorReset:true.",
+  get_flow: "Read one archived flow by durable id. Flows are retired; the reply grants no execution or current-head approval.",
+  flow_action: "Deprecated: flows are retired. New operations refuse with FLOW_RETIRED; use pipeline run stages with review/fix edges. Replay an already accepted clientRequestId to read its original receipt without execution.",
   list_pipelines: "List durable pipelines newest-created first, compact by default, with cursor pagination and a 24 KB page budget. Follow nextCursor with the same filters. full:true reads complete records; compact:false restores the previous bounded board cards: id, task, project, branch/worktree, state and stateDetail, cursor stage, task links, and a per-stage summary (role, engine, attempt count, latest attempt's state and verdict). Deliberately carries no bodies — the spec, stage prompts, role scaffolds and every attempt's input/output transcript are read with get_pipeline, which still returns the whole record. hasSpec tells you a spec exists; long free text is truncated. `state: \"open\"` selects every state a lane can still move from (everything but completed and closed). `compact: true` shrinks each row to id, the title's first line, state, cursor, a clamped stateDetail and per stage its id and latest attempt {n, state, verdict}; get_pipeline with `stageId` then reads one stage's conclusion.",
   conversation_action: "Control or archive Delegatus conversations. interrupt, kill, resume, compact, dialog-key and permission accept one conversation by id, transcript path, or selected-card reference. dialog-key presses a key in a terminal-hosted dialog; a structured host has no terminal, so its tool permission requests are answered with permission and decision allow (once) or deny, optionally naming requestId, and its native question or plan with answer, requestId (the question's reason id) and answers, text, or approve. archive and unarchive also accept up to 100 targets; they update the existing board hidden placement without requiring a live host or readable transcript. Each archive or unarchive target expands to every registered generation path while preserving an exact transcriptPath and a spawn:<launchId> placeholder. Each per-target outcome lists the paths actually written by this call; already-archived means the full expanded set was already hidden. Archive execution requires the operator root or a designated orchestrator seat and retains conversation_action's existing cross-project reach.",
   operator_snapshot: "Read the bounded, secret-redacted Delegatus state currently visible to the operator.",
@@ -3762,6 +3773,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "The whole write is refused, and nothing is stored, when a row names an engine, model or effort outside the launch catalogue (`role_presets_invalid`, with the offending `violations` and `choices`) or when `expectedRevision` is not the current revision (`role_presets_stale_revision`, carrying the current registry to resend against). `expectedRevision` is optional.",
     "A write answers `{changed, revision, previousRevision, health, rows}`, each row as `{row, before, after}`. The revision check, the write and its audit record are one step under a lock shared by every process that writes the registry: every write is appended, with who made it, to `role-presets-audit.jsonl` beside role-presets.json, and a write whose record cannot be stored is undone and refused with `role_presets_audit_unavailable`. A change reaches launches that start after it; running agents keep the runtime they started on.",
   ].join(" "),
+  voice_tools: "Manage proposed voice-only MCP servers: list, status, propose or remove. Every agent, delegated workers included, may propose. Proposals execute nothing. Credentials are entered only in the voice settings. Only the operator browser may dry-run, approve, reject, configure or remove; MCP remove always refuses with voice_tools_operator_required. After proposing, direct the operator to the voice settings to run and review the probe. Commands are bun or uv; environment variables may not choose the launch (PATH, HOME, LD_*, NODE_OPTIONS, BUN_*, UV_*, PYTHON*, XDG_*); a package launch (bun x, uv tool run) sets no cwd and accepts only a registry package name with an optional version (npm @version or @tag, Python ==version); local scripts require an entryFile pin; HTTP URLs are loopback or HTTPS. Pinned changes return an approved server to pending.",
   auto_updates: [
     "Read — and switch on or off — automatic updates of the Delegatus install that serves this MCP: the same state and the same switch as the Update dialog.",
     "Enabling means: Delegatus follows `main`; once a newer merge's required checks are green it waits for a quiet or stable-work window (the operator not active, no update in progress, enough free memory) and then deploys that revision by itself. A deployment that fails rolls back to the running release, and automatic updates then switch themselves off and say why (`off`) until someone turns them on again.",
@@ -3871,7 +3883,7 @@ const pipelineStageSchema = z.object({
   id: z.string().regex(/^\s*[A-Za-z0-9_-]{1,64}\s*$/u)
     .describe("Stage id, unique within the pipeline: 1–64 characters of A–Z a–z 0–9 _ - (surrounding whitespace is trimmed). Referenced by next and onFail."),
   kind: z.enum(["run", "review-loop"])
-    .describe("run: an agent conversation that does the work. review-loop: a read-only review of the run stage whose next chain reaches it; a new one is stored as a read-only run reviewer plus a fix stage (builder, mode apply-fixes) with that run's domain and size, joined by an advance fail edge, and the answer names them in convertedStages (or lists legacyReview refusals when that needs a guess, and stores it as sent)."),
+    .describe("run: an agent conversation that does the work. review-loop is retired: new writes refuse with STAGE_KIND_RETIRED. Preview and explicitly convert stored legacy definitions to run reviewer/fix stages."),
   "prompt": z.string().min(1)
     .describe(`Instruction for this stage's agent, appended to its role scaffold. Up to ${MAX_STAGE_PROMPT_LENGTH} characters once trimmed. {{task}} renders the pipeline task and {{prev.output}} the previous stage's final prose output; a prompt that places neither still receives the previous output as a labelled section appended after the instruction.`),
   next: z.string().nullable().optional()
@@ -3883,7 +3895,7 @@ const pipelineStageSchema = z.object({
     onExhausted: z.enum(PIPELINE_FAIL_EDGE_EXHAUSTIONS).optional()
       .describe("What a fail on the last round does. advance (default): the fail target fixes the last findings. After that fix, the gate follows THIS stage's pass edge or completes when next:null, with no further review. A fix loop from another gate permits a new handoff through a previously spent gate; rounds remain cumulative. stop-after-fix: after the last fix the lane waits in needs_review if the head changed; use it when the operator asked to look before merge. park: stop before the last fix (one more review after maxRounds fail loops). Nothing merges on its own."),
   }).nullable().optional()
-    .describe("Fail successor for a run stage. A review-loop stage may not define one — it recovers through its own review flow."),
+    .describe("Fail successor for a run stage. Retained legacy review-loop stages have no fail edge and cannot execute."),
   role: z.object({
     roleId: z.enum(ROLE_IDS)
       .describe(`Role preset from the shared registry; it supplies the stage's prompt scaffold and its default engine/model/effort. ${PIPELINE_DISALLOWED_ROLE_IDS.join(", ")} is refused inside a pipeline (it needs an interactive deploy confirmation).`),
@@ -4202,7 +4214,7 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     expectedOwner: z.string().optional(),
     expectedEpoch: z.number().int().positive().optional(),
     reason: z.string().optional(),
-    acceptedSha: z.string().regex(/^[0-9a-f]{7,40}$/i).optional().describe("publish: requires a delivery remote. With none, add a remote and run set-delivery-remote first. Exact SHA to publish. A parked passed stage in committing can accept a moved head only when its worktree is clean, HEAD equals this SHA, its previously passed commit is an ancestor and all added work is verified clean integration of origin's configured main branch. Additional lane work or merge resolutions require a fresh review. Preserves pass and reviewed provenance, updates lastPassedCommit and advances automatically after publication. Omit to retry its existing accepted commit, including a settled failed publication; no takeover is needed. Deferred skip-stage, review retry-stage and takeover are refused when the serving controller cannot handle them."),
+    acceptedSha: z.string().regex(/^[0-9a-f]{7,40}$/i).optional().describe("publish: requires a delivery remote. With none, add a remote and run set-delivery-remote first. Exact SHA to publish. A parked passed stage in committing can accept a moved head only when its worktree is clean, HEAD equals this SHA, its previously passed commit is an ancestor and all added work is verified clean integration of origin's configured main branch. Additional lane work or merge resolutions require a fresh review. A stage parked because its commit custody was refused (stateDetail starting «settling the stage push:» or «stage push refused:») instead accepts its reviewed clean HEAD in place, from the lane's creator, its project's seat or the operator, with no integration proof. Preserves pass and reviewed provenance, updates lastPassedCommit and advances automatically after publication. Omit to retry its existing accepted commit, including a settled failed publication; no takeover is needed. Deferred skip-stage, review retry-stage and takeover are refused when the serving controller cannot handle them."),
     link: z.union([z.string(), z.number(), z.array(z.union([z.string(), z.number()]))]).optional()
       .describe("attach-link and detach-link (#2059): a PR or issue as \"#123\", \"123\", \"PR 123\", \"owner/repo#123\" or a github.com URL, or a list. A bare number means the pipeline's delivery repository. Attach what discovery cannot see: the pipeline's lane and delivery branches, its delivery.pr and the PR its stages reported are found without it. Allowed in every state; detach removes only links attached by hand. The answer carries workLinks, the resolved links."),
     kind: z.enum(["pr", "issue"]).optional().describe("attach-link only: whether link names a pull request or an issue, when the number alone leaves it open."),
@@ -4247,6 +4259,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   }).strict().refine(args => args.action === "read" ? ![args.scopes, args.rewrite, args.merge, args.move, args.split, args.archive, args.restore, args.problem, args.adopt, args.drop, args.defer].some(value => value !== undefined) : !!args.scopes && args.scope === undefined && args.cursor === undefined, "read takes scope/cursor; apply takes scopes and editorial operations"),
   leave_lesson: z.object({
     clientRequestId: clientRequestIdSchema,
+    applied: z.array(z.string().regex(/^r_[a-f0-9]{16}$/)).max(5).optional().describe("Delivered rule ids that changed what this stage did."),
+    misled: z.array(z.string().regex(/^r_[a-f0-9]{16}$/)).max(5).optional().describe("Delivered rule ids that were wrong or stale."),
     lesson: z.object({
       scope: z.enum(["role", "project", "machine"]).describe("The narrowest true level: this role here, every role here, or every role in every project."),
       role: z.enum(ROLE_IDS).optional().describe("With scope role only: another role that acts on this rule."),
@@ -4380,7 +4394,8 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
   flow_action: z.object({
     clientRequestId: clientRequestIdSchema,
     flowId: entityIdSchema,
-    action: z.enum(["pause", "resume", "set-mode", "advance", "retry-round", "cancel-round", "set-round-limit", "extend", "another-round", "set-roles", "close", "agent-decision"]),
+    action: z.enum(["pause", "resume", "set-mode", "advance", "retry-round", "cancel-round", "set-round-limit", "extend", "another-round", "set-roles", "close", "agent-decision"])
+      .describe("Deprecated compatibility payload. New operations refuse with FLOW_RETIRED; only an original accepted clientRequestId can replay its historical receipt."),
     decision: z.enum(["submit-review", "continue-fixing", "stop", "completed"]).optional(),
     reason: z.string().optional(),
     expectedRevision: z.number().int().nonnegative().optional(),
@@ -4725,6 +4740,12 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     detail: z.boolean().optional()
       .describe("true: a read also carries each role's shipped values, whether its prompt is overridden, and the launch choices. Ignored with overrides."),
   }).passthrough(),
+  voice_tools: z.object({
+    clientRequestId: clientRequestIdSchema,
+    action: z.enum(["list", "status", "propose", "remove"]),
+    name: z.string().optional().describe("remove only; removal requires the operator browser and is refused here."),
+    proposal: voiceToolProposalSchema.optional(),
+  }).strict(),
   auto_updates: z.object({
     clientRequestId: clientRequestIdSchema,
     enabled: z.boolean().optional()
@@ -4850,6 +4871,13 @@ for (const name of MCP_TOOL_NAMES) TOOL_INPUT_SCHEMAS[name] = TOOL_INPUT_SCHEMAS
 // task validation callback below before a receipt can be acquired.
 export const TOOL_TRANSPORT_SCHEMAS = Object.fromEntries(MCP_TOOL_NAMES.map(toolName => {
   const schema = TOOL_INPUT_SCHEMAS[toolName];
+  // Retain the advertised proposal shape while letting the strict callback below
+  // return INVALID_PROPOSAL before a receipt or domain handler can run.
+  if (toolName === "voice_tools") return [toolName, schema.extend({
+    // Zod's catch input has already been parsed and can have unknown keys removed.
+    // An invalid sentinel keeps a refused proposal invalid at the strict callback.
+    proposal: schema.shape.proposal.catch(() => null),
+  })];
   return [toolName, toolName === "create_task" || toolName === "update_task" ? schema.extend(Object.fromEntries(
     Object.entries(schema.shape).filter(([, fieldSchema]) => fieldSchema.isOptional())
       .map(([field, fieldSchema]) => [field, fieldSchema.catch((context: { input: unknown } | undefined) => context?.input)]),
@@ -4896,12 +4924,13 @@ export function createViewerMcpServer(service: McpToolService, tools: readonly M
       description: TOOL_DESCRIPTIONS[toolName] + (MCP_PAGE_CURSOR_TOOLS.has(toolName) ? ` ${MCP_PAGE_CURSOR_DESCRIPTION}` : ""),
       inputSchema: shortenSchemaDescriptions(TOOL_TRANSPORT_SCHEMAS[toolName]),
     }, async (args, extra) => {
-      if (taskMutation) {
+      if (taskMutation || toolName === "voice_tools") {
         const parsed = schema.safeParse(args);
         if (!parsed.success) {
           const issues = parsed.error.issues.map(issue => ({ field: issue.path.join("."), message: issue.message }));
-          const result = failure(toolName, String((args as McpToolArgs).clientRequestId), "TASK_INVALID_FIELD",
-            issues.map(issue => `${issue.field}: ${issue.message}`).join("; "), false, false,
+          const result = failure(toolName, String((args as McpToolArgs).clientRequestId), toolName === "voice_tools" ? "INVALID_PROPOSAL" : "TASK_INVALID_FIELD",
+            toolName === "voice_tools" ? "Invalid voice tools proposal. Use a registry package name with an optional version or a pinned entryFile; launch variables and inline credentials are refused."
+              : issues.map(issue => `${issue.field}: ${issue.message}`).join("; "), false, false,
             { field: issues[0]?.field, issues });
           return response(result);
         }

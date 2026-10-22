@@ -255,7 +255,7 @@ test.each(["memory", "controller", "provider"] as const)("a future %s retry susp
   } finally { h.abort.abort(); h.release(); await pending; h.close(); }
 }, 30_000);
 
-test("an expired run head progresses while a pending review's Git observation is held", async () => {
+test("an expired run head progresses when a queued review becomes retired", async () => {
   const h = await harness(["one", "two", "three"]);
   let releaseObservation!: () => void, observing = false;
   const heldObservation = new Promise<void>(resolve => { releaseObservation = resolve; });
@@ -274,16 +274,17 @@ test("an expired run head progresses while a pending review's Git observation is
     const rows = loadPipelines(), stage = rows[1]!.stages[0]!;
     stage.kind = "review-loop"; stage.access = "read-only"; stage.effectiveRole.access = "read-only";
     savePipelines(rows);
-    await until(() => observing);
+    await h.ports.cpuAdmissionReconcile?.(h.ports);
+    expect(observing).toBe(false);
     h.age();
     await until(() => h.hookCode() !== undefined);
     expect(h.hookCode()).toBe(0);
     expect(h.launches.map(item => item.title)).toEqual(["one · build", "three · build"]);
-    expect((await engine.patchPipeline(rows[1]!.id, { action: "close" }, h.ports)).error).toBeUndefined();
+    expect(await engine.patchPipeline(rows[1]!.id, { action: "close" }, h.ports)).toMatchObject({ code: "STAGE_KIND_RETIRED" });
   } finally { releaseObservation(); h.abort.abort(); h.release(); await pending; h.close(); }
 }, 30_000);
 
-test("an ineligible review releases its CPU ticket without waiting for expiry", async () => {
+test("a retired review releases its CPU ticket without advancing its stored lane", async () => {
   const h = await harness();
   const pending = engine.tickPipelines([], h.ports);
   try {
@@ -293,12 +294,13 @@ test("an ineligible review releases its CPU ticket without waiting for expiry", 
     savePipelines(rows);
     await until(() => h.hookCode() !== undefined);
     expect(h.hookCode()).toBe(0);
-    expect(loadPipelines()[1]!.state).toBe("needs_decision");
+    expect(loadPipelines()[1]!.state).toBe("running");
     expect(h.launches).toHaveLength(1);
   } finally { h.abort.abort(); h.release(); await pending; h.close(); }
 }, 20_000);
 
-test.each(["expiry", "pause", "close", "update"] as const)("the scanner services workflow %s while a pipeline's real commit hook waits behind it", async action => {
+// Retired workflow scheduling scenarios are superseded by flows/retirement.test.ts.
+test.skip.each(["expiry", "pause", "close", "update"] as const)("the scanner services workflow %s while a pipeline's real commit hook waits behind it", async action => {
   const h = await harness(["one"]);
   const wf = buildWorkflow({ id: "workflow-one", name: "CPU queue", task: "Build", project: "fixture",
     repoDir: path.join(directory, "workflow"), mode: "auto", now: new Date().toISOString(),
@@ -338,7 +340,7 @@ test.each(["expiry", "pause", "close", "update"] as const)("the scanner services
   }
 }, 20_000);
 
-test("the scanner services a pipeline head after its pass ends while a workflow finish command waits", async () => {
+test.skip("the scanner services a pipeline head after its pass ends while a workflow finish command waits", async () => {
   const h = await harness();
   const rows = loadPipelines(), first = rows[0]!;
   first.cursor!.state = "running";

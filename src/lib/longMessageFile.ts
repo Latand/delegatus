@@ -1,6 +1,6 @@
 import path from "node:path";
 import { MAX_INBOX_FILE_BYTES, MAX_INBOX_FILES_TOTAL_BYTES } from "./filePolicy";
-import { inboxFilePaths, inboxFileText, type InboxFileUpload } from "./inboxFiles";
+import { inboxFilePaths, inboxFileText, inboxFileBytes, type InboxFileUpload } from "./inboxFiles";
 import { messageTextExcerpt } from "./messageTextAttachment";
 import { assertStructuredTextEnvelope, MAX_STRUCTURED_TEXT_BYTES } from "./runtime/structuredContent";
 
@@ -13,7 +13,7 @@ export function prepareMessageFiles(text: string, files: readonly InboxFileUploa
   }
   const data = Buffer.from(text, "utf8");
   if (data.length > MAX_INBOX_FILE_BYTES
-    || files.reduce((total, file) => total + file.data.length, data.length) > MAX_INBOX_FILES_TOTAL_BYTES) {
+    || files.reduce((total, file) => total + inboxFileBytes(file), data.length) > MAX_INBOX_FILES_TOTAL_BYTES) {
     throw new Error("message text is too large to convert automatically; attach a text file within the attachment size limit");
   }
   const expanded = [...files, { name: "message.txt", data }];

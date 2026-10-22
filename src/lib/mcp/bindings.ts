@@ -1,3 +1,4 @@
+import { FLOW_ARCHIVE, FLOW_RETIREMENT, STAGE_RETIREMENT, FlowRetiredError } from "@/lib/flows/retirement";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { curationAnswer } from "@/lib/memory/curation/answer";
 import { resolvePrototypeReviewId as resolveStoredReviewId } from "@/lib/prototypeReview/store";
@@ -16,6 +17,7 @@ import { findPrototypeRound } from "@/lib/prototypeReview/store";
 import { autonomyActive, autonomyMandate, autonomyReportKey, pendingAutonomyReports } from "@/lib/monitor/autonomy";
 import { changeSeatTickSettings, markAutonomyReported, markAutonomyDecisionReview } from "@/lib/monitor/seatTickSettings";
 import { pipelinePublishesRemoteBranch } from "@/lib/pipelines/publication";
+import { recordSeatProjectSuccessions, seatLaunchCwd } from "@/lib/orchestrator/seatProjectIdentity";
 import { namedProjectDirectory, resolveNamedProject, ProjectNameRefusal } from "@/lib/projects/nameResolution";
 import { releaseStatus } from "@/lib/release/answer";
 import { releaseControlChange } from "@/lib/release/store";
@@ -286,6 +288,7 @@ import {
 import { parseSelectedContextRef } from "@/lib/selection/selectedContext";
 import { RETRYABLE_TELEGRAM_BOT_CODES, readTelegramBotRefusals, type TelegramBotErrorCode } from "@/lib/telegram/bot/contracts";
 import { telegramSetUp } from "@/lib/telegram/launchReadiness";
+import { voiceTools } from "./voiceTools";
 
 import {
   accountLimitRows,
@@ -2399,6 +2402,7 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, d
   if (!result.pipeline) {
     if (context?.dispatch) context.dispatch.attempted = false;
     const message = result.error ?? "could not create pipeline";
+    if (result.code === STAGE_RETIREMENT.code) throw new McpToolRefusal(message, { ...STAGE_RETIREMENT, retryable: false });
     /* #1026: a rejected create carries every violated constraint with its field
        and expected shape, so an agent composing its first pipeline reads the
        whole contract from one answer — the same list an HTTP caller receives. */
@@ -2491,6 +2495,7 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     : await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest);
   if (!result.pipeline) {
     const message = result.error ?? "could not update pipeline";
+    if (result.code === STAGE_RETIREMENT.code) throw new McpToolRefusal(message, { ...STAGE_RETIREMENT, retryable: false });
     /* A refused close carries the hosts it stopped and the one it could not
        (#670); an agent driving the board must not get less than an HTTP caller. */
     if (result.details) throw new McpToolRefusal(message, { code: result.code, details: result.details });
@@ -2664,7 +2669,7 @@ async function leaveLesson(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
       : null;
     if (caller.kind === "manager" && !seat) throw new RoleMemoryRefusal("LESSON_NOT_A_SEAT", "this caller has no active project designation");
     if (caller.kind === "gateway" && !seat) throw new RoleMemoryRefusal("LESSON_NOT_A_SEAT", "this gateway conversation has no active project designation");
-    const answer = { lesson: args.lesson, rewrite: args.rewrite, none: args.none, problem: args.problem };
+    const answer = { lesson: args.lesson, rewrite: args.rewrite, none: args.none, problem: args.problem, applied: args.applied, misled: args.misled };
     const result = seat ? leaveLessonForSeat(seat, answer) : leaveLessonForConversation(
       dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? [], caller.conversationId, answer,
     );
@@ -4393,7 +4398,10 @@ function orchestratorDispatchRefusal(error: unknown): McpDispatchNotExecutedErro
 
 /** Resolve names through the directory shared with voice and transcript search. */
 function resolveOrchestratorToolProject(named: string, dependencies: ViewerMcpDomainDependencies, requireActiveSeat = true): string {
-  try { return resolveNamedProject(named, namedProjectDirectory(dependencies), requireActiveSeat); }
+  try {
+    recordSeatProjectSuccessions(seatLaunchCwd, true);
+    return resolveNamedProject(named, namedProjectDirectory(dependencies), requireActiveSeat);
+  }
   catch (error) {
     if (error instanceof ProjectNameRefusal) throw new McpToolRefusal(error.message, error.details);
     throw error;
@@ -5421,6 +5429,7 @@ async function createOrchestrator(args: McpToolArgs, control: ViewerControlDepen
     project: typeof (result.seat as { project?: unknown } | undefined)?.project === "string"
       ? (result.seat as { project: string }).project
       : project,
+    ...(typeof result.displayName === "string" ? { displayName: result.displayName } : {}),
     conversationId: result.conversationId ?? null,
     transcriptPath: result.path ?? null,
     seat: result.seat ?? null,
@@ -5765,7 +5774,7 @@ function listFlows(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies)
       project,
     });
   const { rows: flows, ...pagination } = page;
-  return redactPayload({ ...pagination, flows, compact: !fullAnswer(args),
+  return redactPayload({ ...pagination, flows, ...FLOW_ARCHIVE, compact: !fullAnswer(args),
     omittedRecordCount: fullAnswer(args) ? 0 : flows.length,
     readMore: "Pass nextCursor as cursor with the same filters and a fresh clientRequestId. full:true, compact:false or get_flow(flowId) reads complete records." });
 }
@@ -5775,10 +5784,7 @@ async function getFlow(args: McpToolArgs, dependencies: ViewerMcpDomainDependenc
   const source = dependencies.flowSelectionSource?.();
   const flow = source ? source.read(flowId) : dependencies.getFlowsWithPresets().flows.find((candidate) => candidate.id === flowId);
   if (!flow) throw new Error("flow not found");
-  const { flowDecisionContext } = await import("@/lib/flows/decisions");
-  const caller = attributionOf(dependencies);
-  return redactPayload({ flowId, flow, ...(caller.conversationId && caller.conversationId === flow.implementerConversationId
-    ? { decisionContext: await flowDecisionContext(flow) } : {}) });
+  return redactPayload({ flowId, flow, ...FLOW_ARCHIVE });
 }
 
 function mutationReceipt(operationId: string): { operationId: string; receipt: { operationId: string; status: "delivered" } } {
@@ -5801,23 +5807,16 @@ async function flowAction(args: McpToolArgs, dependencies: ViewerMcpDomainDepend
     const { submitFlowDecision } = await import("@/lib/flows/decisions");
     const { flowDecisionRequestSchema } = await import("@/lib/flows/decisionSchema");
     const request = flowDecisionRequestSchema.parse(args);
-    const result = await submitFlowDecision(request, flowDecisionCaller(attributionOf(dependencies)));
-    return redactPayload({ ...result, outcome: result.decision.disposition === "accepted" ? "accepted" : "settled",
+    let result: Awaited<ReturnType<typeof submitFlowDecision>>;
+    try { result = await submitFlowDecision(request, flowDecisionCaller(attributionOf(dependencies))); }
+    catch (error) {
+      if (error instanceof FlowRetiredError) throw new McpToolRefusal(FLOW_RETIREMENT.error, { ...FLOW_RETIREMENT, retryable: false });
+      throw error;
+    }
+    return redactPayload({ ...result, ...FLOW_ARCHIVE, outcome: result.decision.disposition === "accepted" ? "accepted" : "settled",
       nextAction: result.decision.disposition === "accepted" ? "original-key-lookup" : "follow-disposition" });
   }
-  const request = withoutKeys(args, ["flowId", "clientRequestId"]) as PatchFlowRequest;
-  const result = action === "cancel-round"
-    ? await dependencies.cancelRound(flowId)
-    : action === "close"
-      ? await dependencies.closeFlow(flowId)
-      /* set-roles carries the actor so the sizing rules judge the agent's
-         reviewer (docs/design/model-sizing-tiers.md §2). */
-      : action === "pause" || action === "resume" || action === "set-roles"
-        ? dependencies.patchFlow(flowId, request, pauseResumeActorOf(dependencies))
-        : dependencies.patchFlow(flowId, request);
-  if (!result.flow) throw new Error(result.error ?? "could not update flow");
-  const operationId = mcpOperationId("flow_action", requestId(args));
-  return redactPayload({ flowId, flow: result.flow, ...mutationReceipt(operationId) });
+  throw new McpToolRefusal(FLOW_RETIREMENT.error, { ...FLOW_RETIREMENT, retryable: false });
 }
 
 /** A seat's list scope comes from its authenticated designation. */
@@ -8181,6 +8180,7 @@ export function viewerMcpBindings(
     account_project_binding: async (args) => accountProjectBindingTool(args, domainDependencies),
     role_presets: async (args) => waitForStateLock("mcp.role-presets", () => rolePresetsTool(args, domainDependencies)),
     auto_updates: (args, context) => autoUpdatesTool(args, viewerControlForCall(controlDependencies, context), domainDependencies),
+    voice_tools: (args, context) => voiceTools(args, viewerControlForCall(controlDependencies, context), attributionOf(domainDependencies).conversationId ?? null),
     account_limits: async (args) => accountLimitsTool(args, domainDependencies),
     create_orchestrator: orchestratorProjectBinding(domainDependencies, (args, context) => createOrchestrator(args, viewerControlForCall(controlDependencies, context)), false, false),
     send_message_to_orchestrator: (args, context) => sendMessageToOrchestrator(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),

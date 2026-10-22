@@ -1,5 +1,7 @@
 "use client";
 
+import type { ComposerFilePayload } from "@/lib/filePolicy";
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { projectNativeQueue, type NativeQueueView } from "@/components/nativeQueueView";
@@ -52,7 +54,7 @@ export interface NativeQueueMutation {
   images?: StructuredImageRef[];
   /** General attachments as the operator staged them. The route writes them to
       the inbox under this command's key and folds their paths into its text. */
-  files?: Array<{ name: string; base64: string }>;
+  files?: ComposerFilePayload[];
   runtime?: RuntimeSendSettings;
   selectedContext?: SelectedContextRef;
   /** Explicit null for an idle fence; a string permits only that active turn. */

@@ -155,3 +155,46 @@ test("the legacy conversation-host send under the key can neither replace nor de
     setConversationHostDependenciesForTests(null);
   }
 });
+
+test("the legacy writer waits for the shared batch turn before staging asynchronously", async () => {
+  const { enterInboxBatch } = await import("@/lib/inboxFiles");
+  const key = "legacy-serialized-staging";
+  const batch = inboxFileBatchToken(key);
+  const leave = await enterInboxBatch(batch);
+  const turns = (globalThis as { __llvInboxBatchTurns?: Map<string, Promise<void>> }).__llvInboxBatchTurns!;
+  const held = turns.get(batch);
+  let dispatched = false;
+  let settled = false;
+  let released = false;
+  setConversationHostDependenciesForTests({
+    completedFileScan: async () => ({ snapshot: { files: [] } }) as never,
+    collectImagePayloads: () => ({ images: [], error: null }),
+    enqueueStructuredMessage: async () => {
+      dispatched = true;
+      return { ok: false, structured: true, outcome: "failed", error: "structured host ownership is unavailable", status: 409 } as never;
+    },
+  });
+  const pending = conversationHostPOST(new NextRequest("http://127.0.0.1/api/tmux", {
+    method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" },
+    body: JSON.stringify({ conversationId: runtime.conversationId, clientMessageId: key, text: "legacy route", files: attachment(accepted) }),
+  })).then(response => { settled = true; return response; });
+  try {
+    const deadline = performance.now() + 5000;
+    // The global turn changes before the route awaits its predecessor. This
+    // handshake proves the real handler reached the held fence, without sleep.
+    while (turns.get(batch) === held) {
+      if (settled) throw new Error("legacy staging bypassed the shared batch turn");
+      if (performance.now() >= deadline) throw new Error("legacy staging never reached its batch turn");
+      await new Promise<void>(resolve => setImmediate(resolve));
+    }
+    expect(dispatched).toBe(false);
+    expect(fs.existsSync(path.join(inboxFilesDir(), batch, "trace.bin"))).toBe(false);
+    leave(); released = true;
+    expect((await pending).status).toBe(409);
+    expect(dispatched).toBe(true);
+  } finally {
+    if (!released) leave();
+    await pending;
+    setConversationHostDependenciesForTests(null);
+  }
+}, 10_000);

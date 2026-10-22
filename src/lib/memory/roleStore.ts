@@ -19,6 +19,7 @@ import { projectViewRows, projectViewRowsCooperatively, roleScopeKeys, roleViewV
 import { crossProjectRoleScope, isCrossProjectRoleScope, MACHINE_SCOPE, scopeKind, scopeProject, scopeRole } from "./roleScopes";
 import { renderLearnedRulesSelection } from "./roleRender";
 import { closestReadableRuleIds } from "./ruleIds";
+import { deliveredRuleIds } from "./deliveryLedger";
 import {
   MAX_LESSONS_PER_ATTEMPT, ROLE_MEMORY_BOUND,
   type LessonInput, type LessonRequestRow, type RoleMemoryProjectView, type RoleMemoryRow,
@@ -209,7 +210,9 @@ export function learnedRulesSnapshot(project: string, roleId: string | null, max
   });
   const rendered = renderLearnedRulesSelection(scopes, maxBytes);
   return { block: rendered.block, scopes: scopes.map(({ scope, revisions }) => ({ scope, revisions })),
-    rules: rendered.rules.map(rule => ({ id: rule.id, hash: crypto.createHash("sha256").update(rule.rule).digest("hex") })) };
+    rules: rendered.rules.map(rule => ({ id: rule.id, hash: crypto.createHash("sha256").update(rule.rule).digest("hex") })),
+    entries: rendered.rules.map(rule => [scopes.findIndex(scope => scope.scope === resolve(rule.scope)), rule.id, crypto.createHash("sha256").update(rule.rule).digest("hex")] as [number, string, string]),
+    candidates: scopes.map(({ scope, rules }) => ({ scope, rules })) };
 }
 
 export function learnedRulesBlock(project: string, roleId: string | null, maxBytes = Infinity): string {
@@ -269,6 +272,8 @@ interface LessonWriteInput {
   none: string | null;
   rewrite?: RewriteInput;
   problem?: ProblemInput;
+  applied?: string[];
+  misled?: string[];
   now?: string;
 }
 
@@ -294,6 +299,15 @@ function writeLessonAnswer(input: LessonWriteInput & { request?: Pick<LessonRequ
     const request = requested?.kind === "request" ? requested : null;
     if (input.request && !request) throw new RoleMemoryRefusal("LESSON_NOT_REQUESTED", "this stage attempt was not asked for a lesson");
     if (request && (request.none !== null || request.rewrote || request.ruleIds.length || request.problem)) throw new RoleMemoryRefusal("LESSON_LIMIT", "this stage attempt already answered its lesson request");
+    if (input.applied !== undefined || input.misled !== undefined) {
+      if (!request) throw new RoleMemoryRefusal("RULE_NOT_DELIVERED", "usage requires a stage delivery");
+      const applied = input.applied ?? [], misled = input.misled ?? [];
+      if ([applied, misled].some(ids => !Array.isArray(ids) || ids.length > 5 || new Set(ids).size !== ids.length || ids.some(id => typeof id !== "string" || !/^r_[a-f0-9]{16}$/.test(id))) || applied.some(id => misled.includes(id))) throw new RoleMemoryRefusal("LESSON_INVALID", "usage must name up to five distinct ids per field with no overlap");
+      const delivered = deliveredRuleIds(request, request.conversationId);
+      if ([...applied, ...misled].some(id => !delivered.has(id))) throw new RoleMemoryRefusal("RULE_NOT_DELIVERED", "applied and misled must name rules this attempt actually received");
+      if (input.applied !== undefined) request.applied = [...applied];
+      if (input.misled !== undefined) request.misled = [...misled];
+    }
     if (input.problem && request) {
       tx.put({ ...request, problem: input.problem });
       return { left: [], none: null, problem: input.problem };

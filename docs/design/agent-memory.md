@@ -238,6 +238,47 @@ developer context through stdout or `additionalContext`. The default
 reviewed and trusted before it runs. (documented D6; event and field names
 observed O-bin)
 
+#### Delegatus launch scope (verified 2026-10-22)
+
+Before implementation, an isolated `codex-cli 0.162.1` app-server accepted
+`-c hooks.UserPromptSubmit=…` and `-c hooks.state={…}`. `hooks/list` reported
+the declaration's source as `sessionFlags`, its key as
+`/<session-flags>/config.toml:user_prompt_submit:0:0`, and its trust as
+`trusted`. A second process with the same home and no overrides listed no
+hooks. Neither process created `hooks.json` or `config.toml`.
+[The pinned Codex discovery implementation](https://github.com/openai/codex/blob/rust-v0.162.1/codex-rs/hooks/src/engine/discovery.rs)
+defines the session source and normalized declaration hash.
+
+Delegatus now passes the memory declaration and its trust in launch overrides
+and the fresh/resumed thread configuration. The trust table includes the
+existing process-cleanup and operator-question handlers. Setup never asks
+Codex to persist trust. Generated programs contain credential file locations;
+each invocation reads the current key from Delegatus state. An installation
+configured solely through environment credentials keeps its hook credential
+in a protected state file outside the engine home. Endpoint overrides retain
+the control client's credential-forwarding restrictions.
+
+Upgrade migration runs before host adoption. It removes the old memory
+handlers, their trust tables and all old generated memory/setup programs for
+the default, managed and archived Codex homes, matching both configured and
+canonical paths for symlinked homes. It keeps personal declaration
+and state bytes, shared config symlinks, and empty groups that preserve native
+trust indices. If personal handlers share a group with an old memory handler,
+their declaration moves to a free group and receives a copy of its existing
+trust; the original personal trust records remain unchanged. Original files
+are backed up with restricted permissions under Delegatus state's
+`migrations/codex-memory-hooks` directory. Trust retires before declarations,
+so interrupted cleanup can restart from the remaining declaration.
+
+Verification uses explicit test paths in isolated homes and state through the
+project gate: `src/lib/memory/hook.native.test.ts` runs the installed Codex
+against a local model fixture and proves fresh/resumed injection, capability
+refusal, personal-launch isolation and unchanged config bytes.
+`hook.credentials.test.ts` covers key rotation, unrelated endpoints and
+environment-only installations. `hook.migration.test.ts` covers every legacy
+port, mixed personal groups, shared configs, startup ordering, process restart
+and failure/retry paths.
+
 ### 2.5 Side by side
 
 | Question | Claude Code | Codex |
