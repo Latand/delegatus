@@ -158,7 +158,8 @@ test("package launches refuse trailing execution arguments and uv interpreter re
 
 
 test("secret destinations require explicit exact origins or a local recipient", () => {
-  for (const destination of ["https://example.test", "https://example.test:8443", "http://127.0.0.1:3456", "stdio:music"]) {
+  for (const destination of ["https://example.test", "https://example.test:8443", "http://127.0.0.1:3456", "stdio:music",
+    `stdio:music:sha256:${"a".repeat(64)}`]) {
     expect(secretsSchema.safeParse({ token: { value: "synthetic-voice-credential", destinations: [destination] } }).success).toBe(true);
   }
   for (const destination of ["https://*.example.test", "example.test", "https://example.test/mcp", "https://example.test/", "http://example.test", "https://user@example.test", "stdio:*"]) {

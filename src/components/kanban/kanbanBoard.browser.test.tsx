@@ -22931,7 +22931,7 @@ describe("floating voice companion", () => {
    * in both languages and themes: its defining words are whole on screen once the section is
    * scrolled to, no text range leaves the dialog or the window, the page never scrolls sideways,
    * and every control is at least 24 px tall (44 on the phone). Wherever Run dry run starts a command,
-   * the line saying that it runs the program as the operator's OS user is whole beside it. Approving a chosen tool and
+   * the full filesystem sandbox warning is beside it. Approving a chosen tool and
    * flipping «ask before acting» on an approved server are pressed for real (a tap on the phone).
    * Frames go to `$LLV_VOICE_TOOLS_OUT` (default `.artifacts/voice-tools`), never committed.
    */

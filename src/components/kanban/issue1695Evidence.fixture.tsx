@@ -254,7 +254,7 @@ function seedVoiceTools() {
       envValues: { SPOTIFY_REDIRECT_URI: "http://127.0.0.1:8888/callback" } },
     entryFile: null, private: false, askBeforeActing: false, callTimeoutMs: 15_000, generation: 6, owner: "installation", audience: ["voice"], state: "pending",
     proposedBy: { kind: "conversation", conversationId: "conv_fixture_orchestrator", at: voiceToolAt(12) }, approval: null, tools: {}, catalog: null, lastDryRun: null,
-    digest: voiceToolDigest(1), missingSecrets: [], secretRefs: ["spotify-client-id"], secretDestinations: { "spotify-client-id": ["stdio:spotify"] }, ...over,
+    digest: voiceToolDigest(1), secretRecipient: `stdio:spotify:sha256:${"a".repeat(64)}`, missingSecrets: [], secretRefs: ["spotify-client-id"], secretDestinations: { "spotify-client-id": [`stdio:spotify:sha256:${"a".repeat(64)}`] }, ...over,
   });
   const chosen = { search: { enabled: true, acts: false }, now_playing: { enabled: true, acts: false }, play: { enabled: true, acts: true }, pause: { enabled: false, acts: true }, skip: { enabled: false, acts: true } };
   const ok = { code: "OK", at: voiceToolAt(4), digest: voiceToolDigest(501) };

@@ -191,7 +191,7 @@ function ServerRow({ name, server, when, busy, writing, refusal, write }: {
             </div>
             <label className="mt-1 block text-[12px] text-muted">{t("voiceCompanion.tools.destinations")}
               <input type="text" data-destinations={ref} defaultValue={server.secretDestinations?.[ref]?.join(", ") ?? ""} maxLength={4096} disabled={busy} required={typed.has(ref)}
-                placeholder={transport.type === "http" ? "https://mcp.example.test" : `stdio:${name}`} className={`${FIELD} mt-0.5`}
+                placeholder={server.secretRecipient} className={`${FIELD} mt-0.5`}
                 onChange={() => setTyped(current => new Set([...current, ref]))} />
             </label>
             <p data-voice-tool-destinations="" className="mt-0.5 text-[12px] text-muted">{t("voiceCompanion.tools.destinationsSaved", { hosts: server.secretDestinations?.[ref]?.join(", ") || t("voiceCompanion.tools.none") })}</p>

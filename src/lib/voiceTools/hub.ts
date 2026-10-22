@@ -16,7 +16,7 @@ export function voiceToolEnvironment(home: string, source: NodeJS.ProcessEnv): N
   return result;
 }
 /**
- * The stdio launcher as an absolute file found on the Viewer's own PATH. Relative PATH entries are
+ * A probe launcher as an absolute file found on the Viewer's own PATH. Relative PATH entries are
  * skipped, and nothing a proposal sets takes part, so the binary that starts is the one named here.
  */
 export async function resolveExecutable(command: "bun" | "uv", searchPath = process.env.PATH ?? ""): Promise<string | null> {
@@ -89,13 +89,14 @@ export class VoiceToolHub {
     const runRoot = path.join(this.store.directory, "voice-tools-runs", randomUUID());
     try {
       let policies: SecretPolicies = {};
-      let stdio: { executable: string; config: string; runDir: string } | undefined;
+      let stdio: { executable: string; config: string; runDir: string; runRoot: string; stateDirectory: string } | undefined;
       if (server.transport.type === "stdio") {
         const resolved = await resolveExecutable(server.transport.command);
         if (!resolved) return { code: "START_FAILED" };
         await fs.mkdir(path.join(runRoot, "cwd"), { recursive: true, mode: 0o700 });
         await fs.writeFile(path.join(runRoot, "config.toml"), "", { mode: 0o600, flag: "wx" });
-        stdio = { executable: resolved, config: path.join(runRoot, "config.toml"), runDir: path.join(runRoot, "cwd") };
+        stdio = { executable: resolved, config: path.join(runRoot, "config.toml"), runDir: path.join(runRoot, "cwd"), runRoot,
+          stateDirectory: await fs.realpath(this.store.directory) };
       }
       // Preparation awaited disk I/O; resolve the exact proposal again at dispatch.
       const current = await this.store.probeInput(name, expected);
@@ -107,7 +108,7 @@ export class VoiceToolHub {
     } finally { await fs.rm(runRoot, { recursive: true, force: true }); }
   }
   private spawnProbe(name: string, home: string, executable: { executable: string; worker: string }, server: VoiceToolServer, secrets: Record<string, string>, policies: SecretPolicies,
-    stdio: { executable: string; config: string; runDir: string } | undefined, signal: AbortSignal | undefined, abortCode: () => "TIMEOUT" | "CANCELLED"): Promise<ProbeResult> {
+    stdio: { executable: string; config: string; runDir: string; runRoot: string; stateDirectory: string } | undefined, signal: AbortSignal | undefined, abortCode: () => "TIMEOUT" | "CANCELLED"): Promise<ProbeResult> {
     return performanceSpans.wait("voice-tools.spawn", () => new Promise<ProbeResult>(resolve => {
       const child = spawnLeasedHelper("voice-tools-probe", { command: executable.executable, args: [executable.worker],
         cwd: process.cwd(), env: voiceToolEnvironment(home, process.env) }, this.store.directory, { input: true, stdout: "pipe", stderr: "ignore" });

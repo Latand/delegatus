@@ -8,7 +8,7 @@ import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { COMPANION_TOOL_REGISTRY } from "@/lib/voiceCompanion/tools";
 import { commitSeals, seal, validSeal } from "./seal";
 import { verifyEntry } from "./entry";
-import { approvalDigest, digest, emptyRegistry, literalValues, packageLaunch, probeDigest, proposalSchema, secretsSchema, secretReferences,
+import { approvalDigest, digest, emptyRegistry, literalValues, packageLaunch, probeDigest, proposalSchema, secretsSchema, secretReferences, secretDestination,
   assertSecretDestinations, secretReferenceSchema, secretDestinationSchema, type SecretPolicies, selectionSchema, toolName, validateCatalog, voiceToolBounds, type ProbeResult, type Tool, type VoiceToolServer, type VoiceToolsRegistry, type VoiceToolsView } from "./contracts";
 
 export class VoiceToolsError extends Error {
@@ -185,7 +185,7 @@ export class VoiceToolsStore {
         ? { type: "stdio", command: server.transport.command, args: server.transport.args, cwd: server.transport.cwd,
           envNames: Object.keys(server.transport.env).sort(), envValues: literalValues(server.transport.env) }
         : { type: "http", url: server.transport.url, headerNames: Object.keys(server.transport.headers).sort(), headerValues: literalValues(server.transport.headers) };
-      return [name, { ...structuredClone(server), transport, digest: approvalDigest(name, server),
+      return [name, { ...structuredClone(server), transport, digest: approvalDigest(name, server), secretRecipient: secretDestination(name, server),
         missingSecrets: secretReferences(server).filter(ref => !hasSecret(this.secrets, ref)), secretRefs: secretReferences(server), secretDestinations: Object.fromEntries(secretReferences(server).map(ref => [ref, this.policies[ref] ?? []])) }];
     }));
     const result: VoiceToolsView = { version: 1, revision: this.registry.revision, servers };

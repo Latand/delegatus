@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { approvalDigest, digest, type VoiceToolServer } from "./contracts";
+import { approvalDigest, digest, secretDestination, type VoiceToolServer } from "./contracts";
 import { VoiceToolsStore } from "./store";
 
 const roots: string[] = [];
@@ -23,7 +23,7 @@ async function catalog(store: VoiceToolsStore, count = 1, name = "music") {
 async function saveSecrets(store: VoiceToolsStore, values: Record<string, string>, authorize?: () => void) {
   const view = await store.view();
   const destinations = Object.fromEntries(Object.entries(values).map(([ref, value]) => [ref, { value, destinations: Object.entries(view.servers)
-    .filter(([, server]) => server.secretRefs.includes(ref)).map(([name, server]) => server.transport.type === "http" ? new URL(server.transport.url).origin : `stdio:${name}`) }]));
+    .filter(([, server]) => server.secretRefs.includes(ref)).map(([, server]) => server.secretRecipient) }]));
   for (const entry of Object.values(destinations)) if (!entry.destinations.length) entry.destinations.push("https://example.invalid");
   return store.saveSecrets(destinations, authorize);
 }
@@ -230,6 +230,30 @@ test("a launch variable is refused at proposal and on load, and allowed variable
   const raw = JSON.parse(await fs.readFile(store.file, "utf8")); raw.servers.music.transport.env.PATH = { value: "/srv/agent/bin" };
   await fs.writeFile(store.file, JSON.stringify(raw), { mode: 0o600 });
   await expect(new VoiceToolsStore(root).view()).rejects.toThrow("REGISTRY_UNAVAILABLE");
+});
+
+test("a stdio secret grant does not survive replacing the program under the same server name", async () => {
+  const { store } = await setup();
+  const stdioProposal = (packageName: string) => ({
+    name: "music", title: "Music", capability: "Search music",
+    transport: { type: "stdio" as const, command: "bun" as const, args: ["x", packageName], cwd: null, env: { SERVER_TOKEN: { secretRef: "music-token" } } },
+    entryFile: null,
+  });
+  await store.propose(stdioProposal("music-mcp"), actor);
+  await saveSecrets(store, { "music-token": "synthetic-voice-credential" });
+
+  await expect(store.propose(stdioProposal("untrusted-mcp"), actor)).rejects.toThrow("SECRET_DESTINATION");
+  expect((await server(store)).transport).toMatchObject({ args: ["x", "music-mcp"] });
+});
+
+test("the operator view shows the exact identity a stdio secret grant must name", async () => {
+  const { store } = await setup();
+  const candidate = { name: "music", title: "Music", capability: "Search music",
+    transport: { type: "stdio" as const, command: "bun" as const, args: ["x", "music-mcp"], cwd: null, env: { SERVER_TOKEN: { secretRef: "music-token" } } } };
+  await store.propose(candidate, actor);
+  const expected = secretDestination("music", { transport: candidate.transport, entryFile: null });
+  await store.saveSecrets({ "music-token": { value: "synthetic-voice-credential", destinations: [expected] } });
+  expect((await store.view()).servers.music).toHaveProperty("secretRecipient", expected);
 });
 
 test("re-approving the operator's own change on an approved server commits both or neither", async () => {

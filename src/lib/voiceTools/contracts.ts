@@ -55,6 +55,7 @@ export type VoiceToolServer = Omit<VoiceToolProposal, "name"> & {
 };
 export type VoiceToolsRegistry = { version: 1; revision: number; servers: Record<string, VoiceToolServer> };
 export type VoiceToolsView = { version: 1; revision: number; servers: Record<string, Omit<VoiceToolServer, "transport"> & {
+  secretRecipient: string;
   /* Literal values are shown so the operator approves what runs; a secret reference shows its name only. */
   transport: { type: "stdio"; command: "bun" | "uv"; args: string[]; cwd: string | null; envNames: string[]; envValues: Record<string, string> }
     | { type: "http"; url: string; headerNames: string[]; headerValues: Record<string, string> };
@@ -73,7 +74,7 @@ export function approvalDigest(name: string, server: VoiceToolServer): string {
     owner: server.owner, audience: server.audience, private: server.private, askBeforeActing: server.askBeforeActing,
     callTimeoutMs: server.callTimeoutMs, tools: server.tools, catalog: server.catalog?.digest ?? null });
 }
-export function probeDigest(name: string, server: VoiceToolServer): string {
+export function probeDigest(name: string, server: Pick<VoiceToolServer, "transport" | "entryFile">): string {
   return digest({ name, transport: server.transport, entryFile: server.entryFile });
 }
 /** The literal values of a variable or header map, without secret references. */
@@ -147,15 +148,15 @@ export function validateCatalog(name: string, input: unknown, compile?: (schema:
 export const selectionSchema = z.record(z.string().max(128), z.object({ enabled: z.boolean(), acts: z.boolean() }).strict());
 /** Exact HTTP origins (scheme, host and port), or the named local stdio recipient. */
 export const secretDestinationSchema = z.string().max(4096).refine(value => {
-  if (/^stdio:[a-z][a-z0-9_]{1,23}$/.test(value)) return true;
+  if (/^stdio:[a-z][a-z0-9_]{1,23}(?::sha256:[a-f0-9]{64})?$/.test(value)) return true;
   try { const url = new URL(value); return !url.hostname.includes("*") && allowedHttpUrl(value) && url.origin === value; } catch { return false; }
 });
 export const secretInputSchema = z.object({ value: z.string().min(8).max(8192).optional(), destinations: z.array(secretDestinationSchema).min(1).max(32) }).strict();
 export const secretsSchema = z.record(secretReferenceSchema, secretInputSchema).refine(v => Object.keys(v).length <= 256)
   .refine(v => Buffer.byteLength(JSON.stringify(v)) <= voiceToolBounds.secretBytes);
 export type SecretPolicies = Record<string, string[]>;
-export function secretDestination(name: string, server: Pick<VoiceToolServer, "transport">): string {
-  return server.transport.type === "http" ? new URL(server.transport.url).origin : `stdio:${name}`;
+export function secretDestination(name: string, server: Pick<VoiceToolServer, "transport" | "entryFile">): string {
+  return server.transport.type === "http" ? new URL(server.transport.url).origin : `stdio:${name}:${probeDigest(name, server)}`;
 }
 export function assertTransportAuthority(server: Pick<VoiceToolServer, "transport">): void {
   if (server.transport.type === "http" && authorityHeaderOverride(server.transport.headers)) throw new Error("SECRET_DESTINATION");
