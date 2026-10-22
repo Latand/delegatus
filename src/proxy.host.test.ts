@@ -91,7 +91,7 @@ test("static assets check Host while retaining their keyless loading behavior", 
   }
 });
 
-test("Next's compiled matcher covers every App Router entry except the self-gated multiplexer", async () => {
+test("Next's compiled matcher covers every App Router entry except the self-gated streams and upload routes", async () => {
   const { unstable_doesMiddlewareMatch } = await import("next/experimental/testing/server");
   const matches = (pathname: string) => unstable_doesMiddlewareMatch({ config, nextConfig: { basePath: "" }, url: pathname });
   const app = path.join(import.meta.dir, "app");
@@ -102,7 +102,7 @@ test("Next's compiled matcher covers every App Router entry except the self-gate
   expect(routes.length).toBeGreaterThan(100);
   for (const file of routes) {
     const pathname = "/" + file.replace(/(?:^|\/)(?:route|page)\.tsx?$/, "").replace(/\[.*?\]/g, "sample");
-    expect({ pathname, matched: matches(pathname) }).toEqual({ pathname, matched: pathname !== "/api/streams" });
+    expect({ pathname, matched: matches(pathname) }).toEqual({ pathname, matched: !["/api/streams", "/api/composer-upload"].includes(pathname) });
   }
   for (const pathname of ["/_next/static/chunks/app.js", "/favicon.ico"]) expect(matches(pathname)).toBe(true);
 });

@@ -47,9 +47,9 @@ export function viewerHealthRequestPlan(
     authenticated: token
       ? { url: `${endpoint}/`, headers: authenticatedHeaders }
       : null,
-    // A trusted loopback gateway vouches for loopback Host values. Exercise
-    // its untrusted Host path so this refusal still reaches the Viewer gate.
-    unauthorized: token ? { url: `${endpoint}/`, headers: { ...remoteHeaders, host: "viewer-health.invalid" } } : null,
+    // The remote marker prevents the trusted local entry from vouching for
+    // this request; keep the endpoint Host valid so the key gate is exercised.
+    unauthorized: token ? { url: `${endpoint}/`, headers: remoteHeaders } : null,
     capability: {
       url: `${endpoint}/api/runtime/deployments/capabilities/v1`,
       headers: authenticatedHeaders,
@@ -61,7 +61,14 @@ export function viewerHealthRequestPlan(
     from the identity gate once a team is claimed (team mode answers keyless
     requests itself, docs/design/sign-in-and-team.md §4.2). */
 export function viewerRefusesUnauthorized(status: number, body: string): boolean {
-  if (status === 403) return true;
+  if (status === 403) {
+    if (body.includes("Access denied.")) return true;
+    try {
+      return (JSON.parse(body) as { error?: unknown })?.error === "access denied: key required";
+    } catch {
+      return false;
+    }
+  }
   if (status !== 401) return false;
   try {
     return (JSON.parse(body) as { code?: unknown })?.code === MEMBER_REQUIRED_CODE;

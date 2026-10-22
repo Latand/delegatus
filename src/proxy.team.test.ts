@@ -60,11 +60,13 @@ describe("solo install", () => {
     expect(response.headers.get("x-middleware-next")).toBe("1");
   });
 
-  test("the deploy gate's keyless probe is refused at the perimeter", async () => {
+  test("the deploy gate's keyless probe reaches and is refused by the key gate", async () => {
     const probe = viewerHealthRequestPlan("https://dev.example.net", TOKEN, probeHeadersFrom(stateDir)).unauthorized!;
     const response = proxy(new NextRequest(probe.url, { headers: { host: new URL(probe.url).host, ...probe.headers } }));
     expect(response.status).toBe(403);
-    expect(viewerRefusesUnauthorized(response.status, await response.text())).toBe(true);
+    const body = await response.text();
+    expect(body).toContain("Access denied.");
+    expect(viewerRefusesUnauthorized(response.status, body)).toBe(true);
   });
 });
 
@@ -278,12 +280,14 @@ describe("team install: first-party callers name themselves and are checked", ()
     }
   });
 
-  test("the deploy gate's foreign Host probe is refused before the team gate", async () => {
+  test("the deploy gate's keyless probe reaches and is refused by the team gate", async () => {
     const plan = viewerHealthRequestPlan("https://dev.example.net", TOKEN, probeHeadersFrom(stateDir));
     const probe = plan.unauthorized!;
     const response = proxy(new NextRequest(probe.url, { headers: { host: new URL(probe.url).host, ...probe.headers } }));
-    expect(response.status).toBe(403);
-    expect(viewerRefusesUnauthorized(response.status, await response.text())).toBe(true);
+    expect(response.status).toBe(401);
+    const body = await response.text();
+    expect(body).toContain("member_required");
+    expect(viewerRefusesUnauthorized(response.status, body)).toBe(true);
   });
 
   test("an anonymous browser write stays refused, with the key and without one", () => {

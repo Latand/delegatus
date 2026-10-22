@@ -142,4 +142,4 @@ function perimeterCheck(request: NextRequest): PerimeterResult {
 
 /* These routes run this proxy themselves so their request bodies are not
    cloned and buffered before their handlers can enforce their limits. */
-export const config = { matcher: ["/((?!_next/static|favicon.ico|api/streams$|api/composer-upload$).*)"] };
+export const config = { matcher: ["/((?!api/streams$|api/composer-upload$).*)"] };
