@@ -5,6 +5,7 @@ import path from "node:path";
 import { realExec } from "@/lib/workflows/provision";
 import { prepareStageGitGuard, stageGitReceiptDirectory } from "@/lib/git/stageAttemptGuard";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
+import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import { settleStageAttemptPush } from "./stageAttemptPush";
 import { commitAndAdoptStageBranch } from "./stageBranch";
 import type { Pipeline, PipelineStageAttempt } from "./types";
@@ -51,7 +52,7 @@ async function fixture(legacy = false, successor = false, prBase?: { mainBeforeC
   const attempt = { launchId, startedAt: START, completedAt: null } as PipelineStageAttempt;
   const pipeline = { id: "proof", worktreeDir: lane, branch: "pipeline/proof", baseBranch: prBase ? "pipeline/proof" : "main", baseRef: base, lastPassedCommit: base,
     delivery: { active: true, disposition: "owner", ownerId: "proof", publish: "enabled",
-      target: { remote, branch: "refs/heads/pipeline/proof" } } } as Pipeline;
+      target: { remote, repository: projectIdentityFromRemote(remote, lane)!.project, branch: "refs/heads/pipeline/proof" } } } as Pipeline;
   if (!legacy) {
     Object.assign(env, await prepareStageGitGuard(launchId, lane, realExec, START));
   }
@@ -159,6 +160,29 @@ test.each(["local", "pushed", "repair"] as const)("PR-base successor rejects mai
     expect(result).toMatchObject({ ok: false, error: expect.stringContaining("commit " + foreign + " was not created") });
     expect(await f.own("rev-parse", "HEAD")).toBe(head);
     if (mode === "pushed") expect(await f.git(f.remote, "rev-parse", f.pipeline.delivery!.target.branch)).toBe(head);
+  } finally { await f.close(); }
+});
+
+test.each(["local", "repair"] as const)("PR-base successor rejects URL-named fetch alias ancestry during %s settlement", async mode => {
+  const f = await fixture(false, true, {});
+  try {
+    f.pipeline.delivery!.target.pr = 1;
+    const trustedUrl = "file://" + f.remote;
+    const foreignUrl = "file://" + f.foreign;
+    f.pipeline.delivery!.target.remote = trustedUrl;
+    await f.own("config", "remote." + trustedUrl + ".url", foreignUrl);
+    await f.own("config", "remote." + trustedUrl + ".pushurl", trustedUrl);
+
+    await f.git(f.foreign, "commit", "--allow-empty", "-m", "foreign main work");
+    await f.own("fetch", foreignUrl, "main");
+    await f.own("merge", "--no-ff", "-m", "merge foreign main", "FETCH_HEAD");
+    const head = await f.own("rev-parse", "HEAD");
+    const result = await settleStageAttemptPush(f.pipeline, f.attempt, realExec, NOW,
+      mode === "repair" ? { acceptedHead: f.pipeline.baseRef } : undefined);
+
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining("delivery fetch URL does not match the persisted repository") });
+    expect(await f.own("rev-parse", "HEAD")).toBe(head);
+    expect(await f.git(f.remote, "rev-parse", "refs/heads/pipeline/proof")).toBe(f.pipeline.baseRef);
   } finally { await f.close(); }
 });
 
@@ -953,6 +977,7 @@ test("B: an octopus merge can prove creation when Git omits the ancestral lane h
 // A refresh starts from reviewed lane work; the remote merge has no stage receipt.
 async function foreignIntegration(local: boolean) {
   const f = await fixture();
+  f.pipeline.delivery!.target.repository = projectIdentityFromRemote("https://github.com/example/project.git", f.lane)!.project;
   await fs.writeFile(path.join(f.lane, "lane.txt"), "reviewed content\n");
   await f.own("add", "lane.txt");
   const reviewed = await f.commit("reviewed lane work"); await f.push();

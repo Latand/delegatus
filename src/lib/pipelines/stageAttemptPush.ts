@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { stageGitReceiptDirectory } from "@/lib/git/stageAttemptGuard";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
+import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { rollupChecksWithIdentity } from "@/lib/forge/checkRollup";
 import type { ExecPort } from "@/lib/workflows/provision";
@@ -286,6 +287,10 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
     // ancestry must be proved against the remote's fetch URL.
     const fetchUrl = await exec("git", ["remote", "get-url", remote], pipeline.worktreeDir);
     const deliveryUrl = fetchUrl.code === 0 ? fetchUrl.stdout.trim() : remote;
+    const fetchRepository = projectIdentityFromRemote(deliveryUrl, pipeline.worktreeDir)?.project;
+    if (!fetchRepository || fetchRepository !== delivery.target.repository) {
+      return refuse("the delivery fetch URL does not match the persisted repository");
+    }
     const url = await exec("git", ["remote", "get-url", "--push", remote], pipeline.worktreeDir);
     const expectedPushUrl = url.code === 0 ? url.stdout.trim() : remote;
     if (tip && tip !== start.head) {
