@@ -598,13 +598,16 @@ export function stepPasses(root: string, base: string, steps: readonly Step[], s
   const initial = snapshot();
   const key = (step: Step) => fingerprint([initial?.key, step]);
   const runtime = steps.filter(step => step.lane === "runtime");
-  const runtimeComplete = runtime.every(step => store.read(key(step)));
+  // Hold the complete runtime verdict for this invocation: eviction must not
+  // make a consumer run after its private build was skipped.
+  const runtimeRecords = new Map(runtime.map(step => [key(step), store.read(key(step))]));
+  const runtimeComplete = runtime.every(step => runtimeRecords.get(key(step)));
   if (!initial) say("pre-push: pass reuse disabled: worktree is dirty or inputs could not be fingerprinted (" + unavailableReason + ")");
   const current = () => initial && snapshot()?.key === initial.key;
   return {
     reused(step, until = Infinity) {
       if (Date.now() >= until || !initial || !reusable(step) || (step.lane === "runtime" && !runtimeComplete)) return false;
-      const record = store.read(key(step));
+      const record = step.lane === "runtime" ? runtimeRecords.get(key(step)) : store.read(key(step));
       if (!record || !current() || Date.now() >= until) return false;
       say(`pre-push: ${step.name}: reused pass from ${record.at} for tree ${initial.tree.slice(0, 12)} against base ${base.slice(0, 12)}; identical inputs, skipped`);
       return true;
@@ -851,6 +854,7 @@ async function main(mode: Mode, admitted = false): Promise<void> {
     deadline = { startedAt, at: publicationHookDeadline(publicationPushBudgetMs(files), startedAt) };
   }
   if (mode === "pre-push" && !files.length) console.error(`pre-push: nothing changed since ${base.slice(0, 12)}; checking the pushed commits for privacy only`);
+  if (mode === "pre-push" && files.length && files.every(proseOnly)) console.error("pre-push: prose-only diff; types, lint and touched tests skipped because no compiler or executable source input changed");
   const cache = path.join(process.env.XDG_CACHE_HOME ?? path.join(homedir(), ".cache"), "delegatus-gate");
   // Installed on first use, inside the step that needs it and by its deadline.
   let runtime: Promise<string> | undefined;

@@ -10,6 +10,29 @@ const roots: string[] = [];
 afterEach(() => { for (const directory of roots.splice(0)) rmSync(directory, { recursive: true, force: true }); });
 const hookFixture = () => createHookFixture(root, roots);
 
+test("prose-only skips name their reason and a subsequent code change runs the checks", () => {
+  const f = hookFixture();
+  writeFileSync(path.join(f.dir, "notes.md"), "A documentation change.\n");
+  f.git("add", "notes.md"); f.git("commit", "-m", "documentation");
+  const run = () => {
+    const before = f.calls().length;
+    const result = spawnSync("bash", [".githooks/pre-push"], { cwd: f.dir, env: f.env, encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+    return { output: result.stderr, calls: f.calls().slice(before) };
+  };
+  const prose = run();
+  expect(prose.output).toContain("prose-only diff; types, lint and touched tests skipped");
+  expect(prose.calls.some(call => call.args[0] === "tsc")).toBeFalse();
+  expect(prose.calls.some(call => call.args[0] === "scripts/eslint-changes.ts")).toBeFalse();
+  expect(prose.calls.some(call => call.args[0] === "scripts/local-gate-tests.ts")).toBeFalse();
+  writeFileSync(path.join(f.dir, "example.ts"), "export const value = 2;\n");
+  f.git("add", "example.ts"); f.git("commit", "-m", "code change");
+  const code = run();
+  expect(code.output).not.toContain("prose-only diff");
+  for (const command of ["tsc", "scripts/eslint-changes.ts", "scripts/local-gate-tests.ts"])
+    expect(code.calls.some(call => call.args[0] === command), command).toBeTrue();
+}, 60_000);
+
 test("identical clean hook processes reuse passed checks, while privacy and supply chain stay fresh", () => {
   const f = hookFixture();
   writeFileSync(path.join(f.dir, ".gitignore"), "commands.jsonl\nadmission.sqlite*\nllv-heavy-gate.*\nbudget-*/\n");
@@ -122,6 +145,14 @@ test("stopped, deferred, cancelled and failed steps never write a pass; the runt
   for (const member of runtime) open(runtime).passed(member);
   for (const member of runtime) expect(open(runtime).reused(member)).toBeTrue();
   await expect(runSteps("pre-push", runtime, { ...options, deadline: expired, passes: open(runtime) })).rejects.toBeInstanceOf(NoVerdict);
+  const held = open(runtime);
+  expect(held.reused(runtime[0]!)).toBeTrue();
+  // A peer may evict optional cache files after the build has been skipped.
+  // The already-validated group must keep its complete verdict for this run.
+  const directory = path.join(f.dir, ".git/delegatus-gate/passes");
+  for (const file of readdirSync(directory)) rmSync(path.join(directory, file));
+  expect(held.reused(runtime[1]!)).toBeTrue();
+  expect(open(runtime).reused(runtime[0]!)).toBeFalse();
 });
 
 
