@@ -1,4 +1,4 @@
-import { expect, test, spawn, AccountAuthenticationRequiredError, ProjectAccountRefusedError, selectProjectAccount, IDLE_TURN_QUIET_MS, tickPipelines, createPipelineFromRequest, loadPipelines, savePipelines, patchPipeline, entry, harness, create, structuredLatest, runningStructuredStage, LIMITED_ACCOUNT, SPARE_ACCOUNT, stageTranscript, readFixtures, providerQuotaRecord, SILENT_RUN, stageWhoseStopMovesTheTranscript, recoveryReport, providerRecoveryHarness, parkedAccountCases, parkedAccountHarness } from "./engine.fixture";
+import { expect, test, spawn, makeStructuredAttempt, pinStageHead, AccountAuthenticationRequiredError, ProjectAccountRefusedError, selectProjectAccount, IDLE_TURN_QUIET_MS, tickPipelines, createPipelineFromRequest, loadPipelines, savePipelines, patchPipeline, entry, harness, create, structuredLatest, runningStructuredStage, LIMITED_ACCOUNT, SPARE_ACCOUNT, stageTranscript, readFixtures, providerQuotaRecord, SILENT_RUN, stageWhoseStopMovesTheTranscript, recoveryReport, providerRecoveryHarness, parkedAccountCases, parkedAccountHarness } from "./engine.fixture";
 import type { DurableQuotaObservation, PipelinePorts, StageTurnEvidence } from "./engine.fixture";
 
 test("a stop of ours whose replacement waited for a later tick still names the stop, even across a service restart", async () => {
@@ -162,6 +162,48 @@ test("an OOM death retries once after headroom recovers in the same worktree, th
   expect(loadPipelines()[0]!.runs[0]!.attempts).toHaveLength(2);
 });
 
+
+test("#3054: an OOM retry asks for the headroom of its own scoped launch, and waits until that much is free", async () => {
+  const GIB = 2 ** 30;
+  const h = harness();
+  await create(h.ports, [
+    { id: "build", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", agentMemoryMaxBytes: 8 * GIB, prompt: "Build {{task}}", next: null },
+  ] as never);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  makeStructuredAttempt();
+  pinStageHead(h);
+  h.setConversationActive(false);
+  const at = h.ports.now();
+  h.ports.conversationOutOfMemory = async () => ({ at, limitBytes: 8 * GIB, limit: "agent", fatal: true, process: null });
+  const launches: unknown[] = [];
+  let available = 4 * GIB;
+  /* Stands in for the real port: the requirement is the stage's scoped cap. */
+  h.ports.memoryHeadroom = (prior, launch) => {
+    launches.push(structuredClone(launch));
+    return { availableBytes: available, requiredBytes: Math.min(prior, launch?.profile?.agentMemoryMaxBytes ?? 3 * GIB) };
+  };
+  await tickPipelines([], h.ports);
+  const spawnsBefore = h.spawnInputs.length;
+  h.advanceWallClock(60_001);
+  await tickPipelines([], h.ports);
+  let pipeline = loadPipelines()[0]!;
+  expect(pipeline.stateDetail).toContain("waiting for memory: 4.0 of 8.0 GB free");
+  expect(h.spawnInputs).toHaveLength(spawnsBefore);
+  expect(launches.at(-1)).toEqual({ cwd: pipeline.worktreeDir, project: pipeline.project, role: "builder",
+    profile: { agentMemoryMaxBytes: 8 * GIB, access: "read-write", sandbox: "full" } });
+  available = 8 * GIB;
+  h.advanceWallClock(5 * 60_000);
+  h.setConversationActive(true);
+  await tickPipelines([], h.ports);
+  await tickPipelines([], h.ports);
+  pipeline = loadPipelines()[0]!;
+  expect(pipeline.runs[0]!.attempts[1]!.state).toBe("running");
+  expect(h.spawnInputs).toHaveLength(spawnsBefore + 1);
+  /* The retry launched with the same profile its headroom was measured for. */
+  expect(h.spawnInputs.at(-1)!.runtimeProfile).toEqual((launches.at(-1) as { profile: unknown }).profile);
+  expect(h.spawnInputs.at(-1)!.project).toBe(pipeline.project);
+});
 
 test("an OOM recovery wait that never gets headroom parks after its bounded budget", async () => {
   const h = harness();

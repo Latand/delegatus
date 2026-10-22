@@ -9,7 +9,7 @@ import { spawnResponseForReceipt } from "@/lib/agent/spawnResponse";
 import { setProjectAgentMemoryMax, projectAgentMemoryMax } from "@/lib/projects/settings";
 import { loadRoleOverrides, saveRoleOverrides, ROLE_OVERRIDES_SCHEMA_VERSION } from "@/lib/roles/store";
 import { agentMemoryScopes, agentMemoryCapForPlan } from "./agentMemorySettings";
-import { GIB, planAgentMemory, invalidateAgentScopeProbe } from "./agentMemory";
+import { GIB, agentMemoryHeadroom, planAgentMemory, invalidateAgentScopeProbe } from "./agentMemory";
 import { assertAgentMemoryMax } from "./agentMemoryConfig";
 import { normalizeStages } from "@/lib/pipelines/engine";
 import { pipelineStageRuntimeProfile } from "@/lib/pipelines/stageSandbox";
@@ -92,5 +92,42 @@ test("stage normalization refuses invalid caps and copies the validated request 
     const parsed = normalizeStages([{ id: "build", kind: "run", prompt: "Implement the task", next: null, agentMemoryMaxBytes: cap }], lookup);
     expect(parsed.error).toBeUndefined();
     expect(pipelineStageRuntimeProfile(parsed.stages![0]!)).toMatchObject({ agentMemoryMaxBytes: cap });
+  }
+});
+
+test.skipIf(process.platform === "win32")("an OOM retry waits for the headroom of the scoped cap it will launch with", () => {
+  const watchdog = { NODE_ENV: "test", DELEGATUS_AGENT_MEMORY: "watchdog", DELEGATUS_AGENT_MEMORY_MAX: "3G", DELEGATUS_AGENT_MEMORY_RESERVE: "4G" } as const;
+  invalidateAgentScopeProbe();
+  saveRoleOverrides({});
+  expect(setProjectAgentMemoryMax("project-memory", null)).toBe(true);
+  try {
+    for (const [scopeName, saveScope, profile] of [
+      ["stage", () => {}, { agentMemoryMaxBytes: 8 * GIB }],
+      ["role", () => saveRoleOverrides({ builder: { config: { agentMemoryMaxBytes: 8 * GIB } } }), {}],
+      ["project", () => expect(setProjectAgentMemoryMax("project-memory", 8 * GIB)).toBe(true), {}],
+    ] as const) {
+      saveScope();
+      const scopes = agentMemoryScopes({ cwd: directory, project: "project-memory", role: "builder", profile: emptyLaunchProfile({ cwd: directory, ...profile }) });
+      const plan = planAgentMemory({ engine: "codex", sessionKey: `headroom-${scopeName}`, liveAgents: 1, memoryScopes: scopes }, watchdog, { totalBytes: 16 * GIB, probe: () => null, runner: () => "" });
+      expect(agentMemoryCapForPlan(plan)).toMatchObject({ limitBytes: 8 * GIB, source: scopeName, clamped: false });
+      /* The killed attempt ran at 8 GiB; 8 GiB of RAM is available, 4 GiB of it past the reserve. */
+      const tight = agentMemoryHeadroom(1, 8 * GIB, scopes, watchdog, { totalBytes: 16 * GIB, availableBytes: 8 * GIB });
+      expect(tight).toEqual({ availableBytes: 4 * GIB, requiredBytes: 8 * GIB });
+      expect(tight!.availableBytes < tight!.requiredBytes).toBe(true);
+      const recovered = agentMemoryHeadroom(1, 8 * GIB, scopes, watchdog, { totalBytes: 16 * GIB, availableBytes: 12 * GIB });
+      expect(recovered).toEqual({ availableBytes: 8 * GIB, requiredBytes: 8 * GIB });
+      saveRoleOverrides({});
+      expect(setProjectAgentMemoryMax("project-memory", null)).toBe(true);
+    }
+    /* Without scopes the requirement is the installation cap, as for an unscoped launch. */
+    expect(agentMemoryHeadroom(1, 8 * GIB, undefined, watchdog, { totalBytes: 16 * GIB, availableBytes: 8 * GIB })).toEqual({ availableBytes: 4 * GIB, requiredBytes: 3 * GIB });
+    /* A scope above the shared budget waits for the clamped launch cap, never more. */
+    const clamped = { stage: 40 * GIB };
+    expect(agentMemoryCapForPlan(planAgentMemory({ engine: "codex", sessionKey: "headroom-clamped", liveAgents: 1, memoryScopes: clamped }, watchdog, { totalBytes: 16 * GIB, probe: () => null, runner: () => "" })).limitBytes).toBe(12 * GIB);
+    expect(agentMemoryHeadroom(1, 40 * GIB, clamped, watchdog, { totalBytes: 16 * GIB, availableBytes: 16 * GIB })).toEqual({ availableBytes: 12 * GIB, requiredBytes: 12 * GIB });
+  } finally {
+    saveRoleOverrides({});
+    setProjectAgentMemoryMax("project-memory", null);
+    invalidateAgentScopeProbe();
   }
 });

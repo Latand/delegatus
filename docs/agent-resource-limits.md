@@ -19,6 +19,9 @@ refused. Installation size strings retain their existing syntax and fallback.
 Project settings use the canonical project key, role variants inherit their
 role's cap, and stage caps travel with the durable launch profile through
 resume and recovery. Project and role defaults are read again at launch.
+A role's cap belongs to no engine or model: changing the row's model or engine
+in the Agents table, the banner's bulk move and the maintainer's picker keep
+it, and only the row's reset clears it.
 
 Every override is clamped to the existing machine agent budget after the
 installation's shared reserve. Scoped settings cannot alter that reserve,
@@ -36,7 +39,9 @@ on main at `6b5d8509` (`src/lib/runtime/agentMemory.ts`,
 `src/lib/projects/settings.ts`, `src/lib/pipelines/types.ts`). The child-OOM
 handling in `src/lib/pipelines/engine.ts` and
 `src/components/attention/decision.ts` remains: a nonfatal child kill leaves
-the agent active.
+the agent active. A pipeline's automatic retry after a fatal child OOM waits
+for the headroom of the cap that retry launches with, resolved from the same
+project, role and stage scopes and clamped to the same budget.
 
 Before a structured, terminal or headless agent launch, Delegatus requires
 at least 2 GiB of available RAM. This floor leaves 1 GiB of headroom above

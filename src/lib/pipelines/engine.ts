@@ -27,6 +27,7 @@ import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
 import { waitForStateLock, stateDatabaseBusy, stateLockDeferral } from "@/lib/state/lockWait";
 import { validAgentMemoryMax, type AgentMemoryCap } from "@/lib/runtime/agentMemoryConfig";
 import { agentMemoryHeadroom, memoryKillText, type AgentMemoryKill } from "@/lib/runtime/agentMemory";
+import { agentMemoryScopes, type AgentMemoryScopeInput } from "@/lib/runtime/agentMemorySettings";
 import { claudeHostEndText } from "@/lib/runtime/hostEndCause";
 import { cpuPriorityEnv, type CpuPrioritySource } from "@/lib/runtime/cpuPriority";
 import { CPU_PRESSURE_DETAIL_PREFIXES, cpuPressureHoldDetail, machineCpuPressureGate, machineCpuPressurePollMs, type CpuPressureHold } from "@/lib/runtime/cpuPressure";
@@ -388,8 +389,10 @@ export interface PipelinePorts {
   conversationRuntime?(conversationId: string): LaunchRuntime | null;
   /** Fatal memory evidence from the latest terminal host generation. */
   conversationOutOfMemory?(conversationId: string): Promise<AgentMemoryKill | null>;
-  /** Null means the memory mechanism cannot measure headroom. */
-  memoryHeadroom?(priorLimitBytes: number): { availableBytes: number; requiredBytes: number } | null;
+  /** Null means the memory mechanism cannot measure headroom. `launch` names
+      the retry's project, role and stage profile, so the required headroom is
+      the scoped cap that retry will launch with. */
+  memoryHeadroom?(priorLimitBytes: number, launch?: AgentMemoryScopeInput): { availableBytes: number; requiredBytes: number } | null;
   /** Null means hosted, a timestamp means dead/absent since then, and undefined
       means the registry cannot provide authoritative host evidence. */
   conversationHostUnavailableSince?(conversationId: string): Promise<string | null | undefined>;
@@ -2033,7 +2036,7 @@ export function defaultPipelinePorts(
     conversationRegistered: (conversationId) => conversationId.startsWith("conversation_")
       && Boolean(snapshot().conversations[conversationId as ViewerConversationId]),
     conversationRuntime: (conversationId) => conversationRuntime(snapshot(), conversationId),
-    memoryHeadroom: (priorLimitBytes) => agentMemoryHeadroom(Object.values(snapshot().entries).filter((entry) => entry.structuredHost && entry.status !== "dead" && entry.status !== "unhosted").length + 1, priorLimitBytes),
+    memoryHeadroom: (priorLimitBytes, launch) => agentMemoryHeadroom(Object.values(snapshot().entries).filter((entry) => entry.structuredHost && entry.status !== "dead" && entry.status !== "unhosted").length + 1, priorLimitBytes, launch ? agentMemoryScopes(launch) : undefined),
     conversationOutOfMemory: async (conversationId) => {
       const current = snapshot();
       const conversation = current.conversations[conversationId as ViewerConversationId];
@@ -5676,7 +5679,8 @@ async function waitForMemory(pipeline: Pipeline, stage: PipelineStage, attempt: 
   const attempts = runFor(pipeline, stage.id)!.attempts;
   const kill = attempts[attempts.indexOf(attempt) - 1]?.outOfMemory;
   if (!kill) { delete attempt.memoryWait; return false; }
-  const headroom = ports.memoryHeadroom?.(kill.limitBytes);
+  const headroom = ports.memoryHeadroom?.(kill.limitBytes, { cwd: pipeline.worktreeDir, project: pipeline.project,
+    role: attempt.effectiveRole.roleId ?? null, profile: pipelineStageRuntimeProfile(attemptStage(stage, attempt)) });
   if (!headroom || headroom.availableBytes >= headroom.requiredBytes) { delete attempt.memoryWait; pipeline.stateDetail = null; return false; }
   const next = nextBoundedWait(wait, wait.startedAt, now, MEMORY_WAIT_BUDGET);
   if (!next) { await park(pipeline, `${memoryKillText(kill)}; memory did not recover within 30 minutes`, attempt); return true; }

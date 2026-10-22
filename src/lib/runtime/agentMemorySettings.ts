@@ -6,11 +6,13 @@ import type { AgentMemoryScopes, AgentMemoryCap } from "./agentMemoryConfig";
 import { agentMemoryCeiling, type AgentMemoryPlan } from "./agentMemory";
 import { procBackend } from "@/lib/proc";
 
-/** Re-read scoped defaults at the process launch boundary, including resumes. */
-export function agentMemoryScopes(input: {
+export type AgentMemoryScopeInput = {
   cwd: string; project?: string | null; role?: string | null;
   profile?: Pick<LaunchProfile, "agentMemoryMaxBytes" | "agentMemoryRoleParams"> | null;
-}): AgentMemoryScopes {
+};
+
+/** Re-read scoped defaults at the process launch boundary, including resumes. */
+export function agentMemoryScopes(input: AgentMemoryScopeInput): AgentMemoryScopes {
   const project = input.project ?? projectForCwd(input.cwd);
   const role = input.role ? listRoles().find(row => row.id === input.role) : null;
   return { project: project ? projectAgentMemoryMax(project) : null,
@@ -24,7 +26,7 @@ export function agentMemoryCapForPlan(plan: AgentMemoryPlan | null): AgentMemory
 }
 
 /** Prediction only: no scope probes, slice mutation or admission on a read. */
-export function previewAgentMemoryCap(input: Parameters<typeof agentMemoryScopes>[0], liveAgents: number): AgentMemoryCap {
+export function previewAgentMemoryCap(input: AgentMemoryScopeInput, liveAgents: number): AgentMemoryCap {
   const total = procBackend.systemMemory()?.ramTotal;
   const mode = process.env.DELEGATUS_AGENT_MEMORY ?? process.env.LLV_AGENT_MEMORY;
   if (!total || mode === "off" || process.platform === "win32") return agentMemoryCapForPlan(null);

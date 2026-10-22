@@ -96,7 +96,7 @@ export function probeAgentScopes(options: { platform: NodeJS.Platform; cgroupRoo
 let cachedMechanism: { mechanism: "scope" | "watchdog"; version: number } | null = null;
 let sliceConfigured = false;
 export function invalidateAgentScopeProbe(): void { cachedMechanism = null; sliceConfigured = false; }
-type MemoryPorts = { totalBytes?: number; probe?: () => number | null; runner?: MemoryRunner };
+type MemoryPorts = { totalBytes?: number; availableBytes?: number; probe?: () => number | null; runner?: MemoryRunner };
 let testMemoryPorts: MemoryPorts | null = null;
 /** Points every caller that passes no ports at fakes, so a launch-path test never probes or budgets the live agent slice. */
 export function setAgentMemoryPortsForTests(ports: MemoryPorts | null): void { testMemoryPorts = ports; invalidateAgentScopeProbe(); }
@@ -520,10 +520,13 @@ export class AgentMemoryCell {
     }
   }
 }
-export function agentMemoryHeadroom(liveAgents: number, priorLimitBytes: number): { availableBytes: number; requiredBytes: number } | null {
-  const memory = procBackend.systemMemory();
-  if (!memory || !cachedMechanism) return null;
-  const limits = agentMemoryCeiling(memory.ramTotal, liveAgents, { LLV_AGENT_MEMORY_MAX: process.env.DELEGATUS_AGENT_MEMORY_MAX ?? process.env.LLV_AGENT_MEMORY_MAX, LLV_AGENT_MEMORY_RESERVE: process.env.DELEGATUS_AGENT_MEMORY_RESERVE ?? process.env.LLV_AGENT_MEMORY_RESERVE });
+/** `scopes` are the retry's own project/role/stage caps, so the headroom it
+    waits for is the cap planAgentMemory will launch it with. */
+export function agentMemoryHeadroom(liveAgents: number, priorLimitBytes: number, scopes?: AgentMemoryScopes, env = process.env, ports: MemoryPorts = testMemoryPorts ?? {}): { availableBytes: number; requiredBytes: number } | null {
+  const measured = ports.totalBytes !== undefined && ports.availableBytes !== undefined ? null : procBackend.systemMemory();
+  const memory = { ramTotal: ports.totalBytes ?? measured?.ramTotal, ramAvailable: ports.availableBytes ?? measured?.ramAvailable };
+  if (!memory.ramTotal || memory.ramAvailable === undefined || !cachedMechanism) return null;
+  const limits = agentMemoryCeiling(memory.ramTotal, liveAgents, { LLV_AGENT_MEMORY_MAX: env.DELEGATUS_AGENT_MEMORY_MAX ?? env.LLV_AGENT_MEMORY_MAX, LLV_AGENT_MEMORY_RESERVE: env.DELEGATUS_AGENT_MEMORY_RESERVE ?? env.LLV_AGENT_MEMORY_RESERVE }, scopes);
   let availableBytes = Math.max(0, memory.ramAvailable - limits.reserveBytes);
   if (cachedMechanism.mechanism === "scope") {
     try {
