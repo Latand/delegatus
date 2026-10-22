@@ -30,7 +30,9 @@ function treeFingerprint(directory: string, label: string, exclude: (relative: s
     } else if (stat.isFile()) {
       bytes += stat.size;
       if (bytes > 2 * 1024 * 1024 * 1024) throw new Error("dependency fingerprint byte limit");
-      hash.update(`file:${relative}:${stat.mode & 0o777}:${stat.size}\0`);
+      // Installs sharing Bun's hard-linked cache flip group and other bits on
+      // the same inode; only whether the owner may execute it reaches a check.
+      hash.update(`file:${relative}:${stat.mode & 0o100 ? "x" : "-"}:${stat.size}\0`);
       const fd = openSync(file, "r");
       try { let count: number; while ((count = readSync(fd, buffer, 0, buffer.length, null))) hash.update(buffer.subarray(0, count)); }
       finally { closeSync(fd); }

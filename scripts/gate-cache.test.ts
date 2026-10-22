@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { checkEnvironment, environmentFingerprint, GateCache, installedFingerprint, workingInputsFingerprint } from "./gate-cache";
@@ -112,6 +112,14 @@ test("an installed tool edit invalidates the fingerprint without a version or lo
   const before = installedFingerprint(root);
   writeFileSync(script, "export const result = false;");
   expect(installedFingerprint(root)).not.toBe(before);
+});
+
+test("a shared install flipping group or other bits keeps the fingerprint; the owner's execute bit changes it", () => {
+  const root = fixture(), directory = path.join(root, "node_modules", "cli"); mkdirSync(directory, { recursive: true });
+  const script = path.join(directory, "cli.mjs"); writeFileSync(script, "export {};"); chmodSync(script, 0o775);
+  const before = installedFingerprint(root);
+  chmodSync(script, 0o777); expect(installedFingerprint(root)).toBe(before);
+  chmodSync(script, 0o664); expect(installedFingerprint(root)).not.toBe(before);
 });
 
 test("a symlink retarget invalidates working inputs even when its target files have identical bytes", () => {
