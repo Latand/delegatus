@@ -617,7 +617,7 @@ in the JSON.
 
 ## Loaded engine-family campaign
 
-Status: the resumed quiet-window campaign is in progress. The required sample is 30 qualifying after-runs, ten before-runs and two refusal controls. All attempts, including load outliers, are retained in `evidence/perf/pre-push-touched-tests.json#engineLoadCampaign`.
+Status: checkpointed when the quiet window closed; the required sample is incomplete. The required sample is 30 qualifying after-runs, ten before-runs and two refusal controls. All attempts, including load outliers, are retained in `evidence/perf/pre-push-touched-tests.json#engineLoadCampaign`.
 
 The fixed comparison uses main `144c87e12af0` before the fix and `04df47ce7042` after it, with three captured lane heads and their merged trees recorded in the manifest. The stage merged current main at resumption (`51d851863f7d`); the paired campaign keeps its original inputs so the earlier qualifying runs remain comparable. A separate final gate will verify the integrated source.
 
@@ -626,7 +626,7 @@ Each attempt runs the real pre-push entry point in a scratch clone with its own 
 | Side | Qualifying runs | Current sample P90 (s) | File expirations | Refusals | NEW lines |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | before | 7 | 1166.6 | 6 | 4 | 1 |
-| after | 21 | 476.4 | 0 | 0 | 0 |
+| after | 22 | 476.4 | 0 | 0 | 0 |
 
 The sample P90 is provisional until all runs complete. An incomplete baseline or runner error is a refusal even when it emits no NEW assertion line.
 
@@ -675,6 +675,13 @@ The sample P90 is provisional until all runs complete. An incomplete baseline or
 | after-20 | after | 2 | 12.36 / 27.40 / 30.51 | 23.6 | 439.3 | yes | 0 | 0 |
 | after-21 | after | 3 | 17.02 / 26.59 / 32.19 | 494.1 | 402.8 | yes | 0 | 0 |
 | before-07 | before | 1 | 16.80 / 29.36 / 63.94 | 954.7 | 908.8 | yes | 1 | 1 |
+| after-22 | after | 1 | 20.66 / 44.06 / 69.83 | 62.1 | 703.0 | outlier | 0 | 0 |
+| after-122 | after | 1 | 22.05 / 31.28 / 39.39 | 4.0 | 507.7 | outlier | 0 | 0 |
+| after-222 | after | 1 | 23.35 / 35.73 / 42.31 | 682.1 | 606.8 | outlier | 0 | 0 |
+| after-23 | after | 2 | 27.98 / 40.04 / 56.20 | 183.7 | 599.0 | outlier | 0 | 0 |
+| after-322 | after | 1 | 24.06 / 36.28 / 40.33 | 38.3 | 518.0 | outlier | 0 | 0 |
+| after-123 | after | 2 | 18.15 / 31.43 / 38.89 | 3.4 | 507.4 | outlier | 0 | 0 |
+| after-24 | after | 3 | 16.43 / 28.46 / 34.30 | 3.4 | 426.5 | yes | 0 | 0 |
 
 The ten split families retain all 1,078 registered cases, including their names, parameter values and assertion bodies. The preserved calibration and JUnit inventory established that partition before the campaign. The measured timeout exceptions are described in `docs/design/pre-push-gate-under-load.md#2-fix`.
 
@@ -697,6 +704,11 @@ The resumed campaign began with three qualifying after-runs and one before-run. 
 | batch-13 | 1 | 0 | 0 |
 | batch-14 | 1 | 0 | 0 |
 | batch-15 | 1 | 1 | 0 |
+| batch-16 | 2 | 1 | 1 |
+| batch-17 | 1 | 0 | 0 |
+| batch-18 | 1 | 0 | 0 |
+| batch-20 | 2 | 0 | 0 |
+| batch-21 | 3 | 1 | 0 |
 
 Two before-runs fell below the required load band as their remaining files and baseline work used fewer CPUs. Observed test CPU usage averaged at least 3.78 CPUs in `before-02`, against 7.04 in `after-306`. Future before-runs use a four-CPU foreground estimate for initial load padding; after-runs retain eight. New records include `paddingForegroundCpuEstimate`; earlier records used eight. The real gate retains its eight head workers and existing quotas, deadlines and verdict rules. Every earlier qualifier and outlier stays in the sample.
 
@@ -706,9 +718,9 @@ The separate merged-source engine comparison passed on `b68b4fb6c5b1`: 46 explic
 
 The high-load `after-05` outlier captured two existing 15-second explicit test timeouts in `engine.providerReset.part3.test.ts`; filtered retries passed and the comparator classified the occurrences as flaky. At that checkpoint, the 30/10 sample and the two controls remained incomplete.
 
-The recovery attempt merged current main before continuing. Its process now has a private PID namespace; both frozen campaign runners capture local process identities and launch user-manager services without namespace support. The host process view showed that the preceding run was still alive after its agent restarted. That run was allowed to finish, and its campaign pause flag prevented another dispatch. Its later 889.5-second result is excluded from acceptance at the campaign owner’s direction and retained under `discardedRuns`. That recovery attempt submitted no new hook. At that checkpoint, the remaining runs required a compatible execution context or an agreed new measurement epoch. The current merged dependency lock also differs from the captured inputs; final project and integration checks remain outstanding.
+The recovery attempt merged current main before continuing. Its process now has a private PID namespace; both frozen campaign runners capture local process identities and launch user-manager services without namespace support. The host process view showed that the preceding run was still alive after its agent restarted. That run was allowed to finish, and its campaign pause flag prevented another dispatch. Its later 889.5-second result is excluded from acceptance at the campaign owner’s direction and retained under `discardedRuns`. That recovery attempt submitted no new hook. At that checkpoint, the remaining runs required a compatible execution context or an agreed new measurement epoch. At that checkpoint, the merged dependency lock differed from the captured inputs; final project and integration checks were still outstanding.
 
-The supported-wrapper probe completed with exit 0 and an effective ancestor quota of three CPUs (`60000 20000`), outside the historical shared work slice. A read-only identity probe found that the frozen local-PID owner differs from the host identity, while the supported helper translates it correctly. The environment observations and procedures are retained in `engineLoadCampaign.continuationEnvironment`. No acceptance hook was dispatched from the recovery attempt. The next dispatch must also respect the campaign’s 06:00 UTC cutoff.
+The supported-wrapper probe completed with exit 0 and an effective ancestor quota of three CPUs (`60000 20000`), outside the historical shared work slice. A read-only identity probe found that the frozen local-PID owner differs from the host identity, while the supported helper translates it correctly. The environment observations and procedures are retained in `engineLoadCampaign.continuationEnvironment`. No acceptance hook was dispatched from the recovery attempt. That recovery window also retained its 06:00 UTC dispatch cutoff.
 
 ### Managed-runner continuation
 
@@ -716,7 +728,7 @@ The approved adapter translates its namespace-local supervisor identity with `cp
 
 The full equivalence control reran the branch used by `after-18`: 390.8 s complete-gate time, 2.9 s outer admission, load 7.42/27.37/35.15, exit 0, zero expirations and zero NEW failures. Its prior paired observation took 414.4 s. Runtime, source and gate digests matched; all owned padding scopes were quiescent afterward. This control contributes no acceptance run. The adapter and raw evidence digests are in `engineLoadCampaign.managedRunnerContinuation`.
 
-At the previous 06:00 UTC checkpoint, the ledger contained 20/30 qualifying after-runs and 6/10 before-runs. Before-run 6 remains excluded. 2 refusal controls are recorded. Dispatches check the pause flag and stop starting at 06:00 UTC; the current run and its owned cleanup may finish afterward. Only this campaign's recorded processes and scopes are stopped.
+At the previous 06:00 UTC checkpoint, the ledger contained 20/30 qualifying after-runs and 6/10 before-runs. Before-run 6 remains excluded. 2 refusal controls are recorded. That window checked the pause flag and stopped new dispatches at 06:00 UTC; its current run and owned cleanup could finish afterward. Only this campaign's recorded processes and scopes are stopped.
 
 | Refusal control | Complete gate (s) | Median load | Result |
 | --- | ---: | ---: | --- |
@@ -733,10 +745,14 @@ The integration comparison retained two baseline failures: `scripts/merge-batch.
 
 The resumed window began at 21:10 UTC on 2026-10-21 after merging current main by merge commit. The six frozen input trees and gate digests were verified against the preserved ledger before dispatch. The adapter continues to translate process identities and runs the frozen service runner in the same eighteen-CPU shared work slice with three CPUs per file. Before-run 6 remains excluded.
 
-Current qualifying counts: 21/30 after and 7/10 before. After P90 is 476.4 s, with 0 expirations and 0 NEW failures. All attempted load conditions remain in the table. The dispatch cutoff for this window is 01:10 UTC on 2026-10-22; a seat stop message closes dispatch immediately and permits the current run and owned cleanup to finish.
+Current qualifying counts: 22/30 after and 7/10 before. After P90 is 476.4 s, with 0 expirations and 0 NEW failures. All attempted load conditions remain in the table. The dispatch cutoff for this window is 01:10 UTC on 2026-10-22; a seat stop message closes dispatch immediately and permits the current run and owned cleanup to finish.
 
 The separate integration pre-push on merged source `e3f85d8efbb4` completed with exit 0 in 583.5 s including its admission waits, using a fresh frozen-lockfile install. Commands, source and log digests, named checks and classifications are recorded in `engineLoadCampaign.quietWindowContinuation`.
 
 The recovered private adapter now preserves ancestor queue-wait ledgers across both environment boundaries. During `before-07`, 953.6 s of completed, recorded admission wait was restored to its two owned supervisors. Their execution allowances and all frozen hook deadlines stayed unchanged. The run finished with a complete refusal after its provider-reset file expired at 300 seconds.
 
-A separate, non-counting control reran the same frozen branch as `after-21`: 408.4 s against 402.8 s, median load 26.19, exit 0, zero expirations and zero NEW failures. Source, runtime and gate digests and all 65 head file invocations matched. It retained the three-CPU file quota and eighteen-CPU work slice; both ancestor ledgers received the same 243.7 s of actual queue-wait credit. All observed file services and owned padding scopes were quiescent. This validates the held before-run without adding an acceptance sample.
+A separate, non-counting control reran the same frozen branch as `after-21`: 408.4 s against 402.8 s, median load 26.19, exit 0, zero expirations and zero NEW failures. Source, runtime and gate digests and all 65 head file invocations matched. It retained the three-CPU file quota and eighteen-CPU work slice; both ancestor ledgers received the same 243.7 s of actual queue-wait credit. All observed file services and owned padding scopes were quiescent. The control contributes no acceptance sample; its verification releases the held qualifying record for `before-07`.
+
+The quiet-window dispatches are closed. The remaining sample is 8 after-runs and 3 before-runs. The after sample has no expirations and no NEW failures; its P90 remains provisional until all 30 qualifying runs complete. The two refusal controls and the isolated integration gate are complete. All attempted load conditions, including outliers, remain in the record.
+
+While the campaign had no active acceptance run, 27 retained hold samples ranged from 18.10 to 52.98, with median 26.54. These observations explain the dispatch holds and contribute no acceptance run. The separate supervision-ledger control also contributes no acceptance run.
