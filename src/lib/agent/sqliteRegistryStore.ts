@@ -1931,6 +1931,51 @@ export class SqliteAgentRegistryStore {
     return finishSteps(this.loadHotSteps());
   }
 
+  /** Normalize every hot row except operation owners, at most 64 rows per
+      call. One call over the whole hot registry was a 372 ms slice on retained
+      history. Rows normalize independently except a structured receipt, whose
+      artifact backfill reads its conversation through the alias chain, so each
+      receipt batch carries the aliases and conversations it reaches. */
+  private *normalizeHotRowsSteps(input: Record<string, unknown>): Generator<void, RegistryFile> {
+    const shell: Record<string, unknown> = { version: 2, entries: {}, receipts: {} };
+    for (const field of META_FIELDS) if (Object.hasOwn(input, field)) shell[field] = input[field];
+    const file = performanceSpans.sync("registry.prepare.normalize", () => this.normalizePartial(shell));
+    yield;
+    const aliases = (input.conversationAliases ?? {}) as Record<string, unknown>;
+    const conversations = (input.conversations ?? {}) as Record<string, unknown>;
+    for (const collection of ROW_COLLECTIONS) {
+      if (collection === "deliveryOperationOwners") continue;
+      const rows = (input[collection] ?? {}) as Record<string, unknown>;
+      const keys = Object.keys(rows);
+      for (let offset = 0; offset < keys.length; offset += 64) {
+        const batch: Record<string, unknown> = {};
+        for (const key of keys.slice(offset, offset + 64)) batch[key] = rows[key];
+        const partialInput: Record<string, unknown> = { version: 2, entries: {}, receipts: {}, [collection]: batch };
+        if (collection === "receipts") {
+          const reachedAliases: Record<string, unknown> = {};
+          const reachedConversations: Record<string, unknown> = {};
+          for (const receipt of Object.values(batch)) {
+            let current = (receipt as { conversationId?: unknown } | null)?.conversationId;
+            const seen = new Set<string>();
+            while (typeof current === "string" && !seen.has(current)) {
+              seen.add(current);
+              if (Object.hasOwn(conversations, current)) reachedConversations[current] = conversations[current];
+              if (!Object.hasOwn(aliases, current)) break;
+              reachedAliases[current] = aliases[current];
+              current = aliases[current];
+            }
+          }
+          partialInput.conversationAliases = reachedAliases;
+          partialInput.conversations = reachedConversations;
+        }
+        const partial = performanceSpans.sync("registry.prepare.normalize", () => this.normalizePartial(partialInput));
+        Object.assign(file[collection], partial[collection]);
+        yield;
+      }
+    }
+    return file;
+  }
+
   private *loadHotSteps(): Generator<void, SqliteRegistrySnapshot> {
     yield* this.refreshColdKeySteps();
     const input: Record<string, unknown> = { version: 2,entries: {},receipts: {} };
@@ -1963,11 +2008,7 @@ export class SqliteAgentRegistryStore {
     yield;
     const storedOwners = input.deliveryOperationOwners as Record<string, { deliveryId?: string } | null>;
     const ownerIds = new Set(Object.keys(storedOwners));
-    const owners = input.deliveryOperationOwners;
-    input.deliveryOperationOwners = {};
-    const file = performanceSpans.sync("registry.prepare.normalize", () => this.normalizePartial(input));
-    input.deliveryOperationOwners = owners;
-    yield;
+    const file = yield* this.normalizeHotRowsSteps(input);
     /* Operation-owner history can be much larger than the other hot rows.
        Normalize it in bounded batches, with only each batch's referenced
        deliveries present for the cross-row defaults. */

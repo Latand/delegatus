@@ -809,3 +809,70 @@ test("a schema edit during yielded recovery verification cannot publish an index
     expect(db.query("SELECT name FROM sqlite_master WHERE name='registry_lookup_clientMessageId_heldDeliveries'").get()).not.toBeNull();
   } finally { if (edit) clearImmediate(edit); db.close(); }
 });
+
+test("cooperative preparation normalizes hot rows in bounded batches and keeps the receipt backfill", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-registry-readonly-batches-"));
+  directories.push(directory);
+  const seed = new AgentRegistry(path.join(directory, "seed.json"), undefined, undefined, { sqliteMode: "off" });
+  const template = seed.ensureConversation("codex", "/sessions/batch-template.jsonl", "default");
+  const spawn = seed.beginSpawn("codex", "/repo/batch-template", { title: "Batch template" });
+  const initial = seed.snapshot();
+  seed.close();
+  type ConversationId = RegistryFile["receipts"][string]["conversationId"] & string;
+  const conversationTemplate = initial.conversations[template.id]!;
+  const receiptTemplate = initial.receipts[spawn.launchId]!;
+  const rows = 200;
+  for (let index = 0; index < rows; index++) {
+    const id = `conversation_batch-${index}` as ConversationId;
+    const artifactPath = `/sessions/batch-${index}.jsonl`;
+    initial.conversations[id] = {
+      ...conversationTemplate, id, engine: index === 1 ? "claude" : "codex",
+      generations: conversationTemplate.generations.map(generation => ({ ...generation, path: artifactPath })),
+    };
+    // Every third receipt reaches its conversation through a two-link alias chain.
+    let conversationId = id;
+    if (index % 3 === 0) {
+      const near = `conversation_batch-alias-${index}` as ConversationId;
+      const far = `conversation_batch-alias-far-${index}` as ConversationId;
+      initial.conversationAliases[far] = near;
+      initial.conversationAliases[near] = id;
+      conversationId = far;
+    }
+    const launchId = `batch-receipt-${index}`;
+    initial.receipts[launchId] = {
+      ...receiptTemplate, launchId, conversationId, engine: "codex", transport: "structured", state: "completed",
+      artifactPath, artifactLifecycle: "pending", completionMode: "observed-completed",
+    };
+  }
+  let largest = 0;
+  let counting = false;
+  const normalize = ((value: unknown, mode?: Parameters<typeof normalizeRegistry>[1]) => {
+    if (counting) {
+      for (const collection of ["entries", "receipts", "conversations", "conversationAliases", "lineageEdges", "heldDeliveries"]) {
+        largest = Math.max(largest, Object.keys(((value as Record<string, unknown>)[collection] ?? {}) as object).length);
+      }
+    }
+    return normalizeRegistry(value, mode);
+  }) as typeof normalizeRegistry;
+  const store = new SqliteAgentRegistryStore(path.join(directory, "agent-registry.sqlite"), { initialSnapshot: initial, normalize });
+  stores.push(store);
+  counting = true;
+  const prepared = await store.prepareReadOnlySnapshot();
+  counting = false;
+  // One normalization call over every hot row was a 372 ms slice on the
+  // retained-history copy; each call now sees at most one batch.
+  expect(largest).toBeGreaterThan(0);
+  expect(largest).toBeLessThanOrEqual(64);
+  const batch = Object.keys(prepared.file.receipts).filter(id => id.startsWith("batch-receipt-"));
+  expect(batch).toEqual(Array.from({ length: rows }, (_, index) => `batch-receipt-${index}`));
+  expect(batch.filter(id => prepared.file.receipts[id]!.artifactLifecycle === "materialized"))
+    .toEqual(batch.filter(id => id !== "batch-receipt-1"));
+  // An engine mismatch keeps the receipt pending, as the complete normalization does.
+  expect(prepared.file.receipts["batch-receipt-1"]!.artifactLifecycle).toBe("pending");
+  expect(prepared.file.receipts["batch-receipt-0"]!.conversationId).toBe("conversation_batch-alias-far-0");
+  expect(Object.keys(prepared.file.conversations).filter(id => id.startsWith("conversation_batch-")))
+    .toEqual(Array.from({ length: rows }, (_, index) => `conversation_batch-${index}`));
+  expect(prepared.file.conversationAliases["conversation_batch-alias-far-0"]).toBe("conversation_batch-alias-0");
+  const complete = normalizeRegistry(structuredClone(initial));
+  for (const id of batch) expect(prepared.file.receipts[id]!.artifactLifecycle).toBe(complete.receipts[id]!.artifactLifecycle);
+}, 30_000);
