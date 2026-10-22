@@ -153,23 +153,33 @@ test("managed account config symlinks retain their shared personal file and reti
 
 test("a moved archived Codex home retires its former declaration and shared trust", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-hook-archived-home-"));
-  const formerHome = path.join(root, "accounts", "codex", "account-a");
-  const archive = path.join(root, "shared", "codex", "retired", "account-a");
+  const physicalRoot = path.join(root, "physical-root"), logicalRoot = path.join(root, "logical-root");
+  fs.mkdirSync(physicalRoot); fs.symlinkSync(physicalRoot, logicalRoot, "dir");
+  const formerHome = path.join(logicalRoot, "accounts", "codex", "account-a");
+  fs.mkdirSync(formerHome, { recursive: true });
+  const canonicalFormerHome = fs.realpathSync(formerHome);
+  const archive = path.join(logicalRoot, "shared", "codex", "retired", "account-a");
   const sharedHome = path.join(root, "operator", ".codex");
   const backup = path.join(root, "backup");
   const name = `shared-memory-${"b".repeat(12)}.mjs`;
   const formerProgram = path.join(formerHome, ".llv", "hooks", name);
-  const command = `bun '${formerProgram}' 2>/dev/null || true`;
-  const configKey = `${formerHome}/hooks.json:user_prompt_submit:0:0`;
-  const trustedHash = Object.values(codexMemoryHookConfig({ type: "command", command, timeout: 2, additionalContextLimit: 40000 }).state)[0].trusted_hash;
+  const formerCommands = [formerProgram, path.join(canonicalFormerHome, ".llv", "hooks", name)]
+    .map(program => `bun '${program}' 2>/dev/null || true`);
+  const configKeys = [formerHome, canonicalFormerHome].map(home => `${home}/hooks.json:user_prompt_submit:0:0`);
+  const trustedHashes = formerCommands.map(command => Object.values(codexMemoryHookConfig({
+    type: "command", command, timeout: 2, additionalContextLimit: 40000,
+  }).state)[0].trusted_hash);
   const personalConfig = '# Keep this personal configuration byte for byte.\nmodel = "personal-model"\n\n';
   const sharedConfig = path.join(sharedHome, "config.toml");
   const previousCodexHome = process.env.LLV_CODEX_HOME;
   fs.mkdirSync(path.dirname(formerProgram), { recursive: true });
   fs.mkdirSync(sharedHome, { recursive: true });
   fs.writeFileSync(formerProgram, "Legacy synthetic hook source");
-  fs.writeFileSync(path.join(formerHome, "hooks.json"), JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command, timeout: 2 }] }] } }));
-  fs.writeFileSync(sharedConfig, `${personalConfig}[hooks.state.${JSON.stringify(configKey)}]\nenabled = true\ntrusted_hash = ${JSON.stringify(trustedHash)}\n`);
+  fs.writeFileSync(path.join(formerHome, "hooks.json"), JSON.stringify({ hooks: { UserPromptSubmit: formerCommands.map(command => ({
+    hooks: [{ type: "command", command, timeout: 2 }],
+  })) } }));
+  const legacyTrust = configKeys.map((key, index) => `[hooks.state.${JSON.stringify(key)}]\nenabled = true\ntrusted_hash = ${JSON.stringify(trustedHashes[index])}\n`).join("");
+  fs.writeFileSync(sharedConfig, `${personalConfig}${legacyTrust}`);
   fs.symlinkSync(sharedConfig, path.join(formerHome, "config.toml"));
   fs.mkdirSync(path.dirname(archive), { recursive: true });
   fs.renameSync(formerHome, archive);
@@ -180,7 +190,11 @@ test("a moved archived Codex home retires its former declaration and shared trus
     const migratedHooks = fs.readFileSync(path.join(archive, "hooks.json"), "utf8");
     const migratedConfig = fs.readFileSync(sharedConfig, "utf8");
     expect(migratedHooks).not.toContain("shared-memory-");
+    expect(migratedHooks).not.toContain(formerHome);
+    expect(migratedHooks).not.toContain(canonicalFormerHome);
     expect(migratedConfig).toBe(personalConfig);
+    const remainingState = (Bun.TOML.parse(migratedConfig) as { hooks?: { state?: Record<string, unknown> } }).hooks?.state ?? {};
+    for (const key of configKeys) expect(remainingState[key]).toBeUndefined();
     expect(fs.existsSync(path.join(archive, ".llv", "hooks", name))).toBe(false);
     await retireLegacyCodexMemoryHooks(archive, backup);
     expect(fs.readFileSync(path.join(archive, "hooks.json"), "utf8")).toBe(migratedHooks);

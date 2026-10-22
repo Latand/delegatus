@@ -49,7 +49,7 @@ function legacyCommand(command: unknown, directory: string): boolean {
   return /^shared-memory-[a-f0-9]{12}\.mjs$/.test(name);
 }
 
-function archivedCodexHome(home: string): { formerHome: string; sharedConfig: string } | null {
+function archivedCodexHome(home: string): { root: string; formerHome: string; sharedConfig: string } | null {
   const resolved = path.resolve(home);
   const parts = resolved.split(path.sep);
   const length = parts.length;
@@ -59,6 +59,7 @@ function archivedCodexHome(home: string): { formerHome: string; sharedConfig: st
   const accountId = parts[length - 1];
   const codexHome = path.resolve(process.env.LLV_CODEX_HOME || path.join(os.homedir(), ".codex"));
   return {
+    root,
     formerHome: path.join(root, "accounts", "codex", accountId),
     sharedConfig: path.join(codexHome, "config.toml"),
   };
@@ -152,7 +153,12 @@ export async function retireLegacyCodexMemoryHooks(home: string, backupRoot: str
   const original = hookTarget === null ? null : await read(hookTarget);
   const canonicalHome = await fs.realpath(home).catch(error => { if (error.code === "ENOENT") return home; throw error; });
   const formerHome = archived?.formerHome;
-  const canonicalFormerHome = formerHome ? await fs.realpath(formerHome).catch(error => { if (error.code === "ENOENT") return formerHome; throw error; }) : null;
+  const canonicalFormerHome = formerHome ? await fs.realpath(formerHome).catch(async error => {
+    if (error.code !== "ENOENT") throw error;
+    if (!archived) return formerHome;
+    const canonicalRoot = await fs.realpath(archived.root);
+    return path.join(canonicalRoot, "accounts", "codex", path.basename(formerHome));
+  }) : null;
   const hookSources = [...new Set([hookFile, path.join(canonicalHome, "hooks.json"), hookTarget,
     ...(formerHome ? [path.join(formerHome, "hooks.json")] : []),
     ...(canonicalFormerHome ? [path.join(canonicalFormerHome, "hooks.json")] : [])].filter((file): file is string => file !== null))];
