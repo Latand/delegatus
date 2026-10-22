@@ -125,7 +125,8 @@ export function makeHarness(options: { mirrorMain?: "base" | "behind" | "ahead" 
   if (options.mirrorMain === "behind") mirrorMain = git(fixture, "rev-parse", `${base}~3`);
   if (options.mirrorMain === "ahead") mirrorMain = git(root, "--git-dir", mirror, "commit-tree", `${base}^{tree}`, "-p", base, "-m", "main moved on");
   git(root, "--git-dir", mirror, "update-ref", "refs/heads/main", mirrorMain);
-  fs.writeFileSync(path.join(runnerHome, ".gate-runner.env"), `DELEGATUS_AGENT_CPU=off\nLLV_GATE_LOCK_DIR=${path.join(root, "runner-locks")}\nLLV_GATE_SLOTS=2\n`);
+  // The runner side's own settings: fixture gates never wait on the host's CPU pressure.
+  fs.writeFileSync(path.join(runnerHome, ".gate-runner.env"), `DELEGATUS_AGENT_CPU=off\nDELEGATUS_CPU_PRESSURE=off\nLLV_GATE_LOCK_DIR=${path.join(root, "runner-locks")}\nLLV_GATE_SLOTS=2\n`);
 
   const settingsFile = path.join(root, "stub-settings.json");
   const log = path.join(root, "stub-calls.jsonl");
@@ -146,6 +147,8 @@ export function makeHarness(options: { mirrorMain?: "base" | "behind" | "ahead" 
     ...cleanGitEnv() as Env, NODE_ENV: undefined, HOME: home, TMPDIR: tmp, XDG_CONFIG_HOME: xdg, LLV_STATE_DIR: state,
     LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1", LLV_GATE_RUNNER_CONFIG: config, LLV_GATE_RUNNER_CACHE: cache,
     LLV_GATE_RUNNER_SSH: stub, LLV_GATE_LOCK_DIR: path.join(root, "local-locks"), DELEGATUS_AGENT_CPU: "off",
+    // Fixture gates take private slots and never wait on this machine's CPU pressure.
+    DELEGATUS_CPU_PRESSURE: "off",
     LLV_GATE_RUNNER: undefined, LLV_PRIVACY_KNOWN_VALUES_FILE: undefined, ...extra,
   // A local fallback inside an agent's signal domain needs its marker.
   } as unknown as NodeJS.ProcessEnv, { keepSandbox: true });

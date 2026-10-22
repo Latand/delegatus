@@ -60,7 +60,7 @@ test.if(linux)("refused containment runs here before anything starts there; a co
   fs.writeFileSync(path.join(bin, "systemctl"), `#!/bin/bash\nfor arg in "$@"; do [[ $arg == set-property ]] && { echo "refused by policy" >&2; exit 1; }; done\nexec /usr/bin/systemctl "$@"\n`, { mode: 0o755 });
   const file = testFile(h, "where.test.ts", `test("where", () => console.log("cwd=" + process.cwd()));`);
   const noCpuOff = { LLV_GATE_LOCK_DIR: path.join(h.root, "runner-locks") };
-  fs.writeFileSync(path.join(h.runnerHome, ".gate-runner.env"), `LLV_GATE_LOCK_DIR=${noCpuOff.LLV_GATE_LOCK_DIR}\nLLV_GATE_SLOTS=2\n`);
+  fs.writeFileSync(path.join(h.runnerHome, ".gate-runner.env"), `DELEGATUS_CPU_PRESSURE=off\nLLV_GATE_LOCK_DIR=${noCpuOff.LLV_GATE_LOCK_DIR}\nLLV_GATE_SLOTS=2\n`);
   h.settings({ remotePath: [bin] });
   const refused = h.run(["bun", "test", file]);
   expect(refused.code).toBe(0);
@@ -76,7 +76,7 @@ test.if(linux)("refused containment runs here before anything starts there; a co
   expect(probe.stderr.split("\n")[0]).toMatch(/^gate-runner: running here: containment failed: systemd-run --user --quiet exited 69$/);
   expect(probe.stderr).not.toMatch(RUNNING);
 
-  fs.writeFileSync(path.join(h.runnerHome, ".gate-runner.env"), `DELEGATUS_AGENT_CPU=off\nLLV_GATE_LOCK_DIR=${noCpuOff.LLV_GATE_LOCK_DIR}\nLLV_GATE_SLOTS=2\n`);
+  fs.writeFileSync(path.join(h.runnerHome, ".gate-runner.env"), `DELEGATUS_AGENT_CPU=off\nDELEGATUS_CPU_PRESSURE=off\nLLV_GATE_LOCK_DIR=${noCpuOff.LLV_GATE_LOCK_DIR}\nLLV_GATE_SLOTS=2\n`);
   h.settings({});
   fs.rmSync(path.join(h.cache, "runner-health.json"));
   const own = testFile(h, "own69.test.ts", `test("own", () => process.exit(69));`);
