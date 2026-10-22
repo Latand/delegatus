@@ -59,6 +59,7 @@ export async function attemptReferencesClear(original: string, current: string, 
 }
 
 async function containerMountsClear(roots: readonly string[]): Promise<boolean> {
+  const physicalRoots = [...new Set(roots.flatMap(root => [root, resolvePhysicalPath(root)]))];
   let active: string[];
   try { active = (await run("docker", ["ps", "-q"])).stdout.trim().split(/\s+/).filter(Boolean); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return true; throw error; }
@@ -76,7 +77,7 @@ async function containerMountsClear(roots: readonly string[]): Promise<boolean> 
       return matches[0].Mounts.every((mount: { Type?: string; Source?: string }) => {
         if (mount.Type === "tmpfs") return true;
         return typeof mount.Source === "string" && path.isAbsolute(mount.Source)
-          && !roots.some(root => inside(mount.Source!, root) || inside(root, mount.Source!));
+          && ![mount.Source, resolvePhysicalPath(mount.Source)].some(source => physicalRoots.some(root => inside(source, root) || inside(root, source)));
       });
     })) return false;
   }

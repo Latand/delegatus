@@ -94,3 +94,15 @@ fi
   try { expect(await attemptReferencesClear(directory, directory, { ownNamespace: null, processes: [] })).toBeTrue(); }
   finally { if (previous === undefined) delete process.env.PATH; else process.env.PATH = previous; }
 });
+
+test.skipIf(process.platform !== "linux")("a container bind through a physical parent alias retains scratch", async () => {
+  const parent = root(), directory = path.join(parent, "actual/llv-stage-mounted");
+  fs.mkdirSync(directory, { recursive: true });
+  fs.symlinkSync(path.dirname(directory), path.join(parent, "alias"), "dir");
+  const alias = path.join(parent, "alias", path.basename(directory));
+  const bin = path.join(parent, "bin"); fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, "docker"), `#!${process.execPath}\nif (process.argv[2] === "ps") console.log("111111111111"); else console.log(${JSON.stringify(JSON.stringify({ Id: "111111111111", Mounts: [{ Type: "bind", Source: directory }] }))});\n`, { mode: 0o700 });
+  const previous = process.env.PATH; process.env.PATH = bin + path.delimiter + (previous ?? "");
+  try { expect(await attemptReferencesClear(alias, alias, { ownNamespace: null, processes: [] })).toBeFalse(); }
+  finally { if (previous === undefined) delete process.env.PATH; else process.env.PATH = previous; }
+});

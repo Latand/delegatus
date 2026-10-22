@@ -12,8 +12,9 @@ The procedure enumerated direct children with `os.scandir`, kept directories
 without following links, sorted paths, then ran `du -s -B1 --` on the first
 30 directories in each kind (five for the later gate-prefix sample). Nested
 export/evidence observations inspected only the stage root and its `tmp`
-child in the same 30-stage sample. Counts are samples, not estimates of the
-unsampled population. Parent and nested rows overlap and must not be summed.
+child in the same 30-stage sample. Byte measurements cover only the listed
+samples; discovery counts came from the corresponding directory inventories.
+Parent and nested rows overlap and must not be summed.
 
 | Kind | Discovered roots | Sampled roots | Allocated bytes observed |
 | --- | ---: | ---: | ---: |
@@ -81,11 +82,13 @@ Both child config variables resolve inside that root; forwarded forge config
 keeps its existing contract.
 
 Passed, failed, skipped and parked attempts are eligible after their last live
-process leaves. Checkout symlinks into an attempt root keep it through lane completion or explicit
-close, including idle intervals between stages. Explicitly retired startup launches are matched in the
-attempt's retained launch history. Declared stage outputs retain their scratch until lane completion or explicit
-close. Both completed and explicitly closed lanes use the terminal cleanup
-state; remaining process holders still retain their roots. Config sandboxes can retire at settlement. Published prototype media is
+process leaves. Checkout symlinks into an attempt root keep it through lane
+completion or explicit close, including idle intervals between stages.
+Explicitly retired startup launches are matched in the attempt's retained
+launch history. Declared stage outputs retain their scratch until lane
+completion or explicit close. Both completed and explicitly closed lanes use
+the terminal cleanup state; remaining process holders still retain their roots.
+Config sandboxes can retire at settlement. Published prototype media is
 already copied into the durable publication store and remains governed by that
 store. Missing lane records are orphan candidates after the configured age;
 an unreadable owner or unmatched launch stays held. A registered owner marker
@@ -172,7 +175,8 @@ Coverage includes real helper restarts, arrival fairness, the default 100 GiB
 cap changing the removal budget from 32 back to four across restarted helpers,
 concurrent helper admission and recovery after the lock owner is killed,
 authority changes during filesystem inspection, late holders, idle checkout
-links, evidence retention, canonical path aliases, damaged Git metadata,
+links, evidence retention, canonical path aliases for sockets and container
+mounts, damaged Git metadata,
 quarantine replacement and recovery after a refused removal. Directory-reader
 races inject at the streaming reader used by production. The Unix-socket case
 uses a held directory descriptor so it also fits the comparator's deep roots.
