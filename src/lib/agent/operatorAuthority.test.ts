@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import crypto from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -207,13 +209,44 @@ test("a keyless solo navigation bootstraps a cookie, and APIs cannot bootstrap a
   }
 });
 
-test("a solo session expires and is invalid in another process", async () => {
+test("a solo session minted in one process authorizes browser actions in another", async () => {
+  const run = (source: string, env: NodeJS.ProcessEnv = process.env) => promisify(execFile)(process.execPath, ["-e", source], { env, timeout: 10_000 });
+  const minted = await run(`import { soloBrowserSession } from './src/lib/agent/operatorSession'; console.log(soloBrowserSession(0))`);
+  const cookie = minted.stdout.trim();
+  const verified = await run(`
+    import { verifySoloBrowserSession } from './src/lib/agent/operatorSession';
+    import { requireOperatorAuthority, operatorBrowserRequest } from './src/lib/agent/operatorAuthority';
+    Date.now = () => 1;
+    const request = { headers: new Headers({ cookie: 'llv_operator=' + process.env.TEST_COOKIE }) };
+    console.log(JSON.stringify({ verified: verifySoloBrowserSession(process.env.TEST_COOKIE, 1),
+      expired: verifySoloBrowserSession(process.env.TEST_COOKIE, 31 * 24 * 60 * 60 * 1000),
+      authority: requireOperatorAuthority(request).ok, browser: operatorBrowserRequest(request) }));
+  `, { ...process.env, TEST_COOKIE: cookie });
+  expect(JSON.parse(verified.stdout)).toEqual({ verified: true, expired: false, authority: true, browser: true });
+});
+
+test("solo session signatures bind expiry, state directory and access-key generation", async () => {
   const { soloBrowserSession, verifySoloBrowserSession } = await import("./operatorSession");
-  const cookie = soloBrowserSession(0);
-  expect(verifySoloBrowserSession(cookie, 1)).toBe(true);
-  expect(verifySoloBrowserSession(cookie, 31 * 24 * 60 * 60 * 1000)).toBe(false);
-  const child = Bun.spawn([process.execPath, "-e", `import { verifySoloBrowserSession } from './src/lib/agent/operatorSession'; if (verifySoloBrowserSession(process.env.TEST_COOKIE, 1)) process.exit(1)`], { env: { ...process.env, TEST_COOKIE: cookie }, stdout: "pipe", stderr: "pipe" });
-  expect(await child.exited).toBe(0);
+  const value = soloBrowserSession(0);
+  expect(verifySoloBrowserSession(value, 1)).toBe(true);
+  expect(verifySoloBrowserSession(value, 30 * 24 * 60 * 60 * 1000)).toBe(false);
+  expect(verifySoloBrowserSession(value, -1)).toBe(false);
+  expect(verifySoloBrowserSession(value.replace(/v1\.\d+/, "v1.2592000001"), 1)).toBe(false);
+  expect(verifySoloBrowserSession(value.slice(0, -1) + (value.endsWith("a") ? "b" : "a"), 1)).toBe(false);
+  const state = process.env.LLV_STATE_DIR!;
+  const key = path.join(state, "operator-session-key");
+  if (process.platform !== "win32") expect(fs.statSync(key).mode & 0o777).toBe(0o600);
+  const oldKey = process.env.LLV_TOKEN;
+  process.env.LLV_TOKEN = "changed-access-generation";
+  expect(verifySoloBrowserSession(value, 1)).toBe(false);
+  process.env.LLV_TOKEN = oldKey;
+  process.env.LLV_STATE_DIR = path.join(state, "other");
+  expect(verifySoloBrowserSession(value, 1)).toBe(false);
+  expect(fs.existsSync(path.join(process.env.LLV_STATE_DIR, "operator-session-key"))).toBe(false);
+  process.env.LLV_STATE_DIR = state;
+  fs.writeFileSync(key, "damaged");
+  expect(verifySoloBrowserSession(value, 1)).toBe(false);
+  expect(() => soloBrowserSession(0)).toThrow("signing key");
 });
 
 test("live member sessions permit browser actions and revocation takes effect immediately", async () => {
@@ -281,4 +314,67 @@ test("access cookies use the proxy's cookie encoding and malformed values are re
   const wire = response.headers.get("set-cookie")!.split(";")[0]!;
   expect(requireOperatorAuthority(request({ cookie: wire })).ok).toBe(true);
   for (const value of ["%", "%GG", "%E0%A4%A"]) expect(requireOperatorAuthority(request({ cookie: `llv_auth=${value}` }))).toMatchObject({ ok: false, status: 403 });
+});
+
+
+test("cross-site page entry mints a usable same-origin solo session after Host admission", async () => {
+  delete process.env.LLV_TOKEN;
+  const { proxy } = await import("../../proxy");
+  for (const host of ["localhost", "127.0.0.1", "viewer.example.invalid"]) {
+    const previous = process.env.LLV_TS_HOST;
+    process.env.LLV_TS_HOST = host;
+    try {
+      const response = proxy(new NextRequest(`http://${host}/`, { headers: {
+        host, accept: "text/html", "sec-fetch-mode": "navigate", "sec-fetch-site": "cross-site",
+      } }));
+      expect(response.headers.get("x-middleware-next")).toBe("1");
+      expect(response.headers.get("set-cookie")).toContain("SameSite=strict");
+      const value = response.cookies.get("llv_operator")?.value;
+      expect(typeof value).toBe("string");
+      expect(requireOperatorAuthority(request({ host, cookie: `llv_operator=${value}` })).ok).toBe(true);
+      expect(operatorBrowserRequest(request({ host, cookie: `llv_operator=${value}` }))).toBe(true);
+      const foreign = proxy(new NextRequest("http://foreign.example.invalid/", { headers: {
+        host: "foreign.example.invalid", accept: "text/html", "sec-fetch-mode": "navigate",
+      } }));
+      expect(foreign.status).toBe(403);
+      expect(foreign.headers.get("set-cookie")).toBeNull();
+    } finally {
+      if (previous === undefined) delete process.env.LLV_TS_HOST; else process.env.LLV_TS_HOST = previous;
+    }
+  }
+});
+
+
+test("concurrent session issuers share a complete private signing key", async () => {
+  const run = () => promisify(execFile)(process.execPath, ["-e", `
+    import { soloBrowserSession } from './src/lib/agent/operatorSession';
+    console.log(soloBrowserSession(0));
+  `], { env: process.env, timeout: 10_000 });
+  const [first, second] = await Promise.all([run(), run()]);
+  const { verifySoloBrowserSession } = await import("./operatorSession");
+  for (const result of [first, second]) expect(verifySoloBrowserSession(result.stdout.trim(), 1)).toBe(true);
+  expect(first.stdout).toBe(second.stdout);
+  expect(fs.readdirSync(process.env.LLV_STATE_DIR!)).toEqual(["operator-session-key"]);
+});
+
+test("missing, linked and non-private session keys fail closed without replacement", async () => {
+  const { soloBrowserSession, verifySoloBrowserSession } = await import("./operatorSession");
+  const key = path.join(process.env.LLV_STATE_DIR!, "operator-session-key");
+  const shape = `v1.2592000000.${"a".repeat(43)}`;
+  expect(verifySoloBrowserSession(shape, 1)).toBe(false);
+  expect(fs.existsSync(key)).toBe(false);
+  const cookie = soloBrowserSession(0);
+  const saved = fs.readFileSync(key);
+  if (process.platform !== "win32") {
+    fs.chmodSync(key, 0o644);
+    expect(verifySoloBrowserSession(cookie, 1)).toBe(false);
+    expect(() => soloBrowserSession(0)).toThrow("private");
+    fs.chmodSync(key, 0o600);
+    const target = path.join(process.env.LLV_STATE_DIR!, "saved-key");
+    fs.renameSync(key, target);
+    fs.symlinkSync(target, key);
+    expect(verifySoloBrowserSession(cookie, 1)).toBe(false);
+    expect(() => soloBrowserSession(0)).toThrow();
+    expect(fs.readFileSync(target)).toEqual(saved);
+  }
 });

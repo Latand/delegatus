@@ -13,8 +13,14 @@ production edits; it now returns 403.
 
 Preview roots come from the persisted project catalog, flow/pipeline/workflow
 launch directories, worktree mappings, manually registered projects and the
-product-owned stage scratch. A cwd below a linked checkout admits that whole
-checkout on the first read. Home and its ancestors never become preview roots,
+product-owned stage scratch. The active HTTP writers of these roots require
+`requireOperatorAuthority`: project creation, pipeline creation and draft edits
+that submit a repository directory. A cookie-free client and forged Fetch
+Metadata cannot register a private home folder. The UI sends its session
+cookie; verified MCP service claims remain admitted. Agent pipeline creation
+uses the MCP backend's own role, lineage and seat checks. Retired flow and
+workflow HTTP creates return 410 without writing launch roots. A cwd below a
+linked checkout admits that whole checkout on the first read. Home and its ancestors never become preview roots,
 even when scanner history records a session there. Configured evidence roots retain raster-only
 access. Lexical paths, resolved paths and pinned descriptors are checked;
 prototype-review and done-media stores retain their separate access fences.
@@ -42,9 +48,15 @@ production edits.
 The authority gate now accepts verified member cookies, the existing access
 cookie or a separately configured operator token. Browser attribution requires a verified
 cookie. Cookie values use the proxy’s encoding, including access keys with reserved characters; malformed values are refused. A keyless solo page navigation automatically sets a separate HttpOnly,
-SameSite=Strict session cookie; API calls cannot mint it. The bounded process
-session map has eight scopes, a thirty-day lifetime and revocation by eviction
-or process restart. Reloading the page establishes the next solo session.
+SameSite=Strict session cookie; API calls cannot mint it. The thirty-day cookie
+carries an expiry authenticated by a separate private signing key in
+`operator-session-key` under the state directory. The key is published atomically
+with mode 0600; concurrent Viewer generations read the same complete key.
+Unix verification requires those permissions.
+Verification reads a bounded 32 bytes and creates no key. Restarts and release
+succession preserve sessions. Missing, damaged or linked keys fail closed;
+Unix verification also refuses non-private keys. The Host allowlist admits page entry from external links too; subsequent
+same-origin requests carry the session cookie.
 Claiming a team disables solo sessions. Keyed installs use their existing
 cookie path. Scripts can present the separately configured
 `DELEGATUS_OPERATOR_TOKEN` (legacy `LLV_OPERATOR_TOKEN`) in
@@ -72,8 +84,10 @@ read; neither fenced host/origin file was edited.
 Validation covers forged metadata, missing/invalid cookies, separate operator
 and cookie tokens, token rotation, agent/service refusals, live member sessions
 and revocation, automatic solo entry on loopback and configured names,
-expiration and a fresh-process refusal. The real worker-limit route refuses an
-unauthenticated write and accepts session-authenticated writes. Existing proxy
+expiry and real-process issuance followed by verification, operator authorization
+and browser attribution in another process. Concurrent issuers, access-key
+rotation, changed state directories and corrupt/private-key refusals are covered.
+The real worker-limit route refuses an unauthenticated write and accepts session-authenticated writes. Existing proxy
 and team-perimeter tests were also run remotely in isolated state. Browser
 fixtures in the bridge, key catalog and compatibility writers, memory,
 project/seat settings, Telegram and self-update suites now carry the actual
@@ -144,3 +158,20 @@ inspected. The record pins the rendered source hashes. CLI notice checks run
 in real isolated production-mode children. Four existing Compose-only cases
 need Docker, which the remote test server lacks; the publication comparator
 checks those failures against the base.
+
+## Follow-up authorization checks
+
+The review regressions cover the full create-project → artifact path: the
+private fixture remains 403 after a cookie-free or forged-service create, while
+a browser session and verified MCP dispatch can create a project. Draft-root
+edits are refused before reaching the pipeline engine without authority,
+including access-key rotation while route parameters resolve. The
+pipeline HTTP fixtures now send real session cookies; authenticated agent
+callers use the MCP backend for creation, retaining role and seat enforcement.
+The directory-route tests use a fresh state directory per case so the migrated
+curation store cannot leak between cases.
+
+The branch incorporates the current host-allowlist changes through a merge
+commit. The fenced proxy and origin files have no additional edits. No
+performance gain is claimed for the bounded session-key read or preview-root
+resolution. The automatic entry policy for keyless installs remains unchanged.

@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-import { rejectCrossOrigin } from "@/lib/sameOrigin";
+import { rejectForeignHost } from "@/lib/sameOrigin";
 import { OPERATOR_COOKIE, soloBrowserSession } from "@/lib/agent/operatorSession";
 
 import { agentCapabilityClaim, internalServiceClaim } from "@/lib/agent/callerClaims";
@@ -140,7 +140,7 @@ export function teamGate(request: NextRequest, context: TeamGateContext, nowMs =
     store = existingTeamStore();
     if (!store || !store.hasActiveOwner()) {
       // Solo pages open a session after the perimeter admits them, including the trusted local gateway. APIs cannot mint it.
-      if ((!process.env.LLV_TOKEN || context.bearerAuthenticated) && !request.nextUrl.pathname.startsWith("/api/") && isNavigation(request) && !request.headers.has("next-action") && !request.headers.has("x-llv-spawn-capability") && !rejectCrossOrigin(request)) {
+      if ((!process.env.LLV_TOKEN || context.bearerAuthenticated) && !request.nextUrl.pathname.startsWith("/api/") && isNavigation(request) && !request.headers.has("next-action") && !request.headers.has("x-llv-spawn-capability") && !rejectForeignHost(request)) {
         const response = NextResponse.next();
         response.cookies.set({ name: OPERATOR_COOKIE, value: soloBrowserSession(nowMs), httpOnly: true, sameSite: "strict", path: "/", secure: request.headers.get("x-forwarded-proto") === "https", maxAge: 30 * 24 * 60 * 60 });
         return response;

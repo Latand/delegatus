@@ -5,7 +5,7 @@ import { authenticatedAgentSpawnCaller, isAgentInitiatedSpawn } from "@/app/api/
 import { recordOperatorRequest } from "@/lib/activity/requestLedger";
 import { agentRegistry } from "@/lib/agent/registry";
 import { revokedSeatPipelineRefusal, SeatRevocationStoreUnavailableError } from "@/lib/orchestrator/seatAuthority";
-import { directOperatorActivityAuthority } from "@/lib/agent/operatorAuthority";
+import { directOperatorActivityAuthority, requireOperatorAuthority } from "@/lib/agent/operatorAuthority";
 import { conversationAgentRole, isSpawnDeniedRole, reviewerOriginSpawnGuidance, type SpawnRejectionCode } from "@/lib/agent/spawnAdmission";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import { createPipelineFromRequest, type PipelineBriefer } from "@/lib/pipelines/engine";
@@ -170,6 +170,8 @@ export async function POST(req: NextRequest): Promise<NextResponse<{ ok: true; p
   try {
     const origin = pipelineOrigin(req, body);
     if (origin instanceof NextResponse) return origin;
+    const authority = requireOperatorAuthority(req);
+    if (!authority.ok) return NextResponse.json({ error: authority.error }, { status: authority.status });
     const result = await createPipelineFromRequest(body, undefined, {
       allowOperatorDraftWithoutLineage: !isAgentInitiatedSpawn(req),
       queueWhenBusy: true,

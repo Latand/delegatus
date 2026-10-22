@@ -5,11 +5,14 @@ import path from "node:path";
 import { afterAll, beforeEach, expect, test } from "bun:test";
 import { NextRequest } from "next/server";
 
+import { internalServiceHeaders } from "@/lib/agent/operatorAuthority";
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { resetProjectCurationForTests } from "@/lib/projects/curation";
 import { resetProjectDirectoryCacheForTests } from "@/lib/scanner/projectDirectories";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-projects-routes-"));
-const STATE = path.join(SANDBOX, "state");
+let STATE = path.join(SANDBOX, "state");
+let nextCase = 0;
 const ANCHOR = path.join(SANDBOX, "anchor");
 const CHECKOUT = path.join(ANCHOR, "checkout");
 const SIBLING = path.join(ANCHOR, "sibling-idea");
@@ -49,9 +52,11 @@ const { GET } = await import("./directories/route");
 const { POST } = await import("./create/route");
 
 beforeEach(() => {
+  STATE = path.join(SANDBOX, `state-${nextCase++}`);
+  fs.mkdirSync(STATE);
+  fs.writeFileSync(path.join(STATE, "project-catalog.json"), JSON.stringify({ files: { fixture: { cwd: CHECKOUT, projectRoot: CHECKOUT } } }));
   process.env.LLV_STATE_DIR = STATE;
   process.env.HOME = HOME;
-  fs.rmSync(path.join(STATE, "project-curation.json"), { force: true });
   resetProjectCurationForTests();
   resetProjectDirectoryCacheForTests();
 });
@@ -75,7 +80,7 @@ async function suggest(query: string): Promise<string[]> {
 async function create(body: unknown): Promise<{ status: number; payload: Record<string, unknown> }> {
   const response = await POST(new NextRequest("http://127.0.0.1/api/projects/create", {
     method: "POST",
-    headers: { "content-type": "application/json", host: "127.0.0.1:8898" },
+    headers: { "content-type": "application/json", host: "127.0.0.1:8898", cookie: `llv_operator=${soloBrowserSession()}` },
     body: JSON.stringify(body),
   }));
   return { status: response.status, payload: await response.json() as Record<string, unknown> };
@@ -146,4 +151,60 @@ test("/api/projects/create refuses a root outside the suggested roots and create
   const accepted = await create({ name: "Sibling Idea", root: SIBLING });
   expect(accepted.status).toBe(200);
   expect(accepted.payload.root).toBe(SIBLING);
+});
+
+
+test("a cookie-free create cannot widen artifact roots to private home folders", async () => {
+  const { GET: artifact } = await import("../artifact/route");
+  const privateRoot = path.join(HOME, ".config");
+  const privateFile = path.join(privateRoot, "gh", "hosts.yml");
+  fs.mkdirSync(path.dirname(privateFile), { recursive: true });
+  fs.writeFileSync(privateFile, "private fixture content");
+  const read = () => artifact(new NextRequest(`http://127.0.0.1/api/artifact?path=${encodeURIComponent(privateFile)}`, { headers: { host: "127.0.0.1" } }));
+  expect((await read()).status).toBe(403);
+  const untrustedHeaders: Record<string, string>[] = [{}, { "sec-fetch-site": "same-origin" }, { "x-llv-internal-service": "mcp.invalid" }];
+  for (const extra of untrustedHeaders) {
+    const response = await POST(new NextRequest("http://127.0.0.1/api/projects/create", {
+      method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json", ...extra },
+      body: JSON.stringify({ name: "Private directory", root: privateRoot }),
+    }));
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ error: expect.stringContaining("verified session") });
+    expect((await read()).status).toBe(403);
+  }
+  const accepted = await create({ name: "Browser project", root: HOME_IDEA });
+  expect(accepted.status).toBe(200);
+});
+
+
+test("verified MCP dispatch retains project creation authority", async () => {
+  const response = await POST(new NextRequest("http://127.0.0.1/api/projects/create", {
+    method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json", ...internalServiceHeaders("mcp") },
+    body: JSON.stringify({ name: "MCP project", root: HOME_IDEA }),
+  }));
+  expect(response.status).toBe(200);
+});
+
+
+test("project creation rechecks a session after reading the body", async () => {
+  const previous = process.env.LLV_TOKEN;
+  const request = new NextRequest("http://127.0.0.1/api/projects/create", {
+    method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json", cookie: `llv_operator=${soloBrowserSession()}` },
+    body: JSON.stringify({ name: "Rotated session", root: HOME_IDEA }),
+  });
+  const readBody = request.json.bind(request);
+  request.json = async () => {
+    const body = await readBody();
+    process.env.LLV_TOKEN = "rotated-fixture-generation";
+    return body;
+  };
+  try {
+    const response = await POST(request);
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ error: expect.stringContaining("verified session") });
+    const { projectCurationSnapshot } = await import("@/lib/projects/curation");
+    expect(projectCurationSnapshot().manualProjects).toEqual([]);
+  } finally {
+    if (previous === undefined) delete process.env.LLV_TOKEN; else process.env.LLV_TOKEN = previous;
+  }
 });
