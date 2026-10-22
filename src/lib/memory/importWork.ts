@@ -109,10 +109,10 @@ async function outsideCheckout(directory: string) {
     if (path.dirname(current) === current) break;
   }
 }
-async function rejectPreflight(error: unknown, request: ImportRequest, roots: ImportRoots): Promise<never> {
+async function rejectPreflight(error: unknown, request: ImportRequest, roots: ImportRoots, syncAt?: string): Promise<never> {
   if (!(await sourceStoresAreSeparate(stateDir(), roots))) throw error;
   // A sync refused before its lock still spends its attempt, so the next refresh waits (§4.9).
-  if (request.sync) await recordSyncAttempt(request, { result: "failed", added: 0, reason: error instanceof MemoryImportError ? error.reason : "failed" });
+  if (request.sync && syncAt) await recordSyncAttempt(request.importId, syncAt, { result: "failed", added: 0, reason: error instanceof MemoryImportError ? error.reason : "failed" });
   try { await restoreMemorySourceAfterImport(request.importId, request.previous); }
   catch (restoreError) {
     const reason = error instanceof MemoryImportError ? error.reason : "backup_refused";
@@ -120,11 +120,16 @@ async function rejectPreflight(error: unknown, request: ImportRequest, roots: Im
   }
   throw error;
 }
-async function recordSyncAttempt(request: ImportRequest, run: Omit<NonNullable<ImportRecord["sync"]>, "lastAt">) {
-  const sync = { lastAt: new Date(request.at ?? Date.now()).toISOString(), ...run };
+/** Writes this attempt's sync marker on the ready import. Its outcome replaces only this
+    attempt's own marker, so a refusal before the marker (the source moved) writes nothing
+    and a slower attempt never overwrites a newer one. */
+async function recordSyncAttempt(importId: string, lastAt: string, run: Omit<NonNullable<ImportRecord["sync"]>, "lastAt">) {
+  const sync = { lastAt, ...run };
   await waitForStateLock("memory.import", () => {
-    const record = readImportRecord(request.importId);
-    if (record?.state === "ready") importCollection(true)!.boundedPatch(1, tx => tx.put({ ...record, sync }));
+    const record = readImportRecord(importId);
+    if (record?.state !== "ready") return;
+    if (run.result !== "running" && (record.sync?.lastAt !== lastAt || record.sync.result !== "running")) return;
+    importCollection(true)!.boundedPatch(1, tx => tx.put({ ...record, sync }));
   });
 }
 export async function defaultImportRoots(): Promise<ImportRoots> {
@@ -204,6 +209,7 @@ export async function runMemoryImportWork(request: ImportRequest, ports: ImportW
   validateImportId(request.importId);
   const directory = stateDir();
   const sync = request.sync === true;
+  const syncAt = new Date(request.at ?? Date.now()).toISOString();
   // A sync is a delta scan of the same verified backup (§4.6 step 2, §4.9).
   const rescan = request.rescan === true || sync;
   const assertOwned = () => assertCurrent(request.importId, rescan, sync);
@@ -216,13 +222,17 @@ export async function runMemoryImportWork(request: ImportRequest, ports: ImportW
     roots = request.roots ?? (sync ? readImportRecord(request.importId)?.roots : undefined) ?? await defaultImportRoots();
     sourceSeparationProven = await sourceStoresAreSeparate(directory, roots);
     if (!sourceSeparationProven) throw new MemoryImportError("backup_refused");
+    // Once the state directory is proven apart from every engine store, a sync marks its
+    // attempt before the inventory, the lock wait and every copy: a helper its deadline or
+    // a crash ends in any of them leaves the marker, which defers the retry by an hour (§4.9).
+    if (sync) { assertOwned(); await recordSyncAttempt(request.importId, syncAt, { result: "running", added: 0 }); }
     await outsideCheckout(directory);
     await outsideCheckout(path.join(directory, "state.sqlite"));
     assertPrivateImportDatabaseFiles(path.join(directory, "state.sqlite"));
     ({ files, stores } = await inventory(roots, ports.projectForSlug ?? (await import("@/lib/scanner/describe")).projectForClaudeMemorySlug));
   }
   catch (error) {
-    if (roots && await sourceStoresAreSeparate(directory, roots)) return rejectPreflight(error, request, roots);
+    if (roots && await sourceStoresAreSeparate(directory, roots)) return rejectPreflight(error, request, roots, syncAt);
     throw error;
   }
   const transaction = path.join(parent, "import-job");
@@ -240,19 +250,21 @@ export async function runMemoryImportWork(request: ImportRequest, ports: ImportW
   } catch (error) {
     const state = await resolvedDestination(directory);
     if (stores.some(store => within(store, state) || within(state, store))) throw error;
-    return rejectPreflight(error, request, roots!);
+    return rejectPreflight(error, request, roots!, syncAt);
   }
   await privateDirectory(directory);
   await privateDirectory(backups); await privateDirectory(parent); await outsideCheckout(parent);
+  let admitted = false;
   return withFileTransaction(path.join(parent, "import-job"), "memory import busy", async () => {
+    admitted = true;
     assertOwned();
     const prior = readImportRecord(request.importId);
     if (prior?.state === "ready" && !rescan) return prior;
     if (sync && prior?.state !== "ready") throw new MemoryImportError("source_changed");
     let hashed = 0, capped = false;
     const record: ImportRecord = prior?.state === "ready" ? { ...prior } : { kind: "import", id: request.importId, state: "copying", at: new Date(request.at ?? Date.now()).toISOString(), previous: prior ? prior.previous : request.previous, backup: path.join(parent, request.importId), files: 0, candidates: 0, parts: 0 };
-    // A run the helper deadline ends keeps this marker, which defers the retry by an hour (§4.9).
-    if (sync) record.sync = { lastAt: new Date(request.at ?? Date.now()).toISOString(), result: "running", added: 0 };
+    // The marker written before the inventory, kept on the record this run rewrites (§4.9).
+    if (sync) record.sync = { lastAt: syncAt, result: "running", added: 0 };
     await writeImportRows([record], assertOwned);
     try {
       ports.phase?.("backup");
@@ -488,7 +500,7 @@ export async function runMemoryImportWork(request: ImportRequest, ports: ImportW
             if (file && !stored!.dispositions.some(d => d.occurrences.includes(occurrence.id))) offered.add(file);
           }
         }
-        record.sync = { lastAt: new Date(request.at ?? Date.now()).toISOString(), result: capped ? "capped" : "ok", added: offered.size };
+        record.sync = { lastAt: syncAt, result: capped ? "capped" : "ok", added: offered.size };
       }
       Object.assign(record, { state: "ready", curationDirty: true, files: manifest.files.length,
         candidates: (rescan ? record.candidates : 0) + new Set(missingCandidates.map(row => row.group)).size,
@@ -498,7 +510,7 @@ export async function runMemoryImportWork(request: ImportRequest, ports: ImportW
       return record;
     } catch (error) {
       record.state = rescan ? "ready" : "failed"; record.reason = error instanceof MemoryImportError ? error.reason : "failed";
-      if (sync) record.sync = { lastAt: new Date(request.at ?? Date.now()).toISOString(), result: "failed", added: 0, reason: record.reason };
+      if (sync) record.sync = { lastAt: syncAt, result: "failed", added: 0, reason: record.reason };
       let statusFailure: unknown, restoreFailure: unknown;
       if (!(await sourceStoresAreSeparate(directory, roots!))) throw error;
       try { await writeImportRows([record]); } catch (caught) { statusFailure = caught; }
@@ -512,6 +524,10 @@ export async function runMemoryImportWork(request: ImportRequest, ports: ImportW
       }
       throw error;
     }
+  }).catch(async error => {
+    // A sync the lock refused (busy past the wait) records that failure in place of its marker.
+    if (sync && !admitted && await sourceStoresAreSeparate(directory, roots!)) await recordSyncAttempt(request.importId, syncAt, { result: "failed", added: 0, reason: "failed" });
+    throw error;
   });
 }
 

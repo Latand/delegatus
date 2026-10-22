@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { pipelineRoleLookup } from "@/lib/pipelines/roles";
 import {
   decide, findingClasses, laneMetrics, proportionDifference, reviewVerdict, weeklyReport, wilson, windowReport,
   type Decision, type DecisionSample, type MetricsAttempt, type MetricsInput, type MetricsPipeline,
@@ -26,7 +27,11 @@ function lane(id: string, build: MetricsAttempt[], review: MetricsAttempt[], pro
     runs: [{ stageId: "build", attempts: build }, { stageId: "review", attempts: review }],
   };
 }
-const input = (pipelines: MetricsPipeline[], extra: Partial<MetricsInput> = {}): MetricsInput => ({ pipelines, memory: [], imports: [], deliveries: [], ...extra });
+// A ledger whose oldest kept start precedes every fixture window.
+const LEDGER = [{ at: "2026-09-01T00:00:00.000Z", engineMemory: [] }];
+const input = (pipelines: MetricsPipeline[], extra: Partial<MetricsInput> = {}): MetricsInput => ({ pipelines, memory: [], imports: [], deliveries: LEDGER, ...extra });
+/** A read time after every fixture window's review grace. */
+const LATE = "2026-11-01T00:00:00.000Z";
 
 test("every verdict writer gives one first-review verdict", () => {
   expect(reviewVerdict(reviewer(1, at(TRIAL, 3), { report: { at: at(TRIAL, 3), verdict: { status: "fail", findings: ["P1 — a test is missing"] } } }))).toMatchObject({ status: "fail", findings: ["P1 — a test is missing"] });
@@ -132,8 +137,8 @@ test("load records attempts, clean share, engines, models, concurrency, limits, 
 
 test("guards: an engine memory hash, a held-still change, a scaffold change and a load swing invalidate a window", () => {
   const pipelines = trialSet();
-  expect(windowReport(input(pipelines, { deliveries: [{ at: at(TRIAL, 1), engineMemory: [{ hash: "h" }] }, { at: at(TRIAL, 2), engineMemory: [] }] }), TRIAL).invalidBecause).toEqual(["engine-memory-loaded"]);
-  expect(windowReport(input(pipelines, { deliveries: [{ at: at(BASE, 1), engineMemory: [{ hash: "h" }] }] }), TRIAL).valid).toBe(true);
+  expect(windowReport(input(pipelines, { deliveries: [...LEDGER, { at: at(TRIAL, 1), engineMemory: [{ hash: "h" }] }, { at: at(TRIAL, 2), engineMemory: [] }] }), TRIAL).invalidBecause).toEqual(["engine-memory-loaded"]);
+  expect(windowReport(input(pipelines, { deliveries: [...LEDGER, { at: at(BASE, 1), engineMemory: [{ hash: "h" }] }] }), TRIAL).valid).toBe(true);
   expect(windowReport(input(pipelines, { heldChanges: [at(TRIAL, 3)] }), TRIAL).invalidBecause).toEqual(["held-still-changed"]);
   pipelines[1].runs[0].attempts[0].effectiveRole!.promptScaffold = "edited scaffold";
   expect(windowReport(input(pipelines), TRIAL).invalidBecause).toEqual(["held-still-changed"]);
@@ -201,8 +206,8 @@ test("weeklyReport runs the guards against the baseline load and decides on vali
   const baseline = trialSet().map(pipeline => shift(pipeline, -8 * 24));
   const second = { from: TRIAL.to, to: "2026-10-23T00:00:00.000Z" };
   const report = weeklyReport(input([...baseline, ...set, ...trialSet().map(pipeline => shift(pipeline, 7 * 24))], {
-    deliveries: [{ at: at(TRIAL, 1), engineMemory: [{ hash: "h" }] }],
-  }), BASE, [TRIAL, second]);
+    deliveries: [...LEDGER, { at: at(TRIAL, 1), engineMemory: [{ hash: "h" }] }],
+  }), BASE, [TRIAL, second], LATE);
   expect(report.windows.map(window => window.valid)).toEqual([false, true]);
   expect(report.decision).toMatchObject({ outcome: "delegatus", usedWindows: [1], invalidWindows: [{ index: 0, because: ["engine-memory-loaded"] }] });
   expect(Math.abs(report.windows[1].guards.attemptsChange!)).toBeLessThan(0.5);
@@ -223,4 +228,93 @@ test("finding classes follow the keyword table and a lane outside the window is 
   expect(findingClasses("Clipped label in the dark mode frame at 390 px")).toEqual(["rendered"]);
   expect(findingClasses("wording")).toEqual([]);
   expect(laneMetrics(trialSet()[0], BASE)).toBeNull();
+});
+
+/* The baseline and one trial week whose lanes fail far more often: decisive once mature. */
+function decisiveSet(): MetricsPipeline[] {
+  const failing = (prefix: string, window: { from: string }, failed: number) => Array.from({ length: 12 }, (_, i) =>
+    lane(`${prefix}-${i}`, [builder(1, at(window, 2 + i))], [reviewer(1, at(window, 4 + i), { verdict: { status: i < failed ? "fail" : "pass" } })]));
+  return [...failing("base", BASE, 1), ...failing("trial", TRIAL, 2)];
+}
+
+test("§6.1: a review, finding or fix round after the 24-hour grace never changes a closed window", () => {
+  const pipelines = trialSet();
+  const before = weeklyReport(input(pipelines), BASE, [TRIAL], LATE);
+  const late = (hours: number) => at(TRIAL, 168 + hours);
+  // inside-grace passed its first review at +23 h; within-grace already has its rounds.
+  pipelines[2].runs[0].attempts.push(builder(2, late(30), { activatedBy: { edge: "fail" } }));
+  pipelines[2].runs[1].attempts.push(reviewer(2, late(29), { verdict: { status: "fail", findings: ["P1 — the restart test is missing"] } }));
+  pipelines[0].runs[0].attempts.push(builder(3, late(26), { activatedBy: { edge: "fail" } }));
+  pipelines[0].runs[1].attempts.push(reviewer(4, late(25), { verdict: { status: "fail", findings: ["P2 — the retry test is flaky"] } }));
+  const after = weeklyReport(input(pipelines), BASE, [TRIAL], LATE);
+  expect(after).toEqual(before);
+  expect(after.windows[0].fixRounds.perLane.reduce((a, b) => a + b, 0)).toBe(1);
+  expect(after.windows[0].repeatedClasses).toMatchObject({ repeated: 1, later: 2 });
+  // The same attempts inside the grace do count.
+  const inGrace = trialSet();
+  inGrace[2].runs[0].attempts.push(builder(2, late(20), { activatedBy: { edge: "fail" } }));
+  inGrace[2].runs[1].attempts.push(reviewer(2, late(23.5), { verdict: { status: "fail", findings: ["P1 — the restart test is missing"] } }));
+  const counted = windowReport(input(inGrace), TRIAL);
+  expect(counted.fixRounds.perLane.reduce((a, b) => a + b, 0)).toBe(2);
+  expect(counted.repeatedClasses.later).toBe(3);
+});
+
+test("§6.1: no decision before a window's review grace ends, and in-grace reviews enter the mature result", () => {
+  const pipelines = trialSet();
+  for (const now of [TRIAL.to, at(TRIAL, 168 + 23)]) {
+    const early = weeklyReport(input(pipelines), BASE, [TRIAL], now);
+    expect(early.windows[0].provisional).toBe(true);
+    expect(early.decision).toMatchObject({ outcome: "pending", usedWindows: [], heldWindows: [{ index: 0, because: [`reviews-until-${at(TRIAL, 192)}`] }] });
+  }
+  const mature = weeklyReport(input(pipelines), BASE, [TRIAL], at(TRIAL, 192));
+  expect(mature.windows[0]).toMatchObject({ provisional: false, observedUntil: at(TRIAL, 192), lanes: { reviewed: 7 } });
+  expect(mature.decision.heldWindows).toEqual([]);
+  // A decisive week is held as long as it is provisional, explicit windows included.
+  const decisive = decisiveSet();
+  expect(weeklyReport(input(decisive), BASE, [TRIAL], at(TRIAL, 191)).decision.outcome).toBe("pending");
+  expect(weeklyReport(input(decisive), BASE, [TRIAL], at(TRIAL, 192)).decision.outcome).toBe("delegatus");
+  // A baseline still in its own grace decides nothing either.
+  expect(weeklyReport(input(decisive), BASE, [TRIAL], at(BASE, 168 + 1)).decision).toMatchObject({ outcome: "pending", reason: expect.stringContaining("baseline") });
+  // A later provisional week holds an extension, never a mature decision before it.
+  const second = { from: TRIAL.to, to: "2026-10-23T00:00:00.000Z" };
+  const report = weeklyReport(input(decisive), BASE, [TRIAL, second], at(TRIAL, 200));
+  expect(report.windows.map(window => window.provisional)).toEqual([false, true]);
+  expect(report.decision).toMatchObject({ outcome: "delegatus", usedWindows: [0], heldWindows: [{ index: 1 }] });
+  expect(() => weeklyReport(input(decisive), BASE, [TRIAL], "not a time")).toThrow();
+});
+
+test("§6.5: a missing or incomplete delivery ledger is unverified, never a clean week", () => {
+  const decisive = decisiveSet();
+  for (const unavailable of ["missing-file", "missing-table"] as const) {
+    const report = weeklyReport(input(decisive, { deliveries: { unavailable } }), BASE, [TRIAL], LATE);
+    expect(report.windows[0]).toMatchObject({ valid: false, invalidBecause: [], unverified: [`delivery-ledger-${unavailable}`], guards: { engineMemoryStarts: null } });
+    expect(report.decision).toMatchObject({ outcome: "pending", usedWindows: [], heldWindows: [{ index: 0, because: [`delivery-ledger-${unavailable}`] }] });
+  }
+  // A ledger whose oldest kept start is after the window's first start cannot vouch for that start.
+  const pruned = weeklyReport(input(decisive, { deliveries: [{ at: at(TRIAL, 3), engineMemory: [] }] }), BASE, [TRIAL], LATE);
+  expect(pruned.windows[0].unverified).toEqual(["delivery-ledger-incomplete"]);
+  expect(pruned.decision.outcome).toBe("pending");
+  expect(weeklyReport(input(decisive, { deliveries: [] }), BASE, [TRIAL], LATE).decision.outcome).toBe("pending");
+  // A verified empty ledger reaching back over the week decides.
+  const verified = weeklyReport(input(decisive), BASE, [TRIAL], LATE);
+  expect(verified.windows[0]).toMatchObject({ valid: true, unverified: [], guards: { engineMemoryStarts: 0 } });
+  expect(verified.decision.outcome).toBe("delegatus");
+});
+
+test("§6.5: builder domains are separate launch variants, and an edit within one variant invalidates the week", () => {
+  const scaffold = (params: Record<string, string>) => pipelineRoleLookup("builder", params)!.promptScaffold!;
+  expect(scaffold({ domain: "frontend" })).not.toBe(scaffold({ domain: "general" }));
+  const domainLane = (id: string, start: string, domain: string, text = scaffold({ domain })) => ({
+    ...lane(id, [builder(1, start, { effectiveRole: { roleId: "builder", engine: "codex", model: "m1", promptScaffold: text } })], [reviewer(1, new Date(Date.parse(start) + 2 * 3600_000).toISOString(), { verdict: { status: "pass" } })]),
+    stages: [{ id: "build", kind: "run", role: { roleId: "builder", params: { domain } } }, { id: "review", kind: "run", onFail: { to: "build", maxRounds: 2 } }],
+  });
+  const mixed = [domainLane("front", at(TRIAL, 1), "frontend"), domainLane("back", at(TRIAL, 2), "general"), domainLane("front-2", at(TRIAL, 3), "frontend")];
+  const stable = windowReport(input(mixed), TRIAL);
+  expect(stable).toMatchObject({ valid: true, invalidBecause: [], guards: { scaffolds: { builder: { variants: 2, changed: 0 } } } });
+  // The frontend scaffold edited mid-week.
+  const edited = windowReport(input([...mixed, domainLane("front-3", at(TRIAL, 90), "frontend", `${scaffold({ domain: "frontend" })}\nAn added rule.`)]), TRIAL);
+  expect(edited).toMatchObject({ valid: false, invalidBecause: ["held-still-changed"], guards: { scaffolds: { builder: { variants: 2, changed: 1 } } } });
+  // The same lanes in another project are a variant of their own.
+  const elsewhere = { ...domainLane("front-b", at(TRIAL, 4), "frontend", "another project's scaffold"), project: "B" };
+  expect(windowReport(input([...mixed, elsewhere]), TRIAL).valid).toBe(true);
 });

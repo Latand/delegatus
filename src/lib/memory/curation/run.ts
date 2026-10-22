@@ -79,22 +79,24 @@ export async function launchCurationIfDue(input: SeatTickCheckInput, ports: Cura
   const importOnly = !roleMemoryEnabled();
   if (importOnly && !curatableImportId()) return "curation: paused, memory off";
   if (!input.settings.enabled) return "curation: paused, wakes off";
-  const eligible: { project: string; wakeAt: number }[] = [];
-  let reason = "no designated seat", quietEligible = false;
+  const eligible: { project: string; wakeAt: number; batch: ReturnType<typeof selectImportBatch> }[] = [];
+  let reason = "no designated seat", quietEligible = false, nothingToImport = false;
   // Read every designated project's own delivery stamp before choosing a machine host.
   for (const project of [...new Set([...ports.sources.activeSeats(), input.project].map(canonicalProject))].sort()) {
     const host = await hostAdmission(project, ports);
     if (host.held !== null) { if (project === canonicalProject(input.project)) reason = host.held; continue; }
     const status = curationStatus(project, ports.sources.now(), effectiveCurationSetting(ports.sources.settings(project)));
     if (!status.active) continue;
+    // The engines position hosts only a project with a pending import batch, so a
+    // project due for ordinary curation never stands in front of one (§4.9).
+    const batch = importOnly ? selectImportBatch(project) : null;
+    if (importOnly && !batch) { nothingToImport = true; continue; }
     if (!status.due) { quietEligible = true; continue; }
-    eligible.push({ project, wakeAt: host.wakeAt });
+    eligible.push({ project, wakeAt: host.wakeAt, batch });
   }
   eligible.sort((a, b) => b.wakeAt - a.wakeAt || (a.project < b.project ? -1 : a.project > b.project ? 1 : 0));
-  const project = eligible[0]?.project;
-  if (!project) return quietEligible ? null : `curation: paused, no eligible project: ${reason}`;
-  const batch = importOnly ? selectImportBatch(project) : null;
-  if (importOnly && !batch) return "curation: paused, memory off";
+  const project = eligible[0]?.project, batch = eligible[0]?.batch ?? null;
+  if (!project) return quietEligible ? null : nothingToImport ? "curation: paused, memory off" : `curation: paused, no eligible project: ${reason}`;
   const held = admissionHeld(project, ports, batch ? { importBatch: batch } : null); if (held) return held;
   const seat = ports.sources.seatFor(project).active;
   const conversation = seat?.conversationId ? ports.sources.registry().conversation(seat.conversationId as `conversation_${string}`) : null;

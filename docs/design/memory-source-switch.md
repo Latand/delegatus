@@ -661,9 +661,13 @@ the setting and the import record. Due means the record's last sync attempt
 (`sync.lastAt`, durable, so a restart neither repeats nor skips one) is at
 least the interval old; a run that stopped at its cap is due again at the
 next refresh; a failed run is retried after one hour. A run records its
-start (`result: "running"`) before it copies anything, so a helper its
-five-minute deadline or a crash ended also waits that hour, and the state line
-names it interrupted once ten minutes have passed. The interval is
+start (`result: "running"`) once the state directory is proven apart from the
+engines' stores and before its inventory, its wait for the import lock and any
+copy, so a helper its five-minute deadline or a crash ended in any of them also
+waits that hour, and the state line names it interrupted once ten minutes have
+passed. A run the lock refused records that failure in place of its start. A
+refusal before the start (the engines' memory is no longer selected, or the
+sync is off) writes nothing. The interval is
 `memory-sync.json` under the state directory, `intervalHours` 1 to 168,
 default 24 (daily) when the file is absent, 0 for off. `PUT
 /api/memory/source` with `syncIntervalHours` writes it under the same guards
@@ -716,9 +720,12 @@ before the interval; a note changed back to content an earlier pass dropped or
 adopted inherits that disposition and is never offered; a run over the cap
 leaves the rest for the next run; the sync is not due in Delegatus mode,
 before any import, or with the setting off, and its schedule survives a
-restart; every source file's hash is the same after the run; in the engines
-position the curator claims an import pass only while that import has pending
-candidates, and never an ordinary pass.
+restart; every source file's hash is the same after the run; a helper process
+killed in its inventory or while it waits for the import lock leaves its start
+marked, so a restarted reader waits the hour; in the engines position the
+curator claims an import pass only while that import has pending candidates,
+never an ordinary pass, and a project due only for ordinary curation never
+stands in front of one with a pending batch.
 
 ## 5. The rule budget question
 
@@ -859,8 +866,11 @@ the weekly total. No rise is described as free.
 | Trial | `drainedAt` | `drainedAt` plus 7 days |
 
 A lane belongs to the window in which its first builder attempt that no fail
-edge activated started; its reviews count when they completed within 24
-hours after the window ends. Lanes that started in the import-and-drain window are in
+edge activated started; its reviews, their findings and its fix rounds count
+when they completed (a fix round: started) within 24 hours after the window
+ends, so a closed window's numbers never change with later work. A window
+decides nothing before those 24 hours have passed at the read: the report
+shows it as provisional. Lanes that started in the import-and-drain window are in
 neither, and so is any lane with an attempt on a legacy generation (4.6). Reviewers are clean in both windows, so the judge does not change.
 
 ### 6.2 Metrics
@@ -885,7 +895,13 @@ for a difference of shares; a seeded bootstrap over lanes for fix rounds) are
 defined in `src/lib/memory/weeklyMetrics.ts`. Held-still changes that no record
 dates (the lesson request text, the curator brief, the budgets) are passed as
 `--held-change <time>`; a builder or reviewer scaffold that changes inside a
-window is detected from the attempts.
+window is detected from the attempts, comparing only launches of the same
+project, role and role parameters, because a role renders a different scaffold
+per parameter (a builder's domain, a fix round's mode). A missing delivery
+ledger, one without its table, or one whose oldest kept start is later than a
+start in the window cannot check the engine-memory guard: such a window is
+unverified and decides nothing, which is distinct from a ledger that reaches
+back over the window and shows no engine memory.
 
 ### 6.3 What the baseline looks like now
 
@@ -1090,7 +1106,10 @@ with and without it in the input, even when including it would reverse the
 result, and two invalid windows in a row give the stop-and-ask outcome. One row
 set per verdict writer: `stage_report`,
 the fenced-JSON fallback, a review-loop outcome, a retried attempt and a
-parked `needs_decision`.
+parked `needs_decision`. Reviews and fix rounds appended after the grace leave
+a closed window unchanged; a week read before its grace ends, or with a
+missing, tableless or pruned ledger, gives no default; builder domains are
+separate scaffold variants, and an edit within one invalidates the week.
 
 **Slice 8: periodic sync while the engines' memory is on.** 4.9: the setting
 and its route field, the due check on the refresh cadence, the sync run of

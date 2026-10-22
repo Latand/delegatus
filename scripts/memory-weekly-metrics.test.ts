@@ -22,7 +22,7 @@ function lane(id: string, start: string, verdict: string) {
       { stageId: "review", attempts: [{ n: 1, startedAt: at(start, 1), completedAt: at(start, 2), effectiveRole: role("reviewer"), activatedBy: { edge: "pass" }, report: { at: at(start, 2), verdict: { status: verdict } } }] }] };
 }
 
-function fixture(name: string, options: { engineMemoryInFirstWeek: boolean }) {
+function fixture(name: string, options: { engineMemoryInFirstWeek: boolean; ledger?: "present" | "missing-file" | "missing-table" }) {
   const dir = path.join(sandbox, name);
   fs.mkdirSync(path.join(dir, "role-memory"), { recursive: true });
   const db = new Database(path.join(dir, "state.sqlite"), { create: true });
@@ -36,10 +36,17 @@ function fixture(name: string, options: { engineMemoryInFirstWeek: boolean }) {
   for (const pipeline of pipelines) put.run(pipeline.id.startsWith("base") ? "pipelines_archive" : "pipelines", pipeline.id, JSON.stringify(pipeline));
   put.run("role_memory", "q:1", JSON.stringify({ kind: "request", pipelineId: "week2-0", stageId: "build", attempt: 1, at: at(DRAINED, 170), ruleIds: [], none: "covered" }));
   db.close();
-  const ledger = new Database(path.join(dir, "role-memory", "delivery.sqlite"), { create: true });
-  ledger.exec("CREATE TABLE deliveries (sequence INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL)");
-  ledger.query("INSERT INTO deliveries(body) VALUES (?)").run(JSON.stringify({ at: at(DRAINED, 3), engineMemory: options.engineMemoryInFirstWeek ? [{ kind: "codex-summary", hash: "h", bytes: 1, loadedBytes: 1 }] : [] }));
-  ledger.close();
+  if (options.ledger !== "missing-file") {
+    const ledger = new Database(path.join(dir, "role-memory", "delivery.sqlite"), { create: true });
+    if (options.ledger === "missing-table") ledger.exec("CREATE TABLE versions (hash TEXT PRIMARY KEY, content BLOB NOT NULL)");
+    else {
+      ledger.exec("CREATE TABLE deliveries (sequence INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL)");
+      // The oldest kept start precedes every window, so the ledger answers for all of them.
+      ledger.query("INSERT INTO deliveries(body) VALUES (?)").run(JSON.stringify({ at: "2026-09-30T00:00:00.000Z", engineMemory: [] }));
+      ledger.query("INSERT INTO deliveries(body) VALUES (?)").run(JSON.stringify({ at: at(DRAINED, 3), engineMemory: options.engineMemoryInFirstWeek ? [{ kind: "codex-summary", hash: "h", bytes: 1, loadedBytes: 1 }] : [] }));
+    }
+    ledger.close();
+  }
   fs.writeFileSync(path.join(dir, "memory-source.json"), JSON.stringify({ schemaVersion: 1, source: "delegatus", phase: "active", changedAt: PRESS, importId: "i", importStartedAt: PRESS, flippedAt: at(PRESS, 12), drainedAt: DRAINED }));
   return dir;
 }
@@ -74,7 +81,7 @@ test("the script derives the windows from the switch, reads copies and decides o
 
 test("explicit windows on a fixture with no engine memory count the first week", async () => {
   const dir = fixture("explicit", { engineMemoryInFirstWeek: false });
-  const { stdout, code } = await runScript(["--state-dir", dir, "--baseline", `2026-10-01T00:00:00Z/${PRESS}`, "--window", `${DRAINED}/${at(DRAINED, 168)}`]);
+  const { stdout, code } = await runScript(["--state-dir", dir, "--baseline", `2026-10-01T00:00:00Z/${PRESS}`, "--window", `${DRAINED}/${at(DRAINED, 168)}`, "--now", at(DRAINED, 192)]);
   expect(code).toBe(0);
   const report = JSON.parse(stdout);
   expect(report.windows).toHaveLength(1);
@@ -99,4 +106,35 @@ test("window derivation counts only complete trial weeks", () => {
   expect(derivedWindows({ importStartedAt: PRESS, drainedAt: DRAINED }, at(DRAINED, 168)).windows).toHaveLength(1);
   expect(derivedWindows({ importStartedAt: PRESS }, at(DRAINED, 500)).windows).toEqual([]);
   expect(() => derivedWindows(null, PRESS)).toThrow(/no switch press/);
+});
+
+test("a missing ledger file or table never yields a default; a copied ledger does", async () => {
+  const explicit = ["--baseline", `2026-10-01T00:00:00Z/${PRESS}`, "--window", `${at(DRAINED, 168)}/${at(DRAINED, 336)}`, "--now", at(DRAINED, 360)];
+  for (const ledger of ["missing-file", "missing-table"] as const) {
+    const dir = fixture(`ledger-${ledger}`, { engineMemoryInFirstWeek: false, ledger });
+    for (const args of [["--state-dir", dir, "--now", at(DRAINED, 15 * 24)], ["--state-dir", dir, ...explicit]]) {
+      const { stdout, stderr, code, leftovers } = await runScript(args);
+      expect(stderr).toBe("");
+      expect(code).toBe(0);
+      expect(leftovers).toEqual([]);
+      const report = JSON.parse(stdout);
+      expect(report.decision.outcome).toBe("pending");
+      expect(report.windows[0]).toMatchObject({ valid: false, unverified: [`delivery-ledger-${ledger}`], guards: { engineMemoryStarts: null } });
+    }
+  }
+  const present = fixture("ledger-present", { engineMemoryInFirstWeek: false });
+  const report = JSON.parse((await runScript(["--state-dir", present, ...explicit])).stdout);
+  expect(report.windows[0]).toMatchObject({ valid: true, unverified: [], failedReview: { failed: 4, reviewed: 10 } });
+  expect(report.decision.outcome).toBe("delegatus");
+});
+
+test("a derived week decides nothing until its review grace ends", async () => {
+  const dir = fixture("maturity", { engineMemoryInFirstWeek: false });
+  const early = JSON.parse((await runScript(["--state-dir", dir, "--now", at(DRAINED, 168)])).stdout);
+  expect(early.windows).toHaveLength(1);
+  expect(early.windows[0].provisional).toBe(true);
+  expect(early.decision).toMatchObject({ outcome: "pending", heldWindows: [{ index: 0 }] });
+  const mature = JSON.parse((await runScript(["--state-dir", dir, "--now", at(DRAINED, 192)])).stdout);
+  expect(mature.windows[0].provisional).toBe(false);
+  expect(mature.decision).toMatchObject({ outcome: "extend", usedWindows: [0] });
 });

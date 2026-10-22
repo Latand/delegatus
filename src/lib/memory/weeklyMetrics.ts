@@ -29,17 +29,19 @@ export interface MetricsAttempt {
 export interface MetricsPipeline {
   id: string;
   project: string;
-  stages: { id: string; kind: string; onFail?: unknown; effectiveRole?: { roleId?: string | null } | null }[];
+  stages: { id: string; kind: string; onFail?: unknown; effectiveRole?: { roleId?: string | null } | null; role?: { roleId?: string | null; params?: Record<string, unknown> | null } | null }[];
   runs: { stageId: string; attempts: MetricsAttempt[] }[];
 }
+export interface MetricsDelivery { at: string; engineMemory?: readonly unknown[] }
 export interface MetricsInput {
   pipelines: readonly MetricsPipeline[];
   /** role_memory rows: rules and lesson requests. */
   memory: readonly Record<string, unknown>[];
   /** role_memory_import rows: import records and candidates. */
   imports: readonly Record<string, unknown>[];
-  /** Delivery ledger bodies (src/lib/memory/deliveryLedger.ts). */
-  deliveries: readonly { at: string; engineMemory?: readonly unknown[] }[];
+  /** Delivery ledger bodies (src/lib/memory/deliveryLedger.ts), or why the ledger could not be read.
+      A missing ledger is no evidence that no start loaded engine memory (§6.5). */
+  deliveries: readonly MetricsDelivery[] | { unavailable: "missing-file" | "missing-table" };
   /** Install deploy records (deployments.json rows). */
   deployments?: readonly { phase?: string; updatedAt?: string }[];
   /** worker-limit.json. */
@@ -156,18 +158,24 @@ function legacyGenerations(imports: MetricsInput["imports"]): Set<string> {
   return new Set(imports.flatMap(row => row.kind === "import" && Array.isArray(row.legacyGenerations) ? row.legacyGenerations as string[] : []));
 }
 
-/** A lane is a pipeline whose first builder attempt that no fail edge activated started in the window. */
+/** When a window's observations end: reviews and fix rounds count until 24 hours after it (§6.1). */
+export const observedUntil = (window: MetricsWindow) => ms(window.to) + GRACE_MS;
+
+/** A lane is a pipeline whose first builder attempt that no fail edge activated started in the window.
+    Every observation of it (review rounds, their findings, fix rounds) ends at the grace cutoff, so a
+    closed window's numbers never change with later work. */
 export function laneMetrics(pipeline: MetricsPipeline, window: MetricsWindow): LaneMetrics | null {
   const stages = new Map(pipeline.stages.map(stage => [stage.id, stage]));
   const attempts = pipeline.runs.flatMap(run => run.attempts.filter(attempt => !attempt.historical).map(attempt => ({ stage: stages.get(run.stageId), attempt })));
   const start = attempts.filter(({ stage, attempt }) => attempt.effectiveRole?.roleId === "builder" && !reviewGate(stage, attempt)
     && attempt.activatedBy?.edge !== "fail" && attempt.startedAt).map(({ attempt }) => attempt.startedAt!).sort()[0];
   if (!start || !inside(start, window)) return null;
+  const cutoff = observedUntil(window);
   const rounds = attempts.filter(({ stage, attempt }) => reviewGate(stage, attempt))
-    .flatMap(({ attempt }) => { const verdict = reviewVerdict(attempt); return verdict?.at ? [verdict] : []; })
+    .flatMap(({ attempt }) => { const verdict = reviewVerdict(attempt); return verdict?.at && ms(verdict.at) <= cutoff ? [verdict] : []; })
     .sort((a, b) => ms(a.at) - ms(b.at));
   const first = rounds[0];
-  const reviewed = !!first && ms(first.at) <= ms(window.to) + GRACE_MS;
+  const reviewed = !!first;
   let laterFindings = 0, repeatedLaterFindings = 0;
   const seen = new Set<string>();
   rounds.forEach((round, index) => {
@@ -178,7 +186,7 @@ export function laneMetrics(pipeline: MetricsPipeline, window: MetricsWindow): L
   return {
     pipelineId: pipeline.id, project: pipeline.project, startedAt: start, reviewed,
     failedFirstReview: reviewed && first.status === "fail",
-    fixRounds: attempts.filter(({ attempt }) => attempt.activatedBy?.edge === "fail").length,
+    fixRounds: attempts.filter(({ attempt }) => attempt.activatedBy?.edge === "fail" && attempt.startedAt && ms(attempt.startedAt) <= cutoff).length,
     laterFindings, repeatedLaterFindings,
   };
 }
@@ -200,9 +208,16 @@ export interface WindowReport {
     deploys: number;
     presets: Record<"builder" | "reviewer", Record<string, number>>;
   };
-  guards: { engineMemoryStarts: number; neverCuratedEvictions: number; attemptsChange: number | null; heldChanges: number; scaffolds: Record<"builder" | "reviewer", number> };
+  /** `engineMemoryStarts` is null when the ledger cannot answer for the window. `scaffolds` counts
+      launch variants (project, role and parameters) and the variants whose scaffold changed. */
+  guards: { engineMemoryStarts: number | null; neverCuratedEvictions: number; attemptsChange: number | null; heldChanges: number; scaffolds: Record<"builder" | "reviewer", { variants: number; changed: number }> };
+  /** A window that passed every guard; false when a guard failed or could not be checked. */
   valid: boolean;
   invalidBecause: string[];
+  /** Guards the evidence cannot check: the delivery ledger is missing or does not reach back over the window. */
+  unverified: string[];
+  /** Reviews and fix rounds of the window's lanes count until this time. */
+  observedUntil: string;
   byProject: Record<string, { reviewed: number; failed: number }>;
 }
 
@@ -314,7 +329,9 @@ export function windowReport(input: MetricsInput, window: MetricsWindow, baselin
     deploys: (input.deployments ?? []).filter(row => row.phase === "succeeded" && inside(row.updatedAt, window)).length,
     presets: { builder: {}, reviewer: {} },
   };
-  const scaffolds = { builder: new Set<string>(), reviewer: new Set<string>() };
+  // A role renders a different scaffold per parameter (a builder's domain, a fix round's mode), so a
+  // scaffold is compared only with launches of the same project, role and parameters (§6.5).
+  const scaffolds = { builder: new Map<string, Set<string>>(), reviewer: new Map<string, Set<string>>() };
   for (const { pipeline, stage, attempt } of started) {
     const role = attempt.effectiveRole;
     if (!automaticMemoryExcluded({ roleId: role?.roleId ?? stage?.effectiveRole?.roleId ?? null, stage: stage ?? null }) && !roleIsClean(role?.roleId)) load.nonClean += 1;
@@ -323,18 +340,33 @@ export function windowReport(input: MetricsInput, window: MetricsWindow, baselin
     count(load.byProject, pipeline.project);
     if (role?.roleId === "builder" || role?.roleId === "reviewer") {
       count(load.presets[role.roleId], `${role.engine ?? "unknown"}/${role.model ?? "unknown"}`);
-      scaffolds[role.roleId].add(createHash("sha256").update(role.promptScaffold ?? "").digest("hex"));
+      const params = stage?.role?.params ?? {};
+      const variant = JSON.stringify([pipeline.project, Object.keys(params).sort().map(key => [key, params[key]])]);
+      const hashes = scaffolds[role.roleId].get(variant) ?? new Set<string>();
+      hashes.add(createHash("sha256").update(role.promptScaffold ?? "").digest("hex"));
+      scaffolds[role.roleId].set(variant, hashes);
     }
   }
 
-  const engineMemoryStarts = input.deliveries.filter(row => inside(row.at, window) && (row.engineMemory?.length ?? 0) > 0).length;
+  const ledger = Array.isArray(input.deliveries) ? input.deliveries as readonly MetricsDelivery[] : null;
+  const unverified: string[] = [];
+  if (!ledger) unverified.push(`delivery-ledger-${(input.deliveries as { unavailable: string }).unavailable}`);
+  else {
+    // The ledger keeps its newest starts only. A start before its oldest row may have loaded engine memory unseen.
+    const firstStart = Math.min(...started.flatMap(({ attempt }) => attempt.startedAt ? [ms(attempt.startedAt)] : []));
+    const ledgerFrom = Math.min(...ledger.map(row => ms(row.at)).filter(Number.isFinite));
+    if (Number.isFinite(firstStart) && !(ledgerFrom <= firstStart)) unverified.push("delivery-ledger-incomplete");
+  }
+  const engineMemoryStarts = ledger ? ledger.filter(row => inside(row.at, window) && (row.engineMemory?.length ?? 0) > 0).length : null;
   const attemptsChange = baselineAttempts ? (started.length - baselineAttempts) / baselineAttempts : null;
   const heldChanges = (input.heldChanges ?? []).filter(at => inside(at, window)).length;
+  const changed = (variants: Map<string, Set<string>>) => [...variants.values()].filter(hashes => hashes.size > 1).length;
+  const scaffoldGuard = { builder: { variants: scaffolds.builder.size, changed: changed(scaffolds.builder) }, reviewer: { variants: scaffolds.reviewer.size, changed: changed(scaffolds.reviewer) } };
   const invalidBecause = [
     ...(engineMemoryStarts ? ["engine-memory-loaded"] : []),
     ...(evictions.neverCurated ? ["never-curated-eviction"] : []),
     ...(attemptsChange !== null && Math.abs(attemptsChange) > 0.5 ? ["load-changed"] : []),
-    ...(heldChanges || scaffolds.builder.size > 1 || scaffolds.reviewer.size > 1 ? ["held-still-changed"] : []),
+    ...(heldChanges || scaffoldGuard.builder.changed || scaffoldGuard.reviewer.changed ? ["held-still-changed"] : []),
   ];
   return {
     window,
@@ -343,9 +375,11 @@ export function windowReport(input: MetricsInput, window: MetricsWindow, baselin
     fixRounds: { perLane, mean: perLane.length ? mean(perLane) : null, interval: bootstrapMean(perLane), median: perLane.length ? median(perLane) : null },
     repeatedClasses: { repeated, later, share: later ? repeated / later : null, interval: wilson(repeated, later) },
     lessons, evictions, imports, load,
-    guards: { engineMemoryStarts, neverCuratedEvictions: evictions.neverCurated, attemptsChange, heldChanges, scaffolds: { builder: scaffolds.builder.size, reviewer: scaffolds.reviewer.size } },
-    valid: invalidBecause.length === 0,
+    guards: { engineMemoryStarts, neverCuratedEvictions: evictions.neverCurated, attemptsChange, heldChanges, scaffolds: scaffoldGuard },
+    valid: invalidBecause.length === 0 && unverified.length === 0,
     invalidBecause,
+    unverified,
+    observedUntil: new Date(observedUntil(window)).toISOString(),
     byProject,
   };
 }
@@ -409,11 +443,31 @@ export function decide(baseline: DecisionSample, windows: readonly { sample: Dec
   return { outcome: "pending", usedWindows: [], primary: null, corroborating: null, invalidWindows, reason: "no valid window yet" };
 }
 
-export interface WeeklyReport { baseline: WindowReport; windows: WindowReport[]; decision: Decision }
+export interface WeeklyReport {
+  baseline: WindowReport;
+  /** `provisional`: the window's reviews may still complete, so its numbers can change and decide nothing yet. */
+  windows: (WindowReport & { provisional: boolean })[];
+  decision: Decision & { heldWindows: { index: number; because: string[] }[] };
+}
 
-/** The baseline is reported with its guards but never invalidates a trial window. */
-export function weeklyReport(input: MetricsInput, baseline: MetricsWindow, windows: readonly MetricsWindow[]): WeeklyReport {
+/** The baseline is reported with its guards but never invalidates a trial window. §6.6 runs over the
+    windows in order and stops before the first one that cannot decide yet: a window still inside its
+    24-hour review grace at `now` (§6.1), or one whose delivery ledger cannot check the §6.5 guard. */
+export function weeklyReport(input: MetricsInput, baseline: MetricsWindow, windows: readonly MetricsWindow[], now: string): WeeklyReport {
+  const at = ms(now);
+  if (!Number.isFinite(at)) throw Error("the report needs the time it is read at");
   const base = windowReport(input, baseline);
-  const reports = windows.map(window => windowReport(input, window, base.load.attemptsStarted));
-  return { baseline: base, windows: reports, decision: decide(decisionSample(base), reports.map(report => ({ sample: decisionSample(report), valid: report.valid, invalidBecause: report.invalidBecause }))) };
+  const reports = windows.map(window => windowReport(input, window, base.load.attemptsStarted)).map(report => ({ ...report, provisional: observedUntil(report.window) > at }));
+  const heldWindows = reports.flatMap((report, index) => report.provisional || report.unverified.length
+    ? [{ index, because: [...report.provisional ? [`reviews-until-${report.observedUntil}`] : [], ...report.unverified] }] : []);
+  const held = (reason: string): WeeklyReport["decision"] => ({ outcome: "pending", usedWindows: [], primary: null, corroborating: null, invalidWindows: [], reason, heldWindows });
+  if (observedUntil(baseline) > at) return { baseline: base, windows: reports, decision: held(`the baseline's reviews may still complete until ${base.observedUntil}`) };
+  const decidable = reports.slice(0, heldWindows[0]?.index ?? reports.length);
+  const decision = decide(decisionSample(base), decidable.map(report => ({ sample: decisionSample(report), valid: report.valid, invalidBecause: report.invalidBecause })));
+  const next = heldWindows[0];
+  if (next && (decision.outcome === "pending" || decision.outcome === "extend")) {
+    const why = reports[next.index].provisional ? `its reviews may still complete until ${reports[next.index].observedUntil}` : `the delivery ledger cannot check it (${reports[next.index].unverified.join(", ")})`;
+    return { baseline: base, windows: reports, decision: { ...decision, reason: `${decision.reason}; window ${next.index} decides nothing yet: ${why}`, heldWindows } };
+  }
+  return { baseline: base, windows: reports, decision: { ...decision, heldWindows } };
 }

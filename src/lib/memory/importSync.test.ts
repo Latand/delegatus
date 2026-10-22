@@ -14,6 +14,17 @@ import { readSeatTickSettings } from "@/lib/monitor/seatTickSettings";
 import { resetProjectAliasesForTests } from "@/lib/projects/aliases";
 import { curatableImportId, memorySyncDue, memorySyncNextAt, memorySyncStatus, setMemorySyncInterval, syncCurationOpen, MEMORY_SYNC_MAX_FILES } from "./importSync";
 import type { ImportManifest, ImportRoots } from "./importTypes";
+import { AgentRegistry } from "@/lib/agent/registry";
+import { defaultSeatTickSources } from "@/lib/monitor/seatTickSources";
+import { writeSeatTickState } from "@/lib/monitor/seatTickState";
+import { emptySeatTickState } from "@/lib/monitor/types";
+import type { AgentLivenessRecord } from "@/lib/lifecycle/liveness";
+import { input as tickInput } from "@/lib/boardMaintenance/testFixture";
+import { stopWorktreeSweepWorker } from "@/lib/pipelines/worktreeSweepWorker";
+import { withFileTransaction } from "@/lib/state/fileTransaction";
+import { productionCurationController } from "./curation/run";
+import { machinePass, readPass } from "./curation/store";
+import { newRuleId, roleMemoryCollection, roleScope } from "./roleStore";
 
 /* The periodic sync of docs/design/memory-source-switch.md §4.9, on fixture
    homes in a private state directory. Every time is fixed. */
@@ -40,8 +51,8 @@ afterEach(async () => {
   for (const [key, value] of Object.entries({ LLV_STATE_DIR: previous.state, LLV_ROLE_MEMORY: previous.role })) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
   await fs.rm(root, { recursive: true, force: true }); resetProjectAliasesForTests();
 });
-const ports = () => ({ hostProject: PROJECT, projectForSlug: () => PROJECT, writer: async () => ({ kind: "unknown" as const, roleId: null }) });
-const syncRun = (delta: number) => runMemoryImportWork({ importId: ID, previous: null, roots, at: at(delta), sync: true }, ports());
+const ports = (project = PROJECT) => ({ hostProject: project, projectForSlug: () => project, writer: async () => ({ kind: "unknown" as const, roleId: null }) });
+const syncRun = (delta: number, project = PROJECT) => runMemoryImportWork({ importId: ID, previous: null, roots, at: at(delta), sync: true }, ports(project));
 function allCandidates() {
   const rows: ReturnType<typeof readImportCandidates>["candidates"] = [];
   let cursor: string | null = "";
@@ -51,16 +62,16 @@ function allCandidates() {
 const pending = () => allCandidates().filter(c => candidateState(c).state === "pending");
 
 /** The first import, every candidate dropped by a pass, then the switch to the engines. */
-async function importedThenEngines(notes: Record<string, string> = { "topic.md": "Inspect current ownership before changing a running worker.\n" }) {
+async function importedThenEngines(notes: Record<string, string> = { "topic.md": "Inspect current ownership before changing a running worker.\n" }, project = PROJECT) {
   for (const [name, body] of Object.entries(notes)) await fs.writeFile(path.join(memory, name), body);
   await fs.writeFile(path.join(memory, "MEMORY.md"), Object.keys(notes).map(name => `- [${name}](${name})`).join("\n") + "\n");
-  await runMemoryImportWork({ importId: ID, previous: null, roots, at: AT }, ports());
-  await dropPending(0);
+  await runMemoryImportWork({ importId: ID, previous: null, roots, at: AT }, ports(project));
+  await dropPending(0, project);
   await toEngines();
 }
-async function dropPending(delta: number) {
+async function dropPending(delta: number, project = PROJECT) {
   const rows = pending();
-  const pass = claimPass({ project: PROJECT, repoDir: null, now: NOW + delta, importOnly: true })!;
+  const pass = claimPass({ project, repoDir: null, now: NOW + delta, importOnly: true })!;
   expect(pass?.importBatch?.candidates.length).toBe(rows.length);
   await readCuration(pass, "imports");
   const revision = (await readCuration(pass)).scopes.find(scope => scope.scope === "machine")?.revision ?? 0;
@@ -145,6 +156,8 @@ test("the sync is not due in Delegatus mode, before a ready import, with the set
   expect(memorySyncDue(readImportRecord(ID), NOW)).toBe(false);
   expect(memorySyncStatus(readImportRecord(ID), NOW)).toMatchObject({ intervalHours: 0, nextAt: null });
   await expect(syncRun(HOUR)).rejects.toMatchObject({ reason: "source_changed" });
+  // A refused sync marks no attempt.
+  expect(readImportRecord(ID)!.sync).toBeUndefined();
   setMemorySyncInterval(6);
   expect(memorySyncNextAt({ sync: { lastAt: AT, result: "ok", added: 0 } })).toBe(NOW + 6 * HOUR);
   expect(memorySyncNextAt({ sync: { lastAt: AT, result: "failed", added: 0, reason: "integrity" } })).toBe(NOW + HOUR);
@@ -162,16 +175,19 @@ test("the sync is not due in Delegatus mode, before a ready import, with the set
   expect(() => setMemorySyncInterval(169)).toThrow();
 });
 
+/** memorySyncDue read by a fresh process: a restarted reader sees only the durable record. */
+async function freshDue(now: number) {
+  const code = `const { memorySyncDue } = await import(${JSON.stringify(path.join(import.meta.dir, "importSync.ts"))}); const { readImportRecord } = await import(${JSON.stringify(path.join(import.meta.dir, "importStore.ts"))}); console.log(JSON.stringify(memorySyncDue(readImportRecord(${JSON.stringify(ID)}), ${now})));`;
+  const child = Bun.spawn([process.execPath, "--eval", code], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+  const [output, errors, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect(exit, errors).toBe(0);
+  return JSON.parse(output.trim().split("\n").at(-1)!);
+}
+
 test("the schedule survives a restart: a fresh process reads the same due time from the durable record", async () => {
   await importedThenEngines();
   await syncRun(HOUR);
-  const probe = async (now: number) => {
-    const code = `const { memorySyncDue } = await import(${JSON.stringify(path.join(import.meta.dir, "importSync.ts"))}); const { readImportRecord } = await import(${JSON.stringify(path.join(import.meta.dir, "importStore.ts"))}); console.log(JSON.stringify(memorySyncDue(readImportRecord(${JSON.stringify(ID)}), ${now})));`;
-    const child = Bun.spawn([process.execPath, "--eval", code], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
-    const [output, errors, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-    expect(exit, errors).toBe(0);
-    return JSON.parse(output.trim().split("\n").at(-1)!);
-  };
+  const probe = freshDue;
   expect(await probe(NOW + 2 * HOUR)).toBe(false);
   expect(await probe(NOW + 25 * HOUR)).toBe(true);
 });
@@ -256,4 +272,117 @@ test("a sync refused before its lock still records the failure and waits an hour
   expect(record.sync).toEqual({ lastAt: at(HOUR), result: "failed", added: 0, reason: "backup_refused" });
   expect(memorySyncDue(record, NOW + HOUR + 30 * 60_000)).toBe(false);
   expect((await fs.readFile(stateFile("memory-source.json"), "utf8"))).toContain('"engines"');
+});
+
+/** A sync run in its own process, standing for the leased helper. `blockInventory` parks it in the
+    inventory's project lookup after printing "inventory"; it never returns there. */
+function spawnSync(blockInventory: boolean) {
+  const code = `const { runMemoryImportWork } = await import(${JSON.stringify(path.join(import.meta.dir, "importWork.ts"))});
+    setInterval(() => {}, 1000);
+    await runMemoryImportWork({ importId: ${JSON.stringify(ID)}, previous: null, roots: ${JSON.stringify(roots)}, at: ${JSON.stringify(at(HOUR))}, sync: true }, {
+      hostProject: ${JSON.stringify(PROJECT)}, writer: async () => ({ kind: "unknown", roleId: null }),
+      projectForSlug: async () => { if (${blockInventory}) { console.log("inventory"); await new Promise(() => {}); } return ${JSON.stringify(PROJECT)}; },
+    });
+    console.log("finished");`;
+  return Bun.spawn([process.execPath, "--eval", code], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+}
+async function until(check: () => boolean | Promise<boolean>, what: string, ms = 20_000) {
+  const deadline = performance.now() + ms;
+  while (!(await check())) {
+    if (performance.now() > deadline) throw Error(`timed out waiting for ${what}`);
+    await Bun.sleep(20);
+  }
+}
+/** After a killed run: the marker alone, the hour's backoff for this and a restarted reader, untouched engine files, and a later run that completes. */
+async function expectInterruptedAttempt(before: Record<string, string>) {
+  expect(readImportRecord(ID)!.sync).toEqual({ lastAt: at(HOUR), result: "running", added: 0 });
+  expect(memorySyncDue(readImportRecord(ID), NOW + HOUR + 59 * 60_000)).toBe(false);
+  expect(await freshDue(NOW + HOUR + 59 * 60_000)).toBe(false);
+  expect(await freshDue(NOW + 2 * HOUR)).toBe(true);
+  expect(memorySyncStatus(readImportRecord(ID), NOW + HOUR + 20 * 60_000)?.failure).toBe("interrupted");
+  expect(await hashes()).toEqual(before);
+  expect((await syncRun(2 * HOUR)).sync).toEqual({ lastAt: at(2 * HOUR), result: "ok", added: 1 });
+}
+
+test("a helper killed in its inventory leaves its attempt marked, so the next refresh waits an hour", async () => {
+  await importedThenEngines();
+  await fs.writeFile(path.join(memory, "late.md"), "A note the killed run never reaches.\n");
+  const before = await hashes();
+  const child = spawnSync(true);
+  const reader = child.stdout.getReader();
+  let output = "";
+  await until(async () => { const { value, done } = await reader.read(); if (done) throw Error(`helper ended early: ${await new Response(child.stderr).text()}`); output += new TextDecoder().decode(value); return output.includes("inventory"); }, "the inventory");
+  child.kill("SIGKILL");
+  expect(await child.exited).not.toBe(0);
+  expect(output).not.toContain("finished");
+  await expectInterruptedAttempt(before);
+}, 60_000);
+
+test("a helper killed while it waits for the import lock leaves its attempt marked, so the next refresh waits an hour", async () => {
+  await importedThenEngines();
+  await fs.writeFile(path.join(memory, "late.md"), "A note the killed run never reaches.\n");
+  const before = await hashes();
+  const parent = path.join(process.env.LLV_STATE_DIR!, "backups", "engine-memory");
+  let release!: () => void, holding!: () => void;
+  const held = new Promise<void>(resolve => { holding = resolve; });
+  const holder = withFileTransaction(path.join(parent, "import-job"), "the test holds the import lock", () => new Promise<void>(resolve => { release = resolve; holding(); }));
+  await held;
+  const child = spawnSync(false);
+  try {
+    // The helper queued its own ticket behind this one: it waits for the lock.
+    await until(async () => (await fs.readdir(path.join(parent, "import-job.write-locks"))).filter(name => name.endsWith(".json")).length >= 2, "the helper's lock ticket");
+    child.kill("SIGKILL");
+    expect(await child.exited).not.toBe(0);
+  } finally { child.kill("SIGKILL"); release(); await holder; }
+  expect(await new Response(child.stdout).text()).not.toContain("finished");
+  await expectInterruptedAttempt(before);
+}, 60_000);
+
+test("in the engines position the host is chosen among projects with a pending import batch", async () => {
+  const A = "a-fixture", B = "b-fixture";
+  await importedThenEngines(undefined, B);
+  await fs.writeFile(path.join(memory, "late.md"), "Check the account's remaining limit before starting a long run.\n");
+  await syncRun(HOUR, B);
+  // Project A holds an ordinary rule, so it is due for an ordinary pass; B holds the pending import.
+  roleMemoryCollection(true)!.boundedPatch(20, tx => {
+    const id = newRuleId(tx), scope = roleScope(A, "builder");
+    tx.put({ kind: "rule", id, scope, rule: "Inspect the requested scope before changing stored guidance.", why: "An earlier attempt applied guidance at the wrong level.", state: "active", hints: [],
+      source: { project: A, pipelineId: "fixture", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "conversation_fixture" }, createdAt: at(0), changedAt: at(0) });
+    tx.put({ kind: "scope", scope, revision: 1, history: [], active: [id] });
+  });
+  const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "registry.json"));
+  registry.conversation = () => ({ supersededBy: null, generations: [] }) as never;
+  const seats = new Map<string, { conversationId: string; seatEpoch: number; designatedAt: string; path: null }>();
+  const lives = new Map<string, AgentLivenessRecord>();
+  const now = NOW + 2 * HOUR;
+  const sources = { ...defaultSeatTickSources(), now: () => now, registry: () => registry, workerCounts: undefined,
+    seatFor: (project: string) => ({ active: seats.get(project) ?? null, pending: null, history: [] }) as never,
+    activeSeats: () => [...seats.keys()],
+    pipelines: () => [...seats.keys()].map(project => ({ project, repoDir: root }) as never),
+    liveness: async ({ conversationId }: { conversationId?: string }) => lives.has(conversationId!) ? [lives.get(conversationId!)!] : [],
+    latestDeployment: () => ({ state: "ok" as const, value: null }),
+  };
+  const seat = (project: string, wakeAgo: number) => {
+    const conversationId = `conversation_seat_${project}`;
+    seats.set(project, { conversationId, seatEpoch: seats.size + 1, designatedAt: at(-86_400_000), path: null });
+    lives.set(conversationId, { conversationId, host: { state: "alive", pid: process.pid, kind: "structured" }, lifecycle: "waiting", reason: "host_alive_turn_idle" } as AgentLivenessRecord);
+    writeSeatTickState(project, { ...emptySeatTickState(), seatEpoch: seats.get(project)!.seatEpoch, lastWakeAt: new Date(now - wakeAgo).toISOString() });
+  };
+  const bodies: Record<string, unknown>[] = [];
+  const controller = productionCurationController(sources, { archive: () => {}, observe: async () => ({ state: "running" as const }),
+    launch: async body => { bodies.push(body); return { status: 202, body: { state: "running", conversationId: "conversation_fixture_curator", launchId: "fixture" } }; } });
+  const tick = { ...tickInput(), project: A, now };
+  try {
+    // A alone: due for ordinary curation, nothing to import, so no pass of any kind.
+    seat(A, 1000);
+    expect(await controller.launchIfDue(tick)).toBe("curation: paused, memory off");
+    expect(machinePass()).toBeNull();
+    // B joins with an older wake: its import pass launches, never an ordinary pass in A.
+    seat(B, 20_000);
+    expect(await controller.launchIfDue(tick)).toContain("launched");
+    expect(bodies.map(body => body.project)).toEqual([B]);
+    const pass = readPass(String(bodies[0].clientAttemptId))!;
+    expect(pass.project).toBe(B);
+    expect(pass.importBatch).toMatchObject({ importId: ID, candidates: [pending()[0].id] });
+  } finally { await stopWorktreeSweepWorker(); }
 });

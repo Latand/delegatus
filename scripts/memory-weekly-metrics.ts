@@ -9,7 +9,11 @@
    a private temporary directory, reads only the copies, and removes the
    directory it created. Without --baseline and --window it derives them from
    memory-source.json: the baseline is the 7 days before the switch press and
-   each trial week starts at drainedAt. The report is JSON on stdout: counts,
+   each trial week starts at drainedAt. A week whose reviews may still complete
+   (until 24 hours after it ends, by --now) is reported as provisional and
+   decides nothing; neither does a week the delivery ledger cannot check,
+   because it is missing or no longer reaches back over the week. The report
+   is JSON on stdout: counts,
    ids and project keys, never a finding, rule or note text. It claims no
    state owner, writes nothing under the state directory and needs no Viewer. */
 import { Database } from "bun:sqlite";
@@ -91,12 +95,13 @@ export function readMetricsInput(args: MetricsArgs, scratch: string): MetricsInp
         .all(...collections).map(row => JSON.parse(row.value_json) as Record<string, unknown>);
     } finally { db.close(); }
   };
-  let deliveries: MetricsInput["deliveries"] = [];
+  // A missing ledger or table is reported as such, never read as a week with no engine memory loaded.
+  let deliveries: MetricsInput["deliveries"] = { unavailable: "missing-file" };
   if (ledger) {
     const db = new Database(ledger, { readonly: true });
     try {
       const table = db.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table' AND name='deliveries'").get();
-      deliveries = table ? db.query<{ body: string }, []>("SELECT body FROM deliveries ORDER BY sequence").all().map(row => JSON.parse(row.body)) : [];
+      deliveries = table ? db.query<{ body: string }, []>("SELECT body FROM deliveries ORDER BY sequence").all().map(row => JSON.parse(row.body)) : { unavailable: "missing-table" };
     } finally { db.close(); }
   }
   const deployments = args.deployments.flatMap(file => { const value = readJson(file); return Array.isArray(value) ? value : []; });
@@ -117,7 +122,7 @@ export function run(argv: readonly string[]) {
   try {
     const input = readMetricsInput(args, scratch);
     const { baseline, windows } = args.baseline ? { baseline: args.baseline, windows: args.windows } : derivedWindows(readJson(path.join(args.stateDir, "memory-source.json")) as never, args.now);
-    return weeklyReport(input, baseline, windows);
+    return weeklyReport(input, baseline, windows, args.now);
   } finally {
     // Only the directory this run created.
     fs.rmSync(scratch, { recursive: true, force: true });
