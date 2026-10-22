@@ -14,6 +14,7 @@ import {
   relayPollerStatus,
   stopExternalRelayPollers,
   sweepExternalRelayOrphans,
+  waitForExternalRelayRuns,
   wakeExternalRelayPoller,
 } from "./poller";
 import { externalRelayFile, reserveRun, readRelayStore, readRunLedger, updateRelayStore, type PairedRelay, type RelayTargetSettings } from "./store";
@@ -45,8 +46,9 @@ test("unreadable cancellation custody leaves relay settings accessible and prese
     if (before) fs.writeFileSync(file, before); else fs.rmSync(file, { force: true });
   }
 });
-afterAll(() => {
+afterAll(async () => {
   stopExternalRelayPollers();
+  await waitForExternalRelayRuns();
   for (const dir of runDirs) fs.rmSync(dir, { recursive: true, force: true });
   fs.rmSync(root, { recursive: true, force: true });
 });

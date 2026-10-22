@@ -1,7 +1,8 @@
 "use client";
 
 import type { LoopTransport, LoopVoiceHandle } from "./ambientLoop";
-import type { CueTransport, CueVoiceHandle } from "./cuePlayer";
+import type { CueTransport, CueVoiceHandle, EventVoiceHandle } from "./cuePlayer";
+import { playSlice, playSound, soundGraphFor, type PlaySliceOptions, type SoundId } from "./synth";
 
 /**
  * The one real audio backend: decoded buffers on the Web Audio clock.
@@ -20,7 +21,10 @@ import type { CueTransport, CueVoiceHandle } from "./cuePlayer";
  * - fades and ducks have to be ramps on the same clock. `AudioParam`
  *   `linearRampToValueAtTime` is sample-accurate; stepping `.volume` from a
  *   `setInterval` is not, and the steps are audible;
- * - cues need stereo placement, which the pane geometry already computes.
+ * - cues need stereo placement, which the pane geometry already computes;
+ * - the sound map's event sounds are synthesized on the same context, through
+ *   one graph with a typing bus, an event bus and a limiter (`./synth`), so a
+ *   typing slice and an event sound share the duck and the limiter.
  *
  * Everything degrades to `null` — never an exception, never a log line. A locked
  * context (autoplay policy) and an undecoded buffer are the same answer to the
@@ -48,11 +52,6 @@ export interface GainNodeLike {
   connect(destination: never): unknown;
 }
 
-export interface PannerNodeLike {
-  pan: AudioParamLike;
-  connect(destination: never): unknown;
-}
-
 export interface BufferSourceLike {
   buffer: AudioBufferLike | null;
   loop: boolean;
@@ -72,7 +71,6 @@ export interface AudioContextLike {
   resume(): Promise<void>;
   createBufferSource(): BufferSourceLike;
   createGain(): GainNodeLike;
-  createStereoPanner?(): PannerNodeLike;
   decodeAudioData(data: ArrayBuffer): Promise<AudioBufferLike>;
 }
 
@@ -95,6 +93,37 @@ const REAL_TIMERS: TransportTimers = {
   schedule: (run, ms) => setTimeout(run, ms) as unknown as number,
   cancel: (handle) => clearTimeout(handle),
 };
+
+/**
+ * The synthesis side of the cue transport: the graph of one context, a typing
+ * slice on its typing bus, an event sound on its event bus. Injectable so the
+ * transport's own tests run on a fake context.
+ */
+export interface CueEngine {
+  /** Context time before which nothing should be scheduled (the limiter settles). */
+  settledAt(context: AudioContextLike): number;
+  slice(context: AudioContextLike, buffer: AudioBufferLike, options: PlaySliceOptions): { stop(): void; onEnded(run: () => void): void };
+  sound(context: AudioContextLike, id: SoundId, options: { at: number; volume: number; pan: number; batch: number }): { cut(at: number): void };
+}
+
+/** The real engine: the context's one {@link soundGraphFor} graph. */
+export function synthCueEngine(): CueEngine {
+  const graphOf = (context: AudioContextLike) => soundGraphFor(context as unknown as BaseAudioContext);
+  return {
+    settledAt: (context) => graphOf(context).settledAt,
+    slice(context, buffer, options) {
+      const node = playSlice(graphOf(context), buffer as AudioBuffer, options);
+      return {
+        stop: () => node.stop(),
+        onEnded: (run) => { node.onended = () => run(); },
+      };
+    },
+    sound(context, id, options) {
+      const playing = playSound(graphOf(context), id, options);
+      return { cut: (at) => playing.cut(at) };
+    },
+  };
+}
 
 export interface WebAudioTransports {
   cues: CueTransport;
@@ -165,6 +194,7 @@ export function createWebAudioTransports(
   getContext: () => AudioContextLike | null,
   fetchFn: typeof fetch | null = typeof fetch === "function" ? fetch : null,
   timers: TransportTimers = REAL_TIMERS,
+  engine: CueEngine = synthCueEngine(),
 ): WebAudioTransports {
   const buffers = new Map<string, AudioBufferLike>();
   /** A source that failed to fetch or decode is never retried: a 404 asset
@@ -205,36 +235,55 @@ export function createWebAudioTransports(
     return buffer ? { context, buffer } : null;
   };
 
+  /** The context, if it will play right now. Kicks a resume otherwise. */
+  const running = (): AudioContextLike | null => {
+    const context = getContext();
+    if (!context) return null;
+    if (context.state !== "running") {
+      void context.resume().catch(() => undefined);
+      return null;
+    }
+    return context;
+  };
+
   return {
     cues: {
-      start(request): CueVoiceHandle | null {
+      startTyping(request): CueVoiceHandle | null {
         const ready = playable(request.src);
         if (!ready) return null;
         try {
           const { context, buffer } = ready;
-          const source = context.createBufferSource();
-          source.buffer = buffer;
-          const gain = context.createGain();
-          gain.gain.value = request.gain;
-          const panner = context.createStereoPanner?.();
-          if (panner) {
-            panner.pan.value = request.pan;
-            gain.connect(panner as never);
-            panner.connect(context.destination as never);
-          } else {
-            gain.connect(context.destination as never);
-          }
-          source.connect(gain as never);
-          /* A cue is one-shot: `onended` is how the player learns a voice freed
-             up. (The LOOP voice never sets this — see the file header.) */
-          (source as { onended?: unknown }).onended = () => request.onEnded();
-          source.start(context.currentTime + Math.max(0, request.delaySeconds));
+          const at = Math.max(context.currentTime, engine.settledAt(context)) + Math.max(0, request.delaySeconds);
+          const voice = engine.slice(context, buffer, { at, gain: request.gain, pan: request.pan, distant: request.distant });
+          /* A slice is one-shot: its end is how the player learns a voice
+             freed up. (The LOOP voice never sets this — see the file header.) */
+          voice.onEnded(request.onEnded);
           return {
             stop() {
               try {
-                source.stop();
+                voice.stop();
               } catch {
                 /* already finished */
+              }
+            },
+          };
+        } catch {
+          return null;
+        }
+      },
+
+      startEvent(request): EventVoiceHandle | null {
+        const context = running();
+        if (!context) return null;
+        try {
+          const at = Math.max(context.currentTime, engine.settledAt(context));
+          const playing = engine.sound(context, request.sound, { at, volume: request.volume, pan: request.pan, batch: request.batch });
+          return {
+            cut() {
+              try {
+                playing.cut(Math.max(at, context.currentTime));
+              } catch {
+                /* the graph is gone */
               }
             },
           };

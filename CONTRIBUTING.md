@@ -474,6 +474,13 @@ An existing `NODE_OPTIONS` is preserved. Production builds cap page-data
 workers at two to fit the gate's three-CPU quota. The Viewer build and its
 runtime consumers share a private source tree with read-only dependencies;
 they neither contend on another build's `.next/lock` nor consume its output.
+Checkout self-update installation and compilation have immediate admission in a high-weight scope
+beside the agent work slice. Nonempty command output renews a 30-minute silence
+bound, with total bounds of one hour for install and two hours for compilation,
+and bounded child cleanup. Package updates keep pressure admission and work quotas. The deployment
+record preserves the failed phase and cause, including load at a build timeout.
+See `docs/design/cpu-placement.md#release-build-admission-and-deadlines`.
+
 The hook labels CPU admission for publication checks and prints its measured
 queue wait, excluded from the execution budget.
 

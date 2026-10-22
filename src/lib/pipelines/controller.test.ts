@@ -17,6 +17,45 @@ import {
 
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-flow-pipeline-controller-"));
 
+test("incomplete ticks log their start, age and one completion with exact suppressed checks", async () => {
+  const previous = process.env.LLV_QUIET_DIAGNOSTICS;
+  delete process.env.LLV_QUIET_DIAGNOSTICS;
+  const lines: string[] = [];
+  const info = spyOn(console, "info").mockImplementation(line => { lines.push(String(line)); });
+  let now = 0, complete = false;
+  const controller = new FlowPipelineController({
+    now: () => now,
+    scan: async () => ({ files: [], complete }),
+    tickPipelines: async () => ({ changed: false }),
+  }, { maxPasses: 1 });
+  try {
+    for (let tick = 0; tick < 5; tick++) { await controller.tick(); now += 5_000; }
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("still scanning: started");
+    now = 59_999;
+    await controller.tick();
+    expect(lines).toHaveLength(1);
+    now = 60_000;
+    await controller.tick();
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).toContain("still scanning: ageMs=60000 incompleteChecks=7 suppressedCount=5");
+    complete = true;
+    now = 65_000;
+    await controller.tick();
+    await controller.tick();
+    expect(lines).toHaveLength(3);
+    expect(lines[2]).toContain("scan completed: ageMs=65000 incompleteChecks=7 suppressedCount=5");
+    complete = false;
+    await controller.tick();
+    expect(lines).toHaveLength(4);
+    expect(lines[3]).toContain("still scanning: started");
+  } finally {
+    info.mockRestore();
+    if (previous === undefined) delete process.env.LLV_QUIET_DIAGNOSTICS;
+    else process.env.LLV_QUIET_DIAGNOSTICS = previous;
+  }
+});
+
 test("an incomplete catalog defers flows quietly under the CLI and still reports actual failures", async () => {
   const previous = process.env.LLV_QUIET_DIAGNOSTICS;
   const info = spyOn(console, "info").mockImplementation(() => {});
@@ -41,6 +80,38 @@ test("an incomplete catalog defers flows quietly under the CLI and still reports
     expect(error).toHaveBeenCalledWith("[flow pipeline controller] pipelines phase failed", expect.any(Error));
   } finally {
     info.mockRestore(); error.mockRestore();
+    if (previous === undefined) delete process.env.LLV_QUIET_DIAGNOSTICS;
+    else process.env.LLV_QUIET_DIAGNOSTICS = previous;
+  }
+});
+
+test("a scan failure preserves its incomplete episode and cannot announce completion", async () => {
+  const previous = process.env.LLV_QUIET_DIAGNOSTICS;
+  delete process.env.LLV_QUIET_DIAGNOSTICS;
+  const lines: string[] = [], errors: unknown[] = [];
+  const info = spyOn(console, "info").mockImplementation(line => { lines.push(String(line)); });
+  let now = 0, scan: "incomplete" | "failed" | "complete" = "incomplete";
+  const failure = new Error("scan unavailable");
+  const controller = new FlowPipelineController({ now: () => now,
+    scan: async () => { if (scan === "failed") throw failure; return { files: [], complete: scan === "complete" }; },
+    tickPipelines: async () => ({ changed: false }),
+    log: (_, error) => { errors.push(error); },
+  }, { maxPasses: 1 });
+  try {
+    await controller.tick();
+    now = 1_000; scan = "failed";
+    await expect(controller.tick()).rejects.toBe(failure);
+    expect(errors).toEqual([failure]);
+    expect(lines).toHaveLength(1);
+    now = 2_000; scan = "incomplete";
+    await controller.tick();
+    expect(lines).toHaveLength(1);
+    now = 3_000; scan = "complete";
+    await controller.tick();
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).toContain("scan completed: ageMs=3000 incompleteChecks=2 suppressedCount=1");
+  } finally {
+    info.mockRestore();
     if (previous === undefined) delete process.env.LLV_QUIET_DIAGNOSTICS;
     else process.env.LLV_QUIET_DIAGNOSTICS = previous;
   }

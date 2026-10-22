@@ -92,6 +92,8 @@ export type RelayStore = {
   pending: PendingRelay[];
 };
 export type RunRecord = {
+  /** Execution ended; retained delivery/cleanup custody owns no target slot. */
+  capacityReleased?: true;
   /** Present only on a full owner run, bound by the Viewer to its spawn receipt. */
   conversationId?: string;
   /** Durable custody survives a lost lease, cutoff, or Viewer restart. */
@@ -108,6 +110,9 @@ export type RunRecord = {
   startedAt: string;
 };
 export type RunLedger = { v: 1; runs: RunRecord[] };
+export function runHoldsCapacity(run: RunRecord): boolean {
+  return !run.capacityReleased && !run.ownerTurn?.confirmed;
+}
 type RelayRequestClaim = { requestId: string; leaseId: string; ownerPid: number; ownerIdentity: string; claimedAt: number; terminalAt?: number; completion?: ExternalRelayCompletion };
 type RelayRequestLedger = { v: 1; claims: RelayRequestClaim[] };
 const RELAY_REQUEST_CLAIM_RETENTION_MS = 24 * 60 * 60_000;
@@ -326,7 +331,7 @@ export function reserveRun(
       maxConcurrent !== undefined &&
       ledger.runs.filter(
         (run) =>
-          run.relayId === record.relayId && run.targetId === record.targetId,
+          run.relayId === record.relayId && run.targetId === record.targetId && runHoldsCapacity(run),
       ).length >= maxConcurrent
     )
       return ledger;
@@ -367,7 +372,7 @@ export async function reserveRunAsync(
       maxConcurrent !== undefined &&
       ledger.runs.filter(
         (run) =>
-          run.relayId === record.relayId && run.targetId === record.targetId,
+          run.relayId === record.relayId && run.targetId === record.targetId && runHoldsCapacity(run),
       ).length >= maxConcurrent
     )
       return ledger;
