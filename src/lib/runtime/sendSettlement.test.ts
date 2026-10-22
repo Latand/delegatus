@@ -2951,3 +2951,65 @@ for (const expired of [false, true]) test(`progress mirror rechecks its owner an
     active.registry.readOnlySnapshot = read; active.registry.close(); active.close();
   }
 });
+
+test("concurrent asynchronous sweep selections claim a conversation only at dispatch", async () => {
+  const active = fixture("parallel-sweep-selection", { sqlite: true, now: () => Date.parse("2026-10-22T00:00:00Z") });
+  const prepare = active.registry.prepareReadOnlySnapshot.bind(active.registry);
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let entered!: () => void;
+  const reading = new Promise<void>(resolve => { entered = resolve; });
+  let ready!: () => void;
+  const selecting = new Promise<void>(resolve => { ready = resolve; });
+  const releases: Array<() => void> = [];
+  const sweeps: Array<ReturnType<typeof settleDueSends>> = [];
+  try {
+    const { operationId } = acceptSend(active, { clientMessageId: "parallel-sweep", operationId: "operation-parallel-sweep" });
+    const second = acceptSend(active, { clientMessageId: "parallel-sweep-second", operationId: "operation-parallel-sweep-second" });
+    for (const id of [operationId, second.operationId]) {
+      active.journal.transitionOperation(id, "delivering"); active.journal.transitionOperation(id, "delivered");
+    }
+    const file = await prepare();
+    active.registry.prepareReadOnlySnapshot = async () => new Promise(resolve => {
+      releases.push(() => resolve(file)); if (releases.length === 2) ready();
+    });
+    let statusReads = 0;
+    const client = { ...active.client, operationStatus: async (...args: Parameters<RuntimeHostClient["operationStatus"]>) => {
+      statusReads++; entered(); await held; return active.client.operationStatus(...args);
+    } };
+    const running = new Set<string>();
+    sweeps.push(settleDueSends({ registry: active.registry, client, running, progress: null, now: () => Date.parse("2026-10-23T00:00:00Z") }));
+    sweeps.push(settleDueSends({ registry: active.registry, client, running, progress: null, now: () => Date.parse("2026-10-23T00:00:00Z") }));
+    await selecting; for (const resume of releases) resume();
+    await reading; await new Promise<void>(resolve => setImmediate(resolve));
+    expect(statusReads).toBe(1);
+    release();
+    expect((await Promise.all(sweeps)).flatMap(result => result.settled)).toEqual([
+      { operationId, state: "delivered", duplicateRisk: false },
+      { operationId: second.operationId, state: "delivered", duplicateRisk: false },
+    ]);
+    expect(running.size).toBe(0);
+  } finally {
+    release(); for (const resume of releases) resume(); await Promise.allSettled(sweeps);
+    active.registry.prepareReadOnlySnapshot = prepare; active.registry.close(); active.close();
+  }
+});
+
+for (const when of ["preparation", "selection"] as const) test(`a settlement selection whose controller retires during ${when} writes no later deadlines or receipts`, async () => {
+  const active = fixture("retired-sweep-selection", { sqlite: true, now: () => Date.parse("2026-10-22T00:00:00Z") });
+  const prepare = active.registry.prepareReadOnlySnapshot.bind(active.registry);
+  let owned = true, deadlines = 0, reads = 0;
+  try {
+    const { operationId } = acceptSend(active, { clientMessageId: "retired-sweep", operationId: "operation-retired-sweep" });
+    acceptSend(active, { clientMessageId: "retired-sweep-second", operationId: "operation-retired-sweep-second" });
+    const file = await prepare();
+    active.registry.prepareReadOnlySnapshot = async () => { if (when === "preparation") owned = false; return file; };
+    const client = { ...active.client, operationStatus: async () => { reads++; return null; } };
+    await expect(settleDueSends({ registry: active.registry, client, progress: null,
+      now: () => Date.parse("2026-10-23T00:00:00Z"), onDeadline: () => { deadlines++; queueMicrotask(() => { owned = false; }); },
+      assertActive: () => { if (!owned) throw new Error("settlement owner retired"); },
+    })).rejects.toThrow("settlement owner retired");
+    expect(deadlines).toBe(when === "preparation" ? 0 : 1); expect(reads).toBe(0);
+    expect(sendReceiptFor(active.registry.deliverySnapshotForOperation(operationId), operationId)?.state).toBe("in-flight");
+  } finally { active.registry.prepareReadOnlySnapshot = prepare; active.registry.close(); active.close(); }
+});

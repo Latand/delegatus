@@ -1,5 +1,5 @@
 import { registryOpenSpawnReceipts } from "@/lib/agent/registry";
-import { startupSnapshot, startupHostSnapshot, withStartupRowScope, startupHostInScope } from "./startupSnapshot";
+import { startupSnapshot, startupHostSnapshot, startupStructuredHostEntries, withStartupRowScope, startupHostInScope } from "./startupSnapshot";
 import { startupRowRetries, startupRowReason, startupRowNotice, type StartupRowReason } from "./startupRowRetries";
 import { verifiedCodexSocketOwner } from "./codexSocketTransport";
 import { waitForStateLock } from "@/lib/state/lockWait";
@@ -18,7 +18,7 @@ import { accountManager } from "@/lib/accounts/manager";
 import { turnStateFromRecords } from "@/lib/accounts/migration/turnState";
 import { launchProfileEngineReadOnly, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { agentRegistry, conversationIdsResolvingTo, resolveConversationAlias, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt } from "@/lib/agent/registry";
-import { registryRowsMatching, registryConversationsForEntryKey, hotRegistryRows, registryStartupSelectionUnchanged } from "@/lib/agent/sqliteRegistryStore";
+import { registryKeysMatching, registryRowsMatching, registryConversationsForEntryKey, hotRegistryRows, registryStartupSelectionUnchanged } from "@/lib/agent/sqliteRegistryStore";
 import { readClaudePermissionMode } from "@/lib/agent/claudePermissionMode";
 import { effectiveClaudePermissionMode } from "@/lib/agent/cli";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
@@ -610,21 +610,23 @@ function currentRestartCutStamp(stamp: Pick<RestartCutStamp, "sessionId" | "path
 type StartupReadBudget = { signal?: AbortSignal; deadline?: number; assertActive?: () => void };
 const startupReadBudget = new AsyncLocalStorage<StartupReadBudget>();
 
+function assertStartupReadActive(): void {
+  const budget = startupReadBudget.getStore();
+  budget?.signal?.throwIfAborted(); budget?.assertActive?.();
+  if (budget?.deadline !== undefined && performance.now() >= budget.deadline) throw new Error("structured startup read deadline exceeded");
+}
+
 /** Bulk selection at an asynchronous phase boundary; effects still recheck
     their individual host or operation under its writer admission. */
 async function preparedStartupSnapshot(registry: AgentRegistry): Promise<RegistryFile> {
   const budget = startupReadBudget.getStore();
-  const check = () => {
-    budget?.signal?.throwIfAborted(); budget?.assertActive?.();
-    if (budget?.deadline !== undefined && performance.now() >= budget.deadline) throw new Error("structured startup read deadline exceeded");
-  };
-  check();
+  assertStartupReadActive();
   const remaining = budget?.deadline === undefined ? undefined : Math.ceil(budget.deadline - performance.now());
   const cutoff = remaining === undefined ? undefined : AbortSignal.timeout(Math.max(1, remaining));
   const signal = budget?.signal && cutoff ? AbortSignal.any([budget.signal, cutoff]) : budget?.signal ?? cutoff;
   const file = typeof registry.prepareReadOnlySnapshot === "function"
     ? await registry.prepareReadOnlySnapshot(signal) : registry.readOnlySnapshot();
-  check();
+  assertStartupReadActive();
   return startupSnapshot(registry, file);
 }
 
@@ -1169,7 +1171,7 @@ async function unresolvedEligibleHosts(
   const snapshot = await preparedStartupSnapshot(registry);
   const adoptedKeys = new Set(adopted.map((item) => sessionKeyId(item.key)));
   const unresolved: AgentRegistryEntry[] = [];
-  await forEachCooperatively(registry.structuredHostEntries(snapshot), entry => {
+  await forEachCooperatively(await startupStructuredHostEntries(snapshot, assertStartupReadActive), entry => {
     if (entry.structuredHost && productionAdopter(entry.key) && shouldAdopt(entry)
       && !adoptedKeys.has(sessionKeyId(entry.key)) && !claimed(entry.key)) unresolved.push(entry);
   }, { batchSize: 16, timeBudgetMs: 8 });
@@ -1855,14 +1857,20 @@ function* pipelineStartupMembershipSteps(registry: AgentRegistry, host?: AgentRe
       if (entries) memberships[id] = entries;
     }
   };
-  for (const entry of host ? [snapshot.entries[sessionKeyId(host.key)]].filter((entry): entry is AgentRegistryEntry => !!entry) : registryRowsMatching(snapshot, "entries", "structuredHost.kind", ["codex-app-server", "claude-broker", "copilot-acp"])) {
-    if (!startupHostInScope(registry, sessionKeyId(entry.key))) continue;
+  const hostKeys = host ? [sessionKeyId(host.key)] : registryKeysMatching(snapshot, "entries", "structuredHost.kind", ["codex-app-server", "claude-broker", "copilot-acp"]);
+  for (const key of hostKeys) {
+    const entry = snapshot.entries[key];
+    if (!entry || !startupHostInScope(registry, key)) continue;
     for (const conversation of registryConversationsForEntryKey(snapshot, sessionKeyId(entry.key))) take(conversation.id);
     yield;
   }
   // Pending structured spawns can have membership before an entry exists.
   // They need the same unreadable-pipeline fence as resident hosts.
-  if (!host) for (const receipt of registryRowsMatching(snapshot, "receipts", "state", ["starting", "path-pending", "pane-bound", "host-verified", "prompt-delivered"])) { take(receipt.conversationId); yield; }
+  if (!host) for (const key of registryKeysMatching(snapshot, "receipts", "state", ["starting", "path-pending", "pane-bound", "host-verified", "prompt-delivered"])) {
+    const receipt = snapshot.receipts[key];
+    if (receipt) take(receipt.conversationId);
+    yield;
+  }
   const resolve = (id: string) => canonicalIds.get(id) ?? resolveConversationAlias(snapshot, id as ViewerConversationId);
   const byPipeline = new Map<string, string[]>();
   for (const [id, entries] of Object.entries(memberships)) for (const entry of entries) {
@@ -2181,7 +2189,7 @@ async function adoptStructuredHostsPass(
   const client = dependencies.client === undefined ? runtimeHostClient() : dependencies.client;
   const rowRetries = startupRowRetries(registry);
   const initialSnapshot = await preparedStartupSnapshot(registry);
-  const retryEntries = registry.structuredHostEntries(initialSnapshot).filter(entry => !resumeDeferred || resumeDeferred.has(sessionKeyId(entry.key)));
+  const retryEntries = (await startupStructuredHostEntries(initialSnapshot, assertActive)).filter(entry => !resumeDeferred || resumeDeferred.has(sessionKeyId(entry.key)));
   await rowRetries.load(retryEntries.map(entry => sessionKeyId(entry.key)));
   assertActive();
   const delayedRows = new Set(retryEntries.filter(entry => {
@@ -2430,7 +2438,7 @@ async function adoptStructuredHostsPass(
         && (!evidenceMoved(entry) || (admitHeldPendingWork && eligible.pendingWork(entry)))
         && eligible(entry);
     };
-    const adoptionCandidates = registry.structuredHostEntries(await preparedStartupSnapshot(registry)).filter((entry) =>
+    const adoptionCandidates = (await startupStructuredHostEntries(await preparedStartupSnapshot(registry), assertActive)).filter((entry) =>
       entry.structuredHost && shouldAdopt(entry));
     /* Nothing is launched that this pass cannot hand to a delivery controller.
        `controllerBoundEarly` is exactly "this pass has a runtime client", and it
@@ -2589,7 +2597,7 @@ async function adoptStructuredHostsPass(
         totalHosts = Math.max(totalHosts, completedHosts);
         if (!resumeDeferred) markStructuredHostStartupProgress({ phase: "adopting Codex hosts", completedHosts, totalHosts });
       },
-      { onAdopted, onFailure, claimHost, ...(dependencies.adoptCodexHost ? { adoptHost: dependencies.adoptCodexHost } : {}) },
+      { onAdopted, onFailure, claimHost, assertActive, ...(dependencies.adoptCodexHost ? { adoptHost: dependencies.adoptCodexHost } : {}) },
     );
     completedHosts = Math.max(completedHosts, codexCandidateCount);
     nextAdoptedHosts = retainAdoptedHosts(nextAdoptedHosts, codex);
@@ -2650,7 +2658,7 @@ async function adoptStructuredHostsPass(
         totalHosts = Math.max(totalHosts, completedHosts);
         if (!resumeDeferred) markStructuredHostStartupProgress({ phase: "adopting Claude hosts", completedHosts, totalHosts });
       },
-      { onAdopted, onFailure, claimHost },
+      { onAdopted, onFailure, claimHost, assertActive },
     );
     completedHosts = Math.max(completedHosts, codexCandidateCount + claudeCandidateCount);
     nextAdoptedHosts = retainAdoptedHosts(nextAdoptedHosts, claude);
@@ -2739,7 +2747,7 @@ async function adoptStructuredHostsPass(
           if (!latest || evidenceMoved(latest)) return undefined;
           return mutation();
         });
-      }, "reconciling structured hosts"));
+      }, "reconciling structured hosts"), undefined, assertActive);
     const publicationSnapshot = await preparedStartupSnapshot(registry);
     orchestratorHostKeys = currentOrchestratorRestartRecoveryHostKeys(
       registry,

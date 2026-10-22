@@ -1,4 +1,4 @@
-import { startupHostSnapshot } from "./startupSnapshot";
+import { startupHostSnapshot, startupStructuredHostEntries } from "./startupSnapshot";
 import { forEachCooperatively, yieldToRuntime } from "@/lib/cooperative";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
@@ -783,10 +783,12 @@ export async function demoteSkippedStructuredRegistryHosts(
   shouldAdopt: StructuredHostAdoptionFilter,
   admit: <T>(entry: AgentRegistryEntry, mutation: () => T) => Promise<T | undefined> = async (_entry, mutation) => registry.deliveryWriteOrBusy({ label: "registry.startup-demote" }, mutation),
   orphanStop: StructuredOrphanStopDependencies = {},
+  assertActive: () => void = () => {},
 ): Promise<void> {
   const prepared = typeof registry.prepareReadOnlySnapshot === "function" ? await registry.prepareReadOnlySnapshot() : undefined;
   const rows: AgentRegistryEntry[] = [];
-  await withViewerOperation("runtime.startup", () => forEachCooperatively(registry.structuredHostEntries(prepared), entry => {
+  const selected = prepared ? await startupStructuredHostEntries(prepared, assertActive) : registry.structuredHostEntries();
+  await withViewerOperation("runtime.startup", () => forEachCooperatively(selected, entry => {
     performanceSpans.sync("runtime.startup.select", () => {
       if (entry.structuredHost && !shouldAdopt(entry)) rows.push(entry);
     });
@@ -895,12 +897,13 @@ export async function adoptCodexRegistryHosts(
     admit?: (entry: AgentRegistryEntry, snapshot: RegistryFile) => { error: string } | null;
     /** Termination ladder seams for an orphan stopped before adoption (#2790). */
     orphanStop?: StructuredOrphanStopDependencies;
+    assertActive?: () => void;
   } = {},
 ): Promise<AdoptedCodexHost[]> {
   if (!structuredHostsEnabled(env)) return [];
   const candidate: StructuredHostAdoptionFilter = entry => !codexBootAdoptionRetired(entry) && shouldAdopt(entry);
   const prepared = typeof registry.prepareReadOnlySnapshot === "function" ? await registry.prepareReadOnlySnapshot() : undefined;
-  const rows = registry.structuredHostEntries(prepared).filter((entry) =>
+  const rows = (prepared ? await startupStructuredHostEntries(prepared, dependencies.assertActive) : registry.structuredHostEntries()).filter((entry) =>
     entry.key.engine === "codex"
     && entry.structuredHost?.kind === "codex-app-server"
     && candidate(entry));
@@ -1051,11 +1054,12 @@ export async function adoptClaudeRegistryHosts(
     admit?: (entry: AgentRegistryEntry, snapshot: RegistryFile) => { error: string } | null;
     /** Termination ladder seams for an orphan stopped before adoption (#2790). */
     orphanStop?: StructuredOrphanStopDependencies;
+    assertActive?: () => void;
   } = {},
 ): Promise<AdoptedClaudeHost[]> {
   if (!structuredHostsEnabled(env)) return [];
   const prepared = typeof registry.prepareReadOnlySnapshot === "function" ? await registry.prepareReadOnlySnapshot() : undefined;
-  const rows = registry.structuredHostEntries(prepared).filter((entry) =>
+  const rows = (prepared ? await startupStructuredHostEntries(prepared, dependencies.assertActive) : registry.structuredHostEntries()).filter((entry) =>
     entry.key.engine === "claude"
     && entry.structuredHost?.kind === "claude-broker"
     && shouldAdopt(entry));
@@ -1200,7 +1204,7 @@ export async function reconcileDeadStructuredRegistryHostsOffLoop(
   assertActive: () => void = () => {},
 ): Promise<void> {
   const prepared = await registry.prepareReadOnlySnapshot();
-  const rows = registry.structuredHostEntries(prepared);
+  const rows = await startupStructuredHostEntries(prepared, assertActive);
   for (const [index, observed] of rows.entries()) {
     if (!observed.structuredHost?.process) continue;
     if (index > 0 && index % 16 === 0) await new Promise<void>(resolve => setTimeout(resolve, 0));

@@ -2204,14 +2204,19 @@ export async function bindStructuredDeliveryQueue(
       void settleDueSends({
         registry,
         client,
-        progress: progressStore,
+        assertActive: () => {
+          if (stopped || state.activeQueue !== queue) throw new Error("delivery settlement owner retired");
+        },
+        progress: { settle: (...args) => {
+          if (!stopped && state.activeQueue === queue) progressStore.settle(...args);
+        } },
         running: settling,
         onDeadline: (operationId, _conversationId, deadline) => {
           progressStore.deadline(operationId, deadline?.deadlineAt ?? null, deadline?.policy ?? null);
         },
         onSettled: () => requestDrain(),
       }).catch((error) => {
-        controllerDiagnosticError("[structured delivery] background settlement failed", { error: error instanceof Error ? error.message : String(error) });
+        if (!stopped && state.activeQueue === queue) controllerDiagnosticError("[structured delivery] background settlement failed", { error: error instanceof Error ? error.message : String(error) });
       });
     }, sweepMs);
     settlementSweepTimer.unref?.();

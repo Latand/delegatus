@@ -460,3 +460,28 @@ test("startup signal selection and post-RPC evidence prepare snapshots instead o
   registry.prepareReadOnlySnapshot = async () => { throw new Error("phase snapshot refused"); };
   await expect(structuredStartupSignals(registry, client)).rejects.toThrow("phase snapshot refused");
 });
+
+test("startup host selection yields while materializing rows before its mutation loop", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-materialize-"));
+  try {
+    const file = seeded(root, 64);
+    const template = file.entries["codex:reader-0"]!.structuredHost!;
+    let cloned = 0, observed = -1;
+    for (const entry of Object.values(file.entries)) {
+      entry.status = "dead";
+      entry.structuredHost = { ...template, endpoint: "stdio:released", process: null };
+      const plain = { ...entry };
+      Object.defineProperty(entry, "toJSON", { value: () => { cloned++; return plain; } });
+    }
+    const registry = { readOnlySnapshot: () => file, prepareReadOnlySnapshot: async () => file,
+      structuredHostEntries: (prepared?: RegistryFile) => AgentRegistry.prototype.structuredHostEntries.call(registry, prepared),
+    } as unknown as AgentRegistry;
+    const turn = setTimeout(() => { observed = cloned; }, 0);
+    try {
+      await demoteSkippedStructuredRegistryHosts(registry, () => false, async () => { throw new Error("released row was mutated"); });
+      expect(observed).toBeGreaterThanOrEqual(0);
+      expect(observed).toBeLessThanOrEqual(16);
+      expect(cloned).toBe(65);
+    } finally { clearTimeout(turn); }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

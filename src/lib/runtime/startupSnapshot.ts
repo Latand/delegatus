@@ -1,8 +1,11 @@
+import { performanceSpans } from "@/lib/performanceSpans";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { forEachStartupBatch } from "./startupWork";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { conversationIdsResolvingTo, resolveConversationAlias, type AgentRegistry, type RegistryFile } from "@/lib/agent/registry";
+import { conversationIdsResolvingTo, resolveConversationAlias, type AgentRegistry, type AgentRegistryEntry, type RegistryFile } from "@/lib/agent/registry";
 import type { SessionKey } from "@/lib/agent/sessionKey";
-import { registryConversationsForPath, registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
+import { registryConversationsForPath, registryKeysMatching, registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 
 const scope = new AsyncLocalStorage<{ registry: AgentRegistry; keys: ReadonlySet<string> } | null>();
 
@@ -50,4 +53,19 @@ export function startupSnapshot(registry: AgentRegistry, prepared?: RegistryFile
 /** Authorization at a host boundary does not refresh the bulk selection. */
 export function startupHostSnapshot(registry: AgentRegistry, key: SessionKey, includeArtifactPath = false): RegistryFile {
   return typeof registry.startupHostSnapshot === "function" ? registry.startupHostSnapshot(key, includeArtifactPath) : startupSnapshot(registry);
+}
+
+/** Materialize indexed host rows inside slices, including cloning and grants. */
+export async function startupStructuredHostEntries(snapshot: RegistryFile, assertActive: () => void = () => {}): Promise<AgentRegistryEntry[]> {
+  const rows: AgentRegistryEntry[] = [];
+  const selected = (function* () {
+    for (const key of registryKeysMatching(snapshot, "entries", "structuredHost.kind", ["codex-app-server", "claude-broker", "copilot-acp"])) {
+      yield performanceSpans.sync("runtime.startup.select", () => {
+        const entry = snapshot.entries[key];
+        return entry ? JSON.parse(JSON.stringify(entry)) as AgentRegistryEntry : null;
+      });
+    }
+  })();
+  await withViewerOperation("runtime.startup", () => forEachStartupBatch(selected, async entry => { if (entry) rows.push(entry); }, assertActive));
+  return rows;
 }
