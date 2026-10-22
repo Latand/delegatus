@@ -36,7 +36,7 @@ export interface MemoryEngineStart {
   /** Claude provider starts pass --setting-sources "" and exclude home/project settings. */
   providerAccount?: boolean;
 }
-type Selection = ReturnType<typeof learnedRulesSnapshot>;
+type Selection = Pick<ReturnType<typeof learnedRulesSnapshot>, "block" | "scopes" | "rules"> & { reason?: string; shadowIds?: string[]; removed?: import("./roleSelection").SelectionRemoval[] };
 export interface MemoryDelivery {
   schemaVersion: 1;
   conversationId: string;
@@ -46,6 +46,9 @@ export interface MemoryDelivery {
   scopes: Selection["scopes"];
   rules: Selection["rules"];
   bytes: number;
+  reason?: string;
+  shadowIds?: string[];
+  removed?: import("./roleSelection").SelectionRemoval[];
   engineMemory: { kind: "claude-index" | "codex-summary"; hash: string; bytes: number; loadedBytes: number }[];
 }
 const hash = (value: Uint8Array) => createHash("sha256").update(value).digest("hex");
@@ -117,6 +120,7 @@ async function engineMemory(start: MemoryEngineStart, clean: boolean) {
 
 const deliveryLedgerIndexes = declaredIndexes([
   `CREATE INDEX IF NOT EXISTS files_hash ON files(hash)`,
+  `CREATE INDEX IF NOT EXISTS deliveries_attempt ON deliveries(json_extract(body,'$.attempt.pipelineId'), json_extract(body,'$.attempt.stageId'), json_extract(body,'$.attempt.attempt'), json_extract(body,'$.conversationId'))`,
 ]);
 
 /** One owner, no module cache: rows, private content-addressed copies and their
@@ -152,7 +156,7 @@ export async function recordMemoryDelivery(start: MemoryEngineStart, clean: bool
             // Select after asynchronous admission; rules and their ordered metadata
             // are captured together, including omissions at the byte ceiling.
             const selection = select();
-            const row: MemoryDelivery = { schemaVersion: 1, conversationId: start.conversationId, ...(start.attempt ? { attempt: start.attempt } : {}), engine: start.engine, at: new Date().toISOString(), scopes: selection?.scopes ?? [], rules: selection?.rules ?? [], bytes: Buffer.byteLength(selection?.block ?? ""), engineMemory: files.map(({ kind, hash, bytes, loadedBytes }) => ({ kind, hash, bytes, loadedBytes })) };
+            const row: MemoryDelivery = { schemaVersion: 1, conversationId: start.conversationId, ...(start.attempt ? { attempt: start.attempt } : {}), engine: start.engine, at: new Date().toISOString(), scopes: selection?.scopes ?? [], rules: selection?.rules ?? [], bytes: Buffer.byteLength(selection?.block ?? ""), ...(selection?.reason ? { reason: selection.reason, shadowIds: selection.shadowIds, removed: selection.removed } : {}), engineMemory: files.map(({ kind, hash, bytes, loadedBytes }) => ({ kind, hash, bytes, loadedBytes })) };
             const body = JSON.stringify(row);
             if (Buffer.byteLength(body) > 256 * 1024) throw Error("memory delivery metadata exceeds ledger limit");
             const sequence = Number(db.query("INSERT INTO deliveries(body) VALUES (?)").run(body).lastInsertRowid);
@@ -189,6 +193,22 @@ export function memoryDeliveries(after = 0, limit = 100): { sequence: number; de
   const db = new Database(filename, { readonly: true });
   try { return db.query<{ sequence: number; body: string }, [number, number]>("SELECT sequence,body FROM deliveries WHERE sequence>? ORDER BY sequence LIMIT ?").all(after, limit).map(row => ({ sequence: row.sequence, delivery: JSON.parse(row.body) as MemoryDelivery })); }
   finally { db.close(); }
+}
+
+/** Answer authority comes from delivered ids, including earlier starts of this
+ * attempt. A currently readable rule or a shadow id grants no authority. */
+export function deliveredRuleIds(attempt: NonNullable<MemoryEngineStart["attempt"]>, conversationId: string): Set<string> {
+  const filename = statePath("role-memory", "delivery.sqlite");
+  if (!fs.existsSync(filename)) return new Set();
+  const Database = sqliteDatabase();
+  const db = new Database(filename, { readonly: true });
+  try {
+    db.exec("PRAGMA busy_timeout=0");
+    const rows = db.query<{ body: string }, [string, string, number, string]>(`SELECT body FROM deliveries
+      WHERE json_extract(body,'$.attempt.pipelineId')=? AND json_extract(body,'$.attempt.stageId')=?
+      AND json_extract(body,'$.attempt.attempt')=? AND json_extract(body,'$.conversationId')=?`).all(attempt.pipelineId, attempt.stageId, attempt.attempt, conversationId);
+    return new Set(rows.flatMap(row => (JSON.parse(row.body) as MemoryDelivery).rules.map(rule => rule.id)));
+  } finally { db.close(); }
 }
 export function engineMemoryVersion(hash: string): Buffer | null {
   if (!/^[a-f0-9]{64}$/.test(hash)) throw Error("invalid engine memory hash");

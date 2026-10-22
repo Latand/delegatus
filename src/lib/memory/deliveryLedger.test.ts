@@ -154,7 +154,7 @@ test("contended delivery yields to the loop and captures rules and native input 
   expect(progressed).toBe(true);
   const row = memoryDeliveries()[1]!.delivery;
   expect(row.engineMemory[0]!.hash).toBe(digest("After admission."));
-  expect(row.rules[0]!.hash).toBe(digest("Check current ownership before replaying stored operation acknowledgements."));
+  expect(row.rules[0]!.hash).toBe(digest("Verify ownership before replaying any persisted acknowledgement."));
   expect(row.bytes).toBe(Buffer.byteLength(block!));
 });
 

@@ -989,6 +989,8 @@ export async function registerViewerRuntime(): Promise<void> {
     assertStartupActive();
     const { sweepOldLearnedRulesFiles } = await import("@/lib/memory/roleLaunch");
     try { sweepOldLearnedRulesFiles(); } catch { console.warn("[role-memory] old launch-file cleanup unavailable"); }
+    const { startRoleSelectionRetention } = await import("@/lib/memory/roleSelectionRetention");
+    startRoleSelectionRetention();
     const authority = await initializeHotStateStoresAtStartup(boundary, { signal: startupAbort.signal });
     const { ensureLegacyCollectionsImported } = await import("@/lib/state/legacyCollections");
     await ensureLegacyCollectionsImported();

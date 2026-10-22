@@ -1,6 +1,7 @@
 # Role memory layers: a larger store in levels, role-wide rules for every role, write-quality checks, and selection under one hard maximum
 
-Status: research and design, no product change. Written 2026-10-22 against
+Status: design with decisions recorded on 2026-10-22; slice 1 implements
+frozen whole-scope delivery and shadow measurement. The research was written against
 `main` at `f5fd6a2c0`; file and line references are to that commit. Revised
 twice the same day after critiques: when the second revision was finished
 `main` stood at `ee990fcfc`, four commits later, and none of them touches a
@@ -393,7 +394,11 @@ reaches them through their prompts (§3.4).
 | C. Every role lesson goes to "every project" by default; the curator demotes | Writers stop choosing between the two role levels | Simplest request | 12 % of last week's role-here writes (7 of 60; half of the seats' writes) are project-specific and would sit in the wrong scope until demoted; the gate would hold most of the scope back from other projects |
 | D. Multi-role scopes (`roles:<a>+<b>`) | A scope read by a set of roles | Collapses 74 copy rows to 32 | Answers which roles read a rule, a question this requirement does not ask; deferred |
 
-### 2.3 Recommendation: option B
+### 2.3 Earlier recommendation: option B (superseded)
+
+Decision 1 in §7.3 retains curator-only role-wide writes. The agent-write
+proposal below records the evaluated alternative; its visibility machinery,
+project vocabulary and agent writes are excluded from implementation.
 
 **The level.** `leave_lesson`'s `lesson.scope` gains `"every-project"`,
 stored under `role:*:<role>` for the writer's role or the named `role`. The
@@ -665,9 +670,12 @@ lines, one and a half times the nominal pool; a larger pool takes the `bm25`
 row of §5.1 with the reason `jev-pool`, which caps Jev's spend per launch at
 about $0.0026 (the pilot's median $0.00059 per case at a 27 285-point pool,
 scaled by pool size, brief repeats included). The delivered block stays under
-the same 20 000-byte maximum whatever the pool holds.
+the same 24 000-byte maximum whatever the pool holds.
 
 ### 4.3 The start budget and one hard maximum
+
+These delivery bounds begin in slice 4. Slice 1 retains current whole-scope
+delivery and its existing 120 000-byte argument guard.
 
 - **Always-on**: the role's principles, the machine's principles and rules
   the operator kept, walked in curator rank order and added while their
@@ -675,11 +683,11 @@ the same 20 000-byte maximum whatever the pool holds.
   candidate for selection.
 - **Selected**: practices and specifics chosen per launch (§5), filling up
   to 9 000 code points.
-- **One hard maximum per launch: 20 000 bytes** of rendered block for every
+- **One hard maximum per launch: 24 000 bytes** of rendered block for every
   role and engine, enforced in `renderLearnedRulesSelection` on every path:
   selected, fallback, seats, maintainers. The 120 000-byte argument limit
-  stays beneath it as a safety net. 20 000 bytes covers the seat's p90 start
-  today (17 996) and sits below a builder's median (22 851).
+  remains an outer safety net. The selected-delivery maximum covers the seat's
+  p90 start today (17 996) and the builder's median (22 851).
 - **The always-on set is reserved first.** The renderer receives the
   always-on ids as protected, and no pack or cut on any path removes one
   (§5.1). They always fit: 3 000 code points of rule lines are at most
@@ -689,7 +697,7 @@ the same 20 000-byte maximum whatever the pool holds.
   pointer (759 for a builder, 771 for the longest stage role title). In a probe of this commit's renderer, an always-on set at its
   3 000-point cap written in four-byte characters rendered to at most 11 534
   bytes for a builder, a seat, a maintainer and a visual critic, so at least
-  8 466 bytes are left for other rules under the maximum.
+  12 466 bytes are left for other rules under the revised maximum.
 - **What each number counts.** A budget in code points (the store targets,
   always-on, selected) counts the rule lines exactly as the renderer writes
   them, `- [<id>] <rule>` (`ruleLine`, `src/lib/memory/roleConsolidate.ts:19-21`),
@@ -720,7 +728,7 @@ median (§1.7).
 | Block | Claude Opus 5.5 per stage (5-min / 1-hour write) | Codex standard per stage | Codex Fast per stage |
 | --- | --- | ---: | ---: |
 | Builder today, about 22.9 KB | $0.107 / $0.125 | $0.061 | $0.122 |
-| Hard maximum, 20 000 bytes | $0.094 / $0.109 | $0.054 | $0.107 |
+| Hard maximum, 24 000 bytes | $0.113 / $0.131 | $0.064 | $0.128 |
 | Selected start at its ceilings, about 12 750 bytes | $0.060 / $0.070 | $0.034 | $0.068 |
 
 At last week's builder volume (about 991 Codex and 317 Claude stage
@@ -734,8 +742,8 @@ a half times larger. Those pool figures hold under the conditions of §4.2; a
 pool over 120 000 code points skips Jev, so no launch spends more than about
 $0.0026 on it. The block figures in the table hold for any pool.
 
-- **Context.** 20 000 bytes is about 5 000 tokens: 0.5 % of Claude's 1M
-  window and under 2 % of the 272 000 tokens past which OpenAI prices a
+- **Context.** 24 000 bytes is about 6 000 tokens: 0.6 % of Claude's 1M
+  window and under 3 % of the 272 000 tokens past which OpenAI prices a
   prompt higher.
 - **Cache.** The block sits in Claude's appended system prompt and Codex's
   developer instructions, both inside the cached prefix, so a smaller block
@@ -775,14 +783,14 @@ every row of the table uses:
 - **Pack**: walk an ordered list once; add a rule when the selected lines,
   measured as in §4.3, stay within 9 000 code points and the block rendered
   with the always-on set, the rules already added and this one stays within
-  20 000 bytes; skip a rule that fails either test and keep walking. One
+  24 000 bytes; skip a rule that fails either test and keep walking. One
   order gives one result, and no cut follows a pack.
 - **Render**: always-on and chosen rules grouped by scope in curator rank
   order, so scores decide membership and never the text's order, through
-  `renderLearnedRulesSelection` with a 20 000-byte ceiling and the always-on
+  `renderLearnedRulesSelection` with a 24 000-byte ceiling and the always-on
   ids protected.
 - **Cut**: only the rows that pack nothing (`whole`, `no-brief`,
-  `selector-error`) can render more than 20 000 bytes before the cut. Today's
+  `selector-error`) can render more than 24 000 bytes before the cut. Today's
   cut pops the last rule of the scope with the most bytes, whatever it is
   (`src/lib/memory/roleRender.ts:40-47`); that removes always-on principles
   once rule text takes two or more bytes per code point (probe below), and
@@ -794,13 +802,14 @@ every row of the table uses:
   oldest first. Up to its last step that is the store's own leaving order
   (`leavingOrder` and `retainRules`, `roleConsolidate.ts:51-73`), so the
   newest lesson is the last line any cut removes. The cut always ends at or
-  below 20 000 bytes, because the protected set alone fits (§4.3).
+  below 24 000 bytes, because the protected set alone fits (§4.3).
 
 **Probe of the cut and the pack.** A scratch export of this commit,
 synthetic rules with distinct texts and 18-character ids: thirteen 200-point
 principles in the machine scope (2 911 code points, inside the always-on
 cap) and nine curated 300-point practices in each other scope (8 747 code
-points as one list). Today's cut at 20 000 bytes keeps all 40 rules in
+points as one list). This historical probe used the originally proposed
+20 000-byte maximum. Today's cut at 20 000 bytes keeps all 40 rules in
 one-byte text (12 377 bytes) and drops 1, 5 and 6 principles in two-, three-
 and four-byte text (the critique's own mix of texts dropped two). With the
 pack and the cut above, on those cases and on a second set whose reader
@@ -811,7 +820,7 @@ principles stayed in all 48 cases, no block exceeded 19 871 bytes, and every
 
 | Case | What is packed, in which order | Reason on the ledger row |
 | --- | --- | --- |
-| Mode `whole` | No selector runs and no 9 000 budget applies: every candidate and the always-on set in curator rank order; the cut above brings the block within 20 000 bytes | `whole` |
+| Mode `whole` | No selector runs and no 9 000 budget applies: every candidate and the always-on set in curator rank order; the cut above brings the block within 24 000 bytes | `whole` |
 | No brief (seats, maintainers), any mode | As `whole` | `no-brief` |
 | Mode `bm25` | Candidates by BM25 score of brief against rule, highest first; equal scores, including every rule that scores 0, in curator rank order, then by id. No threshold: BM25 scores are not probabilities, so the pack fills toward 9 000 | `bm25` |
 | Mode `bm25`, no candidate shares a term with the brief | The same row, whose order is then curator rank order | `bm25-no-match` |
@@ -823,7 +832,7 @@ principles stayed in all 48 cases, no block exceeded 19 871 bytes, and every
 Rollback is the first row: switching the setting to `whole` stops both
 selectors for every attempt that has not yet frozen its block, and attempts
 already frozen finish on the block they started with. Every row ends in the
-same render under the same 20 000 bytes with the always-on set whole, and
+same render under the same 24 000 bytes with the always-on set whole, and
 none blocks a launch. The
 reason is on the start's ledger row and in a status line the Memory page
 shows.
@@ -848,7 +857,8 @@ written without tuning to labels), reframed for a stage launch:
 
 This sends rule text and stage briefs to OpenRouter and the Jev provider, a
 flow that does not exist today for learned rules (the asks classifier already
-sends agent messages there). It needs the operator's yes (decision 2).
+sends agent messages there). Shadow measurement is authorized by decision 2 (§7.3); selected delivery
+remains gated on the second pilot.
 
 ### 5.3 The cheaper selector
 
@@ -877,7 +887,7 @@ content.
 
 - **What is frozen.** The whole learned-rules block of the attempt's first
   engine start, whichever row of §5.1 produced it (always-on, selected,
-  `whole`, a fallback): the rendered string, at most 20 000 bytes from
+  `whole`, a fallback): the rendered string, at most 24 000 bytes from
   slice 4 on (before it, today's whole block; the largest delivered to `T`
   was 25 004 bytes with 96 rules), and its
   ordered entries, each a scope, a rule id and a hash, the SHA-256 of the
@@ -893,7 +903,8 @@ content.
   version; the reason; the reader's four scope keys, once; `block`, the
   rendered string; `entries`, one `[scope index, id, hash]` per rule in the
   block, in block order; `scores`, one `[id, score]` per selected rule only,
-  three decimals, none in `whole`; during the shadow week `shadowIds`, the
+  three decimals, none without a selection; in shadow these scores belong
+  only to candidates chosen in shadow. During the shadow week `shadowIds`, the
   ids the selector would have delivered, which the first start's ledger row
   also carries for the recall of §5.6; and `removed`, the operator deletions
   below.
@@ -941,7 +952,8 @@ content.
   shadow id 21; the block costs its UTF-8 bytes plus two quotes, one byte
   per line break and one per quote or backslash; the remaining fields come
   to about 460 bytes. From slice 4 on, the design
-  bounds each part of a row: the block (20 000 bytes of UTF-8), the entries
+  bounds each part of a row: the block (24 000 bytes of UTF-8; the
+  historical size table above used the original 20 000-byte proposal), the entries
   (one per rule in the block) and the scores and shadow ids (one per
   selected rule, within the 9 000 points of the pack), so the last row is the
   largest a block can produce under today's lesson limits (rules of at least
@@ -1120,7 +1132,7 @@ agreement reported as Cohen's kappa. Accept the shipped policy when all hold:
    least 75 %;
 2. judged relevance of selected (non-always-on) rules at least 60 %, and of a
    random excluded sample at most 10 %;
-3. no selected part above 9 000 code points and no block above 20 000
+3. no selected part above 9 000 code points and no block above 24 000
    bytes, both measured as §4.3 defines them;
 4. Jev is the primary selector only when it beats BM25 at equal budget on
    criterion 1 or 2 by at least 10 points with the paired interval above
@@ -1145,6 +1157,11 @@ for every attempt not yet frozen, and the shadow continues.
 
 ## 6. Write-quality checks
 
+Decision 7 (§7.3) drops the proposed correction trace, judge passes and
+automated quality loop below. Only applied/misled measurement proceeds in
+slice 1; the operator reviews rule quality visually. The table retains the
+earlier options for the decision record.
+
 | Check | How | Metric and target | Cost |
 | --- | --- | --- | --- |
 | Operator correction → rule | When the seat writes a rule from an operator correction, `leave_lesson` carries `fromOperatorAt`: the time of the operator message in the seat's own conversation. The server checks that a member-authored message exists there at that time and keeps the link local. The rules window marks the rule "from your correction" and opens the message | Share of seat rules with a verified link; on a weekly sample of 20 operator messages judged "is this a correction of how work is done?", share followed in the same turn by a rule or a task: target 80 % | One optional field; one clean judge pass of 20 messages a week |
@@ -1164,17 +1181,14 @@ sample and report, and the operator decides.
 
 ### 7.1 Migration from the current store
 
-- **No row is rewritten at deploy.** `approved`, `writtenBy`, `layer`,
-  `parent`, `applied` counters and the `fromOperatorAt` link are optional
-  fields on existing rule and request rows; `role_memory` keeps schema
-  version 1 and its three row kinds, and its decoder checks only a row's kind
-  and key fields (`roleStore.ts:61-67`), so agents' MCP servers started on an
-  older release still decode every row. Such a server writes a rewrite
-  without setting `writtenBy`; both fields it spreads then name the old text,
-  so the new text reads for no project until the next pass approves it,
-  which errs on the side of withholding.
-- **New records live apart**: selections in `role_memory_selection`; the
-  project vocabulary is derived, cached and disposable.
+- **No row is rewritten at deploy.** `applied` and `misled` are optional
+  fields on request rows. Future `layer` and `parent` fields arrive in slice
+  3. `role_memory` retains schema version 1 and its three row kinds, so older
+  readers can still decode the store. The agent-write visibility fields,
+  correction link and project-vocabulary cache are dropped.
+- **New records live apart:** frozen selections in `role_memory_selection`;
+  the independent monthly feature reservation in
+  `role_memory_selection_spend`. Neither adds a row kind to `role_memory`.
 - **Existing rules get layers** in one curator pass with the Layer check: each
   of the 437 active rules gets a layer and, where clear, a parent. Until a
   rule has a layer it is treated as a practice (selectable, never always-on).
@@ -1184,13 +1198,13 @@ sample and report, and the operator decides.
 - **Order matters.** Raising the store bounds before selected delivery would
   raise builder starts from about 23 KB toward 60 KB. Bounds rise after
   selection is live or together with it.
-- **Rollback.** Setting `memory.delivery` to `whole` returns today's
-  whole-scope delivery under the hard maximum with no selector running
-  (§5.1); attempts that already froze a block finish on it. A release from
-  before slice 2 ignores the new fields and renders every active role-wide
-  rule to every project, unapproved lessons and unapproved rewrites
-  included, so a rollback past slice 2 is preceded by a curator pass over the
-  role-wide scopes.
+- **Rollback.** Selected delivery's `memory.delivery = whole` returns
+  whole-scope delivery under the hard maximum; already frozen attempts keep
+  their block. Slice 1's independent shadow switch is
+  `LLV_ROLE_MEMORY_SHADOW=off`: it stops both shadow selectors and retains
+  frozen delivery. A binary predating slice 1 ignores the selection
+  collection and cannot preserve a frozen block across starts. Role-wide
+  writes remain curator-only throughout.
 
 ### 7.2 Slices, in order
 
@@ -1201,7 +1215,7 @@ sample and report, and the operator decides.
    `src/lib/memory/roleStage.ts`, `roleRender.ts`, `roleStore.ts`,
    `roleTypes.ts`, `roleLaunch.ts`, a new `src/lib/memory/roleSelect.ts`,
    `src/lib/mcp/server.ts`. Tests on isolated state: answer fields validated
-   against readable ids; a resume, a boot adoption and an account migration
+   against ids the attempt actually received; a resume, a boot adoption and an account migration
    after an agent rewrite, a curator move and a budget archive deliver the
    first start's block byte for byte; an operator deletion between starts
    removes exactly that rule's line and records it on the selection row and
@@ -1210,47 +1224,36 @@ sample and report, and the operator decides.
    the deadline; a stored row carries exactly the fields of §5.4, scores only
    for selected rules, and the first start's ledger row carries the shadow
    ids.
-2. **Role-wide writes.** The `every-project` level, the request text of
-   §2.3, the project-term hint, the visibility gate in
-   `learnedRulesSnapshot` and in the rewrite path, `approved` and `writtenBy`
-   written by every path of the §2.3 table, the curator's demotion sentence.
-   Tests: a new role-wide lesson renders for its project at once and for
-   another only after a pass approves it; a curated rule rewritten by an
-   agent from project Q renders for Q at once and for P only after a pass
-   approves the new text; Return and Revert make the text they put in force
-   travel at once; a rule written in P and rewritten unapproved from Q, then
-   approved by a pass that only ranks it, and in a second case by a pass that
-   also edits it, then undone, renders for Q and for neither P nor a third
-   project R, and stays unapproved; a duplicate lesson from R merged into
-   Q's unapproved text renders for R and Q at once and for P only after
-   approval; an agent of P cannot rewrite Q's unapproved text; a row written
-   before the change, rewritten from Q, then ranked by a pass that is
-   undone, derives Q, and one whose writer cannot be derived renders for no
-   project until approved; the hint fires on a repository-only term and not
-   on a term two projects share; seats write the level.
+2. **Role-wide scope stays curator-only.** Agent writes to `role:*:<role>`
+   and slice 2's agent-write visibility machinery are dropped. Agents keep
+   leaving role lessons in their project's scope; the curator alone widens
+   them after checking their fit across projects. Existing scope and write
+   behavior stays in force.
 3. **Layers.** `layer` and `parent`, the Layer check in the curator brief and
    in `apply`, principles rendered first. Tests: the server refuses a parent
    outside the reader's scopes and a principle over 200 code points; a child
    renders under its delivered parent and alone otherwise.
 4. **Selected delivery.** The `bm25` and `jev` modes of §5.1, always-on up
-   to 3 000 and selected up to 9 000 code points, the 20 000-byte hard
+   to 3 000 and selected up to 9 000 code points, the 24 000-byte hard
    maximum on every path, the fix-round nearest-rules list; gated on the
    offline and shadow acceptance of §5.6. Tests: each row of the §5.1 table
    gives its one output and reason; equal scores pack in curator rank order,
    then by id; a partial Jev answer packs exactly as `bm25`; zero BM25
    matches pack in curator rank order; `whole` calls no selector; no row
-   exceeds 9 000 code points of selected lines or 20 000 bytes of block; in
+   exceeds 9 000 code points of selected lines or 24 000 bytes of block; in
    rule text of one to four bytes per code point, for a builder, a seat and
    a maintainer, every member of the always-on set at its cap survives every
    row of §5.1 and the frozen re-render; a reader scope holding unseen
    lessons beyond its target is cut in the order of §5.1, curated rules
-   first and the newest lesson last, and stays within 20 000 bytes; a pool
+   first and the newest lesson last, and stays within 24 000 bytes; a pool
    over 120 000 code points calls no Jev and records `jev-pool`.
 5. **Larger store.** The targets of §4.2; budget archives returned through
    the curator; the brief's 16 000-byte four-scope target replaced by the
    layer guidance.
-6. **Quality loop.** The correction link and its window mark, the weekly
-   and monthly judge passes, disuse ranking in the curator's read.
+6. **Dropped: quality loop.** No correction-trace link, window mark, judge
+   passes or automated quality review. The operator reviews rule quality
+   visually. Slice 1's applied/misled measurement remains.
+
 
 The open lane on memory profiles (PR #3177, still open at this revision)
 changes `src/lib/memory/profileModel.ts`, `src/lib/agent/headless.ts`,
@@ -1259,40 +1262,31 @@ others. None of these slices needs them: `memory.select` registers through
 the existing `withViewerOperation` call. A slice that turns out to touch one
 starts after that lane merges. The runtime host is untouched by every slice.
 
-### 7.3 Decisions for the operator
+### 7.3 Recorded decisions — 2026-10-22
 
-1. **Who may write "role on every project"?**
-   (a) the writing agent, with the visibility gate: each new or rewritten
-   text reaches other projects once the curator approves that text
-   **(recommended)**; (b) the curator only, as today; (c) the writing agent,
-   reaching every project at once.
-2. **Jev for selection: may rule texts and stage briefs go to OpenRouter and
-   the Jev provider?** (a) yes, under its own monthly cap of $5, and only if
-   the second pilot shows Jev beating BM25 by 10 points at equal budget;
-   otherwise BM25 alone **(recommended)**; (b) no, BM25 only, no new data
-   flow; (c) yes, now, without the second pilot.
-3. **The hard maximum per launch.** (a) 20 000 bytes (about 5 000 tokens) for
-   every role, selected text up to 9 000 code points beside 3 000 always-on
-   **(recommended)**; (b) 16 000 bytes, the curator's present target; (c)
-   24 000 bytes, about today's builder start.
-4. **Store targets.** (a) role here 20 000, role on every project 30 000,
-   project and machine 15 000 code points, raised with selected delivery
-   **(recommended)**; (b) keep 10 000 until the shadow week reports; (c)
-   double every scope now, with whole-scope delivery. Like today's 10 000,
-   each is a target that lessons no curator has seen may exceed until the
-   next pass (§4.2).
-5. **Layers.** (a) a layer field and a parent link, principles always-on up
-   to 3 000 code points, the curator decides the layer **(recommended)**; (b)
-   a scope per layer; (c) no layers, selection only.
-6. **The OpenRouter key is at its $3 limit.** The asks classifier and any
-   selection pilot are refused (HTTP 403) until it changes. (a) raise the key's limit,
-   with Delegatus's own caps per feature (asks $1 a month today, selection
-   its own) **(recommended)**; (b) a separate key for memory selection; (c)
-   leave it, and run selection on BM25 alone.
-7. **Tracing your corrections to rules.** (a) the seat links each rule it
-   writes from a correction to your message, the window marks it, and a
-   weekly blind check reads the pairs **(recommended)**; (b) the weekly blind
-   check only; (c) neither.
+These decisions supersede the options proposed earlier in this document.
+Historical measurements and probes above retain their original budgets.
+
+1. **Role on every project stays curator-only.** Slice 2's agent writes
+   are dropped; agents continue writing role lessons in the project scope.
+2. **Jev selection is conditional.** Rule texts and redacted stage briefs
+   may be sent for shadow measurement under an independent $5/month feature
+   cap. Selected delivery uses Jev only if the second pilot beats BM25 by
+   10 percentage points at equal budget; otherwise it uses BM25.
+3. **One hard maximum: 24 000 bytes per launch**, introduced with selected
+   delivery in slice 4. Slice 1 keeps today's whole-scope delivery unchanged.
+4. **Store targets:** role here 20 000, role on every project 30 000,
+   project and machine 15 000 code points. Raise them together with selected
+   delivery, in slice 5; unseen lessons retain today's target semantics.
+5. **Layers:** a layer field and parent link; principles always-on up to
+   3 000 code points; the curator decides the layer. Deferred to slice 3.
+6. **Provider and feature budgets:** the operator raises the OpenRouter key
+   limit. Delegatus retains independent per-feature caps: memory selection
+   $5/month, separate from the asks classifier's cap. A missing key,
+   unavailable provider limit or exhausted budget falls back to BM25.
+7. **Quality review is visual and operator-owned.** The correction-trace
+   link and judge passes are dropped, along with slice 6. Applied/misled
+   measurement in slice 1 remains authorized.
 
 ## Deferred — not currently justified
 
@@ -1339,7 +1333,7 @@ starts after that lane merges. The runtime host is untouched by every slice.
 | Check that agents write what the operator means and what is useful | Correction-to-rule links and faithfulness checks, use counts, blind level and precision samples, curator calibration (§6) |
 | 10 000 per kind is too small | Evidence that the store bound is the binding limit (§1.4) and new bounds (§4.2) |
 | Combine with Jev and measure how well it picks | Grounded stage request (§5.2), pilot with spend, numbers, exact sizes and a ledger check of its labels (§5.5), one delivery policy (§5.1), acceptance thresholds (§5.6) |
-| Relax per-scope limits, keep an overall maximum | Larger store, one hard maximum of 20 000 bytes per launch on every path (§4.3) |
+| Relax per-scope limits, keep an overall maximum | Larger store, one hard maximum of 24 000 bytes per launch on every path (§4.3) |
 | Jev saves injected volume | 106 rules → 13 at 0.5 or 32 at 0.3 in the pilot; API-equivalent cost per start roughly halves (§4.4, §5.5) |
 | Earlier rules: clean reviewers, nothing deleted for disuse, lessons active at once | §2.1, §6 "Disuse", §2.3 visibility gate (active at once for the writing project) |
 
