@@ -55,9 +55,10 @@ explicit fault tests with separate state roots from the failed restart case.
 
 An earlier repair in `src/lib/mcp/bindings.test.ts` already recognizes
 structured state-write diagnostics from successful children. The restart
-tests here require the narrower `stateWait.outcome: success` and continue to
-reject every unsuccessful exit, refusal, malformed record and unexpected
-stderr line.
+tests here accept successful state-write diagnostics, plus async `waiting`
+records followed by success with the same process, call site, subject and
+operation id. They reject unmatched waits, every unsuccessful exit, refusal,
+malformed record and unexpected stderr line.
 
 ## Regression coverage
 
