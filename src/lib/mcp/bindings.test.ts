@@ -212,6 +212,15 @@ test("spawn_agent reaches spawn validation through the operator admission lane",
   expect(fs.readFileSync(path.join(sandbox, "operator-spawn-capability"), "utf8").trim()).toMatch(/^[A-Za-z0-9_-]{43}$/);
 });
 
+test("spawn_agent returns the effective cap and budget clamp from its launch receipt", async () => {
+  const cap = { limitBytes: 8 * 2 ** 30, requestedBytes: 12 * 2 ** 30, source: "stage", clamped: true, enforced: true,
+    note: "Requested memory cap clamped to the shared machine budget." };
+  const binding = viewerMcpBindings(undefined, { post: async () => ({ ok: true, memoryCap: cap,
+    conversationId: "conversation_memory", launchId: "launch_memory", path: null, state: "path-pending", initialMessage: "queued", transport: "structured" }) }).spawn_agent;
+  const answer = await binding({ clientRequestId: "memory-launch-answer", engine: "codex", cwd: process.cwd(), prompt: "Build the task" });
+  expect(answer.memoryCap).toEqual(cap);
+});
+
 test("spawn_agent rejects an explicit model outside the engine catalog before control-plane admission", async () => {
   const requests: Record<string, unknown>[] = [];
   const spawnAgent = viewerMcpBindings(undefined, {

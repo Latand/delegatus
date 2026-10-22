@@ -1,3 +1,4 @@
+import { previewAgentMemoryCap } from "@/lib/runtime/agentMemorySettings";
 import { FLOW_ARCHIVE, FLOW_RETIREMENT, STAGE_RETIREMENT, FlowRetiredError } from "@/lib/flows/retirement";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { curationAnswer } from "@/lib/memory/curation/answer";
@@ -1775,6 +1776,7 @@ async function spawnAgent(args: McpToolArgs, control: ViewerControlDependencies,
     launchId: result.launchId,
     state: result.state,
     initialMessage: result.initialMessage,
+    ...(result.memoryCap ? { memoryCap: result.memoryCap } : {}),
     ...(typeof result.runtime === "string" ? { runtime: result.runtime } : {}),
     /* Whether a brief still needs its own "report back" line. Only a
        structured launch ends its turns where a notice is owed from, so a tmux
@@ -2321,6 +2323,14 @@ function deliveryAcknowledgement(pipeline: import("@/lib/pipelines/types").Pipel
     ...(delivery.disposition === "comparison" ? { conflict: `Target owned by ${delivery.ownerId} at epoch ${delivery.epoch}; comparison lane created with Viewer publication disabled` } : {}) };
 }
 
+function pipelineMemoryCaps(pipeline: Pipeline) {
+  const liveAgents = agentRegistry().liveStructuredHostCount() + 1;
+  return pipeline.stages.map(stage => ({ stageId: stage.id, preview: true,
+    ...previewAgentMemoryCap({ cwd: pipeline.worktreeDir ?? pipeline.repoDir, project: pipeline.project,
+      role: stage.effectiveRole.roleId ?? "builder", profile: { agentMemoryMaxBytes: stage.agentMemoryMaxBytes,
+        agentMemoryRoleParams: stage.role?.params } }, liveAgents) }));
+}
+
 const PIPELINE_CREATION_QUEUED_NOTE = "Pipeline state is not writable right now (a Viewer deployment is handing over, or the store is busy), so this pipeline is queued under the pipelineId above. The serving release stores and starts it on its next controller pass; get_pipeline answers once it is stored. Do not create it again.";
 
 function assertPipelineSeatAuthority(dependencies: ViewerMcpDomainDependencies, src?: unknown): void {
@@ -2417,6 +2427,7 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, d
   if (result.queued) {
     return redactPayload({
       ...pipelineAcknowledgement(result.pipeline),
+      memoryCaps: pipelineMemoryCaps(result.pipeline),
       ...(result.repositoryInitialization ? { repositoryInitialization: result.repositoryInitialization } : {}),
       queued: true,
       queuedBecause: result.queued.reason,
@@ -2430,6 +2441,7 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, d
      had just sent them — a median 10 KB per create. get_pipeline reads it. */
   return redactPayload({
     ...pipelineAcknowledgement(result.pipeline),
+    memoryCaps: pipelineMemoryCaps(result.pipeline),
     ...(result.repositoryInitialization ? { repositoryInitialization: result.repositoryInitialization } : {}),
     ...(result.pipeline.delivery ? { delivery: deliveryAcknowledgement(result.pipeline) } : {}),
     ...(result.warnings?.length ? { warnings: result.warnings } : {}),
@@ -7932,6 +7944,7 @@ async function recoverSpawn(
       facts: {
         state: receipt.state,
         launched: receipt.state === "completed",
+        ...(receipt.memoryCap ? { memoryCap: receipt.memoryCap } : {}),
         ...(receipt.rejection ? { rejection: receipt.rejection.code } : {}),
       },
       ...(ownership ? { ownership } : {}),
@@ -7944,7 +7957,7 @@ async function recoverSpawn(
     evidence: "spawn-receipt",
     reason: `launch receipt is ${receipt.state}`,
     ids,
-    facts: { state: receipt.state },
+    facts: { state: receipt.state, ...(receipt.memoryCap ? { memoryCap: receipt.memoryCap } : {}) },
     ...(ownership ? { ownership } : {}),
   };
 }
@@ -7987,7 +8000,7 @@ export function viewerMcpRecoverableTools(
         const pipeline = pipelineDeliveryLookup({ requestKey: binding.downstreamKey });
         if (!pipeline) return { outcome: "unknown", evidence: "pipeline-row", reason: RECOVERY_ABSENT_REASON, ids: {} };
         return { outcome: "settled", evidence: "pipeline-row", reason: null,
-          ids: { pipelineId: pipeline.id }, facts: { ...pipelineAcknowledgement(pipeline), delivery: deliveryAcknowledgement(pipeline) } };
+          ids: { pipelineId: pipeline.id }, facts: { ...pipelineAcknowledgement(pipeline), memoryCaps: pipelineMemoryCaps(pipeline), delivery: deliveryAcknowledgement(pipeline) } };
       },
     },
     spawn_agent: {

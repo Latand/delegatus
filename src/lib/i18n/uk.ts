@@ -4,6 +4,10 @@ import type { en } from "./en";
 /* Ukrainian mirror of en.ts. The `Record<keyof typeof en, …>` annotation fails
    the build if a key is missing or extra, keeping both locales in lockstep. */
 export const uk: Record<keyof typeof en, Message> = {
+  "agentMemory.cap": "Ліміт пам’яті: {size} GiB.",
+  "agentMemory.clamped": "Запитано {size} GiB; обмежено спільним бюджетом пам’яті.",
+  "agentMemory.unenforced": "Ліміт пам’яті: ізоляцію вимкнено або вона недоступна.",
+
   "workers.title": "Ліміт воркерів",
   "workers.face": "воркери {running} / {limit}",
   "workers.phoneFace": "Воркери {running} / {limit}",
