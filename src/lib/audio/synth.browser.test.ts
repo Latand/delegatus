@@ -26,7 +26,7 @@ const LAUNCH = { headless: true, args: ["--no-sandbox", "--autoplay-policy=no-us
 const PALETTE_2_TABLE: Record<EventSoundId, Loudness> = {
   "your-move": { momentaryMax: -22.0, peakDb: -11.6 },
   fault: { momentaryMax: -24.0, peakDb: -14.4 },
-  released: { momentaryMax: -26.0, peakDb: -17.5 },
+  released: { momentaryMax: -26.0, peakDb: -16.3 },
   landed: { momentaryMax: -26.0, peakDb: -17.6 },
   reply: { momentaryMax: -28.0, peakDb: -17.8 },
   launched: { momentaryMax: -31.0, peakDb: -17.3 },
@@ -73,19 +73,6 @@ const db = (linear: number) => 20 * Math.log10(linear);
  */
 const DESIGN_DELAY = 0.15;
 
-/**
- * The one table value the engine does not reproduce within 1 dB, and why.
- * Until an oscillator's first frequency event applies, Chrome plays its 440 Hz
- * default for the frames before it within the 128-frame render block, so the
- * prototype's strikes opened with a start-dependent phase; the engine sets the
- * starting pitch as the static value too, and every sound now renders the
- * same at any start (asserted below). S5's peak in the design's renders was a
- * low draw of that phase: rendered by the prototype at starts where no leak
- * occurs (0.2 s, 1 s) it peaks at −16.2 dBFS, as the engine does. Its loudness
- * is unchanged, so the level the design sets holds.
- */
-const PEAK_WITHOUT_THE_LEAK: Partial<Record<EventSoundId, number>> = { released: -16.3 };
-
 describe("the synthesis engine, rendered in Chromium", () => {
   beforeAll(async () => {
     if (enabled) page = await engineOnPage();
@@ -114,14 +101,10 @@ describe("the synthesis engine, rendered in Chromium", () => {
     console.log(JSON.stringify(rows));
     for (const row of rows) {
       expect({ id: row.id, lufsWithin1dB: Math.abs(row.lufs - row.designLufs) <= 1 }).toEqual({ id: row.id, lufsWithin1dB: true });
-      const peakTarget = PEAK_WITHOUT_THE_LEAK[row.id] ?? row.designPeak;
-      expect({ id: row.id, peakWithin1dB: Math.abs(row.peak - peakTarget) <= 1 }).toEqual({ id: row.id, peakWithin1dB: true });
+      expect({ id: row.id, peakWithin1dB: Math.abs(row.peak - row.designPeak) <= 1 }).toEqual({ id: row.id, peakWithin1dB: true });
       /* The limiter is there for overlaps only: no single sound reaches it. */
       expect(row.peak).toBeLessThan(-10);
     }
-    /* The exception stays the one value it is: S5's peak is off the table by
-       the leak alone, by less than 1.25 dB. */
-    expect(Math.abs(measured.released!.peakDb - PALETTE_2_TABLE.released.peakDb)).toBeLessThan(1.25);
   });
 
   browserTest("the stored gains are what the engine measures, in both palettes", async () => {

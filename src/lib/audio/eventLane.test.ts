@@ -200,6 +200,13 @@ describe("a landing supersedes its lane's last step", () => {
     expect(plays.map((p) => p.sound)).toEqual(["landed"]);
   });
 
+  test("a landing arriving after its step's window has closed does not recall the step", () => {
+    /* The lane is causal: the step left the gate at 2 s and played, so the
+       landing 5 s after the request plays too, behind the landing's own window. */
+    const plays = harness().run([[0, "step", { pipeline: "p" }], [5, "landed", { pipeline: "p" }]]);
+    expect(plays.map((p) => [p.sound, p.at])).toEqual([["step", 2], ["landed", 10]]);
+  });
+
   test("another lane's step still sounds", () => {
     const plays = harness().run([[0, "step", { pipeline: "q" }], [1, "landed", { pipeline: "p" }]]);
     expect(plays.map((p) => p.sound)).toEqual(["step", "landed"]);
