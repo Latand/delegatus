@@ -138,8 +138,9 @@ function capturingRegistry(): { profiles: Record<string, unknown>[]; displays: u
     spawnReceiptForClientAttempt: () => null,
     beginSpawnRequest,
     beginSpawnRequestAsync: async (request: Parameters<typeof beginSpawnRequest>[0]) => beginSpawnRequest(request),
-    failSpawn: () => undefined,
-    failStructuredSpawn: () => undefined,
+    deliveryWriteBatchOrBusy: async <T>(_correlation: unknown, write: () => T): Promise<T> => write(),
+    failSpawnOffLoop: async () => undefined,
+    failStructuredSpawnOffLoop: async () => undefined,
     readOnlySnapshot: () => ({ receipts: {} }),
   };
   return { profiles, displays, requests, registry };
@@ -185,6 +186,8 @@ test("the report class decides the whole capability surface admission reserves",
     ["prompt"]: `${REPORT_TITLE}\n\nThe operator's own brief.`,
   };
   const response = await executeSpawnRequest(reportLaunchRequest(body), dependencies);
+  expect(response.status).toBe(200);
+  expect(await response.clone().json()).toMatchObject({ state: "failed", error: "account unavailable" });
   if (captured.profiles.length === 0) throw new Error(`no launch reserved: ${response.status} ${JSON.stringify(await response.json())}`);
   expect(captured.profiles.length).toBe(1);
   const profile = captured.profiles[0] as { mcpServers: string[]; plugins: string[] };
@@ -242,7 +245,8 @@ test("a scheduled report still launches once the install has a team", async () =
       resolveHealthySpawnAccount: async () => { throw new Error("no healthy account"); },
       ...reportSpawnOverrides(() => true),
     } as unknown as typeof productionSpawnCommandDependencies);
-    expect(response.status).not.toBe(401);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ state: "failed", error: "account unavailable" });
     expect(captured.profiles.length).toBe(1);
 
     /* A cookie-less caller without the capability is still anonymous. */
