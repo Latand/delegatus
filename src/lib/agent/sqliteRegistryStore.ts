@@ -3398,6 +3398,19 @@ export class SqliteAgentRegistryStore {
     });
   }
 
+  /** Disjoint ranges use the status index and retain unknown or absent
+      statuses, which the memory planner has always counted as active. */
+  memoryPlanningEntryKeys(): string[] {
+    const status = "json_extract(value_json,'$.status')";
+    const ranges = [`${status}<'dead'`, `${status}>'dead' AND ${status}<'unhosted'`,
+      `${status}>'unhosted'`, `${status} IS ?`];
+    const sql = ranges.map(predicate => `SELECT row_key FROM ${this.recordsSource}
+      WHERE collection='entries' AND ${predicate}`).join(" UNION ALL ");
+    // A bound null retains the archive status-index seek; a literal IS NULL
+    // made SQLite walk the entire cold mapping before testing archive JSON.
+    return this.db.query<{ row_key: string }, [null]>(sql).all(null).map(row => row.row_key);
+  }
+
   /** Called inside the keyed reader's transaction. Preserve collection order
       across the session and artifact fallback without loading other rows. */
   conversationKeysForHost(entryKey: string, artifactPath: string): string[] | undefined {

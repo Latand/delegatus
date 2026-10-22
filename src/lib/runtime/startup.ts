@@ -1996,10 +1996,10 @@ export interface StructuredStartupDependencies {
  * launch's whole wait, and a grant withdrawn inside that wait refuses the
  * start the way it does on every other launch.
  */
-export function startupTelegramGrantCheck(registry: Pick<AgentRegistry, "readOnlySnapshot">, entry: AgentRegistryEntry): (() => void) | undefined {
+export function startupTelegramGrantCheck(registry: Pick<AgentRegistry, "readOnlySnapshot"> & Partial<Pick<AgentRegistry, "startupHostSnapshot">>, entry: AgentRegistryEntry): (() => void) | undefined {
   if (!entry.launchProfile?.mcpServers.includes("telegram")) return undefined;
   return () => {
-    const current = registry.readOnlySnapshot().entries[sessionKeyId(entry.key)];
+    const current = (registry.startupHostSnapshot?.(entry.key) ?? registry.readOnlySnapshot()).entries[sessionKeyId(entry.key)];
     if (!current?.launchProfile?.mcpServers.includes("telegram")) throw new Error(TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH);
   };
 }

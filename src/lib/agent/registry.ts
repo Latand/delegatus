@@ -6162,6 +6162,21 @@ export class AgentRegistry {
     }, { skipColdKeyInitialization: true });
   }
 
+  /** Current resource-planning facts, without decoding retained dead hosts. */
+  structuredHostPlanningFacts(conversationId: ViewerConversationId | null | undefined): {
+    liveAgents: number; memberships: DurableConversationMembership[];
+  } {
+    return this.readKeyed(file => {
+      const keys = this.sqliteStore && (this.sqliteMode === "read" || this.sqliteMode === "sqlite")
+        ? this.sqliteStore.memoryPlanningEntryKeys() : undefined;
+      const entries = keys ? keys.flatMap(key => file.entries[key] ? [file.entries[key]!] : []) : Object.values(file.entries);
+      return {
+        liveAgents: entries.filter(entry => entry.structuredHost && entry.status !== "dead" && entry.status !== "unhosted").length + 1,
+        memberships: conversationId ? clone(file.memberships[resolveConversationAlias(file, conversationId)] ?? []) : [],
+      };
+    }, { skipColdKeyInitialization: true });
+  }
+
   /** Existing reaper hygiene owns these bounded storage-only moves. */
   archiveInactiveRows(limit?: number): number {
     assertStateStartupMutation(path.dirname(this.filename),"agent registry archive");

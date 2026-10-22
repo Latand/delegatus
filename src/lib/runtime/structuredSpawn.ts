@@ -2104,9 +2104,8 @@ export async function claudeStructuredHostOptions(
  * CpuContainmentUnavailable for work that cannot be contained.
  */
 export function structuredHostCell(registry: AgentRegistry, engine: string, sessionKey: string, conversationId: ViewerConversationId | null | undefined): AgentMemoryCell | null {
-  const snapshot = registry.readOnlySnapshot();
-  const liveAgents = Object.values(snapshot.entries).filter((entry) => entry.structuredHost && entry.status !== "dead" && entry.status !== "unhosted").length + 1;
-  const cpu = planAgentCpu(workloadForMemberships(conversationId ? snapshot.memberships[registry.canonicalConversationId(conversationId)] : undefined));
+  const { liveAgents, memberships } = registry.structuredHostPlanningFacts(conversationId);
+  const cpu = planAgentCpu(workloadForMemberships(memberships));
   const plan = planAgentMemory({ engine, sessionKey, liveAgents, cpu });
   return plan ? new AgentMemoryCell(plan) : null;
 }

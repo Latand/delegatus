@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -397,4 +397,48 @@ for (const sqliteMode of ["off", "sqlite"] as const) test(`keyed admission evide
     expect(admission.memberships["conversation_reader_1"]?.[0]?.containerId).toBe("lane-1");
     expect(Object.keys(admission.conversations)).toEqual(Object.keys(registry.readOnlySnapshot().conversations));
   } finally { registry.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("startup resource planning reads current active hosts without expanding retained history", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-resource-selection-"));
+  const initial = seeded(root, 8);
+  const statuses = ["idle", "starting", "live", "handoff", "dead", "unhosted", "future-status", undefined, "live"];
+  for (const [i, entry] of Object.values(initial.entries).entries()) {
+    entry.status = statuses[i] as typeof entry.status;
+    entry.structuredHost = i === 8 ? null : { ...initial.entries["codex:reader-0"]!.structuredHost! };
+  }
+  const filename = path.join(root, "registry.json");
+  fs.writeFileSync(filename, JSON.stringify(initial));
+  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+  const peer = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" });
+  const memory = await import("./agentMemory");
+  const cpu = await import("./cpuPlacement");
+  const counts: number[] = [];
+  const plan = spyOn(memory, "planAgentMemory").mockImplementation(input => { counts.push(input.liveAgents); return null; });
+  const cpuPlan = spyOn(cpu, "planAgentCpu").mockReturnValue(null);
+  const { structuredHostCell } = await import("./structuredSpawn");
+  registry.readOnlySnapshot = () => { throw new Error("resource planning expanded registry history"); };
+  try {
+    expect(structuredHostCell(registry, "codex", "reader-0", "conversation_reader_0")).toBeNull();
+    peer.upsert({ ...initial.entries["codex:reader-1"]!, status: "dead" });
+    expect(structuredHostCell(registry, "codex", "reader-0", "conversation_reader_0")).toBeNull();
+    expect(counts).toEqual([7, 6]);
+  } finally { plan.mockRestore(); cpuPlan.mockRestore(); peer.close(); registry.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("startup connector admission rereads only its keyed host and still refuses a withdrawn grant", async () => {
+  const { startupTelegramGrantCheck } = await import("./startup");
+  const entry = { key: { engine: "codex", sessionId: "grant-reader" }, launchProfile: { mcpServers: ["viewer", "telegram"] } } as unknown as RegistryFile["entries"][string];
+  const file = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
+  file.entries["codex:grant-reader"] = entry;
+  const registry = {
+    readOnlySnapshot: () => { throw new Error("connector admission expanded registry history"); },
+    startupHostSnapshot: () => file,
+  } as unknown as AgentRegistry;
+  const check = startupTelegramGrantCheck(registry, entry)!;
+  check();
+  file.entries["codex:grant-reader"] = { ...entry, launchProfile: { ...entry.launchProfile!, mcpServers: ["viewer"] } };
+  const { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH } = await import("./telegramConnectorEnv");
+  expect(check).toThrow(TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH);
 });
