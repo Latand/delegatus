@@ -83,8 +83,8 @@ test("a test run through the preload leaves nothing in the temp dir it started w
   const report = path.join(directory, "made.json");
   const before = fs.readdirSync(temp);
 
-  /* No LLV_* from this process: a lane's environment carries its host stamp
-     and state directory, and the child must build its own. */
+  /* The child builds its own state and host bindings. Its signal-domain
+     capability still lets the gate admit a runner from this PID namespace. */
   const result = spawnSync(process.execPath, ["test", "--preload", path.join(repoRoot, "test-preload.ts"), "./leak.test.ts"], {
     cwd: directory,
     env: {
@@ -92,6 +92,8 @@ test("a test run through the preload leaves nothing in the temp dir it started w
       // The nested test runner still enters its own kernel-owned service.
       XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR,
       DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS,
+      LLV_SIGNAL_SANDBOX: process.env.LLV_SIGNAL_SANDBOX,
+      LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1",
       TMPDIR: temp, LEAK_REPORT: report,
     },
     encoding: "utf8",
