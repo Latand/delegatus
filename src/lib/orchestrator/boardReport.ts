@@ -43,7 +43,9 @@ export interface ReportLane {
   stageId: string | null;
   attempt: number | null;
   attemptStartedAt: string | null;
-  /** The newest attempt failed while the lane is open. */
+  /** Current launch wait, including attempts that have never started. */
+  wait?: string | null;
+  /** The current stage's latest own attempt failed while the lane is open. */
   failure: { stageId: string; reason: string } | null;
   /** First line of what a lane parked on a decision asks. */
   question: string | null;
@@ -439,7 +441,10 @@ export function composeBoardReport(facts: BoardReportFacts): BoardReport {
     const at = lane.stageId ? ` at ${lane.stageId}` : "";
     const paused = lane.state === "paused" ? ", paused" : "";
     const attempt = lane.attempt !== null ? `, attempt ${lane.attempt}` : "";
-    running.push(row(`lane ${lane.id} ${title(lane.title)}${at}${paused}${attempt}, ${age(now - Date.parse(lane.attemptStartedAt ?? lane.createdAt))}`));
+    const elapsed = age(now - Date.parse(lane.attemptStartedAt ?? lane.createdAt));
+    running.push(row(lane.wait
+      ? `lane ${lane.id}: ${clip(lane.wait, REASON_LIMIT)}${at}${paused}${attempt}, ${elapsed}; ${title(lane.title)}`
+      : `lane ${lane.id} ${title(lane.title)}${at}${paused}${attempt}, ${elapsed}`));
   }
 
   /* 5. Tasks with nothing running. Inbox work the operator queued and nobody
