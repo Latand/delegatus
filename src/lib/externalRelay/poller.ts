@@ -112,6 +112,9 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
       continue;
     }
     const ownerAlive = processMatches(run.ownerPid, run.ownerIdentity);
+    // The live callback owns stop retries and completion. Recovery must not
+    // send an install_restarted completion while that callback is pending.
+    if (ownerAlive && relayRequestInFlight(run.requestId)) continue;
     if (run.ownerTurn) {
       if (ownerAlive && !run.ownerTurn.cancel) continue;
       if (!ownerAlive) {
@@ -123,10 +126,20 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
         changeRun(run.requestId, r => ({ ...r, ownerTurn: { ...r.ownerTurn!, cancel: "kill" } }));
       }
       if (!run.ownerTurn.confirmed && !await confirmOwnerStop(run, ownerPorts)) continue;
-      noteRelayOutcome(run.relayId, "failed:cancelled");
     } else if (ownerAlive) continue;
+    // Stop recovery awaited host control; reread delivery custody after it.
+    const held = readRunLedger().runs.find(r => r.requestId === run.requestId);
+    if (!held || ownerAlive && relayRequestInFlight(run.requestId)) continue;
     if (run.childPid && processMatches(run.childPid, run.childIdentity))
       terminateHeadlessReviewerGroup(run.childPid, run.childIdentity);
+    // The accepted completion already reached the requester. Stop custody
+    // only held capacity and files until the host confirmed the stop.
+    if (held.completionAccepted) {
+      removeRunDirectory(run.runDir);
+      dropRun(run.requestId);
+      continue;
+    }
+    if (run.ownerTurn) noteRelayOutcome(run.relayId, "failed:cancelled");
     const relay = readRelayStore().relays.find(
       (item) => item.id === run.relayId,
     );

@@ -76,10 +76,27 @@ import {
 const globalRelay = globalThis as typeof globalThis & {
   __llvExternalRelayActive?: Map<string, number>;
   __llvExternalRelayInflight?: Set<string>;
+  __llvExternalRelayUnrecordedAcceptances?: Set<string>;
 };
 const active = (globalRelay.__llvExternalRelayActive ??= new Map<string, number>());
 const inflight = globalRelay.__llvExternalRelayInflight ??= new Set<string>();
-export const relayRequestInFlight = (requestId: string): boolean => inflight.has(requestId);
+const unrecordedAcceptances = globalRelay.__llvExternalRelayUnrecordedAcceptances ??= new Set<string>();
+export const relayRequestInFlight = (requestId: string): boolean => inflight.has(requestId) || unrecordedAcceptances.has(requestId);
+/** Marks a retained run as delivered. Until the mark is durable this process
+ * keeps delivery ownership, so orphan recovery cannot complete it again. */
+async function recordAcceptedCompletion(requestId: string): Promise<void> {
+  const write = () => changeRunAsync(requestId, row => ({ ...row, completionAccepted: true }), Date.now() + 5000);
+  try { await write(); return; }
+  catch { console.error("External relay accepted completion receipt pending"); }
+  unrecordedAcceptances.add(requestId);
+  void (async () => {
+    for (let delay = 100; unrecordedAcceptances.has(requestId); delay = Math.min(delay * 2, 5000)) {
+      await new Promise<void>(resolve => { const timer = setTimeout(resolve, delay); timer.unref(); });
+      try { await write(); unrecordedAcceptances.delete(requestId); }
+      catch { /* Delivery ownership stays with this process. */ }
+    }
+  })();
+}
 export function externalRelayTempRoot(): string {
   const temporary = path.resolve(os.tmpdir());
   const home = path.resolve(os.homedir());
@@ -325,6 +342,9 @@ export async function runClaimedRequest(
         if (recorded && activeTarget && !activeCapacityFreed) { activeCapacityFreed = true; free(relay, activeTarget); }
         try { await releaseCapacity?.(); }
         catch { console.error("External relay completed capacity release pending"); retryCapacityRelease(); }
+        // A retained row (an unconfirmed owner stop or a pending capacity
+        // release) leaves recovery cleanup only, never a second completion.
+        if (recorded && !capacityReleased) await recordAcceptedCompletion(requestId);
       }
       if (caps?.rich && sent.body !== body) recorder?.annotateV2({ drops: [...answerDrops, {part:"answer",reason:"service_downgrade"}] });
       claimTerminal = sent.delivery !== "refused";

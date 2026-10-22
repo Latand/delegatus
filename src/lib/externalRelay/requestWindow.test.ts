@@ -5,6 +5,8 @@ import path from "node:path";
 import { accountManager } from "@/lib/accounts/manager";
 import * as client from "./client";
 import { advertisedSlots, runClaimedRequest } from "./runner";
+import { sweepExternalRelayOrphans } from "./poller";
+import type { OwnerRunPorts } from "./ownerRun";
 import * as relayStore from "./store";
 import { contextRequest } from "./request.fixture";
 import { updateRelayStore, readRunLedger, reserveRun, dropRun, type PairedRelay } from "./store";
@@ -24,7 +26,7 @@ async function waitFor(check: () => boolean) {
   expect(check()).toBe(true);
 }
 
-function fixture(id: string, deadlineMs?: number, hardCapMinutes = 1, holdStop = false, refuseCompletion = false, fallback: "service" | "none" = "service") {
+function fixture(id: string, deadlineMs?: number, hardCapMinutes = 1, holdStop = false, refuseCompletion = false, fallback: "service" | "none" = "service", holdCompletion = false) {
   let now = epoch;
   jest.useFakeTimers();
   const clock = spyOn(Date, "now").mockImplementation(() => now);
@@ -46,6 +48,8 @@ function fixture(id: string, deadlineMs?: number, hardCapMinutes = 1, holdStop =
   const request = { ...contextRequest, request_id: id, deadline_at: deadlineMs === undefined ? undefined : new Date(epoch + deadlineMs).toISOString(),
     input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } };
   const heartbeats: number[] = [], completions: { at: number; body: unknown }[] = [], stops: string[] = [];
+  let accepted = 0, releaseCompletion!: () => void;
+  const completionGate = new Promise<void>(resolve => { releaseCompletion = resolve; });
   const completionExecutionAuthority: boolean[] = [];
   let launchAuthorize: (() => void) | undefined;
   const wire = spyOn(client, "relayCall").mockImplementation(async (_base, endpoint, _method, body) => {
@@ -54,7 +58,9 @@ function fixture(id: string, deadlineMs?: number, hardCapMinutes = 1, holdStop =
       completions.push({ at: now - epoch, body });
       try { launchAuthorize?.(); completionExecutionAuthority.push(true); }
       catch { completionExecutionAuthority.push(false); }
+      if (holdCompletion) await completionGate;
       if (refuseCompletion) throw new client.ExternalRelayError("lease_lost", 409);
+      accepted++;
     }
     else throw Error("unexpected fixture endpoint");
     return { status: 200, body: { status: "ok" } } as never;
@@ -63,17 +69,19 @@ function fixture(id: string, deadlineMs?: number, hardCapMinutes = 1, holdStop =
   const answer = new Promise<void>(resolve => { release = resolve; });
   const stop = new Promise<void>(resolve => { releaseStop = resolve; });
   let pending: ReturnType<typeof runClaimedRequest> | undefined;
-  return { paired, request, heartbeats, completions, stops, completionExecutionAuthority,
+  const ports: OwnerRunPorts = {
+    launch: async (_body, authorize) => {
+      launchAuthorize = authorize;
+      return { status: 202, body: { conversationId: `conversation_${id}`, initialMessage: "delivered" } };
+    },
+    observe: async () => { observing = true; await answer; return { state: "ended", finalText: "Work finished" }; },
+    stop: async (_id, action) => { stops.push(action); if (holdStop) await stop; },
+  };
+  return { paired, request, heartbeats, completions, stops, completionExecutionAuthority, ports, releaseStop: () => releaseStop(), releaseCompletion: () => releaseCompletion(),
     get settled() { return settled; },
+    get accepted() { return accepted; },
     async start() {
-      pending = runClaimedRequest(paired, request, undefined, { leaseWorker: false, ownerPorts: {
-        launch: async (_body, authorize) => {
-          launchAuthorize = authorize;
-          return { status: 202, body: { conversationId: `conversation_${id}`, initialMessage: "delivered" } };
-        },
-        observe: async () => { observing = true; await answer; return { state: "ended", finalText: "Work finished" }; },
-        stop: async (_id, action) => { stops.push(action); if (holdStop) await stop; },
-      } });
+      pending = runClaimedRequest(paired, request, undefined, { leaseWorker: false, ownerPorts: ports });
       void pending.then(() => { settled = true; }, () => { settled = true; });
       await waitFor(() => observing || settled);
     },
@@ -90,11 +98,12 @@ function fixture(id: string, deadlineMs?: number, hardCapMinutes = 1, holdStop =
     async answer() { release(); await waitFor(() => settled); return pending!; },
     async result() { await waitFor(() => settled); return pending!; },
     async close() {
-      release(); releaseStop();
+      release(); releaseStop(); releaseCompletion();
       if (pending) await waitFor(() => settled);
       await pending;
       if (holdStop) {
-        await waitFor(() => readRunLedger().runs.find(row => row.requestId === id)?.ownerTurn?.confirmed === true);
+        // Recovery may already have removed a delivered row after its stop.
+        await waitFor(() => { const row = readRunLedger().runs.find(item => item.requestId === id); return !row || row.ownerTurn?.confirmed === true; });
         dropRun(id);
       }
       wire.mockRestore(); selection.mockRestore(); quiet.mockRestore(); clock.mockRestore(); jest.useRealTimers();
@@ -164,6 +173,118 @@ test("deadline expiry sends a requester reply when the target disables service f
     expect(f.completions[0]!.at).toBe(600_000);
     expect(f.completionExecutionAuthority).toEqual([false]);
   } finally { await f.close(); }
+});
+
+function startSweep(ports: OwnerRunPorts) {
+  let done = false;
+  const pending = sweepExternalRelayOrphans(ports).finally(() => { done = true; });
+  return { pending, get done() { return done; } };
+}
+const timeoutReply = { outcome: "answered", answer: { action: "reply", text: "Ran out of time." } };
+
+test("timeout reply accepted before the owner stop: recovery cleans up without a second completion", async () => {
+  const f = fixture("timeout_accept_then_stop", 600_000, 30, true, false, "none", true);
+  try {
+    await f.start();
+    await f.advance(600_000);
+    await waitFor(() => f.completions.length === 1);
+    const row = () => readRunLedger().runs.find(item => item.requestId === f.request.request_id);
+    const runDir = row()!.runDir;
+    // The production sweep fires every minute, including while the reply is on the wire.
+    const during = startSweep(f.ports);
+    await poll();
+    f.releaseCompletion();
+    expect(await f.result()).toMatchObject(timeoutReply);
+    const after = startSweep(f.ports);
+    await f.advance(5);
+    expect(fs.existsSync(runDir)).toBe(true);
+    expect(advertisedSlots(f.paired)).toEqual([{ target_id: "target_1", free: 0 }]);
+    f.releaseStop();
+    await waitFor(() => during.done && after.done);
+    await Promise.all([during.pending, after.pending]);
+    expect(f.completions.map(item => (item.body as { outcome: string; reason?: string }).reason ?? "answered")).toEqual(["answered"]);
+    expect(f.completions[0]!.body).toMatchObject(timeoutReply);
+    expect(f.accepted).toBe(1);
+    expect(row()).toBeUndefined();
+    expect(fs.existsSync(runDir)).toBe(false);
+    expect(advertisedSlots(f.paired)).toEqual([{ target_id: "target_1", free: 1 }]);
+  } finally { await f.close(); }
+});
+
+test("timeout reply accepted after the owner stop: recovery leaves delivery to the runner", async () => {
+  const f = fixture("timeout_stop_then_accept", 600_000, 30, true, false, "none", true);
+  try {
+    await f.start();
+    await f.advance(600_000);
+    await waitFor(() => f.completions.length === 1);
+    const row = () => readRunLedger().runs.find(item => item.requestId === f.request.request_id);
+    const runDir = row()!.runDir;
+    const sweep = startSweep(f.ports);
+    await poll();
+    expect(fs.existsSync(runDir)).toBe(true);
+    expect(advertisedSlots(f.paired)).toEqual([{ target_id: "target_1", free: 0 }]);
+    f.releaseStop();
+    await waitFor(() => sweep.done);
+    await sweep.pending;
+    expect(f.completions.map(item => (item.body as { reason?: string }).reason ?? "answered")).toEqual(["answered"]);
+    await waitFor(() => row()?.ownerTurn?.confirmed === true);
+    const confirmed = startSweep(f.ports);
+    await waitFor(() => confirmed.done);
+    await confirmed.pending;
+    expect(f.completions).toHaveLength(1);
+    f.releaseCompletion();
+    expect(await f.result()).toMatchObject(timeoutReply);
+    const last = startSweep(f.ports);
+    await waitFor(() => last.done);
+    await last.pending;
+    expect(f.completions.map(item => (item.body as { outcome: string; reason?: string }).reason ?? "answered")).toEqual(["answered"]);
+    expect(f.completions[0]!.body).toMatchObject(timeoutReply);
+    expect(f.accepted).toBe(1);
+    expect(row()).toBeUndefined();
+    expect(fs.existsSync(runDir)).toBe(false);
+  } finally { await f.close(); }
+});
+
+test("an unpersisted acceptance keeps delivery ownership until its receipt is written", async () => {
+  const f = fixture("timeout_acceptance_receipt_retry", 600_000, 30, true, false, "none");
+  const change = relayStore.changeRunAsync;
+  let refused = 0, writable = false;
+  const marksAcceptance = (update: Parameters<typeof change>[1]) => {
+    try { return update({ requestId: f.request.request_id } as never).completionAccepted === true; }
+    catch { return false; }
+  };
+  const write = spyOn(relayStore, "changeRunAsync").mockImplementation((id, update, until) => {
+    if (id === f.request.request_id && !writable && marksAcceptance(update)) {
+      refused++;
+      return Promise.reject(new relayStore.RelayStoreBusy());
+    }
+    return change(id, update, until);
+  });
+  try {
+    await f.start();
+    await f.advance(600_000);
+    expect(await f.result()).toMatchObject(timeoutReply);
+    expect(refused).toBeGreaterThan(0);
+    const row = () => readRunLedger().runs.find(item => item.requestId === f.request.request_id);
+    expect(row()?.completionAccepted).not.toBe(true);
+    f.releaseStop();
+    await waitFor(() => row()?.ownerTurn?.confirmed === true);
+    // Every receipt write so far was refused; this process still owns delivery.
+    const early = startSweep(f.ports);
+    await waitFor(() => early.done);
+    await early.pending;
+    expect(f.completions).toHaveLength(1);
+    expect(row()).toBeDefined();
+    writable = true;
+    // The retry backs off to at most five seconds between attempts.
+    await f.advance(6000);
+    expect(row()?.completionAccepted).toBe(true);
+    const late = startSweep(f.ports);
+    await waitFor(() => late.done);
+    await late.pending;
+    expect(f.completions).toHaveLength(1);
+    expect(row()).toBeUndefined();
+  } finally { write.mockRestore(); await f.close(); }
 });
 
 for (const refuseCompletion of [false, true]) test(`timeout retains execution custody when cancellation persistence fails (completion refused: ${refuseCompletion})`, async () => {

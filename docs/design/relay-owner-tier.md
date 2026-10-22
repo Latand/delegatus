@@ -598,7 +598,10 @@ conversation later with no lease to answer; the prompt asks for
   `post_completion`; the accepted answer stays accepted. The sweep finishes
   abandoned completed cleanup once its local runner has returned, including
   under the same Viewer process, without controlling a host or completing
-  the request again. A zero-capacity enabled target stays in the claim body
+  the request again. An accepted completion whose owner stop is still
+  unconfirmed keeps capacity and files, and marks `completionAccepted`
+  instead; the sweep confirms the stop, then cleans up without a second
+  completion. A request still held by its local runner is never swept. A zero-capacity enabled target stays in the claim body
   and emits `External relay target capacity` with its concurrency, running,
   retained and waiting counts and the `full` or `drain` reason.
 

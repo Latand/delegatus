@@ -87,7 +87,14 @@ cancellation and completes `answered` with a fixed plain timeout notice,
 without waiting for stop recovery. Unconfirmed execution custody remains in
 the run ledger. This posts a requester reply even with service fallback disabled;
 a `failed` completion would follow that setting and could post nothing. The
-late result cannot send another completion. The lease
+late result cannot send another completion. While the runner still holds the
+request, including while its completion is on the wire, the orphan sweep
+leaves the row alone. An accepted completion on a row the runner retains
+durably marks `completionAccepted`; until that write lands the process keeps
+delivery ownership and retries it. Recovery of a marked row waits for stop
+confirmation, then removes the files and the row without completing the
+request again, so a later `install_restarted` cannot displace the timeout
+reply. The lease
 helper merged from PR #3192 continues renewing until completion; its cadence,
 five-second HTTP calls and service-supplied stall expiry are unchanged. Its
 guardian checks owner identity every second and release ownership every two
