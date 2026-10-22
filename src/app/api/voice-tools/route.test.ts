@@ -16,9 +16,40 @@ const { internalServiceHeaders } = await import("@/lib/agent/callerClaims");
 const { claimInstall, createInvite, redeemJoin } = await import("@/lib/team/members");
 const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
 const { MEMBER_COOKIE, mintSession } = await import("@/lib/team/sessions");
+const { POST: claimPOST } = await import("@/app/api/team/claim/route");
+const { POST: registerPOST } = await import("@/app/api/team/passkeys/route");
+const { POST: passkeySignInPOST } = await import("@/app/api/team/session/passkey/route");
+const { SoftwareAuthenticator } = await import("@/lib/team/softwareAuthenticator.test-support");
+const { updateRelayStore } = await import("@/lib/externalRelay/store");
+const { knownRelay } = await import("@/lib/externalRelay/knownRelays");
+const PAIRED_OWNER_ID = "700001";
+function seedPairedOwner() {
+  updateRelayStore((store) => ({ ...store, relays: [
+    ...store.relays.filter((relay) => relay.id !== "voice-tools-test-pairing"),
+    {
+      id: "voice-tools-test-pairing", origin: knownRelay("celestia")!.origin, api_base: "https://relay.example.test/v1",
+      name: "Test pairing", description: "", credential: "x".repeat(43),
+      owner: { namespace: "telegram", id: PAIRED_OWNER_ID, display_name: "Owner", handle: null },
+      pairedAt: "2026-01-01T00:00:00.000Z", paused: false,
+      limits: { max_response_bytes: 1_048_576, max_wait_s: 25, max_answer_chars: 4000 },
+      targets: [{ id: "voice-tools-test-target", name: "Test target", answered_by: "install", fallback: "none", enabled: true,
+        engine: "codex", model: "test", effort: "low", project: null, concurrency: 1, hardCapMinutes: 1 }],
+    },
+  ] }));
+}
 afterAll(async () => { setVoiceToolHubForTests(undefined); resetTeamStoreForTests(); await fs.rm(root, { recursive: true, force: true }); });
+function authenticatedOwner() {
+  const claimed = claimInstall(teamStore(), "Owner", { surface: "desktop", browser: "chrome" });
+  seedPairedOwner();
+  teamStore().updateMember({ ...claimed.member, telegram: {
+    userId: PAIRED_OWNER_ID, username: "paired-owner", firstName: "Owner", linkedAt: claimed.session.createdAt,
+  } });
+  const session = mintSession(teamStore(), claimed.member.id, "telegram", { surface: "desktop", browser: "chrome" });
+  return { ...claimed, cookie: session.value, session: session.session };
+}
+const browserOwner = authenticatedOwner();
 function request(method: string, body?: unknown, headers: Record<string, string> = {}) {
-  return new NextRequest("http://127.0.0.1/api/voice-tools", { method, headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin", ...headers }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  return new NextRequest("http://127.0.0.1/api/voice-tools", { method, headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin", cookie: `${MEMBER_COOKIE}=${browserOwner.cookie}`, ...headers }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
 }
 const proposal = { name: "music", title: "Music", capability: "Search music", transport: { type: "http", url: "https://example.invalid/mcp", headers: { Authorization: { secretRef: "music-token" } } } };
 
@@ -73,7 +104,7 @@ test("browser API separates operator actions from MCP proposals and never echoes
     expect((await proposalPOST(request("POST", { action, name: "music", digest: view.servers.music.digest, clientRequestId: `forbidden-${action}`, conversationId: "conversation_worker" }, approvedService))).status).toBe(400);
   }
   expect((await POST(request("POST", { action: "approve", name: "music", digest: view.servers.music.digest }))).status).toBe(409);
-  const saved = await POST(request("POST", { action: "secrets", secrets: { "music-token": "synthetic-voice-credential" } }));
+  const saved = await POST(request("POST", { action: "secrets", secrets: { "music-token": { value: "synthetic-voice-credential", destinations: ["https://example.invalid"] } } }));
   expect(saved.status).toBe(200); expect(await saved.text()).not.toContain("synthetic-voice-credential");
   const status = await (await GET(request("GET"))).json();
   expect(status.servers.music.missingSecrets).toEqual([]);
@@ -117,16 +148,53 @@ test("the operator dry-runs and approves a pinned catalog, configures acting con
   } finally { await peer.stop(true); }
 });
 
-test("team mode admits only an active owner, and rechecks after the request body wait", async () => {
+
+test("both proposal routes and approval refuse a secret sent to another origin", async () => {
+  const { approvalDigest } = await import("@/lib/voiceTools/contracts");
+  const secret = { value: "synthetic-bound-credential", destinations: ["https://example.invalid"] };
+  expect((await POST(request("POST", { action: "secrets", secrets: { "bound-token": secret } }))).status).toBe(200);
+  const trusted = { ...proposal, name: "bound", transport: { type: "http", url: "https://example.invalid/mcp", headers: { Authorization: { secretRef: "bound-token" } } } };
+  for (const header of ["Host", "host", "hOsT"]) {
+    const authorityOverride = { ...trusted, name: `bound_${header.toLowerCase()}`, transport: { ...trusted.transport,
+      headers: { ...trusted.transport.headers, [header]: { value: "unbound.example.test" } } } };
+    const browser = await POST(request("POST", { action: "propose", proposal: authorityOverride }));
+    expect(browser.status).toBe(400); expect(await browser.json()).toEqual({ code: "INVALID_PROPOSAL" });
+    const mcp = await proposalPOST(request("POST", { action: "propose", proposal: authorityOverride,
+      clientRequestId: `host-override-${header.toLowerCase()}`, conversationId: "conversation_worker" }, internalServiceHeaders("mcp")));
+    expect(mcp.status).toBe(400); expect(await mcp.json()).toEqual({ code: "INVALID_PROPOSAL" });
+  }
+  const hostile = { ...trusted, transport: { ...trusted.transport, url: "https://other.example.test/mcp" } };
+  const inputs = [
+    POST(request("POST", { action: "propose", proposal: hostile })),
+    proposalPOST(request("POST", { action: "propose", proposal: hostile, conversationId: "conversation_worker", clientRequestId: "wrong-destination" }, internalServiceHeaders("mcp"))),
+  ];
+  for (const response of await Promise.all(inputs)) {
+    expect(response.status).toBe(409); expect(await response.json()).toEqual({ code: "SECRET_DESTINATION" });
+  }
+  expect((await POST(request("POST", { action: "propose", proposal: trusted }))).status).toBe(200);
+  const file = path.join(root, "state/voice-tools.json");
+  const registry = JSON.parse(await fs.readFile(file, "utf8"));
+  registry.servers.bound.transport.url = hostile.transport.url;
+  await fs.writeFile(file, JSON.stringify(registry));
+  for (const action of ["approve", "dry-run"]) {
+    const response = await POST(request("POST", { action, name: "bound", digest: approvalDigest("bound", registry.servers.bound) }));
+    expect(response.status).toBe(409); expect(await response.json()).toEqual({ code: "SECRET_DESTINATION" });
+  }
+  const response = await POST(request("POST", { action: "remove", name: "bound", digest: approvalDigest("bound", registry.servers.bound) }));
+  expect(response.status).toBe(200);
+});
+
+test("team mode admits only the paired owner, and rechecks after the request body wait", async () => {
   resetTeamStoreForTests();
-  const owner = claimInstall(teamStore(), "Owner", { surface: "desktop", browser: "chrome" });
+  process.env.LLV_STATE_DIR = path.join(root, "team-state");
+  const owner = authenticatedOwner();
   const invitation = createInvite(teamStore(), owner.member, "Member");
   const member = redeemJoin(teamStore(), invitation.code, "Member", { surface: "desktop", browser: "chrome" });
   const ownerHeaders = { cookie: `${MEMBER_COOKIE}=${owner.cookie}` };
   const memberHeaders = { cookie: `${MEMBER_COOKIE}=${member.cookie}` };
-  expect((await GET(request("GET"))).status).toBe(401);
-  expect((await GET(request("GET", undefined, memberHeaders))).status).toBe(403);
-  expect((await POST(request("POST", { action: "propose", proposal }, memberHeaders))).status).toBe(403);
+  expect((await GET(request("GET", undefined, { cookie: "" }))).status).toBe(401);
+  expect((await GET(request("GET", undefined, memberHeaders))).status).toBe(401);
+  expect((await POST(request("POST", { action: "propose", proposal }, memberHeaders))).status).toBe(401);
   expect((await GET(request("GET", undefined, ownerHeaders))).status).toBe(200);
   const hub = new VoiceToolHub(new VoiceToolsStore(path.join(root, "state")));
   const view = hub.store.view.bind(hub.store);
@@ -139,7 +207,7 @@ test("team mode admits only an active owner, and rechecks after the request body
   expect((await POST(request("POST", { action: "propose", proposal }, ownerHeaders))).status).toBe(401);
   setVoiceToolHubForTests(new VoiceToolHub(new VoiceToolsStore(path.join(root, "state"))));
   // Issue a fresh owner session for the independent body-read race.
-  const secondSession = mintSession(teamStore(), owner.member.id, "claim", { surface: "desktop", browser: "chrome" });
+  const secondSession = mintSession(teamStore(), owner.member.id, "passkey", { surface: "desktop", browser: "chrome" });
   const secondHeaders = { cookie: `${MEMBER_COOKIE}=${secondSession.value}` };
   // Revoke at the exact body await; authorization must be checked again before mutation.
   const req = request("POST", { action: "propose", proposal }, secondHeaders);
@@ -150,4 +218,223 @@ test("team mode admits only an active owner, and rechecks after the request body
   } });
   expect((await POST(req)).status).toBe(401);
   resetTeamStoreForTests();
+  process.env.LLV_STATE_DIR = path.join(root, "state");
+});
+
+// Regression: browser-shaped headers are public input, never operator proof.
+test("a header-less same-origin local client cannot approve or save secrets", async () => {
+  for (const action of ["approve", "secrets", "dry-run", "configure"]) {
+    const reply = await POST(request("POST", { action, name: "music", digest: `sha256:${"a".repeat(64)}` }, { cookie: "" }));
+    expect(reply.status).toBe(401);
+  }
+});
+
+
+test("a same-origin local client cannot approve a successfully probed server", async () => {
+  // Reproduce the solo-mode hole; an existing owner would let the older team
+  // gate reject this client before the voice-specific proof is checked.
+  resetTeamStoreForTests();
+  process.env.LLV_STATE_DIR = path.join(root, "solo-spoof-state");
+  const store = new VoiceToolsStore(path.join(root, "spoof-state"));
+  const hub = new VoiceToolHub(store);
+  setVoiceToolHubForTests(hub);
+  let contacts = 0;
+  const peer = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
+    contacts++;
+    if (req.method !== "POST") return new Response(null, { status: 405 });
+    const message = await req.json() as { id?: number; method: string };
+    if (message.id === undefined) return new Response(null, { status: 202 });
+    const result = message.method === "initialize" ? { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "fake", version: "1" } }
+      : { tools: [{ name: "search", description: "Search", inputSchema: { type: "object" } }] };
+    return Response.json({ jsonrpc: "2.0", id: message.id, result });
+  } });
+  try {
+    await store.propose({ ...proposal, transport: { type: "http", url: `http://127.0.0.1:${peer.port}/mcp` } }, { kind: "conversation", conversationId: "conversation_worker", at: "2026-01-01T00:00:00.000Z" });
+    await hub.dryRun("music", (await store.view()).servers.music.digest);
+    const ready = (await store.view()).servers.music;
+    expect(ready.lastDryRun?.code).toBe("OK"); expect(contacts).toBeGreaterThan(0);
+    const response = await POST(request("POST", { action: "approve", name: "music", digest: ready.digest }, { cookie: "" }));
+    expect(response.status).toBe(401);
+    expect((await new VoiceToolsStore(store.directory).view()).servers.music.state).toBe("pending");
+  } finally {
+    await peer.stop(true);
+    resetTeamStoreForTests();
+    process.env.LLV_STATE_DIR = path.join(root, "state");
+    setVoiceToolHubForTests(new VoiceToolHub(new VoiceToolsStore(path.join(root, "state"))));
+  }
+});
+
+test("claiming an unclaimed install does not authorize voice tool proposal, dry run or approval", async () => {
+  resetTeamStoreForTests();
+  process.env.LLV_STATE_DIR = path.join(root, "claim-attack-state");
+  seedPairedOwner();
+  const store = new VoiceToolsStore(process.env.LLV_STATE_DIR);
+  setVoiceToolHubForTests(new VoiceToolHub(store));
+  let contacts = 0;
+  const peer = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
+    contacts++;
+    if (req.method !== "POST") return new Response(null, { status: 405 });
+    const message = await req.json() as { id?: number; method: string };
+    if (message.id === undefined) return new Response(null, { status: 202 });
+    const result = message.method === "initialize" ? { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "fake", version: "1" } }
+      : { tools: [{ name: "search", description: "Search", inputSchema: { type: "object" } }] };
+    return Response.json({ jsonrpc: "2.0", id: message.id, result });
+  } });
+  try {
+    const claim = await claimPOST(new NextRequest("http://127.0.0.1/api/team/claim", { method: "POST",
+      headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" }, body: JSON.stringify({ name: "Attacker" }) }));
+    expect(claim.status).toBe(200);
+    const claimedCookie = claim.cookies.get(MEMBER_COOKIE)?.value;
+    expect(claimedCookie).toBeTruthy();
+    const attacker = { cookie: `${MEMBER_COOKIE}=${claimedCookie}` };
+    const local = { ...proposal, transport: { type: "http", url: `http://127.0.0.1:${peer.port}/mcp` } };
+    expect((await POST(request("POST", { action: "propose", proposal: local }, attacker))).status).toBe(401);
+    expect((await GET(request("GET", undefined, attacker))).status).toBe(401);
+    for (const action of ["dry-run", "approve", "configure", "secrets", "remove", "reject"]) {
+      expect((await POST(request("POST", { action, name: "music", digest: `sha256:${"a".repeat(64)}` }, attacker))).status).toBe(401);
+    }
+    expect((await proposalPOST(request("POST", { action: "propose", proposal: local, clientRequestId: "claim-attempt", conversationId: "conversation_worker" }, attacker))).status).toBe(403);
+    expect(contacts).toBe(0);
+    const view = await store.view();
+    expect(view.servers.music).toBeUndefined();
+
+    resetTeamStoreForTests();
+    process.env.LLV_STATE_DIR = path.join(root, "claim-owner-state");
+    const owner = authenticatedOwner();
+    const ownerStore = new VoiceToolsStore(process.env.LLV_STATE_DIR);
+    setVoiceToolHubForTests(new VoiceToolHub(ownerStore));
+    const ownerCookie = { cookie: `${MEMBER_COOKIE}=${owner.cookie}` };
+    const authorized = await POST(request("POST", { action: "propose", proposal: local }, ownerCookie));
+    expect(authorized.status).toBe(200);
+    const proposed = await authorized.json();
+    const dryRun = await POST(request("POST", { action: "dry-run", name: "music", digest: proposed.servers.music.digest }, ownerCookie));
+    expect(dryRun.status).toBe(200);
+    const discovered = await dryRun.json();
+    const approved = await POST(request("POST", { action: "approve", name: "music", digest: discovered.servers.music.digest }, ownerCookie));
+    expect(approved.status).toBe(200);
+    expect((await approved.json()).servers.music.state).toBe("enabled");
+    expect(contacts).toBeGreaterThan(0);
+  } finally {
+    await peer.stop(true);
+    resetTeamStoreForTests();
+    process.env.LLV_STATE_DIR = path.join(root, "state");
+    setVoiceToolHubForTests(new VoiceToolHub(new VoiceToolsStore(path.join(root, "state"))));
+  }
+});
+
+test("claim-only passkey registration and sign-in cannot authorize voice management", async () => {
+  const previousStateDir = process.env.LLV_STATE_DIR;
+  const previousTailnet = process.env.LLV_TS_URL;
+  const previousTailnetHost = process.env.LLV_TS_HOST;
+  resetTeamStoreForTests();
+  process.env.LLV_STATE_DIR = path.join(root, "full-claim-passkey-state");
+  process.env.LLV_TS_URL = "https://voice.example.test";
+  process.env.LLV_TS_HOST = "voice.example.test";
+  setVoiceToolHubForTests(new VoiceToolHub(new VoiceToolsStore(process.env.LLV_STATE_DIR)));
+  seedPairedOwner();
+  const peerSawCredentialHeader: boolean[] = [];
+  const peer = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
+    if (req.method !== "POST") return new Response(null, { status: 405 });
+    if (req.headers.has("authorization")) peerSawCredentialHeader.push(true);
+    const message = await req.json() as { id?: number; method: string };
+    if (message.id === undefined) return new Response(null, { status: 202 });
+    const result = message.method === "initialize" ? { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "fake", version: "1" } }
+      : { tools: [{ name: "search", description: "Search", inputSchema: { type: "object" } }] };
+    return Response.json({ jsonrpc: "2.0", id: message.id, result });
+  } });
+  const teamRequest = (pathname: string, body?: unknown, cookie?: string) => new NextRequest(`https://voice.example.test${pathname}`, {
+    method: "POST",
+    headers: { host: "voice.example.test", "x-forwarded-proto": "https", origin: "https://voice.example.test",
+      "sec-fetch-site": "same-origin", "user-agent": "Mozilla/5.0 Chrome/126.0", "content-type": "application/json",
+      ...(cookie ? { cookie: `${MEMBER_COOKIE}=${cookie}` } : {}) },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  try {
+    const claim = await claimPOST(teamRequest("/api/team/claim", { name: "Self-claimed owner" }));
+    expect(claim.status).toBe(200);
+    const claimCookie = claim.cookies.get(MEMBER_COOKIE)?.value;
+    expect(claimCookie).toBeTruthy();
+
+    const registrationOptions = await registerPOST(teamRequest("/api/team/passkeys", { step: "options" }, claimCookie));
+    expect(registrationOptions.status).toBe(200);
+    const registration = await registrationOptions.json() as { id: string; options: { challenge: string; rp: { id?: string }; user: { id: string } } };
+    const authenticator = await new SoftwareAuthenticator().init();
+    const registrationVerify = await registerPOST(teamRequest("/api/team/passkeys", {
+      step: "verify", id: registration.id,
+      response: await authenticator.register(registration.options, "https://voice.example.test"),
+    }, claimCookie));
+    expect(registrationVerify.status).toBe(200);
+
+    const signInOptionsResponse = await passkeySignInPOST(teamRequest("/api/team/session/passkey", { step: "options" }));
+    expect(signInOptionsResponse.status).toBe(200);
+    const signIn = await signInOptionsResponse.json() as { id: string; options: { challenge: string } };
+    const signInResponse = await passkeySignInPOST(teamRequest("/api/team/session/passkey", {
+      step: "verify", id: signIn.id,
+      response: await authenticator.assert(signIn.options, "voice.example.test", "https://voice.example.test", registration.options.user.id),
+    }));
+    expect(signInResponse.status).toBe(200);
+    const passkeyCookie = signInResponse.cookies.get(MEMBER_COOKIE)?.value;
+    expect(passkeyCookie).toBeTruthy();
+
+    const localProposal = { ...proposal, transport: { type: "http", url: `http://127.0.0.1:${peer.port}/mcp`,
+      headers: { Authorization: { secretRef: "claim-token" } } } };
+    const browserHeaders = { cookie: `${MEMBER_COOKIE}=${passkeyCookie}` };
+    const voiceProposal = await POST(request("POST", { action: "propose", proposal: localProposal }, browserHeaders));
+    const proposalRoute = await proposalPOST(request("POST", {
+      action: "propose", proposal: localProposal,
+      clientRequestId: "self-claim-proposal", conversationId: "conversation_worker",
+    }, internalServiceHeaders("mcp")));
+    expect(proposalRoute.status).toBe(200);
+    const pending = (await proposalRoute.json()).servers.music;
+    const secretBinding = await POST(request("POST", { action: "secrets", secrets: {
+      "claim-token": { value: "synthetic-claim-credential", destinations: [`http://127.0.0.1:${peer.port}`] },
+    } }, browserHeaders));
+    const dryRun = await POST(request("POST", { action: "dry-run", name: "music", digest: pending.digest }, browserHeaders));
+    const afterDryRun = await new VoiceToolsStore(process.env.LLV_STATE_DIR).view();
+    const approval = await POST(request("POST", { action: "approve", name: "music", digest: afterDryRun.servers.music.digest }, browserHeaders));
+    const state = (await new VoiceToolsStore(process.env.LLV_STATE_DIR).view()).servers.music.state;
+
+    expect({ statuses: [voiceProposal.status, secretBinding.status, dryRun.status, approval.status], state, peerSawCredentialHeader })
+      .toEqual({ statuses: [401, 401, 401, 401], state: "pending", peerSawCredentialHeader: [] });
+  } finally {
+    await peer.stop(true);
+    resetTeamStoreForTests();
+    process.env.LLV_STATE_DIR = previousStateDir;
+    if (previousTailnet === undefined) delete process.env.LLV_TS_URL; else process.env.LLV_TS_URL = previousTailnet;
+    if (previousTailnetHost === undefined) delete process.env.LLV_TS_HOST; else process.env.LLV_TS_HOST = previousTailnetHost;
+  }
+});
+
+test("both proposal routes, approval and dry run refuse a secret bound to another origin", async () => {
+  const store = new VoiceToolsStore(path.join(root, "destination-state"));
+  setVoiceToolHubForTests(new VoiceToolHub(store));
+  let contacts = 0;
+  const peer = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() {
+    contacts++;
+    return new Response(null, { status: 500 });
+  } });
+  const local = { ...proposal, transport: { ...proposal.transport, url: `http://127.0.0.1:${peer.port}/mcp` } };
+  try {
+    // A missing reference can be proposed, but gains no destination authority.
+    expect((await POST(request("POST", { action: "propose", proposal: local }))).status).toBe(200);
+    expect((await POST(request("POST", { action: "secrets", secrets: {
+      "music-token": { value: "synthetic-voice-credential", destinations: ["https://example.invalid"] },
+    } }))).status).toBe(200);
+    const mcp = internalServiceHeaders("mcp");
+    const responses = [
+      await POST(request("POST", { action: "propose", proposal: local })),
+      await proposalPOST(request("POST", { action: "propose", proposal: local, clientRequestId: "wrong-destination", conversationId: "conversation_worker" }, mcp)),
+    ];
+    const digest = (await store.view()).servers.music.digest;
+    for (const action of ["approve", "dry-run"]) responses.push(await POST(request("POST", { action, name: "music", digest })));
+    for (const response of responses) {
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({ code: "SECRET_DESTINATION" });
+    }
+    expect(contacts).toBe(0);
+    expect((await store.view()).servers.music.approval).toBeNull();
+  } finally {
+    await peer.stop(true);
+    setVoiceToolHubForTests(new VoiceToolHub(new VoiceToolsStore(path.join(root, "state"))));
+  }
 });

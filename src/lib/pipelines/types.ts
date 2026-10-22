@@ -365,6 +365,19 @@ export type PipelineRuntimeSeat = {
 export type PipelineRuntimeSwitch = {
   id: string; seq: number; requestedAt: string; actor: PauseResumeActor;
   mode: "fork" | "handoff";
+  /** A same-account, tier-only fork the live thread takes with
+      `thread/settings/update`: nothing restarts (docs/design/turbo-mode.md §2.6).
+      Additive on purpose: a release that predates it still reads the record as
+      a fork and would finish it through its own restart path. */
+  inPlace?: true;
+  /** in-place only: `boundary` cuts a running turn after its tool item; `none` lets it finish. */
+  cut?: "boundary" | "none";
+  /** in-place only: what the live thread did with the tier. */
+  tierCut?: "cut" | "armed" | "none" | "turn-ended" | "cancelled" | "host-gone" | "unknown";
+  appliedServiceTier?: string | null;
+  cutTurnId?: string;
+  /** The Turbo episode that asked for this switch, when it did. */
+  turbo?: string;
   from: PipelineRuntimeSeat & { conversationId: string; launchId: string | null; sessionId: string | null; agentPath: string | null };
   to: PipelineRuntimeSeat & { accountPinned: boolean };
   phase: "requested" | "cutting" | "switching" | "continuing" | "committed" | "rolled-back" | "failed" | "superseded";
@@ -1377,6 +1390,10 @@ export type PatchPipelineRequest = {
   resumeCondition?: import("./pauseMetadata").PipelineResumeCondition;
   action: PipelineAction;
   applyNow?: boolean;
+  /** override-stage applyNow of a tier-only change: `none` lets the running turn finish (Turbo's revert). */
+  applyNowCut?: "boundary" | "none";
+  /** override-stage: the Turbo episode key; boundary tier changes affect the running attempt only. */
+  turbo?: string;
   /** Board task used by link-task and unlink-task. */
   taskId?: string;
   /** for link-task (#2187 §5.1): whether this pipeline finishes the task.

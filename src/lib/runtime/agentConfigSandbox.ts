@@ -45,7 +45,8 @@ function sandboxKey(value: string | undefined): string {
 }
 
 /**
- * Where one agent's throw-away config root lives: under the temp root, keyed by
+ * A pipeline uses its declared, ledger-owned attempt root. Other callers keep
+ * their existing throw-away root under the temp root, keyed by
  * the account home it runs under so the number of them stays bounded and a
  * resumed agent finds the same one.
  *
@@ -55,6 +56,9 @@ function sandboxKey(value: string | undefined): string {
  * this whole change exists to make impossible.
  */
 export function agentConfigSandboxRoot(source: NodeJS.ProcessEnv, home?: string): string {
+  const attemptRoot = source.LLV_AGENT_SANDBOX_ROOT;
+  if (attemptRoot && path.isAbsolute(attemptRoot) && path.basename(attemptRoot).startsWith("llv-stage-config-")
+    && !underOperatorRoot(attemptRoot, source)) return attemptRoot;
   return path.join(sandboxTemporaryRoot(source), AGENT_SANDBOX_DIRNAME, sandboxKey(home));
 }
 
