@@ -36,9 +36,11 @@ let service: InstanceType<typeof TelegramBotService>;
 beforeEach(() => {
   fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
   transport = new FakeBotTransport();
+  let confirmationSequence = 0;
   service = new TelegramBotService({
     ...productionTelegramBotDependencies(),
     transportFor: () => transport,
+    fileConfirmationId: () => `operator-route-fixture-${++confirmationSequence}`,
     sleep: async () => {},
     conversationTitle: () => "Report writer",
     documentEnvironment: () => ({ home: HOME, stateDir: process.env.LLV_STATE_DIR! }),
@@ -130,10 +132,15 @@ test.each(["send_media", "send_document"])("%s names the outside file and allowe
       body: { op, clientRequestId: `${op}-${roots}`, chat: "team-reports", images: [{ path: outside, caption: "" }], document: { path: outside } },
     }));
     expect(response.status).toBe(403);
-    expect(await response.json()).toEqual({
-      error: `${op === "send_media" ? "photo 1: " : ""}$HOME/outside.jpg is outside the allowed document roots (${roots}); write the file under one of them`,
-      code: "document_outside_roots", retryable: false,
-    });
+    const body = await response.json();
+    expect(body.code).toBe("document_outside_roots");
+    expect(body.retryable).toBe(false);
+    expect(body.error).toStartWith(`$HOME/outside.jpg is outside the allowed document roots (${roots}); write the file under one of them`);
+    expect(body.confirmation.id).toMatch(/^operator-route-fixture-\d+$/);
+    expect(body.confirmation.url).toBe(`/telegram-file-confirmation?id=${body.confirmation.id}`);
+    expect(body.error).toContain(body.confirmation.url);
+    expect(Number.isFinite(Date.parse(body.confirmation.expiresAt))).toBe(true);
+    expect(body.error).not.toContain(HOME);
   };
   await check("$HOME/handoff");
   service.setDocumentRoots([path.join(HOME, "reports"), path.join(HOME, "exports")]);
