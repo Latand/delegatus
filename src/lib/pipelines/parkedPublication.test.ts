@@ -1092,11 +1092,19 @@ async function legacyPublication(h: ReturnType<typeof fixture>) {
   savePipelines([h.lane]);
 }
 
-async function restartedPublicationController(clock = "2026-10-19T10:00:00.000Z", bounded = false) {
+async function restartedPublicationController(clock = "2026-10-19T10:00:00.000Z", bounded = false, crashLog?: string) {
   const script = `const { realExec } = await import(${JSON.stringify(path.join(import.meta.dir, "../workflows/provision.ts"))});
     const { defaultPipelinePorts, tickPipelines } = await import(${JSON.stringify(path.join(import.meta.dir, "engine.ts"))});
-    const ports = { ...defaultPipelinePorts(), exec: ${publicationFixtureExec.toString()},
-      now: () => ${JSON.stringify(clock)}, scheduleTick: () => {},
+    const fs = await import("node:fs");
+    const crashLog = ${JSON.stringify(crashLog ?? null)};
+    const fixtureExec = ${publicationFixtureExec.toString()};
+    const ports = { ...defaultPipelinePorts(), exec: async (...args) => {
+      if (crashLog && args[0] === "git" && args[1][0] === "push") {
+        fs.appendFileSync(crashLog, JSON.stringify(args[1]) + "\\n");
+        process.exit(0);
+      }
+      return fixtureExec(...args);
+    }, now: () => ${JSON.stringify(clock)}, scheduleTick: () => {},
       conversationAgentActive: async () => false, stageHostResident: async () => false,
       paneAgentAlive: async () => false, getFlow: () => null, worktreePresent: () => true };
     const { tickPipelinesController } = await import(${JSON.stringify(path.join(import.meta.dir, "controllerPass.ts"))});
@@ -1165,7 +1173,7 @@ test("bounded startup returns during publication recovery and labels its remote 
     await leaveDeadPublication(h);
     const ports = { ...h.ports, now: () => "2026-10-19T10:00:00.000Z", scheduleTick: () => {},
       exec: async (...args: Parameters<typeof realExec>) => {
-        if (args[0] === "git" && args[1][0] === "ls-remote") {
+        if (args[0] === "timeout" && args[1].includes("ls-remote")) {
           reads++;
           label = viewerLoopMonitor.current();
           enter();
@@ -1241,22 +1249,29 @@ test("departed publication retries exhaust their durable budget across controlle
   try {
     await leaveDeadPublication(h);
     const pushes = path.join(h.root, "interrupted-pushes");
-    fs.writeFileSync(h.hook, `#!/bin/sh\necho attempt >> '${pushes}'\necho 'pre-push: types' >&2\nkill -TERM "$PPID"\nexit 0\n`, { mode: 0o700 });
     let clock = Date.parse("2026-10-19T10:00:00.000Z");
-    await restartedPublicationController(new Date(clock).toISOString());
+    const restart = () => restartedPublicationController(new Date(clock).toISOString(), false, pushes);
+    // Each retry loses its actual controller process at the push boundary.
+    // A second fresh controller reconciles that death and persists the wait.
+    await restart();
+    expect(h.current().runs[0]!.attempts[0]!.publicationRetry).toMatchObject({ failures: 1 });
+    await restart();
     expect(h.current().runs[0]!.attempts[0]!.publicationRetry).toMatchObject({ failures: 2 });
     for (const wait of [5 * 60_000, 15 * 60_000]) {
       clock += wait;
-      await restartedPublicationController(new Date(clock).toISOString());
+      await restart();
+      await restart();
     }
     expect(h.current().state).toBe("needs_decision");
     expect(h.current().stateDetail!.split("\n")[0]).toContain("retried 3 times");
     expect(h.current().runs[0]!.attempts[0]!.publicationRetry).toMatchObject({ sha: h.passed, failures: 3, exhausted: true });
-    expect(fs.readFileSync(pushes, "utf8").trim().split("\n")).toHaveLength(3);
+    const recorded = () => fs.readFileSync(pushes, "utf8").trim().split("\n").map(line => JSON.parse(line) as string[]);
+    expect(recorded()).toHaveLength(3);
+    for (const argv of recorded()) expect(argv).toContain(`${h.passed}:refs/heads/${h.lane.branch}`);
     clock += 60 * 60_000;
-    await restartedPublicationController(new Date(clock).toISOString());
+    await restart();
     expect(h.current().state).toBe("needs_decision");
-    expect(fs.readFileSync(pushes, "utf8").trim().split("\n")).toHaveLength(3);
+    expect(recorded()).toHaveLength(3);
     expect(h.current().runs[0]!.attempts).toHaveLength(1);
   } finally { h.cleanup(); }
 }, 90_000);
