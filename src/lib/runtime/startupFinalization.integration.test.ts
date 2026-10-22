@@ -1028,3 +1028,25 @@ test("registry preparation precedes pipeline admission at every startup phase", 
     f.journal.close();f.registry.close();
   }
 });
+
+test("marker repair and historical publication share one prepared selection", async () => {
+  const f = fixture(0, true, 40);
+  const { completeStructuredDeliveryQueueStartup } = await import("./structuredDeliveryController");
+  const original = f.registry.prepareReadOnlySnapshot.bind(f.registry);
+  let preparations = 0;
+  try {
+    await bindStructuredDeliveryQueue([], { registry: f.registry, client: f.client, deferStartupWork: true,
+      watchdogIntervalMs: 0, hostlessSettleIntervalMs: 0, settlementSweepMs: 0 });
+    f.registry.prepareReadOnlySnapshot = async signal => {
+      if (++preparations > 1) throw new Error("historical publication repeated complete registry preparation");
+      return original(signal);
+    };
+    await completeStructuredDeliveryQueueStartup([]);
+    expect(preparations).toBe(1);
+    expect(f.journal.readSession({ conversationId: "conversation_history_39" })).not.toBeNull();
+  } finally {
+    f.registry.prepareReadOnlySnapshot = original;
+    await bindStructuredDeliveryQueue([], { registry: f.registry, client: null });
+    f.journal.close(); f.registry.close();
+  }
+});

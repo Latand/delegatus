@@ -1,5 +1,5 @@
 /** One shared pass budget; host rows and phases never renew it. */
-export const STRUCTURED_STARTUP_PASS_DEADLINE_MS = 240_000;
+export const STRUCTURED_STARTUP_PASS_DEADLINE_MS = 300_000;
 
 /** Bound independent historical I/O and join every started operation before
  * propagating failure. Admission must never outlive an unobserved worker. */

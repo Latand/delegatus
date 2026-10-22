@@ -2077,8 +2077,9 @@ export async function bindStructuredDeliveryQueue(
         await successor(items, progress, assertActive, deferredConversationIds);
         return;
       }
-      const startupSnapshot = await registry.prepareReadOnlySnapshot();
-      assertActive();
+      // Marker repair changes no membership or generation. This selection is
+      // reused only to enumerate candidates; publication rechecks each host.
+      const startupSnapshot = markerSnapshot;
       /* Read only to skip republishing a projection that already says what
          this pass would say. It decides nothing else: the state published
          below is read off the registry, never off this snapshot, so a read
