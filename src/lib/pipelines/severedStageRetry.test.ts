@@ -1080,6 +1080,10 @@ test.skipIf(process.platform !== "linux")("a zombie captured from the earlier at
       conversationTurnInterrupted: async () => interrupted,
       restartRecoveryBootStartedAt: () => Date.now() - 60 * 60_000,
       stopInterruptedStageAgent: undefined,
+      /* Without the settled-writer stop, the live sibling holds the launch for
+         as long as it runs; the stop itself is covered by the passed-stage
+         cases above. */
+      stopSettledStageWriter: undefined,
       stageHostTreeStillRunning: defaultPipelinePorts().stageHostTreeStillRunning,
       cpuPressureHold: () => null,
       conversationOperatorStopped: async () => false,
