@@ -167,6 +167,7 @@ jobs:
             src/lib/team/workspaces.test.ts
             src/lib/telegram/bot/outbound.test.ts
             src/lib/telegram/bot/store.test.ts
+            src/lib/transfer/transfer.test.ts
             src/runtime-host/journal.test.ts
             src/runtime-host/journal.codexCallbacks.test.ts
             src/runtime-host/journal.consumerRetention.test.ts

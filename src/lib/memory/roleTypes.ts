@@ -133,8 +133,9 @@ export interface ScopeHistoryEntry {
   revisionScope?: string;
   at: string;
   /** Who changed the scope: a stage agent's lesson, the operator in the rules
-      window, a curator, or the join of a scope stored under a project key that moved. */
-  by: "agent" | "operator" | "succession" | "curator";
+      window, a curator, the join of a scope stored under a project key that
+      moved, or an install transfer that brought rules from another install. */
+  by: "agent" | "operator" | "succession" | "curator" | "transfer";
   pass?: string;
   counts?: CuratorPassView["counts"];
   before?: string[];

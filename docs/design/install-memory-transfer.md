@@ -94,6 +94,31 @@ those accounts has read its limits live on the new install. Anything that
 could not travel is on one list the operator works through. The validation is
 in §9.
 
+### Built
+
+Operator decisions of 2026-10-22: Q1 (a), Q2 (a), Q4 (a), Q5 (a), Q6 (a); Q3
+overridden: the bundle carries Delegatus memory only, engine memory is
+imported into Delegatus memory before export (`memory-source-switch.md`) and
+slice 3 is dropped. What the build settled differently from the text below:
+
+- The code is `src/lib/transfer/`. Sections are made of parts, one per store
+  (`sections.ts`); a record key is `<part>|<key>`. Project keys are remapped by
+  rewriting every `repo-…`/`dir-…` key in a record (`projectKeys.ts`).
+- The memory source choice, the subscription API consent, the voice tool
+  registry, relay targets, Telegram chats and the machine worker limit wait in
+  the import record and on the redo list. Choosing Delegatus memory on the
+  target starts the target's own engine memory import, so it stays the
+  operator's choice there.
+- The shared memory index is not refreshed after an import: it is built from
+  engine memory files, which no longer travel.
+- `delegatus export` needs the running Viewer, like `import`; an export of an
+  install whose Viewer does not start is deferred.
+- File revisions in the dry run are content hashes, so a file restored by a
+  rolled-back import still matches its preview.
+- Measured apply window for the learned rules of §1.10's shape (2,898 rules,
+  112 scopes, about 20 MB of history): 1.06–1.36 s over three runs
+  (`src/lib/transfer/transferMeasure.test.ts` with `LLV_TRANSFER_MEASURE=1`).
+
 ## 0. Earlier work this builds on
 
 `search_transcripts` (project-scoped, then unscoped; "export import memory

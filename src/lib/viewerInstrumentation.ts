@@ -1001,6 +1001,13 @@ export async function registerViewerRuntime(): Promise<void> {
     const authority = await initializeHotStateStoresAtStartup(boundary, { signal: startupAbort.signal });
     const { ensureLegacyCollectionsImported } = await import("@/lib/state/legacyCollections");
     await ensureLegacyCollectionsImported();
+    /* An install transfer the previous Viewer stopped between its checkpoint
+       and its cleanup: finish it when it committed, restore it when not. */
+    await startupBarrier.run(async () => {
+      const { recoverTransferImportsAtStartup } = await import("@/lib/transfer/importer");
+      try { recoverTransferImportsAtStartup(); }
+      catch (error) { console.error("[transfer] recovery of an interrupted import failed", error instanceof Error ? error.message : error); }
+    });
     const { agentRegistry } = await import("@/lib/agent/registry");
     await startupBarrier.run(() => viewerLoopMonitor.run("registry.prepare", () => agentRegistry().prepareReadOnlySnapshot(startupAbort.signal)));
     assertStartupActive();
