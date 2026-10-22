@@ -649,35 +649,86 @@ function writeSeatFile(file: OrchestratorSeatFile): void {
     ordinary previous-seat history. */
 export function reconcileOrchestratorSeatSuccession(sourceInput: string, targetInput: string, revokedAt: string): boolean {
   return withAccountMutationLock(() => {
+    /* Validate every strict migration field first, then retain fields such as
+       provisional rollback custody that the strict retirement projection does
+       not expose. Both reads are under the mutation lock. */
+    readOrchestratorSeatMigrationEvidence();
     const file = readOrchestratorSeatFile();
     const source = canonicalOrchestratorProject(sourceInput);
     const target = canonicalOrchestratorProject(targetInput);
+    if (source === target) return true;
     const sourceSeat = file.seats[source];
     const targetSeat = file.seats[target];
-    if (!sourceSeat?.conversationId || !targetSeat?.conversationId
-      || sourceSeat.conversationId === targetSeat.conversationId) return true;
-    const sourceConversationId = sourceSeat.conversationId;
-    const targetConversationId = targetSeat.conversationId;
-    const firstKey = Object.keys(file.seats).find(project => project === source || project === target);
-    let winner = firstKey === source ? sourceSeat : targetSeat;
-    const other = winner === sourceSeat ? targetSeat : sourceSeat;
-    if (other.seatEpoch > winner.seatEpoch) winner = other;
-    const displaced = winner === sourceSeat ? targetSeat : sourceSeat;
-    const winnerConversationId = winner === sourceSeat ? sourceConversationId : targetConversationId;
-    const displacedConversationId = winner === sourceSeat ? targetConversationId : sourceConversationId;
-    if (file.revocations.some(row => row.project === target && row.conversationId === displacedConversationId && row.seatEpoch === displaced.seatEpoch)) return true;
-    file.revocations.push({
-      project: target,
-      conversationId: displacedConversationId,
-      seatEpoch: displaced.seatEpoch,
-      revokedAt,
-      successorConversationId: winnerConversationId,
-      triggeredBy: winner.triggeredBy ?? null,
-      activatedAt: displaced.activatedAt,
-      path: displaced.path,
-      engine: displaced.engine ?? null,
-    });
-    writeSeatFile(file);
+    let changed = false;
+    if (sourceSeat || targetSeat) {
+      const winner = sourceSeat && targetSeat
+        ? (sourceSeat.seatEpoch > targetSeat.seatEpoch ? sourceSeat : targetSeat)
+        : sourceSeat ?? targetSeat!;
+      const displaced = sourceSeat && targetSeat
+        ? (winner === sourceSeat ? targetSeat : sourceSeat)
+        : null;
+      const rollback = winner === sourceSeat ? file.rollbacks[source] : file.rollbacks[target];
+      file.seats[target] = { ...winner, project: target };
+      delete file.seats[source];
+      if (rollback) file.rollbacks[target] = { ...rollback, project: target };
+      else delete file.rollbacks[target];
+      delete file.rollbacks[source];
+      if ((sourceSeat && sourceSeat.project !== target) || (targetSeat && targetSeat.project !== target)) changed = true;
+      if (displaced?.conversationId && winner.conversationId && displaced.conversationId !== winner.conversationId
+        && !file.revocations.some(row => row.project === target
+          && row.conversationId === displaced.conversationId && row.seatEpoch === displaced.seatEpoch)) {
+        file.revocations.push({
+          project: target,
+          conversationId: displaced.conversationId,
+          seatEpoch: displaced.seatEpoch,
+          revokedAt,
+          successorConversationId: winner.conversationId,
+          triggeredBy: winner.triggeredBy ?? null,
+          activatedAt: displaced.activatedAt,
+          path: displaced.path,
+          engine: displaced.engine ?? null,
+        });
+        changed = true;
+      }
+    }
+
+    const sourcePending = file.pending[source];
+    const targetPending = file.pending[target];
+    if (sourcePending || targetPending) {
+      const winner = sourcePending && targetPending
+        ? (sourcePending.seatEpoch > targetPending.seatEpoch ? sourcePending : targetPending)
+        : sourcePending ?? targetPending!;
+      const displaced = sourcePending && targetPending
+        ? (winner === sourcePending ? targetPending : sourcePending)
+        : null;
+      file.pending[target] = { ...winner, project: target };
+      delete file.pending[source];
+      if ((sourcePending && sourcePending.project !== target) || (targetPending && targetPending.project !== target)) changed = true;
+      if (displaced) {
+        const alreadyRecorded = file.history.some(entry => entry.reason === "superseded_epoch"
+          && entry.seat.project === target
+          && entry.seat.seatEpoch === displaced.seatEpoch
+          && entry.seat.intent.clientRequestId === displaced.intent.clientRequestId
+          && entry.seat.conversationId === displaced.conversationId);
+        if (!alreadyRecorded) {
+          recordTerminalization(file, {
+            seat: { ...displaced, project: target },
+            reason: "superseded_epoch",
+            terminalizedAt: revokedAt,
+          });
+          changed = true;
+        }
+      }
+    }
+
+    if (file.seatLineage) {
+      const remapped = file.seatLineage.map(entry => entry.project === source ? { ...entry, project: target } : entry);
+      const deduplicated = [...new Map(remapped.map(entry => [`${entry.project}\0${entry.conversationId}\0${entry.seatEpoch}`, entry])).values()];
+      if (JSON.stringify(file.seatLineage) !== JSON.stringify(deduplicated)) changed = true;
+      file.seatLineage = deduplicated;
+    }
+
+    if (changed) writeSeatFile(file);
     return true;
   }, { holder: "project succession seat reconciliation" });
 }
@@ -837,6 +888,15 @@ export function allSeatConversationsIn(file: OrchestratorSeatFile | null): SeatC
   for (const revocation of file.revocations) {
     previous.conversationIds.add(revocation.conversationId);
     if (revocation.path) previous.paths.add(revocation.path);
+  }
+  /* A pending intent can name an existing conversation. If identity
+     succession displaces that intent, its terminalization is the durable
+     record that keeps the conversation out of cleanup after the alias lands. */
+  for (const entry of file.history) {
+    if (entry.reason !== "superseded_epoch") continue;
+    const seat = entry.seat;
+    if (seat.conversationId) previous.conversationIds.add(seat.conversationId);
+    if (seat.path) previous.paths.add(seat.path);
   }
   return {
     conversationIds: [...held.conversationIds],

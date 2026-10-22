@@ -34,7 +34,7 @@ function freshRepository(name: string): string {
 const addOrigin = (repo: string, name: string) => git("-C", repo, "remote", "add", "origin", `https://example.invalid/acme/${name}.git`);
 
 const { executeOrchestratorSeatRequest } = await import("./seatCommand");
-const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, allSeatConversations, orchestratorSeatFor, orchestratorSeatIdentityForConversation, orchestratorRevocations, previousOrchestratorSeats } = await import("./seats");
+const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, allSeatConversations, orchestratorSeatFor, orchestratorSeatIdentityForConversation, orchestratorRevocations, previousOrchestratorSeats, readOrchestratorSeatRetirementEvidenceOrNull } = await import("./seats");
 const { activeSeatsByCurrentProject, orchestratorSeatForCurrentProject, recordSeatProjectSuccessions } = await import("./seatProjectIdentity");
 const { authorizedManagerSeats } = await import("./authority");
 const { permitAttentionHandoff } = await import("@/lib/mcp/toolAllowlist");
@@ -219,6 +219,68 @@ test("a seat designated before its origin existed is woken for the lanes of the 
   expect(catalog.projectCatalog.map((entry) => entry.project)).toEqual([remote]);
 });
 
+test("a displaced pending intent remains readable and replayable after project succession", async () => {
+  const repo = freshRepository("pending-seat");
+  addOrigin(repo, "pending-seat");
+  const { createManualProject } = await import("@/lib/projects/curation");
+  const legacyName = "Pending Board";
+  expect(createManualProject(legacyName, repo, new Set(), { allowedRoots: [SANDBOX] }).ok).toBe(true);
+  const canonical = projectForCwd(repo)!;
+
+  const legacy = beginOrchestratorSeatIntent({
+    project: legacyName, mandate: "retain this conversation", clientRequestId: "pending-legacy",
+    mode: "existing", conversationId: "conversation_pending_legacy", now: "2026-10-20T10:00:00.000Z",
+  });
+  const current = beginOrchestratorSeatIntent({
+    project: canonical, mandate: "keep the canonical intent", clientRequestId: "pending-canonical",
+    mode: "existing", conversationId: "conversation_pending_canonical", now: "2026-10-21T10:00:00.000Z",
+  });
+  expect(legacy.kind).toBe("begun");
+  expect(current.kind).toBe("begun");
+
+  const cwdOf = (conversationId: string) => conversationId === "conversation_pending_legacy" ? repo : null;
+  expect(recordSeatProjectSuccessions(cwdOf, false, () => "2026-10-22T12:00:00.000Z")).toContainEqual(
+    expect.objectContaining({ source: legacyName, target: canonical }),
+  );
+
+  expect(orchestratorSeatFor(canonical).pending).toMatchObject({
+    conversationId: "conversation_pending_canonical", intent: { clientRequestId: "pending-canonical" },
+  });
+  expect(orchestratorSeatFor(canonical).history).toContainEqual(expect.objectContaining({
+    reason: "superseded_epoch",
+    seat: expect.objectContaining({
+      conversationId: "conversation_pending_legacy",
+      intent: expect.objectContaining({ clientRequestId: "pending-legacy" }),
+    }),
+  }));
+  expect(allSeatConversations()).toMatchObject({
+    conversationIds: expect.arrayContaining(["conversation_pending_canonical"]),
+    previous: { conversationIds: expect.arrayContaining(["conversation_pending_legacy"]) },
+  });
+
+  expect(recordSeatProjectSuccessions(cwdOf, false, () => "2026-10-23T12:00:00.000Z")).toEqual([]);
+  expect(orchestratorSeatFor(canonical).history).toContainEqual(expect.objectContaining({
+    seat: expect.objectContaining({
+      conversationId: "conversation_pending_legacy",
+      intent: expect.objectContaining({ clientRequestId: "pending-legacy" }),
+    }),
+  }));
+  expect(readOrchestratorSeatRetirementEvidenceOrNull()).not.toBeNull();
+
+  const moduleUrl = new URL("./seats.ts", import.meta.url).href;
+  const child = `const seats = await import(${JSON.stringify(moduleUrl)}); console.log(JSON.stringify({ seat: seats.orchestratorSeatFor(${JSON.stringify(canonical)}), all: seats.allSeatConversations(), retirement: seats.readOrchestratorSeatRetirementEvidenceOrNull() !== null }));`;
+  const restarted = JSON.parse(execFileSync(process.execPath, ["-e", child], { encoding: "utf8", env: process.env }));
+  expect(restarted.retirement).toBe(true);
+  expect(restarted.seat.history).toContainEqual(expect.objectContaining({
+    seat: expect.objectContaining({
+      conversationId: "conversation_pending_legacy",
+      intent: expect.objectContaining({ clientRequestId: "pending-legacy" }),
+    }),
+  }));
+  expect(restarted.all.conversationIds).toContain("conversation_pending_canonical");
+  expect(restarted.all.previous.conversationIds).toContain("conversation_pending_legacy");
+});
+
 test("a display-name seat displaced by an existing canonical seat is retained as a retired seat on succession", async () => {
   const repo = freshRepository("legacy-seat");
   addOrigin(repo, "legacy-seat");
@@ -240,6 +302,7 @@ test("a display-name seat displaced by an existing canonical seat is retained as
   expect(recordSeatProjectSuccessions(cwdOf, false, () => "2026-10-22T12:00:00.000Z").some(move => move.source === legacyName && move.target === canonical)).toBe(true);
 
   expect(orchestratorSeatFor(canonical).active).toMatchObject({ conversationId: canonicalConversation, path: "/seats/canonical.jsonl" });
+  expect(readOrchestratorSeatRetirementEvidenceOrNull()).not.toBeNull();
   expect(previousOrchestratorSeats(canonical)).toContainEqual(expect.objectContaining({ conversationId: legacyConversation, path: "/seats/legacy.jsonl" }));
   expect(allSeatConversations()).toMatchObject({
     conversationIds: expect.arrayContaining([canonicalConversation]),
