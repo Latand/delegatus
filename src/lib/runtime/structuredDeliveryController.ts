@@ -4,6 +4,8 @@ import { conversationIdsResolvingTo, readOnlyConversationLookupFromSnapshot } fr
 import { detachCodexHostForViewerRestart, flushStructuredHostPersistence } from "./registry";
 import { spawnDiagnosticErrorForRegistry } from "@/lib/agent/spawnDiagnostics";
 import { creditGuardBlock } from "@/lib/accounts/creditGuard";
+import { turboCreditExemptFor } from "@/lib/accounts/turboCreditExemption";
+import { conversationProjectKey } from "@/lib/accounts/conversationProject";
 import { assertPipelineTurnAllowed, enforceAccountCreditGuard } from "./accountCreditGuard";
 import { hasRuntimeSwitchKill } from "@/lib/pipelines/runtimeSwitch";
 import { runtimeSwitchRetirementReason } from "@/lib/pipelines/runtimeSwitchFence";
@@ -795,7 +797,10 @@ export async function bindStructuredDeliveryQueue(
     if (conversation?.engine !== "codex") return;
     const accountId = conversation.generations.at(-1)?.accountId;
     const observation = registry.quotaObservations("codex").find(item => item.accountId === accountId);
-    if (creditGuardBlock("codex", observation?.limits)) throw new StructuredSendRefusedError("Codex paid-credit guard reached; continue on an allowed account with capacity");
+    if (creditGuardBlock("codex", observation?.limits)
+      && !turboCreditExemptFor(conversationProjectKey(conversation.projectOwnership, conversation.generations.at(-1)?.launchProfile), accountId)) {
+      throw new StructuredSendRefusedError("Codex paid-credit guard reached; continue on an allowed account with capacity");
+    }
   };
   setSeatChannelNativeWithdrawal((conversationId, operationId) => withdrawNativeSeatMessage(conversationId, operationId, client, nativeQueueExecutor));
   const nativeQueueExecutor = new NativeQueueExecutor({

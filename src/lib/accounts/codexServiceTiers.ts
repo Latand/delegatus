@@ -17,6 +17,7 @@ export function codexModelServiceTiers(home: string, model: string): CodexTierOf
       const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
       record = { key, models: Array.isArray(parsed.models) ? parsed.models : [] };
       cache.set(file, record);
+      while (cache.size > 64) cache.delete(cache.keys().next().value!);
     }
     const row = record.models.find((value): value is Record<string, unknown> => !!value && typeof value === "object" && (value as { slug?: unknown }).slug === model);
     if (!Array.isArray(row?.service_tiers)) return null;
@@ -34,6 +35,24 @@ export function tierOffers(accounts: readonly { id: string; home: string }[], mo
     ((tier === "default" || tier === "standard" || tiers.some(value => value.id === tier)) ? offering : lacking).push(account.id);
   }
   return { offering, lacking, offered: [...offered].sort() };
+}
+
+/** Turbo's tiers, fastest first (docs/design/turbo-mode.md §2.2). */
+export type TurboTier = "ultrafast" | "priority";
+
+/** The fastest tier this account's catalog lists for the model, or null when it lists neither. */
+export function fastestTier(home: string, model: string): TurboTier | null {
+  const ids = new Set((codexModelServiceTiers(home, model) ?? []).map(tier => tier.id));
+  return ids.has("ultrafast") ? "ultrafast" : ids.has("priority") ? "priority" : null;
+}
+
+const TIER_RANK: Record<string, number> = { flex: 0, default: 1, standard: 1, priority: 2, ultrafast: 3 };
+
+/** Whether moving from `from` to `to` is faster. No tier is the default; an unknown id is left alone. */
+export function raisesTier(from: string | null | undefined, to: string): boolean {
+  const before = TIER_RANK[from ?? "default"];
+  const after = TIER_RANK[to];
+  return before !== undefined && after !== undefined && after > before;
 }
 
 export class CodexServiceTierUnavailableError extends Error {

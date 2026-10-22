@@ -91,6 +91,8 @@ export interface SeatTickLastRun {
 
 export interface SeatTickSettingsAnswer {
   autonomy?: { active: boolean; until: string | null; startedAt: string | null; episode: AutonomySetting | null; proactive?: { enabled: boolean } };
+  /** Added by the settings route (docs/design/turbo-mode.md §2.1). */
+  turbo?: import("./turboRuntime").TurboAnswer;
   release?: Partial<ReleaseSetting> & typeof RELEASE_DEFAULTS & { available: boolean; status: ReleaseStatus };
   autoRotate?: { enabled: boolean; thresholdPercent: number; defaultPercent: number; minPercent: number; maxPercent: number;
     windowKnown: boolean | null; lastAttempt: (AutoRotationAttempt & { nextAttemptAt: string }) | null;

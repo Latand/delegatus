@@ -53,6 +53,33 @@ test("paid guard fences pins, continuity and resume specs while another allowed 
   expect(accountManager.resolveProjectSpawn("codex", { project: null })).toMatchObject({ kind: "available", account: { accountId: spare } });
 });
 
+test("Turbo paid approval admits project launches and native resumes, and expires for every seam", async () => {
+  const { applySeatTickSettingsChange, defaultSeatTickSettings, writeSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+  const paid = { ...observation(reserved, 100), limits: { ...observation(reserved, 100).limits,
+    credits: { hasCredits: true, balance: "10", unlimited: false } } };
+  registryWith(reserved, [paid]);
+  bind(reserved);
+  const applied = applySeatTickSettingsChange(defaultSeatTickSettings(ATLAS), { turbo: { enabled: true, hours: 1, credits: true, creditAccounts: [reserved] } }, {
+    at: new Date(NOW).toISOString(), actor: { kind: "gateway", conversationId: null, project: null, seatEpoch: null },
+    turbo: { allowedAccounts: [reserved], plan: [{ accountId: reserved, label: "Reserved carrier", plan: "pro", tiers: { "gpt-6.1-sol": "priority" }, hadCredits: true }] },
+  });
+  if (!applied.ok) throw new Error(applied.error);
+  writeSeatTickSettings(ATLAS, applied.settings);
+  expect(resolveResumeAccountId("codex", reserved, ATLAS)).toBe(reserved);
+  expect(resolveContinuityAccount("codex", reserved, ATLAS).accountId).toBe(reserved);
+  expect(accountManager.resolveProjectSpawn("codex", { project: ATLAS, requestedId: reserved, requireCapacity: true }).kind).toBe("available");
+  expect(() => resolveResumeAccountId("codex", reserved, "another-project")).toThrow("paid-credit guard");
+  expect(() => resolveContinuityAccount("codex", reserved, "another-project")).toThrow("paid-credit guard");
+  const off = applySeatTickSettingsChange(applied.settings, { turbo: { enabled: false } }, {
+    at: new Date(NOW + 1).toISOString(), actor: { kind: "gateway", conversationId: null, project: null, seatEpoch: null },
+  });
+  if (!off.ok) throw new Error(off.error);
+  writeSeatTickSettings(ATLAS, off.settings);
+  expect(() => resolveResumeAccountId("codex", reserved, ATLAS)).toThrow("paid-credit guard");
+  expect(() => resolveContinuityAccount("codex", reserved, ATLAS)).toThrow("paid-credit guard");
+  expect(accountManager.resolveProjectSpawn("codex", { project: ATLAS, requestedId: reserved, requireCapacity: true }).kind).toBe("exhausted");
+});
+
 let reserved = "";
 let spare = "";
 let claudeReserved = "";
