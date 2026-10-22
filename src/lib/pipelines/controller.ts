@@ -1,4 +1,4 @@
-import { startupDiagnostic } from "@/lib/startupDiagnostics";
+import { startupDiagnostic, startupDiagnosticsQuiet } from "@/lib/startupDiagnostics";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
 import path from "node:path";
@@ -9,7 +9,7 @@ import { scheduleAutoMerge } from "@/lib/forge/autoMerge";
 import { scheduleForgeSweep } from "@/lib/forge/sweep";
 import { loadTasksForList } from "@/lib/tasks/store";
 import { completedFileScan } from "@/lib/scanner/scanCache";
-import { FILE_SCAN_RETRY_SECONDS, isFileScanIncompleteError } from "@/lib/scanner/incompleteScan";
+import { isFileScanIncompleteError } from "@/lib/scanner/incompleteScan";
 import { activeRestartGate } from "@/lib/selfUpdate/restartGate";
 import type { FileEntry } from "@/lib/types";
 
@@ -150,6 +150,7 @@ export class FlowPipelineController {
   private readonly maxPasses: number;
   private readonly requestDeadlineMs: number;
   private requestDeadline = 0;
+  private incompleteScan: { startedAt: number; reportedAt: number; checks: number; reports: number } | null = null;
 
   constructor(ports: FlowPipelineControllerPorts, options: FlowPipelineControllerOptions = {}) {
     this.ports = {
@@ -260,9 +261,10 @@ export class FlowPipelineController {
         break;
       }
       if (scanOutcome?.state === "completed" && scanOutcome.value.complete) {
+        this.reportScanProgress(true);
         entries = scanOutcome.value.files;
       } else if (scanOutcome?.state === "completed") {
-        startupDiagnostic("info", `[flow pipeline controller] scan-dependent flow phase skipped: still scanning, retry in ${FILE_SCAN_RETRY_SECONDS} s`);
+        this.reportScanProgress(false);
       }
       if (pipelineOutcome.state === "failed") throw pipelineOutcome.error;
       const changed = (pipelineOutcome.state === "completed" && (pipelineOutcome.value.changed || pipelineOutcome.value.readyWork))
@@ -317,6 +319,28 @@ export class FlowPipelineController {
 
   idle(): boolean {
     return this.running === null && this.activePhases.size === 0;
+  }
+
+  private reportScanProgress(complete: boolean): void {
+    // A quiet CLI has no announced episode to complete. Enabling diagnostics
+    // later starts an episode on the next incomplete observation.
+    if (startupDiagnosticsQuiet()) { this.incompleteScan = null; return; }
+    const now = this.ports.monotonicNow();
+    const held = this.incompleteScan;
+    if (complete) {
+      if (!held) return;
+      this.incompleteScan = null;
+      startupDiagnostic("info", `[flow pipeline controller] scan completed: ageMs=${Math.max(0, Math.round(now - held.startedAt))} incompleteChecks=${held.checks} suppressedCount=${held.checks - held.reports}`);
+    } else if (!held) {
+      this.incompleteScan = { startedAt: now, reportedAt: now, checks: 1, reports: 1 };
+      startupDiagnostic("info", "[flow pipeline controller] still scanning: started ageMs=0 incompleteChecks=1 suppressedCount=0");
+    } else {
+      held.checks++;
+      if (now - held.reportedAt < 60_000) return;
+      held.reportedAt = now;
+      held.reports++;
+      startupDiagnostic("info", `[flow pipeline controller] still scanning: ageMs=${Math.max(0, Math.round(now - held.startedAt))} incompleteChecks=${held.checks} suppressedCount=${held.checks - held.reports}`);
+    }
   }
 
   /** Hourly, off the cycle's critical path: move settled pipeline records to

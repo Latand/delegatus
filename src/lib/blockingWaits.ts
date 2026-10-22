@@ -35,10 +35,16 @@ export interface BlockingWaitCorrelation {
   operationId?: string | null;
 }
 
+export interface StateLockHolder {
+  /** A known local process kind, or other-process when it cannot be proven. */
+  kind: string;
+  ageMs: number;
+}
+
 export interface BlockingWaitSample {
   /** Bounded caller coordinates for a slow registry wait, relative to source. */
   callSite?: string;
-  stateWait?: { callSite: string; reason: string; outcome: string; attempts: number; maxSliceMs: number; backoffMs: number; synchronousSleepMs: number; pid: number; processKind: string; release: string | null };
+  stateWait?: { callSite: string; reason: string; outcome: string; attempts: number; maxSliceMs: number; backoffMs: number; synchronousSleepMs: number; pid: number; processKind: string; release: string | null; holder?: StateLockHolder };
   site: BlockingWaitSite;
   /** `LLV_STATE_OWNER` of this process, or `unowned`. */
   role: string;
@@ -49,9 +55,10 @@ export interface BlockingWaitSample {
   subject: string | null;
   label: string | null;
   operationId: string | null;
-  /** The lock was asked for once and refused, so nothing waited and nothing
-      was written: a write that may not wait (inside a synchronous lock). */
+  /** The operation was refused. Retryable state admission uses deferred. */
   refused?: true;
+  /** Admission can be retried; no application callback entered. */
+  deferred?: true;
   at: string;
 }
 
@@ -77,6 +84,58 @@ const LONGEST_LIMIT = 20;
 const correlation = new AsyncLocalStorage<BlockingWaitCorrelation>();
 const samples: BlockingWaitSample[] = [];
 let logSink: (line: string) => void = (line) => console.warn(line);
+
+// One process owns a bounded window. Operation ids deliberately do not split
+// groups: a busy caller can issue a fresh id on every retry.
+const DEFERRAL_WINDOW_MS = 5_000;
+const DEFERRAL_GROUP_LIMIT = 128;
+type DeferralGroup = { sample: BlockingWaitSample; count: number; firstAt: string };
+const deferrals = new Map<string, DeferralGroup>();
+let deferralTimer: ReturnType<typeof setTimeout> | undefined;
+let deferralDeadline = 0;
+
+function writeWaitLog(value: unknown): void {
+  try { logSink(`[blocking-wait] ${JSON.stringify(value)}`); }
+  catch { /* a log that cannot be written never fails the caller */ }
+}
+
+function writeDeferral(group: DeferralGroup): void {
+  writeWaitLog({ ...group.sample, count: group.count, suppressedCount: group.count - 1,
+    firstAt: group.firstAt, windowMs: DEFERRAL_WINDOW_MS });
+}
+
+function flushDeferrals(): void {
+  clearTimeout(deferralTimer);
+  deferralTimer = undefined;
+  const pending = [...deferrals.values()];
+  deferrals.clear();
+  for (const group of pending) writeDeferral(group);
+}
+
+// Unref keeps a CLI exit prompt; its last partial window still has a receipt.
+process.on("beforeExit", flushDeferrals);
+process.on("exit", flushDeferrals);
+
+function deferWaitLog(sample: BlockingWaitSample): void {
+  if (deferralTimer && performance.now() >= deferralDeadline) flushDeferrals();
+  const key = JSON.stringify([sample.role, sample.subject, sample.label, sample.synchronous,
+    sample.stateWait?.callSite, sample.stateWait?.reason]);
+  const held = deferrals.get(key);
+  if (held) { held.sample = sample; held.count++; }
+  else {
+    if (deferrals.size >= DEFERRAL_GROUP_LIMIT) {
+      const oldest = deferrals.entries().next().value!;
+      deferrals.delete(oldest[0]);
+      writeDeferral(oldest[1]);
+    }
+    deferrals.set(key, { sample, count: 1, firstAt: sample.at });
+  }
+  if (!deferralTimer) {
+    deferralDeadline = performance.now() + DEFERRAL_WINDOW_MS;
+    deferralTimer = setTimeout(flushDeferrals, DEFERRAL_WINDOW_MS);
+    deferralTimer.unref();
+  }
+}
 
 function round(value: number): number {
   return Math.max(0, Math.round(value * 10) / 10);
@@ -113,8 +172,9 @@ export function currentWaitCorrelation(): BlockingWaitCorrelation | null {
 
 /**
  * Records one wait. Waits of zero are dropped: an uncontended lock costs
- * nothing worth keeping, and the window is for the ones that did. A refusal is
- * kept whatever it took: it is the one evidence that a write was not made.
+ * nothing worth keeping, and the window is for the ones that did. Refusals
+ * and deferrals are always sampled. Short state deferrals share a journal
+ * summary; terminal refusals and threshold waits retain immediate evidence.
  */
 export function recordBlockingWait(input: {
   site: BlockingWaitSite;
@@ -126,6 +186,7 @@ export function recordBlockingWait(input: {
   stateWait?: BlockingWaitSample["stateWait"];
 }): void {
   if (!Number.isFinite(input.durationMs) || (input.durationMs <= 0 && !input.refused)) return;
+  const deferred = input.stateWait?.outcome === "deferred";
   const context = input.correlation ?? currentWaitCorrelation();
   const sample: BlockingWaitSample = {
     site: input.site,
@@ -138,14 +199,17 @@ export function recordBlockingWait(input: {
     subject: input.subject ? input.subject.slice(0, 80) : null,
     label: context?.label ? context.label.slice(0, 80) : null,
     operationId: context?.operationId ? context.operationId.slice(0, 120) : null,
-    ...(input.refused ? { refused: true as const } : {}),
+    ...(deferred ? { deferred: true as const } : input.refused ? { refused: true as const } : {}),
     at: new Date().toISOString(),
   };
   samples.push(sample);
   if (samples.length > SAMPLE_LIMIT) samples.splice(0, samples.length - SAMPLE_LIMIT);
+  if (sample.site === "state-write-lock" && sample.deferred && sample.durationMs < 50) {
+    deferWaitLog(sample);
+    return;
+  }
   if (sample.durationMs >= (sample.site === "state-write-lock" || sample.site === "state-lease" || sample.site === "file-transaction" ? 50 : BLOCKING_WAIT_LOG_MS) || (sample.site === "state-write-lock" && sample.refused)) {
-    try { logSink(`[blocking-wait] ${JSON.stringify(sample)}`); }
-    catch { /* a log that cannot be written never fails the caller */ }
+    writeWaitLog(sample);
   }
 }
 
@@ -182,6 +246,9 @@ export function blockingWaitDiagnostics(): BlockingWaitDiagnostics {
 
 /** Tests only. */
 export function resetBlockingWaitsForTests(sink?: (line: string) => void): void {
+  clearTimeout(deferralTimer);
+  deferralTimer = undefined;
+  deferrals.clear();
   samples.length = 0;
   logSink = sink ?? ((line) => console.warn(line));
 }

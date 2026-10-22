@@ -2440,6 +2440,8 @@ export const en = {
   "voiceCompanion.phase.speaking": "Speaking",
   "voiceCompanion.talk": "Talk",
   "voiceCompanion.end": "End conversation",
+  "voiceCompanion.reconnect": "Reconnect",
+  "voiceCompanion.reconnected": "Connection dropped · reconnected",
   "voiceCompanion.mute": "Mute",
   "voiceCompanion.unmute": "Unmute",
   "voiceCompanion.collapse": "Collapse",

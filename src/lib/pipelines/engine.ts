@@ -93,7 +93,7 @@ import {
   type StructuredHostTerminationDependencies,
 } from "@/lib/runtime/structuredHostControl";
 import { redactBounded } from "@/lib/monitor/redact";
-import { captureProcessIdentity, processIdentityMayOwn, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
+import { captureProcessIdentity, processIdentityMayRun, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
 import { parseReview, type ReviewFinding } from "@/lib/review";
 import { spawnStructuredConversation, stagedLaunchRecovery, recoverStagedStructuredLaunch, releaseFailedStagedLaunchContinuation, STAGED_RECOVERY_MAX_CHECKS, STAGED_RECOVERY_BUDGET_MS, type StagedLaunchRecovery } from "@/lib/runtime/structuredSpawn";
 import { projectForCwd } from "@/lib/scanner/describe";
@@ -999,9 +999,17 @@ const PRIOR_WRITER_WAIT_PREFIX = "waiting for an earlier stage agent to stop bef
 const PRIOR_WRITER_WAIT_MS = 5_000;
 
 /** Whether a process a host stop captured onto this row may still run: alive,
-    or not provably gone (#2790). */
+    or not provably gone (#2790). An exited, unreaped one (a zombie) cannot,
+    whatever its parent does about it (#2967). */
 function capturedTreeMayRun(entry: Pick<AgentRegistryEntry, "structuredTerminationSurvivors">): boolean {
-  return (entry.structuredTerminationSurvivors ?? []).some(identity => processIdentityMayOwn(identity));
+  return (entry.structuredTerminationSurvivors ?? []).some(identity => processIdentityMayRun(identity));
+}
+
+/** The recorded engine process can still do work: present, not proven gone and
+    not a zombie (#2967). */
+function engineProcessMayRun(entry: Pick<AgentRegistryEntry, "structuredHost">): boolean {
+  const engine = entry.structuredHost?.process ?? null;
+  return engine !== null && processIdentityMayRun(engine);
 }
 
 /** What still runs for a registry row with no stream to reach it, named for
@@ -1010,12 +1018,12 @@ function capturedTreeMayRun(entry: Pick<AgentRegistryEntry, "structuredTerminati
     writer in the worktree a new attempt would share. */
 export function recordedHostTreeStillRunning(entry: AgentRegistryEntry | undefined | null): string | null {
   if (!entry) return null;
-  const captured = (entry.structuredTerminationSurvivors ?? []).filter(identity => processIdentityMayOwn(identity));
+  const captured = (entry.structuredTerminationSurvivors ?? []).filter(identity => processIdentityMayRun(identity));
   if (captured.length > 0) {
     return `process${captured.length === 1 ? "" : "es"} ${captured.map(identity => identity.pid).join(", ")} captured from its stopped host may still be running`;
   }
   const engine = entry.structuredHost?.process ?? null;
-  if (engine && (entry.status === "dead" || entry.status === "unhosted") && processIdentityMayOwn(engine)) {
+  if (engine && (entry.status === "dead" || entry.status === "unhosted") && processIdentityMayRun(engine)) {
     return `its engine process ${engine.pid} is still running with no stream`;
   }
   return null;
@@ -1054,7 +1062,6 @@ async function stageHostProbe(target: PipelineStageHostRef): Promise<StageHostPr
   const generation = conversation?.generations.at(-1) ?? null;
   if (!conversation || !generation) return null;
   const sessionKey = sessionKeyId({ engine: conversation.engine, sessionId: generation.id });
-  const { structuredHostProcessAlive } = await import("@/lib/runtime/structuredRecovery");
   return {
     conversationId: conversation.id,
     transcriptPath: generation.path,
@@ -1069,7 +1076,7 @@ async function stageHostProbe(target: PipelineStageHostRef): Promise<StageHostPr
     resident: () => {
       const entry = registry.readOnlySnapshot().entries[sessionKey];
       if (!entry) return false;
-      if (structuredHostProcessAlive(entry.structuredHost?.process ?? null)) return true;
+      if (engineProcessMayRun(entry)) return true;
       /* A host stop captures its child's tree before the first signal, and a
          tool that left the group outlives the engine. Until each captured
          process is proven gone, the agent is still at work in the worktree. */
@@ -1080,15 +1087,14 @@ async function stageHostProbe(target: PipelineStageHostRef): Promise<StageHostPr
     orphaned: () => {
       const entry = registry.readOnlySnapshot().entries[sessionKey];
       if (!entry) return false;
-      const engineAlive = structuredHostProcessAlive(entry.structuredHost?.process ?? null);
-      if (engineAlive) return entry.status === "dead" || entry.status === "unhosted";
+      if (engineProcessMayRun(entry)) return entry.status === "dead" || entry.status === "unhosted";
       return capturedTreeMayRun(entry);
     },
     onlyRecordedSurvivorsRun: (recorded) => {
       const entry = registry.readOnlySnapshot().entries[sessionKey];
-      if (!entry || entry.host || structuredHostProcessAlive(entry.structuredHost?.process ?? null)) return false;
+      if (!entry || entry.host || engineProcessMayRun(entry)) return false;
       const known = new Set(recorded.map(identity => `${identity.pid}:${identity.startIdentity}`));
-      return (entry.structuredTerminationSurvivors ?? []).filter(identity => processIdentityMayOwn(identity))
+      return (entry.structuredTerminationSurvivors ?? []).filter(identity => processIdentityMayRun(identity))
         .every(identity => known.has(`${identity.pid}:${identity.startIdentity}`));
     },
     host: () => registry.readOnlySnapshot().entries[sessionKey]?.host ?? null,
@@ -1407,8 +1413,9 @@ async function stopStageHostByRecordedIdentity(
   return refused(`${outcome.error} (pid ${ref.pid}${named}); ${generation}`);
 }
 
+/** A zombie survivor counts as gone: it cannot write anything more (#2967). */
 function terminationIdentityStatus(identity: PipelineUnresolvedTermination["survivors"][number]) {
-  try { return processIdentityStatus(identity); }
+  try { return processIdentityMayRun(identity) ? processIdentityStatus(identity) : "dead" as const; }
   catch { return "unverified" as const; }
 }
 
@@ -1694,8 +1701,7 @@ export function defaultPipelinePorts(
           && !hasUserAuthoredMessage(receipt.artifactPath, receipt.engine)
           && (evidence.entry.status === "dead" || evidence.entry.status === "unhosted")
           && evidence.entry.claimOwner === null
-          && (!evidence.entry.structuredHost?.process || processIdentityStatus(evidence.entry.structuredHost.process) === "dead")
-          && !(evidence.entry.structuredTerminationSurvivors ?? []).some(process => processIdentityStatus(process) !== "dead"),
+          && !engineProcessMayRun(evidence.entry) && !capturedTreeMayRun(evidence.entry),
         currentGeneration: stageLaunchGenerationMatches(receipt, evidence.generation, evidence.entry),
         generationMatches: stageLaunchGenerationIdentityMatches(receipt, evidence.generation, evidence.entry),
         retryClaimId: receipt.retryClaim?.claimId ?? null,
@@ -1782,8 +1788,7 @@ export function defaultPipelinePorts(
         if (!receipt.key && conversation?.generations.length) return false;
         if (receipt.key && (!entry || generation?.id !== receipt.key.sessionId || !stageLaunchGenerationMatches(receipt,
           conversation && generation ? { engine: conversation.engine, path: generation.path } : null, entry))) return false;
-        if (entry && (entry.claimOwner || capturedTreeMayRun(entry)
-          || entry.structuredHost?.process && processIdentityStatus(entry.structuredHost.process) !== "dead")) return false;
+        if (entry && (entry.claimOwner || capturedTreeMayRun(entry) || engineProcessMayRun(entry))) return false;
         // Late native work wins at the write boundary too.
         return stageArtifactStamp(receipt.artifactPath) === stamp
           && (conversation?.generations ?? []).every(g => g.path === receipt.artifactPath || stageArtifactStamp(g.path) === null);
@@ -6445,6 +6450,26 @@ function activationFence(pipeline: Pipeline): string {
     ...(pipeline.controlGeneration === undefined ? [] : [pipeline.controlGeneration])]);
 }
 
+function unstartedPendingAttempt(attempt: PipelineStageAttempt | null | undefined): boolean {
+  return !!attempt && attempt.state === "pending" && !attempt.startedAt && !attempt.launchId
+    && !attempt.conversationId && !attempt.agentPath && !attempt.paneId
+    && !attempt.completedAt && !attempt.report && !attempt.verdict;
+}
+
+function pendingLaunchDetail(attempt: PipelineStageAttempt, ports: PipelinePorts, activationPending = !!attempt.activation): string {
+  const publication = ports.structuredDeliveryPublication?.() ?? "ready";
+  if (publication !== "ready") return `stage spawn deferred: waiting for the delivery controller (${publication})`;
+  if (activationPending) return "stage spawn deferred: reconciling the original stage activation";
+  const now = unixMs(ports.now());
+  if (unixMs(attempt.controllerWait?.retryAfter ?? "") > now) {
+    return `stage spawn deferred: waiting for the launch controller; retry at ${attempt.controllerWait!.retryAfter}`;
+  }
+  if (unixMs(attempt.providerWait?.resumeAt ?? "") > now) {
+    return `stage spawn deferred: waiting for provider capacity; retry at ${attempt.providerWait!.resumeAt}`;
+  }
+  return "stage spawn deferred: waiting for stage launch admission";
+}
+
 /** Each reservation has one process owner. Unknown owner liveness never grants
  * takeover; a dead owner recovers only the stored downstream key. */
 const activationExecutors = globalThis as unknown as { __llvActivationExecutors?: Set<string> };
@@ -6572,17 +6597,54 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
                 accountId: attempt.accountId });
               if (!current.completedAt && !current.verdict) current.state = attempt.state;
             } else {
-              current.state = "pending";
-              current.startedAt = null;
-              current.definition = null;
-              if (live.cursor?.stageId === run.stageId) live.cursor.state = "pending";
+              // A cancelled callback can follow registry admission. Bind its
+              // receipt before dropping activation custody, or the next tick
+              // could reserve another launch under a fresh handshake key.
+              const receipt = current.activation.phase === "reserving"
+                ? agentRegistry().spawnReceiptForClientAttempt(current.activation.clientAttemptId) : null;
+              if (receipt && (receipt.engine !== current.activation.input.role.engine || receipt.cwd !== current.activation.input.cwd
+                || receipt.transport !== "structured" || !agentRegistry().conversationMemberships(receipt.conversationId).some(member =>
+                  member.kind === "pipeline" && member.containerId === live.id && member.stageId === run.stageId
+                  && member.slot === `${run.stageId}:${current.n}` && member.round === current.n
+                  && member.role === current.activation!.input.membership.role))) {
+                // A client key alone cannot adopt another operation's host.
+                delete current.activation.owner;
+                live.stateDetail = "stage spawn deferred: waiting for the original stage membership, runtime and worktree to reconcile; original activation retained";
+                await persist([live]);
+                return;
+              }
+              const controlsCursor = live.cursor?.stageId === run.stageId && currentAttempt(live, run.stageId)?.n === current.n;
+              const settled = !!(current.completedAt || current.verdict || current.report)
+                || ["passed", "failed", "needs_decision", "skipped"].includes(current.state);
+              if (receipt) {
+                Object.assign(current, { launchId: receipt.launchId, conversationId: receipt.conversationId,
+                  accountId: receipt.accountId ?? current.accountId ?? null });
+                if (!settled) { current.state = "spawning"; current.startedAt ??= activation.startedAt; }
+                if (controlsCursor && !settled) live.cursor!.state = "spawning";
+                if (live.state === "running") live.stateDetail = "stage spawn deferred: reconciling the original launch receipt";
+                if (!controlsCursor || settled) {
+                  // An earlier attempt's uncertain launch still fences the
+                  // replacement. Only receipt settlement releases this key.
+                  current.activation.phase = "dispatching";
+                  delete current.activation.owner;
+                  await persist([live]);
+                  return;
+                }
+              } else if (!settled) {
+                current.state = "pending";
+                current.startedAt = null;
+                current.definition = null;
+                if (controlsCursor) live.cursor!.state = "pending";
+              }
             }
             // The activation's captured cursor may still say spawning after a
             // privacy retry was checkpointed. Without launch evidence, keep
             // that durable wait eligible for the next controller tick.
-            if (current.roleMemoryWait && !current.launchId && !current.conversationId && !current.agentPath && !current.paneId) {
+            if (current.roleMemoryWait && !current.completedAt && !current.verdict && !current.report
+              && !["passed", "failed", "needs_decision", "skipped"].includes(current.state)
+              && !current.launchId && !current.conversationId && !current.agentPath && !current.paneId) {
               current.state = "pending";
-              if (live.cursor?.stageId === run.stageId) live.cursor.state = "pending";
+              if (live.cursor?.stageId === run.stageId && currentAttempt(live, run.stageId)?.n === current.n) live.cursor.state = "pending";
             }
             delete current.activation;
             await persist([live]);
@@ -7622,7 +7684,14 @@ async function tickRunStage(
   const attempt = pipeline.cursor?.state === "pending" && prior && ["passed", "failed", "needs_decision", "skipped"].includes(prior.state)
     ? await newAttempt(pipeline, stage)
     : prior ?? await newAttempt(pipeline, stage);
-  if (!attempt || pipeline.state === "needs_decision" || attempt.activation) return;
+  if (!attempt || pipeline.state === "needs_decision") return;
+  if (attempt.activation || unstartedPendingAttempt(attempt) && pipelineHasActivation(pipeline)) {
+    if (!attempt.launchId && !attempt.conversationId && !attempt.report && !attempt.verdict) {
+      const detail = pendingLaunchDetail(attempt, ports, true);
+      if (pipeline.stateDetail !== detail) { pipeline.stateDetail = detail; await persist(); }
+    }
+    return;
+  }
   if (openRuntimeSwitch(attempt)) {
     const switchRecord = openRuntimeSwitch(attempt)!;
     const beforeCut = switchRecord.phase === "requested" && attempt.agentPath
@@ -7665,7 +7734,12 @@ async function tickRunStage(
        pass ends on a pending cursor, which wakes the process that owns the
        controller (requestPipelineTick), and it activates the same attempt. */
     const publication = ports.structuredDeliveryPublication?.() ?? "ready";
-    if (publication === "unbound") { ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline)); return; }
+    if (publication === "unbound") {
+      const detail = pendingLaunchDetail(attempt, ports);
+      if (pipeline.stateDetail !== detail) { pipeline.stateDetail = detail; await persist(); }
+      ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline));
+      return;
+    }
     if (await holdStageLaunchForUpdate(pipeline, ports, persist)) return;
     if (await waitForMemory(pipeline, stage, attempt, ports)) {
       ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline));
@@ -7675,6 +7749,10 @@ async function tickRunStage(
     /* A wait booked by an earlier tick is not due yet. */
     if (unixMs(attempt.controllerWait?.retryAfter ?? "") > unixMs(activationNow)
       || unixMs(attempt.providerWait?.resumeAt ?? "") > unixMs(activationNow)) {
+      if (pipeline.stateDetail?.includes("waiting for the delivery controller")) {
+        pipeline.stateDetail = pendingLaunchDetail(attempt, ports);
+        await persist();
+      }
       ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline));
       return;
     }
@@ -7767,7 +7845,7 @@ async function tickRunStage(
          cannot mistake the wait for one an earlier engine left mid-spawn. */
       attempt.spawnCalls ??= uncountedSpawnCallFloor(attempt);
       if (bookControllerWaitRound(attempt, activationNow, activationNow, ports) === "waiting") {
-        syncControllerWaitStateDetail(pipeline, attempt, null);
+        pipeline.stateDetail = `${pendingLaunchDetail(attempt, ports)}; retry at ${attempt.controllerWait!.retryAfter}`;
         await persist();
         return;
       }
@@ -10541,6 +10619,7 @@ function controllerWaitParkDetail(attempt: PipelineStageAttempt, now: string, fa
     as work to re-tick immediately would spin the controller through passes that
     can only defer it again (#1191). */
 function stageActivationIsWaiting(pipeline: Pipeline, nowMs: number): boolean {
+  if (pipelineHasActivation(pipeline)) return true;
   const stageId = pipeline.cursor?.stageId;
   if (!stageId) return false;
   const attempt = currentAttempt(pipeline, stageId);
@@ -12160,10 +12239,12 @@ function stageGuardShapeError(req: PatchPipelineRequest): PipelinePatchResult | 
  */
 function expectedStageRefusal(pipeline: Pipeline, req: PatchPipelineRequest): PipelinePatchResult | null {
   if (req.expectedStageId === undefined) return null;
+  const pendingRetry = req.action === "retry-stage" && ["running", "paused"].includes(pipeline.state)
+    && pipeline.cursor?.state === "pending" && unstartedPendingAttempt(currentAttempt(pipeline, pipeline.cursor.stageId));
   const waiting = pipeline.state === "needs_decision" || (req.action === "retry-stage"
     && (pipeline.state === "running" && ["running", "spawning"].includes(pipeline.cursor?.state ?? "")
       || pipeline.state === "paused" && pipeline.cursor?.state === "spawning")
-    && ["running", "spawning"].includes(currentAttempt(pipeline, pipeline.cursor!.stageId)?.state ?? ""))
+    && ["running", "spawning"].includes(currentAttempt(pipeline, pipeline.cursor!.stageId)?.state ?? "")) || pendingRetry
     ? pipeline.cursor?.stageId ?? null : null;
   if (waiting !== req.expectedStageId) {
     const repair = pipeline.cursor ? currentAttempt(pipeline, pipeline.cursor.stageId)?.publicationRepair : undefined;
@@ -14287,7 +14368,9 @@ export async function patchPipeline(
         }
         return { pipeline };
       }
-      if (pipeline.runs.some((run) => run.attempts.some((item) => item.activation))) {
+      const unstartedPending = stage?.kind === "run" && pipeline.cursor?.state === "pending" && unstartedPendingAttempt(attempt)
+        && ["running", "paused", "needs_decision"].includes(pipeline.state);
+      if (!unstartedPending && pipelineHasActivation(pipeline)) {
         return { error: "the original stage activation is still reconciling", status: 409 };
       }
       const explicitReceiptRetry = req.stageId !== undefined || req.launchId !== undefined;
@@ -14319,6 +14402,16 @@ export async function patchPipeline(
       }
       const survivorRefusal = pipelineSurvivorRefusal(pipeline);
       if (survivorRefusal) return survivorRefusal;
+      if (unstartedPending && attempt) {
+        // Wake the existing reservation. Its owner and downstream receipt key
+        // remain authoritative; retry never grants another dispatch permit.
+        if (pipeline.state !== "paused") {
+          pipeline.state = "running";
+          pipeline.stateDetail = pendingLaunchDetail(attempt, ports, pipelineHasActivation(pipeline));
+        }
+        await persist(); requestPipelineTick();
+        return { pipeline };
+      }
       if (stage?.kind === "run" && attempt && !attempt.report && !attempt.verdict && ["running", "needs_decision"].includes(pipeline.state)
         && (attempt.suspension || stageAccountBlocked(pipeline, attempt, ports))) {
         if (attempt.suspension?.operatorStoppedAt) {

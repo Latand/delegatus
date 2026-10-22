@@ -99,6 +99,18 @@ function facts(overrides: Partial<BoardReportFacts> = {}): BoardReportFacts {
   };
 }
 
+test("a pending lane names its actual launch wait in the running row (#2996)", () => {
+  const report = composeBoardReport(facts({ lanes: [lane("pending", { attempt: 2, attemptStartedAt: null,
+    wait: "waiting for the delivery controller (unbound)" })] }));
+  expect(report.text).toContain("waiting for the delivery controller (unbound)");
+  expect(report.counts.stuck).toBe(0);
+  expect(report.counts.running).toBe(1);
+  const long = composeBoardReport(facts({ lanes: [lane("pending-lane-".repeat(3), {
+    title: "A long task title ".repeat(12), stageId: "a-long-stage-name".repeat(4),
+    wait: "waiting for the delivery controller (unbound)" })] }));
+  expect(long.text).toContain("waiting for the delivery controller (unbound)");
+});
+
 const openPr = (number: number, headRefName: string, title = `PR ${number}`) => ({
   number, title, headRefName, createdAt: minutesAgo(25), updatedAt: minutesAgo(4),
 });
