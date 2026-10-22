@@ -305,3 +305,20 @@ test("reconciliation retains custody replaced at the preparation boundary", asyn
     });
   } finally { registry.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test("one startup spawn marker repair does not assemble registry history", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-marker-keyed-"));
+  const filename = path.join(root, "registry.json");
+  const initial = seeded(root, 32);
+  const entry = initial.entries["codex:reader-0"]!;
+  entry.pendingAction = "spawn";
+  fs.writeFileSync(filename, JSON.stringify(initial));
+  const registry = new AgentRegistry(filename, () => false, undefined, { sqliteMode: "sqlite" });
+  const original = registry.readOnlySnapshot.bind(registry);
+  registry.readOnlySnapshot = () => { throw new Error("marker repair assembled registry history"); };
+  try {
+    // An unproven process remains protected even on the keyed repair path.
+    expect(registry.repairCompletedStructuredSpawnMarkers(entry.key)).toBe(0);
+    expect(registry.startupHostSnapshot(entry.key).entries["codex:reader-0"]?.pendingAction).toBe("spawn");
+  } finally { registry.readOnlySnapshot = original; registry.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});

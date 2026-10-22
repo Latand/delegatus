@@ -8613,7 +8613,7 @@ export class AgentRegistry {
       proves the exact current generation and whose full recorded ownership is
       still live. This is intentionally a startup-only repair: an incomplete,
       mismatched, handoff, or unverifiable row remains untouched. */
-  repairCompletedStructuredSpawnMarkers(): number {
+  repairCompletedStructuredSpawnMarkers(key?: SessionKey): number {
     const canRepair = (file: RegistryFile, entry: AgentRegistryEntry): boolean => {
       if (entry.pendingAction !== "spawn"
         || entry.host !== null
@@ -8643,7 +8643,7 @@ export class AgentRegistry {
         || !owner
         || !hasCompleteProcessIdentity(process)
         || !hasCompleteProcessIdentity(owner)) return false;
-      const conversation = Object.values(file.conversations).find((candidate) =>
+      const conversation = registryConversationsForEntryKey(file, sessionKeyId(entry.key)).find((candidate) =>
         candidate.engine === entry.key.engine
           && candidate.generations.at(-1)?.id === entry.key.sessionId
           && !candidate.supersededBy);
@@ -8656,6 +8656,13 @@ export class AgentRegistry {
         && this.ownerAlive(process)
         && this.ownerAlive(owner);
     };
+    if (key) return this.mutate(file => {
+      const entry = file.entries[sessionKeyId(key)];
+      if (!entry || !canRepair(file, entry)) return 0;
+      entry.pendingAction = null;
+      entry.updatedAt = now();
+      return 1;
+    });
     const snapshot = this.readOnlySnapshot();
     if (!Object.values(snapshot.entries).some((entry) => canRepair(snapshot, entry))) return 0;
     return this.mutate((file) => {

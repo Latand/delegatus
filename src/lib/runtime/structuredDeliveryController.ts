@@ -1,6 +1,6 @@
 import { performanceSpans } from "@/lib/performanceSpans";
 import { startupHostSnapshot } from "./startupSnapshot";
-import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
+import { registryKeysMatching, registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { seatRecipientVerdict, seatRecipientVerdictAsync, setSeatChannelNativeWithdrawal } from "@/lib/orchestrator/seatChannel";
 import { conversationIdsResolvingTo, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
 import { detachCodexHostForViewerRestart, flushStructuredHostPersistence } from "./registry";
@@ -2055,7 +2055,19 @@ export async function bindStructuredDeliveryQueue(
          registering hosts so even a registration-triggered drain sees the
          repaired durable state. */
       deferredStartupConversations = new Set(deferredConversationIds);
-      (await registry.deliveryWriteOrBusy({ label: "registry.repairCompletedStructuredSpawnMarkers" }, registry.repairCompletedStructuredSpawnMarkers.bind(registry)));
+      const markerSnapshot = await registry.prepareReadOnlySnapshot();
+      assertActive();
+      const markerKeys = registryKeysMatching(markerSnapshot, "entries", "structuredHost.kind",
+        ["codex-app-server", "claude-broker", "copilot-acp"]);
+      await forEachStartupBatch(markerKeys, async key => {
+        const entry = performanceSpans.sync("runtime.startup.select", () => markerSnapshot.entries[key]);
+        if (entry?.pendingAction !== "spawn") return;
+        await registry.deliveryWriteOrBusy({ label: "registry.repairCompletedStructuredSpawnMarkers" }, () => {
+          assertActive();
+          if (superseded()) throw new StructuredDeliveryControllerUnavailableError();
+          return registry.repairCompletedStructuredSpawnMarkers(entry.key);
+        });
+      }, assertActive);
       await phase("registering structured delivery hosts");
       for (const item of items) await register(item);
       assertActive();
