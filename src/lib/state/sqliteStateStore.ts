@@ -260,6 +260,8 @@ export interface CompanionPatch<C> {
 
 export interface StateBoundedTransaction<T> {
   get(key: string): T | null;
+  /** Indexed task evidence; each project seek and returned row spends budget. */
+  taskProjectRows(projects: readonly string[]): T[];
   pipelineLookup(query: { requestKey: string } | { repository: string; branch: string; active?: boolean }): T | null;
   hasUnfinishedPipeline(query: {
     repository: string;
@@ -1693,6 +1695,26 @@ export class SqliteStateCollection<T> {
           const consume = () => { if (--remaining < 0) throw new Error("state patch row budget exceeded"); };
           const changed = new Map<string, "upsert" | "delete">();
           const result = operation({
+            taskProjectRows: (projects) => {
+              if (this.options.collection !== "tasks") throw new Error("task project lookup requires the task collection");
+              const records: T[] = [];
+              for (const project of new Set(projects)) {
+                consume();
+                const rows = db.query<{ value_json: string }, [string, number]>(`
+                  SELECT value_json FROM state_rows INDEXED BY state_rows_task_project
+                  WHERE collection='tasks' AND json_valid(value_json)
+                    AND json_extract(value_json,'$.project')=?
+                  ORDER BY row_key LIMIT ?
+                `).all(project, remaining + 1);
+                for (const row of rows) {
+                  consume();
+                  const value = this.decodeRow(row.value_json, db);
+                  if (value === null) throw new Error("invalid bounded task row");
+                  records.push(this.options.clone(value));
+                }
+              }
+              return records;
+            },
             pipelineLookup: (query) => {
               consume();
               return this.lookupPipeline(db, query);

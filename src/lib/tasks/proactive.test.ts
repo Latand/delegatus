@@ -5,7 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import { admitProactiveTask, readProactiveAllowance, rejectProactiveCandidate } from "./proactive";
 import { checkpointTaskRollbackMirrorForDemotion, importLegacyTasks, loadTasks, mutateTasks, saveTasks } from "./store";
-import { patchTask } from "./commands";
+import { BOARD_TASKS_PER_PROJECT_LIMIT, createTask, patchTask } from "./commands";
+import type { BoardTask } from "./types";
+import { persistProjectAliases } from "@/lib/projects/aliases";
 import { proactiveScopeCurrent } from "./proactiveScope";
 import { compactTask, taskAcknowledgement } from "@/lib/mcp/listAnswers";
 import { encodeTask } from "@/lib/links/taskWire";
@@ -15,6 +17,30 @@ import { candidate, context, NOW, authority } from "./proactive.fixture";
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
 function file() { const root = fs.mkdtempSync(path.join(os.tmpdir(), "proactive-tasks-")); roots.push(root); return path.join(root, "tasks.json"); }
+
+async function runChild(target: string, key: string, action = "admit", project = "atlas", startedAt = context().startedAt) {
+  const root = path.dirname(target);
+  for (const name of ["home", "config", "tmp"]) fs.mkdirSync(path.join(root, name), { recursive: true });
+  const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "proactive.fixture.ts"), target, key, action, project, startedAt], {
+    env: { ...process.env, HOME: path.join(root, "home"), XDG_CONFIG_HOME: path.join(root, "config"), TMPDIR: path.join(root, "tmp"), LLV_STATE_DIR: root },
+    stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 15_000,
+  });
+  try {
+    const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    if (code !== 0) throw new Error(`child exit ${code}: ${err}`);
+    const result = out.split("\n").find(line => line.startsWith("RESULT "));
+    if (!result) throw new Error(`child omitted its result: ${out} ${err}`);
+    return JSON.parse(result.slice(7)) as { id?: string; replay?: boolean; error?: string; episodeUsed?: number; rollingUsed?: number };
+  } finally {
+    if (child.exitCode === null) child.kill();
+    await child.exited;
+  }
+}
+
+function boardRow(index: number, project = "atlas"): BoardTask {
+  return { id: `band-${index}`, project, text: `Recorded outcome ${index}`, status: "assigned", board: "shown", placement: "unplaced", assignments: [],
+    createdAt: new Date(NOW).toISOString(), updatedAt: new Date(NOW).toISOString() };
+}
 
 test("atomic admission counts hidden, done and failed outcomes; stable keys replay one card", async () => {
   const target = file();
@@ -195,15 +221,7 @@ test("legacy rollback edits and restores retain provenance and cannot restore an
 
 test("parallel real processes admit at most two and restart retains receipts and rejection", async () => {
   const target = file();
-  const run = async (key: string, action = "admit") => {
-    const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "proactive.fixture.ts"), target, key, action], { env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
-    const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-    expect(code).toBe(0);
-    if (code !== 0) throw new Error(err);
-    const result = out.split("\n").find(line => line.startsWith("RESULT "));
-    if (!result) throw new Error(`child omitted its result: ${out} ${err}`);
-    return JSON.parse(result.slice(7)) as { id?: string; error?: string };
-  };
+  const run = (key: string, action = "admit") => runChild(target, key, action);
   const settled = await Promise.allSettled([run("a"), run("b"), run("c"), run("d")]);
   const results = settled.map(result => { if (result.status === "rejected") throw result.reason; return result.value; });
   expect(results.filter(result => result.id)).toHaveLength(2);
@@ -214,4 +232,133 @@ test("parallel real processes admit at most two and restart retains receipts and
   await run(key, "reject");
   expect((await run(key)).error).toContain("rejected");
   expect(loadTasks(target)).toHaveLength(2);
+});
+
+test("project succession and restart preserve both quotas, replay and rejected candidate keys", async () => {
+  const target = file();
+  expect((await runChild(target, "one")).id).toBeDefined();
+  const second = await runChild(target, "two");
+  expect(second.id).toBeDefined();
+  expect(await runChild(target, "one", "reject")).toEqual({});
+  expect(await runChild(target, "atlas-renamed", "alias")).toEqual({});
+  for (const project of ["atlas", "atlas-renamed"]) {
+    expect(await runChild(target, "", "allowance", project)).toEqual({ episodeUsed: 2, rollingUsed: 2 });
+    expect((await runChild(target, "three", "admit", project)).error).toContain("episode allowance");
+    expect((await runChild(target, "one", "admit", project)).error).toContain("rejected");
+    expect(await runChild(target, "two", "admit", project)).toEqual({ id: second.id, replay: true });
+  }
+  const next = new Date(NOW + 3_600_000).toISOString();
+  expect((await runChild(target, "three", "admit", "atlas-renamed", next)).error).toContain("rolling 24-hour allowance");
+  expect(await runChild(target, "atlas-final", "alias", "atlas-renamed")).toEqual({});
+  expect(await runChild(target, "", "allowance", "atlas-final")).toEqual({ episodeUsed: 2, rollingUsed: 2 });
+  expect((await runChild(target, "one", "admit", "atlas-final")).error).toContain("rejected");
+  expect(loadTasks(target)).toHaveLength(2);
+});
+
+test("coexisting predecessor and successor receipts combine usage and rejection wins a candidate collision", async () => {
+  const target = file();
+  expect((await runChild(target, "same")).id).toBeDefined();
+  expect(await runChild(target, "same", "reject")).toEqual({});
+  expect((await runChild(target, "same", "admit", "atlas-renamed")).id).toBeDefined();
+  expect(await runChild(target, "atlas-renamed", "alias")).toEqual({});
+  expect(await runChild(target, "atlas-renamed", "alias")).toEqual({});
+  expect(await runChild(target, "", "allowance", "atlas-renamed")).toEqual({ episodeUsed: 2, rollingUsed: 2 });
+  expect((await runChild(target, "third", "admit", "atlas-renamed")).error).toContain("episode allowance");
+  expect((await runChild(target, "same", "admit", "atlas-renamed")).error).toContain("rejected");
+  expect(await runChild(target, "same", "reject", "atlas-renamed")).toEqual({});
+  expect((await runChild(target, "same", "admit")).error).toContain("rejected");
+  expect(loadTasks(target)).toHaveLength(2);
+});
+
+test("succession during asynchronous preparation uses the current canonical project and all predecessor usage", async () => {
+  const target = file();
+  const source = "preparing-project", successor = "prepared-project";
+  const input = (key: string) => ({ ...candidate(key), project: source });
+  const ctx = { ...context(), project: source };
+  await admitProactiveTask(input("first"), ctx, target, authority());
+  const pending = admitProactiveTask(input("second"), ctx, target, authority());
+  expect(persistProjectAliases([{ source, target: successor, displayName: "Prepared project" }])).toBe(true);
+  expect((await pending).task.project).toBe(successor);
+  expect(readProactiveAllowance(successor, ctx.startedAt, NOW, target)).toEqual({ episodeUsed: 2, rollingUsed: 2 });
+  await expect(admitProactiveTask(input("third"), ctx, target, authority())).rejects.toThrow("episode allowance");
+});
+
+test("an oversized alias family refuses reads, admission and rejection without losing existing receipts", async () => {
+  const target = file(), project = "many-predecessors";
+  const input = { ...candidate("held"), project };
+  const ctx = { ...context(), project };
+  await admitProactiveTask(input, ctx, target, authority());
+  expect(persistProjectAliases(Array.from({ length: 127 }, (_, n) => ({ source: `predecessor-${n}`, target: project, displayName: "Project" })))).toBe(true);
+  expect(readProactiveAllowance(project, ctx.startedAt, NOW, target)).toEqual({ episodeUsed: 1, rollingUsed: 1 });
+  expect((await admitProactiveTask(input, ctx, target, authority())).replay).toBe(true);
+  expect(persistProjectAliases([{ source: "predecessor-overflow", target: project, displayName: "Project" }])).toBe(true);
+  expect(() => readProactiveAllowance(project, ctx.startedAt, NOW, target)).toThrow("alias evidence");
+  await expect(admitProactiveTask({ ...input, candidateKey: "new" }, ctx, target, authority())).rejects.toThrow("alias evidence");
+  await expect(rejectProactiveCandidate(project, "held", target)).rejects.toThrow("alias evidence");
+  expect(loadTasks(target)).toHaveLength(1);
+});
+
+test("a full board spends no allowance; hiding one band permits exactly one concurrent admission", async () => {
+  const target = file();
+  saveTasks(Array.from({ length: BOARD_TASKS_PER_PROJECT_LIMIT }, (_, n) => boardRow(n)), target);
+  const ordinary = createTask(loadTasks(target), { project: "atlas", text: "Ordinary outcome", placement: "unplaced" });
+  expect(ordinary.ok).toBe(false);
+  if (!ordinary.ok) expect(ordinary.code).toBe("TASK_BOARD_FULL");
+  expect((await runChild(target, "first")).error).toContain("300 task bands");
+  expect(readProactiveAllowance("atlas", context().startedAt, NOW, target)).toEqual({ episodeUsed: 0, rollingUsed: 0 });
+  expect(loadTasks(target)).toHaveLength(300);
+  mutateTasks(tasks => ({ tasks: tasks.map((task, n) => n === 0 ? { ...task, board: "hidden" } : task), result: null }), target);
+  const results = await Promise.all([runChild(target, "first"), runChild(target, "second")]);
+  expect(results.filter(row => row.id)).toHaveLength(1);
+  expect(results.filter(row => row.error?.includes("300 task bands"))).toHaveLength(1);
+  expect(loadTasks(target).filter(task => task.board !== "hidden")).toHaveLength(300);
+  expect(readProactiveAllowance("atlas", context().startedAt, NOW, target)).toEqual({ episodeUsed: 1, rollingUsed: 1 });
+  const winner = results[0]!.id ? "first" : "second";
+  expect((await runChild(target, winner)).replay).toBe(true);
+});
+
+test("board evidence includes predecessor task keys after succession", async () => {
+  const target = file();
+  saveTasks(Array.from({ length: 300 }, (_, n) => boardRow(n, n < 150 ? "atlas" : "atlas-renamed")), target);
+  expect(await runChild(target, "atlas-renamed", "alias")).toEqual({});
+  expect((await runChild(target, "full", "admit", "atlas-renamed")).error).toContain("300 task bands");
+  expect(await runChild(target, "", "allowance", "atlas-renamed")).toEqual({ episodeUsed: 0, rollingUsed: 0 });
+});
+
+test("board admission rechecks a board filled during asynchronous preparation", async () => {
+  const target = file();
+  saveTasks(Array.from({ length: 299 }, (_, n) => boardRow(n)), target);
+  const pending = admitProactiveTask(candidate("late-board"), context(), target, authority());
+  mutateTasks(tasks => ({ tasks: [...tasks, boardRow(299)], result: null }), target);
+  await expect(pending).rejects.toThrow("300 task bands");
+  expect(loadTasks(target)).toHaveLength(300);
+  expect(readProactiveAllowance("atlas", context().startedAt, NOW, target)).toEqual({ episodeUsed: 0, rollingUsed: 0 });
+});
+
+test("board evidence uses shared visibility for hidden and expired tasks and ignores other projects", async () => {
+  const target = file();
+  saveTasks([
+    ...Array.from({ length: 299 }, (_, n) => boardRow(n)),
+    { ...boardRow(299), board: "hidden" },
+    { ...boardRow(300), status: "done", doneAt: new Date(NOW - 3 * 86_400_000 - 1).toISOString(), doneAdmissions: [] },
+    ...Array.from({ length: 1_100 }, (_, n) => boardRow(n + 301, "other-project")),
+  ], target);
+  await admitProactiveTask(candidate("last"), context(), target, authority());
+  await expect(admitProactiveTask(candidate("full"), context(), target, authority())).rejects.toThrow("300 task bands");
+  expect(readProactiveAllowance("atlas", context().startedAt, NOW, target)).toEqual({ episodeUsed: 1, rollingUsed: 1 });
+});
+
+test("unreadable and oversized board evidence refuse without a task or allowance write", async () => {
+  const target = file();
+  saveTasks([{ ...boardRow(0), board: "hidden" }], target);
+  const db = new Database(legacyDatabasePath(target));
+  try { db.query("UPDATE state_rows SET value_json=json_remove(value_json,'$.text') WHERE collection='tasks' AND row_key='t:band-0'").run(); }
+  finally { db.close(); }
+  await expect(admitProactiveTask(candidate("unreadable"), context(), target, authority())).rejects.toThrow("invalid persisted task");
+  expect(readProactiveAllowance("atlas", context().startedAt, NOW, target)).toEqual({ episodeUsed: 0, rollingUsed: 0 });
+  const oversized = file();
+  saveTasks(Array.from({ length: 1_100 }, (_, n) => ({ ...boardRow(n), board: "hidden" })), oversized);
+  await expect(admitProactiveTask(candidate("oversized"), context(), oversized, authority())).rejects.toThrow("budget");
+  expect(loadTasks(oversized)).toHaveLength(1_100);
+  expect(readProactiveAllowance("atlas", context().startedAt, NOW, oversized)).toEqual({ episodeUsed: 0, rollingUsed: 0 });
 });

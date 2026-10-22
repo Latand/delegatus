@@ -8,10 +8,21 @@ export const authority = (now = NOW, startedAt = new Date(NOW).toISOString()) =>
   seat: () => ({ conversationId: "seat", epoch: 1 }),
 });
 if (import.meta.main) {
-  const { admitProactiveTask, rejectProactiveCandidate } = await import("./proactive");
-  const [file, key, action] = process.argv.slice(2);
+  const { admitProactiveTask, readProactiveAllowance, rejectProactiveCandidate } = await import("./proactive");
+  const [file, key, action, project = "atlas", startedAt = context().startedAt] = process.argv.slice(2);
+  const now = Date.parse(startedAt);
   try {
-    if (action === "reject") { await rejectProactiveCandidate("atlas", key!, file!); process.stdout.write(`\nRESULT ${JSON.stringify({})}\n`); }
-    else { const result = await admitProactiveTask(candidate(key!), context(), file!, authority()); process.stdout.write(`\nRESULT ${JSON.stringify({ id: result.task.id })}\n`); }
+    let result: unknown;
+    if (action === "alias") {
+      const { persistProjectAliases } = await import("@/lib/projects/aliases");
+      if (!persistProjectAliases([{ source: project, target: key!, displayName: "Atlas" }])) throw new Error("alias refused");
+      result = {};
+    } else if (action === "allowance") result = readProactiveAllowance(project, startedAt, now, file!);
+    else if (action === "reject") { await rejectProactiveCandidate(project, key!, file!); result = {}; }
+    else {
+      const admitted = await admitProactiveTask({ ...candidate(key!), project }, { ...context(startedAt), project }, file!, authority(now, startedAt));
+      result = { id: admitted.task.id, replay: admitted.replay };
+    }
+    process.stdout.write(`\nRESULT ${JSON.stringify(result)}\n`);
   } catch (error) { process.stdout.write(`\nRESULT ${JSON.stringify({ error: (error as Error).message })}\n`); }
 }

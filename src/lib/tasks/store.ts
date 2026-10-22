@@ -994,17 +994,23 @@ export function mutateTasksAsync<R>(mutate: (tasks: BoardTask[]) => { tasks: Boa
 }
 
 /** Targeted task + companion transaction. Both leases are acquired in canonical
- * order before reading, and SQLite commits both rows together. No task list scan. */
+ * order before reading, and SQLite commits both rows together. Board evidence
+ * seeks only the project's raw keys, including aliases, under a finite budget;
+ * an oversized or unreadable project refuses admission without spending a slot. */
 export async function patchTaskCompanion<C, R>(companion: SqliteStateCollection<C>,
-  prepare: (get: (id: string) => BoardTask | null) => { task?: BoardTask; records: C[]; result: R }, filePath = TASKS_FILE): Promise<R> {
+  prepare: (get: (id: string) => BoardTask | null, boardTasks: (projects: readonly string[]) => BoardTask[]) => { task?: BoardTask; records: C[]; result: R }, filePath = TASKS_FILE): Promise<R> {
   return withViewerOperation("tasks.proactive.admission", () => waitForStateLock("tasks.proactive.admission", () => {
     const tasks = taskCollection(filePath, "write")!;
     let records: C[] = [];
-    return tasks.boundedPatch(6, tx => {
+    return tasks.boundedPatch(1_024, tx => {
       const patch = prepare(id => {
         const raw = tx.get(`t:${id}`);
         return raw ? coerceTask(raw) : null;
-      });
+      }, projects => tx.taskProjectRows(projects).map(raw => {
+        const task = coerceTask(raw);
+        if (!task) throw new Error("invalid persisted task row");
+        return task;
+      }));
       records = patch.records;
       if (patch.task) {
         stampTaskRevisions([patch.task], new Map(), false);

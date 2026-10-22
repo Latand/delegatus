@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { proactiveActive, type AutonomySetting } from "@/lib/monitor/autonomy";
 import { effectiveSeatTickSettings, readSeatTickSettings } from "@/lib/monitor/seatTickSettings";
 import { orchestratorSeatForCurrentProject } from "@/lib/orchestrator/seatProjectIdentity";
-import { canonicalProject } from "@/lib/projects/aliases";
+import { canonicalProject, projectAliasKeys } from "@/lib/projects/aliases";
 import { legacyDatabasePath } from "@/lib/state/legacyImport";
 import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized } from "@/lib/state/sqliteStateStore";
 import { waitForStateLock } from "@/lib/state/lockWait";
@@ -20,6 +20,27 @@ const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(valu
 const allowanceKey = (project: string) => `allowance:${hash(project)}`;
 const candidateKey = (project: string, candidate: string) => `candidate:${hash([project, candidate])}`;
 
+function projectKeys(project: string): string[] {
+  const keys = projectAliasKeys(project);
+  if (keys.length > 128) throw new Error("proactive project alias evidence exceeds its bound; operator recovery required");
+  return keys;
+}
+
+function allowanceRows(store: SqliteStateCollection<Row> | null, projects: string[]): Allowance[] {
+  return projects.flatMap(project => {
+    const row = store?.get(allowanceKey(project));
+    if (row && row.kind !== "allowance") throw new Error("invalid proactive allowance");
+    return row ? [row] : [];
+  });
+}
+
+function usage(rows: Allowance[], episode: string, now: number) {
+  return {
+    episodeUsed: rows.reduce((sum, row) => sum + (row.episode === episode ? row.used : 0), 0),
+    rollingUsed: rows.reduce((sum, row) => sum + row.admissions.filter(at => at > now - DAY).length, 0),
+  };
+}
+
 function decode(value: unknown): Row | null {
   if (!value || typeof value !== "object") return null;
   const row = value as Row;
@@ -30,7 +51,7 @@ function decode(value: unknown): Row | null {
     && Array.isArray(row.admissions) && row.admissions.length <= 2 && row.admissions.every(Number.isFinite) ? row : null;
 }
 
-/** No process cache: one indexed allowance read and one indexed candidate read. */
+/** No process cache: indexed reads retain receipts under predecessor keys. */
 function collection(file: string, create: boolean): SqliteStateCollection<Row> | null {
   const database = legacyDatabasePath(file);
   if (!create && !stateCollectionsInitialized(database, [seed])) return null;
@@ -42,9 +63,7 @@ function collection(file: string, create: boolean): SqliteStateCollection<Row> |
 export function readProactiveAllowance(project: string, episode: string, now: number, file = TASKS_FILE) {
   const store = collection(file, false);
   try {
-    const row = store?.get(allowanceKey(canonicalProject(project)));
-    if (row && row.kind !== "allowance") throw new Error("invalid proactive allowance");
-    return { episodeUsed: row?.episode === episode ? row.used : 0, rollingUsed: row?.admissions.filter(at => at > now - DAY).length ?? 0 };
+    return usage(allowanceRows(store, projectKeys(project)), episode, now);
   } finally { store?.close(); }
 }
 
@@ -74,16 +93,21 @@ export async function admitProactiveTask(input: CreateTaskInput & { candidateKey
   validate(input);
   input = structuredClone(input);
   context = { ...context };
-  const project = canonicalProject(context.project);
-  if (canonicalProject(String(input.project)) !== project) throw new Error("proactive project mismatch");
   const store = await waitForStateLock("tasks.proactive.initialize", () => collection(file, true)!, { waitMs: 5_000, subject: "proactive allowance" });
   try {
-    return await patchTaskCompanion<Row, { task: BoardTask; replay: boolean }>(store, get => {
+    return await patchTaskCompanion<Row, { task: BoardTask; replay: boolean }>(store, (get, boardTasks) => {
+      const projects = projectKeys(context.project);
+      const project = projects[0]!;
+      if (canonicalProject(String(input.project)) !== project) throw new Error("proactive project mismatch");
       const key = candidateKey(project, input.candidateKey);
-      const previous = store.get(key);
+      const receipts = projects.flatMap(identity => {
+        const row = store.get(candidateKey(identity, input.candidateKey));
+        if (row && row.kind !== "candidate") throw new Error("invalid candidate receipt");
+        return row ? [row] : [];
+      });
+      if (receipts.some(row => row.rejected)) throw new Error("candidate was rejected by the operator");
+      const previous = receipts[0];
       if (previous) {
-        if (previous.kind !== "candidate") throw new Error("invalid candidate receipt");
-        if (previous.rejected) throw new Error("candidate was rejected by the operator");
         const task = get(previous.taskId);
         if (!task || task.project !== project || task.proactive?.candidateKey !== input.candidateKey) throw new Error("candidate receipt has no matching task; operator recovery required");
         return { records: [], result: { task, replay: true } };
@@ -94,13 +118,14 @@ export async function admitProactiveTask(input: CreateTaskInput & { candidateKey
       if (!settings.enabled || !proactiveActive(settings.autonomy, now) || settings.autonomy?.startedAt !== context.startedAt) throw new Error("proactive permission is inactive or the episode changed");
       const seat = ports.seat(project);
       if (!seat || seat.conversationId !== context.conversationId || seat.epoch !== context.seatEpoch) throw new Error("proactive seat authority changed");
-      const held = store.get(allowanceKey(project));
-      if (held && held.kind !== "allowance") throw new Error("invalid proactive allowance");
+      const rows = allowanceRows(store, projects);
+      const total = usage(rows, context.startedAt, now);
+      const held = rows.find(row => row.key === allowanceKey(project));
       const admissions = (held?.admissions ?? []).filter(at => at > now - DAY);
       const used = held?.episode === context.startedAt ? held.used : 0;
-      if (used >= 2) throw new Error("proactive episode allowance exhausted");
-      if (admissions.length >= 2) throw new Error("proactive rolling 24-hour allowance exhausted");
-      const result = createTask([], { ...input, project, placement: "unplaced", board: "shown", clientRequestId: undefined }, [], { now: () => new Date(now).toISOString(), explicit: true, actor: "agent" });
+      if (total.episodeUsed >= 2) throw new Error("proactive episode allowance exhausted");
+      if (total.rollingUsed >= 2) throw new Error("proactive rolling 24-hour allowance exhausted");
+      const result = createTask(boardTasks(projects), { ...input, project, placement: "unplaced", board: "shown", clientRequestId: undefined }, [], { now: () => new Date(now).toISOString(), explicit: true, actor: "agent" });
       if (!result.ok) throw new Error(result.error);
       const task = result.task;
       task.proactive = { episode: context.startedAt, candidateKey: input.candidateKey, sources: [...input.sources], score: [...input.score], scopeHash: proactiveScopeHash(task), scopeRevision: 0 };
@@ -115,10 +140,14 @@ export async function rejectProactiveCandidate(project: string, candidate: strin
   const store = collection(file, false);
   if (!store) throw new Error("candidate not found");
   try {
-    await store.boundedPatchAsync(2, tx => {
-      const row = tx.get(candidateKey(canonicalProject(project), candidate));
-      if (!row || row.kind !== "candidate") throw new Error("candidate not found");
-      tx.put({ ...row, rejected: true });
+    await store.boundedPatchAsync(256, tx => {
+      const rows = projectKeys(project).flatMap(identity => {
+        const row = tx.get(candidateKey(identity, candidate));
+        if (row && row.kind !== "candidate") throw new Error("invalid candidate receipt");
+        return row ? [row] : [];
+      });
+      if (!rows.length) throw new Error("candidate not found");
+      for (const row of rows) tx.put({ ...row, rejected: true });
     }, 5_000);
   } finally { store.close(); }
 }
