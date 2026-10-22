@@ -6,9 +6,9 @@ import { inspectTree, measureTempBytes, resolvePhysicalPath, type ProcessScan } 
 
 const exec = promisify(execFile);
 const inside = (file: string, root: string) => file === root || file.startsWith(root + path.sep);
-const run = (command: string, args: string[]) => exec(command, args, { timeout: 15_000, maxBuffer: 4 * 1024 * 1024, encoding: "utf8" });
-async function repositoryLinks(directory: string): Promise<string[]> {
-  if (process.platform !== "win32") return (await run("find", [directory, "-xdev", "-name", ".git", "-type", "d", "-prune", "-o", "-type", "l", "-print0"])).stdout.split("\0").filter(Boolean);
+const run = (command: string, args: string[], timeout = 15_000) => exec(command, args, { timeout, maxBuffer: 4 * 1024 * 1024, encoding: "utf8" });
+async function repositoryLinks(directory: string, timeout?: number): Promise<string[]> {
+  if (process.platform !== "win32") return (await run("find", [directory, "-xdev", "-name", ".git", "-type", "d", "-prune", "-o", "-type", "l", "-print0"], timeout)).stdout.split("\0").filter(Boolean);
   const pending = [directory], links: string[] = []; let visited = 0;
   while (pending.length) for (const entry of await fs.promises.readdir(pending.pop()!, { withFileTypes: true })) {
     if (++visited > 200_000) throw new Error("partial inbound-link inventory");
@@ -19,23 +19,73 @@ async function repositoryLinks(directory: string): Promise<string[]> {
   return links;
 }
 
+/** Each link's lexical and physical targets, including dangling links. */
+async function repositoryLinkTargets(repository: string, timeout?: number): Promise<string[]> {
+  const targets: string[] = [];
+  for (const link of await repositoryLinks(repository, timeout)) {
+    let target: string;
+    try { target = path.resolve(path.dirname(link), fs.readlinkSync(link)); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; throw error; }
+    targets.push(target, resolvePhysicalPath(target));
+  }
+  return targets;
+}
+
+/** One tick's checkout link inventory, shared by every root the tick examines,
+ * so the cost is one walk per checkout rather than one per checkout per root.
+ * A read older than `freshMs` is repeated, and every walk ends by the tick's
+ * budget; past it the remaining roots are held until the next tick. */
+export class RepositoryLinkInventory {
+  private readonly reads = new Map<string, { at: number; targets: Promise<string[]> }>();
+  private readonly repositoriesOf = new Map<string, string | null>();
+  private readonly deadline: number;
+  readonly walks: string[] = [];
+  constructor(private readonly options: { now?: () => number; budgetMs?: number; freshMs?: number } = {}) {
+    this.deadline = this.now() + (options.budgetMs ?? 30_000);
+  }
+  private now() { return (this.options.now ?? Date.now)(); }
+  /** The nearest enclosing checkout of a process cwd. */
+  repositoryOf(cwd: string): string | null {
+    if (this.repositoriesOf.has(cwd)) return this.repositoriesOf.get(cwd)!;
+    let repository: string | null = null;
+    for (let current = cwd, depth = 0; depth < 64 && current !== path.dirname(current); depth++, current = path.dirname(current)) {
+      if (fs.existsSync(path.join(current, ".git"))) { repository = current; break; }
+    }
+    this.repositoriesOf.set(cwd, repository);
+    return repository;
+  }
+  targets(repository: string): Promise<string[]> {
+    const now = this.now(), cached = this.reads.get(repository);
+    if (cached && now - cached.at <= (this.options.freshMs ?? 10_000)) return cached.targets;
+    const remaining = this.deadline - now;
+    const targets = remaining > 0 ? repositoryLinkTargets(repository, Math.min(15_000, remaining))
+      : Promise.reject(new Error("checkout link inventory exceeded its tick budget"));
+    this.walks.push(repository);
+    this.reads.set(repository, { at: now, targets });
+    return targets;
+  }
+}
+
+const referencesRoot = (roots: readonly string[]) => (target: string) => roots.some(root => inside(target, root));
+const attemptRoots = (original: string, current: string) =>
+  [...new Set([original, current, resolvePhysicalPath(original), resolvePhysicalPath(current)])];
+
 /** A durable checkout link remains a dependency while its lane is open,
  * including between stages when no process has that checkout as its cwd. */
-export async function repositoryReferencesAttemptTemp(repository: string, original: string, current = original): Promise<boolean> {
-  const roots = [...new Set([original, current, resolvePhysicalPath(original), resolvePhysicalPath(current)])];
-  for (const link of await repositoryLinks(repository)) {
-    const target = path.resolve(path.dirname(link), fs.readlinkSync(link));
-    if ([target, resolvePhysicalPath(target)].some(target => roots.some(root => inside(target, root)))) return true;
-  }
-  return false;
+export async function repositoryReferencesAttemptTemp(repository: string, original: string, current = original,
+  inventory = new RepositoryLinkInventory()): Promise<boolean> {
+  return (await inventory.targets(repository)).some(referencesRoot(attemptRoots(original, current)));
 }
 
 /** Idle processes can still depend on a symlink in their checkout. Resolve
- * links without descending through them, including currently dangling links. */
+ * links without descending through them, including currently dangling links.
+ * Every checkout that holds a live process is read; there is no count at
+ * which the check gives up and holds everything. */
 export async function attemptReferencesClear(original: string, current: string, scan: ProcessScan,
-  containers: (roots: readonly string[]) => Promise<boolean> = containerMountsClear): Promise<boolean> {
-  const roots = [...new Set([original, current, resolvePhysicalPath(original), resolvePhysicalPath(current)])];
-  const referenced = (file: string) => [file, resolvePhysicalPath(file)].some(file => roots.some(root => inside(file, root)));
+  containers: (roots: readonly string[]) => Promise<boolean> = containerMountsClear,
+  inventory = new RepositoryLinkInventory()): Promise<boolean> {
+  const roots = attemptRoots(original, current);
+  const referenced = (file: string) => [file, resolvePhysicalPath(file)].some(referencesRoot(roots));
   if (scan.processes.some(process => process.paths.some(referenced))) return false;
   if (process.platform === "linux") {
     for (const line of fs.readFileSync("/proc/net/unix", "utf8").split("\n").slice(1)) {
@@ -45,15 +95,12 @@ export async function attemptReferencesClear(original: string, current: string, 
   }
   const repositories = new Set<string>();
   for (const process of scan.processes) {
-    let cwd = process.paths[0];
-    if (!cwd?.startsWith(path.sep)) continue;
-    for (let depth = 0; depth < 64 && cwd !== path.dirname(cwd); depth++, cwd = path.dirname(cwd)) {
-      if (fs.existsSync(path.join(cwd, ".git"))) { repositories.add(cwd); break; }
-    }
+    const cwd = process.paths[0];
+    const repository = cwd?.startsWith(path.sep) ? inventory.repositoryOf(cwd) : null;
+    if (repository) repositories.add(repository);
   }
-  if (repositories.size > 32) return false;
-  for (const repository of repositories) {
-    if (await repositoryReferencesAttemptTemp(repository, original, current)) return false;
+  for (const repository of [...repositories].sort()) {
+    if (await repositoryReferencesAttemptTemp(repository, original, current, inventory)) return false;
   }
   return process.platform !== "linux" || await containers([original, current]);
 }

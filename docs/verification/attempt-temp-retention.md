@@ -81,9 +81,14 @@ builder uses the declared attempt root before its legacy account default.
 Both child config variables resolve inside that root; forwarded forge config
 keeps its existing contract.
 
-Passed, failed, skipped and parked attempts are eligible after their last live
-process leaves. Checkout symlinks into an attempt root keep it through lane
-completion or explicit close, including idle intervals between stages.
+Passed, failed, skipped and needs-decision attempts, and launches an attempt
+retired, are eligible after their last live process leaves. Checkout symlinks
+into an attempt root keep it through lane completion or explicit close,
+including idle intervals between stages. Every checkout that holds a live
+process is read for links into the root, however many there are; one tick
+shares one link inventory across the roots it examines, rereads a checkout
+whose read is more than 10 seconds old, and holds the remaining roots until
+the next tick once 30 seconds of reading are spent.
 Explicitly retired startup launches are matched in the attempt's retained
 launch history. Declared stage outputs retain their scratch until lane
 completion or explicit close. Both completed and explicitly closed lanes use
@@ -91,7 +96,10 @@ the terminal cleanup state; remaining process holders still retain their roots.
 Config sandboxes can retire at settlement. Published prototype media is
 already copied into the durable publication store and remains governed by that
 store. Missing lane records are orphan candidates after the configured age;
-an unreadable owner or unmatched launch stays held. A registered owner marker
+an unreadable owner or unmatched launch (such as an adopted child
+conversation's) stays held until its lane closes. A conversation with two lane
+memberships gets no ledger owner; its scratch goes with its host, as before
+this change. A registered owner marker
 keeps the legacy sweep from bypassing this decision.
 
 Removal uses the existing durable quarantine intent and inode/snapshot checks.
@@ -125,21 +133,25 @@ and is reaped on timeout. No filesystem walk runs on the Viewer loop.
 
 `LLV_ATTEMPT_TEMP_CAP_BYTES` defaults to 107374182400 (100 GiB), and
 `LLV_ATTEMPT_TEMP_MAX_AGE_DAYS` defaults to 1. The total is the ledger allocation
-estimate across registered scratch, config and adopted gate roots; new or
+estimate across registered scratch and config roots; new or
 unmeasured trees can make it a lower bound. Old orphan roots evict oldest first. Settled roots
 are reclaimed even below the cap. Live processes, open-lane evidence and
 preservation holds take priority over reclamation; over-cap held usage is
 reported. `LLV_TEMP_SWEEP=off` disables retirement and `dry-run` records decisions
-without removal. The existing hourly sweep remains the legacy fallback.
-It adopts at most 32
-interrupted gate roots per pass, using the exact publication/check and admission-monitor
-prefixes; linked checkout and process guards still apply. Namespace-reader
-aliases stay with the existing lease-bound legacy sweep. Shared lock roots
-are never adopted.
+without removal. The existing hourly sweep remains the legacy fallback for
+`llv-*` names. Gate, merger and admission-monitor roots have no creation
+record, so neither the tick nor the legacy sweep removes them by name or age;
+they can join once their producers record ownership. The `llv-gate` admission
+slots are now never a sweep candidate.
 
 Each retired root emits its directory count and attributed bytes before the
-next candidate is inspected. Completed ticks write `attempt-temp-report.json`
-and emit aggregate counts, bytes, hold/error counts and measured over-cap bytes. This work makes no performance improvement
+next candidate is inspected. A tick that removed, failed or measured usage over
+the cap writes `attempt-temp-report.json` and emits aggregate counts, bytes,
+hold/error counts and measured over-cap bytes; so does the first tick whose
+condition (over cap, failing) differs from the recorded report. An idle tick
+writes nothing. A disk-pressure read that arrives while the minute tick holds
+the helper answers from the last observation for up to 90 seconds after it was
+taken, and is refused as stale after that. This work makes no performance improvement
 claim and changes no deployment or worktree-retirement policy.
 
 ## Verification
@@ -170,6 +182,20 @@ isolation. The shared quarantine consumer was also checked separately with
 `gate-remote -- bun scripts/local-gate-tests.ts --base 6b5d8509
 src/lib/pipelines/worktreeSweep.test.ts`: a complete green head needed no base
 sample.
+
+The review round on `6cea7930` added three regressions, run on that revision in
+a scratch export with isolated home, config, temp and state roots:
+
+```sh
+bun test src/lib/runtime/attemptTempProduction.test.ts src/lib/runtime/attemptTempFilesystem.test.ts -t 'more than 32|foreign and gate|idle minute'
+```
+
+All three failed there: 40 unrelated checkouts held a settled root, a
+gate-named directory with no creation record was accepted into the ledger, and
+an idle tick logged its aggregate. All pass after the fix. Three consecutive
+`gate-remote -- bun test src/lib/runtime/attemptTempFilesystem.test.ts` runs
+passed; the large streaming fixture is now made and removed inside its own test
+budget instead of the shared hook.
 
 Coverage includes real helper restarts, arrival fairness, the default 100 GiB
 cap changing the removal budget from 32 back to four across restarted helpers,

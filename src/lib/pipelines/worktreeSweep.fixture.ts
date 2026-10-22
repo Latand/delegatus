@@ -29,6 +29,10 @@ for await (const line of createInterface({ input: process.stdin })) {
   }
   if (kind === "attempt-temp") {
     fs.appendFileSync(path.join(directory, "requests"), kind + "\n");
+    if (process.argv.includes("--hold-attempt")) {
+      fs.writeFileSync(path.join(directory, "attempt-busy"), String(process.pid));
+      while (!fs.existsSync(path.join(directory, "release-attempt"))) await new Promise(resolve => setTimeout(resolve, 5));
+    }
     process.stdout.write(JSON.stringify({ report: await runAttemptTempSweep({ scan: directories => scanProcesses("/proc", directories) }, { ...process.env, LLV_TEMP_SWEEP: "on" }) }) + "\n");
     continue;
   }

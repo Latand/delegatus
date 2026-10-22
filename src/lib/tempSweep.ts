@@ -22,10 +22,10 @@ import { OWNED_TEMP_PREFIX } from "@/lib/tempDirs";
  * killed before it got there, and the residue that predates them. The sweeper
  * removes those, and nothing else:
  *
- * - **Only owned names.** `llv-*`, the isolated gate prefixes, plus
- *   three test prefixes from before the
+ * - **Only owned names.** `llv-*`, plus three test prefixes from before the
  *   per-run root existed. `llv-spawn-sandbox` (every agent's config root, kept
- *   on purpose so a resumed agent finds its own) and `llv-tmux-cwd` are never
+ *   on purpose so a resumed agent finds its own), `llv-tmux-cwd` and the
+ *   `llv-gate` admission slots are never
  *   candidates. A name Delegatus did not choose is never touched, however old.
  * - **Only direct children of the temp roots it uses**: `/tmp`, `/var/tmp`,
  *   this process's temp dir and the Viewer's `scratch` directory. Never a root
@@ -71,9 +71,6 @@ const JOURNAL_ROTATE_BYTES = 1_000_000;
 
 /** Test prefixes from before the per-run test root; each is unique to this repository's suites. */
 const LEGACY_OWNED_PREFIXES = ["pending-producer-", "inflight-producer-", "child-owner-"] as const;
-/** Exact prefixes of isolated publication/check sandboxes. Lock roots are excluded. */
-export const GATE_TEMP_PREFIXES = ["delegatus-local-gate-", "delegatus-test-comparison-", "merge-gate-state-", "merge-privacy-state-", "delegatus-cpu-wait."] as const;
-export const isGateTempName = (name: string) => GATE_TEMP_PREFIXES.some(prefix => name.startsWith(prefix) && name.length > prefix.length);
 /** Owned names that hold live, shared state and are never swept. */
 const KEPT_OWNED_NAMES = new Set(["llv-spawn-sandbox", "llv-tmux-cwd", "llv-gate"]);
 /** Environment variables whose directory a process is using even while it holds nothing open there. */
@@ -82,7 +79,7 @@ const IN_USE_ENV = ["HOME", "TMPDIR", "TMP", "TEMP", "LLV_STATE_DIR", "XDG_CONFI
 export function isOwnedTempName(name: string): boolean {
   if (KEPT_OWNED_NAMES.has(name)) return false;
   if (name.startsWith(OWNED_TEMP_PREFIX) && name.length > OWNED_TEMP_PREFIX.length) return true;
-  return isGateTempName(name) || LEGACY_OWNED_PREFIXES.some((prefix) => name.startsWith(prefix) && name.length > prefix.length);
+  return LEGACY_OWNED_PREFIXES.some((prefix) => name.startsWith(prefix) && name.length > prefix.length);
 }
 
 /** Shared agent state consumes owned space while remaining protected from cleanup. */
@@ -871,15 +868,7 @@ export async function runTempSweepInHelper(env: NodeJS.ProcessEnv = process.env,
   const roots = view.roots.filter(root => root.via || writable.has(root.path));
   // Root discovery is one snapshot; deletion gets its own fresh process scan.
   let report: TempSweepReport;
-  try {
-    if (mode === "on") {
-      const { adoptOrphanGateTemps } = await import("./runtime/attemptTempProduction");
-      const { AttemptTempStore } = await import("./runtime/attemptTempRetention");
-      const store = new AttemptTempStore();
-      try { await adoptOrphanGateTemps(store, roots); } finally { store.close(); }
-    }
-    report = await sweepStaleTempDirs({ maxAgeMs, mode, ...ports, roots, ...checkouts });
-  }
+  try { report = await sweepStaleTempDirs({ maxAgeMs, mode, ...ports, roots, ...checkouts }); }
   finally { await view.close(); }
   recordTempSweep(report);
   const { young, inUse, worktree, deferred } = report.kept;

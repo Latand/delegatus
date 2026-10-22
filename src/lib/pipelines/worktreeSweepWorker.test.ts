@@ -254,3 +254,24 @@ for (const flag of ["--malformed", "--wrong-kind", "--exit", "--oversize", "--ha
   await expect(worker.attemptTemp()).rejects.toThrow();
   expect((await worker.run("dry-run"))!.errors).toEqual([]);
 }, 20000);
+
+test("a disk reading behind the bounded attempt tick answers from its last observation, then refuses once that is too old", async () => {
+  const { root, worker } = fixture("--hold-attempt");
+  const observed = await worker.diskPressure();
+  const tick = worker.attemptTemp();
+  try {
+    const deadline = Date.now() + 10_000;
+    while (!fs.existsSync(path.join(root, "attempt-busy")) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5));
+    expect(fs.existsSync(path.join(root, "attempt-busy"))).toBeTrue();
+    const base = Date.parse(observed.at);
+    const clock = spyOn(Date, "now");
+    try {
+      clock.mockImplementation(() => base + 45_000);
+      expect((await worker.diskPressure()).at).toBe(observed.at);
+      clock.mockImplementation(() => base + 95_000);
+      await expect(worker.diskPressure()).rejects.toThrow("stale while the sweep helper is busy");
+    } finally { clock.mockRestore(); }
+    expect(fs.readFileSync(path.join(root, "requests"), "utf8")).toBe("disk-pressure\nattempt-temp\n");
+  } finally { fs.writeFileSync(path.join(root, "release-attempt"), "release"); }
+  expect(await tick).toMatchObject({ checked: 0, removed: 0 });
+}, 20_000);

@@ -12,6 +12,7 @@ export const WORKTREE_SWEEP_DEADLINE_MS = 45 * 60_000;
 const MAX_REPLY_BYTES = 8 * 1024 * 1024;
 const DISK_PRESSURE_CACHE_TTL_MS = 30_000;
 const DISK_PRESSURE_REQUEST_TIMEOUT_MS = 10_000;
+const ATTEMPT_TEMP_REQUEST_TIMEOUT_MS = 60_000;
 export type SweepWorkerLaunch = { executable: string; entry: string; args?: string[] };
 export function worktreeSweepWorkerLaunch(cwd = process.cwd()): SweepWorkerLaunch {
   const source = path.join(cwd, "src/lib/worktreeSweep.worker.ts");
@@ -110,7 +111,7 @@ export class WorktreeSweepWorker {
       ? Promise.reject(new Error("worktree sweep is already running")) : existing;
     const generation = this.generation;
     const timeoutMs = request.kind === "disk-pressure" ? Math.min(this.timeoutMs, DISK_PRESSURE_REQUEST_TIMEOUT_MS)
-      : request.kind === "attempt-temp" ? Math.min(this.timeoutMs, 60_000) : this.timeoutMs;
+      : request.kind === "attempt-temp" ? Math.min(this.timeoutMs, ATTEMPT_TEMP_REQUEST_TIMEOUT_MS) : this.timeoutMs;
     const deadline = Date.now() + timeoutMs;
     const operation = request.kind === "attempt-temp" || request.kind === "temp" ? "temp.sweep" : request.kind === "disk-pressure" ? "resources.read" : "worktrees.sweep";
     const deadlineLabel = request.kind === "attempt-temp" ? "attempt temp tick" : request.kind === "worktrees" ? "worktree sweep" : request.kind === "temp" ? "temp sweep" : "disk pressure refresh";
@@ -152,6 +153,12 @@ export class WorktreeSweepWorker {
     }
     const existing = this.jobs.get("disk-pressure");
     if (existing) return existing as Promise<DiskPressure>;
+    // The minute attempt tick is bounded by its own deadline. Behind it, the
+    // last observation stays usable for that long; it carries its own time.
+    if (cached && this.jobs.has("attempt-temp") && !this.jobs.has("worktrees") && !this.jobs.has("temp")) {
+      const age = Date.now() - cached.observedAt;
+      if (age >= 0 && age < DISK_PRESSURE_CACHE_TTL_MS + ATTEMPT_TEMP_REQUEST_TIMEOUT_MS) return Promise.resolve(structuredClone(cached.report));
+    }
     if (this.jobs.has("worktrees") || this.jobs.has("temp") || this.jobs.has("attempt-temp")) {
       const job = Promise.reject(new Error("disk pressure observation is stale while the sweep helper is busy"))
         .finally(() => { if (this.jobs.get("disk-pressure") === job) this.jobs.delete("disk-pressure"); });

@@ -3,8 +3,8 @@ import path from "node:path";
 import type { Database } from "bun:sqlite";
 import { statePath } from "@/lib/configDir";
 import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
-import { attemptTempJournalPath, sweepStaleTempDirs, isGateTempName, type ProcessScan } from "@/lib/tempSweep";
-import { allocatedAttemptBytes, attemptReferencesClear, inspectAttemptTree, removeAttemptTree } from "./attemptTempFilesystem";
+import { attemptTempJournalPath, sweepStaleTempDirs, type ProcessScan } from "@/lib/tempSweep";
+import { allocatedAttemptBytes, attemptReferencesClear, inspectAttemptTree, removeAttemptTree, RepositoryLinkInventory } from "./attemptTempFilesystem";
 
 export type AttemptTempState = "live" | "settled" | "closed" | "orphan" | "unknown";
 export type AttemptTempOwner = {
@@ -44,7 +44,7 @@ export class AttemptTempStore {
   }
   register(owner: AttemptTempOwner) {
     const stat = fs.lstatSync(owner.directory);
-    if (!stat.isDirectory() || stat.isSymbolicLink() || (!/^llv-(?:read-only-stage|stage|stage-config)-/.test(path.basename(owner.directory)) && !(owner.pipelineId === null && isGateTempName(path.basename(owner.directory)))))
+    if (!stat.isDirectory() || stat.isSymbolicLink() || !/^llv-(?:read-only-stage|stage|stage-config)-/.test(path.basename(owner.directory)))
       throw new Error("Attempt temp root is not an owned directory");
     this.db.query("INSERT INTO roots(directory,pipelineId,launchId,retainUntilClose,createdAt,identity,checkedAt) VALUES(?,?,?,?,?,?,?)")
       .run(path.resolve(owner.directory), owner.pipelineId, owner.launchId, Number(owner.retainUntilClose), owner.createdAt, `${stat.dev}:${stat.ino}`, owner.createdAt);
@@ -84,6 +84,9 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
   const capBytes = options.capBytes ?? DEFAULT_ATTEMPT_TEMP_CAP_BYTES;
   const report = { checked: 0, removed: 0, removedBytes: 0, held: 0, errors: 0, bytes: store.bytes(), capBytes, overCapBytes: 0 };
   const budget = Math.max(1, Math.min(32, options.maxRoots ?? (store.bytes() > capBytes ? 32 : 4)));
+  const inventory = new RepositoryLinkInventory({ now });
+  const references = options.references
+    ?? ((original: string, current: string, scan: ProcessScan) => attemptReferencesClear(original, current, scan, undefined, inventory));
   for (const owner of store.due(now(), budget)) {
     report.checked++;
     // Persist fairness before the first await; a killed helper resumes elsewhere.
@@ -103,7 +106,7 @@ async function sweepOwnedAttemptTemps(store: AttemptTempStore, options: AttemptT
         const settled = state === "closed" || state === "settled" && !owner.retainUntilClose
           || state === "orphan" && now() - owner.createdAt >= (options.maxAgeMs ?? 86400000);
         if (!settled || !await inspectAttemptTree(directory, owner.directory)) return false;
-        if (!await (options.references ?? attemptReferencesClear)(owner.directory, directory, scan())) return false;
+        if (!await references(owner.directory, directory, scan())) return false;
         // Native/container observations can await I/O. Ownership must still
         // agree after them, at the same dispatch boundary.
         const authority = await options.state(owner);

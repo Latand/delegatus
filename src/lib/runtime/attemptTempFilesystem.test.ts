@@ -5,7 +5,7 @@ import net from "node:net";
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
 import { afterEach, expect, test } from "bun:test";
-import { attemptReferencesClear, inspectAttemptTree, attemptTempUtilityImage } from "./attemptTempFilesystem";
+import { attemptReferencesClear, inspectAttemptTree, attemptTempUtilityImage, RepositoryLinkInventory } from "./attemptTempFilesystem";
 import { AttemptTempStore, sweepAttemptTemps } from "./attemptTempRetention";
 const exec = promisify(execFile);
 const roots: string[] = [];
@@ -32,15 +32,60 @@ test.skipIf(process.platform !== "linux")("a bound Unix socket keeps its attempt
 });
 
 test.skipIf(process.platform !== "linux")("registered inspection streams beyond the legacy entry ceiling", async () => {
-  const directory = root();
   // Empty fixtures keep allocation small while exercising an actual tree
-  // larger than the old 200,000-entry inspection ceiling.
-  for (let group = 0; group < 21; group++) {
-    const child = path.join(directory, String(group)); fs.mkdirSync(child);
-    for (let item = 0; item < 10000; item++) fs.closeSync(fs.openSync(path.join(child, String(item)), "w"));
+  // larger than the old 200,000-entry inspection ceiling. The fixture is made
+  // and removed by native tools inside this test's own budget; a synchronous
+  // removal in the shared hook outlived the hook timeout on loaded hosts.
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-stage-filesystem-"));
+  try {
+    for (let group = 0; group < 21; group++) {
+      await exec("sh", ["-c", 'mkdir "$1" && cd "$1" && seq 0 9999 | xargs touch', "sh", path.join(directory, String(group))], { timeout: 60_000 });
+    }
+    expect(await inspectAttemptTree(directory)).toBeTrue();
+  } finally {
+    await exec("rm", ["-rf", "--", directory], { timeout: 60_000 });
   }
-  expect(await inspectAttemptTree(directory)).toBeTrue();
-}, 60000);
+}, 150_000);
+
+function repositoryProcesses(parent: string, count: number) {
+  return Array.from({ length: count }, (_, n) => {
+    const repository = path.join(parent, `repository-${n}`), cwd = path.join(repository, "work");
+    fs.mkdirSync(path.join(repository, ".git"), { recursive: true }); fs.mkdirSync(cwd);
+    return { pid: 10_000 + n, namespace: null, stamped: false, paths: [cwd] };
+  });
+}
+
+test("a settled root retires beside more than 32 unrelated checkouts; a linking checkout still holds it", async () => {
+  const parent = root(), directory = path.join(parent, "llv-stage-busy-machine"); fs.mkdirSync(directory);
+  const processes = repositoryProcesses(parent, 40);
+  const scan = () => ({ ownNamespace: null, processes });
+  expect(await attemptReferencesClear(directory, directory, scan(), async () => true)).toBeTrue();
+  fs.mkdirSync(path.join(parent, "repository-39/nested"));
+  fs.symlinkSync(path.join(directory, "packages"), path.join(parent, "repository-39/nested/node_modules"), "dir");
+  expect(await attemptReferencesClear(directory, directory, scan(), async () => true)).toBeFalse();
+});
+
+test("one tick reads each checkout once across roots and rereads it once stale", async () => {
+  const parent = root(), first = path.join(parent, "llv-stage-first"), second = path.join(parent, "llv-stage-second");
+  fs.mkdirSync(first); fs.mkdirSync(second);
+  const processes = repositoryProcesses(parent, 34);
+  let now = 1_000;
+  const inventory = new RepositoryLinkInventory({ now: () => now, freshMs: 10_000, budgetMs: 30_000 });
+  for (const directory of [first, second])
+    expect(await attemptReferencesClear(directory, directory, { ownNamespace: null, processes }, async () => true, inventory)).toBeTrue();
+  expect(inventory.walks.length).toBe(34);
+  // Checkouts are read in name order; repository-9 is the last one.
+  fs.symlinkSync(second, path.join(parent, "repository-9/work/late-link"), "dir");
+  // Within the freshness window the read is shared, so the late link is not
+  // yet seen; past it every checkout is read again before the decision.
+  expect(await attemptReferencesClear(second, second, { ownNamespace: null, processes }, async () => true, inventory)).toBeTrue();
+  expect(inventory.walks.length).toBe(34);
+  now += 10_001;
+  expect(await attemptReferencesClear(second, second, { ownNamespace: null, processes }, async () => true, inventory)).toBeFalse();
+  expect(inventory.walks.length).toBe(68);
+  now += 20_000;
+  await expect(attemptReferencesClear(second, second, { ownNamespace: null, processes }, async () => true, inventory)).rejects.toThrow("tick budget");
+});
 
 test.skipIf(process.env.LLV_ATTEMPT_TEMP_DOCKER_TEST !== "1")("container-owned private files retire through a scoped cleanup container", async () => {
   const parent = root(), directory = path.join(parent, "llv-stage-private"); fs.mkdirSync(directory);

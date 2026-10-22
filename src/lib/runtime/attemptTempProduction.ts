@@ -2,7 +2,7 @@ import { statePath } from "@/lib/configDir";
 import { AttemptTempStore, sweepAttemptTemps, type AttemptTempOwner, type AttemptTempState, type AttemptTempSweepOptions } from "./attemptTempRetention";
 import { pipelineRecordReader } from "@/lib/pipelines/store";
 import type { PipelineStageAttempt } from "@/lib/pipelines/types";
-import { tempSweepMode, isGateTempName, type TempSweepRoot } from "@/lib/tempSweep";
+import { tempSweepMode } from "@/lib/tempSweep";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import path from "node:path";
 import fs from "node:fs";
@@ -33,41 +33,23 @@ export async function attemptTempState(owner: AttemptTempOwner): Promise<Attempt
   }
   return "live";
 }
-/** Hourly discovery borrows the existing root inventory. Only known gate
- * producers are adopted, at most 32 per pass; stage roots need lane ownership.
- * Namespace-reader aliases cannot outlive their lease and stay with the legacy
- * sweep. Each admitted root then uses indexed, point-read minute ticks. */
-export async function adoptOrphanGateTemps(store: AttemptTempStore, roots: readonly TempSweepRoot[], limit = 32) {
-  let adopted = 0;
-  for (const root of roots) {
-    if (root.via) continue;
-    let names: string[];
-    try { names = await fs.promises.readdir(root.path); } catch { continue; }
-    const candidates = names.filter(isGateTempName).flatMap(name => {
-      const directory = path.join(root.path, name);
-      let stat: fs.Stats | undefined;
-      try { stat = fs.lstatSync(directory, { throwIfNoEntry: false }); } catch { return []; }
-      return stat?.isDirectory() && !stat.isSymbolicLink() && (process.getuid?.() === undefined || stat.uid === process.getuid())
-        ? [{ directory, createdAt: stat.mtimeMs }] : [];
-    }).sort((a, b) => a.createdAt - b.createdAt || a.directory.localeCompare(b.directory));
-    for (const candidate of candidates) {
-      if (adopted >= limit) return adopted;
-      if (store.has(candidate.directory) || fs.existsSync(path.join(candidate.directory, ".delegatus-attempt-owner"))) continue;
-      try {
-        store.register({ ...candidate, launchId: "orphan-gate", pipelineId: null, retainUntilClose: false });
-        adopted++;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
-    }
-  }
-  return adopted;
-}
-
 function setting(raw: string | undefined, fallback: number) {
   const value = raw?.trim() ? Number(raw) : fallback;
   return Number.isFinite(value) && value >= 0 ? value : fallback;
 }
+type TickCondition = { mode: "on" | "dry-run"; overCap: boolean; failing: boolean };
+const quiet = (mode: TickCondition["mode"]): TickCondition => ({ mode, overCap: false, failing: false });
+function recordedCondition(file: string, mode: TickCondition["mode"]): TickCondition {
+  try {
+    const condition = JSON.parse(fs.readFileSync(file, "utf8"))?.condition;
+    if (condition && typeof condition.overCap === "boolean" && typeof condition.failing === "boolean") return condition;
+  } catch { /* A missing or unreadable report counts as the quiet condition. */ }
+  return quiet(mode);
+}
+
+/** A minute tick reports only when it removed, held over the cap or failed,
+ * or when its condition changed from the recorded report. The recorded
+ * condition is on disk, so a restarted helper does not repeat itself. */
 export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "scan">, env: NodeJS.ProcessEnv = process.env) {
   const mode = tempSweepMode(env);
   if (!mode) return null;
@@ -79,8 +61,13 @@ export async function runAttemptTempSweep(ports: Pick<AttemptTempSweepOptions, "
       capBytes: setting(env.LLV_ATTEMPT_TEMP_CAP_BYTES, 100 * 1024 ** 3),
       maxAgeMs: setting(env.LLV_ATTEMPT_TEMP_MAX_AGE_DAYS, 1) * 86400000,
     });
-    writeJsonDurably(statePath("attempt-temp-report.json"), { at: new Date().toISOString(), ...report });
-    console.log(`[attempt temp] ${mode === "dry-run" ? "would remove" : "removed"} ${report.removed} directories, ${report.removedBytes} bytes; ${report.held} held; ${report.errors} errors; ${report.overCapBytes} measured bytes over cap`);
+    const file = statePath("attempt-temp-report.json");
+    const condition: TickCondition = { mode, overCap: report.overCapBytes > 0, failing: report.errors > 0 };
+    const changed = JSON.stringify(recordedCondition(file, mode)) !== JSON.stringify(condition);
+    if (report.removed || report.errors || report.overCapBytes || changed) {
+      writeJsonDurably(file, { at: new Date().toISOString(), condition, ...report });
+      console.log(`[attempt temp] ${mode === "dry-run" ? "would remove" : "removed"} ${report.removed} directories, ${report.removedBytes} bytes; ${report.held} held; ${report.errors} errors; ${report.overCapBytes} measured bytes over cap`);
+    }
     return report;
   } finally { store.close(); }
 }

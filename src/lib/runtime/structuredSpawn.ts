@@ -268,8 +268,9 @@ export function materializeStructuredHostAccess(
 function tempOwnerForSpawn(input: StructuredSpawnInput) {
   const memberships = input.registry.readOnlySnapshot().memberships[input.registry.canonicalConversationId(input.receipt.conversationId)] ?? [];
   const owners = memberships.filter(member => member.kind === "pipeline");
-  if (owners.length > 1) throw new Error("Stage temp ownership is ambiguous");
-  return owners.length ? { pipelineId: owners[0]!.containerId, launchId: input.receipt.launchId, retainUntilClose: false } : undefined;
+  // Two lanes cannot both own one attempt root. An ambiguous conversation
+  // keeps the unowned contract: its scratch goes with the host.
+  return owners.length === 1 ? { pipelineId: owners[0]!.containerId, launchId: input.receipt.launchId, retainUntilClose: false } : undefined;
 }
 
 async function materializeAttemptAccess(input: StructuredSpawnInput, capability: string | null) {
