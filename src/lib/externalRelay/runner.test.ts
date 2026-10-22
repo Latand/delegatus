@@ -7,7 +7,7 @@ import dns from "node:dns/promises";
 import { callBody, toolSleep, type ToolLoopRuntime } from "./toolLoop";
 import { requestSchema, handoffAnswerSchema, answerSchema, replyAnswerSchema, type ToolCallResult } from "./protocol";
 import { ownerRequest, pendingRetryAfterSeconds, x1Request, x1Results, x1Errors, x1Dir } from "./toolLoop.fixture";
-import { relayClaimCapabilities } from "./poller";
+import { relayClaimCapabilities, sweepExternalRelayOrphans } from "./poller";
 import { setRelaySwitch } from "./switches";
 import { assertOwnerCaptureResponse } from "./ownerCapture.fixture";
 import { afterAll, beforeEach, expect, spyOn, test } from "bun:test";
@@ -101,6 +101,99 @@ function relay(api_base: string): PairedRelay {
     ],
   };
 }
+
+test("capacity transition retains zero targets in the journal and ignores confirmed stop custody", () => {
+  const paired = relay("http://127.0.0.1:1/v1"); paired.targets[0]!.concurrency = 3;
+  const row = { requestId: "slot-old-a", leaseId: "fixture", relayId: paired.id, targetId: "target_1",
+    childPid: null, childIdentity: null, ownerPid: process.pid, ownerIdentity: null, runDir: "", startedAt: "2026-01-01T00:00:00.000Z" };
+  const lines: unknown[][] = [];
+  const journal = spyOn(console, "info").mockImplementation((...args) => { lines.push(args); });
+  try {
+    reserveRun(row); reserveRun({ ...row, requestId: "slot-old-b" }); reserveRun({ ...row, requestId: "slot-current" });
+    expect(advertisedSlots(paired)).toEqual([{ target_id: "target_1", free: 0 }]);
+    expect(lines.some(line => line[0] === "External relay target capacity" && (line[1] as { free?: number }).free === 0)).toBe(true);
+    dropRun("slot-current"); dropRun("slot-old-a"); dropRun("slot-old-b");
+    for (const requestId of ["slot-old-a", "slot-old-b"]) reserveRun({ ...row, requestId,
+      ownerTurn: { clientAttemptId: requestId, cancel: "interrupt", confirmed: true } });
+    expect(advertisedSlots(paired)).toEqual([{ target_id: "target_1", free: 3 }]);
+  } finally { journal.mockRestore(); for (const id of ["slot-old-a", "slot-old-b", "slot-current"]) dropRun(id); }
+});
+
+for (const refusalBeforeAck of [false, true]) test(`accepted completion releases capacity before chain cleanup and labels a racing heartbeat refusal (${refusalBeforeAck})`, async () => {
+  const chains = await import("./conversations");
+  let entered!: () => void, releaseCleanup!: () => void, releaseHeartbeat!: () => void, heartbeatArrived!: () => void, heartbeatLogged!: () => void;
+  const cleanupEntered = new Promise<void>(r => { entered = r; });
+  const cleanupGate = new Promise<void>(r => { releaseCleanup = r; });
+  const heartbeatGate = new Promise<void>(r => { releaseHeartbeat = r; });
+  const heartbeatPending = new Promise<void>(r => { heartbeatArrived = r; });
+  const heartbeatJournal = new Promise<void>(r => { heartbeatLogged = r; });
+  let completing = false;
+  let completions = 0;
+  const lines: unknown[][] = [];
+  const info = console.info;
+  const journal = spyOn(console, "info").mockImplementation((...args) => {
+    lines.push(args); info(...args);
+    if (args[0] === "External relay heartbeat" && (args[1] as { status?: number }).status === 409) heartbeatLogged();
+  });
+  const release = chains.releaseConversationAsync;
+  const cleanup = spyOn(chains, "releaseConversationAsync").mockImplementation(async (id, patch, until) => {
+    if (patch.state === "idle") { entered(); await cleanupGate; throw Error("fixture chain cleanup refused"); }
+    return release(id, patch, until);
+  });
+  const server = await startTestRelay(async (req, body) => {
+    if (req.url?.endsWith("/heartbeat")) {
+      if ((body as { seq: number }).seq > 1 && completing) {
+        heartbeatArrived(); await heartbeatGate;
+        return { status: 409, body: { error: { code: "lease_lost" } } };
+      }
+      return { body: { status: "ok" } };
+    }
+    if (req.url?.endsWith("/complete")) {
+      completions++;
+      completing = true;
+      await heartbeatPending;
+      if (refusalBeforeAck) { releaseHeartbeat(); await heartbeatJournal; }
+      return { body: { status: "accepted", duplicate: false } };
+    }
+    return { status: 404 };
+  });
+  const paired = relay(`${server.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  paired.targets[0]!.concurrency = 3;
+  for (const requestId of ["completion-stale-a", "completion-stale-b"]) reserveRun({ requestId, leaseId: "fixture", relayId: paired.id,
+    targetId: "target_1", childPid: null, childIdentity: null, ownerPid: process.pid, ownerIdentity: null, runDir: "",
+    startedAt: "2026-01-01T00:00:00.000Z", ownerTurn: { clientAttemptId: requestId, cancel: "interrupt", confirmed: true } });
+  updateRelayStore(s => ({ ...s, relays: [paired] })); setRelaySwitch("chain_conversations", true);
+  const request = { ...contextRequest, request_id: "slot-completion-race", chat: { key: "capacity-fixture" }, liveness: { ...contextRequest.liveness, heartbeat_interval_s: 2 },
+    input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } };
+  const pending = runClaimedRequest(paired, request, undefined, { ownerPorts: {
+    launch: async () => ({ status: 202, body: { conversationId: "conversation_slot-completion" } }),
+    observe: async () => ({ state: "ended", finalText: "Done" }), stop: async () => { throw Error("settled work must not be stopped"); },
+  } }).then(value => ({ value }), error => ({ error }));
+  try {
+    await cleanupEntered;
+    expect(advertisedSlots(paired)).toEqual([{ target_id: "target_1", free: 3 }]);
+    expect(runningCount(paired.id, "target_1")).toBe(0);
+    for (const id of ["completion-stale-a", "completion-stale-b"]) dropRun(id);
+    await sweepExternalRelayOrphans();
+    expect(readRunLedger().runs.some(row => row.requestId === request.request_id)).toBe(true);
+    expect(chains.readConversations().some(row => row.state === "running")).toBe(true);
+    releaseHeartbeat(); await heartbeatJournal;
+    expect(lines.some(line => line[0] === "External relay heartbeat" && (line[1] as { phase?: string }).phase === "post_completion")).toBe(true);
+    expect(readAnswerRecord(paired.id, "target_1", request.request_id)).toMatchObject({ outcome: "answered", delivery: "accepted" });
+  } finally {
+    releaseHeartbeat(); releaseCleanup(); await pending;
+    cleanup.mockRestore(); journal.mockRestore();
+    for (const id of ["completion-stale-a", "completion-stale-b"]) dropRun(id);
+    // A failed cleanup leaves its durable marker. The same process's sweep
+    // must release its chain without re-controlling the ended owner turn.
+    await sweepExternalRelayOrphans({ launch: async () => { throw Error("unexpected launch"); },
+      observe: async () => { throw Error("unexpected observation"); }, stop: async () => { throw Error("unexpected stop"); } });
+    expect(chains.readConversations().every(row => row.state !== "running")).toBe(true);
+    expect(completions).toBe(1);
+    await server.close();
+    for (const id of [request.request_id, "completion-stale-a", "completion-stale-b"]) dropRun(id);
+  }
+});
 function stub(script: string) {
   const file = path.join(root, `stub-${crypto.randomUUID()}`);
   fs.writeFileSync(file, `#!/usr/bin/env bun\nconsole.log(JSON.stringify({type:"thread.started",thread_id:"00000000-0000-0000-0000-000000000001"}));\nif(process.env.CODEX_HOME) await Bun.write(process.env.CODEX_HOME+"/sessions/rollout-fixture-00000000-0000-0000-0000-000000000001.jsonl", "fixture");\n${script}\n`);

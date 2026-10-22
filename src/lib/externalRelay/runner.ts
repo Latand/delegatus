@@ -64,6 +64,7 @@ import {
   reserveRunAsync,
   RelayStoreBusy,
   readRunLedger,
+  runHoldsCapacity,
   settleRelayRequestClaimAsync,
   type PairedRelay,
   type RelayTargetSettings,
@@ -75,6 +76,7 @@ const globalRelay = globalThis as typeof globalThis & {
 };
 const active = (globalRelay.__llvExternalRelayActive ??= new Map<string, number>());
 const inflight = globalRelay.__llvExternalRelayInflight ??= new Set<string>();
+export const relayRequestInFlight = (requestId: string): boolean => inflight.has(requestId);
 export function externalRelayTempRoot(): string {
   const temporary = path.resolve(os.tmpdir());
   const home = path.resolve(os.homedir());
@@ -94,19 +96,16 @@ export function advertisedSlots(
   const held = readRunLedger().runs;
   return relay.targets
     .filter((target) => target.enabled && target.engine && target.model)
-    .map((target) => ({
-      target_id: target.id,
-      free: drainHeld ? 0 : Math.max(
-        0,
-        target.concurrency -
-          Math.max(
-            runningCount(relay.id, target.id),
-            held.filter(
-              (run) => run.relayId === relay.id && run.targetId === target.id,
-            ).length,
-          ) - capacityWaiters(relay.id, target.id),
-      ),
-    }));
+    .map((target) => {
+      const running = runningCount(relay.id, target.id);
+      const retained = held.filter(run => run.relayId === relay.id && run.targetId === target.id && runHoldsCapacity(run)).length;
+      const waiting = capacityWaiters(relay.id, target.id);
+      const free = drainHeld ? 0 : Math.max(0, target.concurrency - Math.max(running, retained) - waiting);
+      if (free === 0) console.info("External relay target capacity", {
+        target: target.id, free, concurrency: target.concurrency, running, retained, waiting, reason: drainHeld ? "drain" : "full",
+      });
+      return { target_id: target.id, free };
+    });
 }
 function markActive(relay: PairedRelay, target: RelayTargetSettings): void {
   const key = countKey(relay.id, target.id);
@@ -310,6 +309,11 @@ export async function runClaimedRequest(
   const generatedSources = new Map<string, Set<string>>();
   let chain: { continued: boolean; promptBytes: number } | undefined;
   let resultDelivered = false;
+  let completionAccepted = false;
+  let completionInFlight = false;
+  let completionRefusal: ((accepted: boolean) => void) | null = null;
+  let releaseCapacity: (() => Promise<void>) | null = null;
+  let executionScope = false;
   const loopRecord = () => ({ ...(loop ? { rounds, toolCalls: loop.records } : ownerTools?.records.length ? { toolCalls: ownerTools.records } : {}), ...(chain ? { chain } : {}) });
   const finish = (body: ExternalRelayCompletion): Promise<ExternalRelayCompletion | null> => {
     if (finishing) return finishing;
@@ -365,8 +369,20 @@ export async function runClaimedRequest(
       if (caps?.rich) recorder?.annotateV2({ drops: answerDrops, attachments: stagedAttachments.map(({id,kind,filename,size,sha256}) => ({attachment_id:id,kind,filename,bytes:size,sha256})), ...(body.outcome === "answered" ? { answer: body.answer } : {outcome:`${body.outcome}:${body.reason}`}) });
       const deliveryStart = Date.now();
       const until = releaseRequested ? deliveryStart : deadline.at;
-      const sent = await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature, caps?.plainMax);
+      completionInFlight = true;
+      const sent = await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature, caps?.plainMax)
+        .finally(() => { completionInFlight = false; });
       const completion = sent.body;
+      completionRefusal?.(sent.delivery === "accepted");
+      completionRefusal = null;
+      if (sent.delivery === "accepted") {
+        completionAccepted = true;
+        heartbeatStopped = true;
+        if (heartbeatTimer) clearInterval(heartbeatTimer);
+        if (cadenceTimer) clearTimeout(cadenceTimer);
+        try { await releaseCapacity?.(); }
+        catch { console.error("External relay completed capacity release pending"); }
+      }
       if (caps?.rich && sent.body !== body) recorder?.annotateV2({ drops: [...answerDrops, {part:"answer",reason:"service_downgrade"}] });
       claimTerminal = sent.delivery !== "refused";
       terminalCompletion = claimTerminal ? completion : null;
@@ -381,6 +397,8 @@ export async function runClaimedRequest(
       });
       return completion;
     } finally {
+      completionRefusal?.(completionAccepted);
+      completionRefusal = null;
       heartbeatStopped = true;
       if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
       if (cadenceTimer) { clearTimeout(cadenceTimer); cadenceTimer = null; }
@@ -400,7 +418,7 @@ export async function runClaimedRequest(
           }
         }
       })();
-      inflight.delete(requestId);
+      if (!executionScope) inflight.delete(requestId);
       deliverySettled();
     }
     })();
@@ -429,12 +447,28 @@ export async function runClaimedRequest(
   let conversationBroken = false;
   let runDir: string | null = null;
   let recorded = false;
+  let capacityReleased = false;
   let duplicate = false;
   let run: ReturnType<typeof runEphemeralAgent> | null = null;
   let runFinished = false;
   const callAbort = new AbortController();
   const identityTimers: ReturnType<typeof setTimeout>[] = [];
   let owner: ReturnType<typeof ownerTierFor> = null;
+  executionScope = true;
+  releaseCapacity = async () => {
+    if (!recorded || capacityReleased) return;
+    const held = readRunLedger().runs.find(row => row.requestId === requestId);
+    if (held?.ownerTurn?.cancel && !held.ownerTurn.confirmed) return;
+    await changeRunAsync(requestId, row => {
+      if (row.ownerTurn?.cancel && !row.ownerTurn.confirmed) return row;
+      return { ...row, capacityReleased: true };
+    }, Date.now() + 5000);
+    const current = readRunLedger().runs.find(row => row.requestId === requestId);
+    if (current && !current.capacityReleased) return;
+    capacityReleased = true;
+    free(relay, target);
+    onFreed?.();
+  };
   try {
     let newestProgress: ExternalRelayProgress | null = null;
     const steps = createRelaySteps(relay.features);
@@ -450,7 +484,7 @@ export async function runClaimedRequest(
     const started = Date.now();
     const stallMs = request.liveness.stall_window_s * 1000;
     const cancelStalledRun = () => {
-      if (!leaseUnavailable && Date.now() - heartbeatAt > stallMs) {
+      if (!completionAccepted && !leaseUnavailable && Date.now() - heartbeatAt > stallMs) {
         leaseUnavailable = true;
         run?.cancel();
         callAbort.abort();
@@ -466,12 +500,12 @@ export async function runClaimedRequest(
     };
     const beat = async (stepChange = false, regular = false) => {
       if (beatBusy) { if (regular) regularBeatPending = true; return; }
-      if (leaseUnavailable) return;
+      if (heartbeatStopped || leaseUnavailable) return;
       beatBusy = true;
       const beatSeq = ++seq;
       const sentAt = Date.now();
       let step: string | null = null;
-      const journal = (phase: "attempt" | "acknowledged" | "failed", status?: number, code?: string) =>
+      const journal = (phase: "attempt" | "acknowledged" | "failed" | "completion_pending" | "post_completion", status?: number, code?: string) =>
         console.info("External relay heartbeat", { request: requestId.slice(0, 8), seq: beatSeq, phase, step,
           durationMs: Date.now() - sentAt, ...(status !== undefined ? { status } : {}), ...(code ? { code } : {}) });
       try {
@@ -493,9 +527,17 @@ export async function runClaimedRequest(
         acked = true;
         heartbeatAt = Date.now();
       } catch (error) {
-        journal("failed", error instanceof ExternalRelayError ? error.status : 0,
-          error instanceof ExternalRelayError && ["lease_lost", "unreachable", "malformed", "too_large", "unauthorized",
-            "unsupported_version", "unavailable", "rate_limited", "unknown_feature"].includes(error.code) ? error.code : "transport_error");
+        const terminalRefusal = error instanceof ExternalRelayError &&
+          (error.status === 404 || error.status === 409 && error.code === "lease_lost");
+        if (terminalRefusal && completionAccepted) { journal("post_completion", error.status, "lease_lost"); return; }
+        if (terminalRefusal && completionInFlight) {
+          journal("completion_pending", error.status, "lease_lost");
+          completionRefusal = accepted => journal(accepted ? "post_completion" : "failed", error.status, "lease_lost");
+        } else {
+          journal("failed", error instanceof ExternalRelayError ? error.status : 0,
+            error instanceof ExternalRelayError && ["lease_lost", "unreachable", "malformed", "too_large", "unauthorized",
+              "unsupported_version", "unavailable", "rate_limited", "unknown_feature"].includes(error.code) ? error.code : "transport_error");
+        }
         if (isUnknownFeatureRefusal(error)) await runtime?.onUnknownFeature?.();
         if (
           error instanceof ExternalRelayError &&
@@ -958,53 +1000,56 @@ export async function runClaimedRequest(
     }
     return await finish(failed(leaseId, "agent_error"));
   } finally {
-    if (!claimSettled) {
-      try { await settleClaim(claimTerminal ? "terminal" : "release", deadline.at); }
-      catch { console.error("External relay request claim cleanup failed"); }
-    }
-    inflight.delete(requestId);
-    leaveRelayHold(requestId);
-    deliverySettled();
-    heartbeatStopped = true;
-    if (cadenceTimer) clearTimeout(cadenceTimer);
-    if (heartbeatTimer) clearInterval(heartbeatTimer);
-    callAbort.abort();
-    await ownerParts?.dispose();
-    await inbound?.dispose();
-    for (const file of generatedFiles) { try { await fs.promises.rm(file, {force:true}); } catch { console.error("Relay generated image cleanup failed"); } }
-    await ownerTools?.dispose();
-    let releasePin = true;
-    if (conversation && owner) {
+    try {
+      if (!claimSettled) {
+        try { await settleClaim(claimTerminal ? "terminal" : "release", deadline.at); }
+        catch { console.error("External relay request claim cleanup failed"); }
+      }
+      leaveRelayHold(requestId);
+      deliverySettled();
+      heartbeatStopped = true;
+      if (cadenceTimer) clearTimeout(cadenceTimer);
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
+      callAbort.abort();
+      await ownerParts?.dispose();
+      await inbound?.dispose();
+      for (const file of generatedFiles) { try { await fs.promises.rm(file, {force:true}); } catch { console.error("Relay generated image cleanup failed"); } }
+      await ownerTools?.dispose();
+      let releasePin = true;
+      if (conversation && owner) {
+        try {
+          const custody = readRunLedger().runs.find(r => r.requestId === requestId)?.ownerTurn;
+          releasePin = !(custody?.cancel && !custody.confirmed);
+        } catch { releasePin = false; } // Unreadable custody cannot admit a peer turn.
+      }
+      if (conversation && releasePin) {
+        const compacted = conversationEvidence.compacted;
+        await releaseConversationAsync(conversation.id, { state: conversationBroken ? "broken" : "idle", sessionId: conversation.sessionId,
+          ...(conversationEvidence.sessionId || owner && conversation.conversationId && resultDelivered ? { accountId: conversation.accountId, turns: conversation.turns + 1, turnsSinceCompaction: compacted ? 0 : conversation.turnsSinceCompaction + 1,
+            lastTurnAt: new Date().toISOString(), seen: compacted ? [] : turn?.seen ?? [], staticDigest: compacted ? null : turn?.digest ?? null,
+            lastPromptTokens: conversationEvidence.promptTokens ?? null, compactions: conversation.compactions + (compacted ? 1 : 0), pendingCursor: undefined } : {}) }, Date.now() + 5000);
+      }
+      for (const timer of identityTimers) clearTimeout(timer);
+      // The only way out without a completion is a lost lease.
+      if (recorder && !duplicate && !recorder.finished)
+        recorder.finish({ outcome: "lease_lost", answer: null, delivery: null, ...loopRecord() });
       try {
-        const custody = readRunLedger().runs.find(r => r.requestId === requestId)?.ownerTurn;
-        releasePin = !(custody?.cancel && !custody.confirmed);
-      } catch { releasePin = false; } // Unreadable custody cannot admit a peer turn.
+        const held = readRunLedger().runs.find(r => r.requestId === requestId);
+        const custodyPending = !!held?.ownerTurn?.cancel && !held.ownerTurn.confirmed;
+        if (recorded && !custodyPending) await dropRunAsync(requestId, Date.now() + 5000);
+      } catch (error) {
+        console.error("External relay run ledger cleanup failed", error instanceof Error ? error.name : "unknown");
+      }
+      try {
+        const held = readRunLedger().runs.find(r => r.requestId === requestId);
+        if (runDir && !(held?.ownerTurn?.cancel && !held.ownerTurn.confirmed)) await fs.promises.rm(runDir, { recursive: true, force: true });
+      } catch (error) {
+        console.error("External relay run directory cleanup failed", error instanceof Error ? error.name : "unknown");
+      }
+    } finally {
+      inflight.delete(requestId);
+      if (recorded && !capacityReleased) free(relay, target);
+      onFreed?.();
     }
-    if (conversation && releasePin) {
-      const compacted = conversationEvidence.compacted;
-      await releaseConversationAsync(conversation.id, { state: conversationBroken ? "broken" : "idle", sessionId: conversation.sessionId,
-        ...(conversationEvidence.sessionId || owner && conversation.conversationId && resultDelivered ? { accountId: conversation.accountId, turns: conversation.turns + 1, turnsSinceCompaction: compacted ? 0 : conversation.turnsSinceCompaction + 1,
-          lastTurnAt: new Date().toISOString(), seen: compacted ? [] : turn?.seen ?? [], staticDigest: compacted ? null : turn?.digest ?? null,
-          lastPromptTokens: conversationEvidence.promptTokens ?? null, compactions: conversation.compactions + (compacted ? 1 : 0), pendingCursor: undefined } : {}) }, Date.now() + 5000);
-    }
-    for (const timer of identityTimers) clearTimeout(timer);
-    // The only way out without a completion is a lost lease.
-    if (recorder && !duplicate && !recorder.finished)
-      recorder.finish({ outcome: "lease_lost", answer: null, delivery: null, ...loopRecord() });
-    try {
-      const held = readRunLedger().runs.find(r => r.requestId === requestId);
-      const custodyPending = !!held?.ownerTurn?.cancel && !held.ownerTurn.confirmed;
-      if (recorded && !custodyPending) await dropRunAsync(requestId, Date.now() + 5000);
-    } catch (error) {
-      console.error("External relay run ledger cleanup failed", error instanceof Error ? error.name : "unknown");
-    }
-    try {
-      const held = readRunLedger().runs.find(r => r.requestId === requestId);
-      if (runDir && !(held?.ownerTurn?.cancel && !held.ownerTurn.confirmed)) await fs.promises.rm(runDir, { recursive: true, force: true });
-    } catch (error) {
-      console.error("External relay run directory cleanup failed", error instanceof Error ? error.name : "unknown");
-    }
-    if (recorded) free(relay, target);
-    onFreed?.();
   }
 }

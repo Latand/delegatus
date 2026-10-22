@@ -569,9 +569,35 @@ conversation later with no lease to answer; the prompt asks for
   conversation even after cancellation, and retains an unconfirmed stop.
   Control attempts have a one-second deadline and three attempts per sweep,
   separated by 250 ms. An accepted-but-pending receipt does not prove stop.
-  Confirmed control or terminal liveness permits cleanup. Otherwise the
+  Confirmed control or terminal liveness permits cleanup. After retiring the
+  exact first prompt or continuation, recovery can also confirm a stop from
+  the registry's positive proof that execution custody ended. The current
+  generation must have a dead or unhosted entry. Every retained generation
+  and artifact owner must lack a host, claim, pending action and termination
+  survivors; launch receipts must be terminal with no admission owner or
+  queued launch. Applying switches, unfinished migrations and recoverable
+  deliveries retain custody. Missing or unreadable proof retains it too.
+  This check runs after asynchronous prompt cleanup and needs no readable
+  final transcript. It confirms cancellation only; it accepts no answer.
+  Recovery preserves the continuation operation id when observing a refused
+  control. The ordinary orphan sweep then drops confirmed run custody,
+  restores advertised capacity and releases the reply-chain reservation.
+  No manual ledger edit or transcript deletion is required. Otherwise the
   settings status reports `owner_stop_pending`, the ordinary conversation
   remains on the board, and the orphan sweep retries after a Viewer restart.
+
+  Target capacity counts execution separately from retained cleanup custody.
+  An accepted completion durably marks `capacityReleased` before waiting for
+  claim settlement or chain/file cleanup, and stops scheduling heartbeats.
+  Both reservation paths and claim advertisements ignore that marker and
+  confirmed owner stops. Old rows without either proof still count. An
+  in-flight heartbeat refused after acceptance is journaled as
+  `post_completion`; the accepted answer stays accepted. The sweep finishes
+  abandoned completed cleanup once its local runner has returned, including
+  under the same Viewer process, without controlling a host or completing
+  the request again. A zero-capacity enabled target stays in the claim body
+  and emits `External relay target capacity` with its concurrency, running,
+  retained and waiting counts and the `full` or `drain` reason.
 
 
 ### 6.2 Where it sits
