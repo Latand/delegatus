@@ -8,6 +8,7 @@ import { CompanionLiveSessions } from "./liveSession";
 import { FakeLiveProvider, backendResponse, delegationCreated, functionCall, message } from "./fakeProvider";
 import { fixtureBoardReads } from "./boardReads.fixture";
 import { retainedCalls } from "./callHistory";
+import { callActions } from "./callHistoryTypes";
 import { sameCallOwner } from "./callMemory";
 import { delegationReason } from "./delegationOutcome";
 import { reportHeaderName } from "@/lib/projects/settings";
@@ -23,6 +24,7 @@ beforeEach(() => { const directory = path.join(root, String(++sequence)); proces
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
 
 const START = Date.UTC(2026, 9, 22, 10);
+const READ_TITLE = "Synthetic task title that a voice read aloud";
 const SECRET_WORDS = ["Synthetic instruction about the garden lane", "Synthetic instruction about the review", "Synthetic instruction that fails", "Synthetic answer text", "Synthetic operator words"];
 function harness(sends: Array<{ status: "queued" | "failed"; code?: string }> = []) {
   let now = START;
@@ -36,7 +38,7 @@ function harness(sends: Array<{ status: "queued" | "failed"; code?: string }> = 
   };
   const admission = new CompanionAdmission(storage, paths, () => now);
   const provider = new FakeLiveProvider();
-  const service = new CompanionLiveSessions(storage, admission, fixtureBoardReads({ tasks: () => [{ id: "task-a", project: "fixture", text: "A task", status: "inbox" }], pipelines: () => [], activity: async () => [], messages: async () => [] }),
+  const service = new CompanionLiveSessions(storage, admission, fixtureBoardReads({ tasks: () => [{ id: "task-a", project: "fixture", text: READ_TITLE, status: "inbox" }], pipelines: () => [], activity: async () => [], messages: async () => [] }),
     provider, { key: () => "synthetic-credential", timers: false, now: () => now, closeTimeoutMs: 10 });
   return { storage, admission, provider, service, reports, sent, advance: (ms: number) => { now += ms; } };
 }
@@ -90,6 +92,16 @@ test("each retained call lists its actions with time, kind, project, delivery st
   const text = JSON.stringify(calls);
   for (const words of SECRET_WORDS) expect(text).not.toContain(words);
   expect(text).not.toContain("synthetic-credential");
+  /* A read that succeeded lists no reason: its result is the read text, which the list does not carry. */
+  expect(actions[0]).toMatchObject({ kind: "tool", name: "list_tasks", status: "done", reason: null });
+  expect(text).not.toContain(READ_TITLE);
+});
+
+test("a failed tool lists its reason and a done tool lists none", () => {
+  const entry = (id: string, order: number, data: Record<string, unknown>) => ({ id, kind: "tool", order, atMs: order, data }) as unknown as import("./transcriptRecord").TranscriptEntry;
+  const [failed, done] = callActions([entry("a", 1, { name: "x", status: "failed", code: "c", reason: "why it failed" }), entry("b", 2, { name: "y", status: "done", reason: READ_TITLE })], START);
+  expect(failed).toMatchObject({ status: "failed", reason: "why it failed" });
+  expect(done).toMatchObject({ status: "done", reason: null });
 });
 
 test("the list is the caller's own: a member's calls are theirs, the operator's are not a member's, and an unreadable record is unknown, never empty", async () => {

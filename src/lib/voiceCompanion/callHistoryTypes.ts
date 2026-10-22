@@ -61,8 +61,10 @@ export function callActions(entries: readonly TranscriptEntry[], createdAt: numb
     const at = createdAt + entry.atMs;
     if (entry.kind === "tool") {
       if (requested.has(text(data.callId) ?? "")) continue;
-      actions.push({ id: entry.id, kind: "tool", name: text(data.name), at, projectKey: null, projectName: null, status: text(data.status) ?? "running",
-        code: text(data.code), reason: text(data.reason), conversationId: null, requestId: null });
+      /* A done tool's reason is the text it read back; only a failed tool's reason says why. */
+      const status = text(data.status) ?? "running";
+      actions.push({ id: entry.id, kind: "tool", name: text(data.name), at, projectKey: null, projectName: null, status,
+        code: text(data.code), reason: status === "failed" ? text(data.reason) : null, conversationId: null, requestId: null });
     } else if (entry.kind === "request") {
       const recipient = (data.recipient ?? (data.delivery as { recipient?: unknown } | undefined)?.recipient) as Recipient;
       requests.set(text(data.callId) ?? entry.id, entry.id);
