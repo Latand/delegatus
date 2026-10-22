@@ -3800,8 +3800,11 @@ for (const refusal of ["busy", "unavailable", "accepted-failure"] as const) test
     const next = { ...first, request_id: `chain-${refusal}-next`, claimed_at: new Date().toISOString(), deadline_at: new Date(Date.now() + 10200).toISOString(),
       input: { ...first.input, respond_to: "next", conversation: [{ ...first.input.conversation[0]!, id: "next", reply_to: first.input.respond_to }] } };
     const result = await runClaimedRequest(paired, next, undefined, { ownerPorts: ports });
-    expect(result?.outcome).toBe(refusal === "busy" ? "declined" : refusal === "unavailable" ? "answered" : "failed");
+    expect(result?.outcome).toBe(refusal === "busy" ? "declined" : "answered");
     if (refusal === "busy") expect(result).toMatchObject({ reason: "busy", detail: "chat busy" });
+    if (refusal === "accepted-failure") expect(readAnswerRecord(paired.id, "target_1", next.request_id)).toMatchObject({
+      diagnostic: { source: "observation", message: "Owner turn observation failed without further details" },
+    });
     expect(launches).toBe(refusal === "unavailable" ? 2 : 1); expect(sends).toBe(1);
   } finally { await server.close(); }
 });
