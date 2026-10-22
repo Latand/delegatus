@@ -42,7 +42,7 @@ test("dispatch preserves both runtime verification processes", () => {
   expect(steps.findIndex(step => step.name === "Build the Viewer"))
     .toBeLessThan(scripts.indexOf("bun scripts/verify-viewer-runtime.ts --codex-socket"));
   expect(scripts).toContain("bun scripts/verify-runtime-host.ts");
-  expect(scripts.some((script) => script.includes("bun run build"))).toBe(true);
+  expect(scripts).toContain('npm pack --pack-destination "$RUNNER_TEMP"');
 });
 
 test("no step can fail without failing the job", () => {
@@ -158,6 +158,18 @@ test("supported Codex CLIs run the full native contracts at the proposed commit"
 test("runtime CI runs on every PR and supports dispatch", () => {
   const triggers = Bun.YAML.parse(workflowSource) as { on: Record<string, unknown> };
   expect(Object.keys(triggers.on)).toEqual(["pull_request", "workflow_dispatch"]);
+});
+
+test("runtime CI requires installed-package MCP and audio smoke after prepack", () => {
+  const index = steps.findIndex(step => step.name === "Install the packed package and discover MCP tools and audio");
+  expect(index).toBeGreaterThan(steps.findIndex(step => step.name === "Build the Viewer"));
+  const step = steps[index]!;
+  expect(step.run).toContain("bash scripts/gate-slot.sh bun scripts/npm-package-smoke.mjs --mcp-assets");
+  expect(step.run).toContain("set -euo pipefail");
+  expect(step.if).toBeUndefined();
+  expect(step["continue-on-error"]).toBeUndefined();
+  for (const key of ["HOME", "XDG_CONFIG_HOME", "LLV_STATE_DIR", "TMPDIR"]) expect(step.env?.[key]).toContain("runner.temp");
+  expect(step.env?.LLV_VIEWER_CONTROL_URL).toBe("http://127.0.0.1:1");
 });
 
 test("one stable runtime context refuses every incomplete upstream verdict", () => {

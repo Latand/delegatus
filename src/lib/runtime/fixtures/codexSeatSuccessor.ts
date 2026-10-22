@@ -135,6 +135,10 @@ async function accept(message: JsonObject): Promise<void> {
     } : {} } });
     return;
   }
+  if (message.method === "mcpServerStatus/list") {
+    respond(message.id, { data: [{ name: "viewer", tools: { stage_report: {} } }], nextCursor: null });
+    return;
+  }
   if (message.method === "thread/start" || message.method === "thread/resume") {
     captureViewerServer(params);
     respond(message.id, {

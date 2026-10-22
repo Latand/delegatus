@@ -19,6 +19,9 @@ export const REGISTRY_BACKEND_DESCRIPTOR_VERSION = 1;
     reports every MCP caller as unidentified. */
 export class RegistryBackendIdentityError extends Error {
   override name = "RegistryBackendIdentityError";
+  /** A reader may observe the owner's import/publication handoff. This never
+      grants permission to pick either backend or to perform the migration. */
+  constructor(message: string, readonly awaitingPublication = false) { super(message); }
 }
 
 export interface RegistryBackendDescriptor {
@@ -200,6 +203,7 @@ export function resolveRegistryBackend(
         `the agent registry backend identity is unpublished while both ${path.basename(registryFilename)}`
         + ` and ${path.basename(defaultStore)} exist, so either may be authoritative;`
         + ` start the registry writer with ${REGISTRY_BACKEND_ENV} set so it publishes ${descriptorName}`,
+        true,
       );
     }
     return {
@@ -217,6 +221,7 @@ export function resolveRegistryBackend(
   if (!io.exists(store)) {
     throw new RegistryBackendIdentityError(
       `${descriptorName} names the ${descriptor.mode} backend store ${descriptor.sqliteFile}, which is unavailable`,
+      true,
     );
   }
   return { mode: descriptor.mode, sqliteFilename: store, source: "descriptor", pendingJsonImport: false };

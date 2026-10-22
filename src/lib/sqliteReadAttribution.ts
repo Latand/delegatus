@@ -1,5 +1,7 @@
 import type { Database, SQLQueryBindings, Statement } from "bun:sqlite";
 import { emptyReadTotals, readAttribution, type ReadTotals } from "./readAttribution";
+import path from "node:path";
+import { classifySchemaStatementError } from "./state/schemaCompatibility";
 
 type Connection = { id: number; reader: string; counters: ReadTotals };
 type Shared = { next: number; connections: WeakMap<object, () => Connection | undefined>; observed: WeakSet<object> };
@@ -25,7 +27,10 @@ export function observeSqlite<T extends Database>(db: T, reader: string): T {
     const original = db[method], own = Object.hasOwn(db, method), prototype = Object.getPrototypeOf(db);
     // Keep instance adapters and late prototype guards in the call path.
     // Capturing a bound prototype function would bypass an installed guard.
-    return (...args: unknown[]) => Reflect.apply(own ? original : Reflect.get(prototype, method, db), db, args);
+    return (...args: unknown[]) => {
+      try { return Reflect.apply(own ? original : Reflect.get(prototype, method, db), db, args); }
+      catch (error) { throw classifySchemaStatementError(error, args[0], path.basename(db.filename)); }
+    };
   };
   const observeStatement = (statement: Statement, sql: string) => {
     if (shared.observed.has(statement)) return statement;

@@ -29,6 +29,14 @@ From a clone, point the command at `bin/mcp-server.mjs`, or run
 `scripts/install-mcp.sh`. The script registers the server in your Claude
 Code and Codex configurations and in every account Delegatus manages.
 
+Delegatus checks the engine's connected Viewer tool catalog before a new seat
+or stage can accept work. A missing server, an empty catalog or failed discovery
+appears as a launch failure on its card. The generated server definition pins
+the launching installation's state directory, including when an account's
+registered environment contains an older path. A separate `claude mcp list`
+probe describes its own connection; the launch check reads the running agent's
+connection.
+
 ## Large reads run in Delegatus
 
 For agents Delegatus launches, large reads (pipelines, transcripts, prototype

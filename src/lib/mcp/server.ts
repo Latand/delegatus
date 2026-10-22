@@ -66,10 +66,12 @@ import {
 import { runWithMcpCallerResolution, runAsMcpHttpCaller, type McpHttpCaller } from "./callerContext";
 import type { McpToolPolicy } from "./toolAllowlist";
 import { MCP_TOOL_CATALOG_CAPABILITY } from "./toolCatalog";
+import { proposalSchema as voiceToolProposalSchema } from "@/lib/voiceTools/contracts";
 
 export const MCP_SERVER_NAME = "viewer";
 
 export const MCP_TOOL_NAMES = [
+  "voice_tools",
   "spawn_agent",
   "send_message",
   "message_receipt",
@@ -137,6 +139,7 @@ export type McpToolName = typeof MCP_TOOL_NAMES[number];
 type ReceiptRetention = "bounded" | "durable";
 
 export const MUTATING_MCP_TOOL_NAMES = new Set<McpToolName>([
+  "voice_tools",
   "backfill_worktree_projects",
   "spawn_agent",
   "send_message",
@@ -3762,6 +3765,7 @@ const TOOL_DESCRIPTIONS: Record<McpToolName, string> = {
     "The whole write is refused, and nothing is stored, when a row names an engine, model or effort outside the launch catalogue (`role_presets_invalid`, with the offending `violations` and `choices`) or when `expectedRevision` is not the current revision (`role_presets_stale_revision`, carrying the current registry to resend against). `expectedRevision` is optional.",
     "A write answers `{changed, revision, previousRevision, health, rows}`, each row as `{row, before, after}`. The revision check, the write and its audit record are one step under a lock shared by every process that writes the registry: every write is appended, with who made it, to `role-presets-audit.jsonl` beside role-presets.json, and a write whose record cannot be stored is undone and refused with `role_presets_audit_unavailable`. A change reaches launches that start after it; running agents keep the runtime they started on.",
   ].join(" "),
+  voice_tools: "Manage proposed voice-only MCP servers: list, status, propose or remove. Every agent, delegated workers included, may propose. Proposals execute nothing. Credentials are entered only in the voice settings. Only the operator browser may dry-run, approve, reject, configure or remove; MCP remove always refuses with voice_tools_operator_required. After proposing, direct the operator to the voice settings to run and review the probe. Commands are bun or uv; environment variables may not choose the launch (PATH, HOME, LD_*, NODE_OPTIONS, BUN_*, UV_*, PYTHON*, XDG_*); a package launch (bun x, uv tool run) sets no cwd and accepts only a registry package name with an optional version (npm @version or @tag, Python ==version); local scripts require an entryFile pin; HTTP URLs are loopback or HTTPS. Pinned changes return an approved server to pending.",
   auto_updates: [
     "Read — and switch on or off — automatic updates of the Delegatus install that serves this MCP: the same state and the same switch as the Update dialog.",
     "Enabling means: Delegatus follows `main`; once a newer merge's required checks are green it waits for a quiet or stable-work window (the operator not active, no update in progress, enough free memory) and then deploys that revision by itself. A deployment that fails rolls back to the running release, and automatic updates then switch themselves off and say why (`off`) until someone turns them on again.",
@@ -4725,6 +4729,12 @@ export const TOOL_INPUT_SCHEMAS: Record<McpToolName, z.ZodObject> = {
     detail: z.boolean().optional()
       .describe("true: a read also carries each role's shipped values, whether its prompt is overridden, and the launch choices. Ignored with overrides."),
   }).passthrough(),
+  voice_tools: z.object({
+    clientRequestId: clientRequestIdSchema,
+    action: z.enum(["list", "status", "propose", "remove"]),
+    name: z.string().optional().describe("remove only; removal requires the operator browser and is refused here."),
+    proposal: voiceToolProposalSchema.optional(),
+  }).strict(),
   auto_updates: z.object({
     clientRequestId: clientRequestIdSchema,
     enabled: z.boolean().optional()
@@ -4850,6 +4860,13 @@ for (const name of MCP_TOOL_NAMES) TOOL_INPUT_SCHEMAS[name] = TOOL_INPUT_SCHEMAS
 // task validation callback below before a receipt can be acquired.
 export const TOOL_TRANSPORT_SCHEMAS = Object.fromEntries(MCP_TOOL_NAMES.map(toolName => {
   const schema = TOOL_INPUT_SCHEMAS[toolName];
+  // Retain the advertised proposal shape while letting the strict callback below
+  // return INVALID_PROPOSAL before a receipt or domain handler can run.
+  if (toolName === "voice_tools") return [toolName, schema.extend({
+    // Zod's catch input has already been parsed and can have unknown keys removed.
+    // An invalid sentinel keeps a refused proposal invalid at the strict callback.
+    proposal: schema.shape.proposal.catch(() => null),
+  })];
   return [toolName, toolName === "create_task" || toolName === "update_task" ? schema.extend(Object.fromEntries(
     Object.entries(schema.shape).filter(([, fieldSchema]) => fieldSchema.isOptional())
       .map(([field, fieldSchema]) => [field, fieldSchema.catch((context: { input: unknown } | undefined) => context?.input)]),
@@ -4896,12 +4913,13 @@ export function createViewerMcpServer(service: McpToolService, tools: readonly M
       description: TOOL_DESCRIPTIONS[toolName] + (MCP_PAGE_CURSOR_TOOLS.has(toolName) ? ` ${MCP_PAGE_CURSOR_DESCRIPTION}` : ""),
       inputSchema: shortenSchemaDescriptions(TOOL_TRANSPORT_SCHEMAS[toolName]),
     }, async (args, extra) => {
-      if (taskMutation) {
+      if (taskMutation || toolName === "voice_tools") {
         const parsed = schema.safeParse(args);
         if (!parsed.success) {
           const issues = parsed.error.issues.map(issue => ({ field: issue.path.join("."), message: issue.message }));
-          const result = failure(toolName, String((args as McpToolArgs).clientRequestId), "TASK_INVALID_FIELD",
-            issues.map(issue => `${issue.field}: ${issue.message}`).join("; "), false, false,
+          const result = failure(toolName, String((args as McpToolArgs).clientRequestId), toolName === "voice_tools" ? "INVALID_PROPOSAL" : "TASK_INVALID_FIELD",
+            toolName === "voice_tools" ? "Invalid voice tools proposal. Use a registry package name with an optional version or a pinned entryFile; launch variables and inline credentials are refused."
+              : issues.map(issue => `${issue.field}: ${issue.message}`).join("; "), false, false,
             { field: issues[0]?.field, issues });
           return response(result);
         }
@@ -5119,6 +5137,10 @@ export async function serveViewerMcpStdio(service: McpToolService, healthProbe =
     ? createViewerMcpHealthProbeServer(admittedService)
     : createViewerMcpServer(admittedService);
   const transport = new StdioServerTransport();
+  if (!healthProbe) {
+    const { guardViewerMcpStartup } = await import("./startup");
+    guardViewerMcpStartup(transport);
+  }
   // The SDK does not close its transport on EOF. A dead client (including a
   // killed launcher) must not leave domain timers or in-flight reads resident.
   // This entry point owns a dedicated stdio process, never the Viewer server.

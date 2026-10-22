@@ -1,3 +1,5 @@
+import { subscriptionApiConsent } from "@/lib/accounts/subscriptionApiConsent";
+import { runHeadlessClaudeOnce } from "@/lib/agent/claudeHeadless";
 import { readClaudeCredentials } from "@/lib/accounts/claudeCredentials";
 import { paidCredits } from "@/lib/accounts/creditGuard";
 import { claudeTierDisplayName, normalizeClaudeLaunchModel } from "@/lib/agent/models";
@@ -76,7 +78,7 @@ type LimitsCache = { version: 2; engines: Record<EngineName, Record<string, Engi
     would otherwise let it rest, so the very next read goes to the provider
     instead of resting on a snapshot whose tier list an old parser emptied.
     The cache must never be the thing that hides a tier. */
-const CLAUDE_PARSER_VERSION = 2;
+const CLAUDE_PARSER_VERSION = 3;
 /** Earlier Codex cache entries could contain another account's transcript. */
 const CODEX_ATTRIBUTION_VERSION = 1;
 export type LimitRead = {
@@ -135,6 +137,9 @@ function withCurrentParser(entry: EngineCacheEntry): EngineCacheEntry {
 }
 
 function readDiskCache(): LimitsCache {
+  // A refused consent migration must not become an empty cache that another
+  // engine could persist over the prior-use evidence.
+  subscriptionApiConsent();
   try {
     const raw = (readJsonCache(limitsCacheFile()) ?? {}) as Partial<LimitsCache> & { at?: unknown; accountId?: unknown; data?: LimitsPayload };
     if (raw.version === 2 && raw.engines && typeof raw.engines === "object") {
@@ -527,29 +532,50 @@ interface OauthWindow {
 }
 
 /**
- * Live usage from the same OAuth endpoint the Claude Code CLI uses. The token
- * from the account-scoped credential store stays inside the server process; the
- * browser only ever sees percentages.
+ * Read Claude Code usage first. Only an installation with direct subscription
+ * API consent may fall back to the OAuth endpoint. Token handling on that
+ * fallback stays server-side; callers see validated percentages.
  */
 export async function fetchClaudeLimits(
   credentialsPath: string,
   clock: () => number = Date.now,
   timeoutMs = 8_000,
+  ports: { run?: typeof runHeadlessClaudeOnce } = {},
 ): Promise<LimitRead> {
-  // Keep this local named for its role: an `accessToken = …` line reads as a
-  // credential assignment to the publication gate and fails the scan.
-  let oauthToken = "";
-  let plan: string | null = null;
+  // Freeze migration before a CLI result can create the first new cache entry.
+  subscriptionApiConsent();
+  try {
+    const home = path.dirname(credentialsPath);
+    const cli = await (ports.run ?? runHeadlessClaudeOnce)({ account: { engine: "claude", accountId: "usage", kind: "managed", home,
+      transcriptRoot: path.join(home, "projects"), env: process.env }, prompt: "/usage", timeoutMs });
+    const terminal = cli.records.filter(row => row.type === "result").at(-1);
+    if (cli.status === "done" && terminal?.subtype === "success" && terminal.is_error !== true && terminal.local_command === "usage" && terminal.num_turns === 0) {
+      const data = claudeCliWindows(cli.records, clock());
+      if (data) {
+        const metadata = readClaudeCredentials(home);
+        const plan = metadata.state === "present" ? metadata.document.claudeAiOauth?.subscriptionType : null;
+        return { data: { ...data, plan: typeof plan === "string" ? plan : null }, reason: null, source: "live" };
+      }
+    }
+  } catch { /* Unavailable CLI data can use only the explicitly enabled fallback. */ }
+  if (!subscriptionApiConsent().enabled) return { data: null, reason: "Claude CLI limits unavailable; direct subscription API calls are off", source: "unavailable" };
+  // Read after the CLI wait: it may have refreshed or rotated credentials.
+  // These values remain in this server closure and never reach a child argv.
   const credentials = readClaudeCredentials(path.dirname(credentialsPath));
   if (credentials.state !== "present") {
     return { data: null, reason: credentials.state === "absent" ? "credentials absent" : "credential store unavailable", source: "unavailable" };
   }
   const oauth = credentials.document.claudeAiOauth;
-  if (typeof oauth?.accessToken === "string") oauthToken = oauth.accessToken;
-  if (typeof oauth?.subscriptionType === "string") plan = oauth.subscriptionType;
-  if (!oauthToken) return { data: null, reason: "credentials missing access token", source: "unavailable" };
+  if (typeof oauth?.accessToken !== "string" || !oauth.accessToken) return { data: null, reason: "credentials missing access token", source: "unavailable" };
+
+  // Keep this local named for its role: a credential assignment reads as a
+  // secret to the publication gate.
+  const oauthToken = oauth.accessToken;
+  const plan = typeof oauth.subscriptionType === "string" ? oauth.subscriptionType : null;
   try {
+    if (!subscriptionApiConsent().enabled) return { data: null, reason: "direct subscription API calls are off", source: "unavailable" };
     const res = await fetch(OAUTH_USAGE_URL, {
+      redirect: "error",
       headers: {
         authorization: "Bearer " + oauthToken,
         "anthropic-beta": "oauth-2025-04-20",
@@ -569,9 +595,30 @@ export async function fetchClaudeLimits(
     };
     if (!data.session && !data.weekly) return { data: null, reason: "oauth usage response had no windows", source: "unavailable" };
     return { data, reason: null, source: "live" };
-  } catch (err) {
-    return { data: null, reason: `oauth usage fetch failed: ${err instanceof Error ? err.message : String(err)}`, source: "unavailable" };
+  } catch {
+    return { data: null, reason: "oauth usage fetch failed", source: "unavailable" };
   }
+}
+
+/** The CLI validates usage_report; still validate every numeric field at this
+ * boundary. Meter kinds decide the general windows; labels never do. */
+function claudeCliWindows(records: Record<string, unknown>[], now: number): EngineLimits | null {
+  for (const record of [...records].reverse()) {
+    const report = record.usage_report ?? record.usageReport;
+    if (!report || typeof report !== "object") continue;
+    const rateLimits = (report as { rate_limits?: { limits?: unknown } }).rate_limits;
+    if (!Array.isArray(rateLimits?.limits)) continue;
+    const rows = rateLimits.limits.filter((row): row is Record<string, unknown> => Boolean(row && typeof row === "object" && !Array.isArray(row)));
+    const general = (kind: string, minutes: number): LimitWindow | null => {
+      const row = rows.find(row => row.kind === kind && typeof row.percent === "number" && Number.isFinite(row.percent) && row.percent >= 0);
+      return row ? oauthWindow({ utilization: row.percent, resets_at: row.resets_at }, minutes) : null;
+    };
+    const session = general("session", SESSION_WINDOW_MINUTES);
+    const weekly = general("weekly_all", WEEKLY_WINDOW_MINUTES);
+    if (!session && !weekly) continue;
+    return { session, weekly, tiers: oauthTierWindows({ limits: rows }), plan: null, capturedAt: Math.floor(now / 1000) };
+  }
+  return null;
 }
 
 function retryAfterAt(value: string | null, now: number): number | undefined {
