@@ -40,23 +40,28 @@ test.each(["publisher", "conflicting"])("native stage fixtures choose their own 
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }, 60_000);
 
-async function fixture(task?: string) {
+async function fixture(task?: string, reviewBudget = false) {
   const f = await realWorktreeLane("stage-pr", [
     { id: "build", kind: "run", role: { roleId: "builder" }, access: "read-write", prompt: "Build", next: "review" },
-    { id: "review", kind: "run", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review", next: null },
+    { id: "review", kind: "run", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review", next: null,
+      ...(reviewBudget ? { onFail: { to: "build", maxRounds: 1 } } : {}) },
   ], "remote-branch", false, false, { task: task ?? "stage-pr" });
   const p = loadPipelines().find(p => p.id === f.id)!;
   p.delivery!.target.remote = REMOTE; savePipelines([p]);
   const calls: string[][] = [];
   let exists = false, refuse = false, loseResponse = false;
   let expectedBody = "Stage implementation summary.";
+  let body = "";
   let prShape: "fork" | "head" | "ambiguous" | "closed" | "merged" | "branch" | "number" | undefined;
   let race: { call: number; kind: "pause" | "release" } | undefined;
   f.h.ports.exec = async (command, args, cwd, env, options) => {
+    // The fake forge's delivery repository is the native fixture origin.
+    if (command === "git" && args[0] === "remote" && args[1] === "get-url" && args.at(-1) === REMOTE)
+      return { code: 0, stdout: `${f.origin}\n`, stderr: "" };
     if (command === "gh") {
       // Provenance observations are independent of the delivery guarantee.
       // Only count the controller's exact PR lookup/create awaits here.
-      if (args[1] !== "create" && !args.some(arg => arg.includes("isCrossRepository")))
+      if (args[1] !== "create" && args[1] !== "edit" && !args.some(arg => arg.includes("isCrossRepository")))
         return { code: 1, stdout: "", stderr: "fixture has no observed pull request" };
       calls.push(args);
       if (race?.call === calls.length) {
@@ -66,7 +71,7 @@ async function fixture(task?: string) {
         savePipelines([current]);
       }
       if (args[0] === "pr" && (args[1] === "list" || args[1] === "view")) {
-        const row = { number: prShape === "number" ? 18 : 17, headRefName: prShape === "branch" ? "other-head" : p.branch, baseRefName: "main", state: prShape === "closed" ? "CLOSED" : prShape === "merged" ? "MERGED" : "OPEN", isCrossRepository: prShape === "fork",
+        const row = { body, title: p.task, number: prShape === "number" ? 18 : 17, headRefName: prShape === "branch" ? "other-head" : p.branch, baseRefName: "main", state: prShape === "closed" ? "CLOSED" : prShape === "merged" ? "MERGED" : "OPEN", isCrossRepository: prShape === "fork",
           headRefOid: prShape === "head" ? "f".repeat(40) : await f.git(f.origin, "rev-parse", `refs/heads/${p.branch}`) };
         if (args[1] === "view") return { code: exists ? 0 : 1, stdout: exists ? JSON.stringify(row) : "", stderr: "" };
         const base = args.indexOf("--base");
@@ -76,23 +81,31 @@ async function fixture(task?: string) {
       if (args[0] === "pr" && args[1] === "create") {
         if (refuse) return { code: 1, stdout: "", stderr: "forge refused" };
         expect(fs.readFileSync(args[args.indexOf("--body-file") + 1]!, "utf8")).toBe(expectedBody);
+        body = expectedBody;
         exists = true;
         return loseResponse ? { code: null, stdout: "", stderr: "response lost" } : { code: 0, stdout: "https://github.com/example/widgets/pull/17\n", stderr: "" };
+      }
+      if (args[0] === "pr" && args[1] === "edit") {
+        if (refuse) return { code: 1, stdout: "", stderr: "forge refused" };
+        body = fs.readFileSync(args[args.indexOf("--body-file") + 1]!, "utf8");
+        return { code: loseResponse ? null : 0, stdout: "", stderr: "" };
       }
       throw new Error(`unexpected forge call: ${args.join(" ")}`);
     }
     return realExec(command, args.map(a => a === REMOTE ? f.origin : a), cwd, env, options);
   };
-  const finish = async (summary = "Stage implementation summary.", n: 1 | 2 = 1) => {
+  const finish = async (summary = "Stage implementation summary.", n = 1, verdict: "pass" | "fail" = "pass") => {
     f.h.setConversationActive(false);
-    await engineModule.reportStageCompletion({ verdict: "pass", summary }, { kind: "agent", role: n === 1 ? "builder" : "reviewer", conversationId: `conversation_stage_${n}` }, f.h.ports);
-    await tickPipelines([finishReported(f.h, `/codex/stage-${n}.jsonl`, "pass", summary)], f.h.ports);
+    await engineModule.reportStageCompletion({ verdict, summary,
+      ...(verdict === "fail" ? { findings: [{ severity: "P2" as const, text: "Update the checks." }] } : {}) },
+    { kind: "agent", role: n === 2 ? "reviewer" : "builder", conversationId: `conversation_stage_${n}` }, f.h.ports);
+    await tickPipelines([finishReported(f.h, `/codex/stage-${n}.jsonl`, verdict, summary)], f.h.ports);
     return loadPipelines().find(p => p.id === f.id)!;
   };
   const commit = async () => {
     await f.git(f.worktree, "commit", "--allow-empty", "-m", "stage output");
   };
-  return { ...f, calls, finish, commit, setExpectedBody: (body: string) => { expectedBody = body; }, setPrShape: (shape: typeof prShape) => { exists = true; prShape = shape; }, setRace: (call: number, kind: "pause" | "release") => { race = { call, kind }; }, setMissing: () => { exists = false; }, setExisting: () => { exists = true; }, setRefused: (value = true) => { refuse = value; }, setLost: () => { loseResponse = true; },
+  return { ...f, calls, finish, commit, body: () => body, setExpectedBody: (body: string) => { expectedBody = body; }, setPrShape: (shape: typeof prShape) => { exists = true; prShape = shape; }, setRace: (call: number, kind: "pause" | "release") => { race = { call, kind }; }, setMissing: () => { exists = false; }, setExisting: () => { exists = true; }, setRefused: (value = true) => { refuse = value; }, setLost: () => { loseResponse = true; },
     link: (successor = true) => {
       const current = loadPipelines().find(lane => lane.id === f.id)!;
       current.delivery!.target.pr = 17;
@@ -100,6 +113,159 @@ async function fixture(task?: string) {
       savePipelines([current]); exists = true;
     },
     close: () => { savePipelines([]); fs.rmSync(f.root, { recursive: true, force: true }); } };
+}
+
+const originalBudgetBody = "Producer implementation notes. 7 tests passed; independent review to come.\n\n---\nGenerated with Delegatus.";
+const fixSummary = "Fixed the checks. 9 tests passed; typecheck passed.";
+
+async function finalBudgetFixFixture() {
+  const f = await fixture(undefined, true);
+  try {
+    f.setExpectedBody(originalBudgetBody);
+    await f.commit();
+    expect((await f.finish(originalBudgetBody)).cursor?.stageId).toBe("review");
+    await tickPipelines([], f.h.ports);
+    expect((await f.finish("Checks need updating.", 2, "fail")).cursor?.stageId).toBe("build");
+    await tickPipelines([], f.h.ports);
+    await f.commit();
+    return f;
+  } catch (error) { f.close(); throw error; }
+}
+
+for (const lost of [false, true]) test(`the final budget fix refreshes the PR head and reported checks without another review (lost reply: ${lost})`, async () => {
+  const f = await finalBudgetFixFixture();
+  try {
+    if (lost) f.setLost();
+    const head = await f.git(f.worktree, "rev-parse", "HEAD");
+    const p = await f.finish(fixSummary, 3);
+    expect(p.state, p.stateDetail ?? undefined).toBe("completed");
+    expect(p.runs.find(run => run.stageId === "review")!.attempts).toHaveLength(1);
+    expect(f.body()).toContain(head);
+    expect(f.body()).toContain(fixSummary);
+    expect(f.body()).toContain("Last fix was not re-reviewed");
+    expect(f.body().endsWith(originalBudgetBody)).toBe(true);
+    expect(f.body()).toContain("supersedes earlier head, checks and review-status statements");
+    expect(f.calls.filter(args => args[1] === "edit")).toHaveLength(1);
+    // Restart from the durable lane and the forge's observed body. Replaying
+    // settlement must keep exactly one update and must not edit again.
+    const observed = { number: 17, headRefName: p.branch, baseRefName: "main", state: "OPEN",
+      isCrossRepository: false, headRefOid: head, body: f.body(), title: p.task };
+    const replay = await realExec(process.execPath, ["-e", `
+      const { loadPipelines } = await import("@/lib/pipelines/store");
+      const { ensureStagePullRequest } = await import("@/lib/pipelines/stagePullRequest");
+      const lane = loadPipelines().find(lane => lane.id === ${JSON.stringify(f.id)});
+      const attempt = lane.runs.find(run => run.stageId === "build").attempts.at(-1);
+      let writes = 0;
+      const result = await ensureStagePullRequest(lane, attempt, async (command, args) => {
+        if (command !== "gh" || args[1] !== "view") writes++;
+        return { code: 0, stdout: ${JSON.stringify(JSON.stringify(observed))}, stderr: "" };
+      });
+      console.log(JSON.stringify({ result, writes }));
+    `], process.cwd(), undefined, { timeoutMs: 15_000 });
+    expect(replay.code, replay.stderr).toBe(0);
+    expect(JSON.parse(replay.stdout.trim())).toEqual({ result: { ok: true }, writes: 0 });
+  } finally { f.close(); }
+});
+
+test.each(["exit", "throw", "unconfirmed"] as const)("a final budget PR body refresh failure is reported on the lane (%s)", async failure => {
+  const f = await finalBudgetFixFixture();
+  try {
+    const exec = f.h.ports.exec;
+    f.h.ports.exec = async (...input) => {
+      if (input[0] === "gh" && input[1][1] === "edit") {
+        if (failure === "throw") throw new Error("forge unavailable");
+        return { code: failure === "exit" ? 1 : 0, stdout: "", stderr: "forge refused" };
+      }
+      return exec(...input);
+    };
+    const p = await f.finish(fixSummary, 3);
+    expect(p.state).toBe("needs_decision");
+    expect(p.stateDetail).toContain("pull request body refresh");
+    expect(p.runs.find(run => run.stageId === "build")!.attempts.at(-1)!.error).toContain("pull request body refresh");
+    expect(p.runs.find(run => run.stageId === "review")!.attempts).toHaveLength(1);
+    expect(f.body()).toBe(originalBudgetBody);
+  } finally { f.close(); }
+});
+
+for (const text of [
+  { kind: "path", value: "/home/" + "private-user/work" },
+  { kind: "email", value: ["someone", "private.invalid"].join("@") },
+  { kind: "credential", value: "ghp_" + "A".repeat(36) },
+]) test(`the final budget fix refuses private report text before editing the PR (${text.kind})`, async () => {
+  const f = await finalBudgetFixFixture();
+  try {
+    const p = await f.finish(text.value, 3);
+    expect(p.state).toBe("needs_decision");
+    expect(p.stateDetail).toContain("privacy");
+    expect(p.stateDetail).not.toContain(text.value);
+    expect(f.calls.filter(args => args[1] === "edit")).toHaveLength(0);
+    expect(f.body()).toBe(originalBudgetBody);
+  } finally { f.close(); }
+});
+
+test("the final budget PR refresh keeps the repository's publication gate", async () => {
+  const f = await finalBudgetFixFixture();
+  try {
+    const scripts = path.join(f.worktree, "scripts"); fs.mkdirSync(scripts);
+    fs.writeFileSync(path.join(scripts, "privacy-publication-gate.ts"), "process.exit(1);\n");
+    await f.git(f.worktree, "add", "scripts/privacy-publication-gate.ts");
+    await f.commit();
+    const p = await f.finish(fixSummary, 3);
+    expect(p.state).toBe("needs_decision");
+    expect(p.stateDetail).toContain("repository publication privacy gate");
+    expect(f.calls.filter(args => args[1] === "edit")).toHaveLength(0);
+    expect(f.body()).toBe(originalBudgetBody);
+  } finally { f.close(); }
+});
+
+test.each(["body", "title"] as const)("the final budget refresh refuses an unreadable existing PR %s", async field => {
+  const f = await finalBudgetFixFixture();
+  try {
+    const exec = f.h.ports.exec;
+    f.h.ports.exec = async (...input) => {
+      const result = await exec(...input);
+      if (input[0] === "gh" && input[1][1] === "view") {
+        const row = JSON.parse(result.stdout); delete row[field];
+        return { ...result, stdout: JSON.stringify(row) };
+      }
+      return result;
+    };
+    const p = await f.finish(fixSummary, 3);
+    expect(p.state).toBe("needs_decision");
+    expect(p.stateDetail).toContain("body refresh could not read its existing text");
+    expect(f.calls.filter(args => args[1] === "edit")).toHaveLength(0);
+    expect(f.body()).toBe(originalBudgetBody);
+  } finally { f.close(); }
+});
+
+for (const kind of ["pause", "release"] as const) for (const at of ["read", "edit", "verify"] as const) {
+  test(`a ${kind} during the final PR body ${at} cannot complete stale settlement`, async () => {
+    const f = await finalBudgetFixFixture();
+    try {
+      const exec = f.h.ports.exec;
+      let reads = 0;
+      f.h.ports.exec = async (...input) => {
+        const result = await exec(...input);
+        if (input[0] === "gh") {
+          const operation = input[1][1];
+          if (operation === "view") reads++;
+          if ((at === "read" && reads === 1) || (at === "edit" && operation === "edit") || (at === "verify" && reads === 2)) {
+            const p = loadPipelines().find(lane => lane.id === f.id)!;
+            if (kind === "pause") { p.state = "paused"; p.pausedState = "running"; }
+            else p.delivery!.active = false;
+            savePipelines([p]);
+          }
+        }
+        return result;
+      };
+      const p = await f.finish(fixSummary, 3);
+      expect(p.state).not.toBe("completed");
+      if (kind === "pause") expect(p.state).toBe("paused");
+      else expect(p.delivery!.active).toBe(false);
+      if (at === "read") expect(f.body()).toBe(originalBudgetBody);
+      expect(p.runs.find(run => run.stageId === "review")!.attempts).toHaveLength(1);
+    } finally { f.close(); }
+  });
 }
 
 async function publishedHeadFixture(linked = true) {
@@ -357,6 +523,7 @@ test("C: an existing delivery PR is discovered without another create", async ()
     f.setExisting(); await f.commit();
     expect((await f.finish()).delivery?.target.pr).toBe(17);
     expect(f.calls.filter(a => a[1] === "create")).toHaveLength(0);
+    expect(f.calls.filter(a => a[1] === "edit")).toHaveLength(0);
   } finally { f.close(); }
 });
 
