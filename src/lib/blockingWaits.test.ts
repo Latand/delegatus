@@ -47,15 +47,20 @@ test("window boundaries retain exact counts across operation ids and flush a qui
 
 test("distinct callers stay distinct and a full group cache flushes exact receipts before eviction", () => {
   const { samples } = capture();
-  for (let group = 0; group < 129; group++) {
-    deferred("operation-a", `probe.${group}`);
-    deferred("operation-b", `probe.${group}`);
+  const clock = spyOn(performance, "now").mockReturnValue(0);
+  try {
+    for (let group = 0; group < 129; group++) {
+      deferred("operation-a", `probe.${group}`);
+      deferred("operation-b", `probe.${group}`);
+    }
+    expect(samples()).toHaveLength(1);
+    process.emit("beforeExit", 0);
+    expect(samples()).toHaveLength(129);
+    expect(samples().reduce((total, sample) => total + sample.count, 0)).toBe(258);
+    expect(samples().every(sample => sample.count === 2 && sample.suppressedCount === 1)).toBe(true);
+  } finally {
+    clock.mockRestore();
   }
-  expect(samples()).toHaveLength(1);
-  process.emit("beforeExit", 0);
-  expect(samples()).toHaveLength(129);
-  expect(samples().reduce((total, sample) => total + sample.count, 0)).toBe(258);
-  expect(samples().every(sample => sample.count === 2 && sample.suppressedCount === 1)).toBe(true);
 });
 
 test("wait thresholds and terminal refusal evidence bypass deferral coalescing", () => {

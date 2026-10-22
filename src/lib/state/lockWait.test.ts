@@ -32,33 +32,43 @@ function fixture(validate?: (row: LockRow) => void) {
 test("five zero-wait admissions produce one journal summary with exact totals", () => {
   const logs: string[] = [];
   resetBlockingWaitsForTests(line => logs.push(line));
-  for (let attempt = 0; attempt < 5; attempt++) {
-    expect(() => stateLockAttempt("test.zero", () => { throw new StateLockDeferredError("test.zero"); }))
-      .toThrow(StateLockDeferredError);
+  const clock = spyOn(performance, "now").mockReturnValue(1_000);
+  try {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      expect(() => stateLockAttempt("test.zero", () => { throw new StateLockDeferredError("test.zero"); }))
+        .toThrow(StateLockDeferredError);
+    }
+    // A short-lived process must flush its unexpired window before exiting.
+    process.emit("beforeExit", 0);
+    expect(logs).toHaveLength(1);
+    expect(JSON.parse(logs[0]!.slice("[blocking-wait] ".length)))
+      .toMatchObject({ deferred: true, count: 5, suppressedCount: 4, stateWait: { outcome: "deferred", attempts: 1 } });
+  } finally {
+    clock.mockRestore();
   }
-  // A short-lived process must flush its unexpired window before exiting.
-  process.emit("beforeExit", 0);
-  expect(logs).toHaveLength(1);
-  expect(JSON.parse(logs[0]!.slice("[blocking-wait] ".length)))
-    .toMatchObject({ deferred: true, count: 5, suppressedCount: 4, stateWait: { outcome: "deferred", attempts: 1 } });
 });
 
 test("a zero-budget async admission remains a deferral, with no timeout or lost-write count", async () => {
   const logs: string[] = [];
   resetBlockingWaitsForTests(line => logs.push(line));
   const before = stateLockWaitDiagnostics();
-  for (let attempt = 0; attempt < 5; attempt++) {
-    await expect(waitForStateLock("test.zeroAsync", () => stateLockAttempt("test.zeroAsync", () => {
-      throw new StateLockDeferredError("test.zeroAsync", "lease");
-    }), { waitMs: 0 })).rejects.toBeInstanceOf(StateLockDeferredError);
+  const clock = spyOn(performance, "now").mockReturnValue(1_000);
+  try {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await expect(waitForStateLock("test.zeroAsync", () => stateLockAttempt("test.zeroAsync", () => {
+        throw new StateLockDeferredError("test.zeroAsync", "lease");
+      }), { waitMs: 0 })).rejects.toBeInstanceOf(StateLockDeferredError);
+    }
+    process.emit("beforeExit", 0);
+    expect(logs).toHaveLength(1);
+    expect(JSON.parse(logs[0]!.slice("[blocking-wait] ".length)))
+      .toMatchObject({ deferred: true, count: 5, suppressedCount: 4, stateWait: { outcome: "deferred", reason: "lease", attempts: 1 } });
+    expect(stateLockWaitDiagnostics().refused).toBe(before.refused);
+    expect(stateLockWaitDiagnostics().deferred - before.deferred).toBe(5);
+    expect(await waitForStateLock("test.zeroAsync", () => 42, { waitMs: 0 })).toBe(42);
+  } finally {
+    clock.mockRestore();
   }
-  process.emit("beforeExit", 0);
-  expect(logs).toHaveLength(1);
-  expect(JSON.parse(logs[0]!.slice("[blocking-wait] ".length)))
-    .toMatchObject({ deferred: true, count: 5, suppressedCount: 4, stateWait: { outcome: "deferred", reason: "lease", attempts: 1 } });
-  expect(stateLockWaitDiagnostics().refused).toBe(before.refused);
-  expect(stateLockWaitDiagnostics().deferred - before.deferred).toBe(5);
-  expect(await waitForStateLock("test.zeroAsync", () => 42, { waitMs: 0 })).toBe(42);
 });
 
 async function peer(root: string, filename: string, mode: string, argument: number, suffix = "holder") {
