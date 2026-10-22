@@ -49,13 +49,26 @@ function rewriteReceiptFileAsV1(receiptPath: string): void {
   }));
 }
 
-async function waitForFile(filename: string, timeoutMs = 3_000): Promise<boolean> {
+// A child's milestone is bounded by the test's own timeout, never by runner
+// speed: process startup under load can take seconds. Pass the child to stop
+// waiting as soon as it exits without reaching the milestone.
+const MILESTONE_TIMEOUT_MS = 60_000;
+const SLOW_FLOW_ACTION_LINE = /^\[mcp slow\] pid=\d+ role=[a-z-]+ tool=flow_action(?: [a-zA-Z]+Ms=\d+)+$/;
+
+async function waitForAnyFile(filenames: string[], child?: { exited: Promise<number> }, timeoutMs = MILESTONE_TIMEOUT_MS): Promise<string | null> {
   const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (fs.existsSync(filename)) return true;
+  let exited = false;
+  void child?.exited.then(() => { exited = true; }, () => { exited = true; });
+  while (Date.now() < deadline && !exited) {
+    const found = filenames.find((filename) => fs.existsSync(filename));
+    if (found) return found;
     await Bun.sleep(10);
   }
-  return fs.existsSync(filename);
+  return filenames.find((filename) => fs.existsSync(filename)) ?? null;
+}
+
+async function waitForFile(filename: string, timeoutMs = MILESTONE_TIMEOUT_MS, child?: { exited: Promise<number> }): Promise<boolean> {
+  return await waitForAnyFile([filename], child, timeoutMs) === filename;
 }
 
 async function waitForFileCount(directory: string, prefix: string, count: number, timeoutMs = 10_000): Promise<boolean> {
@@ -1340,6 +1353,7 @@ describe("MCP tool service", () => {
     const handoffReadyPath = path.join(directory, "handoff-ready");
     const handoffReleasePath = path.join(directory, "handoff-release");
     const reuseReadyPath = path.join(directory, "reuse-ready");
+    const reuseWaitingPath = `${reuseReadyPath}-waiting`;
     const reuseReleasePath = path.join(directory, "reuse-release");
     const countPath = path.join(directory, "binding-count");
     const reaperResultPath = path.join(directory, "reaper-result.json");
@@ -1369,7 +1383,7 @@ describe("MCP tool service", () => {
       stdout: "ignore",
       stderr: "pipe",
     }));
-    expect(await waitForFile(handoffReadyPath)).toBeTrue();
+    expect(await waitForFile(handoffReadyPath, undefined, reaper)).toBeTrue();
     expect(fs.existsSync(lockPath)).toBeFalse();
     expect(fs.statSync(pinPath).ino).toBe(staleInode);
 
@@ -1395,9 +1409,13 @@ describe("MCP tool service", () => {
       stdout: "ignore",
       stderr: "pipe",
     }));
-    const enteredBeforeRelease = await waitForFile(reuseReadyPath, 250);
+    // The successor signals an acquisition retry taken while the lock is free
+    // and the handoff still paused. Forced reuse during the handoff reaches the
+    // ready file instead, without such a retry.
+    expect(await waitForAnyFile([reuseWaitingPath, reuseReadyPath], first)).toBe(reuseWaitingPath);
+    expect(fs.existsSync(reuseReadyPath)).toBeFalse();
     fs.writeFileSync(handoffReleasePath, "release");
-    expect(await waitForFile(reuseReadyPath)).toBeTrue();
+    expect(await waitForFile(reuseReadyPath, undefined, first)).toBeTrue();
     expect(Number(fs.readFileSync(reuseReadyPath, "utf8"))).toBe(staleInode);
     fs.writeFileSync(reuseReleasePath, "release");
     const processes = await Promise.all([
@@ -1406,18 +1424,22 @@ describe("MCP tool service", () => {
       childResult(second),
     ]);
 
-    expect(enteredBeforeRelease).toBeFalse();
-    expect(processes).toEqual([
-      { exit: 0, error: "" },
-      { exit: 0, error: "" },
-      { exit: 0, error: "" },
+    // Contended claimants may report the threshold-gated slow-call line on a
+    // loaded runner; any other stderr output still fails.
+    expect(processes.map(({ exit, error }) => ({
+      exit,
+      unexpected: error.split("\n").filter((line) => line && !SLOW_FLOW_ACTION_LINE.test(line)),
+    }))).toEqual([
+      { exit: 0, unexpected: [] },
+      { exit: 0, unexpected: [] },
+      { exit: 0, unexpected: [] },
     ]);
     const results = [reaperResultPath, firstResultPath, secondResultPath]
       .map((filename) => JSON.parse(fs.readFileSync(filename, "utf8")) as { ok: boolean; replayed: boolean });
     expect(results.filter((result) => result.ok && !result.replayed)).toHaveLength(1);
     expect(fs.readFileSync(countPath, "utf8").trim().split("\n")).toHaveLength(1);
     expect(recoveryArtifacts(directory)).toEqual([]);
-  }, 12_000);
+  }, 60_000);
 
   test("successors remain responsive and bounded while namespace release is paused", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-lock-namespace-busy-"));

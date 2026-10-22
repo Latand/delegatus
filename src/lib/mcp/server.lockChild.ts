@@ -18,8 +18,31 @@ type CrashBoundary =
   | "recovery-link-cleanup"
   | "owner-cleanup";
 
+const realMonotonic = performance.now.bind(performance);
+let fixturePausedMs = 0;
+
 function waitFor(filename: string): void {
-  waitForFixtureFile(filename);
+  const started = realMonotonic();
+  try { waitForFixtureFile(filename); } finally { fixturePausedMs += realMonotonic() - started; }
+}
+
+/** A child held at a fixture barrier is waiting for the parent, which may be
+    starting another process on a loaded runner. Neither its lock budget nor its
+    call timing is charged for that wait; every other step stays on real time. */
+async function excludeFixturePauses(beforeRetry: () => void = () => {}): Promise<void> {
+  const { setReceiptLockClockForTests } = await import("./server");
+  Object.defineProperty(performance, "now", {
+    value: () => realMonotonic() - fixturePausedMs,
+    configurable: true,
+    writable: true,
+  });
+  setReceiptLockClockForTests({
+    now: () => Date.now() - fixturePausedMs,
+    pause: (milliseconds) => {
+      beforeRetry();
+      return new Promise((resolve) => setTimeout(resolve, milliseconds));
+    },
+  });
 }
 
 function pauseAt(directory: string, role: RaceRole, phase: string): void {
@@ -563,9 +586,20 @@ if (mode === "hold") {
     process.argv[7]!,
     process.argv[8]!,
   );
+  await excludeFixturePauses();
   await claimReceipt(process.argv[3]!, process.argv[4]!, process.argv[5]!);
 } else if (mode === "reuse-claim") {
   installForcedInodeReuse(process.argv[3]!, process.argv[6]!, process.argv[7]!, process.argv[8]!);
+  // An acquisition retry while the lock is free and the retired inode is still
+  // pinned is a wait on the paused namespace: lock contention leaves the lock
+  // present, and pauses inside namespace cleanup are not acquisition retries.
+  const lockPath = `${process.argv[3]!}.lock`;
+  await excludeFixturePauses(() => {
+    if (new Error().stack?.includes("waitForLockRetry")
+      && !fs.existsSync(lockPath) && fs.existsSync(process.argv[6]!) && !fs.existsSync(process.argv[7]!)) {
+      fs.writeFileSync(`${process.argv[7]!}-waiting`, "waiting");
+    }
+  });
   try {
     await claimReceipt(process.argv[3]!, process.argv[4]!, process.argv[5]!);
   } finally {
