@@ -53,6 +53,7 @@ test("MCP carries the child flag, refuses agent enable and permits seat disable"
   const enabled = applySeatTickSettingsChange(initial, args, { at, actor: operator });
   if (!enabled.ok) throw new Error(enabled.error);
   writeSeatTickSettings(project, enabled.settings);
+  expect((await binding(project).seat_tick_settings({ clientRequestId: "proactive-read-compact" })).autonomy).toMatchObject({ active: true, proactive: { enabled: true } });
   expect((await binding(project).seat_tick_settings({ clientRequestId: "proactive-read", verbose: true })).autonomy).toMatchObject({ proactive: { enabled: true }, episode: { proactive: { enabled: true } } });
   await binding(project).seat_tick_settings({ clientRequestId: "proactive-stop", autonomy: { proactive: { enabled: false }, why: "Reserve requested capacity" } });
   expect((await binding(project).seat_tick_settings({ clientRequestId: "proactive-stopped" })).autonomy).toMatchObject({ active: true, proactive: { enabled: false } });
