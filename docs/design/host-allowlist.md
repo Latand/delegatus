@@ -36,7 +36,7 @@ still reach the handler and retain the existing rewrite diagnostic.
 | Browser UI | Loopback and explicit launcher bind name; `src/proxy.host.test.ts`, `src/proxy.test.ts`, `src/proxy.team.test.ts` cover open/keyed requests, cookies and team admission. |
 | Phone/Tailscale | `src/lib/access/phoneAccess.ts` supplies `LLV_TS_HOST`; proxy tests cover the pinned name, browser authentication and handoff links. |
 | Linked installations | Saved `LLV_PUBLIC_HOST`, outbound URL authority, peer credentials and pending self-check; `src/lib/links/self.test.ts` drives real local HTTP/TLS reverse proxies through the perimeter. |
-| Runtime host | Its stable gateway preserves Host; `src/proxy.team.test.ts` exercises the production tick client and health-probe plans. The intentional foreign-Host health probe still receives a recognized 403. |
+| Runtime host | Its stable gateway preserves Host; `src/proxy.team.test.ts` exercises the production tick client and health-probe plans. The unauthorized health probe keeps the endpoint Host and remote marker, then verifies the key gate's 403 denial or the team gate's 401 `member_required` denial. |
 | MCP HTTP clients | The control URL supplies the HTTP Host; proxy team tests exercise production reads and deployment requests with and without an access key. |
 | Voice relay | `src/lib/voiceCompanion/deliveryPaths.ts` constructs a loopback Host for in-process delivery. Its existing delivery and HTTP tests cover the caller. |
 | Telegram relay | `src/lib/telegram/reportSpawn.ts` constructs loopback Host and Origin for in-process spawn. `src/proxy.host.test.ts` checks those production headers through both Host and write-origin guards. |
