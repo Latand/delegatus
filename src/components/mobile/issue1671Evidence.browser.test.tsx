@@ -4048,7 +4048,7 @@ browserTest("#2098: the phone's Overview is the phone kanban over three projects
  */
 const BOT_OUT = path.resolve(process.env.LLV_TELEGRAM_BOT_OUT ?? ".artifacts/telegram-bot");
 const BOT_EVIDENCE = path.resolve("evidence/telegram-bot");
-const BOT_SCENES = ["none", "chats", "webhook"] as const;
+const BOT_SCENES = ["none", "chats", "webhook", "clone"] as const;
 
 async function readTelegramPanel(page: Page, phone: boolean) {
   return page.evaluate((isPhone) => {
@@ -4158,6 +4158,9 @@ browserTest("telegram bot: the setup panel on the phone and the desktop holds it
     { viewport: { width: 390, height: 844 }, scheme: "light", phone: true, lang: "uk", scenes: ["chats", "refused"] },
     { viewport: { width: 1_280, height: 800 }, scheme: "light", phone: false, lang: "uk", scenes: ["chats", "refused"] },
   );
+  for (const viewport of [{ width: 390, height: 844 }, { width: 410, height: 880 }, { width: 430, height: 932 }, { width: 1280, height: 800 }])
+    for (const scheme of SCHEMES) for (const lang of ["en", "uk"] as const)
+      cases.push({ viewport, scheme, phone: viewport.width < 600, lang, scenes: ["clone"] });
   try {
     for (const { viewport, scheme, phone, lang, scenes } of cases) {
       for (const scene of scenes) {
@@ -4173,10 +4176,21 @@ browserTest("telegram bot: the setup panel on the phone and the desktop holds it
           const top = await readTelegramPanel(page, phone);
           const reportsLine = await page.locator('[role="dialog"][aria-label="Telegram"] [data-telegram-chat-reports]').allTextContents();
           await page.screenshot({ path: path.join(BOT_OUT, `${key}.png`) });
-          const expectedReports = scene === "chats" || scene === "webhook" ? [lang === "uk" ? "Звіти оркестратора: Atlas" : "Orchestrator reports: Atlas"]
+          const expectedReports = scene === "chats" || scene === "webhook" || scene === "clone" ? [lang === "uk" ? "Звіти оркестратора: Atlas" : "Orchestrator reports: Atlas"]
             : scene === "refused" ? [lang === "uk" ? "Звіти оркестратора: Atlas. Дописи сюди зараз відхиляються, тож звіти лишаються лише в журналі: увімкніть дописи або оберіть інший чат" : "Orchestrator reports: Atlas. Posts are refused here now, so they reach the log only: switch posting on or pick another chat"]
             : [];
           if (JSON.stringify(reportsLine) !== JSON.stringify(expectedReports)) failures.push(`${key}: the chat's reports line reads ${JSON.stringify(reportsLine)}`);
+          if (scene === "clone") {
+            const state = page.getByLabel(`Report clone: ${lang === "uk" ? "Агентам можна писати" : "Agents may post"}`, { exact: true });
+            await state.scrollIntoViewIfNeeded();
+            if (!await state.isVisible()) failures.push(`${key}: clone posting status is missing`);
+            const ink = await state.evaluate(node => {
+              const range = document.createRange(); range.selectNodeContents(node);
+              return [...range.getClientRects()].every(r => r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight);
+            }).catch(() => false);
+            if (!ink) failures.push(`${key}: clone posting status is clipped`);
+            await page.screenshot({ path: path.join(BOT_OUT, `${key}-clone.png`) });
+          }
           /* The panel scrolls inside itself; the second frame is its end. */
           await page.evaluate(() => {
             const dialog = document.querySelector('[role="dialog"][aria-label="Telegram"]');

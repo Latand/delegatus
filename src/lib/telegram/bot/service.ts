@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { BotSelector, botRows, publicRefusals, type PostingBot } from "./multiBot";
+import { productionClonePosting, type ClonePostingPort } from "./clone";
 import { TelegramBotError, sendFailure } from "./errors";
 export { TelegramBotError } from "./errors";
 import path from "node:path";
@@ -79,6 +80,7 @@ export interface TelegramRichMessage {
 }
 
 export interface TelegramBotDependencies {
+  clones?: ClonePostingPort;
   transportFor(token: string): BotTransport;
   openStore(): TelegramBotStore;
   removeStoreFiles(): void;
@@ -369,7 +371,7 @@ export class TelegramBotService {
       throw new TelegramBotError("send_uncertain", "Telegram confirmed the send but its local receipt could not be committed; keep the same send key to avoid a duplicate");
     }
     if (metadata.target) this.ensurePublication().wake();
-    else {
+    else if (!botId.startsWith("clone:")) {
       // Injected observers also see unrouted sends. Production refuses them.
       try { void Promise.resolve(this.deps.publishMessage?.(receipt)).catch(() => {
         console.warn("Telegram relay publication unconfirmed");
@@ -423,7 +425,7 @@ export class TelegramBotService {
       })];
   }
   private selector(): BotSelector {
-    return this.selectorCache ??= new BotSelector(this.store(), () => this.deps.now(), () => this.postingBots());
+    return this.selectorCache ??= new BotSelector(this.store(), () => this.deps.now(), () => this.postingBots(), this.deps.clones);
   }
   private postingView(chat: ChatRow, bots = this.postingBots()) {
     return this.store().postingState(db => this.selector().view(db, chat, bots));
@@ -1134,13 +1136,13 @@ export class TelegramBotService {
         ...(topicId !== null ? { message_thread_id: topicId } : {}),
         ...(input.silent === true ? { disable_notification: true } : {}),
       };
-      let result = await transport.call<TgSent>("sendMessage", params);
+      let result = await transport.call<TgSent>("sendMessage", params, { partIndex: index });
       if (!result.ok && result.migrateToChatId && !migrated) {
         migrated = true;
         store.migrateChat(chatId, result.migrateToChatId);
         chatId = result.migrateToChatId;
         selection.migrate(chatId);
-        result = await transport.call<TgSent>("sendMessage", { ...params, chat_id: Number(chatId) });
+        result = await transport.call<TgSent>("sendMessage", { ...params, chat_id: Number(chatId) }, { partIndex: index });
       }
       if (!result.ok) {
         const error = sendFailure(result, chat);
@@ -1517,6 +1519,7 @@ const STORE_FILE = "bot.sqlite";
     the sleep, and keep the rest. */
 export function productionTelegramBotDependencies(): TelegramBotDependencies {
   return {
+    clones: productionClonePosting,
     publicationTarget: telegramPublicationTarget,
     publishMessage: (receipt, authorize) => authorize ? publishDurableTelegramMessage(receipt, authorize) : "skipped",
     transportFor: (token) => createBotApiTransport(token),
