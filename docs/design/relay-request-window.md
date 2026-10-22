@@ -83,9 +83,11 @@ The owner's prompt asks for an answer as soon as its outcome is ready and
 explains the ten-minute total and possible earlier service deadline.
 
 The runner also owns a timer at the absolute request deadline. It initiates
-cancellation and completes `failed` / `hard_cap` with a fixed readable detail,
+cancellation and completes `answered` with a fixed plain timeout notice,
 without waiting for stop recovery. Unconfirmed execution custody remains in
-the run ledger. The late result cannot send another completion. The lease
+the run ledger. This posts a requester reply even with service fallback disabled;
+a `failed` completion would follow that setting and could post nothing. The
+late result cannot send another completion. The lease
 helper merged from PR #3192 continues renewing until completion; its cadence,
 five-second HTTP calls and service-supplied stall expiry are unchanged. Its
 guardian checks owner identity every second and release ownership every two
@@ -101,3 +103,12 @@ attachment upload and completion retries. `runOwnerAgent` also resolves the
 same fallback when invoked directly without a precomputed deadline. Invalid
 compact completion uses it; valid compact execution does not. No persistent
 schema, service wire field or per-call timeout changes.
+
+The fixed notice has a separate `status` delivery mode in both lease transports.
+`ownerRelayStatusReplyAuthorized` checks the exact plain timeout text, refuses
+nonempty attachments, buttons or mentions, and reads the current request row,
+relay pause and target settings before each delivery attempt. It can report a
+deadline while stop confirmation is pending. Agent admission, tools and staged
+answers continue using `ownerRelayAuthorized`, which refuses cancelled turns.
+Tests send hostile payloads and revoke each authority source after transport
+startup through both the inline transport and the independently owned helper.

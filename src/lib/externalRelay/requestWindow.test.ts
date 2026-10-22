@@ -24,7 +24,7 @@ async function waitFor(check: () => boolean) {
   expect(check()).toBe(true);
 }
 
-function fixture(id: string, deadlineMs?: number, hardCapMinutes = 1, holdStop = false, refuseCompletion = false) {
+function fixture(id: string, deadlineMs?: number, hardCapMinutes = 1, holdStop = false, refuseCompletion = false, fallback: "service" | "none" = "service") {
   let now = epoch;
   jest.useFakeTimers();
   const clock = spyOn(Date, "now").mockImplementation(() => now);
@@ -35,7 +35,7 @@ function fixture(id: string, deadlineMs?: number, hardCapMinutes = 1, holdStop =
     owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null },
     pairedAt: new Date(epoch).toISOString(), paused: false,
     limits: { max_response_bytes: 1_048_576, max_wait_s: 25, max_answer_chars: 4000 },
-    targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback: "service", enabled: true,
+    targets: [{ id: "target_1", name: "Target", answered_by: "install", fallback, enabled: true,
       engine: "codex", model: "gpt-6-sol", effort: "low", project: null, concurrency: 1, hardCapMinutes, ownerTier: true }],
   };
   updateRelayStore(store => ({ ...store, relays: [paired] }));
@@ -46,10 +46,14 @@ function fixture(id: string, deadlineMs?: number, hardCapMinutes = 1, holdStop =
   const request = { ...contextRequest, request_id: id, deadline_at: deadlineMs === undefined ? undefined : new Date(epoch + deadlineMs).toISOString(),
     input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } };
   const heartbeats: number[] = [], completions: { at: number; body: unknown }[] = [], stops: string[] = [];
+  const completionExecutionAuthority: boolean[] = [];
+  let launchAuthorize: (() => void) | undefined;
   const wire = spyOn(client, "relayCall").mockImplementation(async (_base, endpoint, _method, body) => {
     if (endpoint.endsWith("/heartbeat")) heartbeats.push(now - epoch);
     else if (endpoint.endsWith("/complete")) {
       completions.push({ at: now - epoch, body });
+      try { launchAuthorize?.(); completionExecutionAuthority.push(true); }
+      catch { completionExecutionAuthority.push(false); }
       if (refuseCompletion) throw new client.ExternalRelayError("lease_lost", 409);
     }
     else throw Error("unexpected fixture endpoint");
@@ -59,11 +63,14 @@ function fixture(id: string, deadlineMs?: number, hardCapMinutes = 1, holdStop =
   const answer = new Promise<void>(resolve => { release = resolve; });
   const stop = new Promise<void>(resolve => { releaseStop = resolve; });
   let pending: ReturnType<typeof runClaimedRequest> | undefined;
-  return { paired, request, heartbeats, completions, stops,
+  return { paired, request, heartbeats, completions, stops, completionExecutionAuthority,
     get settled() { return settled; },
     async start() {
       pending = runClaimedRequest(paired, request, undefined, { leaseWorker: false, ownerPorts: {
-        launch: async () => ({ status: 202, body: { conversationId: `conversation_${id}`, initialMessage: "delivered" } }),
+        launch: async (_body, authorize) => {
+          launchAuthorize = authorize;
+          return { status: 202, body: { conversationId: `conversation_${id}`, initialMessage: "delivered" } };
+        },
         observe: async () => { observing = true; await answer; return { state: "ended", finalText: "Work finished" }; },
         stop: async (_id, action) => { stops.push(action); if (holdStop) await stop; },
       } });
@@ -122,8 +129,8 @@ for (const deadline of [undefined, 600_000, 525_000]) test(`lease renews until t
     expect(f.heartbeats.at(-1)).toBeGreaterThanOrEqual(window - 10_000);
     expect(Math.max(...f.heartbeats.slice(1).map((at, i) => at - f.heartbeats[i]!))).toBeLessThanOrEqual(10_000);
     await f.advance(1000);
-    expect(await f.result()).toMatchObject({ outcome: "failed", reason: "hard_cap",
-      detail: expect.stringMatching(/ran out of time/i) });
+    expect(await f.result()).toMatchObject({ outcome: "answered", answer: {
+      action: "reply", text: expect.stringMatching(/ran out of time/i) } });
     expect(f.completions).toHaveLength(1);
     expect(f.completions[0]!.at).toBe(window);
     expect(f.stops).toEqual(["interrupt"]);
@@ -136,12 +143,26 @@ test("timeout completion does not wait for an unresponsive owner stop", async ()
     await f.start();
     await f.advance(600_000);
     await waitFor(() => f.completions.length === 1);
-    expect(f.completions[0]).toMatchObject({ at: 600_000, body: { outcome: "failed", reason: "hard_cap", detail: expect.stringMatching(/ran out of time/i) } });
+    expect(f.completions[0]).toMatchObject({ at: 600_000, body: { outcome: "answered", answer: { action: "reply", text: expect.stringMatching(/ran out of time/i) } } });
     expect(readRunLedger().runs.find(row => row.requestId === f.request.request_id)?.ownerTurn).toMatchObject({ cancel: "interrupt" });
     expect(readRunLedger().runs.find(row => row.requestId === f.request.request_id)?.ownerTurn?.confirmed).not.toBe(true);
     // A late final answer must never complete this request a second time.
     await f.answer();
     expect(f.completions).toHaveLength(1);
+  } finally { await f.close(); }
+});
+
+test("deadline expiry sends a requester reply when the target disables service fallback", async () => {
+  const f = fixture("timeout_no_fallback", 600_000, 30, false, false, "none");
+  try {
+    await f.start();
+    await f.advance(600_000);
+    expect(await f.result()).toMatchObject({ outcome: "answered", answer: {
+      action: "reply", text: "Ran out of time.", reply_to: "m1",
+    } });
+    expect(f.completions).toHaveLength(1);
+    expect(f.completions[0]!.at).toBe(600_000);
+    expect(f.completionExecutionAuthority).toEqual([false]);
   } finally { await f.close(); }
 });
 

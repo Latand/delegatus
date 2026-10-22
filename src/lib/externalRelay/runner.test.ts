@@ -1125,7 +1125,7 @@ test("a confirmed owner run completes a readable timeout at the service deadline
         stop: async (_id, action) => { stops.push(action); }, pollMs: 5,
       },
     });
-    expect(result).toMatchObject({ outcome: "failed", reason: "hard_cap", detail: expect.stringMatching(/ran out of time/i) });
+    expect(result).toMatchObject({ outcome: "answered", answer: { action: "reply", text: expect.stringMatching(/ran out of time/i) } });
     expect(stops).toEqual(["interrupt"]);
     expect(completions).toHaveLength(1);
   } finally { await server.close(); }

@@ -1776,7 +1776,7 @@ Completion reasons. These follow the target's fallback setting, except
 | failed | `agent_error` | The CLI exited with an error or reported an error result. |
 | failed | `invalid_answer` | The answer failed the checks of §A.8. |
 | failed | `profile_violation` | A runtime tripwire saw a tool or server the profile excludes (§B.6.5). |
-| failed | `hard_cap` | The owner request window or the configured ordinary-agent hard cap ended the run. |
+| failed | `hard_cap` | The configured ordinary-agent hard cap ended the run. Owner request-window expiry posts the fixed timeout reply described in the 2026-10-22 amendment. |
 | failed | `install_restarted` | The Viewer that owned the run is gone (§B.3). |
 | failed | `cancelled` | The operator stopped the run. |
 
@@ -3343,7 +3343,7 @@ The receipt fallback is ten minutes. A valid service `deadline_at` remains
 unchanged, so a service still supplying two minutes still gives two minutes.
 Owner execution receives the remaining request window, including when the
 ordinary target cap is shorter. Ready answers complete immediately. Expiry
-sends `failed` / `hard_cap` with a readable explanation, while unconfirmed
+sends an `answered` plain timeout notice even with service fallback disabled, while unconfirmed
 stop custody remains in the ledger for recovery. Busy holds retain ten seconds
 for explicit completion; per-call, upload and history limits stay unchanged.
 See [relay-request-window.md](relay-request-window.md) for the timer audit,

@@ -11,7 +11,8 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { resolveOwnerOutboundContext } from "./ownerOutboundContext";
 import { capacityWaiters, olderCapacityWaiter, enterRelayHold, leaveRelayHold, releasingRelayHolds, type RelayHoldCause } from "./hold";
 import { relayRequestDeadline, remainingMs } from "./deadline";
-import { ownerRelayAuthorized, ownerRelayAuthorizedAsync } from "./ownerAuthority";
+import { ownerRelayAuthorized, ownerRelayAuthorizedAsync, ownerRelayStatusReplyAuthorized } from "./ownerAuthority";
+import { ownerRequestTimeoutText } from "./requestTimeout";
 import { matchPrototypeAnswer } from "@/lib/prototypeReview/telegramAnswer";
 import { runPrototypeAnswer } from "./prototypeAnswer";
 import { resolveOwnerBridgeContext } from "./ownerBridgeContext";
@@ -132,7 +133,6 @@ const declined = (
 });
 /** The line a hand-off carries (§A.8). It is the install's own words: nothing the model wrote. */
 export const HANDOFF_DETAIL = "The agent handed this request to the service's own assistant.";
-export const OWNER_REQUEST_TIMEOUT_DETAIL = "Delegatus ran out of time before the work finished. Check the relay conversation for progress before retrying.";
 export const memberLimitDetail = (limit: number) =>
   `This member reached ${limit} ${limit === 1 ? "answer" : "answers"} in the last hour in this chat.`;
 const failed = (lease_id: string, reason: string): ExternalRelayCompletion => ({
@@ -220,6 +220,7 @@ export async function runClaimedRequest(
   let deliverySettled!: () => void;
   const released = new Promise<void>(resolve => { deliverySettled = resolve; });
   let allowOwnerReply: (() => boolean) | undefined;
+  let ownerStatusReply: ExternalRelayCompletion | undefined;
   let leaseUnavailable = false;
   let admissionHeld = false;
   const admissionCutoff = () => admissionHeld ? deadline.declineAt : deadline.at;
@@ -312,7 +313,7 @@ export async function runClaimedRequest(
       let sent: Awaited<ReturnType<typeof completeRelayRequest>>;
       try {
         sent = transport
-          ? await transport.complete(body, until, caps?.plainMax ?? 4000, !!allowOwnerReply)
+          ? await transport.complete(body, until, caps?.plainMax ?? 4000, ownerStatusReply ? "status" : !!allowOwnerReply)
           : await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature, caps?.plainMax);
       } catch {
         console.error("External relay helper completion unavailable; using Viewer transport");
@@ -541,7 +542,9 @@ export async function runClaimedRequest(
       try { owner.bridgeReport = resolveOwnerBridgeContext(request, owner, relay.api_base); }
       catch { owner.bridgeReport = null; }
     }
-    if (owner) allowOwnerReply = () => ownerRelayAuthorized(relay.id, target.id, requestId);
+    if (owner) allowOwnerReply = () => ownerStatusReply
+      ? ownerRelayStatusReplyAuthorized(relay.id, target.id, requestId, ownerStatusReply, caps!.plainMax)
+      : ownerRelayAuthorized(relay.id, target.id, requestId);
     const authority = conversationAuthority(request.input.requester, !!owner);
     const usesConversation = !prototype && readRelaySwitches().chain_conversations && request.chat && authority;
     let preResolvedConversation: RelayConversation | null = null;
@@ -690,7 +693,7 @@ export async function runClaimedRequest(
     if (hasInboundMedia(request)) {
       if (!await lease.ack()) return null;
       inbound = await prepareInboundMedia(relay, request, runDir, { signal: callAbort.signal, deadlineAt: deadline.at,
-        authorize: () => { if (leaseUnavailable || releaseRequested || allowOwnerReply && !allowOwnerReply()) throw new ExternalRelayError("lease_lost", 409); } });
+        authorize: () => { if (leaseUnavailable || releaseRequested || owner && !ownerRelayAuthorized(relay.id, target.id, requestId)) throw new ExternalRelayError("lease_lost", 409); } });
       callAbort.signal.throwIfAborted();
     }
     const hydrated = await hydrateToolIndex(relay, request, lease, runtime, deadline.at);
@@ -710,7 +713,7 @@ export async function runClaimedRequest(
       // Service tools never read the Delegatus board; their names stay local.
       steps.observe({ currentTool: pendingServiceTools > 0 ? "relay_tool" : null });
     } : undefined);
-    if (owner && !prototype && caps?.rich) ownerParts = openOwnerAnswer(relay.id, request, runDir, [relay.credential], () => !leaseUnavailable && !callAbort.signal.aborted && allowOwnerReply!(),callAbort.signal);
+    if (owner && !prototype && caps?.rich) ownerParts = openOwnerAnswer(relay.id, request, runDir, [relay.credential], () => !leaseUnavailable && !callAbort.signal.aborted && ownerRelayAuthorized(relay.id, target.id, requestId),callAbort.signal);
     let result: Awaited<ReturnType<typeof runEphemeralAgent>["done"]> | null = null;
     let completion: ExternalRelayDecision | null = null;
     for (rounds = 1; rounds <= (loop ? RELAY_TOOL_ROUNDS : 1); rounds++) {
@@ -753,10 +756,10 @@ export async function runClaimedRequest(
         steps?.observe({});
         stepLog = path.join(loop ? path.join(runDir, `round-${rounds}`) : runDir, "stdout.log");
         run = prototype ? runPrototypeAnswer(prototype, owner!.messageId, () => {
-          if (leaseUnavailable || callAbort.signal.aborted || !allowOwnerReply!()) throw new Error("owner relay authorization revoked");
+          if (leaseUnavailable || callAbort.signal.aborted || !ownerRelayAuthorized(relay.id, target.id, requestId)) throw new Error("owner relay authorization revoked");
         }, { telegramUserId: relay.owner.namespace === "telegram" ? relay.owner.id : undefined }) : owner ? runOwnerAgent({
           ...(conversation?.conversationId ? { continuation: { conversationId: conversation.conversationId, prompt: turn!.prompt } } : {}),
-          authorize: () => { if (leaseUnavailable || callAbort.signal.aborted || !allowOwnerReply!()) throw new Error("owner relay authorization revoked"); },
+          authorize: () => { if (leaseUnavailable || callAbort.signal.aborted || !ownerRelayAuthorized(relay.id, target.id, requestId)) throw new Error("owner relay authorization revoked"); },
           credentials: [relay.credential],
           inboundContext: inbound?.prompt,
           request, owner, target: ownerTarget, deadline, accountId: selectedAccount().accountId,
@@ -873,8 +876,14 @@ export async function runClaimedRequest(
         rounds--; continue;
       }
       finally { if (requestTimer) clearTimeout(requestTimer); }
-      if (owner && !prototype && (requestExpired || result.status === "timeout" && remainingMs(deadline) === 0))
-        return await finish({ lease_id: leaseId, outcome: "failed", reason: "hard_cap", detail: OWNER_REQUEST_TIMEOUT_DETAIL });
+      if (owner && !prototype && (requestExpired || result.status === "timeout" && remainingMs(deadline) === 0)) {
+        console.info("External relay owner request timed out", { request: requestId.slice(0, 8), elapsed_ms: Date.now() - deadline.receivedAt });
+        callAbort.abort();
+        ownerStatusReply = { lease_id: leaseId, outcome: "answered", duration_ms: Date.now() - started,
+          answer: { action: "reply", text: ownerRequestTimeoutText(caps!.plainMax), reply_to: owner.messageId,
+            ...(caps!.rich ? { format: "plain", buttons: [], attachments: [] } : {}) } };
+        return await finish(ownerStatusReply);
+      }
       ownerParts?.close();
       if (ownerParts) { stagedAttachments = ownerParts.parts().attachments; answerDrops.push(...ownerParts.drops); }
       await ownerTools?.close(result.status);

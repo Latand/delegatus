@@ -530,7 +530,7 @@ These are the limits an owner run works within:
 |---|---|---|---|
 | Heartbeats | every `heartbeat_interval_s` (default 10 s); stall after `stall_window_s` (default 45 s) | `protocol.ts:39-45`, `relayLease.worker.ts` | a leased helper process owns heartbeat scheduling and the completion POST, so synchronous Viewer work cannot delay either request |
 | First heartbeat | within `ack_window_s` (default 10 s) | `relay.md` §A.6 F2b | why `runOwnerAgent` returns before the spawn admission ends |
-| Owner request window | remaining absolute service deadline, or receipt + 10 min | `externalRelay/deadline.ts`, `externalRelay/runner.ts` | supersedes the ordinary target cap for owner work; expiry completes `failed` / `hard_cap` with a readable detail while durable stop recovery continues |
+| Owner request window | remaining absolute service deadline, or receipt + 10 min | `externalRelay/deadline.ts`, `externalRelay/runner.ts` | supersedes the ordinary target cap for owner work; expiry posts a fixed plain timeout reply while durable stop recovery continues |
 | The chat's next request | service-controlled hold (historically 120 s) | `relay-slice3.md` §4.7 | the service changes its own total wait separately; the install never extends a supplied deadline |
 | The target's slots | `concurrency` 1–4, default 1; an owner run holds one slot | `runner.ts:299`, `relay.md` §B.8, §A.6 F1b | while it runs at concurrency 1, every other message to this target is answered by the service |
 | Agent start | structured host first message within 30 s; durable setup within 5 min | `structuredSpawn.ts:61`, `:76` | counts against the request window |
