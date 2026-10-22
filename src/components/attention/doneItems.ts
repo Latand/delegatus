@@ -1,11 +1,14 @@
 import { useEffect, useSyncExternalStore } from "react";
 
+import { hiddenTrafficSuspended } from "@/lib/client/hiddenTraffic";
 import { DONE_ACK_MAX_KEYS, type DoneAcknowledgeAnswer, type DoneItemsAnswer, type DoneItemV1 } from "@/lib/done/types";
 
 /*
  * The «Готово» items the Viewer shows (docs/design/done-section.md §3, §5):
- * read on mount, every 30 s while the tab is visible and after each
- * acknowledgement, with the click drawn at once. An acknowledgement leaves
+ * read on mount, every 30 s (a hidden desktop tab included, because S5 and the
+ * deploy and limit faults sound from this feed while the operator works in
+ * another tab, docs/design/sound-redesign.md §4.3; a hidden phone reads
+ * nothing, #1994), on return to the tab and after each acknowledgement, with the click drawn at once. An acknowledgement leaves
  * every count in the frame it is clicked and stays drawn that way until the
  * read carries the server's own answer, or a bound passes; another device
  * sees it on its next read.
@@ -97,6 +100,9 @@ export async function acknowledgeDone(items: readonly DoneItemV1[], options: { u
 
 let pollers = 0;
 let timer: ReturnType<typeof setInterval> | null = null;
+const onTick = () => {
+  if (!hiddenTrafficSuspended()) void refreshDoneItems();
+};
 const onVisible = () => {
   if (document.visibilityState === "visible") void refreshDoneItems();
 };
@@ -114,7 +120,7 @@ export function useDoneItems(enabled = true): readonly DoneItemV1[] {
     pollers += 1;
     if (pollers === 1) {
       void refreshDoneItems();
-      timer = setInterval(onVisible, POLL_MS);
+      timer = setInterval(onTick, POLL_MS);
       document.addEventListener("visibilitychange", onVisible);
     }
     return () => {

@@ -184,7 +184,7 @@ export function planPipelineCues(
 
 // ── S5 and the deploy and limit faults: the «Готово» feed (§4.3) ──────────
 
-/** A deploy restarts the Viewer, so its item is read after the reload. */
+/** A page opened soon after a deploy meets its item in the baseline read. */
 export const DEPLOY_FRESH_MS = 5 * 60_000;
 /** Done keys that sounded, remembered across reloads of this tab. */
 export const HEARD_KEYS_STORAGE_KEY = "llvAudioHeardDone";
@@ -246,9 +246,9 @@ export interface DoneCuePlan {
  * S5 on a deploy item with phase `succeeded`; S7 on `failed` or
  * `rolled-back`, and on a limit episode. Every other kind is silent: its
  * news already sounded as a landing. On the baseline read a deploy item less
- * than 5 minutes old still sounds, because the deploy restarted the page that
- * would have heard it; every key that sounded is remembered so a second
- * reload stays silent.
+ * than 5 minutes old still sounds, because a page opened after the deploy
+ * would otherwise never hear it; every key that sounded is remembered so a
+ * second reload stays silent.
  */
 export function planDoneCues(items: readonly DoneItemV1[], previous: DoneCuePlan | null, now: number, heard: HeardKeys): DoneCuePlan {
   const seen = new Set(items.map((item) => item.key));
