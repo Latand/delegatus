@@ -332,6 +332,12 @@ cloud API token, relay and Telegram tokens, Delegatus access keys.
 
 ## 4. Decision questions
 
+**Answered 2026-10-22, relayed by the seat at 14:03Z:** Q1 A, the server
+stays; Q2–Q4 take the recommended options. Q4 A is not built in v1: the
+attention service moves the operator's board to a conversation, and a runner
+outage has none, so the notice needs its own surface (follow-up slice). Until
+then the `running here` lines and the decision log carry it.
+
 **Q1. What happens to the gate runner after tonight?**
 
 - **A (recommended):** keep the temporary server 7 more days, about €35
@@ -1059,7 +1065,7 @@ refused or oversized return writes nothing and ends the run with 75 (§8.6).
 | `scripts/build-gate.ts` | Bundle `gate-runner/client.ts` and copy `gate-runner/serve.ts` into `dist/gate/gate-runner/`, so the installed wrapper that stage briefs name has the client beside it. |
 | `scripts/review-export.ts:31-56` and `scripts/review-export.test.ts` | Write `export.json` in the directory `reviewExport` creates, beside `checkout`: version 1, the checkout's real path, `head`, and the repository's real common git directory. It sits outside the tree, so no test and no tree id sees it. A test case checks the record. |
 | `AGENTS.md`, local-hooks section | One paragraph: the runner file, `LLV_GATE_RUNNER=off` (which a measurement of this machine's gates sets), what runs where, review exports, and the `gate-runner:` lines. |
-| Only if Q4 A: a Viewer timer | Every 5 minutes, registered with the loop monitor, read the decision log's last lines, and raise one item through `raiseAttentionRequest` (`src/lib/attention/service.ts:197`) after 30 minutes with fallbacks and no remote run; close it through the same service on the next remote run. |
+| Only if Q4 A (chosen; deferred to a follow-up slice, §4): a Viewer timer | Every 5 minutes, registered with the loop monitor, read the decision log's last lines, and raise one item through `raiseAttentionRequest` (`src/lib/attention/service.ts:197`) after 30 minutes with fallbacks and no remote run; close it through the same service on the next remote run. |
 | New `scripts/gate-runner/client.ts`, `serve.ts` and their tests | §8.3–§8.9. |
 | New `scripts/gate-runner/provision.sh` | §8.5. |
 

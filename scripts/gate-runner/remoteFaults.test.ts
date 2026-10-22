@@ -229,7 +229,7 @@ test.if(linux)("refused containment runs here before anything starts there; a co
 
 // T4 (symlink) and T19 (what a bundle carries): ship() and the real serve.ts,
 // without the privacy scan, which refuses any changed symlink.
-test.if(linux)("a shipped tree keeps a symlink, and an export's bundle carries one gate-run commit on main", () => {
+test.if(linux)("a shipped tree keeps a symlink, and an export's bundle carries one gate-run commit on main", async () => {
   const h = harness();
   fs.symlinkSync("README.md", path.join(h.fixture, "readme-link"));
   const scratch = path.join(h.root, "ship"); fs.mkdirSync(scratch);
@@ -246,10 +246,18 @@ test.if(linux)("a shipped tree keeps a symlink, and an export's bundle carries o
   fs.copyFileSync(again.bundle, path.join(dir, "run.bundle"));
   fs.writeFileSync(path.join(dir, "manifest.json"), JSON.stringify({ version: 1, id, kind: "git", tree: again.tree, head: again.head, base: again.base, argv: ["bun", "test", file], cwd: ".", shape: "test", env: {}, outputs: [], chrome: false }));
   const nonce = randomBytes(32).toString("hex");
-  const run = spawnSync(process.execPath, [path.join(dir, "serve.ts"), "run", dir], {
-    input: `${nonce} -\n`, encoding: "utf8", timeout: 120_000,
+  // Standard input stays open as a client's does: end of file means the
+  // client is gone, and serve.ts then stops the run.
+  const session = spawn(process.execPath, [path.join(dir, "serve.ts"), "run", dir], {
+    stdio: ["pipe", "pipe", "pipe"],
     env: { HOME: h.runnerHome, PATH: process.env.PATH, XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS, LLV_GATE_RUNNER_NODE_MODULES: fs.realpathSync(path.join(h.fixture, "node_modules")) } as unknown as NodeJS.ProcessEnv,
   });
+  let stderr = "";
+  session.stderr!.on("data", chunk => { stderr += chunk; });
+  session.stdout!.resume();
+  session.stdin!.write(`${nonce} -\n`);
+  await new Promise(resolve => session.on("close", resolve));
+  const run = { stderr };
   expect(run.stderr).toContain(`${nonce} started`);
   expect(run.stderr).toContain(`${nonce} end 0 ${again.tree}`);
   expect(shipment.tree).not.toBe(again.tree);

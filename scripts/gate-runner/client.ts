@@ -604,7 +604,7 @@ async function main(argv: string[]): Promise<number> {
     }
     if (shape.driver) {
       phase = "outputs";
-      const returned = returnOutputs(env, target.alias, id, tree.root, remoteEnv.outputs, scratch);
+      const returned = returnOutputs(env, target.alias, id, tree.root, remoteEnv.outputs);
       if (returned) {
         markUnhealthy(env, "outputs were not returned");
         remove();
@@ -623,14 +623,13 @@ async function main(argv: string[]): Promise<number> {
 }
 
 /** Fetches, checks and writes the driver's outputs; returns a refusal or null. */
-function returnOutputs(env: Env, alias: string, id: string, root: string, outputs: Record<string, string>, scratch: string): string | null {
+function returnOutputs(env: Env, alias: string, id: string, root: string, outputs: Record<string, string>): string | null {
   const result = sshSync(env, alias, `~/.bun/bin/bun ~/runs/${id}/serve.ts pack-outputs ~/runs/${id}`, 300_000);
   const limit = returnLimit(env);
   if (result.error && (result.error as NodeJS.ErrnoException).code === "ENOBUFS") return `the outputs exceed ${limit} bytes`;
   if (result.status !== 0) return `pack-outputs exited ${result.status ?? "on timeout"}`;
   const data = result.stdout as Buffer;
   if (data.length > limit) return `the outputs exceed ${limit} bytes`;
-  fs.writeFileSync(path.join(scratch, "outputs.tar"), data);
   try {
     const plan = returnPlan(readUstar(data), root, outputs);
     applyReturn(plan);
