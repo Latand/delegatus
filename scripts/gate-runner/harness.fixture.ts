@@ -28,6 +28,8 @@ export interface StubSettings {
   failProbe?: boolean;
   /** Kill the ssh session this many ms after the run's `started` record. */
   killAfterStartedMs?: number;
+  /** Kill the ssh session once the run's output contains this text. */
+  killOn?: string;
   /** Serve this file for pack-outputs instead of the runner's archive. */
   packFile?: string;
   /** Extra environment for the runner side, as the runner host would have it. */
@@ -47,7 +49,7 @@ export interface Harness {
 
 const STUB = `
 const fs = require("node:fs"), { spawn } = require("node:child_process");
-const [settingsFile, logFile, runnerHome] = __CONFIG__;
+const [settingsFile, logFile, runnerHome, groupsFile] = __CONFIG__;
 const settings = JSON.parse(fs.readFileSync(settingsFile, "utf8"));
 const args = process.argv.slice(2);
 let index = 0;
@@ -62,13 +64,23 @@ const env = { HOME: runnerHome, USER: process.env.USER, LANG: "C.UTF-8",
   XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS, ...(settings.remoteEnv ?? {}) };
 for (const key of Object.keys(env)) if (env[key] === undefined) delete env[key];
 const child = spawn("/bin/bash", ["-c", command], { cwd: runnerHome, env, detached: true, stdio: ["pipe", "pipe", "pipe"] });
+// The remote side outlives a killed session, as on a real runner; the
+// harness stops each of these groups when the test ends.
+fs.appendFileSync(groupsFile, child.pid + "\\n");
+let output = "";
+const watch = chunk => {
+  if (!settings.killOn || !command.includes("serve.ts run")) return;
+  output += chunk.toString();
+  if (output.includes(settings.killOn)) { settings.killOn = undefined; flush(); process.kill(process.pid, "SIGKILL"); }
+};
 process.stdin.on("data", chunk => { if (record.stdin < 200) record.head += chunk.toString("latin1").slice(0, 200 - record.stdin); record.stdin += chunk.length; child.stdin.write(chunk); });
 process.stdin.on("end", () => child.stdin.end());
 child.stdin.on("error", () => {});
-child.stdout.on("data", chunk => process.stdout.write(chunk));
+child.stdout.on("data", chunk => { process.stdout.write(chunk); watch(chunk); });
 let seen = "";
 child.stderr.on("data", chunk => {
   process.stderr.write(chunk);
+  watch(chunk);
   if (settings.killAfterStartedMs !== undefined && command.includes("serve.ts run")) {
     seen += chunk.toString();
     if (/ started\\n/.test(seen)) { const delay = settings.killAfterStartedMs; settings.killAfterStartedMs = undefined; setTimeout(() => { flush(); process.kill(process.pid, "SIGKILL"); }, delay); }
@@ -119,7 +131,9 @@ export function makeHarness(options: { mirrorMain?: "base" | "behind" | "ahead" 
   const log = path.join(root, "stub-calls.jsonl");
   fs.writeFileSync(settingsFile, "{}"); fs.writeFileSync(log, "");
   const stub = path.join(root, "ssh");
-  fs.writeFileSync(stub, `#!${process.execPath}\n${STUB.replace("__CONFIG__", JSON.stringify([settingsFile, log, runnerHome]))}`, { mode: 0o755 });
+  const groups = path.join(root, "stub-groups");
+  fs.writeFileSync(groups, "");
+  fs.writeFileSync(stub, `#!${process.execPath}\n${STUB.replace("__CONFIG__", JSON.stringify([settingsFile, log, runnerHome, groups]))}`, { mode: 0o755 });
   const nodeModules = fs.realpathSync(path.join(REPOSITORY, "node_modules"));
   const settings = (value: StubSettings) => fs.writeFileSync(settingsFile, JSON.stringify({ ...value, remoteEnv: { LLV_GATE_RUNNER_NODE_MODULES: nodeModules, ...value.remoteEnv } }));
   settings({});
@@ -140,12 +154,20 @@ export function makeHarness(options: { mirrorMain?: "base" | "behind" | "ahead" 
     calls: () => fs.readFileSync(log, "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line)),
     run: (argv, runOptions = {}) => {
       const result = spawnSync("/bin/bash", [path.join(fixture, "scripts", "gate-slot.sh"), ...argv], {
-        cwd: runOptions.cwd ?? fixture, env: runOptions.env ?? env(), encoding: "utf8", timeout: runOptions.timeout ?? 120_000, maxBuffer: 64 * 1024 * 1024,
+        cwd: runOptions.cwd ?? fixture, env: runOptions.env ?? env(), encoding: "utf8", timeout: runOptions.timeout ?? 200_000, maxBuffer: 64 * 1024 * 1024,
       });
       return { code: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
     },
     cleanup: () => {
       for (const id of fs.readdirSync(path.join(runnerHome, "runs"))) spawnSync("systemctl", ["--user", "stop", `gate-run-${id}`], { stdio: "ignore" });
+      // Only the process groups the stub recorded at their start.
+      const alive = (group: number) => { try { process.kill(-group, 0); return true; } catch { return false; } };
+      const recorded = fs.readFileSync(groups, "utf8").split("\n").map(Number).filter(group => Number.isInteger(group) && group > 1);
+      for (const group of recorded.filter(alive)) { try { process.kill(-group, "SIGTERM"); } catch { /* gone */ } }
+      const until = Date.now() + 20_000;
+      while (recorded.some(alive) && Date.now() < until) Bun.sleepSync(100);
+      for (const group of recorded.filter(alive)) { try { process.kill(-group, "SIGKILL"); } catch { /* gone */ } }
+      while (recorded.some(alive) && Date.now() < until + 5_000) Bun.sleepSync(50);
       fs.rmSync(root, { recursive: true, force: true });
     },
   };

@@ -1123,8 +1123,10 @@ off Linux, as `scripts/gate-slot.test.ts:101` does.
 
 The cases live in `scripts/gate-runner/client.test.ts` (selection, streams,
 archives, health cache, T13, T17, T18, T22, T23), `remote.test.ts` (T1–T5,
-T9, T12, T15, T19, T21) and `remoteFaults.test.ts` (T6–T8, T10, T11, T14,
-T20). The privacy gate refuses any changed symlink, so T4's symlink case ships
+T9, T12, T15, T19, T21), `remoteFaults.test.ts` (T6–T8, T20) and
+`remoteLifecycle.test.ts` (T10, T11, T14). The stub records every process
+group it starts, and each test stops and waits for them, because the runner
+side outlives a killed session as it would on a real host. The privacy gate refuses any changed symlink, so T4's symlink case ships
 through `ship()` and the real `serve.ts run` without the scan. T14's size
 bound uses the test-only `LLV_GATE_RUNNER_RETURN_LIMIT`.
 

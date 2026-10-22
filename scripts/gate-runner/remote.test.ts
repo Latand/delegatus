@@ -10,6 +10,8 @@ import { reviewExport } from "../review-export";
 import { cleanGitEnv, git, makeHarness, privateValue, testFile, withoutRunnerLines, type Harness } from "./harness.fixture";
 
 const linux = process.platform === "linux";
+/** Several stub runs, each a full checkout, install and owned test run; slow under load. */
+const E2E_TIMEOUT = 240_000;
 const harnesses: Harness[] = [];
 afterEach(() => { for (const h of harnesses.splice(0)) h.cleanup(); });
 function harness(options?: Parameters<typeof makeHarness>[0]): Harness { const h = makeHarness(options); harnesses.push(h); return h; }
@@ -42,7 +44,7 @@ test.if(linux)("without a configured runner nothing is contacted and the command
   expect(unconfigured.code).toBe(0);
   expect(unconfigured.stderr).not.toContain("gate-runner:");
   expect(normalized(unconfigured.stdout + unconfigured.stderr)).toBe(normalized(today.stdout + today.stderr));
-});
+}, E2E_TIMEOUT);
 
 // T2
 test.if(linux)("off, a test run, an ineligible shape, an isolated check and an outside path never contact the runner", () => {
@@ -60,7 +62,7 @@ test.if(linux)("off, a test run, an ineligible shape, an isolated check and an o
   const log = fs.readFileSync(path.join(h.cache, "runner-decisions.log"), "utf8");
   expect(log).toContain("\tineligible\tnot a command shape the runner takes\t");
   expect(log).toContain("\tineligible\tan argument names a path outside the checkout\t");
-});
+}, E2E_TIMEOUT);
 
 // T3 and T21
 test.if(linux)("a passing and a failing test file give the same verdict and output remotely as here, once", () => {
@@ -84,7 +86,7 @@ test.if(linux)("a passing and a failing test file give the same verdict and outp
   expect(absolute.code).toBe(1);
   expect(absolute.stderr).toContain("(fail) breaks");
   expect(fs.readdirSync(path.join(h.runnerHome, "runs"))).toEqual([]);
-});
+}, E2E_TIMEOUT);
 
 // T4
 // The privacy gate refuses a changed symlink, so the symlink case of T4 is in
@@ -127,7 +129,7 @@ test("tree", () => {
   expect(fs.readFileSync(indexFile).equals(indexBefore)).toBeTrue();
   expect(git(h.fixture, "for-each-ref")).toBe(refsBefore);
   expect(loose()).toBe(looseBefore);
-});
+}, E2E_TIMEOUT);
 
 // T5
 test.if(linux)("a mirror behind or ahead of the local origin/main still verifies the bundle", () => {
@@ -138,7 +140,7 @@ test.if(linux)("a mirror behind or ahead of the local origin/main still verifies
     expect(result.stderr).toMatch(RUNNING);
     expect(result.code).toBe(0);
   }
-});
+}, E2E_TIMEOUT);
 
 // T9
 test.if(linux)("a tree that changes on the runner after install starts nothing there and runs here", () => {
@@ -151,7 +153,7 @@ test.if(linux)("a tree that changes on the runner after install starts nothing t
   expect(result.stderr).not.toMatch(RUNNING);
   expect(result.stdout).toContain(`cwd=${h.fixture}`);
   expect(result.stdout).not.toContain("/runner/runs/");
-});
+}, E2E_TIMEOUT);
 
 // T12
 test.if(linux)("secrets stay here, driver switches travel, and the push deadline keeps its remaining budget", () => {
@@ -173,7 +175,7 @@ test.if(linux)("secrets stay here, driver switches travel, and the push deadline
   expect(remote.LLV_KANBAN_BROWSER_TEST).toBe("1");
   expect(remote.HOME).toStartWith(path.join(h.runnerHome, "runs"));
   expect(Math.abs(Number(remote.LLV_GATE_PUSH_DEADLINE) - deadline)).toBeLessThan(2_000);
-});
+}, E2E_TIMEOUT);
 
 // T15
 test.if(linux)("a tree holding a known private value is never uploaded and runs here", () => {
@@ -187,7 +189,7 @@ test.if(linux)("a tree holding a known private value is never uploaded and runs 
   expect(result.code).toBe(0);
   expect(result.stderr).toMatch(/^gate-runner: running here: the privacy scan refused the tree: /m);
   expect(h.calls().filter(call => !call.command.includes("manager=ok"))).toEqual([]);
-});
+}, E2E_TIMEOUT);
 
 // T19
 test.if(linux)("a review export runs remotely through its record; a copy without one stays here", () => {
@@ -224,4 +226,4 @@ test("export tree", () => {
   expect(h.run(["bun", "test", "./gate-runner-fixture/export.test.ts"], { cwd: copy }).code).toBe(0);
   expect(h.calls()).toHaveLength(calls);
   expect(fs.readFileSync(path.join(h.cache, "runner-decisions.log"), "utf8")).toContain("\tineligible\ta copy without git metadata or an export record\t");
-});
+}, E2E_TIMEOUT);
