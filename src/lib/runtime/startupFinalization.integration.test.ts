@@ -989,7 +989,7 @@ test("historical fallback publication uses fresh keyed rows after awaited sessio
     await Promise.resolve();
     if (!changed && identity.conversationId === "conversation_history_0") {
       changed = true;
-      f.registry.upsert({ ...entry, status: "idle", updatedAt: "2026-10-22T00:00:00.000Z" });
+      f.registry.upsert({ ...entry, status: "idle" });
     }
     return f.journal.readSession(identity);
   } };
