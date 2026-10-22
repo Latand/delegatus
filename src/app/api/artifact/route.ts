@@ -107,7 +107,7 @@ export async function GET(req: NextRequest): Promise<NextResponse<FailBody> | Ne
 
   /* Resolve symlinks, then re-check containment: ~/x.pdf → /anywhere must not
      read outside the roots. The roots themselves are realpathed so a symlinked
-     home directory compares canonically. */
+     allowed directory compares canonically. */
   let real: string;
   try {
     real = await fs.realpath(abs);

@@ -30,7 +30,7 @@ const MIME: Record<string, string> = {
  * Serves the bytes of a local image a transcript references by path, so the
  * markdown renderer can embed it inline (Markdown `![alt](/abs/path.png)`).
  * Confined to files with an image extension under the roots the artifact
- * route reads (the home directory and the evidence roots, #2084) — a
+ * route reads (known projects, stage scratch and raster evidence roots) — a
  * localhost-only tool, but there is no reason to hand out arbitrary files.
  */
 export async function GET(req: NextRequest): Promise<NextResponse<ApiError> | NextResponse> {
