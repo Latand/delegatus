@@ -97,6 +97,9 @@ test("hook receipts invalidate base, tool and environment drift, and malformed r
   f.git("update-ref", "refs/remotes/origin/main", nextBase);
   expect(run()).toBeTrue(); expect(run()).toBeFalse();
   expect(run({ NODE_OPTIONS: "--stack-trace-limit=25" })).toBeTrue();
+  expect(run({ LLV_VIEWER_PORT: "8001" })).toBeTrue();
+  expect(run({ LLV_VIEWER_PORT: "8001" })).toBeFalse();
+  expect(run({ LLV_VIEWER_PORT: "8002" })).toBeTrue();
   const directory = path.join(f.dir, ".git/delegatus-gate/passes");
   for (const file of readdirSync(directory)) writeFileSync(path.join(directory, file), "incomplete record");
   expect(run()).toBeTrue();
@@ -181,9 +184,9 @@ test("producer and publication reuse the same check despite caller identity meta
     const result = spawnSync("bash", [".githooks/pre-push"], { cwd: f.dir, env: { ...f.env, ...extra }, encoding: "utf8" });
     expect(result.status, result.stderr).toBe(0); return f.calls().slice(before);
   };
-  run({ CODEX_CI: "1", CODEX_VERSION: "caller-version", CODEX_MANAGED_BY_BUN: "1", LLV_STRUCTURED_HOST: "1",
+  run({ CODEX_CI: "1", CODEX_VERSION: "caller-version", CODEX_MANAGED_BY_BUN: "1",
     LLV_STAGE_GIT_WORKTREE: f.dir, LLV_STAGE_GIT_RECEIPT: path.join(f.dir, ".git/caller-receipt"), GIT_AUTHOR_NAME: "Producer", GIT_COMMITTER_NAME: "Producer" });
-  const publication = run({ CODEX_CI: undefined, CODEX_VERSION: undefined, CODEX_MANAGED_BY_BUN: undefined, LLV_STRUCTURED_HOST: undefined,
+  const publication = run({ CODEX_CI: undefined, CODEX_VERSION: undefined, CODEX_MANAGED_BY_BUN: undefined,
     LLV_STAGE_GIT_WORKTREE: undefined, LLV_STAGE_GIT_RECEIPT: undefined, GIT_AUTHOR_NAME: "Publisher", GIT_COMMITTER_NAME: "Publisher" });
   expect(publication.some(call => call.args[0] === "tsc")).toBeFalse();
   expect(publication.some(call => call.args[0] === "scripts/privacy-publication-gate.ts")).toBeTrue();

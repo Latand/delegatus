@@ -9,6 +9,13 @@ afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: 
 const fixture = () => { const root = mkdtempSync(path.join(tmpdir(), "gate-cache-")); roots.push(root); return root; };
 const valid = (value: unknown): value is { passed: true } => !!value && typeof value === "object" && "passed" in value && value.passed === true;
 
+test("authority, endpoint and signal-domain inputs distinguish verification environments", () => {
+  for (const name of ["LLV_SPAWN_CAPABILITY", "LLV_STRUCTURED_HOST", "LLV_VIEWER_PORT", "LLV_SIGNAL_SANDBOX", "GH_CONFIG_DIR"]) {
+    expect(environmentFingerprint({ [name]: "first" }), name).not.toBe(environmentFingerprint({ [name]: "second" }));
+    expect(environmentFingerprint({ [name]: "first" }), name).not.toBe(environmentFingerprint({}));
+  }
+});
+
 test("effective Git configuration binds receipts while invocation metadata does not", () => {
   const first = { NODE_ENV: "test" as const, GIT_CONFIG_GLOBAL: "first-config" };
   expect(environmentFingerprint(first)).not.toBe(environmentFingerprint({ ...first, GIT_CONFIG_GLOBAL: "second-config" }));

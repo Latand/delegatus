@@ -326,8 +326,10 @@ as measured in the audit.
   before reuse and after a check finishes. Failed, stopped, deferred,
   cancelled or leaking checks certify no pass. The runtime build and its
   consumers reuse as a complete group. Privacy, frozen install and advisory
-  checks always run fresh. Transport, caller identity and private isolation
-  roots do not distinguish producer from publication; functional inputs do.
+  checks always run fresh. Inert caller metadata and private isolation roots
+  do not distinguish producer from publication. Authority, Viewer endpoint,
+  structured-host stamp, signal-domain and configuration inputs do: differing
+  execution contexts require fresh checks even on one commit.
 - **Baseline samples:** `scripts/local-gate-tests.ts` needs two matching
   fresh complete assertion observations before a third comparison can reuse
   an initial base sample. Confirmation rounds stay fresh. Runner errors,
