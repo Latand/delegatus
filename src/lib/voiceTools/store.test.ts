@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { approvalDigest, digest, type VoiceToolServer } from "./contracts";
+import { approvalDigest, digest, secretDestination, type VoiceToolServer } from "./contracts";
 import { VoiceToolsStore } from "./store";
 
 const roots: string[] = [];
@@ -20,11 +20,19 @@ async function catalog(store: VoiceToolsStore, count = 1, name = "music") {
   await store.recordProbe(name, (await server(store, name)).digest, { code: "OK", catalog: { digest: digest(tools), fetchedAt: at, tools } });
 }
 
+async function saveSecrets(store: VoiceToolsStore, values: Record<string, string>, authorize?: () => void) {
+  const view = await store.view();
+  const destinations = Object.fromEntries(Object.entries(values).map(([ref, value]) => [ref, { value, destinations: Object.entries(view.servers)
+    .filter(([, server]) => server.secretRefs.includes(ref)).map(([, server]) => server.secretRecipient) }]));
+  for (const entry of Object.values(destinations)) if (!entry.destinations.length) entry.destinations.push("https://example.invalid");
+  return store.saveSecrets(destinations, authorize);
+}
+
 test("secret values live only in the owner-only file; public views show a secret header by name", async () => {
   const { store, root } = await setup();
   await store.propose(proposal(), actor);
   const value = "synthetic-voice-credential";
-  await store.saveSecrets({ "music-token": value });
+  await saveSecrets(store, { "music-token": value });
   const view = await store.view();
   expect(JSON.stringify(view)).not.toContain(value);
   expect(view.servers.music.transport).toEqual({ type: "http", url: "https://example.invalid/mcp", headerNames: ["Authorization"], headerValues: {} });
@@ -42,13 +50,13 @@ test("secret values live only in the owner-only file; public views show a secret
 test("approval requires a matching successful probe; pinned edits and stale clicks fail closed across reloads", async () => {
   const { store, root } = await setup();
   await store.propose(proposal(), actor);
-  await expect(store.operatorChange("music", (await server(store)).digest, "approve")).rejects.toThrow("DRY_RUN_REQUIRED");
-  await store.saveSecrets({ "music-token": "synthetic-voice-credential" });
+  await expect(store.operatorChange("music", (await server(store)).digest, "approve")).rejects.toThrow("MISSING_SECRET");
+  await saveSecrets(store, { "music-token": "synthetic-voice-credential" });
   await catalog(store);
   const before = (await server(store)).digest;
   await store.operatorChange("music", before, "approve");
   expect((await server(store)).state).toBe("enabled");
-  await store.saveSecrets({ "music-token": "synthetic-replacement-credential" });
+  await saveSecrets(store, { "music-token": "synthetic-replacement-credential" });
   expect((await server(store)).state).toBe("enabled");
   await store.propose({ ...proposal(), capability: "Find music" }, actor);
   expect((await server(store)).state).toBe("pending");
@@ -108,7 +116,7 @@ test("selection enforces aggregate tool count, server count and JSON byte budget
 
 test("invalid catalog or secret artifact fails closed; secrets cannot be introduced into existing metadata", async () => {
   const { store, root } = await setup(); await store.propose(proposal(), actor);
-  await expect(store.saveSecrets({ token: "Search music" })).rejects.toThrow("SECRET_ECHO");
+  await expect(saveSecrets(store, { token: "Search music" })).rejects.toThrow("SECRET_ECHO");
   const target = path.join(root, "private.json"); await fs.writeFile(target, "{}", { mode: 0o600 });
   await fs.symlink(target, path.join(root, "voice-tools-secrets.json"));
   await expect(new VoiceToolsStore(root).view()).rejects.toThrow("REGISTRY_UNAVAILABLE");
@@ -117,6 +125,16 @@ test("invalid catalog or secret artifact fails closed; secrets cannot be introdu
   const raw = JSON.parse(await fs.readFile(store.file, "utf8")); raw.servers.music.catalog.tools[0].description = "drift";
   await fs.writeFile(store.file, JSON.stringify(raw), { mode: 0o600 });
   await expect(new VoiceToolsStore(root).view()).rejects.toThrow("REGISTRY_UNAVAILABLE");
+});
+
+test("a persisted HTTP authority override invalidates the store and cannot be approved", async () => {
+  const { store, root } = await setup();
+  await store.propose({ ...proposal(), transport: { type: "http", url: "https://example.invalid/mcp" } }, actor);
+  const raw = JSON.parse(await fs.readFile(store.file, "utf8"));
+  raw.servers.music.transport.headers.hOsT = { value: "unbound.example.test" };
+  await fs.writeFile(store.file, JSON.stringify(raw), { mode: 0o600 });
+  await expect(new VoiceToolsStore(root).view()).rejects.toThrow("REGISTRY_UNAVAILABLE");
+  await expect(store.operatorChange("music", approvalDigest("music", raw.servers.music), "approve")).rejects.toThrow("REGISTRY_UNAVAILABLE");
 });
 
 test("a restarted store refuses a persisted catalog with invalid JSON Schema", async () => {
@@ -134,7 +152,7 @@ test("a restarted store refuses a persisted catalog with invalid JSON Schema", a
 
 test("digest covers the selected catalog separately from ephemeral probe timestamps", async () => {
   const { store } = await setup(); await store.propose(proposal(), actor); await catalog(store);
-  await store.saveSecrets({ "music-token": "synthetic-voice-credential" });
+  await saveSecrets(store, { "music-token": "synthetic-voice-credential" });
   const raw = (await store.probeInput("music", (await server(store)).digest)).server;
   const before = approvalDigest("music", raw);
   const changed: VoiceToolServer = structuredClone(raw); changed.catalog!.fetchedAt = "2026-02-01T00:00:00Z";
@@ -174,7 +192,7 @@ test("authority is rechecked after lock admission and before committing a secret
   await expect(store.operatorChange("music", (await server(store)).digest, "approve", {}, authorize)).rejects.toThrow("REVOKED");
   expect((await server(store)).state).toBe("pending");
   checks = 0;
-  await expect(store.saveSecrets({ token: "synthetic-voice-credential" }, authorize)).rejects.toThrow("REVOKED");
+  await expect(saveSecrets(store, { token: "synthetic-voice-credential" }, authorize)).rejects.toThrow("REVOKED");
   await expect(fs.access(path.join(store.directory, "voice-tools-secrets.json"))).rejects.toThrow();
   expect((await fs.readdir(store.directory)).some(name => name.endsWith(".tmp"))).toBe(false);
 });
@@ -184,7 +202,7 @@ test("prototype property names remain ordinary server, tool and secret-reference
   await store.propose({ ...proposal("constructor"), transport: { type: "http", url: "https://example.invalid/mcp", headers: { Authorization: { secretRef: "constructor" } } } }, actor);
   expect((await server(store, "constructor")).missingSecrets).toEqual(["constructor"]);
   await expect(store.probeInput("constructor", (await server(store, "constructor")).digest)).rejects.toThrow("MISSING_SECRET");
-  await store.saveSecrets({ constructor: "synthetic-voice-credential" });
+  await saveSecrets(store, { constructor: "synthetic-voice-credential" });
   const tools = [{ name: "constructor", description: "Search", inputSchema: { type: "object" } }];
   await store.recordProbe("constructor", (await server(store, "constructor")).digest, { code: "OK", catalog: { digest: digest(tools), fetchedAt: at, tools } });
   expect((await server(store, "constructor")).tools).toEqual({ constructor: { enabled: false, acts: true } });
@@ -212,6 +230,30 @@ test("a launch variable is refused at proposal and on load, and allowed variable
   const raw = JSON.parse(await fs.readFile(store.file, "utf8")); raw.servers.music.transport.env.PATH = { value: "/srv/agent/bin" };
   await fs.writeFile(store.file, JSON.stringify(raw), { mode: 0o600 });
   await expect(new VoiceToolsStore(root).view()).rejects.toThrow("REGISTRY_UNAVAILABLE");
+});
+
+test("a stdio secret grant does not survive replacing the program under the same server name", async () => {
+  const { store } = await setup();
+  const stdioProposal = (packageName: string) => ({
+    name: "music", title: "Music", capability: "Search music",
+    transport: { type: "stdio" as const, command: "bun" as const, args: ["x", packageName], cwd: null, env: { SERVER_TOKEN: { secretRef: "music-token" } } },
+    entryFile: null,
+  });
+  await store.propose(stdioProposal("music-mcp"), actor);
+  await saveSecrets(store, { "music-token": "synthetic-voice-credential" });
+
+  await expect(store.propose(stdioProposal("untrusted-mcp"), actor)).rejects.toThrow("SECRET_DESTINATION");
+  expect((await server(store)).transport).toMatchObject({ args: ["x", "music-mcp"] });
+});
+
+test("the operator view shows the exact identity a stdio secret grant must name", async () => {
+  const { store } = await setup();
+  const candidate = { name: "music", title: "Music", capability: "Search music",
+    transport: { type: "stdio" as const, command: "bun" as const, args: ["x", "music-mcp"], cwd: null, env: { SERVER_TOKEN: { secretRef: "music-token" } } } };
+  await store.propose(candidate, actor);
+  const expected = secretDestination("music", { transport: candidate.transport, entryFile: null });
+  await store.saveSecrets({ "music-token": { value: "synthetic-voice-credential", destinations: [expected] } });
+  expect((await store.view()).servers.music).toHaveProperty("secretRecipient", expected);
 });
 
 test("re-approving the operator's own change on an approved server commits both or neither", async () => {
@@ -302,7 +344,7 @@ test("the approval view shows the value of each literal variable and header, and
     env: { NOTES_FORMAT: { value: "markdown" }, SERVER_TOKEN: { secretRef: "server-token" } } } }, actor);
   await store.propose({ ...proposal("radio"), transport: { type: "http", url: "https://example.invalid/mcp",
     headers: { "X-Workspace": { value: "studio-a" }, Authorization: { secretRef: "radio-token" } } } }, actor);
-  await store.saveSecrets({ "server-token": "synthetic-voice-credential", "radio-token": "synthetic-radio-credential" });
+  await saveSecrets(store, { "server-token": "synthetic-voice-credential", "radio-token": "synthetic-radio-credential" });
   const view = await store.view();
   expect(view.servers.music.transport).toEqual({ type: "stdio", command: "bun", args: ["x", "harmless-mcp"], cwd: null,
     envNames: ["NOTES_FORMAT", "SERVER_TOKEN"], envValues: { NOTES_FORMAT: "markdown" } });
@@ -335,6 +377,126 @@ test("approved non-registry package records fail a fresh load even with a matchi
     raw.servers.music.transport = { type: "stdio", command, args: [...args], cwd: null, env: {} };
     raw.servers.music.approval.digest = approvalDigest("music", raw.servers.music);
     await fs.writeFile(store.file, JSON.stringify(raw));
+    await expect(new VoiceToolsStore(root).view()).rejects.toThrow("REGISTRY_UNAVAILABLE");
+  }
+});
+
+
+test("a self-written approval digest cannot enable a server on fresh load", async () => {
+  const { store, root } = await setup();
+  await store.propose({ ...proposal(), transport: { type: "http", url: "https://example.invalid/mcp" } }, actor);
+  await catalog(store);
+  const raw = JSON.parse(await fs.readFile(store.file, "utf8"));
+  raw.servers.music.state = "enabled";
+  raw.servers.music.approval = { by: "operator", at, digest: approvalDigest("music", raw.servers.music) };
+  await fs.writeFile(store.file, JSON.stringify(raw));
+  const loaded = (await new VoiceToolsStore(root).view()).servers.music;
+  expect(loaded.state).toBe("pending");
+  expect(loaded.approval).toBeNull();
+});
+
+test("a global secret name cannot be proposed to a different destination", async () => {
+  const { store } = await setup();
+  await saveSecrets(store, { "music-token": "synthetic-voice-credential" });
+  await expect(store.propose({ ...proposal(), transport: { type: "http", url: "https://other.example.test/mcp", headers: { Authorization: { secretRef: "music-token" } } } }, actor))
+    .rejects.toThrow("SECRET_DESTINATION");
+});
+
+
+test("approved records and destination grants fail closed after a real process restart", async () => {
+  const { store, root } = await setup();
+  await store.propose(proposal(), actor);
+  await saveSecrets(store, { "music-token": "synthetic-voice-credential" });
+  await catalog(store);
+  await store.operatorChange("music", (await server(store)).digest, "approve");
+  expect((await server(new VoiceToolsStore(root))).state).toBe("enabled");
+  const source = `import {VoiceToolsStore} from './src/lib/voiceTools/store.ts';
+const store = new VoiceToolsStore(process.env.VOICE_TOOLS_TEST_ROOT);
+const view = await store.view();
+let code;
+try { await store.probeInput('music', view.servers.music.digest); } catch (error) { code = error.code; }
+await store.saveSecrets({'music-token':{destinations:['https://example.invalid']}});
+await store.recordProbe('music',view.servers.music.digest,{code:'OK',catalog:view.servers.music.catalog});
+await store.operatorChange('music',view.servers.music.digest,'approve');
+console.log(JSON.stringify({state:view.servers.music.state, approval:view.servers.music.approval, policies:view.servers.music.secretDestinations, code, renewedState:(await store.view()).servers.music.state}));`;
+  const child = Bun.spawn([process.execPath, "--eval", source], { env: { ...process.env, VOICE_TOOLS_TEST_ROOT: root }, stdout: "pipe", stderr: "pipe" });
+  const [output, error, status] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect(status).toBe(0); expect(error).toBe("");
+  expect(JSON.parse(output)).toEqual({ state: "pending", approval: null, policies: { "music-token": [] }, code: "SECRET_DESTINATION", renewedState: "enabled" });
+  // A new owner grant can reuse the private value without returning it to the browser.
+  await store.saveSecrets({ "music-token": { destinations: ["https://example.invalid"] } });
+  expect((await store.probeInput("music", (await server(store)).digest)).secrets).toEqual({ "music-token": "synthetic-voice-credential" });
+});
+
+test("editing a signed approval or destination file never widens authority", async () => {
+  const { store, root } = await setup(); await store.propose(proposal(), actor);
+  await saveSecrets(store, { "music-token": "synthetic-voice-credential" }); await catalog(store);
+  await store.operatorChange("music", (await server(store)).digest, "approve");
+  const approved = JSON.parse(await fs.readFile(store.file, "utf8"));
+  approved.servers.music.askBeforeActing = true;
+  approved.servers.music.approval.digest = approvalDigest("music", approved.servers.music);
+  await fs.writeFile(store.file, JSON.stringify(approved));
+  expect((await server(new VoiceToolsStore(root))).approval).toBeNull();
+  const secretFile = path.join(root, "voice-tools-secrets.json");
+  const raw = JSON.parse(await fs.readFile(secretFile, "utf8"));
+  raw["music-token"].destinations.push("https://other.example.test");
+  await fs.writeFile(secretFile, JSON.stringify(raw));
+  const fresh = new VoiceToolsStore(root);
+  expect((await server(fresh)).secretDestinations).toEqual({ "music-token": [] });
+  await expect(fresh.probeInput("music", (await server(fresh)).digest)).rejects.toThrow("SECRET_DESTINATION");
+  await expect(fresh.operatorChange("music", (await server(fresh)).digest, "approve")).rejects.toThrow("SECRET_DESTINATION");
+  await expect(fresh.propose({ ...proposal(), transport: { type: "http", url: "https://other.example.test/mcp", headers: { Authorization: { secretRef: "music-token" } } } }, actor)).rejects.toThrow("SECRET_DESTINATION");
+});
+
+test("short secrets are rejected explicitly and legacy short values do not disable every view", async () => {
+  const { store, root } = await setup(); await store.propose({ ...proposal(), transport: { type: "http", url: "https://example.invalid/mcp" } }, actor);
+  await expect(store.saveSecrets({ token: { value: "s", destinations: ["https://example.invalid"] } })).rejects.toThrow("INVALID_REQUEST");
+  await fs.writeFile(path.join(root, "voice-tools-secrets.json"), JSON.stringify({ token: "s" }), { mode: 0o600 });
+  expect((await new VoiceToolsStore(root).view()).servers.music.title).toBe("Music");
+});
+
+
+test("restoring a previously signed approval or secret policy cannot undo revocation", async () => {
+  const { store, root } = await setup(); await store.propose(proposal(), actor);
+  await saveSecrets(store, { "music-token": "synthetic-voice-credential" }); await catalog(store);
+  await store.operatorChange("music", (await server(store)).digest, "approve");
+  const approved = await fs.readFile(store.file);
+  const secretFile = path.join(root, "voice-tools-secrets.json"), granted = await fs.readFile(secretFile);
+  await store.operatorChange("music", (await server(store)).digest, "disable");
+  await fs.writeFile(store.file, approved);
+  expect((await server(new VoiceToolsStore(root))).state).toBe("pending");
+  await store.saveSecrets({ "music-token": { destinations: ["https://other.example.test"] } });
+  await fs.writeFile(secretFile, granted);
+  const fresh = new VoiceToolsStore(root);
+  await expect(fresh.probeInput("music", (await server(fresh)).digest)).rejects.toThrow("SECRET_DESTINATION");
+});
+
+test("a signed temporary approval copied before a refused commit grants no authority", async () => {
+  const { store, root } = await setup();
+  await store.propose({ ...proposal(), transport: { type: "http", url: "https://example.invalid/mcp" } }, actor); await catalog(store);
+  const sync = await import("node:fs");
+  let checks = 0, stolen = "";
+  await expect(store.operatorChange("music", (await server(store)).digest, "approve", {}, () => {
+    if (++checks !== 3) return;
+    const temp = sync.readdirSync(root).find(file => file.startsWith("voice-tools.json.") && file.endsWith(".tmp"));
+    expect(temp).toBeDefined(); stolen = sync.readFileSync(path.join(root, temp!), "utf8");
+    throw new Error("REVOKED");
+  })).rejects.toThrow("REVOKED");
+  expect(stolen.length).toBeGreaterThan(0);
+  await fs.writeFile(store.file, stolen);
+  expect((await server(new VoiceToolsStore(root))).approval).toBeNull();
+});
+
+
+test("legacy and signed vault loads preserve reference and count bounds", async () => {
+  const { root } = await setup();
+  for (const values of [
+    { "invalid name": "synthetic-voice-credential" },
+    Object.fromEntries(Array.from({ length: 257 }, (_, i) => [`secret${i}`, "synthetic-voice-credential"])),
+    { "invalid name": { value: "synthetic-voice-credential", destinations: [] } },
+    Object.fromEntries(Array.from({ length: 257 }, (_, i) => [`secret${i}`, { value: "synthetic-voice-credential", destinations: [] }])),
+  ]) {
+    await fs.writeFile(path.join(root, "voice-tools-secrets.json"), JSON.stringify(values), { mode: 0o600 });
     await expect(new VoiceToolsStore(root).view()).rejects.toThrow("REGISTRY_UNAVAILABLE");
   }
 });

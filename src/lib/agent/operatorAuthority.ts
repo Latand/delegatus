@@ -66,7 +66,9 @@ export function callerConversationId(request: Pick<NextRequest, "headers">): str
  *
  * The operator's final decision, after the ceremony was built and rejected on
  * stage: no key, no secret, no cookie, no paste, no unlock, on ANY operator
- * surface. Opening the manager with one click, and starting a call from a card
+ * transport or designation surface. Extensible voice tool management requires
+ * a live owner member session separately in voiceTools/http.ts (2026-10-22).
+ * Opening the manager with one click, and starting a call from a card
  * with one click, are the two gestures that made it unusable — a tab that had not
  * been through a paste could do neither, and a reload put it back where it
  * started. The mechanism that made those clicks work also made the product wrong.
