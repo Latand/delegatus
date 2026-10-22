@@ -231,6 +231,84 @@ test.skipIf(process.platform !== "linux")("a timeout retains its cause while the
   } finally { await real.abort(); }
 });
 
+test.skipIf(process.platform !== "linux").each(([["install", "silence"], ["install", "total"], ["build", "silence"], ["build", "total"]] as const))(
+  "a parent observes UpdateRunner terminate a real %s child on its %s deadline",
+  async (name, reason) => {
+    const base = mkdtempSync(join(tmpdir(), "release-deadline-child-")); roots.push(base);
+    const ownedFile = join(base, "owned-child.json");
+    const source = `
+      import { UpdateRunner, realPorts, updateFailureDetail } from ${JSON.stringify(join(import.meta.dir, "steps.ts"))};
+      import { setCpuPortsForTests } from ${JSON.stringify(join(import.meta.dir, "../runtime/cpuPlacement.ts"))};
+      import { readStartIdentity } from ${JSON.stringify(join(import.meta.dir, "pid.ts"))};
+      import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+      const base = process.argv[1], name = process.argv[2], reason = process.argv[3], ownedFile = process.argv[4];
+      process.env.DELEGATUS_AGENT_CPU = "off";
+      process.env.FIXTURE_REASON = reason;
+      const fixtureBun = base + "/fixture-bun";
+      writeFileSync(fixtureBun, '#!/bin/sh\\nprintf "CHILD_PID=%s\\n" "$$"\\n' +
+        'if [ "$FIXTURE_REASON" = "total" ]; then\\n  while :; do printf "progress\\n"; sleep 0.02; done\\n' +
+        'else\\n  while :; do sleep 1; done\\nfi\\n');
+      chmodSync(fixtureBun, 0o755);
+      setCpuPortsForTests({ probe: () => ({ kind: "not-applicable", reason: "isolated process fixture" }) });
+      const published = [];
+      const ports = realPorts(release => { published.push(release); });
+      const runner = new UpdateRunner({ checkout: base, remote: "fixture", branch: "main", bun: fixtureBun,
+        logDir: base + "/logs", releasesDir: base + "/releases", env: { ...process.env, TMPDIR: base },
+        stepTimeoutMs: { [name]: 300 }, releaseIdleTimeoutMs: 100, livenessPollMs: 10 }, {
+        ...ports,
+        async run(command, options) {
+          if (!command.includes(name)) return 0;
+          mkdirSync(options.cwd, { recursive: true });
+          return ports.run(command, {
+            ...options,
+            onLine(line) {
+              if (line.startsWith("CHILD_PID=")) {
+                const pid = Number(line.slice(10));
+                writeFileSync(ownedFile, JSON.stringify({ pid, startIdentity: readStartIdentity(pid) }));
+              }
+              options.onLine(line);
+            },
+          });
+        },
+        memAvailableMb: () => 8192, revParse: async () => ${JSON.stringify(TARGET)}, exists: () => false,
+        buildIdReadable: () => true,
+      }, () => {});
+      await runner.start(${JSON.stringify(TARGET)});
+      process.stdout.write(JSON.stringify({ state: runner.state.state, failure: runner.state.steps.find(step => step.name === name).failure,
+        detail: updateFailureDetail(runner.state), published }));
+    `;
+    const env = { ...process.env, DELEGATUS_AGENT_CPU: "off", TMPDIR: base, HOME: join(base, "home"),
+      XDG_CONFIG_HOME: join(base, "config"), LLV_STATE_DIR: join(base, "state") };
+    mkdirSync(env.HOME); mkdirSync(env.XDG_CONFIG_HOME); mkdirSync(env.LLV_STATE_DIR);
+    const child = Bun.spawn([process.execPath, "-e", source, base, name, reason, ownedFile], {
+      cwd: base, env, stdout: "pipe", stderr: "pipe", detached: true,
+    });
+    const owner = child.pid ? { pid: child.pid, startIdentity: pid.readStartIdentity(child.pid)! } : null;
+    let guard: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([
+        Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]).then(([status, stdout, stderr]) => ({ status, stdout, stderr })),
+        new Promise<never>((_, reject) => { guard = setTimeout(() => reject(new Error(`independent ${reason} deadline guard expired`)), 2_000); }),
+      ]);
+      if (result.status !== 0) throw new Error(JSON.stringify({ status: result.status, stdout: result.stdout, stderr: result.stderr }));
+      const observed = JSON.parse(result.stdout);
+      expect(observed.state).toBe("failed");
+      expect(observed.failure).toMatchObject({ kind: "timeout", reason });
+      expect(observed.detail).toContain(`Release ${name} failed: timeout after`);
+      expect(observed.published).toEqual([]);
+      const owned = JSON.parse(readFileSync(ownedFile, "utf8")) as pid.RecordedPid;
+      expect(owned.startIdentity).toBeTruthy();
+      expect(pid.sameProcess(owned)).toBe(false);
+    } finally {
+      if (guard) clearTimeout(guard);
+      const recorded = existsSync(ownedFile) ? JSON.parse(readFileSync(ownedFile, "utf8")) as pid.RecordedPid : null;
+      if (recorded?.startIdentity) pid.signalGroup(recorded, "SIGKILL");
+      if (owner && pid.sameProcess(owner)) pid.signalGroup(owner, "SIGKILL");
+      await child.exited;
+    }
+  },
+);
+
 test.skipIf(process.platform !== "linux")("CPU placement off never treats a command argument as an owned scope", async () => {
   const base = mkdtempSync(join(tmpdir(), "release-scope-argument-")); roots.push(base);
   const previous = process.env.DELEGATUS_AGENT_CPU;
