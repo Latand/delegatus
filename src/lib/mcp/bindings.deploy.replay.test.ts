@@ -11,6 +11,9 @@ import { viewerMcpBindings } from "./bindings";
 import { createMcpToolService, SqliteMcpReceiptStore } from "./server";
 import { beginSeatDeployment, recordSeatDeployment, seatDeploymentsFor } from "@/lib/orchestrator/seatDeployments";
 
+// The owner test must outlast every bounded restart and its awaited teardown.
+// Cold imports under the publication gate can exceed Bun's default five seconds.
+const REPLAY_CHILD_TIMEOUT_MS = 15_000;
 const SHA = "a".repeat(40);
 const SEAT = "conversation_deploy_seat";
 const PROJECT = "deploy-project";
@@ -78,7 +81,7 @@ test("a lost busy-join reply replays its durable admission before and after sett
 
     const beforeSettle = await promisify(execFile)(process.execPath,
       ["--eval", childScript, path.join(root, "fresh-before.sqlite"), JSON.stringify(args)], {
-        cwd: process.cwd(), env: { ...process.env }, timeout: 15_000,
+        cwd: process.cwd(), env: { ...process.env }, timeout: REPLAY_CHILD_TIMEOUT_MS,
       });
     expect(JSON.parse(beforeSettle.stdout)).toMatchObject({ ok: true, state: "accepted", deploymentId, wakeOnSettle: true });
     expect(adapter.calls.filter(call => call.startsWith("build:"))).toHaveLength(1);
@@ -87,7 +90,7 @@ test("a lost busy-join reply replays its durable admission before and after sett
     await coordinator.waitForDeployment(deploymentId);
     const afterSettle = await promisify(execFile)(process.execPath,
       ["--eval", childScript, path.join(root, "fresh-after.sqlite"), JSON.stringify(args)], {
-        cwd: process.cwd(), env: { ...process.env }, timeout: 15_000,
+        cwd: process.cwd(), env: { ...process.env }, timeout: REPLAY_CHILD_TIMEOUT_MS,
       });
     expect(JSON.parse(afterSettle.stdout)).toMatchObject({ ok: true, state: "accepted", deploymentId, wakeOnSettle: true });
     expect(posts).toBe(1);
@@ -102,7 +105,7 @@ test("a lost busy-join reply replays its durable admission before and after sett
     journal.close();
     fs.rmSync(root, { recursive: true, force: true });
   }
-});
+}, 2 * REPLAY_CHILD_TIMEOUT_MS + 15_000);
 
 test("an attribution failure during uncertain replay stays pending until admission and wake reconcile", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "uncertain-attribution-replay-"));

@@ -1,9 +1,15 @@
 import fs from "node:fs";
+import { projectCurationSnapshot } from "@/lib/projects/curation";
+import { isCanonicalProjectId } from "@/lib/projects/identity";
+import { namedProjectDirectory, resolveNamedProject, ProjectNameRefusal, type NamedProjectSources } from "@/lib/projects/nameResolution";
+import { canonicalProject } from "@/lib/projects/aliases";
+import { lastScannedFiles, lastScannedProjectCatalog } from "@/lib/scanner/scanCache";
+import { projectInfoFromCwd } from "@/lib/scanner/describe";
 
 import { agentRegistry } from "@/lib/agent/registry";
 import { projectSuccessionFor, recordProjectSuccessions, type ProjectSuccession } from "@/lib/projects/succession";
 
-import { activeOrchestratorSeats, orchestratorSeatFor, type OrchestratorSeat } from "./seats";
+import { activeOrchestratorSeats, orchestratorSeatFor, readOrchestratorSeatFileOrNull, reconcileOrchestratorSeatSuccession, type OrchestratorSeat } from "./seats";
 
 function isDirectory(candidate: string): boolean {
   try { return fs.statSync(candidate).isDirectory(); } catch { return false; }
@@ -38,8 +44,52 @@ function successionForSeat(seat: OrchestratorSeat, cwdOf: SeatCwdOf): ProjectSuc
  * bindings of the old key. Idempotent; the seat tick runs it at boot and before
  * every sweep.
  */
-export function recordSeatProjectSuccessions(cwdOf: SeatCwdOf = seatLaunchCwd): ProjectSuccession[] {
-  return recordProjectSuccessions(activeOrchestratorSeats().map((seat) => successionForSeat(seat, cwdOf)));
+export function recordSeatProjectSuccessions(cwdOf: SeatCwdOf = seatLaunchCwd, legacyOnly = false, now: () => string = () => new Date().toISOString()): ProjectSuccession[] {
+  const file = readOrchestratorSeatFileOrNull();
+  const seats = file ? [...Object.values(file.seats), ...Object.values(file.pending), ...file.history.map(row => row.seat)] : [];
+  const record = (candidates: Iterable<ProjectSuccession | null>) => recordProjectSuccessions(candidates,
+    (move) => reconcileOrchestratorSeatSuccession(move.source, move.target, now()));
+  const pathMoves = legacyOnly ? [] : record(Object.values(file?.seats ?? {}).map((seat) => successionForSeat(seat, cwdOf)));
+  const legacy = seats.filter(seat => !isCanonicalProjectId(canonicalProject(seat.project)));
+  if (!legacy.length) return pathMoves;
+  const sources = seatProjectSources();
+  const last = sources.lastCompletedCatalog?.();
+  const roots = new Map<string, ReturnType<typeof projectInfoFromCwd>>();
+  const seatRoots = new Map<OrchestratorSeat, string>();
+  const blocked = new Set<string>();
+  for (const seat of legacy) {
+    let cwd: string | null = null;
+    try { cwd = seat.conversationId ? cwdOf(seat.conversationId) : null; }
+    catch { blocked.add(seat.project); }
+    if (cwd) {
+      seatRoots.set(seat, cwd);
+      if (!roots.has(cwd)) roots.set(cwd, projectInfoFromCwd(cwd));
+    }
+  }
+  const directory = namedProjectDirectory({ canonicalOnly: true, lastCompletedCatalog: () => ({
+    files: last?.files ?? [], projectCatalog: [...(last?.projectCatalog ?? []),
+      ...[...roots].flatMap(([cwd, info]) => info ? [{ ...info, projectRoot: cwd }] : []),
+    ],
+  }) });
+  // Migration needs a unique name, even when only one candidate has a seat.
+  directory.active.clear();
+  const moves: ProjectSuccession[] = [];
+  for (const seat of legacy) {
+    try {
+      let target = resolveNamedProject(seat.project, directory);
+      const cwd = seatRoots.get(seat);
+      pathMoves.push(...record([projectSuccessionFor(target, cwd)]));
+      const displayName = directory.labels.get(target) ?? target;
+      target = canonicalProject(target);
+      const info = roots.get(cwd ?? "");
+      if (info && canonicalProject(info.project) !== target) { blocked.add(seat.project); continue; }
+      if (isCanonicalProjectId(target)) moves.push({ source: seat.project, target, displayName });
+    } catch (error) {
+      if (!(error instanceof ProjectNameRefusal)) throw error;
+      // Unproven or ambiguous identities stay separate until more evidence exists.
+    }
+  }
+  return [...pathMoves, ...record(moves.filter(move => !blocked.has(move.source)))];
 }
 
 /**
@@ -68,4 +118,55 @@ export function orchestratorSeatForCurrentProject(project: string, cwdOf: SeatCw
   if (stored.active) return stored;
   const moved = activeSeatsByCurrentProject(cwdOf).find((seat) => seat.project === project) ?? null;
   return moved ? { ...stored, active: moved } : stored;
+}
+
+/** The same retained-name resolver used by create_pipeline. A checkout may
+ * introduce a new canonical identity, but cannot make an unknown name valid. */
+export function resolveSeatProject(
+  named: string,
+  cwd?: string,
+  sources: NamedProjectSources = seatProjectSources(),
+  options: { reconcileExistingSeats?: boolean; includeActiveSeats?: boolean } = {},
+): { project: string; displayName: string } {
+  const reconcileExistingSeats = options.reconcileExistingSeats !== false;
+  if (reconcileExistingSeats) recordSeatProjectSuccessions(seatLaunchCwd, true);
+  const info = cwd ? projectInfoFromCwd(cwd) : null;
+  const last = sources.lastCompletedCatalog?.();
+  if (cwd && reconcileExistingSeats) {
+    // A retained folder may gain a repository between scans. Reconcile only
+    // keys this checkout itself proves before indexing its two identities.
+    const retained = readOrchestratorSeatFileOrNull();
+    const known: { project: string; displayName?: string }[] = [
+      ...projectCurationSnapshot().manualProjects, ...(last?.projectCatalog ?? []),
+      ...Object.values(retained?.seats ?? {}), ...Object.values(retained?.pending ?? {}),
+    ];
+    recordProjectSuccessions(known.map(row => {
+      const move = projectSuccessionFor(row.project, cwd);
+      return move ? { ...move, displayName: row.displayName ?? move.displayName } : null;
+    }));
+  }
+  const pending = reconcileExistingSeats && isCanonicalProjectId(canonicalProject(named)) ? orchestratorSeatFor(named).pending : null;
+  const directory = namedProjectDirectory({ ...sources, canonicalOnly: true, includeActiveSeats: options.includeActiveSeats,
+    lastCompletedCatalog: () => ({ files: last?.files ?? [], projectCatalog: [
+      ...(last?.projectCatalog ?? []), ...(info ? [{ ...info, projectRoot: cwd }] : []),
+    ] }),
+  }, pending ? [pending.project] : []);
+  const resolved = resolveNamedProject(named, directory);
+  const label = directory.labels.get(resolved) ?? resolved;
+  const displayName = isCanonicalProjectId(label) ? info?.displayName ?? label : label;
+  const succession = projectSuccessionFor(resolved, cwd);
+  recordProjectSuccessions([succession ? { ...succession, displayName } : null]);
+  const project = canonicalProject(resolved);
+  if (info && project !== canonicalProject(info.project)) throw new ProjectNameRefusal("project contradicts the canonical project of cwd", {
+    code: "project_mismatch", canonicalProject: canonicalProject(info.project), admission: "refused",
+  });
+  return { project, displayName };
+}
+
+function seatProjectSources(): NamedProjectSources {
+  return { lastCompletedCatalog: () => {
+    const projectCatalog = lastScannedProjectCatalog();
+    const files = lastScannedFiles();
+    return projectCatalog && files ? { projectCatalog, files } : null;
+  } };
 }

@@ -11,6 +11,7 @@ import { StringDecoder } from "node:string_decoder";
 
 import { statePath } from "@/lib/configDir";
 import { effectiveClaudePermissionMode } from "@/lib/agent/cli";
+import { readClaudePermissionMode } from "@/lib/agent/claudePermissionMode";
 import type { ProcessIdentity } from "@/lib/agent/registry";
 import { applyClaudeSpawnPolicy, NATIVE_MULTI_AGENT_TOOLS, viewerMcpTransportForLaunch } from "@/lib/agent/spawnPolicy";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
@@ -49,6 +50,7 @@ import {
   type RuntimeEventStore,
 } from "./eventStore";
 import { withAgentConfigSandbox } from "./agentConfigSandbox";
+import { assertViewerMcpTools } from "./viewerMcpLaunch";
 import { pendingPermissionFrom, pendingToolUseFrom, type PendingPermissionRequest } from "./permissionRequests";
 import { NATIVE_MULTI_AGENT_DENY_FLAG } from "./hostActivityFlags";
 import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES, runtimeImageStore } from "./runtimeImageStore";
@@ -66,7 +68,7 @@ type UnsequencedEvent = RuntimeEvent extends infer Event
   ? Event extends RuntimeEvent ? Omit<Event, "seq"> : never
   : never;
 type PendingControl = {
-  resolve(): void;
+  resolve(value?: JsonObject): void;
   reject(error: Error): void;
   timer: ReturnType<typeof setTimeout>;
   interruptTurnId: string | null;
@@ -809,12 +811,18 @@ export class ClaudeStreamBrokerHost implements EngineHost {
   }
 
   static async start(options: ClaudeStreamBrokerHostOptions): Promise<ClaudeStreamBrokerHost> {
-    return this.open(options.sessionId ?? crypto.randomUUID(), false, options);
+    return this.open(options.sessionId ?? crypto.randomUUID(), false, {
+      ...options, permissionMode: options.permissionMode ?? (options.readOnly ? "plan" : "bypassPermissions"),
+    });
   }
 
   static async adopt(sessionId: string, options: ClaudeStreamBrokerHostOptions): Promise<ClaudeStreamBrokerHost> {
     if (!sessionId) throw new Error("Claude session id is required for adoption");
-    return this.open(sessionId, true, options);
+    const permissionMode = options.permissionMode ?? (options.readOnly ? "plan"
+      : /^[0-9a-f-]{36}$/.test(sessionId)
+        ? await readClaudePermissionMode(claudeTranscriptPath(options.cwd, sessionId, options.claudeProjectsDir))
+        : null);
+    return this.open(sessionId, true, { ...options, permissionMode: permissionMode ?? undefined });
   }
 
   private static async open(
@@ -948,6 +956,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       ...options, releaseCleanup: () => { relay?.close(); options.releaseCleanup?.(); },
     });
     try {
+      if (options.claudeConfigDir) await host.verifyViewerMcp();
       host.restore();
       host.reconcileTranscript(options.readTranscript
         ? options.readTranscript(options.cwd, sessionId)
@@ -961,6 +970,40 @@ export class ClaudeStreamBrokerHost implements EngineHost {
         throw new StructuredHostAdoptionCleanupError(safeError(error), host, { cause: cleanupError });
       }
       throw new Error(safeError(error));
+    }
+  }
+
+  private async verifyViewerMcp(): Promise<void> {
+    const deadline = Date.now() + this.requestTimeoutMs;
+    const request = (subtype: string) => new Promise<JsonObject>((resolve, reject) => {
+      if (this.unavailable()) return reject(new Error("Viewer MCP launch failed: Claude closed during startup"));
+      const requestId = crypto.randomUUID();
+      const timer = setTimeout(() => {
+        this.pendingControls.delete(requestId);
+        reject(new Error("Viewer MCP launch failed: Claude tool discovery timed out"));
+      }, Math.max(1, deadline - Date.now()));
+      this.pendingControls.set(requestId, { resolve: value => resolve(value ?? {}), reject, timer, interruptTurnId: null });
+      this.write({ type: "control_request", request_id: requestId, request: { subtype } });
+    });
+    try {
+      await request("initialize");
+      // The CLI acknowledges initialize before its MCP connections settle.
+      // Wait for its own catalog under the same launch deadline.
+      for (;;) {
+        const status = await request("mcp_status");
+        const viewer = Array.isArray(status.mcpServers)
+          ? status.mcpServers.find(entry => stringField(entry, "name") === "viewer") : null;
+        if (stringField(viewer, "status") !== "pending") {
+          assertViewerMcpTools(status.mcpServers, structuredHostStamp());
+          return;
+        }
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) throw new Error("Claude Viewer tool discovery timed out while pending");
+        await new Promise<void>(resolve => setTimeout(resolve, Math.min(250, remaining)));
+      }
+    } catch (error) {
+      const reason = safeError(error);
+      throw new Error(reason.startsWith("Viewer MCP launch failed") ? reason : `Viewer MCP launch failed: ${reason}`);
     }
   }
 
@@ -1103,7 +1146,7 @@ export class ClaudeStreamBrokerHost implements EngineHost {
         reject(error);
         this.fail(error);
       }, this.requestTimeoutMs);
-      this.pendingControls.set(requestId, { resolve, reject, timer, interruptTurnId: turnRef });
+      this.pendingControls.set(requestId, { resolve: () => resolve(), reject, timer, interruptTurnId: turnRef });
       this.write({ type: "control_request", request_id: requestId, request: { subtype: "interrupt" } });
     });
   }
@@ -1618,10 +1661,10 @@ export class ClaudeStreamBrokerHost implements EngineHost {
       if (!pending) return;
       clearTimeout(pending.timer);
       this.pendingControls.delete(requestId);
-      if (response.subtype === "error") pending.reject(new Error("Claude control request failed"));
+      if (response.subtype === "error") pending.reject(new Error(`Claude control request failed: ${safeError(response.error ?? "unknown error")}`));
       else {
         if (pending.interruptTurnId) this.interruptedTurns.add(pending.interruptTurnId);
-        pending.resolve();
+        pending.resolve(record(response.response) ?? {});
       }
       return;
     }

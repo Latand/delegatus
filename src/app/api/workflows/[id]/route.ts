@@ -1,38 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-
+import { FLOW_RETIREMENT } from "@/lib/flows/retirement";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
-import type { ApiError } from "@/lib/types";
-import { patchWorkflow } from "@/lib/workflows/engine";
-import type { PatchWorkflowRequest, Workflow } from "@/lib/workflows/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type WorkflowRouteContext = {
-  params: Promise<{ id: string }>;
-};
-
-export async function PATCH(
-  req: NextRequest,
-  ctx: WorkflowRouteContext,
-): Promise<NextResponse<{ ok: true; workflow: Workflow } | ApiError>> {
+export async function PATCH(req: NextRequest) {
   const rejection = rejectCrossOrigin(req);
   if (rejection) return rejection;
-
-  let body: PatchWorkflowRequest;
-  try {
-    body = (await req.json()) as PatchWorkflowRequest;
-  } catch {
-    return NextResponse.json({ error: "invalid JSON" }, { status: 400 });
-  }
-  const actions = new Set(["pause", "resume", "advance", "retry-stage", "close"]);
-  if (!actions.has(body.action)) {
-    return NextResponse.json({ error: "unknown action" }, { status: 400 });
-  }
-  const { id } = await ctx.params;
-  const result = await patchWorkflow(id, body);
-  if (!result.workflow) {
-    return NextResponse.json({ error: result.error ?? "could not update workflow" }, { status: result.status ?? 400 });
-  }
-  return NextResponse.json({ ok: true, workflow: result.workflow });
+  return NextResponse.json(FLOW_RETIREMENT, { status: 410 });
 }

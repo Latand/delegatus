@@ -46,7 +46,37 @@ stage_refuse() {
   cat "$receipt/refused" >&2
   exit 1
 }
-if [ "$hook" = post-commit ] || [ "$hook" = post-merge ] || [ "$hook" = post-applypatch ] || [ "$hook" = post-rewrite ]; then
+# The Git process that runs a hook is its parent. Its PID with its start time
+# names one invocation, so a recorded intent cannot outlive it into a later one.
+invocation() {
+  started=$(cut -d' ' -f22 2>/dev/null < "/proc/$PPID/stat" | tr -dc '0-9') || started=
+  [ -n "$started" ] || started=$(ps -o lstart= -p "$PPID" 2>/dev/null | tr -c 'A-Za-z0-9\\n' '_') || started=
+  [ -n "$started" ] || return 1
+  printf '%s-%s\\n' "$PPID" "$started"
+}
+if [ "$hook" = reference-transaction ] && [ "\${1:-}" = prepared ] && process=$(invocation) && [ -f "$receipt/intents/$process" ]; then
+  # The commit or merge invocation whose prepare-commit-msg recorded this
+  # intent is now moving a branch, before the ref update and before any kill
+  # can skip post-commit or post-merge. Only the commit it is writing, with
+  # exactly the intent's tree and parents, gets a receipt. An invocation that
+  # aborted (editor, commit-msg, author check) never reaches this point, and
+  # a later reset, update-ref or unguarded commit is another process.
+  # Each line of the intent is one parent set Git may record for it.
+  intent=$(cat "$receipt/intents/$process") || intent=
+  if [ -n "$intent" ]; then
+    printf '%s\\n' "$input" | while read -r old new ref; do
+      case "$ref" in HEAD|refs/heads/*) ;; *) continue ;; esac
+      case "$new" in *[!0-9a-f]*|'') continue ;; esac
+      [ "\${#new}" = 40 ] || continue
+      made=$(git show -s --no-show-signature --format='%T %P' "$new" 2>/dev/null) || continue
+      printf '%s\\n' "$intent" | grep -qxF "$(printf '%s' "\${made% }" | tr ' ' '-')" || continue
+      mkdir -p "$receipt/commits" && : > "$receipt/commits/$new"
+      # One intent proves one commit.
+      rm -f "$receipt/intents/$process"
+    done
+  fi
+fi
+if [ "$hook" = post-commit ] || [ "$hook" = post-merge ] || [ "$hook" = post-applypatch ] || [ "$hook" = post-rewrite ] || [ "$hook" = prepare-commit-msg ]; then
   common=$(git rev-parse --path-format=absolute --git-common-dir) || exit 1
   lane_common=$(lane_git rev-parse --path-format=absolute --git-common-dir) || exit 1
   if [ "$common" = "$lane_common" ]; then
@@ -57,7 +87,34 @@ if [ "$hook" = post-commit ] || [ "$hook" = post-merge ] || [ "$hook" = post-app
       scratch=$(cd "$scratch" && pwd -P) || exit 1
       case "$producer/" in "$scratch/"*) owned=true ;; esac
     fi
-    if [ "$owned" = true ]; then
+    if [ "$owned" = true ] && [ "$hook" = prepare-commit-msg ]; then
+      # Commit and merge run this before the commit object and the ref update
+      # exist, --no-verify included, and the same process later runs the
+      # reference-transaction hook above. Record the tree and parents it is
+      # about to commit under that process. Never refuse the commit here.
+      index=\${GIT_INDEX_FILE:-$(git rev-parse --git-path index)}
+      if process=$(invocation) && mkdir -p "$receipt/intents" && copy=$(mktemp "$receipt/intents/.index-XXXXXX"); then
+        if cp "$index" "$copy" && tree=$(GIT_INDEX_FILE=$copy git write-tree 2>/dev/null); then
+          intent=$tree
+          if parent=$(git rev-parse -q --verify HEAD); then intent=$intent-$parent; else parent=; fi
+          merges=
+          subsumed=false
+          merge_file=$(git rev-parse --git-path MERGE_HEAD) || merge_file=
+          if [ -n "$merge_file" ] && [ -f "$merge_file" ]; then
+            while read -r merged; do
+              merges=$merges-$merged
+              [ -z "$parent" ] || ! git merge-base --is-ancestor "$parent" "$merged" 2>/dev/null || subsumed=true
+            done < "$merge_file"
+          fi
+          intent=$intent$merges
+          # Without --no-ff Git leaves out a HEAD that one of the merged heads
+          # already contains, as in an octopus merge over the lane's own work.
+          [ "$subsumed" = false ] || intent=$(printf '%s\\n%s' "$intent" "$tree$merges")
+          printf '%s\\n' "$intent" > "$copy" && mv "$copy" "$receipt/intents/$process" 2>/dev/null || :
+        fi
+        rm -f "$copy"
+      fi
+    elif [ "$owned" = true ]; then
       mkdir -p "$receipt/commits"
       if [ "$hook" = post-rewrite ]; then
         printf '%s\\n' "$input" | while read -r old made rest; do

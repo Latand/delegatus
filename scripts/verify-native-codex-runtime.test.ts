@@ -25,6 +25,10 @@ test("kernel admission with private state", () => {
   expect(process.env.LLV_OWNED_TEST_RUN_CGROUP).not.toBe(${JSON.stringify(process.env.LLV_OWNED_TEST_RUN_CGROUP)});
   expect(process.env.XDG_RUNTIME_DIR).toBe(${JSON.stringify(process.env.XDG_RUNTIME_DIR)});
   expect(process.env.DBUS_SESSION_BUS_ADDRESS).toBe(${JSON.stringify(process.env.DBUS_SESSION_BUS_ADDRESS)});
+  const boundary = process.env.LLV_SIGNAL_SANDBOX ? JSON.parse(process.env.LLV_SIGNAL_SANDBOX) : null;
+  expect(boundary?.pidNamespace).toBe(${JSON.stringify(process.env.LLV_SIGNAL_SANDBOX ? JSON.parse(process.env.LLV_SIGNAL_SANDBOX).pidNamespace : undefined)});
+  expect(boundary?.userNamespace).toBe(${JSON.stringify(process.env.LLV_SIGNAL_SANDBOX ? JSON.parse(process.env.LLV_SIGNAL_SANDBOX).userNamespace : undefined)});
+  if (boundary) expect(boundary.gate.cgroup).toBe(process.env.LLV_OWNED_TEST_RUN_CGROUP);
   expect(process.env.HOME).not.toBe(${JSON.stringify(process.env.HOME)});
   expect(process.env.LLV_STATE_DIR).not.toBe(${JSON.stringify(process.env.LLV_STATE_DIR)});
   expect(process.env.LLV_STATE_OWNER).toBeUndefined();

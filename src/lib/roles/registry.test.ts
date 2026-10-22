@@ -160,6 +160,22 @@ test("builder parameters select the cheap fixer and the frontend implementation 
   expect(frontend.ok && frontend.value.prompt).toContain("add no new colour, font, pill or card shape");
 });
 
+test("builder and fix-round scaffolds route heavy commands through the gate wrapper and keep plain commits", () => {
+  for (const mode of ["plain", "apply-fixes"] as const) {
+    for (const domain of ["general", "frontend", "docs"] as const) {
+      const resolved = resolveRole("builder", { mode, domain });
+      if (!resolved.ok) throw new Error(resolved.error);
+      expect(resolved.value.prompt).toContain("run test suites, typecheck and builds through the heavy-command wrapper by default");
+      expect(resolved.value.prompt).toContain("the gate wrapper the stage brief names, or the one the project's instruction files name");
+      expect(resolved.value.prompt).toContain("4–8 GB memory cap");
+      expect(resolved.value.prompt).toContain("a -c core.hooksPath or other hook override skips the receipts");
+    }
+  }
+  const verifier = resolveRole("verifier", { claims: "the export keeps every row" });
+  if (!verifier.ok) throw new Error(verifier.error);
+  expect(verifier.value.prompt).not.toContain("heavy-command wrapper by default");
+});
+
 test("role registry rejects unknown and missing required parameters with bounded errors", () => {
   /* #774: a rejection names the accepted alternatives, so the caller can
      self-correct instead of reading the registry source. */

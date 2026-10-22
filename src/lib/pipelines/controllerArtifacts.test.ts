@@ -1,12 +1,13 @@
 import { afterAll, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 
 import { composeStructuredFirstMessage } from "@/lib/runtime/structuredFirstMessage";
 import { CONTROLLER_ARTIFACT_DIRECTORY, prepareControllerArtifactDirectory } from "./controllerArtifacts";
-import { realExec } from "@/lib/workflows/provision";
+import { realExec, type ExecResult } from "@/lib/workflows/provision";
 import { renderStagePrompt } from "./prompts";
 import { resolveStageTestGuidance } from "./testGuidance";
 import { composeStageInput } from "./stageInput";
@@ -15,6 +16,207 @@ import type { PipelineStage } from "./types";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-controller-artifacts-"));
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
+
+test("artifact inspection retries a probe with a null exit status before preparing a handoff", async () => {
+  const { repo } = repository("transient-signal");
+  let probes = 0;
+  let loopTurn = false;
+  const directory = await prepareControllerArtifactDirectory(repo, async (command, args, ...rest) => {
+    if (args[0] === "rev-parse" && args[1] === "--show-toplevel" && ++probes === 1) {
+      setTimeout(() => { loopTurn = true; }, 0);
+      return { code: null, signal: "SIGTERM", stdout: "", stderr: "" };
+    }
+    expect(loopTurn).toBe(true);
+    return realExec(command, args, ...rest);
+  });
+  expect(probes).toBe(2);
+  expect(fs.readFileSync(path.join(directory, ".gitignore"), "utf8")).toBe("*\n");
+});
+
+function clock() {
+  let elapsed = 0;
+  const waits: number[] = [];
+  return {
+    waits,
+    now: () => elapsed,
+    advance: (ms: number) => { elapsed += ms; },
+    sleep: async (ms: number) => { waits.push(ms); elapsed += ms; },
+  };
+}
+
+const probeFailures: { name: string; result?: ExecResult; error?: NodeJS.ErrnoException; cause: string }[] = [
+  { name: "signal", result: { code: null, signal: "SIGTERM", stdout: "", stderr: "" }, cause: "signal SIGTERM" },
+  { name: "timeout", result: { code: null, signal: "SIGKILL", stdout: "", stderr: "command timed out after 10000ms" }, cause: "command timed out after 10000ms" },
+  { name: "spawn-result", result: { code: null, stdout: "", stderr: "spawn git EAGAIN" }, cause: "spawn git EAGAIN" },
+  { name: "spawn-throw", error: Object.assign(new Error("resource temporarily unavailable"), { code: "EAGAIN" }), cause: "EAGAIN: resource temporarily unavailable" },
+  { name: "unknown", result: { code: null, stdout: "", stderr: "" }, cause: "no exit status" },
+];
+
+test.each(probeFailures)("artifact inspection recovers from $name without replaying earlier probes", async ({ name, result, error }) => {
+  const { repo } = repository(`recover-${name}`);
+  const timing = clock();
+  let top = 0, head = 0;
+  const directory = await prepareControllerArtifactDirectory(repo, async (command, args, ...rest) => {
+    if (args[0] === "rev-parse" && args[1] === "--show-toplevel") top++;
+    if (args[0] === "rev-parse" && args[1] === "--verify" && ++head === 1) {
+      if (error) throw error;
+      return result!;
+    }
+    return realExec(command, args, ...rest);
+  }, timing);
+  expect(top).toBe(1);
+  expect(head).toBe(2);
+  expect(timing.waits).toEqual([250]);
+  expect(fs.readFileSync(path.join(directory, ".gitignore"), "utf8")).toBe("*\n");
+});
+
+test.each(probeFailures)("artifact inspection refuses persistent $name after three attempts with its cause", async ({ name, result, error, cause }) => {
+  const { repo, git } = repository(`exhaust-${name}`);
+  fs.writeFileSync(path.join(repo, "source.txt"), "staged source\n");
+  git("add", "source.txt");
+  const timing = clock();
+  let probes = 0;
+  const failure = await prepareControllerArtifactDirectory(repo, async () => {
+    probes++;
+    if (error) throw error;
+    return result!;
+  }, timing).then(() => null, (error: Error) => error);
+  expect(failure?.message).toContain(cause);
+  expect(failure?.message).toContain("git rev-parse, attempt 3");
+  expect(probes).toBe(3);
+  expect(timing.waits).toEqual([250, 500]);
+  expect(fs.existsSync(path.join(repo, ".artifacts"))).toBe(false);
+  expect(git("show", ":source.txt")).toBe("staged source");
+});
+
+test("all artifact probes share one deadline including backoff and earlier successful probes", async () => {
+  const { repo } = repository("inspection-deadline");
+  const timing = clock();
+  const timeouts: number[] = [];
+  const signals: AbortSignal[] = [];
+  const failure = await prepareControllerArtifactDirectory(repo, async (_command, args, _cwd, _env, options) => {
+    timeouts.push(options!.timeoutMs!);
+    signals.push(options!.signal!);
+    timing.advance(options!.timeoutMs!);
+    if (args[1] === "--show-toplevel") return { code: 0, stdout: `${repo}\n`, stderr: "" };
+    return { code: null, signal: "SIGKILL", stdout: "", stderr: `command timed out after ${options!.timeoutMs}ms` };
+  }, timing).then(() => null, (error: Error) => error);
+  expect(failure?.message).toContain("30000ms inspection deadline exceeded");
+  expect(failure?.message).toContain("signal SIGKILL: command timed out after 9750ms");
+  expect(timeouts).toEqual([10_000, 10_000, 9750]);
+  expect(signals.every(signal => signal instanceof AbortSignal)).toBe(true);
+  expect(timing.waits).toEqual([250]);
+  expect(timing.now()).toBe(30_000);
+  expect(fs.existsSync(path.join(repo, ".artifacts"))).toBe(false);
+});
+
+test("artifact backoff cannot dispatch a retry beyond the inspection deadline", async () => {
+  const { repo } = repository("backoff-deadline");
+  const timing = clock();
+  let probes = 0;
+  const failure = await prepareControllerArtifactDirectory(repo, async () => {
+    probes++;
+    timing.advance(29_900);
+    return { code: null, signal: "SIGTERM", stdout: "", stderr: "" };
+  }, timing).then(() => null, (error: Error) => error);
+  expect(failure?.message).toContain("30000ms inspection deadline exceeded: signal SIGTERM");
+  expect(probes).toBe(1);
+  expect(timing.waits).toEqual([100]);
+  expect(timing.now()).toBe(30_000);
+});
+
+test.each([
+  { name: "git-error", code: 128, stderr: "fatal: corrupt Git index", cause: "exit code 128: fatal: corrupt Git index" },
+  { name: "output-limit", code: null, stderr: "command output exceeded its byte limit", cause: "command output exceeded its byte limit" },
+  { name: "cancelled", code: null, stderr: "command cancelled", cause: "command cancelled" },
+  { name: "missing-git", code: null, stderr: "spawn git ENOENT", cause: "spawn git ENOENT" },
+])("artifact inspection immediately refuses $name with the original diagnostic", async ({ name, code, stderr, cause }) => {
+  const { repo } = repository(`permanent-${name}`);
+  const timing = clock();
+  let probes = 0;
+  await expect(prepareControllerArtifactDirectory(repo, async () => {
+    probes++;
+    return { code, stdout: "", stderr };
+  }, timing)).rejects.toThrow(cause);
+  expect(probes).toBe(1);
+  expect(timing.waits).toEqual([]);
+  expect(fs.existsSync(path.join(repo, ".artifacts"))).toBe(false);
+});
+
+test("a real broken Git repository refuses with its stderr and exit code", async () => {
+  const { repo } = repository("real-git-error");
+  fs.writeFileSync(path.join(repo, ".git", "HEAD"), "broken\n");
+  const result = await realExec("git", ["rev-parse", "--show-toplevel"], repo);
+  expect(result.code).toBe(128);
+  expect(result.stderr).toContain("fatal:");
+  await expect(prepareControllerArtifactDirectory(repo)).rejects.toThrow(`exit code 128: ${result.stderr.trim()}`);
+});
+
+test.each([{ unborn: false }, { unborn: true }])("an interrupted index write is refused without replay (unborn=$unborn)", async ({ unborn }) => {
+  const { repo, git } = repository(`no-write-replay-${unborn}`, unborn);
+  const directory = path.join(repo, CONTROLLER_ARTIFACT_DIRECTORY);
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, "old.md"), "private staged input\n");
+  git("add", "-A");
+  let writes = 0;
+  const timing = clock();
+  await expect(prepareControllerArtifactDirectory(repo, async (command, args, ...rest) => {
+    if (args[0] === (unborn ? "rm" : "reset")) {
+      writes++;
+      return { code: null, signal: "SIGTERM", stdout: "", stderr: "" };
+    }
+    return realExec(command, args, ...rest);
+  }, timing)).rejects.toThrow("signal SIGTERM");
+  expect(writes).toBe(1);
+  expect(timing.waits).toEqual([]);
+  expect(git("diff", "--cached", "--name-only")).toContain("old.md");
+});
+
+test("artifact retries recheck repository ancestors before creating files", async () => {
+  const { repo } = repository("retry-ancestor");
+  const external = path.join(root, "retry-ancestor-external");
+  fs.mkdirSync(external);
+  const timing = clock();
+  await expect(prepareControllerArtifactDirectory(repo, async (command, args, ...rest) => {
+    if (!timing.waits.length) return { code: null, signal: "SIGTERM", stdout: "", stderr: "" };
+    return realExec(command, args, ...rest);
+  }, { ...timing, sleep: async (ms) => {
+    await timing.sleep(ms);
+    fs.symlinkSync(external, path.join(repo, ".artifacts"), "dir");
+  } })).rejects.toThrow("pipeline controller artifact path must be a real directory");
+  expect(fs.readdirSync(external)).toEqual([]);
+});
+
+test("fresh processes each exhaust a bounded artifact inspection without creating retry work", async () => {
+  const { repo } = repository("restart-bounds");
+  const childRoot = path.join(root, "probe-child");
+  const env: NodeJS.ProcessEnv = { ...process.env, LLV_STATE_OWNER: undefined, LLV_INBOX_DIR: undefined, DELEGATUS_STATE_DIR: undefined };
+  for (const name of ["HOME", "XDG_CONFIG_HOME", "LLV_STATE_DIR", "TMPDIR"]) {
+    const directory = path.join(childRoot, name.toLowerCase());
+    fs.mkdirSync(directory, { recursive: true });
+    env[name] = directory;
+  }
+  const source = `
+    import { prepareControllerArtifactDirectory, protectExistingControllerArtifacts } from "./src/lib/pipelines/controllerArtifacts";
+    let probes = 0, at = 0;
+    const inspect = process.argv[2] === "prepare" ? prepareControllerArtifactDirectory : protectExistingControllerArtifacts;
+    try {
+      await inspect(process.argv[1], async () => { probes++; return { code: null, signal: "SIGTERM", stdout: "", stderr: "" }; },
+        { now: () => at, sleep: async ms => { at += ms; } });
+    } catch (error) { console.log(JSON.stringify({ probes, at, error: error.message })); }
+  `;
+  for (const entry of ["prepare", "protect"]) {
+    for (let restart = 0; restart < 2; restart++) {
+      const result = await promisify(execFile)(process.execPath, ["-e", source, repo, entry], {
+        cwd: path.resolve(import.meta.dir, "../../.."), env, timeout: 10_000,
+      });
+      expect(JSON.parse(result.stdout)).toEqual({ probes: 3, at: 750,
+        error: "cannot inspect controller artifact Git paths (git rev-parse, attempt 3): signal SIGTERM" });
+    }
+  }
+  expect(fs.existsSync(path.join(repo, ".artifacts"))).toBe(false);
+  expect(fs.readdirSync(env.LLV_STATE_DIR!)).toEqual([]);
+});
 
 function repository(name: string, unborn = false) {
   const repo = path.join(root, name);
@@ -36,30 +238,51 @@ function repository(name: string, unborn = false) {
   return { repo, git };
 }
 
-async function compose(kind: "structured" | "pipeline", cwd: string) {
+async function compose(kind: "structured" | "pipeline", cwd: string, exec: typeof realExec = realExec) {
   const text = "PRIVATE_INPUT_SENTINEL\n" + "Full context 🙂\n".repeat(3_000);
   if (kind === "structured") {
-    return { text, delivered: (await composeStructuredFirstMessage(text, cwd)) };
+    return { text, delivered: (await composeStructuredFirstMessage(text, cwd, exec)) };
   }
   const stage: PipelineStage = { id: "build", kind: "run", prompt: "{{task}}".repeat(100), next: null,
     effectiveRole: { roleId: "builder", engine: "codex", model: null, effort: "high", access: "read-write", promptScaffold: "Complete builder instructions" } };
   const pipeline = buildPipeline({ id: "private-index", task: "t".repeat(500), spec: "AC", project: "fixture", repoDir: cwd,
     stages: [stage], srcPath: null, srcConversationId: null, now: "now" });
   pipeline.worktreeDir = cwd;
-  return { text: renderStagePrompt(pipeline, stage, stage.effectiveRole, text, undefined, resolveStageTestGuidance()), delivered: (await composeStageInput(pipeline, stage, stage.effectiveRole, text)) };
+  return { text: renderStagePrompt(pipeline, stage, stage.effectiveRole, text, undefined, resolveStageTestGuidance()), delivered: (await composeStageInput(pipeline, stage, stage.effectiveRole, text, cwd, exec)) };
 }
 
-async function composeSmall(kind: "structured" | "pipeline", cwd: string) {
-  if (kind === "structured") return (await composeStructuredFirstMessage("small message", cwd));
+async function composeSmall(kind: "structured" | "pipeline", cwd: string, exec: typeof realExec = realExec) {
+  if (kind === "structured") return (await composeStructuredFirstMessage("small message", cwd, exec));
   const stage: PipelineStage = { id: "build", kind: "run", prompt: "Build", next: null,
     effectiveRole: { roleId: null, engine: "codex", model: null, effort: "high", access: "read-write", promptScaffold: null } };
   const pipeline = buildPipeline({ id: "small-index", task: "Small task", project: "fixture", repoDir: cwd,
     stages: [stage], srcPath: null, srcConversationId: null, now: "now" });
   pipeline.worktreeDir = cwd;
-  const delivered = (await composeStageInput(pipeline, stage, stage.effectiveRole, ""));
+  const delivered = (await composeStageInput(pipeline, stage, stage.effectiveRole, "", cwd, exec));
   expect(delivered).toBe(renderStagePrompt(pipeline, stage, stage.effectiveRole, "", undefined, resolveStageTestGuidance()));
   return delivered;
 }
+
+test.each([
+  { kind: "structured", small: true }, { kind: "pipeline", small: true },
+  { kind: "structured", small: false }, { kind: "pipeline", small: false },
+] as const)("$kind launch composition survives a transient Git signal (small=$small)", async ({ kind, small }) => {
+  const { repo } = repository(`launch-retry-${kind}-${small}`);
+  let probes = 0;
+  const exec: typeof realExec = async (command, args, ...rest) => {
+    if (args[0] === "rev-parse" && args[1] === "--show-toplevel" && ++probes === 1) {
+      return { code: null, signal: "SIGTERM", stdout: "", stderr: "" };
+    }
+    return realExec(command, args, ...rest);
+  };
+  const result = small ? await composeSmall(kind, repo, exec) : await compose(kind, repo, exec);
+  expect(probes).toBe(2);
+  if (typeof result === "string") expect(result.length).toBeGreaterThan(0);
+  else {
+    const file = result.delivered.match(/Full (?:structured first message|stage prompt) file: (.+)\n/)?.[1];
+    expect(fs.readFileSync(file!, "utf8")).toBe(result.text);
+  }
+});
 
 test.each([
   { kind: "structured", nested: false, unborn: false },

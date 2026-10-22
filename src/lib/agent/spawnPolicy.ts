@@ -11,7 +11,7 @@ import { statePath } from "@/lib/configDir";
 import { readViewerGatewayConfig, VIEWER_GATEWAY_FILE } from "@/runtime-host/deploymentProxy";
 import { stableMcpRuntimeRoot } from "@/runtime-host/mcpRuntimeRelease";
 
-import { appDirIn } from "../../../bin/appDir.mjs";
+import { viewerMcpStateContext } from "../../../bin/mcp-state-paths.mjs";
 
 import type { AgentEngine } from "./cli";
 import { grantedMcpServers } from "./mcpAllowlist";
@@ -91,10 +91,10 @@ export interface ViewerMcpServerEntry {
  * in its sandbox.
  */
 export function viewerMcpServerEnv(source: McpEnvironment = process.env, overrides: JsonObject = {}): Record<string, string> {
-  const configRoot = source.XDG_CONFIG_HOME?.trim() || path.join(os.homedir(), ".config");
+  const { configRoot, stateDirectory } = viewerMcpStateContext(source, path.join(os.homedir(), ".config"));
   const env: Record<string, string> = {
     XDG_CONFIG_HOME: configRoot,
-    LLV_STATE_DIR: source.LLV_STATE_DIR?.trim() || path.join(appDirIn(configRoot), "state"),
+    LLV_STATE_DIR: stateDirectory,
   };
   /* PATH and HOME are restated rather than assumed: a CLI that treats a
      server's `env` table as the whole environment instead of as additions to
@@ -112,6 +112,9 @@ export function viewerMcpServerEnv(source: McpEnvironment = process.env, overrid
   const inheritedToken = viewerControlToken(parentEnvironment, parentOrigin);
   const normalizedOverrides = normalizeMcpEnvironmentOverrides(overrides);
   for (const [name, value] of Object.entries(normalizedOverrides)) {
+    // The launching installation owns these paths. Account registrations can
+    // outlive an installation or retain an agent's throw-away config root.
+    if (["LLV_STATE_DIR", "XDG_CONFIG_HOME", "LLV_VIEWER_DEPLOY_TARGET", "LLV_STRUCTURED_HOST"].includes(name)) continue;
     if (name !== "LLV_TOKEN" && name !== VIEWER_CONTROL_TOKEN_ENV) env[name] = value;
   }
   const effective = { ...source, ...env };
@@ -371,8 +374,7 @@ function claudeMcpServers(
     if (!definition) return [];
     /* The agent runs under its own config and state root (#1905), so the
        Viewer server — however it was registered — carries the real ones
-       itself. A value already written into the definition wins: an operator
-       who pinned a state dir there meant it. */
+       itself. Registered state paths cannot replace the launching install. */
     const pinned = name === "viewer"
       ? { ...definition, env: viewerMcpServerEnv(process.env, record(definition.env) ?? {}) }
       : definition;

@@ -1,3 +1,4 @@
+import { isCanonicalProjectId } from "./identity";
 import { shortId, matchesShortId } from "@/lib/shortIds";
 import path from "node:path";
 import { projectDisplayName } from "@/lib/displayNames";
@@ -29,6 +30,10 @@ function uniqueCatalogMembers(files: readonly Member[] | undefined): readonly Me
 }
 
 type Sources = {
+  /** Seat admission and legacy recovery use only scanner-minted identities. */
+  canonicalOnly?: boolean;
+  /** Status polls can resolve retained project evidence without re-reading seats. */
+  includeActiveSeats?: boolean;
   authorizedSeats?(): readonly { project?: string | null }[];
   callerProject?(): string | null;
   lastCompletedCatalog?(): { projectCatalog: readonly Member[]; files: readonly Member[] } | null;
@@ -60,7 +65,7 @@ export function namedProjectDirectory(sources: Sources = {}, extraKeys: readonly
     ...projectKeyIndexSnapshot(),
   ]);
   const members: readonly Member[] = [...(last?.projectCatalog ?? []), ...uniqueCatalogMembers(last?.files), ...[...memberKeys].map(project => ({ project }))];
-  const seats = activeOrchestratorSeats();
+  const seats = sources.includeActiveSeats === false ? [] : activeOrchestratorSeats();
   const authorized = sources.authorizedSeats?.() ?? [];
   const manualProjects = projectCurationSnapshot().manualProjects;
   const caller = sources.callerProject?.();
@@ -101,6 +106,7 @@ export function namedProjectDirectory(sources: Sources = {}, extraKeys: readonly
   const encodedDirectories = new Map<string, Set<string>>();
   const labels = new Map<string, string>();
   const index = (name: string | undefined | null, key: string) => {
+    if (sources.canonicalOnly && !isCanonicalProjectId(canonical(key))) return;
     const folded = name?.trim().toLowerCase();
     // Presentation placeholders do not name any one project.
     if (!folded || folded === "unnamed project" || folded === "unresolved project") return;
@@ -109,12 +115,14 @@ export function namedProjectDirectory(sources: Sources = {}, extraKeys: readonly
   };
   const added = new Set<string>();
   const identify = (name: string | undefined | null, key: string) => {
+    if (sources.canonicalOnly && !isCanonicalProjectId(canonical(key))) return;
     const folded = name?.trim().toLowerCase();
     if (!folded) return;
     const projects = identities.get(folded) ?? new Set<string>();
     projects.add(canonical(key)); identities.set(folded, projects);
   };
   const add = (key: string, name?: string) => {
+    if (sources.canonicalOnly && !isCanonicalProjectId(canonical(key))) return;
     const signature = JSON.stringify([key, name ?? null]);
     if (added.has(signature)) return;
     added.add(signature);
@@ -128,12 +136,18 @@ export function namedProjectDirectory(sources: Sources = {}, extraKeys: readonly
   for (const row of members) add(row.project, row.displayName ?? row.projectName);
   for (const [source, target] of Object.entries(aliases.aliases)) { add(target); identify(source, target); index(source, target); }
   for (const [key, name] of Object.entries(aliases.displayNames)) add(key, name);
-  for (const row of manualProjects) add(row.project, row.displayName);
+  for (const row of manualProjects) {
+    add(row.project, row.displayName);
+    index(row.root, row.project);
+    index(path.basename(row.root), row.project);
+  }
   for (const seat of seats) add(seat.project);
   for (const seat of authorized) if (seat.project) add(seat.project);
   if (caller) add(caller);
   for (const key of extraKeys) add(key);
   for (const row of last?.projectCatalog ?? []) if (row.projectRoot) {
+    if (sources.canonicalOnly && !isCanonicalProjectId(canonical(row.project))) continue;
+    index(row.projectRoot, row.project);
     index(path.basename(row.projectRoot), row.project);
     const encoded = normalizeProjectName(path.resolve(row.projectRoot));
     const projects = encodedDirectories.get(encoded) ?? new Set<string>();

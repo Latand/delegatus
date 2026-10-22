@@ -104,7 +104,10 @@ export function projectSuccessionFor(project: string, folder: string | null | un
  * a replay records nothing, which is what makes detection safe to run at every
  * boot and scan.
  */
-export function recordProjectSuccessions(candidates: Iterable<ProjectSuccession | null>): ProjectSuccession[] {
+export function recordProjectSuccessions(
+  candidates: Iterable<ProjectSuccession | null>,
+  beforeAlias?: (succession: ProjectSuccession) => boolean,
+): ProjectSuccession[] {
   const recorded: ProjectSuccession[] = [];
   const seen = new Set<string>();
   for (const succession of candidates) {
@@ -113,6 +116,7 @@ export function recordProjectSuccessions(candidates: Iterable<ProjectSuccession 
     if (canonicalProject(succession.source) === succession.target) continue;
     if (!projectAliasesCanAccept([succession])) continue;
     if (!migrateBoardProjects(new Map([[succession.source, succession.target]]))) continue;
+    if (beforeAlias && !beforeAlias(succession)) continue;
     if (!persistProjectAliases([succession])) continue;
     recorded.push(succession);
     try {

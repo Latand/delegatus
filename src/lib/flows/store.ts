@@ -1,3 +1,4 @@
+import { FLOW_ARCHIVE } from "./retirement";
 import { legacyImportAllowed } from "@/lib/state/legacyImport";
 import { smallStore } from "@/lib/state/smallStore";
 import { waitForStateLock } from "@/lib/state/lockWait";
@@ -386,6 +387,7 @@ function mergeFlowOwnershipPatches(patches: readonly FlowOwnershipPatch[]): void
 }
 
 export function reconcileFlowConversationOwnership(registry: ConversationLookup = agentRegistry()): void {
+  if (FLOW_ARCHIVE.retired) return;
   const flows = loadFlows();
   let dirty = false;
   for (const flow of flows) {
@@ -396,6 +398,7 @@ export function reconcileFlowConversationOwnership(registry: ConversationLookup 
 }
 
 export async function reconcileFlowConversationOwnershipCooperatively(registry: ConversationLookup = agentRegistry()): Promise<void> {
+  if (FLOW_ARCHIVE.retired) return;
   const flows = loadFlows();
   const patches: FlowOwnershipPatch[] = [];
   await forEachCooperatively(flows, async (flow) => {

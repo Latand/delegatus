@@ -5,7 +5,7 @@ import { Database, type SQLQueryBindings } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { installHistoryProjection, readHistoryProjection, historyAttemptCounts, historyPipelineRef, historyHeadlessFlows, historyHeadlessFlowsForTarget, historyHeadlessDeadRounds, historyFleetLimitWaits } from "./historyProjection";
+import { historyInputSql, installHistoryProjection, readHistoryProjection, historyAttemptCounts, historyPipelineRef, historyHeadlessFlows, historyHeadlessFlowsForTarget, historyHeadlessDeadRounds, historyFleetLimitWaits } from "./historyProjection";
 import { fleetLimitWaits } from "@/lib/mcp/agentFleet";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { buildPipeline } from "@/lib/pipelines/store";
@@ -757,4 +757,24 @@ test("fleet wait precedence follows row order, row key and then run order",async
     expect(await f.read(db=>historyFleetLimitWaits(db,["conversation_fixture"]))).toEqual(expected);
     expect(expected.get("conversation_fixture")?.account).toBe("account-zulu");
   } finally {f.db.close();}
+});
+
+test("the jsonb and the text input queries store the same text JSON",() => {
+  const f=fixture();
+  try {
+    const wait={accountId:null,resetsAt:NOW+1000,resumeAt:new Date(NOW+2000).toISOString(),startedAt:new Date(NOW).toISOString(),text:"wait",turnTs:1,tries:0,condition:{kind:"usage_limit",scope:null,resetLabel:null,label:"usage limit"}};
+    const rows=[pipeline("plain"),pipeline("closed",{closedAt:new Date(NOW).toISOString()}),pipeline("empty_runs",{runs:[]})];
+    rows[0]!.runs[0]!.attempts.push({...rows[0]!.runs[0]!.attempts[0]!,n:2,historical:true,providerWait:wait} as never);
+    rows.forEach((row,n)=>f.put(row,"pipelines",n));
+    f.put(flow({id:"flow_rounds",rounds:[{reviewerPath:"/b.jsonl",reviewerConversationId:null,reviewerPid:7,reviewerIdentity:"x"},{reviewerPath:"/a.jsonl",reviewerConversationId:"c",reviewerPid:0,reviewerIdentity:null}]}),"flows");
+    f.put(flow({id:"flow_empty"}),"flows");
+    expect(historyInputSql(f.db,"pipelines","text")).not.toContain("jsonb");
+    expect(historyInputSql(f.db,"flows","text")).not.toContain("jsonb");
+    for (const [collection,key] of [["pipelines","plain"],["pipelines","closed"],["pipelines","empty_runs"],["flows","flow_rounds"],["flows","flow_empty"]] as const) {
+      const input=(form:"jsonb"|"text")=>f.db.query<{input:string},[string,string]>(historyInputSql(f.db,collection,form)).get(collection,key)!.input;
+      expect(typeof input("jsonb")).toBe("string");
+      expect(input("text")).toBe(input("jsonb"));
+    }
+    expect(historyInputSql(f.db,"pipelines")).toBe(historyInputSql(f.db,"pipelines","jsonb"));
+  } finally { f.db.close(); }
 });

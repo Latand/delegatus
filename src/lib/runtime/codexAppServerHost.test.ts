@@ -495,9 +495,9 @@ class FakeAppServer extends EventEmitter {
   readonly pid = 4242;
   readonly requests: Array<Record<string, unknown>> = [];
   readonly signals: NodeJS.Signals[] = [];
-  hookHome: string | null = null;
-  hookDelayMs: number | null = 0;
-  hookTrustDelayMs: number | null = 0;
+  viewerStatus: unknown[] = [{ name: "viewer", tools: { stage_report: {} } }];
+  requireViewerThread = false;
+  beforeViewerStatus: (() => void) | null = null;
   autoResolveServerRequests = true;
   autoCompleteUserMessage = true;
   steerError: { code: number; message: string; data?: unknown } | null = null;
@@ -613,18 +613,13 @@ class FakeAppServer extends EventEmitter {
     }
     if (typeof message.id !== "number") return;
     const method = message.method;
+    if (method === "mcpServerStatus/list") {
+      this.beforeViewerStatus?.();
+      const scoped = !this.requireViewerThread || (message.params as Record<string, unknown>)?.threadId === this.threadId;
+      return this.respond(message.id, { data: scoped ? this.viewerStatus : [{ name: "viewer", tools: { global_only: {} } }], nextCursor: null });
+    }
     if (typeof method === "string" && this.ignoredMethods.includes(method)) return;
     if (method === "initialize") return this.respond(message.id, { userAgent: this.userAgent });
-    if (method === "hooks/list" && this.hookHome) {
-      if (this.hookDelayMs === null) return;
-      const command = JSON.parse(fs.readFileSync(path.join(this.hookHome, "hooks.json"), "utf8")).hooks.UserPromptSubmit[0].hooks[0].command;
-      setTimeout(() => this.respond(message.id as number, { data: [{ hooks: [{ key: "fixture-hook", command, currentHash: "sha256:" + "a".repeat(64) }] }] }), this.hookDelayMs);
-      return;
-    }
-    if (method === "config/value/write" && this.hookHome) {
-      if (this.hookTrustDelayMs !== null) setTimeout(() => this.respond(message.id as number, {}), this.hookTrustDelayMs);
-      return;
-    }
     if (method === "thread/queue/list") {
       if (!this.paginatedHistory) return this.respondError(message.id, "method not found");
       if (this.nativeQueueListNotification) this.notify(this.nativeQueueListNotification.method, this.nativeQueueListNotification.params);
@@ -882,6 +877,78 @@ function fakeSpawn(server: FakeAppServer, captured?: { args?: string[]; options?
   };
 }
 
+test("Codex refuses fresh and adopted launches with missing or empty Viewer tools before queue recovery", async () => {
+  for (const resume of [false, true]) for (const status of [[], [{ name: "viewer", tools: {} }]]) {
+    const child = new FakeAppServer();
+    child.viewerStatus = status;
+    const options = { cwd: "/repo", readProtocolVersion: () => "0.162.1", eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(child) };
+    let host: CodexAppServerHost | null = null;
+    const error = await (resume ? CodexAppServerHost.adopt("thread-149", options) : CodexAppServerHost.start(options))
+      .then(value => { host = value; return null; }, reason => reason);
+    try {
+      expect(String(error)).toContain("Viewer MCP launch failed");
+      expect(child.requests.some(request => request.method === "thread/queue/start" || request.method === "turn/start")).toBe(false);
+    } finally { if (host) await (host as CodexAppServerHost).release(); }
+  }
+});
+
+test("Codex rejects its failed Viewer runtime status even with a cached catalog and retains toolsError", async () => {
+  const cases = [
+    { name: "viewer", runtimeStatus: "failed", tools: { stage_report: {} }, toolsError: null },
+    { name: "viewer", runtimeStatus: "failed", tools: {}, toolsError: "Viewer release target is missing" },
+  ];
+  for (const viewer of cases) {
+    const child = new FakeAppServer();
+    child.viewerStatus = [viewer];
+    const outcome = await CodexAppServerHost.start({ cwd: "/repo", readProtocolVersion: () => "0.162.1",
+      eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(child) }).then(
+      value => ({ host: value, error: null as unknown }), reason => ({ host: null, error: reason as unknown }));
+    try {
+      expect(String(outcome.error)).toContain("Viewer MCP launch failed");
+      expect(String(outcome.error)).toContain(viewer.toolsError ?? "failed");
+      expect(child.requests.some(request => request.method === "thread/queue/start" || request.method === "turn/start")).toBe(false);
+    } finally { if (outcome.host) await outcome.host.release(); }
+  }
+});
+
+test("Codex admits a cached Viewer catalog while its runtime connection is starting", async () => {
+  const child = new FakeAppServer();
+  child.viewerStatus = [{ name: "viewer", runtimeStatus: "starting", tools: { stage_report: {} }, toolsError: null }];
+  const host = await CodexAppServerHost.start({ cwd: "/repo", readProtocolVersion: () => "0.162.1",
+    eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(child) });
+  try {
+    expect((await host.health()).status).toBe("idle");
+    expect(child.requests.some(request => request.method === "thread/queue/start" || request.method === "turn/start")).toBe(false);
+  } finally { await host.release(); }
+});
+
+test("Codex verifies Viewer tools from the opened thread", async () => {
+  const child = new FakeAppServer();
+  child.requireViewerThread = true;
+  child.viewerStatus = [{ name: "viewer", tools: {} }];
+  let host: CodexAppServerHost | null = null;
+  const error = await CodexAppServerHost.start({ cwd: "/repo", readProtocolVersion: () => "0.162.1",
+    eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(child) })
+    .then(value => { host = value; return null; }, reason => reason);
+  try { expect(String(error)).toContain("viewer has no tools"); }
+  finally { if (host) await (host as CodexAppServerHost).release(); }
+});
+
+test("Codex drains resume notifications before awaiting Viewer discovery", async () => {
+  const child = new FakeAppServer();
+  child.beforeViewerStatus = () => {
+    for (let frame = 0; frame < 20; frame++) child.notify("thread/status/changed", {
+      threadId: "thread-149", status: { type: "idle", activeFlags: [] }, padding: "x".repeat(256 * 1024),
+    });
+  };
+  const host = await CodexAppServerHost.adopt("thread-149", { cwd: "/repo", readProtocolVersion: () => "0.162.1",
+    eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(child) });
+  try {
+    expect((await host.health()).status).toBe("idle");
+    expect(child.requests.some(request => request.method === "turn/start" || request.method === "thread/queue/start")).toBe(false);
+  } finally { await host.release(); }
+});
+
 async function waitForCondition(predicate: () => boolean | Promise<boolean>, message: string, timeoutMs = 5_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -942,27 +1009,26 @@ async function nextEvent(iterable: AsyncIterable<unknown>): Promise<unknown> {
 }
 
 describe("CodexAppServerHost", () => {
-  for (const phase of ["discovery", "trust"] as const) for (const mode of ["late", "hung"] as const) test(`optional memory hook ${phase} ${mode} preserves the host and operator delivery`, async () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "memory-optional-rpc-"));
-    const server = new FakeAppServer(); server.hookHome = home;
-    if (phase === "discovery") server.hookDelayMs = mode === "late" ? 120 : null;
-    else server.hookTrustDelayMs = mode === "late" ? 120 : null;
-    const host = await CodexAppServerHost.start({ cwd: home, codexHome: home, env: { ...process.env, LLV_SPAWN_CAPABILITY: "synthetic-capability" }, requestTimeoutMs: 30, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
+  for (const resumed of [false, true]) test(`memory hook stays in ${resumed ? "resumed" : "fresh"} launch configuration`, async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "memory-launch-host-"));
+    const server = new FakeAppServer("memory-launch-thread");
+    const captured: { args?: string[] } = {};
+    const options = { cwd: home, codexHome: home, operatorDecisionForms: true,
+      env: { ...process.env, LLV_SPAWN_CAPABILITY: "synthetic-capability" },
+      eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server, captured) };
+    const host = resumed ? await CodexAppServerHost.adopt("memory-launch-thread", options) : await CodexAppServerHost.start(options);
     try {
-      await Bun.sleep(150);
-      expect((await host.health()).status).not.toBe("dead");
+      expect(captured.args?.some(arg => arg.startsWith("hooks.UserPromptSubmit=["))).toBe(true);
+      const config = (server.requests.find(r => r.method === (resumed ? "thread/resume" : "thread/start"))!.params as { config: { hooks: { UserPromptSubmit: unknown[]; state: Record<string, unknown> } } }).config;
+      expect(JSON.stringify(config.hooks.UserPromptSubmit)).toContain("memory-launch-");
+      expect(Object.keys(config.hooks.state)).toEqual(expect.arrayContaining([
+        "/<session-flags>/config.toml:user_prompt_submit:0:0", "/<session-flags>/config.toml:pre_tool_use:0:0", "/<session-flags>/config.toml:pre_tool_use:1:0",
+      ]));
+      expect(server.requests.filter(r => r.method === "hooks/list" || r.method === "config/value/write")).toEqual([]);
+      expect(fs.existsSync(path.join(home, "hooks.json"))).toBe(false);
+      expect(fs.existsSync(path.join(home, "config.toml"))).toBe(false);
       expect(await host.send({ id: "operator-after-hook", text: "Synthetic operator prompt", origin: { kind: "operator" } })).toMatchObject({ outcome: "turn-started" });
-      const turn = server.requests.find(r => r.method === "turn/start")!.params as { input: Array<{ text: string }> };
-      expect(decodeCodexStructuredUserText(turn.input[0].text).text).toBe("Synthetic operator prompt");
     } finally { await host.release(); fs.rmSync(home, { recursive: true, force: true }); }
-  });
-  test("optional memory hook discovery and trust share one short setup deadline", async () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "memory-setup-budget-"));
-    const server = new FakeAppServer(); server.hookHome = home; server.hookDelayMs = 150; server.hookTrustDelayMs = 150;
-    const started = performance.now();
-    const host = await CodexAppServerHost.start({ cwd: home, codexHome: home, env: { ...process.env, LLV_SPAWN_CAPABILITY: "synthetic-capability" }, eventStore: new MemoryEventStore(), spawnProcess: fakeSpawn(server) });
-    try { expect(performance.now() - started).toBeLessThan(290); await Bun.sleep(180); expect((await host.health()).status).not.toBe("dead"); }
-    finally { await host.release(); fs.rmSync(home, { recursive: true, force: true }); }
   });
   test("structured Codex loads Telegram auth only for the granted root host", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-codex-telegram-grant-"));
@@ -2465,6 +2531,7 @@ describe("CodexAppServerHost", () => {
     const host = await CodexAppServerHost.adopt("managed-thread", {
       cwd: "/repo",
       codexHome,
+      env: { ...process.env, LLV_SPAWN_CAPABILITY: undefined },
       fileAuthCredentials: true,
       eventStore: new MemoryEventStore(),
       spawnProcess: fakeSpawn(server, captured),
@@ -2537,7 +2604,7 @@ describe("CodexAppServerHost", () => {
           viewer: {
             command: "bun",
             args: ["bin/mcp-server.mjs"],
-            env: { LLV_STATE_DIR: "fixture-state" },
+            env: { LLV_STATE_DIR: process.env.LLV_STATE_DIR },
             enabled: true,
             default_tools_approval_mode: "approve",
           },

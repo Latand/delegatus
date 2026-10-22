@@ -4,6 +4,7 @@ import path from "node:path";
 import { statePath } from "@/lib/configDir";
 import { writeJsonDurably } from "@/lib/state/durableJson";
 import { FileTransactionBusyError } from "@/lib/state/fileTransaction";
+import { STAGE_RETIREMENT, hasRetiredStage } from "@/lib/flows/retirement";
 
 import { createPipelineWithDelivery, findPipelineRecord } from "./store";
 import type { Pipeline, PipelineDeliveryTarget } from "./types";
@@ -114,7 +115,7 @@ export function queuedPipelineCreationStatus(pipelineId: string): QueuedPipeline
 export function queuedPipelineCreationMessage(pipelineId: string, status: QueuedPipelineCreationStatus): string {
   return status.state === "queued"
     ? `pipeline ${pipelineId} is queued and not stored yet (${status.reason}); the serving release stores it on its next controller pass. Do not create it again.`
-    : `pipeline ${pipelineId} was queued during a deploy handover and then refused when the controller stored it: ${status.error}. Nothing was created; fix the request and create it again.`;
+    : `pipeline ${pipelineId} was queued and then refused when the controller admitted it: ${status.error}. Nothing was created; fix the request and create it again.`;
 }
 
 /**
@@ -127,6 +128,13 @@ export async function admitQueuedPipelineCreations(): Promise<Pipeline[]> {
   const admitted: Pipeline[] = [];
   for (const entry of listQueuedPipelineCreations()) {
     const file = path.join(pipelineCreationQueueDir(), `${entry.pipeline.id}${QUEUED_SUFFIX}`);
+    if (hasRetiredStage(entry.pipeline.stages)) {
+      const error = `${STAGE_RETIREMENT.code}: ${STAGE_RETIREMENT.error}`;
+      writeJsonDurably(path.join(pipelineCreationQueueDir(), `${entry.pipeline.id}${REFUSED_SUFFIX}`),
+        { ...entry, refusedAt: new Date().toISOString(), error });
+      fs.rmSync(file, { force: true });
+      continue;
+    }
     try {
       if (!findPipelineRecord(entry.pipeline.id)) {
         admitted.push(await createPipelineWithDelivery(entry.pipeline, entry.target, entry.comparison));

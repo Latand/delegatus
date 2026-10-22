@@ -36,7 +36,7 @@ import { headlessCodexThreadConfig } from "@/lib/codexHeadlessConfig";
 import { codexSubagentConfig, readCodexFeatures } from "@/lib/agent/codexSpawnPolicy";
 import { codexProcessCleanupArgs, codexProcessCleanupConfig } from "@/lib/agent/processCleanupPolicy";
 import { nativeCodexActivityMethod } from "./codexSubagentDetection";
-import { installCodexMemoryHook } from "@/lib/memory/hook";
+import { codexMemoryHookArgs, codexMemoryHookConfig, installCodexMemoryHook } from "@/lib/memory/hook";
 import { grantedPluginServerNames, grantedPlugins } from "@/lib/agent/pluginAllowlist";
 import { hardenedRedact } from "@/lib/view/compactText";
 import { decodeCodexStructuredUserText as decodeStructuredUserWire } from "./codexStructuredUserText";
@@ -48,6 +48,7 @@ import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES, runtimeImageStore } from "./runtime
 import { STRUCTURED_IMAGE_CAPABILITY, type StructuredImageRef } from "./structuredContent";
 import { NATIVE_INJECT_CAPABILITY, NATIVE_QUEUE_CAPABILITY, NATIVE_TURN_PROFILE_CAPABILITY } from "./codexCapabilityFlags";
 import { withAgentConfigSandbox } from "./agentConfigSandbox";
+import { assertViewerMcpTools } from "./viewerMcpLaunch";
 import { resolveTelegramLaunchGrant, TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE, type TelegramLaunchGrant } from "./telegramConnectorEnv";
 import {
   normalizeVoiceDeliveries,
@@ -1500,6 +1501,7 @@ export class CodexAppServerHost implements EngineHost {
       ...(options.allowSubagents === true ? [] : ["-c", 'approvals_reviewer="user"']),
       ...Object.entries(subagentFeatures).flatMap(([name, enabled]) => ["-c", `features.${name}=${enabled}`]),
       ...cleanupArgs,
+      ...(memoryHook ? codexMemoryHookArgs(memoryHook, (questionPolicy?.config ?? codexProcessCleanupConfig(options.codexHome)).hooks.state) : []),
       ...(options.fileAuthCredentials ? ["-c", "cli_auth_credentials_store=file"] : []),
       ...(options.permissionProfile && options.permissionProfileConfig
         ? [
@@ -1603,18 +1605,9 @@ export class CodexAppServerHost implements EngineHost {
       const cleanup = questionPolicy?.config ?? codexProcessCleanupConfig(options.codexHome);
       if (questionPolicy) config.tools = questionPolicy.tools;
       Object.assign(config.features as Record<string, unknown>, cleanup.features);
-      config.hooks = cleanup.hooks;
-      if (memoryHook) {
-        const hookSetupDeadline = performance.now() + Math.min(250, provisional.requestTimeoutMs);
-        try {
-          const listed = await provisional.rpc("hooks/list", { cwds: [options.cwd] }, Math.max(1, hookSetupDeadline - performance.now()), true) as { data: Array<{ hooks: Array<{ key: string; command?: string; currentHash: string }> }> };
-          for (const hook of listed.data.flatMap(d => d.hooks)) {
-            if (performance.now() >= hookSetupDeadline) break;
-            if (hook.command !== memoryHook.command || !/^sha256:[a-f0-9]{64}$/i.test(hook.currentHash)) continue;
-            await provisional.rpc("config/value/write", { keyPath: `hooks.state.${JSON.stringify(hook.key)}.trusted_hash`, value: hook.currentHash, mergeStrategy: "replace" }, Math.max(1, hookSetupDeadline - performance.now()), true);
-          }
-        } catch { /* untrusted or unavailable hooks abstain; the prompt still runs */ }
-      }
+      const memoryConfig = memoryHook ? codexMemoryHookConfig(memoryHook) : null;
+      config.hooks = { ...cleanup.hooks, ...memoryConfig,
+        state: { ...cleanup.hooks.state, ...memoryConfig?.state } };
       // Resume resolves engine defaults again; replay the same launch access
       // that thread/start received, including named scratch profiles.
       const launchAccess = {
@@ -1680,6 +1673,7 @@ export class CodexAppServerHost implements EngineHost {
       if (threadId) provisional.reconcileThreadHistory(result);
       provisional.reconcileAfterOpen(threadStatus(result), resumedActiveTurnId(result));
       provisional.endBufferedNotificationReconciliation();
+      if (!options.socketOwner) await provisional.verifyViewerMcp();
       provisional.selectModel(provisional.currentImageModel());
       await provisional.initializeNativeQueue();
       await provisional.negotiateHistoryCapability();
@@ -1700,6 +1694,37 @@ export class CodexAppServerHost implements EngineHost {
     }
   }
 
+  private async verifyViewerMcp(): Promise<void> {
+    try {
+      const deadline = Date.now() + this.requestTimeoutMs;
+      let cursor: string | undefined;
+      const seen = new Set<string>();
+      for (let page = 0; page < 32; page++) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) throw new Error("Viewer tool discovery timed out");
+        const result = record(await this.rpc("mcpServerStatus/list", {
+          threadId: this.identity.threadId,
+          detail: "toolsAndAuthOnly",
+          ...(this.protocol.hasRequestField("mcpServerStatus/list", "serverName") ? { serverName: "viewer" } : {}),
+          ...(cursor ? { cursor } : {}),
+        }, remaining));
+        const entries = result?.data;
+        if (Array.isArray(entries) && entries.some(entry => stringField(entry, "name") === "viewer")) {
+          assertViewerMcpTools(entries, structuredHostStamp());
+          return;
+        }
+        const next = stringField(result, "nextCursor");
+        if (!next || seen.has(next)) break;
+        seen.add(next);
+        cursor = next;
+      }
+      assertViewerMcpTools([], structuredHostStamp());
+    } catch (error) {
+      const reason = safeError(error);
+      throw new Error(reason.startsWith("Viewer MCP launch failed") ? reason : `Viewer MCP launch failed: ${reason}`);
+    }
+  }
+
   /**
    * Fails a granted thread closed when its realized tool surface is wider than
    * the grant (issue #687). Codex resolves plugins from the global config, so
@@ -1713,7 +1738,7 @@ export class CodexAppServerHost implements EngineHost {
     const allowed = new Set(grantedPluginServerNames(granted));
     let listed: unknown;
     try {
-      listed = await this.rpc("mcpServerStatus/list", {});
+      listed = await this.rpc("mcpServerStatus/list", { threadId: this.identity.threadId, detail: "toolsAndAuthOnly" });
     } catch (error) {
       throw new Error(`Codex plugin grant could not be verified: ${safeError(error)}`);
     }

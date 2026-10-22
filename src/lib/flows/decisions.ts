@@ -1,13 +1,16 @@
+import { waitForStateLock } from "@/lib/state/lockWait";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { assertFlowExecution } from "./retirement";
 import { matchesShortId } from "@/lib/shortIds";
 import { agentRegistry } from "@/lib/agent/registry";
 import { turnStateFromRecords } from "@/lib/accounts/migration/turnState";
 import { pendingBackgroundTasks, readBackgroundTaskLedger, type RunningBackgroundTask } from "@/lib/pipelines/backgroundTasks";
-import { loadPipelines, withPipelineMutation } from "@/lib/pipelines/store";
+import { loadPipelines } from "@/lib/pipelines/store";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { readStableTailRecords } from "@/lib/scanner/activity";
 import { lastAssistantMessageFromRecords } from "./findings";
 import { resolveBaseRef, resolveCleanFlowHead } from "./git";
-import { loadFlows, patchFlowRows } from "./store";
+import { loadFlow, patchFlowRows } from "./store";
 import type { Flow, FlowAgentDecision, FlowDecisionRequest } from "./types";
 
 /** Reuse the settlement parser, independently of scanner activity/host liveness. */
@@ -130,17 +133,17 @@ export async function flowDecisionContext(flow: Flow) {
 /** The original key is replayed before revision/turn checks, but after owner checks.
  * Acceptance has no runtime effects. A later flow tick consumes it only on completion. */
 export async function submitFlowDecision(request: FlowDecisionRequest, caller: string | null, dependencies: DecisionPorts = ports): Promise<{ flowId: string; decision: FlowAgentDecision; replayed: boolean }> {
-  // Pipeline settlement already acquires this lease before touching flow rows.
-  // Follow that order so stage retry/rotation cannot race decision admission.
-  if (dependencies === ports) return withPipelineMutation((pipelines) =>
-    submitFlowDecision(request, caller, { ...ports, pipelines: () => pipelines }));
-  const snapshot = loadFlows().find((flow) => flow.id === request.flowId);
+  // Historical receipt lookup is keyed and read-only. No pipeline lease,
+  // transcript/HEAD read or decision settlement is admitted after retirement.
+  const snapshot = await withViewerOperation("history.read", () => waitForStateLock("flows.retired-decision", () => loadFlow(request.flowId)));
+  if (!snapshot?.agentDecisions?.some(item => item.clientRequestId === request.clientRequestId)) assertFlowExecution();
   if (!snapshot || !decisionOwner(snapshot, caller)) throw new Error("flow decision owner could not be verified");
   const existing = snapshot.agentDecisions?.find((item) => item.clientRequestId === request.clientRequestId);
   if (existing) {
     if (existing.owner !== caller || !sameRequest(existing, request)) throw new Error("flow decision idempotency conflict");
     return { flowId: snapshot.id, decision: existing, replayed: true };
   }
+  assertFlowExecution();
   const turn = await dependencies.turn(snapshot);
   const observedHead = await dependencies.head(snapshot.cwd, request.decision);
   let accepted: FlowAgentDecision | undefined;

@@ -22,7 +22,7 @@ process.env.LLV_STATE_DIR = path.join(SANDBOX, "state");
 process.env.LLV_CODEX_HOME = path.join(SANDBOX, "legacy");
 process.env.LLV_CLAUDE_HOME = path.join(SANDBOX, "legacy-claude");
 
-const { claudeEnvPrefix, freshSpecFor, resumeSpecFor, withSpawnCapability, prepareAgentPublicationSpec } = await import("./cli");
+const { claudeEnvPrefix, freshSpecFor, resumeSpecFor, resumeSpecForSession, withSpawnCapability, prepareAgentPublicationSpec } = await import("./cli");
 const { createManagedCodexAccount } = await import("@/lib/accounts/codex");
 const { createManagedClaudeAccount } = await import("@/lib/accounts/claude");
 const { saveTelegramSession, telegramConnectorTokenPath, telegramSessionPath } = await import("@/lib/telegram/sessionStore");
@@ -76,14 +76,22 @@ for (const engine of ["claude", "codex"] as const) for (const mode of ["fresh", 
   const spec = mode === "fresh" ? freshSpecFor(engine, SANDBOX, { claudeConfigDir: home, codexHome: home, deferClaudeSpawnPolicy: true })
     : resumeSpecForSession(engine, "12345678-1234-1234-1234-123456789abc", SANDBOX, home)!;
   const admitted = withSpawnCapability(spec, "a".repeat(43), { ...process.env, LLV_VIEWER_PORT: String(server.port) });
-  const settings = engine === "codex" ? path.join(home, "hooks.json")
-    : (await import("./spawnPolicy")).claudeSpawnPolicyPaths(home, mode === "fresh" ? path.basename(spec.transcript!, ".jsonl") : "resume-12345678-1234-1234-1234-123456789abc").settingsPath;
-  expect(fs.existsSync(settings)).toBe(true);
-  const hook = JSON.parse(fs.readFileSync(settings, "utf8")).hooks.UserPromptSubmit.flatMap((g: { hooks: Array<{ command: string }> }) => g.hooks).find((h: { command: string }) => h.command.includes("shared-memory"));
+  let hook: { command: string; additionalContextLimit: number };
+  if (engine === "codex") {
+    expect(fs.existsSync(path.join(home, "hooks.json"))).toBe(false);
+    expect(fs.existsSync(path.join(home, "config.toml"))).toBe(false);
+    const script = [...new Bun.Glob(".llv/hooks/memory-launch-*.mjs").scanSync({ cwd: home, absolute: true, dot: true })][0];
+    expect(script).toBeDefined();
+    hook = { command: `bun ${JSON.stringify(script)}`, additionalContextLimit: 40000 };
+    expect(admitted.command).toContain("hooks.UserPromptSubmit=");
+    expect(admitted.command).toContain("/<session-flags>/config.toml:user_prompt_submit:0:0");
+  } else {
+    const settings = (await import("./spawnPolicy")).claudeSpawnPolicyPaths(home, mode === "fresh" ? path.basename(spec.transcript!, ".jsonl") : "resume-12345678-1234-1234-1234-123456789abc").settingsPath;
+    hook = JSON.parse(fs.readFileSync(settings, "utf8")).hooks.UserPromptSubmit.flatMap((g: { hooks: Array<{ command: string }> }) => g.hooks).find((h: { command: string }) => h.command.includes("shared-memory"));
+  }
   expect(hook).toBeDefined();
   expect(hook.additionalContextLimit).toBe(40000);
   expect(admitted.command).toContain("LLV_SPAWN_CAPABILITY");
-  if (engine === "codex") expect(admitted.command).toContain("shared-memory-trust");
   const proc = Bun.spawn(["bash", "-c", hook.command], { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: { ...process.env, LLV_SPAWN_CAPABILITY: "a".repeat(43) } });
   proc.stdin.write(JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "synthetic-session", prompt: "Synthetic terminal operator prompt" })); proc.stdin.end();
   expect(await proc.exited).toBe(0);
@@ -578,6 +586,69 @@ test("Codex resume derives its owning account home from the transcript path", ()
   expect(spec?.command).toContain("resume 019f423a-d6e9-7903-7597-3e676b6ff3d4");
 });
 
+const PERMISSION_SESSION_ID = ["00000000", "0000", "0000", "0000", "000000000001"].join("-");
+
+test.each([
+  { name: "user confirmations", transcriptMode: "default", configuredMode: null, expected: "default" },
+  { name: "unknown origin", transcriptMode: null, configuredMode: null, expected: "default" },
+  { name: "Delegatus bypass launch", transcriptMode: "default", configuredMode: "bypassPermissions", expected: "bypassPermissions" },
+  { name: "malformed stored mode", transcriptMode: "default", configuredMode: "invalid mode", expected: "default" },
+])("Claude resume preserves $name permissions", ({ name, transcriptMode, configuredMode, expected }) => {
+  const transcript = path.join(process.env.LLV_CLAUDE_HOME!, "projects", name, `${PERMISSION_SESSION_ID}.jsonl`);
+  fs.mkdirSync(path.dirname(transcript), { recursive: true });
+  fs.writeFileSync(transcript, JSON.stringify({ type: "user", cwd: SANDBOX, permissionMode: transcriptMode }) + "\n");
+  const options = configuredMode ? { permissionMode: configuredMode } : {};
+  const spec = resumeSpecFor("claude-projects", transcript, options)!;
+  expect(spec).not.toBeNull();
+  expect(spec.command.includes("--dangerously-skip-permissions")).toBe(expected === "bypassPermissions");
+  if (expected !== "bypassPermissions") expect(spec.command).toContain(`'--permission-mode' '${expected}'`);
+  expect(spec.launchProfile?.permissionMode).toBe(expected);
+});
+
+test.each([
+  { name: "latest user mode", rows: [{ type: "user", permissionMode: "bypassPermissions" }, { type: "user", permissionMode: "acceptEdits" }], expected: "acceptEdits" },
+  { name: "user bypass mode", rows: [{ type: "user", permissionMode: "bypassPermissions" }], expected: "bypassPermissions" },
+  { name: "assistant cannot set mode", rows: [{ type: "user", permissionMode: "default" }, { type: "assistant", permissionMode: "bypassPermissions" }], expected: "default" },
+  { name: "message content cannot set mode", rows: [{ type: "user", message: { permissionMode: "bypassPermissions" } }], expected: "default" },
+  { name: "invalid latest mode", rows: [{ type: "user", permissionMode: "bypassPermissions" }, { type: "user", permissionMode: "unknown" }], expected: "default" },
+  { name: "bounded tail", rows: [{ type: "assistant", message: "x".repeat(150_000) }, { type: "user", permissionMode: "acceptEdits" }], expected: "acceptEdits" },
+])("Claude resume reads $name without broadening permissions", async ({ name, rows, expected }) => {
+  const transcript = path.join(process.env.LLV_CLAUDE_HOME!, "projects", name, `${PERMISSION_SESSION_ID}.jsonl`);
+  fs.mkdirSync(path.dirname(transcript), { recursive: true });
+  fs.writeFileSync(transcript, rows.map(row => JSON.stringify(row)).join("\n") + "\n");
+  const spec = resumeSpecFor("claude-projects", transcript, { cwd: SANDBOX })!;
+  expect(spec.launchProfile?.permissionMode).toBe(expected);
+  expect(spec.command.includes("--dangerously-skip-permissions")).toBe(expected === "bypassPermissions");
+  const { readClaudePermissionMode } = await import("./claudePermissionMode");
+  expect(await readClaudePermissionMode(transcript) ?? "default").toBe(expected);
+});
+
+test("read-only Claude resume keeps plan mode when the transcript records bypass", () => {
+  const transcript = path.join(process.env.LLV_CLAUDE_HOME!, "projects", "readonly", `${PERMISSION_SESSION_ID}.jsonl`);
+  fs.mkdirSync(path.dirname(transcript), { recursive: true });
+  fs.writeFileSync(transcript, JSON.stringify({ type: "user", permissionMode: "bypassPermissions" }) + "\n");
+  const spec = resumeSpecFor("claude-projects", transcript, { cwd: SANDBOX, readOnly: true })!;
+  expect(spec.launchProfile?.permissionMode).toBe("plan");
+  expect(spec.command).toContain("'--permission-mode' 'plan'");
+  expect(spec.command).not.toContain("--dangerously-skip-permissions");
+});
+
+test("Claude resume uses confirmations for incomplete or unreadable mode evidence", async () => {
+  const { resumeSpecForSession } = await import("./cli");
+  const { readClaudePermissionMode, readClaudePermissionModeSync } = await import("./claudePermissionMode");
+  const transcript = path.join(process.env.LLV_CLAUDE_HOME!, "projects", "incomplete", `${PERMISSION_SESSION_ID}.jsonl`);
+  fs.mkdirSync(path.dirname(transcript), { recursive: true });
+  fs.writeFileSync(transcript, JSON.stringify({ type: "user", permissionMode: "bypassPermissions" }) + '\n{"type":');
+  expect(resumeSpecFor("claude-projects", transcript, { cwd: SANDBOX })?.launchProfile?.permissionMode).toBe("default");
+  for (const pathname of [transcript, `${transcript}.missing`, path.dirname(transcript)]) {
+    expect(readClaudePermissionModeSync(pathname)).toBeNull();
+    expect(await readClaudePermissionMode(pathname)).toBeNull();
+  }
+  const spec = resumeSpecForSession("claude", PERMISSION_SESSION_ID, SANDBOX, process.env.LLV_CLAUDE_HOME!)!;
+  expect(spec.command).toContain("'--permission-mode' 'default'");
+  expect(spec.command).not.toContain("--dangerously-skip-permissions");
+});
+
 test("resume preserves the transcript model and reasoning effort for both engines", () => {
   const codexTranscript = path.join(SANDBOX, "legacy", "sessions", "2026", "07", "09", "rollout-019f423a-d6e9-7903-7597-3e676b6ff3d4.jsonl");
   const claudeTranscript = path.join(process.env.LLV_CLAUDE_HOME!, "projects", "-repo", "019f423a-d6e9-7903-7597-3e676b6ff3d4.jsonl");
@@ -594,8 +665,8 @@ test("resume preserves the transcript model and reasoning effort for both engine
   expect(codex?.command).toContain("CODEX_HOME='");
   expect(claude?.command).toContain("'--model' 'opus'");
   expect(claude?.command).toContain("'--effort' 'max'");
-  expect(claude?.command).toContain("'--dangerously-skip-permissions'");
-  expect(claude?.launchProfile).toMatchObject({ permissionMode: "bypassPermissions" });
+  expect(claude?.command).toContain("'--permission-mode' 'default'");
+  expect(claude?.launchProfile).toMatchObject({ permissionMode: "default" });
 });
 
 test("resume preserves read-only execution policy for both engines", () => {
@@ -613,6 +684,30 @@ test("resume preserves read-only execution policy for both engines", () => {
   expect(claude?.command).toContain("'--permission-mode' 'plan' '--disallowedTools' 'Edit,Write,NotebookEdit'");
   expect(claude?.command).not.toContain("'--dangerously-skip-permissions'");
   expect(claude?.launchProfile).toMatchObject({ readOnly: true, permissionMode: "plan" });
+});
+
+test.each([
+  { sandbox: "full" as const, permissionMode: "bypassPermissions", expected: "--dangerously-skip-permissions" },
+  { sandbox: "restricted" as const, permissionMode: "auto", expected: "'--permission-mode' 'auto'" },
+])("pipeline Claude resume keeps $sandbox execution mode beside read-only repository policy", ({ sandbox, permissionMode, expected }) => {
+  const spec = resumeSpecForSession("claude", PERMISSION_SESSION_ID, SANDBOX, process.env.LLV_CLAUDE_HOME!, {
+    readOnly: true, sandbox, permissionMode,
+  })!;
+  expect(spec.command).toContain(expected);
+  expect(spec.command).not.toContain("'--permission-mode' 'plan'");
+  expect(spec.launchProfile).toMatchObject({ readOnly: true, sandbox, permissionMode });
+});
+
+test.each([
+  { sandbox: "full" as const, expected: "--sandbox danger-full-access" },
+  { sandbox: "restricted" as const, expected: "--sandbox workspace-write" },
+])("pipeline Codex resume keeps $sandbox execution boundary", ({ sandbox, expected }) => {
+  const spec = resumeSpecForSession("codex", PERMISSION_SESSION_ID, SANDBOX, SANDBOX, {
+    readOnly: true, sandbox,
+  })!;
+  expect(spec.command).toContain(expected);
+  expect(spec.command).not.toContain("--sandbox read-only");
+  expect(spec.launchProfile).toMatchObject({ readOnly: true, sandbox });
 });
 
 test("Claude resume normalizes transcript families and omits unknown model overrides", () => {
@@ -637,7 +732,7 @@ test("managed Codex commands pin file-backed credential storage", () => {
   expect(resumeSpecFor("codex-sessions", transcript)?.command).toContain("cli_auth_credentials_store=file");
   expect(fresh.command.indexOf("cli_auth_credentials_store=file")).toBeLessThan(fresh.command.indexOf("gpt-5"));
   const resumed = resumeSpecFor("codex-sessions", transcript)?.command ?? "";
-  expect(resumed.indexOf("cli_auth_credentials_store=file")).toBeLessThan(resumed.indexOf("resume"));
+  expect(resumed.indexOf("cli_auth_credentials_store=file")).toBeLessThan(resumed.indexOf(" resume "));
 });
 
 test("managed Claude fresh and resume commands pin the transcript owner and scrub shadowing env", () => {
