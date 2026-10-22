@@ -95,10 +95,17 @@ export function environmentFingerprint(env: NodeJS.ProcessEnv): string {
     "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "GIT_AUTHOR_DATE", "GIT_COMMITTER_DATE",
     "LLV_STAGE_GIT_WORKTREE", "LLV_STAGE_GIT_RECEIPT", "LLV_STRUCTURED_HOST", "LLV_SPAWN_CAPABILITY", "LLV_VIEWER_PORT", "LLV_SIGNAL_SANDBOX",
     "LLV_AGENT_FORGE_DIR", "LLV_AGENT_FORGE_REPOSITORIES", "LLV_AGENT_GIT_GUARD_DIR", "GH_CONFIG_DIR",
-    "TERM", "COLORTERM", "PAGER", "GIT_PAGER", "GH_PAGER", "NO_COLOR", "FORCE_COLOR"]);
-  return fingerprint(Object.entries(env).filter(([name, value]) => value !== undefined && !roots.has(name)
-    && !/^(?:LLV_CPU_|LLV_GATE_|LLV_OWNED_|LLV_PRIVACY_|GIT_CONFIG_)/.test(name))
-    .sort(([a], [b]) => a.localeCompare(b)));
+    "TERM", "COLORTERM", "PAGER", "GIT_PAGER", "GH_PAGER", "NO_COLOR", "FORCE_COLOR",
+    // Both shell hooks and isolatedEnvironment remove these Git overlays.
+    "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"]);
+  const inputs = Object.entries(env).filter(([name, value]) => value !== undefined && !roots.has(name)
+    && !/^(?:LLV_CPU_|LLV_GATE_|LLV_OWNED_|LLV_PRIVACY_|GIT_CONFIG_(?:KEY|VALUE)_\d+$)/.test(name))
+    .sort(([a], [b]) => a.localeCompare(b));
+  const configuration = [env.GIT_CONFIG_GLOBAL, env.GIT_CONFIG_SYSTEM].map(file => {
+    try { return file ? fileFingerprint(file) : "default"; }
+    catch { return randomUUID(); } // Unreadable explicit configuration cannot certify reuse.
+  });
+  return fingerprint([inputs, configuration]);
 }
 
 /** Each caller owns a namespace. Atomic, immutable-key records; corrupt,

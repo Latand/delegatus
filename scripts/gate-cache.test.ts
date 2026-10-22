@@ -2,12 +2,23 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { GateCache, installedFingerprint, workingInputsFingerprint } from "./gate-cache";
+import { environmentFingerprint, GateCache, installedFingerprint, workingInputsFingerprint } from "./gate-cache";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 const fixture = () => { const root = mkdtempSync(path.join(tmpdir(), "gate-cache-")); roots.push(root); return root; };
 const valid = (value: unknown): value is { passed: true } => !!value && typeof value === "object" && "passed" in value && value.passed === true;
+
+test("effective Git configuration binds receipts while invocation metadata does not", () => {
+  const first = { NODE_ENV: "test", GIT_CONFIG_GLOBAL: "first-config" };
+  expect(environmentFingerprint(first)).not.toBe(environmentFingerprint({ ...first, GIT_CONFIG_GLOBAL: "second-config" }));
+  expect(environmentFingerprint(first)).toBe(environmentFingerprint({ ...first, LLV_GATE_PUSH_DEADLINE: "1000", CODEX_THREAD_ID: "second-thread" }));
+  const config = path.join(fixture(), "gitconfig");
+  writeFileSync(config, "[core]\n autocrlf = false\n");
+  const env = { ...first, GIT_CONFIG_GLOBAL: config }, before = environmentFingerprint(env);
+  writeFileSync(config, "[core]\n autocrlf = true\n");
+  expect(environmentFingerprint(env)).not.toBe(before);
+});
 
 test("receipts survive a process restart; corruption, expiry and oversized records are misses", () => {
   const root = fixture(), cacheModule = path.join(import.meta.dir, "gate-cache.ts");
