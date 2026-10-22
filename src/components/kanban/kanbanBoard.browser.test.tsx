@@ -25378,7 +25378,7 @@ describe("floating voice companion", () => {
     const { browser, close } = await launchOwned();
     const readings: unknown[] = [];
     /** Whether each text range of each element is whole inside the panel's body (or, for the picker row, the panel) and the viewport. */
-    const whole = (page: Page, selectors: string[]) => page.evaluate((list) => {
+    const whole = (page: Page, selectors: string[]) => page.evaluate(({ list, controlSelector }) => {
       const view = document.querySelector<HTMLElement>("[data-companion-transcript-view]")!;
       const body = view.querySelector<HTMLElement>("[data-transcript-body]")!;
       const result: Record<string, { found: boolean; whole: boolean; text: string }> = {};
@@ -25403,8 +25403,28 @@ describe("floating voice companion", () => {
       const box = view.getBoundingClientRect(); const pick = picker.getBoundingClientRect();
       return { result, picker: { label, fits: context.measureText(label).width <= room, height: pick.height, inside: pick.left >= box.left && pick.right <= box.right && pick.top >= box.top && pick.bottom <= box.bottom
           && document.elementFromPoint(pick.left + pick.width / 2, pick.top + pick.height / 2) === picker },
-        panelInside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, sideways: body.scrollWidth - body.clientWidth };
-    }, selectors);
+        panelInside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, sideways: body.scrollWidth - body.clientWidth,
+        /* The page's own top bar: no control of the page that starts in its first 48 px stands under the panel. */
+        covered: [...document.querySelectorAll<HTMLElement>(controlSelector)].filter((control) => !view.contains(control) && !control.closest("[data-voice-companion]"))
+          .map((control) => ({ control, rect: control.getBoundingClientRect() }))
+          .filter(({ rect }) => rect.width > 0 && rect.height > 0 && rect.top < 48 && rect.left < box.right && rect.right > box.left && rect.top < box.bottom && rect.bottom > box.top)
+          .map(({ control, rect }) => `${control.tagName.toLowerCase()} ${(control.innerText || control.getAttribute("aria-label") || "").slice(0, 24)} ${Math.round(rect.left)},${Math.round(rect.top)}`),
+        top: Math.round(box.top),
+        /* The open request's name, whole inside its own line. */
+        title: [...view.querySelectorAll<HTMLElement>("[data-transcript-request] [data-human-label]")].map((node) => ({ text: node.innerText, whole: node.scrollWidth <= node.clientWidth && node.scrollHeight <= node.clientHeight + 1 })),
+        /* The space between the end of what is read above each label of the opened request and the label itself, from the text. */
+        gaps: [...view.querySelectorAll<HTMLElement>(".vc-tr-detail .vc-tr-label")].map((label) => {
+          const previous = label.previousElementSibling as HTMLElement | null;
+          if (!previous) return null;
+          const ink = (node: HTMLElement) => {
+            if (node.matches("pre, .vc-instruction")) { const rect = node.getBoundingClientRect(); return { top: rect.top, bottom: rect.bottom }; }
+            const range = document.createRange(); range.selectNodeContents(node);
+            const rects = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+            return { top: Math.min(...rects.map((rect) => rect.top)), bottom: Math.max(...rects.map((rect) => rect.bottom)) };
+          };
+          return { label: label.textContent ?? "", after: previous.matches("[data-transcript-reason]") ? "reason" : previous.tagName.toLowerCase(), gap: Math.round((ink(label).top - ink(previous).bottom) * 10) / 10 };
+        }).filter((gap) => gap !== null) as Array<{ label: string; after: string; gap: number }> };
+    }, { list: selectors, controlSelector: CONTROL_SELECTOR });
     /** Opens the shown call's request and scrolls its line to the top of the body. */
     const openRequest = async (page: Page) => {
       const request = page.locator('[data-companion-transcript-view] [data-transcript-call="request_orchestrator_delegation"]');
@@ -25455,7 +25475,18 @@ describe("floating voice companion", () => {
           for (const [step, reading] of [["newest", newest], ["failed", failed], ["refused", refused]] as const) {
             expect(Object.entries(reading.result).filter(([, value]) => !value.found || !value.whole).map(([selector]) => selector), `${label} ${step}: every named text is whole`).toEqual([]);
             expect([reading.panelInside, reading.picker.inside, reading.picker.fits, reading.sideways <= 1], `${label} ${step}: panel, picker and its label fit`).toEqual([true, true, true, true]);
+            expect(reading.covered, `${label} ${step}: the panel (top at ${reading.top}) stands below the page's top bar`).toEqual([]);
           }
+          for (const [step, reading] of [["failed", failed], ["refused", refused]] as const) {
+            expect(reading.title.filter((title) => !title.whole), `${label} ${step}: the request's name is whole in its line`).toEqual([]);
+            const reason = reading.gaps.find((gap) => gap.after === "reason");
+            const others = reading.gaps.filter((gap) => gap.after !== "reason").map((gap) => gap.gap);
+            expect(reason, `${label} ${step}: a label follows the reason`).toBeDefined();
+            expect(reason!.gap, `${label} ${step}: the reason has the space the other blocks leave above their next label (${JSON.stringify(reading.gaps)})`).toBeGreaterThanOrEqual(Math.min(...others) - 1);
+            expect(reason!.gap, `${label} ${step}: and within the 12 to 18 px the opened request leaves above its other labels`).toBeGreaterThanOrEqual(12);
+            expect(reason!.gap).toBeLessThanOrEqual(18);
+          }
+          expect(failed.result["[data-transcript-reason]"]!.text, `${label}: the failure reason reads in the owner's language, with no code in it`).not.toMatch(lang === "uk" ? /[A-Za-z]/u : /[(_)]/u);
           await page.keyboard.press("Escape");
           await page.waitForSelector("[data-companion-transcript-view]", { state: "detached", timeout: 5_000 });
           expect(pageErrors, label).toEqual([]);

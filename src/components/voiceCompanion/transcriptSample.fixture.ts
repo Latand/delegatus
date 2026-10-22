@@ -172,7 +172,7 @@ export function sampleCallHistory(locale: Locale, project = "atlas", orchestrato
     add({ id: "tool-call_retry", kind: "tool", atMs: 4_300, data: { name: "request_orchestrator_delegation", callId: "call_retry", arguments: json({ instruction: h.retry, confirmation_reason: null }), status: "done",
       result: json({ status: "failed", sent: false, speech: h.retryReply }) } });
     add({ id: "request-call_retry", kind: "request", atMs: 4_400, data: { authority: "live-model", proposalId: "proposal_retry", callId: "call_retry", sourceItemId: "item_op_retry", instruction: h.retry,
-      recipient, projectName: names[project], status: "failed", code: "conversation_busy", reason: "The orchestrator's conversation refused the message (conversation busy), so nothing was sent.",
+      recipient, projectName: names[project], status: "failed", code: "conversation_busy", reason: "The message was not delivered: the orchestrator's conversation was busy, so nothing was sent.",
       states: [{ atMs: 4_300, status: "proposed" }, { atMs: 4_400, status: "sending" }, { atMs: 6_100, status: "failed", code: "conversation_busy" }] } });
     add({ id: "item_co_retry", kind: "reply", atMs: 6_600, data: { text: h.retryReply, final: true, startMs: 6_600, endMs: 10_200 } });
     return 14;

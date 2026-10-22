@@ -20,9 +20,17 @@ export const DELEGATION_REASONS: Record<DelegationCode, string> = {
   request_not_waiting: "That earlier request is not waiting for a report: it was never sent or its delivery failed. Nothing was sent.",
   request_other_project: "That waiting request went to another project's orchestrator, so this ask is not a repeat of it. Nothing was sent.",
 };
+/** Delivery-failure codes the owner reads as a sentence. Any other code is not shown: the generic sentence stands. */
+const DELIVERY_FAILURES: Record<string, { en: string; uk: string }> = {
+  conversation_busy: { en: "the orchestrator's conversation was busy", uk: "розмова оркестратора була зайнята" },
+  conversation_closed: { en: "the orchestrator's conversation is closed", uk: "розмову оркестратора закрито" },
+  member_required: { en: "the call's starter is no longer a team member", uk: "той, хто розпочав розмову, більше не учасник команди" },
+  voice_seat_changed: { en: "the orchestrator changed before delivery", uk: "оркестратор змінився до доставки" },
+};
+const knownFailure = (code?: string | null) => (code && Object.hasOwn(DELIVERY_FAILURES, code) ? DELIVERY_FAILURES[code] : null);
 export function deliveryFailureReason(code?: string): string {
-  return code ? `The orchestrator's conversation refused the message (${code.replaceAll("_", " ").toLowerCase()}), so nothing was sent.`
-    : "The delivery failed. Nothing reached the orchestrator.";
+  const known = knownFailure(code);
+  return known ? `The message was not delivered: ${known.en}, so nothing was sent.` : "The delivery failed. Nothing reached the orchestrator.";
 }
 /** The same reasons as the owner reads them in Ukrainian. The model and the record keep the English ones. */
 const DELEGATION_REASONS_UK: Record<DelegationCode, string> = {
@@ -46,8 +54,11 @@ const DELEGATION_REASONS_UK: Record<DelegationCode, string> = {
 /** Why a request ended as it did, in the owner's language, from the code its record keeps; null when its stage
  * needs no reason or the code is not one of these, and the recorded reason then stands as it is. */
 export function delegationReason(code: string | null | undefined, stage: string, locale: "en" | "uk"): string | null {
-  if (stage === "failed") return locale === "uk" ? (code ? `Розмова оркестратора відхилила повідомлення (${code.replaceAll("_", " ").toLowerCase()}), тож нічого не надіслано.`
-    : "Доставка не вдалася. До оркестратора нічого не дійшло.") : deliveryFailureReason(code ?? undefined);
+  if (stage === "failed") {
+    if (locale === "en") return deliveryFailureReason(code ?? undefined);
+    const known = knownFailure(code);
+    return known ? `Повідомлення не доставлено: ${known.uk}, тож нічого не надіслано.` : "Доставка не вдалася. До оркестратора нічого не дійшло.";
+  }
   if (!code || !Object.hasOwn(DELEGATION_REASONS, code)) return null;
   return (locale === "uk" ? DELEGATION_REASONS_UK : DELEGATION_REASONS)[code as DelegationCode];
 }

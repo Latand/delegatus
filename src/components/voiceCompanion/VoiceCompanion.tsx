@@ -431,6 +431,8 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
   /* The whole conversation is open beside the character, in place of the lane: a tap on the character that does not
      move it, or Enter, opens it and the same closes it. It reads the adapter's record of the latest session. */
   const [reading, setReading] = useState(false);
+  /* The page's controls as last read, taken when the panel opens: the panel keeps clear of the top bar. */
+  const [pageControls, setPageControls] = useState<readonly Rect[]>([]);
   const [record, setRecord] = useState<SessionTranscriptRecord | null>(null);
   const [sessionSeen, setSessionSeen] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -1304,7 +1306,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
       <style>{VOICE_COMPANION_CSS}</style>
       {typeof adapter.transcript === "function" ? <style>{TRANSCRIPT_CSS}</style> : null}
       {expanded && reading && readable && view ? (() => {
-        const box = transcriptRect(viewportSize(), { ...at, ...block });
+        const box = transcriptRect(viewportSize(), { ...at, ...block }, pageControls);
         /* A dropped call says so in its own header only, never in another retained call's. */
         const droppedShown = !connected && !starting && !!state.resumable && (target === undefined || target === state.resumable.sessionId);
         return <CompanionTranscript dropped={droppedShown} usage={(target === undefined ? state.usage : null) ?? record?.usage} record={record ?? { entries: [], truncated: false }} left={box.x - at.x} top={box.y - at.y} width={box.width} height={box.height}
@@ -1343,7 +1345,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
             aria-expanded={readable ? reading : undefined}
             title={readable ? transcriptLabels(locale).open : undefined}
             data-companion-open-transcript={readable ? "" : undefined}
-            onClick={readable ? () => { if (!swallowClick.current) setReading((open) => !open); } : undefined}
+            onClick={readable ? () => { if (swallowClick.current) return; setPageControls(lastRead.current?.obstacles ?? []); setReading((open) => !open); } : undefined}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}

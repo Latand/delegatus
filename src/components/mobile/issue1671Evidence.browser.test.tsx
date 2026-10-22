@@ -11400,7 +11400,9 @@ describe("phone voice call history", () => {
       return { result, picker: { label, fits: context.measureText(label).width <= picker.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - 20, height: pick.height,
         inside: pick.left >= box.left && pick.right <= box.right && pick.top >= box.top && pick.bottom <= box.bottom
           && document.elementFromPoint(pick.left + pick.width / 2, pick.top + pick.height / 2) === picker },
-        panelInside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, sideways: body.scrollWidth - body.clientWidth };
+        panelInside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, sideways: body.scrollWidth - body.clientWidth,
+        /* The opened request's name, whole in its own line. */
+        title: [...view.querySelectorAll<HTMLElement>("[data-transcript-request] [data-human-label]")].map((node) => ({ text: node.innerText, whole: node.scrollWidth <= node.clientWidth && node.scrollHeight <= node.clientHeight + 1 })) };
     }, selectors);
     const openRequest = async (page: Page) => {
       const request = page.locator('[data-companion-transcript-view] [data-transcript-call="request_orchestrator_delegation"]');
@@ -11441,6 +11443,7 @@ describe("phone voice call history", () => {
           await openRequest(page);
           const failed = await whole(page, ['[data-transcript-request][data-stage="failed"] .vc-call-state', "[data-transcript-reason]", "a[data-transcript-orchestrator]"]);
           expect(failed.result["a[data-transcript-orchestrator]"]!.text).toBe("Atlas");
+          expect(failed.result["[data-transcript-reason]"]!.text, `${prefix}: the failure reason reads in the owner's language, with no code in it`).not.toMatch(lang === "uk" ? /[A-Za-z]/u : /[(_)]/u);
           expect(failed.result["a[data-transcript-orchestrator]"]!.height, "the link is a whole touch target").toBeGreaterThanOrEqual(44);
           await page.screenshot({ path: path.join(out, `${prefix}-2-failed.png`) });
 
@@ -11454,6 +11457,7 @@ describe("phone voice call history", () => {
             expect(Object.entries(reading.result).filter(([, value]) => !value.found || !value.whole).map(([selector]) => selector), `${prefix} ${step}: every named text is whole`).toEqual([]);
             expect([reading.panelInside, reading.picker.inside, reading.picker.fits, reading.sideways <= 1, reading.picker.height >= 44], `${prefix} ${step}: panel, picker, its label and its target`).toEqual([true, true, true, true, true]);
           }
+          for (const [step, reading] of [["failed", failed], ["refused", refused]] as const) expect(reading.title.filter((title) => !title.whole), `${prefix} ${step}: the request's name is whole in its line`).toEqual([]);
           /* The link gives the screen to the orchestrator's conversation. */
           await picker.selectOption("call_failed_delivery");
           await openRequest(page);

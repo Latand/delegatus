@@ -11,7 +11,7 @@ import { REQUEST_STAGES, requestStage, type RetainedCall } from "@/lib/voiceComp
 import { delegationReason } from "@/lib/voiceCompanion/delegationOutcome";
 import { CompanionSpend } from "./CompanionSpend";
 import { useLocale } from "@/lib/i18n";
-import { laneLayout, type Rect, type Size } from "@/lib/voiceCompanion/placement";
+import { CONTROL_CLEARANCE, laneLayout, type Rect, type Size } from "@/lib/voiceCompanion/placement";
 import type { SessionTranscriptRecord, TranscriptEntry } from "@/lib/voiceCompanion/transcriptRecord";
 
 /*
@@ -35,9 +35,19 @@ export const transcriptLabels = (locale: string) => LABELS[locale === "uk" ? "uk
 /* The panel's box beside the character. */
 const SIZE = { width: 360, height: 560 };
 
-/** The panel's box in the viewport: placed as the lane is, facing the middle of the screen, flipping at an edge. */
-export function transcriptRect(viewport: Size, block: Rect): Rect {
-  return laneLayout(viewport, block, Math.min(SIZE.height, viewport.height - 16), Math.min(SIZE.width, viewport.width - 16)).rect;
+/* Controls that start within this distance of the viewport's top are the app's top bar. */
+const TOP_BAR_BAND = 48;
+/* A panel shorter than this is kept at its full height over the bar instead of squeezed beneath it. */
+const MIN_HEIGHT = 280;
+
+/** The panel's box in the viewport: placed as the lane is, facing the middle of the screen, flipping at an edge. A lane that
+    rises past the top bar (`controls`: the controls the page holds, in the viewport) stops below the controls it would cover. */
+export function transcriptRect(viewport: Size, block: Rect, controls: readonly Rect[] = []): Rect {
+  const rect = laneLayout(viewport, block, Math.min(SIZE.height, viewport.height - 16), Math.min(SIZE.width, viewport.width - 16)).rect;
+  const below = controls.reduce((low, control) => (control.y < TOP_BAR_BAND && control.y + control.height > rect.y && control.x < rect.x + rect.width && control.x + control.width > rect.x
+    ? Math.max(low, Math.ceil(control.y + control.height + CONTROL_CLEARANCE)) : low), 0);
+  const height = rect.y + rect.height - below;
+  return below > rect.y && height >= MIN_HEIGHT ? { ...rect, y: below, height } : rect;
 }
 
 type Status = "running" | "done" | "failed";
@@ -353,11 +363,12 @@ export const TRANSCRIPT_CSS = `
 .vc-tr-toggle { position: relative; display: block; width: 100%; margin: 0; padding: 0; border: 0; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; border-radius: 12px; }
 .vc-tr-toggle:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 .vc-tr-toggle .vc-call { cursor: pointer; }
-.vc-tr .vc-call-name[data-human-label] { font-family: inherit; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vc-tr .vc-call-name[data-human-label] { font-family: inherit; font-size: 12px; white-space: normal; overflow-wrap: anywhere; }
 .vc-tr-chev { position: absolute; right: 10px; top: calc(50% - 7px); color: var(--color-muted); transition: transform 150ms ease-out; pointer-events: none; }
 .vc-tr-toggle[aria-expanded="true"] .vc-tr-chev { transform: rotate(90deg); }
 .vc-tr-toggle .vc-call { display: flex; padding-right: 30px; }
 .vc-tr-detail { display: flex; flex-direction: column; gap: 3px; padding: 6px 2px 2px; min-width: 0; }
+.vc-tr-detail > .vc-deleg-note { margin: 0 0 7px; }
 .vc-tr-reason { margin: 0; font-size: 12px; line-height: 16px; color: var(--color-secondary); }
 .vc-tr-pre {
   margin: 0 0 4px; padding: 6px 8px; font: 11px/15px var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text;

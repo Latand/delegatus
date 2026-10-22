@@ -330,14 +330,16 @@ test("a failed call whose result is missing keeps its reason, so the refusal is 
   expect(host.querySelector("[data-transcript-detail]")!.textContent!.match(/project refused/g)).toHaveLength(1);
 });
 
-test("the request row's human label is set in the UI sans font, not the tool-name monospace, and does not wrap", async () => {
+test("the request row's human label is set in the UI sans font, not the tool-name monospace, and wraps whole instead of being cut", async () => {
   const { view } = await open();
   const label = view.querySelector<HTMLElement>("[data-transcript-request] .vc-call-name")!;
   expect(label.hasAttribute("data-human-label")).toBe(true);
   const real = view.querySelector<HTMLElement>('[data-tool="get_task"] .vc-call-name')!;
   expect(real.hasAttribute("data-human-label")).toBe(false);
   expect(TRANSCRIPT_CSS).toMatch(/\.vc-call-name\[data-human-label\]\s*\{[^}]*font-family:\s*inherit/);
-  expect(TRANSCRIPT_CSS).toMatch(/\.vc-call-name\[data-human-label\]\s*\{[^}]*white-space:\s*nowrap/);
+  const rule = TRANSCRIPT_CSS.match(/\.vc-call-name\[data-human-label\]\s*\{([^}]*)\}/)![1]!;
+  expect(rule).toMatch(/white-space:\s*normal/);
+  expect(rule).not.toMatch(/text-overflow|overflow:\s*hidden|nowrap/);
 });
 
 
@@ -560,4 +562,19 @@ test("after a call the owner picks any retained call, and an opened request says
     await act(async () => root.unmount()); host.remove(); mounted = null;
   }
   await act(async () => setLocale("en"));
+});
+
+test("a panel that rises to the viewport's top stops below the page's top-bar controls, and keeps its box where none is under it", async () => {
+  const { transcriptRect } = await import("./CompanionTranscript");
+  const viewport = { width: 1000, height: 800 };
+  const block = { x: 700, y: 520, width: 200, height: 48 };
+  const bare = transcriptRect(viewport, block);
+  expect(bare.y).toBe(8);
+  const search = { x: 600, y: 8, width: 300, height: 32 };
+  const covered = transcriptRect(viewport, block, [search, { x: 20, y: 8, width: 100, height: 32 }]);
+  expect(covered).toEqual({ ...bare, y: 48, height: bare.height - 40 });
+  expect(covered.y + covered.height).toBe(bare.y + bare.height);
+  /* A control beside the panel, or lower than the bar, leaves the box as it was; a squeezed box is not taken. */
+  expect(transcriptRect(viewport, block, [{ x: 20, y: 8, width: 100, height: 32 }, { x: 600, y: 300, width: 300, height: 32 }])).toEqual(bare);
+  expect(transcriptRect({ width: 1000, height: 400 }, { x: 700, y: 260, width: 200, height: 48 }, [search])).toEqual(transcriptRect({ width: 1000, height: 400 }, { x: 700, y: 260, width: 200, height: 48 }));
 });
