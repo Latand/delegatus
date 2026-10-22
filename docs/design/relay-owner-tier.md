@@ -4,6 +4,36 @@ Status: implemented, 2026-10-10. Builds on `relay.md` (§A.6, §A.8, §B.4–§B
 `relay-slice3.md` (per-chat conversations) and the reserved branch in
 `src/lib/externalRelay/profile.ts:4-15`. Nothing here changes the wire.
 
+## Document attachment fallback
+
+The service's 2026-10-21 document projection appends this marker to the
+conversation message's `text`, after any caption or description:
+
+```text
+[Document attached; filename=notes.md; mime_type=text/markdown; byte_size=42]
+```
+
+The shape comes from the service's `relay_answer_input.py` document projection
+(revision `81c42634b8`), reproduced with invented content in
+`src/lib/externalRelay/ownerAttachment.test.ts`. `resolveOwnerReplyContext`
+retains the message text verbatim, so the marker survives without adding wire
+fields. Negotiated `Message.media` entries carry `ref`, `kind`, `filename`,
+`mime_type`, `byte_size` and `availability`; extracted `Input.documents`
+entries carry `title`, `text`, `message_id`, `media_ref` and `extraction`.
+The existing service-wire tool fixture describes `get_media` as a direct read
+with a required `message_id` argument.
+The marker's MIME value may include parameters such as `charset=utf-8`.
+
+For a marked owner message or its explicit reply target, the initial and
+continuation prompts instruct the agent to fetch the attachment with direct
+`get_media` before answering when its content is absent from `<documents>`.
+Content is matched by message or media reference; legacy entries without
+references use the marker's filename and document title. Empty or unavailable
+extractions still need the fallback. Other messages do not trigger it, and
+the instruction is omitted when the direct read is unavailable. The generated
+instruction contains only validated message IDs; the marker and file contents
+remain data under the existing owner prompt rules.
+
 ## Originating requirement
 
 The operator, 2026-10-10 about 07:50 Kyiv time, by voice, in Russian,
