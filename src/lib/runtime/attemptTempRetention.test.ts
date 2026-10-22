@@ -282,7 +282,19 @@ test("the persisted total cap raises the default sweep budget, then returns to i
   for (const [n, directory] of directories.entries()) expect(fs.existsSync(directory)).toBe(n < 4);
 }, 60000);
 
-test.each([false, true])("concurrent helpers serialize retirement and recover an exited owner (crash=%s)", async crash => {
+// The waiting helper may report its file-transaction wait (50 ms or longer,
+// which a loaded host always reaches) as one diagnostic line. Any other line
+// on stderr is still a failure.
+function unexpectedStderr(stderr: string): string {
+  return stderr.split("\n").filter(line => {
+    if (!line.startsWith("[blocking-wait] ")) return line !== "";
+    const sample = JSON.parse(line.slice("[blocking-wait] ".length)) as { site?: string; refused?: boolean };
+    return sample.site !== "file-transaction" || sample.refused === true;
+  }).join("\n");
+}
+
+test.each(["release", "crash"] as const)("concurrent helpers serialize retirement and recover an exited owner (%s)", async ending => {
+  const crash = ending === "crash";
   const f = fixture(); const directory = f.make("concurrent"); f.store.close();
   const spawn = (now: number, state: string) => Bun.spawn([process.execPath,
     path.join(import.meta.dir, "attemptTempRetention.fixture.ts"), f.filename, String(now), state],
@@ -302,7 +314,7 @@ test.each([false, true])("concurrent helpers serialize retirement and recover an
     if (crash) first.kill("SIGKILL"); else first.stdin.end();
     await first.exited;
     const [stdout, stderr, code] = await Promise.all([new Response(second.stdout).text(), new Response(second.stderr).text(), second.exited]);
-    expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+    expect({ code, stderr: unexpectedStderr(stderr) }).toEqual({ code: 0, stderr: "" });
     expect(JSON.parse(stdout)).toMatchObject({ removed: crash ? 1 : 0 });
     expect(fs.existsSync(directory)).toBeFalse();
   } finally {
