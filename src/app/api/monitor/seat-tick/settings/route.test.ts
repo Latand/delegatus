@@ -102,6 +102,29 @@ const get = (query: string, headers: Record<string, string> = { host: "127.0.0.1
 const put = (body: unknown, headers: Record<string, string> = browser) =>
   PUT(new NextRequest(URL_BASE, { method: "PUT", headers, body: JSON.stringify(body) }));
 
+test("proactive enable requires the operator browser and returns persisted effective permission", async () => {
+  setSystemTime(new Date("2026-10-22T00:00:00.000Z"));
+  const autonomy = { enabled: true, proactive: { enabled: true } };
+  for (const headers of [
+    { host: "127.0.0.1:8898", "content-type": "application/json" },
+    { ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: CAPABILITY },
+  ]) {
+    const refused = await put({ project: PROJECT, autonomy, actor: { kind: "gateway" } }, headers);
+    expect(refused.status).toBe(403);
+    expect((await refused.json()).error).toContain("only the operator browser");
+    expectNothingStored();
+  }
+  const saved = await put({ project: PROJECT, autonomy });
+  expect(saved.status).toBe(200);
+  expect((await saved.json()).autonomy.proactive).toEqual({ enabled: true });
+  expect((await (await get(`?project=${PROJECT}`)).json()).autonomy.proactive).toEqual({ enabled: true });
+  seatFile({ project: PROJECT, conversationId: SEAT_CONVERSATION, seatEpoch: 12 });
+  setCallerConversationResolverForTests(() => SEAT_CONVERSATION);
+  const stopped = await put({ project: PROJECT, autonomy: { proactive: { enabled: false }, why: "Stop discovery" } }, { ...browser, [VIEWER_SPAWN_CAPABILITY_HEADER]: CAPABILITY });
+  expect(stopped.status).toBe(200);
+  expect((await stopped.json()).autonomy).toMatchObject({ active: true, proactive: { enabled: false } });
+});
+
 test("HTTP and seat_tick_settings report maintenance paused while wakes are off", async () => {
   const written = await put({ project: PROJECT, enabled: false, reason: "fixture pause", maintenance: { enabled: true, intervalHours: 3 } });
   expect(written.status).toBe(200);

@@ -1,4 +1,5 @@
-import { runTempSweepInHelper } from "./tempSweep";
+import { runTempSweepInHelper, scanProcesses } from "./tempSweep";
+import { runAttemptTempSweep } from "./runtime/attemptTempProduction";
 import { readDiskPressureInHelper } from "./state/diskPressure";
 import { createInterface } from "node:readline";
 import { statePath } from "./configDir";
@@ -14,6 +15,11 @@ for await (const line of lines) {
   try {
     if (line.length > 1024) throw new Error("worktree sweep request exceeded its bound");
     const request = JSON.parse(line);
+    if (request.kind === "attempt-temp") {
+      const report = await runAttemptTempSweep({ scan: directories => scanProcesses("/proc", directories) });
+      process.stdout.write(JSON.stringify({ report }) + "\n");
+      continue;
+    }
     if (request.kind === "temp") {
       const report = await runTempSweepInHelper({ ...process.env, LLV_TEMP_SWEEP: request.env?.LLV_TEMP_SWEEP,
         LLV_TEMP_SWEEP_MAX_AGE_HOURS: request.env?.LLV_TEMP_SWEEP_MAX_AGE_HOURS });

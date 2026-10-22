@@ -6,7 +6,7 @@ import { stateDir } from "@/lib/configDir";
 import { endLeasedHelper, leasedHelperInput, spawnLeasedHelper } from "@/lib/helperLease";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
-import { voiceToolBounds, type ProbeResult, type VoiceToolServer } from "./contracts";
+import { voiceToolBounds, type SecretPolicies, type ProbeResult, type VoiceToolServer } from "./contracts";
 import { VoiceToolsError, VoiceToolsStore } from "./store";
 
 /** Allowlist rather than inherited credentials; each server has a private HOME. */
@@ -16,7 +16,7 @@ export function voiceToolEnvironment(home: string, source: NodeJS.ProcessEnv): N
   return result;
 }
 /**
- * The stdio launcher as an absolute file found on the Viewer's own PATH. Relative PATH entries are
+ * A probe launcher as an absolute file found on the Viewer's own PATH. Relative PATH entries are
  * skipped, and nothing a proposal sets takes part, so the binary that starts is the one named here.
  */
 export async function resolveExecutable(command: "bun" | "uv", searchPath = process.env.PATH ?? ""): Promise<string | null> {
@@ -88,25 +88,27 @@ export class VoiceToolHub {
     // server can plant a node_modules/.bin above it, and it is removed once the helper has closed.
     const runRoot = path.join(this.store.directory, "voice-tools-runs", randomUUID());
     try {
-      let stdio: { executable: string; config: string; runDir: string } | undefined;
+      let policies: SecretPolicies = {};
+      let stdio: { executable: string; config: string; runDir: string; runRoot: string; stateDirectory: string } | undefined;
       if (server.transport.type === "stdio") {
         const resolved = await resolveExecutable(server.transport.command);
         if (!resolved) return { code: "START_FAILED" };
         await fs.mkdir(path.join(runRoot, "cwd"), { recursive: true, mode: 0o700 });
         await fs.writeFile(path.join(runRoot, "config.toml"), "", { mode: 0o600, flag: "wx" });
-        stdio = { executable: resolved, config: path.join(runRoot, "config.toml"), runDir: path.join(runRoot, "cwd") };
+        stdio = { executable: resolved, config: path.join(runRoot, "config.toml"), runDir: path.join(runRoot, "cwd"), runRoot,
+          stateDirectory: await fs.realpath(this.store.directory) };
       }
       // Preparation awaited disk I/O; resolve the exact proposal again at dispatch.
       const current = await this.store.probeInput(name, expected);
-      server = current.server; secrets = current.secrets;
+      server = current.server; secrets = current.secrets; policies = current.policies;
       if (server.transport.type === "stdio" && !stdio) return { code: "START_FAILED" };
       authorize?.();
       if (signal?.aborted) return { code: abortCode() };
-      return await this.spawnProbe(name, home, executable, server, secrets, stdio, signal, abortCode);
+      return await this.spawnProbe(name, home, executable, server, secrets, policies, stdio, signal, abortCode);
     } finally { await fs.rm(runRoot, { recursive: true, force: true }); }
   }
-  private spawnProbe(name: string, home: string, executable: { executable: string; worker: string }, server: VoiceToolServer, secrets: Record<string, string>,
-    stdio: { executable: string; config: string; runDir: string } | undefined, signal: AbortSignal | undefined, abortCode: () => "TIMEOUT" | "CANCELLED"): Promise<ProbeResult> {
+  private spawnProbe(name: string, home: string, executable: { executable: string; worker: string }, server: VoiceToolServer, secrets: Record<string, string>, policies: SecretPolicies,
+    stdio: { executable: string; config: string; runDir: string; runRoot: string; stateDirectory: string } | undefined, signal: AbortSignal | undefined, abortCode: () => "TIMEOUT" | "CANCELLED"): Promise<ProbeResult> {
     return performanceSpans.wait("voice-tools.spawn", () => new Promise<ProbeResult>(resolve => {
       const child = spawnLeasedHelper("voice-tools-probe", { command: executable.executable, args: [executable.worker],
         cwd: process.cwd(), env: voiceToolEnvironment(home, process.env) }, this.store.directory, { input: true, stdout: "pipe", stderr: "ignore" });
@@ -123,7 +125,7 @@ export class VoiceToolHub {
             if (Object.values(secrets).some(secret => raw.includes(secret) || raw.includes(JSON.stringify(secret).slice(1, -1)))) result = { code: "SECRET_ECHO" };
             else {
               const parsed = JSON.parse(raw) as ProbeResult;
-              result = ["OK", "START_FAILED", "PROTOCOL_ERROR", "CATALOG_BOUNDS", "SECRET_ECHO", "ENTRY_CHANGED"].includes(parsed.code) ? parsed : { code: "PROTOCOL_ERROR" };
+              result = ["OK", "START_FAILED", "PROTOCOL_ERROR", "CATALOG_BOUNDS", "SECRET_ECHO", "SECRET_DESTINATION", "ENTRY_CHANGED"].includes(parsed.code) ? parsed : { code: "PROTOCOL_ERROR" };
             }
           } catch { result = { code: "START_FAILED" }; }
         }
@@ -140,7 +142,7 @@ export class VoiceToolHub {
       const input = leasedHelperInput(child);
       input.on("error", () => stop("START_FAILED"));
       // Secrets cross an owned pipe only, never argv, logs or the helper record.
-      input.end(JSON.stringify({ name, server, secrets, home, launch: stdio ?? null }));
+      input.end(JSON.stringify({ name, server, secrets, policies, home, launch: stdio ?? null }));
       if (signal?.aborted) abort();
     }));
   }
