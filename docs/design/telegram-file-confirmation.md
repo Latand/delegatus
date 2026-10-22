@@ -25,19 +25,21 @@ this observation.
 
 ## Scope and shared paths
 
-The producers are the operator bot route and the capability-attributed agent
-bot route. MCP document and media bindings forward to the latter; internal
-rich-message and generated-output senders use separate paths. Document roots
-come from the bot store, with the host handoff directory as the default.
-Both file kinds share the loader's path checks. The loader also serves relay
-uploads and generated output, whose strict defaults must remain intact.
+MCP document and media bindings produce file sends through the capability-
+attributed agent bot route. The owner confirmation route invokes the same
+service methods with private approval context. The operator bot route writes
+the root and chat settings those sends read. Document roots come from the bot
+store, with the host handoff directory as the default. Both file kinds share
+the loader's path checks. Internal rich-message and generated-output senders
+use separate paths.
 
 The transcript's Markdown renderer receives the confirmation URL from the
 agent's reply. Its normal absolute-path branch opens local file previews, so
-this exact application route navigates as an ordinary anchor. Document
-Markdown, feed cards and user-message file links keep their existing resolver.
-The shared loader's other consumers are relay attachments and intake uploads;
-they omit the collector and keep strict path and secret refusals.
+this exact application route navigates as an ordinary anchor. Other local file
+links keep their existing resolver. The shared loader's other consumer is
+`src/lib/externalRelay/attachments.ts`: outgoing attachments omit the collector
+and keep strict path refusals; private generated output uses `readExactFile`.
+Its text attachments still run the existing secret scanner.
 
 The new request and audit record belong to the Telegram bot service and store.
 Only the owner confirmation route consumes a pending request; MCP receives
