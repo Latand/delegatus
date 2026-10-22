@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { ownerReviewDestination } from "@/lib/externalRelay/telegramPublication";
+import { authenticatedOwner } from "@/lib/team";
 import { companionOperator } from "@/lib/voiceCompanion/http";
-import { teamActor, teamMode } from "@/lib/team";
-import { existingTeamStore } from "@/lib/team/store";
 import { internalServiceClaim } from "@/lib/agent/callerClaims";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import { voiceToolHub } from "./hub";
@@ -12,11 +12,10 @@ import { VoiceToolsError } from "./store";
 export function voiceToolsOperator(req: NextRequest): NextResponse | null {
   const rejection = companionOperator(req);
   if (rejection) return rejection;
-  if (teamMode() === "team") {
-    const actor = teamActor(req);
-    const member = actor.kind === "member" ? existingTeamStore()?.member(actor.memberId) : null;
-    if (!member || member.status !== "active" || member.role !== "owner") return failure("OPERATOR_REQUIRED", 403);
-  }
+  let pairedOwner: string | undefined;
+  try { pairedOwner = ownerReviewDestination().chatId; }
+  catch { return failure("OPERATOR_REQUIRED", 401); }
+  if (!authenticatedOwner(req, pairedOwner)) return failure("OPERATOR_REQUIRED", 401);
   return null;
 }
 const common = { name: serverName, digest: z.string().regex(/^sha256:[a-f0-9]{64}$/) };
@@ -70,7 +69,7 @@ export async function changeVoiceTools(req: NextRequest) {
     const input = parsed.data;
     const hub = voiceToolHub();
     const authorize = () => { if (voiceToolsOperator(req)) throw new VoiceToolsError("OPERATOR_REQUIRED"); };
-    if (input.action === "propose") await hub.store.propose(input.proposal, { kind: "operator", conversationId: null, at: new Date().toISOString() });
+    if (input.action === "propose") await hub.store.propose(input.proposal, { kind: "operator", conversationId: null, at: new Date().toISOString() }, authorize);
     else if (input.action === "secrets") await hub.store.saveSecrets(input.secrets, authorize);
     else if (input.action === "dry-run") await hub.dryRun(input.name, input.digest, req.signal, authorize);
     else await hub.store.operatorChange(input.name, input.digest, input.action, input.action === "configure" ? { tools: input.tools, askBeforeActing: input.askBeforeActing, reapprove: input.reapprove } : {}, authorize);
