@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
+import type { OwnerTurnDiagnostic } from "@/lib/externalRelay/diagnostic";
 import { resolveBinary } from "@/lib/agent/cli";
 import { codexSubagentArgs } from "./codexSpawnPolicy";
 import { agentCodexPublicationArgs, agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
@@ -50,6 +51,7 @@ export type EphemeralAgentRequest = {
   runtime?: HeadlessReviewRuntime & { timeoutMs?: number };
 };
 export type EphemeralAgentResult = {
+  diagnostic?: OwnerTurnDiagnostic;
   threadId?: string | null;
   imageHome?: string;
   sessionId?: string | null;

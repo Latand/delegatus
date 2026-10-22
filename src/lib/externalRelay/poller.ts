@@ -112,6 +112,9 @@ export async function sweepExternalRelayOrphans(ownerPorts?: OwnerRunPorts): Pro
       continue;
     }
     const ownerAlive = processMatches(run.ownerPid, run.ownerIdentity);
+    // The live callback owns stop retries and completion. Recovery must not
+    // send an install_restarted completion while that callback is pending.
+    if (ownerAlive && relayRequestInFlight(run.requestId)) continue;
     if (run.ownerTurn) {
       if (ownerAlive && !run.ownerTurn.cancel) continue;
       if (!ownerAlive) {

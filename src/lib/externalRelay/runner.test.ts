@@ -3089,7 +3089,7 @@ for (const scenario of ["answer", "owner_tools", "lease_lost", "hard_cap", "inva
         expect(record).toMatchObject({ profile: { webSearch: true, owner: true }, conversationId: "conversation_owner_runner" });
         if (scenario === "answer" || scenario === "owner_tools") { expect(completion).toMatchObject({ outcome: "answered", answer: { text: "Owner reply", reply_to: "m1" } }); expect(stops).toEqual([]); }
         if (scenario === "lease_lost") { expect(completion).toBeNull(); expect(stops).toEqual(["interrupt"]); }
-        if (scenario === "hard_cap") { expect(completion).toMatchObject({ outcome: "failed", reason: "hard_cap" }); expect(stops).toEqual(["interrupt"]); }
+        if (scenario === "hard_cap") { expect(completion).toMatchObject({ outcome: "answered", answer: { text: expect.stringContaining("Failed:") } }); expect(stops).toEqual(["interrupt"]); }
       }
     } finally { fs.rmSync(switchFile, { force: true }); await server.close(); }
   });
@@ -3161,21 +3161,25 @@ test("owner admission rechecks current store even when the claimed target object
   } finally { await service.close(); }
 });
 
-for (const trigger of ["hard_cap", "lease_lost"] as const) test(`owner ${trigger} retains failed-stop custody and recovers through sweep`, async () => {
-  const { sweepExternalRelayOrphans } = await import("./poller");
+for (const trigger of ["hard_cap", "lease_lost"] as const) test(`owner ${trigger} retains pending execution and retries failed-stop custody`, async () => {
   const service = await startTestRelay((req, body) => req.url?.endsWith("/heartbeat") && trigger === "lease_lost" && (body as { seq: number }).seq > 1
     ? { status: 409, body: { error: { code: "lease_lost", message: "gone" } } } : { body: { status: "ok" } });
   const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
   updateRelayStore(s => ({ ...s, relays: [paired] }));
-  let stops = 0, working = true, recover = false;
+  let stops = 0, working = true, recover = false, finished = false;
+  let reached!: () => void;
+  const refused = new Promise<void>(r => { reached = r; });
   const ports = { launch: async () => ({ status: 202, body: { conversationId: `conversation_stop_${trigger}` } }),
     observe: async () => ({ state: "running" as const }), stopRetryMs: 1, pollMs: 1,
-    stop: async () => { stops++; if (!recover) throw Error("control unavailable"); working = false; } };
+    stop: async () => { if (++stops === 3) reached(); if (!recover) throw Error("control unavailable"); working = false; } };
+  let done: ReturnType<typeof runClaimedRequest> | undefined;
   try {
-    const done = await runClaimedRequest(paired, { ...contextRequest, request_id: `stop_${trigger}`, liveness: { ...contextRequest.liveness, heartbeat_interval_s: 2 },
+    done = runClaimedRequest(paired, { ...contextRequest, request_id: `stop_${trigger}`, liveness: { ...contextRequest.liveness, heartbeat_interval_s: 2 },
       input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, { timeoutMs: trigger === "lease_lost" ? 4000 : 20, ownerPorts: ports });
-    if (trigger === "lease_lost") expect(done).toBeNull(); else expect(done).toMatchObject({ reason: "hard_cap" });
-    expect(stops).toBe(3); expect(working).toBe(true);
+    void done.then(() => { finished = true; });
+    await refused;
+    await new Promise<void>(r => setImmediate(r));
+    expect(finished).toBe(false); expect(working).toBe(true);
     expect(readRunLedger().runs[0]).toMatchObject({ conversationId: `conversation_stop_${trigger}`, ownerTurn: { cancel: "interrupt" } });
     expect(advertisedSlots(paired)[0]!.free).toBe(0);
     expect(relayActivity(paired.id).lastOutcome).toBe("owner_stop_pending");
@@ -3183,43 +3187,163 @@ for (const trigger of ["hard_cap", "lease_lost"] as const) test(`owner ${trigger
     const { noteRelayOutcome } = await import("./activity");
     noteRelayOutcome(paired.id, "failed:hard_cap");
     expect(relayPollerStatus(paired.id).lastOutcome).toBe("owner_stop_pending");
-    // A restarted Viewer still has the receipt-bound conversation to stop.
-    const { changeRun } = await import("./store");
-    changeRun(`stop_${trigger}`, r => ({ ...r, ownerPid: 999999999, ownerIdentity: "gone" }));
     recover = true;
-    await sweepExternalRelayOrphans(ports);
-    expect(stops).toBe(4); expect(working).toBe(false); expect(readRunLedger().runs).toEqual([]);
-  } finally { await service.close(); }
+    const completion = await done;
+    if (trigger === "lease_lost") expect(completion).toBeNull(); else expect(completion).toMatchObject({ outcome: "answered" });
+    expect(stops).toBeGreaterThan(3); expect(working).toBe(false); expect(readRunLedger().runs).toEqual([]);
+  } finally { recover = true; await done; await service.close(); }
+});
+
+for (const failure of ["observation", "turn-error", "observe-exception", "launch-exception", "launch-refusal", "invalid-launch"] as const)
+for (const worker of [false, true]) test(`owner ${failure} keeps its reason in the record, journal and requester reply (worker=${worker})`, async () => {
+  const completions: unknown[] = [], journal: unknown[][] = [];
+  const service = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  paired.targets[0]!.fallback = "none";
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const reason = "fixture transport refused";
+  const unsafe = `${reason} ${paired.credential} /srv/fixture/private.txt`;
+  const source = failure === "observation" || failure === "turn-error" ? "observation" : failure.endsWith("exception") ? "exception" : "launch";
+  const logging = spyOn(console, "error").mockImplementation((...args) => { journal.push(args); });
+  try {
+    const completion = await runClaimedRequestWithLeaseWorker(paired, { ...contextRequest, request_id: "owner_reason",
+      answer: { ...contextRequest.answer, max_chars: 4000 },
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {
+      leaseWorker: worker,
+      ownerPorts: { launch: async () => {
+        if (failure === "launch-exception") throw new Error(unsafe);
+        if (failure === "launch-refusal") return { status: 503, body: { conversationId: "conversation_reason", code: "launch_refused", error: unsafe } };
+        if (failure === "invalid-launch") return { status: 202, body: { error: unsafe } };
+        return { status: 202, body: { conversationId: "conversation_reason" } };
+      },
+        observe: async () => {
+          if (failure === "observe-exception") throw new Error(unsafe);
+          if (failure === "turn-error") return { state: "ended", turnError: unsafe };
+          return { state: "failed", conversationId: "conversation_reason", failure: { kind: "launch-failed", detail: unsafe } };
+        },
+        stop: async () => {} },
+    });
+    const record = readAnswerRecord(paired.id, "target_1", "owner_reason");
+    expect(record).toMatchObject({ diagnostic: { source, message: expect.stringContaining(reason), ...(failure === "launch-refusal" ? { status: 503 } : {}) } });
+    expect(completion).toMatchObject({ outcome: "answered", answer: { action: "reply", text: expect.stringContaining(reason) } });
+    expect(JSON.stringify(journal)).toContain("owner_reason");
+    expect(JSON.stringify(journal)).toContain("fixture transport refused");
+    expect(completions).toHaveLength(1);
+    for (const surface of [completion, record, journal]) {
+      expect(JSON.stringify(surface)).not.toContain(paired.credential);
+      expect(JSON.stringify(surface)).not.toContain("/srv/fixture/private.txt");
+    }
+  } finally { logging.mockRestore(); await service.close(); }
+});
+
+for (const worker of [false, true])
+for (const state of ["confirmed", "unconfirmed", "undiagnosed", "paused", "disabled", "removed", "unbound"] as const)
+test(`owner failure delivery checks durable authority (${state}, worker=${worker})`, async () => {
+  const { InlineRelayLeaseTransport } = await import("./relayLeaseTransport");
+  const { ownerRelayAuthorized } = await import("./ownerAuthority");
+  const completions: unknown[] = [];
+  const service = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "ok" } };
+  });
+  const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  if (state === "paused") paired.paused = true;
+  if (state === "disabled") paired.targets[0]!.enabled = false;
+  if (state === "removed") paired.targets = [];
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const requestId = "failure-authority";
+  reserveRun({ requestId, relayId: paired.id, targetId: "target_1", leaseId: "fixture", childPid: null, childIdentity: null,
+    ownerPid: process.pid, ownerIdentity: null, runDir: "", startedAt: "2026-01-01T00:00:00Z",
+    ownerTurn: { clientAttemptId: "fixture", cancel: "interrupt", ...(state !== "unconfirmed" ? { confirmed: true } : {}),
+      ...(state !== "undiagnosed" ? { diagnostic: { source: "exception", message: "fixture launch failure" } } : {}) } });
+  const Transport = worker ? RelayLeaseTransport : InlineRelayLeaseTransport;
+  const transport = new Transport(paired, state === "unbound" ? "another-request" : requestId, "target_1", "fixture", 10000, () => {}, null);
+  try {
+    await transport.ready;
+    expect(ownerRelayAuthorized(paired.id, "target_1", requestId)).toBe(false);
+    const result = await transport.complete({ lease_id: "fixture", outcome: "answered", duration_ms: 0,
+      answer: { action: "reply", text: "The agent failed. Retry.", reply_to: "m1" } }, Date.now() + 5000, 4000, "failure");
+    expect(result.body).toMatchObject(state === "confirmed" ? { outcome: "answered" } : { outcome: "failed", reason: "cancelled" });
+    expect(completions).toHaveLength(1);
+    if (state !== "confirmed") expect(completions[0]).not.toHaveProperty("answer");
+  } finally { await transport.close(); dropRun(requestId); await service.close(); }
+});
+
+for (const language of ["en", "uk"] as const) test(`owner ${language} failure reply excludes interrupted answer parts`, async () => {
+  const { relayAnswerOp } = await import("./ownerAnswer");
+  let uploads = 0;
+  const service = await startTestRelay(req => { if (req.method === "PUT") uploads++; return { body: { status: "ok" } }; });
+  const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const request = richRequest(true); request.request_id = `owner-failure-parts-${language}`;
+  request.input.requester = { key: "u1", is_owner: true, is_admin: true, is_anonymous_admin: false, can_delete_messages: true, can_restrict_members: true };
+  request.input.conversation[0]!.text = language === "uk" ? "Виконай запит" : "Complete the request";
+  const file = path.join(process.env.HOME!, "handoff", "interrupted-report.md");
+  fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, "# Interrupted report");
+  const conversationId = `conversation_failure_parts_${language}`;
+  let stagingError: unknown;
+  try {
+    const result = await runClaimedRequest(paired, request, undefined, { ownerPorts: {
+      launch: async () => ({ status: 202, body: { conversationId } }),
+      observe: async () => {
+        try { expect(await relayAnswerOp(conversationId, { format: "rich_markdown", buttons: [[{ text: "Staged", url: "https://example.test/report" }]],
+          attachments: [{ path: file, kind: "document", caption: "Interrupted report" }] })).toMatchObject({ attachments: [expect.anything()] }); }
+        catch (error) { stagingError = error; }
+        return { state: "failed", failure: { kind: "host-died", detail: "fixture turn ended unexpectedly" } };
+      }, stop: async () => {},
+    } });
+    if (stagingError) throw stagingError;
+    expect(result).toMatchObject({ outcome: "answered", answer: { format: "plain", buttons: [], text: expect.stringContaining(language === "uk" ? "Причина:" : "Reason:") } });
+    if (result?.outcome === "answered") {
+      expect(result.answer.attachments ?? []).toEqual([]);
+      expect(result.answer.mentions ?? []).toEqual([]);
+    }
+    expect(uploads).toBe(0);
+  } finally { fs.rmSync(file, { force: true }); await service.close(); }
 });
 
 for (const admission of ["failed_receipt", "lost_response"] as const) test(`owner ${admission} keeps custody until host control confirms`, async () => {
-  const { sweepExternalRelayOrphans } = await import("./poller");
-  const service = await startTestRelay(() => ({ body: { status: "ok" } }));
+  const completions: unknown[] = [];
+  const service = await startTestRelay((req, body) => {
+    if (req.url?.endsWith("/complete")) completions.push(body);
+    return { body: { status: "ok" } };
+  });
   const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
   updateRelayStore(s => ({ ...s, relays: [paired] }));
-  let stops = 0, recover = false;
+  let stops = 0, recover = false, finished = false;
+  let reached!: () => void;
+  const refused = new Promise<void>(r => { reached = r; });
   const conversationId = `conversation_${admission}`;
   const ports = {
     launch: async () => admission === "lost_response" ? { status: 202, body: {} }
       : { status: 503, body: { conversationId } },
     observe: async () => ({ state: "failed" as const, conversationId,
       failure: { kind: "launch-failed" as const, detail: "receipt failed before cleanup was confirmed" } }),
-    stop: async () => { stops++; if (!recover) throw Error("control receipt pending"); }, stopRetryMs: 1,
+    stop: async () => { if (++stops === 3) reached(); if (!recover) throw Error("control receipt pending"); }, stopRetryMs: 1,
   };
+  let done: ReturnType<typeof runClaimedRequest> | undefined;
   try {
-    const completion = await runClaimedRequest(paired, { ...contextRequest, request_id: admission,
+    done = runClaimedRequest(paired, { ...contextRequest, request_id: admission,
       input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, { ownerPorts: ports });
-    expect(completion).toMatchObject({ outcome: "failed" });
-    expect(stops).toBe(3);
+    void done.then(() => { finished = true; });
+    await refused;
+    await new Promise<void>(r => setImmediate(r));
+    expect(finished).toBe(false);
     expect(readRunLedger().runs[0]).toMatchObject({ conversationId, ownerTurn: { cancel: "kill", admissionComplete: true } });
     expect(readAnswerRecord(paired.id, "target_1", admission)?.conversationId).toBe(conversationId);
     expect(readRunLedger().runs[0]!.ownerTurn!.confirmed).not.toBe(true);
     expect(advertisedSlots(paired)[0]!.free).toBe(0);
-    // Retry while the same Viewer is alive, without relying on a restart.
-    recover = true;
+    expect(readAnswerRecord(paired.id, "target_1", admission)).toMatchObject({ state: "running", diagnostic: { source: "launch" } });
     await sweepExternalRelayOrphans(ports);
-    expect(stops).toBe(4); expect(readRunLedger().runs).toEqual([]);
-  } finally { await service.close(); }
+    expect(completions).toEqual([]);
+    expect(finished).toBe(false);
+    recover = true;
+    expect(await done).toMatchObject({ outcome: "answered" });
+    expect(stops).toBeGreaterThan(3); expect(readRunLedger().runs).toEqual([]);
+  } finally { recover = true; await done; await service.close(); }
 });
 
 test("owner credentials, host paths and key material never reach completion, answer records or diagnostics", async () => {
@@ -3289,10 +3413,11 @@ test("owner credentials, host paths and key material never reach completion, ans
       expect(opaqueRecord?.answer?.text).toContain("[redacted]");
       expect(JSON.stringify([opaqueOutcome, opaqueRecord, completions])).not.toContain(opaque.slice(0, 27));
     }
+    let diagnosticStops = 0;
     await runClaimedRequest(paired, { ...contextRequest, request_id: "owner_safe_diagnostic",
       input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, {
       timeoutMs: 10, ownerPorts: { launch: async () => ({ status: 202, body: { conversationId: "conversation_diag" } }),
-        observe: async () => ({ state: "running" }), stop: async () => { throw Error(finalText); }, stopRetryMs: 1, pollMs: 1 },
+        observe: async () => ({ state: "running" }), stop: async () => { if (++diagnosticStops <= 3) throw Error(finalText); }, stopRetryMs: 1, pollMs: 1 },
     });
     for (const secret of [value, paired.credential, control, spawn, ...paths, material, pgpMaterial]) expect(JSON.stringify(diagnostics)).not.toContain(JSON.stringify(secret).slice(1, -1));
     const { dropRun } = await import("./store"); dropRun("owner_safe_diagnostic");

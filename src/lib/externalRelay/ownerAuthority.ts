@@ -60,13 +60,23 @@ export function ownerRelayTargetMatches(conversationId: string, project: string,
 
 /** Fail closed at every admission and delivery boundary; reads only. */
 export function ownerRelayAuthorized(relayId: string, targetId: string, requestId: string): boolean {
+  return ownerRelayReplyAuthorized(relayId, targetId, requestId, false);
+}
+
+/** Only the runner's failure reply may follow a diagnosed, confirmed stop.
+ * Agent tools and queued sends keep using ownerRelayAuthorized. */
+export function ownerRelayFailureReplyAuthorized(relayId: string, targetId: string, requestId: string): boolean {
+  return ownerRelayReplyAuthorized(relayId, targetId, requestId, true);
+}
+
+function ownerRelayReplyAuthorized(relayId: string, targetId: string, requestId: string, failureReply: boolean): boolean {
   try {
     const store = JSON.parse(fs.readFileSync(externalRelayFile("relays"), "utf8")) as RelayStore;
     const ledger = JSON.parse(fs.readFileSync(externalRelayFile("runs"), "utf8")) as RunLedger;
     const relay = store.relays.find(r => r.id === relayId);
     const target = relay?.targets.find(t => t.id === targetId);
     const run = ledger.runs.find(r => r.requestId === requestId && r.relayId === relayId && r.targetId === targetId);
-    return store.v === 1 && ledger.v === 1 && !!run?.ownerTurn && !run.ownerTurn.cancel
+    return store.v === 1 && ledger.v === 1 && !!run?.ownerTurn && (!run.ownerTurn.cancel || failureReply && run.ownerTurn.confirmed === true && !!run.ownerTurn.diagnostic)
       && relay?.paused === false && target?.enabled === true && (target.ownerTier === true || run.ownerTurn.prototype === true);
   } catch { return false; }
 }

@@ -5,6 +5,7 @@ import { statePath } from "@/lib/configDir";
 import type { AnswerDrop } from "./answerV2";
 import type { RelayMediaKind, ExternalRelayAnswer, ExternalRelayRequester } from "./protocol";
 import { exemptFromMemberLimit, type RelayAnswerProfile } from "./profile";
+import type { OwnerTurnDiagnostic } from "./diagnostic";
 
 /**
  * One read-only record per relayed request this install claimed (relay.md
@@ -30,6 +31,7 @@ export type RelayToolCallRecord = {
   audience: string | null; truncated: boolean; replayed: boolean; withheld: boolean; local: boolean;
 };
 export type RelayAnswerRecord = {
+  diagnostic?: OwnerTurnDiagnostic;
   features?: string[];
   drops?: AnswerDrop[];
   attachments?: {attachment_id:string;kind:RelayMediaKind;filename:string;bytes:number;sha256:string}[];
@@ -167,6 +169,11 @@ export function answerRecorder(base: {
   return {
     get begun() { return begun; },
     get finished() { return finished; },
+    diagnose(diagnostic: OwnerTurnDiagnostic) {
+      if (record.diagnostic) return;
+      record = { ...record, diagnostic };
+      try { writeRecord(file, record); } catch (error) { logFailure("write", error); }
+    },
     begin(engine: string | null, model: string | null, profile: RelayAnswerProfile) {
       record = { ...record, engine, model, profile, admitted: true };
       begun = true;

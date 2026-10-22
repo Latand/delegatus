@@ -586,6 +586,21 @@ conversation later with no lease to answer; the prompt asks for
   settings status reports `owner_stop_pending`, the ordinary conversation
   remains on the board, and the orphan sweep retries after a Viewer restart.
 
+  A failed owner turn retains its first exception, launch refusal, observation
+  error or deadline reason as a scrubbed `diagnostic` in the answer record and
+  run custody. The journal includes that diagnostic and the request and
+  conversation ids. Admission failures also retain the raw deadline string,
+  resolved deadline and cutoff timestamps, source and fallback reason.
+  Redaction precedes the 1024-code-point message bound.
+  While stop confirmation is unavailable, the owner execution promise stays
+  pending and retries; writing a cutoff alone never completes execution. The
+  live callback owns completion while it is pending, so the orphan sweep
+  cannot send a competing restart completion. After confirmed termination,
+  the runner can send a plain failure reply with the scrubbed reason and a
+  retry instruction. That reply contains no staged agent answer parts. Its
+  delivery guard still requires the bound request, enabled target and current
+  owner-tier permission. Agent tools and queued sends remain revoked.
+
   Target capacity counts execution separately from retained cleanup custody.
   An accepted completion durably marks `capacityReleased` before waiting for
   claim settlement or chain/file cleanup. If the marker write is refused,

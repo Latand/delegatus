@@ -21,7 +21,7 @@ import { scrubOwnerOutput } from "./ownerOutput";
 import { changeRun, changeRunAsync, readRunLedger, type RunRecord } from "./store";
 import { ownerRelayAuthorized } from "./ownerAuthority";
 import { noteRelayOutcome } from "./activity";
-import { offersHandoff, type ExternalRelayRequest, type ExternalRelayDecision } from "./protocol";
+import { offersHandoff, type ExternalRelayRequest, type ExternalRelayDecision, type ExternalRelayAnswer } from "./protocol";
 import type { OwnerInstruction } from "./profile";
 import type { RelayTargetSettings } from "./store";
 import { json } from "./prompt";
@@ -31,6 +31,7 @@ import { readOwnerStepObservation } from "./stepObservation";
 import type { RelayStepObservation } from "./progressSteps";
 import { resolveOwnerReplyContext } from "./ownerBridgeContext";
 import { hostlessConversationEvidence } from "@/lib/runtime/hostlessRegistryEvidence";
+import { ownerTurnDiagnostic, type OwnerTurnDiagnostic } from "./diagnostic";
 
 export type OwnerSpawnedTurn = SpawnedTurn & { continuation?: { operationId: string } };
 export class OwnerContinuationRefused extends Error {
@@ -171,6 +172,20 @@ function ownerMissingOutcomeAnswer(request: ExternalRelayRequest, owner: OwnerIn
     : "The agent ended without reporting completion or a successful handoff. Open the project's orchestrator seat and resend your request there.";
   const compact = ukrainian ? "Без звіту. Повтори." : "No report. Retry.";
   return ownerAnswer(Array.from(explanation).length <= request.answer.max_chars ? explanation : compact, request, owner);
+}
+
+export function ownerFailureAnswer(request: ExternalRelayRequest, owner: OwnerInstruction, diagnostic: OwnerTurnDiagnostic, credentials: readonly string[] = []): ExternalRelayAnswer | null {
+  const ukrainian = /[а-яіїєґ]/iu.test(owner.text);
+  const explanation = ukrainian
+    ? `Агент не зміг завершити запит. Причина: ${diagnostic.message}. Повторіть запит або відкрийте розмову агента в Delegatus.`
+    : `The agent could not complete your request. Reason: ${diagnostic.message}. Retry your request or open the agent conversation in Delegatus.`;
+  const caps = answerCapabilities(request, "");
+  const clean = scrubOwnerOutput(explanation, credentials);
+  const compact = ukrainian ? `Помилка: ${diagnostic.message}` : `Failed: ${diagnostic.message}`;
+  const text = Array.from(clean).length <= caps.plainMax ? clean : Array.from(scrubOwnerOutput(compact, credentials)).slice(0, caps.plainMax).join("");
+  // A failure reply carries no answer parts the interrupted agent staged.
+  const answer = checkedAnswerV2({ action: "reply", text, reply_to: owner.messageId, ...(caps.rich ? { format: "plain", buttons: [] } : {}) }, request, caps, { handoff: false, ignore: false });
+  return answer?.action === "reply" ? answer : null;
 }
 
 export interface OwnerRunPorts {
@@ -541,8 +556,10 @@ type OwnerRunInput = {
   accountId: string | null; hardCapMs: number; ports?: OwnerRunPorts; deadline?: RelayRequestDeadline;
   authorize?: () => void; credentials?: readonly string[];
   inboundContext?: string;
+  rawDeadlineAt?: unknown;
   onConversation(conversationId: string, initialPrompt?: { operationId: string; initialMessage: string }): void | Promise<void>;
   onProgress?(observed: RelayStepObservation): void;
+  onDiagnostic?(diagnostic: OwnerTurnDiagnostic): void;
   continuation?: { conversationId: string; prompt: string };
 };
 export function continueOwnerAgent(input: OwnerRunInput & { conversationId: string; prompt: string }): EphemeralAgentRun {
@@ -558,6 +575,13 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
   catch { throw new Error("owner launch custody unavailable"); }
   let settled = false, admitted = false, launchAttempted = false;
   let firstMessagePending = true;
+  let diagnostic: OwnerTurnDiagnostic | undefined;
+  const diagnose = (source: OwnerTurnDiagnostic["source"], reason: unknown, details: Partial<Omit<OwnerTurnDiagnostic, "source" | "message">> = {}) => {
+    if (diagnostic) return;
+    diagnostic = { ...ownerTurnDiagnostic(source, reason, input.credentials), ...details };
+    console.error("Owner relay turn failed", JSON.stringify({ requestId: input.request.request_id, conversationId: turn.conversationId ?? null, diagnostic }));
+    input.onDiagnostic?.(diagnostic);
+  };
   const deadline = input.deadline ?? relayRequestDeadline(input.request, started);
   let stopped: "interrupt" | "kill" | null = null;
   let cancelStatus: "timeout" | "cancelled" | "failed" = "cancelled";
@@ -575,17 +599,17 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
     activeOwnerRelays.delete(input.request.request_id);
     wake.abort();
     if (refusal) { reject(refusal); return; }
-    resolve({ status, answer, durationMs: Date.now() - started, code: null, signal: null });
+    resolve({ status, answer, ...(diagnostic ? { diagnostic } : {}), durationMs: Date.now() - started, code: null, signal: null });
   };
   const persistStop = (): boolean => {
     if (custody) custody = { ...custody, ...(turn.conversationId ? { conversationId: turn.conversationId } : {}),
-      ownerTurn: { ...custody.ownerTurn!, cancel: stopped!, admissionComplete: admitted } };
+      ownerTurn: { ...custody.ownerTurn!, ...(diagnostic ? { diagnostic } : {}), cancel: stopped!, admissionComplete: admitted } };
     let found = false;
     try {
       changeRun(input.request.request_id, r => {
         found = true;
         return { ...r, ...(turn.conversationId ? { conversationId: turn.conversationId } : {}),
-          ownerTurn: { ...r.ownerTurn!, cancel: stopped!, admissionComplete: admitted } };
+          ownerTurn: { ...r.ownerTurn!, ...(diagnostic ? { diagnostic: r.ownerTurn?.diagnostic ?? diagnostic } : {}), cancel: stopped!, admissionComplete: admitted } };
       });
       return found || !custody;
     } catch {
@@ -598,11 +622,12 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
     clearTimeout(retryTimer); retryTimer = undefined;
     stopWork = (async () => {
       const durable = persistStop();
+      let confirmed = !launchAttempted;
       // The local cutoff and known conversation take precedence over stale disk data.
       if (custody?.ownerTurn) {
         let recoveredInitialPrompt: { operationId: string; initialMessage: string } | undefined;
         if (!launchAttempted) confirmStopPersistence(custody);
-        else await confirmOwnerStop(custody, ports);
+        else confirmed = await confirmOwnerStop(custody, ports);
         try {
           const recovered = readRunLedger().runs.find(r => r.requestId === input.request.request_id)?.conversationId;
           if (recovered && recovered !== turn.conversationId) {
@@ -614,14 +639,21 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
             await input.onConversation(recovered, recoveredInitialPrompt);
           }
         } catch { /* The retained local attribution keeps stop retries possible. */ }
-      } else if (turn.conversationId) {
-        for (let attempt = 0; attempt < 3; attempt++) {
-          try { await bounded(withSpawnDiagnostics(turn.clientAttemptId, () => ports.stop(turn.conversationId!, stopped!, turn.clientAttemptId)), 1000); break; }
-          catch { if (attempt < 2) await sleep(ports.stopRetryMs ?? 250); }
+      } else {
+        if (!turn.conversationId && launchAttempted) {
+          const observed = await bounded(ports.observe(turn), 1000);
+          if (observed.conversationId) turn.conversationId = observed.conversationId;
+          else confirmed = admitted && observed.state === "failed";
+        }
+        if (turn.conversationId) {
+          for (let attempt = 0; attempt < 3; attempt++) {
+            try { await bounded(withSpawnDiagnostics(turn.clientAttemptId, () => ports.stop(turn.conversationId!, stopped!, turn.clientAttemptId)), 1000); confirmed = true; break; }
+            catch { if (attempt < 2) await sleep(ports.stopRetryMs ?? 250); }
+          }
         }
       }
-      if (durable || persistStop()) finish(cancelStatus);
-      // With no durable cutoff the runner must retain its callback, lease and row.
+      if (confirmed && (durable || persistStop())) finish(cancelStatus);
+      // Retain execution and retry until both cutoff and termination are proven.
       else retryTimer = setTimeout(() => { void applyStop(); }, ports.stopRetryMs ?? 1000);
     })().catch(() => {
       console.error("Owner relay stop remains pending; custody retained");
@@ -633,19 +665,22 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
     if (settled && !stopped) return;
     if (!stopped) cancelStatus = status;
     stopped ??= input.continuation || admitted && !firstMessagePending ? "interrupt" : "kill";
-    const durable = persistStop(); wake.abort();
-    if (turn.conversationId || !durable) void applyStop();
-    else finish(status); // pending launch remains in the durable ledger
+    persistStop(); wake.abort();
+    void applyStop();
   };
   const authorize = () => { if (stopped) throw new Error("owner relay turn revoked"); input.authorize?.(); };
-  const timer = setTimeout(() => cancel("timeout"), input.hardCapMs); timer.unref();
+  const timer = setTimeout(() => { diagnose("hard-cap", "Owner turn exceeded its execution time limit", { executionLimitMs: input.hardCapMs }); cancel("timeout"); }, input.hardCapMs); timer.unref();
   const firstMessageDeadline = deadline.declineAt <= started ? deadline.at : deadline.declineAt;
   const admissionTimer = setTimeout(() => {
     if (!firstMessagePending || settled || stopped) return;
+    diagnose("admission-deadline", "Owner turn admission deadline expired before the first message was delivered", {
+      deadlineAt: new Date(deadline.at).toISOString(), cutoffAt: new Date(firstMessageDeadline).toISOString(),
+      deadlineSource: deadline.source, deadlineFallback: deadline.fallback,
+      rawDeadlineAt: typeof input.rawDeadlineAt === "string" ? ownerTurnDiagnostic("admission-deadline", input.rawDeadlineAt, input.credentials).message : null,
+    });
     stopped = input.continuation ? "interrupt" : "kill"; cancelStatus = "failed";
-    const durable = persistStop(); wake.abort();
-    if (turn.conversationId || !durable) void applyStop();
-    else finish("failed");
+    persistStop(); wake.abort();
+    void applyStop();
   }, Math.max(0, firstMessageDeadline - Date.now()));
   admissionTimer.unref();
   const authorizationTimer = setInterval(() => { if (!stopped) { try { authorize(); } catch { cancel("cancelled"); } } }, 100);
@@ -671,6 +706,7 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
               : /cannot be resumed|account is parked|no durable structured owner/.test(error) ? "unavailable" : null;
             if (reason) { finish("failed", null, new OwnerContinuationRefused(reason)); return; }
           }
+          diagnose("launch", sent?.error ?? "Owner continuation response unavailable", sent ? { status: sent.status } : {});
           cancel("failed"); await applyStop(); return;
         }
         turn.continuation = { operationId: sent.operationId };
@@ -687,12 +723,17 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
       admitted = true;
       const id = launched.body.conversationId;
       const hasConversation = typeof id === "string" && id.startsWith("conversation_");
+      if (hasConversation) turn.conversationId = id;
+      if (launched.status < 200 || launched.status >= 300 || !hasConversation) {
+        const fields = [launched.body, ...(launched.body.error && typeof launched.body.error === "object" ? [launched.body.error as Record<string, unknown>] : [])];
+        const reason = fields.flatMap(body => ["code", "error", "detail", "message"].flatMap(key => typeof body[key] === "string" ? [body[key]] : [])).join(": ");
+        diagnose("launch", reason || "Owner launch response did not confirm a conversation", { status: launched.status });
+      }
       if (launched.status >= 200 && launched.status < 300 && hasConversation) {
         firstMessagePending = launched.body.initialMessage === "queued" || launched.body.initialMessage === "pending";
         if (!firstMessagePending) clearTimeout(admissionTimer);
       }
       if (hasConversation) {
-        turn.conversationId = id;
         if (custody) custody = { ...custody, conversationId: id };
         const initialPrompt = !input.continuation && typeof launched.body.launchId === "string"
           ? { operationId: `spawn_message_${launched.body.launchId}`, initialMessage: String(launched.body.initialMessage ?? "pending") }
@@ -710,7 +751,10 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
         const observed = await withViewerOperation("relay.owner-turn.observe", () => ports.observe(turn, !!input.onProgress));
         if (settled || stopped) break;
         authorize();
-        if (observed.state === "failed" || observed.turnError) { cancel("failed"); break; }
+        if (observed.state === "failed" || observed.turnError) {
+          diagnose("observation", observed.turnError || (observed.failure ? `${observed.failure.kind}: ${observed.failure.detail}` : "Owner turn observation failed without further details"));
+          cancel("failed"); break;
+        }
         if (observed.firstMessagePending === false || observed.state === "ended") {
           firstMessagePending = false; clearTimeout(admissionTimer);
         }
@@ -730,7 +774,8 @@ export function runOwnerAgent(input: OwnerRunInput): EphemeralAgentRun {
           if (wake.signal.aborted) onAbort();
         });
       }
-    } catch {
+    } catch (error) {
+      diagnose("exception", error);
       if (!launchAttempted) {
         admitted = true; stopped = input.continuation ? "interrupt" : "kill";
         cancel("cancelled"); await applyStop(); return;

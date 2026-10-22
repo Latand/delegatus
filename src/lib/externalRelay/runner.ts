@@ -11,11 +11,12 @@ import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { resolveOwnerOutboundContext } from "./ownerOutboundContext";
 import { capacityWaiters, olderCapacityWaiter, enterRelayHold, leaveRelayHold, releasingRelayHolds, type RelayHoldCause } from "./hold";
 import { relayRequestDeadline } from "./deadline";
-import { ownerRelayAuthorized, ownerRelayAuthorizedAsync } from "./ownerAuthority";
+import { ownerRelayAuthorized, ownerRelayAuthorizedAsync, ownerRelayFailureReplyAuthorized } from "./ownerAuthority";
 import { matchPrototypeAnswer } from "@/lib/prototypeReview/telegramAnswer";
 import { runPrototypeAnswer } from "./prototypeAnswer";
 import { resolveOwnerBridgeContext } from "./ownerBridgeContext";
-import { runOwnerAgent, OwnerContinuationRefused, ownerContinuationPrompt, ownerInitialCursor, ownerRunPrompt, type OwnerRunPorts } from "./ownerRun";
+import { runOwnerAgent, OwnerContinuationRefused, ownerContinuationPrompt, ownerInitialCursor, ownerRunPrompt, ownerFailureAnswer, type OwnerRunPorts } from "./ownerRun";
+import { ownerTurnDiagnostic, type OwnerTurnDiagnostic } from "./diagnostic";
 import { readRelaySwitches } from "./switches";
 import { compactRequestSchema } from "./protocol";
 import { runCompactRequest } from "./compact";
@@ -215,10 +216,16 @@ export async function runClaimedRequest(
     ...(request?.features ? { features: request.features } : {}),
   });
   inflight.add(requestId);
+  let diagnostic: OwnerTurnDiagnostic | undefined;
+  const recordDiagnostic = (value: OwnerTurnDiagnostic) => {
+    diagnostic ??= value;
+    recorder?.diagnose(diagnostic);
+  };
   let releaseRequested = false;
   let deliverySettled!: () => void;
   const released = new Promise<void>(resolve => { deliverySettled = resolve; });
   let allowOwnerReply: (() => boolean) | undefined;
+  let failureReply = false;
   let leaseUnavailable = false;
   let admissionHeld = false;
   const admissionCutoff = () => admissionHeld ? deadline.declineAt : deadline.at;
@@ -311,7 +318,7 @@ export async function runClaimedRequest(
       let sent: Awaited<ReturnType<typeof completeRelayRequest>>;
       try {
         sent = transport
-          ? await transport.complete(body, until, caps?.plainMax ?? 4000, !!allowOwnerReply)
+          ? await transport.complete(body, until, caps?.plainMax ?? 4000, failureReply ? "failure" : !!allowOwnerReply)
           : await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature, caps?.plainMax);
       } catch {
         console.error("External relay helper completion unavailable; using Viewer transport");
@@ -537,7 +544,7 @@ export async function runClaimedRequest(
       try { owner.bridgeReport = resolveOwnerBridgeContext(request, owner, relay.api_base); }
       catch { owner.bridgeReport = null; }
     }
-    if (owner) allowOwnerReply = () => ownerRelayAuthorized(relay.id, target.id, requestId);
+    if (owner) allowOwnerReply = () => (failureReply ? ownerRelayFailureReplyAuthorized : ownerRelayAuthorized)(relay.id, target.id, requestId);
     const authority = conversationAuthority(request.input.requester, !!owner);
     const usesConversation = !prototype && readRelaySwitches().chain_conversations && request.chat && authority;
     let preResolvedConversation: RelayConversation | null = null;
@@ -751,8 +758,10 @@ export async function runClaimedRequest(
           if (leaseUnavailable || callAbort.signal.aborted || !allowOwnerReply!()) throw new Error("owner relay authorization revoked");
         }, { telegramUserId: relay.owner.namespace === "telegram" ? relay.owner.id : undefined }) : owner ? runOwnerAgent({
           ...(conversation?.conversationId ? { continuation: { conversationId: conversation.conversationId, prompt: turn!.prompt } } : {}),
-          authorize: () => { if (leaseUnavailable || callAbort.signal.aborted || !allowOwnerReply!()) throw new Error("owner relay authorization revoked"); },
+          authorize: () => { if (leaseUnavailable || callAbort.signal.aborted || !ownerRelayAuthorized(relay.id, target.id, requestId)) throw new Error("owner relay authorization revoked"); },
           credentials: [relay.credential],
+          onDiagnostic: recordDiagnostic,
+          rawDeadlineAt: rawRequest.deadline_at,
           inboundContext: inbound?.prompt,
           request, owner, target, deadline, accountId: selectedAccount().accountId,
           hardCapMs: Math.min(target.hardCapMinutes * 60_000, runtime?.timeoutMs ?? Infinity), ports: runtime?.ownerPorts,
@@ -857,6 +866,7 @@ export async function runClaimedRequest(
         rounds--; continue;
       }
       ownerParts?.close();
+      if (result.diagnostic) recordDiagnostic(result.diagnostic);
       if (ownerParts) { stagedAttachments = ownerParts.parts().attachments; answerDrops.push(...ownerParts.drops); }
       await ownerTools?.close(result.status);
       if (conversation && !owner) {
@@ -902,6 +912,8 @@ export async function runClaimedRequest(
     if (leaseUnavailable) return null;
     // A hand-off returns the request to the service, which answers it with
     // its own agent (§A.8); it carries no text from this install.
+    failureReply = !!owner && !!diagnostic && result?.status !== "cancelled";
+    if (failureReply) stagedAttachments = [];
     const body: ExternalRelayCompletion = completion?.action === "handoff"
       ? declined(leaseId, "handoff", null, HANDOFF_DETAIL)
       : completion
@@ -911,6 +923,8 @@ export async function runClaimedRequest(
           answer: completion,
           duration_ms: Date.now() - started,
         }
+      : owner && diagnostic && result?.status !== "cancelled" && allowOwnerReply?.()
+      ? { lease_id: leaseId, outcome: "answered", answer: ownerFailureAnswer(request, owner, diagnostic, [relay.credential])!, duration_ms: Date.now() - started }
       : failed(
           leaseId,
           result?.status === "violation"
@@ -934,6 +948,17 @@ export async function runClaimedRequest(
     if (run) {
       if (!runFinished) run.cancel();
       await run.done;
+    }
+    if (owner) {
+      if (!diagnostic) {
+        const value = ownerTurnDiagnostic("exception", error, [relay.credential]);
+        recordDiagnostic(value);
+        console.error("Owner relay turn failed", JSON.stringify({ requestId, diagnostic: value }));
+      }
+      failureReply = true;
+      stagedAttachments = [];
+      if (allowOwnerReply?.()) return await finish({ lease_id: leaseId, outcome: "answered",
+        answer: ownerFailureAnswer(request, owner, diagnostic!, [relay.credential])!, duration_ms: Date.now() - deadline.receivedAt });
     }
     return await finish(failed(leaseId, "agent_error"));
   } finally {
