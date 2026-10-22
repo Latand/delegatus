@@ -6,7 +6,7 @@ import { AgentRegistry, normalizeRegistry, type RegistryFile } from "@/lib/agent
 import { SqliteAgentRegistryStore, registryStartupSelectionUnchanged } from "@/lib/agent/sqliteRegistryStore";
 import { runStructuredHostRetirementSweep } from "./structuredHostRetirement";
 import { pipelineStartupMemberships, pipelineStartupMembershipsAsync, startupConversationRows } from "./startup";
-import { demoteSkippedStructuredRegistryHosts } from "./registry";
+import { demoteSkippedStructuredRegistryHosts, reconcileDeadStructuredRegistryHostsOffLoop } from "./registry";
 import { determined } from "./determinable";
 
 const NOW = Date.parse("2026-10-16T00:00:00Z");
@@ -281,4 +281,27 @@ test("orphan authorization uses keyed evidence and preserves a protected owner",
     expect(signals).toBe(0);
     expect(registry.startupHostSnapshot(entry.key).entries["codex:reader-0"]!.structuredHost!.process).toEqual(entry.structuredHost!.process);
   } finally {registry.readOnlySnapshot=original;registry.close();fs.rmSync(root,{recursive:true,force:true});}
+});
+
+test("reconciliation retains custody replaced at the preparation boundary", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-custody-boundary-"));
+  const filename = path.join(root, "registry.json");
+  const initial = seeded(root, 0);
+  const entry = initial.entries["codex:reader-0"]!;
+  initial.conversations["conversation_reader_0"]!.turn.state = "terminal";
+  fs.writeFileSync(filename, JSON.stringify(initial));
+  const registry = new AgentRegistry(filename, () => false, undefined, { sqliteMode: "sqlite" });
+  let replaced = false;
+  try {
+    await reconcileDeadStructuredRegistryHostsOffLoop(registry, () => false, () => {
+      if (replaced) return;
+      replaced = true;
+      registry.upsert({ ...entry, claimOwner: "replacement", claimEpoch: 8,
+        structuredHost: { ...entry.structuredHost!, writerClaimEpoch: 8 } });
+    });
+    expect(replaced).toBe(true);
+    expect(registry.startupHostSnapshot(entry.key).entries["codex:reader-0"]).toMatchObject({
+      claimOwner: "replacement", claimEpoch: 8, structuredHost: { writerClaimEpoch: 8 },
+    });
+  } finally { registry.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });

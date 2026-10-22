@@ -1204,8 +1204,8 @@ export async function reconcileDeadStructuredRegistryHostsOffLoop(
   assertActive: () => void = () => {},
 ): Promise<void> {
   await registry.prepareReadOnlySnapshot();
-  assertActive();
   const rows = registry.structuredHostEntries();
+  assertActive();
   for (const [index, observed] of rows.entries()) {
     if (!observed.structuredHost?.process) continue;
     if (index > 0 && index % 16 === 0) await new Promise<void>(resolve => setTimeout(resolve, 0));
