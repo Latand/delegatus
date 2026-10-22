@@ -75,6 +75,19 @@ function capacity(observation: DurableQuotaObservation | undefined, now: number,
 }
 
 /**
+ * One account's quota verdict with the reading it rests on. A stage guard
+ * hold compares `observedAt` with the reading that confirmed the hold, so an
+ * aged copy of that reading never counts as new evidence of capacity.
+ */
+export function accountQuotaVerdict(observations: DurableQuotaObservation[], accountId: string, now = Date.now(),
+  model?: string | null): { capacity: Capacity["kind"]; resetsAt: number | null; observedAt: string | null } {
+  const observation = observations.find((item) => item.accountId === accountId);
+  const verdict = capacity(observation, now, model);
+  return { capacity: verdict.kind, resetsAt: verdict.kind === "exhausted" ? verdict.resetsAt : null,
+    observedAt: observation?.observedAt ?? null };
+}
+
+/**
  * Selects an authenticated account for an unattended spawn. Confirmed fresh
  * headroom wins, then an account whose quota is unknown. Exhaustion is only
  * reported when every authenticated account has a fresh zero-capacity sample

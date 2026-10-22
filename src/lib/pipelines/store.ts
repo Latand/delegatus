@@ -253,7 +253,16 @@ function isStageSuspension(value: unknown): boolean {
     && dated(suspension.requestedAt)
     && (suspension.stoppedAt === undefined || dated(suspension.stoppedAt))
     && (suspension.stopRevision === undefined || Number.isSafeInteger(suspension.stopRevision) && (suspension.stopRevision as number) >= 0)
-    && (suspension.operatorStoppedAt === undefined || dated(suspension.operatorStoppedAt));
+    && (suspension.operatorStoppedAt === undefined || dated(suspension.operatorStoppedAt))
+    && (suspension.hold === undefined || isSuspensionHold(suspension.hold));
+}
+
+function isSuspensionHold(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const hold = value as Record<string, unknown>;
+  return typeof hold.accountId === "string" && hold.accountId.length > 0
+    && (hold.resetsAt === null || Number.isSafeInteger(hold.resetsAt) && (hold.resetsAt as number) >= 0)
+    && (hold.observedAt === null || typeof hold.observedAt === "string" && Number.isFinite(Date.parse(hold.observedAt)));
 }
 
 function isPublicationTextRepair(value: unknown): boolean {

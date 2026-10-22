@@ -43,7 +43,7 @@ import { accountManager, AccountAuthenticationRequiredError, ProjectAccountRefus
 import { validateMigrationTargetRoot } from "@/lib/accounts/migration/targetRoot";
 import { sanitizeProviderError } from "@/lib/accounts/migration/safeHistoryCopy";
 import type { AccountContext, ProjectSpawnResolution } from "@/lib/accounts/contracts";
-import { selectHeadlessAccount } from "@/lib/accounts/headlessSelection";
+import { accountQuotaVerdict, selectHeadlessAccount } from "@/lib/accounts/headlessSelection";
 import { AccountProjectBindingsUnreadableError, allowedAccountIdsForProject } from "@/lib/accounts/projectBindings";
 import {
   ENGINE_NOT_CONNECTED,
@@ -526,6 +526,8 @@ export interface PipelinePorts {
   accountLabel?(engine: FlowEngine, accountId: string): string;
   /** The same capacity classifier used for admission, including the paid-credit guard. */
   accountExhausted?(engine: FlowEngine, accountId: string, model: string | null): boolean;
+  /** The same classifier's verdict with the reading behind it, for a guard hold. */
+  accountQuota?(engine: FlowEngine, accountId: string, model: string | null): ReturnType<typeof accountQuotaVerdict>;
   now(): string;
 }
 
@@ -1600,6 +1602,7 @@ export function defaultPipelinePorts(
     resolveProjectSpawn: (engine, request) => accountManager.resolveProjectSpawn(engine, request),
     accountExhausted: (engine, accountId, model) => selectHeadlessAccount([{ id: accountId, authPresent: true }],
       registry.quotaObservations(engine), accountId, [], Date.now(), model).kind === "exhausted",
+    accountQuota: (engine, accountId, model) => accountQuotaVerdict(registry.quotaObservations(engine), accountId, Date.now(), model),
     accountForTranscript: (engine, transcriptPath) => {
       const owner = accountManager.resolveTranscriptOwner(engine, transcriptPath);
       if (!owner) return null;
@@ -7407,14 +7410,52 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
   return changed;
 }
 
+const USAGE_GUARD_DETAIL = "the stage account reached its usage or paid-credit guard";
+
+function stageAccountId(attempt: PipelineStageAttempt, ports: PipelinePorts): string | null {
+  const engine = attempt.effectiveRole.engine;
+  return attempt.accountId ?? attempt.providerWait?.accountId ?? (attempt.agentPath ? ports.accountForTranscript?.(engine, attempt.agentPath)?.accountId ?? null : null);
+}
+
 function stageAccountBlocked(pipeline: Pipeline, attempt: PipelineStageAttempt, ports: PipelinePorts): string | null {
   const engine = attempt.effectiveRole.engine;
-  const accountId = attempt.accountId ?? attempt.providerWait?.accountId ?? (attempt.agentPath ? ports.accountForTranscript?.(engine, attempt.agentPath)?.accountId : null);
+  const accountId = stageAccountId(attempt, ports);
   if (!accountId) return null;
-  if (ports.accountExhausted?.(engine, accountId, attempt.effectiveRole.model)) return "the stage account reached its usage or paid-credit guard";
+  if (ports.accountExhausted?.(engine, accountId, attempt.effectiveRole.model)) return USAGE_GUARD_DETAIL;
   const pool = ports.allowedAccountIds?.(pipeline.project, engine);
   if (pool && !pool.includes(accountId)) return "the stage account left the project binding";
   return null;
+}
+
+/** Records or refreshes the confirmed exhaustion behind an account suspension
+    (issue #3158). A later read that has only aged leaves the hold standing. */
+function recordAccountHold(attempt: PipelineStageAttempt, blocked: string | null, ports: PipelinePorts): void {
+  const suspension = attempt.suspension!;
+  if (suspension.reason !== "account" || !ports.accountQuota) return;
+  let quota: ReturnType<typeof accountQuotaVerdict>;
+  let accountId: string | null;
+  try {
+    accountId = suspension.hold?.accountId ?? stageAccountId(attempt, ports);
+    if (!accountId) return;
+    quota = ports.accountQuota(attempt.effectiveRole.engine, accountId, attempt.effectiveRole.model);
+  } catch { return; } // An unreadable reading neither confirms nor ends a hold.
+  if (blocked === USAGE_GUARD_DETAIL && quota.capacity === "exhausted") {
+    suspension.hold = { accountId, resetsAt: quota.resetsAt, observedAt: quota.observedAt };
+    return;
+  }
+  const hold = suspension.hold;
+  if (!hold) return;
+  const reset = hold.resetsAt !== null && unixMs(ports.now()) >= hold.resetsAt * 1_000;
+  const newer = quota.capacity === "available" && quota.observedAt !== null
+    && (hold.observedAt === null || unixMs(quota.observedAt) > unixMs(hold.observedAt));
+  if (reset || newer) delete suspension.hold;
+}
+
+function accountHoldDetail(attempt: PipelineStageAttempt, ports: PipelinePorts): string {
+  const hold = attempt.suspension!.hold!;
+  const label = ports.accountLabel?.(attempt.effectiveRole.engine, hold.accountId) ?? hold.accountId;
+  return `${attempt.suspension!.detail}; host stopped; waiting for account ${label}${hold.resetsAt !== null
+    ? ` to reset at ${new Date(hold.resetsAt * 1_000).toISOString()}` : " until a new reading shows capacity"}; keeping the current worktree`;
 }
 
 function suspensionStopKey(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt): string {
@@ -7482,6 +7523,7 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
   catch { return !!attempt.suspension; } // An unreadable binding cannot authorize a successor.
   if (!attempt.suspension && !blocked) return false;
   attempt.suspension ??= { reason: "account", detail: blocked!, requestedAt: ports.now() };
+  recordAccountHold(attempt, blocked, ports);
   if (!await stopSuspendedStage(pipeline, stage, attempt, ports, persist)) return true;
   if (pipeline.state === "paused" || attempt.report) return true;
   if (attempt.conversationId && ports.conversationOperatorStopped) {
@@ -7506,10 +7548,13 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
     if (parsed) { await settleStageVerdict(pipeline, stage, attempt, parsed, ports, persist); return true; }
   }
   let resolution: ProjectSpawnResolution;
+  // A held account is the last resort, so another allowed account with
+  // capacity takes the stage once instead of waiting for the reset.
+  const held = attempt.suspension.hold?.accountId;
   try {
     resolution = (ports.resolveProjectSpawn ?? accountManager.resolveProjectSpawn.bind(accountManager))(attempt.effectiveRole.engine,
       { project: pipeline.project, model: attempt.effectiveRole.model, preferredId: attempt.accountId,
-        unavailableIds: blocked && attempt.accountId ? [attempt.accountId] : [] });
+        unavailableIds: [...new Set([...blocked && attempt.accountId ? [attempt.accountId] : [], ...held ? [held] : []])] });
   } catch (error) {
     pipeline.stateDetail = `${attempt.suspension.detail}; waiting for account selection: ${redactBounded(String(error), 300)}`;
     await persist(); ports.scheduleTick?.(30_000); return true;
@@ -7518,8 +7563,17 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
   let targetBlocked = true;
   try { targetBlocked = !target || Boolean(stageAccountBlocked(pipeline, { ...attempt, accountId: target }, ports)); }
   catch { /* Retain stop custody until the binding can be read. */ }
+  if (target && !targetBlocked && target === held) {
+    // Aged readings of the confirmed exhaustion are no evidence of capacity.
+    pipeline.stateDetail = accountHoldDetail(attempt, ports);
+    const resetsAt = attempt.suspension.hold!.resetsAt;
+    await persist();
+    ports.scheduleTick?.(resetsAt === null ? 60_000 : Math.min(5 * 60_000, Math.max(30_000, resetsAt * 1_000 - unixMs(ports.now()))));
+    return true;
+  }
   if (!target || targetBlocked) {
-    pipeline.stateDetail = `${attempt.suspension.detail}; host stopped; waiting for an allowed account with capacity`;
+    pipeline.stateDetail = attempt.suspension.hold ? accountHoldDetail(attempt, ports)
+      : `${attempt.suspension.detail}; host stopped; waiting for an allowed account with capacity`;
     await persist(); ports.scheduleTick?.(30_000); return true;
   }
   const oldDefinition = attemptStage(stage, attempt);
@@ -7529,6 +7583,19 @@ async function reconcileStageAccountGuard(pipeline: Pipeline, stage: PipelineSta
   try {
     if (stageAccountBlocked(pipeline, { ...attempt, accountId: target }, ports)) return true;
   } catch { return true; }
+  if (!attempt.launchId && !attempt.conversationId && !attempt.agentPath && !attempt.paneId) {
+    // Nothing ran for this attempt (its launch was refused before a
+    // reservation), so it launches again itself: a replacement edge whose
+    // parent never launched carries no creation receipts (issue #3158).
+    delete attempt.suspension;
+    attempt.state = "pending"; attempt.completedAt = null; attempt.error = null;
+    attempt.accountId = target;
+    if (attempt.definition) attempt.definition.account = target;
+    resetStageForRetry(pipeline, stage);
+    pipeline.stateDetail = "launching the stopped stage on an allowed account; keeping the current worktree";
+    await persist(); ports.scheduleTick?.(0);
+    return true;
+  }
   attempt.state = "failed"; attempt.completedAt = ports.now(); attempt.error = attempt.suspension.detail;
   resetStageForRetry(pipeline, stage);
   const next = (await newAttempt(pipeline, stage))!;
