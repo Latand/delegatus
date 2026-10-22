@@ -150,6 +150,8 @@ describe("accounts on the new install", () => {
     expect(again.accounts.map(account => account.action)).toEqual(["existing", "existing", "existing"]);
     await within(here, () => applyTransferImport({ bundleSha256: again.bundleSha256, revisions: again.revisions }, { accounts: { identity } }));
     expect(await within(here, () => listCodexAccounts().length)).toBe(2);
+    // …and keeps what the checks settled.
+    expect((await within(here, () => importedAccountRows())).map(row => row.state).sort()).toEqual(["not_needed", "usable", "usable"]);
   }, 120_000);
 
   test("an account the target's own engine home holds under another login becomes a managed account", async () => {
@@ -181,6 +183,17 @@ describe("accounts on the new install", () => {
     // An account no import brought is left alone.
     await within(here, () => settleImportedAccountSignIn("codex", "default", { identity, readLimits: limitsRead, select: async (_engine, id) => { selected.push(id); } }));
     expect(selected).toEqual([teamHere]);
+  }, 60_000);
+
+  test("the target's own engine home stands in when it is signed into the same identity, and waits for its check", async () => {
+    const here = await target("legacy-same");
+    await within(here, () => signIn("claude", path.join(here.home, ".claude")));
+    const plan = await within(here, () => previewTransferImport(bundle, {}, { accounts: { identity } }));
+    expect(plan.accounts[0]).toMatchObject({ sourceId: "default", action: "legacy", plannedId: "default" });
+    const { report } = await within(here, () => applyTransferImport({ bundleSha256: plan.bundleSha256, revisions: plan.revisions }, { accounts: { identity } }));
+    expect(report.accounts.find(row => row.sourceId === "default")?.state).toBe("unchecked");
+    expect(report.accountsReady).toBe(false);
+    expect(await within(here, () => listClaudeAccounts().map(account => account.label))).toEqual(["Main", "Work"]);
   }, 60_000);
 
   test("accounts interrupted after the commit are made by recovery from the import record", async () => {

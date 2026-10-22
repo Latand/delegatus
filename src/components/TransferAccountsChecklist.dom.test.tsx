@@ -26,6 +26,7 @@ const ROWS: AccountReportRow[] = [
   row({ sourceId: "main", targetId: "default", label: "Main", state: "read_failed", detail: "quota-probe-timeout" }),
   row({ sourceId: "spare", label: "Spare", state: "usable" }),
   row({ sourceId: "old", targetId: null, label: "Old", state: "not_created", detail: "provider-account" }),
+  row({ sourceId: "here", targetId: "here", label: "Here", state: "unchecked" }),
 ];
 
 let mounted: { root: Root; host: HTMLElement } | null = null;
@@ -50,14 +51,14 @@ const buttons = (host: Element) => [...host.querySelectorAll("button")].map(butt
 
 test("every state and the source facts read as words, in English and Ukrainian", () => {
   for (const [locale, expected] of [
-    ["en", ["Signed out", "Different account", "Limits not read", "Ready", "Not created", "Active on the other install", "Bound to 2 projects", "quota-probe-timeout"]],
-    ["uk", ["Не ввійдено", "Інший обліковий запис", "Ліміти не прочитано", "Готовий", "Не створено", "Активний на іншій інсталяції", "Прив'язаний до 2 проєктів"]],
+    ["en", ["Signed out", "Different account", "Limits not read", "Ready", "Not created", "Not checked yet", "Active on the other install", "Bound to 2 projects", "quota-probe-timeout"]],
+    ["uk", ["Не ввійдено", "Інший обліковий запис", "Ліміти не прочитано", "Готовий", "Не створено", "Ще не перевірено", "Активний на іншій інсталяції", "Прив'язаний до 2 проєктів"]],
   ] as const) {
     setLocale(locale);
     const host = render(<TransferAccountsChecklist engine="codex" rows={ROWS} onSignIn={async () => {}} onAction={async () => {}} />);
     const text = host.textContent ?? "";
     for (const words of expected) expect(text).toContain(words);
-    expect(text).not.toMatch(/signed_out|different_account|read_failed|not_created/);
+    expect(text).not.toMatch(/signed_out|different_account|read_failed|not_created|unchecked/);
     flushSync(() => mounted!.root.unmount());
     mounted!.host.remove();
     mounted = null;
@@ -75,6 +76,7 @@ test("each row offers what its state allows and the actions name the account", a
   expect(buttons(item("main"))).toEqual(["Sign in again", "Not needed here"]);
   expect(buttons(item("spare"))).toEqual(["Not needed here"]);
   expect(buttons(item("old"))).toEqual([]);
+  expect(buttons(item("here"))).toEqual(["Not needed here"]);
   // One action at a time: each settles before the next press.
   const settle = () => new Promise(resolve => setTimeout(resolve, 0));
   click(item("team").querySelector("button"));

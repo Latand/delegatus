@@ -184,9 +184,10 @@ export interface AccountReportRow {
   sourceId: string;
   targetId: string | null;
   label: string;
-  /** `not_created`: the account could not be made here (a provider account
+  /** `unchecked`: signed in here, its live limit read not taken yet.
+      `not_created`: the account could not be made here (a provider account
       needs its token; a failed setup names its cause in `detail`). */
-  state: "signed_out" | "usable" | "different_account" | "read_failed" | "not_needed" | "not_created";
+  state: "signed_out" | "unchecked" | "usable" | "different_account" | "read_failed" | "not_needed" | "not_created";
   detail?: string;
   bindings: string[];
   activeOnSource: boolean;

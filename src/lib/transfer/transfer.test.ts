@@ -222,6 +222,16 @@ describe("apply refusals", () => {
     expect(await within(target, () => readImportRecords())).toEqual([]);
   }, 60_000);
 
+  test("never replaces a settings file that is there and does not parse", async () => {
+    const target = await freshTarget("damaged-target");
+    const damaged = path.join(target.state, "project-settings.json");
+    fs.writeFileSync(damaged, "{ half a file");
+    const plan = await within(target, () => previewTransferImport(bundle, { mappings: mappingFor(target) }));
+    expect(plan.sections.find(section => section.name === "settings.projects")!.skippedReasons["target-file-unreadable"]).toBe(1);
+    await within(target, () => applyTransferImport({ bundleSha256: plan.bundleSha256, revisions: plan.revisions, mappings: mappingFor(target) }));
+    expect(fs.readFileSync(damaged, "utf8")).toBe("{ half a file");
+  }, 60_000);
+
   test("refuses a bundle that was never previewed here and a mapping to a missing folder", async () => {
     const target = await freshTarget("unstaged-target");
     const unstaged = await within(target, () => applyTransferImport({ bundleSha256: "0".repeat(64), revisions: {} })).then(() => null, (error: unknown) => error);

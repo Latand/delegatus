@@ -813,6 +813,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "transfer.accounts.bound": { one: "Прив'язаний до {count} проєкту", few: "Прив'язаний до {count} проєктів", many: "Прив'язаний до {count} проєктів", other: "Прив'язаний до {count} проєкту" },
   "transfer.accounts.state.signed_out": "Не ввійдено",
   "transfer.accounts.state.usable": "Готовий",
+  "transfer.accounts.state.unchecked": "Ще не перевірено",
   "transfer.accounts.state.different_account": "Інший обліковий запис",
   "transfer.accounts.state.read_failed": "Ліміти не прочитано",
   "transfer.accounts.state.not_needed": "Тут не потрібен",

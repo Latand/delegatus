@@ -297,18 +297,21 @@ export function buildPlan(decoded: DecodedBundle, request: { mappings?: Record<s
   }
 
   /* Files are planned per file, since several parts can share one. */
-  const fileState = new Map<string, { root: "state" | "config"; relative: string; object: Record<string, unknown> | unknown[] | string | null; original: unknown; changed: boolean }>();
+  const fileState = new Map<string, { root: "state" | "config"; relative: string; object: Record<string, unknown> | unknown[] | string | null; original: unknown; unreadable: boolean; changed: boolean }>();
   const fileFor = (root: "state" | "config", relative: string, parse: "json" | "text") => {
     const id = `${root}:${relative}`;
     let state = fileState.get(id);
     if (!state) {
       const text = readTargetText(root, relative);
       let object: Record<string, unknown> | unknown[] | string | null = null;
+      /* A file that is there and does not parse is never replaced: its store
+         reports it damaged, and the operator repairs it. */
+      let unreadable = false;
       if (text !== null) {
         if (parse === "text") object = text;
-        else { try { object = JSON.parse(text) as Record<string, unknown>; } catch { object = null; } }
+        else { try { object = JSON.parse(text) as Record<string, unknown>; } catch { unreadable = true; } }
       }
-      state = { root, relative, object, original: structuredClone(object), changed: false };
+      state = { root, relative, object, original: structuredClone(object), unreadable, changed: false };
       fileState.set(id, state);
       revisions[`file:${id}`] = fileRevision(root, relative);
     }
@@ -333,7 +336,7 @@ export function buildPlan(decoded: DecodedBundle, request: { mappings?: Record<s
         break;
       case "map": {
         const file = fileFor(part.root, part.file, "json");
-        if (file.object !== null && !isRecordObject(file.object)) {
+        if (file.unreadable || (file.object !== null && !isRecordObject(file.object))) {
           for (const row of entry.rows) count(plan, "skipped", `${part.id}|${row.key}`, "target-file-unreadable");
           break;
         }
@@ -352,7 +355,7 @@ export function buildPlan(decoded: DecodedBundle, request: { mappings?: Record<s
       }
       case "set": {
         const file = fileFor(part.root, part.file, "json");
-        if (file.object !== null && !Array.isArray(file.object)) {
+        if (file.unreadable || (file.object !== null && !Array.isArray(file.object))) {
           for (const row of entry.rows) count(plan, "skipped", `${part.id}|${row.key}`, "target-file-unreadable");
           break;
         }
@@ -537,7 +540,7 @@ function redoList(projects: readonly ProjectPlan[], writes: PlannedWrites, decod
 /** The account plan against this install, and the accounts section's counts moved to match it. */
 async function withAccountPlan(built: Built, deps: AccountTargetDeps | undefined): Promise<Built> {
   if (!built.writes.accountRecords.length) return built;
-  const plans = await planAccounts(built.writes.accountRecords, deps);
+  const plans = await planAccounts(built.writes.accountRecords, built.plan.exportId, deps);
   const section = built.plan.sections.find(candidate => candidate.name === "accounts");
   for (const account of plans) {
     if (!section) break;

@@ -814,6 +814,7 @@ export const en = {
   "transfer.accounts.bound": { one: "Bound to {count} project", other: "Bound to {count} projects" },
   "transfer.accounts.state.signed_out": "Signed out",
   "transfer.accounts.state.usable": "Ready",
+  "transfer.accounts.state.unchecked": "Not checked yet",
   "transfer.accounts.state.different_account": "Different account",
   "transfer.accounts.state.read_failed": "Limits not read",
   "transfer.accounts.state.not_needed": "Not needed here",

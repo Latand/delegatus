@@ -195,8 +195,9 @@ export function validAccountRecord(key: string, value: unknown): boolean {
 }
 
 /** What apply will do with each account, against this install now. Read-only. */
-export async function planAccounts(records: readonly StoredRow[], deps: AccountTargetDeps = {}): Promise<AccountPlan[]> {
+export async function planAccounts(records: readonly StoredRow[], exportId: string, deps: AccountTargetDeps = {}): Promise<AccountPlan[]> {
   const list = deps.list ?? listTarget;
+  const identity = deps.identity ?? productionIdentityReader;
   const accounts = records.filter(row => row.key.startsWith("account:")).map(row => row.value as AccountRecordValue);
   const bindings = records.filter(row => row.key.startsWith("binding:")).map(row => row.value as BindingRecordValue);
   const previous = new Map(importedAccountRows().map(row => [`${row.engine}:${row.sourceId}`, row] as const));
@@ -215,8 +216,13 @@ export async function planAccounts(records: readonly StoredRow[], deps: AccountT
       continue;
     }
     if (account.kind === "legacy") {
+      /* The target's own engine home stands in while it is signed out or
+         signed into the same identity (§2.3); otherwise a managed account. */
       const legacy = here.find(candidate => candidate.kind === "legacy");
-      if (legacy && !legacy.signedIn) { plans.push({ ...base, action: "legacy", plannedId: legacy.id }); continue; }
+      if (legacy && (!legacy.signedIn || (account.identity && identityHash(exportId, await identity(account.engine, legacy)) === account.identity))) {
+        plans.push({ ...base, action: "legacy", plannedId: legacy.id });
+        continue;
+      }
     }
     const same = here.find(candidate => candidate.id === account.id && candidate.kind === "managed");
     if (same && account.kind === "managed") { plans.push({ ...base, action: "existing", plannedId: same.id }); continue; }
@@ -229,10 +235,10 @@ export async function planAccounts(records: readonly StoredRow[], deps: AccountT
     existing setup, apply its bindings at once, and record the checklist rows.
     Idempotent: an account already created for this source account is reused. */
 export async function applyAccounts(importId: string, exportId: string, records: readonly StoredRow[], deps: AccountTargetDeps = {}): Promise<ImportedAccountRow[]> {
-  const plans = await planAccounts(records, deps);
+  const plans = await planAccounts(records, exportId, deps);
+  const previous = new Map(importedAccountRows().map(row => [`${row.engine}:${row.sourceId}`, row] as const));
   const accounts = new Map(records.filter(row => row.key.startsWith("account:")).map(row => [row.key, row.value as AccountRecordValue] as const));
   const bindings = records.filter(row => row.key.startsWith("binding:")).map(row => row.value as BindingRecordValue);
-  const identity = deps.identity ?? productionIdentityReader;
   const list = deps.list ?? listTarget;
   const rows: ImportedAccountRow[] = [];
   const mapped = new Map<string, string>();
@@ -241,20 +247,24 @@ export async function applyAccounts(importId: string, exportId: string, records:
     let targetId = plan.plannedId;
     let state: ImportedAccountRow["state"] = "signed_out";
     let detail: string | undefined;
-    if (plan.action === "legacy" && plan.kind === "legacy") {
-      /* The target's own engine home stands in only while it is signed out
-         or signed into the same identity (§2.3). */
-      const legacy = (await list(plan.engine)).find(candidate => candidate.kind === "legacy");
-      if (legacy?.signedIn && identityHash(exportId, await identity(plan.engine, legacy)) !== source.identity) targetId = null;
-    }
     if (plan.action === "skip") { state = "not_created"; detail = plan.reason; targetId = null; }
     else if (!targetId) {
       try { targetId = await (deps.create ?? createTarget)(plan.engine, plan.label); }
       catch (error) { state = "not_created"; detail = error instanceof Error ? error.name : "create-failed"; }
     }
-    if (targetId) mapped.set(`${plan.engine}:${plan.sourceId}`, targetId);
+    if (targetId) {
+      mapped.set(`${plan.engine}:${plan.sourceId}`, targetId);
+      /* A signed-in account waits for its live read; a re-import keeps the
+         state a check already settled. */
+      const earlier = previous.get(`${plan.engine}:${plan.sourceId}`);
+      const signedIn = (await list(plan.engine)).find(candidate => candidate.id === targetId)?.signedIn ?? false;
+      if (earlier?.targetId === targetId && earlier.state !== "not_created") { state = earlier.state; detail = earlier.detail; }
+      else if (signedIn) state = "unchecked";
+    }
+    const earlier = previous.get(`${plan.engine}:${plan.sourceId}`);
     rows.push({ kind: "account", importId, exportId, engine: plan.engine, sourceId: plan.sourceId, targetId, label: plan.label, sourceKind: plan.kind,
-      activeOnSource: plan.sourceActive, identity: source.identity, bindings: plan.bindings, state, ...(detail ? { detail } : {}) });
+      activeOnSource: plan.sourceActive, identity: source.identity, bindings: plan.bindings, state, ...(detail ? { detail } : {}),
+      ...(earlier?.targetId === targetId && earlier.confirmedDifferent ? { confirmedDifferent: true } : {}) });
   }
   /* Bindings at once, before any account signs in: a binding is what keeps a
      project's work off every other account, so a missing one would widen it.
@@ -348,5 +358,6 @@ export function accountReportRows(rows: readonly ImportedAccountRow[] = imported
 }
 
 export function accountsReady(rows: readonly AccountReportRow[]): boolean {
+  /* An unchecked row is not ready: the import is done when every account read its limits here or is not needed. */
   return rows.every(row => row.state === "usable" || row.state === "not_needed");
 }

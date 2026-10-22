@@ -19,6 +19,7 @@ type Engine = "claude" | "codex";
 
 const STATE_TONE: Record<Row["state"], string> = {
   signed_out: "text-warning",
+  unchecked: "text-warning",
   usable: "text-success",
   different_account: "text-danger",
   read_failed: "text-danger",
