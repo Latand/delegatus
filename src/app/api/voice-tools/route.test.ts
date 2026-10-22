@@ -215,3 +215,37 @@ test("a same-origin local client cannot approve a successfully probed server", a
     expect((await new VoiceToolsStore(store.directory).view()).servers.music.state).toBe("pending");
   } finally { await peer.stop(true); setVoiceToolHubForTests(new VoiceToolHub(new VoiceToolsStore(path.join(root, "state")))); }
 });
+
+test("both proposal routes, approval and dry run refuse a secret bound to another origin", async () => {
+  const store = new VoiceToolsStore(path.join(root, "destination-state"));
+  setVoiceToolHubForTests(new VoiceToolHub(store));
+  let contacts = 0;
+  const peer = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() {
+    contacts++;
+    return new Response(null, { status: 500 });
+  } });
+  const local = { ...proposal, transport: { ...proposal.transport, url: `http://127.0.0.1:${peer.port}/mcp` } };
+  try {
+    // A missing reference can be proposed, but gains no destination authority.
+    expect((await POST(request("POST", { action: "propose", proposal: local }))).status).toBe(200);
+    expect((await POST(request("POST", { action: "secrets", secrets: {
+      "music-token": { value: "synthetic-voice-credential", destinations: ["https://example.invalid"] },
+    } }))).status).toBe(200);
+    const mcp = internalServiceHeaders("mcp");
+    const responses = [
+      await POST(request("POST", { action: "propose", proposal: local })),
+      await proposalPOST(request("POST", { action: "propose", proposal: local, clientRequestId: "wrong-destination", conversationId: "conversation_worker" }, mcp)),
+    ];
+    const digest = (await store.view()).servers.music.digest;
+    for (const action of ["approve", "dry-run"]) responses.push(await POST(request("POST", { action, name: "music", digest })));
+    for (const response of responses) {
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({ code: "SECRET_DESTINATION" });
+    }
+    expect(contacts).toBe(0);
+    expect((await store.view()).servers.music.approval).toBeNull();
+  } finally {
+    await peer.stop(true);
+    setVoiceToolHubForTests(new VoiceToolHub(new VoiceToolsStore(path.join(root, "state"))));
+  }
+});
