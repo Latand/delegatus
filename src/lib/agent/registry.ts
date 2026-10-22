@@ -85,6 +85,7 @@ import {
   type SpawnRejection,
 } from "./spawnAdmission";
 import { roleIsClean } from "@/lib/memory/eligibility";
+import { normalizeAgentMemoryCap, type AgentMemoryCap } from "@/lib/runtime/agentMemoryConfig";
 import { sessionKeyFromTranscript, sessionKeyId, type SessionKey } from "./sessionKey";
 import {
   defaultRegistrySqliteFilename,
@@ -260,6 +261,7 @@ export interface QueuedPinnedSpawn {
 }
 
 export interface SpawnReceipt {
+  memoryCap?: AgentMemoryCap;
   launchId: string;
   /** Client-owned idempotency key. Legacy callers leave this null. */
   clientAttemptId: string | null;
@@ -4036,6 +4038,7 @@ function normalizePendingOrchestratorSeatIdentity(value: unknown): IdentityWaveS
 }
 
 function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnReceipt {
+  const memoryCap = normalizeAgentMemoryCap(value.memoryCap);
   const state = value.state === "completed" || value.state === "failed" || value.state === "pane-bound" || value.state === "host-verified" || value.state === "prompt-delivered" || value.state === "path-pending" || value.state === "conflicted"
     ? value.state
     : "starting";
@@ -4044,6 +4047,7 @@ function normalizeReceipt(value: SpawnReceipt, policy?: McpGrantPolicy): SpawnRe
     : null;
   return {
     ...value,
+    memoryCap: memoryCap ?? undefined,
     clientAttemptId: typeof value.clientAttemptId === "string" ? value.clientAttemptId : null,
     requestDigest: typeof value.requestDigest === "string" ? value.requestDigest : null,
     ...(value.identityWaveTitleBackfill === true ? { identityWaveTitleBackfill: true as const } : {}),
@@ -7098,6 +7102,16 @@ export class AgentRegistry {
       if (receipt.state === "starting") receipt.state = "pane-bound";
       return clone(receipt);
     });
+  }
+
+  async recordSpawnMemoryCapOffLoop(launchId: string, cap: AgentMemoryCap): Promise<void> {
+    const normalized = normalizeAgentMemoryCap(cap);
+    if (!normalized) throw new Error("invalid agent memory cap");
+    await this.deliveryWriteOrBusy({ label: "spawn.memory-cap", operationId: launchId }, () => this.mutate((file) => {
+      const receipt = file.receipts[launchId];
+      if (!receipt || receipt.state === "failed" || receipt.state === "conflicted") throw new Error("launch ended before memory planning");
+      receipt.memoryCap = normalized;
+    }));
   }
 
   markSpawnHostVerified(launchId: string, host: TmuxHostEvidence): SpawnReceipt {

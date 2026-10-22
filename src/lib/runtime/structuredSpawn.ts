@@ -3,6 +3,7 @@ import { ownerRelaySpawnAuthorized } from "@/lib/externalRelay/ownerAuthority";
 import { assertSpawnMemoryAvailable } from "@/lib/agent/spawnMemory";
 import { spawnDiagnosticErrorFor } from "@/lib/agent/spawnDiagnostics";
 import { AgentMemoryCell, planAgentMemory } from "./agentMemory";
+import { agentMemoryScopes, agentMemoryCapForPlan } from "./agentMemorySettings";
 import { planAgentCpu, workloadForMemberships } from "./cpuPlacement";
 import fs from "node:fs";
 import os from "node:os";
@@ -2102,11 +2103,15 @@ export async function claudeStructuredHostOptions(
  * keeps its class and its controls across restarts. Throws
  * CpuContainmentUnavailable for work that cannot be contained.
  */
-export function structuredHostCell(registry: AgentRegistry, engine: string, sessionKey: string, conversationId: ViewerConversationId | null | undefined): AgentMemoryCell | null {
+export function structuredHostCell(registry: AgentRegistry, engine: string, sessionKey: string, conversationId: ViewerConversationId | null | undefined, receipt?: SpawnReceipt): AgentMemoryCell | null {
   const snapshot = registry.readOnlySnapshot();
   const liveAgents = Object.values(snapshot.entries).filter((entry) => entry.structuredHost && entry.status !== "dead" && entry.status !== "unhosted").length + 1;
   const cpu = planAgentCpu(workloadForMemberships(conversationId ? snapshot.memberships[registry.canonicalConversationId(conversationId)] : undefined));
-  const plan = planAgentMemory({ engine, sessionKey, liveAgents, cpu });
+  const conversation = conversationId ? snapshot.conversations[registry.canonicalConversationId(conversationId)] : null;
+  const profile = receipt?.launchProfile ?? conversation?.generations.at(-1)?.launchProfile;
+  const scopes = agentMemoryScopes({ cwd: receipt?.cwd ?? profile?.cwd ?? "", project: receipt?.explicitProject ?? conversation?.projectOwnership?.project ?? profile?.project,
+    role: receipt?.agentRole ?? conversation?.agentRole ?? (conversationId && snapshot.memberships[registry.canonicalConversationId(conversationId)]?.some(row => row.kind === "pipeline") ? "builder" : null), profile });
+  const plan = planAgentMemory({ engine, sessionKey, liveAgents, cpu, memoryScopes: scopes });
   return plan ? new AgentMemoryCell(plan) : null;
 }
 
@@ -2120,7 +2125,9 @@ export async function defaultStartHost(
   } = {},
 ): Promise<SpawnedStructuredHost> {
   input = admittedStructuredLaunchInput(input);
-  const memoryCell = structuredHostCell(input.registry, input.engine, input.receipt.launchId, input.receipt.conversationId);
+  const memoryCell = structuredHostCell(input.registry, input.engine, input.receipt.launchId, input.receipt.conversationId, input.receipt);
+  await input.registry.recordSpawnMemoryCapOffLoop(input.receipt.launchId, agentMemoryCapForPlan(memoryCell?.plan ?? null));
+  input = admittedStructuredLaunchInput(input);
   if (input.engine === "copilot") return await startCopilotStructuredHost(input, capability, {
     ...(memoryCell ? { memoryCell } : {}),
   });
@@ -2971,6 +2978,7 @@ export async function spawnStructuredConversation(
           ? { effectivePermissionMode: input.spec.launchProfile?.permissionMode ?? "default" }
           : {}),
         launchId: input.receipt.launchId,
+        memoryCap: input.registry.spawnReceipt(input.receipt.launchId)?.memoryCap,
         conversationId: input.receipt.conversationId,
         launched: true,
         retrySafe: false,
@@ -2991,6 +2999,7 @@ export async function spawnStructuredConversation(
           ? { effectivePermissionMode: input.spec.launchProfile?.permissionMode ?? "default" }
           : {}),
         launchId: input.receipt.launchId,
+        memoryCap: input.registry.spawnReceipt(input.receipt.launchId)?.memoryCap,
         conversationId: input.receipt.conversationId,
         launched: true,
         retrySafe: false,
@@ -3040,6 +3049,7 @@ export async function spawnStructuredConversation(
         ? { effectivePermissionMode: input.spec.launchProfile?.permissionMode ?? "default" }
         : {}),
       launchId: input.receipt.launchId,
+      memoryCap: settled.receipt.memoryCap,
       conversationId: settled.conversation.id,
       launched: true,
       retrySafe: false,
@@ -3054,7 +3064,7 @@ export async function spawnStructuredConversation(
     if (host && key && recovery && !durableSetupTimedOut && isTransientStagedLaunchFailure(error)) {
       await writeStagedRecovery(input.registry, operationId, { ...recovery, reason: stagedRecoveryFailureReason(error) });
       (await input.registry.deliveryWriteOrBusy({ label: "registry.releaseStructuredSpawnAdmissionOwner" }, input.registry.releaseStructuredSpawnAdmissionOwner.bind(input.registry, operationId, input.receipt.admissionOwner ?? processIdentity())));
-      return { ok: true, target: null, path: null, launchId: operationId, conversationId: input.receipt.conversationId,
+      return { ok: true, target: null, path: null, launchId: operationId, memoryCap: pending?.memoryCap, conversationId: input.receipt.conversationId,
         launched: true, retrySafe: false, initialMessage: "queued", state: "path-pending", transport: "structured" };
     }
     stagedContinuations.delete(operationId);

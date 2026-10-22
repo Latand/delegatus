@@ -1,3 +1,4 @@
+import { assertAgentMemoryMax } from "@/lib/runtime/agentMemoryConfig";
 import type { AgentEngine } from "@/lib/agent/cli";
 import type { QuotaEngine } from "./quotaPolicy";
 import { grantedMcpServers, type McpGrantPolicy } from "@/lib/agent/mcpAllowlist";
@@ -54,6 +55,10 @@ export function normalizeProjectOwnership(value: unknown): ConversationProjectOw
 }
 
 export interface LaunchProfile {
+  /** Stage request; null/absent inherits project and role settings at launch. */
+  agentMemoryMaxBytes?: number | null;
+  /** Text-free role variant selector for resource planning after restart. */
+  agentMemoryRoleParams?: Record<string, string | number>;
   cwd: string;
   model: string | null;
   effort: string | null;
@@ -113,6 +118,7 @@ export function emptyLaunchProfile(
      that HAS a grantable connector (issue #739). */
   policy?: McpGrantPolicy,
 ): LaunchProfile {
+  assertAgentMemoryMax(overrides.agentMemoryMaxBytes);
   return {
     cwd: "",
     model: null,

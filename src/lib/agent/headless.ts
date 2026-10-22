@@ -1,3 +1,4 @@
+import { agentMemoryScopes } from "@/lib/runtime/agentMemorySettings";
 import { signalDomain, signalAgentDomain, spawnHeadlessSignalSandbox, headlessFixtureTransport } from "@/lib/runtime/agentSignalSandbox";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { pipeline } from "node:stream/promises";
@@ -303,6 +304,8 @@ export function scanEventStream(stdout: string): { sessionId: string | null; las
 }
 
 export interface BuiltHeadlessCommand {
+  agentMemoryRole?: "reviewer";
+  agentMemoryMaxBytes?: number | null;
   command: string;
   args: string[];
   env: NodeJS.ProcessEnv;
@@ -366,6 +369,8 @@ export function reviewerCommand(
     args.push("--settings", settings);
     const baseEnv = claudeAccount?.managed ? claudeManagedEnvironment(claudeAccount.home) : process.env;
     return { ...claudeProviderCommand(claudeAccount?.home ?? "", provider, args),
+      agentMemoryRole: "reviewer",
+      agentMemoryMaxBytes: role.agentMemoryMaxBytes,
       env: { ...reviewerEnvironment(baseEnv, spawnCapability), ...(HEADLESS_CLEAN_MEMORY ? CLAUDE_CLEAN_MEMORY_ENV : {}) }, stdin: null, outputPath: null, sessionId,
       reviewerPath: claudeTranscriptPath(cwd, sessionId, claudeAccount?.projectsDir) };
   }
@@ -387,6 +392,8 @@ export function reviewerCommand(
   if (role.serviceTier) args.push("-c", `service_tier=${role.serviceTier === "standard" ? "default" : role.serviceTier}`);
   return {
     command: binary,
+    agentMemoryRole: "reviewer",
+    agentMemoryMaxBytes: role.agentMemoryMaxBytes,
     codexPublication: true,
     args,
     env: reviewerEnvironment(baseEnv, spawnCapability),
@@ -424,7 +431,8 @@ export function launchDetached(input: {
   let child: ChildProcess;
   try {
     // Reviews, relays and digests run unattended: they are work.
-    const plan = planAgentMemory({ engine: "headless", sessionKey: input.key, liveAgents: agentRegistry().liveStructuredHostCount() + 1, cpu: planAgentCpu("work") });
+    const plan = planAgentMemory({ engine: "headless", sessionKey: input.key, liveAgents: agentRegistry().liveStructuredHostCount() + 1, cpu: planAgentCpu("work"), memoryScopes: { ...agentMemoryScopes({ cwd: input.cwd, role: input.built.agentMemoryRole }),
+      ...(input.built.agentMemoryMaxBytes != null ? { role: input.built.agentMemoryMaxBytes } : {}) } });
     const memoryCell = plan ? new AgentMemoryCell(plan) : null;
     const fixture = headlessFixtureTransport();
     const start = ((command: string, args: string[], options: Parameters<typeof spawn>[2]) => {

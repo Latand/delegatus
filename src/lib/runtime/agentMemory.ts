@@ -5,6 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { procBackend } from "@/lib/proc";
 import { assertSpawnMemoryAvailable } from "@/lib/agent/spawnMemory";
 import { linuxBackend } from "@/lib/proc/linux";
+import { assertAgentMemoryMax, type AgentMemoryScopes, type AgentMemoryCap } from "./agentMemoryConfig";
 import { descendantPids, parsePsMemory } from "@/lib/proc/memory";
 
 import { GIB, type AgentMemoryKill, type HostMemoryState } from "./agentMemoryState";
@@ -24,15 +25,22 @@ export function parseMemorySize(value: string | undefined): number | null {
   const bytes = Number(match[1]) * 1024 ** (match[2] ? "KMGT".indexOf(match[2].toUpperCase()) + 1 : 0);
   return Number.isSafeInteger(bytes) && bytes > 0 ? bytes : null;
 }
-export function agentMemoryCeiling(totalBytes: number, liveAgents: number, env: Readonly<Record<string, string | undefined>> = {}) {
+export function agentMemoryCeiling(totalBytes: number, liveAgents: number, env: Readonly<Record<string, string | undefined>> = {}, scopes?: AgentMemoryScopes) {
   const reserveBytes = parseMemorySize(env.LLV_AGENT_MEMORY_RESERVE) ?? Math.max(4 * GIB, Math.ceil(totalBytes * .15 / GIB) * GIB);
   const budgetBytes = Math.max(GIB, totalBytes - reserveBytes);
   const lo = Math.min(4 * GIB, budgetBytes);
-  const requested = parseMemorySize(env.LLV_AGENT_MEMORY_MAX);
+  let requested = parseMemorySize(env.LLV_AGENT_MEMORY_MAX);
+  let source: AgentMemoryCap["source"] = requested === null ? "automatic" : "installation";
+  for (const name of ["project", "role", "stage"] as const) {
+    const value = scopes?.[name];
+    assertAgentMemoryMax(value);
+    if (value != null) { requested = value; source = name; }
+  }
   const limitBytes = requested === null
     ? Math.max(lo, Math.min(Math.max(budgetBytes / 2, lo), Math.floor(2 * budgetBytes / Math.max(1, liveAgents) / (GIB / 2)) * (GIB / 2)))
     : Math.min(budgetBytes, requested);
-  return { reserveBytes, budgetBytes, limitBytes };
+  return { reserveBytes, budgetBytes, limitBytes,
+    ...(scopes ? { requestedBytes: requested, source, clamped: requested !== null && requested > budgetBytes } : {}) };
 }
 export function viewerUnitFromCgroup(text: string): string | null {
   const entry = text.split("\n").find((line) => line.startsWith("0::"));
@@ -42,6 +50,7 @@ export function viewerUnitFromCgroup(text: string): string | null {
 }
 export function agentOomScore(viewerScore: number): number { return Math.min(1000, Math.max(500, viewerScore + 300)); }
 export interface AgentMemoryPlan {
+  cap?: AgentMemoryCap;
   /** `none`: memory mode off or unmeasurable, kept only to carry a CPU scope. */
   mechanism: "scope" | "watchdog" | "none";
   mode?: MemoryMode;
@@ -103,8 +112,9 @@ function cpuOnlyPlan(input: { engine: string; sessionKey: string; cpu?: AgentCpu
     systemdVersion: input.cpu.systemdVersion, cpu: input.cpu };
 }
 /** `input.cpu` comes from planAgentCpu; CPU placement is independent of the memory mode. */
-export function planAgentMemory(input: { engine: string; sessionKey: string; liveAgents: number; cpu?: AgentCpuPlan | null }, env = process.env, ports: MemoryPorts = testMemoryPorts ?? {}): AgentMemoryPlan | null {
+export function planAgentMemory(input: { engine: string; sessionKey: string; liveAgents: number; cpu?: AgentCpuPlan | null; memoryScopes?: AgentMemoryScopes }, env = process.env, ports: MemoryPorts = testMemoryPorts ?? {}): AgentMemoryPlan | null {
   assertSpawnMemoryAvailable();
+  for (const value of Object.values(input.memoryScopes ?? {})) assertAgentMemoryMax(value);
   const raw = env.DELEGATUS_AGENT_MEMORY ?? env.LLV_AGENT_MEMORY ?? "auto";
   const mode: MemoryMode = ["auto", "scope", "watchdog", "off"].includes(raw) ? raw as MemoryMode : "auto";
   if (raw !== mode) diagnostic("mode", "Invalid agent memory mode; using auto.");
@@ -119,8 +129,10 @@ export function planAgentMemory(input: { engine: string; sessionKey: string; liv
     cachedMechanism = { mechanism: version ? "scope" : "watchdog", version: version ?? 253 };
   }
   const mechanism = mode === "auto" ? cachedMechanism.mechanism : mode;
-  const limits = agentMemoryCeiling(totalBytes, input.liveAgents, config);
-  const plan: AgentMemoryPlan = { ...limits, totalBytes, mechanism, mode, platform: process.platform,
+  const limits = agentMemoryCeiling(totalBytes, input.liveAgents, config, input.memoryScopes ?? {});
+  const plan: AgentMemoryPlan = { ...limits, cap: { limitBytes: limits.limitBytes, requestedBytes: limits.requestedBytes ?? null,
+    source: limits.source ?? "automatic", clamped: limits.clamped ?? false, enforced: true,
+    ...(limits.clamped ? { note: "Requested memory cap clamped to the shared machine budget." } : {}) }, totalBytes, mechanism, mode, platform: process.platform,
     score: agentOomScore(Number(read("/proc/self/oom_score_adj")) || 0),
     unit: mechanism === "scope" || input.cpu ? agentScopeUnit(input.engine, input.sessionKey) : null,
     slice: "delegatus-agents.slice", viewerUnit: viewerUnitFromCgroup(read("/proc/self/cgroup")),
@@ -275,7 +287,8 @@ export class AgentMemoryCell {
   get hasInjectedSample() { return Boolean(this.ports.sample); }
   get fatalMemoryExit(): boolean { return this.exitSettled && this.state.lastKill?.fatal === true; }
   constructor(readonly plan: AgentMemoryPlan, private readonly ports: CellPorts = {}) {
-    this.state = { mechanism: plan.mechanism, limitBytes: plan.limitBytes, unit: plan.unit, kills: 0, lastKill: null };
+    this.state = { mechanism: plan.mechanism, limitBytes: plan.limitBytes, unit: plan.unit, kills: 0, lastKill: null,
+      ...(plan.cap ? { cap: plan.cap } : {}) };
   }
   /** The memory evidence of a memory plan; memoryState() is the host's field. */
   snapshot(): HostMemoryState {
