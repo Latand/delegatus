@@ -26,6 +26,55 @@ for (const form of ["array", "array-options", "object", "empty-env"] as const) t
   }
 }, 5_000);
 
+for (const leak of [false, true]) test(`file repetitions renew their root and child ownership (leak=${leak})`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "test-repetitions-"));
+  const repo = path.resolve(import.meta.dir, "../../..");
+  const report = path.join(root, "repetitions.jsonl");
+  fs.writeFileSync(path.join(root, "bunfig.toml"), `[test]\npreload = [${JSON.stringify(path.join(repo, "test-preload.ts"))}]\n`);
+  fs.writeFileSync(path.join(root, "tsconfig.json"), JSON.stringify({ compilerOptions: { paths: { "@/*": [path.join(repo, "src/*")] } } }));
+  fs.writeFileSync(path.join(root, "repetition.test.ts"), `
+import { expect, test } from "bun:test";
+import fs from "node:fs"; import os from "node:os"; import path from "node:path";
+import { captureProcessIdentity } from ${JSON.stringify(path.join(repo, "src/lib/processIdentity.ts"))};
+test("owned repetition", async () => {
+  const prior = fs.existsSync(${JSON.stringify(report)}) ? fs.readFileSync(${JSON.stringify(report)}, "utf8").trim().split("\\n").map(JSON.parse) : [];
+  for (const row of prior) expect(fs.existsSync(row.root)).toBe(false);
+  const root = os.tmpdir();
+  expect(fs.existsSync(process.env.HOME)).toBe(true);
+  expect(fs.existsSync(process.env.LLV_STATE_DIR)).toBe(true);
+  const child = Bun.spawn([process.execPath, "-e", prior.length && ${leak} ? 'console.log("ready"); setInterval(() => {}, 1000)' : 'console.log("ready")'], { stdout: "pipe", stderr: "inherit" });
+  const identity = captureProcessIdentity(child.pid);
+  const ledger = fs.readFileSync(path.join(root, "owned-test-children.jsonl"), "utf8").trim().split("\\n").map(JSON.parse);
+  expect(ledger).toContainEqual(identity);
+  fs.appendFileSync(${JSON.stringify(report)}, JSON.stringify({root, identity}) + "\\n");
+  const reader = child.stdout.getReader();
+  try { expect(new TextDecoder().decode((await reader.read()).value)).toContain("ready"); }
+  finally { reader.releaseLock(); }
+  if (!prior.length || !${leak}) expect(await child.exited).toBe(0);
+});`);
+  const child = Bun.spawn([process.execPath, "test", "./repetition.test.ts", "--rerun-each=2"], {
+    cwd: root, env: { ...process.env, LLV_STATE_DIR: undefined, LLV_OWNED_RUN_TIMEOUT_MS: "15000" }, stdout: "pipe", stderr: "pipe",
+  });
+  try {
+    const output = new Response(child.stderr).text();
+    const code = await child.exited;
+    const diagnostic = await output;
+    expect(code, diagnostic).toBe(leak ? 1 : 0);
+    if (leak) expect(diagnostic).toContain("owned test children survived teardown");
+    const repetitions = fs.readFileSync(report, "utf8").trim().split("\n").map(line => JSON.parse(line) as { root: string; identity: ProcessIdentity });
+    expect(repetitions).toHaveLength(2);
+    expect(new Set(repetitions.map(row => row.root)).size).toBe(2);
+    for (const row of repetitions) {
+      expect(fs.existsSync(row.root)).toBe(false);
+      expect(processIdentityStatus(row.identity)).toBe("dead");
+    }
+  } finally {
+    if (child.exitCode === null) child.kill("SIGKILL");
+    await child.exited;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}, 20_000);
+
 test.skipIf(process.platform !== "linux").each(["shutdown tail", "persistent orphan"])("kernel-owned %s finishes teardown with no survivors and preserves a bystander", async mode => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "kernel-test-teardown-"));
   const repo = path.resolve(import.meta.dir, "../../..");

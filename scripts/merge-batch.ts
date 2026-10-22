@@ -8,6 +8,7 @@ import { MERGE_BATCH_BRANCH_PREFIX, mergeBatchTitle } from "../src/lib/forge/mer
 import type { GithubRunner } from "../src/lib/monitor/githubEvidence";
 import { parseReport, testNameFilter, type TestRun, type TestSite } from "./local-gate-tests";
 import { isolatedEnvironment } from "./local-gate";
+import { isDeclaredRepository } from "../bin/forge-app-token.mjs";
 
 // A between-test error, a runner disagreement and a file that produced no
 // usable report are one file-level fault: their messages vary between runs,
@@ -463,7 +464,10 @@ export class MergeBatch {
       ]);
       if (accessible.trim() === repository) return;
     } catch { /* An unreadable principal must refuse the server-side write. */ }
-    throw new Error("Forge rebase merge requires a verified machine principal; personal or unverified credentials refused");
+    const remedy = isDeclaredRepository(repository, process.env)
+      ? "The GitHub App installation could not prove access to this repository. Ask the installation owner to check its encrypted App credential and repository installation, then launch a new merger."
+      : "This merger has no GitHub App routing for this repository. Ask the installation owner to add the repository to forge-app-repositories.json in the running Delegatus state directory (a JSON array of owner/name strings), then launch a new merger.";
+    throw new Error(`Forge rebase merge requires a verified machine principal; personal or unverified credentials refused. ${remedy} See CONTRIBUTING.md, GitHub writes from launched agents and from the engine.`);
   }
 
   private async view(number: number): Promise<PrView> {
@@ -611,6 +615,9 @@ export class MergeBatch {
         writeFileSync(absolute, Buffer.from(contents, "base64"));
       }
       const reportFile = join(stateDir, "tests.xml");
+      // Add runner options after the file/corpus selection above. Gate args
+      // also serve as the resolution's file inventory and contain paths only.
+      if (gate.id === "tests") args = [...args, "--timeout=60000"];
       if (gate.report) args = [...args, "--reporter=junit", "--reporter-outfile", reportFile];
       if (gate.filter) args = [...args, ...gate.filter];
       const env = gate.id === "tests" ? testEnvironment(stateDir) : isolatedEnvironment(stateDir, process.env);

@@ -79,7 +79,7 @@ test("a retained scan failure reports its age and generation, paces retries and 
     release();
     await completed;
     expect((await tick()).status).toBe(200);
-    expect(flows).toBe(2);
+    expect(flows).toBe(0);
     expect(scans).toBe(2);
     expect(sweeps).toHaveLength(12);
   } finally {

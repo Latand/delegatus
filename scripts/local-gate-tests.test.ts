@@ -118,6 +118,37 @@ test("per-file processes isolate globals and distinct state/HOME/TMPDIR before i
   const result = await f.run(["./example.test.ts", "./second.test.ts"]);
   expect(result.introduced).toHaveLength(0);
 });
+
+test("gate samples allow tests beyond five seconds and retain explicit timeouts", async () => {
+  const f = fixture(`import { test } from "bun:test";
+    test("default exceeds five seconds", async () => { await Bun.sleep(6_000); });
+    test("explicit deadline still refuses", async () => { await new Promise(() => {}); }, 50);
+  `);
+  const result = await f.run();
+  expect(result.introduced).toHaveLength(0);
+  expect(result.preexisting.map(site => site.name)).toEqual(["explicit deadline still refuses"]);
+  expect(f.logs.join("\n")).toContain("0 new failures, 1 pre-existing failures");
+});
+
+test.each([150_000, 150_001])("head file growth hint uses half the file budget: %i ms", async elapsedMs => {
+  const f = fixture(source(true));
+  let now = 0;
+  const clock = spyOn(performance, "now").mockImplementation(() => now);
+  const spawn = Bun.spawn;
+  const launch = spyOn(Bun, "spawn").mockImplementation(((...args: Parameters<typeof Bun.spawn>) => {
+    const child = spawn(...args);
+    // Advance the parent's clock only after its real test runner settles.
+    void child.exited.then(() => { now = elapsedMs; });
+    return child;
+  }) as typeof Bun.spawn);
+  try {
+    expect((await f.run()).introduced).toHaveLength(0);
+    const line = f.logs.find(line => line.startsWith("touched-tests: head file "))!;
+    expect(line).toContain(`${elapsedMs}ms wall; 0 failures; complete`);
+    expect(line.includes("over half the 300 s file budget; split it")).toBe(elapsedMs > 150_000);
+  } finally { launch.mockRestore(); clock.mockRestore(); }
+});
+
 test("duplicate names match occurrences and keep suite ancestry", async () => {
   const site: TestSite = { file: "f.test.ts", name: "same", suite: "suite", kind: "test" };
   const base = { failures: [site], passed: [], elapsedMs: 0, completed: [site.file] };

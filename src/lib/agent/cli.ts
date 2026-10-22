@@ -19,11 +19,12 @@ import { telegramSessionReaderPath } from "@/lib/telegram/packaging";
 import { TELEGRAM_CONNECTOR_TOKEN_ENV, telegramSessionPath } from "@/lib/telegram/sessionStore";
 
 import { claudeTranscriptPath, headCwd } from "./transcript";
+import { normalizedClaudePermissionMode, readClaudePermissionModeSync } from "./claudePermissionMode";
 import { grantedMcpServers } from "./mcpAllowlist";
 import { grantedPlugins } from "./pluginAllowlist";
 import { normalizeClaudeLaunchModel } from "./models";
 import { applyClaudeSpawnPolicy, claudeSpawnPolicyPaths, VIEWER_SPAWN_CAPABILITY_ENV } from "./spawnPolicy";
-import { explicitLaunchProfileSandbox, launchProfileEngineReadOnly, type LaunchProfile } from "@/lib/accounts/migration/contracts";
+import { explicitLaunchProfileSandbox, launchProfileCodexSandbox, launchProfileEngineReadOnly, type LaunchProfile } from "@/lib/accounts/migration/contracts";
 import { codexSubagentArgs } from "./codexSpawnPolicy";
 import { codexProcessCleanupArgs } from "./processCleanupPolicy";
 
@@ -256,6 +257,9 @@ export interface ResumeSpecOptions {
   serviceTier?: string | null;
   /** Execution policy inherited from the generation being replaced. */
   readOnly?: boolean | null;
+  /** Explicit execution sandbox. When present, repository readOnly metadata
+      must not be reinterpreted as an engine restriction. */
+  sandbox?: LaunchProfile["sandbox"];
   permissionMode?: string | null;
   allowSubagents?: boolean;
   operatorDecisionForms?: boolean;
@@ -340,10 +344,10 @@ function pushClaudePolicyArgs(
 }
 
 export function effectiveClaudePermissionMode(
-  options: Pick<ResumeSpecOptions, "readOnly" | "permissionMode">,
+  options: Pick<ResumeSpecOptions, "readOnly" | "sandbox" | "permissionMode">,
 ): string {
-  if (options.permissionMode) return options.permissionMode;
-  return options.readOnly ? "plan" : "bypassPermissions";
+  return normalizedClaudePermissionMode(options.permissionMode)
+    ?? (launchProfileEngineReadOnly(options) ? "plan" : "default");
 }
 
 /** Boot spec for a brand-new agent (no prior conversation) in a chosen directory. */
@@ -358,7 +362,9 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
     const args = [resolveBinary("claude")];
     /* Read-only rounds must not inherit the skip-permissions bypass: with it,
        denying Edit/Write still leaves Bash free to mutate the worktree. */
-    const permissionMode = effectiveClaudePermissionMode(options);
+    const permissionMode = effectiveClaudePermissionMode({
+      ...options, permissionMode: options.permissionMode ?? (options.readOnly ? "plan" : "bypassPermissions"),
+    });
     if (options.readOnly) args.push("--permission-mode", permissionMode, "--disallowedTools", `Edit,Write,NotebookEdit${options.operatorDecisionForms ? ",AskUserQuestion,ExitPlanMode" : ""}`);
     else if (permissionMode === "bypassPermissions") args.push("--dangerously-skip-permissions");
     else args.push("--permission-mode", permissionMode);
@@ -554,6 +560,8 @@ export function resumeSpecFor(root: string, pathname: string, options: ResumeSpe
   if (!eligibility.ok) return null;
   return resumeSpecForSession(eligibility.engine, eligibility.sessionId, eligibility.cwd, eligibility.home, {
     ...options, operatorDecisionForms: options.operatorDecisionForms || operatorDecisionFormsRequired(null, pathname),
+    permissionMode: options.permissionMode ?? (eligibility.engine === "claude"
+      ? launchProfileEngineReadOnly(options) ? "plan" : readClaudePermissionModeSync(pathname) : null),
   });
 }
 
@@ -587,14 +595,15 @@ export function resumeSpecForSession(
     });
     const args = [(options.hostTerminal ? resolveHostBinary : resolveBinary)("claude")];
     const permissionMode = effectiveClaudePermissionMode(options);
-    if (options.readOnly || permissionMode === "plan") {
+    const engineReadOnly = launchProfileEngineReadOnly(options);
+    if (engineReadOnly || permissionMode === "plan") {
       args.push("--permission-mode", "plan", "--disallowedTools", `Edit,Write,NotebookEdit${options.operatorDecisionForms ? ",AskUserQuestion,ExitPlanMode" : ""}`);
-    } else if (permissionMode !== "bypassPermissions" && /^[a-zA-Z-]+$/.test(permissionMode)) {
-      args.push("--permission-mode", permissionMode);
-    } else {
+    } else if (permissionMode === "bypassPermissions") {
       args.push("--dangerously-skip-permissions");
+    } else {
+      args.push("--permission-mode", permissionMode);
     }
-    if (options.operatorDecisionForms && !options.readOnly && permissionMode !== "plan") args.push("--disallowedTools", "AskUserQuestion,ExitPlanMode");
+    if (options.operatorDecisionForms && !engineReadOnly && permissionMode !== "plan") args.push("--disallowedTools", "AskUserQuestion,ExitPlanMode");
     pushClaudePolicyArgs(args, policy);
     const launchModel = providerLaunchModel(home, normalizeClaudeLaunchModel(options.model));
     if (launchModel) args.push("--model", launchModel);
@@ -611,7 +620,7 @@ export function resumeSpecForSession(
         cwd, mcpServers, baseSettingsPath: managed ? claudeSettingsPath() : null, profileId: `resume-${sessionId}`,
         mcpStatePath: managed ? path.join(home, ".claude.json") : path.join(path.dirname(home), ".claude.json"),
       } },
-      launchProfile: { ...emptyLaunchProfileForResume(cwd, launchModel, options.effort ?? null), ...(options.cleanMemory !== undefined ? { cleanMemory: options.cleanMemory } : {}), readOnly: options.readOnly ?? null, permissionMode, allowSubagents: options.allowSubagents ?? false, mcpServers, plugins: grantedPlugins(options.plugins) },
+      launchProfile: { ...emptyLaunchProfileForResume(cwd, launchModel, options.effort ?? null), ...(options.cleanMemory !== undefined ? { cleanMemory: options.cleanMemory } : {}), readOnly: options.readOnly ?? null, sandbox: explicitLaunchProfileSandbox(options), permissionMode, allowSubagents: options.allowSubagents ?? false, mcpServers, plugins: grantedPlugins(options.plugins) },
     };
   }
   let command = `${(options.hostTerminal ? resolveHostBinary : resolveBinary)("codex")}`;
@@ -624,7 +633,8 @@ export function resumeSpecForSession(
   if (options.effort) command += ` -c ${shellQuote(`model_reasoning_effort=${options.effort}`)}`;
   if (options.serviceTier) command += ` -c ${shellQuote(`service_tier=${options.serviceTier === "standard" ? "default" : options.serviceTier}`)}`;
   else if (options.fast != null) command += ` -c ${shellQuote(`service_tier=${options.fast ? "priority" : "standard"}`)}`;
-  if (options.readOnly) command += " --sandbox read-only";
+  const codexSandbox = launchProfileCodexSandbox(options);
+  if (codexSandbox) command += ` --sandbox ${codexSandbox}`;
   if (options.permissionMode && ["untrusted", "on-request", "never"].includes(options.permissionMode)) {
     command += ` --ask-for-approval ${shellQuote(options.permissionMode)}`;
   }
@@ -640,7 +650,7 @@ export function resumeSpecForSession(
     windowName: "codex-resume",
     engine: "codex",
     launchProfile: { ...emptyLaunchProfileForResume(cwd, options.model ?? null, options.effort ?? null),
-      ...(options.cleanMemory !== undefined ? { cleanMemory: options.cleanMemory } : {}), fast: options.serviceTier ? !["default", "standard"].includes(options.serviceTier) : options.fast ?? null, serviceTier: options.serviceTier ?? null, readOnly: options.readOnly ?? null, permissionMode: options.permissionMode ?? null, allowSubagents: options.allowSubagents ?? false, mcpServers, plugins: grantedPlugins(options.plugins) },
+      ...(options.cleanMemory !== undefined ? { cleanMemory: options.cleanMemory } : {}), fast: options.serviceTier ? !["default", "standard"].includes(options.serviceTier) : options.fast ?? null, serviceTier: options.serviceTier ?? null, readOnly: options.readOnly ?? null, sandbox: explicitLaunchProfileSandbox(options), permissionMode: options.permissionMode ?? null, allowSubagents: options.allowSubagents ?? false, mcpServers, plugins: grantedPlugins(options.plugins) },
   };
 }
 

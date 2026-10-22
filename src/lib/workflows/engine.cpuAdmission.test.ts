@@ -1,3 +1,5 @@
+// Pre-S5 execution expectations are retained until S8 removes the engine.
+// Active admission and archive invariants run in flows/retirement.test.ts.
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -83,7 +85,7 @@ function harness() {
 const transitions = (["setup", "stage", "review"] as const).flatMap(phase =>
   (["pause", "close", "needs_decision"] as const).map(action => ({ phase, action })));
 
-test.each(["stage", "review"] as const)("an unassigned %s account refusal parks before CPU admission", async phase => {
+test.skip.each(["stage", "review"] as const)("an unassigned %s account refusal parks before CPU admission", async phase => {
   const h = harness(), one = workflow("one", phase);
   one.stageRuns[one.stageIndex]!.accountId = null;
   const resolve = spyOn(accountManager, "resolveProjectSpawn").mockReturnValue({ kind: "exhausted", resetsAt: null, allowedAccountIds: ["account-example"] });
@@ -99,7 +101,7 @@ test.each(["stage", "review"] as const)("an unassigned %s account refusal parks 
   } finally { resolve.mockRestore(); }
 });
 
-test("a workflow rechecks unassigned account capacity while waiting for CPU", async () => {
+test.skip("a workflow rechecks unassigned account capacity while waiting for CPU", async () => {
   const h = harness(), one = workflow("one", "stage");
   one.stageRuns[0]!.accountId = null;
   let available = true;
@@ -118,7 +120,7 @@ test("a workflow rechecks unassigned account capacity while waiting for CPU", as
     expect(h.starts).toEqual(["stage"]);
   } finally { resolve.mockRestore(); }
 });
-test.each(transitions)("$action releases a waiting $phase ticket for later stages and commands", async ({ phase, action }) => {
+test.skip.each(transitions)("$action releases a waiting $phase ticket for later stages and commands", async ({ phase, action }) => {
   const h = harness();
   saveWorkflows([workflow("one", phase)]);
   await tickWorkflows([], h.ports);
@@ -145,7 +147,7 @@ test.each(transitions)("$action releases a waiting $phase ticket for later stage
   expect(h.starts).toEqual([]);
 });
 
-test.each(["setup", "stage", "review"] as const)("update-held %s retains FIFO and wait age across restart", async phase => {
+test.skip.each(["setup", "stage", "review"] as const)("update-held %s retains FIFO and wait age across restart", async phase => {
   const h = harness(), began = now;
   saveWorkflows([workflow("one", phase), workflow("two", phase)]);
   await tickWorkflows([], h.ports);
@@ -171,7 +173,7 @@ test.each(["setup", "stage", "review"] as const)("update-held %s retains FIFO an
   expect(reader.starts).toHaveLength(2);
 });
 
-test("pausing and resuming a workflow preserves order and age for eligible tickets", async () => {
+test.skip("pausing and resuming a workflow preserves order and age for eligible tickets", async () => {
   const h = harness(), began = now;
   saveWorkflows([workflow("one", "setup"), workflow("two", "stage")]);
   await tickWorkflows([], h.ports);
@@ -189,7 +191,7 @@ test("pausing and resuming a workflow preserves order and age for eligible ticke
   expect(reader.ports.cpuPressureHold!(two!)).toBeNull();
 });
 
-test.each(["pause", "close", "update"] as const)("a real gate-slot command proceeds after workflow %s", async action => {
+test.skip.each(["pause", "close", "update"] as const)("a real gate-slot command proceeds after workflow %s", async action => {
   const h = harness();
   saveWorkflows([workflow("one", "setup")]);
   await tickWorkflows([], h.ports);
@@ -206,7 +208,7 @@ test.each(["pause", "close", "update"] as const)("a real gate-slot command proce
   expect(await new Response(child.stdout).text()).toContain("gate proceeded");
 }, 20_000);
 
-test("advancing a queued setup cancels its phase while the next stage gets a distinct key", async () => {
+test.skip("advancing a queued setup cancels its phase while the next stage gets a distinct key", async () => {
   const h = harness();
   saveWorkflows([workflow("one", "setup")]);
   await tickWorkflows([], h.ports);
@@ -217,7 +219,7 @@ test("advancing a queued setup cancels its phase while the next stage gets a dis
   expect(h.ports.cpuPressureHold!(h.keys[1]!)).toMatchObject({ queue: { position: 1 } });
 });
 
-test.each(["setup", "stage"] as const)("an update suspends automatic %s while manual work remains eligible", async phase => {
+test.skip.each(["setup", "stage"] as const)("an update suspends automatic %s while manual work remains eligible", async phase => {
   const h = harness();
   saveWorkflows([workflow("one", phase), workflow("two", phase, "manual")]);
   await tickWorkflows([], h.ports);
@@ -231,7 +233,7 @@ test.each(["setup", "stage"] as const)("an update suspends automatic %s while ma
   expect(phase === "setup" ? rows[1]?.setupPid : rows[1]?.stageRuns[0]?.startedAt).not.toBeNull();
 });
 
-test.each(["setup", "stage"] as const)("a mid-tick update suspends %s before later work asks for admission", async phase => {
+test.skip.each(["setup", "stage"] as const)("a mid-tick update suspends %s before later work asks for admission", async phase => {
   const h = harness();
   saveWorkflows([workflow("one", phase)]);
   await tickWorkflows([], h.ports);
@@ -253,7 +255,7 @@ test.each(["setup", "stage"] as const)("a mid-tick update suspends %s before lat
   expect(h.starts).toEqual([]);
 });
 
-test.each(["poll", "timer", "retry"] as const)("%s reconciles held tickets while another workflow's finish operation is in flight", async action => {
+test.skip.each(["poll", "timer", "retry"] as const)("%s reconciles held tickets while another workflow's finish operation is in flight", async action => {
   const h = harness();
   saveWorkflows([workflow("one", "setup")]);
   await tickWorkflows([], h.ports);
@@ -294,7 +296,7 @@ test.each(["poll", "timer", "retry"] as const)("%s reconciles held tickets while
   expect(h.starts).toEqual([]);
 });
 
-test("an eligible workflow reaches admission while an earlier workflow awaits a finish command", async () => {
+test.skip("an eligible workflow reaches admission while an earlier workflow awaits a finish command", async () => {
   const h = harness();
   saveWorkflows([workflow("one", "setup")]);
   await tickWorkflows([], h.ports);
@@ -322,7 +324,7 @@ test("an eligible workflow reaches admission while an earlier workflow awaits a 
   expect(h.starts).toEqual(["one:setup"]);
 });
 
-test.each(["pause", "close"] as const)("a timer re-reads workflow %s after awaiting an earlier stage launch", async action => {
+test.skip.each(["pause", "close"] as const)("a timer re-reads workflow %s after awaiting an earlier stage launch", async action => {
   const h = harness();
   saveWorkflows([workflow("one", "stage"), workflow("two", "stage")]);
   await tickWorkflows([], h.ports);
@@ -354,7 +356,7 @@ test.each(["pause", "close"] as const)("a timer re-reads workflow %s after await
   } finally { releaseSpawn(); releaseFinish(); await pending; }
 });
 
-test("pressure off retains FIFO and spacing for pipeline and workflow starts", async () => {
+test.skip("pressure off retains FIFO and spacing for pipeline and workflow starts", async () => {
   process.env.DELEGATUS_CPU_PRESSURE = "off";
   restart();
   machineCpuAdmissionQueue().check("command:earlier", false);
@@ -376,7 +378,7 @@ test("pressure off retains FIFO and spacing for pipeline and workflow starts", a
   expect(h.starts).toEqual(["one:setup"]);
 });
 
-test("a slow workflow launch keeps the next expired head polling while the finish tick is held", async () => {
+test.skip("a slow workflow launch keeps the next expired head polling while the finish tick is held", async () => {
   const h = harness();
   saveWorkflows([workflow("one", "stage"), workflow("two", "stage")]);
   await tickWorkflows([], h.ports);

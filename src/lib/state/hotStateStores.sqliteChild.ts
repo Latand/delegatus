@@ -75,13 +75,13 @@ if (collection === "flows") {
     await persist();
   });
 } else if (collection === "workflows") {
-  const template = normalizeTemplate({
+  const template = await waitForStateLock("workflows.template", () => normalizeTemplate({
     name: "contention",
     stages: [
       { kind: "implement", agent: { engine: "codex", model: null, effort: "medium" }, scope: "store" },
       { kind: "review-loop", reviewer: { engine: "codex", model: null, effort: "xhigh" } },
     ],
-  });
+  }));
   if (!template) throw new Error("contention workflow template is invalid");
   const records = await waitForStateLock("workflows.open", loadWorkflows);
   records.push(buildWorkflow({

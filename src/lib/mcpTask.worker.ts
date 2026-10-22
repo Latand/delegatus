@@ -15,6 +15,7 @@ if (!process.env.LLV_STATE_DIR) throw new Error("task executor needs an explicit
 // App Router modules capture this global when they load. A standalone executor
 // has no Next server bootstrap to install it before the compiled binding graph.
 (globalThis as typeof globalThis & { AsyncLocalStorage?: typeof AsyncLocalStorage }).AsyncLocalStorage ??= AsyncLocalStorage;
+const { identifyCallerWhenReady, logCallerIdentificationError } = await import("./mcp/callerIdentification");
 const { runAsMcpHttpCaller } = await import("./mcp/callerContext");
 const { TASK_EXECUTOR_FRAME_BYTES, TASK_EXECUTOR_HTTP_FRAME_BYTES, TASK_EXECUTOR_TOOLS } = await import("./mcp/taskExecutor");
 const { createProductionViewerMcpService, createViewerMcpServer, mcpTextResultClient, MCP_HTTP_CLIENT_ID } = await import("./mcp/server");
@@ -24,7 +25,18 @@ const { capabilityConversationResolver } = await import("./mcp/bindings");
 const { mcpHttpRefusal } = await import("./mcp/httpResponse");
 const { startTaskChannel } = await import("./mcp/taskChannelServer");
 const { TASK_CHANNEL_CALLS, TASK_CHANNEL_INPUT_BYTES, encodeTaskChannel } = await import("./mcp/taskChannel");
-const service = await createProductionViewerMcpService(false, false, true);
+// initialize and tools/list need only caller identity. Opening task receipts
+// here used to kill this worker before it could identify anyone on an older
+// installation whose serving Viewer had not prepared those receipts yet.
+let service: ReturnType<typeof createProductionViewerMcpService> | undefined;
+function taskService() {
+  if (!service) {
+    const created = createProductionViewerMcpService(false, false, true);
+    service = created;
+    void created.catch(() => { if (service === created) service = undefined; });
+  }
+  return service;
+}
 const calls = new Map<number, AbortController>();
 let pendingBytes = 0, outputs = 0, nextPrivateId = 0;
 let retiring = false;
@@ -100,11 +112,13 @@ async function httpTaskCall(request: TaskExecutorRequest, signal: AbortSignal): 
   if (!TASK_EXECUTOR_TOOLS.has(toolName)) throw new Error("unsupported task HTTP tool");
   if (request.caller.capability !== undefined) {
     let conversationId: string | null;
-    try { conversationId = identifyCapability(request.caller.capability); }
-    catch { return serialized(mcpHttpRefusal(503, -32002, "The Viewer could not read its agent registry to identify this caller; retry the call.")); }
+    try { conversationId = await identifyCallerWhenReady(() => identifyCapability(request.caller.capability), request.caller.capability, request.deadlineAt, signal); }
+    catch {
+      return serialized(mcpHttpRefusal(503, -32002, "The Viewer could not read its agent registry to identify this caller; retry the call.", { "retry-after": "1" }));
+    }
     if (!conversationId) return serialized(mcpHttpRefusal(403, -32001, "This launch capability names no current agent: it is unknown or was rotated by a later launch."));
   }
-  const server = createViewerMcpServer(service, [toolName as import("./mcp/server").McpToolName],
+  const server = createViewerMcpServer(await taskService(), [toolName as import("./mcp/server").McpToolName],
     mcpTextResultClient(new Headers(headers).get("user-agent")?.split("/", 1)[0]));
   const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
   try {
@@ -122,7 +136,10 @@ async function httpTaskCall(request: TaskExecutorRequest, signal: AbortSignal): 
 // The Viewer retires this generation before acknowledging an access-key
 // change. New grants then pass through the new HTTP perimeter.
 privateChannel = await startTaskChannel({
-  identify: capability => acceptsPrivateCalls() ? identifyCapability(capability) : null,
+  identify: capability => {
+    try { return acceptsPrivateCalls() ? identifyCapability(capability) : null; }
+    catch (error) { logCallerIdentificationError(error, capability); throw error; }
+  },
   admit: (bytes, deadlineAt) => admit(--nextPrivateId, bytes, deadlineAt),
   unavailable: () => {
     privateChannel = null;
@@ -154,16 +171,16 @@ input.on("line", (line: string) => {
   const admission = admit(request.id, Buffer.byteLength(line) + 1, request.deadlineAt);
   if (!admission) { send({ id: request.id, error: "task executor admission is full or its request expired; retry the original key" }); return; }
   if (request.name === "identifyCapability") {
-    try {
-      const conversationId = identifyCapability(request.caller.capability);
-      send({ id: request.id, result: { conversationId } });
-    } catch { send({ id: request.id, error: "task executor could not identify the caller" }); }
-    admission.close(); return;
+    void identifyCallerWhenReady(() => identifyCapability(request.caller.capability), request.caller.capability, request.deadlineAt, admission.signal)
+      .then(conversationId => send({ id: request.id, result: { conversationId } }))
+      .catch(() => send({ id: request.id, error: "task executor could not identify the caller" }))
+      .finally(() => admission.close());
+    return;
   }
   if ((!TASK_EXECUTOR_TOOLS.has(request.name) && request.name !== "httpTaskCall") || !request.caller) {
     logMcpLifecycle("invalid-task-request"); process.exit(1);
   }
-  const operation = request.name === "httpTaskCall" ? httpTaskCall(request, admission.signal).then(response => sendHttpReply(request.id, response)) : runAsMcpHttpCaller(request.caller, () => service.callTool(request.name, request.args, {
+  const operation = request.name === "httpTaskCall" ? httpTaskCall(request, admission.signal).then(response => sendHttpReply(request.id, response)) : runAsMcpHttpCaller(request.caller, async () => (await taskService()).callTool(request.name, request.args, {
     signal: admission.signal, deadlineAt: request.deadlineAt, nativeWork: request.nativeWork,
   })).then(result => send({ id: request.id, result }));
   void operation.catch(() => send({ id: request.id, error: "task executor call failed; look up the original request key" }))

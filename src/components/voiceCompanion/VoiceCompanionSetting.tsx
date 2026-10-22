@@ -12,6 +12,7 @@ import { companionErrorMessage, limitResetText } from "@/lib/voiceCompanion/erro
 
 import { callDuration, planName, planTone, planWindows, spendTone, voiceMoney, voiceMonth, windowName, windowTone } from "./CompanionSpend";
 import { CallMemorySetting } from "./CallMemorySetting";
+import { VoiceToolsSetting } from "./VoiceToolsSetting";
 import { COMPANION_SETTINGS_EVENT } from "./hostSurfaces";
 
 export const OPEN_VOICE_COMPANION_SETTINGS_EVENT = "delegatus:open-voice-companion-settings";
@@ -45,6 +46,7 @@ export function VoiceCompanionSettingsHost() {
       <section data-voice-companion-settings="" role="dialog" aria-modal="true" aria-labelledby="voice-companion-settings-title" className="max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-xl border border-border bg-canvas p-5 text-primary shadow-xl" onClick={(event) => event.stopPropagation()}>
         <div className="flex items-center justify-between gap-4"><h2 id="voice-companion-settings-title" className="text-lg font-semibold">{t("voiceCompanion.settings.label")}</h2><button type="button" autoFocus className="min-h-11 px-2" onClick={() => setOpen(false)}>{t("telemetry.close")}</button></div>
         <VoiceCompanionSetting />
+        <VoiceToolsSetting />
       </section>
     </div>,
     document.body,
