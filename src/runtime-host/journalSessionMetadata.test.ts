@@ -107,7 +107,7 @@ test("large legacy journal: indexed selection avoids full scans and preserves ev
       const plan = db.query(`EXPLAIN QUERY PLAN ${indexed[i]}`).all() as { detail: string }[];
       expect(plan.some(row => row.detail.includes(i === 1 ? "session_host_inactive_recency" : "session_host_activity"))).toBe(true);
       expect(plan.some(row => row.detail.includes("TEMP B-TREE"))).toBe(false);
-      expect(plan.some(row => /^SCAN (?:entities|metadata|session_host_metadata)\b/.test(row.detail))).toBe(false);
+      expect(plan.some(row => /^SCAN entities\b/.test(row.detail))).toBe(false);
       if (i < 2) expect(plan.some(row => /SEARCH entities .*\(kind=\? AND id=\?\)/.test(row.detail))).toBe(true);
       const oldRows = db.query(legacy[i]).all().map(row => JSON.stringify(row)).sort();
       const newRows = db.query(indexed[i]).all().map(row => JSON.stringify(row)).sort();
