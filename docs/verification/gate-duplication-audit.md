@@ -397,7 +397,7 @@ Linux checks; the merge repeat reused types, lint and touched tests.
 A previous probe of the audit's 60-file merge using the old gate refused:
 1,284 seconds, median load1 11.8 and PSI 34.1, with 167 pre-existing failures,
 61 flaky cases, a surviving-child diagnostic and a runner timeout. It is a
-refused measurement, not evidence of a successful speed comparison.
+refused measurement. It supplies no successful speed comparison.
 
 ### Correctness checks
 
