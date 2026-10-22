@@ -84,8 +84,11 @@ It cannot reconstruct attempts before activation or after their evidence expires
 
 Frozen selection rows become eligible for deletion one day after their
 attempt settles. The serving Viewer sweeps 32 rows per minute, with a
-settlement recheck at write admission. Missing or unreadable settlement
-proof retains the row; the delivery ledger keeps its own retention policy.
+settlement recheck inside the writer transaction. A current stage awaiting
+publication or repair, an unsettled activation or unconfirmed termination
+retains its row. Close, delivery release and recorded host-settlement times
+extend the grace clock. Missing or unreadable settlement proof retains the
+row; the delivery ledger keeps its own retention policy.
 
 Scope history now keeps the last 10,000 ordinary changes independently of all
 curator-pass records, which stay for Undo. At the measured upper rate of 141
