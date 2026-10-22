@@ -1933,9 +1933,10 @@ export class SqliteAgentRegistryStore {
 
   /** Normalize every hot row except operation owners, at most 64 rows per
       call. One call over the whole hot registry was a 372 ms slice on retained
-      history. Rows normalize independently except a structured receipt, whose
-      artifact backfill reads its conversation through the alias chain, so each
-      receipt batch carries the aliases and conversations it reaches. */
+      history. Rows normalize independently except two cross-row rules: a
+      structured receipt's artifact backfill reads its conversation through the
+      alias chain, so each receipt batch carries the aliases and conversations
+      it reaches; and each held delivery synthesizes its operation's owner. */
   private *normalizeHotRowsSteps(input: Record<string, unknown>): Generator<void, RegistryFile> {
     const shell: Record<string, unknown> = { version: 2, entries: {}, receipts: {} };
     for (const field of META_FIELDS) if (Object.hasOwn(input, field)) shell[field] = input[field];
@@ -1970,6 +1971,14 @@ export class SqliteAgentRegistryStore {
         }
         const partial = performanceSpans.sync("registry.prepare.normalize", () => this.normalizePartial(partialInput));
         Object.assign(file[collection], partial[collection]);
+        if (collection === "heldDeliveries") {
+          // A held delivery names an owner even without a stored owner row.
+          // The first delivery of an operation wins, as in one complete call;
+          // stored owners replace these below.
+          for (const [operationId, owner] of Object.entries(partial.deliveryOperationOwners)) {
+            if (!Object.hasOwn(file.deliveryOperationOwners, operationId)) file.deliveryOperationOwners[operationId] = owner;
+          }
+        }
         yield;
       }
     }

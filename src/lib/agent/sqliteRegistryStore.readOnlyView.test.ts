@@ -875,4 +875,8 @@ test("cooperative preparation normalizes hot rows in bounded batches and keeps t
   expect(prepared.file.conversationAliases["conversation_batch-alias-far-0"]).toBe("conversation_batch-alias-0");
   const complete = normalizeRegistry(structuredClone(initial));
   for (const id of batch) expect(prepared.file.receipts[id]!.artifactLifecycle).toBe(complete.receipts[id]!.artifactLifecycle);
+  for (const collection of ["entries", "receipts", "conversations", "conversationAliases", "heldDeliveries", "deliveryOperationOwners"] as const) {
+    expect(Object.keys(prepared.file[collection])).toEqual(Object.keys(complete[collection]));
+  }
+  expect(prepared.file.deliveryOperationOwners).toEqual(complete.deliveryOperationOwners);
 }, 30_000);
