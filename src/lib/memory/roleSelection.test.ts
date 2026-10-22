@@ -143,7 +143,7 @@ console.log(createHash('sha256').update(block).digest('hex'));
 test("the first start records shadow ids without changing the delivered block", async () => {
   const { buildPipeline, savePipelines } = await import("@/lib/pipelines/store");
   savePipelines([buildPipeline({ id: input().attempt!.pipelineId, task: "Verify durable receipt ownership", project: profile.learnedRules.project, repoDir: root,
-    stages: [{ id: "build", kind: "run", prompt: "Check durable receipts before replaying them.", next: null, effectiveRole: { engine: "codex", model: "fixture-model", effort: "high", roleId: "builder", access: "read-write", promptScaffold: null } }],
+    stages: [{ id: "build", kind: "run", role: { roleId: "builder" }, prompt: "Check durable receipts before replaying them.", next: null, effectiveRole: { engine: "codex", model: "gpt-6.1-sol", effort: "high", roleId: "builder", access: "read-write", promptScaffold: null } }],
     srcPath: null, srcConversationId: null, now: NOW })]);
   const block = await learnedRulesForLaunchProfile(profile, input());
   const { memorySelection } = await import("./roleSelection");
