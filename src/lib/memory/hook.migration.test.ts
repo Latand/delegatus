@@ -189,12 +189,12 @@ test("a moved archived Codex home retires its former declaration and shared trus
     await retireLegacyCodexMemoryHooks(archive, backup);
     const migratedHooks = fs.readFileSync(path.join(archive, "hooks.json"), "utf8");
     const migratedConfig = fs.readFileSync(sharedConfig, "utf8");
-    expect(migratedHooks).not.toContain("shared-memory-");
-    expect(migratedHooks).not.toContain(formerHome);
-    expect(migratedHooks).not.toContain(canonicalFormerHome);
     expect(migratedConfig).toBe(personalConfig);
     const remainingState = (Bun.TOML.parse(migratedConfig) as { hooks?: { state?: Record<string, unknown> } }).hooks?.state ?? {};
     for (const key of configKeys) expect(remainingState[key]).toBeUndefined();
+    expect(migratedHooks).not.toContain("shared-memory-");
+    expect(migratedHooks).not.toContain(formerHome);
+    expect(migratedHooks).not.toContain(canonicalFormerHome);
     expect(fs.existsSync(path.join(archive, ".llv", "hooks", name))).toBe(false);
     await retireLegacyCodexMemoryHooks(archive, backup);
     expect(fs.readFileSync(path.join(archive, "hooks.json"), "utf8")).toBe(migratedHooks);
