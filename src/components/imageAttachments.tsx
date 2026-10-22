@@ -15,7 +15,8 @@ import {
   type AttachmentKind,
   type AttachmentRefusal,
 } from "@/lib/attachmentIntake";
-import { attachmentMegabytes } from "@/lib/filePolicy";
+import { attachmentMegabytes, STREAM_INBOX_FILE_BYTES, type ComposerUploadRef } from "@/lib/filePolicy";
+import { uploadComposerFile } from "@/lib/client/composerUpload";
 import type { RuntimeImageCapability } from "@/lib/runtime/structuredContent";
 
 /** A settled, deliverable attachment: the ready-only projection the send path,
@@ -32,29 +33,28 @@ export interface PendingImage {
 
 export type AttachmentStatus = "reading" | "ready" | "error";
 
-/** A settled, deliverable non-image attachment: the bytes and the operator's
-    own filename, which the inbox preserves as the basename so the path the
-    agent is handed still says what the file is. */
+/** A deliverable file: inline bytes or a completed upload reference, plus
+    the filename that the inbox preserves for the agent. */
 export interface PendingFile {
   id: string;
   name: string;
   mime: string;
   base64: string;
+  upload?: ComposerUploadRef;
 }
 
-/** What survives a persisted draft for a non-image attachment: the operator's
-    own filename and its type, never the bytes (issue #1224). Enough to name the
-    file that has to be attached again, and small enough for the synchronous
-    session storage a document's base64 could never fit. */
+/** A draft keeps the filename and type, plus any completed upload reference.
+    Inline bytes remain outside synchronous session storage. */
 export interface RestoredFile {
   id?: string;
   name: string;
   mime?: string;
+  upload?: ComposerUploadRef;
 }
 
 /** One intake slot in the composer tray: committed synchronously as a
     placeholder the instant a file is picked/pasted/dropped, then settled
-    independently into `ready` (base64 decoded) or `error` (per-item message +
+    independently into `ready` (read or uploaded) or `error` (per-item message +
     retry). One failed read never discards its siblings. */
 export interface PendingAttachment {
   id: string;
@@ -66,6 +66,8 @@ export interface PendingAttachment {
       decoded data URL once ready; "" while a placeholder has no preview yet. */
   preview: string;
   base64?: string;
+  upload?: ComposerUploadRef;
+  uploadPercent?: number;
   error?: string;
   /** Retained in memory so a failed read can be retried without re-picking. */
   file: File;
@@ -166,8 +168,8 @@ function readyImages(attachments: readonly PendingAttachment[]): PendingImage[] 
 function readyFiles(attachments: readonly PendingAttachment[]): PendingFile[] {
   const files: PendingFile[] = [];
   for (const attachment of attachments) {
-    if (attachment.kind === "file" && attachment.status === "ready" && attachment.base64) {
-      files.push({ id: attachment.id, name: attachment.name, mime: attachment.mime, base64: attachment.base64 });
+    if (attachment.kind === "file" && attachment.status === "ready" && (attachment.base64 || attachment.upload)) {
+      files.push({ id: attachment.id, name: attachment.name, mime: attachment.mime, base64: attachment.base64 ?? "", ...(attachment.upload ? { upload: attachment.upload } : {}) });
     }
   }
   return files;
@@ -201,6 +203,7 @@ export function useImageAttachments(handlers: {
   const attachmentsRef = useRef<PendingAttachment[]>([]);
   const imagesRef = useRef<PendingImage[]>([]);
   const filesRef = useRef<PendingFile[]>([]);
+  const uploads = useRef(new Map<string, AbortController>());
   const unmountedRef = useRef(false);
   const capability = handlers.imageCapability ?? null;
   const acceptFiles = handlers.acceptFiles === true;
@@ -214,6 +217,8 @@ export function useImageAttachments(handlers: {
     unmountedRef.current = false;
     return () => {
       unmountedRef.current = true;
+      for (const controller of uploads.current.values()) controller.abort();
+      uploads.current.clear();
       for (const attachment of attachmentsRef.current) revokePreview(attachment);
       attachmentsRef.current = [];
       imagesRef.current = [];
@@ -247,6 +252,21 @@ export function useImageAttachments(handlers: {
   };
 
   const settle = (id: string, file: File) => {
+    const slot = attachmentsRef.current.find(attachment => attachment.id === id);
+    if (slot?.kind === "file" && file.size > STREAM_INBOX_FILE_BYTES) {
+      const controller = new AbortController();
+      uploads.current.set(id, controller);
+      void uploadComposerFile(file, controller.signal, percent => {
+        if (uploads.current.get(id) === controller) patch(id, attachment => ({ ...attachment, uploadPercent: percent }));
+      }).then(upload => {
+        if (uploads.current.get(id) !== controller) return;
+        patch(id, attachment => ({ ...attachment, status: "ready", base64: "", upload, uploadPercent: undefined }));
+      }, error => {
+        if (uploads.current.get(id) !== controller) return;
+        patch(id, attachment => ({ ...attachment, status: "error", error: error instanceof Error ? error.message : translate(getLocale(), "attach.error") }));
+      }).finally(() => { if (uploads.current.get(id) === controller) uploads.current.delete(id); });
+      return;
+    }
     readImage(file).then(
       (decoded) => {
         const current = attachmentsRef.current.find((attachment) => attachment.id === id);
@@ -317,7 +337,7 @@ export function useImageAttachments(handlers: {
       imageCapability: capability,
       staged: {
         files: liveFiles.length,
-        bytes: liveFiles.reduce((total, attachment) => total + attachment.file.size, 0),
+        bytes: liveFiles.reduce((total, attachment) => total + (attachment.upload?.bytes ?? attachment.file.size), 0),
       },
     });
     let accepted = screened.accepted;
@@ -380,6 +400,8 @@ export function useImageAttachments(handlers: {
   };
 
   const remove = (id: string) => {
+    uploads.current.get(id)?.abort();
+    uploads.current.delete(id);
     const target = attachmentsRef.current.find((attachment) => attachment.id === id);
     if (target) revokePreview(target);
     commit(attachmentsRef.current.filter((attachment) => attachment.id !== id));
@@ -388,11 +410,25 @@ export function useImageAttachments(handlers: {
   const retry = (id: string) => {
     const target = attachmentsRef.current.find((attachment) => attachment.id === id);
     if (!target || target.status !== "error") return;
+    if (target.kind === "file") {
+      const others = attachmentsRef.current.filter(slot => slot.id !== id && slot.kind === "file" && slot.status !== "error");
+      const screened = screenAttachments([target.file], { acceptFiles, staged: {
+        files: others.length, bytes: others.reduce((sum, slot) => sum + (slot.upload?.bytes ?? slot.file.size), 0),
+      } });
+      if (screened.refusals.length) {
+        const error = refusalStatusText(screened.refusals);
+        handlers.onError(error);
+        patch(id, slot => ({ ...slot, error }));
+        return;
+      }
+    }
     patch(id, (attachment) => ({ ...attachment, status: "reading", error: undefined }));
     settle(id, target.file);
   };
 
   const clearAll = () => {
+    for (const controller of uploads.current.values()) controller.abort();
+    uploads.current.clear();
     for (const attachment of attachmentsRef.current) revokePreview(attachment);
     commit([]);
   };
@@ -464,15 +500,13 @@ export function useImageAttachments(handlers: {
     settleDelivered,
     /** Drop everything after a send (no confirmation), revoking previews. */
     clear: clearAll,
-    /* Restores a persisted draft tray. Images come back whole, because their
-       bytes are small enough to persist; a general attachment comes back as a
-       NAMED, un-restored slot and never as bytes (#1224). A document's base64
-       does not fit synchronous browser storage, so the alternative to naming it
-       is the file evaporating on a card switch or a phone tab restore with
-       nothing said — the same treatment the outbox gives `needsReattach`. A
-       file handed back WITH its bytes is restored ready. */
+    /* Completed upload references and in-memory inline bytes restore ready.
+       A draft retaining only a filename restores a named error that asks for
+       the file to be picked again. */
     replace: (next: PendingImage[], files: readonly (RestoredFile | PendingFile)[] = []) => {
       if (!reportPendingLimit(next)) return false;
+      for (const controller of uploads.current.values()) controller.abort();
+      uploads.current.clear();
       for (const attachment of attachmentsRef.current) revokePreview(attachment);
       const restoredImages = next.map((image): PendingAttachment => ({
         id: image.id ?? mintAttachmentId(),
@@ -489,11 +523,13 @@ export function useImageAttachments(handlers: {
         const name = file.name || translate(getLocale(), "attach.file");
         /* A draft given back from memory still has its bytes — a queue hand-off
            the runtime refused — and comes back deliverable, as it was staged. */
-        if ("base64" in file && file.base64) {
+        if (file.upload || "base64" in file && file.base64) {
           const mime = file.mime || "application/octet-stream";
+          const base64 = "base64" in file ? file.base64 : "";
           return {
-            id: file.id, kind: "file", status: "ready", name, mime, preview: "", base64: file.base64,
-            file: new File([Uint8Array.from(atob(file.base64), (char) => char.charCodeAt(0))], name, { type: mime }),
+            id: file.id || mintAttachmentId(), kind: "file", status: "ready", name, mime, preview: "", base64,
+            ...(file.upload ? { upload: file.upload } : {}),
+            file: new File([Uint8Array.from(atob(base64), (char) => char.charCodeAt(0))], name, { type: mime }),
             ownsPreview: false,
           };
         }
@@ -614,6 +650,13 @@ function slotLabels(attachment: PendingAttachment, t: ReturnType<typeof useLocal
 
 function statusBadge(attachment: PendingAttachment, t: ReturnType<typeof useLocale>["t"], index: number) {
   if (attachment.status === "reading") {
+    if (attachment.uploadPercent !== undefined) return (
+      <span className="absolute inset-0 flex items-center justify-center rounded bg-canvas text-[9px] font-bold text-secondary"
+        role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={attachment.uploadPercent}
+        aria-label={t("attach.uploading", { name: attachment.name, percent: attachment.uploadPercent })}>
+        {attachment.uploadPercent}%
+      </span>
+    );
     return (
       <span className="absolute inset-0 flex items-center justify-center rounded bg-canvas/70" aria-label={slotLabels(attachment, t, index).reading}>
         <Loader2 className="h-4 w-4 animate-spin text-muted" aria-hidden />
@@ -622,7 +665,7 @@ function statusBadge(attachment: PendingAttachment, t: ReturnType<typeof useLoca
   }
   if (attachment.status === "error") {
     return (
-      <span className="absolute inset-0 flex items-center justify-center rounded bg-danger/10" aria-hidden>
+      <span className="absolute inset-0 flex items-center justify-center rounded bg-danger/10" role="status" aria-label={attachment.error} title={attachment.error}>
         <span className="text-[10px] font-bold uppercase text-danger">!</span>
       </span>
     );

@@ -1,3 +1,5 @@
+import * as headlessCli from "@/lib/agent/claudeHeadless";
+import { setSubscriptionApiConsent } from "@/lib/accounts/subscriptionApiConsent";
 import { afterAll, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -8,6 +10,9 @@ const OLD_STATE = process.env.LLV_STATE_DIR;
 const OLD_HOME = process.env.LLV_CODEX_HOME;
 const OLD_CLAUDE_HOME = process.env.LLV_CLAUDE_HOME;
 process.env.LLV_STATE_DIR = path.join(SANDBOX, "state");
+setSubscriptionApiConsent(true);
+const cliFallback = spyOn(headlessCli, "runHeadlessClaudeOnce").mockResolvedValue({ status: "failed", records: [] });
+
 process.env.LLV_CODEX_HOME = path.join(SANDBOX, "legacy");
 process.env.LLV_CLAUDE_HOME = path.join(SANDBOX, "legacy-claude");
 fs.mkdirSync(process.env.LLV_CLAUDE_HOME, { recursive: true });
@@ -31,6 +36,7 @@ const { selectHeadlessAccount } = await import("@/lib/accounts/headlessSelection
 const { effectiveRemaining } = await import("@/lib/accounts/migration/quotaPolicy");
 
 afterAll(() => {
+  cliFallback.mockRestore();
   if (OLD_STATE === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = OLD_STATE;
   if (OLD_HOME === undefined) delete process.env.LLV_CODEX_HOME;
@@ -182,7 +188,7 @@ test("Claude usage probes honor a caller-specific timeout", async () => {
       20,
     );
     expect(result).toMatchObject({ source: "unavailable" });
-    expect(result.reason).toContain("probe aborted");
+    expect(result.reason).toBe("oauth usage fetch failed");
     expect(observedAbort).toBeTrue();
     expect(timeouts.mock.calls).toEqual([[20]]);
   } finally {
@@ -1350,20 +1356,25 @@ test("concurrent Claude refreshes share one provider request at each retry bound
     return { promise, resolve };
   };
   let response = deferred<Response>();
+  let started = deferred<void>();
   let fetches = 0;
   globalThis.fetch = (async () => {
     fetches += 1;
+    started.resolve();
     return response.promise;
   }) as unknown as typeof fetch;
   try {
     const firstWave = Array.from({ length: 6 }, () => readLimits({ codexLiveReader, now: () => 5_000_000 }));
+    await started.promise;
     expect(fetches).toBe(1);
     response.resolve(new Response(null, { status: 429 }));
     const firstResults = await Promise.all(firstWave);
     expect(firstResults.every((result) => result.provenance.claude.retryAt === new Date(5_060_000).toISOString())).toBeTrue();
 
     response = deferred<Response>();
+    started = deferred<void>();
     const secondWave = Array.from({ length: 6 }, () => readLimits({ codexLiveReader, now: () => 5_060_001 }));
+    await started.promise;
     expect(fetches).toBe(2);
     response.resolve(new Response(null, { status: 429 }));
     const secondResults = await Promise.all(secondWave);
@@ -1897,7 +1908,7 @@ test("a cached snapshot an older parser wrote never holds back a tier the live p
     // The entry the new parser wrote carries its generation, so the next read
     // rests on the backoff again rather than going live every poll.
     const disk = JSON.parse(fs.readFileSync(cacheFile, "utf8")) as { engines: { claude: Record<string, { parser?: number }> } };
-    expect(disk.engines.claude.default.parser).toBe(2);
+    expect(disk.engines.claude.default.parser).toBe(3);
   } finally { request.mockRestore(); resetLimitsCache(); }
 });
 
@@ -1939,7 +1950,7 @@ function writeTierlessThrottledCache(now: number): void {
           provenance: { source: "cache", reason: "oauth-rate-limited", staleSince: new Date(now - 20 * 60_000).toISOString(), retryAt: new Date(now + 15 * 60_000).toISOString() },
           retryAt: now + 15 * 60_000,
           consecutive429s: 4,
-          parser: 2,
+          parser: 3,
         },
       },
       codex: {},

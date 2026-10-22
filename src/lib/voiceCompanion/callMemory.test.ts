@@ -1,3 +1,4 @@
+import * as headlessCli from "@/lib/agent/claudeHeadless";
 import { afterAll, beforeEach, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -25,25 +26,21 @@ const answer = { asked: ["Review the build."], done: ["Passed the request on."],
 const result = (value: unknown = answer) => ({ answer: value, durationMs: 25, inputTokens: 1000, outputTokens: 120, model: "fixture-haiku" });
 test("call memory still admits Haiku with its existing effort, ceiling, deadline and copy", async () => {
   const home = fs.mkdtempSync(path.join(root, "account-"));
-  fs.writeFileSync(path.join(home, ".credentials.json"), JSON.stringify({ claudeAiOauth: { accessToken: "sample", expiresAt: Date.now() + 60_000 } }), { mode: 0o600 });
   const admission = spyOn(accountManager, "resolveHeadlessSpawn").mockImplementation((_engine, _requested, _excluded, project, model) => {
     expect(project).toBe("garden"); expect(model).toBe("claude-haiku-5-5");
     return { kind: "available", account: { engine: "claude", accountId: "sample", kind: "managed", home, transcriptRoot: "sample", env: { NODE_ENV: "test" } } };
   });
-  const originalFetch = globalThis.fetch;
-  const timeout = spyOn(AbortSignal, "timeout");
-  globalThis.fetch = (async (_, init) => {
-    const body = JSON.parse(init!.body as string);
-    expect(body.model).toBe(CALL_MEMORY_MODEL); expect(body.max_tokens).toBe(2048);
-    expect(body.output_config.effort).toBe("low");
-    return Response.json({ stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify(answer) }] });
-  }) as typeof fetch;
+  const call = spyOn(headlessCli, "runHeadlessClaudeOnce").mockImplementation(async request => {
+    expect(request.model).toBe(CALL_MEMORY_MODEL); expect(request.maxTokens).toBe(2048);
+    expect(request.timeoutMs).toBe(20_000); expect(request.schema).toHaveProperty("type", "object");
+    return { status: "done", records: [{ type: "result", subtype: "success", is_error: false, structured_output: answer }] };
+  });
   try {
     expect((await summarizeCall({ text: "Review the build.", previous: null, through: 0, privateOmitted: false, cut: Infinity, turns: 1 }, "garden")).model).toBe("claude-haiku-5-5");
-    expect(timeout).toHaveBeenCalledWith(20_000);
+    expect(call).toHaveBeenCalledTimes(1);
     expect(translate("en", "voiceCompanion.memory.provider")).toContain("Claude Haiku");
     expect(translate("uk", "voiceCompanion.memory.provider")).toContain("Claude Haiku");
-  } finally { globalThis.fetch = originalFetch; admission.mockRestore(); timeout.mockRestore(); }
+  } finally { admission.mockRestore(); call.mockRestore(); }
 });
 function harness(backend: "api" | "codex" = "api", model: CallSummarizer = async () => result(), deadline = 1000) {
   let now = Date.UTC(2026,9,13,10);

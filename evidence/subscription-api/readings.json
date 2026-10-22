@@ -1,0 +1,102 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "revision": "3bb4ba1ab34d5d41120f69a7d47692498b5ff246",
+  "recordedAt": "2026-10-21T19:10:07.256Z",
+  "command": "LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<browser> bun test src/components/kanban/kanbanBoard.browser.test.tsx -t 'subscription API consent'",
+  "sources": {
+    "src/components/telemetry/SubscriptionApiSetting.tsx": "5d0516ce12ccb1d54f8308978fef81b923fa3199b299bf1b8fcce6e25381761f",
+    "src/components/telemetry/TelemetrySettings.tsx": "b18a812cced68940e9b3eaa23c32e00a20abb6ead11aed6c284c874594b2b184",
+    "src/lib/i18n/en.ts": "5d2daf54a94bf9a9e9af1b2a0fce560a6eb9f7468aa36b121ac0742cbb00b1b4",
+    "src/lib/i18n/uk.ts": "16c7f116efae7e8daed849962f862ba3c4b82086b7d4ccd1d7ebb9032318f69d"
+  },
+  "readings": [
+    {
+      "lang": "en",
+      "theme": "light",
+      "viewport": {
+        "width": 1000,
+        "height": 700
+      },
+      "visible": true,
+      "overflow": false,
+      "scrolls": false
+    },
+    {
+      "lang": "en",
+      "theme": "light",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "visible": true,
+      "overflow": false,
+      "scrolls": false
+    },
+    {
+      "lang": "en",
+      "theme": "dark",
+      "viewport": {
+        "width": 1000,
+        "height": 700
+      },
+      "visible": true,
+      "overflow": false,
+      "scrolls": false
+    },
+    {
+      "lang": "en",
+      "theme": "dark",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "visible": true,
+      "overflow": false,
+      "scrolls": false
+    },
+    {
+      "lang": "uk",
+      "theme": "light",
+      "viewport": {
+        "width": 1000,
+        "height": 700
+      },
+      "visible": true,
+      "overflow": false,
+      "scrolls": false
+    },
+    {
+      "lang": "uk",
+      "theme": "light",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "visible": true,
+      "overflow": false,
+      "scrolls": true
+    },
+    {
+      "lang": "uk",
+      "theme": "dark",
+      "viewport": {
+        "width": 1000,
+        "height": 700
+      },
+      "visible": true,
+      "overflow": false,
+      "scrolls": false
+    },
+    {
+      "lang": "uk",
+      "theme": "dark",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "visible": true,
+      "overflow": false,
+      "scrolls": true
+    }
+  ]
+}
