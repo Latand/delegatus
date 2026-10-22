@@ -1383,7 +1383,7 @@ export type PatchPipelineRequest = {
   applyNow?: boolean;
   /** override-stage applyNow of a tier-only change: `none` lets the running turn finish (Turbo's revert). */
   applyNowCut?: "boundary" | "none";
-  /** override-stage: the Turbo episode key that asked for this edit, recorded on the graph edit. */
+  /** override-stage: the Turbo episode key; boundary tier changes affect the running attempt only. */
   turbo?: string;
   /** Board task used by link-task and unlink-task. */
   taskId?: string;

@@ -16,7 +16,7 @@ import { deliverPrototypeDecision } from "@/lib/prototypeReview/deliveryWorker";
 import { findPrototypeRound } from "@/lib/prototypeReview/store";
 import { autonomyActive, autonomyMandate, autonomyReportKey, pendingAutonomyReports } from "@/lib/monitor/autonomy";
 import { endedTurbo, turboActive, turboMandate, turboNeedsPlan, turboProgress } from "@/lib/monitor/turbo";
-import { kickTurbo, turboChangeContext } from "@/lib/monitor/turboRuntime";
+import { turboChangeContext } from "@/lib/monitor/turboRuntime";
 import { changeSeatTickSettings, markAutonomyReported, markAutonomyDecisionReview } from "@/lib/monitor/seatTickSettings";
 import { pipelinePublishesRemoteBranch } from "@/lib/pipelines/publication";
 import { recordSeatProjectSuccessions, seatLaunchCwd } from "@/lib/orchestrator/seatProjectIdentity";
@@ -4786,7 +4786,8 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     if (!applied.ok) throw new Error(applied.error);
     if (change.release) releaseControlChange(project, change.release, actor, applied.settings.updatedAt!);
     if (dependencies.writeTickSettings || dependencies.readTickSettings) writeSettings(project, applied.settings);
-    else if (change.turbo !== undefined) void kickTurbo(project);
+    /* The Viewer owns Codex hosts and runs the sweep from its seat-tick pass.
+       MCP writes only the durable setting; its process cannot dispatch host RPCs. */
     if (review) {
       const taskId = change.autonomyDecision?.taskId ?? null;
       const authorize = () => {

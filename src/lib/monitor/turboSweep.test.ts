@@ -154,6 +154,27 @@ test("an armed cut whose process-local receipt was lost resumes from its recorde
   expect(w.turbo().switches[0]!.state).toBe("switched");
 });
 
+test("after restart an already-continued cut returns even when its host is gone, then a new episode plans", async () => {
+  const w = world([agent(1)]);
+  w.change({ turbo: { enabled: true } });
+  await new TurboSweep(w.ports).kick(project);
+  w.ports.update(project, at, episode => ({ ...episode, switches: episode.switches.map(row => ({
+    ...row, state: "switched", cutTurnId: "turn-cut",
+  })) }));
+  w.live.delete("conversation_1");
+  w.ports.cutState = () => "unknown";
+  w.ports.candidates = async () => [];
+  w.change({ turbo: { enabled: false } });
+  await new TurboSweep(w.ports).kick(project);
+  expect(w.turbo().switches[0]!.state).toBe("reverted");
+  expect(w.turbo().revertedAt).toBeDefined();
+
+  w.change({ turbo: { enabled: true } });
+  await new TurboSweep(w.ports).kick(project);
+  expect(w.turbo().noticeOn?.deliveredAt).toBeDefined();
+  expect(w.turbo().switches).toEqual([]);
+});
+
 test("turning Turbo off keeps an in-flight boundary cut owed until it settles, then continues once", async () => {
   const w = world([agent(1)]);
   let cutState: "armed" | "cut" = "armed";

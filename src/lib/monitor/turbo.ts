@@ -54,6 +54,8 @@ export interface TurboSwitch {
   startedAt?: string;
   /** Native turn persisted before an interruption may happen. */
   cutTurnId?: string;
+  /** The boundary cut and its continuation (or turn end) already settled. */
+  cutSettled?: boolean;
 }
 
 /** A seat notice's delivery; tried at most {@link TURBO_NOTICE_ATTEMPTS} times. */

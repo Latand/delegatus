@@ -271,8 +271,10 @@ export async function driveRuntimeSwitch(
       const tierKey = switchOperationKey(record, "tier");
       const commitInPlace = async (how: NonNullable<PipelineRuntimeSwitch["tierCut"]>) => {
         record.tierCut = how; record.continuedAt ??= now;
-        delete attempt.effectiveRole.preferredServiceTier; delete attempt.effectiveRole.serviceTierSource;
-        attempt.effectiveRole.serviceTier = (record.appliedServiceTier === undefined ? record.to.serviceTier : record.appliedServiceTier) ?? undefined;
+        if (!record.turbo) {
+          delete attempt.effectiveRole.preferredServiceTier; delete attempt.effectiveRole.serviceTierSource;
+          attempt.effectiveRole.serviceTier = (record.appliedServiceTier === undefined ? record.to.serviceTier : record.appliedServiceTier) ?? undefined;
+        }
         if (!record.turbo) attempt.runtimeAccountPin = record.to.accountPinned ? record.to.accountId : null;
         await settle("committed", `service tier ${record.to.serviceTier ?? "default"} applies from the next turn; the running turn was not cut`);
       };

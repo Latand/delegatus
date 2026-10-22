@@ -2498,7 +2498,10 @@ test("in-place: a persisted cut intent recovers the interrupted turn before issu
 
 test("in-place: an idle Codex stage takes the tier for its next turn; nothing is cut, restarted or continued", async () => {
   const h = await inPlaceHarness();
-  const chosen = await h.request({ turbo: "turbo:2026-10-21T12:00:00.000Z" });
+  const initial = loadPipelines()[0]!;
+  Object.assign(initial.runs[0]!.attempts[0]!.effectiveRole, { preferredServiceTier: "priority", serviceTierSource: "role-default" });
+  savePipelines([initial]);
+  const chosen = await h.request({ turbo: "turbo:2026-10-21T12:00:00.000Z", applyNowCut: "boundary" });
   expect(chosen.error).toBeUndefined();
   expect(chosen.runtimeSwitch).toMatchObject({ mode: "fork", inPlace: true, cut: "boundary", turbo: "turbo:2026-10-21T12:00:00.000Z", to: { serviceTier: "ultrafast", accountId: "default" } });
   expect(chosen.graphEdit?.summary).toContain("(Turbo turbo:2026-10-21T12:00:00.000Z)");
@@ -2506,8 +2509,8 @@ test("in-place: an idle Codex stage takes the tier for its next turn; nothing is
   const after = loadPipelines()[0]!;
   const attempt = after.runs[0]!.attempts[0]!;
   expect(attempt.runtimeSwitches![0]).toMatchObject({ phase: "committed", tierCut: "none" });
-  expect(attempt.effectiveRole.serviceTier).toBe("ultrafast");
-  expect(after.stages.find(stage => stage.id === "plan")!.serviceTier).toBe("ultrafast");
+  expect(attempt.effectiveRole).toMatchObject({ preferredServiceTier: "priority", serviceTierSource: "role-default" });
+  expect(after.stages.find(stage => stage.id === "plan")!.serviceTier ?? null).toBeNull();
   expect(h.tierCalls).toEqual([{ conversationId: STAGE_CONVERSATION, operationId: expect.stringMatching(/^pswitch-.*-tier$/), serviceTier: "ultrafast", cut: "boundary" }]);
   expect(h.operations.size).toBe(0);
   expect(h.continuations).toHaveLength(0);

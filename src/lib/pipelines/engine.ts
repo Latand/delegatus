@@ -14513,6 +14513,10 @@ export async function patchPipeline(
       const storedTarget = targetId ? pipeline.stages.find((item) => item.id === targetId) ?? null : null;
       const target = storedTarget ? structuredClone(storedTarget) : null;
       if (!target) return { error: "stage not found", status: 404 };
+      const transientTurboTier = typeof req.turbo === "string" && req.turbo.length > 0
+        && req.applyNow === true && req.applyNowCut === "boundary"
+        && req.role === undefined && req.model === undefined && req.effort === undefined
+        && req.engine === undefined && req.account === undefined && req.prompt === undefined && req.access === undefined;
       /* #1695 C7: checked inside this mutation and before any field is written,
          so a stage another client changed since the caller read it is refused
          and keeps that client's values. */
@@ -14705,7 +14709,7 @@ export async function patchPipeline(
             Object.assign(live, { accountId: nativeGeneration.accountId, sessionId: nativeGeneration.sessionId, agentPath: nativeGeneration.agentPath });
           }
           live.runtimeAccountPin = target.account ?? null;
-          if (JSON.stringify(storedTarget) !== JSON.stringify(target)) {
+          if (!transientTurboTier && JSON.stringify(storedTarget) !== JSON.stringify(target)) {
             Object.assign(storedTarget!, target);
             if (!target.account) delete storedTarget!.account;
             graphEdit = recordGraphEdit(pipeline, ports, actor, { action: "override-stage", stageId: target.id, ...reach, summary: `updated the future runtime of stage ${target.id}; running attempt already uses the selected runtime` });
@@ -14738,8 +14742,10 @@ export async function patchPipeline(
       }
       // All target validation and switch replay/conflict checks precede the
       // definition write, so a refused request cannot alter future attempts.
-      Object.assign(storedTarget!, target);
-      if (!target.account) delete storedTarget!.account;
+      if (!transientTurboTier) {
+        Object.assign(storedTarget!, target);
+        if (!target.account) delete storedTarget!.account;
+      }
       const changed = [
         req.role !== undefined ? "role" : null,
         req.engine !== undefined ? "engine" : null,
@@ -14752,8 +14758,10 @@ export async function patchPipeline(
       graphEdit = recordGraphEdit(pipeline, ports, actor, {
         action: "override-stage",
         stageId: target.id,
-        ...reach,
-        summary: `changed ${changed.join(", ")} of stage ${target.id}${reach.effect === "pending-next-attempt" ? `; applies from attempt ${reach.appliesFromAttempt}` : ""}${typeof req.turbo === "string" && req.turbo ? ` (Turbo ${req.turbo.slice(0, 80)})` : ""}`,
+        ...(transientTurboTier ? { effect: "applied", appliesFromAttempt: live?.n ?? reach.appliesFromAttempt } : reach),
+        summary: transientTurboTier
+          ? `changed the running runtime tier of stage ${target.id}; the stage definition stays unchanged (Turbo ${req.turbo!.slice(0, 80)})`
+          : `changed ${changed.join(", ")} of stage ${target.id}${reach.effect === "pending-next-attempt" ? `; applies from attempt ${reach.appliesFromAttempt}` : ""}${typeof req.turbo === "string" && req.turbo ? ` (Turbo ${req.turbo.slice(0, 80)})` : ""}`,
       });
       if (runtimeSwitch && live) {
         graphEdit.runtimeSwitch = { attempt: live.n, id: runtimeSwitch.id };

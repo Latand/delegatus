@@ -305,6 +305,9 @@ function schedule(): void {
 
 /** Run a pass for the project now (after a settings change) and keep it scheduled while it has work. */
 export async function kickTurbo(project: string): Promise<void> {
+  /* Tool processes can update settings, but only the active Viewer owns the
+     hosted conversations that the sweep must change. */
+  if (process.env.LLV_STATE_OWNER !== "viewer") return;
   const current = state();
   current.projects.add(project);
   try {

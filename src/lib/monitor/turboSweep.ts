@@ -329,7 +329,7 @@ export class TurboSweep {
           }
         }
         await this.update(project, startedAt, current => ({ ...current, switches: current.switches.map(item => item.conversationId === row.conversationId && item.state === "armed"
-          ? { ...item, state: "switched" as const, at: this.at(), ...(state === "cut" || state === "turn-ended" ? {} : { reason: `cut ${state}; the next turn runs at the new speed` }) } : item) }));
+          ? { ...item, state: "switched" as const, ...(state === "cut" ? { cutSettled: true } : {}), at: this.at(), ...(state === "cut" || state === "turn-ended" ? {} : { reason: `cut ${state}; the next turn runs at the new speed` }) } : item) }));
       }
       for (const row of episode.switches.filter(item => item.state === "armed" && item.stage)) {
         const state = await this.ports.stageState(row.stage!, row.conversationId, row.to).catch(() => ({ state: "pending" as const }));
@@ -375,20 +375,22 @@ export class TurboSweep {
   /** Each conversation returns to its own previous tier from its next turn; nothing is cut. */
   private async revertRows(project: string, episode: TurboSetting, rows: TurboSwitch[], reason: string): Promise<void> {
     const key = turboEpisodeKey(episode);
-    for (const row of rows.slice(0, TURBO_ITEMS_PER_PASS)) {
+    for (let row of rows.slice(0, TURBO_ITEMS_PER_PASS)) {
       await this.slots.acquire(this.ports);
       try {
+        const cutSettled = row.cutSettled === true || row.state === "switched";
+        row = { ...row, ...(cutSettled ? { cutSettled: true } : {}) };
         await this.write(project, episode, [{ ...row, state: "reverting", at: this.at() }]);
         const operationId = `${key}:${row.conversationId}`;
         let note = reason;
         if (row.state === "armed" && !row.stage) await this.ports.cancelCut(row.conversationId, operationId);
-        if (!row.stage && row.cutTurnId) {
+        const live = await this.ports.liveTier(row.conversationId, row);
+        if (!row.stage && row.cutTurnId && !cutSettled && live.live && live.hosted !== false) {
           const cut = await this.ports.cutState(operationId, row.conversationId, row.cutTurnId);
           if (cut === "armed" || cut === "unknown") {
             throw new Error("the boundary interrupt is still settling");
           }
         }
-        const live = await this.ports.liveTier(row.conversationId, row);
         const applied = row.appliedTier === undefined ? row.to : row.appliedTier;
         if (row.stage) {
           if (live.hosted === false && live.live && (live.tier === applied || row.uncertain && live.tier === row.from)) {
