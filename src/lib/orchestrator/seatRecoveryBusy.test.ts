@@ -327,7 +327,7 @@ for (const terminal of [false, true]) test(`canonical seat request keeps its pro
       target = "other-project";
       throw Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
     }
-    return { kind: "eligible", conversationId: id, path: transcript, cwd: sandbox, project: "atlas", engine: "claude", model: "opus" };
+    return { kind: "eligible", conversationId: id, path: transcript, cwd: sandbox, project: "other-project", engine: "claude", model: "opus" };
   };
   const result = await executeOrchestratorSeatRequest({ ...request, project: "Atlas Board", clientRequestId: "canonical-seat-request",
     ...(!terminal ? { conversationId: id } : {}),
@@ -336,8 +336,8 @@ for (const terminal of [false, true]) test(`canonical seat request keeps its pro
     expect(result.status).toBe(500);
     expect(orchestratorSeatFor("atlas")).toMatchObject({ active: null, pending: null, history: [{ seat: { intent: { error: "fixture terminal failure" } } }] });
   } else {
-    expect(result.status).toBe(200);
-    expect(orchestratorSeatFor("atlas")).toMatchObject({ active: { conversationId: id }, pending: null, history: [] });
+    expect(result).toMatchObject({ status: 409, body: { code: "project_mismatch", error: "conversation belongs to a different project" } });
+    expect(orchestratorSeatFor("atlas")).toMatchObject({ active: null, pending: null, history: [] });
     expect(selections).toBe(2);
   }
   expect(orchestratorSeatFor("other-project")).toMatchObject({ active: null, pending: null, history: [] });
