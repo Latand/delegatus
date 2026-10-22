@@ -685,7 +685,8 @@ export class CompanionLiveSessions {
         const context = active.codexTurns.get(delegationId) ?? active.codexTurn;
         if (context) context.privateHistory = true;
       }
-      // Codex voices queued speech after the turn's own answer, so a report asked for again is handed at once.
+      // Codex voices queued speech after the turn's own answer, so a report asked for again is handed
+      // as soon as the input hold allows: here, or when the voice's answer releases it.
       if (active.codex) this.speakReports(active);
       const status = output?.status === "refused" || output?.status === "failed" ? "failed" : "done";
       this.admission.record(active.id, { id: `tool-${recordedCallId}`, kind: "tool", atMs,
