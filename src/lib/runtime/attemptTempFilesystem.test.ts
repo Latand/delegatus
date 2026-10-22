@@ -43,9 +43,9 @@ test.skipIf(process.platform !== "linux")("registered inspection streams beyond 
 }, 60000);
 
 test.skipIf(process.env.LLV_ATTEMPT_TEMP_DOCKER_TEST !== "1")("container-owned private files retire through a scoped cleanup container", async () => {
-  const directory = root(); const image = await attemptTempUtilityImage();
-  const store = new AttemptTempStore(path.join(path.dirname(directory), path.basename(directory) + ".sqlite"));
-  roots.push(store.filename); roots.push(store.filename + "-wal"); roots.push(store.filename + "-shm");
+  const parent = root(), directory = path.join(parent, "llv-stage-private"); fs.mkdirSync(directory);
+  const image = await attemptTempUtilityImage();
+  const store = new AttemptTempStore(path.join(parent, "owners.sqlite"));
   cleanups.push(async () => {
     store.close();
     if (fs.existsSync(directory)) await exec("docker", ["run", "--rm", "--pull=never", "--network=none", "--user=0",
@@ -61,8 +61,16 @@ test.skipIf(process.env.LLV_ATTEMPT_TEMP_DOCKER_TEST !== "1")("container-owned p
     const sweep = (at: number) => sweepAttemptTemps(store, { now: () => at, state: async () => "closed", scan: () => ({ ownNamespace: null, processes: [] }) });
     expect((await sweep(now)).removed).toBe(0); expect(fs.existsSync(directory)).toBeTrue();
     fs.unlinkSync(pin);
-    const report = await sweep(now + 60000);
-    expect(report.errors).toBe(0); expect(report.removed).toBe(1); expect(report.removedBytes).toBeGreaterThanOrEqual(4 * 1024 * 1024); expect(fs.existsSync(directory)).toBeFalse();
+    let report;
+    // Other test runs may remove a container between ps and inspect. Production
+    // must retain this tree on that incomplete observation, then retry next tick.
+    for (let tick = 1; tick <= 4; tick++) {
+      report = await sweep(now + tick * 60000);
+      if (report.removed) break;
+      expect(report.held + report.errors).toBeGreaterThan(0);
+      expect(fs.existsSync(path.join(directory, "private"))).toBeTrue();
+    }
+    expect(report!.errors).toBe(0); expect(report!.removed).toBe(1); expect(report!.removedBytes).toBeGreaterThanOrEqual(4 * 1024 * 1024); expect(fs.existsSync(directory)).toBeFalse();
   } finally { store.close(); }
 }, 60000);
 
