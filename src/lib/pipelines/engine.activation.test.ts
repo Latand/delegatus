@@ -1,9 +1,11 @@
+// Pre-S5 embedded-flow execution cases stay as history until S8 deletion.
+// Supported run-reviewer cases and flows/retirement.test.ts remain active.
 import { expect, spyOn, test, spawn, spawnSync, fs, os, path, Database, selectProjectAccount, CONTROLLER_ARTIFACT_GIT_PATHS, engineModule, defaultPipelinePorts, reconcileEmbeddedReviewFlows, tickPipelines, AgentRegistry, setAgentRegistryForTests, createPipelineFromRequest, loadPipelines, savePipelines, durableStageTurnEvidence, edgeRoundsUsed, patchPipeline, closeAndDrain, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, REMOTE_BRANCH, create, exhaustVerdictRecovery, provisionRetryClock, STAGE_HEAD, PASS_TEXT, runningStructuredStage, SSH_CONNECT_TIMEOUT, approvedReviewAwaitingRemote, networkDown, NO_CODE_TEST_STAGES, persistedCommittingReview, PROVIDER_LIMIT_NOTICE, LIMITED_ACCOUNT, SPARE_ACCOUNT, LIMITED_ACCOUNT_LABEL, stageTranscript, limitInterruptedTranscript, codexUsageLimitTranscript, readFixtures, stampPipelinePrompt, severedToolTranscript, truncatedMidTurnTranscript, usageLimitPorts, usageLimitStage } from "./engine.fixture";
 import type { AgentRegistryType, DurableQuotaObservation, PipelinePorts } from "./engine.fixture";
 import { shortId } from "@/lib/shortIds";
 
 
-test("a later exact-head approval replaces a stale startup pause and completes after controller restart (#526)", async () => {
+test.skip("a later exact-head approval replaces a stale startup pause and completes after controller restart (#526)", async () => {
   const h = harness();
   const stages = [
     { id: "build", kind: "run", prompt: "build", next: "review" },
@@ -63,7 +65,7 @@ test("a later exact-head approval replaces a stale startup pause and completes a
   expect(JSON.stringify(loadPipelines()[0])).toBe(afterCompletion);
 });
 
-test("a later approval stays parked when its reviewed head differs from the current pipeline head (#526)", async () => {
+test.skip("a later approval stays parked when its reviewed head differs from the current pipeline head (#526)", async () => {
   const h = harness();
   await create(h.ports, [
     { id: "build", kind: "run", prompt: "build", next: "review" },
@@ -95,7 +97,7 @@ test("a later approval stays parked when its reviewed head differs from the curr
   expect(loadPipelines()[0]!.stateDetail).toBe(parked.stateDetail);
 });
 
-test("issue 533: approval parks when the reviewed repair is absent from the remote pipeline branch", async () => {
+test.skip("issue 533: approval parks when the reviewed repair is absent from the remote pipeline branch", async () => {
   const h = harness();
   const pipeline = await create(h.ports, [
     { id: "build", kind: "run", prompt: "build", next: "review" },
@@ -134,7 +136,7 @@ test("issue 533: approval parks when the reviewed repair is absent from the remo
   });
 });
 
-test("an approval whose remote head read times out retries on its own and settles the reviewed head without touching the flow (#1692)", async () => {
+test.skip("an approval whose remote head read times out retries on its own and settles the reviewed head without touching the flow (#1692)", async () => {
   const h = harness();
   const { control, effects, baseline } = await approvedReviewAwaitingRemote(h);
 
@@ -165,7 +167,7 @@ test("an approval whose remote head read times out retries on its own and settle
   expect(effects()).toEqual(baseline);
 });
 
-test("a remote that comes back at a different head after a timeout parks on the mismatch and approves nothing (#1692)", async () => {
+test.skip("a remote that comes back at a different head after a timeout parks on the mismatch and approves nothing (#1692)", async () => {
   const h = harness();
   const { control, effects, baseline } = await approvedReviewAwaitingRemote(h);
   const divergedRemote = "d".repeat(40);
@@ -185,7 +187,7 @@ test("a remote that comes back at a different head after a timeout parks on the 
   expect(loadPipelines()[0]!.stateDetail).toBe(parked.stateDetail);
 });
 
-test("a remote that refuses the login parks at once, with no automatic retry (#1692)", async () => {
+test.skip("a remote that refuses the login parks at once, with no automatic retry (#1692)", async () => {
   const h = harness();
   const { control, effects, baseline } = await approvedReviewAwaitingRemote(h);
   control.remote = { code: 128, stdout: "", stderr: "git@example.invalid: Permission denied (publickey).\r\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists." };
@@ -205,7 +207,7 @@ test("a remote that refuses the login parks at once, with no automatic retry (#1
   expect(effects()).toEqual(baseline);
 });
 
-test("a remote that never answers parks after a bounded wait that counts its retries, and stays parked (#1692)", async () => {
+test.skip("a remote that never answers parks after a bounded wait that counts its retries, and stays parked (#1692)", async () => {
   const h = harness();
   const { control, effects, baseline } = await approvedReviewAwaitingRemote(h);
 
@@ -228,7 +230,7 @@ test("a remote that never answers parks after a bounded wait that counts its ret
   expect(effects()).toEqual(baseline);
 });
 
-test("an internal pipeline runs every stage and settles its approved review with the network unreachable (#1692)", async () => {
+test.skip("an internal pipeline runs every stage and settles its approved review with the network unreachable (#1692)", async () => {
   const h = harness();
   const pipeline = await create(h.ports, NO_CODE_TEST_STAGES as never);
   expect(pipeline.publication).toBe("internal");
@@ -267,7 +269,7 @@ test("an internal pipeline runs every stage and settles its approved review with
   expect(remoteCalls).toEqual([]);
 });
 
-test("an internal approval of a revision the worktree no longer holds settles nothing and a retry reviews the new head (#1692)", async () => {
+test.skip("an internal approval of a revision the worktree no longer holds settles nothing and a retry reviews the new head (#1692)", async () => {
   const h = harness();
   const { effects, baseline } = await approvedReviewAwaitingRemote(h, {});
   const { remoteCalls } = networkDown(h);
@@ -301,7 +303,7 @@ test("an internal approval of a revision the worktree no longer holds settles no
   expect(remoteCalls).toEqual([]);
 });
 
-test("an internal pipeline an older build parked on the remote head check completes on its local identity with the network down (#1692)", async () => {
+test.skip("an internal pipeline an older build parked on the remote head check completes on its local identity with the network down (#1692)", async () => {
   const h = harness();
   const { effects, baseline } = await approvedReviewAwaitingRemote(h, {});
   /* The record as production left it: review ingress had published the head,
@@ -399,7 +401,7 @@ test("pipeline creation accepts the two publication policies and refuses anythin
   expect(refused.violations).toContainEqual(expect.objectContaining({ field: "publication", message: "publication must be internal or remote-branch" }));
 });
 
-test("an approval parks when the clean head advances during final settlement (#526)", async () => {
+test.skip("an approval parks when the clean head advances during final settlement (#526)", async () => {
   const h = harness();
   await create(h.ports, [
     { id: "build", kind: "run", prompt: "build", next: "review" },
@@ -439,7 +441,7 @@ test("an approval parks when the clean head advances during final settlement (#5
   });
 });
 
-test("REQUEST_CHANGES recovery keeps the bound reviewer in the review slot and lets the flow relay continue (#526)", async () => {
+test.skip("REQUEST_CHANGES recovery keeps the bound reviewer in the review slot and lets the flow relay continue (#526)", async () => {
   const h = harness();
   await create(h.ports, [
     { id: "build", kind: "run", prompt: "build", next: "review" },
@@ -480,7 +482,7 @@ test("REQUEST_CHANGES recovery keeps the bound reviewer in the review slot and l
   });
 });
 
-test("issue 532: a four-round embedded flow authoritatively repairs its stale parent once", async () => {
+test.skip("issue 532: a four-round embedded flow authoritatively repairs its stale parent once", async () => {
   const h = harness();
   await create(h.ports, [
     { id: "build", kind: "run", prompt: "build", next: "review" },
@@ -573,7 +575,7 @@ test("issue 532: a four-round embedded flow authoritatively repairs its stale pa
   });
 });
 
-test("issue 532: projection rebinds one flow-first partial write and refuses ambiguous candidates", async () => {
+test.skip("issue 532: projection rebinds one flow-first partial write and refuses ambiguous candidates", async () => {
   const h = harness();
   await create(h.ports, [
     { id: "build", kind: "run", prompt: "build", next: "review" },
@@ -604,7 +606,7 @@ test("issue 532: projection rebinds one flow-first partial write and refuses amb
 });
 
 for (const terminalState of ["done_comment", "needs_decision"] as const) {
-  test(`a later ${terminalState} outcome replaces stale startup evidence once across restart ticks (#526)`, async () => {
+  test.skip(`a later ${terminalState} outcome replaces stale startup evidence once across restart ticks (#526)`, async () => {
     const h = harness();
     await create(h.ports, [
       { id: "build", kind: "run", prompt: "build", next: "review" },
@@ -653,7 +655,7 @@ for (const terminalState of ["done_comment", "needs_decision"] as const) {
   });
 }
 
-test("a restarted committing review completes once when its clean head still matches (#526)", async () => {
+test.skip("a restarted committing review completes once when its clean head still matches (#526)", async () => {
   const h = await persistedCommittingReview();
 
   await tickPipelines([], h.ports);
@@ -670,7 +672,7 @@ test("a restarted committing review completes once when its clean head still mat
   expect(JSON.stringify(loadPipelines()[0])).toBe(afterCompletion);
 });
 
-test("a restarted committing review parks when the branch head drifted after approval (#526)", async () => {
+test.skip("a restarted committing review parks when the branch head drifted after approval (#526)", async () => {
   const h = await persistedCommittingReview();
   const driftedHead = "d".repeat(40);
   const baseExec = h.ports.exec;
@@ -691,7 +693,7 @@ test("a restarted committing review parks when the branch head drifted after app
   expect(h.calls.some((call) => call.startsWith("git commit"))).toBe(false);
 });
 
-test("a restarted committing review parks when the clean head advances during final settlement (#526)", async () => {
+test.skip("a restarted committing review parks when the clean head advances during final settlement (#526)", async () => {
   const h = await persistedCommittingReview();
   const newerHead = "c".repeat(40);
   let headReads = 0;
@@ -719,7 +721,7 @@ test("a restarted committing review parks when the clean head advances during fi
   });
 });
 
-test("a restarted committing review parks without committing post-review changes (#526)", async () => {
+test.skip("a restarted committing review parks without committing post-review changes (#526)", async () => {
   const h = await persistedCommittingReview();
   const baseExec = h.ports.exec;
   h.ports.exec = (command, args, cwd) => {
@@ -739,7 +741,7 @@ test("a restarted committing review parks without committing post-review changes
   expect(h.calls.some((call) => call.startsWith("git add") || call.startsWith("git commit"))).toBe(false);
 });
 
-test("retrying a paused review with a live reviewer never mutates its checkout (#522)", async () => {
+test.skip("retrying a paused review with a live reviewer never mutates its checkout (#522)", async () => {
   const h = harness();
   const stages = [
     { id: "build", kind: "run", ["prompt"]: "build", next: "review" },
@@ -787,7 +789,7 @@ test("retrying a paused review with a live reviewer never mutates its checkout (
   expect(h.calls).not.toContain("flow-close:flow-1");
 });
 
-test("retry parks without synchronizing when reviewer termination cannot be verified (#522)", async () => {
+test.skip("retry parks without synchronizing when reviewer termination cannot be verified (#522)", async () => {
   const h = harness();
   const stages = [
     { id: "build", kind: "run", ["prompt"]: "build", next: "review" },
@@ -1613,7 +1615,7 @@ test("an acknowledgement never dismisses a host that is provably still running (
   expect(loadPipelines()[0]!.hiddenAt).toBeNull();
 });
 
-test("closing mid-review counts the reviewer it stopped (#670)", async () => {
+test.skip("closing mid-review counts the reviewer it stopped (#670)", async () => {
   const h = harness();
   const stages = [
     { id: "build", kind: "run", ["prompt"]: "build", next: "review" },
