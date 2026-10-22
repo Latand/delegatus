@@ -3346,3 +3346,19 @@ test("hook transport proof is excluded from logical receipt arguments and downst
   expect(await harness.service.callTool("send_message", { ...SEND, nativeCallerProof: "y".repeat(43) })).toMatchObject({ ok: true, replayed: true });
   expect(harness.bindingCalls).toHaveLength(1);
 });
+
+
+test("retirement failures keep their terminal code and durable receipt on every mutation path", async () => {
+  for (const tool of ["flow_action", "pipeline_action", "stage_report", "create_pipeline"] as const) {
+    const code = tool === "flow_action" ? "FLOW_RETIRED" : "STAGE_KIND_RETIRED";
+    let calls = 0;
+    const service = createMcpToolService({ [tool]: async () => {
+      calls++;
+      throw new McpToolRefusal("Retired; use pipeline run stages.", { code, status: 410, retryable: false });
+    } } as unknown as McpToolBindings, new MemoryMcpReceiptStore());
+    const args = { clientRequestId: `retired-${tool}`, action: "pause" };
+    expect(await service.callTool(tool, args)).toMatchObject({ ok: false, code, retryable: false, replayed: false });
+    expect(await service.callTool(tool, args)).toMatchObject({ ok: false, code, retryable: false, replayed: true });
+    expect(calls).toBe(1);
+  }
+});

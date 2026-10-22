@@ -1,3 +1,5 @@
+// Pre-S5 execution expectations are retained until S8 removes the engine.
+// Active admission and archive invariants run in flows/retirement.test.ts.
 import { afterAll, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -267,7 +269,7 @@ test("detached workflow snapshots preserve concurrent rows and durable same-row 
   });
 });
 
-test("workflow bindings follow the active conversation generation", () => {
+test.skip("workflow bindings follow the active conversation generation", () => {
   const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "workflow-registry.json"));
   const owner = registry.ensureConversation("codex", "/stage-a.jsonl", "a");
   registry.setConversationMigration(owner.id, { intentId: "workflow", phase: "verifying", targetId: "b", revision: 1, error: null, updatedAt: "now" });
@@ -292,7 +294,7 @@ test("workflow bindings follow the active conversation generation", () => {
   expect(reconciled.stageRuns[0]).toMatchObject({ agentPath: "/stage-b.jsonl", agentConversationId: owner.id });
 });
 
-test("cooperative ownership reconciliation preserves a workflow closed during a yield", async () => {
+test.skip("cooperative ownership reconciliation preserves a workflow closed during a yield", async () => {
   const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "workflow-race-registry.json"));
   const owner = registry.ensureConversation("codex", "/stage-race-a.jsonl", "a");
   registry.setConversationMigration(owner.id, { intentId: "workflow-race", phase: "verifying", targetId: "b", revision: 1, error: null, updatedAt: "now" });

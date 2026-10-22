@@ -103,9 +103,9 @@ describe("evidence projection", () => {
     expect(evidenceFromPipelines([pipeline({ state: "running" })])[0]!.state).toBe("active");
     expect(evidenceFromPipelines([pipeline({ state: "needs_decision" })])[0]!.state).toBe("inert");
     expect(evidenceFromPipelines([pipeline({ state: "completed" })])[0]!.state).toBe("terminal");
-    expect(evidenceFromFlows([flow({ state: "reviewing" })])[0]!.state).toBe("active");
+    expect(evidenceFromFlows([flow({ state: "reviewing" })])[0]!.state).toBe("inert");
     expect(evidenceFromFlows([flow({ state: "paused" })])[0]!.state).toBe("inert");
-    expect(evidenceFromFlows([flow({ state: "approved" })])[0]!.state).toBe("terminal");
+    expect(evidenceFromFlows([flow({ state: "approved" })])[0]!.state).toBe("inert");
   });
 
   test("issue references travel with the item so a request naming one correlates", () => {

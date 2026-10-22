@@ -1222,6 +1222,38 @@ test.each(["personal", "app-user"] as const)("%s credentials cannot prove an ins
   expect(f.calls.some((args) => args[1] === "merge" || args[1] === "create")).toBe(false);
 });
 
+test.each([undefined, "other/fixture"])("an undeclared merger explains how to enable App routing before publication: %j", async (declared) => {
+  const f = landingFixture();
+  const head = f.addPr(12, "a.txt", "good");
+  const batch = new MergeBatch(f.repo, f.batch.stateFile, async (cwd, args, env) => {
+    if (args[0] !== "gh") return f.batch.run(cwd, args, env);
+    if (args[1] === "api" && args[2] === "installation/repositories?per_page=100") {
+      return { code: 1, output: "HTTP 403: private credential diagnostic" };
+    }
+    return { code: 0, output: await f.batch.gh(args.slice(1)) };
+  }, undefined, async () => {});
+  const previous = process.env.LLV_AGENT_FORGE_REPOSITORIES;
+  if (declared === undefined) delete process.env.LLV_AGENT_FORGE_REPOSITORIES;
+  else process.env.LLV_AGENT_FORGE_REPOSITORIES = declared;
+  try {
+    const built = await batch.build(`12@${head}`); await batch.gate();
+    const refusal = await batch.land().catch(error => error as Error);
+    expect(refusal).toBeInstanceOf(Error);
+    expect((refusal as Error).message).toContain("forge-app-repositories.json");
+    expect((refusal as Error).message).toContain("running Delegatus state directory");
+    expect((refusal as Error).message).toContain("JSON array of owner/name strings");
+    expect((refusal as Error).message).toContain("launch a new merger");
+    expect((refusal as Error).message).not.toMatch(/403|private credential diagnostic/);
+    expect(f.calls.some(args => args[1] === "create" || args[1] === "merge")).toBeFalse();
+    expect(batch.read().published).toBeNull();
+    expect(batch.read().mergeIntent).toBeUndefined();
+    expect(git(f.repo, ["ls-remote", "origin", "refs/heads/main"]).split("\t")[0]).toBe(built.base);
+  } finally {
+    if (previous === undefined) delete process.env.LLV_AGENT_FORGE_REPOSITORIES;
+    else process.env.LLV_AGENT_FORGE_REPOSITORIES = previous;
+  }
+});
+
 test("unreadable forge credentials refuse landing without disclosing diagnostics", async () => {
   const f = landingFixture();
   const head = f.addPr(12, "a.txt", "good");
@@ -1229,6 +1261,31 @@ test("unreadable forge credentials refuse landing without disclosing diagnostics
   f.forge.unavailable = true;
   await expect(f.batch.land()).rejects.toThrow("personal or unverified credentials refused");
   expect(f.calls.some((args) => args[1] === "merge" || args[1] === "create")).toBe(false);
+});
+
+test("a declared merger points to the App credential and installation when verification fails", async () => {
+  const f = landingFixture();
+  const head = f.addPr(12, "a.txt", "good");
+  const previous = process.env.LLV_AGENT_FORGE_REPOSITORIES;
+  process.env.LLV_AGENT_FORGE_REPOSITORIES = "other/fixture,EXAMPLE/fixture";
+  try {
+    await f.batch.build(`12@${head}`); await f.batch.gate();
+    f.forge.unavailable = true;
+    const refusal = await f.batch.land().catch(error => error as Error);
+    expect(refusal).toBeInstanceOf(Error);
+    expect((refusal as Error).message).toContain("encrypted App credential and repository installation");
+    expect((refusal as Error).message).toContain("launch a new merger");
+    expect((refusal as Error).message).not.toMatch(/add the repository|private credential diagnostic/);
+    expect(f.calls.some(args => args[1] === "create" || args[1] === "merge")).toBeFalse();
+    expect(f.batch.read().published).toBeNull();
+    expect(f.batch.read().mergeIntent).toBeUndefined();
+    f.forge.unavailable = false;
+    const landed = await f.batch.land();
+    expect(landed.rows[0]!.status).toBe("merged");
+  } finally {
+    if (previous === undefined) delete process.env.LLV_AGENT_FORGE_REPOSITORIES;
+    else process.env.LLV_AGENT_FORGE_REPOSITORIES = previous;
+  }
 });
 
 test("forge credentials are checked again immediately before the merge", async () => {
@@ -1465,6 +1522,7 @@ for (const shape of ["pre-existing", "bundled-only", "file-error", "new-failure"
       // fixture tests in the enclosing test service, as the other real samplers do.
       if (args[2] !== "bun" || args[3] !== "test") return successfulCommand(args);
       expect(args.slice(0, 2)).toEqual(["/bin/bash", GATE_SLOT]);
+      expect(args).toContain("--timeout=60000");
       const files = args.slice(4).filter(arg => /\.test\.ts$/.test(arg));
       expect(files).toHaveLength(1);
       expect(env!.LLV_VIEWER_CONTROL_URL).toBe("http://127.0.0.1:9");

@@ -170,6 +170,11 @@ alias the operator defined with `gh alias set` is not expanded.
 - **Batch landing** (`scripts/merge-batch.ts`) checks its principal against an
   installation endpoint. Run from a launched agent in a declared repository,
   that check and the merge both go through the shim.
+  A refused check names the missing App routing and asks the installation
+  owner to declare the repository, then launch a new merger: an existing
+  agent keeps its launch environment. When routing is already declared, the
+  refusal asks the owner to check the encrypted App credential and repository
+  installation. Child-command diagnostics are withheld.
 
 The App's registration and its verified installation id live in the operator's
 encrypted Secret Service collection, as one item with the attributes
@@ -444,7 +449,7 @@ they neither contend on another build's `.next/lock` nor consume its output.
 The hook labels CPU admission for publication checks and prints its measured
 queue wait, excluded from the execution budget.
 
-Run an individual test as `bash scripts/gate-slot.sh bun test <file>` with an
+Run an individual test as `bash scripts/gate-slot.sh bun run test <file>` with an
 isolated home, config, state and temporary root. The preload registers real
 Node and Bun children before spawn returns, checks for survivors, and reaps
 them before deleting its temporary root. Direct and nested Linux test runners
@@ -498,3 +503,12 @@ After this workflow switch, a merge already waiting on a removed check name
 may need to be re-armed once. Main's branch protection requires exactly three
 checks, `privacy-publication`, `privacy-tracker-audit` and `runtime-gate`, with
 strict updates enabled.
+
+## Running selected tests
+
+Use `bun run test <explicit test files>` through `scripts/gate-slot.sh`, with
+private HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR and a closed
+LLV_VIEWER_CONTROL_URL. The package command passes a 60-second default timeout
+to every file. Bun ignores a `[test] timeout` key, and a preload timeout reaches
+only its first file on the pinned runtime. Explicit per-test timeouts still
+apply. The pre-push comparator and merger pass the same CLI timeout.
