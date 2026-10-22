@@ -386,7 +386,13 @@ build and its consumers reuse together; a partial runtime chain rebuilds.
 Head commit and branch also bind history-sensitive tests. Pass receipts expire
 after seven days. Each receipt family retains at most 256 records and 32 MiB; unavailable or malformed entries run the check again.
 Each reuse prints the step, recorded time, tree and base with its reason.
-Types and lint run in the same private environment as tests.
+Types, lint and tests run in one private, canonical environment
+(`checkEnvironment` in `scripts/gate-cache.ts`). An agent's session, forge
+authority and Viewer endpoint, a commit identity and push credentials never
+reach them, whoever starts the hook. A caller hands another input to the checks
+by naming it in `LLV_GATE_CHECK_ENV`; it is keyed like the rest. The signal
+boundary counts only by its host epoch, so a stage agent's clean hook run is
+reused when the Viewer publishes the same tree on that host.
 
 ESLint uses its native content cache for head files, keyed by the dependency
 and configuration digests. It retains eight generations of at most 4 MiB under

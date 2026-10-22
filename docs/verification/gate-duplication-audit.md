@@ -239,8 +239,11 @@ prose-only later pushes. *Saving:* run 2 of section 1
 less privacy: 55 s on the small push and 560–850 s on the merge push,
 depending on load. The
 window had up to 271 producer runs repeated by publication (98 agent pushes
-skipped it), up to 94 read-only reruns and 18 retry tries: 280–380 repeats,
-37–50 a day. Retries keep the steps that had passed. *Guarantee:* a step's
+skipped it); a producer's run counts only when it ran the hook itself on the
+clean head it handed over (section 6), up to 94 read-only reruns and 18 retry tries: 280–380 repeats,
+37–50 a day. Inside a stage sandbox, publishing a producer's clean head took
+205–218 s of execution before and 7–9 s after (section 6). Retries keep the
+steps that had passed. *Guarantee:* a step's
 verdict is a function of these inputs, so reuse returns the verdict the gate
 gave on them. The only loss is a second sample of a flaky test on the same
 tree. Trust does not grow: the controller already skips its hook when the agent
@@ -298,8 +301,9 @@ cold runs. *Proved by* `scripts/eslint-changes.test.ts`:
 
 **R4. ESLint's own content cache for unchanged files.** ESLint 10.9.1 caches
 results with `cache: true, cacheStrategy: "content"`, keyed by file content and
-resolved configuration. The cache file lives under the gate's XDG cache, and
-its name carries the digests of `bun.lock` and `eslint.config.mjs`. The
+resolved configuration. The cache file lives under `delegatus-gate/eslint` in
+the clone's common Git directory, and its name carries the digests of
+`bun.lock` and `eslint.config.mjs`. The
 configuration has no type-aware rules (no `parserOptions.project`), so a file's
 messages depend on its content and the configuration alone. *Saving:* about
 0.3 s for each unchanged file, and 77 % of the files linted on later pushes
@@ -326,17 +330,31 @@ as measured in the audit.
   before reuse and after a check finishes. Failed, stopped, deferred,
   cancelled or leaking checks certify no pass. The runtime build and its
   consumers reuse as a complete group. Privacy, frozen install and advisory
-  checks always run fresh. Inert caller metadata and private isolation roots
-  do not distinguish producer from publication. Authority, Viewer endpoint,
-  structured-host stamp, signal-domain and configuration inputs do: differing
-  execution contexts require fresh checks even on one commit.
+  checks always run fresh.
+- **One check environment:** reusable checks run under `checkEnvironment`
+  (`scripts/gate-cache.ts`), whoever starts the hook. It keeps the inputs a
+  check may read: `PATH` without the agent's forge directory, locale, time
+  zone, user and shell, Node and Bun options, `CI`, the browser paths,
+  explicit Git configuration files and any input a caller names in
+  `LLV_GATE_CHECK_ENV`. It also keeps the admission, placement, proxy and
+  signal-boundary variables that decide where a check runs. An agent's
+  session, forge authority and Viewer endpoint, the Viewer's own settings, a
+  commit identity and push credentials never reach a check. The key hashes the
+  values that do. The signal boundary counts only by its host epoch, the
+  host's boot id and PID namespace. The gate service that admitted one run, the
+  agent's scope and its monitor are per-run fields. A sandboxed producer and
+  the Viewer publishing on the same host therefore share a key; a reboot, a
+  forged boundary or another host does not. A producer's opt-in variables
+  (`LLV_*_TEST=1`) no longer reach the hook's checks; publication already
+  removed them.
 - **Baseline samples:** `scripts/local-gate-tests.ts` needs two matching
   fresh complete assertion observations before a third comparison can reuse
   an initial base sample. Confirmation rounds stay fresh. Runner errors,
   incomplete samples and local/workspace dependencies receive no cached
   allowance. An observed flaky result invalidates its entry. Base commit,
   selected file, failing-name filter, origin, dependency inputs, comparator
-  sources, Bun bytes, environment and budgets bind each entry.
+  sources, Bun bytes, the environment the comparison hands its tests (the
+  boundary by host epoch) and budgets bind each entry.
 - **Lint:** `scripts/eslint-changes.ts` reads base text only for files with
   head errors. Its native content cache uses separate generations for
   dependency and configuration bytes. Corrupt or unavailable optional cache
@@ -357,14 +375,61 @@ privacy/install/advisory checks. `scripts/local-gate-tests.test.ts` covers
 independent baseline observations, filters, dependency/origin/source changes
 and flaky/error refusal. `scripts/eslint-changes.test.ts` covers both sides
 of the lint skip and content-cache invalidation. `scripts/gate-cache.test.ts`
-covers restart, corruption, expiry, bounds and unavailable storage.
+covers restart, corruption, expiry, bounds, unavailable storage, the check
+environment and the boundary's host epoch. The hook fixture's own seams reach
+its shims through `LLV_GATE_CHECK_ENV`.
+
+A producer saves the publication run only when it runs the pre-push hook
+itself (`bash .githooks/pre-push`) on the clean head it hands over. Running
+`scripts/local-gate-tests.ts` by hand records no step pass, and its baseline
+entries match the hook's only when its environment does.
+
+### Producer, then publication, inside a stage sandbox
+
+This is the duplicate of section 2.1 as it happens on this host. A stage
+agent's environment carries its session, forge authority, Viewer endpoint and
+a signal boundary that every gate admission rewrites. On 2026-10-22 between
+21:44 and 22:44 UTC, inside a builder stage's signal sandbox on the operator's
+host (24 CPUs), each product input was pushed twice in its own clone. The
+producer ran `bash .githooks/pre-push` with the stage's own environment. The
+publication then ran the same hook on the identical commit with the
+environment `pipelinePublicationHookEnv` hands it (`src/lib/pipelines/git.ts`),
+keeping only the stage's boundary, without which `scripts/gate-slot.sh` cannot
+admit inside the sandbox. *Before* is the gate at `e12215c01`. *After* is this
+branch's gate source (`scripts/` and `.githooks/`), applied to the same base.
+Each pair shares the product commit, tree, base and installed dependencies. Wall
+time includes outer gate-slot queueing. The hook reports its own CPU admission
+wait separately. Load1 and CPU PSI (some, avg10) were sampled every five
+seconds; the table gives medians over each run.
+
+| Input | Version | Producer / publication wall, s | Publication CPU wait, s | Median load1, producer / publication | Median PSI, producer / publication | Publication steps reused |
+| --- | --- | --- | --- | --- | --- | --- |
+| Docs only (1 file) | Before | 1.3 / 1.3 | 0 | 16.4 / 16.4 | 5.3 / 5.3 | 0 (privacy only) |
+| Docs only (1 file) | After | 1.3 / 1.3 | 0 | 17.2 / 17.2 | 10.2 / 10.2 | 0 (privacy only) |
+| Small product change (3 files) | Before | 313.0 / 425.2 | 220.0 | 31.6 / 16.7 | 15.7 / 3.8 | 0 |
+| Small product change (3 files) | After | 231.5 / 33.8 | 24.8 | 18.5 / 18.4 | 6.9 / 4.8 | 5 |
+| Merge of main (3 lane files, 16 from main) | Before | 214.2 / 218.5 | 0.2 | 14.8 / 16.1 | 3.8 / 9.6 | 0 |
+| Merge of main (3 lane files, 16 from main) | After | 302.9 / 7.5 | 0.1 | 27.7 / 19.4 | 13.9 / 3.5 | 5 |
+
+All twelve runs exited zero. Each *after* publication logged a reuse line for
+types, ESLint, touched tests and both Linux steps, naming tree, base and
+reason, then ran privacy fresh. Its execution was 9.0 s on the small input and
+7.4 s on the merge. The *before* publication ran every step again: 205 s and
+218 s of execution. The producers' cold runs had uneven load and show no cold
+speedup. A docs-only push runs privacy alone under both gates. The merge
+input was measured again after the attempt that began it lost its host. Its
+pair ran together, 22:31–22:44 UTC. The gate source did not change between
+the two sessions.
 
 ### Execution-phase comparison on fixed product inputs
 
 The implemented gate at `f61c6aa84` was compared with `e12215c01` on the
-remote test runner on 2026-10-22. Both arms ran in the same admitted scope,
+remote test runner on 2026-10-22, outside any signal sandbox and with one
+environment for both runs. It measures repeats by one caller, so it does not
+stand for producer and publication. Both arms ran in the same admitted scope,
 with the same CPU/memory limits and separate isolated check roots. The
-procedure was `scripts/measure-local-gate.ts`: export the old gate source,
+procedure was a one-off runner, `scripts/measure-local-gate.ts`, removed in
+the fix round and kept in the branch history: export the old gate source,
 use immutable product commits, run the old and new planner/runner twice in
 separate clones, and sample host load1 and CPU PSI every five seconds.
 Fetch and outer CPU admission are excluded. File privacy remains enabled;
@@ -437,12 +502,3 @@ remove about 76 seconds on the small input at matching measured CPU pressure,
 and about 14 seconds on this smaller merge at comparable load and pressure.
 The retained privacy check and receipt validation account for the remaining
 time. Cold-run speed gains are unproven.
-
-The measurements used gate source `f61c6aa84`. Subsequent key hardening binds
-spawn authority, the structured-host stamp, Viewer port, signal domain and
-GitHub configuration path. A read of the owned benchmark environment confirmed
-all five were unset during these runs; their binding does not change these
-comparison inputs. Endpoint invalidation was observed red, then green, through
-the public fingerprint function. The hook regression also covers an unchanged
-endpoint reusing its pass and a changed endpoint forcing a fresh run. Different
-producer and publication execution contexts conservatively run fresh checks.
