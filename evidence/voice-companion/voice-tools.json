@@ -4,11 +4,11 @@
   "viewportBasis": "configured scene width",
   "command": "LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chromium> bun test src/components/kanban/kanbanBoard.browser.test.tsx --test-name-pattern 'voice tools settings render every state'",
   "sources": {
-    "src/components/kanban/kanbanBoard.browser.test.tsx": "0b94b1d4648c3c1b612d64f1968055a3037430293a5ce32c74649af33ea7647b",
-    "src/components/kanban/issue1695Evidence.fixture.tsx": "7de103d03f8d5b4884f940fb600f62cfe198c42aefa6728057fa0404b3fe8797",
-    "src/components/voiceCompanion/VoiceToolsSetting.tsx": "d3ab39020a1e08f4e170317da18bb0959d7cd6cc146d366736e2124b3997837b",
-    "src/lib/i18n/en.ts": "17fdbe63a2fe582b450949ceb35b5cc3fab4fdb931e2c8d331108fe330397ad7",
-    "src/lib/i18n/uk.ts": "2f3a0183baeb1c9d082672a7cc6b64959dda82775066e55d87b2e7d784ae3b4e",
+    "src/components/kanban/kanbanBoard.browser.test.tsx": "525e0d23206cd01a1280530b42c7fb3995ce84372b92fd7ea236002c1b5c580e",
+    "src/components/kanban/issue1695Evidence.fixture.tsx": "103df9cab3995382c5920622d12552e013a6c9ffb8140ea134aaf808f631e5ab",
+    "src/components/voiceCompanion/VoiceToolsSetting.tsx": "d274c99fc539a0d1283dc74abb7771c7039ef3dbbd43a6daed62d9e90afc462b",
+    "src/lib/i18n/en.ts": "302256d4c7e39dcf946bfd0fb71cc5cac7d1c02a3bb255bd06663c408df28096",
+    "src/lib/i18n/uk.ts": "147f9773c251f39b7c4977a256f283574dbe93aab9e73c85d05945b5bee05645",
     "src/app/globals.css": "46cece0a546dffe434248bc8378e958d4169caa449e98ed96e63aa62e33fa53e"
   },
   "failures": [],
