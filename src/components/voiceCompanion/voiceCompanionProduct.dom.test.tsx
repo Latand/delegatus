@@ -28,7 +28,7 @@ const { VoiceCompanionHost } = await import("./VoiceCompanionHost");
 const { OPEN_VOICE_COMPANION_SETTINGS_EVENT, VoiceCompanionSetting, VoiceCompanionSettingsHost } = await import("./VoiceCompanionSetting");
 const { OPEN_KEYS_EVENT } = await import("@/components/keys/openKeys");
 const { COMPANION_SETTINGS_EVENT } = await import("./hostSurfaces");
-const { createCompanionStore } = await import("@/hooks/useVoiceCompanion");
+const { createCompanionStore, RESUME_RECHECK_MS } = await import("@/hooks/useVoiceCompanion");
 const { translate } = await import("@/lib/i18n/core");
 const { LAYER } = await import("@/components/layers");
 const { companionErrorMessage } = await import("@/lib/voiceCompanion/errors");
@@ -443,6 +443,63 @@ test("the store offers a call back only after a drop that followed speech, keeps
   expect([reloaded.get().lines.length, reloaded.get().reconnected]).toEqual([0, false]);
   expect(reloaded.get().resumable).toBeNull();
   release();
+});
+
+test("the store asks the Viewer again while it answers that nothing dropped, at most three times, and after a drop that left no lines", async () => {
+  const listeners = new Set<(event: CompanionEvent) => void>();
+  const emit = (sessionId: string, payload: Payload) => {
+    const event = { ...payload, version: 1, sessionId, generation: 1, eventId: `event-${sessionId}-${payload.type}`, seq: 1, atMs: 1 } as CompanionEvent;
+    for (const listener of [...listeners]) listener(event);
+  };
+  const delays: number[] = [];
+  let due: (() => void) | null = null;
+  const schedule = (run: () => void, ms: number) => { delays.push(ms); due = run; return () => { if (due === run) due = null; }; };
+  const fire = async () => { const run = due; due = null; run?.(); await act(async () => settle()); };
+  let answers: Array<{ sessionId: string; project: string | null } | null | "fails"> = [];
+  let asked = 0;
+  const adapter: VoiceCompanionAdapter = {
+    mode: "official-realtime",
+    subscribe: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    start: async () => { emit("call-2", { type: "session.ready", mode: "official-realtime" }); },
+    command: async () => undefined,
+    close: async () => undefined,
+    resumable: async () => { asked += 1; const answer = answers.shift() ?? null; if (answer === "fails") throw new Error("offline"); return answer; },
+  };
+
+  /* Null, a failed question, then the call: offered on the third recheck's answer, no remount. */
+  answers = [null, "fails", { sessionId: "call-1", project: "atlas" }];
+  const store = createCompanionStore(adapter, { schedule });
+  const release = store.connect();
+  await act(async () => settle());
+  expect([asked, store.get().resumable, delays]).toEqual([1, null, [RESUME_RECHECK_MS]]);
+  await fire();
+  expect([asked, store.get().resumable]).toEqual([2, null]);
+  await fire();
+  expect([asked, store.get().resumable, due]).toEqual([3, { sessionId: "call-1", project: "atlas" }, null]);
+
+  /* A resumed part drops before anything is said here: the store asks instead of reading its empty lines. */
+  await store.start({ locale: "en", project: "atlas", resume: "call-1" });
+  expect([store.get().reconnected, store.get().lines.length]).toEqual([true, 0]);
+  answers = [{ sessionId: "call-2", project: "atlas" }];
+  emit("call-2", { type: "session.closed", reason: "transport", incomplete: false });
+  await act(async () => settle());
+  expect([asked, store.get().resumable]).toEqual([4, { sessionId: "call-2", project: "atlas" }]);
+  /* A hang-up asks nothing. */
+  await store.start({ locale: "en", project: "atlas" });
+  emit("call-2", { type: "session.closed", reason: "operator", incomplete: false });
+  await act(async () => settle());
+  expect(asked).toBe(4);
+  release();
+
+  /* A Viewer that keeps answering null is asked four times in all, then left alone. */
+  answers = [];
+  asked = 0;
+  const quiet = createCompanionStore(adapter, { schedule });
+  const gone = quiet.connect();
+  await act(async () => settle());
+  for (let recheck = 0; recheck < 5; recheck += 1) await fire();
+  expect([asked, quiet.get().resumable, due]).toEqual([4, null, null]);
+  gone();
 });
 
 async function liveHarness() {

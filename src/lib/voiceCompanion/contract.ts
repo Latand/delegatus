@@ -150,6 +150,9 @@ export type CompanionCommand =
 
 /** A call that dropped and can go on as the same conversation. */
 export interface ResumableCall { sessionId: Id; project: string | null }
+/** An open call whose browser has not polled for this long has lost it: a live browser polls every half second.
+ * Until then the Viewer answers that nothing dropped, so a page that reloaded mid-call asks again after it. */
+export const STALE_BROWSER_MS = 5_000;
 
 export interface VoiceCompanionAdapter {
   readonly mode: CompanionMode;
@@ -165,7 +168,7 @@ export interface VoiceCompanionAdapter {
   refresh?(): Promise<void>;
   /** The whole conversation of the latest session, still readable after it ended; null before the first. */
   transcript?(): Promise<SessionTranscriptRecord | null>;
-  /** The operator's dropped call the Viewer still offers, read once a page opens; its record becomes the one `transcript` reads. */
+  /** The operator's dropped call the Viewer still offers, read when a page opens and after a drop; its record becomes the one `transcript` reads. */
   resumable?(): Promise<ResumableCall | null>;
   /** Unmount also releases delivery observation. */
   dispose?(): Promise<void>;

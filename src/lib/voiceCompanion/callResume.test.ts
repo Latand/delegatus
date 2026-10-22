@@ -48,8 +48,15 @@ function say(h: Harness, providerId: string, turns: Array<["operator" | "voice",
   turns.forEach(([speaker, text], index) => h.provider.replay(providerId, { type: speaker === "operator" ? "session.input_transcript.delta" : "session.output_transcript.delta",
     event_id: `${providerId}-turn-${from + index}`, delta: text, start_ms: (from + index) * 4000, end_ms: (from + index) * 4000 + 3000 }));
 }
-const settle = () => new Promise(resolve => setTimeout(resolve, 30));
 const ending = (h: Harness, id: string) => h.admission.transcriptRecord(id).entries.find(row => row.kind === "session_end")?.data.reason;
+/** Waits until the dropped part is closed and its journal ends, however long the close chain takes under load. */
+async function closed(h: Harness, id: string) {
+  for (let attempt = 0; attempt < 2_000; attempt += 1) {
+    if (h.admission.session(id).closed && ending(h, id) !== undefined) return;
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  throw new Error(`session ${id} never closed`);
+}
 
 for (const backend of ["api", "codex"] as const) test(`${backend}: a call whose provider session drops resumes with its conversation in both contexts and one record`, async () => {
   const h = harness(backend);
@@ -57,7 +64,7 @@ for (const backend of ["api", "codex"] as const) test(`${backend}: a call whose 
   say(h, first.providerId, [["operator", "Check the search lane."], ["voice", "The search lane passed its verifier."], ["operator", "And the phone review?"]]);
   await h.service.drain(first.sessionId);
   h.provider.disconnect(first.providerId);
-  await settle();
+  await closed(h, first.sessionId);
   expect(ending(h, first.sessionId)).toBe("transport");
   /* The dropped call is offered back to the operator who had it, and its whole record is still readable. */
   expect(h.service.resumable(operator)).toMatchObject({ sessionId: first.sessionId, project: "fixture" });
@@ -88,7 +95,7 @@ for (const backend of ["api", "codex"] as const) test(`${backend}: a call whose 
   say(h, second.providerId, [["operator", "Then deploy it."]], 10);
   await h.service.drain(second.sessionId);
   h.provider.disconnect(second.providerId);
-  await settle();
+  await closed(h, second.sessionId);
   expect(h.service.resumable(operator)?.sessionId).toBe(second.sessionId);
   const third = await start(h, { resume: second.sessionId });
   const again = h.provider.sessions.at(-1)!.memory!;
@@ -105,7 +112,7 @@ test("a long call is trimmed from its oldest lines with a marker and the newest 
   say(h, first.providerId, Array.from({ length: 60 }, (_, at) => [at % 2 ? "voice" : "operator", `Line ${at} of the synthetic call, long enough to fill the budget soon.`] as ["operator" | "voice", string]));
   await h.service.drain(first.sessionId);
   h.provider.disconnect(first.providerId);
-  await settle(); await h.memory.drain();
+  await closed(h, first.sessionId); await h.memory.drain();
   await start(h, { resume: first.sessionId });
   const memory = h.provider.sessions.at(-1)!.memory!;
   expect(memory.length).toBeLessThanOrEqual(CONTINUATION_BUDGET);
@@ -124,7 +131,7 @@ test("a reconnect within the drop window starts before the dropped call's summar
   say(h, first.providerId, [["operator", "Keep the release for tonight."], ["voice", "Noted."]]);
   await h.service.drain(first.sessionId);
   h.provider.disconnect(first.providerId);
-  await settle();
+  await closed(h, first.sessionId);
   await start(h, { resume: first.sessionId });
   expect(h.provider.sessions.at(-1)!.memory).toContain("operator: Keep the release for tonight.");
   release(); await h.memory.drain();
@@ -139,7 +146,7 @@ for (const backend of ["api", "codex"] as const) test(`${backend}: private group
   else { await h.service.drain(first.sessionId); await h.provider.callTool(first.providerId, "relay_owner_history", { action: "messages", chat: "private-sentinel", from: null, to: null, cursor: null, limit: null }, "history", "native-private-turn"); }
   h.admission.record(first.sessionId, { id: "private-reply", kind: "reply", atMs: 9900, data: { final: true, text: "private title sentinel, private member sentinel: private message sentinel" } });
   h.provider.disconnect(first.providerId);
-  await settle();
+  await closed(h, first.sessionId);
   await start(h, { resume: first.sessionId });
   const memory = h.provider.sessions.at(-1)!.memory!;
   expect(memory).toContain("operator: Review step one.");
@@ -154,7 +161,7 @@ test("only the operator who had the call can see or resume it", async () => {
   say(h, first.providerId, [["operator", "Member A speaking."]]);
   await h.service.drain(first.sessionId);
   h.provider.disconnect(first.providerId);
-  await settle();
+  await closed(h, first.sessionId);
   expect(h.service.resumable({ memberId: "member-b" })).toBeNull();
   expect(h.service.resumable(operator)).toBeNull();
   expect(h.service.resumable({ memberId: "member-a" })?.sessionId).toBe(first.sessionId);
@@ -206,7 +213,7 @@ test("a hang-up is not offered back; a stale browser and a browser that lost its
   say(h, late.providerId, [["operator", "Late."]]);
   await h.service.drain(late.sessionId);
   h.provider.disconnect(late.providerId);
-  await settle();
+  await closed(h, late.sessionId);
   h.advance(31 * 60_000);
   expect(h.service.resumable(operator)).toBeNull();
 });
@@ -218,7 +225,7 @@ test("a start that failed before anything was said is not offered as a call to r
   expect(h.service.resumable(operator)).toBeNull();
   const empty = await start(h);
   h.provider.disconnect(empty.providerId);
-  await settle();
+  await closed(h, empty.sessionId);
   expect(h.service.resumable(operator)).toBeNull();
 });
 
@@ -245,4 +252,75 @@ test("after a Viewer restart the call it held is offered from its journal and re
   expect(memory).toContain("voice: Heard you.");
   expect(memory).toContain("operator: Keep going.");
   await restarted.close(second.sessionId);
+});
+
+/*
+ * The page's store against the session service: a reload mid-call asks while the Viewer still counts the old page as
+ * live, and a part resumed after a reload holds no lines of its own. The adapter is a stand-in for the browser's.
+ */
+test("a page reloaded two seconds after its last poll is offered the call without a remount, and so is a resumed part that drops before anything new is said", async () => {
+  const { createCompanionStore, RESUME_RECHECK_MS } = await import("@/hooks/useVoiceCompanion");
+  const h = harness();
+  const timers = new Set<{ at: number; run: () => void }>();
+  const schedule = (run: () => void, ms: number) => { const timer = { at: h.now() + ms, run }; timers.add(timer); return () => { timers.delete(timer); }; };
+  const elapse = async (ms: number) => {
+    h.advance(ms);
+    for (const timer of [...timers].sort((a, b) => a.at - b.at)) if (timer.at <= h.now()) { timers.delete(timer); timer.run(); }
+    await flush();
+  };
+  const flush = async () => { for (let turn = 0; turn < 10; turn += 1) await Promise.resolve(); };
+  const listeners = new Set<(event: import("./contract").CompanionEvent) => void>();
+  let seq = 0;
+  const emit = (sessionId: string, payload: import("./contract").Payload) => {
+    const event = { ...payload, version: 1, sessionId, generation: 1, eventId: `event-${seq}`, seq: seq += 1, atMs: seq } as import("./contract").CompanionEvent;
+    for (const listener of [...listeners]) listener(event);
+  };
+  const answers: Array<string | null> = [];
+  let live: { sessionId: string; providerId: string } | null = null;
+  const adapter: import("./contract").VoiceCompanionAdapter = {
+    mode: "official-realtime",
+    subscribe: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    start: async (options) => { live = await start(h, { resume: options.resume }); emit(live.sessionId, { type: "session.ready", mode: "official-realtime" }); },
+    command: async () => undefined,
+    close: async () => undefined,
+    resumable: async () => { const call = h.service.resumable(operator); answers.push(call?.sessionId ?? null); return call ? { sessionId: call.sessionId, project: call.project } : null; },
+  };
+
+  const first = await start(h);
+  say(h, first.providerId, [["operator", "Check the search lane."], ["voice", "It passed."], ["operator", "Good."]]);
+  await h.service.drain(first.sessionId);
+  await h.service.events(first.sessionId, 0);
+  const lastPoll = h.now();
+  /* The page reloads: the new one asks while the old one polled two seconds ago. */
+  h.advance(2_000);
+  const store = createCompanionStore(adapter, { schedule });
+  const release = store.connect();
+  await flush();
+  expect([answers, store.get().resumable]).toEqual([[null], null]);
+  await elapse(RESUME_RECHECK_MS);
+  expect(answers).toEqual([null, first.sessionId]);
+  expect(store.get().resumable).toEqual({ sessionId: first.sessionId, project: "fixture" });
+  /* Well inside the watchdog's 30 s, before the call is even closed as a drop. */
+  expect(h.now() - lastPoll).toBeLessThan(30_000);
+  expect(ending(h, first.sessionId)).toBeUndefined();
+
+  /* The reloaded page resumes; its part drops before anyone speaks. The store has no lines and asks the Viewer. */
+  await store.start({ locale: "en", project: "fixture", resume: first.sessionId });
+  const second = live!;
+  expect([store.get().reconnected, store.get().lines.length]).toEqual([true, 0]);
+  h.provider.disconnect(second.providerId);
+  await closed(h, second.sessionId);
+  emit(second.sessionId, { type: "session.closed", reason: "transport", incomplete: false });
+  await flush();
+  expect(store.get().resumable).toEqual({ sessionId: second.sessionId, project: "fixture" });
+  expect(timers.size).toBe(0);
+
+  /* A question still waiting for its recheck ends with the page. */
+  release();
+  const other = createCompanionStore({ ...adapter, resumable: async () => null }, { schedule });
+  const gone = other.connect();
+  await flush();
+  expect(timers.size).toBe(1);
+  gone();
+  expect(timers.size).toBe(0);
 });

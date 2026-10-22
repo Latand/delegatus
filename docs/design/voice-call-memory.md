@@ -619,7 +619,12 @@ The change (`src/lib/voiceCompanion/callResume.ts`):
   when it dropped within 30 minutes and holds speech, or is still open with no
   browser polling it for 5 seconds (a reload, a restarted Viewer before
   recovery). The browser store offers it as `state.resumable`; a drop it saw
-  itself offers it at once.
+  after speech offers it at once. The store asks when a page opens and after
+  every drop, so a part resumed after a reload, which holds no lines of its own,
+  is offered from the journal. A page that reloaded mid-call asks while the
+  Viewer still counts the old page as polling and hears null, so the store asks
+  again 6 seconds later (`RESUME_RECHECK_MS`, `src/hooks/useVoiceCompanion.ts`),
+  up to three times while nothing runs and nothing is offered.
 - **Resume.** A start with `resume: <session>` is refused unless that call is
   the starter's own (route `owns` and the server's `sameCallOwner`), closed by a
   drop within the window, and holds speech. A call this Viewer still holds open is

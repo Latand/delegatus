@@ -10,8 +10,7 @@ import type { SessionTranscriptRecord, TranscriptEntry } from "./transcriptRecor
 
 /** How long a dropped call is offered back; after it, Talk starts a new call. */
 export const RESUME_WINDOW_MS = 30 * 60_000;
-/** An open call whose browser has not polled for this long has lost it: a live browser polls every half second. */
-export const STALE_BROWSER_MS = 5_000;
+export { STALE_BROWSER_MS } from "./contract";
 /** Ends that cut a call off. A hang-up, a spoken goodbye, the cap and the plan limit end it. */
 export const DROP_REASONS: ReadonlySet<string> = new Set(["transport", "error"]);
 const CHAIN_LIMIT = 16;
