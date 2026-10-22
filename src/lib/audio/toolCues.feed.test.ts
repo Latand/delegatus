@@ -40,7 +40,7 @@ test("claude: a tool_use whose tool_result arrived in the same update ticks once
     [claudeToolUse("b1", "git status --short"), claudeToolResult("b1", " M src/index.ts")],
   );
   expect(first).toEqual([]);
-  expect(second).toEqual([{ cue: "tool-tick", eventId: "tool:conv-1:b1", pan: 0 }]);
+  expect(second).toEqual([{ cue: "typing", eventId: "tool:conv-1:b1", pan: 0 }]);
   /* The next tick re-parses the same window: nothing new, nothing rings. */
   expect(scanner.scan(session.feed(all, 0, true).items, all.length)).toEqual([]);
 });
@@ -55,7 +55,7 @@ test("codex: a function_call settled by its function_call_output in the same upd
     ],
   );
   expect(first).toEqual([]);
-  expect(second).toEqual([{ cue: "tool-tick", eventId: "tool:conv-1:call-fast", pan: 0 }]);
+  expect(second).toEqual([{ cue: "typing", eventId: "tool:conv-1:call-fast", pan: 0 }]);
 });
 
 test("codex: a custom_tool_call settled in the same update ticks once", () => {
@@ -68,7 +68,7 @@ test("codex: a custom_tool_call settled in the same update ticks once", () => {
     ],
   );
   expect(first).toEqual([]);
-  expect(second).toEqual([{ cue: "tool-tick", eventId: "tool:conv-1:call-custom", pan: 0 }]);
+  expect(second).toEqual([{ cue: "typing", eventId: "tool:conv-1:call-custom", pan: 0 }]);
 });
 
 test("paging older history in resets the parser but never replays a sound", () => {
@@ -81,7 +81,7 @@ test("paging older history in resets the parser but never replays a sound", () =
   /* A fast call lands (call + output in one tick) and rings. */
   const grown = [...window, claudeToolUse("b8", "bun run build"), claudeToolResult("b8", "done")];
   expect(scanner.scan(session.feed(grown, 2, true).items, 7)).toEqual([
-    { cue: "tool-tick", eventId: "tool:conv-1:b8", pan: 0 },
+    { cue: "typing", eventId: "tool:conv-1:b8", pan: 0 },
   ]);
   /* «Show earlier»: the window now starts at 0, which resets the session and
      re-parses everything — fresh item objects, same transcript. The revealed

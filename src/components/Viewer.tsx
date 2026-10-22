@@ -7,7 +7,8 @@ import { formatConversationHash, isArchivedPredecessor, parseConversationHash, r
 import { navigateToFragment, NOTIFICATION_OPEN_MESSAGE, setFragmentNavigator } from "@/lib/navigation/fragmentNavigation";
 import { createTraversalFence, FOCUS_HISTORY_STATE_KEY, focusEntryFor, parseFocusHistoryState, recordFocusNavigation, recordProjectNavigation, retargetRecordedProject, setFocusHistoryOwner } from "@/lib/navigation/focusHistory";
 import { onAccountPanelRequest } from "@/lib/accounts/openPanel";
-import { useAgentChimes } from "@/hooks/useAgentChimes";
+import { useFleetCues } from "@/hooks/useFleetCues";
+import { useWorkCues } from "@/hooks/useWorkCues";
 import { useArchivedProjects } from "@/hooks/useArchivedProjects";
 import { useProjectCuration } from "@/hooks/useProjectCuration";
 import { useEffectiveFlows } from "@/components/flows/flowModel";
@@ -32,7 +33,7 @@ import { PrototypeReviewHost } from "./prototypeReview/PrototypeReviewHost";
 import { openPrototypeReview } from "@/hooks/usePrototypeReview";
 import type { PrototypeReviewNotice } from "@/lib/prototypeReview/types";
 import { useDismissalOverlay, usePrototypeDismissalOverlay } from "./attention/dismissalOverlay";
-import { useDoneItems } from "./attention/doneItems";
+import { useDoneItems, useDoneItemsLoaded } from "./attention/doneItems";
 import { clearNotice, markNoticesSeen, usePhoneNotices } from "./attention/phoneNotices";
 import { BootShell } from "./BootShell";
 import { AttentionIsland } from "./attention/AttentionIsland";
@@ -439,10 +440,6 @@ function ViewerApp() {
   /* This tab's optimistic flow closes apply before anything renders: the X
      on a flow strip clears the reviewer side of the scheme instantly. */
   const flows = useEffectiveFlows(polledFlows);
-  /* A stand-in served for a scope still loading (#1432) is not scanned for
-     chimes: it is the last certified payload under a new label, and scanning
-     it would let the pinned answer's hydrated rows ring instead of seeding. */
-  useAgentChimes(files, requestScope, scopeCertified);
   const { archivedProjects, archiveProject, unarchiveProject } = useArchivedProjects(files, projectAliases);
   const catalogProjects = useMemo(() => new Set(projectCatalog.map((entry) => entry.project)), [projectCatalog]);
   /* The setup guide's Project step offers the projects the rail lists, the
@@ -1073,7 +1070,17 @@ function ViewerApp() {
      title and the phone's badge, until it is accepted. The rail's ⏸, «Dismiss
      all», the agents' read and the board report stay decisions only. */
   const doneItems = useDoneItems();
+  const doneLoaded = useDoneItemsLoaded();
   const waitingCount = needsYou.length + doneItems.length;
+  /* The sound map (docs/design/sound-redesign.md): what needs the operator,
+     what landed and what was released, from the same queue and feed the badge
+     reads, so a sound and the badge cannot disagree. A stand-in served for a
+     scope still loading (#1432) is not planned on: it is the last certified
+     payload under a new label, and planning on it would let the pinned
+     answer's hydrated rows sound instead of seeding. */
+  useWorkCues(needsYou, pipelines, doneItems, requestScope, loaded && scopeCertified, doneLoaded);
+  /* Agents working off screen, and the answer to this tab's own message. */
+  useFleetCues();
   /* The rail's ⏸, the Overview's rows and the phone's project sheet count
      this same grouping, one number per project with the panel's sections. */
   const needsYouByProject = useMemo(() => needsYouCounts(needsYou), [needsYou]);

@@ -104,3 +104,32 @@ test("SSE emits a heartbeat while the journal cursor is quiet", async () => {
   expect(heartbeat).toContain("event: heartbeat");
   expect(heartbeat).toContain('"publishedSeq":44');
 });
+
+test("SSE forwards every session's tool items, a session this tab never opened included", async () => {
+  /* The distant typing of docs/design/sound-redesign.md §4.4 hears agents
+     off screen from these `item` events. The stream asks the host for every
+     event after the cursor, with no session or kind filter; if that ever
+     changes, S2 has to fall back to turn starts and ends. */
+  const item = (seq: number, conversationId: string): RuntimeEvent => ({
+    ...event(seq),
+    scope: runtimeScope("session", conversationId),
+    kind: "item",
+    payload: { conversationId, turnId: "turn-one", phase: "started", item: { type: "commandExecution", id: `call-${seq}` } },
+  });
+  const asked: unknown[][] = [];
+  const client = {
+    waitEvents: async (...args: unknown[]) => {
+      asked.push(args.slice(0, 2));
+      return { reset: false, floorSeq: 0, events: [item(1, "conv-on-screen"), item(2, "conv-never-opened")] };
+    },
+  } as unknown as RuntimeHostClient;
+  const abort = new AbortController();
+  const reader = runtimeEventStream(client, 0, abort.signal).getReader();
+  const first = await reader.read();
+  abort.abort();
+  await reader.cancel();
+  const frames = new TextDecoder().decode(first.value).split("\n\n").filter((frame) => frame.includes("data: "));
+  const forwarded = frames.map((frame) => JSON.parse(frame.slice(frame.indexOf("data: ") + 6)) as RuntimeEvent);
+  expect(asked).toEqual([[0, expect.any(Number)]]);
+  expect(forwarded.map((e) => [e.kind, e.scope.id])).toEqual([["item", "conv-on-screen"], ["item", "conv-never-opened"]]);
+});

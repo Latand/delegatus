@@ -499,6 +499,17 @@ The listening form (acceptance 5) asks, each with an "other" answer:
 
 No ADR: every decision here is a code-level choice reversible in one lane.
 
+## Implementation notes (2026-10-22)
+
+The operator's listening answers chose palette 2 «Дерево» (`ACTIVE_PALETTE` in `src/lib/audio/synth.ts`, one constant), the original eight typing files, and every voiced event as designed with the inferred ask silent; the call music is unchanged. Where the code departs from the text above:
+
+- **Gains are measured once, not in every tab.** Rendering is deterministic, so `CALIBRATED_GAIN` holds the §6.3 calibration for both palettes, and `src/lib/audio/synth.browser.test.ts` re-runs it in Chromium and fails on any drift over 0.1 dB.
+- **Every sound renders the same at any start.** Until an oscillator's first frequency event applies, Chrome plays its 440 Hz default for the frames before it in the 128-frame render block. The prototype's strikes therefore opened with a start-dependent phase, which moved peaks by up to 1.8 dB between plays. The engine sets the starting pitch as the static value too, and the mallet reads the noise slice of the prototype's renders. One table value changes: S5's palette-2 peak is −16.3 dBFS (−17.5 above), which matches the prototype's own renders at starts where the leak does not occur. Every loudness is within 0.5 LU of the table.
+- **S7 keeps its F5.** §5.3's table writes the fault as A5 → F5 → D5, the one figure outside D major (a minor third, on purpose), and the code keeps it.
+- **S5 does not cut S4.** Only S6 and S7 cut a playing sound (§6.2's own example: S5 arriving mid-S4 plays after it), as the prototype's planner does.
+- **The voice-call pair is unchanged.** `src/lib/voiceCompanion/cues.ts` belongs to the voice call code, which another open lane is changing; its two tones stay as they are. The dictation pair moved onto the engine.
+- **No replica.** The synthesized typing replica (§5.4) was a listening variant only; the operator kept the original files, so it is not shipped.
+
 ## Deferred — not currently justified
 
 - Repeating a reminder sound for an obligation left unanswered: the badge and the tab title already persist, and a repeating sound is the classic fatigue source.

@@ -101,6 +101,11 @@ const onVisible = () => {
   if (document.visibilityState === "visible") void refreshDoneItems();
 };
 
+/** Whether a read has answered yet: an empty list before it is no answer. */
+export function useDoneItemsLoaded(): boolean {
+  return useSyncExternalStore(subscribe, () => applied > 0, () => false);
+}
+
 /** The items still waiting, newest first; the one reader that polls. */
 export function useDoneItems(enabled = true): readonly DoneItemV1[] {
   const items = useSyncExternalStore(subscribe, () => snapshot, () => EMPTY);
