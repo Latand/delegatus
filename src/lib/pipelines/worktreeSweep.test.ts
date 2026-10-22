@@ -3330,7 +3330,7 @@ test.each([false, true])("sweep continuation uses the persisted completion flag 
   const callbacks: Array<() => void> = [], delays: number[] = [];
   startWorktreeSweep({ env: {}, firstDelayMs: 100, intervalMs: 60_000,
     schedule: (callback, delay) => { callbacks.push(callback); delays.push(delay); return { unref() {} } as ReturnType<typeof setTimeout>; },
-    sweep: async () => ({ progress: { complete } }),
+    sweep: async () => ({ progress: { complete, visited: 1 } }),
   });
   callbacks[0]!();
   await new Promise(resolve => setImmediate(resolve));
@@ -3358,4 +3358,121 @@ test("repository rotation and independent cursors prevent unchanged repositories
     for (let n = 0; n < 4; n++) input.previous = JSON.parse(JSON.stringify(await sweepMergedWorktrees(input)));
     expect(visited.size).toBe(8);
   }
+});
+
+/** Repositories of closed lanes behind a fake Git, as the operator machine
+    shapes them: every lane registered, nothing on disk but its directory. */
+function closedLaneRepositories(repositories: number, lanes: number, closedAt: string) {
+  const roots = Array.from({ length: repositories }, (_, r) => path.join(caseDir, `shape-${r}`));
+  for (const root of roots) fs.mkdirSync(root);
+  const owners = roots.flatMap((root, r) => Array.from({ length: lanes }, (_, n) => {
+    const id = `${r}-${String(n).padStart(2, "0")}`, dir = `${root}-pipeline-${id}`;
+    fs.mkdirSync(dir);
+    return pipeline({ id, repoDir: root, worktreeDir: dir, branch: `lane-${id}`, state: "closed", closedAt });
+  }));
+  const git: WorktreeSweepPorts["git"] = async (args, cwd) => ({ code: 0, stderr: "", stdout: args[0] === "rev-parse" ? path.join(cwd, ".git")
+    : args[0] === "remote" && args[1] === "get-url" ? `https://github.com/${REPOSITORY}.git\n`
+    : args[0] === "worktree" ? [cwd, ...owners.filter(owner => owner.repoDir === cwd).map(owner => owner.worktreeDir)]
+      .map(dir => `worktree ${dir}\0HEAD ${"a".repeat(40)}\0branch refs/heads/lane\0\0`).join("") : "" });
+  return { roots, owners, git };
+}
+
+test("a slice whose discovery outlasts its budget still visits a candidate and drains the queue", async () => {
+  const { owners, git } = closedLaneRepositories(2, 8, "2026-10-22T00:00:00Z");
+  // The forge read alone spends more than the whole selection budget.
+  let clock = 0, forgeReads = 0;
+  const visited = new Set<string>();
+  const input = ports({ mode: "dry-run", pipelines: owners, git, timeBudgetMs: 1000, monotonicNow: () => clock,
+    now: () => Date.parse("2026-10-22T00:30:00Z"),
+    mergedPullRequests: () => { forgeReads++; clock += 1100; return []; },
+    // Three candidates spend the budget, so the slice ends inside the first repository.
+    phase: (phase, dir) => { if (phase === "candidate" && dir) { clock += 400; visited.add(dir); } },
+  });
+  let pending = Infinity;
+  for (let slice = 0; slice < 16; slice++) {
+    forgeReads = 0;
+    const report = await sweepMergedWorktrees(input);
+    expect(report.progress!.visited).toBeGreaterThanOrEqual(1);
+    // Once spent, the next repository's forge read waits for its own turn.
+    expect(forgeReads).toBe(1);
+    expect(report.progress!.pending.length).toBeLessThan(pending);
+    pending = report.progress!.pending.length;
+    input.previous = JSON.parse(JSON.stringify(report));
+    if (report.progress!.complete) break;
+  }
+  expect(input.previous!.progress!.complete).toBe(true);
+  expect(visited.size).toBe(16);
+});
+
+test("a zero-progress slice waits the normal interval instead of re-arming at five seconds", async () => {
+  const callbacks: Array<() => void> = [], delays: number[] = [];
+  startWorktreeSweep({ env: {}, firstDelayMs: 100, intervalMs: 60_000,
+    schedule: (callback, delay) => { callbacks.push(callback); delays.push(delay); return { unref() {} } as ReturnType<typeof setTimeout>; },
+    sweep: async () => ({ progress: { complete: false, visited: 0, pending: ["a"] } }),
+  });
+  callbacks[0]!();
+  await new Promise(resolve => setImmediate(resolve));
+  expect(delays).toEqual([100, 60_000]);
+});
+
+test("every lane whose retention ended is visited in the first sweep after its deadline", async () => {
+  const { owners, git } = closedLaneRepositories(1, 64, "2026-10-22T00:00:00Z");
+  let at = Date.parse("2026-10-22T00:30:00Z");
+  const visited = new Set<string>();
+  const input = ports({ mode: "dry-run", pipelines: owners, git, now: () => at,
+    phase: (phase, dir) => { if (phase === "candidate" && dir) visited.add(dir); } });
+  /** One hourly sweep: its first slice plus every continuation. */
+  const sweep = async () => {
+    visited.clear();
+    let slices = 0;
+    do {
+      input.previous = JSON.parse(JSON.stringify(await sweepMergedWorktrees(input)));
+      slices++;
+    } while (!input.previous!.progress!.complete && slices < 16);
+    return { slices, report: input.previous! };
+  };
+  const drained = await sweep();
+  expect(drained.slices).toBe(4);
+  expect(drained.report.kept.filter(row => row.reason === "retention")).toHaveLength(64);
+  // Each retention row records when it can change: the end of the lane's hour.
+  expect(new Set(Object.values(drained.report.progress!.due!))).toEqual(new Set([Date.parse("2026-10-22T01:00:00Z")]));
+
+  // Before the deadline an hourly sweep visits only its fair 16.
+  at = Date.parse("2026-10-22T00:50:00Z");
+  expect((await sweep()).slices).toBe(1);
+  expect(visited.size).toBe(16);
+
+  at = Date.parse("2026-10-27T00:00:00Z");
+  const expired = await sweep();
+  expect(visited.size).toBe(64);
+  expect(expired.slices).toBeLessThanOrEqual(4);
+  expect(expired.report.kept.filter(row => row.reason === "retention" && row.detail?.startsWith("eligible after 2026-10-22"))).toEqual([]);
+});
+
+test("a recent write is revisited when it ages past the quiet floor", async () => {
+  // Two slices drain 32 lanes without the fair cursor wrapping onto the busy one.
+  const { roots, owners, git } = closedLaneRepositories(1, 32, "2026-10-01T00:00:00Z");
+  const busy = owners[0]!.worktreeDir;
+  let at = Date.parse("2026-10-22T00:00:00Z");
+  const written = at - 60_000;
+  const visited = new Set<string>();
+  const input = ports({ mode: "dry-run", pipelines: owners, git, now: () => at,
+    inspect: (dir, settings) => inspectTree(dir, { ...settings, stat: file => {
+      const stat = fs.lstatSync(file); stat.mtimeMs = stat.ctimeMs = dir === busy ? written : 1; return stat;
+    } }),
+    phase: (phase, dir) => { if (phase === "candidate" && dir) visited.add(dir); } });
+  while (!input.previous?.progress?.complete) input.previous = JSON.parse(JSON.stringify(await sweepMergedWorktrees(input)));
+  expect(input.previous!.kept).toContainEqual(expect.objectContaining({ path: busy, reason: "recent-writes" }));
+  expect(input.previous!.progress!.due![busy]).toBe(written + 24 * 3_600_000);
+  // The fair cursor sits on it, so only its deadline can bring it back soon.
+  input.maxCandidates = 2;
+  const slice = async (time: number) => {
+    at = time;
+    visited.clear();
+    input.previous!.progress!.cursors![roots[0]!] = busy;
+    input.previous = JSON.parse(JSON.stringify(await sweepMergedWorktrees(input)));
+    return visited.has(busy);
+  };
+  expect(await slice(written + 24 * 3_600_000 - 1)).toBe(false);
+  expect(await slice(written + 24 * 3_600_000)).toBe(true);
 });

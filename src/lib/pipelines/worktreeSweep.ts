@@ -195,7 +195,11 @@ export type WorktreeKept = { path: string; reason: WorktreeKeptReason; detail?: 
 export type WorktreeSweepReport = {
   at: string;
   /** Advisory discovery state only; never authorizes an effect. */
-  progress?: { cursor: string; repositoryCursor?: string; cursors?: Record<string, string>; pending: string[]; fingerprints: Record<string, string>; visited: number; complete: boolean };
+  progress?: { cursor: string; repositoryCursor?: string; cursors?: Record<string, string>; pending: string[]; fingerprints: Record<string, string>;
+    /** Epoch ms at which a kept path's verdict can change with time alone
+        (retention ends, recent writes age past the floor, a live holder is
+        rechecked); a later slice enqueues it then. */
+    due?: Record<string, number>; visited: number; complete: boolean };
   mode: WorktreeSweepMode;
   repositories: string[];
   /** In a dry run, what the sweep would have removed. */
@@ -969,6 +973,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
     try {
       const result = (ports.inspect ?? inspectTree)(accessible(directory), { git, threshold: now() - quietMs,
         mounts: (ports.mountPoints ? ports.mountPoints(directory) : mountPointsUnder(accessible(directory))), ignoreRootCtime: afterQuarantine });
+      recentWritesDue = result.newestMs + quietMs;
       return (result.hold === "git-checkout" ? "ignored-files" : result.hold) ?? (now() - result.newestMs < quietMs ? "recent-writes" : null);
     } catch { return "unreadable-tree"; }
   };
@@ -994,7 +999,16 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
     errors: [],
   };
   if (!dryRun) recoverCheckoutHeadLocks(accessible, report.errors);
+  /** When each path visited in this slice should be visited again even with
+      no registration change. Advisory scheduling only; never proof. */
+  const dueAt = new Map<string, number>();
+  let recentWritesDue: number | undefined;
   const keep = (kept: WorktreeKept) => {
+    if (kept.reason === "recent-writes" && recentWritesDue !== undefined) dueAt.set(kept.path, recentWritesDue);
+    // Live holders leave no registration trace; the next hourly sweep rechecks
+    // them so the retention clock starts when they let go.
+    else if (kept.reason === "in-use" || kept.reason === "live-conversation") dueAt.set(kept.path, now() + WORKTREE_SWEEP_INTERVAL_MS);
+    else if (kept.reason !== "retention") dueAt.delete(kept.path);
     /* Activity restarts the retention clock. */
     if (BUSY_REASONS.has(kept.reason)
       && !(kept.reason === "live-conversation" && kept.detail === "owner proof deferred by per-pass budget"))
@@ -1066,9 +1080,12 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
     return [...new Set([...(index.get(resolve(worktree)) ?? []), ...(index.get(physical(worktree)) ?? [])])];
   };
   const budgetClock = ports.monotonicNow ?? (() => performance.now());
-  const started = budgetClock();
   const candidateLimit = Math.max(1, ports.maxCandidates ?? 16);
   const timeBudget = Math.max(1, ports.timeBudgetMs ?? 1000);
+  /* The selection budget starts at the first candidate, so a slow discovery
+     (a cold forge cache, gh, a loaded host) still advances at least one. */
+  let started: number | undefined;
+  const spent = () => started !== undefined && budgetClock() - started >= timeBudget;
   const priorProgress = ports.previous?.progress;
   const progress: NonNullable<WorktreeSweepReport["progress"]> = { cursor: priorProgress?.cursor ?? "", pending: [] as string[],
     cursors: { ...priorProgress?.cursors }, repositoryCursor: priorProgress?.repositoryCursor,
@@ -1103,17 +1120,6 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
     const [main, ...linked] = listed;
     if (!main || linked.length === 0) continue;
     const mainPath = resolve(main.path);
-    const remote = await ports.git(["remote", "get-url", "origin"], root);
-    const repository = remote.code === 0 ? githubRepositoryOfRemote(remote.stdout.trim()) : null;
-    const merged = repository ? await ports.mergedPullRequests(repository) : [];
-    const byHead = new Map<string, MergedPullRequest[]>();
-    const byNumber = new Map<number, MergedPullRequest>();
-    for (const pr of merged ?? []) {
-      byNumber.set(pr.number, pr);
-      const list = byHead.get(pr.headRefName) ?? [];
-      list.push(pr);
-      byHead.set(pr.headRefName, list);
-    }
     /** The commits this repository's remotes advertise as branch and tag tips,
         read afresh for each preservation proof; null
         when no remote answered. */
@@ -1158,7 +1164,22 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
       const fingerprint = JSON.stringify([entry.head, entry.branch, entry.locked, entry.prunable,
         owners.map(owner => [owner.id, owner.state, pipelineHoldsCheckout(owner), latestTerminalTime([owner])])]);
       progress.fingerprints[directory] = fingerprint;
-      if (priorProgress?.fingerprints?.[directory] !== fingerprint) pending.add(directory);
+      const due = priorProgress?.due?.[directory];
+      if (priorProgress?.fingerprints?.[directory] !== fingerprint || (typeof due === "number" && due <= now())) pending.add(directory);
+    }
+    // Once the slice is spent, later repositories are only fingerprinted:
+    // their merged pull requests (possibly a gh call) wait for their turn.
+    if (progress.visited >= candidateLimit || spent()) continue;
+    const remote = await ports.git(["remote", "get-url", "origin"], root);
+    const repository = remote.code === 0 ? githubRepositoryOfRemote(remote.stdout.trim()) : null;
+    const merged = repository ? await ports.mergedPullRequests(repository) : [];
+    const byHead = new Map<string, MergedPullRequest[]>();
+    const byNumber = new Map<number, MergedPullRequest>();
+    for (const pr of merged ?? []) {
+      byNumber.set(pr.number, pr);
+      const list = byHead.get(pr.headRefName) ?? [];
+      list.push(pr);
+      byHead.set(pr.headRefName, list);
     }
     // Half the slice serves dirty paths; the fair cursor cannot starve under
     // continuous writes. Nested registrations remain guards even when deferred.
@@ -1169,7 +1190,8 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
     const dirty = ordered.filter(entry => pending.has(resolve(entry.path))).slice(0, Math.ceil(candidateLimit / 2));
     const candidates = [...new Set([...dirty, ...fair])];
     for (const entry of candidates) {
-      if (progress.visited >= candidateLimit || budgetClock() - started >= timeBudget) break;
+      if (progress.visited >= candidateLimit || spent()) break;
+      started ??= budgetClock();
       progress.visited++;
       const directory = resolve(entry.path);
       progress.repositoryCursor = root;
@@ -1177,7 +1199,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
         progress.cursor = directory;
         progress.cursors![root] = directory;
       }
-      visited.add(directory); selected.add(directory); pending.delete(directory);
+      visited.add(directory); selected.add(directory); pending.delete(directory); dueAt.delete(directory);
       ports.phase?.("candidate", directory);
       await yieldToRuntime();
       const worktree = resolve(entry.path);
@@ -1207,11 +1229,14 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
       const hourLane = finished && owners.length > 0 && !batch.owned;
       const base = { path: worktree, ...(pipelineId ? { pipelineId } : {}), ...(firstSettledAt ? { firstSettledAt } : {}) };
       const iso = (at: number) => new Date(at).toISOString();
-      const retentionDetail = (settled: number, why?: string) => why
-        ? `eligible after ${iso(settled + FINISHED_WORKTREE_RETENTION_MS)}; ${why}`
-        : hourLane && now() - settled < PUSHED_WORKTREE_RETENTION_MS
-          ? `eligible after ${iso(settled + PUSHED_WORKTREE_RETENTION_MS)} when clean with every commit on a remote, otherwise after ${iso(settled + FINISHED_WORKTREE_RETENTION_MS)}`
-          : `eligible after ${iso(settled + FINISHED_WORKTREE_RETENTION_MS)}`;
+      const retentionDetail = (settled: number, why?: string) => {
+        const hour = !why && hourLane && now() - settled < PUSHED_WORKTREE_RETENTION_MS;
+        // The earliest time this retention row can change verdict.
+        dueAt.set(worktree, settled + (hour ? PUSHED_WORKTREE_RETENTION_MS : FINISHED_WORKTREE_RETENTION_MS));
+        return why ? `eligible after ${iso(settled + FINISHED_WORKTREE_RETENTION_MS)}; ${why}`
+          : hour ? `eligible after ${iso(settled + PUSHED_WORKTREE_RETENTION_MS)} when clean with every commit on a remote, otherwise after ${iso(settled + FINISHED_WORKTREE_RETENTION_MS)}`
+            : `eligible after ${iso(settled + FINISHED_WORKTREE_RETENTION_MS)}`;
+      };
       const unproven = (remote: boolean | null) => remote === null ? "no remote of the repository answered" : "a commit of HEAD is in no ref a remote advertises";
       if (initial.open.some((open) => inside(open, worktree))) {
         keep({ ...base, reason: "open-pipeline" });
@@ -1445,7 +1470,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
     // the evidence drivers' fixture-only bundles, keeping protected contents.
     for (const entry of ordered) {
       const worktree = resolve(entry.path);
-      if (!selected.has(worktree) || budgetClock() - started >= timeBudget || !remaining.has(worktree) || entry.locked || entry.prunable
+      if (!selected.has(worktree) || spent() || !remaining.has(worktree) || entry.locked || entry.prunable
         || worktree === mainPath || roots.has(worktree)
         || projectRoots.some((project) => inside(project, worktree))) continue;
       const owners = ownersOf(ownersAtStart, worktree);
@@ -1503,7 +1528,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
       const clock = `${entry.head}:${entry.branch}:${owner.id}:${owner.state}:${latestTerminalTime(owners)}:${previouslyKept.get(worktree)?.firstSettledAt ?? ""}`;
       const candidates = ports.cache?.candidates(accessible(worktree), clock, discover) ?? discover();
       for (const next of candidates) {
-        if (report.trimmed.length >= maxRemovals || budgetClock() - started >= timeBudget) break;
+        if (report.trimmed.length >= maxRemovals || spent()) break;
         const relative = path.relative(worktree, next);
         const artifact = relative.split(path.sep).includes(".artifacts");
         if (!artifact) {
@@ -1585,6 +1610,13 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
     keep(previous ? { ...previous } : { path: directory, reason: "deferred" });
   }
   for (const root of Object.keys(progress.cursors ?? {})) if (!roots.has(root)) delete progress.cursors![root];
+  const due: Record<string, number> = {};
+  for (const directory of discovered) {
+    const at = visited.has(directory) ? dueAt.get(directory) : priorProgress?.due?.[directory];
+    // A visited path due already would only re-enter the next slice.
+    if (typeof at === "number" && Number.isFinite(at) && (!visited.has(directory) || at > now())) due[directory] = at;
+  }
+  progress.due = due;
   progress.pending = [...pending];
   progress.complete = pending.size === 0;
   const seenKept = new Set<string>();
@@ -1592,7 +1624,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
   for (const kept of report.kept) {
     // Accounting is advisory and bounded independently of retirement. A cache
     // eviction never schedules a full walk of every retained tree.
-    const measured = visited.has(kept.path) && budgetClock() - started < timeBudget;
+    const measured = visited.has(kept.path) && !spent();
     if (measured && kept.reason !== "mount-boundary") {
       const nested = report.kept.filter(other => other.path !== kept.path && inside(other.path, kept.path));
       let rootBytes = 0;
@@ -1880,8 +1912,10 @@ export function startWorktreeSweep(ports: {
     const timer = schedule(() => {
       let continuation = false;
       void sweep().then(result => {
-        continuation = !!(result && typeof result === "object" && "progress" in result
-          && (result as WorktreeSweepReport).progress?.complete === false);
+        const progress = result && typeof result === "object" && "progress" in result ? (result as WorktreeSweepReport).progress : undefined;
+        // A slice that visited nothing (discovery alone outlasted its budget)
+        // waits the normal interval instead of repeating discovery every 5 s.
+        continuation = progress?.complete === false && (progress.visited ?? 0) > 0;
       })
         .catch((error) => console.error("[worktree sweep] failed", error instanceof Error ? error.message : String(error)))
         .finally(() => {

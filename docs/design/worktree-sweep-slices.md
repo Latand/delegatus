@@ -1,8 +1,11 @@
 # Worktree sweep slices and controller settlement
 
 The existing sweep helper owns discovery, accounting and retirement. Each request
-selects at most 16 candidates and stops selecting after one second of elapsed
-work. It yields between candidates. A final retirement already in progress
+selects at most 16 candidates and stops selecting one second after its first
+candidate, so a slow discovery (a cold forge cache, `gh`, a loaded host) still
+visits at least one. Once a slice is spent, later repositories are only
+fingerprinted; their merged pull requests are read on their own turn. It yields
+between candidates. A final retirement already in progress
 finishes its safety checks under the existing command and helper deadlines;
 the selection budget never interrupts a removal halfway through its protocol.
 Trim operations share the selection budget and have their own removal-count cap.
@@ -13,7 +16,12 @@ for each repository and the number visited.
 The report writer persists it atomically with the existing retention observations.
 A restarted helper continues that queue. Older reports start discovery again.
 Git registration metadata and lane headers are compared on each slice; changes
-to HEAD, branch, locking or lane activity enqueue that path. Initial ownership is
+to HEAD, branch, locking or lane activity enqueue that path. Each kept row whose
+verdict can change with time alone records when: the end of its retention, its
+newest write plus the quiet floor, or the next hourly sweep for a live process or
+conversation. The first slice at or after that time enqueues the path, so expiry
+is a delta too. These times only schedule a visit; the visit decides from fresh
+reads. Initial ownership is
 indexed once by lexical and physical checkout path. A slice reads process and
 conversation guards once for selection; candidates approaching an effect refresh
 them through the existing retirement protocol. Repository discovery deduplicates
@@ -25,7 +33,8 @@ previous advisory bytes and retention observations. These observations never
 supply deletion authority. Allocation-cache eviction cannot schedule a walk of
 every retained tree; the production helper discards old allocation inventories
 and keeps the small trim-candidate cache. Completed discovery returns to the
-hourly schedule; a pending queue resumes after five seconds. Discovery,
+hourly schedule; a pending queue resumes after five seconds, unless the slice
+visited nothing, which waits the hourly interval. Discovery,
 candidate work and accounting have separate loop-monitor labels, forwarded by
 the helper protocol. Existing loop-gap and performance-summary logs remain.
 
