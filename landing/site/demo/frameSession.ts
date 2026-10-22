@@ -1,5 +1,6 @@
 /*
- * Each demo frame gets a session store of its own, held in memory.
+ * Each demo frame gets a session store and a local store of its own, held in
+ * memory.
  *
  * The Viewer keeps a conversation's draft, its outbox and the receipts of what
  * was sent in sessionStorage. Every frame on the landing shares one origin and
@@ -8,6 +9,11 @@
  * jump, a Replay or a language switch, already delivered and in the old
  * language. A frame here is one pass through the script, so its session lives
  * exactly as long as the frame's document.
+ *
+ * The local store is shared the same way, and the Viewer follows its storage
+ * events: a seat one frame docked at the side or folded docked and folded in
+ * every other frame on the page, under the view that frame had drawn. Each
+ * frame's views set the layout they show, so none needs another's.
  *
  * Imported first by demo.tsx, ahead of the Viewer, so no module reads the
  * shared store while it loads.
@@ -35,6 +41,7 @@ class FrameStorage {
 }
 
 Object.defineProperty(window, "sessionStorage", { value: new FrameStorage(), configurable: true });
+Object.defineProperty(window, "localStorage", { value: new FrameStorage(), configurable: true });
 
 // Product dialogs focus their contents on open. In an embedded demo that can
 // scroll the landing to a frame far below the reader (including on language

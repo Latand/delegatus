@@ -7,8 +7,8 @@
  * screen, each section, the hero's demo held at each of its six steps, the
  * other views of each frame, and the legacy-install joke. PNGs go to
  * LANDING_RENDER_DIR (default ~/Pictures/delegatus-review/landing/final/),
- * which is never committed. Page errors and requests the frames left
- * unanswered are written beside them in report.json.
+ * which is never committed. Page errors and the requests each frame left
+ * unanswered, keyed by frame, are written beside them in report.json.
  *
  * `--only=en-1440` limits the run to one language and width.
  * `--scheme=light` asks the browser for a light colour scheme (default dark).
@@ -109,6 +109,9 @@ const base = process.env.LANDING_URL ?? `http://127.0.0.1:${server.port}/`;
 const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"], executablePath: process.env.CHROME_BIN ?? "/usr/bin/google-chrome-stable" });
 const report: Record<string, unknown> = {};
 
+/* Every live frame, in the page's order. */
+const LIVE_FRAMES = [".live-run", ".live-auto", ".live-mem", ".live-open", ".live-use", ".live-phone"];
+
 const VIEWPORTS = [
   { name: "1440", width: 1440, height: 900, phone: false },
   { name: "390", width: 390, height: 844, phone: true },
@@ -202,7 +205,10 @@ async function checkSwipe() {
     ["hero-board", ".hero .demo"],
     ["open-composer", ".live-open iframe"],
     ["run-demo", ".live-run iframe"],
+    ["auto-demo", ".live-auto iframe"],
+    ["mem-demo", ".live-mem iframe"],
     ["open-demo", ".live-open iframe"],
+    ["use-demo", ".live-use iframe"],
     ["phone-demo", ".live-phone iframe"],
     ["plain-text", ".sec-run .sec-head h2"],
   ] as const;
@@ -302,7 +308,10 @@ async function checkSwipe() {
       pointerRows.push(...Object.entries(await pointerOf(page)).map(([frame, pointerEvents]) => ({ viewport: `${viewport.name} ${lang}`, frame, pointerEvents })));
       if (swipeCheck === "after") {
         /* A landing tab under a frame still changes the frame's screen by a tap. */
-        for (const [frameName, tab] of [["run", '.sec-run [data-view="decision"]'], ["open", '.sec-open [data-view="search"]'], ["phone", '.sec-reach [data-view="decision"]']] as const) {
+        for (const [frameName, tab] of [
+          ["run", '.sec-run [data-view="decision"]'], ["auto", '.sec-auto [data-view="decisions"]'], ["mem", '.sec-mem [data-view="curator"]'],
+          ["open", '.sec-open [data-view="search"]'], ["use", '.sec-use [data-view="task"]'], ["phone", '.sec-reach [data-view="decision"]'],
+        ] as const) {
           const key = `${lang} ${viewport.name} ${frameName} tab`;
           await page.locator(`.live-${frameName}`).scrollIntoViewIfNeeded();
           await frameOf(page, `.live-${frameName}`);
@@ -318,11 +327,11 @@ async function checkSwipe() {
         /* Full screen is where a visitor uses the demo itself: the frame takes touch there only. */
         const run = page.locator(".live-run");
         await run.scrollIntoViewIfNeeded();
-        await page.locator(".stage-wrap > .fs-btn").tap();
+        await page.locator(".sec-run .stage-wrap > .fs-btn").tap();
         await page.waitForFunction(() => getComputedStyle(document.querySelector(".live-run iframe")!).pointerEvents === "auto", null, { timeout: 5_000 }).catch(() => undefined);
         const inside = (await pointerOf(page)).run;
         if (inside !== "auto") failures.push(`${lang} ${viewport.name}: run frame is ${inside} in full screen`);
-        await page.locator(".stage-wrap > .fs-btn").tap();
+        await page.locator(".sec-run .stage-wrap > .fs-btn").tap();
         await page.waitForFunction(() => getComputedStyle(document.querySelector(".live-run iframe")!).pointerEvents === "none", null, { timeout: 5_000 }).catch(() => undefined);
         const outside = (await pointerOf(page)).run;
         if (outside !== "none") failures.push(`${lang} ${viewport.name}: run frame is ${outside} after leaving full screen`);
@@ -337,24 +346,26 @@ async function checkSwipe() {
     }
   }
   /* Who may touch a frame, by device: a phone turned sideways is still a touch phone; a mouse keeps its frames. */
+  const FRAMES = ["run", "auto", "mem", "open", "use", "phone"] as const;
+  const every = (pointer: string) => Object.fromEntries(FRAMES.map((frame) => [frame, pointer])) as Record<(typeof FRAMES)[number], string>;
   const devices = [
-    { name: "844x390 touch", width: 844, height: 390, touch: true, expect: { run: "none", open: "none", phone: "none" } },
-    { name: "1440x900 mouse", width: 1440, height: 900, touch: false, expect: { run: "auto", open: "auto", phone: "auto" } },
-    { name: "600x900 mouse", width: 600, height: 900, touch: false, expect: { run: "auto", open: "auto", phone: "auto" } },
-    { name: "1024x1366 touch tablet", width: 1024, height: 1366, touch: true, expect: { run: "auto", open: "auto", phone: "none" } },
+    { name: "844x390 touch", width: 844, height: 390, touch: true, expect: every("none") },
+    { name: "1440x900 mouse", width: 1440, height: 900, touch: false, expect: every("auto") },
+    { name: "600x900 mouse", width: 600, height: 900, touch: false, expect: every("auto") },
+    { name: "1024x1366 touch tablet", width: 1024, height: 1366, touch: true, expect: { ...every("auto"), phone: "none" } },
   ];
   for (const device of devices) {
     const context = await browser.newContext({ viewport: { width: device.width, height: device.height }, ...(device.touch ? { isMobile: true, hasTouch: true, deviceScaleFactor: 2 } : {}) });
     const page = await context.newPage();
     await page.goto(`${base}?lang=en`);
-    for (const name of ["run", "open", "phone"]) {
+    for (const name of FRAMES) {
       await page.locator(`.live-${name}`).scrollIntoViewIfNeeded();
       await frameOf(page, `.live-${name}`);
     }
     const pointers = await pointerOf(page);
     for (const [frame, pointerEvents] of Object.entries(pointers)) {
       pointerRows.push({ viewport: device.name, frame, pointerEvents });
-      const expected = device.expect[frame as "run" | "open" | "phone"];
+      const expected = device.expect[frame as (typeof FRAMES)[number]];
       if (swipeCheck === "after" && pointerEvents !== expected) failures.push(`${device.name}: ${frame} frame is ${pointerEvents}, expected ${expected}`);
     }
     await context.close();
@@ -384,7 +395,7 @@ async function checkSwipe() {
 async function checkFullscreen() {
   const dir = process.env.LANDING_RENDER_DIR ?? "/tmp/landing-fullscreen-renders";
   fs.mkdirSync(dir, { recursive: true });
-  const frames = [["run", ".live-run"], ["open", ".live-open"], ["phone", ".live-phone"]] as const;
+  const frames = [["run", ".live-run"], ["auto", ".live-auto"], ["mem", ".live-mem"], ["open", ".live-open"], ["use", ".live-use"], ["phone", ".live-phone"]] as const;
   const LABELS = { en: { enter: "Full screen", exit: "Exit full screen" }, uk: { enter: "На весь екран", exit: "Вийти з повного екрана" } };
   const failures: string[] = [];
   const rows: Record<string, unknown>[] = [];
@@ -1290,7 +1301,7 @@ for (const lang of ["en", "uk"] as Locale[]) {
       await page.evaluate((top) => window.scrollTo(0, top), y);
       await settle(page, 150);
     }
-    for (const selector of [".live-run", ".live-open", ".live-phone"]) {
+    for (const selector of LIVE_FRAMES) {
       // Keep the lazy frame visible while its initial view renders.
       await page.locator(selector).scrollIntoViewIfNeeded();
       await frameOf(page, selector);
@@ -1299,7 +1310,10 @@ for (const lang of ["en", "uk"] as Locale[]) {
 
     await shoot(page, ".hero", `${key}-1-hero.png`);
     await shoot(page, ".sec-run", `${key}-2-run.png`);
+    await shoot(page, ".sec-auto", `${key}-2a-auto.png`);
+    await shoot(page, ".sec-mem", `${key}-2b-mem.png`);
     await shoot(page, ".sec-open", `${key}-3-open.png`);
+    await shoot(page, ".sec-use", `${key}-3a-use.png`);
     await shoot(page, ".sec-reach", `${key}-4-reach.png`);
     await page.locator(".sec-faq details").first().evaluate((item) => { (item as HTMLDetailsElement).open = true; });
     await shoot(page, ".sec-faq", `${key}-5-faq.png`);
@@ -1323,14 +1337,19 @@ for (const lang of ["en", "uk"] as Locale[]) {
       await shoot(page, target, file);
     };
     await tab('.sec-run [data-view="decision"]', 2200, `${key}-2-run-decision.png`, ".sec-run .stage-wrap");
+    await tab('.sec-auto [data-view="decisions"]', 2200, `${key}-2a-auto-decisions.png`, viewport.phone ? ".live-auto" : ".sec-auto");
+    await tab('.sec-mem [data-view="curator"]', 2200, `${key}-2b-mem-curator.png`, ".sec-mem .stage-wrap");
     for (const view of ["search", "accounts", "overview"]) {
       await tab(`.sec-open [data-view="${view}"]`, 2600, `${key}-3-open-${view}.png`, viewport.phone ? ".live-open" : ".sec-open");
     }
+    await tab('.sec-use [data-view="task"]', 2200, `${key}-3a-use-task.png`, ".sec-use .stage-wrap");
+    /* The phone has no limit history, so its tab is hidden there. */
+    if (!viewport.phone) await tab('.sec-use [data-view="history"]', 2200, `${key}-3a-use-history.png`, ".sec-use .stage-wrap");
     await tab('.seg-phone [data-view="decision"]', 1800, `${key}-4-reach-decision.png`, ".reach-art");
     await tab('.seg-phone [data-view="reports"]', 1800, `${key}-4-reach-reports.png`, ".reach-art");
 
     /* The page whole, every frame loaded: each is brought into view first so it renders. */
-    for (const selector of [".live-open", ".live-run", ".live-phone"]) {
+    for (const selector of LIVE_FRAMES) {
       await page.locator(selector).scrollIntoViewIfNeeded();
       await settle(page, 700);
     }
@@ -1343,9 +1362,16 @@ for (const lang of ["en", "uk"] as Locale[]) {
     await settle(page, 1200);
     await shoot(page, ".hero-head", `${key}-legacy.png`);
 
+    /* What every frame asked and the demo did not answer, by frame, through all the views above. */
+    const unanswered: Record<string, string[]> = {};
+    for (const handle of await page.locator(".live iframe").elementHandles()) {
+      const id = await handle.evaluate((iframe) => (iframe as Element).closest<HTMLElement>(".live")!.dataset.live!);
+      const asked = await (await handle.contentFrame())?.evaluate(() => (window as unknown as { demoUnanswered?: string[] }).demoUnanswered ?? []) ?? [];
+      if (asked.length) unanswered[id] = [...new Set([...(unanswered[id] ?? []), ...asked])];
+    }
     report[key] = {
       errors,
-      unanswered: await (await frameOf(page, ".live-run")).evaluate(() => (window as unknown as { demoUnanswered?: string[] }).demoUnanswered ?? []),
+      unanswered,
       overflowX: await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth),
     };
     await context.close();
