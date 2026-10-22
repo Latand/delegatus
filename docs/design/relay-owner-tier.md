@@ -601,7 +601,9 @@ conversation later with no lease to answer; the prompt asks for
   the request again. An accepted completion whose owner stop is still
   unconfirmed keeps capacity and files, and marks `completionAccepted`
   instead; the sweep confirms the stop, then cleans up without a second
-  completion. A request still held by its local runner is never swept. A zero-capacity enabled target stays in the claim body
+  completion. A request still held by its local runner is never swept,
+  and neither is any row whose owner is a live process other than the
+  sweeping one, such as the previous Viewer during a handover. A zero-capacity enabled target stays in the claim body
   and emits `External relay target capacity` with its concurrency, running,
   retained and waiting counts and the `full` or `drain` reason.
 

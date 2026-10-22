@@ -89,7 +89,9 @@ the run ledger. This posts a requester reply even with service fallback disabled
 a `failed` completion would follow that setting and could post nothing. The
 late result cannot send another completion. While the runner still holds the
 request, including while its completion is on the wire, the orphan sweep
-leaves the row alone. An accepted completion on a row the runner retains
+leaves the row alone. A sweep in another process, such as the successor
+Viewer during a handover, cannot see that process-local hold, so it leaves
+every row whose recorded owner process is still alive. An accepted completion on a row the runner retains
 durably marks `completionAccepted`; until that write lands the process keeps
 delivery ownership and retries it. Recovery of a marked row waits for stop
 confirmation, then removes the files and the row without completing the

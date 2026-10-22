@@ -26,13 +26,13 @@ async function waitFor(check: () => boolean) {
   expect(check()).toBe(true);
 }
 
-function fixture(id: string, deadlineMs?: number, hardCapMinutes = 1, holdStop = false, refuseCompletion = false, fallback: "service" | "none" = "service", holdCompletion = false) {
+function fixture(id: string, deadlineMs?: number, hardCapMinutes = 1, holdStop = false, refuseCompletion = false, fallback: "service" | "none" = "service", holdCompletion = false, origin = "http://127.0.0.1:1") {
   let now = epoch;
   jest.useFakeTimers();
   const clock = spyOn(Date, "now").mockImplementation(() => now);
   const quiet = spyOn(console, "info").mockImplementation(() => {});
   const paired: PairedRelay = {
-    id: "window_fixture", origin: "http://127.0.0.1:1", api_base: "http://127.0.0.1:1/v1",
+    id: "window_fixture", origin, api_base: `${origin}/v1`,
     name: "Fixture", description: "", credential: "x".repeat(43),
     owner: { namespace: "test", id: "owner", display_name: "Owner", handle: null },
     pairedAt: new Date(epoch).toISOString(), paused: false,
@@ -209,6 +209,62 @@ test("timeout reply accepted before the owner stop: recovery cleans up without a
     expect(fs.existsSync(runDir)).toBe(false);
     expect(advertisedSlots(f.paired)).toEqual([{ target_id: "target_1", free: 1 }]);
   } finally { await f.close(); }
+});
+
+test("a successor Viewer's sweep leaves a timeout reply the live previous Viewer still owns", async () => {
+  // This process stands for the previous Viewer; a fresh Bun process sharing
+  // the state directory stands for its successor. The successor's relay
+  // transport reaches this local service, which records every call.
+  const served: string[] = [];
+  const service = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(request) {
+    served.push(`${new URL(request.url).pathname} ${await request.text()}`);
+    return Response.json({ status: "ok" });
+  } });
+  const f = fixture("timeout_successor_sweep", 600_000, 30, true, false, "none", true, `http://127.0.0.1:${service.port}`);
+  const successorSweep = async () => {
+    const child = Bun.spawn([process.execPath, "-e", `
+      import { sweepExternalRelayOrphans } from "./src/lib/externalRelay/poller";
+      import { readRunLedger } from "./src/lib/externalRelay/store";
+      const stops = [];
+      await sweepExternalRelayOrphans({
+        launch: async () => { throw new Error("successor launches nothing"); },
+        observe: async () => ({ state: "ended" }),
+        stop: async (_conversation, action) => { stops.push(action); },
+      });
+      console.log("successor=" + JSON.stringify({ stops, rows: readRunLedger().runs.map(row => row.requestId) }));
+    `], { cwd: process.cwd(), env: { ...process.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    const [output, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect({ error, code }).toEqual({ error: "", code: 0 });
+    return JSON.parse(output.split("\n").find(line => line.startsWith("successor="))!.slice("successor=".length)) as { stops: string[]; rows: string[] };
+  };
+  try {
+    await f.start();
+    await f.advance(600_000);
+    await waitFor(() => f.completions.length === 1);
+    const row = () => readRunLedger().runs.find(item => item.requestId === f.request.request_id);
+    const runDir = row()!.runDir;
+    expect(row()?.ownerTurn?.cancel).toBe("interrupt");
+    expect(row()?.completionAccepted).not.toBe(true);
+    // The timeout reply is on the wire and the cancellation is durable.
+    expect(await successorSweep()).toEqual({ stops: [], rows: [f.request.request_id] });
+    f.releaseCompletion();
+    expect(await f.result()).toMatchObject(timeoutReply);
+    await waitFor(() => row()?.completionAccepted === true);
+    // Accepted but the stop is unconfirmed: the live owner keeps custody.
+    expect(await successorSweep()).toEqual({ stops: [], rows: [f.request.request_id] });
+    expect(fs.existsSync(runDir)).toBe(true);
+    f.releaseStop();
+    const owner = startSweep(f.ports);
+    await waitFor(() => owner.done);
+    await owner.pending;
+    expect(row()).toBeUndefined();
+    expect(fs.existsSync(runDir)).toBe(false);
+    expect(await successorSweep()).toEqual({ stops: [], rows: [] });
+    expect(served).toEqual([]);
+    expect(f.completions.map(item => (item.body as { reason?: string }).reason ?? "answered")).toEqual(["answered"]);
+    expect(f.completions[0]!.body).toMatchObject(timeoutReply);
+    expect(f.accepted).toBe(1);
+  } finally { await f.close(); void service.stop(true); }
 });
 
 test("timeout reply accepted after the owner stop: recovery leaves delivery to the runner", async () => {
