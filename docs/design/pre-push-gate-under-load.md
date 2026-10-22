@@ -165,8 +165,8 @@ the split expires four files (E3). The split without the timeout keeps the
 cascades, the false refusal and the hidden cost (E2).
 
 1. **Per-test timeout 60 s.** Pass `--timeout=60000` in the comparator, all
-   three merger call paths, and the package test command. Multi-file platform
-   CI and direct runs use `bun run test <explicit files>`. The implementation
+   three merger call paths, and the package test command. Direct runs use
+   `bun run test <explicit files>`. The implementation
    rehearsal found that Bun 1.4.0 ignores `[test] timeout = 60000`: the two
    provider-chain files still timed out at 5000 ms. A preload calling
    `setDefaultTimeout` also loses its override after the first file
@@ -196,8 +196,10 @@ cascades, the false refusal and the hidden cost (E2).
 
    The CLI flag covers the gate's head and base samples, its
    reruns, the merger's own `bun test` calls
-   (`scripts/merge-batch.ts:358,669,709`), CI and the direct package command, so a
-   test passes or fails the same way everywhere.
+   (`scripts/merge-batch.ts:358,669,709`) and the direct package command. The
+   existing Windows CI commands keep their published invocation. Switching
+   those jobs to the package command is deferred until a publisher with the
+   required workflow permission can carry that separate change.
    Other explicit timeouts stay unless the protocol shows one tripping. Sizing:
    the worst test on the default took 13.9 s and the worst on an explicit
    timeout 25.6 s, in E3 with spikes to load 58. 60 s leaves 2.3× to 4.3×

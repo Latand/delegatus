@@ -278,7 +278,7 @@ jobs:
           TMP: ${{ runner.temp }}\llv-tmp
           TEMP: ${{ runner.temp }}\llv-tmp
         run: >
-          bun run test
+          bun test
           src/lib/proc/memory.test.ts
           src/lib/proc/portable.test.ts
           src/lib/proc/darwinIdentity.test.ts
@@ -310,7 +310,7 @@ jobs:
           TMP: ${{ runner.temp }}\llv-tmp
           TEMP: ${{ runner.temp }}\llv-tmp
         run: >
-          bun run test
+          bun test
           bin/launcher-relaunch.test.ts
           bin/launcher-credentials.test.ts
           src/lib/selfUpdate/pid.test.ts
