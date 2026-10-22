@@ -3473,6 +3473,7 @@ test("a plain seat_tick_settings read of a fenced, paused project with a note st
 
   const verbose = await bindings.seat_tick_settings({ clientRequestId: "tick-size-verbose", verbose: true });
   expect(verbose).toMatchObject({
+    autonomy: { active: false, proactive: { enabled: false } },
     settings: { enabled: false, reason },
     monitorPrompt: note,
     effective: { reason },

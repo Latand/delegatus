@@ -95,7 +95,7 @@ import {
   type StructuredHostTerminationDependencies,
 } from "@/lib/runtime/structuredHostControl";
 import { redactBounded } from "@/lib/monitor/redact";
-import { captureProcessIdentity, processIdentityMayOwn, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
+import { captureProcessIdentity, processIdentityMayRun, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
 import { parseReview, type ReviewFinding } from "@/lib/review";
 import { spawnStructuredConversation, stagedLaunchRecovery, recoverStagedStructuredLaunch, releaseFailedStagedLaunchContinuation, STAGED_RECOVERY_MAX_CHECKS, STAGED_RECOVERY_BUDGET_MS, type StagedLaunchRecovery } from "@/lib/runtime/structuredSpawn";
 import { projectForCwd } from "@/lib/scanner/describe";
@@ -1007,9 +1007,17 @@ const PRIOR_WRITER_WAIT_PREFIX = "waiting for an earlier stage agent to stop bef
 const PRIOR_WRITER_WAIT_MS = 5_000;
 
 /** Whether a process a host stop captured onto this row may still run: alive,
-    or not provably gone (#2790). */
+    or not provably gone (#2790). An exited, unreaped one (a zombie) cannot,
+    whatever its parent does about it (#2967). */
 function capturedTreeMayRun(entry: Pick<AgentRegistryEntry, "structuredTerminationSurvivors">): boolean {
-  return (entry.structuredTerminationSurvivors ?? []).some(identity => processIdentityMayOwn(identity));
+  return (entry.structuredTerminationSurvivors ?? []).some(identity => processIdentityMayRun(identity));
+}
+
+/** The recorded engine process can still do work: present, not proven gone and
+    not a zombie (#2967). */
+function engineProcessMayRun(entry: Pick<AgentRegistryEntry, "structuredHost">): boolean {
+  const engine = entry.structuredHost?.process ?? null;
+  return engine !== null && processIdentityMayRun(engine);
 }
 
 /** What still runs for a registry row with no stream to reach it, named for
@@ -1018,12 +1026,12 @@ function capturedTreeMayRun(entry: Pick<AgentRegistryEntry, "structuredTerminati
     writer in the worktree a new attempt would share. */
 export function recordedHostTreeStillRunning(entry: AgentRegistryEntry | undefined | null): string | null {
   if (!entry) return null;
-  const captured = (entry.structuredTerminationSurvivors ?? []).filter(identity => processIdentityMayOwn(identity));
+  const captured = (entry.structuredTerminationSurvivors ?? []).filter(identity => processIdentityMayRun(identity));
   if (captured.length > 0) {
     return `process${captured.length === 1 ? "" : "es"} ${captured.map(identity => identity.pid).join(", ")} captured from its stopped host may still be running`;
   }
   const engine = entry.structuredHost?.process ?? null;
-  if (engine && (entry.status === "dead" || entry.status === "unhosted") && processIdentityMayOwn(engine)) {
+  if (engine && (entry.status === "dead" || entry.status === "unhosted") && processIdentityMayRun(engine)) {
     return `its engine process ${engine.pid} is still running with no stream`;
   }
   return null;
@@ -1062,7 +1070,6 @@ async function stageHostProbe(target: PipelineStageHostRef): Promise<StageHostPr
   const generation = conversation?.generations.at(-1) ?? null;
   if (!conversation || !generation) return null;
   const sessionKey = sessionKeyId({ engine: conversation.engine, sessionId: generation.id });
-  const { structuredHostProcessAlive } = await import("@/lib/runtime/structuredRecovery");
   return {
     conversationId: conversation.id,
     transcriptPath: generation.path,
@@ -1077,7 +1084,7 @@ async function stageHostProbe(target: PipelineStageHostRef): Promise<StageHostPr
     resident: () => {
       const entry = registry.readOnlySnapshot().entries[sessionKey];
       if (!entry) return false;
-      if (structuredHostProcessAlive(entry.structuredHost?.process ?? null)) return true;
+      if (engineProcessMayRun(entry)) return true;
       /* A host stop captures its child's tree before the first signal, and a
          tool that left the group outlives the engine. Until each captured
          process is proven gone, the agent is still at work in the worktree. */
@@ -1088,15 +1095,14 @@ async function stageHostProbe(target: PipelineStageHostRef): Promise<StageHostPr
     orphaned: () => {
       const entry = registry.readOnlySnapshot().entries[sessionKey];
       if (!entry) return false;
-      const engineAlive = structuredHostProcessAlive(entry.structuredHost?.process ?? null);
-      if (engineAlive) return entry.status === "dead" || entry.status === "unhosted";
+      if (engineProcessMayRun(entry)) return entry.status === "dead" || entry.status === "unhosted";
       return capturedTreeMayRun(entry);
     },
     onlyRecordedSurvivorsRun: (recorded) => {
       const entry = registry.readOnlySnapshot().entries[sessionKey];
-      if (!entry || entry.host || structuredHostProcessAlive(entry.structuredHost?.process ?? null)) return false;
+      if (!entry || entry.host || engineProcessMayRun(entry)) return false;
       const known = new Set(recorded.map(identity => `${identity.pid}:${identity.startIdentity}`));
-      return (entry.structuredTerminationSurvivors ?? []).filter(identity => processIdentityMayOwn(identity))
+      return (entry.structuredTerminationSurvivors ?? []).filter(identity => processIdentityMayRun(identity))
         .every(identity => known.has(`${identity.pid}:${identity.startIdentity}`));
     },
     host: () => registry.readOnlySnapshot().entries[sessionKey]?.host ?? null,
@@ -1415,8 +1421,9 @@ async function stopStageHostByRecordedIdentity(
   return refused(`${outcome.error} (pid ${ref.pid}${named}); ${generation}`);
 }
 
+/** A zombie survivor counts as gone: it cannot write anything more (#2967). */
 function terminationIdentityStatus(identity: PipelineUnresolvedTermination["survivors"][number]) {
-  try { return processIdentityStatus(identity); }
+  try { return processIdentityMayRun(identity) ? processIdentityStatus(identity) : "dead" as const; }
   catch { return "unverified" as const; }
 }
 
@@ -1702,8 +1709,7 @@ export function defaultPipelinePorts(
           && !hasUserAuthoredMessage(receipt.artifactPath, receipt.engine)
           && (evidence.entry.status === "dead" || evidence.entry.status === "unhosted")
           && evidence.entry.claimOwner === null
-          && (!evidence.entry.structuredHost?.process || processIdentityStatus(evidence.entry.structuredHost.process) === "dead")
-          && !(evidence.entry.structuredTerminationSurvivors ?? []).some(process => processIdentityStatus(process) !== "dead"),
+          && !engineProcessMayRun(evidence.entry) && !capturedTreeMayRun(evidence.entry),
         currentGeneration: stageLaunchGenerationMatches(receipt, evidence.generation, evidence.entry),
         generationMatches: stageLaunchGenerationIdentityMatches(receipt, evidence.generation, evidence.entry),
         retryClaimId: receipt.retryClaim?.claimId ?? null,
@@ -1790,8 +1796,7 @@ export function defaultPipelinePorts(
         if (!receipt.key && conversation?.generations.length) return false;
         if (receipt.key && (!entry || generation?.id !== receipt.key.sessionId || !stageLaunchGenerationMatches(receipt,
           conversation && generation ? { engine: conversation.engine, path: generation.path } : null, entry))) return false;
-        if (entry && (entry.claimOwner || capturedTreeMayRun(entry)
-          || entry.structuredHost?.process && processIdentityStatus(entry.structuredHost.process) !== "dead")) return false;
+        if (entry && (entry.claimOwner || capturedTreeMayRun(entry) || engineProcessMayRun(entry))) return false;
         // Late native work wins at the write boundary too.
         return stageArtifactStamp(receipt.artifactPath) === stamp
           && (conversation?.generations ?? []).every(g => g.path === receipt.artifactPath || stageArtifactStamp(g.path) === null);

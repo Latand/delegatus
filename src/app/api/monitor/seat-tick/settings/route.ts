@@ -149,6 +149,10 @@ export async function PUT(req: NextRequest): Promise<NextResponse<SeatTickSettin
     /* Inside the try: attribution reads the seat file, and an unreadable one
        must answer as a failure rather than as an uncaught throw. */
     const actor = settingsActor(req, project);
+    if (change.autonomy?.proactive?.enabled === true
+      && (actor.kind !== "gateway" || !operatorBrowserRequest(req) || req.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER))) {
+      return NextResponse.json({ error: "only the operator browser may enable proactive autonomy" }, { status: 403 });
+    }
     if (body.clearUnknownInstructions === true) {
       if (actor.kind !== "gateway" || !operatorBrowserRequest(req) || req.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER)) {
         return NextResponse.json({ error: "only the operator browser can remove instructions with unknown authors" }, { status: 403 });
