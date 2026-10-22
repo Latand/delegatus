@@ -1,7 +1,7 @@
 import { yieldToRuntime } from "@/lib/cooperative";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
-import { ownsItsSettlement, type AgentRegistry, type DeliveryOperationOwner } from "@/lib/agent/registry";
+import { ownsItsSettlement, type AgentRegistry, type DeliveryOperationOwner, type RegistryFile } from "@/lib/agent/registry";
 import { archivedOwnersEndedSince, hotRegistryRows } from "@/lib/agent/sqliteRegistryStore";
 import { ACCOUNT_MIGRATION_PASS_INTERVAL_MS } from "@/lib/accounts/migration/controllerSignal";
 import type { HeldDelivery, ViewerConversationId } from "@/lib/accounts/migration/contracts";
@@ -284,8 +284,7 @@ const ARCHIVED_ENDING_MARGIN_MS = 86_400_000;
  * proves nothing, so the sweep takes no checkpoint past it and the next sweep
  * checks again.
  */
-function* restorationSteps(registry: AgentRegistry, progress: RestorableProgress, now: number): Generator<void, boolean> {
-  const file = registry.readOnlySnapshot();
+function* restorationSteps(registry: AgentRegistry, progress: RestorableProgress, now: number, file: RegistryFile): Generator<void, boolean> {
   let complete = true;
   /** Whether the record is missing; an unreadable store marks the sweep incomplete. */
   const missing = (operationId: string): boolean => {
@@ -353,57 +352,88 @@ function* restorationSteps(registry: AgentRegistry, progress: RestorableProgress
       logged(error);
     }
   }
-  return complete && registry.readOnlySnapshot() === file;
+  return complete;
 }
 
 
-const restorations = new WeakMap<RestorableProgress, { registry: AgentRegistry; steps: Generator<void, boolean>; now: number }>();
+const restorations = new WeakMap<RestorableProgress, {
+  registry: AgentRegistry; steps: Generator<void, boolean>; now: number; file: RegistryFile;
+}>();
+
+function restoreSlice(registry: AgentRegistry, progress: RestorableProgress, now: number,
+  prepared?: RegistryFile, validate = true): boolean {
+  return withViewerOperation("delivery-progress.restore", () => performanceSpans.sync("delivery-progress.restore.slice", () => {
+    let pending = restorations.get(progress);
+    if (pending && (pending.registry !== registry || pending.now !== now || (prepared && pending.file !== prepared))) {
+      pending.steps.return(false); pending = undefined;
+    }
+    if (!pending) {
+      const file = prepared ?? registry.readOnlySnapshot();
+      pending = { registry, steps: restorationSteps(registry, progress, now, file), now, file };
+      restorations.set(progress, pending);
+    }
+    try {
+      const started = performance.now();
+      for (let count = 0; count < RESTORE_BATCH_LIMIT; count++) {
+        const next = pending.steps.next();
+        if (next.done) {
+          restorations.delete(progress);
+          return next.value && (!validate || registry.readOnlySnapshot() === pending.file);
+        }
+        if (performance.now() - started >= 8) break;
+      }
+      return false;
+    } catch (error) {
+      restorations.delete(progress);
+      pending.steps.return(false);
+      throw error;
+    }
+  }));
+}
 
 /** A slice never spends a checkpoint on work it has not visited. A restart
     begins again from the durable mark; already-written records are preserved. */
 export function restoreMissingRecords(registry: AgentRegistry, progress: RestorableProgress, now = Date.now()): boolean {
-  let pending = restorations.get(progress);
-  if (pending && (pending.registry !== registry || pending.now !== now)) { pending.steps.return(false); pending = undefined; }
-  if (!pending) {
-    pending = { registry, steps: restorationSteps(registry, progress, now), now };
-    restorations.set(progress, pending);
-  }
-  try {
-    const started = performance.now();
-    return withViewerOperation("delivery-progress.restore", () => performanceSpans.sync("delivery-progress.restore.slice", () => {
-      for (let count = 0; count < RESTORE_BATCH_LIMIT; count++) {
-        const next = pending.steps.next();
-        if (next.done) { restorations.delete(progress); return next.value; }
-        if (performance.now() - started >= 8) break;
-      }
-      return false;
-    }));
-  } catch (error) {
-    restorations.delete(progress);
-    pending.steps.return(false);
-    throw error;
-  }
+  return restoreSlice(registry, progress, now);
 }
 
 export async function restoreMissingRecordsAsync(registry: AgentRegistry, progress: RestorableProgress, now: number,
   assertActive: () => void = () => {}, deadline = performance.now() + 30_000): Promise<boolean> {
+  const prepare = async () => {
+    assertActive();
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) return null;
+    const signal = AbortSignal.timeout(Math.ceil(remaining));
+    try {
+      const file = await registry.prepareReadOnlySnapshot(signal);
+      assertActive();
+      return performance.now() >= deadline ? null : file;
+    } catch (error) {
+      assertActive();
+      if (signal.aborted && performance.now() >= deadline) return null;
+      throw error;
+    }
+  };
+  const abandon = () => {
+    restorations.get(progress)?.steps.return(false);
+    restorations.delete(progress);
+  };
   try {
+    await yieldToRuntime();
+    const file = await prepare();
+    if (!file) { abandon(); return false; }
     let complete: boolean;
     do {
       await yieldToRuntime();
       assertActive();
-      if (performance.now() >= deadline) {
-        restorations.get(progress)?.steps.return(false);
-        restorations.delete(progress);
-        return false;
-      }
-      complete = restoreMissingRecords(registry, progress, now);
+      if (performance.now() >= deadline) { abandon(); return false; }
+      complete = restoreSlice(registry, progress, now, file, false);
     } while (restorations.has(progress));
-    assertActive();
-    return complete;
+    // Refresh cooperatively as well: a foreign writer may have invalidated
+    // the initial view while the bounded restoration slices were running.
+    return complete && await prepare() === file;
   } catch (error) {
-    restorations.get(progress)?.steps.return(false);
-    restorations.delete(progress);
+    abandon();
     throw error;
   }
 }

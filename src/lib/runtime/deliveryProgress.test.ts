@@ -686,3 +686,36 @@ test("restoration covers every ending through bounded sweeps before advancing co
     } finally { restarted.close(); }
   } finally { store.close(); registry.close(); }
 });
+
+
+test("asynchronous restoration prepares both its selection and freshness check without a synchronous refresh", async () => {
+  const { registry, filename } = sweepFixture("prepared-restoration");
+  const snapshot = registry.readOnlySnapshot();
+  const store = new DeliveryProgressStore(filename, () => 1000, noTimer);
+  const { restoreMissingRecordsAsync } = await import("./recordWait");
+  let preparations = 0;
+  const reader = {
+    readOnlySnapshot: () => { throw new Error("unprepared restoration refresh"); },
+    prepareReadOnlySnapshot: async (signal?: AbortSignal) => {
+      signal?.throwIfAborted(); preparations++; return snapshot;
+    },
+  } as typeof registry;
+  try {
+    expect(await restoreMissingRecordsAsync(reader, store, 1000)).toBe(true);
+    expect(preparations).toBe(2);
+    reader.prepareReadOnlySnapshot = async () => { throw new Error("preparation refused"); };
+    await expect(restoreMissingRecordsAsync(reader, store, 1000)).rejects.toThrow("preparation refused");
+    preparations = 0;
+    reader.prepareReadOnlySnapshot = async () => { preparations++; return snapshot; };
+    expect(await restoreMissingRecordsAsync(reader, store, 1000, () => {}, 0)).toBe(false);
+    expect(preparations).toBe(0);
+    let current = true;
+    reader.prepareReadOnlySnapshot = async () => { current = false; return snapshot; };
+    await expect(restoreMissingRecordsAsync(reader, store, 1000, () => {
+      if (!current) throw new Error("restoration owner retired");
+    })).rejects.toThrow("restoration owner retired");
+    preparations = 0;
+    reader.prepareReadOnlySnapshot = async () => ++preparations === 1 ? snapshot : { ...snapshot };
+    expect(await restoreMissingRecordsAsync(reader, store, 1000)).toBe(false);
+  } finally { store.close(); registry.close(); }
+});
