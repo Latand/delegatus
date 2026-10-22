@@ -93,6 +93,7 @@ class CompactAppServer extends EventEmitter {
     }
     if (method === "modelProvider/capabilities/read") return this.respond(message.id, { webSearch: false, imageGeneration: false });
     if (method === "config/read") return this.respond(message.id, { config: { mcp_servers: {} } });
+    if (method === "mcpServerStatus/list") return this.respond(message.id, { data: [{ name: "viewer", tools: { stage_report: {} } }], nextCursor: null });
     if (method === "thread/start") {
       return this.respond(message.id, { thread: { id: this.threadId, path: `/sessions/${this.threadId}.jsonl`, turns: [] } });
     }

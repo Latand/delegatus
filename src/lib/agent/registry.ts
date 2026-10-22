@@ -6027,6 +6027,13 @@ export class AgentRegistry {
     });
   }
 
+  /** Memory planning selects active host rows through the existing status
+      index, without decoding retained registry history. */
+  liveStructuredHostCount(): number {
+    return this.readKeyed(file => registryRowsMatching(file, "entries", "status", [...LIVE_CHILD_HOST_STATES])
+      .filter(entry => Boolean(entry.structuredHost)).length);
+  }
+
   /** Latest launch directories for worker counting, without registry inventory. */
   workerSeatContexts(ids: readonly string[]): Map<string, { conversationId: string; directories: string[] }> {
     if (this.sqliteStore && (this.sqliteMode === "sqlite" || this.sqliteMode === "read")) return this.sqliteStore.workerSeatContexts(ids);

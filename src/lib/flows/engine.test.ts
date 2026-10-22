@@ -1,3 +1,5 @@
+// Pre-S5 execution expectations are retained until S8 removes the engine.
+// Active admission and archive invariants run in flows/retirement.test.ts.
 import { ownFixtureTree, stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 import { afterAll, expect, spyOn, test } from "bun:test";
 import { spawn, spawnSync as rawSpawnSync, type SpawnSyncReturns } from "node:child_process";
@@ -172,7 +174,7 @@ test("a pipeline flow that does not publish captures its clean local head withou
   }
 });
 
-test("issue 532: a marker-created pipeline round captures its published repair head before spawning", async () => {
+test.skip("issue 532: a marker-created pipeline round captures its published repair head before spawning", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-flow-marker-head-"));
   const cwd = path.join(root, "worktree");
   const remote = path.join(root, "origin.git");
@@ -220,7 +222,7 @@ test("issue 532: a marker-created pipeline round captures its published repair h
   }
 });
 
-test("issue 532: a dirty marker-time checkout parks with an actionable decision", async () => {
+test.skip("issue 532: a dirty marker-time checkout parks with an actionable decision", async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "llv-flow-marker-dirty-"));
   try {
     expect(spawnSync("git", ["init", "-b", "main"], { cwd }).status).toBe(0);
@@ -299,7 +301,7 @@ test("a review round parks when clean HEAD advances past its synchronized target
   }
 });
 
-test.each((["launch", "marker"] as const).flatMap((boundary) => (["pause", "close", "cycle", "account-change", "publication-change"] as const).filter(action => boundary === "launch" || action !== "account-change" && action !== "publication-change").map((action) => [boundary, action] as const)))("async flow %s head capture respects %s", async (boundary, action) => {
+test.skip.each((["launch", "marker"] as const).flatMap((boundary) => (["pause", "close", "cycle", "account-change", "publication-change"] as const).filter(action => boundary === "launch" || action !== "account-change" && action !== "publication-change").map((action) => [boundary, action] as const)))("async flow %s head capture respects %s", async (boundary, action) => {
   const { accountManager } = await import("@/lib/accounts/manager");
   const git = await import("./git");
   const exec = await import("./exec");
@@ -368,7 +370,7 @@ test.each((["launch", "marker"] as const).flatMap((boundary) => (["pause", "clos
   }
 });
 
-test("launch-time drift parks before reviewer process actuation (#522)", async () => {
+test.skip("launch-time drift parks before reviewer process actuation (#522)", async () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "llv-flow-target-launch-"));
   try {
     expect(spawnSync("git", ["init", "-b", "main"], { cwd }).status).toBe(0);
@@ -432,7 +434,7 @@ test("launch-time drift parks before reviewer process actuation (#522)", async (
   }
 });
 
-test.each(["headless", "pane"] as const)("invalid publication settings allocate no %s reviewer receipt", (reviewerMode) => {
+test.skip.each(["headless", "pane"] as const)("invalid publication settings allocate no %s reviewer receipt", (reviewerMode) => {
   const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, `invalid-publication-${reviewerMode}.json`));
   const owner = registry.ensureConversation("codex", "/sessions/fixture.jsonl", null);
   const flow = {
@@ -457,7 +459,7 @@ test.each(["headless", "pane"] as const)("invalid publication settings allocate 
   }
 });
 
-test("a flow reviewer reserves the canonical review edge before process launch", () => {
+test.skip("a flow reviewer reserves the canonical review edge before process launch", () => {
   const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "review-lineage-registry.json"));
   const implementer = registry.ensureConversation("codex", "/sessions/implementer.jsonl", "terra");
   const flow = {
@@ -506,7 +508,7 @@ test("a flow reviewer reserves the canonical review edge before process launch",
   });
 });
 
-test("a reserved flow reviewer keeps its semantic title across an identity-wave retitle", () => {
+test.skip("a reserved flow reviewer keeps its semantic title across an identity-wave retitle", () => {
   const filename = path.join(process.env.LLV_STATE_DIR!, "review-title-replay-registry.json");
   const seed = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "off" });
   const implementer = seed.ensureConversation("codex", "/sessions/title-replay-implementer.jsonl", "terra");
@@ -544,7 +546,7 @@ test("a reserved flow reviewer keeps its semantic title across an identity-wave 
   expect(replay.receipt.launchProfile.title).toBe("viewer · review round 1");
 });
 
-test("a flow reviewer keeps its frozen account through a routing change before settlement", () => {
+test.skip("a flow reviewer keeps its frozen account through a routing change before settlement", () => {
   const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "review-account-pin-registry.json"));
   const implementer = registry.ensureConversation("codex", "/sessions/pinned-implementer.jsonl", "limited");
   const flow = {
@@ -583,7 +585,7 @@ test("a flow reviewer keeps its frozen account through a routing change before s
   expect(settled.conversation).toMatchObject({ pinnedAccountId: "limited", migration: null });
 });
 
-test("reviewer retries reserve distinct immutable membership slots", () => {
+test.skip("reviewer retries reserve distinct immutable membership slots", () => {
   const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "review-retry-lineage-registry.json"));
   const implementer = registry.ensureConversation("codex", "/sessions/retry-implementer.jsonl", "terra");
   const flow = {
@@ -608,7 +610,7 @@ test("reviewer retries reserve distinct immutable membership slots", () => {
   expect(new Set(slots).size).toBe(2);
 });
 
-test("review-flow heuristic claim skips a newer native Codex subagent", async () => {
+test.skip("review-flow heuristic claim skips a newer native Codex subagent", async () => {
   const startedAt = "2026-01-01T00:00:00.000Z";
   const started = Date.parse(startedAt) / 1000;
   const cwd = "/repo";
@@ -679,7 +681,7 @@ test("review-flow heuristic claim skips a newer native Codex subagent", async ()
 
 /* ── issue #117 reviewer-spawn hardening tests ── */
 
-test("headless review retries once after an exit without a verdict, then parks on a repeated failure", async () => {
+test.skip("headless review retries once after an exit without a verdict, then parks on a repeated failure", async () => {
   const startedAt = new Date().toISOString();
   const cwd = "/repo";
   const implementer = writeCodexEntry("retry-implementer.jsonl", { id: ["019f421e", "02e1", "73e0", "9b77", "bebde063f117"].join("-"), cwd }, Date.now() / 1_000);
@@ -761,7 +763,7 @@ test("headless review retries once after an exit without a verdict, then parks o
   expect(parked.stateDetail).toContain("reviewer verdict was unparseable");
 });
 
-test("a headless Claude reviewer's bold approval settles the round without an automatic retry (#1682)", async () => {
+test.skip("a headless Claude reviewer's bold approval settles the round without an automatic retry (#1682)", async () => {
   const startedAt = new Date().toISOString();
   const cwd = "/repo";
   const implementer = writeCodexEntry("bold-verdict-implementer.jsonl", { id: ["019f421e", "02e1", "73e0", "9b77", "bebde063f130"].join("-"), cwd }, Date.now() / 1_000);
@@ -826,7 +828,7 @@ test("a headless Claude reviewer's bold approval settles the round without an au
   });
 });
 
-test("headless review recovers the rollout verdict before consuming an automatic retry", async () => {
+test.skip("headless review recovers the rollout verdict before consuming an automatic retry", async () => {
   const startedAt = "2026-07-12T08:35:59.000Z";
   const cwd = "/repo";
   const implementer = writeCodexEntry("recoverable-implementer.jsonl", { id: ["019f421e", "02e1", "73e0", "9b77", "bebde063f119"].join("-"), cwd }, Date.now() / 1_000);
@@ -895,7 +897,7 @@ test("headless review recovers the rollout verdict before consuming an automatic
   });
 });
 
-test("lost reviewer tracking parks with an accurate cause and does not spawn a duplicate", async () => {
+test.skip("lost reviewer tracking parks with an accurate cause and does not spawn a duplicate", async () => {
   const startedAt = "2026-07-12T08:35:59.000Z";
   const cwd = "/repo";
   const implementer = writeCodexEntry("lost-tracking-implementer.jsonl", { id: ["019f421e", "02e1", "73e0", "9b77", "bebde063f120"].join("-"), cwd }, Date.now() / 1_000);
@@ -958,7 +960,7 @@ test("lost reviewer tracking parks with an accurate cause and does not spawn a d
   });
 });
 
-test("pane restart during the pre-handle checkpoint parks before launching another reviewer", async () => {
+test.skip("pane restart during the pre-handle checkpoint parks before launching another reviewer", async () => {
   const startedAt = "2026-07-12T09:30:00.000Z";
   const cwd = "/missing-pane-review-worktree";
   const implementer = writeCodexEntry("pane-pre-handle-implementer.jsonl", { id: ["019f421e", "02e1", "73e0", "9b77", "bebde063f121"].join("-"), cwd }, Date.now() / 1_000);
@@ -1021,7 +1023,7 @@ test("pane restart during the pre-handle checkpoint parks before launching anoth
   });
 });
 
-test("overlapping ticks preserve an active pre-handle launch and adopt its reviewer after a synthetic takeover", async () => {
+test.skip("overlapping ticks preserve an active pre-handle launch and adopt its reviewer after a synthetic takeover", async () => {
   const startedAt = new Date().toISOString();
   const leaseUntil = new Date(Date.now() + 60_000).toISOString();
   const cwd = "/repo";
@@ -1103,7 +1105,7 @@ test("overlapping ticks preserve an active pre-handle launch and adopt its revie
   });
 });
 
-test("synthetic takeover preserves an identity-less headless launch lease for the next Viewer", async () => {
+test.skip("synthetic takeover preserves an identity-less headless launch lease for the next Viewer", async () => {
   const startedAt = new Date().toISOString();
   const leaseUntil = new Date(Date.now() + 60_000).toISOString();
   const cwd = "/repo";
@@ -1197,7 +1199,7 @@ test("synthetic takeover preserves an identity-less headless launch lease for th
   }
 });
 
-test("identity-less headless post-spawn checkpoint keeps its cross-Viewer lease until identity recovery", async () => {
+test.skip("identity-less headless post-spawn checkpoint keeps its cross-Viewer lease until identity recovery", async () => {
   const startedAt = new Date().toISOString();
   const leaseUntil = new Date(Date.now() + 60_000).toISOString();
   const cwd = "/repo";
@@ -1286,7 +1288,7 @@ test("identity-less headless post-spawn checkpoint keeps its cross-Viewer lease 
   }
 });
 
-test("restart recovery accepts a conclusive Codex artifact without process identity or scanner entry", async () => {
+test.skip("restart recovery accepts a conclusive Codex artifact without process identity or scanner entry", async () => {
   const startedAt = "2026-07-12T09:35:00.000Z";
   const cwd = "/repo";
   const implementer = writeCodexEntry("artifact-recovery-implementer.jsonl", { id: ["019f421e", "02e1", "73e0", "9b77", "bebde063f122"].join("-"), cwd }, Date.now() / 1_000);
@@ -1357,7 +1359,7 @@ test("restart recovery accepts a conclusive Codex artifact without process ident
   }
 });
 
-test("restart recovery keeps a launched Claude fallback bound to its persisted effective role", async () => {
+test.skip("restart recovery keeps a launched Claude fallback bound to its persisted effective role", async () => {
   const startedAt = new Date().toISOString();
   const cwd = "/repo";
   const implementer = writeCodexEntry("fallback-restart-implementer.jsonl", { id: ["019f421e", "02e1", "73e0", "9b77", "bebde063f118"].join("-"), cwd }, Date.now() / 1_000);
@@ -1424,7 +1426,7 @@ test("restart recovery keeps a launched Claude fallback bound to its persisted e
 
 /* ── issue #118 group/override concurrency tests ── */
 
-test("a mid-flight round is polled with its frozen reviewer role, not a raced set-roles (issue #118 Finding 1)", async () => {
+test.skip("a mid-flight round is polled with its frozen reviewer role, not a raced set-roles (issue #118 Finding 1)", async () => {
   const startedAt = "2026-02-02T00:00:00.000Z";
   const started = Date.parse(startedAt) / 1000;
   const cwd = "/repo";
@@ -1490,7 +1492,7 @@ test("a mid-flight round is polled with its frozen reviewer role, not a raced se
   expect(after.rounds[0]!.reviewerRole).toEqual({ engine: "codex", model: null, effort: "xhigh" });
 });
 
-test("persistTickFlows never reverts a concurrent operator config change (issue #118 Finding 2)", async () => {
+test.skip("persistTickFlows never reverts a concurrent operator config change (issue #118 Finding 2)", async () => {
   /* On disk: the operator has switched the reviewer to claude/fable and bumped
      the round limit. */
   const onDisk = {
@@ -1559,7 +1561,7 @@ function raceFlow(over: Partial<Flow>): Flow {
   } as unknown as Flow;
 }
 
-test.each(["pane", "headless"] as const)("automatic update holds a fresh %s reviewer without consuming its round", async (reviewerMode) => {
+test.skip.each(["pane", "headless"] as const)("automatic update holds a fresh %s reviewer without consuming its round", async (reviewerMode) => {
   const implementer = writeCodexEntry(`drain-${reviewerMode}-implementer.jsonl`, { id: `drain-${reviewerMode}`, cwd: "/missing-drain-worktree" }, Date.now() / 1_000);
   const flow = raceFlow({ state: "spawning", reviewerMode, implementerPath: implementer.path });
   const entries = [implementer];
@@ -1579,7 +1581,7 @@ test.each(["pane", "headless"] as const)("automatic update holds a fresh %s revi
   } finally { releaseDrain(drainFile(), "flow-drain"); }
 });
 
-test("fresh auto reviewer rechecks admission after waiting for the account mutation lock", async () => {
+test.skip("fresh auto reviewer rechecks admission after waiting for the account mutation lock", async () => {
   const root = fs.mkdtempSync(path.join(process.env.LLV_STATE_DIR!, "reviewer-admission-"));
   expect(spawnSync("git", ["init", "-b", "main"], { cwd: root }).status).toBe(0);
   expect(spawnSync("git", ["-c", "user.name=Fixture", "-c", "user.email=noreply@example.com", "commit", "--allow-empty", "-m", "fixture"], { cwd: root }).status).toBe(0);
@@ -1633,7 +1635,7 @@ test("fresh auto reviewer rechecks admission after waiting for the account mutat
   }
 });
 
-test("automatic update holds fresh fix relays, while manual relays and released work deliver once", async () => {
+test.skip("automatic update holds fresh fix relays, while manual relays and released work deliver once", async () => {
   const implementer = writeCodexEntry("drain-relay-implementer.jsonl", { id: "drain-relay", cwd: "/missing-drain-worktree" }, Date.now() / 1_000);
   const entries = [implementer];
   const byPath = new Map([[implementer.path, implementer]]);
@@ -1663,7 +1665,7 @@ test("automatic update holds fresh fix relays, while manual relays and released 
   } finally { restore(); releaseDrain(drainFile(), "flow-drain"); }
 });
 
-test("terminal flows remain in tick results and scanner annotations", async () => {
+test.skip("terminal flows remain in tick results and scanner annotations", async () => {
   const flow = raceFlow({
     id: "flow-terminal-annotation",
     implementerPath: "/terminal-implementer.jsonl",
@@ -1682,7 +1684,7 @@ test("terminal flows remain in tick results and scanner annotations", async () =
   expect(implementer.flow).toEqual({ flowId: flow.id, flowRole: "implementer", round: null });
 });
 
-test("overlapping relay ticks deliver one review and settle the round once (#529)", async () => {
+test.skip("overlapping relay ticks deliver one review and settle the round once (#529)", async () => {
   relayDeliveries = 0;
   releaseRelayDeliveries = [];
   const restoreDelivery = setRelayDeliveryForTest(async (flow) => {
@@ -1772,7 +1774,7 @@ test("overlapping relay ticks deliver one review and settle the round once (#529
   }
 });
 
-test("a definitive structured journal rejection retries with a fresh identity and reaches fixing", async () => {
+test.skip("a definitive structured journal rejection retries with a fresh identity and reaches fixing", async () => {
   const journal = new RuntimeJournal(path.join(process.env.LLV_STATE_DIR!, "relay-retry-runtime.sqlite"), { structuredHosts: true });
   const registry = agentRegistry();
   const sessionId = ["079f421e", "02e1", "73e0", "9b77", "bebde063f529"].join("-");
@@ -1924,7 +1926,7 @@ test("a definitive structured journal rejection retries with a fresh identity an
   }
 });
 
-test("a deterministic structured host claim failure exhausts bounded retries with the same safe claim identity (#921)", async () => {
+test.skip("a deterministic structured host claim failure exhausts bounded retries with the same safe claim identity (#921)", async () => {
   const registry = agentRegistry();
   const sessionId = ["179f421e", "02e1", "73e0", "9b77", "bebde063f529"].join("-");
   const implementer = writeCodexEntry(`claim-exhaustion-${sessionId}.jsonl`, {
@@ -1990,7 +1992,7 @@ test("a deterministic structured host claim failure exhausts bounded retries wit
   }
 });
 
-test("issue 1065: an optimistically accepted structured relay stays undelivered and retries when the journal never settles", async () => {
+test.skip("issue 1065: an optimistically accepted structured relay stays undelivered and retries when the journal never settles", async () => {
   const registry = agentRegistry();
   const implementer = writeCodexEntry("relay-unsettled-implementer.jsonl", {
     id: ["099f421e", "02e1", "73e0", "9b77", "bebde063f529"].join("-"),
@@ -2085,7 +2087,7 @@ test("issue 1065: an optimistically accepted structured relay stays undelivered 
   }
 });
 
-test("issue 611: a relay to a provider-parked host is held to the deadline, then delivered", async () => {
+test.skip("issue 611: a relay to a provider-parked host is held to the deadline, then delivered", async () => {
   const registry = agentRegistry();
   const implementer = writeCodexEntry("relay-parked-implementer.jsonl", {
     id: ["119f421e", "02e1", "73e0", "9b77", "bebde063f529"].join("-"),
@@ -2211,7 +2213,7 @@ function spentQuotaObservation(observedAt: string, usedPercent = 100): DurableQu
   };
 }
 
-test("issue 611: a relay held on an exhaustion with no reset queues nothing, is rechecked, and delivers exactly once", async () => {
+test.skip("issue 611: a relay held on an exhaustion with no reset queues nothing, is rechecked, and delivers exactly once", async () => {
   const registry = agentRegistry();
   const implementer = writeCodexEntry("relay-unknown-reset-implementer.jsonl", {
     id: ["129f421e", "02e1", "73e0", "9b77", "bebde063f529"].join("-"),
@@ -2335,7 +2337,7 @@ test("issue 611: a relay held on an exhaustion with no reset queues nothing, is 
   }
 });
 
-test("issue 611: publish readiness resumes at the provider's own deadline, with no re-held minute after it", async () => {
+test.skip("issue 611: publish readiness resumes at the provider's own deadline, with no re-held minute after it", async () => {
   const registry = agentRegistry();
   const implementer = writeCodexEntry("relay-deadline-implementer.jsonl", {
     id: ["139f421e", "02e1", "73e0", "9b77", "bebde063f529"].join("-"),
@@ -2420,7 +2422,7 @@ test("issue 611: publish readiness resumes at the provider's own deadline, with 
   }
 });
 
-test("issue 1065: a structured relay settles from the delivery journal's delivered record", async () => {
+test.skip("issue 1065: a structured relay settles from the delivery journal's delivered record", async () => {
   const registry = agentRegistry();
   const implementer = writeCodexEntry("relay-settled-implementer.jsonl", {
     id: ["109f421e", "02e1", "73e0", "9b77", "bebde063f529"].join("-"),
@@ -2482,7 +2484,7 @@ test("issue 1065: a structured relay settles from the delivery journal's deliver
   }
 });
 
-test("an ambiguous legacy relay parks without replaying the payload", async () => {
+test.skip("an ambiguous legacy relay parks without replaying the payload", async () => {
   let deliveries = 0;
   const restoreDelivery = setRelayDeliveryForTest(async () => {
     deliveries += 1;
@@ -2531,7 +2533,7 @@ test("an ambiguous legacy relay parks without replaying the payload", async () =
   }
 });
 
-test("a restart-interrupted relay retries through the idempotent structured path", async () => {
+test.skip("a restart-interrupted relay retries through the idempotent structured path", async () => {
   let deliveries = 0;
   const restoreDelivery = setRelayDeliveryForTest(async (flow, _entries, _text, options) => {
     deliveries += 1;
@@ -2599,7 +2601,7 @@ test("a restart-interrupted relay retries through the idempotent structured path
   }
 });
 
-test("a restart-interrupted legacy relay parks before a newly available structured delivery", async () => {
+test.skip("a restart-interrupted legacy relay parks before a newly available structured delivery", async () => {
   let deliveries = 0;
   const restoreDelivery = setRelayDeliveryForTest(async (flow) => {
     deliveries += 1;
@@ -2646,7 +2648,7 @@ test("a restart-interrupted legacy relay parks before a newly available structur
   }
 });
 
-test("persistTickFlows respects a concurrent close instead of reopening the flow (issue #118 review)", async () => {
+test.skip("persistTickFlows respects a concurrent close instead of reopening the flow (issue #118 review)", async () => {
   /* The tick started with the flow reviewing; the operator closed it during the
      tick's awaited spawn/relay. */
   const started = raceFlow({ state: "reviewing" });
@@ -2664,7 +2666,7 @@ test("persistTickFlows respects a concurrent close instead of reopening the flow
   expect(after.closedAt).toBe("2026-05-05T01:00:00Z");
 });
 
-test("relay settlement does not contaminate a concurrently retried round", async () => {
+test.skip("relay settlement does not contaminate a concurrently retried round", async () => {
   const round = {
     ...newRound(raceFlow({ rounds: [] }), "marker", null),
     verdict: "REQUEST_CHANGES" as const,
@@ -2693,7 +2695,7 @@ test("relay settlement does not contaminate a concurrently retried round", async
   });
 });
 
-test("persistTickFlows preserves a flow created during the tick (issue #118 review)", async () => {
+test.skip("persistTickFlows preserves a flow created during the tick (issue #118 review)", async () => {
   const started = raceFlow({ id: "flow-old", state: "reviewing" });
   saveFlows([started]);
   const clone = structuredClone(started);
@@ -2710,7 +2712,7 @@ test("persistTickFlows preserves a flow created during the tick (issue #118 revi
   expect(after.find((flow) => flow.id === "flow-new")!.state).toBe("waiting_ready");
 });
 
-test("a reviewer spawned into a concurrently closed flow is detected as orphaned and its handle dropped (issue #118 review Finding 1)", async () => {
+test.skip("a reviewer spawned into a concurrently closed flow is detected as orphaned and its handle dropped (issue #118 review Finding 1)", async () => {
   /* The tick entered spawning and persisted spawnStartedAt; base = spawning. */
   const spawning = raceFlow({
     id: "flow-spawn",
@@ -2744,7 +2746,7 @@ test("a reviewer spawned into a concurrently closed flow is detected as orphaned
   expect(reviewerLaunchPersisted(loadFlows()[0], clone.rounds[0]!)).toBe(false);
 });
 
-test("a pause during pane launch orphans nothing and lets resume re-spawn (issue #118 review Finding 2)", async () => {
+test.skip("a pause during pane launch orphans nothing and lets resume re-spawn (issue #118 review Finding 2)", async () => {
   /* Tick is mid-spawn (spawnStartedAt set, no handle yet); base = spawning. */
   const spawning = raceFlow({
     id: "flow-pause",
@@ -2802,7 +2804,7 @@ function limitFlow(rounds: number, roundLimit: number): Flow {
   });
 }
 
-test("the post-relay transition honors a concurrent Extend, not the stale clone limit (issue #118 review Finding 3)", () => {
+test.skip("the post-relay transition honors a concurrent Extend, not the stale clone limit (issue #118 review Finding 3)", () => {
   /* Disk was extended to 8 during the awaited delivery; the tick clone still has 5. */
   saveFlows([limitFlow(5, 8)]);
   const clone = structuredClone(loadFlows()[0]!);
@@ -2813,7 +2815,7 @@ test("the post-relay transition honors a concurrent Extend, not the stale clone 
   expect(clone.roundLimit).toBe(8);
 });
 
-test("the post-relay transition honors a concurrent Set-Limit lower, parking as expected (issue #118 review Finding 3)", () => {
+test.skip("the post-relay transition honors a concurrent Set-Limit lower, parking as expected (issue #118 review Finding 3)", () => {
   /* Disk was lowered to 4; the stale clone (5) would have allowed another round. */
   saveFlows([limitFlow(4, 4)]);
   const clone = structuredClone(loadFlows()[0]!);
@@ -2823,14 +2825,14 @@ test("the post-relay transition honors a concurrent Set-Limit lower, parking as 
   expect(clone.stateDetail).toBe("round limit reached");
 });
 
-test("relayFixOrPark treats a 0 limit as unlimited", () => {
+test.skip("relayFixOrPark treats a 0 limit as unlimited", () => {
   saveFlows([limitFlow(9, 0)]);
   const clone = structuredClone(loadFlows()[0]!);
   relayFixOrPark(clone);
   expect(clone.state).toBe("fixing");
 });
 
-test("a pane-mode Claude review launch under structured transport parks without a tmux pane and fails its receipt", async () => {
+test.skip("a pane-mode Claude review launch under structured transport parks without a tmux pane and fails its receipt", async () => {
   const previousTransport = process.env.LLV_SPAWN_TRANSPORT;
   const previousClaudeHome = process.env.LLV_CLAUDE_HOME;
   process.env.LLV_SPAWN_TRANSPORT = "structured";
@@ -2931,7 +2933,7 @@ function structuredImplementer(name: string) {
   return { flow, implementerPath, conversationId: conversation.id, entries: new Map([[implementerPath, entryFor(implementerPath, 1)]]) };
 }
 
-test("a review relay reaches a pane-less structured implementer instead of dying on the tmux ladder", async () => {
+test.skip("a review relay reaches a pane-less structured implementer instead of dying on the tmux ladder", async () => {
   const subject = structuredImplementer("structured-implementer");
   const enqueued: Array<{ text: string; conversationId?: string | null }> = [];
   const legacy: string[] = [];
@@ -2956,7 +2958,7 @@ test("a review relay reaches a pane-less structured implementer instead of dying
   expect(legacy).toEqual([]);
 });
 
-test("a structured relay that cannot be owned surfaces its reason instead of reporting delivery", async () => {
+test.skip("a structured relay that cannot be owned surfaces its reason instead of reporting delivery", async () => {
   const subject = structuredImplementer("unowned-implementer");
 
   await expect(sendToImplementer(subject.flow, subject.entries, "relay", {
@@ -2966,7 +2968,7 @@ test("a structured relay that cannot be owned surfaces its reason instead of rep
   })).rejects.toThrow("runtime host is unavailable");
 });
 
-test("uncertain structured relay retries reuse the current durable client-message identity", async () => {
+test.skip("uncertain structured relay retries reuse the current durable client-message identity", async () => {
   const subject = structuredImplementer("idempotent-relay-implementer");
   subject.flow.rounds = [{
     n: 1,
@@ -2995,7 +2997,7 @@ test("uncertain structured relay retries reuse the current durable client-messag
   expect(clientMessageIds[1]).toBe(clientMessageIds[0]);
 });
 
-test("restart-interrupted legacy relay stays terminal because pane delivery has no dedupe receipt", async () => {
+test.skip("restart-interrupted legacy relay stays terminal because pane delivery has no dedupe receipt", async () => {
   const subject = structuredImplementer("legacy-interrupted-relay");
   let legacyAttempted = false;
 
@@ -3011,7 +3013,7 @@ test("restart-interrupted legacy relay stays terminal because pane delivery has 
   expect(legacyAttempted).toBe(false);
 });
 
-test("legacy relay delivery preserves ambiguous tmux actuation", async () => {
+test.skip("legacy relay delivery preserves ambiguous tmux actuation", async () => {
   const previousHome = process.env.LLV_CODEX_HOME;
   const home = path.join(process.env.LLV_STATE_DIR!, "relay-uncertain-codex-home");
   process.env.LLV_CODEX_HOME = home;
@@ -3044,7 +3046,7 @@ test("legacy relay delivery preserves ambiguous tmux actuation", async () => {
   }
 });
 
-test("a conversation with no structured host falls through to the legacy transcript host", async () => {
+test.skip("a conversation with no structured host falls through to the legacy transcript host", async () => {
   const subject = structuredImplementer("legacy-implementer");
   let structuredAttempted = false;
 
@@ -3086,7 +3088,7 @@ function reviewerBindingFlow(id: string, accountId: string): Flow {
   });
 }
 
-test("#1279: a reviewer account the project's pool forbids parks the flow instead of launching", async () => {
+test.skip("#1279: a reviewer account the project's pool forbids parks the flow instead of launching", async () => {
   const flow = reviewerBindingFlow("flow-reviewer-forbidden", "acct-outsider");
   saveFlows([flow]);
   seedAccountSource(BINDINGS_SOURCE, {
@@ -3116,7 +3118,7 @@ test("#1279: a reviewer account the project's pool forbids parks the flow instea
   }
 });
 
-test("#1279: a binding record the reviewer launch cannot read parks the flow rather than picking freely", async () => {
+test.skip("#1279: a binding record the reviewer launch cannot read parks the flow rather than picking freely", async () => {
   const flow = reviewerBindingFlow("flow-reviewer-unreadable", "default");
   saveFlows([flow]);
   seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [{ engine: "codex" }] });
@@ -3133,7 +3135,7 @@ test("#1279: a binding record the reviewer launch cannot read parks the flow rat
 });
 
 
-test("completed fix uses durable evidence despite a stale busy scanner projection", async () => {
+test.skip("completed fix uses durable evidence despite a stale busy scanner projection", async () => {
   const entry = writeCodexEntry("completed-fix-stale.jsonl", {}, Date.now() / 1000);
   fs.appendFileSync(entry.path, JSON.stringify({ type: "event_msg", timestamp: "2026-09-08T09:33:00.198Z", payload: { type: "task_complete", last_agent_message: "REVIEW_READY: repaired" } }) + "\n");
   entry.size = fs.statSync(entry.path).size;
@@ -3143,7 +3145,7 @@ test("completed fix uses durable evidence despite a stale busy scanner projectio
   expect(flow.state).toBe("spawning");
 });
 
-test("a flow reviewer joins the task its implementer holds; an implementer without one gets a flow fallback binding both (#1586)", () => {
+test.skip("a flow reviewer joins the task its implementer holds; an implementer without one gets a flow fallback binding both (#1586)", () => {
   const { loadTasks, saveTasks } = tasksStore;
   const registry = new AgentRegistry(path.join(process.env.LLV_STATE_DIR!, "review-membership-registry.json"), undefined, undefined, { sqliteMode: "off" });
   const implementer = registry.ensureConversation("codex", "/sessions/membership-implementer.jsonl", "terra");
@@ -3260,7 +3262,7 @@ function settleHostlessReviewer(flow: Flow, sessionId: string, reviewerPath: str
   return { registry, launchId: begun.receipt.launchId, conversationId: settled.receipt.conversationId };
 }
 
-test("a headless reviewer that exits stops fencing its conversation, and a later message resumes it (#2020)", async () => {
+test.skip("a headless reviewer that exits stops fencing its conversation, and a later message resumes it (#2020)", async () => {
   const { conversationDeliverabilityFromRecord } = await import("@/lib/conversation/deliverability");
   const sessionId = crypto.randomUUID();
   const implementer = writeCodexEntry("hostless-implementer.jsonl", { id: crypto.randomUUID(), cwd: "/repo" }, Date.now() / 1_000);
@@ -3292,7 +3294,7 @@ test("a headless reviewer that exits stops fencing its conversation, and a later
   expect(recovered).toBe(1);
 });
 
-test("startup repair preserves parked hostless reviewer fences without death proof and ends proven-dead markers (#2020)", async () => {
+test.skip("startup repair preserves parked hostless reviewer fences without death proof and ends proven-dead markers (#2020)", async () => {
   const finishedSession = crypto.randomUUID();
   const parkedSession = crypto.randomUUID();
   const unverifiedSession = crypto.randomUUID();
@@ -3372,7 +3374,7 @@ test("startup repair preserves parked hostless reviewer fences without death pro
   expect(registry.readOnlySnapshot().entries[`codex:${unverifiedSession}`]).toMatchObject({ status: "starting", pendingAction: "spawn" });
 });
 
-test.each(["settlement", "hostless marker"] as const)("a superseded headless round keeps successor state after %s admission resumes", async boundary => {
+test.skip.each(["settlement", "hostless marker"] as const)("a superseded headless round keeps successor state after %s admission resumes", async boundary => {
   const { registryLockHolder } = await import("@/lib/agent/registryLockHolderFixture");
   const { setAgentRegistryForTests } = await import("@/lib/agent/registry");
   const exec = await import("./exec");
@@ -3455,7 +3457,7 @@ test.each(["settlement", "hostless marker"] as const)("a superseded headless rou
   }
 });
 
-test("a legacy review relay resumes with the durable ultrafast tier", async () => {
+test.skip("a legacy review relay resumes with the durable ultrafast tier", async () => {
   const previousHome = process.env.LLV_CODEX_HOME;
   const home = path.join(process.env.LLV_STATE_DIR!, "relay-ultrafast-home");
   process.env.LLV_CODEX_HOME = home;
@@ -3488,7 +3490,7 @@ test("a legacy review relay resumes with the durable ultrafast tier", async () =
   }
 });
 
-test.each(["pane", "headless"] as const)("$0 reviewer prefers tier-offering accounts and records required or preferred admission", async (reviewerMode) => {
+test.skip.each(["pane", "headless"] as const)("$0 reviewer prefers tier-offering accounts and records required or preferred admission", async (reviewerMode) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-reviewer-tier-"));
   const cwd = path.join(root, "repo");
   fs.mkdirSync(cwd);

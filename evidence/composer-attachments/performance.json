@@ -1,0 +1,139 @@
+{
+  "baseRevision": "f5fd6a2c0f88fac4c281dfd0513868e67cc7ef07",
+  "candidateSourceSha256": "e1f88e4234eddff71d8be9c307ed71c4e0eabd8f90e7c3705c32acd34718b7c5",
+  "runtime": "1.4.0",
+  "next": "16.3.8",
+  "conditions": "Production Viewer, empty isolated state, shared gate 3 CPU quota, one client, 100 MiB of byte 97 named recording.ogg, 64 KiB raw chunks. Three alternating paired runs, both routes warm; full GC before each run. Fresh isolated Viewer per measurement when mode is selected. Requests relay through the real stable TCP listener on port 0. Baseline inbox code from base with only shared policy and clone cap raised. Streamed side includes raw admission, independent inbox copy, digest verification and final path planning. No engine runs.",
+  "capturedAt": "2026-10-21T20:41:28.899Z",
+  "procedure": "docs/design/composer-attachments.md#performance-verification",
+  "readings": [
+    {
+      "pair": 1,
+      "mode": "json",
+      "loadAverage": [
+        15.32,
+        15.91,
+        18.48
+      ],
+      "bytes": 104857600,
+      "uploadStatus": null,
+      "status": 200,
+      "stored": true,
+      "elapsedMs": 559.3070049999997,
+      "fromUtcMs": 1792615257564,
+      "toUtcMs": 1792615258131,
+      "loopGapMs": 423.84891100000004,
+      "idleRssBytes": 393064448,
+      "peakRssBytes": 914911232,
+      "rssIncreaseBytes": 521846784,
+      "viewerReportedGapsMs": []
+    },
+    {
+      "pair": 1,
+      "mode": "streamed",
+      "loadAverage": [
+        14.79,
+        15.78,
+        18.41
+      ],
+      "bytes": 104857600,
+      "uploadStatus": 200,
+      "status": 200,
+      "stored": true,
+      "elapsedMs": 549.1113939999996,
+      "fromUtcMs": 1792615263771,
+      "toUtcMs": 1792615264325,
+      "loopGapMs": 72.49642999999924,
+      "idleRssBytes": 388612096,
+      "peakRssBytes": 637329408,
+      "rssIncreaseBytes": 248717312,
+      "viewerReportedGapsMs": []
+    },
+    {
+      "pair": 2,
+      "mode": "json",
+      "loadAverage": [
+        14.37,
+        15.66,
+        18.34
+      ],
+      "bytes": 104857600,
+      "uploadStatus": null,
+      "status": 200,
+      "stored": true,
+      "elapsedMs": 758.4431000000004,
+      "fromUtcMs": 1792615276653,
+      "toUtcMs": 1792615277423,
+      "loopGapMs": 548.6382469999999,
+      "idleRssBytes": 386256896,
+      "peakRssBytes": 906825728,
+      "rssIncreaseBytes": 520568832,
+      "viewerReportedGapsMs": [
+        547
+      ]
+    },
+    {
+      "pair": 2,
+      "mode": "streamed",
+      "loadAverage": [
+        14.48,
+        15.7,
+        18.37
+      ],
+      "bytes": 104857600,
+      "uploadStatus": 200,
+      "status": 200,
+      "stored": true,
+      "elapsedMs": 607.5542249999999,
+      "fromUtcMs": 1792615269806,
+      "toUtcMs": 1792615270438,
+      "loopGapMs": 33.44840000000022,
+      "idleRssBytes": 388464640,
+      "peakRssBytes": 586067968,
+      "rssIncreaseBytes": 197603328,
+      "viewerReportedGapsMs": []
+    },
+    {
+      "pair": 3,
+      "mode": "json",
+      "loadAverage": [
+        14.18,
+        15.59,
+        18.3
+      ],
+      "bytes": 104857600,
+      "uploadStatus": null,
+      "status": 200,
+      "stored": true,
+      "elapsedMs": 463.40333100000043,
+      "fromUtcMs": 1792615282660,
+      "toUtcMs": 1792615283129,
+      "loopGapMs": 281.3059319999993,
+      "idleRssBytes": 385622016,
+      "peakRssBytes": 907141120,
+      "rssIncreaseBytes": 521519104,
+      "viewerReportedGapsMs": []
+    },
+    {
+      "pair": 3,
+      "mode": "streamed",
+      "loadAverage": [
+        14.08,
+        15.55,
+        18.28
+      ],
+      "bytes": 104857600,
+      "uploadStatus": 200,
+      "status": 200,
+      "stored": true,
+      "elapsedMs": 517.2018360000002,
+      "fromUtcMs": 1792615288376,
+      "toUtcMs": 1792615288898,
+      "loopGapMs": 98.73958799999946,
+      "idleRssBytes": 390799360,
+      "peakRssBytes": 586670080,
+      "rssIncreaseBytes": 195870720,
+      "viewerReportedGapsMs": []
+    }
+  ]
+}

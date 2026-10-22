@@ -21,6 +21,11 @@ if claude:
 for line in sys.stdin:
     message = json.loads(line)
     if claude:
+        if message.get("type") == "control_request":
+            control = message.get("request", {}).get("subtype")
+            if control in ("initialize", "mcp_status"):
+                result = {"mcpServers": [{"name": "viewer", "status": "connected", "tools": [{"name": "stage_report"}]}]} if control == "mcp_status" else {}
+                emit({"type": "control_response", "response": {"subtype": "success", "request_id": message["request_id"], "response": result}})
         if message.get("type") == "user":
             record_delivery("claude", thread, message["message"]["content"])
             emit({**message, "isReplay": True})
@@ -43,6 +48,8 @@ for line in sys.stdin:
         result = {"data": [{"id": "fixture", "isDefault": True, "inputModalities": ["text"]}]}
     elif method == "config/read":
         result = {"config": {"mcp_servers": {}}}
+    elif method == "mcpServerStatus/list":
+        result = {"data": [{"name": "viewer", "tools": {"stage_report": {}}}], "nextCursor": None}
     elif method in ("thread/resume", "thread/start", "thread/read"):
         # A fresh start names no thread; the app-server mints one, as a real one does.
         thread = params.get("threadId") or (str(uuid.uuid4()) if method == "thread/start" else thread)

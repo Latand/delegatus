@@ -1231,9 +1231,22 @@ async function preparePipelineEvidence(mode: "startup" | "health" | "ownership" 
   assertPipelineEvidenceBudget(budget);
   const signature = evidenceSignature();
   assertPipelineEvidenceBudget(budget);
-  const pendingKey = `${signature}:${mode}`;
-  const existing = budget ? undefined : pendingEvidence.get(`${signature}:startup`) ?? (mode !== "startup" ? pendingEvidence.get(`${signature}:ownership`) ?? pendingEvidence.get(`${signature}:health`) : undefined) ?? pendingEvidence.get(pendingKey);
-  if (existing) { performanceSpans.event("pipeline.shared"); return existing; }
+  const filename = stateDatabaseFile();
+  // Share a cold read across writes to this database. Freshness still belongs
+  // to each caller; a replacement file must start its own read.
+  const pendingNamespace = JSON.stringify([filename, evidenceFileIdentity(filename)]);
+  const pendingKey = `${pendingNamespace}:${mode}`;
+  const existing = budget ? undefined : pendingEvidence.get(`${pendingNamespace}:startup`) ?? (mode !== "startup" ? pendingEvidence.get(`${pendingNamespace}:ownership`) ?? pendingEvidence.get(`${pendingNamespace}:health`) : undefined) ?? pendingEvidence.get(pendingKey);
+  if (existing) {
+    performanceSpans.event("pipeline.shared");
+    const evidence = await existing;
+    // A completed promise can remain here until its owner resumes. Recheck
+    // both the joining caller's revision and writes since the producer checked.
+    if (evidence.signature !== signature || evidence.signature !== evidenceSignature()) {
+      throw new PipelineEvidenceChangedError("pipeline evidence changed during preparation");
+    }
+    return evidence;
+  }
   const pending = withViewerOperation("pipelines.evidence", async () => {
     assertPipelineEvidenceBudget(budget);
     const pipelines: Pipeline[] = [];
@@ -1255,8 +1268,10 @@ async function preparePipelineEvidence(mode: "startup" | "health" | "ownership" 
           if (value.ownership) ownership.push(value.ownership);
           if (value.issue) issues.push(value.issue);
         }
-        if (signature !== evidenceSignature()) throw new PipelineEvidenceChangedError("pipeline evidence changed during preparation");
+        // Preserve revision-tagged validation even when this snapshot loses
+        // its freshness race. The next read revalidates only changed rows.
         compactEvidence = prepared;
+        if (signature !== evidenceSignature()) throw new PipelineEvidenceChangedError("pipeline evidence changed during preparation");
         return { pipelines, ownership, issues, signature };
       }
       compactEvidence = undefined;

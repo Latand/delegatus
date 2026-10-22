@@ -1675,7 +1675,7 @@ test("board_snapshot returns an inert bounded board projection with durable line
   expect(rawScans).toBe(0);
 });
 
-test("flow tools read durable flows and return a stable action receipt", async () => {
+test("flow tools read archives and refuse new action effects", async () => {
   const flows = [
     { id: "flow_open", project: "viewer", state: "waiting_ready", closedAt: null },
     { id: "flow_closed", project: "viewer", state: "closed", closedAt: "2026-07-23T01:00:00.000Z" },
@@ -1697,31 +1697,14 @@ test("flow tools read durable flows and return a stable action receipt", async (
     count: 1,
     flows: [{ id: "flow_open" }],
   });
-  expect(await bindings.get_flow({ clientRequestId: "get-flow", flowId: "flow_open" })).toEqual({
-    flowId: "flow_open",
-    flow: flows[0],
+  expect(await bindings.get_flow({ clientRequestId: "get-flow", flowId: "flow_open" })).toMatchObject({
+    flowId: "flow_open", flow: flows[0], retired: true,
   });
-  const actionResult = await bindings.flow_action({ clientRequestId: "pause-flow", flowId: "flow_open", action: "pause" });
-  const actionOperationId = actionResult.operationId as string;
-  expect(actionResult).toMatchObject({
-    flowId: "flow_open",
-    receipt: { status: "delivered" },
-    flow: { state: "paused" },
-  });
-  expect(actionOperationId).toMatch(/^mcp_flow_action_[0-9a-f]{24}$/);
-  expect((actionResult.receipt as { operationId: string }).operationId).toBe(actionOperationId);
-  expect(actions).toEqual([{
-    id: "flow_open",
-    action: "pause",
-    actor: { kind: "agent", role: "reviewer", conversationId: "conversation_reviewer" },
-  }]);
-  /* set-roles carries the agent too, so the sizing rules judge its reviewer. */
-  await bindings.flow_action({ clientRequestId: "set-roles-flow", flowId: "flow_open", action: "set-roles", roles: { reviewer: { engine: "claude", model: "sonnet" } } });
-  expect(actions.at(-1)).toEqual({
-    id: "flow_open",
-    action: "set-roles",
-    actor: { kind: "agent", role: "reviewer", conversationId: "conversation_reviewer" },
-  });
+  for (const action of ["pause", "resume", "set-roles", "cancel-round", "close"]) {
+    await expect(bindings.flow_action({ clientRequestId: `retired-${action}`, flowId: "flow_open", action }))
+      .rejects.toMatchObject({ details: { code: "FLOW_RETIRED", retryable: false } });
+  }
+  expect(actions).toEqual([]);
 });
 
 test("list_pipelines applies project, state, and closed filters to the durable registry", async () => {
@@ -3169,7 +3152,7 @@ test("create_pipeline batches every invalid stage model with each engine catalog
     src: path.join(sandbox, "creator.jsonl"),
     stages: [
       { id: "build", kind: "run", engine: "codex", model: "gpt-5.6-codex", prompt: "build", next: "review" },
-      { id: "review", kind: "review-loop", engine: "claude", model: "claude-fable-5", prompt: "review", next: null },
+      { id: "review", kind: "run", role: { roleId: "reviewer" }, engine: "claude", model: "claude-fable-5", prompt: "review", next: null },
     ],
   }, { signal: undefined, deadlineAt: Date.now() + 30_000 } as never).then(
     () => null,

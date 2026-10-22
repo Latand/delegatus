@@ -48,6 +48,7 @@ import { MAX_STRUCTURED_IMAGE_ENCODED_BYTES, runtimeImageStore } from "./runtime
 import { STRUCTURED_IMAGE_CAPABILITY, type StructuredImageRef } from "./structuredContent";
 import { NATIVE_INJECT_CAPABILITY, NATIVE_QUEUE_CAPABILITY, NATIVE_TURN_PROFILE_CAPABILITY } from "./codexCapabilityFlags";
 import { withAgentConfigSandbox } from "./agentConfigSandbox";
+import { assertViewerMcpTools } from "./viewerMcpLaunch";
 import { resolveTelegramLaunchGrant, TELEGRAM_UNAVAILABLE_THIS_RUN_NOTICE, type TelegramLaunchGrant } from "./telegramConnectorEnv";
 import {
   normalizeVoiceDeliveries,
@@ -1695,6 +1696,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
       if (threadId) provisional.reconcileThreadHistory(result);
       provisional.reconcileAfterOpen(threadStatus(result), resumedActiveTurnId(result));
       provisional.endBufferedNotificationReconciliation();
+      if (!options.socketOwner) await provisional.verifyViewerMcp();
       provisional.selectModel(provisional.currentImageModel());
       await provisional.initializeNativeQueue();
       await provisional.negotiateHistoryCapability();
@@ -1715,6 +1717,37 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     }
   }
 
+  private async verifyViewerMcp(): Promise<void> {
+    try {
+      const deadline = Date.now() + this.requestTimeoutMs;
+      let cursor: string | undefined;
+      const seen = new Set<string>();
+      for (let page = 0; page < 32; page++) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) throw new Error("Viewer tool discovery timed out");
+        const result = record(await this.rpc("mcpServerStatus/list", {
+          threadId: this.identity.threadId,
+          detail: "toolsAndAuthOnly",
+          ...(this.protocol.hasRequestField("mcpServerStatus/list", "serverName") ? { serverName: "viewer" } : {}),
+          ...(cursor ? { cursor } : {}),
+        }, remaining));
+        const entries = result?.data;
+        if (Array.isArray(entries) && entries.some(entry => stringField(entry, "name") === "viewer")) {
+          assertViewerMcpTools(entries, structuredHostStamp());
+          return;
+        }
+        const next = stringField(result, "nextCursor");
+        if (!next || seen.has(next)) break;
+        seen.add(next);
+        cursor = next;
+      }
+      assertViewerMcpTools([], structuredHostStamp());
+    } catch (error) {
+      const reason = safeError(error);
+      throw new Error(reason.startsWith("Viewer MCP launch failed") ? reason : `Viewer MCP launch failed: ${reason}`);
+    }
+  }
+
   /**
    * Fails a granted thread closed when its realized tool surface is wider than
    * the grant (issue #687). Codex resolves plugins from the global config, so
@@ -1728,7 +1761,7 @@ export class CodexAppServerHost implements EngineHost, TierCapableHost {
     const allowed = new Set(grantedPluginServerNames(granted));
     let listed: unknown;
     try {
-      listed = await this.rpc("mcpServerStatus/list", {});
+      listed = await this.rpc("mcpServerStatus/list", { threadId: this.identity.threadId, detail: "toolsAndAuthOnly" });
     } catch (error) {
       throw new Error(`Codex plugin grant could not be verified: ${safeError(error)}`);
     }
