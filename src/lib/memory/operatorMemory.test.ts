@@ -26,7 +26,7 @@ const { renderLearnedRules } = await import("./roleRender");
 const { operatorRootConversation, storedOperatorRoot } = await import("./operatorMemory");
 
 const PROJECT = "operator-project";
-const OPERATOR = { project: PROJECT, roleId: null, reader: "operator" };
+const OPERATOR = { project: PROJECT, roleId: null, reader: "operator" as const };
 
 function registryAt(name: string) {
   return new AgentRegistry(path.join(sandbox, `${name}-${state}.json`), undefined, undefined, { sqliteMode: "off" });
