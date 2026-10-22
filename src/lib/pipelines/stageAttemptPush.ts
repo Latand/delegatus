@@ -343,15 +343,16 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
     const verifiedBase = async (): Promise<string | null> => {
       if (baseTip !== undefined) return baseTip;
       // The provisioning base may be the PR branch being published. It
-      // cannot attest its own imported commits. Read origin's main directly;
-      // neither the lane's pinned base nor a movable tracking ref proves it.
+      // cannot attest its own imported commits. Read main from the stored
+      // delivery URL; the worktree's editable origin alias cannot authorize
+      // commits from another repository.
       const baseRef = `refs/heads/${DEFAULT_PIPELINE_BASE_BRANCH}`;
-      const found = await exec("git", ["ls-remote", "--refs", "origin", baseRef], pipeline.worktreeDir, undefined, { timeoutMs: 5000 });
+      const found = await exec("git", ["ls-remote", "--refs", expectedUrl, baseRef], pipeline.worktreeDir, undefined, { timeoutMs: 5000 });
       if (found.code !== 0) throw new StagePushRemoteUnavailable();
       const [sha, name] = found.stdout.trim().split(/\s+/);
       if (!found.stdout.trim()) return baseTip = null;
       if (name !== baseRef || !/^[0-9a-f]{40}$/.test(sha) || found.stdout.trim().split("\n").length !== 1) throw new Error("base branch has no exact tip");
-      const fetched = await exec("git", ["fetch", "--no-tags", "origin", sha], pipeline.worktreeDir, undefined, { timeoutMs: 10000 });
+      const fetched = await exec("git", ["fetch", "--no-tags", expectedUrl, sha], pipeline.worktreeDir, undefined, { timeoutMs: 10000 });
       if (fetched.code !== 0) throw new StagePushRemoteUnavailable();
       return baseTip = sha;
     };

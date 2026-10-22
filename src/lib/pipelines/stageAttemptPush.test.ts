@@ -107,6 +107,33 @@ test.each(["local", "pushed", "repair"] as const)("PR-base successor refuses a f
   } finally { await f.close(); }
 });
 
+test.each(["local", "pushed", "repair"] as const)("PR-base successor rejects redirected-origin ancestry during %s settlement", async mode => {
+  const f = await fixture(false, true, {});
+  try {
+    f.pipeline.delivery!.target.pr = 1;
+    await f.git(f.foreign, "commit", "--allow-empty", "-m", "foreign main work");
+    const foreign = await f.git(f.foreign, "rev-parse", "HEAD");
+    // The lane's origin alias is editable. Keep delivery pointed at the
+    // original bare remote, and merge the foreign main through the alias.
+    await f.own("remote", "set-url", "origin", f.foreign);
+    await f.own("fetch", "origin", "main");
+    await f.own("merge", "--no-ff", "-m", "merge redirected origin main", "origin/main");
+    const head = await f.own("rev-parse", "HEAD");
+    const originalTip = await f.git(f.remote, "rev-parse", "refs/heads/pipeline/proof");
+    if (mode === "pushed") {
+      const pushed = await f.own("push", f.remote, "HEAD:refs/heads/pipeline/proof");
+      expect(pushed).toBe("");
+    }
+    const tip = await f.git(f.remote, "rev-parse", "refs/heads/pipeline/proof");
+    const result = await settleStageAttemptPush(f.pipeline, f.attempt, realExec, NOW,
+      mode === "repair" ? { acceptedHead: f.pipeline.baseRef } : undefined);
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining(`commit ${foreign} was not created`) });
+    expect(await f.own("rev-parse", "HEAD")).toBe(head);
+    expect(await f.git(f.remote, "rev-parse", "refs/heads/pipeline/proof")).toBe(tip);
+    if (mode !== "pushed") expect(tip).toBe(originalTip);
+  } finally { await f.close(); }
+});
+
 test.each(["pushed", "repair"] as const)("PR-base successor verifies current origin main during %s settlement", async mode => {
   const f = await fixture(false, true, { mainBeforeCreation: true });
   try {
@@ -128,14 +155,14 @@ test.each(["lookup timeout", "fetch timeout", "missing main", "malformed tip"] a
     const tip = await f.git(f.remote, "rev-parse", "refs/heads/pipeline/proof");
     let reads = 0, fetches = 0;
     const exec: typeof realExec = async (command, args, cwd, env, options) => {
-      if (command === "git" && args.join(" ") === "ls-remote --refs origin refs/heads/main") {
+      if (command === "git" && args.join(" ") === `ls-remote --refs ${f.remote} refs/heads/main`) {
         reads++;
         expect(options?.timeoutMs).toBe(5000);
         if (fault === "lookup timeout") return { code: 124, stdout: "", stderr: "fixture timeout" };
         if (fault === "missing main") return { code: 0, stdout: "", stderr: "" };
         if (fault === "malformed tip") return { code: 0, stdout: `${head}\trefs/heads/other\n`, stderr: "" };
       }
-      if (command === "git" && args[0] === "fetch" && args[2] === "origin") {
+      if (command === "git" && args[0] === "fetch" && args[2] === f.remote) {
         fetches++;
         expect(options?.timeoutMs).toBe(10000);
         if (fault === "fetch timeout") return { code: 124, stdout: "", stderr: "fixture timeout" };
@@ -931,6 +958,10 @@ async function foreignIntegration(local: boolean) {
   const commands: string[][] = [];
   const exec: typeof realExec = async (command, args, cwd, env, options) => {
     commands.push([command, ...args]);
+    if (command === "git" && args.slice(0, 3).join(" ") === "remote get-url --push"
+      && args[3] === f.pipeline.delivery?.target.remote) {
+      return { code: 0, stdout: "https://github.com/example/project.git\n", stderr: "" };
+    }
     if (command === "git" && args[0] === "remote" && args[1] === "get-url") {
       return { code: 0, stdout: "https://github.com/example/project.git\n", stderr: "" };
     }
@@ -942,6 +973,12 @@ async function foreignIntegration(local: boolean) {
         return { code: checksCode, stdout: JSON.stringify(page ?? { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } }) + "\n", stderr: "" };
       }
       return { code: checksCode, stdout: JSON.stringify(args[0] === "api" ? required : checks), stderr: "" };
+    }
+    if (command === "git" && args[0] === "ls-remote" && args[2] === "https://github.com/example/project.git") {
+      return realExec(command, [args[0]!, args[1]!, f.remote, ...args.slice(3)], cwd, env, options);
+    }
+    if (command === "git" && args[0] === "fetch" && args[2] === "https://github.com/example/project.git") {
+      return realExec(command, [args[0]!, args[1]!, f.remote, ...args.slice(3)], cwd, env, options);
     }
     return realExec(command, args, cwd, env, options);
   };
@@ -974,6 +1011,10 @@ test.each([false, true])("published clean main integration is adopted without cr
         const exec = async (command, args, cwd, env, options) => {
           if (command === "git" && args[0] === "remote" && args[1] === "get-url")
             return { code: 0, stdout: "https://github.com/example/project.git", stderr: "" };
+          if (command === "git" && (args[0] === "ls-remote" || args[0] === "fetch")
+            && args[2] === "https://github.com/example/project.git") {
+            return realExec(command, [args[0], args[1], pipeline.delivery.target.remote, ...args.slice(3)], cwd, env, options);
+          }
           if (command === "gh") return { code: 0, stdout: JSON.stringify(args[0] === "api"
             ? args.includes("graphql") ? { nodes: [{ __typename: "StatusContext", context: "ci", state: "SUCCESS", createdAt: "2026-10-16T10:01:00Z" }], pageInfo: { hasNextPage: false, endCursor: null } }
               : { protected: true, protection: { required_status_checks: { contexts: ["ci"] } } } : checks), stderr: "" };
