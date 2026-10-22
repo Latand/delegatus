@@ -532,8 +532,8 @@ export function buildRoleMemory(lang: Lang, bootSeconds: number): RoleMemoryProj
         versions: [{ id: "rule-b1-v1", rule: EXAMPLE_RULES.B1earlier.rule[i], why: EXAMPLE_RULES.B1earlier.why[i], hints: [], createdAt: ago(4 * 24 * HOUR) }],
       })]),
       scope("role:*:reviewer", "role", "reviewer", [rule("R1", "reviewer", { stageId: "review", fixRound: true, tasks: 2 })]),
-      scope("role:*:architect", "role", "architect", [rule("A1", "architect", { stageId: "design", awaitingCuration: true, curatedAt: undefined, fresh: true, createdAt: ago(40 * MIN), changedAt: ago(40 * MIN) })]),
-      scope(`project:${PROJECT}`, "project", null, [rule("P1", "builder", { tasks: 2 })],
+      scope(`project:${PROJECT}`, "project", null, [rule("P1", "builder", { tasks: 2 }),
+        rule("A1", "architect", { stageId: "design", awaitingCuration: true, curatedAt: undefined, fresh: true, createdAt: ago(40 * MIN), changedAt: ago(40 * MIN) })],
         [rule("P0", "verifier", { state: "archived", reason: "task-specific", stageId: "verify", changedAt: curated })]),
       scope("machine", "machine", null, [rule("M1", "builder", { tasks: 2 }), rule("M2", "verifier", { stageId: "verify" })]),
     ],
@@ -569,7 +569,6 @@ export function buildProfile(lang: Lang, bootSeconds: number, rules: RoleMemoryP
     "role:*:orchestrator": ["Small questions get small answers", "A question the data already answers never waits for a pipeline.", "Малі питання — малі відповіді", "Питання, на яке вже є дані, не чекає на пайплайн."],
     "role:*:builder": ["Only what was asked", "Builders change what the task names and fix causes instead of explaining them.", "Лише те, що просили", "Білдери змінюють те, що названо в задачі, і виправляють причини, а не пояснюють їх."],
     "role:*:reviewer": ["Tests that can fail", "A reviewer checks that a test would turn red with the bug put back.", "Тести, які можуть впасти", "Рев’юер перевіряє, що тест почервоніє, якщо повернути помилку."],
-    "role:*:architect": ["Defaults reach old tests", "A new default comes with the list of tests it now touches.", "Типові значення доходять до старих тестів", "Нове типове значення приходить зі списком тестів, яких воно тепер торкається."],
     [`project:${PROJECT}`]: ["Hooks stay on", "Dependencies come from the lockfile, and the commit hook is never skipped.", "Хуки лишаються ввімкненими", "Залежності беруться з lock-файлу, а хук коміту ніколи не обходять."],
     machine: ["Clean up only your own", "Delete what you created, and read a timed-out run as unfinished.", "Прибирай лише своє", "Видаляй те, що створив сам, а прогін, що вперся в ліміт, вважай незавершеним."],
   };

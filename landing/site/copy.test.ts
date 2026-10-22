@@ -124,7 +124,7 @@ test("the memory frame's example rules fit the product's limits in both language
     const active = scopes.flatMap((scope) => scope.active);
     expect(active.length).toBeGreaterThanOrEqual(4);
     expect(active.length).toBeLessThanOrEqual(8);
-    expect(new Set(scopes.filter((scope) => scope.kind === "role").map((scope) => scope.roleId))).toEqual(new Set(["orchestrator", "builder", "reviewer", "architect"]));
+    expect(new Set(scopes.filter((scope) => scope.kind === "role").map((scope) => scope.roleId))).toEqual(new Set(["orchestrator", "builder", "reviewer"]));
   }
 });
 
