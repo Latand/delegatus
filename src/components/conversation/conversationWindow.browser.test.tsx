@@ -5611,7 +5611,7 @@ describe("owner confirmation of one Telegram file send", () => {
     const evidence: Array<Record<string, unknown>> = [];
     try {
       browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
-      for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
+      for (const viewport of [{ width: 390, height: 844 }, { width: 1280, height: 900 }]) {
         for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
           for (const state of ["pending", "sent", "rejected", "expired", "uncertain", "failed", "unavailable", "owner"] as const) {
             const name = `${viewport.width}-${lang}-${theme}-${state}`;
@@ -5620,6 +5620,19 @@ describe("owner confirmation of one Telegram file send", () => {
               const words = fileConfirmationText[lang];
               const status = page.getByRole("status");
               await page.waitForFunction(() => !/Loading|Завантаження/.test(document.querySelector('[role="status"]')?.textContent ?? "Loading"));
+              // Measure the opening screen before any action or scroll can hide a misplaced state.
+              expect(await status.textContent()).toBe(words[state]);
+              const initialStatus = await status.boundingBox();
+              expect(initialStatus).not.toBeNull();
+              expect(initialStatus!.x).toBeGreaterThanOrEqual(0);
+              expect(initialStatus!.y).toBeGreaterThanOrEqual(0);
+              expect(initialStatus!.x + initialStatus!.width).toBeLessThanOrEqual(viewport.width);
+              expect(initialStatus!.y + initialStatus!.height).toBeLessThanOrEqual(viewport.height);
+              expect(await page.locator("main").evaluate(node => node.scrollTop)).toBe(0);
+              if (state !== "pending") {
+                expect(await page.getByRole("heading", { name: words.title, exact: true }).count()).toBe(0);
+                expect(await page.getByText(words.intro, { exact: true }).count()).toBe(0);
+              }
               if (state === "pending") {
                 expect(await page.getByText("b".repeat(64), { exact: false }).count()).toBe(1);
                 expect(await page.getByText("document_secret", { exact: false }).count()).toBe(1);
@@ -5630,11 +5643,15 @@ describe("owner confirmation of one Telegram file send", () => {
                 await page.screenshot({ path: path.join(output, `${name}-decision.png`) });
                 await approve.click();
                 await page.getByText(words.sent, { exact: true }).waitFor();
+                await page.waitForFunction(() => {
+                  const status = document.querySelector('[role="status"]')!.getBoundingClientRect();
+                  return status.top >= 0 && status.bottom <= innerHeight;
+                });
+                await page.screenshot({ path: path.join(output, `${name}-sent.png`) });
                 expect(await page.evaluate(() => (window as unknown as { fileConfirmationSends(): number }).fileConfirmationSends())).toBe(1);
                 expect(await page.getByRole("button", { name: words.approve, exact: true }).count()).toBe(0);
               } else {
                 await page.getByText(words[state], { exact: true }).waitFor();
-                await status.scrollIntoViewIfNeeded();
                 expect(await page.getByRole("button", { name: words.approve, exact: true }).count()).toBe(0);
                 await page.screenshot({ path: path.join(output, `${name}.png`) });
               }
@@ -5645,7 +5662,7 @@ describe("owner confirmation of one Telegram file send", () => {
               expect(reading.overflow).toBeLessThanOrEqual(1);
               expect(reading.background).not.toBe("rgba(0, 0, 0, 0)");
               expect(pageErrors).toEqual([]);
-              evidence.push({ frame: name, ...reading });
+              evidence.push({ frame: name, initialStatus, initialStatusText: words[state], ...reading });
             } finally { await context.close(); }
           }
         }

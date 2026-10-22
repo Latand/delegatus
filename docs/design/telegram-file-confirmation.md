@@ -61,6 +61,9 @@ and `details.confirmation` over MCP: `id`, a Delegatus-relative `url`, and
 The paired installation owner signs in through the existing Telegram sign-in
 surface, sees the full file hash, path, name, caption, chat, topic and detector
 reasons, then chooses **Approve and send once** or **Do not send**.
+The current state appears before the destination and file details. A completed,
+expired or refused request opens with its outcome as the heading. Sending and
+decision results return the view to the top so the owner can read that state.
 
 The pending request owns a copy of normalized send options. Approval cannot
 submit replacement options. The service reloads every file, runs its detectors,
@@ -129,7 +132,10 @@ The existing conversation-window driver contains the rendered case. It covers
 en/uk, light/dark and 1280×900/390×844, including pending, sent, rejected,
 expired, uncertain, failed, unavailable and owner-sign-in states. The pending
 case clicks the production approval control and verifies exactly one mock
-send. Geometry and source hashes live in
+send. Every state's full status must fit inside the initial viewport before
+any scrolling; non-pending views omit the send question and approval intro.
+The pending case also checks that the sent result is visible after the click.
+Geometry and source hashes live in
 `evidence/telegram-file-confirmation/geometry.json`; captures are private
 artifacts. Reproduce with:
 
