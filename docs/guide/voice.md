@@ -73,3 +73,17 @@ is still open. The next call starts with up to five summaries from the last
 week. The summaries stay on this machine, outside agent memory. The voice
 settings list them with **Forget** and **Forget all**, and a switch there
 turns remembering off.
+
+### When the connection drops
+
+A call that drops keeps what was said: a lost network, a provider session that
+ends mid-call, a page reload and a Delegatus restart all leave the call's
+record on this machine. The character says the connection dropped and offers
+**Reconnect** (on a phone, in the head's menu) for 30 minutes, also after a
+reload. Reconnect continues the same call: the voice starts with the
+conversation so far, as much of it as fits the call-memory budget, newest lines
+first and with a note of how many older lines it left out, and does not ask
+again for what you already said. The call's transcript shows every part of the call,
+with a line where the connection dropped. **Talk** starts a new call instead.
+A part of a call that read a private Telegram group is not carried into the
+reconnected call.

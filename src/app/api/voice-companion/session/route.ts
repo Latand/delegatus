@@ -21,11 +21,14 @@ export async function POST(req: NextRequest) {
       companionSessionOwner(req, session);
     };
     if (body.action === "start") {
-      if (typeof body.project !== "string" || !["en", "uk"].includes(body.locale as string) || typeof body.sdp !== "string" || !id(body.requestId)) throw new Error("INVALID_REQUEST");
+      if (typeof body.project !== "string" || !["en", "uk"].includes(body.locale as string) || typeof body.sdp !== "string" || !id(body.requestId)
+        || (body.resume !== undefined && !id(body.resume))) throw new Error("INVALID_REQUEST");
       const previous = Object.values(service.storage.read().sessions).find(session => session.mintRequestId === body.requestId);
       if (previous) companionSessionOwner(req, previous);
+      /* A reconnect continues only the caller's own call. */
+      if (typeof body.resume === "string") owns(body.resume);
       return NextResponse.json(await service.start({ project: body.project, locale: body.locale as "en" | "uk", sdp: body.sdp, requestId: body.requestId,
-        startedBy: companionStarter(req) }), { status: 201, headers });
+        startedBy: companionStarter(req), ...(typeof body.resume === "string" ? { resume: body.resume } : {}) }), { status: 201, headers });
     }
     if (body.action === "close" && id(body.requestId) && body.sessionId === undefined) {
       const session = Object.values(service.storage.read().sessions).find(row => row.mintRequestId === body.requestId);
@@ -34,7 +37,11 @@ export async function POST(req: NextRequest) {
     }
     if (!id(body.sessionId)) throw new Error("INVALID_REQUEST");
     owns(body.sessionId);
-    if (body.action === "close") await service.close(body.sessionId);
+    if (body.action === "close") {
+      /* A browser whose media or network failed says so: the call dropped, and it is offered back. */
+      if (body.reason !== undefined && body.reason !== "transport") throw new Error("INVALID_REQUEST");
+      await service.close(body.sessionId, body.reason === "transport" ? "transport" : "operator");
+    }
     else if (body.action === "context") {
       if (body.project !== null && (typeof body.project !== "string" || !body.project.trim() || body.project.length > 200)) throw new Error("INVALID_REQUEST");
       await service.context(body.sessionId, body.project as string | null);

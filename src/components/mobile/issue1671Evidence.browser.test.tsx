@@ -18,6 +18,7 @@ import { heldDeliveryOccurrences, orchestratorMandateDeliveries } from "@/lib/ru
 import { messageTextDigest } from "@/lib/runtime/messageTextDigest";
 import { deliveredMessageOccurrences } from "@/lib/runtime/deliveredMessageOccurrences";
 import type { FileEntry } from "@/lib/types";
+import type { TranscriptEntry } from "@/lib/voiceCompanion/transcriptRecord";
 import { captureAttentionRing, captureWorkerLimitFrames, capturePrototypeQuestions, captureSeatMandateHandover, openFixture, serveEvidenceFixture } from "@/components/kanban/issue1695BrowserHarness";
 import { playPath, recordDrag } from "@/components/kanban/dragFrameMeter";
 import { measureStageChain, stageChainFailures, type StageChainLane } from "@/components/pipelines/stageChainMeasure";
@@ -11469,6 +11470,168 @@ describe("phone voice call history", () => {
     } finally { await browser.close(); stop(); }
     fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2) + "\n");
   }, 180_000);
+});
+
+describe("phone voice drop", () => {
+  /*
+   * A call whose connection drops keeps what was said, offers the same call back in one tap, still does after a
+   * reload, and goes on with its history (docs/design/voice-call-memory.md, "A dropped call resumes"). The phone
+   * head runs the product's own adapter (`?voice=drop`); its session and resume routes are answered here with a
+   * synthetic call, and `window.phoneVoice.lose()` fails its peer connection as a lost network does.
+   *
+   *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=<chrome> bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "phone voice drop"
+   *
+   * Frames go to `.artifacts/voice-companion/phone-drop/` and are never committed.
+   */
+  browserTest("history after a drop, the one-tap reconnect, a reload, and the restored call at 390 px", async () => {
+    const out = path.resolve(".artifacts/voice-companion/phone-drop");
+    fs.mkdirSync(out, { recursive: true });
+    const { base, stop } = await serveFixture();
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    const readings: unknown[] = [];
+    try {
+      for (const [lang, scheme] of [["uk", "light"], ["en", "dark"]] as const) {
+        const size = { width: 390, height: 844 };
+        const said = lang === "uk"
+          ? [["operator", "Як там лінія пошуку?"], ["companion", "Лінія пошуку пройшла перевірку з другої спроби."], ["operator", "А перегляд дошки на телефоні?"]]
+          : [["operator", "How is the search lane?"], ["companion", "The search lane passed its verifier on the second attempt."], ["operator", "And the phone board review?"]];
+        const after = lang === "uk" ? "Перегляд дошки на другому колі." : "The phone board review is on its second round.";
+        /* The synthetic Viewer: one call per start, its events by sequence, and the call's record joined across its parts
+           by the product's own `chainRecord`, the second part starting 20 s after the first. */
+        const { chainRecord } = await import("@/lib/voiceCompanion/callResume");
+        type Call = { id: string; resumes: string | null; createdAt: number; events: Array<Record<string, unknown>>; entries: TranscriptEntry[]; closed: string | null };
+        const calls: Call[] = [];
+        const starts: Array<Record<string, unknown>> = [];
+        const closes: Array<Record<string, unknown>> = [];
+        const event = (call: Call, payload: Record<string, unknown>) => call.events.push({ ...payload, version: 1, sessionId: call.id, generation: 1, eventId: `${call.id}-${call.events.length + 1}`, seq: call.events.length + 1, atMs: call.events.length * 10 });
+        const parts = (call: Call): Call[] => [...(call.resumes ? parts(calls.find((row) => row.id === call.resumes)!) : []), call];
+        const record = (call: Call) => chainRecord(parts(call).map((part) => ({ id: part.id, createdAt: part.createdAt, entries: part.entries, truncated: false }))).entries;
+        const context = await browser.newContext({ viewport: size, hasTouch: true, isMobile: true, colorScheme: scheme });
+        try {
+          await context.addInitScript((language) => localStorage.setItem("llv_lang", language), lang);
+          await context.route("**/api/voice-companion/resume", (route) => {
+            const last = calls.at(-1);
+            return route.fulfill({ json: { resumable: last && last.closed === "transport" ? { sessionId: last.id, project: "atlas", endedAt: 1 } : null } });
+          });
+          await context.route("**/api/voice-companion/session**", async (route) => {
+            const request = route.request();
+            const url = new URL(request.url());
+            if (request.method() === "POST") {
+              const body = JSON.parse(request.postData() ?? "{}") as Record<string, unknown>;
+              if (body.action === "start") {
+                starts.push(body);
+                const call: Call = { id: `drop-call-${calls.length + 1}`, resumes: typeof body.resume === "string" ? body.resume : null, createdAt: calls.length * 20_000, events: [], entries: [], closed: null };
+                calls.push(call);
+                event(call, { type: "session.ready", mode: "official-realtime" });
+                call.entries.push({ id: "start", kind: "session_start", atMs: 0, order: 0, data: call.resumes ? { resumes: call.resumes } : {} });
+                const lines = call.resumes ? [["companion", after]] : said;
+                lines.forEach(([speaker, text], index) => {
+                  event(call, { type: "transcript.snapshot", speaker, itemId: `${call.id}-line-${index}`, text, final: true });
+                  call.entries.push({ id: `line-${index}`, kind: speaker === "operator" ? "utterance" : "reply", atMs: 2000 + index * 4000, order: call.entries.length, data: { text, final: true } });
+                });
+                return route.fulfill({ status: 201, json: { sessionId: call.id, sdp: "v=0\r\n" } });
+              }
+              if (body.action === "close") {
+                closes.push(body);
+                const call = calls.find((row) => row.id === body.sessionId);
+                if (call && !call.closed) {
+                  call.closed = body.reason === "transport" ? "transport" : "operator";
+                  event(call, { type: "session.closed", reason: call.closed, incomplete: false });
+                  call.entries.push({ id: "end", kind: "session_end", atMs: 14_000, order: call.entries.length, data: { reason: call.closed } });
+                }
+              }
+              return route.fulfill({ json: { ok: true } });
+            }
+            const call = calls.find((row) => row.id === url.searchParams.get("sessionId"));
+            if (!call) return route.fulfill({ status: 409, json: { code: "SESSION_UNAVAILABLE" } });
+            if (url.searchParams.get("view") === "transcript") return route.fulfill({ json: { entries: record(call), truncated: false } });
+            const from = Number(url.searchParams.get("after") ?? 0);
+            return route.fulfill({ json: { events: call.events.filter((row) => (row.seq as number) > from) } });
+          });
+          const page = await context.newPage();
+          const errors: string[] = [];
+          page.on("pageerror", (error) => errors.push(error.message));
+          const prefix = `${size.width}x${size.height}-${lang}-${scheme}`;
+          const head = page.locator("[data-phone-voice-head]");
+          const voice = page.locator("[data-phone-voice]");
+          const bubble = page.locator("[data-phone-voice-bubble]");
+          const panel = page.locator("[data-companion-transcript-view]");
+          const settled = () => page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); const end = animation.effect?.getComputedTiming().endTime; animation.currentTime = typeof end === "number" && Number.isFinite(end) ? end : 0; } });
+          const inside = (box: { x: number; y: number; width: number; height: number } | null) => !!box && box.x >= 0 && box.y >= 0 && box.x + box.width <= size.width + 0.5 && box.y + box.height <= size.height + 0.5;
+          const readHistory = async (frame: string, expected: string[]) => {
+            await head.tap(); await page.locator("[data-phone-voice-transcript]").tap();
+            await panel.locator("[data-transcript-text]").first().waitFor();
+            await page.waitForFunction((last) => document.querySelector("[data-companion-transcript-view]")?.textContent?.includes(last), expected.at(-1)!);
+            await settled();
+            const texts = await panel.locator("[data-transcript-text]").allTextContents();
+            for (const text of expected) expect(texts).toContain(text);
+            const box = await panel.boundingBox();
+            expect(inside(box)).toBe(true);
+            expect(await panel.locator("[data-transcript-body]").evaluate((node) => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
+            await page.screenshot({ path: path.join(out, `${prefix}-${frame}.png`) });
+            const divider = await panel.locator("[data-transcript-resumed]").allTextContents();
+            const dividerTimes = await panel.locator("[data-kind=resumed] .vc-tr-time").allTextContents();
+            await page.keyboard.press("Escape"); await panel.waitFor({ state: "detached" });
+            return { frame, texts, divider, dividerTimes, box };
+          };
+
+          await page.goto(`${base}/?voice=drop&voice-long=1&seatnoise=ii&runtime=structured#c=conversation_running`);
+          await head.waitFor(); await page.locator("[data-mobile-message=agent]").first().waitFor(); await pause(page, 600);
+          await head.tap(); await page.locator("[data-phone-voice-talk]").tap();
+          await page.waitForFunction(() => document.querySelector("[data-phone-voice]")?.getAttribute("data-phase") !== "offline");
+          await pause(page, 900);
+
+          /* The network goes mid-call. */
+          await page.evaluate(() => (window as unknown as { phoneVoice: { lose(): void } }).phoneVoice.lose());
+          await page.waitForFunction(() => document.querySelector("[data-phone-voice]")?.getAttribute("data-phase") === "offline");
+          await bubble.waitFor();
+          expect(closes.at(-1)).toMatchObject({ action: "close", sessionId: "drop-call-1", reason: "transport" });
+          const lost = (await bubble.textContent())?.replace(/\u00a0/gu, " ");
+          expect(lost).toBe(lang === "uk" ? "Зʼєднання обірвалося. Сказане збережено." : "The connection dropped. What was said is kept.");
+          expect(inside(await bubble.boundingBox())).toBe(true);
+          await settled();
+          await page.screenshot({ path: path.join(out, `${prefix}-1-dropped.png`) });
+          await head.tap();
+          const resumeRow = page.locator("[data-phone-voice-resume]");
+          await resumeRow.waitFor();
+          expect(await resumeRow.textContent()).toBe(lang === "uk" ? "Відновити розмову" : "Reconnect");
+          expect(inside(await page.locator("[data-phone-voice-pop]").boundingBox())).toBe(true);
+          await settled();
+          await page.screenshot({ path: path.join(out, `${prefix}-2-menu.png`) });
+          await head.tap();
+          const dropped = await readHistory("3-history", said.map(([, text]) => text));
+
+          /* A reload: nothing in the page's memory, the call still offered and readable. */
+          await page.reload();
+          await head.waitFor(); await pause(page, 900);
+          await head.tap(); await resumeRow.waitFor();
+          await settled();
+          await page.screenshot({ path: path.join(out, `${prefix}-4-reloaded-menu.png`) });
+          await head.tap();
+          const reloaded = await readHistory("5-reloaded-history", said.map(([, text]) => text));
+
+          /* One tap continues the same call. */
+          await head.tap(); await resumeRow.tap();
+          await page.waitForFunction(() => document.querySelector("[data-phone-voice]")?.getAttribute("data-phase") !== "offline");
+          expect(starts.at(-1)).toMatchObject({ action: "start", resume: "drop-call-1" });
+          await bubble.waitFor();
+          await page.waitForFunction((text) => document.querySelector("[data-phone-voice-bubble]")?.textContent?.replace(/\u00a0/gu, " ") === text,
+            lang === "uk" ? "Зʼєднання відновлено. Розмова триває з того місця, де обірвалася." : "Connection restored. The conversation goes on where it stopped.");
+          expect(inside(await bubble.boundingBox())).toBe(true);
+          await settled();
+          await page.screenshot({ path: path.join(out, `${prefix}-6-restored.png`) });
+          expect(await voice.getAttribute("data-phase")).not.toBe("offline");
+          const restored = await readHistory("7-restored-history", [...said.map(([, text]) => text), after]);
+          expect(restored.divider).toEqual([lang === "uk" ? "Зʼєднання обірвалося · відновлено" : "Connection dropped · reconnected"]);
+          /* One clock across the parts: the reconnect stands at 0:20, after the dropped part's last line at 0:10. */
+          expect(restored.dividerTimes).toEqual(["0:20"]);
+          expect(errors).toEqual([]);
+          readings.push({ viewport: size, lang, scheme, dropped, reloaded, restored, closes, starts: starts.map((row) => ({ resume: row.resume ?? null })), errors });
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); stop(); }
+    fs.writeFileSync(path.join(out, "readings.json"), `${JSON.stringify({ driver: "src/components/mobile/issue1671Evidence.browser.test.tsx", readings }, null, 2)}\n`);
+  }, 240_000);
 });
 
 describe("seat recovery failure history", () => {

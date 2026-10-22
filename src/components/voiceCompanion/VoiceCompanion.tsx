@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, ChevronDown, CircleAlert, LoaderCircle, Mic, MicOff, Minimize2, PhoneOff, SendHorizontal, Settings, X } from "lucide-react";
+import { Check, ChevronDown, CircleAlert, LoaderCircle, Mic, MicOff, Minimize2, PhoneOff, RotateCcw, SendHorizontal, Settings, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { EngineMark } from "@/components/EngineMark";
@@ -310,7 +310,8 @@ type Floater =
   | { kind: "answer"; key: string; delegation: DelegationView; answer: DelegationView["answers"][number]; settled: true }
   | { kind: "report"; key: string; report: CompanionState["orchestratorReports"][number]; settled: true }
   /* A failure, or a fact the operator needs before asking (no orchestrator here), in plain words. */
-  | { kind: "notice"; key: string; code: string; tone: "failure" | "note"; settled: true; resetsAt?: number | null }
+  /* A dropped call's notice stays unsettled, with its Reconnect, for as long as the call is offered. */
+  | { kind: "notice"; key: string; code: string; tone: "failure" | "note"; settled: boolean; resetsAt?: number | null }
   | { kind: "more"; key: string; count: number; settled: false };
 
 const LINGER_MS: Record<Exclude<Floater["kind"], "more">, number> = { speech: SPEECH_LINGER_MS, call: CALL_LINGER_MS, delegation: DELEGATION_LINGER_MS, answer: DELEGATION_LINGER_MS, report: DELEGATION_LINGER_MS, notice: NOTICE_LINGER_MS };
@@ -631,15 +632,18 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
       ...state.orchestratorReports.map(report => ({ kind: "report" as const, key: `report:${report.reportId}`, report, settled: true as const })),
     ].sort((left, right) => (left.kind === "answer" ? left.answer.order : left.report.order) - (right.kind === "answer" ? right.answer.order : right.report.order));
     const notices: Floater[] = [];
-    const say = (source: string, code: string, tone: "failure" | "note" = "failure", resetsAt?: number | null) => notices.push({ kind: "notice", key: `notice:${talks}:${source}:${code}`, code, tone, settled: true, resetsAt });
+    const say = (source: string, code: string, tone: "failure" | "note" = "failure", resetsAt?: number | null, settled = true) => notices.push({ kind: "notice", key: `notice:${talks}:${source}:${code}`, code, tone, settled, resetsAt });
     if (refusedStart) say(`start${refusedStart.n}`, refusedStart.code);
+    /* A call that dropped is said as a drop, whatever failure ended it, and stays offered until it is continued or replaced. */
+    if (state.resumable && !awaiting) say(`drop:${state.resumable.sessionId}`, "CONNECTION_LOST", "failure", null, false);
     /* Until the session asked for is ready, an error the state still holds is the previous conversation's. */
-    if (state.error && !awaiting) say("error", state.error, "failure", state.errorResetsAt);
+    else if (state.error && !awaiting) say("error", state.error, "failure", state.errorResetsAt);
+    if (state.reconnected && state.phase !== "offline" && !awaiting) say("restored", "CONNECTION_RESTORED", "note");
     /* A retained reservation exists only for an API call. */
     if (state.closure?.incomplete && state.usage?.backend !== "codex" && !awaiting && state.error !== "FINALIZATION_INCOMPLETE") say("closure", "FINALIZATION_INCOMPLETE");
     if (seat === false && state.phase !== "offline") say("seat", "no_orchestrator", "note");
     return [...speech, ...calls, ...deleg, ...reports, ...notices];
-  }, [state.lines, state.calls, state.delegation, state.deliveryCards, state.orchestratorReports, shownBubbles, state.phase, state.error, state.errorResetsAt, state.closure, state.usage?.backend, paced, refusedStart, seat, talks, awaiting, charsOf, decidedFor]);
+  }, [state.lines, state.calls, state.delegation, state.deliveryCards, state.orchestratorReports, shownBubbles, state.phase, state.error, state.errorResetsAt, state.closure, state.usage?.backend, state.resumable, state.reconnected, paced, refusedStart, seat, talks, awaiting, charsOf, decidedFor]);
 
   /* When each element arrived and when it settled. The lane is ordered by arrival,
      and one not stamped yet is the newest there is. */
@@ -1102,6 +1106,19 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     /* A failed start is told by the adapter as an error event; the lane says it. */
     void store.start({ locale: speechLocale, project }).catch(() => undefined).finally(() => setStarting(false));
   };
+  /* The dropped call goes on as the same conversation, in the project in view, or its own when none is. */
+  const resume = () => {
+    const call = state.resumable;
+    if (starting || !call) return;
+    const target = project ?? call.project;
+    setTalks((count) => count + 1);
+    setRefusedStart(target === null ? { code: "NO_PROJECT", n: (refusedStart?.n ?? 0) + 1 } : null);
+    if (target === null) return;
+    setMuted(false);
+    setStarting(true);
+    setReading(false);
+    void store.start({ locale: speechLocale, project: target, resume: call.sessionId }).catch(() => undefined).finally(() => setStarting(false));
+  };
   const end = () => { void store.stop().catch(() => undefined); };
   const toggleMute = () => { const next = !muted; setMuted(next); void store.command({ type: "mute", muted: next }).catch(() => undefined); };
   const decide = (proposalId: string, decision: "send" | "cancel") => {
@@ -1121,7 +1138,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
 
   const connected = state.phase !== "offline";
   /* Readable from the first conversation on: before it there is no record to open. */
-  if ((connected || starting) && !sessionSeen) setSessionSeen(true);
+  if ((connected || starting || state.resumable) && !sessionSeen) setSessionSeen(true);
   /* After a reload the page has no conversation of its own, and the retained calls are what it opens. */
   const history = useRetainedCalls(adapter, reading, sessionSeen);
   const readable = typeof adapter.transcript === "function" && (sessionSeen || !!history.calls?.length);
@@ -1159,9 +1176,10 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
     if (floater.kind === "notice") {
       return (
         <div className="vc-notice" role={floater.tone === "failure" ? "alert" : "status"} data-tone={floater.tone} data-code={floater.code} data-companion-notice>
-          <span className="vc-notice-icon" aria-hidden><CircleAlert size={14} /></span>
+          <span className="vc-notice-icon" aria-hidden>{floater.code === "CONNECTION_RESTORED" ? <Check size={14} /> : <CircleAlert size={14} />}</span>
           <span className="vc-notice-text">{companionErrorMessage(floater.code, speechLocaleOf(locale), { resetsAt: floater.resetsAt })}</span>
           {onOpenSettings && SETTINGS_FAILURES.has(floater.code) ? <button type="button" className="vc-act" data-companion-open-settings onClick={onOpenSettings}><Settings size={13} aria-hidden />{t("voiceCompanion.openSettings")}</button> : null}
+          {floater.code === "CONNECTION_LOST" && state.resumable ? <button type="button" className="vc-act" data-primary data-companion-resume disabled={starting} onClick={resume}><RotateCcw size={13} aria-hidden />{t("voiceCompanion.reconnect")}</button> : null}
         </div>
       );
     }
@@ -1287,7 +1305,9 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
       {typeof adapter.transcript === "function" ? <style>{TRANSCRIPT_CSS}</style> : null}
       {expanded && reading && readable && view ? (() => {
         const box = transcriptRect(viewportSize(), { ...at, ...block });
-        return <CompanionTranscript usage={(target === undefined ? state.usage : null) ?? record?.usage} record={record ?? { entries: [], truncated: false }} left={box.x - at.x} top={box.y - at.y} width={box.width} height={box.height}
+        /* A dropped call says so in its own header only, never in another retained call's. */
+        const droppedShown = !connected && !starting && !!state.resumable && (target === undefined || target === state.resumable.sessionId);
+        return <CompanionTranscript dropped={droppedShown} usage={(target === undefined ? state.usage : null) ?? record?.usage} record={record ?? { entries: [], truncated: false }} left={box.x - at.x} top={box.y - at.y} width={box.width} height={box.height}
           calls={history.calls} current={target ?? record?.sessionId ?? null} onChoose={history.choose}
           onClose={() => { setReading(false); root.current?.querySelector<HTMLElement>("[data-grip]")?.focus(); }} />;
       })() : null}
@@ -1342,7 +1362,7 @@ export function VoiceCompanion({ adapter, project, locale: sessionLocale, seat, 
                 <button type="button" className="vc-btn" data-companion-end aria-label={t("voiceCompanion.end")} title={t("voiceCompanion.end")} onClick={end}><PhoneOff size={15} aria-hidden /></button>
               </>
             ) : (
-              <button type="button" className="vc-talk" data-companion-talk onClick={talk}><Mic size={13} aria-hidden />{t("voiceCompanion.talk")}</button>
+              <button type="button" className="vc-talk" data-quiet={state.resumable ? "" : undefined} data-companion-talk onClick={talk}><Mic size={13} aria-hidden />{t("voiceCompanion.talk")}</button>
             )}
             <button type="button" className="vc-btn" data-companion-collapse aria-label={t("voiceCompanion.collapse")} title={t("voiceCompanion.collapse")} aria-expanded onClick={() => toggle(true)}><Minimize2 size={15} aria-hidden /></button>
           </div>

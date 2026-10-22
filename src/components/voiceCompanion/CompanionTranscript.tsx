@@ -25,9 +25,9 @@ import type { SessionTranscriptRecord, TranscriptEntry } from "@/lib/voiceCompan
  */
 
 const LABELS = {
-  en: { title: "Conversation", live: "in progress", ended: "ended", close: "Close", args: "Arguments", result: "Result", toVoice: "Passed to the voice", open: "Show the conversation", empty: "Nothing said yet.", truncated: "Part of the conversation is not kept: the record reached its size limit.", request: "Request to the orchestrator", instruction: "Instruction", steps: "Delivery steps", copyMessage: "Copy message", showDetails: "Show details", hideDetails: "Hide details", reports: { message: "Message", progress: "Progress", result: "Result", question: "Question", blocked: "Blocked" },
+  en: { title: "Conversation", live: "in progress", ended: "ended", dropped: "connection dropped", close: "Close", args: "Arguments", result: "Result", toVoice: "Passed to the voice", open: "Show the conversation", empty: "Nothing said yet.", truncated: "Part of the conversation is not kept: the record reached its size limit.", request: "Request to the orchestrator", instruction: "Instruction", steps: "Delivery steps", copyMessage: "Copy message", showDetails: "Show details", hideDetails: "Hide details", reports: { message: "Message", progress: "Progress", result: "Result", question: "Question", blocked: "Blocked" },
     calls: "Call", orchestrator: "Orchestrator", openConversation: "Open its conversation", unavailable: "record unavailable" },
-  uk: { title: "Розмова", live: "триває", ended: "завершено", close: "Закрити", args: "Аргументи", result: "Результат", toVoice: "Передано голосу", open: "Показати розмову", empty: "Ще нічого не сказано.", truncated: "Частина розмови не збереглася: запис досяг межі розміру.", request: "Запит оркестратору", instruction: "Доручення", steps: "Кроки доставки", copyMessage: "Скопіювати повідомлення", showDetails: "Показати подробиці", hideDetails: "Сховати подробиці", reports: { message: "Повідомлення", progress: "Хід роботи", result: "Результат", question: "Питання", blocked: "Заблоковано" },
+  uk: { title: "Розмова", live: "триває", ended: "завершено", dropped: "зʼєднання обірвалося", close: "Закрити", args: "Аргументи", result: "Результат", toVoice: "Передано голосу", open: "Показати розмову", empty: "Ще нічого не сказано.", truncated: "Частина розмови не збереглася: запис досяг межі розміру.", request: "Запит оркестратору", instruction: "Доручення", steps: "Кроки доставки", copyMessage: "Скопіювати повідомлення", showDetails: "Показати подробиці", hideDetails: "Сховати подробиці", reports: { message: "Повідомлення", progress: "Хід роботи", result: "Результат", question: "Питання", blocked: "Заблоковано" },
     calls: "Розмова", orchestrator: "Оркестратор", openConversation: "Відкрити його розмову", unavailable: "запис недоступний" },
 } as const;
 export const transcriptLabels = (locale: string) => LABELS[locale === "uk" ? "uk" : "en"];
@@ -43,6 +43,8 @@ export function transcriptRect(viewport: Size, block: Rect): Rect {
 type Status = "running" | "done" | "failed";
 type Row =
   | { kind: "speech"; key: string; atMs: number; speaker: "operator" | "companion"; text: string }
+  /* The connection dropped here and the same call went on. */
+  | { kind: "resumed"; key: string; atMs: number }
   | { kind: "report"; key: string; atMs: number; project: string | null; status: string | null; text: string }
   | { kind: "call"; key: string; atMs: number; name: string; status: Status; args: string; result: string | null; reason: string | null; handoffs: string[] }
   | { kind: "request"; key: string; atMs: number; instruction: string; stage: string; reason: string | null; code: string | null; engine: "claude" | "codex" | null;
@@ -90,6 +92,8 @@ export function transcriptRows(entries: readonly TranscriptEntry[]): Row[] {
       else rows.push({ kind: "report", key: entry.id, atMs: entry.atMs, project: str(data.projectName) ?? str(data.project), status: str(data.status), text: str(data.text) ?? "" });
     } else if (entry.kind === "handoff") {
       calls.get(str(data.delegationId) ?? "")?.handoffs.push(str(data.text) ?? "");
+    } else if (entry.kind === "session_start" && str(data.resumes)) {
+      rows.push({ kind: "resumed", key: entry.id, atMs: entry.atMs });
     }
   }
   return rows;
@@ -122,12 +126,14 @@ function Disclosure({ summary, children, name, label }: { summary: ReactNode; ch
   );
 }
 
-export function CompanionTranscript({ record, usage = record.usage, left, top, width, height, modal = false, calls = null, current = null, onChoose, onClose }: {
+export function CompanionTranscript({ record, usage = record.usage, left, top, width, height, modal = false, dropped = false, calls = null, current = null, onChoose, onClose }: {
   record: SessionTranscriptRecord;
   usage?: CompanionUsage;
   /* The box, from the companion's own corner. */
   left: number; top: number; width: number; height: number;
   modal?: boolean;
+  /* The call dropped and is offered again: the header says so, where a hung-up call says it ended. */
+  dropped?: boolean;
   /** The operator's retained calls, newest first, and the one shown; with more than one a picker opens each. */
   calls?: readonly RetainedCall[] | null;
   current?: string | null;
@@ -236,6 +242,11 @@ export function CompanionTranscript({ record, usage = record.usage, left, top, w
         </li>
       );
     }
+    if (row.kind === "resumed") return (
+      <li key={row.key} className="vc-tr-row vc-tr-resumed" data-kind="resumed">
+        <span className="vc-tr-time">{clock(row.atMs)}</span><span data-transcript-resumed>{t("voiceCompanion.reconnected")}</span>
+      </li>
+    );
     if (row.kind === "report") return (
       <li key={row.key} className="vc-tr-row" data-kind="report">
         <div className="vc-call vc-deleg vc-reply" data-stage="answered" data-report-status={row.status ?? undefined} data-transcript-report>
@@ -267,7 +278,7 @@ export function CompanionTranscript({ record, usage = record.usage, left, top, w
       <div className="vc-tr-head">
         <span className="vc-tr-title">{L.title}</span>
         {/* A Codex call's footer carries its length on the server clock, so the header does not add a second one. */}
-        <span className="vc-tr-sub">{ended ? L.ended : L.live}{usage?.backend === "codex" ? null : ` · ${clock(last)}`}</span>
+        <span className="vc-tr-sub">{dropped ? L.dropped : ended ? L.ended : L.live}{usage?.backend === "codex" ? null : ` · ${clock(last)}`}</span>
         <button type="button" className="vc-btn vc-tr-close" aria-label={L.close} title={L.close} data-transcript-close onClick={onClose}><X size={14} aria-hidden /></button>
       </div>
       {picking ? (
@@ -324,6 +335,7 @@ export const TRANSCRIPT_CSS = `
 .vc-tr-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
 .vc-tr-row { display: flex; flex-direction: column; min-width: 0; }
 .vc-tr-row[data-speaker="operator"] { align-items: flex-end; }
+.vc-tr-resumed { flex-direction: row; justify-content: center; align-items: baseline; gap: 6px; padding: 2px 0; font-size: 11.5px; color: var(--color-secondary); border-top: 1px dashed var(--color-border); overflow-wrap: anywhere; text-align: center; }
 .vc-tr-row[data-speaker="companion"] { align-items: flex-start; }
 .vc-tr .vc-bubble { max-width: 88%; cursor: text; }
 .vc-tr .vc-bubble[data-speaker="companion"] { box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }

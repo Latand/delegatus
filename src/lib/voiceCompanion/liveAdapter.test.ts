@@ -25,6 +25,7 @@ function fixture(extra: ConstructorParameters<typeof OfficialVoiceCompanionAdapt
   let serverEvents: CompanionEvent[] = [];
   let usage: import("./contract").CompanionUsage | undefined;
   let contextFailures = 0;
+  let pollsFail = false;
   let contextGate: { promise: Promise<Response>; release: (response: Response) => void } | null = null;
   let servedProject: string | null = null;
   let seq = 0;
@@ -34,6 +35,7 @@ function fixture(extra: ConstructorParameters<typeof OfficialVoiceCompanionAdapt
   let clock = 0;
   const adapter = new OfficialVoiceCompanionAdapter({ pollMs: 100_000, now: () => clock, media: cb => { callbacks = cb; return media; }, ...extra,
     fetch: (async (_url, init) => {
+      if (!init?.body && pollsFail) throw new TypeError("Failed to fetch");
       if (!init?.body) return String(_url).includes("view=transcript") ? Response.json({ entries: [], truncated: false, usage }) : Response.json({ events: serverEvents, usage });
       const body = JSON.parse(String(init.body)); requests.push(body);
       if (body.action === "context") {
@@ -50,7 +52,7 @@ function fixture(extra: ConstructorParameters<typeof OfficialVoiceCompanionAdapt
     const promise = new Promise<Response>(resolve => { release = resolve; });
     contextGate = { promise, release };
     return (failed = false) => release(failed ? Response.json({ code: "COMPANION_UNAVAILABLE" }, { status: 503 }) : Response.json({ ok: true }));
-  }, failContextOnce: () => { contextFailures = 1; }, get servedProject() { return servedProject; }, usage: (value: import("./contract").CompanionUsage) => { usage = value; }, push: (value: CompanionEvent) => serverEvents.push(value), advance: (ms: number) => { clock += ms; jest.advanceTimersByTime(ms); }, get callbacks() { return callbacks; },
+  }, failContextOnce: () => { contextFailures = 1; }, failPolls: () => { pollsFail = true; }, healPolls: () => { pollsFail = false; }, get servedProject() { return servedProject; }, usage: (value: import("./contract").CompanionUsage) => { usage = value; }, push: (value: CompanionEvent) => serverEvents.push(value), advance: (ms: number) => { clock += ms; jest.advanceTimersByTime(ms); }, get callbacks() { return callbacks; },
     get opens() { return opens; }, get closes() { return closes; }, get muted() { return muted; }, get interrupts() { return interrupts; } };
 }
 test("media starts on request, mouth follows played output, microphone echo preserves playback, and awaited hangup releases media", async () => {
@@ -131,6 +133,29 @@ test("a confirmed delivery receives its correlated card after hangup without ope
   expect(state.delegation?.stage).toBe("queued");
   expect(f.opens).toBe(1);
   expect(f.requests.filter(row => row.action === "start")).toHaveLength(1);
+  await f.adapter.dispose();
+});
+
+test("a Viewer that stops answering mid-call is a drop: the close says so, and only a real session is closed as one", async () => {
+  const f = fixture({ pollMs: 500 });
+  const events: CompanionEvent[] = [];
+  f.adapter.subscribe(event => events.push(event));
+  await f.adapter.start({ project: "fixture", locale: "en" });
+  f.failPolls();
+  f.advance(600);
+  await f.adapter.close();
+  expect(events.filter(event => event.type === "error").map(event => (event as { code: string }).code)).toContain("CONNECTION_LOST");
+  expect(f.requests.filter(row => row.action === "close")).toEqual([{ action: "close", sessionId: "fixture-session", reason: "transport" }]);
+  /* An operator's own hang-up of the next call carries no reason. */
+  f.healPolls();
+  await f.adapter.start({ project: "fixture", locale: "en" });
+  await f.adapter.close();
+  expect(f.requests.filter(row => row.action === "close").at(-1)).toEqual({ action: "close", sessionId: "fixture-session" });
+  /* A microphone or audio refusal is no drop. */
+  await f.adapter.start({ project: "fixture", locale: "en" });
+  f.callbacks.lost("AUDIO_REFUSED");
+  await f.adapter.close();
+  expect(f.requests.filter(row => row.action === "close").at(-1)).toEqual({ action: "close", sessionId: "fixture-session" });
   await f.adapter.dispose();
 });
 

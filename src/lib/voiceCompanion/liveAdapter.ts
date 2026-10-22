@@ -1,6 +1,6 @@
 "use client";
 
-import type { CompanionCommand, CompanionEvent, CompanionUsage, Locale, Payload, VoiceCompanionAdapter } from "./contract";
+import type { CompanionCommand, CompanionEvent, CompanionUsage, Locale, Payload, ResumableCall, VoiceCompanionAdapter } from "./contract";
 import { createBrowserCues, type CompanionCues } from "./cues";
 import type { SessionTranscriptRecord } from "./transcriptRecord";
 import type { RetainedCall } from "./callHistoryTypes";
@@ -67,6 +67,8 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
   private readonly cues: CompanionCues;
   /** Set by the connect cue, so a session that never connected has no disconnect to mark, and each end sounds once. */
   private connected = false;
+  /** The connection failed: the close tells the Viewer the call dropped, so it is offered back. */
+  private dropping = false;
   constructor(private readonly options: AdapterOptions = {}) { this.cues = options.cues ?? createBrowserCues(); }
   subscribe(emit: (event: CompanionEvent) => void): () => void { this.listeners.add(emit); return () => { this.listeners.delete(emit); }; }
   private emit(payload: Payload, original?: CompanionEvent): void {
@@ -88,7 +90,7 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
     }
     return result;
   }
-  start(options: { locale: Locale; project: string }): Promise<void> {
+  start(options: { locale: Locale; project: string; resume?: string }): Promise<void> {
     if (this.starting) return this.starting;
     /* The tap is the user activation the sounds need. */
     this.cues.prepare();
@@ -97,7 +99,7 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
     this.starting = promise;
     return promise.finally(() => { if (this.starting === promise) this.starting = null; });
   }
-  private async begin(options: { locale: Locale; project: string }): Promise<void> {
+  private async begin(options: { locale: Locale; project: string; resume?: string }): Promise<void> {
     await this.close();
     this.stopObserver();
     this.contextSync = null; this.syncedProject = undefined; this.contextUncertain = false;
@@ -298,9 +300,21 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
     this.connected = false;
     this.cues.disconnect();
   }
+  /** A failed peer connection, a closed channel or a Viewer that stopped answering cut the call off: a drop. */
   private lost(code: string): void {
-    this.emit({ type: "error", code, recoverable: false });
+    const drop = code === "PROVIDER_ERROR";
+    if (drop && this.sessionId) this.dropping = true;
+    this.emit({ type: "error", code: drop ? "CONNECTION_LOST" : code, recoverable: false });
     void this.close().catch(() => undefined);
+  }
+  async resumable(): Promise<ResumableCall | null> {
+    const response = await (this.options.fetch ?? fetch)("/api/voice-companion/resume", { cache: "no-store", signal: AbortSignal.timeout(10_000) });
+    if (!response.ok) return null;
+    const value = (await response.json() as { resumable?: { sessionId?: unknown; project?: unknown } | null } | null)?.resumable;
+    if (!value || typeof value.sessionId !== "string" || !/^[A-Za-z0-9_-]{1,200}$/.test(value.sessionId) || this.sessionId || this.starting) return null;
+    /* Its record is the one the conversation view reads until a call starts. */
+    this.observedId = value.sessionId;
+    return { sessionId: value.sessionId, project: typeof value.project === "string" ? value.project : null };
   }
   async transcript(chosen?: string): Promise<SessionTranscriptRecord | null> {
     const sessionId = chosen ?? this.observedId;
@@ -334,13 +348,14 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
     this.disconnected();
     this.stopPlayback("closed");
     const sessionId = this.sessionId; const requestId = this.requestId;
+    const dropped = this.dropping; this.dropping = false;
     const media = this.media;
     const promise = (async () => {
       // Disable microphone input immediately; keep WebRTC alive while final
       // provider usage drains through the server's close request.
       media?.mute(true);
       try {
-        if (sessionId || requestId) await this.request({ action: "close", ...(sessionId ? { sessionId } : { requestId }) });
+        if (sessionId || requestId) await this.request({ action: "close", ...(sessionId ? { sessionId, ...(dropped ? { reason: "transport" } : {}) } : { requestId }) });
         if (sessionId) { await this.poll; await this.readEvents(); }
       } catch { this.emit({ type: "error", code: "FINALIZATION_INCOMPLETE", recoverable: true }); }
       finally {
