@@ -49,6 +49,21 @@ function legacyCommand(command: unknown, directory: string): boolean {
   return /^shared-memory-[a-f0-9]{12}\.mjs$/.test(name);
 }
 
+function archivedCodexHome(home: string): { formerHome: string; sharedConfig: string } | null {
+  const resolved = path.resolve(home);
+  const parts = resolved.split(path.sep);
+  const length = parts.length;
+  if (parts[length - 4] !== "shared" || parts[length - 3] !== "codex" || parts[length - 2] !== "retired"
+    || !/^[a-z0-9][a-z0-9-]{0,31}$/.test(parts[length - 1] ?? "")) return null;
+  const root = parts.slice(0, -4).join(path.sep) || path.parse(resolved).root;
+  const accountId = parts[length - 1];
+  const codexHome = path.resolve(process.env.LLV_CODEX_HOME || path.join(os.homedir(), ".codex"));
+  return {
+    formerHome: path.join(root, "accounts", "codex", accountId),
+    sharedConfig: path.join(codexHome, "config.toml"),
+  };
+}
+
 function removeArrayItems(items: Span[], selected: Set<number>): Edit[] {
   const edits: Edit[] = [];
   for (let i = 0; i < items.length; i++) {
@@ -131,13 +146,20 @@ async function replace(file: string, before: string, after: string, backup: stri
  * Backups live in state, outside the Codex home. */
 export async function retireLegacyCodexMemoryHooks(home: string, backupRoot: string): Promise<void> {
   const hookFile = path.join(home, "hooks.json"), configLink = path.join(home, "config.toml");
+  const archived = archivedCodexHome(home);
   const directory = path.join(home, ".llv", "hooks");
   const hookTarget = await fs.realpath(hookFile).catch(error => { if (error.code === "ENOENT") return null; throw error; });
   const original = hookTarget === null ? null : await read(hookTarget);
   const canonicalHome = await fs.realpath(home).catch(error => { if (error.code === "ENOENT") return home; throw error; });
-  const hookSources = [...new Set([hookFile, path.join(canonicalHome, "hooks.json"), hookTarget].filter((file): file is string => file !== null))];
+  const formerHome = archived?.formerHome;
+  const canonicalFormerHome = formerHome ? await fs.realpath(formerHome).catch(error => { if (error.code === "ENOENT") return formerHome; throw error; }) : null;
+  const hookSources = [...new Set([hookFile, path.join(canonicalHome, "hooks.json"), hookTarget,
+    ...(formerHome ? [path.join(formerHome, "hooks.json")] : []),
+    ...(canonicalFormerHome ? [path.join(canonicalFormerHome, "hooks.json")] : [])].filter((file): file is string => file !== null))];
   const files = await fs.readdir(directory).catch(error => { if (error.code === "ENOENT") return []; throw error; });
-  const directories = [...new Set([directory, await fs.realpath(directory).catch(error => { if (error.code === "ENOENT") return directory; throw error; })])];
+  const directories = [...new Set([directory, await fs.realpath(directory).catch(error => { if (error.code === "ENOENT") return directory; throw error; }),
+    ...(formerHome ? [path.join(formerHome, ".llv", "hooks")] : []),
+    ...(canonicalFormerHome ? [path.join(canonicalFormerHome, ".llv", "hooks")] : [])])];
   const generated = new Map<string, string>();
   for (const name of files.filter(name => generatedName.test(name))) {
     const bytes = await read(path.join(directory, name));
@@ -146,7 +168,10 @@ export async function retireLegacyCodexMemoryHooks(home: string, backupRoot: str
   if (!original?.includes("shared-memory-") && !generated.size) return;
   // Managed accounts intentionally share config.toml through an overlay link.
   // Replace its regular target and retain the link itself.
-  const configFile = await fs.realpath(configLink).catch(error => { if (error.code === "ENOENT") return configLink; throw error; });
+  const configFile = await fs.realpath(configLink).catch(error => {
+    if (error.code === "ENOENT") return archived ? archived.sharedConfig : configLink;
+    throw error;
+  });
   const config = await read(configFile);
   // Validate before any mutation or retirement, including generated programs.
   const tree = original === null ? null : jsonSpans(original);
@@ -221,7 +246,11 @@ export async function retireLegacyCodexMemoryHooks(home: string, backupRoot: str
     let next = edit(config, removals);
     if (aliases.length) next += (next.endsWith("\n") ? "\n" : "\n\n") + aliases.join("\n");
     Bun.TOML.parse(next);
-    if (await fs.realpath(configLink) !== configFile) throw new Error("memory hook migration observed a changed config link; retry required");
+    const currentConfigFile = await fs.realpath(configLink).catch(error => {
+      if (error.code === "ENOENT") return archived ? archived.sharedConfig : configLink;
+      throw error;
+    });
+    if (currentConfigFile !== configFile) throw new Error("memory hook migration observed a changed config link; retry required");
     await replace(configFile, config, next, backup);
   }
   if (original !== null && hookTarget !== null) {

@@ -151,6 +151,47 @@ test("managed account config symlinks retain their shared personal file and reti
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test("a moved archived Codex home retires its former declaration and shared trust", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-hook-archived-home-"));
+  const formerHome = path.join(root, "accounts", "codex", "account-a");
+  const archive = path.join(root, "shared", "codex", "retired", "account-a");
+  const sharedHome = path.join(root, "operator", ".codex");
+  const backup = path.join(root, "backup");
+  const name = `shared-memory-${"b".repeat(12)}.mjs`;
+  const formerProgram = path.join(formerHome, ".llv", "hooks", name);
+  const command = `bun '${formerProgram}' 2>/dev/null || true`;
+  const configKey = `${formerHome}/hooks.json:user_prompt_submit:0:0`;
+  const trustedHash = Object.values(codexMemoryHookConfig({ type: "command", command, timeout: 2, additionalContextLimit: 40000 }).state)[0].trusted_hash;
+  const personalConfig = '# Keep this personal configuration byte for byte.\nmodel = "personal-model"\n\n';
+  const sharedConfig = path.join(sharedHome, "config.toml");
+  const previousCodexHome = process.env.LLV_CODEX_HOME;
+  fs.mkdirSync(path.dirname(formerProgram), { recursive: true });
+  fs.mkdirSync(sharedHome, { recursive: true });
+  fs.writeFileSync(formerProgram, "Legacy synthetic hook source");
+  fs.writeFileSync(path.join(formerHome, "hooks.json"), JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command, timeout: 2 }] }] } }));
+  fs.writeFileSync(sharedConfig, `${personalConfig}[hooks.state.${JSON.stringify(configKey)}]\nenabled = true\ntrusted_hash = ${JSON.stringify(trustedHash)}\n`);
+  fs.symlinkSync(sharedConfig, path.join(formerHome, "config.toml"));
+  fs.mkdirSync(path.dirname(archive), { recursive: true });
+  fs.renameSync(formerHome, archive);
+  fs.unlinkSync(path.join(archive, "config.toml"));
+  process.env.LLV_CODEX_HOME = sharedHome;
+  try {
+    await retireLegacyCodexMemoryHooks(archive, backup);
+    const migratedHooks = fs.readFileSync(path.join(archive, "hooks.json"), "utf8");
+    const migratedConfig = fs.readFileSync(sharedConfig, "utf8");
+    expect(migratedHooks).not.toContain("shared-memory-");
+    expect(migratedConfig).toBe(personalConfig);
+    expect(fs.existsSync(path.join(archive, ".llv", "hooks", name))).toBe(false);
+    await retireLegacyCodexMemoryHooks(archive, backup);
+    expect(fs.readFileSync(path.join(archive, "hooks.json"), "utf8")).toBe(migratedHooks);
+    expect(fs.readFileSync(sharedConfig, "utf8")).toBe(migratedConfig);
+  } finally {
+    if (previousCodexHome === undefined) delete process.env.LLV_CODEX_HOME;
+    else process.env.LLV_CODEX_HOME = previousCodexHome;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("personal hooks in a mixed group keep their original declarations and trust records", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-hook-mixed-"));
   const home = path.join(root, "codex"), directory = path.join(home, ".llv", "hooks"); fs.mkdirSync(directory, { recursive: true });
