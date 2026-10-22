@@ -192,9 +192,11 @@ export function reportLaneFrom(pipeline: Pipeline): ReportLane {
     stageId,
     attempt: onStage?.n ?? null,
     attemptStartedAt: onStage?.startedAt ?? null,
-    failure: open && newest?.attempt.state === "failed"
-      ? { stageId: newest.stageId, reason: firstLine(newest.attempt.error) ?? "no reason recorded" }
+    failure: open && onStage?.state === "failed"
+      ? { stageId: stageId!, reason: firstLine(onStage.error) ?? "no reason recorded" }
       : null,
+    wait: onStage && ["pending", "spawning"].includes(onStage.state)
+      ? firstLine(pipeline.stateDetail) ?? (onStage.launchId ? "waiting for the original launch receipt" : "waiting for stage launch admission") : null,
     question: firstLine(pipeline.stateDetail) ?? firstLine(newest?.attempt.report?.summary ?? null),
     reviewStageId: pipeline.reviewPending?.stageId ?? null,
     lastFixUnreviewed: pipelineCompletedUnreviewed(pipeline) !== null,

@@ -36,7 +36,7 @@ function spotify(over: Partial<Server> = {}): Server {
     title: "Spotify", capability: "Music: play and search.", entryFile: null, private: false, askBeforeActing: false, callTimeoutMs: 15_000,
     transport: { type: "stdio", command: "uv", args: ["tool", "run", "spotify-mcp-example"], cwd: null, envNames: ["SPOTIFY_CLIENT_ID", "SPOTIFY_REDIRECT_URI"], envValues: { SPOTIFY_REDIRECT_URI: "http://127.0.0.1:8888/callback" } },
     generation: 3, owner: "installation", audience: ["voice"], state: "pending", proposedBy: { kind: "conversation", conversationId: "conv_a", at: AT },
-    approval: null, tools: {}, catalog: null, lastDryRun: null, digest: digestOf(1), missingSecrets: ["spotify-client-id"], secretRefs: ["spotify-client-id"], ...over,
+    approval: null, tools: {}, catalog: null, lastDryRun: null, digest: digestOf(1), secretRecipient: `stdio:spotify:sha256:${"a".repeat(64)}`, missingSecrets: ["spotify-client-id"], secretRefs: ["spotify-client-id"], secretDestinations: { "spotify-client-id": [] }, ...over,
   };
 }
 type Answer = { status: number; body: unknown };
@@ -48,12 +48,15 @@ function routes(servers: Record<string, Server>) {
   harness.setRoute((url, init) => {
     if (new URL(url, "http://127.0.0.1:8898").pathname !== "/api/voice-tools") return undefined;
     if (!init?.method || init.method === "GET") return jsonResponse(view());
-    const body = JSON.parse(String(init.body)) as { action: string; name?: string; digest?: string; tools?: Server["tools"]; askBeforeActing?: boolean; reapprove?: true; secrets?: Record<string, string> };
+    const body = JSON.parse(String(init.body)) as { action: string; name?: string; digest?: string; tools?: Server["tools"]; askBeforeActing?: boolean; reapprove?: true; secrets?: Record<string, { value?: string; destinations: string[] }> };
     const answer = ((): Answer => {
       if (refuse[body.action]) { const code = refuse[body.action]; delete refuse[body.action]; return { status: 409, body: { code } }; }
       record.revision += 1;
       if (body.action === "secrets") {
-        for (const server of Object.values(record.servers)) server.missingSecrets = server.missingSecrets.filter(ref => !Object.hasOwn(body.secrets!, ref));
+        for (const server of Object.values(record.servers)) {
+          server.missingSecrets = server.missingSecrets.filter(ref => !Object.hasOwn(body.secrets!, ref));
+          for (const ref of server.secretRefs) if (Object.hasOwn(body.secrets!, ref)) server.secretDestinations[ref] = body.secrets![ref].destinations;
+        }
         return { status: 200, body: view() };
       }
       const server = record.servers[body.name!];
@@ -115,11 +118,34 @@ test("no servers reads as such, and a failed read offers a retry that recovers",
   expect(host.querySelector("[data-voice-tool-server]")).toBeNull();
 });
 
+test("the owner sign-in refusal names paired Telegram access in both locales", async () => {
+  harness.setRoute(url => url.startsWith("/api/voice-tools") ? jsonResponse({ code: "OPERATOR_REQUIRED" }, 401) : undefined);
+  for (const locale of ["en", "uk"] as const) {
+    localStorage.removeItem("llv_lang"); resetLocaleForTests(); setLocale(locale);
+    const host = await mount();
+    const status = host.querySelector("[data-voice-tools-status]")!;
+    expect(status.textContent).toBe(translate(locale, "voiceCompanion.tools.signIn"));
+    if (locale === "en") {
+      expect(status.textContent).toContain("Sign in through the paired owner's Telegram account");
+      expect(status.textContent).toContain("without a Celestia owner pairing");
+      expect(status.textContent).not.toMatch(/passkey|claim/i);
+    } else {
+      expect(status.textContent).toContain("Telegram");
+      expect(status.textContent).toContain("pairing");
+      expect(status.textContent).not.toMatch(/ключем доступу|зареєструйте/i);
+    }
+    const current = mounted!; await act(async () => current.root.unmount()); current.host.remove(); mounted = null;
+  }
+  resetLocaleForTests(); localStorage.removeItem("llv_lang");
+});
+
 test("a pending proposal shows what will run by name, takes its secret once and never draws it again", async () => {
   const { record } = routes({ spotify: spotify({ transport: { type: "stdio", command: "bun", args: ["run", "/srv/tools/notes server.ts"], cwd: "/srv/tools", envNames: ["NOTES_FORMAT", "NOTES_TOKEN"], envValues: { NOTES_FORMAT: "markdown" } },
     entryFile: { path: "/srv/tools/notes server.ts", sha256: "ab".repeat(32) } }) });
   const host = await mount();
   const row = host.querySelector<HTMLElement>("[data-voice-tool-server='spotify']")!;
+  expect(row.querySelector("[data-voice-tool-dry-run-hint]")?.textContent).toContain("state directory, including saved secrets, is hidden");
+  expect(row.querySelector<HTMLInputElement>("input[data-destinations]")?.placeholder).toBe(spotify().secretRecipient);
   expect(row.dataset.state).toBe("pending");
   expect(row.querySelector("[data-voice-tool-state]")?.textContent).toBe("Waiting for approval");
   expect(row.querySelector("[data-voice-tool-runs] code")?.textContent).toBe("bun run '/srv/tools/notes server.ts'");
@@ -133,9 +159,10 @@ test("a pending proposal shows what will run by name, takes its secret once and 
   const input = row.querySelector<HTMLInputElement>("[data-voice-tool-reference] input")!;
   expect(input.type).toBe("password");
   await act(async () => typeInto(input, SECRET));
+  await act(async () => typeInto(row.querySelector<HTMLInputElement>("input[data-destinations]")!, spotify().secretRecipient));
   await act(async () => { row.querySelector("form")!.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true })); });
   await act(async () => settle());
-  expect(writes()).toEqual([{ action: "secrets", secrets: { "spotify-client-id": SECRET } }]);
+  expect(writes()).toEqual([{ action: "secrets", secrets: { "spotify-client-id": { value: SECRET, destinations: [spotify().secretRecipient] } } }]);
   expect(record.servers.spotify.missingSecrets).toEqual([]);
   expect(host.querySelector<HTMLInputElement>("[data-voice-tool-reference] input")!.value).toBe("");
   expect(host.innerHTML).not.toContain(SECRET);
@@ -249,10 +276,10 @@ test("an HTTP server shows its URL, a literal header's value and a secret header
   } finally { resetLocaleForTests(); localStorage.removeItem("llv_lang"); }
 });
 
-test("beside Run dry run, a command's row says the press starts the program as your OS user, in English and Ukrainian; an address's row does not", async () => {
+test("beside Run dry run, a stdio row explains filesystem containment in English and Ukrainian; an address's row does not", async () => {
   const hints = { en: translate("en", "voiceCompanion.tools.dryRunHint"), uk: translate("uk", "voiceCompanion.tools.dryRunHint") };
-  expect(hints.en).toBe("Run dry run starts this program as your OS user to list its tools, so press it only for what you trust.");
-  expect(hints.uk).toBe("«Пробний запуск» запускає цю програму від імені вашого користувача ОС, щоб отримати список її інструментів, тож натискайте його лише для того, чому довіряєте.");
+  expect(hints.en).toBe("A stdio dry run runs proposed code in a Linux filesystem sandbox. The Delegatus state directory, including saved secrets, is hidden. The program can still read files elsewhere and send them anywhere. Run only programs you trust.");
+  expect(hints.uk).toBe("Пробний запуск stdio виконує запропонований код у файловому пісочному середовищі Linux. Каталог стану Delegatus, зокрема збережені секрети, приховано. Програма все ще може читати інші файли й надсилати їх будь-куди. Запускайте лише програми, яким довіряєте.");
   /* The approval sentence stays in the intro beside it. */
   expect(translate("en", "voiceCompanion.tools.intro")).toContain("An approved server runs as your OS user");
   for (const locale of ["en", "uk"] as const) {
@@ -284,6 +311,7 @@ test("a refused secrets save keeps what was typed beside its reason, and the nex
   const host = await mount();
   const input = host.querySelector<HTMLInputElement>("[data-voice-tool-reference] input")!;
   await act(async () => typeInto(input, SECRET));
+  await act(async () => typeInto(host.querySelector<HTMLInputElement>("input[data-destinations]")!, spotify().secretRecipient));
   const submit = async () => {
     await act(async () => { host.querySelector("form")!.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true })); });
     await act(async () => settle());
@@ -298,8 +326,21 @@ test("a refused secrets save keeps what was typed beside its reason, and the nex
   expect(host.innerHTML).not.toContain(SECRET);
 
   await submit();
-  expect(writes()).toEqual([{ action: "secrets", secrets: { "spotify-client-id": SECRET } }, { action: "secrets", secrets: { "spotify-client-id": SECRET } }]);
+  expect(writes()).toEqual([{ action: "secrets", secrets: { "spotify-client-id": { value: SECRET, destinations: [spotify().secretRecipient] } } }, { action: "secrets", secrets: { "spotify-client-id": { value: SECRET, destinations: [spotify().secretRecipient] } } }]);
   expect(record.servers.spotify.missingSecrets).toEqual([]);
   expect(host.querySelector<HTMLInputElement>("[data-voice-tool-reference] input")!.value).toBe("");
   expect(host.querySelector("[data-voice-tools-refused]")).toBeNull();
+});
+
+
+test("unbound destinations require owner input and can be renewed without resending the private value", async () => {
+  routes({ spotify: spotify({ missingSecrets: [], secretDestinations: { "spotify-client-id": [] } }) });
+  const host = await mount();
+  const destination = host.querySelector<HTMLInputElement>("input[data-destinations]")!;
+  expect(destination.value).toBe("");
+  expect(host.querySelector("[data-voice-tool-destinations]")?.textContent).toContain(translate("en", "voiceCompanion.tools.destinationsSaved", { hosts: translate("en", "voiceCompanion.tools.none") }));
+  await act(async () => typeInto(destination, spotify().secretRecipient));
+  await act(async () => { host.querySelector("form")!.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true })); });
+  await act(async () => settle());
+  expect(writes()).toEqual([{ action: "secrets", secrets: { "spotify-client-id": { destinations: [spotify().secretRecipient] } } }]);
 });
