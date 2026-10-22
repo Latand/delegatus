@@ -574,3 +574,74 @@ block (9,242 characters including the persona), returned the SDP answer in
 32 scenes: 1440 and 390 pixels, both themes and languages, empty memory,
 three calls, provider failure and a 600-character summary. Its record is
 `evidence/voice-companion/call-memory.json`; every displayed summary is invented.
+
+## A dropped call resumes
+
+Operator request, 2026-10-22: a voice call that dropped with the connection lost
+its earlier history, and the next call did not have it in context.
+
+What happened before this change, observed on `main` at `e12215c01` with the
+fake provider (`src/lib/voiceCompanion/callResume.test.ts` and the two drop cases
+in `voiceCompanionProduct.dom.test.tsx`, red on that commit):
+
+Line numbers below are at `e12215c01`. Earlier work on call memory is this
+document's first part (#2810, then #2850 and #3177); no earlier change dealt with
+reconnecting a dropped call.
+
+- During a call the history lives in three places: the call journal
+  (`src/lib/voiceCompanion/transcriptRecord.ts:95`, each settled entry appended
+  and fsynced), the browser store's `state.lines` (`src/hooks/useVoiceCompanion.ts`,
+  `src/lib/voiceCompanion/reducer.ts`) and the provider session's own context.
+- A drop ends the provider session, and its context with it. The browser store
+  dropped `state.lines` as soon as the next session became ready
+  (`src/hooks/useVoiceCompanion.ts:29` reduces from `INITIAL_COMPANION_STATE`
+  for a new session id), and both views cleared the record they read
+  (`setRecord(null)` in `talk()`, `src/components/voiceCompanion/VoiceCompanion.tsx:1100`
+  and `src/components/voiceCompanion/PhoneVoiceCompanion.tsx:430`). After a reload
+  the dropped call's record had no way back into the page.
+- The next call started with the earlier-call summaries only
+  (`src/lib/voiceCompanion/liveSession.ts:203`). The dropped call's summary is
+  written in the background after the call ends, so a reconnect within its
+  seconds started with nothing from that call, and later with at most its
+  600-character summary.
+- A browser whose peer connection failed asked the Viewer to close the call
+  without a reason (`src/lib/voiceCompanion/liveAdapter.ts:299` and `:335`), so
+  the journal recorded an operator hang-up; a browser that stopped polling was
+  closed by the watchdog with reason `cap` (`src/lib/voiceCompanion/liveSession.ts:269-270`).
+
+The change (`src/lib/voiceCompanion/callResume.ts`):
+
+- **Drop reasons.** A failed connection closes with `reason: "transport"`
+  (`liveAdapter.ts`, the session route accepts no other close reason), and the
+  watchdog closes a browser that stopped polling as `transport`. `transport` and
+  `error` are drops; a hang-up, a goodbye, the cap and the plan limit are not.
+- **Offer.** `GET /api/voice-companion/resume` answers the caller's newest call
+  when it dropped within 30 minutes and holds speech, or is still open with no
+  browser polling it for 5 seconds (a reload, a restarted Viewer before
+  recovery). The browser store offers it as `state.resumable`; a drop it saw
+  itself offers it at once.
+- **Resume.** A start with `resume: <session>` is refused unless that call is
+  the starter's own (route `owns` and the server's `sameCallOwner`), closed by a
+  drop within the window, and holds speech. A call this Viewer still holds open is
+  closed as `transport` first. The new session's `session_start` records
+  `resumes`, so the parts chain through their journals, up to 16.
+- **Context.** The new provider session starts with the conversation so far:
+  settled operator and voice turns, requests and reports, oldest first, newest
+  kept, each line at most 300 characters, in the same 2,400-character budget as
+  the earlier-call notes, which fill what it leaves. Lines left out are counted in
+  a marker, and the first part's stored summary, when there is one, stands for
+  them. Each part stops at its private-history cut (`privateCut`, the summariser's
+  rule) with a line saying a private part is not repeated. The block reaches both
+  the voice and the backing model, as the notes do.
+- **Record.** The session route's transcript of a resumed call is every part in
+  order on one clock from the first part's start; an earlier part's end is left
+  out and each later part's start renders as "Connection dropped · reconnected".
+- **Screen.** The store keeps the lines across the reconnect by lifting the new
+  session's generations above the earlier ones, so the reducer's reconnect rule
+  keeps settled lines and delivered work. The desktop lane keeps a "connection
+  dropped" notice with **Reconnect** while the call is offered; the phone says it
+  in its bubble and puts **Reconnect** first in the head's menu. A reconnect says
+  "Connection restored" once.
+
+Speech still growing when the Viewer process dies is not in the journal, as
+before; a reconnect after such a restart continues from the last settled turn.

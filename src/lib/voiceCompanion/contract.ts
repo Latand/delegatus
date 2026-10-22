@@ -148,9 +148,13 @@ export type CompanionCommand =
   | { type: "interrupt"; responseId: Id }
   | { type: "mute"; muted: boolean };
 
+/** A call that dropped and can go on as the same conversation. */
+export interface ResumableCall { sessionId: Id; project: string | null }
+
 export interface VoiceCompanionAdapter {
   readonly mode: CompanionMode;
-  start(options: { locale: Locale; project: Id }): Promise<void>;
+  /** `resume` continues a dropped call: the new session starts with its conversation. */
+  start(options: { locale: Locale; project: Id; resume?: Id }): Promise<void>;
   /** Updates browser context on the same call, including while it starts. */
   setProject?(project: string | null): Promise<void>;
   subscribe(emit: (event: CompanionEvent) => void): () => void;
@@ -161,6 +165,8 @@ export interface VoiceCompanionAdapter {
   refresh?(): Promise<void>;
   /** The whole conversation of the latest session, still readable after it ended; null before the first. */
   transcript?(): Promise<SessionTranscriptRecord | null>;
+  /** The operator's dropped call the Viewer still offers, read once a page opens; its record becomes the one `transcript` reads. */
+  resumable?(): Promise<ResumableCall | null>;
   /** Unmount also releases delivery observation. */
   dispose?(): Promise<void>;
 }

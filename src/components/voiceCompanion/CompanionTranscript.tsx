@@ -36,6 +36,8 @@ export function transcriptRect(viewport: Size, block: Rect): Rect {
 type Status = "running" | "done" | "failed";
 type Row =
   | { kind: "speech"; key: string; atMs: number; speaker: "operator" | "companion"; text: string }
+  /* The connection dropped here and the same call went on. */
+  | { kind: "resumed"; key: string; atMs: number }
   | { kind: "report"; key: string; atMs: number; project: string | null; status: string | null; text: string }
   | { kind: "call"; key: string; atMs: number; name: string; status: Status; args: string; result: string | null; reason: string | null; handoffs: string[] }
   | { kind: "request"; key: string; atMs: number; instruction: string; stage: string; reason: string | null; engine: "claude" | "codex" | null;
@@ -83,6 +85,8 @@ export function transcriptRows(entries: readonly TranscriptEntry[]): Row[] {
       else rows.push({ kind: "report", key: entry.id, atMs: entry.atMs, project: str(data.projectName) ?? str(data.project), status: str(data.status), text: str(data.text) ?? "" });
     } else if (entry.kind === "handoff") {
       calls.get(str(data.delegationId) ?? "")?.handoffs.push(str(data.text) ?? "");
+    } else if (entry.kind === "session_start" && str(data.resumes)) {
+      rows.push({ kind: "resumed", key: entry.id, atMs: entry.atMs });
     }
   }
   return rows;
@@ -210,6 +214,11 @@ export function CompanionTranscript({ record, usage = record.usage, left, top, w
         </li>
       );
     }
+    if (row.kind === "resumed") return (
+      <li key={row.key} className="vc-tr-row vc-tr-resumed" data-kind="resumed">
+        <span className="vc-tr-time">{clock(row.atMs)}</span><span data-transcript-resumed>{t("voiceCompanion.reconnected")}</span>
+      </li>
+    );
     if (row.kind === "report") return (
       <li key={row.key} className="vc-tr-row" data-kind="report">
         <div className="vc-call vc-deleg vc-reply" data-stage="answered" data-report-status={row.status ?? undefined} data-transcript-report>
@@ -286,6 +295,7 @@ export const TRANSCRIPT_CSS = `
 .vc-tr-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
 .vc-tr-row { display: flex; flex-direction: column; min-width: 0; }
 .vc-tr-row[data-speaker="operator"] { align-items: flex-end; }
+.vc-tr-resumed { flex-direction: row; justify-content: center; align-items: baseline; gap: 6px; padding: 2px 0; font-size: 11.5px; color: var(--color-secondary); border-top: 1px dashed var(--color-border); overflow-wrap: anywhere; text-align: center; }
 .vc-tr-row[data-speaker="companion"] { align-items: flex-start; }
 .vc-tr .vc-bubble { max-width: 88%; cursor: text; }
 .vc-tr .vc-bubble[data-speaker="companion"] { box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }

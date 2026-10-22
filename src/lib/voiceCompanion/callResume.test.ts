@@ -31,8 +31,9 @@ function harness(backend: "api" | "codex" = "api", model: CallSummarizer = async
   const admission = new CompanionAdmission(storage, { recipient: () => null, reports: () => [], send: async () => { throw new Error("unexpected send"); } }, () => now);
   const provider = new FakeLiveProvider(); if (backend === "codex") Object.defineProperty(provider, "backend", { value: "codex" });
   const memory = new CallMemory(storage, admission.records, model, () => now, 1000);
-  const build = () => new CompanionLiveSessions(storage, admission, fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] }), provider,
-    { memory, key: () => "synthetic-credential", timers: false, now: () => now, closeTimeoutMs: 10,
+  /* A restarted Viewer brings its own state, records and call memory: one writer per journal, as in production. */
+  const build = (state = storage, gate = admission) => new CompanionLiveSessions(state, gate, fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] }), provider,
+    { memory: gate === admission ? memory : new CallMemory(state, gate.records, model, () => now, 1000), key: () => "synthetic-credential", timers: false, now: () => now, closeTimeoutMs: 10,
       ownerHistory: async () => ({ available: true, title: "private title sentinel", chat: "private-sentinel", timeZone: "UTC", start: "2026-10-22T00:00:00Z", end: "2026-10-23T00:00:00Z", oldestStoredAt: null,
         messages: [{ messageId: 1, sentAt: "2026-10-22T09:00:00Z", author: { name: "private member sentinel", username: null }, fromAssistant: false, topicId: null, replyToMessageId: null, text: "private message sentinel", media: null, truncated: false }], nextCursor: null, privacy: OWNER_HISTORY_PRIVACY }) });
   return { storage, admission, provider, memory, service: build(), build, advance: (ms: number) => { now += ms; }, now: () => now };
@@ -159,6 +160,14 @@ test("only the operator who had the call can see or resume it", async () => {
   expect(h.service.resumable({ memberId: "member-a" })?.sessionId).toBe(first.sessionId);
   await expect(start(h, { resume: first.sessionId, startedBy: { memberId: "member-b" } })).rejects.toThrow("SESSION_UNAVAILABLE");
   expect(h.provider.sessions).toHaveLength(1);
+
+  /* Another member naming a live call never cuts it off. */
+  const live = await start(h, { startedBy: { memberId: "member-a" } });
+  say(h, live.providerId, [["operator", "Still talking."]]);
+  await h.service.drain(live.sessionId);
+  await expect(start(h, { resume: live.sessionId, startedBy: { memberId: "member-b" } })).rejects.toThrow("SESSION_UNAVAILABLE");
+  expect(ending(h, live.sessionId)).toBeUndefined();
+  await h.service.close(live.sessionId);
 });
 
 test("a hang-up is not offered back; a stale browser and a browser that lost its media are drops", async () => {
@@ -216,19 +225,24 @@ test("a start that failed before anything was said is not offered as a call to r
 test("after a Viewer restart the call it held is offered from its journal and resumes with its words", async () => {
   const h = harness();
   const first = await start(h);
-  say(h, first.providerId, [["operator", "Before the restart."], ["voice", "Heard you."], ["operator", "Keep going."]]);
+  /* Settled speech is in the journal on disk; the voice's last line was still growing when the Viewer died. */
+  say(h, first.providerId, [["operator", "Before the restart."], ["voice", "Heard you."], ["operator", "Keep going."], ["voice", "Still growing"]]);
   await h.service.drain(first.sessionId);
-  /* The previous Viewer died: its process owned the call, and nothing closed it. */
+  /* The previous Viewer died: its process owned the call, and nothing closed it. The next one reads only the disk. */
   h.storage.change(document => { document.sessions[first.sessionId].owner = { pid: 2 ** 22 + 17, instance: "previous-viewer" }; });
-  const restarted = h.build();
+  const storage = new CompanionStorage(h.now);
+  const admission = new CompanionAdmission(storage, { recipient: () => null, reports: () => [], send: async () => { throw new Error("unexpected send"); } }, h.now);
+  expect(admission.transcriptRecord(first.sessionId).entries.filter(row => row.kind === "utterance").map(row => row.data.text)).toEqual(["Before the restart.", "Keep going."]);
+  const restarted = h.build(storage, admission);
   h.service = restarted;
   expect(restarted.resumable(operator)?.sessionId).toBe(first.sessionId);
   await restarted.recover();
-  expect(ending(h, first.sessionId)).toBe("transport");
+  expect(admission.transcriptRecord(first.sessionId).entries.find(row => row.kind === "session_end")?.data.reason).toBe("transport");
   expect(restarted.resumable(operator)?.sessionId).toBe(first.sessionId);
   const second = await start(h, { resume: first.sessionId });
   const memory = h.provider.sessions.at(-1)!.memory!;
   expect(memory).toContain("operator: Before the restart.");
   expect(memory).toContain("voice: Heard you.");
+  expect(memory).toContain("operator: Keep going.");
   await restarted.close(second.sessionId);
 });

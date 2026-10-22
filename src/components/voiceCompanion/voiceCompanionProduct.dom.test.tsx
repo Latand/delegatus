@@ -373,6 +373,78 @@ test("the store renders nothing for a level sample, resets on a new session and 
  * production session route and the session service over the local fake provider.
  * Only the browser's media objects are stand-ins; nothing leaves the process.
  */
+test("the store offers a call back only after a drop that followed speech, keeps it through a failed reconnect, and withdraws it when the Viewer refuses", async () => {
+  const listeners = new Set<(event: CompanionEvent) => void>();
+  let seq = 0;
+  const emit = (sessionId: string, payload: Payload) => {
+    const event = { ...payload, version: 1, sessionId, generation: 1, eventId: `event-${seq}`, seq: seq += 1, atMs: seq } as CompanionEvent;
+    for (const listener of [...listeners]) listener(event);
+  };
+  let next: { id: string; failure: string | null } = { id: "call-1", failure: null };
+  let offered: { sessionId: string; project: string | null } | null = null;
+  const adapter: VoiceCompanionAdapter = {
+    mode: "official-realtime",
+    subscribe: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    start: async () => {
+      if (next.failure) { emit(`local-${seq}`, { type: "session.ready", mode: "official-realtime" }); emit(`local-${seq - 1}`, { type: "error", code: next.failure, recoverable: false }); throw new Error(next.failure); }
+      emit(next.id, { type: "session.ready", mode: "official-realtime" });
+    },
+    command: async () => undefined,
+    close: async () => undefined,
+    resumable: async () => offered,
+  };
+  const store = createCompanionStore(adapter);
+  const disconnect = store.connect();
+  await act(async () => settle());
+  expect(store.get().resumable).toBeNull();
+
+  /* A drop before anything was said, and a hang-up after speech, offer nothing. */
+  await store.start({ locale: "en", project: "atlas" });
+  emit("call-1", { type: "session.closed", reason: "transport", incomplete: false });
+  expect(store.get().resumable).toBeNull();
+  next = { id: "call-2", failure: null };
+  await store.start({ locale: "en", project: "atlas" });
+  emit("call-2", { type: "transcript.final", speaker: "operator", itemId: "said", text: "Check the build." });
+  emit("call-2", { type: "session.closed", reason: "operator", incomplete: false });
+  expect(store.get().resumable).toBeNull();
+
+  /* A lost connection after speech offers the call, and the lines stay. */
+  next = { id: "call-3", failure: null };
+  await store.start({ locale: "en", project: "atlas" });
+  emit("call-3", { type: "transcript.final", speaker: "operator", itemId: "said", text: "Check the build." });
+  emit("call-3", { type: "error", code: "CONNECTION_LOST", recoverable: false });
+  expect(store.get().resumable).toEqual({ sessionId: "call-3", project: null });
+  expect(store.get().lines.map((line) => line.text)).toEqual(["Check the build."]);
+
+  /* A reconnect whose request is lost keeps the offer and the lines; one the Viewer refuses withdraws it. */
+  next = { id: "call-4", failure: "COMPANION_UNAVAILABLE" };
+  await expect(store.start({ locale: "en", project: "atlas", resume: "call-3" })).rejects.toThrow("COMPANION_UNAVAILABLE");
+  expect([store.get().resumable?.sessionId, store.get().reconnected]).toEqual(["call-3", false]);
+  expect(store.get().lines.map((line) => line.text)).toEqual(["Check the build."]);
+  next = { id: "call-4", failure: "SESSION_UNAVAILABLE" };
+  await expect(store.start({ locale: "en", project: "atlas", resume: "call-3" })).rejects.toThrow("SESSION_UNAVAILABLE");
+  expect([store.get().resumable, store.get().reconnected, store.get().error]).toEqual([null, false, "SESSION_UNAVAILABLE"]);
+
+  /* A reconnect that goes through continues the lines under a newer generation; the next fresh call starts empty. */
+  emit("call-3", { type: "session.closed", reason: "transport", incomplete: false });
+  offered = { sessionId: "call-3", project: "atlas" };
+  disconnect();
+  const reloaded = createCompanionStore(adapter);
+  const release = reloaded.connect();
+  await act(async () => settle());
+  expect(reloaded.get().resumable).toEqual({ sessionId: "call-3", project: "atlas" });
+  next = { id: "call-5", failure: null };
+  await reloaded.start({ locale: "en", project: "atlas", resume: "call-3" });
+  expect([reloaded.get().resumable, reloaded.get().reconnected, reloaded.get().phase]).toEqual([null, true, "idle"]);
+  emit("call-5", { type: "transcript.final", speaker: "companion", itemId: "said", text: "Back again." });
+  expect(reloaded.get().lines.map((line) => line.text)).toEqual(["Back again."]);
+  next = { id: "call-6", failure: null };
+  await reloaded.start({ locale: "en", project: "atlas" });
+  expect([reloaded.get().lines.length, reloaded.get().reconnected]).toEqual([0, false]);
+  expect(reloaded.get().resumable).toBeNull();
+  release();
+});
+
 async function liveHarness() {
   const fs = await import("node:fs");
   const os = await import("node:os");
@@ -1256,7 +1328,7 @@ test("phone: a lost network keeps the call's history, the menu offers Reconnect,
     await pause(700);
     const closes = sessionCalls().map((call) => call.body as { action?: string; reason?: string } | null).filter((body) => body?.action === "close");
     expect(closes.at(-1)?.reason).toBe("transport");
-    expect(document.querySelector("[data-phone-voice-bubble]")?.textContent).toBe(companionErrorMessage("CONNECTION_LOST", "en"));
+    expect(document.querySelector("[data-phone-voice-bubble]")?.textContent?.replace(/\u00a0/gu, " ")).toBe(companionErrorMessage("CONNECTION_LOST", "en"));
     await click(document.querySelector("[data-phone-voice-head]"));
     expect(document.querySelector("[data-phone-voice-resume]")).toBeTruthy();
     await click(document.querySelector("[data-phone-voice-transcript]"));
@@ -1279,7 +1351,7 @@ test("phone: a lost network keeps the call's history, the menu offers Reconnect,
     expect(live.provider.sessions).toHaveLength(2);
     expect(live.provider.sessions[1].memory).toContain("operator: Check the search lane.");
     expect(phoneHead()?.dataset.phase).not.toBe("offline");
-    expect(document.querySelector("[data-phone-voice-bubble]")?.textContent).toBe(companionErrorMessage("CONNECTION_RESTORED", "en"));
+    expect(document.querySelector("[data-phone-voice-bubble]")?.textContent?.replace(/\u00a0/gu, " ")).toBe(companionErrorMessage("CONNECTION_RESTORED", "en"));
   } finally { await unmountNow(); await live.release(); }
 });
 
