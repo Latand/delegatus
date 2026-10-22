@@ -578,3 +578,39 @@ test("a panel that rises to the viewport's top stops below the page's top-bar co
   expect(transcriptRect(viewport, block, [{ x: 20, y: 8, width: 100, height: 32 }, { x: 600, y: 300, width: 300, height: 32 }])).toEqual(bare);
   expect(transcriptRect({ width: 1000, height: 400 }, { x: 700, y: 260, width: 200, height: 48 }, [search])).toEqual(transcriptRect({ width: 1000, height: 400 }, { x: 700, y: 260, width: 200, height: 48 }));
 });
+
+test("an ended call, and each call picked, opens at its start; a live call opens at its newest line and keeps following", async () => {
+  const { sampleCallHistory } = await import("./transcriptSample.fixture");
+  const { calls, records } = sampleCallHistory("en");
+  /* jsdom has no layout: give the body a scroll height so the position it was set to can be read back. */
+  const heightOf = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollHeight");
+  Object.defineProperty(HTMLElement.prototype, "scrollHeight", { configurable: true, get() { return 1000; } });
+  try {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    mounted = { root, host };
+    const show = async (record: (typeof records)[string], current: string) => act(async () => root.render(<CompanionTranscript record={record} calls={calls} current={current}
+      onChoose={() => {}} left={0} top={0} width={360} height={560} onClose={() => {}} />));
+    const body = () => host.querySelector<HTMLElement>("[data-transcript-body]")!;
+    await show(records[calls[0]!.sessionId]!, calls[0]!.sessionId);
+    expect(body().scrollTop).toBe(0);
+    /* Picking another call lands on that call's start too, even when the reader had scrolled the first to its end. */
+    body().scrollTop = 900;
+    await act(async () => { body().dispatchEvent(new Event("scroll")); });
+    await show(records[calls[1]!.sessionId]!, calls[1]!.sessionId);
+    expect(body().scrollTop).toBe(0);
+
+    /* A live call (no session_end) opens at its end and follows a new line. */
+    const live = { ...records[calls[0]!.sessionId]!, sessionId: "call_live", entries: records[calls[0]!.sessionId]!.entries.filter((entry) => entry.kind !== "session_end") };
+    await show(live, "call_live");
+    expect(body().scrollTop).toBe(1000);
+    body().scrollTop = 0;
+    await act(async () => { body().dispatchEvent(new Event("scroll")); });
+    const entries = [...live.entries, { ...live.entries[0]!, id: "late", order: live.entries.length, atMs: 999_000, data: { ...live.entries[0]!.data } }];
+    await show({ ...live, entries }, "call_live");
+    expect(body().scrollTop).toBe(0);
+  } finally {
+    if (heightOf) Object.defineProperty(HTMLElement.prototype, "scrollHeight", heightOf); else delete (HTMLElement.prototype as { scrollHeight?: number }).scrollHeight;
+  }
+});

@@ -11376,6 +11376,8 @@ describe("phone voice call history", () => {
     const { base, stop } = await serveFixture();
     const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
     const readings: unknown[] = [];
+    /* The first action of an opened call (a tool call or a request to the orchestrator) and its status text. */
+    const FIRST_ACTION = ['.vc-tr-list > li:is([data-kind="call"], [data-kind="request"])', '.vc-tr-list > li:is([data-kind="call"], [data-kind="request"]) .vc-call-state'];
     const whole = (page: Page, selectors: string[]) => page.evaluate((list) => {
       const view = document.querySelector<HTMLElement>("[data-companion-transcript-view]")!;
       const body = view.querySelector<HTMLElement>("[data-transcript-body]")!;
@@ -11401,6 +11403,10 @@ describe("phone voice call history", () => {
         inside: pick.left >= box.left && pick.right <= box.right && pick.top >= box.top && pick.bottom <= box.bottom
           && document.elementFromPoint(pick.left + pick.width / 2, pick.top + pick.height / 2) === picker },
         panelInside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, sideways: body.scrollWidth - body.clientWidth,
+        /* A row of the list the body's top edge runs through: a retained call opens at its start, so none is cut there. */
+        cutByTop: [...body.querySelectorAll<HTMLElement>(".vc-tr-list > li")].filter((row) => { const rect = row.getBoundingClientRect(); return rect.top < body.getBoundingClientRect().top - 0.5 && rect.bottom > body.getBoundingClientRect().top + 0.5; })
+          .map((row) => row.getAttribute("data-kind") ?? ""),
+        scrolled: Math.round(body.scrollTop),
         /* The opened request's name, whole in its own line. */
         title: [...view.querySelectorAll<HTMLElement>("[data-transcript-request] [data-human-label]")].map((node) => ({ text: node.innerText, whole: node.scrollWidth <= node.clientWidth && node.scrollHeight <= node.clientHeight + 1 })) };
     }, selectors);
@@ -11435,11 +11441,12 @@ describe("phone voice call history", () => {
           expect(await panel.getAttribute("aria-modal")).toBe("true");
           expect(await picker.inputValue()).toBe("call_delegation");
           expect(await page.evaluate(() => (window as unknown as { phoneVoice: { starts: string[] } }).phoneVoice.starts)).toEqual([]);
-          const newest = await whole(page, [".vc-tr-title", ".vc-tr-sub"]);
+          const newest = await whole(page, [".vc-tr-title", ".vc-tr-sub", ...FIRST_ACTION]);
           await page.screenshot({ path: path.join(out, `${prefix}-1-newest.png`) });
 
           await picker.selectOption("call_failed_delivery");
           await panel.locator('[data-transcript-request][data-stage="failed"]').waitFor();
+          const failedStart = await whole(page, FIRST_ACTION);
           await openRequest(page);
           const failed = await whole(page, ['[data-transcript-request][data-stage="failed"] .vc-call-state', "[data-transcript-reason]", "a[data-transcript-orchestrator]"]);
           expect(failed.result["a[data-transcript-orchestrator]"]!.text).toBe("Atlas");
@@ -11449,10 +11456,16 @@ describe("phone voice call history", () => {
 
           await picker.selectOption("call_refused");
           await panel.locator('[data-transcript-request][data-stage="refused"]').waitFor();
+          const refusedStart = await whole(page, FIRST_ACTION);
           await openRequest(page);
           const refused = await whole(page, ['[data-transcript-request][data-stage="refused"] .vc-call-state', "[data-transcript-reason]"]);
           await page.screenshot({ path: path.join(out, `${prefix}-3-refused.png`) });
 
+          /* Each call opens at its start: its first action row and that row's status text stand whole in the body and no row is cut by the body's top edge. */
+          for (const [step, reading] of [["newest", newest], ["failed", failedStart], ["refused", refusedStart]] as const) {
+            expect(Object.entries(reading.result).filter(([selector, value]) => FIRST_ACTION.includes(selector) && (!value.found || !value.whole)).map(([selector]) => selector), `${prefix} ${step}: the first action row and its status are whole on opening`).toEqual([]);
+            expect([reading.scrolled, reading.cutByTop], `${prefix} ${step}: opened at the start, no row cut by the body's top edge`).toEqual([0, []]);
+          }
           for (const [step, reading] of [["newest", newest], ["failed", failed], ["refused", refused]] as const) {
             expect(Object.entries(reading.result).filter(([, value]) => !value.found || !value.whole).map(([selector]) => selector), `${prefix} ${step}: every named text is whole`).toEqual([]);
             expect([reading.panelInside, reading.picker.inside, reading.picker.fits, reading.sideways <= 1, reading.picker.height >= 44], `${prefix} ${step}: panel, picker, its label and its target`).toEqual([true, true, true, true, true]);

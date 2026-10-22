@@ -25372,6 +25372,8 @@ describe("floating voice companion", () => {
      `<hand-off>/history`, never into the tree. */
   browserTest("call history after a reload: the newest retained call, a picker for each earlier one, and a request's reason and orchestrator link, 1440 and 1000, en and uk, light and dark", async () => {
     if (ONLY && !ONLY.includes("history")) return;
+    /* The first action of an opened call (a tool call or a request to the orchestrator) and its status text. */
+    const FIRST_ACTION = ['.vc-tr-list > li:is([data-kind="call"], [data-kind="request"])', '.vc-tr-list > li:is([data-kind="call"], [data-kind="request"]) .vc-call-state'];
     const out = path.join(HANDOFF, "history");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(OUT);
@@ -25410,6 +25412,10 @@ describe("floating voice companion", () => {
           .filter(({ rect }) => rect.width > 0 && rect.height > 0 && rect.top < 48 && rect.left < box.right && rect.right > box.left && rect.top < box.bottom && rect.bottom > box.top)
           .map(({ control, rect }) => `${control.tagName.toLowerCase()} ${(control.innerText || control.getAttribute("aria-label") || "").slice(0, 24)} ${Math.round(rect.left)},${Math.round(rect.top)}`),
         top: Math.round(box.top),
+        /* A row of the list the body's top edge runs through: a retained call opens at its start, so none is cut there. */
+        cutByTop: [...body.querySelectorAll<HTMLElement>(".vc-tr-list > li")].filter((row) => { const rect = row.getBoundingClientRect(); return rect.top < body.getBoundingClientRect().top - 0.5 && rect.bottom > body.getBoundingClientRect().top + 0.5; })
+          .map((row) => row.getAttribute("data-kind") ?? ""),
+        scrolled: Math.round(body.scrollTop),
         /* The open request's name, whole inside its own line. */
         title: [...view.querySelectorAll<HTMLElement>("[data-transcript-request] [data-human-label]")].map((node) => ({ text: node.innerText, whole: node.scrollWidth <= node.clientWidth && node.scrollHeight <= node.clientHeight + 1 })),
         /* The space between the end of what is read above each label of the opened request and the label itself, from the text. */
@@ -25453,11 +25459,12 @@ describe("floating voice companion", () => {
           expect(options.length, `${label}: three retained calls`).toBe(3);
           expect(await picker.inputValue(), `${label}: the newest call opens`).toBe("call_delegation");
           expect(await panel.locator("[data-transcript-request]").first().getAttribute("data-stage")).toBe("delivered");
-          const newest = await whole(page, [".vc-tr-title", ".vc-tr-sub"]);
+          const newest = await whole(page, [".vc-tr-title", ".vc-tr-sub", ...FIRST_ACTION]);
           await page.screenshot({ path: path.join(out, `history-${label}-1-newest.png`) });
 
           await picker.selectOption("call_failed_delivery");
           await panel.locator('[data-transcript-request][data-stage="failed"]').waitFor({ timeout: 5_000 });
+          const failedStart = await whole(page, FIRST_ACTION);
           await openRequest(page);
           const failed = await whole(page, ['[data-transcript-request][data-stage="failed"] .vc-call-state', "[data-transcript-reason]", "a[data-transcript-orchestrator]"]);
           expect(failed.result["[data-transcript-reason]"]!.text, `${label}: the delivery failure says why`).toContain(lang === "uk" ? "нічого не надіслано" : "nothing was sent");
@@ -25466,12 +25473,18 @@ describe("floating voice companion", () => {
 
           await picker.selectOption("call_refused");
           await panel.locator('[data-transcript-request][data-stage="refused"]').waitFor({ timeout: 5_000 });
+          const refusedStart = await whole(page, FIRST_ACTION);
           await openRequest(page);
           const refused = await whole(page, ['[data-transcript-request][data-stage="refused"] .vc-call-state', "[data-transcript-reason]"]);
           expect(refused.result["[data-transcript-reason]"]!.text, `${label}: the refusal says why`).toContain(lang === "uk" ? "немає призначеного оркестратора" : "no designated orchestrator");
           expect(await panel.locator("a[data-transcript-orchestrator]").count(), `${label}: a refusal before any orchestrator links none`).toBe(0);
           await page.screenshot({ path: path.join(out, `history-${label}-3-refused.png`) });
 
+          /* Each call opens at its start: its first action row and that row's status text stand whole in the body and no row is cut by the body's top edge. */
+          for (const [step, reading] of [["newest", newest], ["failed", failedStart], ["refused", refusedStart]] as const) {
+            expect(Object.entries(reading.result).filter(([selector, value]) => FIRST_ACTION.includes(selector) && (!value.found || !value.whole)).map(([selector]) => selector), `${label} ${step}: the first action row and its status are whole on opening`).toEqual([]);
+            expect([reading.scrolled, reading.cutByTop], `${label} ${step}: opened at the start, no row cut by the body's top edge`).toEqual([0, []]);
+          }
           for (const [step, reading] of [["newest", newest], ["failed", failed], ["refused", refused]] as const) {
             expect(Object.entries(reading.result).filter(([, value]) => !value.found || !value.whole).map(([selector]) => selector), `${label} ${step}: every named text is whole`).toEqual([]);
             expect([reading.panelInside, reading.picker.inside, reading.picker.fits, reading.sideways <= 1], `${label} ${step}: panel, picker and its label fit`).toEqual([true, true, true, true]);

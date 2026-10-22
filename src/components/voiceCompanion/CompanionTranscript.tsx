@@ -164,9 +164,22 @@ export function CompanionTranscript({ record, usage = record.usage, left, top, w
   const last = record.entries.reduce((max, entry) => Math.max(max, entry.atMs, typeof entry.data.endMs === "number" ? entry.data.endMs : 0), 0);
   const body = useRef<HTMLDivElement>(null);
   const panel = useRef<HTMLDivElement>(null);
-  /* Opened at its newest line, as the lane shows it, and following new lines until the reader scrolls back. */
+  /* A live call opens at its newest line, as the lane shows it, and follows new lines until the reader scrolls back.
+     A call that has ended (and each call picked in the picker) opens at its start, where its first action and
+     delivery status stand whole, and stays there. */
   const following = useRef(true);
-  useLayoutEffect(() => { if (following.current && body.current) body.current.scrollTop = body.current.scrollHeight; }, [rows]);
+  const opened = useRef<string | null | undefined>(null);
+  useLayoutEffect(() => {
+    const node = body.current;
+    if (!node) return;
+    if (rows.length && opened.current !== record.sessionId) {
+      opened.current = record.sessionId;
+      following.current = !ended;
+      node.scrollTop = ended ? 0 : node.scrollHeight;
+      return;
+    }
+    if (following.current) node.scrollTop = node.scrollHeight;
+  }, [rows, record.sessionId, ended]);
   useEffect(() => { panel.current?.focus({ preventScroll: true }); }, []);
 
   const who = (speaker: "operator" | "companion") => (speaker === "operator" ? t("voiceCompanion.you") : "Delegatus");
