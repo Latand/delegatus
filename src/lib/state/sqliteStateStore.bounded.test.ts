@@ -13,6 +13,38 @@ import { assertStateChildSuccess } from "./stateChildResult.fixture";
 
 type Row = { key: string; value: number };
 
+test("bounded companion writes commit together, rollback together and share a finite budget", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bounded-companion-"));
+  const filename = path.join(dir, "state.sqlite");
+  const options = (collection: string) => ({ collection, schemaVersion: 1, busyMessage: "busy", key: (row: Row) => row.key,
+    clone: structuredClone, decode: (raw: unknown) => raw as Row });
+  initializeStateCollections(filename, ["first", "second"].map(name => ({ ...options(name), migrationId: name, loadRecords: () => [] })));
+  const first = new SqliteStateCollection<Row>(filename, options("first"));
+  const second = new SqliteStateCollection<Row>(filename, options("second"));
+  try {
+    const put = (budget: number, crash = false) => first.boundedPatch(budget, tx => {
+      tx.put({ key: "task", value: 1 });
+    }, undefined, { collection: second, prepare: () => {
+      if (crash) throw new Error("crash after task write");
+      return { records: [{ key: "allowance", value: 2 }] };
+    } });
+    expect(() => put(2, true)).toThrow("crash after task write");
+    expect(first.get("task")).toBeNull();
+    expect(second.get("allowance")).toBeNull();
+    expect(() => put(1)).toThrow("budget");
+    expect(first.get("task")).toBeNull();
+    expect(second.get("allowance")).toBeNull();
+    put(2);
+    expect(first.get("task")?.value).toBe(1);
+    expect(second.get("allowance")?.value).toBe(2);
+    // Reverse collection order must take the same two leases in the same order.
+    second.boundedPatch(2, tx => tx.put({ key: "allowance", value: 3 }), undefined,
+      { collection: first, prepare: () => ({ records: [{ key: "task", value: 4 }] }) });
+    expect(first.get("task")?.value).toBe(4);
+    expect(second.get("allowance")?.value).toBe(3);
+  } finally { first.close(); second.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("controller caches follow decoding authority and refuse writes that race snapshot preparation", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "controller-authority-"));
   const rows = Array.from({ length: 32 }, (_, n) => ({ key: `row-${n}`, value: n }));

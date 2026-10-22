@@ -1667,16 +1667,27 @@ export class SqliteStateCollection<T> {
 
   /** A bounded read/modify/write transaction. No collection materialization.
       Every read and mutation consumes the caller's finite row budget. */
-  boundedPatch<R>(limit: number, operation: (tx: StateBoundedTransaction<T>) => R, heldLease?: string): R {
+  boundedPatch<R, C = never>(limit: number, operation: (tx: StateBoundedTransaction<T>) => R, heldLease?: string,
+    companion?: { collection: SqliteStateCollection<C>; prepare: () => CompanionPatch<C> }): R {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 4096) throw new Error("invalid state patch limit");
+    const peer = companion?.collection;
+    if (peer && (heldLease || peer === (this as unknown) || peer.filename !== this.filename)) {
+      throw new Error("a bounded companion write needs another collection of the same database and owns both leases");
+    }
     assertSqliteWriteAuthority(this.filename);
-    const lease = heldLease ?? this.acquireLeaseSync();
+    // The same ordering as patchSync; failed second acquisition releases the first.
+    const peerFirst = peer && peer.options.collection < this.options.collection;
+    let peerLease: string | null = null;
+    let lease: string | null = heldLease ?? null;
     try {
+      if (peerFirst) peerLease = peer!.acquireLeaseSync();
+      lease ??= this.acquireLeaseSync();
+      if (peer && !peerFirst) peerLease = peer.acquireLeaseSync();
       const db = connectDatabase(this.filename);
       try {
         const result = withImmediateTransaction(db, this.options.busyMessage, () => {
           assertSqliteWriteAuthority(this.filename);
-          this.assertLease(db, lease);
+          this.assertLease(db, lease!);
           const revision = this.collectionMeta(db)!.revision + 1;
           let remaining = limit;
           const consume = () => { if (--remaining < 0) throw new Error("state patch row budget exceeded"); };
@@ -1747,6 +1758,11 @@ export class SqliteStateCollection<T> {
             },
           });
           if (result instanceof Promise) throw new Error("bounded state patches must be synchronous");
+          if (companion) {
+            const patch = companion.prepare();
+            for (let n = 0; n < patch.records.length + (patch.deleteKeys?.length ?? 0); n++) consume();
+            companion.collection.mergeRows(db, peerLease!, patch.records, patch.deleteKeys ?? []);
+          }
           // The callback and authority are checked inside the same commit boundary.
           assertSqliteWriteAuthority(this.filename);
           if (changed.size) {
@@ -1760,9 +1776,14 @@ export class SqliteStateCollection<T> {
         }, this.options.collection);
         secureDatabaseFiles(this.filename);
         this.invalidateAfterCommit();
+        peer?.invalidateAfterCommit();
         return result;
       } finally { db.close(); }
-    } finally { if (!heldLease) this.releaseLeaseSync(lease); }
+    } finally {
+      if (peerLease && !peerFirst) peer!.releaseLeaseSync(peerLease);
+      if (!heldLease && lease) this.releaseLeaseSync(lease);
+      if (peerLease && peerFirst) peer!.releaseLeaseSync(peerLease);
+    }
   }
 
   /** Admission without materializing the collection. Prepared evidence is

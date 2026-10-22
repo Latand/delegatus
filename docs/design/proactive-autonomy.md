@@ -4,6 +4,13 @@ Originating requirement — operator, 2026-10-22, approximately 14:06Z, seat voi
 
 Status: policy decided by the operator on **2026-10-22 at 14:48Z**. The five decisions at the end govern this design and its implementation slices. Implementation and live enablement remain separate steps.
 
+Implementation checkpoint: slices 1 and 2 are implemented. Slice 2 supplies internal atomic task admission, durable allowance and rejection records, immutable provenance, scope invalidation and compact read projection. It exposes no task-creation transport and enables no invented starts. The remaining slices are pending:
+
+- **3:** integrate the single-lane reservation, fresh account reserve, operator rejection/adoption and shared dispatch/effect fences across creation, direct spawn, retries, recovery, successors, publication and merge. Safe pausing needs those boundaries to agree before execution is enabled.
+- **4:** connect bounded discovery, frozen-scope independent review and operator-only proposal holds after the slice 3 fences; run the mechanical and semantic policy rehearsals separately.
+- **5:** expose the permission, effective allowance and pause reasons in the existing shared seat tick panel, plus the task marker/actions and rendered evidence. Its effective states and actions depend on slices 3 and 4.
+- **6:** run the complete episode/restart/rejection/expiry rehearsal and end report against the integrated feature. The internal allowance tests cover persistence, concurrency and rollback; they do not establish end-to-end execution behavior.
+
 ## 1. Observed behavior and evidence
 
 ### Inspection boundary

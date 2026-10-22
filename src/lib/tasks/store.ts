@@ -1,4 +1,5 @@
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { retainProactiveScope, validProactiveProvenance } from "./proactiveScope";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import fs from "node:fs";
 import { readFindingKey, reconcileOpenFindings, validStoredFinding } from "./finding";
@@ -51,6 +52,7 @@ function committedRows(tasks: BoardTask[], before: ReturnType<typeof snapshotTas
   for (const task of tasks) {
     task.project = canonical(task.project);
     const prior = before.get(task.id);
+    retainProactiveScope(task, prior ? (persistedRows.get(prior.ref) as BoardTask | undefined) ?? prior.ref : undefined);
     const completed = withTaskCompletion(task, prior ? { ...task, status: prior.status } : task);
     Object.assign(task, completed);
     /* A writer that moved the task without naming itself leaves the earlier
@@ -197,6 +199,7 @@ function coerceTask(value: unknown, canonical = canonicalProject): BoardTask | n
     typeof raw.project === "string" &&
     isTaskStatus(raw.status) &&
     typeof raw.text === "string" &&
+    (raw.proactive === undefined || validProactiveProvenance(raw.proactive)) &&
     (raw.details === undefined || typeof raw.details === "string") &&
     (raw.placement === undefined || isPlacement(raw.placement)) &&
     (raw.pos === undefined || isFinitePos(raw.pos)) &&
@@ -432,7 +435,14 @@ function mergeLegacyTasks(filePath: string, body: LegacyTasksBody, baseline: Sta
           continue;
         }
       }
-      records.push(row);
+      const incomingTask = key.startsWith("t:") ? coerceTask(row) : null;
+      const previousTask = key.startsWith("t:") ? coerceTask(held) : null;
+      if (incomingTask && previousTask?.proactive) {
+        retainProactiveScope(incomingTask, previousTask);
+        records.push(incomingTask as unknown as TaskStateRow);
+      } else {
+        records.push(row);
+      }
       summary.replaced += 1;
       summary.keys.push(key);
     }
@@ -981,4 +991,26 @@ export function mutateTaskTelegramPolls(taskId: string, reviewId: string,
 
 export function mutateTasksAsync<R>(mutate: (tasks: BoardTask[]) => { tasks: BoardTask[] | undefined; result: R }, filePath = TASKS_FILE): Promise<R> {
   return waitForStateLock("tasks.mutation", () => mutateTasks(mutate, filePath), { subject: "tasks" });
+}
+
+/** Targeted task + companion transaction. Both leases are acquired in canonical
+ * order before reading, and SQLite commits both rows together. No task list scan. */
+export async function patchTaskCompanion<C, R>(companion: SqliteStateCollection<C>,
+  prepare: (get: (id: string) => BoardTask | null) => { task?: BoardTask; records: C[]; result: R }, filePath = TASKS_FILE): Promise<R> {
+  return withViewerOperation("tasks.proactive.admission", () => waitForStateLock("tasks.proactive.admission", () => {
+    const tasks = taskCollection(filePath, "write")!;
+    let records: C[] = [];
+    return tasks.boundedPatch(6, tx => {
+      const patch = prepare(id => {
+        const raw = tx.get(`t:${id}`);
+        return raw ? coerceTask(raw) : null;
+      });
+      records = patch.records;
+      if (patch.task) {
+        stampTaskRevisions([patch.task], new Map(), false);
+        tx.put(patch.task as unknown as TaskStateRow);
+      }
+      return patch.result;
+    }, undefined, { collection: companion, prepare: () => ({ records }) });
+  }, { waitMs: 5_000, subject: "tasks.proactive" }));
 }
