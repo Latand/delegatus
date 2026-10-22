@@ -1,5 +1,7 @@
 "use client";
 
+import { isFileConfirmationUrl } from "@/lib/telegram/bot/fileConfirmationContract";
+
 import { createContext, Fragment, useContext, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
@@ -143,6 +145,7 @@ function FileAnchor({ spelled, target, title, label }: { spelled: string; target
 function Anchor({ href: raw, label }: { href: string; label: string }) {
   const scope = useContext(MdDocumentContext);
   const href = raw.replace(/\\([()])/g, "$1");
+  if (isFileConfirmationUrl(href)) return <a href={href} title={href} className={ANCHOR_CLASS}>{label}</a>;
   if (scope && href.startsWith("#") && !/^#[acfp]=/.test(href)) {
     return (
       <a
