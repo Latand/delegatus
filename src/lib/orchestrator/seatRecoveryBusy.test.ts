@@ -28,6 +28,7 @@ const AT = "2026-10-11T17:11:00.000Z";
 const conversationId = () => `conversation_${randomUUID()}`;
 function dependencies(spawn: SeatCommandDependencies["spawn"], waitMs?: number): SeatCommandDependencies {
   return {
+    resolveProject: project => ({ project, displayName: project }),
     spawn, deliver: async () => ({ ok: true, outcome: "delivered" }), conversationTarget: () => null,
     summarizeHandoffs: async () => ({ kind: "fallback", reason: "unavailable" }),
     launchSettlement: () => ({ kind: "unknown" }), stampRegistryIdentity: () => {},
@@ -284,7 +285,6 @@ test("other spawn errors retain immediate terminal behavior", async () => {
   expect(orchestratorSeatFor("atlas").history.at(-1)?.seat.intent.error).toBe("spawn transport failed");
 });
 
-
 for (const automatic of [false, true]) test(`a failed receipt after SQLite busy stays pending through ${automatic ? "automatic recovery" : "designation"} replay`, async () => {
   let failedReceipt = false;
   let calls = 0;
@@ -312,4 +312,33 @@ for (const automatic of [false, true]) test(`a failed receipt after SQLite busy 
   expect(result.status).toBe(200);
   expect(calls).toBe(2);
   expect(orchestratorSeatFor("atlas").history).toEqual([]);
+});
+
+for (const terminal of [false, true]) test(`canonical seat request keeps its project through ${terminal ? "terminal failure" : "a busy retry and name change"}`, async () => {
+  let target = "atlas";
+  let selections = 0;
+  const id = "conversation_canonical_retry";
+  const transcript = path.join(sandbox, "canonical-seat.jsonl");
+  fs.writeFileSync(transcript, "");
+  const deps = dependencies(async () => { throw new Error("fixture terminal failure"); });
+  deps.resolveProject = () => ({ project: target, displayName: "Atlas Board" });
+  deps.conversationTarget = () => {
+    if (++selections === 1) {
+      target = "other-project";
+      throw Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
+    }
+    return { kind: "eligible", conversationId: id, path: transcript, cwd: sandbox, project: "other-project", engine: "claude", model: "opus" };
+  };
+  const result = await executeOrchestratorSeatRequest({ ...request, project: "Atlas Board", clientRequestId: "canonical-seat-request",
+    ...(!terminal ? { conversationId: id } : {}),
+  }, deps);
+  if (terminal) {
+    expect(result.status).toBe(500);
+    expect(orchestratorSeatFor("atlas")).toMatchObject({ active: null, pending: null, history: [{ seat: { intent: { error: "fixture terminal failure" } } }] });
+  } else {
+    expect(result).toMatchObject({ status: 409, body: { code: "project_mismatch", error: "conversation belongs to a different project" } });
+    expect(orchestratorSeatFor("atlas")).toMatchObject({ active: null, pending: null, history: [] });
+    expect(selections).toBe(2);
+  }
+  expect(orchestratorSeatFor("other-project")).toMatchObject({ active: null, pending: null, history: [] });
 });

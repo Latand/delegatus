@@ -1,3 +1,5 @@
+import { resolveSeatProject } from "./seatProjectIdentity";
+import { ProjectNameRefusal } from "@/lib/projects/nameResolution";
 import { seatMessageKeys } from "@/lib/orchestrator/seatDeliveryKeys";
 import type { NextRequest } from "next/server";
 import fs from "node:fs";
@@ -125,6 +127,8 @@ export interface SeatLaunchAdmission {
 }
 
 export interface SeatCommandDependencies {
+  /** Name admission; fixtures may supply their own project directory. */
+  resolveProject?(named: string, cwd?: string): { project: string; displayName: string };
   /** Reconstruct the durable automatic fence for polling and request recovery. */
   automaticReplacementHold?(conversationId: string): SeatCommandResult | null | Promise<SeatCommandResult | null>;
   /** POST /api/spawn in-process, on the operator's own authority. */
@@ -1030,7 +1034,23 @@ export function executeOrchestratorSeatRequest(
   triggeredBy: OrchestratorSeatTrigger | null = null,
   admission?: SeatLaunchAdmission,
 ): Promise<SeatCommandResult> {
-  return guardedSeatTransition(rawBody, "seat_transition_failed", (retryingSqliteRequestId) => runOrchestratorSeatRequest(rawBody, dependencies, triggeredBy, admission, retryingSqliteRequestId), {
+  const body = { ...rawBody };
+  let identity: { project: string; displayName: string } | null = null;
+  return guardedSeatTransition(body, "seat_transition_failed", async (retryingSqliteRequestId) => {
+    const named = typeof rawBody.project === "string" ? rawBody.project.trim() : "";
+    if (!named) return { status: 400, body: { error: "project is required", admission: "refused" } };
+    if (!identity) {
+      try {
+        identity = (dependencies.resolveProject ?? resolveSeatProject)(named, text(rawBody.cwd) || undefined);
+      } catch (error) {
+        if (error instanceof ProjectNameRefusal) return { status: 400, body: { error: error.message, ...error.details, admission: "refused" } };
+        throw error;
+      }
+    }
+    body.project = identity.project;
+    const result = await runOrchestratorSeatRequest(body, dependencies, triggeredBy, admission, retryingSqliteRequestId);
+    return result.status < 400 ? { ...result, body: { ...result.body, ...identity, project: canonicalOrchestratorProject(identity.project) } } : result;
+  }, {
     replay: true,
     waitMs: dependencies.seatStoreWaitMs,
     launchAccepted: (clientRequestId) => dependencies.launchSettlement({ launchId: null, clientRequestId }).kind === "settled",

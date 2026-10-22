@@ -165,6 +165,7 @@ function settledSpawn(conversationId: string, launchId: string): () => Promise<{
 
 function dependencies(): SeatCommandDependencies {
   return {
+    resolveProject: project => ({ project, displayName: project }),
     spawn: async (body) => {
       spawns.push(body);
       return spawnAnswer(body);
