@@ -54,6 +54,7 @@ export type TelegramBotErrorCode =
   | "document_too_large"
   | "document_secret"
   | "document_roots_invalid"
+  | "confirmation_invalid"
   | "format_invalid"
   | "not_enough_rights"
   | "forbidden"
