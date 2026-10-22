@@ -584,7 +584,11 @@ These stay here:
   sets it to `off` as well, so nothing recurses.
 - **Test seams:** `LLV_GATE_RUNNER_CONFIG` (a config path),
   `LLV_GATE_RUNNER_CACHE` (the directory for the health file and the decision
-  log) and `LLV_GATE_RUNNER_SSH` (the ssh executable). Only tests set them.
+  log), `LLV_GATE_RUNNER_SSH` (the ssh executable) and
+  `LLV_GATE_RUNNER_RETURN_LIMIT` (a lower bound on returned outputs) on the
+  client; `LLV_GATE_RUNNER_NODE_MODULES` and
+  `LLV_GATE_RUNNER_TEST_AFTER_INSTALL` on the stub runner's side. Only tests
+  set them.
 
 The resolution order is `LLV_GATE_RUNNER`, then `LLV_GATE_RUNNER_CONFIG`, then
 the passwd-home file.
@@ -595,13 +599,16 @@ the passwd-home file.
 nested-slot check and before local admission. On Linux, when
 `LLV_GATE_RUNNER` is not `off` and either it is set or the config file exists
 under the passwd home (`getent passwd "$(id -u)" | cut -d: -f6`), the wrapper
-execs `bun "$(dirname "$0")/gate-runner/client.ts" "$@"`. Everything else is
-the client's job, `scripts/gate-runner/client.ts`:
+runs `bun "$(dirname "$0")/gate-runner/client.ts" "$@"` as a job, forwards
+`TERM` and `INT` to it, and hands it a decision file. The client either exits
+with the remote verdict, which the wrapper returns, or writes `here` and exits;
+the wrapper then sets `LLV_GATE_RUNNER=off` and continues into local admission,
+so a local run carries no extra process. Everything else is the client's job,
+`scripts/gate-runner/client.ts`:
 
 1. **Eligibility (§8.1).** When it fails, the client appends the reason to
-   the decision log (§8.7), execs the wrapper again with
-   `LLV_GATE_RUNNER=off` and prints nothing. The original command then runs
-   exactly as today.
+   the decision log (§8.7), answers `here` and prints nothing. The original
+   command then runs exactly as today.
 2. **Health.** The answer is cached for 60 s, healthy or not, in
    `~/.cache/delegatus-gate/runner-health.json` under the passwd home. A
    probe is one call,
@@ -648,8 +655,9 @@ the client's job, `scripts/gate-runner/client.ts`:
    is 12 lowercase hex characters, which the client checks before using it in
    a command.
 6. **Run.** `ssh -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 <alias> '~/.bun/bin/bun ~/runs/<id>/serve.ts run ~/runs/<id>'`
-   runs with the client writing a 32-byte random nonce, hex-encoded, as the
-   first line of the session's standard input, then holding that input open.
+   runs with the client writing a 32-byte random nonce, hex-encoded, and the
+   push budget left at that moment in milliseconds (or `-`) as the first line
+   of the session's standard input, then holding that input open.
    Nothing the runner writes before the `started` record reaches the caller.
    When `started` arrives, the client prints
    `gate-runner: running on the gate runner (run <id>, tree <12 chars>)` to
@@ -670,8 +678,6 @@ The manifest carries:
   `origin/main`) for a git tree; tree and parent for an export;
 - the shape;
 - the allowlisted environment (§8.5);
-- the remaining push budget in milliseconds, when `LLV_GATE_PUSH_DEADLINE`
-  was set;
 - whether the caller set `CHROME_BIN`;
 - the output-directory map (§8.8).
 
@@ -731,9 +737,10 @@ directory, which is removed afterwards. **In a git work tree:**
    unedited export gave the commit's own tree id in 422 ms, and a fresh index
    gave another id (§7).
 3. `commit-tree T -p P` with the same `gate-run` identity gives `C`. `P` is
-   the mirror's main `M` when the recorded repository has it, else
-   `git merge-base <commit> origin/main` there. Main is append-only, so the
-   mirror holds `P` either way. The parent lets the bundle leave out every
+   `git merge-base <commit> origin/main` in the recorded repository, else the
+   mirror's main `M` when that repository has it. Main is append-only, so the
+   mirror holds `P` either way, and the files that differ between `P` and `C`
+   are exactly the lane's changes, which is what the privacy scan reads. The parent lets the bundle leave out every
    object main already has: with three edits it took 25,674 bytes and 54 ms,
    against 44,212,015 bytes for a parentless commit (§7). Neither the
    exported commit nor any lane commit message travels.
@@ -756,12 +763,16 @@ same protocol.
 
 **`serve.ts run <dir>`:**
 
-1. **Sweep.** Remove every `~/runs/*` whose `lease` file is older than 30
-   minutes and whose unit `gate-run-<id>` is not active
-   (`systemctl --user is-active`). Then write `<dir>/lease`, touched every
-   30 s while the run lives.
+1. **Sweep.** Remove every `~/runs/<id>` named by this protocol (12
+   lowercase hex characters) whose `lease` file is older than 30 minutes and
+   whose unit `gate-run-<id>` is not active (`systemctl --user is-active`).
+   Directories under other names belong to whoever made them by hand and
+   stay. Then write `<dir>/lease`, touched every 30 s while the run lives.
 2. **Nonce.** Read one line from standard input within 10 s and keep it in
-   memory only. It is never written to disk, the manifest, an environment or
+   memory only. The line also carries the push budget left when the session
+   opened; the runner's clock at that moment plus that budget becomes the
+   command's `LLV_GATE_PUSH_DEADLINE`, so setup on the runner counts against
+   it. It is never written to disk, the manifest, an environment or
    the argv of `serve.ts exec`. The command runs as the same account, and
    `kernel.yama.ptrace_scope` = 1 (read on the runner, asserted by
    `provision.sh`) stops it from reading the memory of `serve.ts run`, which
@@ -813,14 +824,16 @@ same protocol.
    - `LLV_CPU_WAIT_ROOTS` and `LLV_GATE_ADMISSION_WAIT_ROOTS` set to
      `["<dir>/ledger"]`, so runner-side queue time is excluded from the
      budget there;
-   - `LLV_GATE_PUSH_DEADLINE` = the runner's clock now + the remaining
-     milliseconds;
-   - `LLV_GATE_SLOTS` from `~/.gate-runner.env` (3 on this server, §1.3);
+   - `LLV_GATE_PUSH_DEADLINE` from step 2;
+   - every `NAME=value` line of `~/.gate-runner.env`, the runner's own
+     settings: `LLV_GATE_SLOTS` (3 on this server, §1.3);
    - the manifest's allowlisted variables.
 
    **Allowlist:**
    - `LLV_OWNED_RUN_TIMEOUT_MS`, `NODE_OPTIONS`, `NO_COLOR` and
      `FORCE_COLOR`;
+   - `CLAUDECODE` and `AGENT`, which switch Bun's test reporter to its compact
+     agent output, so an agent reads the same lines from either side;
    - the drivers' switch variables, classified in one table in `client.ts`.
      Every `process.env.NAME` the four drivers and `scripts/local-gate*.ts`
      read is either `pass`, `isolated`, `output-dir` (§8.8), `input-path` or
@@ -842,7 +855,7 @@ same protocol.
    of its output exists yet. After `started`, an exit 69 passes through like
    any other code.
 8. **Launch.** Write the `started` record. Run
-   `systemd-run --user --quiet --collect --wait --pipe --unit=gate-run-<id> -p TimeoutStopSec=15s -- ~/.bun/bin/bun <dir>/serve.ts exec <dir>`.
+   `systemd-run --user --quiet --collect --wait --pipe --unit=gate-run-<id> -p TimeoutStopSec=15s --setenv=HOME=<home> -- ~/.bun/bin/bun <dir>/serve.ts exec <dir>`.
    Inside that unit, `serve.ts exec` spawns `bash <dir>/tree/scripts/gate-slot.sh <argv>`
    in `<dir>/tree/<cwd>` with that environment. The runner's own
    `gate-slot.sh` admission, slots, work slice, 300% scope quota,
@@ -1094,13 +1107,20 @@ off Linux, as `scripts/gate-slot.test.ts:101` does.
 | T14 | A fixture driver writes `evidence/x/a.json`, `.artifacts/y/b.png` and into an absolute `FOO_DIR`, and edits `.githooks/pre-push` and `package.json` in the runner's tree. A hostile `pack-outputs` stub then returns, in turn, an entry `tree/../x`, an absolute name, a symlink `tree/evidence/l` → `/` followed by `tree/evidence/l/f`, a hard link, and an entry under `tree/scripts/`. | A declared file is missing locally; any other file changes, compared by a hash list of the whole local tree and of the parent of `FOO_DIR`; a hostile return writes anything or exits other than 75; over the size bound, the exit is not 75 or a partial file appears. |
 | T15 | A tree containing a known value from a temporary known-values file, in a git tree and in a review export | Anything is uploaded, or the command does not run here with the privacy line. |
 | T16 | `publicationDeadlineOnly` (`src/lib/pipelines/publication.test.ts`) | It is false for `gate-runner: no verdict:` alone, or true when a `NEW` or `PRIVACY GATE: FAIL` line accompanies it. |
-| T17 | `isolatedEnvironment` (`scripts/local-gate.test.ts`) | It leaves `LLV_GATE_RUNNER` other than `off`. |
+| T17 | `isolatedEnvironment` (`scripts/gate-runner/client.test.ts`) | It leaves `LLV_GATE_RUNNER` other than `off`. |
 | T18 | `serve.ts` isolation keys | A key `isolatedEnvironment` replaces is neither given a fresh directory nor mapped to the persistent cache (`XDG_CACHE_HOME`) in `serve.ts`. |
 | T19 | A review export that `reviewExport()` made of a fixture commit, then edited, with a new file and a deleted file, keeping a tracked file that matches an ignore rule; a fixture test file run there; and a copy of the same files without `export.json` | For the export: the test does not run remotely; its exit or output (minus `gate-runner:` lines) differs from a local run; `T` differs from the tree of the export's files; the runner's tree holds `.git` or lacks the ignored tracked file; the bundle carries the exported commit or a lane commit message; any file of the export changes. For the copy: any invocation is recorded, or the decision log lacks its `ineligible` line. |
 | T20 | Containment refused: a stub `systemctl` on the runner's `PATH` refuses `set-property`; in a second case the probe unit exits 69; in a third, the command itself exits 69 after `started` | In the first two, any line from the runner reaches the caller before `gate-runner: running here: containment failed`, the command does not run here, or a `started` record is written. In the third, the client does anything but exit 69. |
 | T21 | `bun test $PWD/<fixture>.test.ts`, and `bun test` with an absolute path outside the tree | The first gives an exit or output (minus `gate-runner:` lines) different from a local run, or its manifest argv holds an absolute path. The second records any invocation. |
 | T22 | `provision.sh --print-settings` with 16 CPUs and `MemTotal` 32,083,512 kB, and with 32 CPUs and 128 GiB | The slots differ from 3 and 8, or `MemoryHigh` differs from `MemTotal` − 4 GiB. |
 | T23 | The client's config lookup (through `machineHome()`) and the shell branch's, run with `HOME` and `XDG_CONFIG_HOME` set to temporary directories | Either resolves under `HOME`, or under anything other than field 6 of `getent passwd <uid>`. |
+
+The cases live in `scripts/gate-runner/client.test.ts` (selection, streams,
+archives, health cache, T13, T17, T18, T22, T23), `remote.test.ts` (T1–T5,
+T9, T12, T15, T19, T21) and `remoteFaults.test.ts` (T6–T8, T10, T11, T14,
+T20). The privacy gate refuses any changed symlink, so T4's symlink case ships
+through `ship()` and the real `serve.ts run` without the scan. T14's size
+bound uses the test-only `LLV_GATE_RUNNER_RETURN_LIMIT`.
 
 ### 8.12 Rehearsal on the real runner and rollout
 

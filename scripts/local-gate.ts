@@ -232,6 +232,9 @@ export function isolatedEnvironment(root: string, inherited: NodeJS.ProcessEnv):
   env.CLAUDE_CODE_TMPDIR = env.TMPDIR;
   env.NODE_ENV = "test";
   env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
+  // An isolated check, its fixtures and comparator file runs stay on this
+  // machine; a remote run already happens one level up (scripts/gate-runner).
+  env.LLV_GATE_RUNNER = "off";
   return env;
 }
 
