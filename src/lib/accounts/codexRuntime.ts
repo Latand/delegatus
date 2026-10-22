@@ -164,6 +164,9 @@ export class ManagedCodexRuntime {
     this.observeSignedIn = options.observeSignedIn ?? (async (accountId) => {
       const { refreshAccountLimits } = await import("@/lib/accounts/liveLimits");
       await refreshAccountLimits("codex", accountId, { phase: "login-complete" });
+      /* An account an install transfer brought settles its checklist row now. */
+      const { settleImportedAccountSignIn } = await import("@/lib/transfer/accounts");
+      await settleImportedAccountSignIn("codex", accountId).catch(() => {});
     });
     this.now = options.now ?? (() => Date.now());
     this.stateFile = options.stateFile ?? statePath("codex-login-attempts.json");

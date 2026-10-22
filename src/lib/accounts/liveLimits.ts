@@ -27,7 +27,8 @@ import { kickStructuredDeliveryQueue } from "@/lib/runtime/structuredDeliverySig
  */
 
 /** Which reader took the observation, for the quota telemetry line. */
-export type LiveReadPhase = "operator-refresh" | "reset-credit-redeem" | "spawn-admission" | "login-complete";
+/** `transfer-verify`: an account an install transfer brought, read once it is signed in here. */
+export type LiveReadPhase = "operator-refresh" | "reset-credit-redeem" | "spawn-admission" | "login-complete" | "transfer-verify";
 
 export interface LiveLimitsDeps {
   registry?: Pick<AgentRegistry, "recordQuotaObservation"> & Partial<Pick<AgentRegistry, "quotaObservations" | "deliveryWriteOrBusy">>;

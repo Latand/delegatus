@@ -13,6 +13,7 @@ import { withFileTransactionSync } from "@/lib/state/fileTransaction";
 import { initializeStateCollections, SqliteStateCollection, stateCollectionsInitialized } from "@/lib/state/sqliteStateStore";
 import { assertStateStartupMutation } from "@/lib/stateOwnership";
 
+import { accountReportRows, accountsReady, applyAccounts, importedAccountRows, planAccounts, validAccountRecord, type AccountTargetDeps } from "./accounts";
 import { decodeBundle, splitRecordKey } from "./bundle";
 import { remapText, resolveAliasChain } from "./projectKeys";
 import { planRoleMemory, scopeFigures, validRoleRecord } from "./roleMemory";
@@ -76,7 +77,11 @@ export interface LedgerRow {
   /** The source's history of every scope merged into one this install already had. */
   scopeHistories: Record<string, unknown[]>;
   accounts: AccountPlan[];
-  report: Omit<TransferReport, "accounts">;
+  /** Account and binding records, applied after the commit; kept so an
+      interrupted apply can finish them without the bundle. */
+  accountRecords: StoredRow[];
+  accountsApplied: boolean;
+  report: Omit<TransferReport, "accounts" | "accountsReady">;
 }
 
 function ledgerCollection(create: boolean): SqliteStateCollection<LedgerRow> | null {
@@ -222,6 +227,8 @@ interface PlannedWrites {
   keptAsVersion: Set<string>;
   /** The source's history of each scope merged into an existing one, kept in the import record. */
   scopeHistories: Record<string, unknown[]>;
+  /** Account and binding records, project keys remapped, applied after the commit. */
+  accountRecords: StoredRow[];
 }
 
 interface Built {
@@ -264,7 +271,7 @@ export function buildPlan(decoded: DecodedBundle, request: { mappings?: Record<s
   const projectTarget = new Map(projectPlans.map(project => [project.key, project.target ?? project.key] as const));
   const remap = (text: string) => remapText(text, key => projectTarget.get(key) ?? key);
   const revisions: Record<string, string> = {};
-  const writes: PlannedWrites = { rows: new Map(), files: new Map(), pending: [], versions: {}, aliases: [], roleRowsAfter: [], sourceActive: new Map(), keptAsVersion: new Set(), scopeHistories: {} };
+  const writes: PlannedWrites = { rows: new Map(), files: new Map(), pending: [], versions: {}, aliases: [], roleRowsAfter: [], sourceActive: new Map(), keptAsVersion: new Set(), scopeHistories: {}, accountRecords: [] };
   const sectionPlans = new Map<string, SectionPlan>();
   const unknownSections = decoded.header.sections.filter(section => !isSectionName(section.name) || section.schema !== 1).map(section => section.name);
   for (const section of decoded.header.sections) sectionPlans.set(section.name, emptySectionPlan(section.name, section.records, replace.has(section.name as never)));
@@ -274,10 +281,18 @@ export function buildPlan(decoded: DecodedBundle, request: { mappings?: Record<s
     const sectionPlan = sectionPlans.get(record.s)!;
     if (unknownSections.includes(record.s)) { count(sectionPlan, "skipped", record.k, "needs-newer-delegatus"); continue; }
     const { part, key } = splitRecordKey(record.k);
-    if (record.s === "accounts") continue;
+    const row = { key: remap(key), value: JSON.parse(remap(JSON.stringify(record.v))) as unknown };
+    if (record.s === "accounts") {
+      /* Counted new here; the account plan, which reads this install's
+         accounts, settles which already exist (§3). */
+      if (part !== "accounts" || !validAccountRecord(row.key, row.value)) { count(sectionPlan, "skipped", record.k, "invalid-record"); continue; }
+      writes.accountRecords.push(row);
+      count(sectionPlan, "new", record.k);
+      continue;
+    }
     if (!partById.has(part) || partById.get(part)!.section !== record.s) { count(sectionPlan, "skipped", record.k, "unknown-part"); continue; }
     const entry = byPart.get(part) ?? { section: record.s, rows: [] };
-    entry.rows.push({ key: remap(key), value: JSON.parse(remap(JSON.stringify(record.v))) as unknown });
+    entry.rows.push(row);
     byPart.set(part, entry);
   }
 
@@ -519,9 +534,36 @@ function redoList(projects: readonly ProjectPlan[], writes: PlannedWrites, decod
 
 /* ── Dry run ─────────────────────────────────────────────────────────── */
 
-export async function previewTransferImport(bytes: Uint8Array, request: { mappings?: Record<string, string>; replace?: readonly string[] } = {}, options: { now?: Date } = {}): Promise<TransferPlan> {
+/** The account plan against this install, and the accounts section's counts moved to match it. */
+async function withAccountPlan(built: Built, deps: AccountTargetDeps | undefined): Promise<Built> {
+  if (!built.writes.accountRecords.length) return built;
+  const plans = await planAccounts(built.writes.accountRecords, deps);
+  const section = built.plan.sections.find(candidate => candidate.name === "accounts");
+  for (const account of plans) {
+    if (!section) break;
+    if (account.action === "existing") { section.new -= 1; section.same += 1; }
+    else if (account.action === "skip") { section.new -= 1; count(section, "skipped", `accounts|account:${account.engine}:${account.sourceId}`, account.reason ?? "skipped"); }
+  }
+  built.plan.accounts = plans;
+  return built;
+}
+
+export async function previewTransferImport(
+  bytes: Uint8Array, request: { mappings?: Record<string, string>; replace?: readonly string[] } = {},
+  options: { now?: Date; accounts?: AccountTargetDeps } = {},
+): Promise<TransferPlan> {
   const decoded = await stageBundle(bytes);
-  return buildPlan(decoded, request, (options.now ?? new Date()).toISOString()).plan;
+  return (await withAccountPlan(buildPlan(decoded, request, (options.now ?? new Date()).toISOString()), options.accounts)).plan;
+}
+
+/** After the commit: the accounts, signed out, and their bindings (§3.5); then the record says so. */
+async function finishAccounts(ledger: LedgerRow, deps: AccountTargetDeps | undefined): Promise<void> {
+  if (ledger.accountsApplied) return;
+  await applyAccounts(ledger.importId, ledger.exportId, ledger.accountRecords, deps);
+  const held = ledgerCollection(true)!;
+  try { held.patchSync(() => ({ records: [{ ...ledger, accountsApplied: true }] })); }
+  finally { held.close(); }
+  ledger.accountsApplied = true;
 }
 
 /* ── Apply ───────────────────────────────────────────────────────────── */
@@ -603,6 +645,7 @@ function writeCollections(writes: PlannedWrites, ledger: LedgerRow, expected: Re
 
 export interface ApplyOptions {
   now?: () => Date;
+  accounts?: AccountTargetDeps;
   /** Runs after the commit, before the report is returned (known values, accounts). */
   afterCommit?: (ledger: LedgerRow) => Promise<void> | void;
 }
@@ -612,7 +655,7 @@ export async function applyTransferImport(request: TransferImportRequest, option
   const started = performance.now();
   const decoded = await readStaged(request.bundleSha256);
   const now = clock().toISOString();
-  const built = buildPlan(decoded, { mappings: request.mappings, replace: request.replace }, now);
+  const built = await withAccountPlan(buildPlan(decoded, { mappings: request.mappings, replace: request.replace }, now), options.accounts);
   for (const [store, revision] of Object.entries(built.plan.revisions)) {
     if (request.revisions[store] !== revision) throw new TransferImportError("target_changed", "this install changed since the preview; preview again");
   }
@@ -647,7 +690,7 @@ export async function applyTransferImport(request: TransferImportRequest, option
     const everyActive = (built.writes.sourceActive.get(scope) ?? []).every(id => activeHere.has(id) || built.writes.keptAsVersion.has(id));
     return { scope, source, target, ok: everyActive && target.active >= source.active, overBudget: target.codePoints > 10_000 };
   });
-  const report: Omit<TransferReport, "accounts"> = {
+  const report: Omit<TransferReport, "accounts" | "accountsReady"> = {
     importId, bundleSha256: decoded.sha256, exportId: decoded.header.exportId, sourceProduct: decoded.header.product,
     appliedAt: now, applyMs: 0, sections, scopes, redo: built.plan.redo, mappings: request.mappings ?? {},
     complete: sections.every(section => section.balanced) && scopes.every(scope => scope.ok),
@@ -656,6 +699,7 @@ export async function applyTransferImport(request: TransferImportRequest, option
     kind: "import", importId, bundleSha256: decoded.sha256, exportId: decoded.header.exportId, sourceProduct: decoded.header.product,
     appliedAt: now, mappings: request.mappings ?? {}, aliases: built.writes.aliases, pending: built.writes.pending,
     versions: built.writes.versions, scopeHistories: built.writes.scopeHistories, accounts: built.plan.accounts, report,
+    accountRecords: built.writes.accountRecords, accountsApplied: built.writes.accountRecords.length === 0,
   };
   try {
     let first = true;
@@ -687,10 +731,12 @@ export async function applyTransferImport(request: TransferImportRequest, option
   if (built.writes.rows.get("role_memory")?.records.length) {
     try { refreshLessonKnownValues(); } catch { /* removed on failure; the gate refuses until the next lesson rewrites it */ }
   }
+  await finishAccounts(ledger, options.accounts);
   await options.afterCommit?.(ledger);
   /* The import record holds the time up to its own commit; the caller gets
      the whole apply, the commit and the cleanup included. */
-  return { report: { ...report, applyMs: Math.round(performance.now() - started), accounts: [] }, ledger };
+  const accounts = accountReportRows(importedAccountRows().filter(row => row.importId === importId));
+  return { report: { ...report, applyMs: Math.round(performance.now() - started), accounts, accountsReady: accountsReady(accounts) }, ledger };
 }
 
 /* ── Recovery ────────────────────────────────────────────────────────── */
@@ -698,11 +744,12 @@ export async function applyTransferImport(request: TransferImportRequest, option
 export interface RecoveryOutcome { importId: string; outcome: "finished" | "rolled-back" }
 
 /** Settle every import a stopped worker or Viewer left between its checkpoint
-    and its cleanup: committed (its ledger row exists) → finish; not → restore. */
-export function recoverTransferImports(): RecoveryOutcome[] {
+    and its cleanup: committed (its ledger row exists) → finish; not → restore.
+    A committed import whose accounts were not made yet gets them now. */
+export async function recoverTransferImports(deps?: AccountTargetDeps): Promise<RecoveryOutcome[]> {
   const root = path.join(transferRoot(), "imports");
   let names: string[] = [];
-  try { names = fs.readdirSync(root).sort(); } catch { return []; }
+  try { names = fs.readdirSync(root).sort(); } catch { names = []; }
   const outcomes: RecoveryOutcome[] = [];
   for (const name of names) {
     const directory = path.join(root, name);
@@ -716,11 +763,12 @@ export function recoverTransferImports(): RecoveryOutcome[] {
       outcomes.push({ importId: journal.importId, outcome: "rolled-back" });
     }
   }
+  for (const row of readImportRecords()) if (row.accountsApplied === false) await finishAccounts(row, deps);
   return outcomes;
 }
 
 /** The Viewer's startup step, under the release fence. */
-export function recoverTransferImportsAtStartup(): RecoveryOutcome[] {
+export async function recoverTransferImportsAtStartup(): Promise<RecoveryOutcome[]> {
   const directory = stateDir();
   if (!fs.existsSync(path.join(directory, "transfer", "imports"))) return [];
   assertStateStartupMutation(directory, "install transfer recovery");

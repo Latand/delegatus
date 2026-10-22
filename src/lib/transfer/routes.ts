@@ -117,3 +117,39 @@ export async function getReport(req: NextRequest): Promise<Response> {
   const response = await importReport(importId);
   return transferJson(response, statusOf(response));
 }
+
+const ENGINES = new Set(["claude", "codex", "copilot"]);
+
+/** The accounts panel's checklist: every account an import brought, with its state here. */
+export async function getAccounts(req: NextRequest): Promise<Response> {
+  const refused = transferGate(req);
+  if (refused) return refused;
+  const engine = req.nextUrl.searchParams.get("engine");
+  const { accountReportRows, importedAccountRows } = await import("./accounts");
+  const rows = importedAccountRows().filter(row => !engine || row.engine === engine);
+  return transferJson({ ok: true, result: accountReportRows(rows) });
+}
+
+/** `{ action: "verify" }` reads each account's limits live (phase `transfer-verify`);
+    `not_needed` and `confirm_identity` record the operator's answer on one row. */
+export async function postAccounts(req: NextRequest): Promise<Response> {
+  const refused = transferGate(req);
+  if (refused) return refused;
+  const body = await readBounded(req, 16 * 1024);
+  let input: Record<string, unknown>;
+  try { input = JSON.parse(Buffer.from(body ?? new Uint8Array()).toString("utf8")) as Record<string, unknown>; }
+  catch { return transferJson({ error: "the body is not JSON", code: "bad_request" }, 400); }
+  const engine = typeof input.engine === "string" && ENGINES.has(input.engine) ? input.engine as "claude" | "codex" | "copilot" : undefined;
+  const sourceId = typeof input.sourceId === "string" ? input.sourceId : undefined;
+  const accounts = await import("./accounts");
+  if (input.action === "verify") {
+    const { viewerLoopMonitor } = await import("@/lib/viewerLoopMonitor");
+    const rows = await viewerLoopMonitor.run("transfer.verify", () => accounts.verifyImportedAccounts({ engine, sourceId }));
+    return transferJson({ ok: true, result: accounts.accountReportRows(rows) });
+  }
+  if ((input.action === "not_needed" || input.action === "confirm_identity") && engine && sourceId) {
+    const row = accounts.markImportedAccount(engine, sourceId, input.action);
+    return row ? transferJson({ ok: true, result: accounts.accountReportRows([row])[0] }) : transferJson({ ok: false, error: { code: "unknown_account", message: "no imported account with that id" } }, 404);
+  }
+  return transferJson({ error: "action must be verify, not_needed or confirm_identity", code: "bad_request" }, 400);
+}

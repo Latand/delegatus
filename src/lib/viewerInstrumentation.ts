@@ -1005,7 +1005,7 @@ export async function registerViewerRuntime(): Promise<void> {
        and its cleanup: finish it when it committed, restore it when not. */
     await startupBarrier.run(async () => {
       const { recoverTransferImportsAtStartup } = await import("@/lib/transfer/importer");
-      try { recoverTransferImportsAtStartup(); }
+      try { await recoverTransferImportsAtStartup(); }
       catch (error) { console.error("[transfer] recovery of an interrupted import failed", error instanceof Error ? error.message : error); }
     });
     const { agentRegistry } = await import("@/lib/agent/registry");

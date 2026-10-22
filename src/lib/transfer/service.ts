@@ -113,7 +113,7 @@ export async function applyBundle(request: TransferImportRequest, options: Servi
     if (response) return response;
     /* The worker died between its checkpoint and its cleanup: settle it now
        rather than at the next activation. */
-    return stopped(exit!, viewerLoopMonitor.run("transfer.recover", () => recoverTransferImports()));
+    return stopped(exit!, await viewerLoopMonitor.run("transfer.recover", () => recoverTransferImports()));
   });
   applying = run;
   try { return await run; }

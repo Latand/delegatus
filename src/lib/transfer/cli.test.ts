@@ -11,7 +11,7 @@ import { ensureLegacyCollectionsImported } from "@/lib/state/legacyCollections";
 
 import { runTransferCommand } from "../../../bin/transfer.mjs";
 import { readImportRecords } from "./importer";
-import { getReport, postApply, postExport, postPreview, transferGate } from "./routes";
+import { getAccounts, getReport, postAccounts, postApply, postExport, postPreview, transferGate } from "./routes";
 import { makeInstall, REPOSITORY, seedSource, within, type Install } from "./transfer.fixture";
 
 /* `delegatus export` and `delegatus import` (install-memory-transfer §4.2)
@@ -59,6 +59,7 @@ beforeAll(async () => {
     if (pathname === "/api/transfer/preview") return postPreview(req);
     if (pathname === "/api/transfer/apply") return postApply(req);
     if (pathname === "/api/transfer/report") return getReport(req);
+    if (pathname === "/api/transfer/accounts") return request.method === "POST" ? postAccounts(req) : getAccounts(req);
     return new Response("not found", { status: 404 });
   } });
 }, 120_000);

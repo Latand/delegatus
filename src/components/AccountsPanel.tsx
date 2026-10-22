@@ -33,6 +33,7 @@ import { Badge } from "./ui/Badge";
 import { formatCheckedClock, formatQuotaAsOf, formatResetClock, formatResetEta, windowLabel } from "./rateLimit";
 import { engineTintOf } from "./utils";
 import { Z } from "@/components/layers";
+import { TransferAccountsChecklist, useImportedAccounts } from "./TransferAccountsChecklist";
 
 /** Amber that clears contrast on the panel background — state legibility never
     leans on color alone, so this pairs with the "needs sign-in" text chip. */
@@ -922,6 +923,9 @@ export function AccountsPanel({
   // aria-live text changes exactly on the code-ready and signed-in transitions —
   // no effect/setState needed, and mount content is never announced.
   const announcement = claudeAnnouncement(engine, accounts, t);
+  /* Accounts an install transfer brought: re-read whenever an account's
+     sign-in state here changes, since a sign-in settles its row. */
+  const imported = useImportedAccounts(engine, accounts.map((account) => `${account.id}:${account.authPresent ? 1 : 0}`).join(","));
   const closeRef = useRef<HTMLButtonElement>(null);
   const engineName = engineDisplay(engine);
   // Desktop anchor per caller; both share the mobile bottom sheet. The header
@@ -999,6 +1003,21 @@ export function AccountsPanel({
         <p className="sr-only" role="status" aria-live="polite">{announcement}</p>
 
         {projectContext ? <ProjectAccountDetail context={projectContext} /> : null}
+
+        <TransferAccountsChecklist
+          engine={engine}
+          rows={imported.rows}
+          onSignIn={async (accountId) => {
+            if (engine === "claude") await state.retryLogin(accountId);
+            else await startCodexDeviceSignIn(state, accountId);
+            await imported.reload();
+          }}
+          onAction={async (body) => {
+            await imported.post(body);
+            if (body.action === "verify") await state.refresh();
+            await imported.reload();
+          }}
+        />
 
         {mutation ? (
           <div role="status" aria-live="polite" className="flex items-center gap-2 border-b border-border bg-accent/5 px-3 py-2 text-[11px] font-semibold text-primary">

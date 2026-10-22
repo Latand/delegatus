@@ -184,7 +184,9 @@ export interface AccountReportRow {
   sourceId: string;
   targetId: string | null;
   label: string;
-  state: "signed_out" | "signing_in" | "usable" | "different_account" | "read_failed" | "not_needed";
+  /** `not_created`: the account could not be made here (a provider account
+      needs its token; a failed setup names its cause in `detail`). */
+  state: "signed_out" | "usable" | "different_account" | "read_failed" | "not_needed" | "not_created";
   detail?: string;
   bindings: string[];
   activeOnSource: boolean;
@@ -216,5 +218,8 @@ export interface TransferReport {
   accounts: AccountReportRow[];
   redo: RedoItem[];
   mappings: Record<string, string>;
+  /** Every section balanced and every scope's active rules present (§5.1). */
   complete: boolean;
+  /** Every account usable here or marked not needed (§5.2); the import is done when this holds too. */
+  accountsReady: boolean;
 }

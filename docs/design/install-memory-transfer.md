@@ -115,6 +115,19 @@ slice 3 is dropped. What the build settled differently from the text below:
   install whose Viewer does not start is deferred.
 - File revisions in the dry run are content hashes, so a file restored by a
   rolled-back import still matches its preview.
+- Accounts (slice 2, `src/lib/transfer/accounts.ts`): an account travels
+  when it is signed in or bound to a project. Its identity hash is salted
+  with the export id. On the target, accounts are made through the existing
+  account setup after the commit (§4.8), with their bindings applied at once;
+  an account whose setup failed keeps its source id in its bindings, which
+  matches no account, so its projects park. The import record keeps the
+  account records, so an apply stopped after its commit finishes them at
+  recovery. A Claude custom-provider account is not made (its token never
+  travels) and is listed. The checklist rows live in the `transfer_accounts`
+  collection; `POST /api/transfer/accounts` verifies them with the
+  `transfer-verify` live read, and a completed sign-in settles its row at
+  once. Copilot rows count as usable when the CLI config shows a signed-in
+  user; no limit read exists for them (§11).
 - Measured apply window for the learned rules of §1.10's shape (2,898 rules,
   112 scopes, about 20 MB of history): 1.06–1.36 s over three runs
   (`src/lib/transfer/transferMeasure.test.ts` with `LLV_TRANSFER_MEASURE=1`).

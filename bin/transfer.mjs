@@ -65,6 +65,9 @@ const TEXT = {
     redo: "Still to do on this install:",
     applied: (ms) => `Applied in ${ms} ms.`,
     incomplete: "The report found a difference; see the sections and scopes above.",
+    scopeLine: (s) => `${s.scope}: rules ${s.source.rules}→${s.target.rules}, active ${s.source.active}→${s.target.active}, code points ${s.source.codePoints}→${s.target.codePoints}${s.overBudget ? " (over the 10 000 target: the next curation trims it)" : ""}`,
+    accountState: { signed_out: "signed out", usable: "ready", different_account: "signed into a different account", read_failed: "limits not read", not_needed: "not needed here", not_created: "not created" },
+    accountsPending: "Memory and settings arrived. Sign in each account from the accounts panel's checklist, then run delegatus import --report.",
     noReport: "No import has been applied on this install.",
   },
   uk: {
@@ -96,6 +99,9 @@ const TEXT = {
     redo: "Ще треба зробити на цій інсталяції:",
     applied: (ms) => `Застосовано за ${ms} мс.`,
     incomplete: "Звіт знайшов розбіжність; дивіться розділи й області вище.",
+    scopeLine: (s) => `${s.scope}: правил ${s.source.rules}→${s.target.rules}, активних ${s.source.active}→${s.target.active}, символів ${s.source.codePoints}→${s.target.codePoints}${s.overBudget ? " (понад ціль 10 000: наступне курування скоротить)" : ""}`,
+    accountState: { signed_out: "не ввійдено", usable: "готовий", different_account: "ввійдено в інший обліковий запис", read_failed: "ліміти не прочитано", not_needed: "тут не потрібен", not_created: "не створено" },
+    accountsPending: "Пам'ять і налаштування прибули. Увійдіть у кожен обліковий запис за списком у панелі облікових записів, потім запустіть delegatus import --report.",
     noReport: "На цій інсталяції ще не застосовано жодного імпорту.",
   },
 };
@@ -264,12 +270,13 @@ function printReport(context, report) {
   const { log, text } = context;
   for (const section of report.sections) log(`${section.balanced ? "✓" : "✗"}${text.sectionLine(section).slice(1)}`);
   for (const scope of report.scopes) {
-    log(`${scope.ok ? "✓" : "✗"} ${scope.scope}: rules ${scope.source.rules}→${scope.target.rules}, active ${scope.source.active}→${scope.target.active}, code points ${scope.source.codePoints}→${scope.target.codePoints}${scope.overBudget ? " (over the 10 000 target: next curation)" : ""}`);
+    log(`${scope.ok ? "✓" : "✗"} ${text.scopeLine(scope)}`);
   }
-  for (const account of report.accounts ?? []) log(`  ${account.engine} ${account.label}: ${account.state}${account.detail ? ` (${account.detail})` : ""}`);
+  for (const account of report.accounts ?? []) log(`  ${account.engine} «${account.label}»: ${text.accountState[account.state] ?? account.state}${account.detail ? ` (${account.detail})` : ""}`);
   printRedo(context, report.redo);
   log(text.applied(report.applyMs));
   if (!report.complete) log(text.incomplete);
+  else if (report.accountsReady === false) log(text.accountsPending);
 }
 
 async function runExport(args, context) {
@@ -303,10 +310,12 @@ async function runImport(args, context) {
   if (args.includes("--report")) {
     const id = args[args.indexOf("--report") + 1];
     const query = id && !id.startsWith("--") ? `?importId=${encodeURIComponent(id)}` : "";
+    /* §5.2: each account the import brought reads its limits live before the report prints. */
+    jsonOf(context, await request(context, { method: "POST", path: "/api/transfer/accounts", contentType: "application/json", body: Buffer.from(JSON.stringify({ action: "verify" })) }, "import"));
     const report = jsonOf(context, await request(context, { method: "GET", path: `/api/transfer/report${query}` }, "import"));
     if (!report) { context.log(context.text.noReport); return 1; }
     printReport(context, report);
-    return report.complete ? 0 : 5;
+    return report.complete && report.accountsReady !== false ? 0 : 5;
   }
   const source = args.find((arg, index) => !arg.startsWith("--") && !["--map", "--replace", "--passphrase-file", "--port"].includes(args[index - 1]));
   if (!source) { context.log(context.text.usage); return 2; }

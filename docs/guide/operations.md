@@ -105,7 +105,17 @@ there, in conflict (this install's value stays unless `--replace` names the
 section) or skipped, and every folder that needs a folder here. Apply writes
 nothing when this install changed since the dry run, and leaves the install
 as it was when it fails or stops partway. The report compares each learned
-rule scope with the source and lists what still has to be done here: signing
-in each account, API keys through Keys → Import, the relay pairing, the
-GitHub App credential, and the environment variables the source used. The
+rule scope with the source and lists what still has to be done here: API
+keys through Keys → Import, the relay pairing, the GitHub App credential, and
+the environment variables the source used.
+
+Accounts arrive signed out, under the same labels and with the same project
+bindings, which apply at once: a project bound to an account that is not
+signed in yet waits for it. Each engine's accounts panel then shows
+**Accounts from your other install**: sign each one in with the usual link
+and code, and it is ready once its limits read here. The account that was
+active on the other install becomes active here when it is ready. A login
+that differs from the one the other install used is shown as a different
+account until you confirm it. `delegatus import --report` checks every
+account again and prints what is left. The
 design is [docs/design/install-memory-transfer.md](../design/install-memory-transfer.md).

@@ -47,17 +47,23 @@ export function installEnv(install: Install): Record<string, string> {
   return { LLV_STATE_DIR: install.state, XDG_CONFIG_HOME: install.config };
 }
 
+/** The variables every store and account module resolves per call, set to one install's directories. */
+export function installVariables(install: Install): Record<string, string | undefined> {
+  return {
+    LLV_STATE_DIR: install.state, XDG_CONFIG_HOME: install.config, LLV_SEAT_TICK_SETTINGS_FILE: undefined,
+    LLV_CLAUDE_HOME: path.join(install.home, ".claude"), LLV_CODEX_HOME: path.join(install.home, ".codex"), COPILOT_HOME: path.join(install.home, ".copilot"),
+  };
+}
+
 export async function within<T>(install: Install, run: () => T | Promise<T>): Promise<T> {
-  const saved = { state: process.env.LLV_STATE_DIR, config: process.env.XDG_CONFIG_HOME, seat: process.env.LLV_SEAT_TICK_SETTINGS_FILE };
-  process.env.LLV_STATE_DIR = install.state;
-  process.env.XDG_CONFIG_HOME = install.config;
-  delete process.env.LLV_SEAT_TICK_SETTINGS_FILE;
+  const variables = installVariables(install);
+  const saved = Object.fromEntries(Object.keys(variables).map(name => [name, process.env[name]]));
+  const assign = (values: Record<string, string | undefined>) => {
+    for (const [name, value] of Object.entries(values)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
+  };
+  assign(variables);
   try { return await run(); }
-  finally {
-    for (const [name, value] of [["LLV_STATE_DIR", saved.state], ["XDG_CONFIG_HOME", saved.config], ["LLV_SEAT_TICK_SETTINGS_FILE", saved.seat]] as const) {
-      if (value === undefined) delete process.env[name]; else process.env[name] = value;
-    }
-  }
+  finally { assign(saved); }
 }
 
 export const REMOTE = "https://forge.example.test/owner/alpha.git";

@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 
 import { memorySource } from "@/lib/memory/source";
@@ -45,7 +46,11 @@ export async function runTransferWorkerRequest(request: TransferWorkerRequest): 
       case "export": {
         const sections = request.sections?.filter(isSectionName) as SectionName[] | undefined;
         const aliases = projectAliasSnapshot();
+        const exportId = crypto.randomUUID();
+        const { accountExporter } = await import("./accounts");
         const result = await exportTransferBundle({
+          exportId,
+          accounts: accountExporter(exportId),
           sections,
           product: metadata.version,
           env: process.env,
@@ -65,10 +70,13 @@ export async function runTransferWorkerRequest(request: TransferWorkerRequest): 
         return { ok: true, result: report };
       }
       case "recover":
-        return { ok: true, result: recoverTransferImports() };
+        return { ok: true, result: await recoverTransferImports() };
       case "report": {
         const row = readTransferReport(request.importId);
-        return { ok: true, result: row ? { ...row.report, accounts: [] } : null };
+        if (!row) return { ok: true, result: null };
+        const { accountReportRows, accountsReady, importedAccountRows } = await import("./accounts");
+        const accounts = accountReportRows(importedAccountRows().filter(account => account.importId === row.importId));
+        return { ok: true, result: { ...row.report, accounts, accountsReady: accountsReady(accounts) } };
       }
     }
   } catch (error) {
