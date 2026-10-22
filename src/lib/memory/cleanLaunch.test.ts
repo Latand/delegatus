@@ -121,7 +121,7 @@ test("Codex launches pass the shared effective-memory decision to the app-server
     });
     const config = (server.requests.find((request) => request.method === "thread/start")?.params as { config: { features: Record<string, unknown> } }).config;
     await host.release();
-    return { args, features: config.features, hooks: fs.existsSync(path.join(codexHome, "hooks.json")) ? fs.readFileSync(path.join(codexHome, "hooks.json"), "utf8") : null };
+    return { args, features: config.features, hooks: JSON.stringify((config as unknown as { hooks: { UserPromptSubmit?: unknown[] } }).hooks.UserPromptSubmit) ?? null };
   };
   const clean = await launch(true);
   expect(clean.args).toContain("features.memories=false");
@@ -130,7 +130,7 @@ test("Codex launches pass the shared effective-memory decision to the app-server
   const builder = await launch(false);
   expect(builder.args).not.toContain("features.memories=false");
   expect(builder.features.memories).not.toBe(false);
-  expect(builder.hooks).toContain("shared-memory-");
+  expect(builder.hooks).toContain("memory-launch-");
   const policyDisabled = await launch(false, false);
   expect(policyDisabled.args).toContain("features.memories=false");
   expect(policyDisabled.features.memories).not.toBe(false);
