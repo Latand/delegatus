@@ -30,6 +30,7 @@ import { setVoiceCompanionAdapterForTests } from "@/components/voiceCompanion/Vo
 import type { VoiceCompanionAdapter } from "@/lib/voiceCompanion/contract";
 import { scenarioScript } from "@/lib/voiceCompanion/scenarios";
 import { createSimulatedCompanion, realClock } from "@/lib/voiceCompanion/simulator";
+import { OfficialVoiceCompanionAdapter } from "@/lib/voiceCompanion/liveAdapter";
 import { getRuntimeBus } from "@/hooks/runtimeBus";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -196,6 +197,19 @@ if (VOICE_SCENE === "sim" || VOICE_SCENE === "reads") {
       ...(VOICE_SCENE === "reads" ? { transcript: async () => (await serverFetch("/evidence/voice-transcript")).json() } : {}),
     };
   });
+}
+/* `?voice=drop`: the product's own adapter, its session and resume routes answered by the driver over the network
+   (`serverFetch`, so `page.route` sees them), with a stand-in for the microphone and the peer connection.
+   `window.phoneVoice.lose()` fails that connection, as a lost network does. */
+if (VOICE_SCENE === "drop") {
+  setVoiceCompanionAdapterForTests((): VoiceCompanionAdapter => new OfficialVoiceCompanionAdapter({
+    fetch: ((input: RequestInfo | URL, init?: RequestInit) => serverFetch(input, init)) as typeof fetch,
+    media: (callbacks) => {
+      Object.assign(phoneVoice, { lose: () => callbacks.lost("PROVIDER_ERROR") });
+      return { open: async () => "v=0\r\n", answer: async () => {}, mute: () => {}, interrupt: () => {}, close: async () => {} };
+    },
+    cues: { prepare: () => {}, connect: () => {}, disconnect: () => {}, dispose: () => {} },
+  }));
 }
 function voiceFeed(feed: string): string {
   if (!VOICE_LONG) return feed;

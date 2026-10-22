@@ -24,6 +24,8 @@ import type { AttachmentDeliveryOutcome } from "@/lib/attachmentRetention";
 import type { Flow } from "@/lib/flows/types";
 import type { SelectedContextRef } from "@/lib/selection/selectedContext";
 
+import { awaitingReplies, type ReplyPolicy } from "@/lib/audio/fleetCues";
+
 import { getRuntimeBus, isRuntimeUiEnabled, type RuntimeBus, type RuntimeBusState } from "./runtimeBus";
 
 const INERT: RuntimeBusState = {
@@ -344,19 +346,39 @@ export interface SendOptions {
   selectedContext?: SelectedContextRef;
 }
 
+/**
+ * This tab is about to write to (or launch) a conversation: its next answer
+ * plays the reply sound (S8 of docs/design/sound-redesign.md §4.4). The turn
+ * ids the session shows NOW are recorded, because the default send interrupts
+ * a running turn and the answer comes in a newer one. Returns the undo.
+ */
+export function awaitReply(conversationId: string, policy: ReplyPolicy): () => void {
+  const session = getRuntimeBus().getState().store.sessions[conversationId];
+  return awaitingReplies.expect(conversationId, {
+    activeTurnId: session?.activeTurnId ?? null,
+    settledTurnId: session?.settledTurnId ?? null,
+  }, policy);
+}
+
 /** Send/steer a message. Replaying the same key returns the original receipt
  *  server-side — never a second send. */
-export function sendRuntimeMessage(options: SendOptions): Promise<CommandResult> {
-  return postCommand("/api/runtime/send", {
+export async function sendRuntimeMessage(options: SendOptions): Promise<CommandResult> {
+  const policy = options.policy ?? "interrupt-active";
+  const forget = awaitReply(options.conversationId, policy);
+  const result = await postCommand("/api/runtime/send", {
     conversationId: options.conversationId,
     text: options.text,
     images: options.images,
     ...(options.files?.length ? { files: options.files } : {}),
     idempotencyKey: options.idempotencyKey,
-    policy: options.policy ?? "interrupt-active",
+    policy,
     ...(options.runtime ? { runtime: options.runtime } : {}),
     ...(options.selectedContext ? { selectedContext: options.selectedContext } : {}),
   });
+  /* A refused send asked nothing of anyone; one that may be on the wire
+     (`uncertain`) can still be answered. */
+  if (!result.ok && result.delivery !== "uncertain") forget();
+  return result;
 }
 
 /**

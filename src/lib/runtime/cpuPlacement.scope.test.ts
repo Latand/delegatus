@@ -4,7 +4,9 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { captureProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
+import * as updatePid from "@/lib/selfUpdate/pid";
+import { procBackend } from "@/lib/proc";
+import { captureProcessIdentity, processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
 import { stopFixtureIdentity } from "@/lib/testing/fixtureProcess";
 
 import { GIB, planAgentMemory, setAgentMemoryPortsForTests, wrapAgentCommand } from "./agentMemory";
@@ -140,14 +142,14 @@ scopeTest("memory mode off still gets the work scope's CPU quota", () => {
   expect([seen.max, seen.memory, seen.parentMax]).toEqual(["60000 20000", "max", "360000 20000"]);
 });
 
-scopeTest("a publication push or release build runs in its own work scope", async () => {
+scopeTest.each(["update-install", "update-build"])("publication keeps its work quota while %s gets a high-weight sibling scope", async work => {
   const wrapped = wrapWorkCommand("/bin/sh", ["-c", REPORT], { label: "publish-push", env, ports });
   units.push(wrapped.args.find((arg) => arg.startsWith("--unit="))!.slice("--unit=".length));
   const seen = report(spawnSync(wrapped.command, wrapped.args, { encoding: "utf8" }).stdout);
   expect(seen.group).toMatch(new RegExp(`/${slices.work}/delegatus-work-publish-push-[0-9a-f-]{12}\\.scope$`));
   expect([seen.weight, seen.max, seen.parentMax]).toEqual(["100", "60000 20000", "360000 20000"]);
 
-  // The self-update port wraps install and build the same way.
+  // Compilation competes with the complete work slice at operator weight.
   const { realPorts } = await import("@/lib/selfUpdate/steps");
   const { buildEnv } = await import("@/lib/selfUpdate/env");
   const previous = process.env.LLV_AGENT_CPU;
@@ -155,16 +157,49 @@ scopeTest("a publication push or release build runs in its own work scope", asyn
   setCpuPortsForTests(ports);
   const lines: string[] = [];
   try {
-    const code = await realPorts(() => {}).run(["/bin/sh", "-c", REPORT], { cwd: sandbox, env: { ...buildEnv(sandbox), TMPDIR: sandbox }, onLine: (line) => lines.push(line), work: "update-build" });
+    const code = await realPorts(() => {}).run(["/bin/sh", "-c", REPORT], { cwd: sandbox, env: { ...buildEnv(sandbox), TMPDIR: sandbox }, onLine: (line) => lines.push(line), work });
     expect(code).toBe(0);
   } finally {
     setCpuPortsForTests(null);
     if (previous === undefined) delete process.env.LLV_AGENT_CPU; else process.env.LLV_AGENT_CPU = previous;
   }
   const build = report(lines.join("\n"));
-  expect(build.group).toMatch(new RegExp(`/${slices.work}/delegatus-work-update-build-[0-9a-f-]{12}\\.scope$`));
-  expect(build.max).toBe("60000 20000");
+  expect(build.group).toMatch(new RegExp(`/${slices.agents}/delegatus-release-[0-9a-f-]{12}\\.scope$`));
+  expect([build.weight, build.max, build.parentMax]).toEqual(["1000", "max 100000", "max 100000"]);
 });
+
+scopeTest.each([false, true])("release cleanup reaps descendants when leader identity is unreadable: %p", async unreadable => {
+  const { realPorts } = await import("@/lib/selfUpdate/steps");
+  const { buildEnv } = await import("@/lib/selfUpdate/env");
+  const previous = process.env.LLV_AGENT_CPU;
+  process.env.LLV_AGENT_CPU = "auto";
+  setCpuPortsForTests(ports);
+  let ready = () => {};
+  const started = new Promise<void>(resolve => { ready = resolve; });
+  let descendant: ProcessIdentity | null = null;
+  let leader: ProcessIdentity | null = null;
+  const identity = unreadable ? spyOn(updatePid, "readStartIdentity").mockReturnValue(null) : null;
+  const real = realPorts(() => {});
+  const childCode = 'process.on("SIGTERM", () => {}); console.log("child " + process.pid); setInterval(() => {}, 1000);';
+  const code = `const { spawn } = require("node:child_process"); console.log("leader " + process.pid); spawn(process.execPath, ["-e", ${JSON.stringify(childCode)}], {stdio:["ignore","inherit","inherit"]}); setInterval(() => {}, 1000);`;
+  const done = real.run([process.execPath, "-e", code], { cwd: sandbox, env: buildEnv(sandbox), work: "update-build", onLine: line => {
+    if (line.startsWith("leader ")) leader = captureProcessIdentity(Number(line.slice(7)));
+    if (line.startsWith("child ")) { descendant = captureProcessIdentity(Number(line.slice(6))); ready(); }
+  } }).catch(error => error);
+  try {
+    await started;
+    await real.abort();
+    const survived = (): boolean => descendant !== null && processIdentityStatus(descendant) !== "dead" && !procBackend.processExited(descendant.pid);
+    expect(survived()).toBe(false);
+  } finally {
+    if (descendant) await stopFixtureIdentity(descendant);
+    if (leader) await stopFixtureIdentity(leader);
+    await done;
+    identity?.mockRestore();
+    setCpuPortsForTests(null);
+    if (previous === undefined) delete process.env.LLV_AGENT_CPU; else process.env.LLV_AGENT_CPU = previous;
+  }
+}, 15_000);
 
 scopeTest("a headless review run launches into the work slice", async () => {
   const { launchDetached } = await import("@/lib/agent/headless");

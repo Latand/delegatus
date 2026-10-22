@@ -31,7 +31,9 @@ import {
   EphemeralProfileError,
 } from "@/lib/agent/ephemeral";
 import type { HeadlessReviewRuntime } from "@/lib/agent/headless";
-import { relayCall, ExternalRelayError, isUnknownFeatureRefusal } from "./client";
+import { relayCall, ExternalRelayError } from "./client";
+import { completeRelayRequest } from "./relayCompletion";
+import { InlineRelayLeaseTransport, RelayLeaseTransport } from "./relayLeaseTransport";
 import {
   answerSchema,
   replyAnswerSchema,
@@ -64,6 +66,7 @@ import {
   reserveRunAsync,
   RelayStoreBusy,
   readRunLedger,
+  runHoldsCapacity,
   settleRelayRequestClaimAsync,
   type PairedRelay,
   type RelayTargetSettings,
@@ -75,6 +78,7 @@ const globalRelay = globalThis as typeof globalThis & {
 };
 const active = (globalRelay.__llvExternalRelayActive ??= new Map<string, number>());
 const inflight = globalRelay.__llvExternalRelayInflight ??= new Set<string>();
+export const relayRequestInFlight = (requestId: string): boolean => inflight.has(requestId);
 export function externalRelayTempRoot(): string {
   const temporary = path.resolve(os.tmpdir());
   const home = path.resolve(os.homedir());
@@ -94,19 +98,16 @@ export function advertisedSlots(
   const held = readRunLedger().runs;
   return relay.targets
     .filter((target) => target.enabled && target.engine && target.model)
-    .map((target) => ({
-      target_id: target.id,
-      free: drainHeld ? 0 : Math.max(
-        0,
-        target.concurrency -
-          Math.max(
-            runningCount(relay.id, target.id),
-            held.filter(
-              (run) => run.relayId === relay.id && run.targetId === target.id,
-            ).length,
-          ) - capacityWaiters(relay.id, target.id),
-      ),
-    }));
+    .map((target) => {
+      const running = runningCount(relay.id, target.id);
+      const retained = held.filter(run => run.relayId === relay.id && run.targetId === target.id && runHoldsCapacity(run)).length;
+      const waiting = capacityWaiters(relay.id, target.id);
+      const free = drainHeld ? 0 : Math.max(0, target.concurrency - Math.max(running, retained) - waiting);
+      if (free === 0) console.info("External relay target capacity", {
+        target: target.id, free, concurrency: target.concurrency, running, retained, waiting, reason: drainHeld ? "drain" : "full",
+      });
+      return { target_id: target.id, free };
+    });
 }
 function markActive(relay: PairedRelay, target: RelayTargetSettings): void {
   const key = countKey(relay.id, target.id);
@@ -139,85 +140,12 @@ const failed = (lease_id: string, reason: string): ExternalRelayCompletion => ({
   reason,
   detail: null,
 });
-/** The completion as sent, and whether the service acknowledged it. */
-export async function completeRelayRequest(
-  relay: PairedRelay,
-  requestId: string,
-  body: ExternalRelayCompletion,
-  until: () => number,
-  allowOwnerReply?: () => boolean,
-  onUnknownFeature?: () => Promise<unknown>,
-  plainMax = 4000,
-): Promise<{ body: ExternalRelayCompletion; delivery: RelayAnswerDelivery }> {
-  let wait = 1000;
-  let attempted = false;
-  let downgraded = false;
-  while (true) {
-    if (attempted && Date.now() >= until()) return { body, delivery: "unconfirmed" };
-    attempted = true;
-    if (body.outcome === "answered" && allowOwnerReply && !allowOwnerReply()) body = failed(body.lease_id, "cancelled");
-    try {
-      await relayCall(
-        relay.api_base,
-        `/requests/${encodeURIComponent(requestId)}/complete`,
-        "POST",
-        body,
-        relay.credential,
-        { timeoutMs: 5000, maxBytes: relay.limits.max_response_bytes,
-          ...(allowOwnerReply ? { prepareBody: () => {
-            if (body.outcome === "answered" && !allowOwnerReply()) body = failed(body.lease_id, "cancelled");
-            return body;
-          } } : {}),
-        },
-      );
-      return { body, delivery: "accepted" };
-    } catch (error) {
-      if (isUnknownFeatureRefusal(error)) await onUnknownFeature?.();
-      if (error instanceof ExternalRelayError) {
-        const v2 = body.outcome === "answered" && body.answer.format !== undefined;
-        if (v2 && body.outcome === "answered" && (
-          error.status === 400 && error.code === "malformed" && body.answer.mentions?.length
-          || error.status === 422 && (body.answer.attachments?.some(file => file.kind === "photo") || /!\[/.test(body.answer.text))))
-          return { body, delivery: "refused" };
-        if (v2 && error.status === 409 && error.code === "already_completed") return { body: failed(body.lease_id, "invalid_answer"), delivery: "refused" };
-        if (v2 && !downgraded && (error.status === 422 && ["invalid_format", "attachment_not_ready"].includes(error.code) || error.status === 415 || error.status === 400 && error.code === "malformed")) {
-          downgraded = true;
-          if (body.outcome === "answered" && body.answer.text.trim() && error.status === 422 && error.code === "attachment_not_ready") {
-            const answer = { ...body.answer }; delete answer.attachments;
-            // Explicit source refs cannot outlive the selected uploads.
-            if (/!\[/.test(answer.text)) { body = failed(body.lease_id, "invalid_answer"); continue; }
-            body = { ...body, answer };
-          } else if (body.outcome === "answered" && body.answer.text.trim() && [...body.answer.text].length <= plainMax) {
-            const { action, text, reply_to } = body.answer;
-            body = { ...body, answer: { action, text, reply_to, format: "plain", buttons: [] } };
-          } else body = failed(body.lease_id, "invalid_answer");
-          continue;
-        }
-        if (v2 && [415,422].includes(error.status)) return { body, delivery: "refused" };
-        if (error.status === 413 && body.outcome === "answered") {
-          body = failed(body.lease_id, "invalid_answer");
-          continue;
-        }
-        if (error.status === 409 && error.code === "handoff_after_action" && body.outcome === "declined" && body.reason === "handoff") {
-          body = failed(body.lease_id, "invalid_answer");
-          continue;
-        }
-        if ([400, 401, 404, 409, 413, 426].includes(error.status))
-          return { body, delivery: "refused" };
-      }
-      if (Date.now() >= until())
-        return { body, delivery: "unconfirmed" };
-      if (body.outcome === "answered" && body.answer.format !== undefined && error instanceof ExternalRelayError && error.status === 429 && error.retryAfterSeconds !== null) wait = Math.max(1, error.retryAfterSeconds * 1000);
-      await new Promise((resolve) => setTimeout(resolve, Math.min(wait, Math.max(0, until() - Date.now()))));
-      wait = Math.min(wait * 2, 5000);
-    }
-  }
-}
+export { completeRelayRequest } from "./relayCompletion";
 export async function runClaimedRequest(
   relay: PairedRelay,
   raw: unknown,
   onFreed?: () => void,
-  runtime?: HeadlessReviewRuntime & ToolLoopRuntime & { timeoutMs?: number; ownerPorts?: OwnerRunPorts; onUnknownFeature?: () => Promise<unknown> },
+  runtime?: HeadlessReviewRuntime & ToolLoopRuntime & { timeoutMs?: number; ownerPorts?: OwnerRunPorts; onUnknownFeature?: () => Promise<unknown>; onLeaseReady?: () => void; leaseWorker?: boolean },
 ): Promise<ExternalRelayCompletion | null> {
   const deadline = relayRequestDeadline(raw);
   const claimId = raw && typeof raw === "object" ? (raw as Record<string, unknown>).request_id : null;
@@ -298,8 +226,7 @@ export async function runClaimedRequest(
   let ownerTools: ReturnType<typeof openOwnerServiceTools> | null = null;
   let loop: ReturnType<typeof createToolLoop> | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
-  let cadenceTimer: ReturnType<typeof setTimeout> | null = null;
-  let heartbeatStopped = false;
+  let transport: RelayLeaseTransport | InlineRelayLeaseTransport | null = null;
   let pendingBeat: Promise<void> | null = null;
   let finishing: Promise<ExternalRelayCompletion | null> | null = null;
   let ownerParts: ReturnType<typeof openOwnerAnswer> | null = null;
@@ -310,6 +237,20 @@ export async function runClaimedRequest(
   const generatedSources = new Map<string, Set<string>>();
   let chain: { continued: boolean; promptBytes: number } | undefined;
   let resultDelivered = false;
+  let completionAccepted = false;
+  let completionInFlight = false;
+  let activeCapacityFreed = false;
+  let activeTarget: RelayTargetSettings | null = null;
+  let recorded = false;
+  let capacityReleaseRetry: Promise<void> | null = null;
+  let releaseCapacity: (() => Promise<void>) | null = null;
+  let initialLeaseNotified = false;
+  const notifyInitialLease = () => {
+    if (initialLeaseNotified) return;
+    initialLeaseNotified = true;
+    runtime?.onLeaseReady?.();
+  };
+  let executionScope = false;
   const loopRecord = () => ({ ...(loop ? { rounds, toolCalls: loop.records } : ownerTools?.records.length ? { toolCalls: ownerTools.records } : {}), ...(chain ? { chain } : {}) });
   const finish = (body: ExternalRelayCompletion): Promise<ExternalRelayCompletion | null> => {
     if (finishing) return finishing;
@@ -365,8 +306,24 @@ export async function runClaimedRequest(
       if (caps?.rich) recorder?.annotateV2({ drops: answerDrops, attachments: stagedAttachments.map(({id,kind,filename,size,sha256}) => ({attachment_id:id,kind,filename,bytes:size,sha256})), ...(body.outcome === "answered" ? { answer: body.answer } : {outcome:`${body.outcome}:${body.reason}`}) });
       const deliveryStart = Date.now();
       const until = releaseRequested ? deliveryStart : deadline.at;
-      const sent = await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature, caps?.plainMax);
+      if (body.outcome === "answered" && allowOwnerReply && !allowOwnerReply()) body = failed(body.lease_id, "cancelled");
+      completionInFlight = true;
+      let sent: Awaited<ReturnType<typeof completeRelayRequest>>;
+      try {
+        sent = transport
+          ? await transport.complete(body, until, caps?.plainMax ?? 4000, !!allowOwnerReply)
+          : await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature, caps?.plainMax);
+      } catch {
+        console.error("External relay helper completion unavailable; using Viewer transport");
+        sent = await completeRelayRequest(relay, requestId, body, () => until, allowOwnerReply, runtime?.onUnknownFeature, caps?.plainMax);
+      } finally { completionInFlight = false; }
       const completion = sent.body;
+      if (sent.delivery === "accepted") {
+        completionAccepted = true;
+        if (recorded && activeTarget && !activeCapacityFreed) { activeCapacityFreed = true; free(relay, activeTarget); }
+        try { await releaseCapacity?.(); }
+        catch { console.error("External relay completed capacity release pending"); retryCapacityRelease(); }
+      }
       if (caps?.rich && sent.body !== body) recorder?.annotateV2({ drops: [...answerDrops, {part:"answer",reason:"service_downgrade"}] });
       claimTerminal = sent.delivery !== "refused";
       terminalCompletion = claimTerminal ? completion : null;
@@ -381,9 +338,8 @@ export async function runClaimedRequest(
       });
       return completion;
     } finally {
-      heartbeatStopped = true;
+      notifyInitialLease();
       if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
-      if (cadenceTimer) { clearTimeout(cadenceTimer); cadenceTimer = null; }
       if (!claimSettled) {
         try { await settleClaim(claimTerminal ? "terminal" : "release", deadline.at); }
         catch { console.error("External relay request claim cleanup failed"); }
@@ -400,7 +356,7 @@ export async function runClaimedRequest(
           }
         }
       })();
-      inflight.delete(requestId);
+      if (!executionScope) inflight.delete(requestId);
       deliverySettled();
     }
     })();
@@ -419,6 +375,7 @@ export async function runClaimedRequest(
     );
   if (deadline.fallback === "past") return finish(declined(leaseId, "busy"));
   const target = relay.targets.find((item) => item.id === request.target_id);
+  activeTarget = target ?? null;
   if (!target || !target.engine || !target.model)
     return finish(declined(leaseId, "not_configured"));
   if (relay.paused || !target.enabled)
@@ -428,110 +385,127 @@ export async function runClaimedRequest(
   let turn: ReturnType<typeof conversationTurnPrompt> | null = null;
   let conversationBroken = false;
   let runDir: string | null = null;
-  let recorded = false;
+  let capacityReleased = false;
   let duplicate = false;
   let run: ReturnType<typeof runEphemeralAgent> | null = null;
   let runFinished = false;
   const callAbort = new AbortController();
   const identityTimers: ReturnType<typeof setTimeout>[] = [];
   let owner: ReturnType<typeof ownerTierFor> = null;
+  executionScope = true;
+  releaseCapacity = async () => {
+    if (!recorded || capacityReleased) return;
+    const held = readRunLedger().runs.find(row => row.requestId === requestId);
+    if (held?.ownerTurn?.cancel && !held.ownerTurn.confirmed) return;
+    await changeRunAsync(requestId, row => {
+      if (row.ownerTurn?.cancel && !row.ownerTurn.confirmed) return row;
+      return { ...row, capacityReleased: true };
+    }, Date.now() + 5000);
+    const current = readRunLedger().runs.find(row => row.requestId === requestId);
+    if (current && !current.capacityReleased) return;
+    capacityReleased = true;
+    if (!activeCapacityFreed) { activeCapacityFreed = true; free(relay, target); }
+    onFreed?.();
+  };
+  const retryCapacityRelease = () => {
+    if (capacityReleaseRetry || !completionAccepted) return;
+    capacityReleaseRetry = (async () => {
+      let delay = 100;
+      while (!capacityReleased) {
+        let held: ReturnType<typeof readRunLedger>["runs"][number] | undefined;
+        try { held = readRunLedger().runs.find(row => row.requestId === requestId); }
+        catch {
+          console.error("External relay completed capacity custody unreadable during retry");
+          await new Promise<void>(resolve => { const timer = setTimeout(resolve, delay); timer.unref(); });
+          delay = Math.min(delay * 2, 5000);
+          continue;
+        }
+        if (!held || held.ownerTurn?.cancel && !held.ownerTurn.confirmed) return;
+        try { await releaseCapacity?.(); }
+        catch { console.error("External relay completed capacity release retry pending"); }
+        if (capacityReleased) return;
+        await new Promise<void>(resolve => { const timer = setTimeout(resolve, delay); timer.unref(); });
+        delay = Math.min(delay * 2, 5000);
+      }
+    })().finally(() => { capacityReleaseRetry = null; });
+  };
   try {
     let newestProgress: ExternalRelayProgress | null = null;
     const steps = createRelaySteps(relay.features);
+    let progressSeq = 0;
     let stepLog: string | null = null;
     let pendingServiceTools = 0;
-    let beatBusy = false;
-    let seq = 0;
     const intervalMs = request.liveness.heartbeat_interval_s * 1000;
-    const beatAnchor = Date.now();
-    let nextRegularDue = beatAnchor + intervalMs;
-    let regularBeatPending = false;
     let acked = false;
+    let heartbeatBusy = false;
     const started = Date.now();
     const stallMs = request.liveness.stall_window_s * 1000;
     const cancelStalledRun = () => {
-      if (!leaseUnavailable && Date.now() - heartbeatAt > stallMs) {
+      if (!heartbeatBusy && !completionAccepted && !completionInFlight && !leaseUnavailable && Date.now() - heartbeatAt > stallMs) {
         leaseUnavailable = true;
         run?.cancel();
         callAbort.abort();
       }
     };
-    const armCadence = () => {
-      if (cadenceTimer) clearTimeout(cadenceTimer);
-      cadenceTimer = setTimeout(() => {
-        cadenceTimer = null;
-        pendingBeat = beat(false, true);
-      }, Math.max(0, nextRegularDue - Date.now()));
-      cadenceTimer.unref();
-    };
-    const beat = async (stepChange = false, regular = false) => {
-      if (beatBusy) { if (regular) regularBeatPending = true; return; }
-      if (leaseUnavailable) return;
-      beatBusy = true;
-      const beatSeq = ++seq;
-      const sentAt = Date.now();
-      let step: string | null = null;
-      const journal = (phase: "attempt" | "acknowledged" | "failed", status?: number, code?: string) =>
-        console.info("External relay heartbeat", { request: requestId.slice(0, 8), seq: beatSeq, phase, step,
-          durationMs: Date.now() - sentAt, ...(status !== undefined ? { status } : {}), ...(code ? { code } : {}) });
-      try {
-        const sentProgress = newestProgress;
-        const progress = steps ? steps.beat(beatSeq, Date.now(), stepChange) : sentProgress;
-        step = progress?.kind === "step" ? progress.label : null;
-        if (progress?.kind === "step") noteRelayProgress(relay.id, target.id, progress);
-        journal("attempt");
-        const response = await relayCall(
-          relay.api_base,
-          `/requests/${encodeURIComponent(requestId)}/heartbeat`,
-          "POST",
-          { lease_id: leaseId, seq: beatSeq, progress },
-          relay.credential,
-          { timeoutMs: 5000, maxBytes: relay.limits.max_response_bytes },
-        );
-        journal("acknowledged", response.status);
-        if (newestProgress === sentProgress) newestProgress = null;
-        acked = true;
-        heartbeatAt = Date.now();
-      } catch (error) {
-        journal("failed", error instanceof ExternalRelayError ? error.status : 0,
-          error instanceof ExternalRelayError && ["lease_lost", "unreachable", "malformed", "too_large", "unauthorized",
-            "unsupported_version", "unavailable", "rate_limited", "unknown_feature"].includes(error.code) ? error.code : "transport_error");
-        if (isUnknownFeatureRefusal(error)) await runtime?.onUnknownFeature?.();
-        if (
-          error instanceof ExternalRelayError &&
-          (error.status === 404 ||
-            (error.status === 409 && error.code === "lease_lost"))
-        ) {
-          leaseUnavailable = true;
-          run?.cancel();
-          callAbort.abort();
+    // Lease HTTP traffic has its own process and event loop. Viewer stalls and
+    // synchronous state work therefore cannot delay the heartbeat or answer POST.
+    const initialProgress = steps?.beat(++progressSeq, Date.now(), true) ?? newestProgress;
+    newestProgress = initialProgress;
+    if (initialProgress?.kind === "step") noteRelayProgress(relay.id, target.id, initialProgress);
+    let firstAcknowledged!: () => void;
+    const firstAck = new Promise<void>(resolve => { firstAcknowledged = resolve; });
+    const onHeartbeat = (frame: Parameters<ConstructorParameters<typeof RelayLeaseTransport>[5]>[0]) => {
+      const step = newestProgress?.kind === "step" ? newestProgress.label : null;
+      if (frame.phase === "attempt") heartbeatBusy = true;
+      else if (frame.phase === "acknowledged" || frame.phase === "failed" || frame.phase === "post_completion") heartbeatBusy = false;
+      console.info("External relay heartbeat", { request: requestId.slice(0, 8), seq: frame.seq,
+        phase: frame.phase, step, status: frame.status, ...(frame.code ? { code: frame.code } : {}) });
+      if (frame.phase === "acknowledged") { acked = true; heartbeatAt = Date.now(); firstAcknowledged(); }
+      else if (frame.phase === "failed") {
+        if ((frame.status === 404 || frame.status === 409 && frame.code === "lease_lost") && !completionAccepted) {
+          leaseUnavailable = true; run?.cancel(); callAbort.abort();
         }
-      } finally {
-        beatBusy = false;
-        cancelStalledRun();
-        if (!heartbeatStopped && !leaseUnavailable) {
-          const now = Date.now();
-          if (regular) while (nextRegularDue <= now) nextRegularDue += intervalMs;
-          if (regularBeatPending) {
-            regularBeatPending = false;
-            pendingBeat = beat(false, true);
-          } else armCadence();
-        }
+        firstAcknowledged();
       }
+      if (frame.phase === "failed" && frame.code === "unknown_feature")
+        void runtime?.onUnknownFeature?.().finally(firstAcknowledged);
     };
-    // Acknowledge before filesystem context, account selection or agent launch.
-    // The same sequencer and timer retain the lease throughout slow admission.
-    pendingBeat = beat();
-    await pendingBeat;
+    transport = runtime?.leaseWorker === false
+      ? new InlineRelayLeaseTransport(relay, requestId, target.id, leaseId, intervalMs, onHeartbeat, initialProgress,
+        () => { void runtime?.onUnknownFeature?.(); })
+      : new RelayLeaseTransport(relay, requestId, target.id, leaseId, intervalMs, onHeartbeat, initialProgress,
+        () => { void runtime?.onUnknownFeature?.(); });
+    if (transport) {
+      await transport.ready;
+      const firstBeatDeadline = runtime?.leaseWorker === false ? null
+        : setTimeout(firstAcknowledged, Math.max(1, Math.min(stallMs, deadline.at - Date.now())));
+      firstBeatDeadline?.unref();
+      await firstAck;
+      if (firstBeatDeadline) clearTimeout(firstBeatDeadline);
+      if (leaseUnavailable) {
+        await transport.close(); transport = null;
+        notifyInitialLease();
+        return null;
+      }
+    } else {
+      // Focused unit fixtures can keep lease I/O in process. The production
+      // poller leaves leaseWorker unset and always uses the independent helper.
+      acked = true;
+      heartbeatAt = Date.now();
+      firstAcknowledged();
+    }
+    notifyInitialLease();
+    pendingBeat = Promise.resolve();
     heartbeatTimer = setInterval(() => {
       if (steps && !owner && !runFinished && stepLog) steps.observe(readRelayStepObservation(stepLog));
-      if (!beatBusy) cancelStalledRun();
-      if (!beatBusy && !leaseUnavailable) {
-        if (steps?.changeDue(Date.now())) pendingBeat = beat(true);
+      cancelStalledRun();
+      if (!leaseUnavailable && steps?.changeDue(Date.now())) {
+        newestProgress = steps.beat(++progressSeq, Date.now(), true);
+        if (newestProgress?.kind === "step") noteRelayProgress(relay.id, target.id, newestProgress);
+        transport?.progress(newestProgress);
       }
     }, 1000);
     heartbeatTimer.unref();
-    if (leaseUnavailable) return null;
     if (Date.now() >= deadline.at) return await finish(declined(leaseId, "busy"));
     // The member limit (§B.8): a member past it is declined, and the service's
     // fallback setting decides whether its own agent answers instead.
@@ -705,7 +679,6 @@ export async function runClaimedRequest(
           if (pendingBeat) await pendingBeat;
           if (acked || leaseUnavailable) break;
           await toolSleep(1000, callAbort.signal);
-          if (!beatBusy) pendingBeat = beat();
         }
         return acked && !leaseUnavailable;
       },
@@ -726,6 +699,7 @@ export async function runClaimedRequest(
         newestProgress = { kind: done ? "tool_done" : "tool_start", label: tool, tool,
           status: done ? (failed ? "failed" : "completed") : "running", at: new Date().toISOString() };
         noteRelayProgress(relay.id, target.id, newestProgress);
+        transport?.progress(newestProgress);
       }
     }, steps ? pending => {
       pendingServiceTools += pending ? 1 : -1;
@@ -821,6 +795,7 @@ export async function runClaimedRequest(
             if (progress && request.answer.progress === "notes") {
               newestProgress = progress;
               noteRelayProgress(relay.id, target.id, progress);
+              transport?.progress(progress);
             }
           },
         });
@@ -912,7 +887,11 @@ export async function runClaimedRequest(
       if (leaseUnavailable) return null;
       if (steps && decision && !("kind" in decision)) {
         steps.observe({ writingAnswer: true });
-        if (steps.changeDue(Date.now())) { pendingBeat = beat(true); await pendingBeat; }
+        if (steps.changeDue(Date.now())) {
+          newestProgress = steps.beat(++progressSeq, Date.now(), true);
+          if (newestProgress?.kind === "step") noteRelayProgress(relay.id, target.id, newestProgress);
+          transport?.progress(newestProgress);
+        }
       }
       if (!decision || !("kind" in decision)) { completion = decision; break; }
       await loop!.runCalls(decision.calls, rounds);
@@ -958,53 +937,60 @@ export async function runClaimedRequest(
     }
     return await finish(failed(leaseId, "agent_error"));
   } finally {
-    if (!claimSettled) {
-      try { await settleClaim(claimTerminal ? "terminal" : "release", deadline.at); }
-      catch { console.error("External relay request claim cleanup failed"); }
-    }
-    inflight.delete(requestId);
-    leaveRelayHold(requestId);
-    deliverySettled();
-    heartbeatStopped = true;
-    if (cadenceTimer) clearTimeout(cadenceTimer);
-    if (heartbeatTimer) clearInterval(heartbeatTimer);
-    callAbort.abort();
-    await ownerParts?.dispose();
-    await inbound?.dispose();
-    for (const file of generatedFiles) { try { await fs.promises.rm(file, {force:true}); } catch { console.error("Relay generated image cleanup failed"); } }
-    await ownerTools?.dispose();
-    let releasePin = true;
-    if (conversation && owner) {
+    try {
+      if (!claimSettled) {
+        try { await settleClaim(claimTerminal ? "terminal" : "release", deadline.at); }
+        catch { console.error("External relay request claim cleanup failed"); }
+      }
+      leaveRelayHold(requestId);
+      deliverySettled();
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
+      callAbort.abort();
+      await ownerParts?.dispose();
+      await inbound?.dispose();
+      for (const file of generatedFiles) { try { await fs.promises.rm(file, {force:true}); } catch { console.error("Relay generated image cleanup failed"); } }
+      await ownerTools?.dispose();
+      let releasePin = true;
+      if (conversation && owner) {
+        try {
+          const custody = readRunLedger().runs.find(r => r.requestId === requestId)?.ownerTurn;
+          releasePin = !(custody?.cancel && !custody.confirmed);
+        } catch { releasePin = false; } // Unreadable custody cannot admit a peer turn.
+      }
+      if (conversation && releasePin) {
+        const compacted = conversationEvidence.compacted;
+        await releaseConversationAsync(conversation.id, { state: conversationBroken ? "broken" : "idle", sessionId: conversation.sessionId,
+          ...(conversationEvidence.sessionId || owner && conversation.conversationId && resultDelivered ? { accountId: conversation.accountId, turns: conversation.turns + 1, turnsSinceCompaction: compacted ? 0 : conversation.turnsSinceCompaction + 1,
+            lastTurnAt: new Date().toISOString(), seen: compacted ? [] : turn?.seen ?? [], staticDigest: compacted ? null : turn?.digest ?? null,
+            lastPromptTokens: conversationEvidence.promptTokens ?? null, compactions: conversation.compactions + (compacted ? 1 : 0), pendingCursor: undefined } : {}) }, Date.now() + 5000);
+      }
+      for (const timer of identityTimers) clearTimeout(timer);
+      // The only way out without a completion is a lost lease.
+      if (recorder && !duplicate && !recorder.finished)
+        recorder.finish({ outcome: "lease_lost", answer: null, delivery: null, ...loopRecord() });
       try {
-        const custody = readRunLedger().runs.find(r => r.requestId === requestId)?.ownerTurn;
-        releasePin = !(custody?.cancel && !custody.confirmed);
-      } catch { releasePin = false; } // Unreadable custody cannot admit a peer turn.
+        const held = readRunLedger().runs.find(r => r.requestId === requestId);
+        const custodyPending = !!held?.ownerTurn?.cancel && !held.ownerTurn.confirmed;
+        if (recorded && !custodyPending && !(completionAccepted && !capacityReleased)) await dropRunAsync(requestId, Date.now() + 5000);
+      } catch (error) {
+        console.error("External relay run ledger cleanup failed", error instanceof Error ? error.name : "unknown");
+      }
+      try {
+        const held = readRunLedger().runs.find(r => r.requestId === requestId);
+        if (runDir && !(held?.ownerTurn?.cancel && !held.ownerTurn.confirmed)) await fs.promises.rm(runDir, { recursive: true, force: true });
+      } catch (error) {
+        console.error("External relay run directory cleanup failed", error instanceof Error ? error.name : "unknown");
+      }
+    } finally {
+      notifyInitialLease();
+      await transport?.close();
+      transport = null;
+      inflight.delete(requestId);
+      if (recorded && !capacityReleased && !completionAccepted && !activeCapacityFreed) {
+        activeCapacityFreed = true;
+        free(relay, target);
+      }
+      onFreed?.();
     }
-    if (conversation && releasePin) {
-      const compacted = conversationEvidence.compacted;
-      await releaseConversationAsync(conversation.id, { state: conversationBroken ? "broken" : "idle", sessionId: conversation.sessionId,
-        ...(conversationEvidence.sessionId || owner && conversation.conversationId && resultDelivered ? { accountId: conversation.accountId, turns: conversation.turns + 1, turnsSinceCompaction: compacted ? 0 : conversation.turnsSinceCompaction + 1,
-          lastTurnAt: new Date().toISOString(), seen: compacted ? [] : turn?.seen ?? [], staticDigest: compacted ? null : turn?.digest ?? null,
-          lastPromptTokens: conversationEvidence.promptTokens ?? null, compactions: conversation.compactions + (compacted ? 1 : 0), pendingCursor: undefined } : {}) }, Date.now() + 5000);
-    }
-    for (const timer of identityTimers) clearTimeout(timer);
-    // The only way out without a completion is a lost lease.
-    if (recorder && !duplicate && !recorder.finished)
-      recorder.finish({ outcome: "lease_lost", answer: null, delivery: null, ...loopRecord() });
-    try {
-      const held = readRunLedger().runs.find(r => r.requestId === requestId);
-      const custodyPending = !!held?.ownerTurn?.cancel && !held.ownerTurn.confirmed;
-      if (recorded && !custodyPending) await dropRunAsync(requestId, Date.now() + 5000);
-    } catch (error) {
-      console.error("External relay run ledger cleanup failed", error instanceof Error ? error.name : "unknown");
-    }
-    try {
-      const held = readRunLedger().runs.find(r => r.requestId === requestId);
-      if (runDir && !(held?.ownerTurn?.cancel && !held.ownerTurn.confirmed)) await fs.promises.rm(runDir, { recursive: true, force: true });
-    } catch (error) {
-      console.error("External relay run directory cleanup failed", error instanceof Error ? error.name : "unknown");
-    }
-    if (recorded) free(relay, target);
-    onFreed?.();
   }
 }
