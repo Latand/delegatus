@@ -181,7 +181,7 @@ import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/o
 import { contextReading, readOrchestratorTranscriptFacts, rotationRecommendation } from "@/lib/orchestrator/health";
 import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
 import { splitRelayMessageText } from "@/lib/orchestrator/relayText";
-import { leaveLessonForSeat, leaveLessonForConversation, lessonRequestForReport } from "@/lib/memory/roleStage";
+import { leaveCorrectionForRole, leaveLessonForSeat, leaveLessonForConversation, lessonRequestForReport } from "@/lib/memory/roleStage";
 import { readMemoryProblem } from "@/lib/memory/roleProblems";
 import { RoleMemoryRefusal } from "@/lib/memory/roleStore";
 import { withoutStoredLessonsAsync, renderReportAsync, scrubIssueReportAsync } from "@/lib/memory/privacy";
@@ -2669,10 +2669,17 @@ async function leaveLesson(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
       : null;
     if (caller.kind === "manager" && !seat) throw new RoleMemoryRefusal("LESSON_NOT_A_SEAT", "this caller has no active project designation");
     if (caller.kind === "gateway" && !seat) throw new RoleMemoryRefusal("LESSON_NOT_A_SEAT", "this gateway conversation has no active project designation");
-    const answer = { lesson: args.lesson, rewrite: args.rewrite, none: args.none, problem: args.problem, applied: args.applied, misled: args.misled };
-    const result = seat ? leaveLessonForSeat(seat, answer) : leaveLessonForConversation(
-      dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? [], caller.conversationId, answer,
-    );
+    const answer = { correction: args.correction, lesson: args.lesson, rewrite: args.rewrite, none: args.none, problem: args.problem, applied: args.applied, misled: args.misled };
+    let result;
+    if (seat) result = leaveLessonForSeat(seat, answer);
+    else {
+      try {
+        result = leaveLessonForConversation(dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? [], caller.conversationId, answer);
+      } catch (error) {
+        if (!(error instanceof RoleMemoryRefusal) || error.code !== "LESSON_NOT_AN_ATTEMPT" || args.correction !== true || caller.kind !== "agent" || !caller.conversationId) throw error;
+        result = leaveCorrectionForRole({ conversationId: caller.conversationId, roleId: caller.role, project: dependencies.callerProject ? dependencies.callerProject() : productionCallerProject() }, answer);
+      }
+    }
     return { ...result };
   } catch (error) {
     if (error instanceof RoleMemoryRefusal) {

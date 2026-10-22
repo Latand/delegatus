@@ -157,7 +157,7 @@ export function applyCuration(pass: CuratorPass, input: CurationApply, now = new
         if (scopeKind(from.scope) === "role" && scopeKind(into.scope) !== "role") note(item.note);
         work.set(id, { ...from, state: "merged", reason: "duplicate", mergedInto: item.into, mergedAt: now, note: item.note });
       }
-      work.set(item.into, { ...into, ...text(item.rule, item.why ?? into.why), note: item.note, mergedFrom: [...(into.mergedFrom ?? []), ...item.from] }); touched.add(item.into);
+      work.set(item.into, { ...into, ...text(item.rule, item.why ?? into.why), note: item.note, ...(item.from.some(id => work.get(id)?.operatorCorrection) ? { operatorCorrection: true as const } : {}), mergedFrom: [...(into.mergedFrom ?? []), ...item.from] }); touched.add(item.into);
     }
     const reasons: CuratorReason[] = ["task-specific", "stale", "in-code", "in-instructions", "no-reader", "contradicted", "duplicate"];
     for (const item of input.archive ?? []) {

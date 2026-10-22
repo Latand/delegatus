@@ -157,8 +157,8 @@ export function joinMovedScopes(now = new Date().toISOString()): void {
         const earlier = joined.find((kept) => sameRule(kept.rule, rule.rule));
         if (!earlier) { joined.push(rule); continue; }
         // A duplicate carries the strongest retention decision across a rename.
-        if (rule.curatedAt || rule.keptByOperatorAt) {
-          const kept = { ...earlier, curatedAt: rule.curatedAt ?? earlier.curatedAt, keptByOperatorAt: rule.keptByOperatorAt ?? earlier.keptByOperatorAt };
+        if (rule.curatedAt || rule.keptByOperatorAt || rule.operatorCorrection) {
+          const kept = { ...earlier, ...(rule.operatorCorrection ? { operatorCorrection: true as const } : {}), curatedAt: rule.curatedAt ?? earlier.curatedAt, keptByOperatorAt: rule.keptByOperatorAt ?? earlier.keptByOperatorAt };
           joined.splice(joined.indexOf(earlier), 1);
           joined.push(kept);
           tx.put(kept);
@@ -267,6 +267,7 @@ export function versionedRule(tx: RuleTransaction, current: RoleMemoryRule, text
 }
 
 interface LessonWriteInput {
+  correction?: true;
   source: RuleSource;
   lessons: readonly LessonInput[];
   none: string | null;
@@ -285,6 +286,11 @@ export function leaveLessons(input: Omit<LessonWriteInput, "source"> & { source:
 /** A designated seat leaves practice without creating a stage request. */
 export function leaveSeatLessons(input: Omit<LessonWriteInput, "source" | "none" | "problem"> & { source: SeatRuleSource }) {
   return writeLessonAnswer({ ...input, none: null });
+}
+
+/** Correction lessons do not spend the stage's closing request. */
+export function leaveCorrectionLessons(input: Omit<LessonWriteInput, "none" | "rewrite" | "problem" | "applied" | "misled">) {
+  return writeLessonAnswer({ ...input, correction: true, none: null });
 }
 
 /** Both writers share versions, duplicate merging, bounds and privacy hints. */
@@ -353,6 +359,7 @@ function writeLessonAnswer(input: LessonWriteInput & { request?: Pick<LessonRequ
       const incoming: RoleMemoryRule = {
         kind: "rule", id: newRuleId(tx), scope, rule: lesson.rule, why: lesson.why,
         state: "active", hints, source: { ...input.source, project }, createdAt: now, changedAt: now,
+        ...(input.correction ? { operatorCorrection: true as const } : {}),
       };
       const outcome = appendRule(active, incoming, now);
       for (const changed of outcome.changed) tx.put(changed);
@@ -477,6 +484,11 @@ function taskCounter(all: readonly RoleMemoryRow[], byId: ReadonlyMap<string, Ro
       }
     }
   }
+  for (const row of all) {
+    if (row.kind !== "rule" || row.versionOf || !row.operatorCorrection || tasks.has(row.id)) continue;
+    const source = row.source;
+    if (source.origin === undefined || source.origin === "stage") tasks.set(row.id, [{ key: source.taskId ?? `pipeline:${source.pipelineId}`, at: row.createdAt }]);
+  }
   const mergedAt = (from: string, into: string) => byId.get(from)?.mergedAt ?? mergeTimes.get(edgeKey(from, into)) ?? byId.get(from)?.changedAt ?? "";
   return (id) => {
     const seen = new Set<string>();
@@ -518,8 +530,9 @@ function view(row: RoleMemoryRule, now: number, byId: ReadonlyMap<string, RoleMe
   });
   return {
     id: row.id, rule: row.rule, why: row.why, state: row.state, hints: row.hints, tasks,
+    ...(row.operatorCorrection ? { operatorCorrection: true as const } : {}),
     ...(row.reason ? { reason: row.reason } : {}), ...(row.mergedInto ? { mergedInto: row.mergedInto } : {}),
-    roleId: row.source.roleId, fixRound: row.source.fixRound, stageId: row.source.origin === "seat" ? "seat" : row.source.origin === "import" ? "import" : row.source.stageId,
+    roleId: row.source.roleId, fixRound: row.source.fixRound, stageId: row.source.origin === "seat" ? "seat" : row.source.origin === "import" ? "import" : row.source.origin === "conversation" ? "conversation" : row.source.stageId,
     ...(row.source.origin === "import" ? { importSource: { candidate: row.source.candidate, occurrences: row.source.occurrences, engine: row.source.engine, sha256: row.source.sha256, importId: row.source.importId } } : {}),
     fresh: now - Date.parse(row.createdAt) < DAY_MS, createdAt: row.createdAt, changedAt: row.changedAt,
     ...(row.revisedBy ? { revisedBy: revisionView(row.revisedBy) } : {}),

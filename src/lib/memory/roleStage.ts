@@ -4,7 +4,7 @@ import { ROLE_IDS } from "@/lib/roles/types";
 import { automaticMemoryExcluded, roleIsClean } from "./eligibility";
 import { LESSON_MATCH_MIN_CHARS, lettersAndDigits } from "./roleConsolidate";
 import { lessonRequestLines, type HandedFindings } from "./roleRender";
-import { leaveSeatLessons, leaveLessons, lessonRequest, recordLessonRequest, roleMemoryCollection, RoleMemoryRefusal, type LeftLesson } from "./roleStore";
+import { leaveCorrectionLessons, leaveSeatLessons, leaveLessons, lessonRequest, recordLessonRequest, roleMemoryCollection, RoleMemoryRefusal, type LeftLesson } from "./roleStore";
 import { assertGenericRule, problemInput } from "./roleProblems";
 import { scopeKind } from "./roleScopes";
 import { roleMemoryEnabled, roleMemorySelectorEnabled } from "./settings";
@@ -68,7 +68,7 @@ function recognisable(value: string, field: string): string {
   return value;
 }
 
-export interface LessonAnswerArgs { lesson?: unknown; rewrite?: unknown; none?: unknown; lessons?: unknown; problem?: unknown; applied?: unknown; misled?: unknown }
+export interface LessonAnswerArgs { correction?: unknown; lesson?: unknown; rewrite?: unknown; none?: unknown; lessons?: unknown; problem?: unknown; applied?: unknown; misled?: unknown }
 
 export function lessonUsage(args: Pick<LessonAnswerArgs, "applied" | "misled">): { applied?: string[]; misled?: string[] } {
   const parse = (value: unknown): string[] | undefined => {
@@ -97,6 +97,8 @@ function ruleText(value: unknown, field: string): string {
 
 /** Exactly one answer, validated before the request can be consumed. */
 export function parseLessons(args: LessonAnswerArgs, writerRole: string | null): { lessons: LessonInput[]; none: string | null; rewrite?: RewriteInput; problem?: ProblemInput } {
+  if (args.correction !== undefined && args.correction !== true) throw new RoleMemoryRefusal("LESSON_INVALID", "correction must be true when supplied");
+  if (args.correction && (!args.lesson || args.applied !== undefined || args.misled !== undefined)) throw new RoleMemoryRefusal("LESSON_INVALID", "a correction requires lesson and carries no delivery measurement");
   if (args.lessons !== undefined || [args.none, args.rewrite, args.lesson, args.problem].filter(value => value !== undefined).length !== 1) {
     throw new RoleMemoryRefusal("LESSON_INVALID", "give exactly one of none, rewrite, lesson or problem");
   }
@@ -120,7 +122,7 @@ export function parseLessons(args: LessonAnswerArgs, writerRole: string | null):
     if (typeof item.role !== "string" || !(ROLE_IDS as readonly string[]).includes(item.role)) throw new RoleMemoryRefusal("LESSON_INVALID", "lesson.role must be a role id");
     role = item.role;
   }
-  if (scope === "role" && roleIsClean(role ?? writerRole)) throw new RoleMemoryRefusal("LESSON_CLEAN_ROLE", "this role receives no learned rules; its own know-how has no memory scope");
+  if (!args.correction && scope === "role" && roleIsClean(role ?? writerRole)) throw new RoleMemoryRefusal("LESSON_CLEAN_ROLE", "this role receives no learned rules; its own know-how has no memory scope");
   if (scope === "role" && !role && !writerRole) throw new RoleMemoryRefusal("LESSON_INVALID", "this stage has no role; name one in role, or use scope project");
   return { lessons: [{ scope, ...(role ? { role } : {}), rule, why }], none: null };
 }
@@ -138,15 +140,30 @@ export interface LeaveLessonResult {
 export function leaveLessonForConversation(pipelines: readonly Pipeline[], conversationId: string | null, args: LessonAnswerArgs, now = new Date().toISOString()): LeaveLessonResult {
   if (!conversationId) throw new RoleMemoryRefusal("LESSON_NOT_AN_ATTEMPT", "a lesson is left by a stage that was asked for one, or by a project's designated orchestrator seat; this conversation is neither");
   const held = pipelines.flatMap((pipeline) => pipeline.runs.flatMap((run) => run.attempts
-    .filter((attempt) => !attempt.historical && attempt.conversationId === conversationId)
+    .filter((attempt) => (!attempt.historical || args.correction === true) && attempt.conversationId === conversationId)
     .map((attempt) => ({ pipeline, stage: pipeline.stages.find((candidate) => candidate.id === run.stageId) ?? null, stageId: run.stageId, attempt }))));
   if (!held.length) throw new RoleMemoryRefusal("LESSON_NOT_AN_ATTEMPT", "a lesson is left by a stage that was asked for one, or by a project's designated orchestrator seat; this conversation is neither");
+  if (args.correction === true) {
+    // Operators can correct a result after its stage has settled. The authenticated
+    // conversation still proves its provenance; no closing request is spent.
+    const current = held.filter(entry => entry.stage);
+    if (current.length !== 1) throw new RoleMemoryRefusal("LESSON_AMBIGUOUS", "a correction lesson requires one recorded stage attempt for this conversation");
+    if (!roleMemoryEnabled()) throw new RoleMemoryRefusal("LESSON_SWITCHED_OFF", "learned rules are switched off on this installation");
+    const target = current[0];
+    const roleId = target.attempt.effectiveRole.roleId ?? null;
+    const parsed = parseLessons(args, roleId);
+    const result = leaveCorrectionLessons({ source: {
+      project: target.pipeline.project, pipelineId: target.pipeline.id, taskId: target.pipeline.taskIds?.[0], stageId: target.stageId, attempt: target.attempt.n,
+      roleId, fixRound: target.attempt.activatedBy?.edge === "fail", conversationId,
+    }, lessons: parsed.lessons, now });
+    return { pipelineId: target.pipeline.id, stageId: target.stageId, attempt: target.attempt.n, ...result };
+  }
   const requested = held.map((entry) => ({ ...entry, request: lessonRequest(entry.pipeline.id, entry.stageId, entry.attempt.n) }))
     .filter((entry) => entry.request).sort((a, b) => b.request!.at.localeCompare(a.request!.at));
   const target = requested[0] ?? null;
   const latest = target ?? held.at(-1)!;
   const roleId = latest.attempt.effectiveRole.roleId ?? null;
-  if (stageMemoryExcluded(latest.stage, roleId)) throw new RoleMemoryRefusal("LESSON_CLEAN_STAGE", "a review stage stays clean: it reads no learned rules and leaves none");
+  if (stageMemoryExcluded(latest.stage, roleId)) throw new RoleMemoryRefusal("LESSON_CLEAN_STAGE", "a review stage reads no learned rules and leaves only explicit operator correction lessons");
   if (!roleMemoryEnabled()) throw new RoleMemoryRefusal("LESSON_SWITCHED_OFF", "learned rules are switched off on this installation");
   if (!target) throw new RoleMemoryRefusal("LESSON_NOT_REQUESTED", "report the stage with stage_report first; its answer asks for the lesson");
   const parsed = parseLessons(args, roleId);
@@ -180,11 +197,22 @@ export function leaveLessonForSeat(seat: { project: string | null; conversationI
       const row = roleMemoryCollection()?.get(`r:${parsed.rewrite.id}`);
       if (row?.kind === "rule") assertGenericRule(parsed.rewrite.rule, scopeKind(row.scope));
     }
-    const result = leaveSeatLessons({ source: { origin: "seat", project: seat.project, roleId: "orchestrator", fixRound: false, conversationId: seat.conversationId }, lessons: parsed.lessons, rewrite: parsed.rewrite, now });
+    const result = leaveSeatLessons({ ...(args.correction ? { correction: true as const } : {}), source: { origin: "seat", project: seat.project, roleId: "orchestrator", fixRound: false, conversationId: seat.conversationId }, lessons: parsed.lessons, rewrite: parsed.rewrite, now });
     return { project: seat.project, roleId: "orchestrator" as const, ...result };
   } catch (error) {
     if (error instanceof RoleMemoryRefusal && error.code === "LESSON_IS_PROBLEM") throw new RoleMemoryRefusal(error.code, "this names a defect: find or create its board task with create_task. Tell the operator in chat when it is critical. For a practice that holds on other tasks, express the generic check without the project's fact");
     if (error instanceof RoleMemoryRefusal && error.code === "LESSON_ABOUT_ONE_TASK") throw new RoleMemoryRefusal(error.code, "the rule names one task or run; it belongs on that task's card. If it holds elsewhere, say it without the identifier");
     throw error;
   }
+}
+
+
+/** Non-pipeline role identity and project come from the authenticated registry caller. */
+export function leaveCorrectionForRole(caller: { project: string | null; conversationId: string; roleId: string | null }, args: LessonAnswerArgs, now = new Date().toISOString()) {
+  const roleId = caller.roleId;
+  if (args.correction !== true || !caller.project || caller.project === "*" || !roleId || !(ROLE_IDS as readonly string[]).includes(roleId)) throw new RoleMemoryRefusal("LESSON_NOT_AN_ATTEMPT", "a correction needs a registered role and concrete project");
+  if (!roleMemoryEnabled()) throw new RoleMemoryRefusal("LESSON_SWITCHED_OFF", "learned rules are switched off on this installation");
+  const parsed = parseLessons(args, roleId);
+  const result = leaveCorrectionLessons({ source: { origin: "conversation", project: caller.project, roleId, fixRound: false, conversationId: caller.conversationId }, lessons: parsed.lessons, now });
+  return { project: caller.project, roleId: caller.roleId, ...result };
 }

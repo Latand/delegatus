@@ -84,7 +84,7 @@ import { shortId } from "@/lib/shortIds";
  * accepted workstream, a re-run when a role's default model changes; it also
  * ships the working rule 16 that #3083 rewrote. */
 
-import { ROLE_DEFAULTS, WORKING_RULES_SHORT } from "@/lib/roles/defaults";
+import { OPERATOR_CORRECTION_RULE, ROLE_DEFAULTS, WORKING_RULES_SHORT } from "@/lib/roles/defaults";
 import { configForVariant, VARIANT_PARAMS, variantParamLabel } from "@/lib/roles/paramConfig";
 import { ROLE_VARIANT_IDS, type RoleVariantId } from "@/lib/roles/types";
 import type { RegistryRoleDefinitions, RoleConfig, RoleDefinition } from "@/lib/roles/types";
@@ -110,7 +110,7 @@ export const ORCHESTRATOR_SPAWN_CONFIG = {
     which is how v20's rewrite never left the source (#2030), so
     `prompt.test.ts` pins the text's fingerprint per version and fails until
     the bump and a new fingerprint land together. */
-export const ORCHESTRATOR_PROMPT_VERSION = 58;
+export const ORCHESTRATOR_PROMPT_VERSION = 59;
 
 /** Whether a seat's recorded mandate version is behind the current default —
     the one question rotation, the seat card and `rotate_orchestrator` ask
@@ -751,10 +751,11 @@ export function orchestratorMandateForDelivery(mandate: string, roles: readonly 
     bytes under the same clientAttemptId, and a spawn receipt matched by
     request digest refuses any other text. */
 export function orchestratorMandateUpgraded(mandate: string): string {
+  const oldRule13 = "13. Read the newest answer first: it replaces only the decision it names; recheck answers since the brief before you publish or ask, and never re-ask a settled question.";
+  if (!mandate.includes(OPERATOR_CORRECTION_RULE)) mandate = mandate.split(oldRule13).join(`${oldRule13} ${OPERATOR_CORRECTION_RULE}`);
   mandate = mandate.split(SHIPPED_WORKING_RULE_16).join(WORKING_RULE_16);
-  return mandate.includes(ORCHESTRATOR_MAINTENANCE_PRACTICE)
-    ? mandate
-    : mandate.replace(ORCHESTRATOR_OUTPUTS_BULLET, `${ORCHESTRATOR_OUTPUTS_BULLET}\n${ORCHESTRATOR_MAINTENANCE_PRACTICE}`);
+  if (!mandate.includes(ORCHESTRATOR_MAINTENANCE_PRACTICE)) mandate = mandate.replace(ORCHESTRATOR_OUTPUTS_BULLET, `${ORCHESTRATOR_OUTPUTS_BULLET}\n${ORCHESTRATOR_MAINTENANCE_PRACTICE}`);
+  return mandate.includes(OPERATOR_CORRECTION_RULE) ? mandate : `${mandate}\n\n${OPERATOR_CORRECTION_RULE}`;
 }
 
 /** Delivery with an already rendered role table. A pending seat intent replays

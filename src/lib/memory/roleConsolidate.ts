@@ -81,9 +81,9 @@ export function appendRule(active: readonly RoleMemoryRule[], incoming: RoleMemo
   if (duplicate) {
     changed.push({ ...incoming, state: "merged", reason: "duplicate", mergedInto: duplicate.id, mergedAt: at, changedAt: at });
     merged.push({ from: incoming.id, into: duplicate.id });
-    if (!duplicate.curatedAt && !duplicate.keptByOperatorAt) {
+    if (incoming.operatorCorrection || (!duplicate.curatedAt && !duplicate.keptByOperatorAt)) {
       next.splice(next.indexOf(duplicate), 1);
-      const refreshed = { ...duplicate, changedAt: at };
+      const refreshed = { ...duplicate, changedAt: at, ...(incoming.operatorCorrection ? { operatorCorrection: true as const } : {}) };
       next.push(refreshed);
       changed.push(refreshed);
     }

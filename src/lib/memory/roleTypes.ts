@@ -52,6 +52,8 @@ export interface RewriteInput {
 }
 
 export interface StageRuleSource {
+  /** Task provenance for a correction written before a closing request exists. */
+  taskId?: string;
   origin?: "stage";
   project: string;
   pipelineId: string;
@@ -83,9 +85,19 @@ export interface ImportRuleSource {
   sha256: string;
   importId: string;
 }
-export type RuleSource = StageRuleSource | SeatRuleSource | ImportRuleSource;
+/** Server-attributed role conversation outside a pipeline, including scheduled roles. */
+export interface ConversationRuleSource {
+  origin: "conversation";
+  project: string;
+  roleId: string;
+  fixRound: false;
+  conversationId: string;
+}
+export type RuleSource = StageRuleSource | SeatRuleSource | ImportRuleSource | ConversationRuleSource;
 
 export interface RoleMemoryRule {
+  /** This rule includes a lesson prompted by an operator correction. */
+  operatorCorrection?: true;
   kind: "rule";
   id: string;
   scope: string;
@@ -201,6 +213,7 @@ export interface LessonInput {
 
 /** What the window and the card read: no conversation ids leave the server. */
 export interface RuleView {
+  operatorCorrection?: true;
   id: string;
   rule: string;
   why: string;

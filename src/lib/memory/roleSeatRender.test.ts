@@ -12,10 +12,11 @@ test("even a first seat reads when to leave a rule, create a task and tell the o
   expect(block).not.toContain("When you report with stage_report");
 });
 
-test("maintainers read seat guidance and leave no rules themselves", () => {
+test("maintainers read seat guidance and leave only operator correction lessons", () => {
   const block = renderLearnedRules(scopes("maintainer"));
   expect(block).toContain("Earlier agents and this project's seat");
-  expect(block).toContain("You leave no rules in this run.");
+  expect(block).toContain("Leave a lesson with correction:true for an operator correction");
+  expect(block).not.toContain("You leave no rules in this run.");
   expect(block).not.toContain("When you report with stage_report");
 });
 

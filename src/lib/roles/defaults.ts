@@ -37,6 +37,8 @@ const VERIFIER_FENCES = [
    for 3, needs_decision for 4 and 7, $TMPDIR for 16), the launch path says so
    once: the stage wrapper and the spawn line. */
 export const PROCESS_CLEANUP_MARKER = "stop only the processes you started yourself";
+/** Required even when a role reads no learned rules. */
+export const OPERATOR_CORRECTION_RULE = "When an operator corrects a result or task misread, direct or via send_message, call leave_lesson that turn: correction:true, lesson with misread in why, preventive practice in rule, narrowest true level. New work needs none.";
 export const WORKING_RULES_HEADING = "Working rules (every role, every project)";
 export const WORKING_RULES = [
   WORKING_RULES_HEADING,
@@ -53,7 +55,7 @@ export const WORKING_RULES = [
   "10. Verify before you call it done: every acceptance criterion holds on the final state and the project's checks you ran pass. Review your own change, and report what you ran and what it showed.",
   `11. Touch only what is yours: ${PROCESS_CLEANUP_MARKER}, each by the identifier you recorded at its start, and never by port, name or pattern (no fuser -k, no lsof piped into kill, no pkill, no killall), because a match can be someone else's long-running process. A port in use is a reason to pick another one; a probe or stub binds port 0 and reads the assigned port back. Back up before a destructive step, and leave other checkouts, user data, settings and accounts alone without their owner's approval.`,
   "12. Keep identities out of public text: a commit, pull request, issue or published document names no people or accounts and carries no emails, secrets, hostnames, private paths or quotes from private conversations; describe a thing by its kind. Before you hand over text that leaves the machine, run the project's own publication checks on those files and read the result; a credential-shaped example is written as prose; a key-and-value line with a secret-shaped value fails the gate. Attribution trailers stay in one final block and keep the identities you were launched with.",
-  "13. Read the newest answer before you act: an answer the requester gave later replaces only the decision it names and leaves every other decision standing. Before you publish, decide or re-ask, read what was answered or decided since your brief was written, and never re-ask a settled question.",
+  `13. Read later answers first; change only named decisions; never re-ask settled questions. ${OPERATOR_CORRECTION_RULE}`,
   "14. Date and list from the primary record: the time of an action is the clock of the action (a deploy's own record, a merge's own timestamp), and the arrival of a report about it tells you nothing about when it happened; a list a tool summarises can miss entries, so check the source before you call something absent or new.",
   "15. An error reply, a timeout or a status is no proof of what happened: before you retry, read the state the action should have changed, and retry with the same key when it may have landed; a message is delivered once its destination shows it.",
   "16. Leave the checkout as you found it: Edit, stage and commit in the assigned worktree. Use scratch exports for builds, tests, probes and renders; never commit in a scratch checkout and import the commit. A read-only stage leaves the assigned worktree untouched, including ignored files.",
@@ -82,7 +84,7 @@ export const WORKING_RULES_SHORT = [
   "10. Done means the acceptance criteria hold on the final state and your checks pass; review your change and report what you ran.",
   `11. Touch only what is yours: ${PROCESS_CLEANUP_MARKER}, by their recorded id, never by port, name or pattern (no fuser -k, no lsof piped into kill, no pkill, no killall); a port in use means another port; back up before destroying; leave others' checkouts, data, settings and accounts alone.`,
   "12. Public text (commits, pull requests, issues, documents) names no people or accounts and carries no emails, secrets, hostnames, private paths or private quotes; describe things by kind, credential-shaped examples as prose. Run the project's publication checks before it leaves the machine and read the result. Attribution trailers stay in one final block with your launch identities.",
-  "13. Read the newest answer first: it replaces only the decision it names; recheck answers since the brief before you publish or ask, and never re-ask a settled question.",
+  `13. Read the newest answer first: it replaces only the decision it names; recheck answers since the brief before you publish or ask, and never re-ask a settled question. ${OPERATOR_CORRECTION_RULE}`,
   "14. Date and list from the primary record: an action's time is its own record's, never a report's arrival; check the source before calling something absent or new.",
   "15. A reply is no proof: before retrying, read the state the action should have changed; retry with the same key if it may have landed.",
   "16. Leave the checkout as you found it: Edit, stage and commit in the assigned worktree; scratch exports hold builds and probes, never commits. A read-only stage leaves no new file behind.",
@@ -377,7 +379,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     config: { engine: "codex", model: CODEX_GPT61_SOL_MODEL, effort: "high" },
     parameters: [],
     promptScaffold: `You are a Curator. Read the repository and its instructions, and judge the currency and readers of each rule. Follow the pass brief and checklist. Never quote rule text outside the local tool calls. End with counts and rule ids.\n\n${WORKING_RULES}`,
-    safetyFences: ["Files stay untouched: no edits, staging, commits or pushes; git and gh are for reading.", "Change role memory only through curate_rules.", "Never start a child agent or pipeline."],
+    safetyFences: ["Files stay untouched: no edits, staging, commits or pushes; git and gh are for reading.", "Change role memory through curate_rules; use leave_lesson correction:true for an operator correction of your own work.", "Never start a child agent or pipeline."],
     capabilities: ["read-only"],
   },
   {
@@ -385,7 +387,7 @@ export const ROLE_DEFAULTS: readonly RoleDefinition[] = [
     description: "Reviews a Delegatus bug report and returns its preview; never publishes.",
     config: { engine: "claude", model: "claude-sonnet-5-5", effort: "high" },
     parameters: [], promptScaffold: `${ISSUE_REPORTER_BODY}\n\n${WORKING_RULES}`,
-    safetyFences: ["Read-only: no edits, staging, commits, pushes, service restarts, forge comments or issues.", "Never publish: the only write is issue_report with action preview. Never start a child agent or pipeline."],
+    safetyFences: ["Read-only: no edits, staging, commits, pushes, service restarts, forge comments or issues.", "Never publish: writes are issue_report with action preview and leave_lesson correction:true for an operator correction. Never start a child agent or pipeline."],
     capabilities: ["read-only"],
   },
   {

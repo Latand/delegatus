@@ -119,3 +119,44 @@ test("a newly created split part cannot file a concrete defect as a rule", () =>
   expect(active().map(rule => rule.id)).toEqual([id]);
   expect(row(id).rule).toBe(RULE);
 });
+
+
+test("correction lessons lead scope reads and the pass agenda, including a duplicate of a curated rule", async () => {
+  const correction = leave("correction", "task-correction");
+  const firstPass = claimPass({ project: PROJECT, repoDir: root, now: NOW + 10 })!;
+  applyCuration(firstPass, input({ [scope()]: [correction] }), at(20));
+  patchPass(firstPass.id, { state: "succeeded", endedAt: at(30) });
+  const source = request("correction-again", "task-correction-again");
+  leaveLessons({ request: source, source, lessons: [{ scope: "role", rule: RULE, why: WHY }], correction: true, none: null, now: at(40) });
+  const ordinary = leave("ordinary", "task-ordinary", "When adding translated controls, compare every supported language before accepting the result.");
+  const pass = claimPass({ project: PROJECT, repoDir: root, now: NOW + 7 * 60 * 60_000 })!;
+  const agenda = await readCuration(pass);
+  expect(agenda.scopes[0]).toMatchObject({ scope: scope(), corrections: 1 });
+  const page = await readCuration(pass, scope());
+  if (!("rules" in page)) throw Error("scope page expected");
+  expect(page.rules[0]).toMatchObject({ id: correction, operatorCorrection: true, newSincePass: true });
+  expect(page.rules.findIndex(rule => rule.id === ordinary)).toBeGreaterThan(0);
+  expect(curatorBrief(PROJECT)).toContain("Review operatorCorrection lessons first");
+  expect(curatorBrief(PROJECT)).toContain("integrate, rewrite or drop");
+  applyCuration(pass, input({ [scope()]: [correction, ordinary] }, { rewrite: [{ id: correction, rule: "For rendered changes, enumerate supported combinations and measure each before accepting the result.", note: "Rewrite the correction into the existing practice." }] }), at(60));
+  expect(row(correction)).toMatchObject({ operatorCorrection: true, note: "Rewrite the correction into the existing practice.", revisedBy: { by: "curator" } });
+});
+
+
+for (const decision of ["integrate", "rewrite", "drop"] as const) test(`a correction's ${decision} decision uses reversible curation history`, () => {
+  const source = request("decision", "task-decision");
+  const id = leaveLessons({ request: source, source, correction: true, lessons: [{ scope: "role", rule: RULE, why: WHY }], none: null, now: at() }).left[0].id;
+  const target = decision === "integrate" ? leave("existing", "task-existing", "For rendered changes, enumerate the required combinations before accepting the result.") : id;
+  const pass = claimPass({ project: PROJECT, repoDir: root, now: NOW + 10 })!;
+  applyCuration(pass, input({ [scope()]: decision === "drop" ? [] : [target] }, decision === "rewrite"
+    ? { rewrite: [{ id, rule: "For rendered changes, check all supported combinations before accepting the result.", note: "Refine the correction practice." }] }
+    : decision === "drop" ? { archive: [{ id, reason: "task-specific", note: "The correction describes one task alone." }] }
+    : { merge: [{ into: target, from: [id], rule: RULE, note: "Integrate the correction into the existing practice." }] }), at(20));
+  expect(row(target)).toMatchObject({ operatorCorrection: true, curatedAt: at(20), state: decision === "drop" ? "archived" : "active" });
+  const scopeRow = roleMemoryCollection()!.get(`s:${scope()}`);
+  if (scopeRow?.kind !== "scope") throw Error("scope missing");
+  expect(scopeRow.history.at(-1)).toMatchObject({ by: "curator", pass: pass.id });
+  patchPass(pass.id, { state: "succeeded", endedAt: at(30) });
+  expect(revertCuratorPass(pass.id, at(40)).skipped).toEqual([]);
+  expect(row(id)).toMatchObject({ operatorCorrection: true, state: "active", rule: RULE });
+});

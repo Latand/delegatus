@@ -7,6 +7,29 @@ commit. This lane wrote this document and the frame manifest and nothing else
 in the repository; the prototype frames live outside it, under
 `~/Pictures/delegatus-review/role-memory/`.
 
+## Operator corrections (2026-10-22 amendment)
+
+The shipped seat mandate and every role scaffold require a lesson in the same
+turn when an operator corrects a result or reveals a misunderstood task. A
+correction relayed by the seat through `send_message` has the same duty. New
+work alone does not trigger it. Call `leave_lesson` with `correction:true` and
+`lesson`: explain the misread in `why`, the preventing practice in `rule`, at
+the narrowest true level. Keep task identifiers and private identities out.
+
+Correction lessons work before `stage_report`, independently of its one closing
+answer, and remain available to clean roles and registered role conversations
+outside pipelines. Clean roles still receive no automatic memory or closing
+request. The installation's role-memory kill switch still applies. Ordinary
+unasked lessons retain their existing seat-only admission. This supersedes the
+blanket refusals for clean roles and non-pipeline roles in the original design.
+
+The stored rule and its view carry `operatorCorrection:true`. Duplicate merging
+preserves this marker on the survivor and keeps the incoming lesson's provenance
+in its merged record. The curator reads pending correction scopes and lessons
+first, then decides integrate, rewrite or drop through the existing operations,
+notes and reversible scope history. Scheduling and operator deletions retain
+their existing rules. See [the observation and verification](../verification/operator-correction-lessons.md).
+
 ## Originating requirement
 
 Operator, 2026-10-07 11:41 UTC (14:41 Kyiv), by voice, in Russian, in the

@@ -28,9 +28,11 @@ async function readRuleCuration(pass: CuratorPass, scope?: string, cursor?: stri
   const attempts = scope ? await readHistoryProjection(db => historyAttemptCounts(db, project, now), { collections: ["pipelines","pipelines_archive"] }) : {};
   const scopes = [...new Set(pass.scopes.map(canonicalScope))];
   const view = await projectViewAsync(project, now);
-  if (!scope) return { pass: pass.id, ...(pass.importBatch ? { import: { candidates: pass.importBatch.candidates.length, scope: "imports" } } : {}), scopes: scopes.map(key => {
+  const correctionCounts = new Map(view.scopes.map(s => [s.scope, s.active.filter(rule => rule.operatorCorrection && rule.awaitingCuration).length]));
+  const corrections = (key: string) => correctionCounts.get(key) ?? 0;
+  if (!scope) return { pass: pass.id, ...(pass.importBatch ? { import: { candidates: pass.importBatch.candidates.length, scope: "imports" } } : {}), scopes: scopes.slice().sort((a, b) => Number(corrections(b) > 0) - Number(corrections(a) > 0)).map(key => {
     const held = view.scopes.find(s => s.scope === key);
-    return { scope: key, revision: held?.revision ?? 0, chars: held?.chars ?? 0, bound: ROLE_MEMORY_BOUND, active: held?.active.length ?? 0, left: held?.left.length ?? 0 };
+    return { scope: key, corrections: corrections(key), revision: held?.revision ?? 0, chars: held?.chars ?? 0, bound: ROLE_MEMORY_BOUND, active: held?.active.length ?? 0, left: held?.left.length ?? 0 };
   }) };
   const resolvedScope = canonicalScope(scope);
   if (!scopes.includes(resolvedScope)) throw new RoleMemoryRefusal("CURATE_SCOPE", "scope does not belong to this pass");
@@ -52,8 +54,9 @@ async function readRuleCuration(pass: CuratorPass, scope?: string, cursor?: stri
   const departuresSince = held.hasPass ? held.departuresSince : since;
   const entries: Record<string, unknown>[] = [
     ...(rules?.active.slice().reverse().map(({ versions, ...rule }) => ({ kind: "active", ...rule, newSincePass: !!rule.awaitingCuration || rule.changedAt > since, versionCount: versions?.length ?? 0, earlierText: versions?.at(-1) })) ?? []),
-    ...(rules?.left.filter(rule => rule.reason === "budget" || rule.changedAt > departuresSince).map(({ versions, ...rule }) => ({ kind: "left", ...rule, versionCount: versions?.length ?? 0 })) ?? []),
+    ...(rules?.left.filter(rule => rule.reason === "budget" || rule.changedAt > departuresSince).map(({ versions, ...rule }) => ({ kind: "left", ...rule, newSincePass: rule.changedAt > departuresSince, versionCount: versions?.length ?? 0 })) ?? []),
   ];
+  entries.sort((a, b) => Number(!!b.operatorCorrection && b.newSincePass === true) - Number(!!a.operatorCorrection && a.newSincePass === true));
   if (role && !isCrossProjectRoleScope(resolvedScope)) entries.push(...otherProjectRoleRules(resolvedScope).map(row => ({ kind: "other-project", id: row.id, scope: canonicalScope(row.scope), rule: row.rule, why: row.why, readOnly: true })));
   const meta = { pass: pass.id, scope: resolvedScope, revision, chars: rules?.chars ?? scopeChars([]), bound: ROLE_MEMORY_BOUND, attempts, scaffold };
   const page: Record<string, unknown>[] = [];
