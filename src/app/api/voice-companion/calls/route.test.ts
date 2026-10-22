@@ -53,6 +53,21 @@ test("the operator lists their retained calls without knowing an id, and each li
   expect((await list({ "x-llv-spawn-capability": "invalid-agent" })).status).toBe(403);
 });
 
+test("a listed call whose state row is gone still opens through the session route, to its owner only", async () => {
+  const f = fixture();
+  const minted = await (await start("history-journal")).json();
+  f.admission.record(minted.sessionId, { id: "tool-read", kind: "tool", atMs: 400, data: { name: "list_tasks", callId: "read", status: "done", arguments: "{}" } });
+  await f.service.close(minted.sessionId);
+  f.service.storage.change(document => { delete document.sessions[minted.sessionId]; });
+  const { calls } = await (await list()).json();
+  expect(calls.map((call: { sessionId: string }) => call.sessionId)).toEqual([minted.sessionId]);
+  const record = await transcript(minted.sessionId);
+  expect(record.status).toBe(200);
+  expect(await record.json()).toMatchObject({ sessionId: minted.sessionId, entries: expect.arrayContaining([expect.objectContaining({ id: "tool-read" })]) });
+  /* Only the transcript view reads a journal alone; events need the call's state. */
+  expect((await session.GET(new NextRequest(`http://127.0.0.1/api/voice-companion/session?sessionId=${minted.sessionId}&after=0`, { headers: headers() }))).status).toBe(409);
+});
+
 test("a team member lists only the calls they started; another member and an anonymous browser read none of them", async () => {
   const { claimInstall, createInvite, redeemJoin } = await import("@/lib/team/members");
   const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
@@ -69,6 +84,8 @@ test("a team member lists only the calls they started; another member and an ano
     await f.service.close(mine.sessionId);
     const theirs = await (await start("team-history-b", cookie(owner.cookie))).json();
     await f.service.close(theirs.sessionId);
+    /* Read from the journal alone, a call stays its starter's as well. */
+    f.service.storage.change(document => { delete document.sessions[mine.sessionId]; });
     expect((await (await list(cookie(starter.cookie))).json()).calls.map((call: { sessionId: string }) => call.sessionId)).toEqual([mine.sessionId]);
     expect((await (await list(cookie(owner.cookie))).json()).calls.map((call: { sessionId: string }) => call.sessionId)).toEqual([theirs.sessionId]);
     expect(JSON.stringify(await (await list(cookie(owner.cookie))).json())).not.toContain(mine.sessionId);

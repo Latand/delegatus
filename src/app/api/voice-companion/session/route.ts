@@ -61,10 +61,14 @@ export async function GET(req: NextRequest) {
     const after = Number(req.nextUrl.searchParams.get("after") ?? 0);
     if (!id(sessionId) || !Number.isSafeInteger(after) || after < 0) throw new Error("INVALID_REQUEST");
     const service = companionSessions();
-    const session = service.storage.read().sessions[sessionId];
+    const view = req.nextUrl.searchParams.get("view");
+    const stored = service.storage.read().sessions[sessionId];
+    /* A retained call whose state row is gone opens from its journal, under the owner the journal recorded. */
+    const session = stored ?? (view === "transcript" ? service.admission.records.journalSession(sessionId) : null);
     if (!session) throw new Error("SESSION_UNAVAILABLE");
     companionSessionOwner(req, session);
-    if (req.nextUrl.searchParams.get("view") === "transcript") {
+    if (view === "transcript") {
+      if (!stored) return NextResponse.json({ sessionId, ...service.admission.records.read(sessionId) }, { headers });
       // Opening an ended call is also its bounded report reconciliation path.
       // The shared event path speaks only while the provider call is active.
       await service.events(sessionId, after);

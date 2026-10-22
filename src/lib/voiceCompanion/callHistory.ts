@@ -32,16 +32,26 @@ function journal(records: CompanionTranscriptRecords, session: StoredSession): {
   return value;
 }
 
+/** Calls whose state row is gone but whose journal records who started them (`CompanionTranscriptRecords.sessions`,
+ * read only for ids the state does not hold). A journal that names no owner, or cannot be read, proves no owner and
+ * is left out. */
+function journalOnly(records: CompanionTranscriptRecords, known: Record<string, StoredSession>): StoredSession[] {
+  return records.ids().filter(id => !known[id]).flatMap(id => {
+    try { const session = records.journalSession(id); return session ? [session] : []; } catch { return []; }
+  });
+}
+
 /** The retained calls `owns` admits, newest first; of calls started in the same millisecond, the one stored last. */
 export function retainedCalls(storage: CompanionStorage, records: CompanionTranscriptRecords, owns: (session: StoredSession) => boolean,
   names: (project: string, locale: Locale) => string = reportHeaderName): RetainedCall[] {
+  const stored = storage.read().sessions;
   const known = new Map<string, string>();
   const name = (project: string, locale: Locale) => {
     const key = `${locale}\n${project}`;
     if (!known.has(key)) { let value = project; try { value = names(project, locale); } catch { /* the key stands for its name */ } known.set(key, value); }
     return known.get(key)!;
   };
-  return Object.values(storage.read().sessions).filter(owns).reverse().sort((a, b) => b.createdAt - a.createdAt).map(session => {
+  return [...journalOnly(records, stored), ...Object.values(stored)].filter(owns).reverse().sort((a, b) => b.createdAt - a.createdAt).map(session => {
     const read = journal(records, session);
     return { sessionId: session.id, startedAt: session.createdAt, endedAt: session.closed ? callEndedAt(session) : null, project: name(session.project, session.locale),
       live: !session.closed, truncated: read?.truncated ?? false,

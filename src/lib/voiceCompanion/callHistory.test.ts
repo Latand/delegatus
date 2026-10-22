@@ -145,6 +145,23 @@ test("a request recorded before requests named their project is named by the lis
     .toEqual([expect.objectContaining({ id: "request-legacy", at: START + 500, project: "Name of atlas", status: "delivered", conversationId: "conversation_atlas" })]);
 });
 
+test("a call whose state row is gone is still listed from its owned journal, and a journal without an owner is not", async () => {
+  const h = harness();
+  const kept = await callWithRequest(h, "fixture", SECRET_WORDS[1]);
+  await h.service.close(kept.sessionId);
+  const legacy = await callWithRequest(h, "fixture", SECRET_WORDS[2]);
+  await h.service.close(legacy.sessionId);
+  const directory = path.join(process.env.LLV_STATE_DIR!, "voice-companion", "transcripts");
+  /* A journal written before calls recorded who started them. */
+  const file = path.join(directory, `${legacy.sessionId}.jsonl`);
+  fs.writeFileSync(file, fs.readFileSync(file, "utf8").split("\n").map(line => line.includes('"kind":"session_start"') ? line.replace(/,"startedBy":\{"operator":true\}/u, "") : line).join("\n"));
+  h.storage.change(document => { delete document.sessions[kept.sessionId]; delete document.sessions[legacy.sessionId]; });
+  const calls = retainedCalls(h.storage, h.admission.records, operatorOwns({ operator: true }), project => project);
+  expect(calls.map(call => call.sessionId)).toEqual([kept.sessionId]);
+  expect(calls[0]).toMatchObject({ live: false, endedAt: expect.any(Number), actions: [expect.objectContaining({ kind: "request", status: "queued" })] });
+  expect(retainedCalls(h.storage, h.admission.records, operatorOwns({ memberId: "member-a" }), project => project)).toEqual([]);
+});
+
 test("refusal and delivery reasons read in the owner's language, from the code the record keeps", () => {
   expect(delegationReason("no_orchestrator", "refused", "en")).toBe("This project has no designated orchestrator, so nothing was sent.");
   expect(delegationReason("no_orchestrator", "refused", "uk")).toContain("оркестратора");
