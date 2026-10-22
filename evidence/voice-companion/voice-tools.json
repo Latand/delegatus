@@ -2,6 +2,15 @@
   "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
   "synthetic": true,
   "viewportBasis": "configured scene width",
+  "command": "LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chromium> bun test src/components/kanban/kanbanBoard.browser.test.tsx --test-name-pattern 'voice tools settings render every state'",
+  "sources": {
+    "src/components/kanban/kanbanBoard.browser.test.tsx": "91b08bda2c5b8581f92b691f8c1eec1eddc72cd3cb17582a87f807d8f7d82b5c",
+    "src/components/kanban/issue1695Evidence.fixture.tsx": "6cbababdec3b652462904d43acda082014cea00a1b1f4f99d092ec7ba6155e60",
+    "src/components/voiceCompanion/VoiceToolsSetting.tsx": "d3ab39020a1e08f4e170317da18bb0959d7cd6cc146d366736e2124b3997837b",
+    "src/lib/i18n/en.ts": "56d2d9db15f715f40a996109961f8838aa8fc457356962d30be2bcc72a3e42a5",
+    "src/lib/i18n/uk.ts": "05e4fb6fa2878cdd91bba7ce7db1adddea62d63471db018f61eeb34219a61a47",
+    "src/app/globals.css": "46cece0a546dffe434248bc8378e958d4169caa449e98ed96e63aa62e33fa53e"
+  },
   "failures": [],
   "measurements": [
     {
@@ -32,6 +41,18 @@
       "rows": 1
     },
     {
+      "label": "1440-en-light-pending-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
       "label": "1440-en-light-pending-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -54,6 +75,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1440-en-light-review-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -130,6 +163,18 @@
       "rows": 1
     },
     {
+      "label": "1440-en-light-approved-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
       "label": "1440-en-light-approved-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -150,6 +195,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1440-en-light-approved-ask-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -185,6 +242,18 @@
       "rows": 1
     },
     {
+      "label": "1440-en-light-long-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
       "label": "1440-en-light-long-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -204,6 +273,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1440-en-light-approved-refused-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -238,6 +319,18 @@
       "rows": 1
     },
     {
+      "label": "1440-en-light-dry-run-busy-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
       "label": "1440-en-light-dry-run-busy-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -265,6 +358,18 @@
       "rows": 1
     },
     {
+      "label": "1440-en-light-rejected-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
       "label": "1440-en-light-rejected-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -285,6 +390,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1440-en-light-disabled-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -335,6 +452,18 @@
       "rows": 1
     },
     {
+      "label": "1440-en-dark-pending-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
       "label": "1440-en-dark-pending-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -357,6 +486,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1440-en-dark-review-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -433,6 +574,18 @@
       "rows": 1
     },
     {
+      "label": "1440-en-dark-approved-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
       "label": "1440-en-dark-approved-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -453,6 +606,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1440-en-dark-approved-ask-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -488,6 +653,18 @@
       "rows": 1
     },
     {
+      "label": "1440-en-dark-long-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
       "label": "1440-en-dark-long-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -507,6 +684,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1440-en-dark-approved-refused-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -541,6 +730,18 @@
       "rows": 1
     },
     {
+      "label": "1440-en-dark-dry-run-busy-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
       "label": "1440-en-dark-dry-run-busy-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -568,6 +769,18 @@
       "rows": 1
     },
     {
+      "label": "1440-en-dark-rejected-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
       "label": "1440-en-dark-rejected-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -588,6 +801,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1440-en-dark-disabled-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -638,6 +863,18 @@
       "rows": 1
     },
     {
+      "label": "1440-uk-light-pending-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
       "label": "1440-uk-light-pending-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -660,6 +897,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1440-uk-light-review-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -736,6 +985,18 @@
       "rows": 1
     },
     {
+      "label": "1440-uk-light-approved-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
       "label": "1440-uk-light-approved-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -756,6 +1017,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1440-uk-light-approved-ask-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -791,6 +1064,18 @@
       "rows": 1
     },
     {
+      "label": "1440-uk-light-long-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
       "label": "1440-uk-light-long-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -810,6 +1095,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1440-uk-light-approved-refused-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -844,6 +1141,18 @@
       "rows": 1
     },
     {
+      "label": "1440-uk-light-dry-run-busy-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
       "label": "1440-uk-light-dry-run-busy-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -871,6 +1180,18 @@
       "rows": 1
     },
     {
+      "label": "1440-uk-light-rejected-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
       "label": "1440-uk-light-rejected-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -891,6 +1212,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1440-uk-light-disabled-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -941,6 +1274,18 @@
       "rows": 1
     },
     {
+      "label": "1440-uk-dark-pending-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
       "label": "1440-uk-dark-pending-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -963,6 +1308,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1440-uk-dark-review-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -1039,6 +1396,18 @@
       "rows": 1
     },
     {
+      "label": "1440-uk-dark-approved-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
       "label": "1440-uk-dark-approved-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -1059,6 +1428,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1440-uk-dark-approved-ask-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -1094,6 +1475,18 @@
       "rows": 1
     },
     {
+      "label": "1440-uk-dark-long-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
       "label": "1440-uk-dark-long-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -1113,6 +1506,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1440-uk-dark-approved-refused-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -1147,6 +1552,18 @@
       "rows": 1
     },
     {
+      "label": "1440-uk-dark-dry-run-busy-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
       "label": "1440-uk-dark-dry-run-busy-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -1167,6 +1584,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1440-uk-dark-rejected-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -1201,7 +1630,1663 @@
       "rows": 1
     },
     {
+      "label": "1440-uk-dark-disabled-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
       "label": "1440-uk-dark-disabled-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-light-empty-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 0
+    },
+    {
+      "label": "1000-en-light-pending-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-light-pending-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-light-pending-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-light-review-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-light-review-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-light-review-tools",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-light-review-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-light-failed-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-light-failed-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-light-approved-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-light-approved-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-light-approved-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-light-approved-ask-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-light-approved-ask-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-light-approved-ask-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-light-long-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-light-long-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-light-long-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-light-approved-refused-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-light-approved-refused-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-light-approved-refused-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-light-dry-run-busy-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-light-dry-run-busy-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-light-dry-run-busy-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-light-rejected-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-light-rejected-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-light-rejected-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-light-disabled-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-light-disabled-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-light-disabled-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-dark-empty-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 0
+    },
+    {
+      "label": "1000-en-dark-pending-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-dark-pending-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-dark-pending-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-dark-review-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-dark-review-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-dark-review-tools",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-dark-review-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-dark-failed-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-dark-failed-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-dark-approved-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-dark-approved-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-dark-approved-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-dark-approved-ask-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-dark-approved-ask-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-dark-approved-ask-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-dark-long-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-dark-long-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-dark-long-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-dark-approved-refused-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-dark-approved-refused-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-dark-approved-refused-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-dark-dry-run-busy-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-dark-dry-run-busy-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-dark-dry-run-busy-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-dark-rejected-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-dark-rejected-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-dark-rejected-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-dark-disabled-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-dark-disabled-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-en-dark-disabled-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-light-empty-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 0
+    },
+    {
+      "label": "1000-uk-light-pending-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-light-pending-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-light-pending-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-light-review-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-light-review-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-light-review-tools",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-light-review-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-light-failed-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-light-failed-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-light-approved-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-light-approved-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-light-approved-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-light-approved-ask-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-light-approved-ask-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-light-approved-ask-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-light-long-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-light-long-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-light-long-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-light-approved-refused-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-light-approved-refused-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-light-approved-refused-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-light-dry-run-busy-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-light-dry-run-busy-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-light-dry-run-busy-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-light-rejected-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-light-rejected-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-light-rejected-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-light-disabled-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-light-disabled-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-light-disabled-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-dark-empty-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 0
+    },
+    {
+      "label": "1000-uk-dark-pending-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-dark-pending-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-dark-pending-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-dark-review-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-dark-review-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-dark-review-tools",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-dark-review-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-dark-failed-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-dark-failed-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-dark-approved-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-dark-approved-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-dark-approved-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-dark-approved-ask-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-dark-approved-ask-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-dark-approved-ask-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-dark-long-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-dark-long-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-dark-long-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-dark-approved-refused-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-dark-approved-refused-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-dark-approved-refused-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-dark-dry-run-busy-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-dark-dry-run-busy-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-dark-dry-run-busy-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-dark-rejected-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-dark-rejected-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-dark-rejected-foot",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-dark-disabled-head",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-dark-disabled-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "1000-uk-dark-disabled-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
       "outside": 0,
@@ -1244,6 +3329,18 @@
       "rows": 1
     },
     {
+      "label": "820-en-light-pending-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
       "label": "820-en-light-pending-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -1266,6 +3363,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "820-en-light-review-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -1342,6 +3451,18 @@
       "rows": 1
     },
     {
+      "label": "820-en-light-approved-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
       "label": "820-en-light-approved-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -1362,6 +3483,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "820-en-light-approved-ask-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -1397,6 +3530,18 @@
       "rows": 1
     },
     {
+      "label": "820-en-light-long-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
       "label": "820-en-light-long-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -1416,6 +3561,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "820-en-light-approved-refused-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -1450,6 +3607,18 @@
       "rows": 1
     },
     {
+      "label": "820-en-light-dry-run-busy-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
       "label": "820-en-light-dry-run-busy-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -1477,6 +3646,18 @@
       "rows": 1
     },
     {
+      "label": "820-en-light-rejected-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
       "label": "820-en-light-rejected-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -1497,6 +3678,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "820-en-light-disabled-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -1547,6 +3740,18 @@
       "rows": 1
     },
     {
+      "label": "820-en-dark-pending-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
       "label": "820-en-dark-pending-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -1569,6 +3774,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "820-en-dark-review-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -1645,6 +3862,18 @@
       "rows": 1
     },
     {
+      "label": "820-en-dark-approved-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
       "label": "820-en-dark-approved-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -1665,6 +3894,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "820-en-dark-approved-ask-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -1700,6 +3941,18 @@
       "rows": 1
     },
     {
+      "label": "820-en-dark-long-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
       "label": "820-en-dark-long-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -1719,6 +3972,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "820-en-dark-approved-refused-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -1753,6 +4018,18 @@
       "rows": 1
     },
     {
+      "label": "820-en-dark-dry-run-busy-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
       "label": "820-en-dark-dry-run-busy-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -1780,6 +4057,18 @@
       "rows": 1
     },
     {
+      "label": "820-en-dark-rejected-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
       "label": "820-en-dark-rejected-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -1800,6 +4089,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "820-en-dark-disabled-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -1850,6 +4151,18 @@
       "rows": 1
     },
     {
+      "label": "820-uk-light-pending-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
       "label": "820-uk-light-pending-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -1872,6 +4185,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "820-uk-light-review-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -1948,6 +4273,18 @@
       "rows": 1
     },
     {
+      "label": "820-uk-light-approved-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
       "label": "820-uk-light-approved-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -1968,6 +4305,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "820-uk-light-approved-ask-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -2003,6 +4352,18 @@
       "rows": 1
     },
     {
+      "label": "820-uk-light-long-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
       "label": "820-uk-light-long-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -2022,6 +4383,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "820-uk-light-approved-refused-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -2056,6 +4429,18 @@
       "rows": 1
     },
     {
+      "label": "820-uk-light-dry-run-busy-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
       "label": "820-uk-light-dry-run-busy-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -2083,6 +4468,18 @@
       "rows": 1
     },
     {
+      "label": "820-uk-light-rejected-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
       "label": "820-uk-light-rejected-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -2103,6 +4500,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "820-uk-light-disabled-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -2153,6 +4562,18 @@
       "rows": 1
     },
     {
+      "label": "820-uk-dark-pending-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
       "label": "820-uk-dark-pending-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -2175,6 +4596,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "820-uk-dark-review-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -2251,6 +4684,18 @@
       "rows": 1
     },
     {
+      "label": "820-uk-dark-approved-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
       "label": "820-uk-dark-approved-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -2271,6 +4716,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "820-uk-dark-approved-ask-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -2306,6 +4763,18 @@
       "rows": 1
     },
     {
+      "label": "820-uk-dark-long-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
       "label": "820-uk-dark-long-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -2325,6 +4794,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "820-uk-dark-approved-refused-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -2359,6 +4840,18 @@
       "rows": 1
     },
     {
+      "label": "820-uk-dark-dry-run-busy-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
       "label": "820-uk-dark-dry-run-busy-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -2386,6 +4879,18 @@
       "rows": 1
     },
     {
+      "label": "820-uk-dark-rejected-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
       "label": "820-uk-dark-rejected-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -2406,6 +4911,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "820-uk-dark-disabled-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -2456,6 +4973,18 @@
       "rows": 1
     },
     {
+      "label": "390-en-light-pending-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
       "label": "390-en-light-pending-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -2478,6 +5007,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "390-en-light-review-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -2554,6 +5095,18 @@
       "rows": 1
     },
     {
+      "label": "390-en-light-approved-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
       "label": "390-en-light-approved-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -2574,6 +5127,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "390-en-light-approved-ask-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -2609,6 +5174,18 @@
       "rows": 1
     },
     {
+      "label": "390-en-light-long-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
       "label": "390-en-light-long-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -2628,6 +5205,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "390-en-light-approved-refused-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -2662,6 +5251,18 @@
       "rows": 1
     },
     {
+      "label": "390-en-light-dry-run-busy-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
       "label": "390-en-light-dry-run-busy-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -2689,6 +5290,18 @@
       "rows": 1
     },
     {
+      "label": "390-en-light-rejected-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
       "label": "390-en-light-rejected-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -2709,6 +5322,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "390-en-light-disabled-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -2759,6 +5384,18 @@
       "rows": 1
     },
     {
+      "label": "390-en-dark-pending-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
       "label": "390-en-dark-pending-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -2781,6 +5418,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "390-en-dark-review-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -2857,6 +5506,18 @@
       "rows": 1
     },
     {
+      "label": "390-en-dark-approved-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
       "label": "390-en-dark-approved-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -2877,6 +5538,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "390-en-dark-approved-ask-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -2912,6 +5585,18 @@
       "rows": 1
     },
     {
+      "label": "390-en-dark-long-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
       "label": "390-en-dark-long-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -2931,6 +5616,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "390-en-dark-approved-refused-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -2965,6 +5662,18 @@
       "rows": 1
     },
     {
+      "label": "390-en-dark-dry-run-busy-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
       "label": "390-en-dark-dry-run-busy-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -2992,6 +5701,18 @@
       "rows": 1
     },
     {
+      "label": "390-en-dark-rejected-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
       "label": "390-en-dark-rejected-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -3012,6 +5733,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "390-en-dark-disabled-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -3062,6 +5795,18 @@
       "rows": 1
     },
     {
+      "label": "390-uk-light-pending-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
       "label": "390-uk-light-pending-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -3084,6 +5829,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "390-uk-light-review-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -3160,6 +5917,18 @@
       "rows": 1
     },
     {
+      "label": "390-uk-light-approved-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
       "label": "390-uk-light-approved-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -3180,6 +5949,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "390-uk-light-approved-ask-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -3215,6 +5996,18 @@
       "rows": 1
     },
     {
+      "label": "390-uk-light-long-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
       "label": "390-uk-light-long-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -3234,6 +6027,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "390-uk-light-approved-refused-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -3268,6 +6073,18 @@
       "rows": 1
     },
     {
+      "label": "390-uk-light-dry-run-busy-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
       "label": "390-uk-light-dry-run-busy-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -3295,6 +6112,18 @@
       "rows": 1
     },
     {
+      "label": "390-uk-light-rejected-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
       "label": "390-uk-light-rejected-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -3315,6 +6144,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(244, 241, 236)",
+      "rows": 1
+    },
+    {
+      "label": "390-uk-light-disabled-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -3365,6 +6206,18 @@
       "rows": 1
     },
     {
+      "label": "390-uk-dark-pending-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
       "label": "390-uk-dark-pending-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -3387,6 +6240,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "390-uk-dark-review-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -3463,6 +6328,18 @@
       "rows": 1
     },
     {
+      "label": "390-uk-dark-approved-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
       "label": "390-uk-dark-approved-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -3483,6 +6360,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "390-uk-dark-approved-ask-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -3518,6 +6407,18 @@
       "rows": 1
     },
     {
+      "label": "390-uk-dark-long-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
       "label": "390-uk-dark-long-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -3537,6 +6438,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "390-uk-dark-approved-refused-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],
@@ -3571,6 +6484,18 @@
       "rows": 1
     },
     {
+      "label": "390-uk-dark-dry-run-busy-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
       "label": "390-uk-dark-dry-run-busy-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -3598,6 +6523,18 @@
       "rows": 1
     },
     {
+      "label": "390-uk-dark-rejected-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
       "label": "390-uk-dark-rejected-foot",
       "viewportOverflow": false,
       "dialogOverflow": false,
@@ -3618,6 +6555,18 @@
       "outside": 0,
       "shown": [
         true,
+        true
+      ],
+      "small": [],
+      "background": "rgb(17, 18, 24)",
+      "rows": 1
+    },
+    {
+      "label": "390-uk-dark-disabled-secrets",
+      "viewportOverflow": false,
+      "dialogOverflow": false,
+      "outside": 0,
+      "shown": [
         true
       ],
       "small": [],

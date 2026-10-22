@@ -1141,3 +1141,11 @@ The same tests are retained with explicit destination fixtures after the fix.
 Further tests cover restart, tampered MACs, replay of revoked grants, copied
 uncommitted approvals, revocation during preparation,
 owner-session revocation and successful authorized HTTP discovery.
+
+
+The existing board browser driver records the destination controls in
+`evidence/voice-companion/voice-tools.json`: 496 measurements, zero geometry
+failures, EN/UK, light/dark, widths 1440, 1000, 820 and 390, including a
+1000×700 desktop window. The unchanged base reproduced all 264 previously
+committed measurements exactly. The record includes the command and hashes
+of its six rendered sources; screenshots remain in the capture scratch.
