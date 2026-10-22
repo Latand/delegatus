@@ -5,13 +5,45 @@
  * image is not: a PDF, a log, an archive. No node: imports here — this module
  * is bundled into client components too.
  *
- * The bounds are deliberately explicit rather than generous: an attachment
- * rides base64 inside one JSON request, so a batch the operator cannot notice
- * is a batch the phone cannot upload (issue #1224).
+ * Large files use the streamed upload path; messages carry references to
+ * completed uploads. Small files retain the inline JSON path.
  */
-export const MAX_INBOX_FILE_BYTES = 20 * 1024 * 1024;
+export const MAX_INBOX_FILE_BYTES = 100 * 1024 * 1024;
 export const MAX_INBOX_FILES = 5;
-export const MAX_INBOX_FILES_TOTAL_BYTES = 40 * 1024 * 1024;
+export const MAX_INBOX_FILES_TOTAL_BYTES = 200 * 1024 * 1024;
+/** Keep the browser and JSON parser's working set small. Older clients may
+ * still send their original 20 MiB inline files. */
+export const STREAM_INBOX_FILE_BYTES = 1024 * 1024;
+export const MAX_INLINE_INBOX_FILE_BYTES = 20 * 1024 * 1024;
+export const MAX_INLINE_INBOX_FILES_TOTAL_BYTES = 40 * 1024 * 1024;
+
+export interface ComposerUploadRef {
+  id: string;
+  bytes: number;
+  sha256: string;
+}
+
+export function isComposerUploadRef(value: unknown): value is ComposerUploadRef {
+  if (!value || typeof value !== "object") return false;
+  const ref = value as ComposerUploadRef;
+  return /^[a-f0-9]{32}$/.test(ref.id) && Number.isSafeInteger(ref.bytes)
+    && ref.bytes > 0 && ref.bytes <= MAX_INBOX_FILE_BYTES && /^[a-f0-9]{64}$/.test(ref.sha256);
+}
+
+export function sameComposerUploadRef(left: ComposerUploadRef | undefined, right: ComposerUploadRef | undefined): boolean {
+  return left === undefined || right === undefined ? left === right
+    : left.id === right.id && left.bytes === right.bytes && left.sha256 === right.sha256;
+}
+
+export interface ComposerFilePayload {
+  name: string;
+  base64: string;
+  upload?: ComposerUploadRef;
+}
+
+export function composerFilePayload(file: ComposerFilePayload): ComposerFilePayload {
+  return { name: file.name, base64: file.base64, ...(file.upload ? { upload: file.upload } : {}) };
+}
 
 /** Whole megabytes, for a refusal the operator reads rather than decodes. */
 export function attachmentMegabytes(bytes: number): string {

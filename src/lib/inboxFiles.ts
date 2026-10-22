@@ -11,6 +11,9 @@ import {
   MAX_INBOX_FILES_TOTAL_BYTES,
 } from "@/lib/filePolicy";
 import { inboxDir } from "@/lib/configDir";
+import { composerUploadOwner, resolveComposerUpload, type StoredComposerUpload } from "./composerUploads";
+import type { TeamActor } from "./team/contract";
+import { MAX_INLINE_INBOX_FILE_BYTES, MAX_INLINE_INBOX_FILES_TOTAL_BYTES, isComposerUploadRef } from "./filePolicy";
 
 /**
  * General (non-image) composer attachments on their way to an agent (issue
@@ -36,7 +39,10 @@ export interface InboxFileUpload {
       re-encoding it to compare strings) tripled the peak footprint of a batch
       this process has no spare memory for. */
   data: Buffer;
+  stored?: StoredComposerUpload;
 }
+
+export const inboxFileBytes = (file: InboxFileUpload): number => file.stored?.bytes ?? file.data.length;
 
 export interface InboxFileAdmissionFailure {
   error: string;
@@ -100,13 +106,52 @@ export function admitInboxFilePayload(body: { files?: unknown }): InboxFileAdmis
     if (rawBytesFromBase64(candidate.base64) > MAX_INBOX_FILE_BYTES) {
       return failure(`${name} is too large (${attachmentMegabytes(MAX_INBOX_FILE_BYTES)} MB limit)`, 413);
     }
+    if (rawBytesFromBase64(candidate.base64) > MAX_INLINE_INBOX_FILE_BYTES) {
+      return failure(`${name} needs a streamed upload; attach the file again`, 413);
+    }
     const data = decodeAttachment(candidate.base64);
     if (!data) return failure(`${name} could not be read`, 400);
     totalBytes += data.byteLength;
+    if (totalBytes > MAX_INLINE_INBOX_FILES_TOTAL_BYTES) {
+      return failure("large attachment batches need streamed uploads; attach the files again", 413);
+    }
     if (totalBytes > MAX_INBOX_FILES_TOTAL_BYTES) {
       return failure(`attachments exceed the ${attachmentMegabytes(MAX_INBOX_FILES_TOTAL_BYTES)} MB request limit`, 413);
     }
     files.push({ name, data });
+  }
+  return { files, error: null };
+}
+
+/** Resolve opaque completed uploads in the caller's scope. No submitted path
+ * is ever opened, and no upload bytes are loaded into the command envelope. */
+export async function admitInboxFilePayloadAsync(body: { files?: unknown }, actor: TeamActor): Promise<InboxFileAdmissionResult> {
+  if (!Array.isArray(body.files) || !body.files.some(file => file && typeof file === "object" && "upload" in file)) {
+    return admitInboxFilePayload(body);
+  }
+  if (body.files.length > MAX_INBOX_FILES) return failure(`too many files (${MAX_INBOX_FILES} limit)`, 413);
+  const files: InboxFileUpload[] = [];
+  let bytes = 0;
+  let inlineBytes = 0;
+  for (const value of body.files) {
+    if (!value || typeof value !== "object" || typeof value.name !== "string") return failure("invalid file", 400);
+    if (value.upload !== undefined) {
+      if (value.base64 !== "" || !isComposerUploadRef(value.upload)) return failure("invalid attachment upload reference", 400);
+      try {
+        const stored = await resolveComposerUpload(value.upload, composerUploadOwner(actor));
+        files.push({ name: inboxAttachmentName(value.name), data: Buffer.alloc(0), stored });
+      } catch {
+        return failure(`${inboxAttachmentName(value.name)} upload is unavailable; attach the file again`, 400);
+      }
+    } else {
+      const admitted = admitInboxFilePayload({ files: [value] });
+      if (admitted.error) return admitted;
+      files.push(...admitted.files);
+      inlineBytes += admitted.files.reduce((total, file) => total + file.data.length, 0);
+      if (inlineBytes > MAX_INLINE_INBOX_FILES_TOTAL_BYTES) return failure("large attachment batches need streamed uploads; attach the files again", 413);
+    }
+    bytes += inboxFileBytes(files.at(-1)!);
+    if (bytes > MAX_INBOX_FILES_TOTAL_BYTES) return failure(`attachments exceed the ${attachmentMegabytes(MAX_INBOX_FILES_TOTAL_BYTES)} MB request limit`, 413);
   }
   return { files, error: null };
 }
@@ -220,6 +265,7 @@ export interface StagedInboxFiles {
  * the batch. A failure releases only what this call created.
  */
 export function stageInboxFiles(files: readonly InboxFileUpload[], token: string): StagedInboxFiles {
+  if (files.some(file => file.stored)) throw new Error("streamed uploads require asynchronous inbox staging");
   const filePaths = inboxFilePaths(files, token);
   const created: string[] = [];
   if (!filePaths.length) return { filePaths, created };
@@ -252,6 +298,60 @@ export function stageInboxFiles(files: readonly InboxFileUpload[], token: string
     throw error;
   }
   return { filePaths, created };
+}
+
+async function fileDigest(filePath: string): Promise<string> {
+  const digest = crypto.createHash("sha256");
+  for await (const chunk of fs.createReadStream(filePath)) digest.update(chunk);
+  return digest.digest("hex");
+}
+
+/** Link completed uploads atomically. Existing paths keep their original bytes
+ * and the same per-batch ownership/retention rules as inline attachments. */
+export async function stageInboxFilesAsync(files: readonly InboxFileUpload[], token: string): Promise<StagedInboxFiles> {
+  const filePaths = inboxFilePaths(files, token);
+  const created: string[] = [];
+  if (!filePaths.length) return { filePaths, created };
+  const dir = path.dirname(filePaths[0]!);
+  await fs.promises.mkdir(dir, { recursive: true });
+  try {
+    for (const [index, file] of files.entries()) {
+      const target = filePaths[index]!;
+      const temporary = path.join(dir, `.${crypto.randomUUID()}.partial`);
+      const source = temporary;
+      let temporaryCreated = false;
+      try {
+        const handle = await fs.promises.open(temporary, "wx", 0o600);
+        temporaryCreated = true;
+        try { if (!file.stored) await handle.writeFile(file.data); } finally { await handle.close(); }
+        if (file.stored) {
+          // Keep the retained upload independent of a file an agent may edit.
+          // Reflink where available; otherwise copy off the main loop.
+          await fs.promises.copyFile(file.stored.path, temporary, fs.constants.COPYFILE_FICLONE);
+          if (await fileDigest(temporary) !== file.stored.sha256) throw new Error("attachment upload changed before staging");
+        }
+        const sourceStat = await fs.promises.lstat(source);
+        if (!sourceStat.isFile() || sourceStat.size !== inboxFileBytes(file)) throw new Error("attachment upload changed before staging");
+        try {
+          await fs.promises.link(source, target);
+          created.push(target); markDeletable(target);
+          const published = await fs.promises.lstat(target);
+          if (published.dev !== sourceStat.dev || published.ino !== sourceStat.ino) throw new Error("attachment upload changed during staging");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+          const existing = await fs.promises.lstat(target);
+          const expected = file.stored?.sha256 ?? crypto.createHash("sha256").update(file.data).digest("hex");
+          if (!existing.isFile() || existing.size !== inboxFileBytes(file) || await fileDigest(target) !== expected) {
+            throw new InboxFileConflictError(`${path.basename(target)} is already attached under this request with different contents`);
+          }
+          deletable.delete(target);
+        }
+      } finally {
+        if (temporaryCreated) await fs.promises.unlink(temporary).catch(() => {});
+      }
+    }
+    return { filePaths, created };
+  } catch (error) { deleteInboxFiles(created); throw error; }
 }
 
 /* Held on globalThis so every bundle that loads this module shares one set of

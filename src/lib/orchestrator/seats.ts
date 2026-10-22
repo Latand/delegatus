@@ -643,6 +643,96 @@ function writeSeatFile(file: OrchestratorSeatFile): void {
   void withViewerOperation("orchestrator.recipient-authority", () => recipientAuthorityIndex(filePath, revision)).catch(() => {});
 }
 
+/** Preserve the seat that canonical-key collapse would otherwise displace.
+    Called under the mutation lock before the project alias is published, so
+    subsequent canonical reads see one active seat and the former one in the
+    ordinary previous-seat history. */
+export function reconcileOrchestratorSeatSuccession(sourceInput: string, targetInput: string, revokedAt: string): boolean {
+  return withAccountMutationLock(() => {
+    /* Validate every strict migration field first, then retain fields such as
+       provisional rollback custody that the strict retirement projection does
+       not expose. Both reads are under the mutation lock. */
+    readOrchestratorSeatMigrationEvidence();
+    const file = readOrchestratorSeatFile();
+    const source = canonicalOrchestratorProject(sourceInput);
+    const target = canonicalOrchestratorProject(targetInput);
+    if (source === target) return true;
+    const sourceSeat = file.seats[source];
+    const targetSeat = file.seats[target];
+    let changed = false;
+    if (sourceSeat || targetSeat) {
+      const winner = sourceSeat && targetSeat
+        ? (sourceSeat.seatEpoch > targetSeat.seatEpoch ? sourceSeat : targetSeat)
+        : sourceSeat ?? targetSeat!;
+      const displaced = sourceSeat && targetSeat
+        ? (winner === sourceSeat ? targetSeat : sourceSeat)
+        : null;
+      const rollback = winner === sourceSeat ? file.rollbacks[source] : file.rollbacks[target];
+      file.seats[target] = { ...winner, project: target };
+      delete file.seats[source];
+      if (rollback) file.rollbacks[target] = { ...rollback, project: target };
+      else delete file.rollbacks[target];
+      delete file.rollbacks[source];
+      if ((sourceSeat && sourceSeat.project !== target) || (targetSeat && targetSeat.project !== target)) changed = true;
+      if (displaced?.conversationId && winner.conversationId && displaced.conversationId !== winner.conversationId
+        && !file.revocations.some(row => row.project === target
+          && row.conversationId === displaced.conversationId && row.seatEpoch === displaced.seatEpoch)) {
+        file.revocations.push({
+          project: target,
+          conversationId: displaced.conversationId,
+          seatEpoch: displaced.seatEpoch,
+          revokedAt,
+          successorConversationId: winner.conversationId,
+          triggeredBy: winner.triggeredBy ?? null,
+          activatedAt: displaced.activatedAt,
+          path: displaced.path,
+          engine: displaced.engine ?? null,
+        });
+        changed = true;
+      }
+    }
+
+    const sourcePending = file.pending[source];
+    const targetPending = file.pending[target];
+    if (sourcePending || targetPending) {
+      const winner = sourcePending && targetPending
+        ? (sourcePending.seatEpoch > targetPending.seatEpoch ? sourcePending : targetPending)
+        : sourcePending ?? targetPending!;
+      const displaced = sourcePending && targetPending
+        ? (winner === sourcePending ? targetPending : sourcePending)
+        : null;
+      file.pending[target] = { ...winner, project: target };
+      delete file.pending[source];
+      if ((sourcePending && sourcePending.project !== target) || (targetPending && targetPending.project !== target)) changed = true;
+      if (displaced) {
+        const alreadyRecorded = file.history.some(entry => entry.reason === "superseded_epoch"
+          && entry.seat.project === target
+          && entry.seat.seatEpoch === displaced.seatEpoch
+          && entry.seat.intent.clientRequestId === displaced.intent.clientRequestId
+          && entry.seat.conversationId === displaced.conversationId);
+        if (!alreadyRecorded) {
+          recordTerminalization(file, {
+            seat: { ...displaced, project: target },
+            reason: "superseded_epoch",
+            terminalizedAt: revokedAt,
+          });
+          changed = true;
+        }
+      }
+    }
+
+    if (file.seatLineage) {
+      const remapped = file.seatLineage.map(entry => entry.project === source ? { ...entry, project: target } : entry);
+      const deduplicated = [...new Map(remapped.map(entry => [`${entry.project}\0${entry.conversationId}\0${entry.seatEpoch}`, entry])).values()];
+      if (JSON.stringify(file.seatLineage) !== JSON.stringify(deduplicated)) changed = true;
+      file.seatLineage = deduplicated;
+    }
+
+    if (changed) writeSeatFile(file);
+    return true;
+  }, { holder: "project succession seat reconciliation" });
+}
+
 /** The active seat, any pending intent, and the terminalized-intent history
     for one project (oldest first). */
 export function orchestratorSeatFor(project: string): {
@@ -798,6 +888,15 @@ export function allSeatConversationsIn(file: OrchestratorSeatFile | null): SeatC
   for (const revocation of file.revocations) {
     previous.conversationIds.add(revocation.conversationId);
     if (revocation.path) previous.paths.add(revocation.path);
+  }
+  /* A pending intent can name an existing conversation. If identity
+     succession displaces that intent, its terminalization is the durable
+     record that keeps the conversation out of cleanup after the alias lands. */
+  for (const entry of file.history) {
+    if (entry.reason !== "superseded_epoch") continue;
+    const seat = entry.seat;
+    if (seat.conversationId) previous.conversationIds.add(seat.conversationId);
+    if (seat.path) previous.paths.add(seat.path);
   }
   return {
     conversationIds: [...held.conversationIds],

@@ -7453,7 +7453,9 @@ browserTest("composer context mode: the toggle, auto switching and the context r
           const chip = document.querySelector<HTMLElement>("[data-composer-context-toggle]")?.getBoundingClientRect() ?? null;
           const overlaps = controls.some(({ box: a }, i) => controls.some(({ box: b }, j) => i < j
             && a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5));
-          const row = document.querySelector<HTMLElement>("[data-composer-context-toggle]")?.parentElement?.closest<HTMLElement>("div") ?? null;
+          /* The phone's whole tools row, which holds the toggle inside its settings group since #1484. */
+          const toggle = document.querySelector<HTMLElement>("[data-composer-context-toggle]");
+          const row = toggle?.closest<HTMLElement>("[data-mobile2-tools]") ?? toggle?.parentElement?.closest<HTMLElement>("div") ?? null;
           return {
             pageOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
             toolsRow: row ? { scrollWidth: row.scrollWidth, clientWidth: row.clientWidth } : null,
@@ -12330,5 +12332,139 @@ describe("Telegram multiple bots", () => {
       fs.mkdirSync("evidence/telegram-multi-bot", { recursive: true });
       fs.writeFileSync("evidence/telegram-multi-bot/phone.json", JSON.stringify({ readings }, null, 2) + "\n");
     } finally { await browser.close(); if (tempFd !== null) fs.closeSync(tempFd); server.stop(); }
+  }, 300_000);
+});
+
+/*
+ * #1484: the phone composer's tools row lays the settings (model/effort chip,
+ * Context toggle) out at the box's left edge and the actions (attach, dictate,
+ * mic, send slot) at its right edge, on one line, every control a 44 px box.
+ * Read at both named phone widths and one between them, plus a landscape phone
+ * (either axis under 640 × 600 takes the phone shell), with an empty field,
+ * with a draft and while dictating (Chromium's fake microphone), in both
+ * languages and both schemes. Recording takes the settings off the row so the
+ * meter has width; the actions keep the right edge. Two conversations: a
+ * structured Claude one (the chip alone) and the Codex one that offers context
+ * mode (the chip and the Context toggle).
+ *
+ *   LLV_SWIPE_BROWSER_TEST=1 CHROME_BIN=… LLV_PHONE_TOOLS_OUT=<scratch> \
+ *     bun test src/components/mobile/issue1671Evidence.browser.test.tsx -t "phone composer tools row"
+ *
+ * Frames and the fixture bundle go to `$LLV_PHONE_TOOLS_OUT` (default
+ * `.artifacts/phone-composer-tools`); the readings are kept in
+ * `evidence/phone-composer-tools/row.json`.
+ */
+describe("phone composer tools row", () => {
+  browserTest("settings at the left edge, actions at the right, one line of 44 px controls (#1484)", async () => {
+    const out = path.resolve(process.env.LLV_PHONE_TOOLS_OUT ?? ".artifacts/phone-composer-tools");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, "src/components/mobile/issue1671Evidence.fixture.tsx");
+    const base = served.base.replace(/\/$/, "");
+    const browser = await chromium.launch({ headless: true, args: ["--no-sandbox", "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"], ...(process.env.CHROME_BIN ? { executablePath: process.env.CHROME_BIN } : {}) });
+    const readings: Array<Record<string, unknown>> = [];
+    const failures: string[] = [];
+    const viewports = [{ width: 390, height: 844 }, { width: 375, height: 812 }, { width: 360, height: 780 }, { width: 844, height: 390 }] as const;
+    try {
+      for (const scene of ["structured", "context"] as const) for (const viewport of viewports) for (const scheme of ["light", "dark"] as const) for (const locale of ["en", "uk"] as const) {
+        const query = scene === "context" ? "?context-mode=1" : "?runtime=structured";
+        const { page, context, pageErrors } = await openFixture(browser, `${base}/${query}#c=conversation_running`, viewport, scheme, locale, "reduce", true);
+        try {
+          await context.grantPermissions(["microphone"]);
+          await page.waitForSelector("[data-mobile2-tools]", { timeout: 15_000 });
+          await pause(page, 600);
+          for (const draft of ["empty", "draft", "recording"] as const) {
+            if (draft === "draft") {
+              await page.locator("[data-mobile2-composer] textarea").fill(locale === "uk" ? "Перевір останній результат рев'ю" : "Check the last review result");
+              await pause(page, 300);
+            }
+            if (draft === "recording") {
+              await page.locator(`[data-mobile2-tools] button[aria-label="${translate(locale, "mic.dictate")}"]`).click();
+              await page.locator(`[data-mobile2-tools] button[aria-label="${translate(locale, "mic.stopRecognize")}"]`).waitFor({ timeout: 10_000 });
+              await pause(page, 1_200);
+            }
+            const reading = await page.evaluate(() => {
+              const box = (element: Element | null) => {
+                if (!element) return null;
+                const r = element.getBoundingClientRect();
+                return { left: Math.round(r.left * 10) / 10, right: Math.round(r.right * 10) / 10, top: Math.round(r.top * 10) / 10, bottom: Math.round(r.bottom * 10) / 10, width: Math.round(r.width * 10) / 10, height: Math.round(r.height * 10) / 10 };
+              };
+              const row = document.querySelector("[data-mobile2-tools]")!;
+              const settings = row.querySelector("[data-mobile2-tools-settings]");
+              const actions = row.querySelector("[data-mobile2-tools-actions]");
+              const name = (element: Element) => element.getAttribute("aria-label") ?? element.textContent?.trim() ?? element.tagName;
+              const controls = [...row.querySelectorAll("button")].filter((element) => element.getClientRects().length > 0)
+                .map((element) => ({ name: name(element), toggle: element.hasAttribute("data-composer-context-toggle"), voiceCall: element.getAttribute("data-testid") === "voice-call-button", group: settings?.contains(element) ? "settings" : actions?.contains(element) ? "actions" : "row", box: box(element)! }));
+              /* Text measured from its ranges, not its element boxes: each line of
+                 visible text on the row and whether its own box clips it. */
+              const range = document.createRange();
+              const texts: Array<{ text: string; lines: number; box: ReturnType<typeof box>; clipped: boolean }> = [];
+              const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+              for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                const parent = node.parentElement!;
+                if (!node.textContent?.trim() || parent.closest(".sr-only, [hidden]")) continue;
+                range.selectNodeContents(node);
+                const rects = [...range.getClientRects()];
+                if (!rects.length) continue;
+                const left = Math.min(...rects.map((r) => r.left)), right = Math.max(...rects.map((r) => r.right));
+                const top = Math.min(...rects.map((r) => r.top)), bottom = Math.max(...rects.map((r) => r.bottom));
+                texts.push({ text: node.textContent.trim(), lines: new Set(rects.map((r) => Math.round(r.top))).size,
+                  box: { left, right, top, bottom, width: right - left, height: bottom - top }, clipped: parent.scrollWidth > parent.clientWidth + 0.5 });
+              }
+              const unit = document.querySelector("[data-mobile2-composer]");
+              return {
+                row: box(row), settings: box(settings), actions: box(actions), unit: box(unit),
+                rowStyle: { paddingLeft: getComputedStyle(unit!).paddingLeft, paddingRight: getComputedStyle(unit!).paddingRight },
+                rowOverflow: row.scrollWidth > row.clientWidth + 0.5,
+                pageOverflow: document.documentElement.scrollWidth > innerWidth,
+                slot: document.querySelector("[data-mobile2-composer]")?.getAttribute("data-mobile2-composer") ?? null,
+                controls, texts,
+                window: { width: innerWidth, height: innerHeight },
+              };
+            });
+            const at = `${scene} ${viewport.width}x${viewport.height} ${scheme} ${locale} ${draft}`;
+            const shot = `${scene}-${viewport.width}x${viewport.height}-${scheme}-${locale}-${draft}`;
+            await page.screenshot({ path: path.join(out, `${shot}.png`) });
+            /* A close crop of the box, so the row reads at full size. */
+            const unitBox = reading.unit;
+            if (unitBox) await page.screenshot({ path: path.join(out, `${shot}-unit.png`), clip: { x: 0, y: Math.max(0, unitBox.top - 8), width: viewport.width, height: Math.min(viewport.height - Math.max(0, unitBox.top - 8), unitBox.height + 16) } });
+            const { row, settings, actions } = reading;
+            if (!row || !actions) { failures.push(`${at}: the tools row is not whole`); continue; }
+            if (scene === "context" && draft !== "recording" && !reading.controls.some((control) => control.group === "settings" && control.toggle)) failures.push(`${at}: the Context toggle is not in the settings group`);
+            if (draft === "recording" ? settings : !settings) failures.push(`${at}: ${settings ? "settings stay on the row while recording" : "no settings group on the row"}`);
+            if (settings && settings.left - row.left > 1) failures.push(`${at}: settings start ${settings.left - row.left}px in from the row's left edge`);
+            if (row.right - actions.right > 1) failures.push(`${at}: actions end ${row.right - actions.right}px short of the row's right edge`);
+            if (settings && settings.right > actions.left + 0.5) failures.push(`${at}: settings run into the actions`);
+            if (reading.rowOverflow || reading.pageOverflow) failures.push(`${at}: the row or the page overflows sideways`);
+            /* The landscape phone's row already ended 5 px under the fold before
+               #1484 (the same 351–395 on the base); that height is not this
+               row's to fix, so landscape is held sideways only. */
+            const landscape = viewport.width > viewport.height;
+            if (row.left < 0 || row.right > viewport.width + 0.5 || (!landscape && row.bottom > viewport.height + 0.5)) failures.push(`${at}: the row leaves the viewport`);
+            const wanted = ["actions"].concat(settings ? ["settings"] : []);
+            for (const group of wanted) if (!reading.controls.some((control) => control.group === group)) failures.push(`${at}: no control in ${group}`);
+            for (const control of reading.controls) {
+              /* The voice-call button was 32 px on the phone before #1484 and
+                 belongs to the voice lane; its size stays in the readings. */
+              if (!control.voiceCall && (control.box.width < 44 - 0.5 || control.box.height < 44 - 0.5)) failures.push(`${at}: «${control.name}» is ${control.box.width}×${control.box.height}`);
+              if (control.box.top < row.top - 0.5 || control.box.bottom > row.bottom + 0.5) failures.push(`${at}: «${control.name}» leaves the row's line`);
+              if (control.group === "row") failures.push(`${at}: «${control.name}» belongs to neither group`);
+            }
+            const ordered = [...reading.controls].sort((a, b) => a.box.left - b.box.left);
+            for (let index = 1; index < ordered.length; index += 1) {
+              if (ordered[index]!.box.left < ordered[index - 1]!.box.right - 0.5) failures.push(`${at}: «${ordered[index - 1]!.name}» and «${ordered[index]!.name}» overlap`);
+            }
+            for (const text of reading.texts) {
+              if (text.lines > 1) failures.push(`${at}: «${text.text}» wraps onto ${text.lines} lines`);
+              if (text.box && (text.box.left < row.left - 0.5 || text.box.right > row.right + 0.5)) failures.push(`${at}: «${text.text}» leaves the row`);
+            }
+            if (pageErrors.length) failures.push(`${at}: page errors ${JSON.stringify(pageErrors)}`);
+            readings.push({ scene, viewport, scheme, locale, draft, frame: `${shot}.png`, ...reading });
+          }
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/phone-composer-tools", { recursive: true });
+      fs.writeFileSync("evidence/phone-composer-tools/row.json", JSON.stringify(readings, null, 2) + "\n");
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); served.stop(); }
   }, 300_000);
 });

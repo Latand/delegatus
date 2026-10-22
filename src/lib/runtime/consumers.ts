@@ -65,8 +65,8 @@ function text(...values: unknown[]): string | null {
 }
 
 /**
- * Event-only adaptation seam for legacy stores. It never scans files and has
- * no browser dependency, allowing a hosted turn to drive flow progression.
+ * Event-only task projection with no scanner or browser dependency. Retired
+ * flow/workflow events are acknowledged without invoking their writer ports.
  */
 function projection(kind: "flow" | "workflow" | "task", id: string, value: unknown, event: RuntimeEvent): RuntimeEventInput[] {
   if (!value || typeof value !== "object" || Array.isArray(value)) return [];
@@ -83,10 +83,7 @@ function projection(kind: "flow" | "workflow" | "task", id: string, value: unkno
 export async function consumeRuntimeEvent(event: RuntimeEvent, ports: RuntimeConsumerPorts): Promise<RuntimeEventInput[]> {
   if (event.kind === "turn-ended") {
     const flowId = text(event.payload.flowId);
-    if (flowId) {
-      const flow = await admitted("flow readiness", () => ports.flowReady(flowId, text(event.payload.readyNote, event.payload.finalAssistantOutput)));
-      return projection("flow", flowId, flow, event);
-    }
+    if (flowId) return []; // FLOW_RETIRED: consume the historical event without actuation.
     const conversationId = text(event.payload.conversationId);
     const turnId = text(event.payload.turnId);
     const outcome = event.payload.outcome as SpawnTurnEnded["outcome"];
@@ -102,15 +99,7 @@ export async function consumeRuntimeEvent(event: RuntimeEvent, ports: RuntimeCon
     }
     return [];
   }
-  if (event.kind === "workflow.stage.completed") {
-    const workflowId = text(event.payload.workflowId);
-    const stage = event.payload.stage;
-    if (workflowId && typeof stage === "number" && Number.isInteger(stage) && stage >= 0) {
-      const workflow = await admitted("workflow stage completion", () => ports.workflowStageCompleted(workflowId, stage));
-      return projection("workflow", workflowId, workflow, event);
-    }
-    return [];
-  }
+  if (event.kind === "flow.ready" || event.kind === "workflow.stage.completed") return [];
   if (event.kind === "task.delivery.acked") {
     const taskId = text(event.payload.taskId);
     const assignmentId = text(event.payload.assignmentId);

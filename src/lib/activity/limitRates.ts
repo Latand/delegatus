@@ -13,6 +13,7 @@ export interface RateDependencies { history(): { series: Record<string, LimitSam
   coverageComplete?: boolean; revalidateFrozen?: boolean }
 export interface RateChange { account: string; day: string }
 export const utcDay = (at: number) => new Date(at).toISOString().slice(0, 10);
+export const LIMIT_RATE_SCHEMA = 4;
 const SAMPLE_TOLERANCE = 5 * 60_000;
 const covers = (samples: readonly LimitSample[], from: number, through: number) =>
   samples.length > 0 && samples[0]!.t * 1000 <= from && samples.at(-1)!.t * 1000 >= through - SAMPLE_TOLERANCE;
@@ -50,6 +51,27 @@ export function nearestRate(rows: readonly Pick<LimitRate, "day" | "rate">[], da
     if (row.day > day && (!later || row.day < later.day)) later = row;
   }
   return (earlier ?? later)?.rate ?? null;
+}
+
+/** Retire derived Codex rates from before account attribution, including days
+ * older than the retained samples and plan medians borrowed by other accounts.
+ * Deletion and task invalidation commit together. The remaining rows are the
+ * durable cursor, so a restart resumes without an in-memory migration flag. */
+export async function invalidateUnattributedCodexRates(db: Database, write: (work: () => void) => Promise<void>): Promise<boolean> {
+  const rows = db.query<{ account: string; window: string; day: string }, []>(`SELECT account,window,day FROM usage_limit_rates
+    WHERE account >= 'codex:' AND account < 'codex;' ORDER BY account,window,day LIMIT 200`).all();
+  if (!rows.length) return true;
+  await write(() => {
+    const remove = db.query("DELETE FROM usage_limit_rates WHERE account=? AND window=? AND day=?");
+    // Neighbour-day fallback can have used this rate on any task day.
+    const enqueue = db.query(`INSERT INTO limit_spend_rate_changes(account,day,task_cursor) VALUES(?,'*','')
+      ON CONFLICT(account,day) DO UPDATE SET task_cursor=''`);
+    for (const row of rows) {
+      remove.run(row.account, row.window, row.day);
+      enqueue.run(row.account);
+    }
+  });
+  return rows.length < 200;
 }
 
 /** Hourly calibration. Only this bounded pass owns rate state; there is no process cache. */

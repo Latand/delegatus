@@ -162,6 +162,7 @@ interface Recorded {
 function dependencies(overrides: Partial<SeatCommandDependencies> = {}): { deps: SeatCommandDependencies; recorded: Recorded } {
   const recorded: Recorded = { spawns: [], deliveries: [], digests: [], identityStamps: [] };
   const deps: SeatCommandDependencies = {
+    resolveProject: project => ({ project, displayName: project }),
     spawn: async (body) => {
       recorded.spawns.push(body);
       return { status: 200, body: { ok: true, state: "settled", conversationId: NEW_ID, path: "/tmp/new.jsonl", launchId: "launch_1" } };

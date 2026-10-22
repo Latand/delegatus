@@ -1,5 +1,12 @@
 # Voice Delegatus remembers earlier calls
 
+Transport superseded 2026-10-21: call summaries now use headless Claude Code
+with Haiku 5.5, the same schema and 20-second invocation deadline. Profiles
+use Opus 5.5 with a Haiku fallback through that shared CLI transport. The
+direct caller and its timing comparisons below are the historical design.
+See [Subscription API consent](subscription-api-consent.md) and the current
+[privacy disclosure](../guide/security-and-privacy.md#what-leaves-your-machine).
+
 Originating requirement. Operator, 2026-10-12 about 23:40Z, by voice (ru),
 relayed by Voice Delegatus, verbatim:
 

@@ -6027,6 +6027,13 @@ export class AgentRegistry {
     });
   }
 
+  /** Memory planning selects active host rows through the existing status
+      index, without decoding retained registry history. */
+  liveStructuredHostCount(): number {
+    return this.readKeyed(file => registryRowsMatching(file, "entries", "status", [...LIVE_CHILD_HOST_STATES])
+      .filter(entry => Boolean(entry.structuredHost)).length);
+  }
+
   /** Latest launch directories for worker counting, without registry inventory. */
   workerSeatContexts(ids: readonly string[]): Map<string, { conversationId: string; directories: string[] }> {
     if (this.sqliteStore && (this.sqliteMode === "sqlite" || this.sqliteMode === "read")) return this.sqliteStore.workerSeatContexts(ids);
@@ -8943,7 +8950,14 @@ export class AgentRegistry {
         const priorTurnState = conversation.turn.state;
         const lineage = file.lineageEdges[conversation.id];
         const observedParentConversationId = observation.launchProfile.parentConversationId;
-        generation.accountId = observation.accountId ?? generation.accountId;
+        const observedAccountId = observation.accountId ?? generation.accountId;
+        if (observedAccountId !== generation.accountId && generation.quotaCustody
+          && !generation.quotaCustody.endedAt) {
+          // Discovery time cannot establish the switch time. Readers quarantine
+          // this whole custody interval, even if inventory later returns to it.
+          generation.quotaCustody = { ...generation.quotaCustody, endedAt: observation.observedAt };
+        }
+        generation.accountId = observedAccountId;
         generation.launchProfile = {
           ...generation.launchProfile,
           ...observation.launchProfile,
@@ -10204,12 +10218,16 @@ export class AgentRegistry {
       const predecessor = conversation.generations.at(-1);
       if (!predecessor) throw new Error("viewer conversation has no native generation");
       const committedAt = now();
+      const committedHost = successor.host ?? expectedReceipt.host;
       predecessor.archivedAt = committedAt;
       const generation: NativeGeneration = {
         ...successor,
         launchProfile: emptyLaunchProfile(successor.launchProfile ?? predecessor.launchProfile),
         historyHash: successor.historyHash ?? null,
-        host: successor.host ?? null,
+        host: committedHost ?? null,
+        ...(committedHost?.kind === "codex-app-server" && successor.accountId
+          ? { quotaCustody: { accountId: successor.accountId, artifactPath: successor.path } }
+          : {}),
         createdAt: committedAt,
         archivedAt: null,
       };

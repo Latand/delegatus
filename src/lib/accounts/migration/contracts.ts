@@ -87,7 +87,7 @@ export interface LaunchProfile {
   plan: AgentPlan | null;
 }
 
-type DurableLaunchAccess = Pick<LaunchProfile, "readOnly" | "sandbox"> | null | undefined;
+type DurableLaunchAccess = Partial<Pick<LaunchProfile, "readOnly" | "sandbox">> | null | undefined;
 
 export function explicitLaunchProfileSandbox(profile: DurableLaunchAccess): "full" | "restricted" | null {
   return profile?.sandbox === "full" || profile?.sandbox === "restricted"
@@ -178,6 +178,11 @@ export interface NativeGeneration {
   launchProfile: LaunchProfile;
   historyHash: string | null;
   host: GenerationHostEvidence | null;
+  /** Original Codex transcript/account binding, frozen when verified host
+      custody is committed. Inventory reconciliation may rewrite path/accountId;
+      an unverified account rebind quarantines the whole interval. endedAt is
+      the discovery time, never a proven account-switch boundary. */
+  quotaCustody?: { accountId: string; artifactPath: string; endedAt?: string };
   createdAt: string;
   archivedAt: string | null;
 }

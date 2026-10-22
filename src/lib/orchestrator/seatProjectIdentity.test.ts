@@ -34,7 +34,7 @@ function freshRepository(name: string): string {
 const addOrigin = (repo: string, name: string) => git("-C", repo, "remote", "add", "origin", `https://example.invalid/acme/${name}.git`);
 
 const { executeOrchestratorSeatRequest } = await import("./seatCommand");
-const { orchestratorSeatFor, orchestratorRevocations } = await import("./seats");
+const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent, allSeatConversations, orchestratorSeatFor, orchestratorSeatIdentityForConversation, orchestratorRevocations, previousOrchestratorSeats, readOrchestratorSeatRetirementEvidenceOrNull } = await import("./seats");
 const { activeSeatsByCurrentProject, orchestratorSeatForCurrentProject, recordSeatProjectSuccessions } = await import("./seatProjectIdentity");
 const { authorizedManagerSeats } = await import("./authority");
 const { permitAttentionHandoff } = await import("@/lib/mcp/toolAllowlist");
@@ -219,6 +219,105 @@ test("a seat designated before its origin existed is woken for the lanes of the 
   expect(catalog.projectCatalog.map((entry) => entry.project)).toEqual([remote]);
 });
 
+test("a displaced pending intent remains readable and replayable after project succession", async () => {
+  const repo = freshRepository("pending-seat");
+  addOrigin(repo, "pending-seat");
+  const { createManualProject } = await import("@/lib/projects/curation");
+  const legacyName = "Pending Board";
+  expect(createManualProject(legacyName, repo, new Set(), { allowedRoots: [SANDBOX] }).ok).toBe(true);
+  const canonical = projectForCwd(repo)!;
+
+  const legacy = beginOrchestratorSeatIntent({
+    project: legacyName, mandate: "retain this conversation", clientRequestId: "pending-legacy",
+    mode: "existing", conversationId: "conversation_pending_legacy", now: "2026-10-20T10:00:00.000Z",
+  });
+  const current = beginOrchestratorSeatIntent({
+    project: canonical, mandate: "keep the canonical intent", clientRequestId: "pending-canonical",
+    mode: "existing", conversationId: "conversation_pending_canonical", now: "2026-10-21T10:00:00.000Z",
+  });
+  expect(legacy.kind).toBe("begun");
+  expect(current.kind).toBe("begun");
+
+  const cwdOf = (conversationId: string) => conversationId === "conversation_pending_legacy" ? repo : null;
+  expect(recordSeatProjectSuccessions(cwdOf, false, () => "2026-10-22T12:00:00.000Z")).toContainEqual(
+    expect.objectContaining({ source: legacyName, target: canonical }),
+  );
+
+  expect(orchestratorSeatFor(canonical).pending).toMatchObject({
+    conversationId: "conversation_pending_canonical", intent: { clientRequestId: "pending-canonical" },
+  });
+  expect(orchestratorSeatFor(canonical).history).toContainEqual(expect.objectContaining({
+    reason: "superseded_epoch",
+    seat: expect.objectContaining({
+      conversationId: "conversation_pending_legacy",
+      intent: expect.objectContaining({ clientRequestId: "pending-legacy" }),
+    }),
+  }));
+  expect(allSeatConversations()).toMatchObject({
+    conversationIds: expect.arrayContaining(["conversation_pending_canonical"]),
+    previous: { conversationIds: expect.arrayContaining(["conversation_pending_legacy"]) },
+  });
+
+  expect(recordSeatProjectSuccessions(cwdOf, false, () => "2026-10-23T12:00:00.000Z")).toEqual([]);
+  expect(orchestratorSeatFor(canonical).history).toContainEqual(expect.objectContaining({
+    seat: expect.objectContaining({
+      conversationId: "conversation_pending_legacy",
+      intent: expect.objectContaining({ clientRequestId: "pending-legacy" }),
+    }),
+  }));
+  expect(readOrchestratorSeatRetirementEvidenceOrNull()).not.toBeNull();
+
+  const moduleUrl = new URL("./seats.ts", import.meta.url).href;
+  const child = `const seats = await import(${JSON.stringify(moduleUrl)}); console.log(JSON.stringify({ seat: seats.orchestratorSeatFor(${JSON.stringify(canonical)}), all: seats.allSeatConversations(), retirement: seats.readOrchestratorSeatRetirementEvidenceOrNull() !== null }));`;
+  const restarted = JSON.parse(execFileSync(process.execPath, ["-e", child], { encoding: "utf8", env: process.env }));
+  expect(restarted.retirement).toBe(true);
+  expect(restarted.seat.history).toContainEqual(expect.objectContaining({
+    seat: expect.objectContaining({
+      conversationId: "conversation_pending_legacy",
+      intent: expect.objectContaining({ clientRequestId: "pending-legacy" }),
+    }),
+  }));
+  expect(restarted.all.conversationIds).toContain("conversation_pending_canonical");
+  expect(restarted.all.previous.conversationIds).toContain("conversation_pending_legacy");
+});
+
+test("a display-name seat displaced by an existing canonical seat is retained as a retired seat on succession", async () => {
+  const repo = freshRepository("legacy-seat");
+  addOrigin(repo, "legacy-seat");
+  const { createManualProject } = await import("@/lib/projects/curation");
+  const legacyName = "Occupied Legacy Board";
+  expect(createManualProject(legacyName, repo, new Set(), { allowedRoots: [SANDBOX] }).ok).toBe(true);
+  const canonical = projectForCwd(repo)!;
+  const legacyConversation = "conversation_legacy-seat";
+  const canonicalConversation = "conversation_canonical-seat";
+  const seat = (project: string, requestId: string, conversationId: string, transcriptPath: string, now: string) => {
+    const begun = beginOrchestratorSeatIntent({ project, mandate: "run the board", clientRequestId: requestId, mode: "spawn", now });
+    if (begun.kind !== "begun") throw new Error("seat intent did not begin");
+    completeOrchestratorSeatIntent({ project, clientRequestId: requestId, conversationId, path: transcriptPath, engine: "codex", now });
+  };
+  seat(legacyName, "legacy-seat-request", legacyConversation, "/seats/legacy.jsonl", "2026-10-20T10:00:00.000Z");
+  seat(canonical, "canonical-seat-request", canonicalConversation, "/seats/canonical.jsonl", "2026-10-21T10:00:00.000Z");
+
+  const cwdOf = (conversationId: string) => conversationId === legacyConversation ? repo : null;
+  expect(recordSeatProjectSuccessions(cwdOf, false, () => "2026-10-22T12:00:00.000Z").some(move => move.source === legacyName && move.target === canonical)).toBe(true);
+
+  expect(orchestratorSeatFor(canonical).active).toMatchObject({ conversationId: canonicalConversation, path: "/seats/canonical.jsonl" });
+  expect(readOrchestratorSeatRetirementEvidenceOrNull()).not.toBeNull();
+  expect(previousOrchestratorSeats(canonical)).toContainEqual(expect.objectContaining({ conversationId: legacyConversation, path: "/seats/legacy.jsonl" }));
+  expect(allSeatConversations()).toMatchObject({
+    conversationIds: expect.arrayContaining([canonicalConversation]),
+    paths: expect.arrayContaining(["/seats/canonical.jsonl"]),
+    previous: { conversationIds: expect.arrayContaining([legacyConversation]), paths: expect.arrayContaining(["/seats/legacy.jsonl"]) },
+  });
+  expect(orchestratorSeatIdentityForConversation(legacyConversation)).toMatchObject({ project: canonical });
+
+  expect(recordSeatProjectSuccessions(cwdOf, false, () => "2026-10-23T12:00:00.000Z")).toEqual([]);
+  expect(orchestratorRevocations().filter(row => row.project === canonical && row.conversationId === legacyConversation)).toHaveLength(1);
+  /* Fresh durable reads after the alias has been written retain the same rows. */
+  expect(previousOrchestratorSeats(canonical)).toContainEqual(expect.objectContaining({ conversationId: legacyConversation, path: "/seats/legacy.jsonl" }));
+  expect(allSeatConversations()?.previous).toMatchObject({ conversationIds: expect.arrayContaining([legacyConversation]), paths: expect.arrayContaining(["/seats/legacy.jsonl"]) });
+});
+
 test("a scan that sees one folder under two keys records the succession", async () => {
   const repo = freshRepository("gadgetworks");
   const local = projectForCwd(repo)!;
@@ -280,4 +379,95 @@ test("request_attention's cross-project refusal names both keys", () => {
   expect(verdict.refusedAs).toBe("cross-project");
   expect(verdict.error).toContain("dir-00000000000000000000000000000000");
   expect(verdict.error).toContain("repo-00000000000000000000000000000000");
+});
+
+test("legacy display-name seats migrate once and retain tasks and conversation identity", async () => {
+  const { createManualProject } = await import("@/lib/projects/curation");
+  const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("./seats");
+  const repo = freshRepository("LegacyRepo");
+  addOrigin(repo, "LegacyRepo");
+  const project = projectForCwd(repo)!;
+  expect(createManualProject("Legacy Board", repo, new Set(), { allowedRoots: [SANDBOX] }).ok).toBe(true);
+  beginOrchestratorSeatIntent({ project: "Legacy Board", mandate: "Own this board", clientRequestId: "legacy-seat", mode: "spawn", now: "2026-10-21T00:00:00.000Z" });
+  completeOrchestratorSeatIntent({ project: "Legacy Board", clientRequestId: "legacy-seat", conversationId: SEAT, path: "/sessions/legacy.jsonl", now: "2026-10-21T00:00:00.000Z" });
+  const epoch = orchestratorSeatFor("Legacy Board").active!.seatEpoch;
+  const { mutateTasks, loadTasks } = await import("@/lib/tasks/store");
+  const { createTask } = await import("@/lib/tasks/commands");
+  const task = mutateTasks(tasks => {
+    const result = createTask(tasks, { project: "Legacy Board", text: "Keep legacy work reachable", placement: "unplaced" });
+    return { tasks: result.ok ? result.tasks : undefined, result };
+  });
+  expect(task.ok).toBe(true);
+  expect(recordSeatProjectSuccessions(() => repo)).toEqual([{ source: "Legacy Board", target: project, displayName: "Legacy Board" }]);
+  expect(recordSeatProjectSuccessions(() => repo)).toEqual([]);
+  expect(canonicalProject("Legacy Board")).toBe(project);
+  expect(orchestratorSeatFor(project).active).toMatchObject({ conversationId: SEAT, seatEpoch: epoch, path: "/sessions/legacy.jsonl", project });
+  expect(orchestratorSeatFor("Legacy Board").active).toEqual(orchestratorSeatFor(project).active);
+  expect(loadTasks().find(row => row.text === "Keep legacy work reachable")?.project).toBe(project);
+  const { namedProjectDirectory } = await import("@/lib/projects/nameResolution");
+  const directory = namedProjectDirectory();
+  expect(directory.labels.has("Legacy Board")).toBe(false);
+  expect(directory.names.get("legacy board")).toEqual(new Set([project]));
+  const child = Bun.spawn([process.execPath, "-e", `
+    import { recordSeatProjectSuccessions } from "./src/lib/orchestrator/seatProjectIdentity.ts";
+    import { orchestratorSeatFor } from "./src/lib/orchestrator/seats.ts";
+    console.log(JSON.stringify({ moves: recordSeatProjectSuccessions(), seat: orchestratorSeatFor(${JSON.stringify(project)}).active }));
+  `], { cwd: process.cwd(), env: { ...process.env }, stdout: "pipe", stderr: "pipe" });
+  const [output, errors, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect({ code, errors }).toEqual({ code: 0, errors: "" });
+  expect(JSON.parse(output)).toMatchObject({ moves: [], seat: { project, conversationId: SEAT, seatEpoch: epoch } });
+});
+
+test("ambiguous legacy seat names remain separate even when one candidate is seated", async () => {
+  const { createManualProject } = await import("@/lib/projects/curation");
+  const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("./seats");
+  const roots = ["AmbiguousOne", "AmbiguousTwo"].map(name => freshRepository(name));
+  for (const root of roots) expect(createManualProject("Ambiguous Legacy", root, new Set(), { allowedRoots: [SANDBOX] }).ok).toBe(true);
+  for (const [index, project] of ["Ambiguous Legacy", projectForCwd(roots[0]!)!].entries()) {
+    const clientRequestId = `ambiguous-seat-${index}`;
+    beginOrchestratorSeatIntent({ project, mandate: "Own this board", clientRequestId, mode: "spawn", now: "2026-10-21T00:00:00.000Z" });
+    completeOrchestratorSeatIntent({ project, clientRequestId, conversationId: `conversation_ambiguous_${index}`, path: null, now: "2026-10-21T00:00:00.000Z" });
+  }
+  expect(recordSeatProjectSuccessions(() => null)).toEqual([]);
+  expect(canonicalProject("Ambiguous Legacy")).toBe("Ambiguous Legacy");
+  expect(orchestratorSeatFor("Ambiguous Legacy").active?.conversationId).toBe("conversation_ambiguous_0");
+});
+
+
+for (const namedBy of ["display", "folder", "basename"]) test(`designation by ${namedBy} follows a registered folder that gained a repository`, async () => {
+  const { createManualProject } = await import("@/lib/projects/curation");
+  const folder = path.join(SANDBOX, `RegisteredFolder-${namedBy}`);
+  const displayName = `Registered Board ${namedBy}`;
+  fs.mkdirSync(folder);
+  const before = projectForCwd(folder)!;
+  expect(createManualProject(displayName, folder, new Set(), { allowedRoots: [SANDBOX] }).ok).toBe(true);
+  git("init", "-q", "-b", "main", folder);
+  addOrigin(folder, `RegisteredRepo-${namedBy}`);
+  const project = projectForCwd(folder)!;
+  expect(project).not.toBe(before);
+  const answer = await executeOrchestratorSeatRequest({ project: namedBy === "display" ? displayName : namedBy === "folder" ? folder : path.basename(folder), cwd: folder, mandate: "Own this board", clientRequestId: "registered-folder-seat" }, seatDependencies());
+  expect(answer.status).toBe(200);
+  expect(answer.body).toMatchObject({ project, displayName, seat: { project } });
+  expect(canonicalProject(before)).toBe(project);
+  const { resolveSeatProject } = await import("./seatProjectIdentity");
+  expect(resolveSeatProject(project).displayName).toBe(displayName);
+});
+
+
+test("legacy display-name recovery follows the registered folder's identity succession", async () => {
+  const { createManualProject } = await import("@/lib/projects/curation");
+  const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("./seats");
+  const folder = path.join(SANDBOX, "LegacyMovedFolder");
+  fs.mkdirSync(folder);
+  const before = projectForCwd(folder)!;
+  expect(createManualProject("Moved Legacy Board", folder, new Set(), { allowedRoots: [SANDBOX] }).ok).toBe(true);
+  beginOrchestratorSeatIntent({ project: "Moved Legacy Board", mandate: "Own this board", clientRequestId: "moved-legacy-seat", mode: "spawn", now: "2026-10-21T00:00:00.000Z" });
+  completeOrchestratorSeatIntent({ project: "Moved Legacy Board", clientRequestId: "moved-legacy-seat", conversationId: "conversation_moved_legacy", path: null, now: "2026-10-21T00:00:00.000Z" });
+  git("init", "-q", "-b", "main", folder);
+  addOrigin(folder, "LegacyMovedRepo");
+  const project = projectForCwd(folder)!;
+  recordSeatProjectSuccessions(() => folder);
+  expect(canonicalProject(before)).toBe(project);
+  expect(canonicalProject("Moved Legacy Board")).toBe(project);
+  expect(orchestratorSeatFor(project).active?.conversationId).toBe("conversation_moved_legacy");
 });

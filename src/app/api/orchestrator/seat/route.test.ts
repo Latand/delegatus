@@ -7,6 +7,7 @@ import path from "node:path";
 
 import { NextRequest } from "next/server";
 
+import { AgentRegistry, setAgentRegistryForTests } from "@/lib/agent/registry";
 import { setCallerConversationResolverForTests } from "@/lib/agent/operatorAuthority";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 import {
@@ -38,6 +39,7 @@ import { GET as seatGet, POST as seatPost } from "./route";
  */
 
 let sandbox = "";
+let registry: AgentRegistry;
 let previousStateDir: string | undefined;
 let previousHome: string | undefined;
 const WORKER_CAPABILITY = crypto.randomBytes(32).toString("base64url");
@@ -48,6 +50,8 @@ beforeEach(() => {
   sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-seat-route-"));
   process.env.LLV_STATE_DIR = sandbox;
   process.env.HOME = sandbox;
+  registry = new AgentRegistry(path.join(sandbox, "registry.json"));
+  setAgentRegistryForTests(registry);
   setCallerConversationResolverForTests((digest) =>
     digest === crypto.createHash("sha256").update(WORKER_CAPABILITY).digest("hex")
       ? "conversation_worker"
@@ -55,6 +59,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  registry.close();
+  setAgentRegistryForTests(null);
   setCallerConversationResolverForTests(null);
   setSeatCommandDependenciesForTests(null);
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
@@ -239,8 +245,8 @@ test("the status read parses the seat record once, and reads the task store once
      the seat, the previous seats, their notes tasks, the cross-project set. */
   const seat = (n: number, conversationPath: string, now: string) => {
     const clientRequestId = `req_reads_0000${n}`;
-    beginOrchestratorSeatIntent({ project: "proj-a", mandate: "own the board", clientRequestId, mode: "spawn", now });
-    completeOrchestratorSeatIntent({ project: "proj-a", clientRequestId, conversationId: `conversation_reads_${n}`, path: conversationPath, engine: "claude", now });
+    beginOrchestratorSeatIntent({ project: "repo-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", mandate: "own the board", clientRequestId, mode: "spawn", now });
+    completeOrchestratorSeatIntent({ project: "repo-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", clientRequestId, conversationId: `conversation_reads_${n}`, path: conversationPath, engine: "claude", now });
   };
   seat(1, "/seats/r1.jsonl", "2026-09-18T14:02:00.000Z");
   seat(2, "/seats/r2.jsonl", "2026-09-19T03:10:00.000Z");
@@ -251,7 +257,7 @@ test("the status read parses the seat record once, and reads the task store once
   const store = spyOn(taskStore, "loadTasksForList");
   try {
     let status = 0;
-    const answer = await reads(async () => { status = (await seatGet(new NextRequest("http://127.0.0.1/api/orchestrator/seat?project=proj-a"))).status; });
+    const answer = await reads(async () => { status = (await seatGet(new NextRequest("http://127.0.0.1/api/orchestrator/seat?project=repo-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))).status; });
     expect(status).toBe(200);
     /* One parse of the record for the seat, the previous seats and the
        cross-project set; one read of the store for their notes. */
@@ -268,7 +274,7 @@ test("the status read parses the seat record once, and reads the task store once
     /* And a project with no seat and nothing retired reads the record once and
        the store not at all. */
     store.mockClear();
-    const vacant = await reads(() => seatGet(new NextRequest("http://127.0.0.1/api/orchestrator/seat?project=proj-vacant")));
+    const vacant = await reads(() => seatGet(new NextRequest("http://127.0.0.1/api/orchestrator/seat?project=repo-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")));
     expect(seatsRead(vacant)).toBe(1);
     expect(store.mock.calls.length).toBe(0);
   } finally {
@@ -362,5 +368,127 @@ test("a read whose reconciliation throws still answers the record as it stands",
     expect(await seatRead()).toMatchObject({ pending: { intent: { clientRequestId: "req_lost_00004" } } });
   } finally {
     warned.mockRestore();
+  }
+});
+
+for (const existing of [false, true]) test(`a display-name ${existing ? "adoption" : "designation"} stores the repository key used by pipeline admission`, async () => {
+  const { createManualProject } = await import("@/lib/projects/curation");
+  const { projectForCwd } = await import("@/lib/scanner/describe");
+  const displayName = existing ? "Widget Board" : "WidgetBoard";
+  const root = path.join(sandbox, "WidgetRepo");
+  fs.mkdirSync(path.join(root, ".git"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
+  fs.writeFileSync(path.join(root, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/team/WidgetRepo.git\n');
+  const project = projectForCwd(root)!;
+  expect(createManualProject(displayName, root, new Set(), { allowedRoots: [sandbox] }).ok).toBe(true);
+  const spawns: Record<string, unknown>[] = [];
+  const spawn = spyOn(productionSeatCommandDependencies, "spawn").mockImplementation(async body => {
+    spawns.push(body);
+    return { status: 200, body: { ok: true, state: "settled", conversationId: "conversation_widget", path: null } };
+  });
+  const stamp = spyOn(productionSeatCommandDependencies, "stampRegistryIdentity").mockImplementation(() => {});
+  const readiness = spyOn(productionSeatCommandDependencies, "engineReadiness").mockImplementation(() => "connected");
+  const report = spyOn(productionSeatCommandDependencies, "startBoardReport").mockImplementation(() => {});
+  const target = spyOn(productionSeatCommandDependencies, "conversationTarget").mockImplementation(() => ({ kind: "eligible", conversationId: "conversation_widget", path: path.join(sandbox, "widget.jsonl"), cwd: root, project, engine: "codex" }));
+  const deliver = spyOn(productionSeatCommandDependencies, "deliver").mockResolvedValue({ ok: true });
+  const now = spyOn(productionSeatCommandDependencies, "now").mockReturnValue("2026-10-21T00:00:00.000Z");
+  try {
+    const response = await seatPost(new NextRequest("http://127.0.0.1/api/orchestrator/seat", {
+      method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" },
+      body: JSON.stringify({ project: displayName, cwd: root, mandate: "Own the board", clientRequestId: "widget-seat-request", engine: "codex", model: "gpt-6.1-sol", ...(existing ? { conversationId: "conversation_widget" } : {}) }),
+    }));
+    const answer = await response.json();
+    expect(answer).toMatchObject({ project, displayName, seat: { project } });
+    expect(response.status).toBe(200);
+    expect(spawns).toMatchObject(existing ? [] : [{ project }]);
+    expect(deliver.mock.calls.length).toBe(existing ? 1 : 0);
+    expect(orchestratorSeatFor(project).active?.conversationId).toBe("conversation_widget");
+    for (const name of [project, displayName, "WidgetRepo", root]) {
+      const read = await seatGet(new NextRequest(`http://127.0.0.1/api/orchestrator/seat?project=${encodeURIComponent(name)}`));
+      expect(await read.json()).toMatchObject({ project, displayName, seat: { project } });
+    }
+    const { viewerMcpRecoverableTools, productionDomainDependencies } = await import("@/lib/mcp/bindings");
+    const pipeline = viewerMcpRecoverableTools({ ...productionDomainDependencies,
+      callerAttribution: () => ({ kind: "manager", conversationId: "conversation_widget", role: "orchestrator" }),
+      authorizedSeats: () => {
+        const seat = orchestratorSeatFor(project).active!;
+        return [{ project: seat.project, conversationId: seat.conversationId!, path: seat.path }];
+      },
+      attentionAuthority: () => ({ kind: "unidentified" }),
+      registrySnapshot: () => registry.readOnlySnapshot(),
+    }).create_pipeline!;
+    for (const named of [displayName, undefined]) {
+      const bound = await pipeline.bind({ project: named, repoDir: root, clientRequestId: "widget-pipeline-request" });
+      expect(bound.target.project).toBe(project);
+    }
+  } finally {
+    for (const mock of [spawn, stamp, readiness, report, target, deliver, now]) mock.mockRestore();
+  }
+});
+
+test("unknown and ambiguous seat names refuse before a spawn or intent write", async () => {
+  const { createManualProject } = await import("@/lib/projects/curation");
+  const { projectForCwd } = await import("@/lib/scanner/describe");
+  const projects = ["one", "two"].map(name => {
+    const root = path.join(sandbox, name);
+    fs.mkdirSync(root);
+    expect(createManualProject("Shared Board", root, new Set(), { allowedRoots: [sandbox] }).ok).toBe(true);
+    return projectForCwd(root)!;
+  });
+  const spawn = spyOn(productionSeatCommandDependencies, "spawn").mockImplementation(async () => { throw new Error("unexpected spawn"); });
+  try {
+    for (const [project, code] of [["Shared Board", "ambiguous_project"], ["Unknown Board", "unknown_project"]]) {
+      const response = await seatPost(new NextRequest("http://127.0.0.1/api/orchestrator/seat", {
+        method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" },
+        body: JSON.stringify({ project, mandate: "Own the board", clientRequestId: "refused-seat-request" }),
+      }));
+      expect(response.status).toBe(400);
+      const body = await response.json();
+      expect(body).toMatchObject({ code, admission: "refused" });
+      if (code === "ambiguous_project") expect(body.candidates).toEqual([...projects].sort());
+      expect(orchestratorSeatFor(project!)).toMatchObject({ active: null, pending: null });
+    }
+    const mismatch = await seatPost(new NextRequest("http://127.0.0.1/api/orchestrator/seat", {
+      method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" },
+      body: JSON.stringify({ project: projects[0], cwd: path.join(sandbox, "two"), mandate: "Own the board", clientRequestId: "mismatch-seat-request" }),
+    }));
+    expect(mismatch.status).toBe(400);
+    expect(await mismatch.json()).toMatchObject({ code: "project_mismatch", canonicalProject: projects[1], admission: "refused" });
+    expect(spawn).not.toHaveBeenCalled();
+    for (const project of projects) expect(orchestratorSeatFor(project)).toMatchObject({ active: null, pending: null });
+  } finally { spawn.mockRestore(); }
+});
+
+test("canonical status reads use the folder's resolved display name without curation or a saved alias", async () => {
+  const { projectForCwd } = await import("@/lib/scanner/describe");
+  const { resolveSeatProject } = await import("@/lib/orchestrator/seatProjectIdentity");
+  const root = path.join(sandbox, "NaturalRepo");
+  fs.mkdirSync(path.join(root, ".git"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
+  fs.writeFileSync(path.join(root, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/team/NaturalRepo.git\n');
+  const project = projectForCwd(root)!;
+  const admissionName = resolveSeatProject(project, root).displayName;
+  const spawn = spyOn(productionSeatCommandDependencies, "spawn").mockImplementation(async () => ({
+    status: 200,
+    body: { ok: true, state: "settled", conversationId: "conversation_natural", path: path.join(sandbox, "natural.jsonl") },
+  }));
+  const stamp = spyOn(productionSeatCommandDependencies, "stampRegistryIdentity").mockImplementation(() => {});
+  const readiness = spyOn(productionSeatCommandDependencies, "engineReadiness").mockImplementation(() => "connected");
+  const report = spyOn(productionSeatCommandDependencies, "startBoardReport").mockImplementation(() => {});
+  const now = spyOn(productionSeatCommandDependencies, "now").mockReturnValue("2026-10-21T00:00:00.000Z");
+  try {
+    const admission = await seatPost(new NextRequest("http://127.0.0.1/api/orchestrator/seat", {
+      method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" },
+      body: JSON.stringify({ project, cwd: root, mandate: "Own the board", clientRequestId: "natural-seat-request", engine: "codex", model: "gpt-6.1-sol" }),
+    }));
+    expect(admission.status).toBe(200);
+    const admitted = await admission.json() as { project: string; displayName: string };
+
+    const status = await seatGet(new NextRequest(`http://127.0.0.1/api/orchestrator/seat?project=${encodeURIComponent(project)}&cwd=${encodeURIComponent(root)}`));
+    expect(status.status).toBe(200);
+    expect(await status.json()).toMatchObject({ project: admitted.project, displayName: admitted.displayName });
+    expect(admitted.displayName).toBe("NaturalRepo");
+  } finally {
+    for (const mock of [spawn, stamp, readiness, report, now]) mock.mockRestore();
   }
 });

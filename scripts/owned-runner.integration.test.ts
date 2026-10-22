@@ -38,7 +38,10 @@ for (const mode of ["exit", "timeout", "TERM", "KILL", "test-KILL", "deadline"] 
   const baseline = scopeBaseline();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "runner-lifetime-"));
   const env = { ...process.env };
-  for (const key of Object.keys(env)) if (key.startsWith("LLV_")) delete env[key];
+  // A signal-sandboxed stage keeps its marker: the fixture's owned runner really
+  // starts in the stage's PID namespace, and without the marker its gate
+  // service refuses an owner it cannot see.
+  for (const key of Object.keys(env)) if (key.startsWith("LLV_") && key !== "LLV_SIGNAL_SANDBOX") delete env[key];
   for (const [key, dir] of Object.entries({ HOME: "home", XDG_CONFIG_HOME: "config", XDG_DATA_HOME: "data", XDG_CACHE_HOME: "cache", TMPDIR: "tmp", LLV_STATE_DIR: "state" })) {
     env[key] = path.join(root, dir); fs.mkdirSync(env[key]!);
   }
@@ -98,7 +101,10 @@ for (const mode of ["exit", "TERM", "KILL"] as const) test.skipIf(process.platfo
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "nested-run-lifetime-"));
   const record = path.join(root, "child.json");
   const env = { ...process.env };
-  for (const key of Object.keys(env)) if (key.startsWith("LLV_")) delete env[key];
+  // A signal-sandboxed stage keeps its marker: the fixture's owned runner really
+  // starts in the stage's PID namespace, and without the marker its gate
+  // service refuses an owner it cannot see.
+  for (const key of Object.keys(env)) if (key.startsWith("LLV_") && key !== "LLV_SIGNAL_SANDBOX") delete env[key];
   for (const [key, dir] of Object.entries({ HOME: "home", XDG_CONFIG_HOME: "config", TMPDIR: "tmp", LLV_STATE_DIR: "state" })) {
     env[key] = path.join(root, dir); fs.mkdirSync(env[key]!);
   }

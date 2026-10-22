@@ -360,7 +360,9 @@
     const visibleHeight = window.visualViewport?.height ?? window.innerHeight;
     if (live.root) live.root.style.maxHeight = full && phone ? `${visibleHeight}px` : "";
     const width = (full ? live.host.clientWidth : live.el.clientWidth) || 1;
-    const lw = phone ? Number(d.pw) : full ? width : Math.max(Number(d.lw), width);
+    // A frame marked data-exact keeps its logical width at every page width, so a
+    // picture whose edge falls between two columns does so on every screen.
+    const lw = phone ? Number(d.pw) : full ? width : "exact" in d ? Number(d.lw) : Math.max(Number(d.lw), width);
     const lh = phone ? Number(d.ph) : full ? live.host.clientHeight || 1 : Number(d.lh);
     // Embedded frames size against the layout viewport, which holds still
     // while the browser's toolbar collapses or the keyboard opens, so the
@@ -381,6 +383,12 @@
       live.iframe.style.top = phone ? "50%" : "0";
       live.iframe.style.transformOrigin = phone ? "center" : "0 0";
       live.iframe.style.transform = phone ? `translate(-50%, -50%) scale(${scale})` : scale === 1 ? "" : `scale(${scale})`;
+    }
+    // A view the phone layout does not have (the limit history) hides its tab
+    // there and gives way to the view the tab names.
+    for (const tab of document.querySelectorAll(`[data-tabs-for="${live.id}"] [data-desktop-only]`)) {
+      tab.hidden = phone;
+      if (phone && live.view === tab.dataset.view) markTabs(live, tab.dataset.phoneView);
     }
     if (phone !== live.phone) {
       live.phone = phone;
@@ -460,7 +468,7 @@
     if (!live) continue;
     list.dataset.tabsFor = live.id;
     const tabs = [...list.querySelectorAll('[role="tab"]')];
-    tabs.forEach((tab, index) => {
+    tabs.forEach((tab) => {
       tab.addEventListener("click", () => {
         const view = tab.dataset.view;
         if (view === live.view && live.iframe) return;
@@ -476,7 +484,8 @@
         const back = vertical ? "ArrowUp" : "ArrowLeft";
         if (event.key !== forward && event.key !== back) return;
         event.preventDefault();
-        const next = tabs[(index + (event.key === forward ? 1 : -1) + tabs.length) % tabs.length];
+        const shown = tabs.filter((candidate) => !candidate.hidden);
+        const next = shown[(shown.indexOf(tab) + (event.key === forward ? 1 : -1) + shown.length) % shown.length];
         next.focus();
         next.click();
       });

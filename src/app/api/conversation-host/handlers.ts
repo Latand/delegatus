@@ -481,7 +481,7 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
   const rawFiles = (body as { files?: unknown }).files;
   const fileAdmission: InboxFileAdmissionResult = rawFiles === undefined || rawFiles === null
     ? { files: [], error: null }
-    : (await import("@/lib/inboxFiles")).admitInboxFilePayload({ files: rawFiles });
+    : await (await import("@/lib/inboxFiles")).admitInboxFilePayloadAsync({ files: rawFiles }, trustedActor ?? teamActor(req));
   if (fileAdmission.error) {
     return NextResponse.json({ error: fileAdmission.error.error }, { status: fileAdmission.error.status });
   }
@@ -567,13 +567,13 @@ export async function conversationHostPOST(req: NextRequest, options?: { actor: 
   let filePaths: string[] = [];
   let textAttachment: MessageTextAttachment | undefined;
   {
-    const { saveInboxFiles, inboxFileBatchToken } = await import("@/lib/inboxFiles");
+    const { stageInboxFilesAsync, inboxFileBatchToken, withInboxBatch } = await import("@/lib/inboxFiles");
     try {
       const batch = inboxFileBatchToken(clientMessageId);
       const prepared = prepareMessageFiles(text, fileAdmission.files, batch);
       textAttachment = prepared.textAttachment;
       payloadText = prepared.payload;
-      filePaths = saveInboxFiles(prepared.files, batch);
+      filePaths = (await withInboxBatch(batch, () => stageInboxFilesAsync(prepared.files, batch))).filePaths;
     } catch (error) {
       return NextResponse.json({
         error: error instanceof Error ? error.message : "attachments could not be saved",

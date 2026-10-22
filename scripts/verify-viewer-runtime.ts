@@ -178,6 +178,7 @@ export function sandboxEnvironment(sandbox: string): NodeJS.ProcessEnv {
     TMPDIR: sandbox,
     LLV_STATE_DIR: path.join(sandbox, "state"),
     LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1",
+    LLV_SIGNAL_SANDBOX: process.env.LLV_SIGNAL_SANDBOX,
   };
 }
 
