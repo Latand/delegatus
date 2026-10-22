@@ -838,6 +838,8 @@ export async function completeViewerRuntimeActivation(
   steps.publishHotStateActivation();
   await steps.runClaudeLoginRecovery?.();
   await steps.runWorktreeRecovery?.();
+  const { retireLegacyCodexMemoryHooksAtStartup } = await import("@/lib/memory/hookMigration");
+  await retireLegacyCodexMemoryHooksAtStartup();
   steps.startStructuredHosts?.();
   await steps.prepareBoard?.();
   await steps.startControllers();
