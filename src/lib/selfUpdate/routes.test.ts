@@ -1,3 +1,4 @@
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import os from "node:os";
 import { POST as updatePost } from "@/app/api/self-update/update/route";
 import { POST as deployPost } from "@/app/api/runtime/deployments/route";
@@ -86,10 +87,10 @@ afterAll(() => rmSync(root, { recursive: true, force: true }));
 const BASE = "http://127.0.0.1:3000/api/self-update";
 const browser = { host: "127.0.0.1:3000", origin: "http://127.0.0.1:3000", "sec-fetch-site": "same-origin", "content-type": "application/json" };
 const post = (path: string, body?: unknown, headers: Record<string, string> = browser) =>
-  new NextRequest(`${BASE}${path}`, { method: "POST", headers, body: body === undefined ? undefined : JSON.stringify(body) });
+  new NextRequest(`${BASE}${path}`, { method: "POST", headers: { ...(headers === browser ? { cookie: `llv_operator=${soloBrowserSession()}` } : {}), ...headers }, body: body === undefined ? undefined : JSON.stringify(body) });
 
 async function snapshot(headers: Record<string, string> = browser): Promise<Snapshot> {
-  return (await getSnapshot(new Request(BASE, { headers }))).json() as Promise<Snapshot>;
+  return (await getSnapshot(new Request(BASE, { headers: { ...(headers === browser ? { cookie: `llv_operator=${soloBrowserSession()}` } : {}), ...headers } }))).json() as Promise<Snapshot>;
 }
 
 async function until(predicate: (s: Snapshot) => boolean, timeoutMs = 10_000): Promise<Snapshot> {

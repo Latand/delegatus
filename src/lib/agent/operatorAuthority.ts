@@ -2,28 +2,19 @@ import crypto from "node:crypto";
 
 import type { NextRequest } from "next/server";
 
+import { OPERATOR_COOKIE, verifySoloBrowserSession } from "@/lib/agent/operatorSession";
+import { tokensMatch } from "@/lib/authToken";
+import { existingTeamStore } from "@/lib/team/store";
+import { MEMBER_COOKIE, verifySessionValue } from "@/lib/team/sessions";
+
 import { internalServiceClaim } from "@/lib/agent/callerClaims";
 import { agentRegistry } from "@/lib/agent/registry";
 import { VIEWER_SPAWN_CAPABILITY_HEADER } from "@/lib/agent/spawnPolicy";
 
 export { internalServiceHeaders, type InternalViewerService } from "@/lib/agent/callerClaims";
 
-/**
- * "Is this the operator, or an agent?" — for the decisions only the operator may make.
- *
- * #691 round 5 found the shape of the hole: every gate in the bridge keys off *is
- * this the designated manager*, so anything able to APPOINT the manager inherits all
- * of that authority at once. Designation therefore needs a different question
- * answered — not "which conversation are you" but "are you a conversation at all".
- *
- * That question is answered below, and it is the ONLY question asked. Rounds 5–10
- * answered a second one — "does the caller possess the operator session secret" —
- * and the whole apparatus that made possession possible (a printed key, a paste
- * field, a per-tab volatile credential, a reload that lost it) was built, shipped to
- * stage, and rejected by the operator. See `voiceTransportOperator` below for the
- * reasoning that replaced it.
- */
-
+/** Operator actions require an authenticated session or a separately configured operator token.
+ * Conversation capabilities identify agents and never grant operator authority. */
 export type OperatorAuthority =
   | { ok: true }
   | { ok: false; status: number; error: string };
@@ -52,47 +43,9 @@ export function callerConversationId(request: Pick<NextRequest, "headers">): str
   return resolveConversation(crypto.createHash("sha256").update(capability).digest("hex"));
 }
 
-/**
- * THE OPERATOR IS THE LOCAL BROWSER. There is no ceremony, anywhere.
- *
- * The question every gate in this feature actually needs answered is
- * AGENT-versus-OPERATOR, and it never was human authentication. This application
- * is single-user and bound to loopback; its routes reject cross-origin before
- * consulting authority, and that rejection is the perimeter. A same-origin request
- * therefore IS the operator by construction. An agent is distinguishable on
- * entirely different grounds: it names itself by presenting the conversation
- * capability the registry issued it. That self-naming is the only disqualifier
- * here.
- *
- * The operator's final decision, after the ceremony was built and rejected on
- * stage: no key, no secret, no cookie, no paste, no unlock, on ANY operator
- * surface. Opening the manager with one click, and starting a call from a card
- * with one click, are the two gestures that made it unusable — a tab that had not
- * been through a paste could do neither, and a reload put it back where it
- * started. The mechanism that made those clicks work also made the product wrong.
- *
- * What is NOT relaxed, and must not be:
- *
- * - INJECTION into a live call. `permitRealtimeAction` grants `appendSpeech` and
- *   `deliverWorkerResponse` to the peer that established the call — proven by the
- *   realtime session id the backend minted for it — and to nobody else, whatever
- *   this function returns. Speaking in the assistant's voice is not a transport
- *   act and does not follow transport rules.
- * - AGENTS. A caller presenting a conversation capability is refused every
- *   operator-only action, including designation, whatever role it holds.
- *   ROTATION IS NOT ONE OF THEM (#1402): see `rotationActor` below, which asks
- *   the same question and answers it with a NAME. It has no refusal to give.
- *
- * Residual, stated plainly rather than papered over: a local process running as
- * the operator's uid can send the same same-origin-shaped request the browser
- * sends, so it can now reach designation too. Five rounds of credential designs
- * established that no arrangement of software on one uid excludes such a process —
- * every place a browser can hold a value at rest is a file that process can read —
- * and the operator has chosen the working product over a gate that raised the cost
- * without closing the hole.
- */
+/** Voice transport uses the same authenticated operator boundary as operator actions. */
 export function voiceTransportOperator(request: Pick<NextRequest, "headers">): boolean {
-  return callerConversationId(request) === null;
+  return requireOperatorAuthority(request).ok;
 }
 
 const AGENT_REFUSED: OperatorAuthority = {
@@ -113,17 +66,28 @@ export function directOperatorActivityAuthority(request: Pick<NextRequest, "head
   return requireOperatorAuthority(request);
 }
 
-/**
- * Whether a composer request is the operator's own words: direct operator
- * activity that a browser sent. A browser stamps every fetch with
- * `sec-fetch-site`, and a same-origin one is a Viewer page; a script holding
- * the operator's token sends none. Such a script (an agent relaying over ssh
- * to another host's Viewer) used to be recorded as the operator and counted
- * as the operator's hours (docs/design/worktime-matches-zvit.md, G2). It is
- * still admitted; it is only attributed as what it is.
- */
+/** Browser attribution requires a verified cookie. Fetch Metadata adds no authority. */
 export function operatorBrowserRequest(request: Pick<NextRequest, "headers">): boolean {
-  return directOperatorActivityAuthority(request).ok && request.headers.get("sec-fetch-site") === "same-origin";
+  return directOperatorActivityAuthority(request).ok && authenticatedSession(request);
+}
+
+function cookie(request: Pick<NextRequest, "headers">, name: string): string | undefined {
+  const values = (request.headers.get("cookie") ?? "").split(";").map(value => value.trim()).filter(value => value.startsWith(`${name}=`));
+  if (values.length !== 1) return undefined;
+  try { return decodeURIComponent(values[0]!.slice(name.length + 1)); }
+  catch { return undefined; }
+}
+
+function authenticatedSession(request: Pick<NextRequest, "headers">): boolean {
+  const configuredKey = process.env.LLV_TOKEN;
+  const value = cookie(request, "llv_auth");
+  if (configuredKey && value && tokensMatch(value, configuredKey)) return true;
+  const member = cookie(request, MEMBER_COOKIE);
+  try {
+    const store = existingTeamStore();
+    if (member && store && verifySessionValue(store, member) !== null) return true;
+    return !store?.hasActiveOwner() && verifySoloBrowserSession(cookie(request, OPERATOR_COOKIE));
+  } catch { return false; }
 }
 
 /** Who a request says it is. `operator` is the local browser — anything that
@@ -166,15 +130,16 @@ export function rotationActor(request: Pick<NextRequest, "headers">): ViewerActo
   return conversationId ? { kind: "agent", conversationId } : { kind: "operator", conversationId: null };
 }
 
-/**
- * Whether this request may perform an operator-only action.
- *
- * One rule, the same one the transport uses: anything that is not an agent. The
- * caller is responsible for having rejected cross-origin first — that is where the
- * perimeter lives, and this function cannot see it.
- */
+/** The route checks origin first; credentials establish authority independently. */
 export function requireOperatorAuthority(request: Pick<NextRequest, "headers">): OperatorAuthority {
-  /* An agent that presented its own capability has named itself. Nothing else about
-     the request is consulted, because nothing else about it is evidence. */
-  return callerConversationId(request) ? AGENT_REFUSED : { ok: true };
+  if (callerConversationId(request)) return AGENT_REFUSED;
+  if (authenticatedSession(request)) return { ok: true };
+  // The local gateway injects the perimeter bearer token. It is not caller proof.
+  const expected = process.env.DELEGATUS_OPERATOR_TOKEN || process.env.LLV_OPERATOR_TOKEN;
+  const presented = request.headers.get("x-llv-operator-token");
+  if (expected && presented && tokensMatch(presented, expected)) return { ok: true };
+  // The MCP backend checks tool-specific authority and forwards conversation capabilities for designation.
+  const service = internalServiceClaim(request, { readOnly: true });
+  if (service.claim === "valid" && service.service === "mcp") return { ok: true };
+  return { ok: false, status: 403, error: "this is an operator-only action; a verified session or operator token is required" };
 }

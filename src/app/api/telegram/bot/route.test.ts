@@ -1,3 +1,4 @@
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -57,9 +58,11 @@ afterAll(() => {
 });
 
 function request(pathname: string, init: { method?: string; body?: unknown; headers?: Record<string, string> } = {}): NextRequest {
+  const action = (init.body as { action?: string } | undefined)?.action;
+  const page = init.headers === PAGE || (!init.headers && pathname === "/api/telegram/bot" && action !== "connect" && action !== "add_bot");
   return new NextRequest(`http://127.0.0.1${pathname}`, {
     method: init.method ?? "GET",
-    headers: { host: "127.0.0.1", "content-type": "application/json", ...init.headers },
+    headers: { host: "127.0.0.1", "content-type": "application/json", ...(page ? { cookie: `llv_operator=${soloBrowserSession()}` } : {}), ...init.headers },
     ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
   });
 }

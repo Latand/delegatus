@@ -31,3 +31,53 @@ Validation: `gate-remote -- bun run test` with explicit paths for
 `src/lib/scanner/projectDirectories.test.ts`: 63 passed. Remote gate runs
 isolate HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR and use a closed
 Viewer control port. No performance improvement is claimed.
+
+## 7. Operator authority
+
+Before the fix, `src/lib/agent/operatorAuthority.ts:176` admitted any caller
+that named no conversation. `:125` used Fetch Metadata to attribute browser
+activity. A forged same-origin request passed the new negative test before
+production edits.
+
+The authority gate now accepts verified member cookies, the existing access
+cookie or a separately configured operator token. Browser attribution requires a verified
+cookie. Cookie values use the proxy’s encoding, including access keys with reserved characters; malformed values are refused. A keyless solo page navigation automatically sets a separate HttpOnly,
+SameSite=Strict session cookie; API calls cannot mint it. The bounded process
+session map has eight scopes, a thirty-day lifetime and revocation by eviction
+or process restart. Reloading the page establishes the next solo session.
+Claiming a team disables solo sessions. Keyed installs use their existing
+cookie path. Scripts can present the separately configured
+`DELEGATUS_OPERATOR_TOKEN` (legacy `LLV_OPERATOR_TOKEN`) in
+`x-llv-operator-token`; the perimeter bearer cannot grant operator authority,
+because the gateway injects it. A trusted local gateway navigation, authenticated by its
+injected bearer token, also establishes the browser cookie. Solo cookies are
+bound to the current access-key generation, so rotation revokes them. The
+existing signed MCP service token also retains backend dispatch authority;
+designation still refuses a forwarded agent identity, and direct browser
+activity still refuses every service tag. Other service tags grant no operator
+authority. Structured launch allowlists exclude the optional operator token. Legacy headless and terminal launches and native config/feature probes explicitly remove both access-key and operator-token aliases. Fetch Metadata supplies no authority. On a keyless install,
+a local client able to open a permitted page can establish a session too;
+this change binds actions to that session and preserves automatic browser entry.
+
+Callers inspected: seat designation, worker limits, bridge, role memory,
+onboarding health, project settings, Telegram bot settings, asks-you, memory
+settings/source, external relay, self-update, voice transport, voice companion,
+key access, subscription consent, seat-tick settings, orchestrator relay,
+native queue, runtime HTTP and conversation-host attribution. Direct-activity
+consumers (team actor, spawn, deputy asker, prototype review, answer, tasks and
+pipelines) inherit the same verified boundary. Rotation retains its separate
+attribution contract. The host-allowlist PR and voice-tool authority PR were
+read; neither fenced host/origin file was edited.
+
+Validation covers forged metadata, missing/invalid cookies, separate operator
+and cookie tokens, token rotation, agent/service refusals, live member sessions
+and revocation, automatic solo entry on loopback and configured names,
+expiration and a fresh-process refusal. The real worker-limit route refuses an
+unauthenticated write and accepts session-authenticated writes. Existing proxy
+and team-perimeter tests were also run remotely in isolated state. Browser
+fixtures in the bridge, key catalog and compatibility writers, memory,
+project/seat settings, Telegram and self-update suites now carry the actual
+session cookie. Refusal fixtures remain unauthenticated. The scoped publication
+comparator also checks these callers against the task base and retains existing
+failures separately from regressions. Five additional credential-inheritance regressions failed before the launcher edits and now pass, including real terminal children with unchanged arguments and stdin.
+

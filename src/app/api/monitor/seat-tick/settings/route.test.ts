@@ -1,3 +1,4 @@
+import { soloBrowserSession } from "@/lib/agent/operatorSession";
 import { afterAll, afterEach, beforeEach, expect, setSystemTime, test } from "bun:test";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -100,7 +101,7 @@ const browser = { host: "127.0.0.1:8898", origin: "http://127.0.0.1:8898", "sec-
 const get = (query: string, headers: Record<string, string> = { host: "127.0.0.1:8898" }) =>
   GET(new NextRequest(`${URL_BASE}${query}`, { headers }));
 const put = (body: unknown, headers: Record<string, string> = browser) =>
-  PUT(new NextRequest(URL_BASE, { method: "PUT", headers, body: JSON.stringify(body) }));
+  PUT(new NextRequest(URL_BASE, { method: "PUT", headers: { ...(headers === browser ? { cookie: `llv_operator=${soloBrowserSession()}` } : {}), ...headers }, body: JSON.stringify(body) }));
 
 test("HTTP and seat_tick_settings report maintenance paused while wakes are off", async () => {
   const written = await put({ project: PROJECT, enabled: false, reason: "fixture pause", maintenance: { enabled: true, intervalHours: 3 } });
