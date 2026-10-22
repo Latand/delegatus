@@ -239,3 +239,18 @@ test("production readers never scan processes or probe volumes on the calling lo
     expect(processScans).toBe(0);
   } finally { scan.mockRestore(); probe.mockRestore(); }
 }, 30_000);
+
+test("attempt retirement coalesces through the owned worker", async () => {
+  const { root, worker } = fixture();
+  const request = worker.attemptTemp();
+  expect(worker.attemptTemp()).toBe(request);
+  expect(await request).toMatchObject({ checked: 0, removed: 0, removedBytes: 0 });
+  expect(fs.readFileSync(path.join(root, "requests"), "utf8")).toBe("attempt-temp\n");
+});
+
+for (const flag of ["--malformed", "--wrong-kind", "--exit", "--oversize", "--hang"]) test(`attempt retirement refuses ${flag} and reaps its helper`, async () => {
+  const { worker } = fixture(flag, 2000);
+  await worker.run("dry-run");
+  await expect(worker.attemptTemp()).rejects.toThrow();
+  expect((await worker.run("dry-run"))!.errors).toEqual([]);
+}, 20000);

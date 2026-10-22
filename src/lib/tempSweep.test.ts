@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, spyOn, test } from "bun:test";
+import { procBackend } from "@/lib/proc";
 
 import {
   isOwnedTempConsumerName,
@@ -78,12 +79,12 @@ async function started(child: ChildProcess): Promise<ChildProcess> {
   return child;
 }
 
-test("owned names are llv-* and three legacy test prefixes; shared roots and foreign names are not", () => {
-  for (const name of ["llv-test-run-a1B2c3", "llv-registry-x", "llv-stage-abc", "llv-issue-1641-q", "pending-producer-a", "inflight-producer-b", "child-owner-c"]) {
+test("owned stage, gate and legacy names exclude shared roots and foreign names", () => {
+  for (const name of ["llv-test-run-a1B2c3", "llv-registry-x", "llv-stage-abc", "llv-issue-1641-q", "pending-producer-a", "inflight-producer-b", "child-owner-c", "delegatus-local-gate-fixture", "delegatus-test-comparison-fixture", "merge-gate-state-fixture", "merge-privacy-state-fixture"]) {
     expect(isOwnedTempName(name)).toBeTrue();
     expect(isOwnedTempConsumerName(name)).toBeTrue();
   }
-  for (const name of ["llv-spawn-sandbox", "llv-tmux-cwd", "llv-", "rv2191-png", "rev-state", "pulse-PKdhtXMmr18n", "playwright_chromiumdev_profile-x", "claude-1000", "tmux-1000", "systemd-private-x"]) {
+  for (const name of ["llv-spawn-sandbox", "llv-tmux-cwd", "llv-", "rv2191-png", "rev-state", "pulse-PKdhtXMmr18n", "playwright_chromiumdev_profile-x", "claude-1000", "tmux-1000", "systemd-private-x", "delegatus-local-gate-", "delegatus-gate"]) {
     expect(isOwnedTempName(name)).toBeFalse();
     expect(isOwnedTempConsumerName(name)).toBe(["llv-spawn-sandbox", "llv-tmux-cwd"].includes(name));
   }
@@ -463,9 +464,9 @@ test.each(["process", "process-alias", "pipeline", "activity", "parent-redirect"
   const directory = aged(root, "llv-late-owner", 3 * DAY);
   const scan: ProcessScan = { ownNamespace: null, processes: [] };
   let worktrees: string[] = [];
-  const original = fs.promises.readdir;
+  const original = fs.promises.opendir;
   let injected = false;
-  const read = spyOn(fs.promises, "readdir").mockImplementation((async (...args: Parameters<typeof fs.promises.readdir>) => {
+  const read = spyOn(fs.promises, "opendir").mockImplementation((async (...args: Parameters<typeof fs.promises.opendir>) => {
     const entries = await original(...args);
     if (String(args[0]) === directory && !injected) {
       injected = true;
@@ -490,7 +491,7 @@ test.each(["process", "process-alias", "pipeline", "activity", "parent-redirect"
       }
     }
     return entries;
-  }) as typeof fs.promises.readdir);
+  }) as typeof fs.promises.opendir);
   try {
     const report = await sweepStaleTempDirs({ roots: [{ path: root, via: "" }], scan, currentWorktrees: () => worktrees, maxAgeMs: DAY });
     expect(injected).toBeTrue();
@@ -509,9 +510,9 @@ test.each(["process", "process-alias", "pipeline", "activity", "parent-redirect"
 test.skipIf(process.platform !== "linux").each(["cwd", "file"])("production temp cleanup refreshes a real late %s holder", async holder => {
   const root = tempRoot();
   const directory = aged(root, "llv-late-live", 3 * DAY);
-  const original = fs.promises.readdir;
+  const original = fs.promises.opendir;
   let injected = false;
-  const read = spyOn(fs.promises, "readdir").mockImplementation((async (...args: Parameters<typeof fs.promises.readdir>) => {
+  const read = spyOn(fs.promises, "opendir").mockImplementation((async (...args: Parameters<typeof fs.promises.opendir>) => {
     const result = await original(...args);
     if (String(args[0]) === directory && !injected) {
       injected = true;
@@ -519,7 +520,7 @@ test.skipIf(process.platform !== "linux").each(["cwd", "file"])("production temp
       else await started(spawn("sh", ["-c", 'exec 3<"$1"; exec sleep 60', "fixture", path.join(directory, "file.txt")], { cwd: root }));
     }
     return result;
-  }) as typeof fs.promises.readdir);
+  }) as typeof fs.promises.opendir);
   try {
     const report = (await runTempSweep({ NODE_ENV: "test", LLV_TEMP_SWEEP_MAX_AGE_HOURS: "24" }, { roots: [{ path: root, via: "" }], now: () => Date.now() + 2 * DAY }))!;
     expect(injected).toBeTrue();
@@ -557,11 +558,11 @@ for (const recycled of [false, true]) test.skipIf(process.platform !== "linux")(
   }
   const rename = fs.renameSync;
   patches.push(spyOn(fs, "renameSync").mockImplementation(((from: fs.PathLike, to: fs.PathLike) => rename(map(from), map(to))) as typeof rename));
-  for (const method of ["stat", "readdir", "lstat", "rm"] as const) {
+  for (const method of ["stat", "readdir", "opendir", "lstat", "rm"] as const) {
     const original = fs.promises[method];
     patches.push(spyOn(fs.promises, method).mockImplementation((async (file: fs.PathLike, ...args: unknown[]) => {
       const result = await Reflect.apply(original, fs.promises, [map(file), ...args]);
-      if (recycled && method === "readdir" && String(map(file)) === stale && !changed) { changed = true; namespace = "mnt:[67890]"; }
+      if (recycled && method === "opendir" && String(map(file)) === stale && !changed) { changed = true; namespace = "mnt:[67890]"; }
       return result;
     }) as typeof original));
   }
@@ -887,4 +888,17 @@ test.skipIf(process.platform !== "linux")("a post-rename holder through a proc r
   } });
   expect(report.removed).toEqual([]); expect(report.kept.inUse).toBe(1);
   expect(fs.existsSync(directory)).toBeTrue();
+});
+
+
+test("portable process scans include a registered config root outside system temp", () => {
+  const root = tempRoot(), config = path.join(root, "config"); fs.mkdirSync(config);
+  const list = spyOn(procBackend, "listProcesses").mockReturnValue([]);
+  const descriptors = spyOn(procBackend, "scanFdTargetsUnder").mockImplementation((directory, visit) => {
+    if (directory === config) visit(path.join(config, "held"), 456, () => false);
+  });
+  try {
+    const scan = scanProcesses(path.join(root, "missing-proc"), [config]);
+    expect(scan.processes.find(process => process.pid === 456)?.paths).toEqual([path.join(config, "held")]);
+  } finally { descriptors.mockRestore(); list.mockRestore(); }
 });

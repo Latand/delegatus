@@ -5,6 +5,7 @@ import { WorktreeSweepCache } from "./worktreeSweepCache";
 import { scanProcesses, runTempSweepInHelper } from "../tempSweep";
 import { diskVolumes, observeDiskPressure } from "../state/diskPressure";
 import { allocatedBytes } from "./worktreeSweep";
+import { runAttemptTempSweep } from "../runtime/attemptTempProduction";
 console.log = (...args) => console.error(...args);
 const directory = process.env.SWEEP_TEST_ROOT!;
 const cache = new WorktreeSweepCache(path.join(directory, "cache.json"));
@@ -25,6 +26,11 @@ for await (const line of createInterface({ input: process.stdin })) {
       continue;
     }
     if (process.argv.includes("--oversize")) { process.stdout.write("x".repeat(9 * 1024 * 1024)); continue; }
+  }
+  if (kind === "attempt-temp") {
+    fs.appendFileSync(path.join(directory, "requests"), kind + "\n");
+    process.stdout.write(JSON.stringify({ report: await runAttemptTempSweep({ scan: directories => scanProcesses("/proc", directories) }) }) + "\n");
+    continue;
   }
   if (kind === "temp" || kind === "disk-pressure") {
     fs.appendFileSync(path.join(directory, "requests"), kind + "\n");
