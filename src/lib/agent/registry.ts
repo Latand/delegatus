@@ -1250,7 +1250,13 @@ export function serviceTierForSpeed(tier: string | null | undefined, fast: boole
 
 function mergeResumeLaunchProfile(current: LaunchProfile, requested: LaunchProfile): LaunchProfile {
   const tier = requested.serviceTier ?? current.serviceTier;
+  /* A stage cap carries over unless the resume names one; an explicit null
+     clears it back to the project and role defaults. */
+  const memoryMax = requested.agentMemoryMaxBytes !== undefined ? requested.agentMemoryMaxBytes : current.agentMemoryMaxBytes;
+  const memoryRoleParams = requested.agentMemoryRoleParams ?? current.agentMemoryRoleParams;
   return {
+    ...(memoryMax !== undefined ? { agentMemoryMaxBytes: memoryMax } : {}),
+    ...(memoryRoleParams ? { agentMemoryRoleParams: memoryRoleParams } : {}),
     cwd: requested.cwd || current.cwd,
     model: requested.model ?? current.model,
     effort: requested.effort ?? current.effort,

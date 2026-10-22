@@ -17,8 +17,10 @@ project `agentMemoryMaxBytes`, role config `agentMemoryMaxBytes`, then stage
 are integer bytes from 1 GiB through 1 TiB; invalid submitted values are
 refused. Installation size strings retain their existing syntax and fallback.
 Project settings use the canonical project key, role variants inherit their
-role's cap, and stage caps travel with the durable launch profile through
-resume and recovery. Project and role defaults are read again at launch.
+role's cap, and the stage cap and the role variant selector travel with the
+durable launch profile through resume and recovery. A resume that names no
+stage cap keeps the conversation's; an explicit null clears it. Project and
+role defaults are read again at launch.
 A role's cap belongs to no engine or model: changing the row's model or engine
 in the Agents table, the banner's bulk move and the maintainer's picker keep
 it, and only the row's reset clears it.

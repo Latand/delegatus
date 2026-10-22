@@ -66,6 +66,46 @@ test.skipIf(process.platform === "win32")("scoped settings survive a fresh proce
   expect(spawnResponseForReceipt(registry.spawnReceipt(begun.receipt.launchId)!).memoryCap).toEqual(cap);
 });
 
+test.skipIf(process.platform === "win32")("a resume successor keeps the stage cap and role variant selector its conversation launched with", () => {
+  const watchdog = { NODE_ENV: "test", DELEGATUS_AGENT_MEMORY: "watchdog", DELEGATUS_AGENT_MEMORY_MAX: "3G", DELEGATUS_AGENT_MEMORY_RESERVE: "4G" } as const;
+  expect(setProjectAgentMemoryMax("project-memory", null)).toBe(true);
+  /* The frontend variant's cap differs from the base row, so a lost selector shows. */
+  saveRoleOverrides({ builder: { config: { agentMemoryMaxBytes: 4 * GIB }, variants: { frontend: { agentMemoryMaxBytes: 6 * GIB } } } });
+  try {
+    const registry = new AgentRegistry(path.join(directory, "resume-registry.json"), undefined, undefined, { sqliteMode: "off" });
+    const entry = (sessionId: string) => ({ key: { engine: "codex" as const, sessionId }, artifactPath: `${directory}/${sessionId}.jsonl`, cwd: directory,
+      accountId: "default", status: "live" as const, host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
+    const begun = beginLegacySpawnFixture(registry, { engine: "codex", cwd: directory, transport: "structured", role: "builder",
+      launchProfile: emptyLaunchProfile({ cwd: directory, agentMemoryMaxBytes: 8 * GIB, agentMemoryRoleParams: { domain: "frontend" } }) });
+    if (begun.kind !== "created") throw new Error("expected a fresh receipt");
+    expect(registry.settleSpawn(begun.receipt.launchId, entry("019f4906-3f67-\x37b72-9fbc-9ec3b5ad1401")).kind).toBe("settled");
+    const plannedCap = (receipt: { launchProfile: ReturnType<typeof emptyLaunchProfile> }, sessionKey: string) => agentMemoryCapForPlan(planAgentMemory({
+      engine: "codex", sessionKey, liveAgents: 1,
+      memoryScopes: agentMemoryScopes({ cwd: directory, project: "project-memory", role: "builder", profile: receipt.launchProfile }),
+    }, watchdog, { totalBytes: 16 * GIB, probe: () => null, runner: () => "" }));
+    expect(plannedCap(begun.receipt, "resume-first")).toMatchObject({ limitBytes: 8 * GIB, source: "stage" });
+
+    /* A resume that names no memory fields inherits both. */
+    const resumed = registry.beginSpawnRequest({ engine: "codex", cwd: directory, transport: "structured", conversationId: begun.receipt.conversationId,
+      purpose: "resume-successor", origin: { kind: "successor" }, launchProfile: emptyLaunchProfile({ cwd: directory }) });
+    if (resumed.kind !== "created") throw new Error("expected a resume receipt");
+    expect(resumed.receipt.launchProfile).toMatchObject({ agentMemoryMaxBytes: 8 * GIB, agentMemoryRoleParams: { domain: "frontend" } });
+    expect(plannedCap(resumed.receipt, "resume-second")).toMatchObject({ limitBytes: 8 * GIB, requestedBytes: 8 * GIB, source: "stage" });
+    expect(registry.settleSpawn(resumed.receipt.launchId, entry("019f4906-3f67-\x37b72-9fbc-9ec3b5ad1402")).kind).toBe("settled");
+
+    /* An explicit null clears the stage cap; the variant selector still picks the frontend row. */
+    const cleared = registry.beginSpawnRequest({ engine: "codex", cwd: directory, transport: "structured", conversationId: begun.receipt.conversationId,
+      purpose: "resume-successor", origin: { kind: "successor" }, launchProfile: emptyLaunchProfile({ cwd: directory, agentMemoryMaxBytes: null }) });
+    if (cleared.kind !== "created") throw new Error("expected a second resume receipt");
+    expect(cleared.receipt.launchProfile.agentMemoryMaxBytes).toBeNull();
+    expect(cleared.receipt.launchProfile.agentMemoryRoleParams).toEqual({ domain: "frontend" });
+    expect(plannedCap(cleared.receipt, "resume-third")).toMatchObject({ limitBytes: 6 * GIB, source: "role" });
+  } finally {
+    saveRoleOverrides({});
+    invalidateAgentScopeProbe();
+  }
+});
+
 test("invalid scope values refuse and null resets inheritance without losing other settings", () => {
   for (const value of [0, -1, GIB - 1, 2 ** 40 + 1, 1.5, Infinity, NaN, "8G", {}, false]) {
     expect(() => assertAgentMemoryMax(value)).toThrow("integer bytes");
@@ -110,17 +150,22 @@ test.skipIf(process.platform === "win32")("an OOM retry waits for the headroom o
       const scopes = agentMemoryScopes({ cwd: directory, project: "project-memory", role: "builder", profile: emptyLaunchProfile({ cwd: directory, ...profile }) });
       const plan = planAgentMemory({ engine: "codex", sessionKey: `headroom-${scopeName}`, liveAgents: 1, memoryScopes: scopes }, watchdog, { totalBytes: 16 * GIB, probe: () => null, runner: () => "" });
       expect(agentMemoryCapForPlan(plan)).toMatchObject({ limitBytes: 8 * GIB, source: scopeName, clamped: false });
-      /* The killed attempt ran at 8 GiB; 8 GiB of RAM is available, 4 GiB of it past the reserve. */
-      const tight = agentMemoryHeadroom(1, 8 * GIB, scopes, watchdog, { totalBytes: 16 * GIB, availableBytes: 8 * GIB });
-      expect(tight).toEqual({ availableBytes: 4 * GIB, requiredBytes: 8 * GIB });
+      /* The killed attempt ran at the 3 GiB installation cap; the scope was
+         raised to 8 GiB while recovery waited. 8 GiB of RAM is available,
+         4 GiB of it past the reserve: enough for the old cap, not the new one. */
+      const tight = agentMemoryHeadroom(1, 3 * GIB, scopes, watchdog, { totalBytes: 16 * GIB, availableBytes: 8 * GIB });
+      expect(tight).toEqual({ availableBytes: 4 * GIB, requiredBytes: plan!.limitBytes });
       expect(tight!.availableBytes < tight!.requiredBytes).toBe(true);
-      const recovered = agentMemoryHeadroom(1, 8 * GIB, scopes, watchdog, { totalBytes: 16 * GIB, availableBytes: 12 * GIB });
+      const recovered = agentMemoryHeadroom(1, 3 * GIB, scopes, watchdog, { totalBytes: 16 * GIB, availableBytes: 12 * GIB });
       expect(recovered).toEqual({ availableBytes: 8 * GIB, requiredBytes: 8 * GIB });
+      expect(recovered!.availableBytes >= recovered!.requiredBytes).toBe(true);
       saveRoleOverrides({});
       expect(setProjectAgentMemoryMax("project-memory", null)).toBe(true);
     }
-    /* Without scopes the requirement is the installation cap, as for an unscoped launch. */
+    /* Without scopes the requirement is the installation cap, as for an unscoped launch,
+       whether the killed attempt ran above or below it. */
     expect(agentMemoryHeadroom(1, 8 * GIB, undefined, watchdog, { totalBytes: 16 * GIB, availableBytes: 8 * GIB })).toEqual({ availableBytes: 4 * GIB, requiredBytes: 3 * GIB });
+    expect(agentMemoryHeadroom(1, 2 * GIB, undefined, watchdog, { totalBytes: 16 * GIB, availableBytes: 8 * GIB })).toEqual({ availableBytes: 4 * GIB, requiredBytes: 3 * GIB });
     /* A scope above the shared budget waits for the clamped launch cap, never more. */
     const clamped = { stage: 40 * GIB };
     expect(agentMemoryCapForPlan(planAgentMemory({ engine: "codex", sessionKey: "headroom-clamped", liveAgents: 1, memoryScopes: clamped }, watchdog, { totalBytes: 16 * GIB, probe: () => null, runner: () => "" })).limitBytes).toBe(12 * GIB);

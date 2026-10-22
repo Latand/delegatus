@@ -535,5 +535,8 @@ export function agentMemoryHeadroom(liveAgents: number, priorLimitBytes: number,
       if (group && Number.isFinite(current)) availableBytes = Math.max(0, Math.min(memory.ramAvailable, limits.budgetBytes - current));
     } catch { return null; }
   }
-  return { availableBytes, requiredBytes: Math.min(priorLimitBytes, limits.limitBytes) };
+  /* The retry launches at the current cap, raised or lowered since the kill,
+     so that cap (already budget-clamped) is the headroom it needs; the
+     killed attempt's limit no longer decides. */
+  return { availableBytes, requiredBytes: limits.limitBytes };
 }
