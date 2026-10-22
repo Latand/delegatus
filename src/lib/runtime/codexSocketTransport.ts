@@ -8,10 +8,10 @@ import { execFile, spawn, type ChildProcessWithoutNullStreams, type SpawnOptions
 import WebSocket from "ws";
 import { procBackend } from "@/lib/proc";
 import { redactBounded } from "@/lib/monitor/redact";
-import { PRIVATE_KEY_BLOCK } from "@/lib/view/compactText";
 import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
 import { signalProcessGroup } from "@/lib/processGroup";
 import type { ProcessIdentity } from "@/lib/agent/registry";
+import { startupStderrText } from "./startupStderr";
 import { bindSignalDomain, nativeProcessId, normalizeSignalBoundaryOff, recordSignalBoundaryOff, signalAgentDomain, signalBoundaryOff, signalDomain, type AgentSignalDomain, type SignalBoundaryOff } from "./agentSignalSandbox";
 
 export interface CodexSocketOwner { endpoint: string; process: ProcessIdentity; signalDomain?: AgentSignalDomain; signalBoundary?: SignalBoundaryOff }
@@ -50,18 +50,8 @@ function verifiedSocket(owner: CodexSocketOwner): string | null {
 
 export function verifiedCodexSocketOwner(owner: CodexSocketOwner): boolean { return verifiedSocket(owner) !== null; }
 
-const PRIVATE_KEY_HEADER = /-----BEGIN [A-Z ]*PRIVATE KEY-----/;
 /** Bytes of native stderr kept for a startup diagnostic. Everything after is discarded. */
 const STDERR_KEEP_BYTES = 16 * 1024;
-const STDERR_READ_BYTES = 8192;
-
-/** A key block whose footer was clipped (or never printed) matches no complete-block
- * pattern, so its payload is cut from the header on before redaction sees the text. */
-function withoutUnterminatedSecret(text: string): string {
-  const complete = text.replace(PRIVATE_KEY_BLOCK, "[redacted]");
-  const header = PRIVATE_KEY_HEADER.exec(complete);
-  return header ? `${complete.slice(0, header.index)}[redacted]` : complete;
-}
 
 interface StderrDrain { writer: number; finished: Promise<void> }
 
@@ -184,13 +174,7 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
           size = next;
         }
       }
-      // Keep the first complete lines: cutting a raw tail can expose a suffix
-      // of a credential whose prefix fell outside the retained bytes.
-      const bytes = Buffer.alloc(Math.min(size, STDERR_READ_BYTES));
-      fs.readSync(fd, bytes, 0, bytes.length, 0);
-      let text = bytes.toString("utf8");
-      if (size > bytes.length) text = text.slice(0, Math.max(0, text.lastIndexOf("\n"))) + "\n[stderr clipped]";
-      return redactBounded(withoutUnterminatedSecret(text), 2048);
+      return startupStderrText(fd, size);
     };
     const startupFailure = (reason: string, ownership = false) => new Error(ownership
       ? `Codex callback listener ownership could not be verified (${reason})`
@@ -223,13 +207,15 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
     };
     let child: ChildProcessWithoutNullStreams;
     try { child = launch ? await launch(command, [...args, "--listen", `unix://${file}`],
-      { ...options, env: { ...(options.env ?? process.env), LLV_SIGNAL_IGNORE_NATIVE_STDIO: "1" } }, base)
+      { ...options, env: { ...(options.env ?? process.env), LLV_SIGNAL_IGNORE_NATIVE_STDIO: "1", LLV_SIGNAL_KEEP_NATIVE_STDERR: "1" } }, base)
       : (wrap ? wrap(base) : base)(command, [...args, "--listen", `unix://${file}`], options); }
     catch (error) {
       const detail = await diagnostic(true);
       closeDiagnostic();
       fs.rmdirSync(directory);
-      throw new Error(redactBounded(`${error instanceof Error ? error.message : String(error)}${detail ? `; stderr: ${detail}` : ""}`, 2400));
+      const reason = error instanceof Error ? error.message : String(error);
+      // A wrapper that read the same redacted startup stderr already carries it.
+      throw new Error(redactBounded(`${reason}${detail && !reason.includes(detail) ? `; stderr: ${detail}` : ""}`, 2400));
     }
     let failure: Error | undefined;
     child.on("error", error => { failure = error; });

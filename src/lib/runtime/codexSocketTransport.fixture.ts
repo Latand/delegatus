@@ -2,9 +2,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { CodexSocketTransport } from "./codexSocketTransport";
+import { spawnManagedEngine } from "./agentSignalSandbox";
 
 const [root, mode] = process.argv.slice(2);
+const launcher = mode?.startsWith("managed") || mode?.startsWith("throw") ? "managed" : mode?.startsWith("shim") ? "shim" : undefined;
 const directory = fs.openSync(root!, "r");
 process.env.HOME = `/proc/${process.pid}/fd/${directory}`;
 const marker = path.join(root!, "ready");
@@ -13,7 +16,7 @@ if (mode === "timeout" || mode === "ownership") Date.now = () => clock() + (fs.e
 const peer = `
   const fs = require("node:fs");
   const file = process.argv.at(-1).slice("unix://".length);
-  const mode = process.env.PEER_MODE;
+  const mode = process.env.PEER_MODE.replace(/^(managed|shim)/, "");
   fs.writeSync(2, "EADDRINUSE: callback bind refused\\n");
   fs.writeSync(2, "Bearer " + "private".repeat(8) + "\\n");
   fs.writeSync(2, process.env.HOME + "/private/file\\n");
@@ -63,9 +66,34 @@ const peer = `
 let sink: number | undefined;
 let peerProcess: ChildProcessWithoutNullStreams | undefined;
 try {
-  const transport = await CodexSocketTransport.launch(mode === "missing" ? path.join(root!, "missing-binary") : process.execPath, ["-e", peer], {
-    detached: true, env: { ...process.env, PEER_MODE: mode, PEER_MARKER: marker },
+  let command0 = mode === "missing" ? path.join(root!, "missing-binary") : process.execPath;
+  const env0: NodeJS.ProcessEnv = { ...process.env, PEER_MODE: mode, PEER_MARKER: marker };
+  if (launcher) for (const name of ["LLV_GATE_SLOT_LEASE", "LLV_SIGNAL_SANDBOX"]) delete env0[name];
+  if (mode?.startsWith("throw")) {
+    // A launcher whose setup fails after printing a key block: complete, or clipped past the retained bytes.
+    const bin = path.join(root!, "launcher-bin"); fs.mkdirSync(bin, { recursive: true });
+    const body = Array.from({ length: mode === "throwclipped" ? 300 : 20 }, (_, line) => `KEYPAYLOAD${String(line).padStart(3, "0")}${"A".repeat(50)}`).join("\n");
+    fs.writeFileSync(path.join(root!, "launcher.stderr"), `EADDRINUSE: callback bind refused\nBearer ${"private".repeat(8)}\n${root}/private/file\n-----BEGIN PRIVATE KEY-----\n${body}\n${mode === "throwclipped" ? "" : "-----END PRIVATE KEY-----\n"}`);
+    fs.writeFileSync(path.join(bin, "python3"), `#!/bin/sh\ncat '${path.join(root!, "launcher.stderr")}' > "$LLV_SIGNAL_DIAGNOSTIC"\nexit 9\n`, { mode: 0o755 });
+    env0.PATH = `${bin}:${process.env.PATH}`;
+  }
+  if (launcher === "shim") {
+    // The container's host CLI shim from the Dockerfile with python3 absent, so its own fallback runs.
+    const bin = path.join(root!, "shim-bin"); fs.mkdirSync(bin, { recursive: true });
+    const enter = path.join(root!, "enter"); fs.writeFileSync(enter, "#!/bin/sh\nexec \"$@\"\n", { mode: 0o700 });
+    const source = fs.readFileSync(path.resolve("Dockerfile"), "utf8").match(/make_nsenter_shim\(\) \{[\s\S]*?\n\}/)![0]
+      .replace(/nsenter -t 1 -m -p -C --no-fork -- \/usr\/bin\/setpriv --reuid="\\\$uid" --regid="\\\$gid" --groups="\\\$groups" --/, `"${enter}"`)
+      .replaceAll('"/usr/local/bin/$name"', `"${bin}/$name"`).replaceAll("/usr/bin/python3", path.join(root!, "absent", "python3"));
+    const made = spawnSync("bash", ["-c", `${source}\nmake_nsenter_shim engine '${process.execPath}'`], { encoding: "utf8" });
+    if (made.status !== 0) throw new Error(`shim fixture failed: ${made.stderr}`);
+    command0 = path.join(bin, "engine");
+    env0.LLV_DOCKER_NSENTER_SHIMS = "1";
+  }
+  const transport = await CodexSocketTransport.launch(command0, ["-e", peer], {
+    detached: true, env: env0,
   }, undefined, async (command, args, options, base) => {
+    // The production adapter the Codex host passes.
+    if (launcher) return spawnManagedEngine(command, args, options, null, undefined, options.env ?? process.env, base);
     const diagnostic = path.join(root!, "wrapper.stderr");
     fs.rmSync(diagnostic, { force: true });
     peerProcess = base(command, args, mode === "wrapped" || mode === "chatty"

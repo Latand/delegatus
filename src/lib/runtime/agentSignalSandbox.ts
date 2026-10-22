@@ -4,7 +4,9 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams, type SpawnOptions, type SpawnOptionsWithoutStdio } from "node:child_process";
 import { processIdentityStatus, type ProcessIdentity } from "@/lib/processIdentity";
+import { redactBounded } from "@/lib/monitor/redact";
 import type { AgentMemoryCell } from "./agentMemory";
+import { STDERR_READ_BYTES, startupStderrText, withoutUnterminatedSecret } from "./startupStderr";
 
 export interface AgentSignalDomain {
   policyVersion: 1;
@@ -391,7 +393,9 @@ export async function spawnSignalSandbox(command: string, args: string[], option
   const child = bridged ? start(command, args, { ...options, env })
     : start("python3", [launcher, "--receipt", receipt, ...(scope ? ["--scope", scope] : []), "--", command, ...args], { ...options, env });
   let stderr = "", failure: Error | undefined, closed = false;
-  const diagnostic = (chunk: unknown) => { stderr = (stderr + String(chunk)).slice(-2048); };
+  // The head of the output keeps a secret's opening marker with its payload;
+  // a clipped tail could start inside one and defeat redaction.
+  const diagnostic = (chunk: unknown) => { if (stderr.length < STDERR_READ_BYTES) stderr = (stderr + String(chunk)).slice(0, STDERR_READ_BYTES); };
   child.stderr?.on("data", diagnostic);
   child.once("error", error => { failure = error; });
   child.once("close", () => { closed = true; });
@@ -418,13 +422,11 @@ export async function spawnSignalSandbox(command: string, args: string[], option
       if (child.exitCode !== null || child.signalCode !== null || Date.now() >= deadline) {
         if (!stderr.trim() && diagnosticFile && fs.existsSync(diagnosticFile)) {
           const fd = fs.openSync(diagnosticFile, "r");
-          try {
-            const size = fs.fstatSync(fd).size, bytes = Buffer.alloc(Math.min(size, 2048));
-            fs.readSync(fd, bytes, 0, bytes.length, Math.max(0, size - bytes.length));
-            stderr = bytes.toString("utf8");
-          } finally { fs.closeSync(fd); }
+          try { stderr = startupStderrText(fd, fs.fstatSync(fd).size); }
+          finally { fs.closeSync(fd); }
         }
-        throw new Error(`agent signal sandbox unavailable: ${stderr.trim() || "readiness was not proved before the launch deadline"}`);
+        const cause = redactBounded(withoutUnterminatedSecret(stderr), 2048).trim();
+        throw new Error(`agent signal sandbox unavailable: ${cause || "readiness was not proved before the launch deadline"}`);
       }
       await pause(10);
     }

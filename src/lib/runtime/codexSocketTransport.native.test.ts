@@ -9,7 +9,7 @@ import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIden
 const binary = process.env.LLV_CODEX_BINARY ?? "codex";
 const version = spawnSync(binary, ["--version"], { encoding: "utf8", timeout: 5_000 }).stdout?.trim();
 
-for (const mode of ["exit", "wrapped", "large", "boundary", "secret", "signal", "wrappedsignal", "missing", "timeout", "ownership", "success", "chatty"] as const) {
+for (const mode of ["exit", "wrapped", "large", "boundary", "secret", "signal", "wrappedsignal", "missing", "timeout", "ownership", "success", "chatty", "managedexit", "shimexit", "managedsecret", "throwkey", "throwclipped"] as const) {
   test.skipIf(process.platform !== "linux")(`callback startup ${mode} preserves a bounded redacted cause on repeated launches`, async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "callback-"));
     try {
@@ -46,13 +46,25 @@ for (const mode of ["exit", "wrapped", "large", "boundary", "secret", "signal", 
             expect(message).toStartWith("Codex callback listener failed before dispatch: ");
             continue;
           }
+          if (mode.startsWith("throw")) {
+            // A refusing wrapper keeps its structural detail beside the redacted cause.
+            expect(message).toStartWith("agent signal sandbox unavailable: ");
+            expect(message).toContain("EADDRINUSE: callback bind refused");
+            expect(message).not.toContain("private".repeat(8));
+            expect(message).not.toContain(root);
+            expect(message).not.toContain("KEYPAYLOAD");
+            expect(message).not.toContain("PRIVATE KEY");
+            expect(message).toContain("[redacted]");
+            expect(message.length).toBeLessThanOrEqual(2400);
+            continue;
+          }
           expect(message).toContain(mode === "ownership" ? "ownership could not be verified"
             : mode === "timeout" ? "timed out after 10000ms" : mode === "signal" || mode === "wrappedsignal" ? "exited on signal SIGTERM" : "exited with code 23");
           expect(message).toContain("EADDRINUSE: callback bind refused");
           expect(message).not.toContain("private".repeat(8));
           expect(message).not.toContain(root);
           if (mode === "large" || mode === "boundary") expect(message).toContain("[stderr clipped]");
-          if (mode === "secret") {
+          if (mode === "secret" || mode === "managedsecret" || mode.startsWith("throw")) {
             expect(message).not.toContain("KEYPAYLOAD");
             expect(message).not.toContain("PRIVATE KEY");
             expect(message).toContain("[redacted]");
