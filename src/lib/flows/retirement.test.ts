@@ -20,6 +20,7 @@ const { tickFlow, tickFlows, reserveReviewerSpawnOffLoop, enforceHeadlessAccount
 const { submitFlowDecision } = await import("./decisions");
 const { savePipelines, loadPipelines, buildPipeline, pipelineIdentity } = await import("@/lib/pipelines/store");
 const { createPipelineFromRequest, patchPipeline, normalizeStages, tickPipelines, defaultPipelinePorts, reconcileEmbeddedReviewFlows, preparePipelineReviewRepair, reportStageCompletion, pipelineAttemptTargetForSource, adoptAttempt } = await import("@/lib/pipelines/engine");
+const { queuePipelineCreation, queuedPipelineCreationStatus, queuedPipelineCreationMessage } = await import("@/lib/pipelines/creationQueue");
 const { registerPipelineTick } = await import("@/lib/pipelines/controllerSignal");
 const { viewerMcpBindings, productionDomainDependencies } = await import("@/lib/mcp/bindings");
 const { createMcpToolService, MemoryMcpReceiptStore, SqliteMcpReceiptStore } = await import("@/lib/mcp/server");
@@ -244,6 +245,69 @@ test("a graph replaced with a retired definition during preparation is rechecked
     release();
     expect(await pending).toMatchObject(STAGE_RETIREMENT);
     expect(rows()).toBe(before);
+  } finally { release(); await pending; }
+});
+
+test("controller refuses queued legacy creations before storing or provisioning them", async () => {
+  savePipelines([]);
+  const queued = legacyLane(); queued.id = "queued-retired-lane"; queued.publication = "remote-branch";
+  queuePipelineCreation(queued, { repository: "fixture", remote: "https://example.invalid/repo.git", branch: "refs/heads/retired" }, false,
+    "fixture handover", date);
+  let gitCalls = 0;
+  const ports = { ...defaultPipelinePorts(), exec: (async () => { gitCalls++; return { code: 0, stdout: "", stderr: "" }; }) as never };
+
+  await tickPipelines([], ports);
+
+  expect(loadPipelines()).toEqual([]);
+  expect(gitCalls).toBe(0);
+  const status = queuedPipelineCreationStatus(queued.id);
+  if (status?.state !== "refused") throw new Error("retired queued creation was not refused");
+  expect(status.error).toContain("STAGE_KIND_RETIRED");
+  expect(queuedPipelineCreationMessage(queued.id, queuedPipelineCreationStatus(queued.id)!)).toContain("review-loop stages are retired");
+});
+
+test("controller leaves retained legacy publication lanes untouched and does not read Git", async () => {
+  const lane = legacyLane(); lane.state = "paused"; lane.publication = "remote-branch";
+  lane.runs[1]!.attempts.push({ n: 1, state: "reviewing", effectiveRole: lane.stages[1]!.effectiveRole, launchId: null,
+    conversationId: owner, sessionId: null, agentPath: flow().implementerPath, paneId: null, flowId: flow().id,
+    startedAt: date, completedAt: null, input: null, activatedBy: null, output: null, verdict: null, error: null } as PipelineStageAttempt);
+  savePipelines([lane]); const before = rows(); let gitCalls = 0;
+  const ports = { ...defaultPipelinePorts(), exec: (async () => { gitCalls++; throw new Error("legacy delivery read reached Git"); }) as never };
+
+  await tickPipelines([], ports);
+
+  expect(rows()).toBe(before);
+  expect(gitCalls).toBe(0);
+  const retained = loadPipelines()[0]!;
+  expect(retained.delivery).toBeUndefined();
+  expect(retained.publication).toBe("remote-branch");
+  expect(retained.state).toBe("paused");
+});
+
+test("delivery admission rechecks the graph after its Git read before claiming ownership", async () => {
+  const live = legacyLane(); live.stages[1]!.kind = "run"; live.state = "paused"; live.publication = "remote-branch";
+  savePipelines([live]);
+  let started!: () => void, release!: () => void;
+  const entered = new Promise<void>(resolve => { started = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  let gitCalls = 0;
+  const ports = { ...defaultPipelinePorts(), exec: (async () => {
+    gitCalls++; started(); await held;
+    return { code: 0, stdout: "https://example.invalid/repo.git", stderr: "" };
+  }) as never };
+  const pending = tickPipelines([], ports);
+  try {
+    await entered;
+    const retained = legacyLane(); retained.state = "paused"; retained.publication = "remote-branch";
+    savePipelines([retained]); const before = rows();
+    release(); await pending;
+    expect(rows()).toBe(before);
+    const retainedRow = loadPipelines()[0]!;
+    expect(retainedRow.delivery).toBeUndefined();
+    expect(retainedRow.publication).toBe("remote-branch");
+    expect(retainedRow.state).toBe("paused");
+    expect(retainedRow.stages.map(stage => stage.kind)).toEqual(["run", "review-loop"]);
+    expect(gitCalls).toBe(1);
   } finally { release(); await pending; }
 });
 

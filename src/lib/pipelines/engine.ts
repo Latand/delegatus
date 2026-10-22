@@ -10640,6 +10640,7 @@ async function reconcileTerminalStageHosts(pipeline: Pipeline, ports: PipelinePo
 }
 
 async function admitExistingPipelineDelivery(pipeline: Pipeline, ports: PipelinePorts): Promise<Pipeline | null> {
+  if (hasRetiredStage(pipeline.stages)) return null;
   const admission = pipeline.publicationAdmission?.state === "pending" ? pipeline.publicationAdmission : null;
   const abort = new AbortController();
   const revalidate = pipelineRecordRevalidator(pipeline.id, (current) => {
@@ -10657,6 +10658,7 @@ async function admitExistingPipelineDelivery(pipeline: Pipeline, ports: Pipeline
   const target = { repository, remote: url, branch: `refs/heads/${pipeline.branch}` };
   return withDeliveryMutationAsync((tx) => {
     const current = tx.get(pipeline.id);
+    if (current && hasRetiredStage(current.stages)) return current;
     if (admission && (!current || current.publicationAdmission?.id !== admission.id)) return current;
     if (admission && current && (abort.signal.aborted || remoteActionFence(current) !== admission.fence)) {
       current.publicationAdmission = { ...admission, state: "settled", error: "publication admission superseded" };
@@ -11215,7 +11217,9 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
     await drainPendingStaleControllerFlows(ports);
     await ports.cpuAdmissionReconcile?.(ports);
     const requested = (await selectControllerPipelines("admission")).filter((pipeline) => !pipeline.delivery && pipeline.publicationAdmission?.state === "pending");
-    const legacy = [...new Map([...requested, ...await controllerUnclaimedPublications()].map((pipeline) => [pipeline.id, pipeline])).values()].slice(0, 16);
+    const legacy = [...new Map([...requested, ...await controllerUnclaimedPublications()]
+      .filter(pipeline => !hasRetiredStage(pipeline.stages))
+      .map((pipeline) => [pipeline.id, pipeline])).values()].slice(0, 16);
     for (const pipeline of legacy) await admitExistingPipelineDelivery(pipeline, ports);
     if (legacy.length === 16) followUp = true;
     /* Creates the store refused during a handover (#1835), stored before
