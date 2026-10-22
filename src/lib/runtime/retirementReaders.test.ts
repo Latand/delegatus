@@ -370,7 +370,7 @@ for (const engine of ["codex", "claude"] as const) test(`${engine} adoption prep
       setStructuredHostClaimed: () => null,
     } as unknown as AgentRegistry;
     const adopt = engine === "codex" ? adoptCodexRegistryHosts : adoptClaudeRegistryHosts;
-    await adopt(registry, async () => { throw new Error("refused admission reached options"); }, {}, () => true, undefined, {
+    await adopt(registry, async () => { throw new Error("refused admission reached options"); }, { NODE_ENV: "test" }, () => true, undefined, {
       claimHost: async entry => entry,
       admit: () => { admissions++; return { error: "fixture admission refused" }; },
     });

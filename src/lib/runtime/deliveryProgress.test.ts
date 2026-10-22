@@ -699,7 +699,7 @@ test("asynchronous restoration prepares both its selection and freshness check w
     prepareReadOnlySnapshot: async (signal?: AbortSignal) => {
       signal?.throwIfAborted(); preparations++; return snapshot;
     },
-  } as typeof registry;
+  } as unknown as typeof registry;
   try {
     expect(await restoreMissingRecordsAsync(reader, store, 1000)).toBe(true);
     expect(preparations).toBe(2);
