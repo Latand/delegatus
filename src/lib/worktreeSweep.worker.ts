@@ -9,6 +9,7 @@ import { productionWorktreeSweepPorts, runWorktreeSweep, type WorktreeSweepMode 
 // stdout is a bounded response protocol; application diagnostics keep their origin.
 console.log = (...args) => console.error(...args);
 const cache = new WorktreeSweepCache(statePath("worktree-sweep-cache.json"));
+cache.discardAllocations();
 const lines = createInterface({ input: process.stdin });
 for await (const line of lines) {
   try {
@@ -28,9 +29,15 @@ for await (const line of lines) {
     if (request.kind !== "worktrees") throw new Error("invalid sweep request kind");
     const { mode } = request as { mode: WorktreeSweepMode };
     if (mode !== "on" && mode !== "dry-run") throw new Error("invalid worktree sweep mode");
+    process.stdout.write(JSON.stringify({ phase: "discovery" }) + "\n");
     const report = await runWorktreeSweep({ LLV_WORKTREE_SWEEP: mode }, async mode => {
       const ports = await waitForStateLock("worktrees.sweep.inputs", () => productionWorktreeSweepPorts(mode));
-      return { ...ports, cache };
+      let previousPhase = "";
+      return { ...ports, cache, phase: (phase: string) => {
+        if (phase === previousPhase) return;
+        previousPhase = phase;
+        process.stdout.write(JSON.stringify({ phase }) + "\n");
+      } };
     });
     cache.persist();
     process.stdout.write(JSON.stringify({ report }) + "\n");
