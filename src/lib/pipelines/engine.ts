@@ -6448,10 +6448,10 @@ function unstartedPendingAttempt(attempt: PipelineStageAttempt | null | undefine
     && !attempt.completedAt && !attempt.report && !attempt.verdict;
 }
 
-function pendingLaunchDetail(attempt: PipelineStageAttempt, ports: PipelinePorts): string {
+function pendingLaunchDetail(attempt: PipelineStageAttempt, ports: PipelinePorts, activationPending = !!attempt.activation): string {
   const publication = ports.structuredDeliveryPublication?.() ?? "ready";
   if (publication !== "ready") return `stage spawn deferred: waiting for the delivery controller (${publication})`;
-  if (attempt.activation) return "stage spawn deferred: reconciling the original stage activation";
+  if (activationPending) return "stage spawn deferred: reconciling the original stage activation";
   const now = unixMs(ports.now());
   if (unixMs(attempt.controllerWait?.retryAfter ?? "") > now) {
     return `stage spawn deferred: waiting for the launch controller; retry at ${attempt.controllerWait!.retryAfter}`;
@@ -6594,25 +6594,47 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
               // could reserve another launch under a fresh handshake key.
               const receipt = current.activation.phase === "reserving"
                 ? agentRegistry().spawnReceiptForClientAttempt(current.activation.clientAttemptId) : null;
+              if (receipt && (receipt.engine !== current.activation.input.role.engine || receipt.cwd !== current.activation.input.cwd
+                || receipt.transport !== "structured" || !agentRegistry().conversationMemberships(receipt.conversationId).some(member =>
+                  member.kind === "pipeline" && member.containerId === live.id && member.stageId === run.stageId
+                  && member.slot === `${run.stageId}:${current.n}` && member.round === current.n
+                  && member.role === current.activation!.input.membership.role))) {
+                // A client key alone cannot adopt another operation's host.
+                delete current.activation.owner;
+                live.stateDetail = "stage spawn deferred: waiting for the original stage membership, runtime and worktree to reconcile; original activation retained";
+                await persist([live]);
+                return;
+              }
+              const controlsCursor = live.cursor?.stageId === run.stageId && currentAttempt(live, run.stageId)?.n === current.n;
+              const settled = !!(current.completedAt || current.verdict || current.report)
+                || ["passed", "failed", "needs_decision", "skipped"].includes(current.state);
               if (receipt) {
                 Object.assign(current, { launchId: receipt.launchId, conversationId: receipt.conversationId,
-                  accountId: receipt.accountId ?? current.accountId ?? null, state: "spawning" });
-                current.startedAt ??= activation.startedAt;
-                if (live.cursor?.stageId === run.stageId) live.cursor.state = "spawning";
+                  accountId: receipt.accountId ?? current.accountId ?? null });
+                if (!settled) { current.state = "spawning"; current.startedAt ??= activation.startedAt; }
+                if (controlsCursor && !settled) live.cursor!.state = "spawning";
                 if (live.state === "running") live.stateDetail = "stage spawn deferred: reconciling the original launch receipt";
-              } else {
+                if (!controlsCursor || settled) {
+                  // An earlier attempt's uncertain launch still fences the
+                  // replacement. Only receipt settlement releases this key.
+                  current.activation.phase = "dispatching";
+                  delete current.activation.owner;
+                  await persist([live]);
+                  return;
+                }
+              } else if (!settled) {
                 current.state = "pending";
                 current.startedAt = null;
                 current.definition = null;
-                if (live.cursor?.stageId === run.stageId) live.cursor.state = "pending";
+                if (controlsCursor) live.cursor!.state = "pending";
               }
             }
             // The activation's captured cursor may still say spawning after a
             // privacy retry was checkpointed. Without launch evidence, keep
             // that durable wait eligible for the next controller tick.
-            if (current.roleMemoryWait && !current.launchId && !current.conversationId && !current.agentPath && !current.paneId) {
+            if (current.state === "pending" && current.roleMemoryWait && !current.launchId && !current.conversationId && !current.agentPath && !current.paneId) {
               current.state = "pending";
-              if (live.cursor?.stageId === run.stageId) live.cursor.state = "pending";
+              if (live.cursor?.stageId === run.stageId && currentAttempt(live, run.stageId)?.n === current.n) live.cursor.state = "pending";
             }
             delete current.activation;
             await persist([live]);
@@ -7589,9 +7611,9 @@ async function tickRunStage(
     ? await newAttempt(pipeline, stage)
     : prior ?? await newAttempt(pipeline, stage);
   if (!attempt || pipeline.state === "needs_decision") return;
-  if (attempt.activation) {
+  if (attempt.activation || unstartedPendingAttempt(attempt) && pipelineHasActivation(pipeline)) {
     if (!attempt.launchId && !attempt.conversationId && !attempt.report && !attempt.verdict) {
-      const detail = pendingLaunchDetail(attempt, ports);
+      const detail = pendingLaunchDetail(attempt, ports, true);
       if (pipeline.stateDetail !== detail) { pipeline.stateDetail = detail; await persist(); }
     }
     return;
@@ -10523,6 +10545,7 @@ function controllerWaitParkDetail(attempt: PipelineStageAttempt, now: string, fa
     as work to re-tick immediately would spin the controller through passes that
     can only defer it again (#1191). */
 function stageActivationIsWaiting(pipeline: Pipeline, nowMs: number): boolean {
+  if (pipelineHasActivation(pipeline)) return true;
   const stageId = pipeline.cursor?.stageId;
   if (!stageId) return false;
   const attempt = currentAttempt(pipeline, stageId);
@@ -14273,7 +14296,7 @@ export async function patchPipeline(
       }
       const unstartedPending = stage?.kind === "run" && pipeline.cursor?.state === "pending" && unstartedPendingAttempt(attempt)
         && ["running", "paused", "needs_decision"].includes(pipeline.state);
-      if (pipeline.runs.some((run) => run.attempts.some((item) => item.activation && !(unstartedPending && item === attempt)))) {
+      if (!unstartedPending && pipelineHasActivation(pipeline)) {
         return { error: "the original stage activation is still reconciling", status: 409 };
       }
       const explicitReceiptRetry = req.stageId !== undefined || req.launchId !== undefined;
@@ -14310,7 +14333,7 @@ export async function patchPipeline(
         // remain authoritative; retry never grants another dispatch permit.
         if (pipeline.state !== "paused") {
           pipeline.state = "running";
-          pipeline.stateDetail = pendingLaunchDetail(attempt, ports);
+          pipeline.stateDetail = pendingLaunchDetail(attempt, ports, pipelineHasActivation(pipeline));
         }
         await persist(); requestPipelineTick();
         return { pipeline };
