@@ -328,3 +328,21 @@ function fakeRefusal() {
   const extra = ["private", "extra"].join("-");
   return {bot:{name:"First bot",username:"first_fixture_bot",botId:extra},code:"forbidden",reason:"Removed from chat",source:"send",at:"2026-10-20T12:00:00Z",token:extra};
 }
+
+
+test.each(["telegram_bot_send_document", "telegram_bot_send_media"] as const)("%s preserves the owner confirmation link through real HTTP and MCP receipt replay", async tool => {
+  let calls = 0;
+  const confirmation = { id: "confirmation-fixture", url: "/telegram-file-confirmation?id=confirmation-fixture", expiresAt: "2026-10-20T12:10:00.000Z" };
+  const viewer = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => {
+    calls++;
+    return Response.json({ error: "Owner confirmation required", code: "document_forbidden_path", retryable: false, confirmation }, { status: 403 });
+  } });
+  process.env.LLV_VIEWER_CONTROL_URL = `http://127.0.0.1:${viewer.port}`;
+  try {
+    const mcp = createMcpToolService(viewerMcpBindings(undefined, productionViewerControlDependencies(true)), new MemoryMcpReceiptStore());
+    const input = { clientRequestId: "confirmation", chat: "reports", ...(tool === "telegram_bot_send_document" ? { document: { path: "/sandbox/file.md" } } : { images: [{ path: "/sandbox/frame.png", caption: "Frame" }] }) };
+    expect(await mcp.callTool(tool, input)).toMatchObject({ ok: false, code: "document_forbidden_path", retryable: false, details: { confirmation } });
+    expect(await mcp.callTool(tool, input)).toMatchObject({ replayed: true, details: { confirmation } });
+    expect(calls).toBe(1);
+  } finally { viewer.stop(true); }
+});

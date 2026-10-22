@@ -38,6 +38,7 @@ let transport: InstanceType<typeof FakeBotTransport>;
 let tokensSeen: string[];
 let sleeps: number[];
 let service: InstanceType<typeof TelegramBotService>;
+let confirmationSequence = 0;
 
 function me(overrides: Record<string, unknown> = {}) {
   return ok({ id: BOT_ID, is_bot: true, first_name: "Report Bot", username: "report_test_bot", can_join_groups: true, can_read_all_group_messages: false, ...overrides });
@@ -51,6 +52,7 @@ function newService() {
       return transport;
     },
     now: () => NOW,
+    fileConfirmationId: () => `fixture-${++confirmationSequence}`,
     sleep: async (ms) => { sleeps.push(ms); },
     conversationTitle: (id) => (id === "conversation_writer" ? "Weekly report writer" : null),
     documentEnvironment: () => ({ home: HOME, stateDir: process.env.LLV_STATE_DIR! }),
@@ -61,6 +63,7 @@ beforeEach(() => {
   fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
   fs.rmSync(HOME, { recursive: true, force: true });
   fs.rmSync(path.join(SANDBOX, "elsewhere"), { recursive: true, force: true });
+  confirmationSequence = 0;
   transport = new FakeBotTransport();
   tokensSeen = [];
   sleeps = [];
@@ -373,6 +376,7 @@ test("a truncated HTTP success stays pending across a service restart", async ()
       return new Response('{"ok":true,"result":[', { status: 200 });
     }),
     now: () => NOW,
+    fileConfirmationId: () => `fixture-${++confirmationSequence}`,
     sleep: async () => {},
     conversationTitle: () => "Weekly report writer",
     documentEnvironment: () => ({ home: HOME, stateDir: process.env.LLV_STATE_DIR! }),
@@ -1205,4 +1209,79 @@ test("the operator's test post goes out silently once, is not recorded as an age
   await expect(service.testPost("release-notes", "again")).rejects.toMatchObject({ code: "chat_not_allowed" });
   expect(transport.callsOf("sendMessage")).toHaveLength(1);
   expect(transport.callsOf("getUpdates")).toEqual([]);
+});
+
+/* Exact, owner-confirmed file sends. The transport below is always fake. */
+test("a refused file offers a hash-bound confirmation and owner approval sends it once", async () => {
+  await allowedTeam();
+  const report = documentFile(path.join(HOME, ".private", "credentials.md"), ["-----BEGIN ", "PRIVATE KEY-----"].join(""));
+  const input = { conversationId: "conversation_writer", clientRequestId: "confirm-document", chat: "team-reports", topicId: 7, document: { path: report, caption: "Requested file" } };
+  const error = await refusal(() => service.sendDocument(input));
+  expect(error.code).toBe("document_forbidden_path");
+  expect(error.extra.confirmation).toMatchObject({ url: expect.stringContaining("/telegram-file-confirmation?id="), expiresAt: new Date(NOW.getTime() + 600_000).toISOString() });
+  const id = error.extra.confirmation!.id;
+  const pending = service.fileConfirmation(id);
+  expect(pending).toMatchObject({ chatId: String(TEAM.id), topicId: 7, files: [{ sha256: crypto.createHash("sha256").update(fs.readFileSync(report)).digest("hex") }] });
+  expect(pending.reasons.map(reason => reason.code)).toEqual(["document_forbidden_path", "document_outside_roots", "document_secret"]);
+  expect(transport.callsOf("sendDocument")).toHaveLength(0);
+  transport.script("sendDocument", ok({ message_id: 195, date: T0 + 100 }));
+  expect(await service.decideFileConfirmation(id, pending.digest, true, () => {})).toMatchObject({ messageIds: [195], alreadySent: false });
+  expect(transport.callsOf("sendDocument")[0]!.params).toMatchObject({ chat_id: TEAM.id, message_thread_id: 7, caption: "Requested file" });
+  expect(await (transport.callsOf("sendDocument")[0]!.params.document as File).text()).toBe(fs.readFileSync(report, "utf8"));
+  expect((await refusal(() => service.decideFileConfirmation(id, pending.digest, true, () => {}))).code).toBe("confirmation_invalid");
+  expect(transport.callsOf("sendDocument")).toHaveLength(1);
+  expect(service.fileConfirmation(id).state).toBe("sent");
+  /* An ordinary retry still runs every detector. */
+  expect((await refusal(() => service.sendDocument({ ...input, clientRequestId: "another-send" }))).code).toBe("document_forbidden_path");
+});
+
+test.each(["changed", "digest", "expired", "rejected", "authority"] as const)("file confirmation refuses %s without sending", async kind => {
+  await allowedTeam();
+  const report = documentFile(path.join(HANDOFF, "credentials.md"), ["-----BEGIN ", "PRIVATE KEY-----"].join(""));
+  const error = await refusal(() => sendDocument({ path: report }, { clientRequestId: "confirm-refusal" }));
+  expect(error.extra.confirmation).toBeDefined();
+  const id = error.extra.confirmation!.id;
+  const pending = service.fileConfirmation(id);
+  if (kind === "changed") fs.writeFileSync(report, REPORT);
+  const clock = kind === "expired" ? spyOn(service["deps"], "now").mockReturnValue(new Date(NOW.getTime() + 600_000)) : null;
+  try {
+    if (kind === "rejected") {
+      await service.decideFileConfirmation(id, pending.digest, false, () => {});
+    } else {
+      expect((await refusal(() => service.decideFileConfirmation(id, kind === "digest" ? "0".repeat(64) : pending.digest, true, () => {
+        if (kind === "authority") throw new TelegramBotError("forbidden", "owner session was revoked");
+      }))).code).toBe(kind === "authority" ? "forbidden" : "confirmation_invalid");
+    }
+    expect(transport.callsOf("sendDocument")).toHaveLength(0);
+  } finally { clock?.mockRestore(); }
+});
+
+test("a hidden photo needs its own confirmation and sends once", async () => {
+  await allowedTeam();
+  const filename = path.join(HOME, ".private", "frame.png");
+  fs.mkdirSync(path.dirname(filename), { recursive: true });
+  await sharp({ create: { width: 2, height: 2, channels: 3, background: "blue" } }).png().toFile(filename);
+  const input = { conversationId: "conversation_writer", clientRequestId: "confirm-photo", chat: "team-reports", images: [{ path: filename, caption: "Frame" }], topicId: 9 };
+  const error = await refusal(() => service.sendMedia(input));
+  expect(error.extra.confirmation).toBeDefined();
+  const pending = service.fileConfirmation(error.extra.confirmation!.id);
+  transport.script("sendPhoto", ok({ message_id: 196, date: T0 + 100 }));
+  expect(await service.decideFileConfirmation(pending.id, pending.digest, true, () => {})).toMatchObject({ messageIds: [196] });
+  expect(transport.callsOf("sendPhoto")[0]!.params).toMatchObject({ chat_id: TEAM.id, message_thread_id: 9 });
+  expect((await refusal(() => service.decideFileConfirmation(pending.id, pending.digest, true, () => {}))).code).toBe("confirmation_invalid");
+});
+
+
+test("an agent send key cannot pre-use the owner's confirmed document claim", async () => {
+  await allowedTeam();
+  const flaggedFile = documentFile(path.join(HANDOFF, "credentials.md"), ["-----BEGIN ", "PRIVATE KEY-----"].join(""));
+  const first = await refusal(() => sendDocument({ path: flaggedFile }));
+  const view = service.fileConfirmation(first.extra.confirmation!.id);
+  const clean = documentFile(path.join(HANDOFF, "clean.md"), REPORT);
+  transport.script("sendDocument", ok({ message_id: 197, date: T0 + 100 }), ok({ message_id: 198, date: T0 + 101 }));
+  await sendDocument({ path: clean }, { clientRequestId: `file-confirmation:${view.id}` });
+  expect(await service.decideFileConfirmation(view.id, view.digest, true, () => {})).toMatchObject({ messageIds: [198], alreadySent: false });
+  const calls = transport.callsOf("sendDocument");
+  expect(calls).toHaveLength(2);
+  expect(await (calls[1]!.params.document as File).text()).toBe(fs.readFileSync(flaggedFile, "utf8"));
 });

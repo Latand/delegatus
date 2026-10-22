@@ -1,0 +1,406 @@
+{
+  "sources": [
+    {
+      "path": "src/components/telegram/TelegramFileConfirmation.tsx",
+      "sha256": "d40eba124f94a18293e980753587afd949362ff447b14f2e67d81882cd980b71"
+    },
+    {
+      "path": "src/lib/telegram/bot/fileConfirmationContract.ts",
+      "sha256": "0c235c8eada3e3b1ef5937f551e4f0cd67ce3120deb1005f5fe0025991a47512"
+    },
+    {
+      "path": "src/components/conversation/conversationWindowEvidence.fixture.tsx",
+      "sha256": "65d395529dbc2b0d9c69127e540df3db4b5758e06090a7802c65fa8c8521a8f0"
+    },
+    {
+      "path": "src/components/conversation/conversationWindow.browser.test.tsx",
+      "sha256": "97a83bce08c552953fd103e994c1fbe50bdedd2a3f708b251eaf94e2b9d4754f"
+    }
+  ],
+  "frames": [
+    {
+      "frame": "1280-en-light-pending",
+      "overflow": 0,
+      "text": "Send this file to Telegram?Review the detector warnings and the exact destination. Approval sends these bytes once. This request expires after ten minutes.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).Sent. This confirmation has been used.",
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "1280-en-light-sent",
+      "overflow": 0,
+      "text": "Send this file to Telegram?Review the detector warnings and the exact destination. Approval sends these bytes once. This request expires after ten minutes.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).Sent. This confirmation has been used.",
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "1280-en-light-rejected",
+      "overflow": 0,
+      "text": "Send this file to Telegram?Review the detector warnings and the exact destination. Approval sends these bytes once. This request expires after ten minutes.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).Send declined.",
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "1280-en-light-expired",
+      "overflow": 0,
+      "text": "Send this file to Telegram?Review the detector warnings and the exact destination. Approval sends these bytes once. This request expires after ten minutes.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).This confirmation has expired. Ask for a new send request.",
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "1280-en-light-uncertain",
+      "overflow": 0,
+      "text": "Send this file to Telegram?Review the detector warnings and the exact destination. Approval sends these bytes once. This request expires after ten minutes.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).Telegram did not confirm delivery. Check the destination before requesting another send.",
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "1280-en-light-failed",
+      "overflow": 0,
+      "text": "Send this file to Telegram?Review the detector warnings and the exact destination. Approval sends these bytes once. This request expires after ten minutes.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).The send was refused. Review the result before requesting another send.",
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "1280-en-light-unavailable",
+      "overflow": 0,
+      "text": "Send this file to Telegram?Review the detector warnings and the exact destination. Approval sends these bytes once. This request expires after ten minutes.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).This confirmation is unavailable. Ask for a new send request.",
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "1280-en-light-owner",
+      "overflow": 0,
+      "text": "Sign in with Telegram as the paired installation owner to review this send.Sign in",
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "1280-en-dark-pending",
+      "overflow": 0,
+      "text": "Send this file to Telegram?Review the detector warnings and the exact destination. Approval sends these bytes once. This request expires after ten minutes.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).Sent. This confirmation has been used.",
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "1280-en-dark-sent",
+      "overflow": 0,
+      "text": "Send this file to Telegram?Review the detector warnings and the exact destination. Approval sends these bytes once. This request expires after ten minutes.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).Sent. This confirmation has been used.",
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "1280-en-dark-rejected",
+      "overflow": 0,
+      "text": "Send this file to Telegram?Review the detector warnings and the exact destination. Approval sends these bytes once. This request expires after ten minutes.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).Send declined.",
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "1280-en-dark-expired",
+      "overflow": 0,
+      "text": "Send this file to Telegram?Review the detector warnings and the exact destination. Approval sends these bytes once. This request expires after ten minutes.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).This confirmation has expired. Ask for a new send request.",
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "1280-en-dark-uncertain",
+      "overflow": 0,
+      "text": "Send this file to Telegram?Review the detector warnings and the exact destination. Approval sends these bytes once. This request expires after ten minutes.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).Telegram did not confirm delivery. Check the destination before requesting another send.",
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "1280-en-dark-failed",
+      "overflow": 0,
+      "text": "Send this file to Telegram?Review the detector warnings and the exact destination. Approval sends these bytes once. This request expires after ten minutes.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).The send was refused. Review the result before requesting another send.",
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "1280-en-dark-unavailable",
+      "overflow": 0,
+      "text": "Send this file to Telegram?Review the detector warnings and the exact destination. Approval sends these bytes once. This request expires after ten minutes.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).This confirmation is unavailable. Ask for a new send request.",
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "1280-en-dark-owner",
+      "overflow": 0,
+      "text": "Sign in with Telegram as the paired installation owner to review this send.Sign in",
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "1280-uk-light-pending",
+      "overflow": 0,
+      "text": "Надіслати цей файл у Telegram?Перевірте попередження детекторів і точне місце доставки. Підтвердження надсилає ці байти один раз. Запит діє десять хвилин.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).Надіслано. Це підтвердження вже використано.",
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "1280-uk-light-sent",
+      "overflow": 0,
+      "text": "Надіслати цей файл у Telegram?Перевірте попередження детекторів і точне місце доставки. Підтвердження надсилає ці байти один раз. Запит діє десять хвилин.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).Надіслано. Це підтвердження вже використано.",
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "1280-uk-light-rejected",
+      "overflow": 0,
+      "text": "Надіслати цей файл у Telegram?Перевірте попередження детекторів і точне місце доставки. Підтвердження надсилає ці байти один раз. Запит діє десять хвилин.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).Надсилання скасовано.",
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "1280-uk-light-expired",
+      "overflow": 0,
+      "text": "Надіслати цей файл у Telegram?Перевірте попередження детекторів і точне місце доставки. Підтвердження надсилає ці байти один раз. Запит діє десять хвилин.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).Термін дії підтвердження минув. Попросіть новий запит.",
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "1280-uk-light-uncertain",
+      "overflow": 0,
+      "text": "Надіслати цей файл у Telegram?Перевірте попередження детекторів і точне місце доставки. Підтвердження надсилає ці байти один раз. Запит діє десять хвилин.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).Telegram не підтвердив доставку. Перевірте чат перед новим запитом на надсилання.",
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "1280-uk-light-failed",
+      "overflow": 0,
+      "text": "Надіслати цей файл у Telegram?Перевірте попередження детекторів і точне місце доставки. Підтвердження надсилає ці байти один раз. Запит діє десять хвилин.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).Надсилання відхилено. Перевірте результат перед новим запитом.",
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "1280-uk-light-unavailable",
+      "overflow": 0,
+      "text": "Надіслати цей файл у Telegram?Перевірте попередження детекторів і точне місце доставки. Підтвердження надсилає ці байти один раз. Запит діє десять хвилин.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).Це підтвердження недоступне. Попросіть новий запит на надсилання.",
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "1280-uk-light-owner",
+      "overflow": 0,
+      "text": "Для перевірки увійдіть через Telegram як власник, прив’язаний до цієї інсталяції.Увійти",
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "1280-uk-dark-pending",
+      "overflow": 0,
+      "text": "Надіслати цей файл у Telegram?Перевірте попередження детекторів і точне місце доставки. Підтвердження надсилає ці байти один раз. Запит діє десять хвилин.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).Надіслано. Це підтвердження вже використано.",
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "1280-uk-dark-sent",
+      "overflow": 0,
+      "text": "Надіслати цей файл у Telegram?Перевірте попередження детекторів і точне місце доставки. Підтвердження надсилає ці байти один раз. Запит діє десять хвилин.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).Надіслано. Це підтвердження вже використано.",
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "1280-uk-dark-rejected",
+      "overflow": 0,
+      "text": "Надіслати цей файл у Telegram?Перевірте попередження детекторів і точне місце доставки. Підтвердження надсилає ці байти один раз. Запит діє десять хвилин.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).Надсилання скасовано.",
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "1280-uk-dark-expired",
+      "overflow": 0,
+      "text": "Надіслати цей файл у Telegram?Перевірте попередження детекторів і точне місце доставки. Підтвердження надсилає ці байти один раз. Запит діє десять хвилин.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).Термін дії підтвердження минув. Попросіть новий запит.",
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "1280-uk-dark-uncertain",
+      "overflow": 0,
+      "text": "Надіслати цей файл у Telegram?Перевірте попередження детекторів і точне місце доставки. Підтвердження надсилає ці байти один раз. Запит діє десять хвилин.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).Telegram не підтвердив доставку. Перевірте чат перед новим запитом на надсилання.",
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "1280-uk-dark-failed",
+      "overflow": 0,
+      "text": "Надіслати цей файл у Telegram?Перевірте попередження детекторів і точне місце доставки. Підтвердження надсилає ці байти один раз. Запит діє десять хвилин.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).Надсилання відхилено. Перевірте результат перед новим запитом.",
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "1280-uk-dark-unavailable",
+      "overflow": 0,
+      "text": "Надіслати цей файл у Telegram?Перевірте попередження детекторів і точне місце доставки. Підтвердження надсилає ці байти один раз. Запит діє десять хвилин.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).Це підтвердження недоступне. Попросіть новий запит на надсилання.",
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "1280-uk-dark-owner",
+      "overflow": 0,
+      "text": "Для перевірки увійдіть через Telegram як власник, прив’язаний до цієї інсталяції.Увійти",
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "390-en-light-pending",
+      "overflow": 0,
+      "text": "Send this file to Telegram?Review the detector warnings and the exact destination. Approval sends these bytes once. This request expires after ten minutes.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).Sent. This confirmation has been used.",
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "390-en-light-sent",
+      "overflow": 0,
+      "text": "Send this file to Telegram?Review the detector warnings and the exact destination. Approval sends these bytes once. This request expires after ten minutes.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).Sent. This confirmation has been used.",
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "390-en-light-rejected",
+      "overflow": 0,
+      "text": "Send this file to Telegram?Review the detector warnings and the exact destination. Approval sends these bytes once. This request expires after ten minutes.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).Send declined.",
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "390-en-light-expired",
+      "overflow": 0,
+      "text": "Send this file to Telegram?Review the detector warnings and the exact destination. Approval sends these bytes once. This request expires after ten minutes.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).This confirmation has expired. Ask for a new send request.",
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "390-en-light-uncertain",
+      "overflow": 0,
+      "text": "Send this file to Telegram?Review the detector warnings and the exact destination. Approval sends these bytes once. This request expires after ten minutes.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).Telegram did not confirm delivery. Check the destination before requesting another send.",
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "390-en-light-failed",
+      "overflow": 0,
+      "text": "Send this file to Telegram?Review the detector warnings and the exact destination. Approval sends these bytes once. This request expires after ten minutes.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).The send was refused. Review the result before requesting another send.",
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "390-en-light-unavailable",
+      "overflow": 0,
+      "text": "Send this file to Telegram?Review the detector warnings and the exact destination. Approval sends these bytes once. This request expires after ten minutes.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).This confirmation is unavailable. Ask for a new send request.",
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "390-en-light-owner",
+      "overflow": 0,
+      "text": "Sign in with Telegram as the paired installation owner to review this send.Sign in",
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "390-en-dark-pending",
+      "overflow": 0,
+      "text": "Send this file to Telegram?Review the detector warnings and the exact destination. Approval sends these bytes once. This request expires after ten minutes.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).Sent. This confirmation has been used.",
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "390-en-dark-sent",
+      "overflow": 0,
+      "text": "Send this file to Telegram?Review the detector warnings and the exact destination. Approval sends these bytes once. This request expires after ten minutes.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).Sent. This confirmation has been used.",
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "390-en-dark-rejected",
+      "overflow": 0,
+      "text": "Send this file to Telegram?Review the detector warnings and the exact destination. Approval sends these bytes once. This request expires after ten minutes.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).Send declined.",
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "390-en-dark-expired",
+      "overflow": 0,
+      "text": "Send this file to Telegram?Review the detector warnings and the exact destination. Approval sends these bytes once. This request expires after ten minutes.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).This confirmation has expired. Ask for a new send request.",
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "390-en-dark-uncertain",
+      "overflow": 0,
+      "text": "Send this file to Telegram?Review the detector warnings and the exact destination. Approval sends these bytes once. This request expires after ten minutes.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).Telegram did not confirm delivery. Check the destination before requesting another send.",
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "390-en-dark-failed",
+      "overflow": 0,
+      "text": "Send this file to Telegram?Review the detector warnings and the exact destination. Approval sends these bytes once. This request expires after ten minutes.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).The send was refused. Review the result before requesting another send.",
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "390-en-dark-unavailable",
+      "overflow": 0,
+      "text": "Send this file to Telegram?Review the detector warnings and the exact destination. Approval sends these bytes once. This request expires after ten minutes.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).This confirmation is unavailable. Ask for a new send request.",
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "390-en-dark-owner",
+      "overflow": 0,
+      "text": "Sign in with Telegram as the paired installation owner to review this send.Sign in",
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "390-uk-light-pending",
+      "overflow": 0,
+      "text": "Надіслати цей файл у Telegram?Перевірте попередження детекторів і точне місце доставки. Підтвердження надсилає ці байти один раз. Запит діє десять хвилин.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).Надіслано. Це підтвердження вже використано.",
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "390-uk-light-sent",
+      "overflow": 0,
+      "text": "Надіслати цей файл у Telegram?Перевірте попередження детекторів і точне місце доставки. Підтвердження надсилає ці байти один раз. Запит діє десять хвилин.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).Надіслано. Це підтвердження вже використано.",
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "390-uk-light-rejected",
+      "overflow": 0,
+      "text": "Надіслати цей файл у Telegram?Перевірте попередження детекторів і точне місце доставки. Підтвердження надсилає ці байти один раз. Запит діє десять хвилин.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).Надсилання скасовано.",
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "390-uk-light-expired",
+      "overflow": 0,
+      "text": "Надіслати цей файл у Telegram?Перевірте попередження детекторів і точне місце доставки. Підтвердження надсилає ці байти один раз. Запит діє десять хвилин.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).Термін дії підтвердження минув. Попросіть новий запит.",
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "390-uk-light-uncertain",
+      "overflow": 0,
+      "text": "Надіслати цей файл у Telegram?Перевірте попередження детекторів і точне місце доставки. Підтвердження надсилає ці байти один раз. Запит діє десять хвилин.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).Telegram не підтвердив доставку. Перевірте чат перед новим запитом на надсилання.",
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "390-uk-light-failed",
+      "overflow": 0,
+      "text": "Надіслати цей файл у Telegram?Перевірте попередження детекторів і точне місце доставки. Підтвердження надсилає ці байти один раз. Запит діє десять хвилин.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).Надсилання відхилено. Перевірте результат перед новим запитом.",
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "390-uk-light-unavailable",
+      "overflow": 0,
+      "text": "Надіслати цей файл у Telegram?Перевірте попередження детекторів і точне місце доставки. Підтвердження надсилає ці байти один раз. Запит діє десять хвилин.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).Це підтвердження недоступне. Попросіть новий запит на надсилання.",
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "390-uk-light-owner",
+      "overflow": 0,
+      "text": "Для перевірки увійдіть через Telegram як власник, прив’язаний до цієї інсталяції.Увійти",
+      "background": "rgb(244, 241, 236)"
+    },
+    {
+      "frame": "390-uk-dark-pending",
+      "overflow": 0,
+      "text": "Надіслати цей файл у Telegram?Перевірте попередження детекторів і точне місце доставки. Підтвердження надсилає ці байти один раз. Запит діє десять хвилин.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).Надіслано. Це підтвердження вже використано.",
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "390-uk-dark-sent",
+      "overflow": 0,
+      "text": "Надіслати цей файл у Telegram?Перевірте попередження детекторів і точне місце доставки. Підтвердження надсилає ці байти один раз. Запит діє десять хвилин.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).Надіслано. Це підтвердження вже використано.",
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "390-uk-dark-rejected",
+      "overflow": 0,
+      "text": "Надіслати цей файл у Telegram?Перевірте попередження детекторів і точне місце доставки. Підтвердження надсилає ці байти один раз. Запит діє десять хвилин.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).Надсилання скасовано.",
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "390-uk-dark-expired",
+      "overflow": 0,
+      "text": "Надіслати цей файл у Telegram?Перевірте попередження детекторів і точне місце доставки. Підтвердження надсилає ці байти один раз. Запит діє десять хвилин.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).Термін дії підтвердження минув. Попросіть новий запит.",
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "390-uk-dark-uncertain",
+      "overflow": 0,
+      "text": "Надіслати цей файл у Telegram?Перевірте попередження детекторів і точне місце доставки. Підтвердження надсилає ці байти один раз. Запит діє десять хвилин.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).Telegram не підтвердив доставку. Перевірте чат перед новим запитом на надсилання.",
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "390-uk-dark-failed",
+      "overflow": 0,
+      "text": "Надіслати цей файл у Telegram?Перевірте попередження детекторів і точне місце доставки. Підтвердження надсилає ці байти один раз. Запит діє десять хвилин.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).Надсилання відхилено. Перевірте результат перед новим запитом.",
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "390-uk-dark-unavailable",
+      "overflow": 0,
+      "text": "Надіслати цей файл у Telegram?Перевірте попередження детекторів і точне місце доставки. Підтвердження надсилає ці байти один раз. Запит діє десять хвилин.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).Це підтвердження недоступне. Попросіть новий запит на надсилання.",
+      "background": "rgb(17, 18, 24)"
+    },
+    {
+      "frame": "390-uk-dark-owner",
+      "overflow": 0,
+      "text": "Для перевірки увійдіть через Telegram як власник, прив’язаний до цієї інсталяції.Увійти",
+      "background": "rgb(17, 18, 24)"
+    }
+  ]
+}

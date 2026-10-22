@@ -1,6 +1,9 @@
+"use client";
+
+import { TelegramFileConfirmation } from "@/components/telegram/TelegramFileConfirmation";
+import type { FileConfirmationView } from "@/lib/telegram/bot/fileConfirmationContract";
 import { DeputyBlock } from "./DeputyBlock";
 import type { SeatDeputyView } from "@/lib/orchestrator/deputyView";
-"use client";
 
 /**
  * The rendered-evidence fixture for the conversation window's launch-prompt
@@ -96,6 +99,7 @@ const MANDATE = [
 const ECHO = `You are the Orchestrator. Drive work through the production Viewer MCP tools.\n\n${MANDATE}\n\n## Handoff\nSupersedes the predecessor seat.`;
 
 export type ConversationWindowCase =
+  | "file-confirmation"
   | "seat-inbox"
   | "parallel-failure"
   | "attention-answer"
@@ -1851,7 +1855,8 @@ const requested = (params.get("case") as ConversationWindowCase | null) ?? "rece
 /* The lifecycle case mounts the production window itself — the feed, the
    composer and a fake host behind them — so it takes over the root rather than
    rendering one arranged frame. */
-if (root && requested === "seat-inbox") createRoot(root).render(<InboxFixture />);
+if (root && requested === "file-confirmation") mountFileConfirmation(root);
+else if (root && requested === "seat-inbox") createRoot(root).render(<InboxFixture />);
 else if (root && requested === "attention-answer") mountAttentionAnswer(root);
 else if (root && requested === "parallel-failure") createRoot(root).render(<ParallelFailureFixture />);
 else if (root && requested === "lifecycle") mountLifecycle(root);
@@ -1878,4 +1883,32 @@ function InboxFixture() {
   return <main data-evidence-case="seat-inbox" className="mx-auto max-w-3xl space-y-4 bg-canvas px-3 py-5 text-primary">
     <MessageProvenanceProvider value={lookup}>{feed.items.map(e => <div key={e.key} data-inbox-member><FeedItem item={e.item} /></div>)}</MessageProvenanceProvider>
   </main>;
+}
+
+
+function mountFileConfirmation(root: HTMLElement) {
+  Date.now = () => Date.parse("2026-10-22T12:00:00Z");
+  const state = params.get("state") ?? "pending";
+  const view: FileConfirmationView = {
+    id: "fixture-confirmation", digest: "a".repeat(64), kind: "document", chatId: "-1000000000101", chatTitle: "Fixture reports", topicId: 7,
+    options: { conversationId: "conversation_fixture", clientRequestId: "fixture", chat: "-1000000000101", topicId: 7, replyToMessageId: null, format: "plain", silent: false,
+      document: { path: "/sandbox/.private/credentials-readme-for-the-requested-handoff.md", filename: "credentials-readme-for-the-requested-handoff.md", caption: "Requested file / Запитаний файл" } },
+    files: [{ path: "/sandbox/.private/credentials-readme-for-the-requested-handoff.md", filename: "credentials-readme-for-the-requested-handoff.md", sha256: "b".repeat(64), bytes: 256 }],
+    reasons: [{ code: "document_forbidden_path", reason: "The file is in a dot-directory." }, { code: "document_outside_roots", reason: "The file is outside the configured document roots." }, { code: "document_secret", reason: "The file contains what looks like a secret (private_key, line 1).", secretClass: "private_key", line: 1 }],
+    createdAt: "2026-10-22T12:00:00.000Z", expiresAt: "2026-10-22T12:10:00.000Z", state: state === "owner" ? "pending" : state as FileConfirmationView["state"],
+  };
+  let sends = 0;
+  Object.assign(window, { fileConfirmationSends: () => sends });
+  window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input), location.origin);
+    if (url.pathname !== "/api/telegram/bot/confirmation") return Response.json({});
+    if (state === "owner") return Response.json({ code: "OPERATOR_REQUIRED" }, { status: 401 });
+    if (init?.method === "POST") {
+      const body = JSON.parse(String(init.body));
+      if (body.approve) sends++;
+      return Response.json(body.approve ? { messageIds: [100] } : { rejected: true });
+    }
+    return Response.json(view);
+  }) as typeof window.fetch;
+  createRoot(root).render(<TelegramFileConfirmation />);
 }

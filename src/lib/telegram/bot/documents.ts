@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import sharp from "sharp";
 import path from "node:path";
 
@@ -17,10 +18,11 @@ import {
  * Which files `telegram_bot_send_document` may post, decided on the Viewer
  * host before Telegram is contacted.
  *
- * A document can be any file, so the path an agent names is never trusted: it
- * must resolve (symlinks followed) under a document root the operator set, it
- * may not pass through a dot-directory or the Delegatus state directory even
- * when a root contains them, and the file actually opened is checked again,
+ * A document can be any file, so the path an agent names is never trusted.
+ * Strict callers require a configured root and refuse dot-directories. The
+ * bot can collect path/secret warnings for one owner confirmation. The state
+ * directory, type, size and descriptor checks remain hard refusals. The file
+ * actually opened is checked again,
  * so a directory swapped for a link between the check and the open cannot
  * carry it out. Its type and size are bounded, the name it is shown under
  * keeps its type, and a text file is scanned, in UTF-8 and UTF-16, with the
@@ -42,7 +44,14 @@ export class DocumentRefusal extends Error {
 
 export type DocumentEnvironment = { home: string; stateDir: string };
 
-export type LoadedDocument = { file: File; filename: string; caption: string | null; bytes: number };
+export type LoadedDocument = { file: File; filename: string; caption: string | null; bytes: number; sha256: string };
+export type DocumentWarning = { code: "document_forbidden_path" | "document_outside_roots" | "document_secret"; reason: string; secretClass?: string; line?: number };
+
+/** A collector is used only by the bot's confirmation path. Strict callers omit it. */
+function detected(warnings: DocumentWarning[] | undefined, warning: DocumentWarning): void {
+  if (!warnings) throw new DocumentRefusal(warning.code, warning.reason, warning.secretClass);
+  if (!warnings.some(previous => JSON.stringify(previous) === JSON.stringify(warning))) warnings.push(warning);
+}
 
 const MIME: Record<(typeof DOCUMENT_EXTENSIONS)[number], string> = {
   ".md": "text/markdown",
@@ -342,19 +351,20 @@ function extensionOf(name: string): string {
 
 /** Where a checked path may not be: a dot-directory, the state directory, or
     anywhere but strictly under a root. */
-function refusePlace(real: string, requested: string, realRoots: readonly string[], roots: readonly string[], environment: DocumentEnvironment): void {
+function refusePlace(real: string, requested: string, realRoots: readonly string[], roots: readonly string[], environment: DocumentEnvironment, warnings?: DocumentWarning[]): void {
   const realDot = dotSegment(real);
-  if (realDot !== null) throw new DocumentRefusal("document_forbidden_path", `${requested} resolves through ${realDot}; files in dot-directories are never sent`);
+  if (realDot !== null) detected(warnings, { code: "document_forbidden_path", reason: "The file is in a dot-directory." });
   if (forbiddenDirectories(environment).some((forbidden) => within(real, forbidden))) {
     throw new DocumentRefusal("document_forbidden_path", `${requested} is inside the Delegatus state directory, which is never sent`);
   }
+  if (realRoots.includes(real)) throw new DocumentRefusal("document_outside_roots", "A document root itself cannot be sent.");
   if (!realRoots.some((root) => within(real, root) && real !== root)) {
     const displayPath = (filename: string) => {
       if (!within(filename, environment.home)) return filename;
       const relative = path.relative(environment.home, filename).split(path.sep).join("/");
       return relative ? `$HOME/${relative}` : "$HOME";
     };
-    throw new DocumentRefusal("document_outside_roots", `${displayPath(requested)} is outside the allowed document roots (${roots.map(displayPath).join(", ")}); write the file under one of them`);
+    detected(warnings, { code: "document_outside_roots", reason: `${displayPath(requested)} is outside the allowed document roots (${roots.map(displayPath).join(", ")}); write the file under one of them` });
   }
 }
 
@@ -383,10 +393,11 @@ export function readUnderRoots<Admitted = void>(
   maxBytes: number,
   /** Refuses by the resolved path, after the place checks and before the open. */
   admit: (real: string) => Admitted = () => undefined as Admitted,
+  warnings?: DocumentWarning[],
 ): { real: string; bytes: Buffer; admitted: Admitted } {
   /* `..` starts with a dot too, so traversal is refused by the same rule. */
   const requestedDot = dotSegment(requested);
-  if (requestedDot !== null) throw new DocumentRefusal("document_forbidden_path", `${requested} passes through ${requestedDot}; files in dot-directories are never sent`);
+  if (requestedDot !== null) detected(warnings, { code: "document_forbidden_path", reason: "The file is in a dot-directory." });
 
   let real: string;
   try {
@@ -395,10 +406,10 @@ export function readUnderRoots<Admitted = void>(
     throw new DocumentRefusal("document_invalid", `${requested} does not exist or cannot be read on the Viewer host`);
   }
   const realRoots = roots.map((root) => realOrSelf(root));
-  refusePlace(real, requested, realRoots, roots, environment);
+  refusePlace(real, requested, realRoots, roots, environment, warnings);
   const admitted = admit(real);
 
-  return { ...readOpenedFile(requested, real, maxBytes, opened => refusePlace(opened, requested, realRoots, roots, environment)), admitted };
+  return { ...readOpenedFile(requested, real, maxBytes, opened => refusePlace(opened, requested, realRoots, roots, environment, opened === real ? warnings : undefined)), admitted };
 }
 
 /** Private generated output has no document root. Its exact path, including
@@ -451,7 +462,7 @@ function readOpenedFile(requested: string, real: string, maxBytes: number, reche
  * Checks and loads one document. Throws a {@link DocumentRefusal} for every
  * reason not to send it; nothing here contacts Telegram.
  */
-export function loadDocument(input: unknown, roots: readonly string[], environment: DocumentEnvironment): LoadedDocument {
+export function loadDocument(input: unknown, roots: readonly string[], environment: DocumentEnvironment, warnings?: DocumentWarning[]): LoadedDocument {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new DocumentRefusal("document_invalid", "document needs {path, filename?, caption?}");
   }
@@ -463,9 +474,7 @@ export function loadDocument(input: unknown, roots: readonly string[], environme
   if (typeof caption === "string" && caption.length > DOCUMENT_CAPTION_MAX_CHARS) {
     throw new DocumentRefusal("text_too_long", `document caption exceeds ${DOCUMENT_CAPTION_MAX_CHARS} characters`);
   }
-  /* `..` starts with a dot too, so traversal is refused by the same rule. */
-  const requestedDot = dotSegment(requested);
-  if (requestedDot !== null) throw new DocumentRefusal("document_forbidden_path", `${requested} passes through ${requestedDot}; files in dot-directories are never sent`);
+  if (dotSegment(requested) !== null) detected(warnings, { code: "document_forbidden_path", reason: "The file is in a dot-directory." });
   const filename = shown === undefined || shown === null ? path.basename(requested) : shown;
   if (typeof filename !== "string" || filename.trim() === "" || filename.length > 255 || /[\\/\u0000-\u001f\u007f]/.test(filename) || filename.startsWith(".")) {
     throw new DocumentRefusal("document_invalid", "document.filename must be a plain file name without slashes or a leading dot");
@@ -486,7 +495,7 @@ export function loadDocument(input: unknown, roots: readonly string[], environme
       throw new DocumentRefusal("document_type", `the shown filename must keep the file's type: ${extension} is ${realKind} and ${extensionOf(filename)} is ${shownKind}`);
     }
     return { extension, kind: realKind };
-  });
+  }, warnings);
 
   const signature = extension === ".pdf" ? bytes.subarray(0, 5).toString("latin1") === "%PDF-"
     : extension === ".png" ? bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
@@ -498,11 +507,7 @@ export function loadDocument(input: unknown, roots: readonly string[], environme
   if (kind === "text") {
     const hit = documentBytesSecret(bytes);
     if (hit) {
-      throw new DocumentRefusal(
-        "document_secret",
-        `${requested} contains what looks like a secret (${hit.secretClass}, line ${hit.line}); remove it and write the file again`,
-        hit.secretClass,
-      );
+      detected(warnings, { code: "document_secret", reason: `The file contains what looks like a secret (${hit.secretClass}, line ${hit.line}).`, secretClass: hit.secretClass, line: hit.line });
     }
   }
 
@@ -512,6 +517,7 @@ export function loadDocument(input: unknown, roots: readonly string[], environme
     filename,
     caption: typeof caption === "string" && caption !== "" ? caption : null,
     bytes: bytes.length,
+    sha256: createHash("sha256").update(bytes).digest("hex"),
   };
 }
 

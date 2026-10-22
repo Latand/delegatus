@@ -1,3 +1,4 @@
+import { fileConfirmationText } from "@/lib/telegram/bot/fileConfirmationContract";
 import { describe, expect } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -5597,5 +5598,62 @@ describe("streamed composer attachments", () => {
       try { await browser?.close(); }
       finally { served.stop(); if (scratchFd !== undefined) fs.closeSync(scratchFd); }
     }
+  }, 120_000);
+});
+
+
+describe("owner confirmation of one Telegram file send", () => {
+  browserTest("the file, destination, warnings and decisions fit both languages and themes", async () => {
+    const output = path.resolve(".artifacts/telegram-file-confirmation");
+    fs.mkdirSync(output, { recursive: true });
+    const served = await serveEvidenceFixture(output, FIXTURE);
+    let browser: Browser | null = null;
+    const evidence: Array<Record<string, unknown>> = [];
+    try {
+      browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+      for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
+        for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+          for (const state of ["pending", "sent", "rejected", "expired", "uncertain", "failed", "unavailable", "owner"] as const) {
+            const name = `${viewport.width}-${lang}-${theme}-${state}`;
+            const { context, page, pageErrors } = await openFixture(browser, `${served.base}?case=file-confirmation&state=${state}&lang=${lang}&id=fixture-confirmation`, viewport, theme, lang);
+            try {
+              const words = fileConfirmationText[lang];
+              const status = page.getByRole("status");
+              await page.waitForFunction(() => !/Loading|Завантаження/.test(document.querySelector('[role="status"]')?.textContent ?? "Loading"));
+              if (state === "pending") {
+                expect(await page.getByText("b".repeat(64), { exact: false }).count()).toBe(1);
+                expect(await page.getByText("document_secret", { exact: false }).count()).toBe(1);
+                await page.screenshot({ path: path.join(output, `${name}-top.png`) });
+                const approve = page.getByRole("button", { name: words.approve, exact: true });
+                await approve.scrollIntoViewIfNeeded();
+                expect(await approve.isEnabled()).toBe(true);
+                await page.screenshot({ path: path.join(output, `${name}-decision.png`) });
+                await approve.click();
+                await page.getByText(words.sent, { exact: true }).waitFor();
+                expect(await page.evaluate(() => (window as unknown as { fileConfirmationSends(): number }).fileConfirmationSends())).toBe(1);
+                expect(await page.getByRole("button", { name: words.approve, exact: true }).count()).toBe(0);
+              } else {
+                await page.getByText(words[state], { exact: true }).waitFor();
+                await status.scrollIntoViewIfNeeded();
+                expect(await page.getByRole("button", { name: words.approve, exact: true }).count()).toBe(0);
+                await page.screenshot({ path: path.join(output, `${name}.png`) });
+              }
+              const reading = await page.evaluate(() => {
+                const main = document.querySelector("main")!;
+                return { overflow: main.scrollWidth - main.clientWidth, text: main.textContent, background: getComputedStyle(main).backgroundColor };
+              });
+              expect(reading.overflow).toBeLessThanOrEqual(1);
+              expect(reading.background).not.toBe("rgba(0, 0, 0, 0)");
+              expect(pageErrors).toEqual([]);
+              evidence.push({ frame: name, ...reading });
+            } finally { await context.close(); }
+          }
+        }
+      }
+    } finally { await browser?.close(); served.stop(); }
+    fs.mkdirSync("evidence/telegram-file-confirmation", { recursive: true });
+    const { createHash } = await import("node:crypto");
+    const sources = ["src/components/telegram/TelegramFileConfirmation.tsx", "src/lib/telegram/bot/fileConfirmationContract.ts", "src/components/conversation/conversationWindowEvidence.fixture.tsx", "src/components/conversation/conversationWindow.browser.test.tsx"].map(file => ({ path: file, sha256: createHash("sha256").update(fs.readFileSync(file)).digest("hex") }));
+    fs.writeFileSync("evidence/telegram-file-confirmation/geometry.json", JSON.stringify({ sources, frames: evidence }, null, 2) + "\n");
   }, 120_000);
 });

@@ -1,3 +1,4 @@
+import { readFileConfirmationLink } from "@/lib/telegram/bot/fileConfirmationContract";
 import { FLOW_ARCHIVE, FLOW_RETIREMENT, STAGE_RETIREMENT, FlowRetiredError } from "@/lib/flows/retirement";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { curationAnswer } from "@/lib/memory/curation/answer";
@@ -771,6 +772,7 @@ async function dispatchViewerControl(
       ...(typeof result.expectedRevision === "number" || result.expectedRevision === null ? { expectedRevision: result.expectedRevision } : {}),
       ...(typeof result.retryAfterSeconds === "number" ? { retryAfterSeconds: result.retryAfterSeconds } : {}),
       ...(Array.isArray(result.sentMessageIds) && result.sentMessageIds.every((id) => typeof id === "number") ? { sentMessageIds: result.sentMessageIds } : {}),
+      ...(readFileConfirmationLink(result.confirmation) ? { confirmation: readFileConfirmationLink(result.confirmation) } : {}),
       ...(text(result.secretClass) ? { secretClass: text(result.secretClass) } : {}),
       ...(refusals.length ? { refusals } : {}),
     });
@@ -5374,6 +5376,7 @@ async function telegramBotSendMedia(args: McpToolArgs, control: ViewerControlDep
     if (error instanceof McpDispatchVerdictError && typeof error.details.code === "string") {
       const code = error.details.code;
       throw new McpToolRefusal(error.message, { code, retryable: RETRYABLE_TELEGRAM_BOT_CODES.has(code as TelegramBotErrorCode),
+        ...(readFileConfirmationLink(error.details.confirmation) ? { confirmation: readFileConfirmationLink(error.details.confirmation) } : {}),
         ...(Array.isArray(error.details.refusals) ? { refusals: readTelegramBotRefusals(error.details.refusals) } : {}) });
     }
     throw error;
@@ -5400,6 +5403,7 @@ async function telegramBotSendDocument(args: McpToolArgs, control: ViewerControl
       throw new McpToolRefusal(error.message, {
         code,
         retryable: RETRYABLE_TELEGRAM_BOT_CODES.has(code as TelegramBotErrorCode),
+        ...(readFileConfirmationLink(error.details.confirmation) ? { confirmation: readFileConfirmationLink(error.details.confirmation) } : {}),
         ...(Array.isArray(error.details.refusals) ? { refusals: readTelegramBotRefusals(error.details.refusals) } : {}),
         ...(typeof retryAfterSeconds === "number" ? { retryAfterSeconds } : {}),
         ...(typeof secretClass === "string" ? { secretClass } : {}),
