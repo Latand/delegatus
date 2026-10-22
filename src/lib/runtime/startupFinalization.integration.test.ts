@@ -1008,3 +1008,23 @@ test("historical fallback publication uses fresh keyed rows after awaited sessio
     f.journal.close(); f.registry.close();
   }
 });
+
+
+test("registry preparation precedes pipeline admission at every startup phase", async () => {
+  const f=fixture(0);
+  const { stateLeaseHoldsInFlight }=await import("@/lib/state/sqliteStateStore");
+  const original=f.registry.prepareReadOnlySnapshot.bind(f.registry);let prepared=0;
+  f.registry.prepareReadOnlySnapshot=async signal=>{
+    prepared++;
+    expect(stateLeaseHoldsInFlight().filter(hold=>hold.collection==="pipelines")).toEqual([]);
+    return original(signal);
+  };
+  try {
+    await adoptStructuredHostsAtStartup({registry:f.registry,client:f.client,refreshTranscriptState:async()=>{},adopt:async()=>[],adoptClaude:async()=>[],orchestratorSeats:()=>[]});
+    expect(prepared).toBeGreaterThan(0);
+  } finally {
+    f.registry.prepareReadOnlySnapshot=original;
+    await bindStructuredDeliveryQueue([],{registry:f.registry,client:null});
+    f.journal.close();f.registry.close();
+  }
+});

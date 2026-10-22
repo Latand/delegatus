@@ -1887,9 +1887,10 @@ function startupMembershipIdentity(selection: ReturnType<typeof pipelineStartupM
   return JSON.stringify([...selection.selectedIds].map(id => [id, selection.resolve(id), selection.memberships[id] ?? []]));
 }
 
-async function deferredPipelineStartupEvidence(registry: AgentRegistry, host?: AgentRegistryEntry): Promise<PipelineStartupEvidence> {
+async function deferredPipelineStartupEvidence(registry: AgentRegistry, host?: AgentRegistryEntry, prepared?: ReturnType<typeof pipelineStartupMemberships>): Promise<PipelineStartupEvidence> {
   const deferred = new Set<string>();
-  const selection = host ? pipelineStartupMemberships(registry, host) : await pipelineStartupMembershipsAsync(registry);
+  if (prepared && !(registryStartupSelectionUnchanged(prepared.snapshot) ?? registry.readOnlySnapshot() === prepared.snapshot)) throw new Error("startup membership revision changed");
+  const selection = prepared ?? (host ? pipelineStartupMemberships(registry, host) : await pipelineStartupMembershipsAsync(registry));
   const { memberships, resolve } = selection;
   for (const [id, entries] of Object.entries(memberships)) {
     if (entries.some((membership) => membership.kind === "pipeline")) deferred.add(resolve(id));
@@ -1908,7 +1909,8 @@ function reportPipelineStartupRefusal(error: unknown): void {
     A failed read retains pipeline members without launch or demotion; a
     captured survivor blocks even pending work until its identity is dead. */
 async function pipelineStartupEvidence(registry: AgentRegistry, available = true, host?: AgentRegistryEntry, selection?: ReturnType<typeof pipelineStartupMemberships>): Promise<PipelineStartupEvidence> {
-  if (!available) return deferredPipelineStartupEvidence(registry, host);
+  if (selection && !(registryStartupSelectionUnchanged(selection.snapshot) ?? registry.readOnlySnapshot() === selection.snapshot)) throw new Error("startup membership revision changed");
+  if (!available) return deferredPipelineStartupEvidence(registry, host, selection);
   const settled = new Set<string>();
   const deferred = new Set<string>();
   const { memberships, resolve, byPipeline, selectedIds, snapshot } = selection ?? (host ? pipelineStartupMemberships(registry, host) : await pipelineStartupMembershipsAsync(registry));
@@ -1919,14 +1921,14 @@ async function pipelineStartupEvidence(registry: AgentRegistry, available = true
     preservedIds = new Set((await pipelineRegistryHealthAsync()).map((issue) => issue.id));
   } catch (error) {
     reportPipelineStartupRefusal(error);
-    return deferredPipelineStartupEvidence(registry, host);
+    return deferredPipelineStartupEvidence(registry, host, selection);
   }
   if (host) {
     const current = pipelineStartupMemberships(registry, host);
     if (startupMembershipIdentity(current) !== startupMembershipIdentity({ memberships, resolve, byPipeline, selectedIds, snapshot })) {
       return { ...await deferredPipelineStartupEvidence(registry, host), changed: true };
     }
-  } else if (!(registryStartupSelectionUnchanged(snapshot) ?? registry.readOnlySnapshot() === snapshot)) return deferredPipelineStartupEvidence(registry);
+  } else if (!(registryStartupSelectionUnchanged(snapshot) ?? registry.readOnlySnapshot() === snapshot)) throw new Error("startup membership revision changed");
   for (const [id, entries] of Object.entries(memberships)) {
     if (entries.some((entry) => entry.kind === "pipeline" && preservedIds.has(entry.containerId))) {
       deferred.add(resolve(id));
@@ -2279,22 +2281,28 @@ async function adoptStructuredHostsPass(
   assertActive();
   let membershipSelection: { snapshot: RegistryFile; value: ReturnType<typeof pipelineStartupMemberships> } | undefined;
   const membershipDeadline = passDeadline;
+  const selectionCurrent = () => membershipSelection && (registryStartupSelectionUnchanged(membershipSelection.snapshot)
+    ?? registry.readOnlySnapshot() === membershipSelection.snapshot);
   const readEvidence = async (entry?: AgentRegistryEntry) => {
     if (dependencies.pipelineEvidence) return dependencies.pipelineEvidence(registry);
     if (entry) return pipelineStartupEvidence(registry, true, entry);
-    const current = membershipSelection && (registryStartupSelectionUnchanged(membershipSelection.snapshot)
-      ?? registry.readOnlySnapshot() === membershipSelection.snapshot);
-    if (!current) {
+    if (!selectionCurrent()) throw new Error("startup membership revision changed");
+    return pipelineStartupEvidence(registry, true, undefined, membershipSelection!.value);
+  };
+  const readBulkEvidence = async (phase?: string) => {
+    // Registry I/O and census yields precede pipeline admission. Only the
+    // revision proof and current pipeline ownership belong to that lease.
+    if (!dependencies.pipelineEvidence && !selectionCurrent()) {
       await registry.prepareReadOnlySnapshot(dependencies.signal);
       assertActive();
       const value = await pipelineStartupMembershipsAsync(registry, { signal: dependencies.signal, deadline: membershipDeadline });
       assertActive();
       membershipSelection = { snapshot: value.snapshot, value };
     }
-    return pipelineStartupEvidence(registry, true, undefined, membershipSelection!.value);
+    return admitState(async available => available ? readEvidence()
+      : pipelineStartupEvidence(registry, false, undefined, membershipSelection?.value), phase);
   };
-  let pipelineEvidence = await admitState(async (available) =>
-    available ? readEvidence() : pipelineStartupEvidence(registry, false));
+  let pipelineEvidence = await readBulkEvidence();
   {
     assertActive();
     const deferralSnapshot = startupSnapshot(registry);
@@ -2348,8 +2356,7 @@ async function adoptStructuredHostsPass(
       new Set(unresolvedInterruptions.map((obligation) => canonicalConversationId(registry, obligation.conversationId))),
       resumeDeferred,
     );
-    pipelineEvidence = await admitState(async (available) =>
-      available ? readEvidence() : pipelineStartupEvidence(registry, false), "reading startup signals");
+    pipelineEvidence = await readBulkEvidence("reading startup signals");
     /* Only a continuation not yet admitted forces its row's adoption. One the
        queue holds is pending work of its own, which makes the row eligible for
        as long as it stays unsettled. */
@@ -2840,8 +2847,7 @@ async function adoptStructuredHostsPass(
        whole of it waits for the re-probe; without one it runs now, so an
        unrelated lane's queued or superseded launch is reconciled by this boot
        whatever another pipeline's survivor is doing. */
-    pipelineEvidence = await admitState(async (available) =>
-      available ? readEvidence() : pipelineStartupEvidence(registry, false), "recovering pending spawns");
+    pipelineEvidence = await readBulkEvidence("recovering pending spawns");
     const fencedReceipts = fencedPendingSpawnReceipts(registry, pipelineEvidence.deferred);
     if (client && fencedReceipts.length === 0 && !rowRetry) {
       await reportProgress("recovering pending spawns");
