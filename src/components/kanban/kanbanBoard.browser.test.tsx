@@ -22931,7 +22931,7 @@ describe("floating voice companion", () => {
    * in both languages and themes: its defining words are whole on screen once the section is
    * scrolled to, no text range leaves the dialog or the window, the page never scrolls sideways,
    * and every control is at least 24 px tall (44 on the phone). Wherever Run dry run starts a command,
-   * the line saying that it runs the program as the operator's OS user is whole beside it. Approving a chosen tool and
+   * the full filesystem sandbox warning is beside it. Approving a chosen tool and
    * flipping «ask before acting» on an approved server are pressed for real (a tap on the phone).
    * Frames go to `$LLV_VOICE_TOOLS_OUT` (default `.artifacts/voice-tools`), never committed.
    */
@@ -22939,7 +22939,7 @@ describe("floating voice companion", () => {
     const out = path.resolve(process.env.LLV_VOICE_TOOLS_OUT ?? ".artifacts/voice-tools");
     fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
-    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
+    let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
     const failures: string[] = [];
     const measurements: unknown[] = [];
     const dryRun = (lang: "en" | "uk") => [translate(lang, "voiceCompanion.tools.action.dryRun"), translate(lang, "voiceCompanion.tools.dryRunHint")];
@@ -22948,6 +22948,7 @@ describe("floating voice companion", () => {
        read in these frames. */
     const defining: Record<string, (lang: "en" | "uk") => { head: string[]; tools?: string[]; foot: string[] }> = {
       empty: lang => ({ head: [translate(lang, "voiceCompanion.tools.empty")], foot: [] }),
+      "sign-in-required": lang => ({ head: [translate(lang, "voiceCompanion.tools.signIn")], foot: [] }),
       pending: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example",
         translate(lang, "voiceCompanion.tools.secretValue", { name: "SPOTIFY_CLIENT_ID" }), "SPOTIFY_REDIRECT_URI=http://127.0.0.1:8888/callback"],
         foot: [translate(lang, "voiceCompanion.tools.secretNeeded"), translate(lang, "voiceCompanion.tools.dryRun.none"), ...dryRun(lang), translate(lang, "voiceCompanion.tools.action.reject")] }),
@@ -22965,18 +22966,27 @@ describe("floating voice companion", () => {
         foot: [translate(lang, "voiceCompanion.tools.refused.SELECTION_BOUNDS"), translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.disable")] }),
       "dry-run-busy": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example"],
         foot: [...dryRun(lang), translate(lang, "voiceCompanion.tools.refused.dryRun.BUSY")] }),
+      "destination-refused": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example"],
+        tools: ["skip"], foot: [translate(lang, "voiceCompanion.tools.refused.SECRET_DESTINATION"), translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.approve")] }),
+      "destination-result": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example"],
+        foot: [translate(lang, "voiceCompanion.tools.dryRun.SECRET_DESTINATION"), ...dryRun(lang)] }),
       rejected: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.rejected"), "spotify-mcp-example"],
         foot: [...dryRun(lang), translate(lang, "voiceCompanion.tools.action.remove")] }),
       disabled: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.disabled"), "spotify-mcp-example"],
         foot: [translate(lang, "voiceCompanion.tools.ask"), ...dryRun(lang), translate(lang, "voiceCompanion.tools.action.approve"), translate(lang, "voiceCompanion.tools.action.remove")] }),
     };
     /* The refused states are read after their press, which every language and theme makes. */
-    const refusedPress: Record<string, string> = { "approved-refused": "[data-voice-tool-ask]", "dry-run-busy": "[data-voice-tool-action='dry-run']" };
+    const refusedPress: Record<string, string> = { "approved-refused": "[data-voice-tool-ask]", "dry-run-busy": "[data-voice-tool-action='dry-run']",
+      "destination-refused": "[data-voice-tool-action='approve']" };
     try {
-      for (const width of [1440, 820, 390]) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const state of Object.keys(defining)) {
+      for (const width of [1440, 1000, 820, 390]) {
+        // Release each width's renderers before the next matrix, bounding retained browser memory.
+        await browser?.close();
+        browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
+        for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const state of Object.keys(defining)) {
         const label = `${width}-${lang}-${scheme}-${state}`;
         const phone = width === 390;
-        const { context, page, pageErrors } = await openVoice(browser, server.base, `&mount=product&backend=codex&voicetools=${state}`, { viewport: { width, height: 844 }, lang, scheme, product: true, phone, motion: "reduce" });
+        const { context, page, pageErrors } = await openVoice(browser, server.base, `&mount=product&backend=codex&voicetools=${state}`, { viewport: { width, height: width === 1000 ? 700 : 844 }, lang, scheme, product: true, phone, motion: "reduce" });
         try {
           await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-voice-companion-settings")));
           const section = page.locator("[data-voice-tools]");
@@ -22994,14 +23004,14 @@ describe("floating voice companion", () => {
               expect(await page.locator("[data-voice-tool-state]").getAttribute("data-voice-tool-state")).toBe("enabled");
             }
           }
-          for (const part of ["head", "tools", "foot"] as const) {
-            const words = defining[state](lang)[part] ?? [];
+          for (const part of ["head", "secrets", "tools", "foot"] as const) {
+            const words = part === "secrets" ? (await page.locator("[data-voice-tool-reference]").count() ? [translate(lang, "voiceCompanion.tools.destinations")] : []) : defining[state](lang)[part] ?? [];
             if (!words.length) continue;
-            if (state === "empty") await section.scrollIntoViewIfNeeded();
+            if (state === "empty" || state === "sign-in-required") await section.scrollIntoViewIfNeeded();
             /* The head: the row's top at the dialog's top. The tools: the list's end at the dialog's bottom. The foot: its last line (the action row, or a line or refusal under it) at the dialog's bottom. */
-            else await page.evaluate(([selector, top]) => document.querySelector(selector)!.scrollIntoView({ block: top ? "start" : "end" }), [part === "head" ? "[data-voice-tool-server]" : part === "tools" ? "[data-voice-tool-tools]" : "[data-voice-tool-server] > :last-child", part === "head"] as const);
+            else await page.evaluate(([selector, top]) => document.querySelector(selector)!.scrollIntoView({ block: top ? "start" : "end" }), [part === "head" ? "[data-voice-tool-server]" : part === "secrets" ? "[data-voice-tool-reference]" : part === "tools" ? "[data-voice-tool-tools]" : "[data-voice-tool-server] > :last-child", part === "head"] as const);
             await page.screenshot({ path: path.join(out, `${label}-${part}.png`) });
-            const read = await page.evaluate(({ words, phone }) => {
+            const read = await page.evaluate(({ words, phone, part }) => {
               const dialog = document.querySelector<HTMLElement>("[data-voice-companion-settings]")!;
               const box = dialog.getBoundingClientRect();
               const section = document.querySelector<HTMLElement>("[data-voice-tools]")!;
@@ -23015,7 +23025,8 @@ describe("floating voice companion", () => {
               }
               /* Each defining phrase: every text range of it inside the dialog's visible box and the window; a short word on one line. */
               const shown = words.map(word => {
-                const all = document.createTreeWalker(section, NodeFilter.SHOW_TEXT);
+                const searchRoot = part === "tools" ? section.querySelector("[data-voice-tool-tools]") ?? section : section;
+                const all = document.createTreeWalker(searchRoot, NodeFilter.SHOW_TEXT);
                 for (let node = all.nextNode(); node; node = all.nextNode()) {
                   const at = node.textContent?.indexOf(word) ?? -1;
                   if (at < 0) continue;
@@ -23032,14 +23043,14 @@ describe("floating voice companion", () => {
               }).map(control => control.outerHTML.slice(0, 80));
               return { viewportOverflow: document.documentElement.scrollWidth > innerWidth + 1, dialogOverflow: dialog.scrollWidth > dialog.clientWidth + 1, outside, shown, small,
                 background: getComputedStyle(dialog).backgroundColor, rows: section.querySelectorAll("[data-voice-tool-server]").length };
-            }, { words, phone });
+            }, { words, phone, part });
             measurements.push({ label: `${label}-${part}`, ...read });
             if (read.viewportOverflow || read.dialogOverflow) failures.push(`${label}: scrolls sideways`);
             if (read.outside) failures.push(`${label}: ${read.outside} text box(es) outside the dialog`);
             read.shown.forEach((whole, at) => { if (!whole) failures.push(`${label}-${part}: «${words[at]}» is not whole on screen`); });
             if (read.small.length) failures.push(`${label}: small targets ${read.small.join(" | ")}`);
           }
-          expect(await row.count()).toBe(state === "empty" ? 0 : 1);
+          expect(await row.count()).toBe(state === "empty" || state === "sign-in-required" ? 0 : 1);
           if (state === "approved" || state === "approved-ask") {
             const ask = page.locator("[data-voice-tool-ask]");
             expect(await ask.isChecked()).toBe(state === "approved-ask");
@@ -23065,10 +23076,14 @@ describe("floating voice companion", () => {
           if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
         } finally { await context.close(); }
       }
+      }
       fs.mkdirSync("evidence/voice-companion", { recursive: true });
-      fs.writeFileSync("evidence/voice-companion/voice-tools.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", synthetic: true, viewportBasis: "configured scene width", failures, measurements }, null, 2) + "\n");
+      const sources = ["src/components/kanban/kanbanBoard.browser.test.tsx", "src/components/kanban/issue1695Evidence.fixture.tsx", "src/components/voiceCompanion/VoiceToolsSetting.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts", "src/app/globals.css"];
+      fs.writeFileSync("evidence/voice-companion/voice-tools.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", synthetic: true, viewportBasis: "configured scene width",
+        command: "LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chromium> bun test src/components/kanban/kanbanBoard.browser.test.tsx --test-name-pattern 'voice tools settings render every state'",
+        sources: Object.fromEntries(sources.map(source => [source, createHash("sha256").update(fs.readFileSync(source)).digest("hex")])), failures, measurements }, null, 2) + "\n");
       expect(failures).toEqual([]);
-    } finally { await browser.close(); server.stop(); }
+    } finally { await browser?.close(); server.stop(); }
   }, 900_000);
 
   /*
