@@ -8,18 +8,19 @@ import { randomUUID } from "node:crypto";
  * CPU placement for agent hosts and heavy work (docs/design/cpu-placement.md).
  *
  * Operator hosts keep their scopes in `delegatus-agents.slice` with a high CPU
- * weight. Pipeline and flow hosts, headless runs, gates and the first-party
- * builds the service starts go to the subordinate `delegatus-agents-work.slice`,
+ * weight. Pipeline and flow hosts, headless runs, gates and workflow setup
+ * go to the subordinate `delegatus-agents-work.slice`,
  * each scope with a low weight and its own quota, the slice with an aggregate
- * quota. Placement is decided apart from the memory mode: an agent whose memory
- * mode is `watchdog` or `off` still gets its CPU scope.
+ * quota. Release preparation gets an uncapped high-weight scope beside that
+ * work slice, with immediate admission. Placement is decided apart from the
+ * memory mode: an agent whose memory mode is `watchdog` or `off` still gets its CPU scope.
  *
  * Where the mechanism should exist (Linux outside a container) and cannot be
  * used, work is refused with the reason and the setting that opts out. Operator
  * hosts never wait on it.
  */
 
-export type AgentWorkload = "operator" | "work";
+export type AgentWorkload = "operator" | "work" | "release";
 export const AGENT_SLICE = "delegatus-agents.slice";
 export const WORK_SLICE = "delegatus-agents-work.slice";
 export const OPERATOR_CPU_WEIGHT = 1000;
@@ -204,11 +205,11 @@ export function planAgentCpu(workload: AgentWorkload, env: Readonly<Record<strin
   if (!ports.probe && containment.kind !== "missing") cachedContainment = containment;
   if (containment.kind === "not-applicable") { diagnostic("cpu-na", `Agent CPU placement is off: ${containment.reason}.`); return null; }
   if (containment.kind === "missing") {
-    if (workload === "work") throw new CpuContainmentUnavailable(containment.reason);
+    if (workload !== "operator") throw new CpuContainmentUnavailable(containment.reason);
     diagnostic("cpu-missing", `Operator agents run without CPU placement: ${containment.reason}.`);
     return null;
   }
-  if (workload === "operator") {
+  if (workload !== "work") {
     return { workload, slice: agentSlice, weight: OPERATOR_CPU_WEIGHT, quotaPercent: null, periodMs: CPU_QUOTA_PERIOD_MS, systemdVersion: containment.systemdVersion };
   }
   const plan: AgentCpuPlan = { workload, slice: workSlice, weight: WORK_CPU_WEIGHT, quotaPercent: settings.scopeQuotaPercent, periodMs: CPU_QUOTA_PERIOD_MS, systemdVersion: containment.systemdVersion };
@@ -238,10 +239,21 @@ export function cpuScopeCommand(plan: AgentCpuPlan, unit: string, description: s
     ...cpuScopeProperties(plan), "--", command, ...args] };
 }
 
-/** Wraps a first-party heavy command (a publication push and its hooks, a release build) in its own work scope. */
+/** Wraps a first-party heavy command (a publication push and its hooks, a dependency install) in its own work scope. */
 export function wrapWorkCommand(command: string, args: string[], options: { label: string; env?: Readonly<Record<string, string | undefined>>; ports?: CpuPorts }): { command: string; args: string[] } {
   const plan = planAgentCpu("work", options.env ?? process.env, options.ports ?? testPorts ?? {});
   if (!plan) return { command, args };
   const label = options.label.replace(/[^a-zA-Z0-9_.-]/g, "-").slice(0, 32);
   return cpuScopeCommand(plan, `delegatus-work-${label}-${randomUUID().slice(0, 12)}.scope`, "Delegatus work", command, args);
+}
+
+/** Release install and compilation compete with the aggregate work slice at operator weight.
+ * They have immediate admission so a busy test fleet cannot hold a release. */
+export function wrapReleaseCommand(command: string, args: string[], label: string, ports: CpuPorts = testPorts ?? {}): { command: string; args: string[]; unit: string | null } {
+  const plan = planAgentCpu("release", process.env, ports);
+  if (!plan) return { command, args, unit: null };
+  const unit = `delegatus-release-${randomUUID().slice(0, 12)}.scope`;
+  const wrapped = cpuScopeCommand(plan, unit, `Delegatus ${label}`, command, args);
+  wrapped.args.splice(wrapped.args.indexOf("--"), 0, "-p", "KillMode=control-group", "-p", "TimeoutStopSec=2s");
+  return { ...wrapped, unit };
 }
