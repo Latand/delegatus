@@ -1,6 +1,6 @@
 "use client";
 
-import { AudioLines, EyeOff, MessageSquare, Mic, MicOff, PhoneOff } from "lucide-react";
+import { AudioLines, EyeOff, MessageSquare, Mic, MicOff, PhoneOff, RotateCcw } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { LAYER } from "@/components/layers";
@@ -343,7 +343,8 @@ export function PhoneVoiceCompanion({ adapter, project, locale: sessionLocale, s
   const connected = state.phase !== "offline";
   const live = connected || starting;
   if (live && !sessionSeen) setSessionSeen(true);
-  const readable = sessionSeen && typeof adapter.transcript === "function";
+  /* A call the Viewer still offers after a reload has a record to read before any call starts here. */
+  const readable = (sessionSeen || state.resumable !== null) && typeof adapter.transcript === "function";
   const waitingForReport = record !== null && awaitsReport(record);
   useEffect(() => {
     if (!reading || !adapter.transcript) return;
@@ -381,8 +382,11 @@ export function PhoneVoiceCompanion({ adapter, project, locale: sessionLocale, s
 
   /* What the session says went wrong, once per failure, after the session asked for is ready. */
   const awaiting = store.awaiting();
-  const sessionNotice = state.error && !awaiting ? { key: `error:${state.generation}:${state.error}`, code: state.error, resetsAt: state.errorResetsAt }
-    : state.closure?.incomplete && state.usage?.backend !== "codex" && !awaiting ? { key: `closure:${state.generation}`, code: "FINALIZATION_INCOMPLETE" } : null;
+  /* A dropped call is said as a drop, whatever failure ended it; a reconnect says the call goes on. */
+  const sessionNotice = state.resumable && !awaiting ? { key: `drop:${state.resumable.sessionId}`, code: "CONNECTION_LOST" }
+    : state.error && !awaiting ? { key: `error:${state.generation}:${state.error}`, code: state.error, resetsAt: state.errorResetsAt }
+    : state.closure?.incomplete && state.usage?.backend !== "codex" && !awaiting ? { key: `closure:${state.generation}`, code: "FINALIZATION_INCOMPLETE" }
+    : state.reconnected && connected && !awaiting ? { key: `restored:${state.generation}`, code: "CONNECTION_RESTORED" } : null;
   const seenNotice = useRef<string | null>(null);
   useEffect(() => {
     if (!sessionNotice || seenNotice.current === sessionNotice.key) return;
@@ -430,6 +434,19 @@ export function PhoneVoiceCompanion({ adapter, project, locale: sessionLocale, s
     setReading(false); setRecord(null);
     /* A failed start is told by the adapter as an error event; the bubble says it. */
     void store.start({ locale: speechLocale, project }).catch(() => undefined).finally(() => setStarting(false));
+  };
+  /* The dropped call goes on as the same conversation, in the project on top, or its own when none is. */
+  const resume = () => {
+    setMenu(false);
+    const call = state.resumable;
+    if (starting || !call) return;
+    const target = project ?? call.project;
+    if (target === null) { setNotice({ key: `refused:${(refusals.current += 1)}`, code: "NO_PROJECT" }); return; }
+    setNotice(null);
+    setMuted(false);
+    setStarting(true);
+    setReading(false);
+    void store.start({ locale: speechLocale, project: target, resume: call.sessionId }).catch(() => undefined).finally(() => setStarting(false));
   };
   const end = () => { setMenu(false); void store.stop().catch(() => undefined); };
   const toggleMute = () => { const next = !muted; setMuted(next); void store.command({ type: "mute", muted: next }).catch(() => undefined); };
@@ -563,9 +580,16 @@ export function PhoneVoiceCompanion({ adapter, project, locale: sessionLocale, s
                 </button>
               </>
             ) : (
-              <button type="button" role="menuitem" className="pvc-row" data-tone="primary" data-phone-voice-talk onClick={talk}>
-                <Mic size={17} aria-hidden />{t("voiceCompanion.talk")}
-              </button>
+              <>
+                {state.resumable ? (
+                  <button type="button" role="menuitem" className="pvc-row" data-tone="primary" data-phone-voice-resume onClick={resume}>
+                    <RotateCcw size={17} aria-hidden />{t("voiceCompanion.reconnect")}
+                  </button>
+                ) : null}
+                <button type="button" role="menuitem" className="pvc-row" data-tone={state.resumable ? undefined : "primary"} data-phone-voice-talk onClick={talk}>
+                  <Mic size={17} aria-hidden />{t("voiceCompanion.talk")}
+                </button>
+              </>
             )}
             {settingsFailure ? (
               <button type="button" role="menuitem" className="pvc-row" data-phone-voice-settings onClick={() => { setMenu(false); onOpenSettings(); }}>

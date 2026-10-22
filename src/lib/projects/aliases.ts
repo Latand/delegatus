@@ -76,6 +76,13 @@ export function canonicalProject(project: string): string {
   return resolveAlias(project, readSnapshot().aliases);
 }
 
+/** Canonical key and its predecessors, resolved against one durable snapshot. */
+export function projectAliasKeys(project: string): string[] {
+  const { aliases } = readSnapshot();
+  const current = resolveAlias(project, aliases);
+  return [current, ...Object.keys(aliases).filter(key => key !== current && resolveAlias(key, aliases) === current)];
+}
+
 /** Resolve a batch against one alias snapshot without filesystem reads per row. */
 export function projectAliasResolver(): (project: string) => string {
   const { aliases } = readSnapshot();

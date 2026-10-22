@@ -1,12 +1,12 @@
 import { assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
 import { IncompatibleSchemaError, schemaCompileFailure } from "./schemaCompatibility";
-import { blockingWaitRole } from "@/lib/blockingWaits";
+import { blockingWaitRole, type StateLockHolder } from "@/lib/blockingWaits";
 import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import { performanceSpans } from "@/lib/performanceSpans";
 import crypto from "node:crypto";
 import { viewerLoopMonitor, withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { forEachCooperatively, mapCooperatively, yieldToRuntime } from "@/lib/cooperative";
-import { StateLockDeferredError, stateLockAttempt, stateLockDeferral, waitForStateLock } from "./lockWait";
+import { StateLockDeferredError, stateLockAttempt, stateLockDeferral, stateLockProcessKind, waitForStateLock } from "./lockWait";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -260,6 +260,8 @@ export interface CompanionPatch<C> {
 
 export interface StateBoundedTransaction<T> {
   get(key: string): T | null;
+  /** Indexed task evidence; each project seek and returned row spends budget. */
+  taskProjectRows(projects: readonly string[]): T[];
   pipelineLookup(query: { requestKey: string } | { repository: string; branch: string; active?: boolean }): T | null;
   hasUnfinishedPipeline(query: {
     repository: string;
@@ -1667,21 +1669,52 @@ export class SqliteStateCollection<T> {
 
   /** A bounded read/modify/write transaction. No collection materialization.
       Every read and mutation consumes the caller's finite row budget. */
-  boundedPatch<R>(limit: number, operation: (tx: StateBoundedTransaction<T>) => R, heldLease?: string): R {
+  boundedPatch<R, C = never>(limit: number, operation: (tx: StateBoundedTransaction<T>) => R, heldLease?: string,
+    companion?: { collection: SqliteStateCollection<C>; prepare: () => CompanionPatch<C> }): R {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 4096) throw new Error("invalid state patch limit");
+    const peer = companion?.collection;
+    if (peer && (heldLease || peer === (this as unknown) || peer.filename !== this.filename)) {
+      throw new Error("a bounded companion write needs another collection of the same database and owns both leases");
+    }
     assertSqliteWriteAuthority(this.filename);
-    const lease = heldLease ?? this.acquireLeaseSync();
+    // The same ordering as patchSync; failed second acquisition releases the first.
+    const peerFirst = peer && peer.options.collection < this.options.collection;
+    let peerLease: string | null = null;
+    let lease: string | null = heldLease ?? null;
     try {
+      if (peerFirst) peerLease = peer!.acquireLeaseSync();
+      lease ??= this.acquireLeaseSync();
+      if (peer && !peerFirst) peerLease = peer.acquireLeaseSync();
       const db = connectDatabase(this.filename);
       try {
         const result = withImmediateTransaction(db, this.options.busyMessage, () => {
           assertSqliteWriteAuthority(this.filename);
-          this.assertLease(db, lease);
+          this.assertLease(db, lease!);
           const revision = this.collectionMeta(db)!.revision + 1;
           let remaining = limit;
           const consume = () => { if (--remaining < 0) throw new Error("state patch row budget exceeded"); };
           const changed = new Map<string, "upsert" | "delete">();
           const result = operation({
+            taskProjectRows: (projects) => {
+              if (this.options.collection !== "tasks") throw new Error("task project lookup requires the task collection");
+              const records: T[] = [];
+              for (const project of new Set(projects)) {
+                consume();
+                const rows = db.query<{ value_json: string }, [string, number]>(`
+                  SELECT value_json FROM state_rows INDEXED BY state_rows_task_project
+                  WHERE collection='tasks' AND json_valid(value_json)
+                    AND json_extract(value_json,'$.project')=?
+                  ORDER BY row_key LIMIT ?
+                `).all(project, remaining + 1);
+                for (const row of rows) {
+                  consume();
+                  const value = this.decodeRow(row.value_json, db);
+                  if (value === null) throw new Error("invalid bounded task row");
+                  records.push(this.options.clone(value));
+                }
+              }
+              return records;
+            },
             pipelineLookup: (query) => {
               consume();
               return this.lookupPipeline(db, query);
@@ -1747,6 +1780,11 @@ export class SqliteStateCollection<T> {
             },
           });
           if (result instanceof Promise) throw new Error("bounded state patches must be synchronous");
+          if (companion) {
+            const patch = companion.prepare();
+            for (let n = 0; n < patch.records.length + (patch.deleteKeys?.length ?? 0); n++) consume();
+            companion.collection.mergeRows(db, peerLease!, patch.records, patch.deleteKeys ?? []);
+          }
           // The callback and authority are checked inside the same commit boundary.
           assertSqliteWriteAuthority(this.filename);
           if (changed.size) {
@@ -1760,9 +1798,14 @@ export class SqliteStateCollection<T> {
         }, this.options.collection);
         secureDatabaseFiles(this.filename);
         this.invalidateAfterCommit();
+        peer?.invalidateAfterCommit();
         return result;
       } finally { db.close(); }
-    } finally { if (!heldLease) this.releaseLeaseSync(lease); }
+    } finally {
+      if (peerLease && !peerFirst) peer!.releaseLeaseSync(peerLease);
+      if (!heldLease && lease) this.releaseLeaseSync(lease);
+      if (peerLease && peerFirst) peer!.releaseLeaseSync(peerLease);
+    }
   }
 
   /** Admission without materializing the collection. Prepared evidence is
@@ -2750,7 +2793,7 @@ export class SqliteStateCollection<T> {
     `).run(cutoff, this.options.collection);
   }
 
-  private tryAcquireLease(db: Database, ownerToken: string): boolean {
+  private tryAcquireLease(db: Database, ownerToken: string): true | StateLockHolder {
     try {
       db.exec("BEGIN IMMEDIATE");
       const held = db.query<LeaseRow, [string]>(`
@@ -2760,7 +2803,8 @@ export class SqliteStateCollection<T> {
       const now = Date.now();
       if (held && !leaseIsStale(held, this.filename, this.options.collection, now)) {
         db.exec("ROLLBACK");
-        return false;
+        return { kind: held.owner_pid === process.pid ? stateLockProcessKind() : "other-process",
+          ageMs: Math.max(0, now - held.acquired_at) };
       }
       if (held) db.query("DELETE FROM state_leases WHERE collection = ?").run(this.options.collection);
       db.query(`
@@ -2796,9 +2840,10 @@ export class SqliteStateCollection<T> {
       const db = connectDatabase(this.filename);
       const ownerToken = crypto.randomUUID();
       try {
-        if (this.tryAcquireLease(db, ownerToken)) return ownerToken;
+        const acquired = this.tryAcquireLease(db, ownerToken);
+        if (acquired === true) return ownerToken;
         this.assertDiskHasSpace();
-        throw new StateLockDeferredError("state.lease", "lease");
+        throw new StateLockDeferredError("state.lease", "lease", acquired);
       } finally { db.close(); }
     }, this.options.collection);
   }

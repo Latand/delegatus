@@ -299,7 +299,8 @@ function normalizeAutonomy(value: unknown): AutonomySetting | null {
   const actor = normalizeActor(raw.setBy);
   if (!actor || typeof raw.enabled !== "boolean" || !isoOrNull(raw.startedAt) || !isoOrNull(raw.updatedAt)
     || (raw.until !== null && !isoOrNull(raw.until))) return null;
-  return { ...raw, setBy: actor, decisions: Array.isArray(raw.decisions) ? raw.decisions : [] };
+  // Legacy/imported actor claims cannot carry an invention grant.
+  return { ...raw, proactive: { enabled: false }, setBy: actor, decisions: Array.isArray(raw.decisions) ? raw.decisions : [] };
 }
 
 /** A row written by a newer or older release still loads; a malformed one reads as off. */
@@ -684,16 +685,18 @@ export function applySeatTickSettingsChange(
     catch (error) { return { ok: false, error: error instanceof Error ? error.message : "invalid release change" }; }
   }
   let autonomy = endedAutonomy(current.autonomy, Date.parse(context.at));
+  const autonomyContext = autonomy?.proactive?.enabled || change.autonomy?.proactive !== undefined
+    ? { ...context, actor: context.instructionActor ?? context.actor } : context;
   const autonomyHistory = [...(current.autonomyHistory ?? [])];
   if (Object.hasOwn(change, "autonomy")) {
     try {
-      const next = changeAutonomy(autonomy, change.autonomy!, context, current.project, enabled);
+      const next = changeAutonomy(autonomy, change.autonomy!, autonomyContext, current.project, enabled);
       if (autonomy && next?.startedAt !== autonomy.startedAt) autonomyHistory.push(autonomy);
       autonomy = next;
     } catch (error) { return { ok: false, error: (error as Error).message }; }
   }
   if (autonomy?.enabled && !enabled) {
-    try { autonomy = changeAutonomy(autonomy, { enabled: false, why: change.reason ?? current.reason ?? "Wakes turned off" }, context, current.project, false); }
+    try { autonomy = changeAutonomy(autonomy, { enabled: false, why: change.reason ?? current.reason ?? "Wakes turned off" }, autonomyContext, current.project, false); }
     catch (error) { return { ok: false, error: (error as Error).message }; }
   }
   let turbo = endedTurbo(current.turbo, Date.parse(context.at));

@@ -26,7 +26,7 @@ export const SEAT_TICK_POLL_MS = 60_000;
 /** The change fields the route takes. `untilMinutes` is minutes from now, as
     the `seat_tick_settings` tool's own argument is. */
 export interface SeatTickChange {
-  autonomy?: { enabled?: boolean; hours?: number | null };
+  autonomy?: { enabled?: boolean; hours?: number | null; proactive?: { enabled: boolean } };
   /** Turbo (docs/design/turbo-mode.md): saved on its own, at once, never with the panel's Save. */
   turbo?: Record<string, unknown>;
   release?: { enabled?: boolean; askBeforePublish?: boolean; minChanges?: number | string | null; minGapHours?: number | string | null; hold?: string | null };

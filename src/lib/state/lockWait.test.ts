@@ -1,11 +1,11 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resetBlockingWaitsForTests } from "@/lib/blockingWaits";
 import { initializeStateCollections, initializeStateCollectionsAsync, injectStateWriteFaultForTests, SqliteStateCollection } from "./sqliteStateStore";
-import { StateLockDeferredError, stateLockAttempt, stateLockWaitsInFlight, waitForStateLock } from "./lockWait";
+import { StateLockDeferredError, stateLockAttempt, stateLockWaitDiagnostics, stateLockWaitsInFlight, waitForStateLock } from "./lockWait";
 import { lockRowOptions, type LockRow } from "./lockWait.fixture";
 import { readRevision, stateDatabases } from "./durability";
 import { boardFor } from "@/lib/board/store";
@@ -28,6 +28,48 @@ function fixture(validate?: (row: LockRow) => void) {
   const store = new SqliteStateCollection(filename, { ...lockRowOptions, validate });
   return { root, filename, store, seed };
 }
+
+test("five zero-wait admissions produce one journal summary with exact totals", () => {
+  const logs: string[] = [];
+  resetBlockingWaitsForTests(line => logs.push(line));
+  const clock = spyOn(performance, "now").mockReturnValue(1_000);
+  try {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      expect(() => stateLockAttempt("test.zero", () => { throw new StateLockDeferredError("test.zero"); }))
+        .toThrow(StateLockDeferredError);
+    }
+    // A short-lived process must flush its unexpired window before exiting.
+    process.emit("beforeExit", 0);
+    expect(logs).toHaveLength(1);
+    expect(JSON.parse(logs[0]!.slice("[blocking-wait] ".length)))
+      .toMatchObject({ deferred: true, count: 5, suppressedCount: 4, stateWait: { outcome: "deferred", attempts: 1 } });
+  } finally {
+    clock.mockRestore();
+  }
+});
+
+test("a zero-budget async admission remains a deferral, with no timeout or lost-write count", async () => {
+  const logs: string[] = [];
+  resetBlockingWaitsForTests(line => logs.push(line));
+  const before = stateLockWaitDiagnostics();
+  const clock = spyOn(performance, "now").mockReturnValue(1_000);
+  try {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await expect(waitForStateLock("test.zeroAsync", () => stateLockAttempt("test.zeroAsync", () => {
+        throw new StateLockDeferredError("test.zeroAsync", "lease");
+      }), { waitMs: 0 })).rejects.toBeInstanceOf(StateLockDeferredError);
+    }
+    process.emit("beforeExit", 0);
+    expect(logs).toHaveLength(1);
+    expect(JSON.parse(logs[0]!.slice("[blocking-wait] ".length)))
+      .toMatchObject({ deferred: true, count: 5, suppressedCount: 4, stateWait: { outcome: "deferred", reason: "lease", attempts: 1 } });
+    expect(stateLockWaitDiagnostics().refused).toBe(before.refused);
+    expect(stateLockWaitDiagnostics().deferred - before.deferred).toBe(5);
+    expect(await waitForStateLock("test.zeroAsync", () => 42, { waitMs: 0 })).toBe(42);
+  } finally {
+    clock.mockRestore();
+  }
+});
 
 async function peer(root: string, filename: string, mode: string, argument: number, suffix = "holder") {
   const ready = path.join(root, `${suffix}.ready`), go = path.join(root, "go");
@@ -126,6 +168,30 @@ test("same-loop lease release progresses and refused synchronous admission never
   } finally { clearTimeout(timer); release(); await held; }
 });
 
+test("a deferred lease reports its safe holder kind and age without entering a write", async () => {
+  const { store } = fixture();
+  const logs: string[] = [];
+  resetBlockingWaitsForTests(line => logs.push(line));
+  let now = 10_000;
+  const clock = spyOn(Date, "now").mockImplementation(() => now);
+  let release!: () => void, acquired!: () => void;
+  const ready = new Promise<void>(resolve => { acquired = resolve; });
+  const held = store.mutate(async () => { acquired(); await new Promise<void>(resolve => { release = resolve; }); });
+  let entered = 0;
+  try {
+    await ready;
+    now += 250;
+    expect(() => store.boundedPatch(1, () => { entered++; })).toThrow(StateLockDeferredError);
+    process.emit("beforeExit", 0);
+    const summary = logs.map(line => JSON.parse(line.slice("[blocking-wait] ".length)))
+      .find(sample => sample.deferred);
+    expect(summary?.stateWait.holder).toEqual({ kind: "embedded", ageMs: 250 });
+    expect(entered).toBe(0);
+  } finally { release(); await held; clock.mockRestore(); }
+  await store.boundedPatchAsync(1, () => { entered++; });
+  expect(entered).toBe(1);
+});
+
 test("first-open migration yields before seeds run and an existing schema opens during a writer hold", async () => {
   const { root, filename, seed } = fixture();
   const child = await peer(root, filename, "hold", 750);
@@ -155,6 +221,7 @@ test("exclusive recovery contention bounds connection, schema, marker and durabi
   });
   expect(await child.exited).toBe(0);
   expect(measurement.maxGap).toBeLessThanOrEqual(50);
+  process.emit("beforeExit", 0);
   for (const site of ["state.marker", "state.durability.revision", "state.connection"]) expect(logs.some(line => line.includes(`"callSite":"${site}"`))).toBe(true);
 });
 
