@@ -335,22 +335,23 @@ test("ambiguous legacy seat names remain separate even when one candidate is sea
 });
 
 
-test("designation by display name follows a registered folder that gained a repository", async () => {
+for (const namedBy of ["display", "folder", "basename"]) test(`designation by ${namedBy} follows a registered folder that gained a repository`, async () => {
   const { createManualProject } = await import("@/lib/projects/curation");
-  const folder = path.join(SANDBOX, "RegisteredFolder");
+  const folder = path.join(SANDBOX, `RegisteredFolder-${namedBy}`);
+  const displayName = `Registered Board ${namedBy}`;
   fs.mkdirSync(folder);
   const before = projectForCwd(folder)!;
-  expect(createManualProject("Registered Board", folder, new Set(), { allowedRoots: [SANDBOX] }).ok).toBe(true);
+  expect(createManualProject(displayName, folder, new Set(), { allowedRoots: [SANDBOX] }).ok).toBe(true);
   git("init", "-q", "-b", "main", folder);
-  addOrigin(folder, "RegisteredRepo");
+  addOrigin(folder, `RegisteredRepo-${namedBy}`);
   const project = projectForCwd(folder)!;
   expect(project).not.toBe(before);
-  const answer = await executeOrchestratorSeatRequest({ project: "Registered Board", cwd: folder, mandate: "Own this board", clientRequestId: "registered-folder-seat" }, seatDependencies());
+  const answer = await executeOrchestratorSeatRequest({ project: namedBy === "display" ? displayName : namedBy === "folder" ? folder : path.basename(folder), cwd: folder, mandate: "Own this board", clientRequestId: "registered-folder-seat" }, seatDependencies());
   expect(answer.status).toBe(200);
-  expect(answer.body).toMatchObject({ project, displayName: "Registered Board", seat: { project } });
+  expect(answer.body).toMatchObject({ project, displayName, seat: { project } });
   expect(canonicalProject(before)).toBe(project);
   const { resolveSeatProject } = await import("./seatProjectIdentity");
-  expect(resolveSeatProject(project).displayName).toBe("Registered Board");
+  expect(resolveSeatProject(project).displayName).toBe(displayName);
 });
 
 

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { projectCurationSnapshot } from "@/lib/projects/curation";
 import { isCanonicalProjectId } from "@/lib/projects/identity";
 import { namedProjectDirectory, resolveNamedProject, ProjectNameRefusal, type NamedProjectSources } from "@/lib/projects/nameResolution";
 import { canonicalProject } from "@/lib/projects/aliases";
@@ -123,6 +124,19 @@ export function resolveSeatProject(named: string, cwd?: string, sources: NamedPr
   recordSeatProjectSuccessions(seatLaunchCwd, true);
   const info = cwd ? projectInfoFromCwd(cwd) : null;
   const last = sources.lastCompletedCatalog?.();
+  if (cwd) {
+    // A retained folder may gain a repository between scans. Reconcile only
+    // keys this checkout itself proves before indexing its two identities.
+    const retained = readOrchestratorSeatFileOrNull();
+    const known: { project: string; displayName?: string }[] = [
+      ...projectCurationSnapshot().manualProjects, ...(last?.projectCatalog ?? []),
+      ...Object.values(retained?.seats ?? {}), ...Object.values(retained?.pending ?? {}),
+    ];
+    recordProjectSuccessions(known.map(row => {
+      const move = projectSuccessionFor(row.project, cwd);
+      return move ? { ...move, displayName: row.displayName ?? move.displayName } : null;
+    }));
+  }
   const pending = isCanonicalProjectId(canonicalProject(named)) ? orchestratorSeatFor(named).pending : null;
   const directory = namedProjectDirectory({ ...sources, canonicalOnly: true,
     lastCompletedCatalog: () => ({ files: last?.files ?? [], projectCatalog: [
