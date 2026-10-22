@@ -1,5 +1,150 @@
 # Stage push settlement and pull request delivery
 
+## Commits the attempt made without a hook receipt (2026-10-21)
+
+Two passed fix stages could not settle on 2026-10-21 because settlement
+refused a commit the attempt itself had made in its worktree. The evidence
+below comes from each launch's receipt directory, each worktree's own HEAD
+reflog and the stage agents' command records; times are UTC. No live state
+was changed.
+
+| Lane, attempt | Evidence and cause |
+| --- | --- |
+| `ce3a00a0` fix, attempt 2 | The launch started at 04:32:36 on `653ff2ce`. At 04:35:50 the agent ran `git -c core.hooksPath=.githooks commit`, creating `b60b75d1` (reflog `commit:`). Its receipt directory has no `commits/` entry at all. The turn completed at 04:36:30. The retry and its successor started on `b60b75d1` and were refused for it. |
+| `ab42a936` fix, attempt 1 | The launch started at 05:10:41 on `b60b75d1`. At 05:11:49 the agent ran `git merge --no-ff --no-commit origin/main` (clean), and at 05:14:07 it ran `git -c core.hooksPath=.githooks commit`, creating merge `b72eeaa2` (reflog `commit (merge):`). At 05:22:35 a plain `git commit` created `172db603`, whose receipt exists. Settlement refused `b72eeaa2`. |
+
+The receipt writer is the post-commit/post-merge branch of the launch's
+generated hook, `src/lib/git/stageAttemptGuard.ts:49-82` at `a58ac024`, which
+writes `commits/<sha>` at lines 66, 74 and 78. That hook is reachable only
+through the `core.hooksPath` entry the launch appends to `GIT_CONFIG_COUNT`
+(`src/lib/git/agentHistoryGuard.ts:203`). The settlement check reads those
+receipts in `src/lib/pipelines/stageAttemptPush.ts:392` at `a58ac024` and
+refuses at line 407. Its only other proof, reflog recovery, ran only for
+launches that predate start receipts (line 306).
+
+Hypotheses tested:
+
+- **A non-conflicting `git merge` runs none of the receipt hooks: refuted.** A
+  merge that creates a commit runs `post-merge`, and the guard writes the
+  receipt while `MERGE_HEAD` still exists. A `--no-commit` merge writes it at
+  the concluding `git commit` through `post-commit`. The existing post-merge
+  argument test and a scratch probe on git 2.43 both show the receipt.
+- **The cause in both lanes: the agent overrode the hooks path.** Git reads
+  command-line `-c` settings after `GIT_CONFIG_COUNT` entries, so
+  `-c core.hooksPath=.githooks` replaces the guard's hook directory. In
+  `ce3a00a0` the repository's own pre-commit hook still ran and printed its
+  privacy and eslint verdicts, and no receipt hook ran. Both agents had read
+  `git config --get core.hooksPath` minutes earlier, which shows the launch's
+  generated directory, so the override reads as an attempt to commit with the
+  repository's hooks on.
+- **An OOM kill right after a commit can lose its receipt: confirmed, though it
+  was not this incident's cause.** Git moves the branch, appends the reflog
+  entry, and only then starts `post-commit`. A kill in that window keeps the
+  commit and loses the receipt. The new test kills the committing process
+  group from the `reference-transaction` hook's `committed` phase and
+  reproduces it. In `ce3a00a0` the receipt was already missing because of the
+  override.
+
+### Fix
+
+The receipt for a commit or merge is now written before Git moves the
+branch, by the invocation that writes the commit
+(`src/lib/git/stageAttemptGuard.ts:51-77` and `:89-105`). The launch's
+`prepare-commit-msg` hook records an intent: the tree of the index being
+committed and the parents the commit will have (HEAD, then each `MERGE_HEAD`
+line). Git runs that hook for `commit` and for a merge that creates a commit,
+`--no-verify` included, before it writes the commit object. The hook files
+the intent under the Git process that runs it, named by its PID and its start
+time from `/proc` (or `ps` where `/proc` is absent).
+
+The same process then runs the `reference-transaction` hook in its `prepared`
+phase, before the ref update. If an intent exists for that process, and the
+commit it is moving `HEAD` or a branch to has exactly the intent's tree and
+parents, the hook writes `commits/<sha>` and removes the intent. A kill after
+the ref update and before `post-commit` or `post-merge` therefore leaves the
+receipt in place. `src/lib/git/agentHistoryGuard.ts:73` now reads the
+transaction's input once for both guards.
+
+An intent proves nothing outside its own invocation. Three things can abort
+a commit after `prepare-commit-msg` has run: a failing editor, a refusing
+`commit-msg` hook, or the guard's own author check. The aborted process never
+reaches the ref update, and its intent stays filed under a process that has
+exited. A later writer with the same tree, parents, identity and time is
+another process and gets no receipt. That covers an unguarded commit in the
+lane, a `reset` or `update-ref` (whatever its reflog message reads), and an
+import from another checkout. Settlement reads receipts only, exactly as on
+`a58ac024` (`src/lib/pipelines/stageAttemptPush.ts` is unchanged). The reflog
+replay the first round added proved commits from an intent keyed only by tree
+and parents, so an aborted invocation's intent could attest another writer's
+commit. That replay and its version 2 start receipt are removed.
+
+A commit made with the launch hooks overridden (`-c core.hooksPath=…`) runs
+none of the launch's hooks, so it has neither an intent nor a receipt.
+Nothing Git records tells it apart from an imported commit. It stays
+unproved; both incident commits were of this kind. The builder rules ask for
+a plain `git commit`, and the park names the recovery below, which now
+accepts such a head in place.
+
+When settlement still refuses, the park names the recovery. The lane's
+creator, its project's seat or the operator reviews the head and calls
+`pipeline_action publish` with `acceptedSha` set to the clean worktree HEAD.
+`src/lib/pipelines/engine.ts` (`custodyAcceptance`) then accepts it in place.
+That includes a HEAD that is still the passed commit, as when a refused
+foreign push parked an otherwise unchanged lane. It requires a custody park,
+the exact HEAD, a clean worktree and the previous passed commit as an
+ancestor. It records a `recovery` entry in the delivery journal, completes the
+pass, publishes it and advances, with no successor lane. Without
+`acceptedSha`, `publish` still retries the proof.
+
+The builder work rules (`src/lib/roles/defaults.ts`), which builders and fix
+rounds both carry, send suites, typecheck and builds through the
+heavy-command wrapper by default and ask for a plain `git commit`. The stage
+launch's test guidance (`src/lib/pipelines/testGuidance.ts`) names the
+installed `gate-slot.sh` for them and the 4–8 GB scope cap.
+
+### Verification
+
+`src/lib/pipelines/stageAttemptPush.test.ts` runs real repositories and the
+real generated hooks in isolated state. The host-death cases kill the
+committing process group from the `reference-transaction` hook's `committed`
+phase, after the branch moved and before `post-commit` or `post-merge`. These
+settle:
+
+- a clean merge;
+- a clean merge concluded by `commit`;
+- a conflicted merge concluded by `commit`;
+- an ordinary commit, inherited by a host-lost replacement, by an operator
+  retry and by a manual silent retry;
+- an attempt's own commit after accepted or published history;
+- an own commit after a fast-forward of current main.
+
+Each of these fails on `a58ac024` with the incident's refusal.
+
+These are refused:
+
+- a commit aborted by its editor, by `commit-msg` or by the author check,
+  followed by a same-tree, same-parents, same-identity commit, either made
+  unguarded in the lane or made in another checkout and imported by
+  `GIT_REFLOG_ACTION=commit git reset --hard` (reflog `commit: updating
+  HEAD`). All six cases were accepted with `{ ok: true }` by the first round
+  (`cff58910`). Keying intents by a constant instead of the process turns the
+  three reset cases red again;
+- a foreign shared-identity commit with the subject `updating HEAD`, reached
+  by `GIT_REFLOG_ACTION=commit git reset --hard`, before and after a main
+  fast-forward;
+- a foreign shared-identity merge reached by `update-ref -m "merge
+  origin/main: Merge made by the 'ort' strategy."`;
+- an ordinary commit and a clean merge made under a command-line hooks path
+  override;
+- a same-identity commit made after the attempt ended;
+- an own amend or rebase whose `post-rewrite` receipt was lost.
+
+The earlier forged-reflog, foreign-worktree, other-identity and
+dropped-history cases still refuse.
+`src/lib/pipelines/parkedPublication.test.ts` covers the seat's in-place
+acceptance, its authorization and clean-worktree refusals, and an accepted
+head equal to the passed commit.
+
 ## Stage worktree and published integration recovery (2026-10-19)
 
 The task evidence identifies three occurrences on 2026-10-18. The investigation
