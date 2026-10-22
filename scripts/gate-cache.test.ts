@@ -2,30 +2,73 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { environmentFingerprint, GateCache, installedFingerprint, workingInputsFingerprint } from "./gate-cache";
+import { checkEnvironment, environmentFingerprint, GateCache, installedFingerprint, workingInputsFingerprint } from "./gate-cache";
+import { agentEnvironments } from "./local-gate.fixture";
+import { pipelinePublicationHookEnv } from "../src/lib/pipelines/git";
+import { systemBootEpoch } from "../src/lib/processIdentity";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 const fixture = () => { const root = mkdtempSync(path.join(tmpdir(), "gate-cache-")); roots.push(root); return root; };
 const valid = (value: unknown): value is { passed: true } => !!value && typeof value === "object" && "passed" in value && value.passed === true;
 
-test("authority, endpoint and signal-domain inputs distinguish verification environments", () => {
+test("a raw environment keys every variable that would reach a check", () => {
   const base = { NODE_ENV: "test" as const };
-  for (const name of ["LLV_SPAWN_CAPABILITY", "LLV_STRUCTURED_HOST", "LLV_VIEWER_PORT", "LLV_SIGNAL_SANDBOX", "GH_CONFIG_DIR"]) {
+  for (const name of ["LLV_SPAWN_CAPABILITY", "LLV_STRUCTURED_HOST", "LLV_VIEWER_PORT", "GH_CONFIG_DIR", "CODEX_THREAD_ID"]) {
     expect(environmentFingerprint({ ...base, [name]: "first" }), name).not.toBe(environmentFingerprint({ ...base, [name]: "second" }));
     expect(environmentFingerprint({ ...base, [name]: "first" }), name).not.toBe(environmentFingerprint(base));
   }
 });
 
+test("checks never receive a producer's session, authority or endpoint, and producer and publication share one key", () => {
+  const forge = path.join(fixture(), "agent-forge", "lane");
+  const { producer, viewer } = agentEnvironments({ PATH: "/usr/local/bin:/usr/bin", LANG: "C.UTF-8", USER: "builder", SHELL: "/bin/bash" }, forge);
+  const publication = { ...viewer, ...pipelinePublicationHookEnv(viewer), LLV_PRIVACY_KNOWN_VALUES_FILE: "lessons.json",
+    GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "credential.helper", GIT_CONFIG_VALUE_0: "forge-helper", LLV_GATE_PUSH_DEADLINE: "1000" };
+  const checks = checkEnvironment(producer);
+  for (const name of ["LLV_SPAWN_CAPABILITY", "LLV_STRUCTURED_HOST", "LLV_VIEWER_PORT", "LLV_AGENT_FORGE_DIR", "GH_CONFIG_DIR", "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_MESSAGING_TOKEN", "AI_AGENT", "CODEX_THREAD_ID", "GIT_CONFIG_COUNT", "GIT_EDITOR", "LLV_STAGE_GIT_RECEIPT", "GIT_AUTHOR_NAME", "GIT_COMMITTER_EMAIL"]) expect(checks[name], name).toBeUndefined();
+  expect(checks.PATH).toBe("/usr/local/bin:/usr/bin");
+  for (const name of ["LLV_STATE_OWNER", "LLV_LANG", "LLV_TOKEN", "PORT", "TELEGRAM_BOT_TOKEN", "GIT_CONFIG_COUNT", "LLV_PRIVACY_KNOWN_VALUES_FILE"]) expect(checkEnvironment(publication)[name], name).toBeUndefined();
+  expect(environmentFingerprint(checkEnvironment(producer))).toBe(environmentFingerprint(checkEnvironment(publication)));
+  expect(checkEnvironment(checks)).toEqual(checks);
+  // A changed input that does reach the checks still separates them.
+  for (const change of [{ PATH: "/opt/other/bin:/usr/bin" }, { NODE_OPTIONS: "--stack-trace-limit=25" }, { LANG: "uk_UA.UTF-8" }, { CHROME_BIN: "/opt/chrome" }])
+    expect(environmentFingerprint(checkEnvironment({ ...producer, ...change })), JSON.stringify(change)).not.toBe(environmentFingerprint(checks));
+  // A raw environment that reaches tests directly keys an identity by presence only.
+  expect(environmentFingerprint({ PATH: "/usr/bin", GIT_AUTHOR_NAME: "first" })).toBe(environmentFingerprint({ PATH: "/usr/bin", GIT_AUTHOR_NAME: "second" }));
+  expect(environmentFingerprint({ PATH: "/usr/bin", GIT_AUTHOR_NAME: "first" })).not.toBe(environmentFingerprint({ PATH: "/usr/bin" }));
+  const declared = { ...producer, LLV_GATE_CHECK_ENV: "PROBE", PROBE: "first" };
+  expect(checkEnvironment(declared).PROBE).toBe("first");
+  expect(environmentFingerprint(checkEnvironment(declared))).not.toBe(environmentFingerprint(checkEnvironment({ ...declared, PROBE: "second" })));
+});
+
+test("the signal boundary binds its host epoch, never the gate service that admitted a run", () => {
+  const epoch = systemBootEpoch() ?? "linux:fixture-boot:pidns:pid:[1]";
+  const boundary = (fields: Record<string, unknown>) => JSON.stringify({ policyVersion: 1, hostEpoch: epoch, scope: "/agent.scope", gate: { cgroup: "/a/delegatus-gate-1.service", entry: "10:1" }, ...fields });
+  const base = { PATH: "/usr/bin", LLV_SIGNAL_SANDBOX: boundary({}) };
+  const key = (env: Partial<NodeJS.ProcessEnv>) => environmentFingerprint(checkEnvironment(env));
+  expect(checkEnvironment(base).LLV_SIGNAL_SANDBOX).toBe(base.LLV_SIGNAL_SANDBOX);
+  expect(key({ ...base, LLV_SIGNAL_SANDBOX: boundary({ gate: { cgroup: "/b/delegatus-gate-2.service", entry: "20:2" } }) })).toBe(key(base));
+  expect(key({ ...base, LLV_SIGNAL_SANDBOX: boundary({ gate: undefined, scope: "/another-agent.scope" }) })).toBe(key(base));
+  expect(key({ ...base, LLV_SIGNAL_SANDBOX: boundary({ hostEpoch: "linux:another-boot:pidns:pid:[1]" }) })).not.toBe(key(base));
+  for (const forged of [boundary({ policyVersion: 2 }), boundary({ hostEpoch: 7 }), "not json"]) {
+    expect(key({ ...base, LLV_SIGNAL_SANDBOX: forged }), forged).not.toBe(key(base));
+    expect(key({ ...base, LLV_SIGNAL_SANDBOX: forged }), forged).not.toBe(key({ ...base, LLV_SIGNAL_SANDBOX: forged }));
+  }
+  if (systemBootEpoch()) expect(key({ PATH: "/usr/bin" })).toBe(key(base));
+});
+
 test("effective Git configuration binds receipts while invocation metadata does not", () => {
   const first = { NODE_ENV: "test" as const, GIT_CONFIG_GLOBAL: "first-config" };
-  expect(environmentFingerprint(first)).not.toBe(environmentFingerprint({ ...first, GIT_CONFIG_GLOBAL: "second-config" }));
-  expect(environmentFingerprint(first)).toBe(environmentFingerprint({ ...first, LLV_GATE_PUSH_DEADLINE: "1000", CODEX_THREAD_ID: "second-thread" }));
+  const key = (env: Partial<NodeJS.ProcessEnv>) => environmentFingerprint(checkEnvironment(env));
+  expect(key(first)).not.toBe(key({ ...first, GIT_CONFIG_GLOBAL: "second-config" }));
+  expect(key(first)).toBe(key({ ...first, LLV_GATE_PUSH_DEADLINE: "1000", CODEX_THREAD_ID: "second-thread" }));
   const config = path.join(fixture(), "gitconfig");
   writeFileSync(config, "[core]\n autocrlf = false\n");
-  const env = { ...first, GIT_CONFIG_GLOBAL: config }, before = environmentFingerprint(env);
+  const env = { ...first, GIT_CONFIG_GLOBAL: config }, before = key(env);
   writeFileSync(config, "[core]\n autocrlf = true\n");
-  expect(environmentFingerprint(env)).not.toBe(before);
+  expect(key(env)).not.toBe(before);
 });
 
 test("receipts survive a process restart; corruption, expiry and oversized records are misses", () => {

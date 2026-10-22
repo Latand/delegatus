@@ -1,8 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
-import { createHookFixture } from "./local-gate.fixture";
+import { agentEnvironments, createHookFixture } from "./local-gate.fixture";
+import { pipelinePublicationHookEnv } from "../src/lib/pipelines/git";
 import { NoVerdict, runSteps, stepPasses, type Step } from "./local-gate";
 
 const root = path.resolve(import.meta.dir, "..");
@@ -97,9 +99,11 @@ test("hook receipts invalidate base, tool and environment drift, and malformed r
   f.git("update-ref", "refs/remotes/origin/main", nextBase);
   expect(run()).toBeTrue(); expect(run()).toBeFalse();
   expect(run({ NODE_OPTIONS: "--stack-trace-limit=25" })).toBeTrue();
-  expect(run({ LLV_VIEWER_PORT: "8001" })).toBeTrue();
-  expect(run({ LLV_VIEWER_PORT: "8001" })).toBeFalse();
-  expect(run({ LLV_VIEWER_PORT: "8002" })).toBeTrue();
+  expect(run({ LANG: "uk_UA.UTF-8" })).toBeTrue();
+  expect(run({ LANG: "uk_UA.UTF-8" })).toBeFalse();
+  expect(run({ LANG: "C.UTF-8" })).toBeTrue();
+  // An endpoint that never reaches a check cannot separate two runs.
+  expect(run({ LANG: "C.UTF-8", LLV_VIEWER_PORT: "8001" })).toBeFalse();
   const directory = path.join(f.dir, ".git/delegatus-gate/passes");
   for (const file of readdirSync(directory)) writeFileSync(path.join(directory, file), "incomplete record");
   expect(run()).toBeTrue();
@@ -159,6 +163,19 @@ test("stopped, deferred, cancelled and failed steps never write a pass; the runt
 });
 
 
+test("a pass is reused across gate admissions in one signal boundary, never across host epochs", () => {
+  const f = hookFixture();
+  const base = f.git("rev-parse", "origin/main").toString().trim();
+  writeFileSync(path.join(f.dir, "example.ts"), "export const value = 2;\n");
+  f.git("add", "example.ts"); f.git("commit", "-m", "change");
+  const step: Step = { name: "types", command: ["bunx", "tsc", "--noEmit"] };
+  const env = (service: number, hostEpoch = "linux:boot-a:pidns:pid:[1]") => ({ ...f.env, LLV_SIGNAL_SANDBOX: JSON.stringify({ policyVersion: 1, hostEpoch,
+    scope: "/agent.scope", gate: { cgroup: `/gate.slice/delegatus-gate-${service}.service`, entry: `${service}:1` } }) });
+  stepPasses(f.dir, base, [step], () => {}, env(1)).passed(step);
+  expect(stepPasses(f.dir, base, [step], () => {}, env(2)).reused(step)).toBeTrue();
+  expect(stepPasses(f.dir, base, [step], () => {}, env(2, "linux:boot-b:pidns:pid:[1]")).reused(step)).toBeFalse();
+});
+
 test("privacy, frozen install and advisory audit execute on both pushes of one dependency tree", () => {
   const f = hookFixture();
   for (const file of ["audit-with-retry.test.ts", "supply-chain-check.test.ts"]) writeFileSync(path.join(f.dir, "scripts", file), "// hook fixture\n");
@@ -175,19 +192,43 @@ test("privacy, frozen install and advisory audit execute on both pushes of one d
   }
 }, 60_000);
 
-test("producer and publication reuse the same check despite caller identity metadata", () => {
+test("a stage agent's pass is reused by publication of the same tree, which reruns privacy", () => {
   const f = hookFixture();
+  writeFileSync(path.join(f.dir, ".gitignore"), "commands.jsonl\nadmission.sqlite*\nllv-heavy-gate.*\nbudget-*/\n");
   writeFileSync(path.join(f.dir, "example.ts"), "export const value = 2;\n");
-  f.git("add", "example.ts"); f.git("commit", "-m", "change");
-  const run = (extra: Partial<NodeJS.ProcessEnv>) => {
+  f.git("add", ".gitignore", "example.ts"); f.git("commit", "-m", "change");
+  // The forge directory shadows git with a credentialed shim, as an agent's does.
+  // Outside the checkout: ignored files there are verification inputs.
+  const agent = mkdtempSync(path.join(tmpdir(), "hook-agent-")), forge = path.join(agent, "forge");
+  roots.push(agent);
+  mkdirSync(forge, { recursive: true });
+  writeFileSync(path.join(forge, "git"), `#!/bin/bash\nPATH=\${PATH#*:} exec git "$@"\n`); chmodSync(path.join(forge, "git"), 0o755);
+  const { producer, viewer } = agentEnvironments(f.env, forge);
+  // Roots and the CPU priority binding point into the fixture, never at live state.
+  for (const name of ["TMPDIR", "LLV_STATE_DIR", "XDG_CONFIG_HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_TMPDIR", "LLV_AGENT_GIT_GUARD_DIR"]) {
+    producer[name] = path.join(agent, name.toLowerCase()); mkdirSync(producer[name]!, { recursive: true });
+  }
+  Object.assign(producer, { NODE_ENV: f.env.NODE_ENV, LLV_GATE_CPU_PRIORITY_SOURCE: process.env.LLV_GATE_CPU_PRIORITY_SOURCE, GIT_CONFIG_VALUE_0: "!true" });
+  // A runner inside a signal boundary hands it to gate-slot; on the host the
+  // Viewer has none, and the key binds the boundary's host epoch either way.
+  const publication = { ...viewer, ...pipelinePublicationHookEnv(viewer), LLV_PRIVACY_KNOWN_VALUES_FILE: path.join(agent, "lessons.json"),
+    GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "credential.helper", GIT_CONFIG_VALUE_0: "!true",
+    LLV_SIGNAL_SANDBOX: process.env.LLV_SIGNAL_SANDBOX, LLV_STATE_DIR: process.env.LLV_STATE_DIR };
+  const run = (env: NodeJS.ProcessEnv) => {
     const before = f.calls().length;
-    const result = spawnSync("bash", [".githooks/pre-push"], { cwd: f.dir, env: { ...f.env, ...extra }, encoding: "utf8" });
-    expect(result.status, result.stderr).toBe(0); return f.calls().slice(before);
+    const result = spawnSync("bash", [".githooks/pre-push"], { cwd: f.dir, env, encoding: "utf8" });
+    expect(result.status, result.stdout + result.stderr).toBe(0); return { calls: f.calls().slice(before), output: result.stderr };
   };
-  run({ CODEX_CI: "1", CODEX_VERSION: "caller-version", CODEX_MANAGED_BY_BUN: "1",
-    LLV_STAGE_GIT_WORKTREE: f.dir, LLV_STAGE_GIT_RECEIPT: path.join(f.dir, ".git/caller-receipt"), GIT_AUTHOR_NAME: "Producer", GIT_COMMITTER_NAME: "Producer" });
-  const publication = run({ CODEX_CI: undefined, CODEX_VERSION: undefined, CODEX_MANAGED_BY_BUN: undefined,
-    LLV_STAGE_GIT_WORKTREE: undefined, LLV_STAGE_GIT_RECEIPT: undefined, GIT_AUTHOR_NAME: "Publisher", GIT_COMMITTER_NAME: "Publisher" });
-  expect(publication.some(call => call.args[0] === "tsc")).toBeFalse();
-  expect(publication.some(call => call.args[0] === "scripts/privacy-publication-gate.ts")).toBeTrue();
-}, 60_000);
+  const built = run(producer);
+  for (const command of ["tsc", "scripts/eslint-changes.ts", "scripts/local-gate-tests.ts"]) {
+    const call = built.calls.find(call => call.args[0] === command);
+    expect(call, command).toBeDefined();
+    for (const name of ["LLV_SPAWN_CAPABILITY", "LLV_STRUCTURED_HOST", "LLV_VIEWER_PORT", "LLV_AGENT_FORGE_DIR", "GH_CONFIG_DIR", "CLAUDE_CODE_SESSION_ID",
+      "CLAUDE_CODE_MESSAGING_TOKEN", "AI_AGENT", "CODEX_THREAD_ID", "GIT_CONFIG_COUNT", "GIT_AUTHOR_NAME", "LLV_PRIVACY_KNOWN_VALUES_FILE"]) expect(call!.names, `${command} ${name}`).not.toContain(name);
+    expect(call!.path!.split(path.delimiter), command).not.toContain(forge);
+  }
+  const published = run(publication);
+  for (const command of ["tsc", "scripts/eslint-changes.ts", "scripts/local-gate-tests.ts"]) expect(published.calls.some(call => call.args[0] === command), published.output).toBeFalse();
+  for (const step of ["types", "eslint", "touched tests"]) expect(published.output).toContain(`pre-push: ${step}: reused pass`);
+  expect(published.calls.some(call => call.args[0] === "scripts/privacy-publication-gate.ts")).toBeTrue();
+}, 120_000);

@@ -4,7 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { changedSinceBase, platformScope, workflowEntries } from "./ci-platform-scope";
 import { cpuBudgetTimer, cpuInheritedWaitMs, cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
-import { cacheDirectory, environmentFingerprint, fileFingerprint, fingerprint, GateCache, gateToolFiles, installedFingerprint, workingInputsFingerprint } from "./gate-cache";
+import { cacheDirectory, checkEnvironment, environmentFingerprint, fileFingerprint, fingerprint, GateCache, gateToolFiles, installedFingerprint, workingInputsFingerprint } from "./gate-cache";
 import { publicationHookDeadline, publicationPushBudgetMs } from "../src/lib/pipelines/gateBudget";
 
 export type Mode = "pre-commit" | "pre-push";
@@ -564,7 +564,8 @@ export interface StepPasses { reused(step: Step, until?: number): boolean; passe
  * and its consumers reuse together; a partial runtime run rebuilds afresh.
  * Privacy, install and advisory data always receive a fresh observation.
  */
-export function stepPasses(root: string, base: string, steps: readonly Step[], say: (line: string) => void): StepPasses {
+export function stepPasses(root: string, base: string, steps: readonly Step[], say: (line: string) => void, env: NodeJS.ProcessEnv = process.env): StepPasses {
+  const checkEnv = checkEnvironment(env);
   const store = new GateCache<PassRecord>(cacheDirectory(root, "passes"), (value): value is PassRecord =>
     !!value && typeof value === "object" && "at" in value && typeof value.at === "string" && Number.isFinite(Date.parse(value.at)));
   const toolRoot = path.resolve(import.meta.dir, "..");
@@ -578,20 +579,21 @@ export function stepPasses(root: string, base: string, steps: readonly Step[], s
       if (status) { unavailableReason = "dirty worktree"; return; }
       if (git(root, ["merge-base", "HEAD", "origin/main"]) !== base) { unavailableReason = "base changed"; return; }
       const head = git(root, ["rev-parse", "HEAD"]), tree = git(root, ["rev-parse", "HEAD^{tree}"]);
-      const runtimeCache = path.join(process.env.XDG_CACHE_HOME ?? path.join(homedir(), ".cache"), "delegatus-gate");
+      const runtimeCache = path.join(env.XDG_CACHE_HOME ?? path.join(homedir(), ".cache"), "delegatus-gate");
       const pins = steps.filter(step => step.pinned).length && existsSync(path.join(root, "Dockerfile"))
         ? [path.join(runtimeCache, `bun-${pinnedBunVersion(readFileSync(path.join(root, "Dockerfile"), "utf8"))}/node_modules/.bin/bun`)] : [];
       for (const version of new Set(steps.flatMap(step => step.codex ? [step.codex] : []))) {
         const target = process.arch === "x64" ? "x86_64" : "aarch64";
         pins.push(path.join(runtimeCache, `codex-${version}/node_modules/@openai/codex-linux-${process.arch}/vendor/${target}-unknown-linux-musl/bin/codex`));
       }
-      const tools = [process.execPath, Bun.which("bun"), Bun.which("bunx"), Bun.which("node"), Bun.which("git"), ...pins,
+      const which = (name: string) => Bun.which(name, { PATH: checkEnv.PATH ?? "" });
+      const tools = [process.execPath, which("bun"), which("bunx"), which("node"), which("git"), ...pins,
         ...["node_modules/.bun/lock", "node_modules/typescript/package.json", "node_modules/eslint/package.json"].map(file => path.join(root, file))];
-      // Hash effective configuration, never store its values. Execution roots,
+      // Hash what the checks receive, never store its values. Execution roots,
       // deadlines and CPU tickets belong to a run, rather than its result.
-      const env = environmentFingerprint(process.env);
+      const environment = environmentFingerprint(checkEnv);
       const toolchain = [...tools.map(file => file ? fileFingerprint(file) : "missing"), ...toolFiles.map(file => fileFingerprint(path.join(toolRoot, file)))];
-      return { head, tree, key: fingerprint([3, head, tree, base, spawnSync("git", ["symbolic-ref", "--short", "-q", "HEAD"], { cwd: root, encoding: "utf8" }).stdout, Bun.version, process.platform, process.arch, toolchain, installedFingerprint(root), workingInputsFingerprint(root), env,
+      return { head, tree, key: fingerprint([3, head, tree, base, spawnSync("git", ["symbolic-ref", "--short", "-q", "HEAD"], { cwd: root, encoding: "utf8" }).stdout, Bun.version, process.platform, process.arch, toolchain, installedFingerprint(root), workingInputsFingerprint(root), environment,
         spawnSync("git", ["config", "--get-regexp", "^remote\\."], { cwd: root, encoding: "utf8" }).stdout] ) };
     } catch (error) { unavailableReason = error instanceof Error ? error.name : "input fingerprint unavailable"; return; }
   };
@@ -862,7 +864,9 @@ async function main(mode: Mode, admitted = false): Promise<void> {
   const fixtures = new Map<string, Promise<string>>();
   const sandbox = createGateSandbox();
   try {
-    const isolated = isolatedEnvironment(sandbox, process.env);
+    // Pre-push checks see one canonical environment, so a producer's pass and
+    // the publication of the same tree share a key (scripts/gate-cache.ts).
+    const isolated = isolatedEnvironment(sandbox, mode === "pre-push" ? checkEnvironment(process.env) : process.env);
     const privacyEnv = {
       ...process.env,
       LLV_PRIVACY_KNOWN_VALUE_FINGERPRINTS_FILE: path.join(root, "scripts/privacy-known-value-fingerprints.json"),

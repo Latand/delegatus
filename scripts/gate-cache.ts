@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, readSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { systemBootEpoch } from "../src/lib/processIdentity";
 
 export const fingerprint = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 export function fileFingerprint(file: string): string {
@@ -80,32 +81,72 @@ export function gateToolFiles(root: string): string[] {
   return [...seen, "scripts/gate-slot.sh", "bunfig.toml", "tsconfig.json"].sort();
 }
 
-/** Hash all remaining environment inputs, including caller-specific test flags.
- * These exclusions are per-invocation transport, scheduling and sandbox roots;
- * the runner replaces roots before any cached check executes.
+/** Isolation replaces these before a check reads them, or they only record
+ * how this process was started. */
+const ROOTS = new Set(["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "TMPDIR", "LLV_STATE_DIR", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_TMPDIR",
+  "GEMINI_CLI_HOME", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME", "NODE_ENV", "LLV_VIEWER_CONTROL_URL"]);
+const BOOKKEEPING = new Set(["PWD", "OLDPWD", "SHLVL", "_", "INVOCATION_ID", "JOURNAL_STREAM", "SYSTEMD_EXEC_PID", "MANAGERPID",
+  "TERM", "COLORTERM", "PAGER", "GIT_PAGER", "GH_PAGER", "NO_COLOR", "FORCE_COLOR"]);
+/** What a check may read, so its value is part of the key. */
+const KEYED = /^(?:PATH|LANG|LANGUAGE|LC_[A-Z]+|TZ|USER|LOGNAME|SHELL|NODE_OPTIONS|BUN_[A-Z0-9_]+|CI|CHROME_BIN|PLAYWRIGHT_BROWSERS_PATH|GIT_CONFIG_(?:GLOBAL|SYSTEM|NOSYSTEM)|LLV_GATE_(?:BUN|CHECK_ENV))$/;
+/** A commit identity that reaches a check is keyed by presence. Pre-push
+ * checks receive none: the Viewer publishing a lane need not carry one, and
+ * hosted CI has none either. */
+const IDENTITY = /^GIT_(?:AUTHOR|COMMITTER)_(?:NAME|EMAIL)$/;
+/** Admission, placement and the signal boundary decide where and when a check
+ * runs, never what it checks. The boundary's host epoch is keyed instead. */
+const TRANSPORT = /^(?:LLV_SIGNAL_SANDBOX|LLV_(?:GATE|CPU|OWNED)_[A-Z0-9_]+|(?:LLV|DELEGATUS)_(?:AGENT_CPU|CPU_PRESSURE[A-Z0-9_]*|WORK_(?:SCOPE_)?CPU_QUOTA)|LLV_DOCKER_NSENTER_SHIMS|XDG_RUNTIME_DIR|DBUS_SESSION_BUS_ADDRESS|(?:HTTPS?|NO|ALL)_PROXY|(?:https?|no|all)_proxy|SSL_CERT_(?:FILE|DIR)|NODE_EXTRA_CA_CERTS)$/;
+const declaredInputs = (env: Partial<NodeJS.ProcessEnv>) => new Set((env.LLV_GATE_CHECK_ENV ?? "").split(",").map(name => name.trim()).filter(Boolean));
+
+/** One environment for every reusable check, whoever starts the hook: a stage
+ * agent with its session, forge authority and Viewer endpoint, or the Viewer
+ * publishing for it with its own settings, identity and push credentials.
+ * None of that reaches a check. A caller hands further inputs by naming them in
+ * LLV_GATE_CHECK_ENV, and they are keyed like the rest. Idempotent.
  */
-export function environmentFingerprint(env: NodeJS.ProcessEnv): string {
-  const roots = new Set(["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "TMPDIR", "TMP", "TEMP", "PWD", "OLDPWD", "SHLVL", "_", "INVOCATION_ID", "JOURNAL_STREAM", "SYSTEMD_EXEC_PID", "NODE_ENV",
-    "CODEX_HOME", "CODEX_SESSION_ID", "CODEX_THREAD_ID", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_TMPDIR", "GEMINI_CLI_HOME",
-    "LLV_STATE_DIR", "LLV_STATE_OWNER", "LLV_INBOX_DIR", "LLV_CODEX_HOME", "LLV_CLAUDE_HOME", "DELEGATUS_STATE_DIR",
-    "LLV_VIEWER_CONTROL_URL", "LLV_LANG", "LLV_TOKEN", "LLV_DEBUG", "DELEGATUS_DEBUG", "LLV_LAUNCHER_REEXEC", "LLV_LAUNCHER_CHECKOUT",
-    // Caller identity and Git transport do not choose the verification program.
-    // Publication still runs its own authorization and credential gates.
-    "CODEX_CI", "CODEX_VERSION", "CODEX_MANAGED_BY_BUN", "CODEX_MANAGED_PACKAGE_ROOT",
-    "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "GIT_AUTHOR_DATE", "GIT_COMMITTER_DATE",
-    "LLV_STAGE_GIT_WORKTREE", "LLV_STAGE_GIT_RECEIPT",
-    "LLV_AGENT_FORGE_DIR", "LLV_AGENT_FORGE_REPOSITORIES", "LLV_AGENT_GIT_GUARD_DIR",
-    "TERM", "COLORTERM", "PAGER", "GIT_PAGER", "GH_PAGER", "NO_COLOR", "FORCE_COLOR",
-    // Both shell hooks and isolatedEnvironment remove these Git overlays.
-    "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"]);
-  const inputs = Object.entries(env).filter(([name, value]) => value !== undefined && !roots.has(name)
-    && !/^(?:LLV_CPU_|LLV_GATE_|LLV_OWNED_|LLV_PRIVACY_|GIT_CONFIG_(?:KEY|VALUE)_\d+$)/.test(name))
-    .sort(([a], [b]) => a.localeCompare(b));
+export function checkEnvironment(env: Partial<NodeJS.ProcessEnv>): NodeJS.ProcessEnv {
+  const declared = declaredInputs(env), result = {} as NodeJS.ProcessEnv;
+  for (const [name, value] of Object.entries(env)) {
+    if (value !== undefined && (KEYED.test(name) || declared.has(name) || TRANSPORT.test(name) || ROOTS.has(name))) result[name] = value;
+  }
+  // The agent's forge directory shadows git and gh with credentialed shims.
+  const forge = env.LLV_AGENT_FORGE_DIR ? path.resolve(env.LLV_AGENT_FORGE_DIR) : undefined;
+  if (result.PATH !== undefined) result.PATH = result.PATH.split(path.delimiter)
+    .filter(entry => !(entry && (path.resolve(entry) === forge || /[/\\]delegatus[/\\]agent-forge[/\\]/.test(`${path.resolve(entry)}/`)))).join(path.delimiter);
+  return result;
+}
+
+/** The host a check ran on, read from the signal boundary when there is one:
+ * its host epoch is the host's boot epoch, so a sandboxed producer and the
+ * Viewer publishing on that host agree. Per-run boundary fields never count.
+ */
+export function hostEpoch(env: Partial<NodeJS.ProcessEnv>): string {
+  if (env.LLV_SIGNAL_SANDBOX === undefined) return systemBootEpoch() ?? randomUUID();
+  try {
+    const boundary = JSON.parse(env.LLV_SIGNAL_SANDBOX) as { policyVersion?: unknown; hostEpoch?: unknown };
+    if (boundary.policyVersion === 1 && typeof boundary.hostEpoch === "string" && boundary.hostEpoch) return boundary.hostEpoch;
+  } catch { /* An unreadable boundary names no host. */ }
+  return randomUUID();
+}
+
+/** Key everything that reaches a check from `env`, which is either a
+ * checkEnvironment result or a test comparison's own inherited environment:
+ * values for inputs, presence for a commit identity, the host epoch for the
+ * signal boundary and the bytes of explicit Git configuration files.
+ */
+export function environmentFingerprint(env: Partial<NodeJS.ProcessEnv>): string {
+  const inputs = Object.entries(env).filter(([name, value]) => value !== undefined && !ROOTS.has(name) && !BOOKKEEPING.has(name)
+    && !IDENTITY.test(name) && (KEYED.test(name) || !TRANSPORT.test(name))
+    && !/^(?:GIT_CONFIG(?:_COUNT|_PARAMETERS)?|GIT_CONFIG_(?:KEY|VALUE)_\d+|LLV_PRIVACY_[A-Z0-9_]+)$/.test(name))
+    .map(([name, value]) => [name, name === "PATH" ? checkEnvironment({ PATH: value, LLV_AGENT_FORGE_DIR: env.LLV_AGENT_FORGE_DIR }).PATH : value])
+    .filter(([name]) => name !== "LLV_AGENT_FORGE_DIR")
+    .sort(([a], [b]) => a!.localeCompare(b!));
+  const identity = Object.keys(env).filter(name => IDENTITY.test(name) && env[name] !== undefined).sort();
   const configuration = [env.GIT_CONFIG_GLOBAL, env.GIT_CONFIG_SYSTEM].map(file => {
     try { return file ? fileFingerprint(file) : "default"; }
     catch { return randomUUID(); } // Unreadable explicit configuration cannot certify reuse.
   });
-  return fingerprint([inputs, configuration]);
+  return fingerprint([inputs, identity, configuration, hostEpoch(env)]);
 }
 
 /** Each caller owns a namespace. Atomic, immutable-key records; corrupt,
