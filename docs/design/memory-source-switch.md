@@ -294,10 +294,13 @@ Delegatus memory off with them.
 
 For the operator's conversations, the selector is the existing text-free
 marker with `roleId: null`, which already reads the project and machine
-scopes (`roleStore.ts:109-111`). It is set at spawn and re-derived on resume
+scopes (`roleStore.ts:109-111`), plus `reader: "operator"` so the block can
+tell it from a role-less stage. It is set at spawn and re-derived on resume
 in the block that sets the seat's (`registry.ts:6320-6338`) for a root
 conversation with no role and no parent, and only while the source is
-Delegatus. The block's notice and pointer for this reader are new text in
+Delegatus (`draining` or `active`, the phases in which the engines' memory is
+off); restart adoption and account migration re-derive it from the same
+durable proof (`src/lib/memory/operatorMemory.ts`). The block's notice and pointer for this reader are new text in
 `roleRender.ts:47-58`: the stage notice (`:13`) speaks of finishing stages and
 the stage pointer (`:12`) of `stage_report`, neither of which an operator
 conversation does. `leave_lesson` admits such a conversation in the binding

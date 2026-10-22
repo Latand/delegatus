@@ -14,6 +14,7 @@ import { initializeStateCollections, SqliteStateCollection, stateCollectionsInit
 
 import { appendRule, lessonPatternSource, retainRules, sameRule, scopeChars } from "./roleConsolidate";
 import { roleMemoryEnabled } from "./settings";
+import { engineMemoryOff } from "./source";
 import { curationRevision, curationView } from "./curation/store";
 import { projectViewRows, projectViewRowsCooperatively, roleScopeKeys, roleViewVersion } from "./roleViewSource";
 import { crossProjectRoleScope, isCrossProjectRoleScope, MACHINE_SCOPE, scopeKind, scopeProject, scopeRole } from "./roleScopes";
@@ -23,7 +24,7 @@ import { deliveredRuleIds } from "./deliveryLedger";
 import {
   MAX_LESSONS_PER_ATTEMPT, ROLE_MEMORY_BOUND,
   type LessonInput, type LessonRequestRow, type RoleMemoryProjectView, type RoleMemoryRow,
-  type RoleMemoryRule, type RoleMemoryScopeRow, type RuleSource, type StageRuleSource, type SeatRuleSource, type RuleView, type ScopeView, type StageLessonView,
+  type RoleMemoryRule, type RoleMemoryScopeRow, type RuleSource, type StageRuleSource, type SeatRuleSource, type OperatorRuleSource, type RuleView, type ScopeView, type StageLessonView,
   type RewriteInput, type RuleRevision, type RuleRevisionView, type ScopeHistoryEntry, type RulePrivacyHint, type ProblemInput,
 } from "./roleTypes";
 
@@ -194,7 +195,7 @@ export function activeRules(scope: string): RoleMemoryRule[] {
 }
 
 /** The block a new stage of this role and project starts with. */
-export function learnedRulesSnapshot(project: string, roleId: string | null, maxBytes = Infinity) {
+export function learnedRulesSnapshot(project: string, roleId: string | null, maxBytes = Infinity, reader?: "operator") {
   // A process start resolves aliases in its snapshot; it never joins or migrates state.
   const all = rows();
   const resolve = scopeResolver();
@@ -208,7 +209,7 @@ export function learnedRulesSnapshot(project: string, roleId: string | null, max
       ? [{ scope: row.scope, revision: row.revision, revisionScope: row.revisionScope ?? row.scope }] : []);
     return { scope, revisions, rules: retainRules(active, new Date().toISOString()).active.reverse() };
   });
-  const rendered = renderLearnedRulesSelection(scopes, maxBytes);
+  const rendered = renderLearnedRulesSelection(scopes, maxBytes, { ...(reader ? { reader } : {}), engineMemoryOff: engineMemoryOff() });
   return { block: rendered.block, scopes: scopes.map(({ scope, revisions }) => ({ scope, revisions })),
     rules: rendered.rules.map(rule => ({ id: rule.id, hash: crypto.createHash("sha256").update(rule.rule).digest("hex") })),
     entries: rendered.rules.map(rule => [scopes.findIndex(scope => scope.scope === resolve(rule.scope)), rule.id, crypto.createHash("sha256").update(rule.rule).digest("hex")] as [number, string, string]),
@@ -284,6 +285,13 @@ export function leaveLessons(input: Omit<LessonWriteInput, "source"> & { source:
 
 /** A designated seat leaves practice without creating a stage request. */
 export function leaveSeatLessons(input: Omit<LessonWriteInput, "source" | "none" | "problem"> & { source: SeatRuleSource }) {
+  return writeLessonAnswer({ ...input, none: null });
+}
+
+/** The operator's own root conversation in Delegatus mode: project and machine
+    rules only, with the seat's text guards and no request to consume. */
+export function leaveOperatorLessons(input: Omit<LessonWriteInput, "source" | "none" | "problem"> & { source: OperatorRuleSource }) {
+  if (input.lessons.some(lesson => lesson.scope === "role")) throw new RoleMemoryRefusal("LESSON_WRONG_LEVEL", "an operator conversation leaves project or machine rules; a role's practice is its seat's or its stages'");
   return writeLessonAnswer({ ...input, none: null });
 }
 
@@ -519,7 +527,7 @@ function view(row: RoleMemoryRule, now: number, byId: ReadonlyMap<string, RoleMe
   return {
     id: row.id, rule: row.rule, why: row.why, state: row.state, hints: row.hints, tasks,
     ...(row.reason ? { reason: row.reason } : {}), ...(row.mergedInto ? { mergedInto: row.mergedInto } : {}),
-    roleId: row.source.roleId, fixRound: row.source.fixRound, stageId: row.source.origin === "seat" ? "seat" : row.source.origin === "import" ? "import" : row.source.stageId,
+    roleId: row.source.roleId, fixRound: row.source.fixRound, stageId: row.source.origin === "seat" ? "seat" : row.source.origin === "operator" ? "operator" : row.source.origin === "import" ? "import" : row.source.stageId,
     ...(row.source.origin === "import" ? { importSource: { candidate: row.source.candidate, occurrences: row.source.occurrences, engine: row.source.engine, sha256: row.source.sha256, importId: row.source.importId } } : {}),
     fresh: now - Date.parse(row.createdAt) < DAY_MS, createdAt: row.createdAt, changedAt: row.changedAt,
     ...(row.revisedBy ? { revisedBy: revisionView(row.revisedBy) } : {}),

@@ -85,6 +85,7 @@ import {
   type SpawnRejection,
 } from "./spawnAdmission";
 import { roleIsClean } from "@/lib/memory/eligibility";
+import { applyOperatorMemorySelector, operatorRootConversation } from "@/lib/memory/operatorMemory";
 import { sessionKeyFromTranscript, sessionKeyId, type SessionKey } from "./sessionKey";
 import {
   defaultRegistrySqliteFilename,
@@ -6631,6 +6632,18 @@ export class AgentRegistry {
       } else if ((memoryRole === "orchestrator" || memoryRole === "maintainer")
         && !profile.cleanMemory && !profile.learnedRules && memoryProject) {
         profile.learnedRules = { project: memoryProject, roleId: memoryRole };
+      } else if (!designatedSeatMembership && !memoryRole) {
+        /* The operator's own root conversation reads project and machine rules
+           while Delegatus memory is on; set at spawn, re-derived on resume.
+           A new launch proves the root by its operator origin, a successor by
+           its durable record (memory-source-switch.md §3.3). */
+        const operatorRoot = existingConversation
+          ? input.purpose !== undefined && input.purpose !== "launch" && operatorRootConversation({
+            agentRole: existingConversation.agentRole, parentConversationId,
+            delegationDepth: existingConversation.delegationDepth, memberships: file.memberships[existingConversation.id] ?? [] })
+          : input.origin?.kind === "operator" && operatorRootConversation({
+            agentRole: role, parentConversationId, delegationDepth: 0, memberships: input.memberships ?? [] });
+        applyOperatorMemorySelector(profile, memoryProject, operatorRoot);
       }
       /* A delegated conversation never acquires a plugin grant (#687): a role
          preset or a lineage parent denies it on resume, successor and restart

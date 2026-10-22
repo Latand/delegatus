@@ -83,7 +83,15 @@ export interface ImportRuleSource {
   sha256: string;
   importId: string;
 }
-export type RuleSource = StageRuleSource | SeatRuleSource | ImportRuleSource;
+/** The operator's own root conversation, in Delegatus mode: project and machine only. */
+export interface OperatorRuleSource {
+  origin: "operator";
+  project: string;
+  roleId: null;
+  fixRound: false;
+  conversationId: string;
+}
+export type RuleSource = StageRuleSource | SeatRuleSource | ImportRuleSource | OperatorRuleSource;
 
 export interface RoleMemoryRule {
   kind: "rule";
