@@ -26,7 +26,7 @@ export const SEAT_TICK_POLL_MS = 60_000;
 /** The change fields the route takes. `untilMinutes` is minutes from now, as
     the `seat_tick_settings` tool's own argument is. */
 export interface SeatTickChange {
-  autonomy?: { enabled?: boolean; hours?: number | null };
+  autonomy?: { enabled?: boolean; hours?: number | null; proactive?: { enabled: boolean } };
   release?: { enabled?: boolean; askBeforePublish?: boolean; minChanges?: number | string | null; minGapHours?: number | string | null; hold?: string | null };
   autoRotate?: { enabled?: boolean; thresholdPercent?: number | string | null };
   enabled?: boolean;

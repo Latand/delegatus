@@ -33,7 +33,7 @@ export type ViewerOperation = "state.index-repair" | "temp.sweep" | "resources.r
   | "resources.read" | "seat.panel" | "attention.read" | "pipelines.revalidate" | "runtime-journal.receipt-sweep"
   | "done.sweep" | "done.media" | "done.frame-source"
   | "seat-tick.prepare" | "seat-tick.liveness" | "seat-tick.children" | "seat-tick.reports" | "seat-tick.worker-asks" | "seat-tick.rule-reports" | "seat-tick.check" | "seat-tick.payload" | "seat-tick.audit"
-  | "state.document"
+  | "state.document" | "tasks.proactive.admission"
   | "memory.search" | "memory.open"
   | "codex.protocol-admission" | "mcp.page-cursors"
   | "worktrees.discovery" | "worktrees.candidate" | "worktrees.accounting"

@@ -179,6 +179,17 @@ export interface TaskSyncStamps {
 }
 
 export interface BoardTask {
+  /** Installation-local invention identity. Only atomic admission creates it;
+      linked boards never exchange its private sources or execution authority. */
+  proactive?: {
+    episode: string;
+    candidateKey: string;
+    sources: string[];
+    score: number[];
+    scopeHash: string;
+    /** Increases on each scope edit, including restoring earlier content. */
+    scopeRevision: number;
+  };
   /** Local reporter identity; never exchanged with linked installs. */
   findingKey?: string;
   /** Occurrences in this install; a new task after Done starts at one. */
