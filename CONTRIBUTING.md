@@ -170,6 +170,11 @@ alias the operator defined with `gh alias set` is not expanded.
 - **Batch landing** (`scripts/merge-batch.ts`) checks its principal against an
   installation endpoint. Run from a launched agent in a declared repository,
   that check and the merge both go through the shim.
+  A refused check names the missing App routing and asks the installation
+  owner to declare the repository, then launch a new merger: an existing
+  agent keeps its launch environment. When routing is already declared, the
+  refusal asks the owner to check the encrypted App credential and repository
+  installation. Child-command diagnostics are withheld.
 
 The App's registration and its verified installation id live in the operator's
 encrypted Secret Service collection, as one item with the attributes
