@@ -5,14 +5,16 @@ import { readRuntimeSnapshot, type RuntimeSnapshotReads } from "@/lib/runtime/sn
  * within that pass can be observed. A rejected read remains unknown. */
 export function pipelineRuntimeReads() {
   let activity: Promise<RuntimeSnapshotReads["activity"]> | null = null;
+  const sessions = (client: RuntimeHostClient, conversationId: string) => {
+    activity ??= readRuntimeSnapshot(client, "activity");
+    return activity.then(value => value.sessions.filter(session => session.conversationId === conversationId));
+  };
   return {
     // Epoch and activity retain the same observation even when epoch is asked
     // first and the host changes before a later session check in this pass.
     metadata(client: RuntimeHostClient) { return activity ??= readRuntimeSnapshot(client, "activity"); },
-    session(client: RuntimeHostClient, conversationId: string) {
-      activity ??= readRuntimeSnapshot(client, "activity");
-      return activity.then(value => value.sessions.find(session => session.conversationId === conversationId));
-    },
+    sessions,
+    session: (client: RuntimeHostClient, conversationId: string) => sessions(client, conversationId).then(rows => rows[0]),
     reset() { activity = null; },
   };
 }
