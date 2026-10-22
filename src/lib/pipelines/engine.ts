@@ -1980,20 +1980,21 @@ export function defaultPipelinePorts(
     conversationAgentActive: async (conversationId) => {
       const client = runtimeHostClient();
       if (!client) return null;
-      let session;
+      let sessions;
       try {
-        session = await runtimeReads.session(client, conversationId);
+        sessions = await runtimeReads.sessions(client, conversationId);
       } catch {
         return null;
       }
-      if (!session) return null;
-      if (["dead", "unhosted", "conflict"].includes(session.host)) {
+      if (!sessions.length) return null;
+      if (sessions.some(session => !["dead", "unhosted", "conflict"].includes(session.host)
+        && (session.turn === "running" || session.turn === "interrupt_requested" || session.attentionIds.length > 0))) return true;
+      if (sessions.every(session => ["dead", "unhosted", "conflict"].includes(session.host))) {
         /* A host may be adopted again during this controller pass. Do not let
            affirmative death evidence poison later liveness checks in the tick. */
         runtimeReads.reset();
         return false;
       }
-      if (session.turn === "running" || session.turn === "interrupt_requested" || session.attentionIds.length > 0) return true;
       /* A hosted idle turn is an inter-turn state with unknown agent activity. */
       return null;
     },
@@ -4839,19 +4840,40 @@ async function readRepairDelivery(pipeline: Pipeline, stage: PipelineStage, atte
   const worker = publicationRepairWorker(pipeline, attempt);
   if (!repair || !worker?.attempt.conversationId || !ports.stageRepairDelivery) return repair?.delivery;
   const key = repair.clientMessageId ?? `stage-publication-repair-${pipeline.id}-${stage.id}-${attempt.n}`;
-  try { return await ports.stageRepairDelivery(worker.attempt.conversationId, key, unixMs(repair.refusedAt) + COMMIT_REPAIR_WAIT_MS); }
-  catch { return { operationId: repair.delivery?.operationId ?? null, state: "unavailable" as const, safeToReplace: false }; }
+  const failed = repair.delivery?.state === "failed" ? repair.delivery : undefined;
+  try {
+    const current = await ports.stageRepairDelivery(worker.attempt.conversationId, key, unixMs(repair.refusedAt) + COMMIT_REPAIR_WAIT_MS);
+    // A read outage cannot erase a terminal receipt for this same operation.
+    return current.state === "unavailable" && failed && (!current.operationId || current.operationId === failed.operationId) ? failed : current;
+  } catch { return failed ?? { operationId: repair.delivery?.operationId ?? null, state: "unavailable" as const, safeToReplace: false }; }
 }
 
 type RepairProducerEvidence = { conversationId: string; active: boolean | null;
-  durable: Awaited<ReturnType<typeof stageRepairEvidence>>; delivery?: import("./types").PipelineRepairDelivery };
+  repairIdentity: string; durable: Awaited<ReturnType<typeof stageRepairEvidence>>; delivery?: import("./types").PipelineRepairDelivery };
+
+function publicationRepairIdentity(attempt: PipelineStageAttempt): string {
+  const repair = attempt.publicationRepair;
+  return JSON.stringify([attempt.n, repair?.operationId, repair?.refusedAt, repair?.stageId, repair?.attempt]);
+}
+
+async function readRepairProducerEvidence(pipeline: Pipeline, stage: PipelineStage, attempt: PipelineStageAttempt,
+  ports: PipelinePorts): Promise<RepairProducerEvidence | undefined> {
+  const worker = publicationRepairWorker(pipeline, attempt)?.attempt ?? attempt;
+  if (!worker.conversationId) return;
+  const conversationId = worker.conversationId;
+  const repairIdentity = publicationRepairIdentity(attempt);
+  const delivery = await readRepairDelivery(pipeline, stage, attempt, ports);
+  const durable = await stageRepairEvidence(worker, ports);
+  const active = await ports.conversationAgentActive(conversationId);
+  return { conversationId, repairIdentity, delivery, durable, active };
+}
 
 function publicationRepairDeliveryDetail(repair: NonNullable<PipelineStageAttempt["publicationRepair"]>, delivery = repair.delivery): string {
   return `; operation ${delivery?.operationId ?? repair.clientMessageId ?? "unavailable"}; delivery ${delivery?.state ?? "unavailable"}`;
 }
 
-/** A deadline ends the repair's permission, but only no-dispatch evidence or
- * a finished producer releases its writer. A terminal unknown remains visible. */
+/** Failed sends and gone producers release the repair. Positive evidence of
+ * a running or queued writer still guards against starting a second turn. */
 function publicationRepairProducerRefusal(pipeline: Pipeline, attempt: PipelineStageAttempt,
   evidence: RepairProducerEvidence | undefined, ports: PipelinePorts): string | null {
   const repair = attempt.publicationRepair;
@@ -4860,27 +4882,46 @@ function publicationRepairProducerRefusal(pipeline: Pipeline, attempt: PipelineS
   const delivery = evidence?.delivery ?? repair?.delivery;
   const suffix = repair ? publicationRepairDeliveryDetail(repair, delivery) : "";
   const refusal = `the producer repair turn may still be running or queued${suffix}`;
-  if (evidence?.conversationId !== worker.conversationId) return refusal;
+  if (evidence?.conversationId !== worker.conversationId || evidence.repairIdentity !== publicationRepairIdentity(attempt)) return refusal;
   const { active, durable } = evidence;
   const repairStartedAt = repair?.requestedAt ?? repair?.sendingAt;
   const finished = !!repairStartedAt && durable?.turn === "terminal"
     && (durable.message?.ts ?? 0) > (repair?.messageTs ?? 0)
     && (durable.lastRecordAt ?? durable.message?.ts ?? 0) >= unixMs(repairStartedAt);
-  const noDispatch = delivery?.safeToReplace === true && (delivery.state === "failed"
-    || delivery.state === "unreserved" && evidence.delivery === delivery && !!repair
-      && unixMs(ports.now()) >= unixMs(repair.refusedAt) + COMMIT_REPAIR_WAIT_MS);
-  if (active === true || durable?.turn === "busy" || ports.conversationDeliveryOutstanding?.(worker.conversationId)
+  const failed = delivery?.state === "failed";
+  const noDispatch = delivery?.safeToReplace === true && delivery.state === "unreserved"
+    && evidence.delivery === delivery && !!repair
+    && unixMs(ports.now()) >= unixMs(repair.refusedAt) + COMMIT_REPAIR_WAIT_MS;
+  // An orphan can retain an open transcript turn and queued projection. The
+  // current host's affirmative death evidence supersedes those stale markers.
+  const gone = !!repair && active === false;
+  if (!gone && (active === true || durable?.turn === "busy" || ports.conversationDeliveryOutstanding?.(worker.conversationId)
     || liveBackgroundTasks(durable?.backgroundTasks ?? [], unixMs(ports.now())).length > 0
-    || delivery && !delivery.safeToReplace && delivery.state !== "delivered" && !finished
-    || active !== false && !finished && !noDispatch) return refusal;
-  if (repair && delivery) {
-    repair.delivery = delivery;
-    if (!repair.settledAt && noDispatch) {
+    || active !== false && !finished && !noDispatch && !failed)) return refusal;
+  if (repair) {
+    if (delivery) repair.delivery = delivery;
+    if (!repair.settledAt && (failed || noDispatch || active === false)) {
       repair.settledAt = ports.now();
-      repair.outcome = { status: "rejected", reason: `The producer repair delivery ${delivery.operationId ?? "was not reserved"} settled ${delivery.state}.` };
+      repair.outcome = { status: "rejected", reason: active === false && !failed && !noDispatch
+        ? "The recorded producer is gone; its publication repair is no longer pending."
+        : `The producer repair delivery ${delivery?.operationId ?? "was not reserved"} settled ${delivery?.state}.` };
     }
   }
   return repair && !repair.settledAt ? refusal : null;
+}
+
+/** Refresh parked records too: older rejected repairs can lack every send
+ * checkpoint. Healing never publishes or sends another repair prompt. */
+async function reconcileParkedPublicationRepair(pipeline: Pipeline, ports: PipelinePorts): Promise<boolean> {
+  const stage = currentStage(pipeline);
+  const attempt = stage && currentAttempt(pipeline, stage.id);
+  const repair = attempt?.publicationRepair;
+  if (pipeline.state !== "needs_decision" || !stage || !attempt || !repair
+    || !passedStagePublicationPark(pipeline, attempt) || repair.settledAt && repair.delivery?.state === "failed") return false;
+  const before = JSON.stringify(repair);
+  const evidence = await readRepairProducerEvidence(pipeline, stage, attempt, ports);
+  publicationRepairProducerRefusal(pipeline, attempt, evidence, ports);
+  return before !== JSON.stringify(repair);
 }
 
 function stagePublicationRepairText(stage: PipelineStage, attempt: PipelineStageAttempt, repair: NonNullable<PipelineStageAttempt["publicationRepair"]>): string {
@@ -11409,6 +11450,7 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
           pipelineChanged = reconcileParkedUsageLimit(pipeline) || pipelineChanged;
           pipelineChanged = await reconcileParkedProviderRetry(pipeline, lanePorts, persistPipeline) || pipelineChanged;
           pipelineChanged = reconcileParkedVerdictMiss(pipeline, lanePorts) || pipelineChanged;
+          pipelineChanged = await reconcileParkedPublicationRepair(pipeline, lanePorts) || pipelineChanged;
           pipelineChanged = await reconcileParkedDelivery(pipeline, lanePorts) || pipelineChanged;
           pipelineChanged = await reconcileParkedStructuredSpawn(pipeline, lanePorts) || pipelineChanged;
           pipelineChanged = (await reconcileBoundReviewFlow(pipeline, lanePorts, persistPipeline)) || pipelineChanged;
@@ -13155,7 +13197,8 @@ async function resolveDecision(
   }
   // Rollback disables admission; durable answers and pending attempts remain readable/drainable.
   if (process.env.LLV_PIPELINE_RESOLVE_DECISION === "0") return { error: "resolve-decision is disabled", status: 409 };
-  if (!matchesShortId(pipelineRevision(pipeline), req.expectedRevision!)) {
+  const answeredRevision = pipelineRevision(pipeline);
+  if (!matchesShortId(answeredRevision, req.expectedRevision!)) {
     return { error: "the pipeline changed since it was read; read it again before answering", status: 409, code: "STAGE_CHANGED", field: "expectedRevision" };
   }
   const expectation = expectedStageRefusal(pipeline, req);
@@ -13189,7 +13232,7 @@ async function resolveDecision(
     if (repairRefusal) return { error: repairRefusal, status: 409 };
   }
   const decision: PipelineDecisionAnswer = {
-    clientRequestId: req.clientRequestId, expectedRevision: pipelineRevision(pipeline),
+    clientRequestId: req.clientRequestId, expectedRevision: answeredRevision,
     stageId: stage.id, attempt: attempt.n, nextAttempt: runFor(pipeline, stage.id)!.attempts.length + 1,
     question: publicationDecision ? pipeline.stateDetail! : attempt.output ?? attempt.report?.summary ?? "", answer: req.answer,
     actor: structuredClone(actor!), at: ports.now(),
@@ -13733,14 +13776,7 @@ export async function patchPipeline(
         const refusal = decisionAnswerActorRefusal(snapshot, actor, req.clientRequestId);
         if (refusal) return refusal;
       }
-      const worker = publicationRepairWorker(snapshot, snapshotAttempt) ?? { stage: snapshotStage!, attempt: snapshotAttempt };
-      if (worker.attempt.conversationId) {
-        const conversationId = worker.attempt.conversationId;
-        const delivery = await readRepairDelivery(snapshot, snapshotStage!, snapshotAttempt, ports);
-        const durable = await stageRepairEvidence(worker.attempt, ports);
-        const active = await ports.conversationAgentActive(conversationId);
-        decisionProducerEvidence = { conversationId, active, durable, delivery };
-      }
+      decisionProducerEvidence = await readRepairProducerEvidence(snapshot, snapshotStage!, snapshotAttempt, ports);
     }
   }
 

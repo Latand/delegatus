@@ -20,7 +20,8 @@ test("every audio file the product's tables name is copied into dist, byte for b
   try {
     const urls = copyDemoAudio(repo, dist);
     expect(urls).toEqual(demoAudioUrls());
-    expect(urls.filter((url) => url.startsWith("/audio/cues/")).length).toBe(13);
+    /* The eight kept typing slices: every other sound is synthesized. */
+    expect(urls.filter((url) => url.startsWith("/audio/cues/")).length).toBe(8);
     expect(urls.some((url) => url.startsWith("/audio/ambient/"))).toBe(false);
     expect(fs.existsSync(path.join(dist, "audio/ambient"))).toBe(false);
     for (const url of urls) {
