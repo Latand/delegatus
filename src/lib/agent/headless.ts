@@ -424,7 +424,7 @@ export function launchDetached(input: {
   let child: ChildProcess;
   try {
     // Reviews, relays and digests run unattended: they are work.
-    const plan = planAgentMemory({ engine: "headless", sessionKey: input.key, liveAgents: Object.values(agentRegistry().readOnlySnapshot().entries).filter((entry) => entry.structuredHost && entry.status !== "dead" && entry.status !== "unhosted").length + 1, cpu: planAgentCpu("work") });
+    const plan = planAgentMemory({ engine: "headless", sessionKey: input.key, liveAgents: agentRegistry().liveStructuredHostCount() + 1, cpu: planAgentCpu("work") });
     const memoryCell = plan ? new AgentMemoryCell(plan) : null;
     const fixture = headlessFixtureTransport();
     const start = ((command: string, args: string[], options: Parameters<typeof spawn>[2]) => {

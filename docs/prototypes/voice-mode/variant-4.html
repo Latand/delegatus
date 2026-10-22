@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Варіант 4 · Опція C: сервери запускає сам Codex</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="a-r" viewBox="0 0 44 18"><path d="M3 9H39" stroke="currentColor" stroke-width="2.5" fill="none"/><path d="M32 3L40 9L32 15" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="a-b" viewBox="0 0 44 18"><path d="M5 9H39" stroke="currentColor" stroke-width="2.5" fill="none"/><path d="M12 3L4 9L12 15M32 3L40 9L32 15" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  </defs>
+</svg>
+
+<!-- docs/design/voice-extensible-tools.md: the add-an-MCP flow (§3.3) and the next call's tools (§3.4) for this option -->
+<section class="frame" data-frame="1" data-caption="opciia-c-codex-yak-klient">
+  <div class="kicker">Варіант 4 · Опція C з дизайну розширюваних інструментів голосу</div>
+  <h1 class="flagged">Опція C: сервери запускає сам Codex<span class="flag no">Не рекомендовано для голосу</span></h1>
+  <p class="lede">Delegatus лише веде реєстр і дозволи, а MCP-сервери запускає й викликає <b>сам рушій агента</b> (Codex). Так уже видається Telegram агентам.</p>
+
+  <h2>Де що працює</h2>
+  <div class="chain">
+    <div class="node viewer"><h3>Сервер Delegatus</h3><div class="sub">як сьогодні</div><ul><li>реєстр і схвалення</li><li>список дозволених серверів стає даними</li></ul></div>
+    <div class="arrbox"><svg class="arr"><use href="#a-r"/></svg><span>налаштування <code>mcp_servers</code></span></div>
+    <div class="node new"><h3>Процес Codex голосу</h3><div class="sub">один на дзвінок</div><ul><li>сам запускає <span class="nw">MCP-сервери</span></li><li>сам викликає їхні інструменти</li></ul></div>
+    <div class="arrbox"><svg class="arr"><use href="#a-r"/></svg><span>stdio</span></div>
+    <div class="node "><h3>MCP-сервери</h3><div class="sub">своя копія на кожну сесію</div><ul><li>Spotify, месенджер</li><li>ваш швидкий скрипт</li></ul></div>
+    <div class="arrbox gap"><span>а на типовому бекенді:</span></div>
+    <div class="node off"><h3>Бекенд API</h3><div class="sub">типовий для голосу</div><ul><li>шляху до MCP немає</li></ul></div>
+  </div>
+
+  <h2>Як додати MCP і як його отримує наступний дзвінок</h2>
+  <div class="seq" style="--n:6">
+    <div class="lanehd">Оператор<small>людина</small></div>
+    <div class="lanehd">Голос<small>мовна модель + бекенд</small></div>
+    <div class="lanehd">Оркестратор<small>агент проєкту</small></div>
+    <div class="lanehd">Delegatus<small>сервер</small></div>
+    <div class="lanehd">Codex голосу<small>процес на дзвінок</small></div>
+    <div class="lanehd">MCP-сервер<small>Spotify</small></div>
+    <div class="phase" style="grid-row:2">Додати MCP — один раз</div>
+    <div class="sc op" style="grid-row:3;grid-column:1/3"><span class="num">1</span><div><div class="dir">Оператор <svg class="ia"><use href="#a-r"/></svg> Голос</div><p>«Додай Spotify до своїх інструментів».</p></div></div>
+    <div class="sc " style="grid-row:4;grid-column:2/4"><span class="num">2</span><div><div class="dir">Голос <svg class="ia"><use href="#a-r"/></svg> Оркестратор</div><p>Передає прохання оркестратору як доручення й каже оператору: «Надіслав».</p></div></div>
+    <div class="sc solo" style="grid-row:5;grid-column:3/4"><span class="num">3</span><div><div class="dir">Оркестратор</div><p>Знаходить готовий пакет або доручає воркеру написати скрипт.</p></div></div>
+    <div class="sc " style="grid-row:6;grid-column:3/5"><span class="num">4</span><div><div class="dir">Оркестратор <svg class="ia"><use href="#a-r"/></svg> Delegatus</div><p>Пропонує сервер через <code>voice_tools</code>. Сервер записано в реєстр зі станом «чекає схвалення».</p></div></div>
+    <div class="sc " style="grid-row:7;grid-column:2/4"><span class="num">5</span><div><div class="dir">Оркестратор <svg class="ia"><use href="#a-r"/></svg> Голос</div><p>Звіт <code>bridge_report</code>: «Spotify чекає вашого схвалення». Голос зачитує.</p></div></div>
+    <div class="sc op key" style="grid-row:8;grid-column:1/5"><span class="num">6</span><div><div class="dir">Оператор <svg class="ia"><use href="#a-r"/></svg> Delegatus</div><p>У налаштуваннях вводить секрет і натискає <b>«Схвалити»</b>.</p><p>Назва потрапляє до списку MCP-серверів, які дозволено видавати. Сьогодні цей список вшитий у код: лише <code>viewer</code> і <code>telegram</code>.</p></div></div>
+    <div class="phase next" style="grid-row:9">Наступний дзвінок</div>
+    <div class="sc op" style="grid-row:10;grid-column:1/3"><span class="num">7</span><div><div class="dir">Оператор <svg class="ia"><use href="#a-r"/></svg> Голос</div><p>Кладе слухавку й дзвонить знову.</p></div></div>
+    <div class="sc key" style="grid-row:11;grid-column:4/6"><span class="num">8</span><div><div class="dir">Delegatus <svg class="ia"><use href="#a-r"/></svg> Codex голосу</div><p>Запускає процес Codex для дзвінка зі схваленими серверами в <code>mcp_servers</code>. Сьогодні там порожньо.</p></div></div>
+    <div class="sc " style="grid-row:12;grid-column:5/7"><span class="num">9</span><div><div class="dir">Codex голосу <svg class="ia"><use href="#a-r"/></svg> MCP-сервер</div><p>Codex сам запускає сервер і читає список його інструментів.</p></div></div>
+    <div class="sc warn" style="grid-row:13;grid-column:2/7"><span class="num">10</span><div><div class="dir">Голос <svg class="ia"><use href="#a-r"/></svg> Codex голосу <svg class="ia"><use href="#a-r"/></svg> MCP-сервер</div><p>«Увімкни джаз» <svg class="ia"><use href="#a-r"/></svg> Codex сам викликає інструмент. Delegatus бачить виклик лише після того, як він стався, і зупинити його не може.</p></div></div>
+    <div class="sc warn" style="grid-row:14;grid-column:2/5"><span class="num">11</span><div><div class="dir">Голос <svg class="ia"><use href="#a-r"/></svg> Delegatus</div><p>На <b>типовому бекенді API</b> нових інструментів немає: його виклики виконує Delegatus, а клієнта MCP у цій опції в Delegatus немає.</p></div></div>
+  </div>
+
+  <div class="pros">
+    <div class="note good"><span class="h">Що дає</span><ul><li>Підходить для агентів: так само можна видавати сервери оркестратору й воркерам (#714).</li><li>У Delegatus не з'являється клієнт MCP.</li></ul></div>
+    <div class="note bad"><span class="h">Чим платимо</span><ul><li><b>Не працює на типовому бекенді API</b>, лише на Codex.</li><li>Виклики йдуть повз Delegatus: правило приватності й запис дзвінка їх не охоплюють.</li><li>Кожна сесія запускає власну копію кожного сервера.</li></ul></div>
+  </div>
+</section>
+</body>
+</html>

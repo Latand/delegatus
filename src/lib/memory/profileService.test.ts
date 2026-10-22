@@ -17,11 +17,10 @@ describe("explicit parallel profile generation", () => {
     const caller = await prepareProfileCaller("garden", {
       model: MEMORY_PROFILE_MODEL,
       manager: { resolveHeadlessSpawn: () => ({ kind: "available", account: { engine: "claude", accountId: "sample", kind: "managed", home: "sample", transcriptRoot: "sample", env: { NODE_ENV: "test" } } }) },
-      credentials: () => ({ state: "present", source: "file", document: { claudeAiOauth: { accessToken: "sample", expiresAt: Date.now() + 60_000 } } }),
-      request: async (_, init) => {
-        const body = JSON.parse(init.body as string); requests.push(body.model);
-        if (body.model === MEMORY_PROFILE_MODEL && body.messages[0].content.includes("Memory level: all memory")) return new Response(null, { status: 403 });
-        return Response.json({ stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify(sampleAnswer()) }] });
+      run: async request => {
+        requests.push(request.model!);
+        if (request.model === MEMORY_PROFILE_MODEL && request.prompt.includes("Memory level: all memory")) return { status: "failed", records: [] };
+        return { status: "done", records: [{ type: "result", subtype: "success", is_error: false, structured_output: sampleAnswer() }] };
       },
     });
     const h = harness(caller); h.ports.model = MEMORY_PROFILE_MODEL;

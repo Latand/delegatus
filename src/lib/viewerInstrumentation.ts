@@ -922,6 +922,9 @@ export async function installSpawnCapabilityResolverAtStartup(): Promise<void> {
 
 export async function registerViewerRuntime(): Promise<void> {
   viewerLoopMonitor.start();
+  // The validated persisted catalog is prepared without contacting any server.
+  void import("./voiceTools/hub").then(({ voiceToolHub }) => voiceToolHub().store.load())
+    .catch(() => console.error("[voice-tools] REGISTRY_UNAVAILABLE"));
   // Background diagnostics never hold readiness or reach the runtime host.
   void import("./loopProfilerServing").then(({ startServingLoopProfiler }) => startServingLoopProfiler(viewerLoopMonitor)).catch(() => {});
   await installServingNextRenderMonitor();
