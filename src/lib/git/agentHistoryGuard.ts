@@ -70,7 +70,7 @@ check_author() {
   [ "$author" = ${quote(name + "\n" + email)} ] || refuse
 }
 hook=\${0##*/}
-if [ "$hook" = post-rewrite ]; then input=$(cat); fi
+if [ "$hook" = post-rewrite ] || [ "$hook" = reference-transaction ]; then input=$(cat); fi
 ${stageAttemptGuardScript()}
 if [ "$hook" = prepare-commit-msg ]; then
   # commit exports its effective author, including -C/-c inheritance. The
@@ -87,7 +87,6 @@ if [ "$hook" = pre-applypatch ]; then
   [ "$author_data" = ${quote("GIT_AUTHOR_NAME=" + quote(name) + "\nGIT_AUTHOR_EMAIL=" + quote(email))} ] || refuse
 fi
 if [ "$hook" = reference-transaction ]; then
-  input=$(cat)
   if [ "\${1:-}" = prepared ]; then
     printf '%s\\n' "$input" | while read -r old new ref; do
       case "$ref" in
