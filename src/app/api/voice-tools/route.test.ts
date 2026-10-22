@@ -16,8 +16,14 @@ const { internalServiceHeaders } = await import("@/lib/agent/callerClaims");
 const { claimInstall, createInvite, redeemJoin } = await import("@/lib/team/members");
 const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
 const { MEMBER_COOKIE, mintSession } = await import("@/lib/team/sessions");
+const { POST: claimPOST } = await import("@/app/api/team/claim/route");
 afterAll(async () => { setVoiceToolHubForTests(undefined); resetTeamStoreForTests(); await fs.rm(root, { recursive: true, force: true }); });
-const browserOwner = claimInstall(teamStore(), "Owner", { surface: "desktop", browser: "chrome" });
+function authenticatedOwner() {
+  const claimed = claimInstall(teamStore(), "Owner", { surface: "desktop", browser: "chrome" });
+  const session = mintSession(teamStore(), claimed.member.id, "passkey", { surface: "desktop", browser: "chrome" });
+  return { ...claimed, cookie: session.value, session: session.session };
+}
+const browserOwner = authenticatedOwner();
 function request(method: string, body?: unknown, headers: Record<string, string> = {}) {
   return new NextRequest("http://127.0.0.1/api/voice-tools", { method, headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin", cookie: `${MEMBER_COOKIE}=${browserOwner.cookie}`, ...headers }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
 }
@@ -124,6 +130,15 @@ test("both proposal routes and approval refuse a secret sent to another origin",
   const secret = { value: "synthetic-bound-credential", destinations: ["https://example.invalid"] };
   expect((await POST(request("POST", { action: "secrets", secrets: { "bound-token": secret } }))).status).toBe(200);
   const trusted = { ...proposal, name: "bound", transport: { type: "http", url: "https://example.invalid/mcp", headers: { Authorization: { secretRef: "bound-token" } } } };
+  for (const header of ["Host", "host", "hOsT"]) {
+    const authorityOverride = { ...trusted, name: `bound_${header.toLowerCase()}`, transport: { ...trusted.transport,
+      headers: { ...trusted.transport.headers, [header]: { value: "unbound.example.test" } } } };
+    const browser = await POST(request("POST", { action: "propose", proposal: authorityOverride }));
+    expect(browser.status).toBe(400); expect(await browser.json()).toEqual({ code: "INVALID_PROPOSAL" });
+    const mcp = await proposalPOST(request("POST", { action: "propose", proposal: authorityOverride,
+      clientRequestId: `host-override-${header.toLowerCase()}`, conversationId: "conversation_worker" }, internalServiceHeaders("mcp")));
+    expect(mcp.status).toBe(400); expect(await mcp.json()).toEqual({ code: "INVALID_PROPOSAL" });
+  }
   const hostile = { ...trusted, transport: { ...trusted.transport, url: "https://other.example.test/mcp" } };
   const inputs = [
     POST(request("POST", { action: "propose", proposal: hostile })),
@@ -148,7 +163,7 @@ test("both proposal routes and approval refuse a secret sent to another origin",
 test("team mode admits only an active owner, and rechecks after the request body wait", async () => {
   resetTeamStoreForTests();
   process.env.LLV_STATE_DIR = path.join(root, "team-state");
-  const owner = claimInstall(teamStore(), "Owner", { surface: "desktop", browser: "chrome" });
+  const owner = authenticatedOwner();
   const invitation = createInvite(teamStore(), owner.member, "Member");
   const member = redeemJoin(teamStore(), invitation.code, "Member", { surface: "desktop", browser: "chrome" });
   const ownerHeaders = { cookie: `${MEMBER_COOKIE}=${owner.cookie}` };
@@ -168,7 +183,7 @@ test("team mode admits only an active owner, and rechecks after the request body
   expect((await POST(request("POST", { action: "propose", proposal }, ownerHeaders))).status).toBe(401);
   setVoiceToolHubForTests(new VoiceToolHub(new VoiceToolsStore(path.join(root, "state"))));
   // Issue a fresh owner session for the independent body-read race.
-  const secondSession = mintSession(teamStore(), owner.member.id, "claim", { surface: "desktop", browser: "chrome" });
+  const secondSession = mintSession(teamStore(), owner.member.id, "passkey", { surface: "desktop", browser: "chrome" });
   const secondHeaders = { cookie: `${MEMBER_COOKIE}=${secondSession.value}` };
   // Revoke at the exact body await; authorization must be checked again before mutation.
   const req = request("POST", { action: "propose", proposal }, secondHeaders);
@@ -217,6 +232,63 @@ test("a same-origin local client cannot approve a successfully probed server", a
     const response = await POST(request("POST", { action: "approve", name: "music", digest: ready.digest }, { cookie: "" }));
     expect(response.status).toBe(401);
     expect((await new VoiceToolsStore(store.directory).view()).servers.music.state).toBe("pending");
+  } finally {
+    await peer.stop(true);
+    resetTeamStoreForTests();
+    process.env.LLV_STATE_DIR = path.join(root, "state");
+    setVoiceToolHubForTests(new VoiceToolHub(new VoiceToolsStore(path.join(root, "state"))));
+  }
+});
+
+test("claiming an unclaimed install does not authorize voice tool proposal, dry run or approval", async () => {
+  resetTeamStoreForTests();
+  process.env.LLV_STATE_DIR = path.join(root, "claim-attack-state");
+  const store = new VoiceToolsStore(process.env.LLV_STATE_DIR);
+  setVoiceToolHubForTests(new VoiceToolHub(store));
+  let contacts = 0;
+  const peer = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
+    contacts++;
+    if (req.method !== "POST") return new Response(null, { status: 405 });
+    const message = await req.json() as { id?: number; method: string };
+    if (message.id === undefined) return new Response(null, { status: 202 });
+    const result = message.method === "initialize" ? { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "fake", version: "1" } }
+      : { tools: [{ name: "search", description: "Search", inputSchema: { type: "object" } }] };
+    return Response.json({ jsonrpc: "2.0", id: message.id, result });
+  } });
+  try {
+    const claim = await claimPOST(new NextRequest("http://127.0.0.1/api/team/claim", { method: "POST",
+      headers: { host: "127.0.0.1", origin: "http://127.0.0.1", "sec-fetch-site": "same-origin", "content-type": "application/json" }, body: JSON.stringify({ name: "Attacker" }) }));
+    expect(claim.status).toBe(200);
+    const claimedCookie = claim.cookies.get(MEMBER_COOKIE)?.value;
+    expect(claimedCookie).toBeTruthy();
+    const attacker = { cookie: `${MEMBER_COOKIE}=${claimedCookie}` };
+    const local = { ...proposal, transport: { type: "http", url: `http://127.0.0.1:${peer.port}/mcp` } };
+    expect((await POST(request("POST", { action: "propose", proposal: local }, attacker))).status).toBe(401);
+    expect((await GET(request("GET", undefined, attacker))).status).toBe(401);
+    for (const action of ["dry-run", "approve", "configure", "secrets", "remove", "reject"]) {
+      expect((await POST(request("POST", { action, name: "music", digest: `sha256:${"a".repeat(64)}` }, attacker))).status).toBe(401);
+    }
+    expect((await proposalPOST(request("POST", { action: "propose", proposal: local, clientRequestId: "claim-attempt", conversationId: "conversation_worker" }, attacker))).status).toBe(403);
+    expect(contacts).toBe(0);
+    const view = await store.view();
+    expect(view.servers.music).toBeUndefined();
+
+    resetTeamStoreForTests();
+    process.env.LLV_STATE_DIR = path.join(root, "claim-owner-state");
+    const owner = authenticatedOwner();
+    const ownerStore = new VoiceToolsStore(process.env.LLV_STATE_DIR);
+    setVoiceToolHubForTests(new VoiceToolHub(ownerStore));
+    const ownerCookie = { cookie: `${MEMBER_COOKIE}=${owner.cookie}` };
+    const authorized = await POST(request("POST", { action: "propose", proposal: local }, ownerCookie));
+    expect(authorized.status).toBe(200);
+    const proposed = await authorized.json();
+    const dryRun = await POST(request("POST", { action: "dry-run", name: "music", digest: proposed.servers.music.digest }, ownerCookie));
+    expect(dryRun.status).toBe(200);
+    const discovered = await dryRun.json();
+    const approved = await POST(request("POST", { action: "approve", name: "music", digest: discovered.servers.music.digest }, ownerCookie));
+    expect(approved.status).toBe(200);
+    expect((await approved.json()).servers.music.state).toBe("enabled");
+    expect(contacts).toBeGreaterThan(0);
   } finally {
     await peer.stop(true);
     resetTeamStoreForTests();

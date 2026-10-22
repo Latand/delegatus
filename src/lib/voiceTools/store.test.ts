@@ -127,6 +127,16 @@ test("invalid catalog or secret artifact fails closed; secrets cannot be introdu
   await expect(new VoiceToolsStore(root).view()).rejects.toThrow("REGISTRY_UNAVAILABLE");
 });
 
+test("a persisted HTTP authority override invalidates the store and cannot be approved", async () => {
+  const { store, root } = await setup();
+  await store.propose({ ...proposal(), transport: { type: "http", url: "https://example.invalid/mcp" } }, actor);
+  const raw = JSON.parse(await fs.readFile(store.file, "utf8"));
+  raw.servers.music.transport.headers.hOsT = { value: "unbound.example.test" };
+  await fs.writeFile(store.file, JSON.stringify(raw), { mode: 0o600 });
+  await expect(new VoiceToolsStore(root).view()).rejects.toThrow("REGISTRY_UNAVAILABLE");
+  await expect(store.operatorChange("music", approvalDigest("music", raw.servers.music), "approve")).rejects.toThrow("REGISTRY_UNAVAILABLE");
+});
+
 test("a restarted store refuses a persisted catalog with invalid JSON Schema", async () => {
   const { store, root } = await setup();
   await store.propose(proposal(), actor);

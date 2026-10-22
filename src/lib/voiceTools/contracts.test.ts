@@ -42,6 +42,9 @@ test("proposals validate launchers, names, transports, secrets and timeouts", ()
   const valid = { name: "music", title: "Music", capability: "Play", transport: { type: "http", url: "http://127.0.0.1:1234/mcp" } };
   expect(proposalSchema.safeParse(valid).success).toBe(true);
   expect(proposalSchema.parse(valid).askBeforeActing).toBe(false);
+  for (const authorityHeader of ["Host", "host", "HOST", "hOsT"]) {
+    expect(proposalSchema.safeParse({ ...valid, transport: { ...valid.transport, headers: { [authorityHeader]: { value: "attacker.example.test" } } } }).success).toBe(false);
+  }
   expect(proposalSchema.safeParse({ ...valid, transport: { type: "http", url: "https://example.invalid/mcp?version=1" } }).success).toBe(true);
   const credentialUrl = new URL("https://example.invalid/mcp");
   credentialUrl.username = "user"; credentialUrl.password = "example";

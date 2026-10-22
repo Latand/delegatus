@@ -25,11 +25,13 @@ export function allowedHttpUrl(input: string): boolean {
  * NODE_ENV only tells the server how to behave, so a proposal may still set it.
  */
 export const launchShapingEnv = /^(?:PATH|PATHEXT|HOME|SHELL|COMSPEC|SYSTEMROOT|WINDIR|TMPDIR|TEMP|TMP|LD_\w*|DYLD_\w*|NODE_(?!ENV$)\w*|BUN_\w*|BUNFIG\w*|UV_\w*|NPM_CONFIG_\w*|YARN_\w*|PIP_\w*|PYTHON\w*|VIRTUAL_ENV|CONDA_\w*|XDG_\w*|GIT_\w*|GLIBC_TUNABLES|MALLOC_\w*|SSL_CERT_\w*|CURL_CA_BUNDLE|REQUESTS_CA_BUNDLE|(?:HTTPS?|ALL|NO)_PROXY)$/i;
+const authorityHeaderOverride = (headers: Record<string, unknown>) => Object.keys(headers).some(name => /^(?:host|:authority)$/i.test(name));
 export const transportSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("stdio"), command: z.enum(["bun", "uv"]), args: z.array(z.string().max(4096).refine(v => !v.includes("\0"))).max(64),
     cwd: text(4096).nullable().default(null),
     env: variables(/^[A-Za-z_][A-Za-z0-9_]{0,127}$/).refine(v => Object.keys(v).every(name => !launchShapingEnv.test(name))).default({}) }).strict(),
-  z.object({ type: z.literal("http"), url: text(4096).refine(allowedHttpUrl), headers: variables(/^[A-Za-z][A-Za-z0-9-]{0,127}$/).default({}) }).strict(),
+  z.object({ type: z.literal("http"), url: text(4096).refine(allowedHttpUrl),
+    headers: variables(/^[A-Za-z][A-Za-z0-9-]{0,127}$/).default({}).refine(headers => !authorityHeaderOverride(headers)) }).strict(),
 ]);
 export const proposalSchema = z.object({
   name: serverName, title: text(120), capability: text(160), transport: transportSchema,
@@ -155,8 +157,12 @@ export type SecretPolicies = Record<string, string[]>;
 export function secretDestination(name: string, server: Pick<VoiceToolServer, "transport">): string {
   return server.transport.type === "http" ? new URL(server.transport.url).origin : `stdio:${name}`;
 }
+export function assertTransportAuthority(server: Pick<VoiceToolServer, "transport">): void {
+  if (server.transport.type === "http" && authorityHeaderOverride(server.transport.headers)) throw new Error("SECRET_DESTINATION");
+}
 /** Runs at proposal, approval, dispatch and independently inside the worker. */
 export function assertSecretDestinations(name: string, server: VoiceToolServer, policies: SecretPolicies, references = secretReferences(server)): void {
+  assertTransportAuthority(server);
   const destination = secretDestination(name, server);
   if (references.some(ref => !Object.hasOwn(policies, ref) || !Array.isArray(policies[ref]) || !policies[ref].includes(destination))) throw new Error("SECRET_DESTINATION");
 }

@@ -16,6 +16,7 @@ export function voiceToolsOperator(req: NextRequest): NextResponse | null {
   if (!session) return failure("OPERATOR_REQUIRED", 401);
   const member = existingTeamStore()?.member(session.member.id);
   if (!member || member.status !== "active" || member.role !== "owner") return failure("OPERATOR_REQUIRED", 403);
+  if (!["passkey", "telegram"].includes(session.session.method)) return failure("OPERATOR_REQUIRED", 401);
   return null;
 }
 const common = { name: serverName, digest: z.string().regex(/^sha256:[a-f0-9]{64}$/) };

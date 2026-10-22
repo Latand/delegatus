@@ -1062,11 +1062,17 @@ HTTP headers). These references describe the pre-fix code.
 
 `src/lib/voiceTools/http.ts#voiceToolsOperator` requires a live member session
 whose active member is the installation owner, in addition to the existing
-origin and agent/service exclusions. A solo installation must first claim an
-owner through the existing member flow. Fetch Metadata, an absent capability
-header and a loopback address supply no authenticated owner proof. Body reads,
-lock admission, dispatch and final writes recheck owner authority. The MCP
-proposal route still has only list, status and propose branches.
+origin and agent/service exclusions. For this surface, the session must also
+come from a verified passkey assertion or the owner's linked Telegram account.
+The install-claim endpoint still creates the first owner and a `claim` session,
+but that bootstrap session cannot manage voice tools. The owner establishes
+voice-tool authority by completing a passkey ceremony or signing in through
+the already linked Telegram identity. Invite, claim, recovery and device
+approval sessions do not satisfy this additional proof. Fetch Metadata, an
+absent capability header and a loopback address supply no authenticated owner
+proof. Body reads, lock admission, dispatch and final writes recheck owner
+authority. The MCP proposal route still has only list, status and propose
+branches.
 
 `src/lib/voiceTools/seal.ts` holds a random MAC key in the Viewer process.
 Approvals authenticate their digest, timestamp, server name, destination policy and store scope.
@@ -1095,6 +1101,10 @@ existing member authentication path is the authority boundary for this slice.
 A secret update carries an optional private value and an explicit, nonempty
 list of destinations. HTTP destinations are exact origins: scheme, normalized
 host and port. Paths, userinfo, wildcards and suffix matches are refused.
+`Host` and `:authority` header overrides are refused case-insensitively at
+proposal parsing, persisted-store loading and approval, and checked again in
+the final worker before it resolves or sends any credential. A shared ingress
+therefore receives requests for the URL authority only.
 Stdio destinations name the local recipient as `stdio:<server-name>`; granting
 a remote host never grants a local program access to its credential. New
 values require at least eight characters. Legacy string values migrate as

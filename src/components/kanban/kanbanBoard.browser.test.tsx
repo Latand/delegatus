@@ -22948,6 +22948,7 @@ describe("floating voice companion", () => {
        read in these frames. */
     const defining: Record<string, (lang: "en" | "uk") => { head: string[]; tools?: string[]; foot: string[] }> = {
       empty: lang => ({ head: [translate(lang, "voiceCompanion.tools.empty")], foot: [] }),
+      "sign-in-required": lang => ({ head: [translate(lang, "voiceCompanion.tools.signIn")], foot: [] }),
       pending: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example",
         translate(lang, "voiceCompanion.tools.secretValue", { name: "SPOTIFY_CLIENT_ID" }), "SPOTIFY_REDIRECT_URI=http://127.0.0.1:8888/callback"],
         foot: [translate(lang, "voiceCompanion.tools.secretNeeded"), translate(lang, "voiceCompanion.tools.dryRun.none"), ...dryRun(lang), translate(lang, "voiceCompanion.tools.action.reject")] }),
@@ -22965,13 +22966,18 @@ describe("floating voice companion", () => {
         foot: [translate(lang, "voiceCompanion.tools.refused.SELECTION_BOUNDS"), translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.disable")] }),
       "dry-run-busy": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example"],
         foot: [...dryRun(lang), translate(lang, "voiceCompanion.tools.refused.dryRun.BUSY")] }),
+      "destination-refused": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example"],
+        tools: ["skip"], foot: [translate(lang, "voiceCompanion.tools.refused.SECRET_DESTINATION"), translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.approve")] }),
+      "destination-result": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example"],
+        foot: [translate(lang, "voiceCompanion.tools.dryRun.SECRET_DESTINATION"), ...dryRun(lang)] }),
       rejected: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.rejected"), "spotify-mcp-example"],
         foot: [...dryRun(lang), translate(lang, "voiceCompanion.tools.action.remove")] }),
       disabled: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.disabled"), "spotify-mcp-example"],
         foot: [translate(lang, "voiceCompanion.tools.ask"), ...dryRun(lang), translate(lang, "voiceCompanion.tools.action.approve"), translate(lang, "voiceCompanion.tools.action.remove")] }),
     };
     /* The refused states are read after their press, which every language and theme makes. */
-    const refusedPress: Record<string, string> = { "approved-refused": "[data-voice-tool-ask]", "dry-run-busy": "[data-voice-tool-action='dry-run']" };
+    const refusedPress: Record<string, string> = { "approved-refused": "[data-voice-tool-ask]", "dry-run-busy": "[data-voice-tool-action='dry-run']",
+      "destination-refused": "[data-voice-tool-action='approve']" };
     try {
       for (const width of [1440, 1000, 820, 390]) {
         // Release each width's renderers before the next matrix, bounding retained browser memory.
@@ -23001,7 +23007,7 @@ describe("floating voice companion", () => {
           for (const part of ["head", "secrets", "tools", "foot"] as const) {
             const words = part === "secrets" ? (await page.locator("[data-voice-tool-reference]").count() ? [translate(lang, "voiceCompanion.tools.destinations")] : []) : defining[state](lang)[part] ?? [];
             if (!words.length) continue;
-            if (state === "empty") await section.scrollIntoViewIfNeeded();
+            if (state === "empty" || state === "sign-in-required") await section.scrollIntoViewIfNeeded();
             /* The head: the row's top at the dialog's top. The tools: the list's end at the dialog's bottom. The foot: its last line (the action row, or a line or refusal under it) at the dialog's bottom. */
             else await page.evaluate(([selector, top]) => document.querySelector(selector)!.scrollIntoView({ block: top ? "start" : "end" }), [part === "head" ? "[data-voice-tool-server]" : part === "secrets" ? "[data-voice-tool-reference]" : part === "tools" ? "[data-voice-tool-tools]" : "[data-voice-tool-server] > :last-child", part === "head"] as const);
             await page.screenshot({ path: path.join(out, `${label}-${part}.png`) });
@@ -23044,7 +23050,7 @@ describe("floating voice companion", () => {
             read.shown.forEach((whole, at) => { if (!whole) failures.push(`${label}-${part}: «${words[at]}» is not whole on screen`); });
             if (read.small.length) failures.push(`${label}: small targets ${read.small.join(" | ")}`);
           }
-          expect(await row.count()).toBe(state === "empty" ? 0 : 1);
+          expect(await row.count()).toBe(state === "empty" || state === "sign-in-required" ? 0 : 1);
           if (state === "approved" || state === "approved-ask") {
             const ask = page.locator("[data-voice-tool-ask]");
             expect(await ask.isChecked()).toBe(state === "approved-ask");

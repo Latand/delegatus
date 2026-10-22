@@ -2451,7 +2451,7 @@ export const uk: Record<keyof typeof en, Message> = {
   "voiceCompanion.tools.title": "Інструменти",
   "voiceCompanion.tools.destinations": "Дозволені адреси (точні origin або одержувач stdio)",
   "voiceCompanion.tools.destinationsSaved": "Дозволено: {hosts}",
-  "voiceCompanion.tools.signIn": "Увійдіть як власник інсталяції, щоб керувати інструментами голосу. Якщо власника ще немає, спочатку зареєструйте його.",
+  "voiceCompanion.tools.signIn": "Підтвердьте власника інсталяції ключем доступу або прив’язаним обліковим записом Telegram, щоб керувати інструментами голосу. Якщо власника ще немає, спочатку зареєструйте його.",
   "voiceCompanion.tools.refused.SECRET_DESTINATION": "Цій адресі не дозволено отримувати секрет. Задайте дозволені адреси перед перевіркою чи схваленням.",
   "voiceCompanion.tools.dryRun.SECRET_DESTINATION": "Адресі не дозволено отримувати секрет",
   "voiceCompanion.tools.intro": "MCP-сервери, які агенти пропонують для голосу. Схвалений сервер працює від імені вашого користувача ОС і може читати та змінювати ваші файли, тож схвалюйте лише те, чому довіряєте. Дзвінки поки що не використовують ці інструменти.",

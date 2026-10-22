@@ -2506,7 +2506,7 @@ export const en = {
   "voiceCompanion.tools.title": "Tools",
   "voiceCompanion.tools.destinations": "Allowed destinations (exact origins or stdio recipient)",
   "voiceCompanion.tools.destinationsSaved": "Allowed: {hosts}",
-  "voiceCompanion.tools.signIn": "Sign in as the installation owner to manage voice tools. Claim this installation first if it has no owner.",
+  "voiceCompanion.tools.signIn": "Verify the installation owner with a passkey or linked Telegram account to manage voice tools. Claim this installation first if it has no owner.",
   "voiceCompanion.tools.refused.SECRET_DESTINATION": "This secret is not allowed at this destination. Set its allowed destinations before running or approving.",
   "voiceCompanion.tools.dryRun.SECRET_DESTINATION": "Secret destination is not allowed",
   "voiceCompanion.tools.intro": "MCP servers that agents propose for the voice. An approved server runs as your OS user and can read and write your files, so approve only what you trust. Calls do not use these tools yet.",

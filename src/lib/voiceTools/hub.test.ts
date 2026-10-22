@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { VoiceToolHub, resolveExecutable, voiceToolEnvironment } from "./hub";
 import { VoiceToolsStore } from "./store";
-import { approvalDigest, digest } from "./contracts";
+import { approvalDigest, digest, type VoiceToolServer } from "./contracts";
 
 const roots: string[] = [];
 const listeners: ReturnType<typeof Bun.serve>[] = [];
@@ -742,4 +742,24 @@ test("the worker checks exact scheme, port and host even when the store is bypas
     expect(JSON.parse(output).code).toBe(destinations[0] === origin ? "OK" : "SECRET_DESTINATION");
     expect(peer.requests.length > before).toBe(destinations[0] === origin);
   }
+});
+
+test("the real worker refuses a proposal-controlled Host before sending its credential", async () => {
+  const { store, root } = await setup(); const peer = fake();
+  const expected = await propose(store, peer.url, { Authorization: { secretRef: "music-token" } });
+  const server = JSON.parse(await fs.readFile(store.file, "utf8")).servers.music as VoiceToolServer;
+  if (server.transport.type !== "http") throw new Error("expected HTTP transport");
+  server.transport.headers.hOsT = { value: "unbound.example.test" };
+  const child = spawn(process.execPath, [path.join(import.meta.dir, "probe.worker.ts")], {
+    cwd: process.cwd(), env: voiceToolEnvironment(root, process.env), stdio: ["pipe", "pipe", "ignore"],
+  });
+  let output = ""; child.stdout!.on("data", chunk => { output += chunk.toString(); });
+  const closed = new Promise(resolve => child.once("close", resolve));
+  child.stdin!.end(JSON.stringify({ name: "music", server, secrets: { "music-token": "synthetic-voice-credential" },
+    policies: { "music-token": [new URL(peer.url).origin] }, home: root, launch: null }));
+  const watchdog = setTimeout(() => child.kill("SIGKILL"), 15_000);
+  try { await closed; } finally { clearTimeout(watchdog); }
+  expect(expected).toBeTruthy();
+  expect(JSON.parse(output).code).toBe("SECRET_DESTINATION");
+  expect(peer.requests).toEqual([]);
 });

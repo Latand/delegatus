@@ -227,14 +227,17 @@ const voiceSettings = {
    «ask before acting» off and on), `rejected` and `disabled` (a proposal the operator rejected, and an approved
    server they turned off), `long` (every operator-visible field at its schema maximum), and two whose next
    press is refused: `approved-refused` (the switch's change and re-approval meet the selection bound) and
-   `dry-run-busy` (the hub already runs eight dry runs). */
+   `dry-run-busy` (the hub already runs eight dry runs), plus `sign-in-required`,
+   `destination-refused` and `destination-result`. */
 const VOICE_TOOLS = new URLSearchParams(location.search).get("voicetools");
 type FixtureVoiceTool = Record<string, unknown> & { state: string; digest: string; askBeforeActing: boolean; tools: Record<string, { enabled: boolean; acts: boolean }>;
   missingSecrets: string[]; secretRefs: string[]; catalog: { digest: string; fetchedAt: string; tools: Array<{ name: string; description: string; annotations?: { readOnlyHint?: boolean } }> } | null;
   lastDryRun: { code: string; at: string; digest: string } | null };
 const voiceToolsState = { revision: 7, servers: {} as Record<string, FixtureVoiceTool> };
 /* One refusal per action, answered before the record changes, as the route answers a refused mutation. */
-const voiceToolsRefuse: Record<string, string> = VOICE_TOOLS === "approved-refused" ? { configure: "SELECTION_BOUNDS" } : VOICE_TOOLS === "dry-run-busy" ? { "dry-run": "BUSY" } : {};
+const voiceToolsRefuse: Record<string, string> = VOICE_TOOLS === "approved-refused" ? { configure: "SELECTION_BOUNDS" }
+  : VOICE_TOOLS === "dry-run-busy" ? { "dry-run": "BUSY" }
+    : VOICE_TOOLS === "destination-refused" ? { approve: "SECRET_DESTINATION" } : {};
 const voiceToolDigest = (seed: number) => `sha256:${seed.toString(16).padStart(64, "0")}`;
 const voiceToolAt = (minutesAgo: number) => new Date((VOICE_LOADED - minutesAgo * 60) * 1000).toISOString();
 const spotifyCatalog = () => ({ digest: voiceToolDigest(901), fetchedAt: voiceToolAt(4), tools: [
@@ -257,6 +260,8 @@ function seedVoiceTools() {
   const ok = { code: "OK", at: voiceToolAt(4), digest: voiceToolDigest(501) };
   if (VOICE_TOOLS === "pending") voiceToolsState.servers.spotify = spotify({ missingSecrets: ["spotify-client-id"], secretDestinations: { "spotify-client-id": [] } });
   if (VOICE_TOOLS === "review") voiceToolsState.servers.spotify = spotify({ catalog: spotifyCatalog(), lastDryRun: ok, tools: { ...chosen, play: { enabled: false, acts: true } } });
+  if (VOICE_TOOLS === "destination-refused") voiceToolsState.servers.spotify = spotify({ catalog: spotifyCatalog(), lastDryRun: ok, tools: { ...chosen, play: { enabled: false, acts: true } } });
+  if (VOICE_TOOLS === "destination-result") voiceToolsState.servers.spotify = spotify({ lastDryRun: { code: "SECRET_DESTINATION", at: voiceToolAt(1), digest: voiceToolDigest(503) } });
   if (VOICE_TOOLS === "dry-run-busy") voiceToolsState.servers.spotify = spotify({});
   if (VOICE_TOOLS === "rejected") voiceToolsState.servers.spotify = spotify({ state: "rejected" });
   if (VOICE_TOOLS === "disabled") voiceToolsState.servers.spotify = spotify({ state: "disabled", catalog: spotifyCatalog(), lastDryRun: ok, tools: chosen });
@@ -4693,6 +4698,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   /* The Tools section's route, as `/api/voice-tools` answers: the view on a read and after each write, and a fixed
      code on a refusal. A dry run of the timed-out script times out again; the Spotify server's passes. */
   if (VOICE && url.pathname === "/api/voice-tools") {
+    if (VOICE_TOOLS === "sign-in-required" && method === "GET") return json({ code: "OPERATOR_REQUIRED" }, 401);
     if (method === "POST") {
       const body = JSON.parse(String(init?.body ?? "{}")) as { action: string; name?: string; digest?: string; tools?: FixtureVoiceTool["tools"]; askBeforeActing?: boolean; reapprove?: true; secrets?: Record<string, { value?: string; destinations: string[] }> };
       const server = body.name ? voiceToolsState.servers[body.name] : undefined;
