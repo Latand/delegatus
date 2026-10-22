@@ -3284,8 +3284,19 @@ for (const language of ["en", "uk"] as const) test(`owner ${language} failure re
   const file = path.join(process.env.HOME!, "handoff", "interrupted-report.md");
   fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, "# Interrupted report");
   const conversationId = `conversation_failure_parts_${language}`;
+  const { Database } = await import("bun:sqlite");
+  const settingsFile = path.join(process.env.LLV_STATE_DIR!, "telegram", "bot.sqlite");
+  const hadDatabase = fs.existsSync(settingsFile);
+  fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+  const settings = new Database(settingsFile);
+  const hadSettings = !!settings.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'settings'").get();
+  const priorRoots = hadSettings ? settings.query<{ value: string }, []>("SELECT value FROM settings WHERE key = 'document_roots'").get() : null;
   let stagingError: unknown;
   try {
+    // Earlier cases can leave an intentionally partial bot database. Own the
+    // setting this attachment fixture needs, then restore exactly that state.
+    settings.exec("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)");
+    settings.query("INSERT OR REPLACE INTO settings (key, value) VALUES ('document_roots', ?)").run(JSON.stringify([path.dirname(file)]));
     const result = await runClaimedRequest(paired, request, undefined, { ownerPorts: {
       launch: async () => ({ status: 202, body: { conversationId } }),
       observe: async () => {
@@ -3302,7 +3313,17 @@ for (const language of ["en", "uk"] as const) test(`owner ${language} failure re
       expect(result.answer.mentions ?? []).toEqual([]);
     }
     expect(uploads).toBe(0);
-  } finally { fs.rmSync(file, { force: true }); await service.close(); }
+  } finally {
+    try {
+      if (!hadSettings) settings.exec("DROP TABLE settings");
+      else if (priorRoots) settings.query("INSERT OR REPLACE INTO settings (key, value) VALUES ('document_roots', ?)").run(priorRoots.value);
+      else settings.query("DELETE FROM settings WHERE key = 'document_roots'").run();
+    } finally {
+      settings.close();
+      if (!hadDatabase) fs.rmSync(settingsFile, { force: true });
+      fs.rmSync(file, { force: true }); await service.close();
+    }
+  }
 });
 
 for (const admission of ["failed_receipt", "lost_response"] as const) test(`owner ${admission} keeps custody until host control confirms`, async () => {
