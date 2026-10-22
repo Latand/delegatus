@@ -1,9 +1,13 @@
+import { resolveSeatProject } from "@/lib/orchestrator/seatProjectIdentity";
+import { ProjectNameRefusal } from "@/lib/projects/nameResolution";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import fs from "node:fs";
 import os from "node:os";
 
 import { NextRequest, NextResponse } from "next/server";
 
+import { canonicalProject } from "@/lib/projects/aliases";
+import { isCanonicalProjectId } from "@/lib/projects/identity";
 import { requireOperatorAuthority } from "@/lib/agent/operatorAuthority";
 import { viewerMcpRegistered } from "@/lib/agent/spawnPolicy";
 import { executeOrchestratorSeatRequest, reconcileOrchestratorSeatLaunch } from "@/lib/orchestrator/seatCommand";
@@ -26,6 +30,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 interface SeatStatus {
+  project: string;
+  displayName: string;
   seat: OrchestratorSeat | null;
   pending: OrchestratorSeat | null;
   /** The latest terminal failure still needing attention. Its durable history
@@ -81,12 +87,23 @@ interface SeatFailure {
 
 export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | SeatConversationsAnswer | ApiError>> {
   return withViewerOperation("seat.panel", async () => {
-  const project = req.nextUrl.searchParams.get("project")?.trim() ?? "";
+  let project = req.nextUrl.searchParams.get("project")?.trim() ?? "";
+  let displayName = project;
+  const cwd = req.nextUrl.searchParams.get("cwd")?.trim() || undefined;
   if (req.nextUrl.searchParams.get("scope")?.trim() === "all") {
     return NextResponse.json({ all: withDeputyRefs(allSeatConversationsIn(readOrchestratorSeatFileOrNull()), readDeputyFileOrNull()) });
   }
   if (!project) return NextResponse.json({ error: "project is required" }, { status: 400 });
-  const cwd = req.nextUrl.searchParams.get("cwd")?.trim() || undefined;
+  try {
+    ({ project, displayName } = resolveSeatProject(project, cwd, undefined, isCanonicalProjectId(canonicalProject(project))
+      ? { reconcileExistingSeats: false, includeActiveSeats: false }
+      : {}));
+  }
+  catch (error) {
+    // Historical unknown keys remain readable while their identity is unproven.
+    if (!(error instanceof ProjectNameRefusal)) throw error;
+    if (error.details.code !== "unknown_project") return NextResponse.json({ error: error.message, ...error.details }, { status: 400 });
+  }
   const home = process.env.HOME?.trim() || os.homedir();
   /* ONE read of the seat record for the whole answer. Every part of it — this
      project's seat, the seats that held it before, and the conversations every
@@ -134,6 +151,7 @@ export async function GET(req: NextRequest): Promise<NextResponse<SeatStatus | S
     return { ...seat, title: task?.title ?? null, taskId: task?.taskId ?? null, hasNotes: task?.hasNotes ?? false };
   });
   return NextResponse.json({
+    project, displayName,
     seat: active,
     pending,
     lastFailure: currentSeatFailure(failure, active, hostObservation),
