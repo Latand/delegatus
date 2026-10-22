@@ -20,7 +20,10 @@ Producers are the fresh/resumed builders in `runtime/structuredSpawn.ts`, the
 boot adoption builders in `runtime/startup.ts`, and both successor builders
 in `accounts/migration/provider.ts`. Each engine start goes through one of
 these builders. Launch profiles and receipts retain their text-free selector;
-no ledger fields are added to those contracts or to MCP lesson writes.
+no ledger fields are added to those launch contracts. Optional `applied` and
+`misled` ids on MCP lesson answers are checked against this attempt and
+conversation's indexed delivery records, never against current readability
+or shadow membership. The answer and its measurement commit together.
 Legacy boot rows first acquire a durable conversation through the existing
 registry method under asynchronous state admission.
 
@@ -42,6 +45,14 @@ engine, timestamp, physical scope revisions and their revision namespaces,
 ordered rule ids with SHA-256 hashes, exact UTF-8 instruction bytes, and native
 memory descriptors (`kind`, full-file SHA-256, file bytes, loaded-prefix bytes).
 The renderer supplies both text and ordered metadata after the byte ceiling.
+Stage attempts freeze that block in `role_memory_selection` on their first
+start; resumes, boot adoption and account migration replay it. Shadow
+selection adds its reason and ids to the ledger without changing delivered
+membership. Later starts record `frozen`; their scope keys stay fixed and
+their revision arrays are empty, since no current scope revision rendered
+that replay. Operator deletion or an unresolved exact version removes the
+corresponding line and records the removal on both records. See
+[role-memory-layers.md §5.4](role-memory-layers.md#54-where-it-runs).
 To recover a rule text, match its hash against the permanent current rule and
 its version rows; timestamps cannot distinguish same-instant rewrites.
 No rule text or explanation is duplicated into the ledger. Existing rule
@@ -70,6 +81,14 @@ Sequence gaps before the oldest retained row represent expired evidence.
 Reconstruction covers every retained start after activation; analysis must
 report the retained sequence/time window and count expired starts separately.
 It cannot reconstruct attempts before activation or after their evidence expires.
+
+Frozen selection rows become eligible for deletion one day after their
+attempt settles. The serving Viewer sweeps 32 rows per minute, with a
+settlement recheck inside the writer transaction. A current stage awaiting
+publication or repair, an unsettled activation or unconfirmed termination
+retains its row. Close, delivery release and recorded host-settlement times
+extend the grace clock. Missing or unreadable settlement proof retains the
+row; the delivery ledger keeps its own retention policy.
 
 Scope history now keeps the last 10,000 ordinary changes independently of all
 curator-pass records, which stay for Undo. At the measured upper rate of 141

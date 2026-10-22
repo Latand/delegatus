@@ -7,7 +7,7 @@ import path from "node:path";
 import { stateLockWaitsInFlight } from "@/lib/state/lockWait";
 import { assertStateChildSuccess } from "@/lib/state/stateChildResult.fixture";
 import { learnedRulesForLaunchProfile } from "./roleLaunch";
-import { DELIVERY_LEDGER_STARTS, engineMemoryVersion, memoryDeliveries, type MemoryEngineStart } from "./deliveryLedger";
+import { DELIVERY_LEDGER_STARTS, engineMemoryVersion, memoryDeliveries, prepareDeliveryLedgerIndexes, type MemoryEngineStart } from "./deliveryLedger";
 import { learnedRulesSnapshot, leaveLessons, recordLessonRequest, roleMemoryCollection } from "./roleStore";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-delivery-test-"));
 let draw = 0;
@@ -29,6 +29,54 @@ async function runChild(script: string): Promise<void> {
     assertStateChildSuccess(code, stderr);
   } finally { if (timer) clearTimeout(timer); }
 }
+
+test("an upgrade builds delivery indexes off-loop before the first writer", async () => {
+  const directory = path.join(process.env.LLV_STATE_DIR!, "role-memory");
+  fs.mkdirSync(directory, { recursive: true });
+  const filename = path.join(directory, "delivery.sqlite");
+  const db = new Database(filename);
+  try {
+    db.exec("CREATE TABLE deliveries (sequence INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL); CREATE TABLE versions (hash TEXT PRIMARY KEY, content BLOB NOT NULL); CREATE TABLE files (sequence INTEGER REFERENCES deliveries(sequence) ON DELETE CASCADE, hash TEXT REFERENCES versions(hash), PRIMARY KEY(sequence, hash)); BEGIN IMMEDIATE");
+    const insert = db.query("INSERT INTO deliveries(body) VALUES (?)");
+    const body = JSON.stringify({ attempt: { pipelineId: "prior-pipeline", stageId: "build", attempt: 1 }, conversationId: "prior-conversation", retained: "history".repeat(128) });
+    for (let i = 0; i < 4_000; i++) insert.run(body);
+    db.exec("COMMIT");
+  } finally { db.close(); }
+
+  const barrier = path.join(directory, "worker-barrier");
+  fs.mkdirSync(barrier, { recursive: true });
+  let progressed = false;
+  let closeWorkerWatch = () => {};
+  const workerReady = new Promise<void>((resolve, reject) => {
+    const readyFile = path.join(barrier, "worker-ready");
+    const watcher = fs.watch(barrier, () => {
+      if (fs.existsSync(readyFile)) { watcher.close(); resolve(); }
+    });
+    closeWorkerWatch = () => watcher.close();
+    watcher.once("error", reject);
+    if (fs.existsSync(readyFile)) { watcher.close(); resolve(); }
+  });
+  const preparing = prepareDeliveryLedgerIndexes({ workerStartedBarrierForTest: barrier });
+  try {
+    await Promise.race([workerReady, preparing.then(() => { throw Error("delivery index worker completed before its start barrier"); })]);
+    await new Promise<void>(resolve => setImmediate(() => {
+      progressed = true;
+      fs.writeFileSync(path.join(barrier, "continue"), "continue");
+      resolve();
+    }));
+    await preparing;
+  } finally {
+    closeWorkerWatch();
+    fs.writeFileSync(path.join(barrier, "continue"), "continue");
+    if (!progressed) await preparing.catch(() => {});
+  }
+  const check = new Database(filename, { readonly: true });
+  try {
+    expect(check.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM deliveries").get()!.count).toBe(4_000);
+    expect(check.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='index'").all().map(row => row.name)).toEqual(expect.arrayContaining(["files_hash", "deliveries_attempt"]));
+    expect(progressed).toBe(true);
+  } finally { check.close(); }
+});
 function lesson(rule: string, attempt = 1, rewrite?: string) {
   const source = { project: "ledger-project", pipelineId: "ledger-pipeline", stageId: "build", attempt, roleId: "builder", fixRound: false, conversationId: "conversation_ledger" };
   recordLessonRequest({ ...source, at: "2026-10-16T00:00:00.000Z" });
@@ -154,7 +202,7 @@ test("contended delivery yields to the loop and captures rules and native input 
   expect(progressed).toBe(true);
   const row = memoryDeliveries()[1]!.delivery;
   expect(row.engineMemory[0]!.hash).toBe(digest("After admission."));
-  expect(row.rules[0]!.hash).toBe(digest("Check current ownership before replaying stored operation acknowledgements."));
+  expect(row.rules[0]!.hash).toBe(digest("Verify ownership before replaying any persisted acknowledgement."));
   expect(row.bytes).toBe(Buffer.byteLength(block!));
 });
 
