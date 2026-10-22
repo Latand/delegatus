@@ -134,6 +134,34 @@ test.each(["local", "pushed", "repair"] as const)("PR-base successor rejects red
   } finally { await f.close(); }
 });
 
+test.each(["local", "pushed", "repair"] as const)("PR-base successor rejects main ancestry redirected by a URL-shaped push alias during %s settlement", async mode => {
+  const f = await fixture(false, true, {});
+  try {
+    f.pipeline.delivery!.target.pr = 1;
+    const foreignUrl = "file://" + f.foreign;
+    await f.own("config", "remote." + foreignUrl + ".url", f.remote);
+    await f.own("config", "remote." + foreignUrl + ".pushurl", f.foreign);
+    f.pipeline.delivery!.target.remote = foreignUrl;
+
+    await f.git(f.foreign, "commit", "--allow-empty", "-m", "foreign main work");
+    const foreign = await f.git(f.foreign, "rev-parse", "HEAD");
+    await f.own("fetch", f.foreign, "main");
+    await f.own("merge", "--no-ff", "-m", "merge foreign main", "FETCH_HEAD");
+    const head = await f.own("rev-parse", "HEAD");
+
+    if (mode === "pushed") {
+      await f.own("push", f.remote, "HEAD:" + f.pipeline.delivery!.target.branch);
+      await fs.writeFile(path.join(f.receipt, "pushes", head),
+        f.pipeline.delivery!.target.branch + "\n" + f.foreign + "\n");
+    }
+    const result = await settleStageAttemptPush(f.pipeline, f.attempt, realExec, NOW,
+      mode === "repair" ? { acceptedHead: f.pipeline.baseRef } : undefined);
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining("commit " + foreign + " was not created") });
+    expect(await f.own("rev-parse", "HEAD")).toBe(head);
+    if (mode === "pushed") expect(await f.git(f.remote, "rev-parse", f.pipeline.delivery!.target.branch)).toBe(head);
+  } finally { await f.close(); }
+});
+
 test.each(["pushed", "repair"] as const)("PR-base successor verifies current origin main during %s settlement", async mode => {
   const f = await fixture(false, true, { mainBeforeCreation: true });
   try {
