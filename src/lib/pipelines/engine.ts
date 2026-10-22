@@ -78,6 +78,7 @@ import { readHostTurnRecord } from "@/lib/runtime/eventStore";
 import { restartCutEvidenceUnresolved } from "@/lib/runtime/restartCutHold";
 import { conversationTurnLiveness, outstandingDeliverySince, readHostProcessEvidence, type TurnLivenessDependencies } from "@/lib/runtime/liveness";
 import { structuredDeliveryPublicationState } from "@/lib/runtime/structuredDeliveryController";
+import { tierCutState as tierCutStateSync } from "@/lib/runtime/tierSwitch";
 import { DELIVERY_UNVERIFIED_BY_EARLIER_EXECUTOR } from "@/lib/runtime/structuredDeliveryQueue";
 import { enqueueStructuredMessage, idleContinuationDeliveryRetryable } from "@/lib/runtime/structuredMessageDelivery";
 import { delegatusMessageOrigin } from "@/lib/runtime/agentMessageAuthor";
@@ -459,6 +460,11 @@ export interface PipelinePorts {
   }): Promise<boolean>;
   /** Enrolls this stage's existing conversation in ordinary account migration. */
   runtimeSwitchControl?(conversationId: string, path: string, action: "interrupt" | "reconfigure", operationId: string, target: PipelineRuntimeSwitch["to"]): Promise<"already-current" | void>;
+  /** In-place tier switch on the live host (Turbo): sets the thread's tier and records it on the conversation. */
+  runtimeSwitchTier?(conversationId: string, operationId: string, serviceTier: string | null, cut: "boundary" | "none", turbo?: { project: string; episode: string; expected?: { accountId: string | null; model: string | null }; beforeCut?: (turnId: string) => Promise<void> }): Promise<{ cut: "cut" | "armed" | "none"; appliedTier: string | null }>;
+  /** Where an armed in-place cut stands; `unknown` after a restart lost it. */
+  runtimeSwitchTierCut?(conversationId: string, operationId: string, turnId?: string): "armed" | "cut" | "turn-ended" | "cancelled" | "host-gone" | "unknown" | Promise<"armed" | "cut" | "turn-ended" | "cancelled" | "host-gone" | "unknown">;
+  cancelRuntimeSwitchTierCut?(conversationId: string, operationId: string): void | Promise<void>;
   runtimeSwitchOutcome?(conversationId: string, operationId: string): Promise<{ state: "pending" | "applied" | "failed" | "superseded"; error?: string }>;
   cancelRuntimeSwitch?(conversationId: string, operationId: string): Promise<void>;
   runtimeSwitchDelivery?(conversationId: string, clientMessageId: string): RuntimeSwitchDelivery | Promise<RuntimeSwitchDelivery>;
@@ -2176,6 +2182,24 @@ export function defaultPipelinePorts(
           fast: target.engine === "codex" ? !!target.serviceTier && !["default", "standard"].includes(target.serviceTier) : null,
           ...(target.accountId ? { accountId: target.accountId } : {}) } } : {}) });
       return runtimeSwitchControlAcknowledgement(result);
+    },
+    runtimeSwitchTier: async (conversationId, operationId, serviceTier, cut, turbo) => {
+      const { switchConversationTier } = await import("@/lib/runtime/tierSwitch");
+      const { authorizeTurboTier } = await import("@/lib/monitor/turboRuntime");
+      return await switchConversationTier(conversationId, operationId, serviceTier, cut, {
+        ...(turbo?.expected ? { expected: turbo.expected } : {}),
+        ...(turbo?.beforeCut ? { beforeCut: turbo.beforeCut } : {}),
+        ...(turbo?.episode && cut !== "none" ? { authorizeDispatch: () => authorizeTurboTier(turbo.project, turbo.episode, conversationId) } : {}),
+      });
+    },
+    runtimeSwitchTierCut: async (conversationId, operationId, turnId) => {
+      const { structuredDeliveryHostForConversation } = await import("@/lib/runtime/structuredDeliveryController");
+      const state = tierCutStateSync(operationId, structuredDeliveryHostForConversation(conversationId), turnId);
+      return state === "none" ? "turn-ended" : state;
+    },
+    cancelRuntimeSwitchTierCut: async (conversationId, operationId) => {
+      const { cancelTierCut } = await import("@/lib/runtime/tierSwitch");
+      await cancelTierCut(conversationId, operationId);
     },
     runtimeSwitchOutcome: async (conversationId, operationId) => {
       const current = registry.conversation(conversationId as ViewerConversationId)?.reconfigure;
@@ -6447,6 +6471,26 @@ function activationFence(pipeline: Pipeline): string {
     ...(pipeline.controlGeneration === undefined ? [] : [pipeline.controlGeneration])]);
 }
 
+function unstartedPendingAttempt(attempt: PipelineStageAttempt | null | undefined): boolean {
+  return !!attempt && attempt.state === "pending" && !attempt.startedAt && !attempt.launchId
+    && !attempt.conversationId && !attempt.agentPath && !attempt.paneId
+    && !attempt.completedAt && !attempt.report && !attempt.verdict;
+}
+
+function pendingLaunchDetail(attempt: PipelineStageAttempt, ports: PipelinePorts, activationPending = !!attempt.activation): string {
+  const publication = ports.structuredDeliveryPublication?.() ?? "ready";
+  if (publication !== "ready") return `stage spawn deferred: waiting for the delivery controller (${publication})`;
+  if (activationPending) return "stage spawn deferred: reconciling the original stage activation";
+  const now = unixMs(ports.now());
+  if (unixMs(attempt.controllerWait?.retryAfter ?? "") > now) {
+    return `stage spawn deferred: waiting for the launch controller; retry at ${attempt.controllerWait!.retryAfter}`;
+  }
+  if (unixMs(attempt.providerWait?.resumeAt ?? "") > now) {
+    return `stage spawn deferred: waiting for provider capacity; retry at ${attempt.providerWait!.resumeAt}`;
+  }
+  return "stage spawn deferred: waiting for stage launch admission";
+}
+
 /** Each reservation has one process owner. Unknown owner liveness never grants
  * takeover; a dead owner recovers only the stored downstream key. */
 const activationExecutors = globalThis as unknown as { __llvActivationExecutors?: Set<string> };
@@ -6574,17 +6618,54 @@ export async function drainStageActivations(ports: PipelinePorts): Promise<void>
                 accountId: attempt.accountId });
               if (!current.completedAt && !current.verdict) current.state = attempt.state;
             } else {
-              current.state = "pending";
-              current.startedAt = null;
-              current.definition = null;
-              if (live.cursor?.stageId === run.stageId) live.cursor.state = "pending";
+              // A cancelled callback can follow registry admission. Bind its
+              // receipt before dropping activation custody, or the next tick
+              // could reserve another launch under a fresh handshake key.
+              const receipt = current.activation.phase === "reserving"
+                ? agentRegistry().spawnReceiptForClientAttempt(current.activation.clientAttemptId) : null;
+              if (receipt && (receipt.engine !== current.activation.input.role.engine || receipt.cwd !== current.activation.input.cwd
+                || receipt.transport !== "structured" || !agentRegistry().conversationMemberships(receipt.conversationId).some(member =>
+                  member.kind === "pipeline" && member.containerId === live.id && member.stageId === run.stageId
+                  && member.slot === `${run.stageId}:${current.n}` && member.round === current.n
+                  && member.role === current.activation!.input.membership.role))) {
+                // A client key alone cannot adopt another operation's host.
+                delete current.activation.owner;
+                live.stateDetail = "stage spawn deferred: waiting for the original stage membership, runtime and worktree to reconcile; original activation retained";
+                await persist([live]);
+                return;
+              }
+              const controlsCursor = live.cursor?.stageId === run.stageId && currentAttempt(live, run.stageId)?.n === current.n;
+              const settled = !!(current.completedAt || current.verdict || current.report)
+                || ["passed", "failed", "needs_decision", "skipped"].includes(current.state);
+              if (receipt) {
+                Object.assign(current, { launchId: receipt.launchId, conversationId: receipt.conversationId,
+                  accountId: receipt.accountId ?? current.accountId ?? null });
+                if (!settled) { current.state = "spawning"; current.startedAt ??= activation.startedAt; }
+                if (controlsCursor && !settled) live.cursor!.state = "spawning";
+                if (live.state === "running") live.stateDetail = "stage spawn deferred: reconciling the original launch receipt";
+                if (!controlsCursor || settled) {
+                  // An earlier attempt's uncertain launch still fences the
+                  // replacement. Only receipt settlement releases this key.
+                  current.activation.phase = "dispatching";
+                  delete current.activation.owner;
+                  await persist([live]);
+                  return;
+                }
+              } else if (!settled) {
+                current.state = "pending";
+                current.startedAt = null;
+                current.definition = null;
+                if (controlsCursor) live.cursor!.state = "pending";
+              }
             }
             // The activation's captured cursor may still say spawning after a
             // privacy retry was checkpointed. Without launch evidence, keep
             // that durable wait eligible for the next controller tick.
-            if (current.roleMemoryWait && !current.launchId && !current.conversationId && !current.agentPath && !current.paneId) {
+            if (current.roleMemoryWait && !current.completedAt && !current.verdict && !current.report
+              && !["passed", "failed", "needs_decision", "skipped"].includes(current.state)
+              && !current.launchId && !current.conversationId && !current.agentPath && !current.paneId) {
               current.state = "pending";
-              if (live.cursor?.stageId === run.stageId) live.cursor.state = "pending";
+              if (live.cursor?.stageId === run.stageId && currentAttempt(live, run.stageId)?.n === current.n) live.cursor.state = "pending";
             }
             delete current.activation;
             await persist([live]);
@@ -7281,7 +7362,7 @@ export async function drainRuntimeSwitches(ports: PipelinePorts): Promise<boolea
         if (pool && (!account.accountId || !pool.includes(account.accountId))) {
           const subject = record.rollback || account === record.from ? "source account" : "target account";
           let reason = `runtime switch ${subject} is no longer allowed; stage continuation is fenced`;
-          if (!record.rollback && account === record.to && record.mode === "fork" && ports.cancelRuntimeSwitch) {
+          if (!record.rollback && account === record.to && record.mode === "fork" && !record.inPlace && ports.cancelRuntimeSwitch) {
             try {
               const sourcePool = ports.allowedAccountIds?.(pipeline.project, record.from.engine);
               if (sourcePool && (!record.from.accountId || !sourcePool.includes(record.from.accountId))) {
@@ -7560,7 +7641,14 @@ async function tickRunStage(
   const attempt = pipeline.cursor?.state === "pending" && prior && ["passed", "failed", "needs_decision", "skipped"].includes(prior.state)
     ? await newAttempt(pipeline, stage)
     : prior ?? await newAttempt(pipeline, stage);
-  if (!attempt || pipeline.state === "needs_decision" || attempt.activation) return;
+  if (!attempt || pipeline.state === "needs_decision") return;
+  if (attempt.activation || unstartedPendingAttempt(attempt) && pipelineHasActivation(pipeline)) {
+    if (!attempt.launchId && !attempt.conversationId && !attempt.report && !attempt.verdict) {
+      const detail = pendingLaunchDetail(attempt, ports, true);
+      if (pipeline.stateDetail !== detail) { pipeline.stateDetail = detail; await persist(); }
+    }
+    return;
+  }
   if (openRuntimeSwitch(attempt)) {
     const switchRecord = openRuntimeSwitch(attempt)!;
     const beforeCut = switchRecord.phase === "requested" && attempt.agentPath
@@ -7603,7 +7691,12 @@ async function tickRunStage(
        pass ends on a pending cursor, which wakes the process that owns the
        controller (requestPipelineTick), and it activates the same attempt. */
     const publication = ports.structuredDeliveryPublication?.() ?? "ready";
-    if (publication === "unbound") { ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline)); return; }
+    if (publication === "unbound") {
+      const detail = pendingLaunchDetail(attempt, ports);
+      if (pipeline.stateDetail !== detail) { pipeline.stateDetail = detail; await persist(); }
+      ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline));
+      return;
+    }
     if (await holdStageLaunchForUpdate(pipeline, ports, persist)) return;
     if (await waitForMemory(pipeline, stage, attempt, ports)) {
       ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline));
@@ -7613,6 +7706,10 @@ async function tickRunStage(
     /* A wait booked by an earlier tick is not due yet. */
     if (unixMs(attempt.controllerWait?.retryAfter ?? "") > unixMs(activationNow)
       || unixMs(attempt.providerWait?.resumeAt ?? "") > unixMs(activationNow)) {
+      if (pipeline.stateDetail?.includes("waiting for the delivery controller")) {
+        pipeline.stateDetail = pendingLaunchDetail(attempt, ports);
+        await persist();
+      }
       ports.cpuAdmissionSuspend?.(cpuStageKey(pipeline));
       return;
     }
@@ -7705,7 +7802,7 @@ async function tickRunStage(
          cannot mistake the wait for one an earlier engine left mid-spawn. */
       attempt.spawnCalls ??= uncountedSpawnCallFloor(attempt);
       if (bookControllerWaitRound(attempt, activationNow, activationNow, ports) === "waiting") {
-        syncControllerWaitStateDetail(pipeline, attempt, null);
+        pipeline.stateDetail = `${pendingLaunchDetail(attempt, ports)}; retry at ${attempt.controllerWait!.retryAfter}`;
         await persist();
         return;
       }
@@ -10484,6 +10581,7 @@ function controllerWaitParkDetail(attempt: PipelineStageAttempt, now: string, fa
     as work to re-tick immediately would spin the controller through passes that
     can only defer it again (#1191). */
 function stageActivationIsWaiting(pipeline: Pipeline, nowMs: number): boolean {
+  if (pipelineHasActivation(pipeline)) return true;
   const stageId = pipeline.cursor?.stageId;
   if (!stageId) return false;
   const attempt = currentAttempt(pipeline, stageId);
@@ -12103,10 +12201,12 @@ function stageGuardShapeError(req: PatchPipelineRequest): PipelinePatchResult | 
  */
 function expectedStageRefusal(pipeline: Pipeline, req: PatchPipelineRequest): PipelinePatchResult | null {
   if (req.expectedStageId === undefined) return null;
+  const pendingRetry = req.action === "retry-stage" && ["running", "paused"].includes(pipeline.state)
+    && pipeline.cursor?.state === "pending" && unstartedPendingAttempt(currentAttempt(pipeline, pipeline.cursor.stageId));
   const waiting = pipeline.state === "needs_decision" || (req.action === "retry-stage"
     && (pipeline.state === "running" && ["running", "spawning"].includes(pipeline.cursor?.state ?? "")
       || pipeline.state === "paused" && pipeline.cursor?.state === "spawning")
-    && ["running", "spawning"].includes(currentAttempt(pipeline, pipeline.cursor!.stageId)?.state ?? ""))
+    && ["running", "spawning"].includes(currentAttempt(pipeline, pipeline.cursor!.stageId)?.state ?? "")) || pendingRetry
     ? pipeline.cursor?.stageId ?? null : null;
   if (waiting !== req.expectedStageId) {
     const repair = pipeline.cursor ? currentAttempt(pipeline, pipeline.cursor.stageId)?.publicationRepair : undefined;
@@ -14230,7 +14330,9 @@ export async function patchPipeline(
         }
         return { pipeline };
       }
-      if (pipeline.runs.some((run) => run.attempts.some((item) => item.activation))) {
+      const unstartedPending = stage?.kind === "run" && pipeline.cursor?.state === "pending" && unstartedPendingAttempt(attempt)
+        && ["running", "paused", "needs_decision"].includes(pipeline.state);
+      if (!unstartedPending && pipelineHasActivation(pipeline)) {
         return { error: "the original stage activation is still reconciling", status: 409 };
       }
       const explicitReceiptRetry = req.stageId !== undefined || req.launchId !== undefined;
@@ -14262,6 +14364,16 @@ export async function patchPipeline(
       }
       const survivorRefusal = pipelineSurvivorRefusal(pipeline);
       if (survivorRefusal) return survivorRefusal;
+      if (unstartedPending && attempt) {
+        // Wake the existing reservation. Its owner and downstream receipt key
+        // remain authoritative; retry never grants another dispatch permit.
+        if (pipeline.state !== "paused") {
+          pipeline.state = "running";
+          pipeline.stateDetail = pendingLaunchDetail(attempt, ports, pipelineHasActivation(pipeline));
+        }
+        await persist(); requestPipelineTick();
+        return { pipeline };
+      }
       if (stage?.kind === "run" && attempt && !attempt.report && !attempt.verdict && ["running", "needs_decision"].includes(pipeline.state)
         && (attempt.suspension || stageAccountBlocked(pipeline, attempt, ports))) {
         if (attempt.suspension?.operatorStoppedAt) {
@@ -14535,6 +14647,10 @@ export async function patchPipeline(
       const storedTarget = targetId ? pipeline.stages.find((item) => item.id === targetId) ?? null : null;
       const target = storedTarget ? structuredClone(storedTarget) : null;
       if (!target) return { error: "stage not found", status: 404 };
+      const transientTurboTier = typeof req.turbo === "string" && req.turbo.length > 0
+        && req.applyNow === true && req.applyNowCut === "boundary"
+        && req.role === undefined && req.model === undefined && req.effort === undefined
+        && req.engine === undefined && req.account === undefined && req.prompt === undefined && req.access === undefined;
       /* #1695 C7: checked inside this mutation and before any field is written,
          so a stage another client changed since the caller read it is refused
          and keeps that client's values. */
@@ -14559,6 +14675,7 @@ export async function patchPipeline(
           return { error: "the stage's running attempt changed since this runtime was chosen; read the stage again before choosing", status: 409, code: "STAGE_CHANGED", field: seenAttempt ? "expectedConversationId" : "expectedAttempt" };
         }
         if (req.role !== undefined || req.prompt !== undefined || req.access !== undefined) return { error: "role, prompt and access apply from the next attempt; send a separate override-stage", status: 400 };
+        if (req.applyNowCut !== undefined && req.applyNowCut !== "boundary" && req.applyNowCut !== "none") return { error: "applyNowCut must be boundary or none", status: 400 };
         const parkedSource = pipeline.state === "needs_decision" && live?.state === "needs_decision" && !live.report
           && (pendingRuntimeSwitchRetry(live) || live.providerWait?.condition.kind === "usage_limit" || !!live.conversationId && (ports.runtimeSwitchSourceUnavailable?.(live.conversationId)
             || await ports.conversationTurnInterrupted?.(live.conversationId) === "dead"));
@@ -14688,11 +14805,12 @@ export async function patchPipeline(
         const allowed = (id: string | null) => !!id && (read.pool === null || read.pool.includes(id));
         const nativeGeneration = ports.conversationGeneration?.(live.conversationId) ?? null;
         const generation = nativeGeneration?.engine === engine ? nativeGeneration : engine === live.effectiveRole.engine ? currentRuntimeSeat(live) : null;
-        const model = target.effectiveRole.model ?? generation?.model;
-        const effort = target.effectiveRole.effort ?? generation?.effort;
+        const turboTierOnly = typeof req.turbo === "string" && req.applyNowCut !== undefined && req.model === undefined && req.effort === undefined && req.engine === undefined && req.account === undefined;
+        const model = turboTierOnly ? generation?.model ?? target.effectiveRole.model : target.effectiveRole.model ?? generation?.model;
+        const effort = turboTierOnly ? generation?.effort ?? target.effectiveRole.effort : target.effectiveRole.effort ?? generation?.effort;
         if (!model || !effort) return { error: "apply now requires a resolved model and effort; select them explicitly", status: 400 };
         const preferredId = generation?.accountId ?? null;
-        const serviceTier = target.effectiveRole.serviceTier ?? null;
+        const serviceTier = turboTierOnly && req.serviceTier === null ? null : target.effectiveRole.serviceTier ?? null;
         const offers = engine === "codex" && serviceTier ? tierOffers(listCodexAccounts(), model, serviceTier) : null;
         // A pool offering the tier does not prove the preferred account offers it.
         const unavailableIds = [
@@ -14700,9 +14818,13 @@ export async function patchPipeline(
           ...(offers?.lacking ?? []),
         ];
         let migrationTarget: AccountContext | undefined;
-        let accountId = target.account ?? (allowed(preferredId) ? preferredId : null);
-        if (ports.resolveProjectSpawn) {
-          const resolution = ports.resolveProjectSpawn(engine, { project: pipeline.project, model, requestedId: target.account, preferredId, unavailableIds });
+        let accountId = turboTierOnly && req.applyNowCut === "none"
+          ? preferredId
+          : target.account ?? (allowed(preferredId) ? preferredId : null);
+        /* Returning a tier changes no account and dispatches no turn. Capacity
+           admission must not prevent undo after the paid approval ends. */
+        if (ports.resolveProjectSpawn && !(turboTierOnly && req.applyNowCut === "none")) {
+          const resolution = ports.resolveProjectSpawn(engine, { project: pipeline.project, model, requestedId: turboTierOnly ? preferredId : target.account, preferredId, unavailableIds });
           if (resolution.kind !== "available" || !allowed(resolution.account.accountId)) return { error: "no allowed target account is available", status: 409 };
           accountId = resolution.account.accountId;
           migrationTarget = resolution.account;
@@ -14711,6 +14833,7 @@ export async function patchPipeline(
         const to = { engine, model, effort,
           serviceTier, accountId, accountPinned: !!target.account };
         const open = pendingRuntimeSwitchRetry(live) ?? openRuntimeSwitch(live);
+        if (open && typeof req.turbo === "string" && open.turbo !== req.turbo) return { error: "another runtime switch is in progress", status: 409, code: "RUNTIME_SWITCH_IN_PROGRESS" };
         if (open) return runtimeTargetsEqual(open.to, to) && open.to.accountPinned === to.accountPinned ? { pipeline, runtimeSwitch: open, replayed: true }
           : { error: "another runtime switch is in progress", status: 409, code: "RUNTIME_SWITCH_IN_PROGRESS" };
         if (runtimeTargetsEqual(nativeGeneration ?? currentRuntimeSeat(live), to)) {
@@ -14720,7 +14843,7 @@ export async function patchPipeline(
             Object.assign(live, { accountId: nativeGeneration.accountId, sessionId: nativeGeneration.sessionId, agentPath: nativeGeneration.agentPath });
           }
           live.runtimeAccountPin = target.account ?? null;
-          if (JSON.stringify(storedTarget) !== JSON.stringify(target)) {
+          if (!transientTurboTier && JSON.stringify(storedTarget) !== JSON.stringify(target)) {
             Object.assign(storedTarget!, target);
             if (!target.account) delete storedTarget!.account;
             graphEdit = recordGraphEdit(pipeline, ports, actor, { action: "override-stage", stageId: target.id, ...reach, summary: `updated the future runtime of stage ${target.id}; running attempt already uses the selected runtime` });
@@ -14738,15 +14861,25 @@ export async function patchPipeline(
           }
         }
         const seq = (live.runtimeSwitches?.at(-1)?.seq ?? 0) + 1;
+        const source = nativeGeneration ?? currentRuntimeSeat(live);
+        /* Only the Codex tier changes and the live host can take it: no restart (Turbo, §2.6). */
+        const inPlace = engine === "codex" && engine === live.effectiveRole.engine && source.engine === engine
+          && source.model === to.model && source.effort === to.effort && source.accountId === to.accountId
+          && !!ports.runtimeSwitchTier;
+        if (req.applyNowCut !== undefined && !inPlace) return { error: "applyNowCut applies only to a tier-only change of a running Codex stage", status: 400 };
         runtimeSwitch = { id: `${pipeline.id}:${target.id}:${live.n}:${seq}`, seq, requestedAt: ports.now(), actor: actor!,
           mode: engine === live.effectiveRole.engine ? "fork" : "handoff", phase: "requested",
+          ...(inPlace ? { inPlace: true as const, cut: req.applyNowCut ?? "boundary" } : {}),
+          ...(typeof req.turbo === "string" && req.turbo ? { turbo: req.turbo.slice(0, 80) } : {}),
           from: { ...(nativeGeneration ?? currentRuntimeSeat(live)), conversationId: live.conversationId, launchId: live.launchId, sessionId: nativeGeneration?.sessionId ?? live.sessionId, agentPath: nativeGeneration?.agentPath ?? live.agentPath }, to };
         live.runtimeSwitches = [...(live.runtimeSwitches ?? []).slice(-7), runtimeSwitch];
       }
       // All target validation and switch replay/conflict checks precede the
       // definition write, so a refused request cannot alter future attempts.
-      Object.assign(storedTarget!, target);
-      if (!target.account) delete storedTarget!.account;
+      if (!transientTurboTier) {
+        Object.assign(storedTarget!, target);
+        if (!target.account) delete storedTarget!.account;
+      }
       const changed = [
         req.role !== undefined ? "role" : null,
         req.engine !== undefined ? "engine" : null,
@@ -14759,8 +14892,10 @@ export async function patchPipeline(
       graphEdit = recordGraphEdit(pipeline, ports, actor, {
         action: "override-stage",
         stageId: target.id,
-        ...reach,
-        summary: `changed ${changed.join(", ")} of stage ${target.id}${reach.effect === "pending-next-attempt" ? `; applies from attempt ${reach.appliesFromAttempt}` : ""}`,
+        ...(transientTurboTier ? { effect: "applied", appliesFromAttempt: live?.n ?? reach.appliesFromAttempt } : reach),
+        summary: transientTurboTier
+          ? `changed the running runtime tier of stage ${target.id}; the stage definition stays unchanged (Turbo ${req.turbo!.slice(0, 80)})`
+          : `changed ${changed.join(", ")} of stage ${target.id}${reach.effect === "pending-next-attempt" ? `; applies from attempt ${reach.appliesFromAttempt}` : ""}${typeof req.turbo === "string" && req.turbo ? ` (Turbo ${req.turbo.slice(0, 80)})` : ""}`,
       });
       if (runtimeSwitch && live) {
         graphEdit.runtimeSwitch = { attempt: live.n, id: runtimeSwitch.id };

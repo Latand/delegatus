@@ -261,6 +261,49 @@ export function hostSupportsCompact(host: EngineHost): host is CompactCapableHos
 }
 
 /**
+ * A live tier change for the thread this host owns (docs/design/turbo-mode.md
+ * §2.6). `thread/settings/update` moves the thread's NEXT turn to the tier
+ * without a restart. `cut` decides what happens to a running turn:
+ * `none` lets it finish at its old tier; `now` interrupts it; `boundary`
+ * interrupts it once no command, patch or tool call is in progress, so a
+ * running command is never killed. A turn awaiting an answer is never cut.
+ */
+export interface RuntimeTierRequest {
+  operationId: string;
+  /** null clears the thread's tier, as the schema allows. */
+  serviceTier: string | null;
+  cut: "now" | "boundary" | "none";
+  /** Recheck the caller's authority at dispatch and before a delayed cut. */
+  authorizeDispatch?: () => void;
+  /** Persist the native turn identity before an interrupt can be sent. */
+  beforeCut?: (turnId: string) => Promise<void>;
+}
+
+export type RuntimeTierCut = "cut" | "turn-ended" | "cancelled" | "host-gone";
+
+export interface RuntimeTierOutcome {
+  /** The tier `thread/settings/updated` echoed, or the requested one when no echo arrived first. */
+  appliedTier: string | null;
+  echoed: boolean;
+  /** `cut`: interrupted now. `armed`: waits for the tool item to finish. `none`: nothing cut. */
+  cut: "cut" | "armed" | "none";
+  /** Why a requested cut was not made (an attention, no running turn). */
+  reason?: string;
+  /** Settles when an armed cut is made or abandoned. */
+  settled?: Promise<RuntimeTierCut>;
+}
+
+export interface TierCapableHost extends EngineHost {
+  setTier(request: RuntimeTierRequest): Promise<RuntimeTierOutcome>;
+  cancelArmedTierCut(operationId: string): boolean;
+  tierCutEvidence?(turnId: string): RuntimeTierCut | "armed" | "unknown";
+}
+
+export function hostSupportsTier(host: EngineHost | null | undefined): host is TierCapableHost {
+  return !!host && typeof (host as Partial<TierCapableHost>).setTier === "function";
+}
+
+/**
  * One native injection: raw operator input appended to the thread's
  * model-visible history without steering, interrupting or starting a turn
  * (#1560, Codex `thread/inject_items`).

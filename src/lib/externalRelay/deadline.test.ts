@@ -19,7 +19,19 @@ for (const [name, raw, fallback] of [
   ["past at receipt", { claimed_at: "2026-10-13T11:59:00Z", deadline_at: "2026-10-13T11:59:59Z" }, "past"],
   ["equal to receipt", { deadline_at: "2026-10-13T12:00:00Z" }, "past"],
 ] as const) test(`deadline fallback ${name} has one immutable receipt budget`, () => {
-  expect(relayRequestDeadline(raw, received)).toEqual({ receivedAt: received, at: received + 120000, declineAt: received + 110000, source: "receipt", fallback });
+  expect(relayRequestDeadline(raw, received)).toEqual({ receivedAt: received, at: received + 600000, declineAt: received + 590000, source: "receipt", fallback });
+});
+test("five minutes of owner work leaves five minutes in the receipt window", () => {
+  const deadline = relayRequestDeadline({}, received);
+  expect(remainingMs(deadline, received + 300_000)).toBe(300_000);
+  expect(remainingMs(deadline, received + 600_000)).toBe(0);
+});
+for (const transit of [0, 45_000, 300_000]) test(`service ten-minute deadline retains its full remainder after ${transit}ms transit`, () => {
+  const at = received + 600_000;
+  const deadline = relayRequestDeadline({ deadline_at: new Date(at).toISOString() }, received + transit);
+  expect(deadline.at).toBe(at);
+  expect(deadline.source).toBe("deadline_at");
+  expect(remainingMs(deadline, received + transit)).toBe(600_000 - transit);
 });
 test("deadline extraction does not depend on claimed_at validation", () => {
   expect(relayRequestDeadline({ claimed_at: "bad", deadline_at: "2026-10-13T12:00:13Z" }, received).at).toBe(received + 13000);

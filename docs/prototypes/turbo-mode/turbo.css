@@ -1,0 +1,243 @@
+/* The three Turbo controls (docs/design/turbo-mode.md §6) and what they share:
+   the status mark, the dialog title icon and the confirm button's icon.
+
+   Colours are product tokens only. Turbo is Codex-only, so its cool end is
+   --color-codex; heat runs through --color-crown (the product's yellow) to
+   --color-danger. The design names --color-warning for the hazard stripes;
+   in the light theme that token is a brown (#8a5f00), so the stripes use
+   --color-crown, the token that is yellow in both themes. --tick-3 stays
+   Full autonomy's violet and is not used here. */
+
+:root { --hazard-ink: var(--color-primary); }
+[data-theme="dark"] { --hazard-ink: var(--surface-board); }
+
+/* ── Shared ─────────────────────────────────────────────────────────────── */
+.row-divider { width: 1px; height: 20px; flex-shrink: 0; background: var(--color-border); }
+.turbo-head-inline { flex: 0 0 auto; }
+.cap-head { font-weight: 600; color: var(--color-primary); }
+.caption-muted .cap-head { color: var(--color-secondary); }
+.status-mark { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 14px; height: 12px; position: relative; }
+.dock-mark { display: inline-flex; margin-right: 2px; }
+.dock-mark .status-mark { margin: 0; }
+.dlg-icon { position: relative; display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; width: 28px; height: 20px; margin-top: -1px; }
+.phone .dlg-icon { width: 32px; height: 24px; margin-right: 4px; }
+.btn-icon { position: relative; display: inline-flex; width: 16px; height: 12px; flex-shrink: 0; }
+
+@keyframes turbo-flicker {
+  0%, 100% { transform: scaleX(1) scaleY(1); }
+  30% { transform: scaleX(.93) scaleY(1.06); }
+  60% { transform: scaleX(1.03) scaleY(.94); }
+}
+@keyframes turbo-shift { from { background-position: 0 0; } to { background-position: 16px 0; } }
+
+/* ═══ Variant 1 «Форсаж»: a switch with an afterburner ═══════════════════ */
+.t1 { position: relative; display: inline-flex; align-items: center; flex-shrink: 0; border-radius: 999px; outline: none; }
+.phone .t1 { min-height: 44px; }
+.t1-track {
+  position: relative; display: block; width: 64px; height: 28px; border-radius: 999px; overflow: hidden;
+  border: 1px solid var(--color-border); background: var(--color-sunken);
+  transition: border-color .2s, background-color .2s;
+}
+.phone .t1-track { width: 80px; height: 36px; }
+.t1-thumb {
+  position: absolute; top: 2px; left: 2px; width: 22px; height: 22px; border-radius: 999px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--color-card); box-shadow: var(--shadow-1);
+  transition: left .32s cubic-bezier(.2,0,0,1), box-shadow .2s;
+}
+.phone .t1-thumb { width: 30px; height: 30px; }
+.t1-nozzle { width: 16px; height: 16px; }
+.phone .t1-nozzle { width: 22px; height: 22px; }
+.t1-nozzle circle, .mark-nozzle circle, .dlg-nozzle circle { fill: none; stroke: var(--color-muted); stroke-width: 1.5; }
+/* The pilot light: a small blue flame waiting on the right, where the
+   afterburner will be lit from. */
+.t1-pilot {
+  position: absolute; top: 50%; right: 10px; width: 6px; height: 6px; margin-top: -3px; border-radius: 999px;
+  background: color-mix(in oklab, var(--color-codex) 45%, transparent);
+  transition: opacity .2s, box-shadow .2s;
+}
+.phone .t1-pilot { right: 14px; width: 8px; height: 8px; margin-top: -4px; }
+.t1-flame { position: absolute; top: 2px; bottom: 2px; left: 1px; width: 0; height: calc(100% - 4px); transform-origin: right center; opacity: 0; }
+.t1-sparks { position: absolute; inset: 0; pointer-events: none; }
+.t1-sparks i { position: absolute; width: 4px; height: 4px; border-radius: 999px; background: var(--glyph-sol); opacity: 0; }
+
+/* hover/focus: the nozzle wakes and the pilot glows */
+.t1:hover:not(:disabled) .t1-track, .t1.sim-hover .t1-track { border-color: color-mix(in oklab, var(--color-codex) 55%, transparent); }
+.t1:hover:not(:disabled) .t1-nozzle circle, .t1.sim-hover .t1-nozzle circle { stroke: var(--color-codex); }
+.t1:hover:not(:disabled) .t1-pilot, .t1.sim-hover .t1-pilot { background: var(--color-codex); box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-codex) 22%, transparent), 0 0 8px var(--color-codex); }
+.t1:focus-visible .t1-track, .t1.sim-focus .t1-track { box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-accent) 40%, transparent); }
+.t1.sim-focus .t1-nozzle circle { stroke: var(--color-codex); }
+
+/* dialog open: the nozzle is armed */
+.t1[data-turbo="dialog"] .t1-nozzle circle { stroke: var(--color-codex); }
+.t1[data-turbo="dialog"] .t1-pilot { background: var(--color-codex); box-shadow: 0 0 8px var(--color-codex); }
+
+/* on: the thumb at the right, a flame trail behind it */
+.t1[aria-checked="true"] .t1-track { border-color: var(--color-codex); background: color-mix(in oklab, var(--color-danger) 10%, var(--color-sunken)); }
+.t1[aria-checked="true"] .t1-thumb { left: 40px; box-shadow: var(--shadow-1), 0 0 0 2px color-mix(in oklab, var(--color-codex) 35%, transparent); }
+.phone .t1[aria-checked="true"] .t1-thumb { left: 48px; }
+.t1[aria-checked="true"] .t1-nozzle .nz-1 { stroke: var(--color-codex); }
+.t1[aria-checked="true"] .t1-nozzle .nz-2 { stroke: var(--color-crown); }
+.t1[aria-checked="true"] .t1-nozzle .nz-3 { stroke: var(--color-danger); fill: var(--color-crown); }
+.t1[aria-checked="true"] .t1-pilot { opacity: 0; }
+.t1[aria-checked="true"] .t1-flame { width: 49px; opacity: 1; animation: turbo-flicker 1.2s ease-in-out infinite; }
+.phone .t1[aria-checked="true"] .t1-flame { width: 63px; }
+/* ending soon: the flame shortens with the time left */
+.t1[data-turbo="ending"] .t1-flame { transform: scaleX(.38); animation: none; }
+/* switching: three sparks pop from the nozzle, once per conversation switched */
+.t1[data-turbo="switching"] .t1-sparks i { opacity: 1; }
+.t1[data-turbo="switching"] .t1-sparks i:nth-child(1) { left: 32px; top: 3px; }
+.t1[data-turbo="switching"] .t1-sparks i:nth-child(2) { left: 25px; top: 12px; width: 3px; height: 3px; }
+.t1[data-turbo="switching"] .t1-sparks i:nth-child(3) { left: 33px; top: 20px; width: 3px; height: 3px; background: var(--color-danger); }
+.phone .t1[data-turbo="switching"] .t1-sparks i:nth-child(1) { left: 38px; top: 4px; }
+.phone .t1[data-turbo="switching"] .t1-sparks i:nth-child(2) { left: 30px; top: 16px; }
+.phone .t1[data-turbo="switching"] .t1-sparks i:nth-child(3) { left: 39px; top: 27px; }
+.t1:disabled { opacity: .5; }
+
+/* The mark: a small flame leaving a nozzle. */
+.mark-1 { width: 18px; }
+.mark-flame { position: absolute; left: 0; top: 2px; width: 12px; height: 8px; }
+.mark-nozzle { position: absolute; right: 0; top: 0; width: 10px; height: 12px; }
+.mark-nozzle circle { stroke: var(--color-codex) !important; stroke-width: 2.2 !important; }
+.dlg-flame { position: absolute; left: 0; top: 4px; width: 20px; height: 12px; }
+.dlg-nozzle { position: absolute; right: 0; top: 1px; width: 16px; height: 18px; }
+.dlg-nozzle circle { stroke: var(--color-codex) !important; }
+.phone .dlg-flame { top: 5px; width: 22px; height: 14px; }
+.phone .dlg-nozzle { width: 18px; height: 22px; }
+.btn-icon-1 .btn-flame { position: absolute; inset: 0; width: 16px; height: 12px; }
+
+/* ═══ Variant 2 «Тахометр»: a rev-counter chip ═══════════════════════════ */
+.t2 {
+  display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; height: 32px; padding: 0 10px 0 6px;
+  border-radius: var(--radius-control); border: 1px solid var(--color-border); background: var(--color-card);
+  font-size: var(--text-ui); font-weight: 600; color: var(--color-secondary); outline: none;
+  transition: border-color .2s, background-color .2s;
+}
+/* The phone row already says «Турбо» at its left, like every row in the
+   sheet, so the chip there is the gauge alone. */
+.phone .t2 { height: 44px; min-width: 64px; justify-content: center; padding: 0 12px; font-size: var(--text-body); }
+.phone .t2-word { display: none; }
+.t2-gauge { width: 34px; height: 21px; overflow: visible; }
+.phone .t2-gauge { width: 40px; height: 25px; }
+.t2-gauge .g-tick, .mark-gauge .g-tick, .dlg-gauge .g-tick, .btn-gauge .g-tick { stroke: var(--color-strong); stroke-width: 2; stroke-linecap: round; }
+.t2-gauge .g-tick.is-lit, .mark-gauge .g-tick.is-lit, .dlg-gauge .g-tick.is-lit, .btn-gauge .g-tick.is-lit { stroke: var(--color-codex); }
+.t2-gauge .g-tick.is-lit.is-red, .mark-gauge .g-tick.is-lit.is-red, .dlg-gauge .g-tick.is-lit.is-red, .btn-gauge .g-tick.is-lit.is-red { stroke: var(--color-danger); }
+.g-red { fill: none; stroke: color-mix(in oklab, var(--color-danger) 40%, transparent); stroke-width: 2.4; stroke-linecap: round; }
+.g-needle { stroke: var(--color-primary); stroke-width: 1.8; stroke-linecap: round; transform-box: view-box; transform-origin: 16px 17px; transform: rotate(var(--needle, -72deg)); transition: transform .6s cubic-bezier(.3,1.6,.5,1); }
+.g-hub { fill: var(--color-primary); }
+.t2:hover:not(:disabled), .t2.sim-hover { border-color: color-mix(in oklab, var(--color-codex) 55%, transparent); color: var(--color-primary); }
+/* hover: the engine revs and holds while the pointer stays — the needle
+   climbs to mid-scale in Codex blue and the first four ticks light */
+.t2:hover:not(:disabled) .g-needle, .t2.sim-hover .g-needle { --needle: 18deg; stroke: var(--color-codex); }
+.t2:hover:not(:disabled) .g-hub, .t2.sim-hover .g-hub { fill: var(--color-codex); }
+.t2:hover:not(:disabled) .g-tick:nth-of-type(-n+4), .t2.sim-hover .g-tick:nth-of-type(-n+4) { stroke: var(--color-codex); }
+.t2:focus-visible, .t2.sim-focus { box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-accent) 40%, transparent); color: var(--color-primary); }
+/* dialog open: revving, the needle half way */
+.t2[data-turbo="dialog"] { border-color: var(--color-codex); color: var(--color-primary); }
+.t2[data-turbo="dialog"] .g-needle { --needle: 34deg; }
+/* on: the chip runs hot — a solid red face with a glow, the dial drawn in
+   the face's ink, the needle pinned in the red sector. Off is a quiet
+   outlined chip, so the two differ in fill and shape at a glance. */
+.t2[aria-pressed="true"] {
+  border-color: var(--color-danger); background: var(--color-danger); color: var(--color-on-brand);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-danger) 22%, transparent), 0 0 12px color-mix(in oklab, var(--color-danger) 55%, transparent);
+}
+.t2[aria-pressed="true"] .t2-word { text-transform: uppercase; letter-spacing: .06em; font-weight: 700; }
+.t2[aria-pressed="true"] .g-tick { stroke: color-mix(in oklab, var(--color-on-brand) 45%, transparent); }
+.t2[aria-pressed="true"] .g-tick.is-lit, .t2[aria-pressed="true"] .g-tick.is-lit.is-red { stroke: var(--color-on-brand); }
+.t2[aria-pressed="true"] .g-needle { --needle: 64deg; stroke: var(--color-on-brand); stroke-width: 2.2; }
+.t2[aria-pressed="true"] .g-hub { fill: var(--color-on-brand); }
+.t2[aria-pressed="true"] .g-red { stroke: var(--color-crown); stroke-width: 3; animation: turbo-pulse 2.4s ease-in-out infinite; }
+@keyframes turbo-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+/* ending soon: the needle drifts back toward the middle */
+.t2[data-turbo="ending"] { box-shadow: none; }
+.t2[data-turbo="ending"] .g-needle { --needle: 22deg; }
+.t2[data-turbo="ending"] .g-red { animation: none; stroke: color-mix(in oklab, var(--color-crown) 55%, transparent); }
+@keyframes turbo-shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-2px); } 75% { transform: translateX(2px); } }
+.t2.is-confirmed { animation: turbo-shake .18s ease-in-out 2; }
+.t2:disabled { opacity: .5; }
+.mark-2 { width: 18px; }
+.mark-gauge { width: 18px; height: 12px; overflow: visible; }
+.mark-gauge .g-needle, .dlg-gauge .g-needle, .btn-gauge .g-needle { --needle: 64deg; stroke: var(--color-danger); stroke-width: 2.4; }
+.mark-gauge .g-tick { stroke-width: 2.2; }
+.mark-gauge .g-red, .dlg-gauge .g-red, .btn-gauge .g-red { stroke: var(--color-danger); }
+.mark-gauge .g-hub, .dlg-gauge .g-hub, .btn-gauge .g-hub { fill: var(--color-danger); }
+.dlg-gauge { width: 28px; height: 18px; overflow: visible; }
+.phone .dlg-gauge { width: 32px; height: 21px; }
+.btn-gauge { width: 16px; height: 11px; overflow: visible; }
+.btn-gauge .g-tick { stroke: var(--color-on-brand) !important; stroke-width: 2.4; }
+.btn-gauge .g-needle { stroke: var(--color-on-brand); }
+.btn-gauge .g-hub { fill: var(--color-on-brand); }
+.btn-gauge .g-red { stroke: var(--color-on-brand); opacity: .6; }
+
+/* ═══ Variant 3 «Червона кнопка»: a launch button under a safety cover ═══ */
+.t3-wrap { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.t3-cap { font-size: var(--text-label); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--color-muted); }
+.phone .t3-wrap .t3-cap { display: none; }
+.t3 { display: inline-flex; flex-shrink: 0; border-radius: var(--radius-control); outline: none; }
+.phone .t3 { min-height: 44px; align-items: center; }
+.t3-plate {
+  position: relative; display: block; width: 42px; height: 36px; border-radius: var(--radius-control);
+  border: 1px solid var(--color-strong); background: var(--color-sunken); perspective: 120px; overflow: visible;
+  box-shadow: inset 0 1px 2px color-mix(in oklab, var(--color-primary) 12%, transparent);
+}
+.phone .t3-plate { width: 54px; height: 44px; }
+.t3-dome {
+  position: absolute; left: 50%; top: 58%; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 999px;
+  background: radial-gradient(circle at 38% 32%, color-mix(in oklab, var(--color-danger) 45%, #fff) 0 14%, var(--color-danger) 52%, color-mix(in oklab, var(--color-danger) 70%, #000) 100%);
+  box-shadow: 0 2px 0 color-mix(in oklab, var(--color-danger) 55%, #000);
+  transition: transform .15s, box-shadow .2s, filter .2s;
+}
+.phone .t3-dome { width: 28px; height: 28px; margin: -14px 0 0 -14px; }
+/* The cover: clear plastic hinged at its top edge, with a striped lip. */
+.t3-cover {
+  position: absolute; inset: 0; border-radius: var(--radius-control); transform-origin: 50% 0;
+  border: 1px solid color-mix(in oklab, var(--color-primary) 30%, transparent);
+  background: linear-gradient(180deg, color-mix(in oklab, var(--color-card) 55%, transparent), color-mix(in oklab, var(--color-card) 25%, transparent));
+  box-shadow: inset 0 1px 0 color-mix(in oklab, var(--color-card) 80%, transparent);
+  transition: transform .3s cubic-bezier(.2,0,0,1);
+}
+.t3-lip {
+  position: absolute; left: -1px; right: -1px; bottom: -1px; height: 7px; border-radius: 0 0 var(--radius-control) var(--radius-control);
+  background: repeating-linear-gradient(135deg, var(--color-crown) 0 4px, var(--hazard-ink) 4px 8px);
+  background-size: 16px 7px;
+}
+.t3:hover:not(:disabled) .t3-cover, .t3.sim-hover .t3-cover { transform: rotateX(-38deg); box-shadow: 0 6px 6px -4px color-mix(in oklab, var(--color-primary) 35%, transparent); }
+.t3:focus-visible .t3-plate, .t3.sim-focus .t3-plate { box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-accent) 40%, transparent); }
+.t3.sim-hover + *, .t3-wrap:hover .t3-cap { color: var(--color-secondary); }
+/* dialog open, and on: the cover is flipped up to a strip above the button */
+.t3[data-turbo="dialog"] .t3-cover, .t3[aria-pressed="true"] .t3-cover { transform: scaleY(.19); border-color: transparent; }
+.t3[data-turbo="dialog"] .t3-lip, .t3[aria-pressed="true"] .t3-lip { height: auto; top: 0; border-radius: var(--radius-control) var(--radius-control) 0 0; background-size: 16px 100%; }
+/* on: the button is lit, the stripes crawl */
+.t3[aria-pressed="true"] .t3-dome {
+  background: radial-gradient(circle at 38% 32%, #fff 0 12%, color-mix(in oklab, var(--color-danger) 55%, #fff) 30%, var(--color-danger) 72%);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-danger) 28%, transparent), 0 0 14px 2px color-mix(in oklab, var(--color-danger) 60%, transparent);
+  transform: scale(.94);
+}
+.t3[aria-pressed="true"] .t3-lip { animation: turbo-shift 3s linear infinite; }
+.t3-wrap[data-turbo="switching"] .t3-cap, .t3-wrap[data-turbo="on"] .t3-cap, .t3-wrap[data-turbo="ending"] .t3-cap { color: var(--color-danger); }
+/* ending soon: the cover starts to come down over the button — half of the
+   dome is under it — and the button cools to an unlit red with no glow; the
+   stripes stop. */
+.t3[data-turbo="ending"] .t3-cover { transform: scaleY(.55); border-color: color-mix(in oklab, var(--color-primary) 30%, transparent); }
+.t3[data-turbo="ending"] .t3-lip { top: auto; height: 7px; border-radius: 0 0 var(--radius-control) var(--radius-control); background-size: 16px 7px; animation: none; transform: scaleY(1.8); transform-origin: 50% 100%; }
+.t3[data-turbo="ending"] .t3-dome {
+  background: radial-gradient(circle at 38% 32%, color-mix(in oklab, var(--color-danger) 45%, #fff) 0 14%, var(--color-danger) 52%, color-mix(in oklab, var(--color-danger) 70%, #000) 100%);
+  box-shadow: 0 2px 0 color-mix(in oklab, var(--color-danger) 55%, #000); transform: none;
+}
+.t3:disabled { opacity: .5; }
+/* The mark: the launch button seen from the side — a red half-dome on a
+   hazard-striped base — so it never reads as a round status light. */
+.mark-3 { width: 18px; height: 13px; }
+.mark-3 .mark-dome, .dlg-icon-3 .mark-dome { position: absolute; left: 4px; right: 4px; top: 0; height: 8px; border-radius: 999px 999px 0 0; background: var(--color-danger); }
+.mark-3 .mark-cover, .dlg-icon-3 .mark-cover { position: absolute; left: 0; right: 0; bottom: 0; height: 5px; border-radius: 1px; background: repeating-linear-gradient(135deg, var(--color-crown) 0 2px, var(--hazard-ink) 2px 4px); box-shadow: 0 0 0 1px color-mix(in oklab, var(--color-primary) 25%, transparent); }
+.dlg-icon-3, .phone .dlg-icon-3 { width: 24px; height: 20px; }
+.dlg-icon-3 .mark-dome { left: 5px; right: 5px; top: 1px; height: 12px; }
+.dlg-icon-3 .mark-cover { height: 6px; background: repeating-linear-gradient(135deg, var(--color-crown) 0 3px, var(--hazard-ink) 3px 6px); }
+.btn-icon-3 { width: 12px; height: 12px; border-radius: 999px; background: var(--color-danger); box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-on-brand) 70%, transparent); }
+
+@media (prefers-reduced-motion: reduce) {
+  .t1-flame, .t1-thumb, .t3-cover, .t3-dome, .g-needle { animation: none !important; transition: none !important; }
+  .t1[data-turbo="switching"] .t1-sparks i { opacity: 0; }
+  .t2[aria-pressed="true"] .g-red, .t3[aria-pressed="true"] .t3-lip, .t2.is-confirmed { animation: none !important; }
+}
