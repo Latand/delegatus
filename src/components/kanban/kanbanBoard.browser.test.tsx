@@ -23005,7 +23005,7 @@ describe("floating voice companion", () => {
             /* The head: the row's top at the dialog's top. The tools: the list's end at the dialog's bottom. The foot: its last line (the action row, or a line or refusal under it) at the dialog's bottom. */
             else await page.evaluate(([selector, top]) => document.querySelector(selector)!.scrollIntoView({ block: top ? "start" : "end" }), [part === "head" ? "[data-voice-tool-server]" : part === "secrets" ? "[data-voice-tool-reference]" : part === "tools" ? "[data-voice-tool-tools]" : "[data-voice-tool-server] > :last-child", part === "head"] as const);
             await page.screenshot({ path: path.join(out, `${label}-${part}.png`) });
-            const read = await page.evaluate(({ words, phone }) => {
+            const read = await page.evaluate(({ words, phone, part }) => {
               const dialog = document.querySelector<HTMLElement>("[data-voice-companion-settings]")!;
               const box = dialog.getBoundingClientRect();
               const section = document.querySelector<HTMLElement>("[data-voice-tools]")!;
@@ -23019,7 +23019,8 @@ describe("floating voice companion", () => {
               }
               /* Each defining phrase: every text range of it inside the dialog's visible box and the window; a short word on one line. */
               const shown = words.map(word => {
-                const all = document.createTreeWalker(section, NodeFilter.SHOW_TEXT);
+                const searchRoot = part === "tools" ? section.querySelector("[data-voice-tool-tools]") ?? section : section;
+                const all = document.createTreeWalker(searchRoot, NodeFilter.SHOW_TEXT);
                 for (let node = all.nextNode(); node; node = all.nextNode()) {
                   const at = node.textContent?.indexOf(word) ?? -1;
                   if (at < 0) continue;
@@ -23036,7 +23037,7 @@ describe("floating voice companion", () => {
               }).map(control => control.outerHTML.slice(0, 80));
               return { viewportOverflow: document.documentElement.scrollWidth > innerWidth + 1, dialogOverflow: dialog.scrollWidth > dialog.clientWidth + 1, outside, shown, small,
                 background: getComputedStyle(dialog).backgroundColor, rows: section.querySelectorAll("[data-voice-tool-server]").length };
-            }, { words, phone });
+            }, { words, phone, part });
             measurements.push({ label: `${label}-${part}`, ...read });
             if (read.viewportOverflow || read.dialogOverflow) failures.push(`${label}: scrolls sideways`);
             if (read.outside) failures.push(`${label}: ${read.outside} text box(es) outside the dialog`);

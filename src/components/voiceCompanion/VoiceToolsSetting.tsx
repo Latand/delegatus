@@ -184,12 +184,11 @@ function ServerRow({ name, server, when, busy, writing, refusal, write }: {
           const missing = server.missingSecrets.includes(ref);
           return <div key={ref} className="block min-w-0" data-voice-tool-reference={ref} data-missing={missing ? "" : undefined}>
             <span className="flex flex-wrap gap-x-1.5 text-[12px]"><span className="font-mono text-primary">{ref}</span><span className={missing ? "font-semibold text-warning" : "text-muted"}>{t(missing ? "voiceCompanion.tools.secretNeeded" : "voiceCompanion.tools.secretSaved")}</span></span>
-            <label className="block">
-              <span className="sr-only">{ref}</span>
-              <input type="password" autoComplete="off" spellCheck={false} minLength={8} maxLength={8192} data-1p-ignore="" data-lpignore="true" disabled={busy}
+            <div className="block">
+              <input type="password" aria-label={ref} autoComplete="off" spellCheck={false} minLength={8} maxLength={8192} data-1p-ignore="" data-lpignore="true" disabled={busy}
               placeholder={missing ? "" : t("voiceCompanion.tools.secretReplace")} data-reference={ref}
               onChange={event => { const filled = event.target.value.length > 0; setTyped(current => { const next = new Set(current); if (filled) next.add(ref); else next.delete(ref); return next; }); }} className={`${FIELD} mt-0.5`} />
-            </label>
+            </div>
             <label className="mt-1 block text-[12px] text-muted">{t("voiceCompanion.tools.destinations")}
               <input type="text" data-destinations={ref} defaultValue={server.secretDestinations?.[ref]?.join(", ") ?? ""} maxLength={4096} disabled={busy} required={typed.has(ref)}
                 placeholder={transport.type === "http" ? "https://mcp.example.test" : `stdio:${name}`} className={`${FIELD} mt-0.5`}
