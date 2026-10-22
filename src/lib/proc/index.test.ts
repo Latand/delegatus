@@ -1,4 +1,9 @@
 import { expect, test } from "bun:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+import { startLeaderExitedChild, startUnreapedChild } from "@/lib/testing/unreapedChild";
 
 import { linuxBackend } from "./linux";
 import { portableBackend } from "./portable";
@@ -36,4 +41,29 @@ test("every backend answers the whole contract", () => {
   const methods = Object.keys(linuxBackend).sort();
   expect(Object.keys(windowsBackend).sort()).toEqual(methods);
   expect(Object.keys(portableBackend).sort()).toEqual(methods);
+});
+
+test.skipIf(process.platform !== "linux")("a real unreaped child keeps its /proc entry and start token but reads exited (#2967)", async () => {
+  const fixture = await startUnreapedChild();
+  try {
+    expect(linuxBackend.pidAlive(fixture.zombie.pid)).toBeTrue();
+    expect(linuxBackend.processIdentity(fixture.zombie.pid)).toBe(fixture.zombie.startIdentity);
+    expect(linuxBackend.processExited(fixture.zombie.pid)).toBeTrue();
+    expect(linuxBackend.processExited(fixture.parent.pid)).toBeFalse();
+  } finally {
+    await fixture.stop();
+  }
+});
+
+test.skipIf(process.platform !== "linux" || !Bun.which("python3"))("a process whose main thread exited reads running while another thread lives (#2967)", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "leader-exited-"));
+  const fixture = await startLeaderExitedChild(Bun.which("python3")!, path.join(directory, "writes.txt"));
+  try {
+    expect(fs.readFileSync(`/proc/${fixture.identity.pid}/stat`, "utf8")).toMatch(/\) Z /);
+    expect(linuxBackend.pidAlive(fixture.identity.pid)).toBeTrue();
+    expect(linuxBackend.processExited(fixture.identity.pid)).toBeFalse();
+  } finally {
+    await fixture.stop();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
