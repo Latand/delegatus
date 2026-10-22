@@ -96,7 +96,8 @@ export function TransferAccountsChecklist({ engine, rows, onSignIn, onAction }: 
               <span className={`shrink-0 text-[10.5px] font-semibold ${STATE_TONE[row.state]}`}>{t(`transfer.accounts.state.${row.state}`)}</span>
             </div>
             <div className="text-[10px] text-muted">
-              {[row.activeOnSource ? t("transfer.accounts.activeThere") : null, row.bindings.length ? t("transfer.accounts.bound", { count: row.bindings.length }) : null, row.detail ?? null]
+              {/* No project list here: the dialog shows no «Bound to» (#1418); the bindings apply all the same. */}
+              {[row.activeOnSource ? t("transfer.accounts.activeThere") : null, row.detail ?? null]
                 .filter(Boolean).join(" · ")}
             </div>
             {row.state !== "not_created" ? (

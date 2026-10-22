@@ -27,7 +27,10 @@
  * control only on Codex and enabled only while that card holds a credit, every
  * meter filled with what REMAINS (its value equals the row's own «n% left»),
  * the corner naming one of the card's own windows and carrying the tightest of
- * them, 44px targets and no horizontal scroll. Shots land in
+ * them, 44px targets and no horizontal scroll. Transfer checklist (install
+ * transfer slice 2): two accounts an import brought, signed out, one per
+ * engine; each dialog lists its one row with its state, «Sign in» and «Not
+ * needed here» in en/light and uk/dark, nothing overflowing. Shots land in
  * <tmp>/llv-issue-1418-latest/out/1418-<surface>-<engine>.png and are never
  * committed: the privacy gate refuses rasters.
  */
@@ -119,6 +122,14 @@ async function seedHome(): Promise<void> {
   setActiveCodexAccount(codexA.id);
   const claudeB = createManagedClaudeAccount("Account B");
   fs.writeFileSync(path.join(claudeB.home, ".credentials.json"), "{}", { mode: 0o600 });
+
+  /* An install transfer brought two accounts (install-memory-transfer §3.4):
+     made signed out through the same account setup, with no identity read. */
+  const { applyAccounts } = await import("@/lib/transfer/accounts");
+  await applyAccounts("capture-import", "capture-export", [
+    { key: "account:codex:team", value: { engine: "codex", id: "team", label: "Team", kind: "managed", active: true, identity: null } },
+    { key: "account:claude:research", value: { engine: "claude", id: "research", label: "Research", kind: "managed", active: false, identity: null } },
+  ], { identity: async () => null });
 
   const now = new Date();
   const nowS = Math.floor(now.getTime() / 1000);
@@ -251,6 +262,61 @@ function checkDialog(engine: "Codex" | "Claude", facts: DialogFacts): void {
     if (facts.resetButtons !== 0) throw new Error(`${where}: a Claude card drew a reset control`);
     if (facts.flagshipRows.join() !== "default") throw new Error(`${where}: flagship rows on [${facts.flagshipRows.join(", ")}], expected only the account reporting a bucket`);
   }
+  if (facts.scrollWidth > facts.innerWidth) throw new Error(`${where}: the document scrolls to ${facts.scrollWidth}px at ${facts.innerWidth}px`);
+  if (facts.bottom > facts.viewport) throw new Error(`${where}: the dialog ends at ${facts.bottom}px, past the ${facts.viewport}px viewport`);
+}
+
+interface ChecklistFacts {
+  rows: { label: string; state: string; buttons: string[]; overflow: boolean }[];
+  title: string | null;
+  bottom: number;
+  viewport: number;
+  scrollWidth: number;
+  innerWidth: number;
+}
+
+/** The open accounts dialog that carries the transfer checklist, in any language. */
+const CHECKLIST_DIALOG = '[role="dialog"]:has([data-transfer-checklist])';
+
+/** The transfer checklist at the top of a dialog, read off the DOM. */
+async function checklistFacts(page: Page): Promise<ChecklistFacts> {
+  return page.evaluate((selector) => {
+    const dialog = document.querySelector(selector)!;
+    const section = dialog.querySelector("[data-transfer-checklist]");
+    return {
+      title: section?.querySelector("h3")?.textContent ?? null,
+      rows: [...(section?.querySelectorAll("[data-transfer-account]") ?? [])].map((row) => {
+        const spans = row.querySelectorAll("span");
+        return {
+          label: spans[0]?.textContent ?? "",
+          state: spans[1]?.textContent ?? "",
+          buttons: [...row.querySelectorAll<HTMLButtonElement>("button")].filter((button) => !button.disabled).map((button) => (button.textContent ?? "").trim()),
+          overflow: [...row.querySelectorAll<HTMLElement>("*")].some((element) => element.scrollWidth > element.clientWidth + 1 && !element.classList.contains("truncate")),
+        };
+      }),
+      bottom: Math.round(dialog.getBoundingClientRect().bottom),
+      viewport: window.innerHeight,
+      scrollWidth: document.documentElement.scrollWidth,
+      innerWidth: window.innerWidth,
+    };
+  }, CHECKLIST_DIALOG);
+}
+
+/* Each dialog lists the one account the transfer brought to its engine,
+   signed out, with the product's own sign-in offered and every word in the
+   page's language; nothing overflows and the dialog stays on screen. */
+function checkChecklist(engine: "Codex" | "Claude", locale: "en" | "uk", facts: ChecklistFacts): void {
+  const where = `desktop ${engine} transfer checklist (${locale})`;
+  const words = locale === "en"
+    ? { title: "Accounts from your other install", state: "Signed out", signIn: "Sign in", skip: "Not needed here" }
+    : { title: "Акаунти з вашої іншої інсталяції", state: "Не ввійдено", signIn: "Увійти", skip: "Тут не потрібен" };
+  const label = engine === "Codex" ? "Team" : "Research";
+  if (facts.title !== words.title) throw new Error(`${where}: the title reads «${facts.title}»`);
+  if (facts.rows.length !== 1 || facts.rows[0]!.label !== label) throw new Error(`${where}: rows are [${facts.rows.map((row) => row.label).join(", ")}], expected ${label}`);
+  const row = facts.rows[0]!;
+  if (row.state !== words.state) throw new Error(`${where}: the state reads «${row.state}»`);
+  if (row.buttons.join("|") !== `${words.signIn}|${words.skip}`) throw new Error(`${where}: the row offers [${row.buttons.join(", ")}]`);
+  if (row.overflow) throw new Error(`${where}: text in the row overflows its box`);
   if (facts.scrollWidth > facts.innerWidth) throw new Error(`${where}: the document scrolls to ${facts.scrollWidth}px at ${facts.innerWidth}px`);
   if (facts.bottom > facts.viewport) throw new Error(`${where}: the dialog ends at ${facts.bottom}px, past the ${facts.viewport}px viewport`);
 }
@@ -439,6 +505,30 @@ async function main(): Promise<void> {
       await closeDialog(desktop, engine);
     }
     await desktop.close();
+
+    /* The transfer checklist in both languages and both schemes. */
+    const TRIGGER = { en: (engine: string) => `button[aria-label="${engine} accounts — switch or add"]`, uk: (engine: string) => `button[aria-label="Акаунти ${engine} — змінити або додати"]` };
+    for (const [locale, colorScheme] of [["en", "light"], ["uk", "dark"]] as const) {
+      const write = await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale, source: "chosen" }) });
+      if (!write.ok) throw new Error(`the interface language write answered ${write.status}`);
+      const context = await browser.newContext({ viewport: DESKTOP, colorScheme, reducedMotion: "reduce" });
+      await context.addInitScript((lang: string) => { localStorage.setItem("llv_lang", lang); }, locale);
+      const page = await context.newPage();
+      await page.goto(baseUrl, { waitUntil: "networkidle" });
+      for (const engine of ["Codex", "Claude"] as const) {
+        await page.click(TRIGGER[locale](engine));
+        await page.waitForSelector(CHECKLIST_DIALOG);
+        await page.waitForTimeout(250);
+        checkChecklist(engine, locale, await checklistFacts(page));
+        const file = path.join(OUT_DIR, `1418-desktop-${engine.toLowerCase()}-transfer-${locale}-${colorScheme}.png`);
+        await page.locator(CHECKLIST_DIALOG).screenshot({ path: file });
+        console.log(`  ${path.basename(file)}`);
+        await page.keyboard.press("Escape");
+        await page.waitForSelector(CHECKLIST_DIALOG, { state: "detached" });
+      }
+      await context.close();
+    }
+    await fetch(`${baseUrl}/api/operator/settings`, { method: "PUT", headers: { "content-type": "application/json", origin: baseUrl }, body: JSON.stringify({ locale: "en", source: "chosen" }) });
 
     /* The phone (mobile v2 lane 9): one screen holds both engines, so there is
        one shot and one set of checks, reached the way the operator reaches it. */

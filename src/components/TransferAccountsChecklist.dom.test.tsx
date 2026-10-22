@@ -51,14 +51,16 @@ const buttons = (host: Element) => [...host.querySelectorAll("button")].map(butt
 
 test("every state and the source facts read as words, in English and Ukrainian", () => {
   for (const [locale, expected] of [
-    ["en", ["Signed out", "Different account", "Limits not read", "Ready", "Not created", "Not checked yet", "Active on the other install", "Bound to 2 projects", "quota-probe-timeout"]],
-    ["uk", ["Не ввійдено", "Інший обліковий запис", "Ліміти не прочитано", "Готовий", "Не створено", "Ще не перевірено", "Активний на іншій інсталяції", "Прив'язаний до 2 проєктів"]],
+    ["en", ["Signed out", "Different account", "Limits not read", "Ready", "Not created", "Not checked yet", "Active on the other install", "quota-probe-timeout"]],
+    ["uk", ["Не ввійдено", "Інший акаунт", "Ліміти не прочитано", "Готовий", "Не створено", "Ще не перевірено", "Активний на іншій інсталяції"]],
   ] as const) {
     setLocale(locale);
     const host = render(<TransferAccountsChecklist engine="codex" rows={ROWS} onSignIn={async () => {}} onAction={async () => {}} />);
     const text = host.textContent ?? "";
     for (const words of expected) expect(text).toContain(words);
     expect(text).not.toMatch(/signed_out|different_account|read_failed|not_created|unchecked/);
+    // The accounts dialog carries no «Bound to» (#1418); the bindings still apply.
+    expect(text).not.toMatch(/Bound to|Прив'язаний/);
     flushSync(() => mounted!.root.unmount());
     mounted!.host.remove();
     mounted = null;

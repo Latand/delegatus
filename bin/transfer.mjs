@@ -100,8 +100,8 @@ const TEXT = {
     applied: (ms) => `Застосовано за ${ms} мс.`,
     incomplete: "Звіт знайшов розбіжність; дивіться розділи й області вище.",
     scopeLine: (s) => `${s.scope}: правил ${s.source.rules}→${s.target.rules}, активних ${s.source.active}→${s.target.active}, символів ${s.source.codePoints}→${s.target.codePoints}${s.overBudget ? " (понад ціль 10 000: наступне курування скоротить)" : ""}`,
-    accountState: { unchecked: "ввійдено, ще не перевірено", signed_out: "не ввійдено", usable: "готовий", different_account: "ввійдено в інший обліковий запис", read_failed: "ліміти не прочитано", not_needed: "тут не потрібен", not_created: "не створено" },
-    accountsPending: "Пам'ять і налаштування прибули. Увійдіть у кожен обліковий запис за списком у панелі облікових записів, потім запустіть delegatus import --report.",
+    accountState: { unchecked: "ввійдено, ще не перевірено", signed_out: "не ввійдено", usable: "готовий", different_account: "ввійдено в інший акаунт", read_failed: "ліміти не прочитано", not_needed: "тут не потрібен", not_created: "не створено" },
+    accountsPending: "Пам'ять і налаштування прибули. Увійдіть у кожен акаунт за списком у панелі акаунтів, потім запустіть delegatus import --report.",
     noReport: "На цій інсталяції ще не застосовано жодного імпорту.",
   },
 };
@@ -124,7 +124,7 @@ const REDO = {
     browser_preferences: "browser preferences (sound, theme, panel widths) stay with each browser",
   },
   uk: {
-    account_sign_in: "увійдіть у кожен обліковий запис за списком у панелі облікових записів",
+    account_sign_in: "увійдіть у кожен акаунт за списком у панелі акаунтів",
     api_keys: "API-ключі й токен Telegram-бота: Ключі → Імпорт із текстом Ключі → Експорт джерела",
     telegram_bot: "підключіть того самого Telegram-бота; псевдоніми чатів і дозвіл писати застосуються тоді (від'єднайте його на джерелі, якщо він переїжджає)",
     relay_pairing: "спарте ретранслятор знову; налаштування його цілей застосуються тоді",

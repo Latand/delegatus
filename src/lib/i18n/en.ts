@@ -811,7 +811,6 @@ export const en = {
   "transfer.accounts.confirm": "This is the right account",
   "transfer.accounts.notNeeded": "Not needed here",
   "transfer.accounts.activeThere": "Active on the other install",
-  "transfer.accounts.bound": { one: "Bound to {count} project", other: "Bound to {count} projects" },
   "transfer.accounts.state.signed_out": "Signed out",
   "transfer.accounts.state.usable": "Ready",
   "transfer.accounts.state.unchecked": "Not checked yet",
