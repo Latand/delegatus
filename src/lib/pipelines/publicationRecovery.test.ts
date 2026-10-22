@@ -3,6 +3,11 @@ import { realExec, type ExecPort } from "@/lib/workflows/provision";
 import { prepareStageGitGuard, stageGitReceiptDirectory } from "@/lib/git/stageAttemptGuard";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { OPERATOR_PAUSE_RESUME_ACTOR } from "@/lib/pauseResumeActor";
+import { RuntimeJournal } from "@/runtime-host/journal";
+import { RuntimeHost } from "@/runtime-host/host";
+import { serveRuntimeHost } from "@/runtime-host/socket";
+import { once } from "node:events";
+import { defaultPipelinePorts } from "./engine";
 import { beforeEach, afterEach } from "bun:test";
 
 // Literal Git wrappers also read the parent's command configuration. Isolate
@@ -23,6 +28,60 @@ const stages = [
   { id: "review", kind: "run", role: { roleId: "reviewer" }, access: "read-only", prompt: "Review", next: null },
 ];
 const current = () => loadPipelines()[0]!;
+
+test.each(["resolve-decision", "retry-stage"] as const)(
+  "a running producer behind an idle runtime alias still refuses %s after failed delivery", async action => {
+    const f = await fixture();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "pipeline-repair-alias-"));
+    const journal = new RuntimeJournal(path.join(root, "runtime.sqlite"));
+    const host = new RuntimeHost(journal);
+    const socketPath = path.join(root, "host.sock");
+    const server = serveRuntimeHost(socketPath, { handle: request => host.handle(request) });
+    const priorSocket = process.env.LLV_RUNTIME_HOST_SOCKET;
+    process.env.LLV_RUNTIME_HOST_SOCKET = socketPath;
+    try {
+      await once(server, "listening");
+      let clock = Date.parse("2026-10-16T10:00:00.000Z");
+      f.h.ports.now = () => new Date(clock).toISOString();
+      f.h.ports.resumeSeveredTurn = async () => true;
+      f.h.ports.conversationDeliveryOutstanding = () => false;
+      f.h.ports.stageRepairDelivery = async () => ({ operationId: "failed-alias-repair", state: "failed", safeToReplace: false });
+      await f.commit("implementation"); f.refuse(); await f.finish();
+      clock += 21 * 60_000;
+      const parked = current();
+      const attempt = parked.runs[0]!.attempts[0]!;
+      const conversationId = attempt.conversationId!;
+      attempt.publicationRepair!.delivery = { operationId: "failed-alias-repair", state: "failed", safeToReplace: false };
+      savePipelines([parked]);
+      f.h.ports.durableTurnEvidence = async () => null;
+      f.h.ports.conversationAgentActive = defaultPipelinePorts().conversationAgentActive;
+      for (const [id, turn] of [["idle-alias", "idle"], ["running-owner", "running"]] as const) {
+        journal.append({ scope: { type: "session", id }, kind: "session-status",
+          payload: { conversationId, sessionKey: { engine: "codex", sessionId: id },
+            hostKind: "codex-app-server", host: "hosted", turn, attentionIds: [] },
+        });
+      }
+      expect(await f.h.ports.conversationAgentActive(conversationId)).toBe(true);
+      await tickPipelines([], f.h.ports);
+      expect(current().state).toBe("needs_decision");
+      const ready = current();
+
+      const result = await rawPatchPipeline(ready.id, { action,
+        ...(action === "resolve-decision" ? { clientRequestId: "running-alias-answer", answer: "Continue the accepted work.",
+          expectedStageId: "build", expectedAttempt: 1, expectedRevision: pipelineRevision(ready) } : {}),
+      }, f.h.ports, OPERATOR_PAUSE_RESUME_ACTOR);
+      expect(result.status).toBe(409);
+      expect(result.error).toContain("producer repair turn may still be running or queued");
+      expect(current().state).toBe("needs_decision");
+      expect(current().runs[0]!.attempts).toHaveLength(1);
+      expect(current().runs[0]!.attempts[0]!.publicationRepair?.delivery?.operationId).toBe("failed-alias-repair");
+    } finally {
+      await new Promise<void>(resolve => server.close(() => resolve()));
+      if (priorSocket === undefined) delete process.env.LLV_RUNTIME_HOST_SOCKET;
+      else process.env.LLV_RUNTIME_HOST_SOCKET = priorSocket;
+      journal.close(); fs.rmSync(root, { recursive: true, force: true }); f.close();
+    }
+  });
 
 test.each(["resolve-decision", "retry-stage"] as const)(
   "a stored legacy rejected repair with a failed send permits %s", async action => {
