@@ -334,7 +334,7 @@ export async function kickTurbo(project: string): Promise<void> {
   try {
     /* Only the release that owns traffic holds the hosts; a demoted one would
        plan an episode with nothing to switch. */
-    const { viewerReleaseOwnsTraffic } = await import("@/lib/viewerInstrumentation");
+    const { viewerReleaseOwnsTraffic } = await import("@/lib/viewerReleaseTraffic");
     if (!viewerReleaseOwnsTraffic()) { current.projects.delete(project); return; }
     await withViewerOperation("turbo.sweep", () => current.sweep.kick(project));
   } catch (error) {
