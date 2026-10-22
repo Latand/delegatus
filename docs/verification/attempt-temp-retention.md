@@ -103,7 +103,8 @@ preservation procedure.
 The separate `attempt-temp.sqlite` ledger selects due rows through an index.
 A normal minute tick examines at most four roots; measured usage above the cap
 raises that bound to 32. The due checkpoint commits before asynchronous work,
-so helper restarts preserve fairness. Registered roots use streamed native
+so helper restarts preserve fairness. New roots enter at their creation time,
+so arrivals cannot jump ahead of a due retry. Registered roots use streamed native
 inspection and allocation commands, each
 bounded to 15 seconds. Legacy snapshots and Windows inspection retain their
 200,000-entry ceiling. A constrained cleanup container can inspect and remove
@@ -122,14 +123,14 @@ preservation holds take priority over reclamation; over-cap held usage is
 reported. `LLV_TEMP_SWEEP=off` disables retirement and `dry-run` records decisions
 without removal. The existing hourly sweep remains the legacy fallback.
 It adopts at most 32
-interrupted gate roots per pass, using the four exact publication/check
+interrupted gate roots per pass, using the exact publication/check and admission-monitor
 prefixes; linked checkout and process guards still apply. Namespace-reader
 aliases stay with the existing lease-bound legacy sweep. Shared lock roots
 are never adopted.
 
-Every attempt tick writes `attempt-temp-report.json` and emits a service journal
-line containing removed directory count, attributed allocated bytes, hold/error
-counts and measured over-cap bytes. This work makes no performance improvement
+Each retired root emits its directory count and attributed bytes before the
+next candidate is inspected. Completed ticks write `attempt-temp-report.json`
+and emit aggregate counts, bytes, hold/error counts and measured over-cap bytes. This work makes no performance improvement
 claim and changes no deployment or worktree-retirement policy.
 
 ## Verification

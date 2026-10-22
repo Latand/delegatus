@@ -43,7 +43,7 @@ test.skipIf(process.env.LLV_ATTEMPT_TEMP_DOCKER_TEST !== "1")("container-owned p
   });
   store.register({ directory, pipelineId: "fixture", launchId: "fixture", retainUntilClose: false, createdAt: 1 });
   await exec("docker", ["run", "--rm", "--pull=never", "--network=none", "--user=0", "--mount", `type=bind,source=${directory},target=/attempt`,
-    "--entrypoint", "/bin/sh", image, "-c", "mkdir /attempt/private; echo fixture > /attempt/private/data; chown -R 12345:12345 /attempt/private; chmod 700 /attempt/private"], { timeout: 15000 });
+    "--entrypoint", "/bin/sh", image, "-c", "mkdir /attempt/private; dd if=/dev/zero of=/attempt/private/data bs=1048576 count=4 2>/dev/null; chown -R 12345:12345 /attempt/private; chmod 700 /attempt/private"], { timeout: 15000 });
   try {
     expect(() => fs.readdirSync(path.join(directory, "private"))).toThrow();
     const now = Date.parse("2030-01-01T00:00:00Z");
@@ -52,7 +52,7 @@ test.skipIf(process.env.LLV_ATTEMPT_TEMP_DOCKER_TEST !== "1")("container-owned p
     expect((await sweep(now)).removed).toBe(0); expect(fs.existsSync(directory)).toBeTrue();
     fs.unlinkSync(pin);
     const report = await sweep(now + 60000);
-    expect(report.errors).toBe(0); expect(report.removed).toBe(1); expect(fs.existsSync(directory)).toBeFalse();
+    expect(report.errors).toBe(0); expect(report.removed).toBe(1); expect(report.removedBytes).toBeGreaterThanOrEqual(4 * 1024 * 1024); expect(fs.existsSync(directory)).toBeFalse();
   } finally { store.close(); }
 }, 60000);
 

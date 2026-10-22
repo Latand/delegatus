@@ -80,13 +80,13 @@ async function started(child: ChildProcess): Promise<ChildProcess> {
 }
 
 test("owned stage, gate and legacy names exclude shared roots and foreign names", () => {
-  for (const name of ["llv-test-run-a1B2c3", "llv-registry-x", "llv-stage-abc", "llv-issue-1641-q", "pending-producer-a", "inflight-producer-b", "child-owner-c", "delegatus-local-gate-fixture", "delegatus-test-comparison-fixture", "merge-gate-state-fixture", "merge-privacy-state-fixture"]) {
+  for (const name of ["llv-test-run-a1B2c3", "llv-registry-x", "llv-stage-abc", "llv-issue-1641-q", "pending-producer-a", "inflight-producer-b", "child-owner-c", "delegatus-local-gate-fixture", "delegatus-test-comparison-fixture", "merge-gate-state-fixture", "merge-privacy-state-fixture", "delegatus-cpu-wait.fixture"]) {
     expect(isOwnedTempName(name)).toBeTrue();
     expect(isOwnedTempConsumerName(name)).toBeTrue();
   }
-  for (const name of ["llv-spawn-sandbox", "llv-tmux-cwd", "llv-", "rv2191-png", "rev-state", "pulse-PKdhtXMmr18n", "playwright_chromiumdev_profile-x", "claude-1000", "tmux-1000", "systemd-private-x", "delegatus-local-gate-", "delegatus-gate"]) {
+  for (const name of ["llv-spawn-sandbox", "llv-tmux-cwd", "llv-gate", "llv-", "rv2191-png", "rev-state", "pulse-PKdhtXMmr18n", "playwright_chromiumdev_profile-x", "claude-1000", "tmux-1000", "systemd-private-x", "delegatus-local-gate-", "delegatus-gate"]) {
     expect(isOwnedTempName(name)).toBeFalse();
-    expect(isOwnedTempConsumerName(name)).toBe(["llv-spawn-sandbox", "llv-tmux-cwd"].includes(name));
+    expect(isOwnedTempConsumerName(name)).toBe(["llv-spawn-sandbox", "llv-tmux-cwd", "llv-gate"].includes(name));
   }
 });
 

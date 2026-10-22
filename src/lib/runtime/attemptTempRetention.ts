@@ -45,8 +45,8 @@ export class AttemptTempStore {
     const stat = fs.lstatSync(owner.directory);
     if (!stat.isDirectory() || stat.isSymbolicLink() || (!/^llv-(?:read-only-stage|stage|stage-config)-/.test(path.basename(owner.directory)) && !(owner.pipelineId === null && isGateTempName(path.basename(owner.directory)))))
       throw new Error("Attempt temp root is not an owned directory");
-    this.db.query("INSERT INTO roots(directory,pipelineId,launchId,retainUntilClose,createdAt,identity) VALUES(?,?,?,?,?,?)")
-      .run(path.resolve(owner.directory), owner.pipelineId, owner.launchId, Number(owner.retainUntilClose), owner.createdAt, `${stat.dev}:${stat.ino}`);
+    this.db.query("INSERT INTO roots(directory,pipelineId,launchId,retainUntilClose,createdAt,identity,checkedAt) VALUES(?,?,?,?,?,?,?)")
+      .run(path.resolve(owner.directory), owner.pipelineId, owner.launchId, Number(owner.retainUntilClose), owner.createdAt, `${stat.dev}:${stat.ino}`, owner.createdAt);
     fs.writeFileSync(path.join(owner.directory, ".delegatus-attempt-owner"), "attempt-temp.sqlite\n", { mode: 0o600, flag: "wx" });
   }
   has(directory: string) { return !!this.db.query("SELECT 1 FROM roots WHERE directory=?").get(directory); }
@@ -98,7 +98,10 @@ export async function sweepAttemptTemps(store: AttemptTempStore, options: Attemp
         if (!await attemptReferencesClear(owner.directory, directory, scan())) return false;
         // Native/container observations can await I/O. Ownership must still
         // agree after them, at the same dispatch boundary.
-        return await options.state(owner) === state;
+        const authority = await options.state(owner);
+        const final = fs.lstatSync(directory, { throwIfNoEntry: false });
+        return authority === state && !!final?.isDirectory() && !final.isSymbolicLink()
+          && `${final.dev}:${final.ino}` === owner.identity;
       };
       if (stat && !await eligible()) { report.held++; continue; }
       const result = await sweepStaleTempDirs({

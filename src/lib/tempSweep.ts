@@ -22,7 +22,7 @@ import { OWNED_TEMP_PREFIX } from "@/lib/tempDirs";
  * killed before it got there, and the residue that predates them. The sweeper
  * removes those, and nothing else:
  *
- * - **Only owned names.** `llv-*`, the four isolated gate prefixes, plus
+ * - **Only owned names.** `llv-*`, the isolated gate prefixes, plus
  *   three test prefixes from before the
  *   per-run root existed. `llv-spawn-sandbox` (every agent's config root, kept
  *   on purpose so a resumed agent finds its own) and `llv-tmux-cwd` are never
@@ -72,10 +72,10 @@ const JOURNAL_ROTATE_BYTES = 1_000_000;
 /** Test prefixes from before the per-run test root; each is unique to this repository's suites. */
 const LEGACY_OWNED_PREFIXES = ["pending-producer-", "inflight-producer-", "child-owner-"] as const;
 /** Exact prefixes of isolated publication/check sandboxes. Lock roots are excluded. */
-export const GATE_TEMP_PREFIXES = ["delegatus-local-gate-", "delegatus-test-comparison-", "merge-gate-state-", "merge-privacy-state-"] as const;
+export const GATE_TEMP_PREFIXES = ["delegatus-local-gate-", "delegatus-test-comparison-", "merge-gate-state-", "merge-privacy-state-", "delegatus-cpu-wait."] as const;
 export const isGateTempName = (name: string) => GATE_TEMP_PREFIXES.some(prefix => name.startsWith(prefix) && name.length > prefix.length);
 /** Owned names that hold live, shared state and are never swept. */
-const KEPT_OWNED_NAMES = new Set(["llv-spawn-sandbox", "llv-tmux-cwd"]);
+const KEPT_OWNED_NAMES = new Set(["llv-spawn-sandbox", "llv-tmux-cwd", "llv-gate"]);
 /** Environment variables whose directory a process is using even while it holds nothing open there. */
 const IN_USE_ENV = ["HOME", "TMPDIR", "TMP", "TEMP", "LLV_STATE_DIR", "XDG_CONFIG_HOME", "CLAUDE_CODE_TMPDIR"] as const;
 

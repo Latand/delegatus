@@ -85,22 +85,29 @@ export async function attemptTempUtilityImage(): Promise<string> {
   }
   throw new Error("no installed container cleanup utility image");
 }
-async function containerCommand(directory: string, operation: "inspect" | "remove", original = directory, guard?: () => Promise<boolean>) {
+async function containerCommand(directory: string, operation: "inspect" | "remove" | "measure", original = directory, guard?: () => Promise<boolean>) {
+  const initial = fs.lstatSync(directory);
+  if (!initial.isDirectory() || initial.isSymbolicLink()) throw new Error("attempt namespace root changed");
+  const identity = `${initial.dev}:${initial.ino}`;
   // Running containers may hold files through mount aliases that an ordinary
   // proc observer cannot read. Never stop or exec into one for reclamation.
   if (!await containerMountsClear([directory, original])) throw new Error("container ownership could not be cleared for the attempt tree");
   const image = await attemptTempUtilityImage();
   if (!/^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/.test(image) || directory.includes(",")) throw new Error("invalid container cleanup input");
-  const script = operation === "inspect"
-    ? 'exec find /attempt -xdev "$@"'
+  const body = operation === "inspect" ? 'exec find /attempt -xdev "$@"'
+    : operation === "measure" ? 'exec du -skx /attempt'
     : 'find /attempt -xdev "$@" > /tmp/holds || exit; test ! -s /tmp/holds || exit 75; exec find /attempt -xdev -depth -mindepth 1 -delete';
+  const script = 'identity=$1; shift; test "$(stat -c %d:%i /attempt)" = "$identity" || exit 75; ' + body;
   if (guard && !await guard()) throw new Error("attempt authority changed before namespace removal");
+  const final = fs.lstatSync(directory);
+  if (!final.isDirectory() || final.isSymbolicLink() || `${final.dev}:${final.ino}` !== identity)
+    throw new Error("attempt identity changed before namespace dispatch");
   // Only this owned tree is writable. No pull, network, socket, privileged
   // mode or host namespace is granted to the cleanup container.
   return run("docker", ["run", "--rm", "--pull=never", "--network=none", "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=1m",
     "--cap-drop=ALL", "--cap-add=DAC_OVERRIDE", "--cap-add=FOWNER", "--security-opt=no-new-privileges", "--pids-limit=32", "--memory=128m", "--cpus=1", "--user=0",
-    "--mount", `type=bind,source=${directory},target=/attempt${operation === "inspect" ? ",readonly" : ""}`,
-    "--entrypoint", "timeout", image, "12", "/bin/sh", "-c", script, "sh", ...unsafe]);
+    "--mount", `type=bind,source=${directory},target=/attempt${operation !== "remove" ? ",readonly" : ""}`,
+    "--entrypoint", "timeout", image, "12", "/bin/sh", "-c", script, "sh", identity, ...unsafe]);
 }
 
 /** Native find streams an arbitrarily large owned tree; the owned worker and
@@ -126,9 +133,15 @@ export async function removeAttemptTree(directory: string, original = directory,
 
 export async function allocatedAttemptBytes(directory: string): Promise<number> {
   if (process.platform === "win32") return measureTempBytes(directory);
-  try {
-    const value = Number((await run("du", ["-skx", "--", directory])).stdout.split(/\s+/)[0]);
-    if (Number.isFinite(value) && value >= 0) return value * 1024;
-  } catch { /* Measurement can be partial while namespace ownership is checked. */ }
+  let output: string | undefined;
+  try { output = (await run("du", ["-skx", "--", directory])).stdout; }
+  catch {
+    if (process.platform === "linux") {
+      try { output = (await containerCommand(directory, "measure")).stdout; }
+      catch { /* Preserve a lower bound if namespace measurement is unavailable. */ }
+    }
+  }
+  const value = Number(output?.trim().split(/\s+/)[0] ?? NaN);
+  if (Number.isFinite(value) && value >= 0) return value * 1024;
   return fs.lstatSync(directory).blocks * 512;
 }
