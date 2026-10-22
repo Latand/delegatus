@@ -32,6 +32,7 @@ const STATUS: Record<TelegramBotErrorCode, number> = {
   document_too_large: 413,
   document_secret: 422,
   document_roots_invalid: 400,
+  confirmation_invalid: 409,
   format_invalid: 400,
   forbidden: 403,
   not_enough_rights: 403,
@@ -66,6 +67,7 @@ export function telegramBotFailure(error: unknown): NextResponse {
       ...(error.extra.retryAfterSeconds !== undefined ? { retryAfterSeconds: error.extra.retryAfterSeconds } : {}),
       ...(error.extra.sentMessageIds ? { sentMessageIds: error.extra.sentMessageIds } : {}),
       ...(error.extra.refusals ? { refusals: error.extra.refusals } : {}),
+      ...(error.extra.confirmation ? { confirmation: error.extra.confirmation } : {}),
       ...(error.extra.secretClass ? { secretClass: error.extra.secretClass } : {}),
     }, { status: STATUS[error.code] ?? 400 });
   }

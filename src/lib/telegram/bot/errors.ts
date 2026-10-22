@@ -6,7 +6,7 @@ export class TelegramBotError extends Error {
   constructor(
     readonly code: TelegramBotErrorCode,
     message: string,
-    readonly extra: { retryAfterSeconds?: number; sentMessageIds?: number[]; secretClass?: string; refusals?: TelegramBotRefusal[] } = {},
+    readonly extra: { retryAfterSeconds?: number; sentMessageIds?: number[]; secretClass?: string; confirmation?: { id: string; url: string; expiresAt: string }; refusals?: TelegramBotRefusal[] } = {},
   ) {
     super(message);
     this.name = "TelegramBotError";
