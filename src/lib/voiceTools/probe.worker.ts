@@ -7,7 +7,7 @@ import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import Ajv from "ajv";
 import path from "node:path";
 import * as fs from "node:fs/promises";
-import { digest, launchShapingEnv, packageLaunch, validateCatalog, voiceToolBounds, type VoiceToolServer } from "./contracts";
+import { assertSecretDestinations, type SecretPolicies, digest, launchShapingEnv, packageLaunch, validateCatalog, voiceToolBounds, type VoiceToolServer } from "./contracts";
 import { verifyEntry } from "./entry";
 
 let received = 0;
@@ -18,7 +18,7 @@ for await (const chunk of process.stdin) {
   input.push(chunk);
 }
 const request = JSON.parse(Buffer.concat(input).toString("utf8")) as {
-  name: string; server: VoiceToolServer; secrets: Record<string, string>; home: string;
+  name: string; server: VoiceToolServer; secrets: Record<string, string>; policies?: SecretPolicies; home: string;
   /** Chosen by the Viewer (hub.ts): the launcher's absolute path, an empty Bun config and an empty folder. */
   launch: { executable: string; config: string; runDir: string } | null;
 };
@@ -136,6 +136,7 @@ async function systemPython(launch: { executable: string; runDir: string }, env:
 const boundedFetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
   const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
   if (request.server.transport.type !== "http" || url.href !== new URL(request.server.transport.url).href) throw new Error("PROTOCOL_ERROR");
+  assertSecretDestinations(request.name, request.server, request.policies ?? {});
   const response = await fetch(input, { ...init, redirect: "error" });
   if (!response.body) return response;
   const reader = response.body.getReader();
@@ -155,6 +156,7 @@ const boundedFetch = async (input: string | URL | Request, init?: RequestInit): 
 let client: Client | undefined;
 let answer: unknown;
 try {
+  assertSecretDestinations(request.name, request.server, request.policies ?? {});
   await verifyEntry(request.server);
   const transport = request.server.transport;
   client = new Client({ name: "delegatus-voice-tools-probe", version: "1" });
@@ -175,13 +177,13 @@ try {
   } while (cursor);
   // No echo from the peer, including fields discarded during normalization, may escape.
   const raw = JSON.stringify(tools);
-  if (Object.values(request.secrets).some(secret => raw.includes(secret) || raw.includes(JSON.stringify(secret).slice(1, -1)))) throw new Error("SECRET_ECHO");
+  if (Object.values(request.secrets).some(secret => secret.length >= 8 && (raw.includes(secret) || raw.includes(JSON.stringify(secret).slice(1, -1))))) throw new Error("SECRET_ECHO");
   const ajv = new Ajv({ strict: false, allErrors: false, validateFormats: false });
   const catalog = validateCatalog(request.name, tools, schema => { ajv.removeSchema(); ajv.compile(schema); });
   answer = { code: "OK", catalog: { digest: digest(catalog), fetchedAt: new Date().toISOString(), tools: catalog } };
 } catch (error) {
   const message = error instanceof Error ? error.message : "";
-  answer = { code: ["START_FAILED", "CATALOG_BOUNDS", "SECRET_ECHO", "ENTRY_CHANGED"].includes(message) ? message : "PROTOCOL_ERROR" };
+  answer = { code: ["START_FAILED", "CATALOG_BOUNDS", "SECRET_ECHO", "SECRET_DESTINATION", "ENTRY_CHANGED"].includes(message) ? message : "PROTOCOL_ERROR" };
 } finally {
   // The parent deadline also owns close; a peer cannot extend it during shutdown.
   await client?.close().catch(() => undefined);

@@ -6,8 +6,8 @@ export const voiceToolBounds = { servers: 64, enabledServers: 16, tools: 128, se
   wireBytes: 2 * 1024 * 1024, secretBytes: 2 * 1024 * 1024, registryBytes: 8 * 1024 * 1024, deadlineMs: 20_000, children: 8 } as const;
 const text = (max: number) => z.string().min(1).max(max).refine(value => !value.includes("\0"));
 export const serverName = z.string().regex(/^[a-z][a-z0-9_]{1,23}$/);
-const reference = z.string().regex(/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/);
-const value = z.union([z.object({ value: z.string().max(4096).refine(v => !v.includes("\0")) }).strict(), z.object({ secretRef: reference }).strict()]);
+export const secretReferenceSchema = z.string().regex(/^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/);
+const value = z.union([z.object({ value: z.string().max(4096).refine(v => !v.includes("\0")) }).strict(), z.object({ secretRef: secretReferenceSchema }).strict()]);
 const variables = (pattern: RegExp) => z.record(z.string().regex(pattern), value).refine(v => Object.keys(v).length <= 64)
   .refine(v => Object.entries(v).every(([name, entry]) => !/key|token|secret|password|authorization|cookie/i.test(name) || "secretRef" in entry));
 export function allowedHttpUrl(input: string): boolean {
@@ -41,13 +41,13 @@ export const proposalSchema = z.object({
 export type VoiceToolProposal = z.infer<typeof proposalSchema>;
 export type Tool = { name: string; description: string; inputSchema: Record<string, unknown>; annotations?: Record<string, unknown> };
 export type Catalog = { digest: string; fetchedAt: string; tools: Tool[] };
-export type ProbeCode = "OK" | "START_FAILED" | "PROTOCOL_ERROR" | "TIMEOUT" | "CATALOG_BOUNDS" | "SECRET_ECHO" | "MISSING_SECRET" | "ENTRY_CHANGED" | "BUSY" | "CANCELLED";
+export type ProbeCode = "OK" | "START_FAILED" | "PROTOCOL_ERROR" | "TIMEOUT" | "CATALOG_BOUNDS" | "SECRET_ECHO" | "MISSING_SECRET" | "SECRET_DESTINATION" | "ENTRY_CHANGED" | "BUSY" | "CANCELLED";
 export type ProbeResult = { code: ProbeCode; catalog?: Catalog };
 export type VoiceToolServer = Omit<VoiceToolProposal, "name"> & {
   generation: number;
   owner: "installation"; audience: ["voice"]; state: "pending" | "enabled" | "disabled" | "rejected" | "changed";
   proposedBy: { kind: "conversation" | "operator"; conversationId: string | null; at: string };
-  approval: { by: "operator"; at: string; digest: string } | null;
+  approval: { by: "operator"; at: string; digest: string; mac?: string } | null;
   tools: Record<string, { enabled: boolean; acts: boolean }>;
   catalog: Catalog | null; lastDryRun: { code: ProbeCode; at: string; digest: string } | null;
 };
@@ -56,7 +56,7 @@ export type VoiceToolsView = { version: 1; revision: number; servers: Record<str
   /* Literal values are shown so the operator approves what runs; a secret reference shows its name only. */
   transport: { type: "stdio"; command: "bun" | "uv"; args: string[]; cwd: string | null; envNames: string[]; envValues: Record<string, string> }
     | { type: "http"; url: string; headerNames: string[]; headerValues: Record<string, string> };
-  digest: string; missingSecrets: string[]; secretRefs: string[];
+  digest: string; missingSecrets: string[]; secretRefs: string[]; secretDestinations: Record<string, string[]>;
 }> };
 export const emptyRegistry = (): VoiceToolsRegistry => ({ version: 1, revision: 0, servers: {} });
 
@@ -143,5 +143,20 @@ export function validateCatalog(name: string, input: unknown, compile?: (schema:
   });
 }
 export const selectionSchema = z.record(z.string().max(128), z.object({ enabled: z.boolean(), acts: z.boolean() }).strict());
-export const secretsSchema = z.record(reference, z.string().min(1).max(8192)).refine(v => Object.keys(v).length <= 256)
+/** Exact HTTP origins (scheme, host and port), or the named local stdio recipient. */
+export const secretDestinationSchema = z.string().max(4096).refine(value => {
+  if (/^stdio:[a-z][a-z0-9_]{1,23}$/.test(value)) return true;
+  try { const url = new URL(value); return !url.hostname.includes("*") && allowedHttpUrl(value) && url.origin === value; } catch { return false; }
+});
+export const secretInputSchema = z.object({ value: z.string().min(8).max(8192).optional(), destinations: z.array(secretDestinationSchema).min(1).max(32) }).strict();
+export const secretsSchema = z.record(secretReferenceSchema, secretInputSchema).refine(v => Object.keys(v).length <= 256)
   .refine(v => Buffer.byteLength(JSON.stringify(v)) <= voiceToolBounds.secretBytes);
+export type SecretPolicies = Record<string, string[]>;
+export function secretDestination(name: string, server: Pick<VoiceToolServer, "transport">): string {
+  return server.transport.type === "http" ? new URL(server.transport.url).origin : `stdio:${name}`;
+}
+/** Runs at proposal, approval, dispatch and independently inside the worker. */
+export function assertSecretDestinations(name: string, server: VoiceToolServer, policies: SecretPolicies, references = secretReferences(server)): void {
+  const destination = secretDestination(name, server);
+  if (references.some(ref => !Object.hasOwn(policies, ref) || !Array.isArray(policies[ref]) || !policies[ref].includes(destination))) throw new Error("SECRET_DESTINATION");
+}

@@ -6,11 +6,11 @@ import type { VoiceToolsView } from "@/lib/voiceTools/contracts";
 type Server = VoiceToolsView["servers"][string];
 type Body = { action: "dry-run" | "approve" | "reject" | "disable" | "remove"; name: string; digest: string }
   | { action: "configure"; name: string; digest: string; tools?: Server["tools"]; askBeforeActing?: boolean; reapprove?: true }
-  | { action: "secrets"; secrets: Record<string, string> };
+  | { action: "secrets"; secrets: Record<string, { value?: string; destinations: string[] }> };
 type Control = "secrets" | "dry-run" | "approve" | "reject" | "disable" | "remove" | "ask" | "tools";
 
-const DRY_RUN_CODES = ["START_FAILED", "PROTOCOL_ERROR", "TIMEOUT", "CATALOG_BOUNDS", "SECRET_ECHO", "MISSING_SECRET", "ENTRY_CHANGED", "BUSY", "CANCELLED"];
-const REFUSALS = ["STALE_APPROVAL", "DRY_RUN_REQUIRED", "MISSING_SECRET", "ENTRY_CHANGED", "SELECTION_BOUNDS", "CATALOG_BOUNDS", "OPERATOR_REQUIRED", "SERVER_NOT_FOUND", "TIMEOUT", "BUSY"];
+const DRY_RUN_CODES = ["START_FAILED", "PROTOCOL_ERROR", "TIMEOUT", "CATALOG_BOUNDS", "SECRET_ECHO", "SECRET_DESTINATION", "MISSING_SECRET", "ENTRY_CHANGED", "BUSY", "CANCELLED"];
+const REFUSALS = ["SECRET_DESTINATION", "STALE_APPROVAL", "DRY_RUN_REQUIRED", "MISSING_SECRET", "ENTRY_CHANGED", "SELECTION_BOUNDS", "CATALOG_BOUNDS", "OPERATOR_REQUIRED", "SERVER_NOT_FOUND", "TIMEOUT", "BUSY"];
 /* Waiting servers first: they are what the operator opened this section for. */
 const ORDER: Server["state"][] = ["pending", "changed", "enabled", "disabled", "rejected"];
 const BUTTON = "min-h-9 rounded-[8px] border border-border px-3 text-[13px] font-semibold text-primary hover:bg-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-45 max-sm:min-h-11";
@@ -43,6 +43,7 @@ export function VoiceToolsSetting() {
   const [view, setView] = useState<VoiceToolsView | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
+  const [signInRequired, setSignInRequired] = useState(false);
   const [writing, setWriting] = useState<{ name: string; control: Control } | null>(null);
   const [refusal, setRefusal] = useState<{ name: string; control: Control; code: string } | null>(null);
   const sequence = useRef(0);
@@ -53,6 +54,7 @@ export function VoiceToolsSetting() {
     setLoadError(false);
     try {
       const response = await fetch("/api/voice-tools", { cache: "no-store" });
+      if (current === sequence.current) setSignInRequired(response.status === 401 || response.status === 403);
       if (!response.ok) throw new Error("unavailable");
       const next = await response.json() as VoiceToolsView;
       if (current === sequence.current) setView(next);
@@ -104,7 +106,7 @@ export function VoiceToolsSetting() {
   return <section data-voice-tools="" aria-labelledby="voice-tools-title" className="mt-4 min-w-0 border-t border-border pt-3 text-[13px] [overflow-wrap:anywhere]">
     <h3 id="voice-tools-title" className="flex min-h-11 items-center font-semibold">{t("voiceCompanion.tools.title")}</h3>
     <p className="text-muted">{t("voiceCompanion.tools.intro")}</p>
-    <div role="status" data-voice-tools-status="" className="mt-2 min-h-5 text-muted empty:hidden">{loading && !view ? t("voiceCompanion.tools.loading") : loadError ? t("voiceCompanion.tools.error") : view && !servers.length ? t("voiceCompanion.tools.empty") : ""}</div>
+    <div role="status" data-voice-tools-status="" className="mt-2 min-h-5 text-muted empty:hidden">{loading && !view ? t("voiceCompanion.tools.loading") : loadError ? t(signInRequired ? "voiceCompanion.tools.signIn" : "voiceCompanion.tools.error") : view && !servers.length ? t("voiceCompanion.tools.empty") : ""}</div>
     {loadError ? <button type="button" onClick={() => void read()} className="min-h-11 underline">{t("voiceCompanion.tools.retry")}</button> : null}
     {servers.length ? <ul className="mt-2 space-y-3" data-voice-tools-list="">
       {servers.map(([name, server]) => <ServerRow key={name} name={name} server={server} when={when} busy={writing !== null} writing={writing?.name === name ? writing.control : null}
@@ -162,7 +164,12 @@ function ServerRow({ name, server, when, busy, writing, refusal, write }: {
     {server.secretRefs.length ? <form className="mt-2" data-voice-tool-references="" onSubmit={event => {
       event.preventDefault();
       const fields = [...event.currentTarget.querySelectorAll<HTMLInputElement>("input[data-reference]")];
-      const secrets = Object.fromEntries(fields.flatMap(field => field.value && server.secretRefs.includes(field.dataset.reference!) ? [[field.dataset.reference!, field.value]] : []));
+      const form = event.currentTarget;
+      const secrets = Object.fromEntries(fields.flatMap(field => {
+        const ref = field.dataset.reference!;
+        const destinations = [...form.querySelectorAll<HTMLInputElement>("input[data-destinations]")].find(input => input.dataset.destinations === ref)?.value.trim().split(/[\s,]+/).filter(Boolean) ?? [];
+        return typed.has(ref) && destinations.length ? [[ref, { ...(field.value ? { value: field.value } : {}), destinations }]] : [];
+      }));
       if (!Object.keys(secrets).length) return;
       /* A refused save keeps what was typed beside its reason; a saved one clears the fields. */
       void write("secrets", { action: "secrets", secrets }).then(saved => {
@@ -175,12 +182,21 @@ function ServerRow({ name, server, when, busy, writing, refusal, write }: {
       <div className="mt-1 space-y-1.5">
         {server.secretRefs.map(ref => {
           const missing = server.missingSecrets.includes(ref);
-          return <label key={ref} className="block min-w-0" data-voice-tool-reference={ref} data-missing={missing ? "" : undefined}>
+          return <div key={ref} className="block min-w-0" data-voice-tool-reference={ref} data-missing={missing ? "" : undefined}>
             <span className="flex flex-wrap gap-x-1.5 text-[12px]"><span className="font-mono text-primary">{ref}</span><span className={missing ? "font-semibold text-warning" : "text-muted"}>{t(missing ? "voiceCompanion.tools.secretNeeded" : "voiceCompanion.tools.secretSaved")}</span></span>
-            <input type="password" autoComplete="off" spellCheck={false} maxLength={8192} data-1p-ignore="" data-lpignore="true" disabled={busy}
+            <label className="block">
+              <span className="sr-only">{ref}</span>
+              <input type="password" autoComplete="off" spellCheck={false} minLength={8} maxLength={8192} data-1p-ignore="" data-lpignore="true" disabled={busy}
               placeholder={missing ? "" : t("voiceCompanion.tools.secretReplace")} data-reference={ref}
               onChange={event => { const filled = event.target.value.length > 0; setTyped(current => { const next = new Set(current); if (filled) next.add(ref); else next.delete(ref); return next; }); }} className={`${FIELD} mt-0.5`} />
-          </label>;
+            </label>
+            <label className="mt-1 block text-[12px] text-muted">{t("voiceCompanion.tools.destinations")}
+              <input type="text" data-destinations={ref} defaultValue={server.secretDestinations?.[ref]?.join(", ") ?? ""} maxLength={4096} disabled={busy} required={typed.has(ref)}
+                placeholder={transport.type === "http" ? "https://mcp.example.test" : `stdio:${name}`} className={`${FIELD} mt-0.5`}
+                onChange={() => setTyped(current => new Set([...current, ref]))} />
+            </label>
+            <p data-voice-tool-destinations="" className="mt-0.5 text-[12px] text-muted">{t("voiceCompanion.tools.destinationsSaved", { hosts: server.secretDestinations?.[ref]?.join(", ") || t("voiceCompanion.tools.none") })}</p>
+          </div>;
         })}
       </div>
       <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">

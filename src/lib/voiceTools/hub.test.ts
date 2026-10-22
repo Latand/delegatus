@@ -44,11 +44,19 @@ async function propose(store: VoiceToolsStore, url: string, headers = {}) {
   return (await store.view()).servers.music.digest;
 }
 
+async function saveSecrets(store: VoiceToolsStore, values: Record<string, string>, authorize?: () => void) {
+  const view = await store.view();
+  const destinations = Object.fromEntries(Object.entries(values).map(([ref, value]) => [ref, { value, destinations: Object.entries(view.servers)
+    .filter(([, server]) => server.secretRefs.includes(ref)).map(([name, server]) => server.transport.type === "http" ? new URL(server.transport.url).origin : `stdio:${name}`) }]));
+  for (const entry of Object.values(destinations)) if (!entry.destinations.length) entry.destinations.push("https://example.invalid");
+  return store.saveSecrets(destinations, authorize);
+}
+
 test("HTTP dry run initializes, paginates tools, stops and keeps credentials out of records", async () => {
   const { store, root } = await setup();
   const server = fake(params => params.cursor ? { tools: [{ ...tools[0], name: "play", annotations: {} }] } : { tools, nextCursor: "page2" });
   const expected = await propose(store, server.url, { Authorization: { secretRef: "music-token" } });
-  await store.saveSecrets({ "music-token": "synthetic-voice-credential" });
+  await saveSecrets(store, { "music-token": "synthetic-voice-credential" });
   await new VoiceToolHub(store).dryRun("music", expected);
   const view = await store.view();
   expect(view.servers.music.lastDryRun?.code).toBe("OK");
@@ -109,7 +117,7 @@ test("a peer echo, count overflow, schema rejection and repeated cursors return 
     [{ tools: [], nextCursor: "again" }, "CATALOG_BOUNDS"],
   ] as const) {
     const { store } = await setup(); const server = fake(() => reply);
-    const expected = await propose(store, server.url); await store.saveSecrets({ "music-token": "synthetic-voice-credential" });
+    const expected = await propose(store, server.url, { Authorization: { secretRef: "music-token" } }); await saveSecrets(store, { "music-token": "synthetic-voice-credential" });
     await new VoiceToolHub(store).dryRun("music", expected);
     expect((await store.view()).servers.music.lastDryRun?.code).toBe(code);
     expect((await store.view()).servers.music.catalog).toBeNull();
@@ -170,7 +178,7 @@ test("HTTP redirects never forward credentials to another endpoint; wire overflo
   const target = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { followed++; return Response.json({}); } }); listeners.push(target);
   const redirect = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { return new Response(null, { status: 307, headers: { location: `http://127.0.0.1:${target.port}/mcp` } }); } }); listeners.push(redirect);
   const expected = await propose(store, `http://127.0.0.1:${redirect.port}/mcp`, { Authorization: { secretRef: "music-token" } });
-  await store.saveSecrets({ "music-token": "synthetic-voice-credential" });
+  await saveSecrets(store, { "music-token": "synthetic-voice-credential" });
   await new VoiceToolHub(store).dryRun("music", expected);
   expect(followed).toBe(0); expect((await store.view()).servers.music.lastDryRun?.code).toBe("PROTOCOL_ERROR");
   const huge = fake(() => ({ tools: [{ ...tools[0], description: "x".repeat(3 * 1024 * 1024) }] }));
@@ -254,7 +262,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{const m=JSON.pa
   await store.propose({ name: "music", title: "Music", capability: "Search", transport: { type: "stdio", command: "bun", args: [entry],
     env: { READY_URL: { value: `http://127.0.0.1:${notify.port}/ready` }, SERVER_TOKEN: { secretRef: "server-token" } } },
     entryFile: { path: entry, sha256: createHash("sha256").update(source).digest("hex") } }, actor);
-  await store.saveSecrets({ "server-token": "synthetic-voice-credential" });
+  await saveSecrets(store, { "server-token": "synthetic-voice-credential" });
   let expire!: () => void;
   const hub = new VoiceToolHub(store, 20_000, (callback, milliseconds) => { if (milliseconds === 17_000) expire = callback; return () => {}; });
   const pending = hub.dryRun("music", (await store.view()).servers.music.digest);
@@ -671,3 +679,66 @@ test.skipIf(process.env.LLV_VOICE_REGISTRY_NETWORK_TEST !== "1")("public registr
     expect((await new VoiceToolsStore(root).view()).servers.music.state).toBe("enabled");
   }
 }, 45_000);
+
+
+test("an unbound secret is never sent by the real hub dry run", async () => {
+  const { store } = await setup(); const peer = fake();
+  const expected = await propose(store, peer.url, { Authorization: { secretRef: "music-token" } });
+  await fs.writeFile(path.join(store.directory, "voice-tools-secrets.json"), JSON.stringify({ "music-token": "synthetic-voice-credential" }), { mode: 0o600 });
+  await expect(new VoiceToolHub(store).dryRun("music", expected)).rejects.toThrow("SECRET_DESTINATION");
+  expect(peer.requests).toEqual([]);
+});
+
+test("the worker refuses a credential without a destination policy before connecting", async () => {
+  const { store, root } = await setup(); const peer = fake();
+  const expected = await propose(store, peer.url, { Authorization: { secretRef: "music-token" } });
+  await saveSecrets(store, { "music-token": "synthetic-voice-credential" });
+  const server = JSON.parse(await fs.readFile(store.file, "utf8")).servers.music;
+  expect(expected).toBe(approvalDigest("music", server));
+  const child = spawn(process.execPath, [path.join(import.meta.dir, "probe.worker.ts")], {
+    cwd: process.cwd(), env: voiceToolEnvironment(root, process.env), stdio: ["pipe", "pipe", "ignore"],
+  });
+  let output = ""; child.stdout!.on("data", chunk => { output += chunk.toString(); });
+  const exited = new Promise(resolve => child.once("close", resolve));
+  child.stdin!.end(JSON.stringify({ name: "music", server, secrets: { "music-token": "synthetic-voice-credential" }, home: root, launch: null }));
+  const watchdog = setTimeout(() => child.kill("SIGKILL"), 15_000);
+  try { await exited; } finally { clearTimeout(watchdog); }
+  expect(JSON.parse(output).code).toBe("SECRET_DESTINATION");
+  expect(peer.requests).toEqual([]);
+});
+
+
+test("destination revocation during hub preparation prevents dispatch", async () => {
+  const { store } = await setup(); const peer = fake();
+  const expected = await propose(store, peer.url, { Authorization: { secretRef: "music-token" } });
+  await saveSecrets(store, { "music-token": "synthetic-voice-credential" });
+  const original = store.probeInput.bind(store);
+  let calls = 0;
+  store.probeInput = async (...args) => {
+    const result = await original(...args);
+    if (++calls === 1) await store.saveSecrets({ "music-token": { destinations: ["https://other.example.test"] } });
+    return result;
+  };
+  await expect(new VoiceToolHub(store).dryRun("music", expected)).rejects.toThrow("SECRET_DESTINATION");
+  expect(calls).toBe(1);
+  expect(peer.requests).toEqual([]);
+});
+
+
+test("the worker checks exact scheme, port and host even when the store is bypassed", async () => {
+  const { store, root } = await setup(); const peer = fake();
+  await propose(store, peer.url, { Authorization: { secretRef: "music-token" } });
+  const server = JSON.parse(await fs.readFile(store.file, "utf8")).servers.music;
+  const origin = new URL(peer.url).origin;
+  for (const destinations of [["https://example.invalid"], [origin.replace("http:", "https:")], ["http://127.0.0.1:1"], [`${origin}.other.example.test`], [origin]]) {
+    const before = peer.requests.length;
+    const child = spawn(process.execPath, [path.join(import.meta.dir, "probe.worker.ts")], { cwd: process.cwd(), env: voiceToolEnvironment(root, process.env), stdio: ["pipe", "pipe", "ignore"] });
+    let output = ""; child.stdout!.on("data", chunk => { output += chunk.toString(); });
+    const closed = new Promise(resolve => child.once("close", resolve));
+    child.stdin!.end(JSON.stringify({ name: "music", server, secrets: { "music-token": "synthetic-voice-credential" }, policies: { "music-token": destinations }, home: root, launch: null }));
+    const watchdog = setTimeout(() => child.kill("SIGKILL"), 15_000);
+    try { await closed; } finally { clearTimeout(watchdog); }
+    expect(JSON.parse(output).code).toBe(destinations[0] === origin ? "OK" : "SECRET_DESTINATION");
+    expect(peer.requests.length > before).toBe(destinations[0] === origin);
+  }
+});

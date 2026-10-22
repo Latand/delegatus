@@ -11,11 +11,14 @@ by voice: the voice passes the request to the orchestrator, the orchestrator
 adds the requested server to Delegatus, and after the voice is restarted the
 new tool is there. Ideally none of this needs a rebuild of the whole app.
 
+Sections 0–15 preserve the original design. Section 16 records the implemented
+operator-session, approval-authenticity and credential-destination contract.
+
 This note is **deliverable B** of that lane: the design for extensible voice
 tools. It builds on deliverable A, `docs/design/voice-mode-explained.md`, which
 explains how the voice works today. It changes no product code.
 
-- Code: every `file:line` below is on commit `8ae63305` (main). The pipeline
+- Code: `file:line` references in sections 0–15 are on commit `8ae63305` (main). The pipeline
   head `f843f968` adds only deliverable A. Main has since moved to `a4d76d4e`.
   Of the cited files, only `src/lib/mcp/server.ts` and
   `src/lib/performanceSpans.ts` changed there, each with a same-length edit
@@ -1042,3 +1045,99 @@ a scratch directory and
     row that files it as a design task.
   - `search_memory` for MCP connector registries found nothing.
   - No earlier design for extensible voice tools exists in `docs/design`.
+
+
+## 16. Operator approval and credential destinations (implemented 2026-10-22)
+
+This section updates the slice 1 security contract following the independent
+verification of #3157 and the standing 2026-10-19 instruction to fix recorded
+bugs. Relocated on task base `351d63b1`, the cited paths are
+`src/lib/agent/operatorAuthority.ts:126` and `:179` (header-based
+classification), `src/lib/voiceTools/store.ts:133` (unkeyed approval
+validation), `:16` and `:225` (global secret lookup), and
+`src/lib/voiceTools/probe.worker.ts:25` and `:163` (credential resolution and
+HTTP headers). These references describe the pre-fix code.
+
+### Authority and restart behavior
+
+`src/lib/voiceTools/http.ts#voiceToolsOperator` requires a live member session
+whose active member is the installation owner, in addition to the existing
+origin and agent/service exclusions. A solo installation must first claim an
+owner through the existing member flow. Fetch Metadata, an absent capability
+header and a loopback address supply no authenticated owner proof. Body reads,
+lock admission, dispatch and final writes recheck owner authority. The MCP
+proposal route still has only list, status and propose branches.
+
+`src/lib/voiceTools/seal.ts` holds a random MAC key in the Viewer process.
+Approvals authenticate their digest, timestamp, server name, destination policy and store scope.
+Secret destination records authenticate the reference, value, destinations and
+store scope with the same private key under a separate domain. Writing JSON or
+recomputing a public digest cannot create either grant. A fresh store object
+in the same Viewer can verify them; another process cannot. A bounded in-memory
+ledger accepts only seals whose authorized atomic writes committed. Disabling
+an approval or replacing a destination removes its old seal, so restoring an
+old signed file cannot undo revocation. A signed temporary file copied before
+a refused final write grants nothing. The ledger keeps at most 64 scopes;
+eviction fails closed, and one installation uses two scopes.
+
+The key has no disk copy. After a Viewer restart, approvals become pending
+and credential destination grants become empty. The private values remain in
+the owner-only secrets file. The authenticated owner can save destinations
+again with a blank value field to retain a value, dry-run and reapprove.
+This deliberate fail-closed behavior avoids putting a reusable signing key in
+another file available to the same local user. An in-process compromise, a
+stolen live member cookie, edits to the member identity store or browser
+profile access remain outside this file-only authenticity guarantee. The
+existing member authentication path is the authority boundary for this slice.
+
+### Destination policy and shared paths
+
+A secret update carries an optional private value and an explicit, nonempty
+list of destinations. HTTP destinations are exact origins: scheme, normalized
+host and port. Paths, userinfo, wildcards and suffix matches are refused.
+Stdio destinations name the local recipient as `stdio:<server-name>`; granting
+a remote host never grants a local program access to its credential. New
+values require at least eight characters. Legacy string values migrate as
+unbound values and cannot be sent until the owner supplies a destination.
+
+The producers and consumers of the contract are:
+
+| Path | What it passes or verifies |
+| --- | --- |
+| Settings form, EN/UK text, DOM fixtures and board browser fixture | Owner-entered destinations, saved policy beside each secret reference; password fields remain uncontrolled and clear after successful save |
+| Browser route | Active owner session, strict secret-update schema and authority callback at persistence/dispatch |
+| MCP tool and proposal route | Strict proposal schema; may reference a name, cannot write secrets, destinations or approvals |
+| Store proposal, including replacement and persisted defaults | An existing referenced secret must already allow the proposed recipient; an unknown name stays missing and receives no grant |
+| Store secret write | Merge existing private values, sign explicit policies, invalidate dependent probes and approvals when bindings change; blank values retain existing secrets |
+| Store fresh load, mutation reload and probe preparation | Verify MACs, quarantine unsigned or changed grants, refuse unbound/mismatched destinations |
+| Store approval and reapproval | Require allowed destinations and a matching successful dry run before issuing the approval MAC |
+| Hub initial preparation and final dispatch | Reread under the store lock, then send only referenced private values and the policy snapshot to the leased worker |
+| Probe worker and every HTTP fetch | Independently check destination before credential resolution/connection and before each request; redirects remain refused |
+| Public view and MCP status copies | Policy names and destinations only; never return private values |
+
+The destination input starts empty for an unbound reference. The proposed URL
+is displayed separately and never becomes a default grant. A destination
+change invalidates the dependent dry run and approval. All credentials remain
+in the existing owner-only secrets file; the MAC key remains in memory.
+The new work makes no performance gain claim.
+
+### Residual risks from the verifier
+
+| Risk | Disposition and reason |
+| --- | --- |
+| File swap between entry verification and execution by path | Accepted for slice 1. Both checks remain, but path execution has a swap window. Approved stdio programs run as the installation user; executable image capture and a constrained filesystem need a separate execution model. The settings warning states the program can read and write that user's files. |
+| Digest covers only the entry file | Accepted for slice 1. Imports, interpreters and registry dependencies remain outside that pin. Approval grants trust to the program and its dependencies; the entry hash detects entry edits and does not attest a dependency closure. |
+| `setsid` escape from the reaped process group | Accepted for slice 1. Group reaping bounds cooperative children, while a malicious approved program can escape it. Strong descendant containment needs a portable supervisor or OS sandbox. Owner approval is required before any dry run. |
+| Encoded secret echo | Accepted for slice 1. Literal and JSON-escaped echo detection is a best-effort check. Arbitrary encodings cannot be reliably recognized, and an approved peer receives its authorized credential. Destination restrictions and sending only referenced credentials reduce exposure; only trusted peers should receive a grant. |
+| One-character secret blocks every view | Fixed for new input: values shorter than eight characters are refused explicitly. Old short values remain unbound, are excluded from substring echo scans and cannot acquire a destination grant without replacement. |
+
+### Regression evidence
+
+Before production edits, five new tests failed on the immutable task base
+through the real routes, store, hub and worker: unauthenticated same-origin
+approval, self-written approval digest, proposal reuse of a global secret,
+hub dispatch of an unbound credential and worker dispatch without a policy.
+The same tests are retained with explicit destination fixtures after the fix.
+Further tests cover restart, tampered MACs, replay of revoked grants, copied
+uncommitted approvals, revocation during preparation,
+owner-session revocation and successful authorized HTTP discovery.

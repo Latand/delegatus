@@ -36,7 +36,7 @@ function spotify(over: Partial<Server> = {}): Server {
     title: "Spotify", capability: "Music: play and search.", entryFile: null, private: false, askBeforeActing: false, callTimeoutMs: 15_000,
     transport: { type: "stdio", command: "uv", args: ["tool", "run", "spotify-mcp-example"], cwd: null, envNames: ["SPOTIFY_CLIENT_ID", "SPOTIFY_REDIRECT_URI"], envValues: { SPOTIFY_REDIRECT_URI: "http://127.0.0.1:8888/callback" } },
     generation: 3, owner: "installation", audience: ["voice"], state: "pending", proposedBy: { kind: "conversation", conversationId: "conv_a", at: AT },
-    approval: null, tools: {}, catalog: null, lastDryRun: null, digest: digestOf(1), missingSecrets: ["spotify-client-id"], secretRefs: ["spotify-client-id"], ...over,
+    approval: null, tools: {}, catalog: null, lastDryRun: null, digest: digestOf(1), missingSecrets: ["spotify-client-id"], secretRefs: ["spotify-client-id"], secretDestinations: { "spotify-client-id": ["stdio:spotify"] }, ...over,
   };
 }
 type Answer = { status: number; body: unknown };
@@ -48,12 +48,15 @@ function routes(servers: Record<string, Server>) {
   harness.setRoute((url, init) => {
     if (new URL(url, "http://127.0.0.1:8898").pathname !== "/api/voice-tools") return undefined;
     if (!init?.method || init.method === "GET") return jsonResponse(view());
-    const body = JSON.parse(String(init.body)) as { action: string; name?: string; digest?: string; tools?: Server["tools"]; askBeforeActing?: boolean; reapprove?: true; secrets?: Record<string, string> };
+    const body = JSON.parse(String(init.body)) as { action: string; name?: string; digest?: string; tools?: Server["tools"]; askBeforeActing?: boolean; reapprove?: true; secrets?: Record<string, { value?: string; destinations: string[] }> };
     const answer = ((): Answer => {
       if (refuse[body.action]) { const code = refuse[body.action]; delete refuse[body.action]; return { status: 409, body: { code } }; }
       record.revision += 1;
       if (body.action === "secrets") {
-        for (const server of Object.values(record.servers)) server.missingSecrets = server.missingSecrets.filter(ref => !Object.hasOwn(body.secrets!, ref));
+        for (const server of Object.values(record.servers)) {
+          server.missingSecrets = server.missingSecrets.filter(ref => !Object.hasOwn(body.secrets!, ref));
+          for (const ref of server.secretRefs) if (Object.hasOwn(body.secrets!, ref)) server.secretDestinations[ref] = body.secrets![ref].destinations;
+        }
         return { status: 200, body: view() };
       }
       const server = record.servers[body.name!];
@@ -135,7 +138,7 @@ test("a pending proposal shows what will run by name, takes its secret once and 
   await act(async () => typeInto(input, SECRET));
   await act(async () => { row.querySelector("form")!.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true })); });
   await act(async () => settle());
-  expect(writes()).toEqual([{ action: "secrets", secrets: { "spotify-client-id": SECRET } }]);
+  expect(writes()).toEqual([{ action: "secrets", secrets: { "spotify-client-id": { value: SECRET, destinations: ["stdio:spotify"] } } }]);
   expect(record.servers.spotify.missingSecrets).toEqual([]);
   expect(host.querySelector<HTMLInputElement>("[data-voice-tool-reference] input")!.value).toBe("");
   expect(host.innerHTML).not.toContain(SECRET);
@@ -298,8 +301,21 @@ test("a refused secrets save keeps what was typed beside its reason, and the nex
   expect(host.innerHTML).not.toContain(SECRET);
 
   await submit();
-  expect(writes()).toEqual([{ action: "secrets", secrets: { "spotify-client-id": SECRET } }, { action: "secrets", secrets: { "spotify-client-id": SECRET } }]);
+  expect(writes()).toEqual([{ action: "secrets", secrets: { "spotify-client-id": { value: SECRET, destinations: ["stdio:spotify"] } } }, { action: "secrets", secrets: { "spotify-client-id": { value: SECRET, destinations: ["stdio:spotify"] } } }]);
   expect(record.servers.spotify.missingSecrets).toEqual([]);
   expect(host.querySelector<HTMLInputElement>("[data-voice-tool-reference] input")!.value).toBe("");
   expect(host.querySelector("[data-voice-tools-refused]")).toBeNull();
+});
+
+
+test("unbound destinations require owner input and can be renewed without resending the private value", async () => {
+  routes({ spotify: spotify({ missingSecrets: [], secretDestinations: { "spotify-client-id": [] } }) });
+  const host = await mount();
+  const destination = host.querySelector<HTMLInputElement>("input[data-destinations]")!;
+  expect(destination.value).toBe("");
+  expect(host.querySelector("[data-voice-tool-destinations]")?.textContent).toContain(translate("en", "voiceCompanion.tools.destinationsSaved", { hosts: translate("en", "voiceCompanion.tools.none") }));
+  await act(async () => typeInto(destination, "stdio:spotify"));
+  await act(async () => { host.querySelector("form")!.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true })); });
+  await act(async () => settle());
+  expect(writes()).toEqual([{ action: "secrets", secrets: { "spotify-client-id": { destinations: ["stdio:spotify"] } } }]);
 });

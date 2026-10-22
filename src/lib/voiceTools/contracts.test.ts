@@ -95,9 +95,9 @@ test("catalogs bound count, UTF-8 descriptions, schema bytes, depth, validity an
 });
 
 test("vault accounting bounds serialized UTF-8 after JSON escaping", () => {
-  expect(secretsSchema.safeParse({ music: "synthetic-voice-credential" }).success).toBe(true);
-  expect(secretsSchema.safeParse(Object.fromEntries(Array.from({ length: 256 }, (_, i) => [`secret${i}`, "\0".repeat(8192)]))).success).toBe(false);
-  expect(secretsSchema.safeParse(Object.fromEntries(Array.from({ length: 256 }, (_, i) => [`secret${i}`, "🎵".repeat(4096)]))).success).toBe(false);
+  expect(secretsSchema.safeParse({ music: { value: "synthetic-voice-credential", destinations: ["https://example.invalid"] } }).success).toBe(true);
+  expect(secretsSchema.safeParse(Object.fromEntries(Array.from({ length: 256 }, (_, i) => [`secret${i}`, { value: "\0".repeat(8192), destinations: ["https://example.invalid"] }]))).success).toBe(false);
+  expect(secretsSchema.safeParse(Object.fromEntries(Array.from({ length: 256 }, (_, i) => [`secret${i}`, { value: "🎵".repeat(4096), destinations: ["https://example.invalid"] }]))).success).toBe(false);
 });
 
 test("package launches accept only registry names and optional versions", () => {
@@ -151,4 +151,16 @@ test("package launches refuse trailing execution arguments and uv interpreter re
   }
   expect(accepts("bun", ["x", "@scope/name@1.2.3"])).toBe(true);
   expect(accepts("uv", ["tool", "run", "name==1.2.3"])).toBe(true);
+});
+
+
+test("secret destinations require explicit exact origins or a local recipient", () => {
+  for (const destination of ["https://example.test", "https://example.test:8443", "http://127.0.0.1:3456", "stdio:music"]) {
+    expect(secretsSchema.safeParse({ token: { value: "synthetic-voice-credential", destinations: [destination] } }).success).toBe(true);
+  }
+  for (const destination of ["https://*.example.test", "example.test", "https://example.test/mcp", "https://example.test/", "http://example.test", "https://user@example.test", "stdio:*"]) {
+    expect(secretsSchema.safeParse({ token: { value: "synthetic-voice-credential", destinations: [destination] } }).success).toBe(false);
+  }
+  expect(secretsSchema.safeParse({ token: "synthetic-voice-credential" }).success).toBe(false);
+  expect(secretsSchema.safeParse({ token: { destinations: [] } }).success).toBe(false);
 });

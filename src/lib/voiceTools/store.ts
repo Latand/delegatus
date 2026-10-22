@@ -3,17 +3,22 @@ import * as fs from "node:fs/promises";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { randomUUID } from "node:crypto";
+import { z } from "zod";
 import { withFileTransactionAsync } from "@/lib/state/fileTransaction";
 import { COMPANION_TOOL_REGISTRY } from "@/lib/voiceCompanion/tools";
+import { commitSeals, seal, validSeal } from "./seal";
 import { verifyEntry } from "./entry";
 import { approvalDigest, digest, emptyRegistry, literalValues, packageLaunch, probeDigest, proposalSchema, secretsSchema, secretReferences,
-  selectionSchema, toolName, validateCatalog, voiceToolBounds, type ProbeResult, type Tool, type VoiceToolServer, type VoiceToolsRegistry, type VoiceToolsView } from "./contracts";
+  assertSecretDestinations, secretReferenceSchema, secretDestinationSchema, type SecretPolicies, selectionSchema, toolName, validateCatalog, voiceToolBounds, type ProbeResult, type Tool, type VoiceToolServer, type VoiceToolsRegistry, type VoiceToolsView } from "./contracts";
 
 export class VoiceToolsError extends Error {
   constructor(public code: string) { super(code); }
 }
 const fail = (code: string): never => { throw new VoiceToolsError(code); };
 const hasSecret = (secrets: Record<string, string>, ref: string) => Object.hasOwn(secrets, ref) && !!secrets[ref];
+const legacySecretsSchema = z.record(secretReferenceSchema, z.string().min(1).max(8192)).refine(v => Object.keys(v).length <= 256);
+const persistedSecretsSchema = z.record(secretReferenceSchema, z.object({ value: z.string().min(1).max(8192), destinations: z.array(secretDestinationSchema).max(32), mac: z.string().optional() }).strict())
+  .refine(v => Object.keys(v).length <= 256);
 function validProposal(input: unknown, defaultCwd: string) {
   const parsed = proposalSchema.safeParse(input);
   if (!parsed.success) return null;
@@ -74,7 +79,7 @@ async function atomicJson(file: string, value: unknown, authorize?: () => void):
 }
 function assertNoSecrets(value: unknown, secrets: Record<string, string>): void {
   const serialized = JSON.stringify(value);
-  if (Object.values(secrets).some(secret => serialized.includes(secret) || serialized.includes(JSON.stringify(secret).slice(1, -1)))) fail("SECRET_ECHO");
+  if (Object.values(secrets).some(secret => secret.length >= 8 && (serialized.includes(secret) || serialized.includes(JSON.stringify(secret).slice(1, -1))))) fail("SECRET_ECHO");
 }
 async function validatePersistedCatalogs(catalogs: { name: string; tools: Tool[] }[]): Promise<void> {
   const pending = catalogs.map(catalog => ({ ...catalog, cacheKey: `${catalog.name}:${digest(catalog.tools)}` }))
@@ -104,7 +109,10 @@ async function validatePersistedCatalogs(catalogs: { name: string; tools: Tool[]
   finally { if (timer) clearTimeout(timer); await worker.terminate(); }
 }
 const validatedSchemaDigests = new Map<string, true>();
-async function parseRegistry(input: unknown, directory: string): Promise<VoiceToolsRegistry> {
+function approvalSealInput(name: string, server: VoiceToolServer, approval: NonNullable<VoiceToolServer["approval"]>, policies: SecretPolicies) {
+  return { name, at: approval.at, digest: approval.digest, policies: Object.fromEntries(secretReferences(server).map(ref => [ref, policies[ref] ?? []])) };
+}
+async function parseRegistry(input: unknown, directory: string, policies: SecretPolicies): Promise<VoiceToolsRegistry> {
   if (input === null) return emptyRegistry();
   const registry = input as VoiceToolsRegistry;
   if (registry.version !== 1 || !Number.isSafeInteger(registry.revision) || registry.revision < 0 || !registry.servers || Array.isArray(registry.servers)
@@ -130,19 +138,20 @@ async function parseRegistry(input: unknown, directory: string): Promise<VoiceTo
       catalogsToCompile.push({ name, tools: validated });
     }
     if (Object.keys(tools).length > voiceToolBounds.tools || Object.keys(tools).some(tool => !catalog?.tools.some(t => t.name === tool))) return fail("REGISTRY_UNAVAILABLE");
-    if (approval && approval.digest !== approvalDigest(name, raw) || state === "enabled" && !approval) {
+    if (approval && (approval.digest !== approvalDigest(name, raw) || !validSeal(path.join(directory, "approval"), approvalSealInput(name, raw, approval, policies), approval.mac)) || state === "enabled" && !approval) {
       raw.state = "pending"; raw.approval = null;
     }
   }
   await validatePersistedCatalogs(catalogsToCompile);
   return registry;
 }
-const probeCodes = new Set(["OK", "START_FAILED", "PROTOCOL_ERROR", "TIMEOUT", "CATALOG_BOUNDS", "SECRET_ECHO", "MISSING_SECRET", "ENTRY_CHANGED", "BUSY", "CANCELLED"]);
+const probeCodes = new Set(["OK", "START_FAILED", "PROTOCOL_ERROR", "TIMEOUT", "CATALOG_BOUNDS", "SECRET_ECHO", "MISSING_SECRET", "SECRET_DESTINATION", "ENTRY_CHANGED", "BUSY", "CANCELLED"]);
 
 /** One Viewer owner. Every mutation re-reads under the async cross-process lock. */
 export class VoiceToolsStore {
   private registry = emptyRegistry();
   private secrets: Record<string, string> = {};
+  private policies: SecretPolicies = {};
   private loaded?: Promise<void>;
   readonly file: string;
   private readonly secretsFile: string;
@@ -155,10 +164,19 @@ export class VoiceToolsStore {
   }
   private async reload(): Promise<void> {
     const [registry, secrets] = await Promise.all([readJson(this.file, voiceToolBounds.registryBytes), readJson(this.secretsFile, voiceToolBounds.secretBytes)]);
-    const parsed = secretsSchema.safeParse(secrets ?? {});
-    if (!parsed.success) return fail("REGISTRY_UNAVAILABLE");
-    const valid = await parseRegistry(registry, this.directory); assertNoSecrets(valid, parsed.data);
-    this.registry = valid; this.secrets = parsed.data;
+    // Legacy values remain private, but carry no trusted destination grant.
+    const parsed = persistedSecretsSchema.safeParse(secrets ?? {});
+    const old = legacySecretsSchema.safeParse(secrets ?? {});
+    if (!parsed.success && !old.success) return fail("REGISTRY_UNAVAILABLE");
+    const values: Record<string, string> = parsed.success ? Object.fromEntries(Object.entries(parsed.data).map(([ref, entry]) => [ref, entry.value])) : old.data!;
+    const policies: SecretPolicies = parsed.success ? Object.fromEntries(Object.entries(parsed.data).map(([ref, entry]) => [ref,
+      validSeal(this.secretsFile, { ref, value: entry.value, destinations: entry.destinations }, entry.mac) ? entry.destinations : []])) : {};
+    const valid = await parseRegistry(registry, this.directory, policies); assertNoSecrets(valid, values);
+    for (const [name, server] of Object.entries(valid.servers)) {
+      try { assertSecretDestinations(name, server, policies); }
+      catch { if (server.state === "enabled") server.state = "pending"; server.approval = null; server.lastDryRun = null; }
+    }
+    this.registry = valid; this.secrets = values; this.policies = policies;
   }
   async view(): Promise<VoiceToolsView> {
     await this.load();
@@ -168,7 +186,7 @@ export class VoiceToolsStore {
           envNames: Object.keys(server.transport.env).sort(), envValues: literalValues(server.transport.env) }
         : { type: "http", url: server.transport.url, headerNames: Object.keys(server.transport.headers).sort(), headerValues: literalValues(server.transport.headers) };
       return [name, { ...structuredClone(server), transport, digest: approvalDigest(name, server),
-        missingSecrets: secretReferences(server).filter(ref => !hasSecret(this.secrets, ref)), secretRefs: secretReferences(server) }];
+        missingSecrets: secretReferences(server).filter(ref => !hasSecret(this.secrets, ref)), secretRefs: secretReferences(server), secretDestinations: Object.fromEntries(secretReferences(server).map(ref => [ref, this.policies[ref] ?? []])) }];
     }));
     const result: VoiceToolsView = { version: 1, revision: this.registry.revision, servers };
     assertNoSecrets(result, this.secrets); return result;
@@ -185,11 +203,13 @@ export class VoiceToolsStore {
       candidate.revision++;
       assertNoSecrets(candidate, this.secrets);
       if (Buffer.byteLength(JSON.stringify(candidate)) > voiceToolBounds.registryBytes) return fail("REGISTRY_BOUNDS");
-      await atomicJson(this.file, candidate, authorize); this.registry = candidate;
+      await atomicJson(this.file, candidate, authorize);
+      commitSeals(path.join(this.directory, "approval"), Object.values(candidate.servers).flatMap(server => server.approval?.mac ? [server.approval.mac] : []));
+      this.registry = candidate;
       return result;
     });
   }
-  async propose(input: unknown, actor: VoiceToolServer["proposedBy"]): Promise<void> {
+  async propose(input: unknown, actor: VoiceToolServer["proposedBy"], authorize?: () => void): Promise<void> {
     const shape = proposalSchema.safeParse(input);
     const parsed = shape.success ? validProposal(shape.data, path.join(this.directory, "voice-tools-data", shape.data.name)) : null;
     if (!parsed) return fail("INVALID_PROPOSAL");
@@ -199,12 +219,13 @@ export class VoiceToolsStore {
       const previous = Object.hasOwn(registry.servers, name) ? registry.servers[name] : undefined;
       const candidate: VoiceToolServer = { ...config, generation: previous?.generation ?? registry.revision + 1, owner: "installation", audience: ["voice"], state: "pending", proposedBy: actor,
         approval: null, tools: previous?.tools ?? {}, catalog: previous?.catalog ?? null, lastDryRun: previous?.lastDryRun ?? null };
+      this.checkDestinations(name, candidate, false);
       if (previous && approvalDigest(name, candidate) === approvalDigest(name, previous)) {
         candidate.state = previous.state; candidate.approval = previous.approval;
       } else if (previous) candidate.generation = registry.revision + 1;
       if (previous && probeDigest(name, previous) !== probeDigest(name, candidate)) candidate.lastDryRun = null;
       registry.servers[name] = candidate;
-    });
+    }, authorize);
   }
   private server(registry: VoiceToolsRegistry, name: string, expected: string): VoiceToolServer {
     const server = Object.hasOwn(registry.servers, name) ? registry.servers[name] : undefined;
@@ -212,17 +233,23 @@ export class VoiceToolsStore {
     if (approvalDigest(name, server) !== expected) return fail("STALE_APPROVAL");
     return server;
   }
+  private checkDestinations(name: string, server: VoiceToolServer, requireAll = true): void {
+    const refs = secretReferences(server);
+    if (requireAll && refs.some(ref => !hasSecret(this.secrets, ref))) return fail("MISSING_SECRET");
+    const known = requireAll ? refs : refs.filter(ref => hasSecret(this.secrets, ref));
+    try { assertSecretDestinations(name, server, this.policies, known); } catch { return fail("SECRET_DESTINATION"); }
+  }
   async probeInput(name: string, expected: string) {
     await this.load();
     // Refresh under the same lock as removal and proposal replacement before dispatch.
-    let input!: { server: VoiceToolServer; secrets: Record<string, string>; digest: string };
+    let input!: { server: VoiceToolServer; secrets: Record<string, string>; policies: SecretPolicies; digest: string };
     await fs.mkdir(this.directory, { recursive: true, mode: 0o700 });
     await withFileTransactionAsync(this.file, "VOICE_TOOLS_BUSY", async () => {
       await this.reload();
       const registry = this.registry;
       const server = this.server(registry, name, expected);
-      if (secretReferences(server).some(ref => !hasSecret(this.secrets, ref))) return fail("MISSING_SECRET");
-      input = { server: structuredClone(server), secrets: { ...this.secrets }, digest: probeDigest(name, server) };
+      this.checkDestinations(name, server);
+      input = { server: structuredClone(server), secrets: Object.fromEntries(secretReferences(server).map(ref => [ref, this.secrets[ref]])), policies: structuredClone(this.policies), digest: probeDigest(name, server) };
     });
     return input;
   }
@@ -275,8 +302,8 @@ export class VoiceToolsStore {
     }, authorize);
   }
   private async approve(registry: VoiceToolsRegistry, name: string, server: VoiceToolServer): Promise<void> {
+    this.checkDestinations(name, server);
     if (!server.catalog || server.lastDryRun?.code !== "OK" || server.lastDryRun.digest !== probeDigest(name, server)) return fail("DRY_RUN_REQUIRED");
-    if (secretReferences(server).some(ref => !hasSecret(this.secrets, ref))) return fail("MISSING_SECRET");
     try { await verifyEntry(server); } catch { return fail("ENTRY_CHANGED"); }
     const enabled = Object.entries(registry.servers).filter(([key, value]) => key === name || value.state === "enabled");
     if (enabled.length > voiceToolBounds.enabledServers) return fail("SELECTION_BOUNDS");
@@ -285,16 +312,35 @@ export class VoiceToolsStore {
     })) ?? []);
     if (selected.length > voiceToolBounds.selectedTools || Buffer.byteLength(JSON.stringify(selected)) > voiceToolBounds.selectionBytes) return fail("SELECTION_BOUNDS");
     if (new Set(selected.map(tool => tool.name)).size !== selected.length) return fail("CATALOG_BOUNDS");
-    server.state = "enabled"; server.approval = { by: "operator", at: this.now(), digest: approvalDigest(name, server) };
+    const approval = { by: "operator" as const, at: this.now(), digest: approvalDigest(name, server) };
+    server.state = "enabled"; server.approval = { ...approval, mac: seal(path.join(this.directory, "approval"), approvalSealInput(name, server, approval, this.policies)) };
   }
   async saveSecrets(input: unknown, authorize?: () => void): Promise<void> {
     const parsed = secretsSchema.safeParse(input);
     if (!parsed.success) return fail("INVALID_REQUEST");
     await this.mutate(async registry => {
-      const secrets = secretsSchema.safeParse({ ...this.secrets, ...parsed.data });
-      if (!secrets.success) return fail("INVALID_REQUEST");
-      assertNoSecrets(registry, secrets.data);
-      await atomicJson(this.secretsFile, secrets.data, authorize); this.secrets = secrets.data;
+      const values = { ...this.secrets };
+      const policies = structuredClone(this.policies);
+      for (const [ref, entry] of Object.entries(parsed.data)) {
+        if (entry.value !== undefined) values[ref] = entry.value;
+        if (!Object.hasOwn(values, ref) || values[ref].length < 8) return fail("MISSING_SECRET");
+        policies[ref] = [...new Set(entry.destinations)].sort();
+      }
+      assertNoSecrets(registry, values);
+      const stored = Object.fromEntries(Object.entries(values).map(([ref, value]) => {
+        const entry = { ref, value, destinations: policies[ref] ?? [] };
+        return [ref, { value, destinations: entry.destinations, mac: seal(this.secretsFile, entry) }];
+      }));
+      if (Object.keys(stored).length > 256 || Buffer.byteLength(JSON.stringify(stored)) > voiceToolBounds.secretBytes) return fail("INVALID_REQUEST");
+      // Binding changes invalidate probes and approvals before a new dispatch.
+      for (const server of Object.values(registry.servers)) {
+        if (secretReferences(server).some(ref => JSON.stringify(this.policies[ref]) !== JSON.stringify(policies[ref]))) {
+          server.approval = null; server.state = "pending"; server.lastDryRun = null;
+        }
+      }
+      await atomicJson(this.secretsFile, stored, authorize);
+      commitSeals(this.secretsFile, Object.values(stored).map(entry => entry.mac));
+      this.secrets = values; this.policies = policies;
     }, authorize);
   }
 }

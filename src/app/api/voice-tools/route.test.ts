@@ -17,8 +17,9 @@ const { claimInstall, createInvite, redeemJoin } = await import("@/lib/team/memb
 const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");
 const { MEMBER_COOKIE, mintSession } = await import("@/lib/team/sessions");
 afterAll(async () => { setVoiceToolHubForTests(undefined); resetTeamStoreForTests(); await fs.rm(root, { recursive: true, force: true }); });
+const browserOwner = claimInstall(teamStore(), "Owner", { surface: "desktop", browser: "chrome" });
 function request(method: string, body?: unknown, headers: Record<string, string> = {}) {
-  return new NextRequest("http://127.0.0.1/api/voice-tools", { method, headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin", ...headers }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  return new NextRequest("http://127.0.0.1/api/voice-tools", { method, headers: { host: "127.0.0.1", "sec-fetch-site": "same-origin", cookie: `${MEMBER_COOKIE}=${browserOwner.cookie}`, ...headers }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
 }
 const proposal = { name: "music", title: "Music", capability: "Search music", transport: { type: "http", url: "https://example.invalid/mcp", headers: { Authorization: { secretRef: "music-token" } } } };
 
@@ -73,7 +74,7 @@ test("browser API separates operator actions from MCP proposals and never echoes
     expect((await proposalPOST(request("POST", { action, name: "music", digest: view.servers.music.digest, clientRequestId: `forbidden-${action}`, conversationId: "conversation_worker" }, approvedService))).status).toBe(400);
   }
   expect((await POST(request("POST", { action: "approve", name: "music", digest: view.servers.music.digest }))).status).toBe(409);
-  const saved = await POST(request("POST", { action: "secrets", secrets: { "music-token": "synthetic-voice-credential" } }));
+  const saved = await POST(request("POST", { action: "secrets", secrets: { "music-token": { value: "synthetic-voice-credential", destinations: ["https://example.invalid"] } } }));
   expect(saved.status).toBe(200); expect(await saved.text()).not.toContain("synthetic-voice-credential");
   const status = await (await GET(request("GET"))).json();
   expect(status.servers.music.missingSecrets).toEqual([]);
@@ -117,14 +118,42 @@ test("the operator dry-runs and approves a pinned catalog, configures acting con
   } finally { await peer.stop(true); }
 });
 
+
+test("both proposal routes and approval refuse a secret sent to another origin", async () => {
+  const { approvalDigest } = await import("@/lib/voiceTools/contracts");
+  const secret = { value: "synthetic-bound-credential", destinations: ["https://example.invalid"] };
+  expect((await POST(request("POST", { action: "secrets", secrets: { "bound-token": secret } }))).status).toBe(200);
+  const trusted = { ...proposal, name: "bound", transport: { type: "http", url: "https://example.invalid/mcp", headers: { Authorization: { secretRef: "bound-token" } } } };
+  const hostile = { ...trusted, transport: { ...trusted.transport, url: "https://other.example.test/mcp" } };
+  const inputs = [
+    POST(request("POST", { action: "propose", proposal: hostile })),
+    proposalPOST(request("POST", { action: "propose", proposal: hostile, conversationId: "conversation_worker", clientRequestId: "wrong-destination" }, internalServiceHeaders("mcp"))),
+  ];
+  for (const response of await Promise.all(inputs)) {
+    expect(response.status).toBe(409); expect(await response.json()).toEqual({ code: "SECRET_DESTINATION" });
+  }
+  expect((await POST(request("POST", { action: "propose", proposal: trusted }))).status).toBe(200);
+  const file = path.join(root, "state/voice-tools.json");
+  const registry = JSON.parse(await fs.readFile(file, "utf8"));
+  registry.servers.bound.transport.url = hostile.transport.url;
+  await fs.writeFile(file, JSON.stringify(registry));
+  for (const action of ["approve", "dry-run"]) {
+    const response = await POST(request("POST", { action, name: "bound", digest: approvalDigest("bound", registry.servers.bound) }));
+    expect(response.status).toBe(409); expect(await response.json()).toEqual({ code: "SECRET_DESTINATION" });
+  }
+  const response = await POST(request("POST", { action: "remove", name: "bound", digest: approvalDigest("bound", registry.servers.bound) }));
+  expect(response.status).toBe(200);
+});
+
 test("team mode admits only an active owner, and rechecks after the request body wait", async () => {
   resetTeamStoreForTests();
+  process.env.LLV_STATE_DIR = path.join(root, "team-state");
   const owner = claimInstall(teamStore(), "Owner", { surface: "desktop", browser: "chrome" });
   const invitation = createInvite(teamStore(), owner.member, "Member");
   const member = redeemJoin(teamStore(), invitation.code, "Member", { surface: "desktop", browser: "chrome" });
   const ownerHeaders = { cookie: `${MEMBER_COOKIE}=${owner.cookie}` };
   const memberHeaders = { cookie: `${MEMBER_COOKIE}=${member.cookie}` };
-  expect((await GET(request("GET"))).status).toBe(401);
+  expect((await GET(request("GET", undefined, { cookie: "" }))).status).toBe(401);
   expect((await GET(request("GET", undefined, memberHeaders))).status).toBe(403);
   expect((await POST(request("POST", { action: "propose", proposal }, memberHeaders))).status).toBe(403);
   expect((await GET(request("GET", undefined, ownerHeaders))).status).toBe(200);
@@ -150,4 +179,39 @@ test("team mode admits only an active owner, and rechecks after the request body
   } });
   expect((await POST(req)).status).toBe(401);
   resetTeamStoreForTests();
+  process.env.LLV_STATE_DIR = path.join(root, "state");
+});
+
+// Regression: browser-shaped headers are public input, never operator proof.
+test("a header-less same-origin local client cannot approve or save secrets", async () => {
+  for (const action of ["approve", "secrets", "dry-run", "configure"]) {
+    const reply = await POST(request("POST", { action, name: "music", digest: `sha256:${"a".repeat(64)}` }, { cookie: "" }));
+    expect(reply.status).toBe(401);
+  }
+});
+
+
+test("a same-origin local client cannot approve a successfully probed server", async () => {
+  const store = new VoiceToolsStore(path.join(root, "spoof-state"));
+  const hub = new VoiceToolHub(store);
+  setVoiceToolHubForTests(hub);
+  let contacts = 0;
+  const peer = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
+    contacts++;
+    if (req.method !== "POST") return new Response(null, { status: 405 });
+    const message = await req.json() as { id?: number; method: string };
+    if (message.id === undefined) return new Response(null, { status: 202 });
+    const result = message.method === "initialize" ? { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "fake", version: "1" } }
+      : { tools: [{ name: "search", description: "Search", inputSchema: { type: "object" } }] };
+    return Response.json({ jsonrpc: "2.0", id: message.id, result });
+  } });
+  try {
+    await store.propose({ ...proposal, transport: { type: "http", url: `http://127.0.0.1:${peer.port}/mcp` } }, { kind: "conversation", conversationId: "conversation_worker", at: "2026-01-01T00:00:00.000Z" });
+    await hub.dryRun("music", (await store.view()).servers.music.digest);
+    const ready = (await store.view()).servers.music;
+    expect(ready.lastDryRun?.code).toBe("OK"); expect(contacts).toBeGreaterThan(0);
+    const response = await POST(request("POST", { action: "approve", name: "music", digest: ready.digest }, { cookie: "" }));
+    expect(response.status).toBe(401);
+    expect((await new VoiceToolsStore(store.directory).view()).servers.music.state).toBe("pending");
+  } finally { await peer.stop(true); setVoiceToolHubForTests(new VoiceToolHub(new VoiceToolsStore(path.join(root, "state")))); }
 });
