@@ -177,6 +177,15 @@ export type WorktreeKeptReason =
   | "self-update-release"
   | "recent-writes" | "mount-boundary" | "entry-limit" | "unreadable-tree" | "changed-during-inspection" | "interrupted-removal";
 
+/** Kept rows whose verdict can change with no registration change and no
+    other deadline: live holders, an unanswered forge, and failed reads or
+    removals. Each is rechecked by the next hourly sweep. */
+const RETRIED_REASONS: ReadonlySet<WorktreeKeptReason> = new Set<WorktreeKeptReason>(["in-use", "live-conversation",
+  "forge-unavailable", "unreadable-tree", "changed-during-inspection", "map-write-failed", "remove-failed"]);
+/** A retry with no deadline earlier than the next hourly sweep. */
+const NEXT_SWEEP = Number.POSITIVE_INFINITY;
+const HEAD_UNREADABLE = "HEAD unreadable";
+
 export type MergedPullRequest = { number: number; url: string; headRefName: string; headRefOid: string };
 
 export type WorktreeRemoval = {
@@ -1003,11 +1012,14 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
       no registration change. Advisory scheduling only; never proof. */
   const dueAt = new Map<string, number>();
   let recentWritesDue: number | undefined;
-  const keep = (kept: WorktreeKept) => {
+  /** `retryBy`: a failed read or a transient refusal. The next hourly sweep
+      rechecks the row, or the earlier time its verdict can change. */
+  const keep = (kept: WorktreeKept, retryBy?: number) => {
     if (kept.reason === "recent-writes" && recentWritesDue !== undefined) dueAt.set(kept.path, recentWritesDue);
     // Live holders leave no registration trace; the next hourly sweep rechecks
     // them so the retention clock starts when they let go.
-    else if (kept.reason === "in-use" || kept.reason === "live-conversation") dueAt.set(kept.path, now() + WORKTREE_SWEEP_INTERVAL_MS);
+    else if (retryBy !== undefined || RETRIED_REASONS.has(kept.reason))
+      dueAt.set(kept.path, Math.min(now() + WORKTREE_SWEEP_INTERVAL_MS, retryBy ?? NEXT_SWEEP));
     else if (kept.reason !== "retention") dueAt.delete(kept.path);
     /* Activity restarts the retention clock. */
     if (BUSY_REASONS.has(kept.reason)
@@ -1263,7 +1275,11 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
       const pushed = screened === true;
       /* Past retention the remote proof stands without the forge. */
       if (repository && merged === null && !retained && !pushed) {
-        keep({ ...base, reason: "forge-unavailable", detail: `${repository}: neither the forge cache nor gh listed its merged pull requests` });
+        // The forge can answer again, and the remote proof stands without it
+        // once the lane's hour (or four days) ends.
+        const retentionEnd = !finished ? NEXT_SWEEP
+          : settledSince + (hourLane && now() - settledSince < PUSHED_WORKTREE_RETENTION_MS ? PUSHED_WORKTREE_RETENTION_MS : FINISHED_WORKTREE_RETENTION_MS);
+        keep({ ...base, reason: "forge-unavailable", detail: `${repository}: neither the forge cache nor gh listed its merged pull requests` }, retentionEnd);
         continue;
       }
       const candidates = pipelinePrCandidates(owners);
@@ -1290,7 +1306,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
       const resume = readIntent(worktree);
       const status = await ports.git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], worktree);
       if (status.code !== 0) {
-        keep({ ...base, reason: "uncommitted", detail: `git status failed: ${(status.stderr || "").trim()}` });
+        keep({ ...base, reason: "uncommitted", detail: `git status failed: ${(status.stderr || "").trim()}` }, NEXT_SWEEP);
         continue;
       }
       const classified = classifyStatus(status.stdout, true);
@@ -1318,7 +1334,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
           now, or why none does. `fresh` reads the advertised refs again. */
       const prove = async (fresh: boolean): Promise<{ pr: MergedPullRequest | null; head: string; preservation: Preservation; branch: string | null } | WorktreeKept> => {
         const current = await checkedOut(ports.git, worktree);
-        if (!current) return { ...base, reason: "unmerged-commits", detail: "HEAD unreadable" };
+        if (!current) return { ...base, reason: "unmerged-commits", detail: HEAD_UNREADABLE };
         const freshOwners = ownersOf(ownershipPipelines(), worktree);
         const aged = retained || pushed;
         if (aged && freshOwners.some(pipelineHoldsCheckout)) return { ...base, reason: "open-pipeline" };
@@ -1348,7 +1364,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
       };
       let proof = await prove(false);
       if ("reason" in proof) {
-        keep(proof);
+        keep(proof, proof.detail === HEAD_UNREADABLE ? NEXT_SWEEP : undefined);
         continue;
       }
       if (report.removed.length >= maxRemovals) {
@@ -1370,18 +1386,18 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
         continue;
       }
       const releaseHead = dryRun ? () => {} : lockCheckoutHead(worktree, accessible, report.errors);
-      if (!releaseHead) { keep({ ...base, reason: "locked", detail: "HEAD could not be held through removal" }); continue; }
+      if (!releaseHead) { keep({ ...base, reason: "locked", detail: "HEAD could not be held through removal" }, NEXT_SWEEP); continue; }
       try {
         /* A commit made since the status read leaves the checkout clean, so the
            removal below would not refuse it: HEAD is proven again last. */
         proof = await prove(true);
         if ("reason" in proof) {
-          keep(proof);
+          keep(proof, proof.detail === HEAD_UNREADABLE ? NEXT_SWEEP : undefined);
           continue;
         }
         removal = { ...removal, pr: proof.pr ? { number: proof.pr.number, url: proof.pr.url } : null, preservation: proof.preservation, branch: proof.branch };
         const finalListing = await ports.git(["worktree", "list", "--porcelain", "-z"], root);
-        if (finalListing.code !== 0) { keep({ ...base, reason: "uncommitted", detail: "worktree registration could not be refreshed" }); continue; }
+        if (finalListing.code !== 0) { keep({ ...base, reason: "uncommitted", detail: "worktree registration could not be refreshed" }, NEXT_SWEEP); continue; }
         const finalWorktrees = parseWorktreeList(finalListing.stdout);
         const finalEntry = finalWorktrees.find(other => resolve(other.path) === worktree);
         if (!finalEntry || finalEntry.prunable) { keep({ ...base, reason: "missing" }); continue; }
@@ -1390,23 +1406,23 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
         if (finalNested) { keep({ ...base, reason: "holds-worktree", detail: finalNested.path }); continue; }
         const trackedBefore = await ports.git(["ls-files", "-z"], worktree);
         let originalTracked = trackedBefore.code === 0 ? trackedSnapshot(accessible(worktree), trackedBefore.stdout, resuming) : null;
-        if (originalTracked === null) { keep({ ...base, reason: "uncommitted", detail: "tracked contents could not be inspected" }); continue; }
+        if (originalTracked === null) { keep({ ...base, reason: "uncommitted", detail: "tracked contents could not be inspected" }, NEXT_SWEEP); continue; }
         let finalStatus = await ports.git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], worktree);
         let finalClass = classifyStatus(finalStatus.stdout, true);
-        if (finalStatus.code !== 0 || (finalClass.changed.length && !(resuming && onlyDeletions(finalStatus.stdout)))) { keep({ ...base, reason: "uncommitted" }); continue; }
+        if (finalStatus.code !== 0 || (finalClass.changed.length && !(resuming && onlyDeletions(finalStatus.stdout)))) { keep({ ...base, reason: "uncommitted" }, finalStatus.code !== 0 ? NEXT_SWEEP : undefined); continue; }
         if (resuming && finalClass.changed.length) {
           const missing = await ports.git(["ls-files", "--deleted", "-z"], worktree);
           const paths = missing.stdout.split("\0").filter(Boolean);
-          if (missing.code !== 0 || !paths.length) { keep({ ...base, reason: "uncommitted", detail: "interrupted removal's missing files could not be identified" }); continue; }
+          if (missing.code !== 0 || !paths.length) { keep({ ...base, reason: "uncommitted", detail: "interrupted removal's missing files could not be identified" }, NEXT_SWEEP); continue; }
           // No --force: checkout-index fills absent paths and refuses to
           // replace a file another process created after ls-files --deleted.
           const restored = await ports.git(["checkout-index", "--", ...paths], worktree);
-          if (restored.code !== 0) { keep({ ...base, reason: "uncommitted", detail: "interrupted removal's missing files could not be restored" }); continue; }
+          if (restored.code !== 0) { keep({ ...base, reason: "uncommitted", detail: "interrupted removal's missing files could not be restored" }, NEXT_SWEEP); continue; }
           finalStatus = await ports.git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching"], worktree);
           finalClass = classifyStatus(finalStatus.stdout, true);
-          if (finalStatus.code !== 0 || finalClass.changed.length) { keep({ ...base, reason: "uncommitted" }); continue; }
+          if (finalStatus.code !== 0 || finalClass.changed.length) { keep({ ...base, reason: "uncommitted" }, finalStatus.code !== 0 ? NEXT_SWEEP : undefined); continue; }
           originalTracked = trackedSnapshot(accessible(worktree), trackedBefore.stdout);
-          if (originalTracked === null) { keep({ ...base, reason: "uncommitted", detail: "restored tracked contents could not be inspected" }); continue; }
+          if (originalTracked === null) { keep({ ...base, reason: "uncommitted", detail: "restored tracked contents could not be inspected" }, NEXT_SWEEP); continue; }
         }
         const finalHead = await ports.git(["rev-parse", "--verify", "HEAD"], worktree);
         if (finalHead.code !== 0 || finalHead.stdout.trim() !== proof.head) {
@@ -1415,7 +1431,7 @@ async function sweepMergedWorktreesWithRoots(ports: WorktreeSweepPorts): Promise
         }
         const finalIgnored = keptIgnored(accessible(worktree), finalClass.ignored);
         const trackedNow = await ports.git(["ls-files", "--cached", "-v", "-z"], worktree);
-        if (trackedNow.code !== 0) { keep({ ...base, reason: "uncommitted" }); continue; }
+        if (trackedNow.code !== 0) { keep({ ...base, reason: "uncommitted" }, NEXT_SWEEP); continue; }
         const tagged = trackedNow.stdout.split("\0").filter(Boolean);
         // Git status and worktree removal trust these index flags. They cannot
         // establish that a tracked file contains no unique local edits.

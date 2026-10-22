@@ -3476,3 +3476,75 @@ test("a recent write is revisited when it ages past the quiet floor", async () =
   expect(await slice(written + 24 * 3_600_000 - 1)).toBe(false);
   expect(await slice(written + 24 * 3_600_000)).toBe(true);
 });
+
+test("lanes kept while the forge is down are all revisited by the first hourly sweep after it answers", async () => {
+  const { owners, git } = closedLaneRepositories(1, 32, "2026-10-22T00:00:00Z");
+  let at = Date.parse("2026-10-22T00:30:00Z");
+  let forge: MergedPullRequest[] | null = null;
+  const visited = new Set<string>();
+  const input = ports({ mode: "dry-run", pipelines: owners, git, now: () => at, mergedPullRequests: () => forge,
+    phase: (phase, dir) => { if (phase === "candidate" && dir) visited.add(dir); } });
+  const sweep = async () => {
+    visited.clear();
+    let slices = 0;
+    do {
+      input.previous = JSON.parse(JSON.stringify(await sweepMergedWorktrees(input)));
+      slices++;
+    } while (!input.previous!.progress!.complete && slices < 16);
+    return input.previous!;
+  };
+  const down = await sweep();
+  expect(down.keptCounts).toEqual({ "forge-unavailable": 32 });
+  // The earlier of the next hourly sweep and the end of the lanes' hour.
+  const due = down.progress!.due!;
+  expect(Object.keys(due)).toHaveLength(32);
+  expect(new Set(Object.values(due))).toEqual(new Set([Date.parse("2026-10-22T01:00:00Z")]));
+
+  forge = [];
+  at = Date.parse("2026-10-22T02:00:00Z");
+  const recovered = await sweep();
+  expect(visited.size).toBe(32);
+  expect(recovered.keptCounts["forge-unavailable"]).toBeUndefined();
+  expect(recovered.keptCounts).toEqual({ retention: 32 });
+});
+
+test("a lane past its hour kept while the forge is down is rechecked at the next hourly sweep", async () => {
+  const { owners, git } = closedLaneRepositories(1, 4, "2026-10-21T00:00:00Z");
+  const at = Date.parse("2026-10-22T00:30:00Z");
+  const report = await sweepMergedWorktrees(ports({ mode: "dry-run", pipelines: owners, git, now: () => at, mergedPullRequests: () => null }));
+  expect(report.keptCounts).toEqual({ "forge-unavailable": 4 });
+  // The four-day retention ends later than the next hourly sweep.
+  expect(new Set(Object.values(report.progress!.due!))).toEqual(new Set([at + 3_600_000]));
+});
+
+for (const failure of ["git status failed", "unreadable-tree"] as const) test(`a lane kept for a transient failure (${failure}) is revisited by the next hourly sweep`, async () => {
+  const { roots, owners, git } = closedLaneRepositories(1, 32, "2026-10-01T00:00:00Z");
+  const failing = owners[0]!.worktreeDir;
+  let at = Date.parse("2026-10-22T00:00:00Z");
+  const visited = new Set<string>();
+  const input = ports({ mode: "dry-run", pipelines: owners, now: () => at,
+    git: async (args, cwd) => failure === "git status failed" && args[0] === "status" && cwd === failing
+      ? { code: 128, stdout: "", stderr: "fatal: index file corrupt" } : git(args, cwd),
+    inspect: (dir, settings) => {
+      if (failure === "unreadable-tree" && dir === failing) throw new Error("EACCES");
+      return inspectTree(dir, { ...settings, stat: file => { const stat = fs.lstatSync(file); stat.mtimeMs = stat.ctimeMs = 1; return stat; } });
+    },
+    phase: (phase, dir) => { if (phase === "candidate" && dir) visited.add(dir); } });
+  while (!input.previous?.progress?.complete) input.previous = JSON.parse(JSON.stringify(await sweepMergedWorktrees(input)));
+  expect(input.previous!.kept).toContainEqual(failure === "unreadable-tree"
+    ? expect.objectContaining({ path: failing, reason: "unreadable-tree" })
+    : expect.objectContaining({ path: failing, reason: "uncommitted", detail: expect.stringContaining("git status failed") }));
+  expect(input.previous!.progress!.due![failing]).toBe(at + 3_600_000);
+  // The fair cursor sits on it, so only its due time can bring it back soon.
+  input.maxCandidates = 2;
+  const slice = async (time: number) => {
+    at = time;
+    visited.clear();
+    input.previous!.progress!.cursors![roots[0]!] = failing;
+    input.previous = JSON.parse(JSON.stringify(await sweepMergedWorktrees(input)));
+    return visited.has(failing);
+  };
+  const due = input.previous!.progress!.due![failing]!;
+  expect(await slice(due - 1)).toBe(false);
+  expect(await slice(due)).toBe(true);
+});

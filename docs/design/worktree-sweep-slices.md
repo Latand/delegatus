@@ -17,10 +17,22 @@ The report writer persists it atomically with the existing retention observation
 A restarted helper continues that queue. Older reports start discovery again.
 Git registration metadata and lane headers are compared on each slice; changes
 to HEAD, branch, locking or lane activity enqueue that path. Each kept row whose
-verdict can change with time alone records when: the end of its retention, its
-newest write plus the quiet floor, or the next hourly sweep for a live process or
-conversation. The first slice at or after that time enqueues the path, so expiry
-is a delta too. These times only schedule a visit; the visit decides from fresh
+verdict can change with time alone records when:
+- `retention`: the end of its retention (the lane's hour, then four days);
+- `recent-writes`: its newest write plus the quiet floor;
+- `in-use` and `live-conversation`: the next hourly sweep;
+- `forge-unavailable`: the next hourly sweep, or the end of the lane's hour or
+  four days when that is earlier, since the remote proof then stands without
+  the forge;
+- a failed read or removal: the next hourly sweep. This covers
+  `unreadable-tree`, `changed-during-inspection`, `map-write-failed`,
+  `remove-failed`, `uncommitted` when `git status`, `git ls-files`, the
+  registration refresh or an interrupted removal's restore failed,
+  `unmerged-commits` when HEAD was unreadable, and `locked` when HEAD could not
+  be held through removal.
+
+Other reasons wait for a registration change or the fair cursor. The first
+slice at or after a recorded time enqueues the path, so expiry is a delta too. These times only schedule a visit; the visit decides from fresh
 reads. Initial ownership is
 indexed once by lexical and physical checkout path. A slice reads process and
 conversation guards once for selection; candidates approaching an effect refresh
