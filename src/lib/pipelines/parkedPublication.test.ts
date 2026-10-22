@@ -304,6 +304,7 @@ function terminalReview(h: ReturnType<typeof fixture>) {
   const attempt = structuredClone(h.lane.runs[0]!.attempts[0]!);
   attempt.effectiveRole = h.lane.stages[1]!.effectiveRole!;
   attempt.flowId = null;
+  attempt.reviewHeadSha = null; attempt.expectedReviewHeadSha = null;
   attempt.reviewedHead = h.passed;
   h.lane.runs.push({ ...h.lane.runs[0]!, stageId: "review", attempts: [attempt] });
   h.lane.cursor = { stageId: "review", state: "committing", input: null, activatedBy: { stageId: "build", attempt: 1, edge: "pass" } };
