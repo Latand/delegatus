@@ -135,6 +135,7 @@ import { preparePipelineRepository, readRepositoryInitialization } from "./initi
 import { classifyProviderCondition, type ProviderCondition } from "./providerConditions";
 import { pipelineDeliveryGuidance, renderCutRetryInput, renderDecisionInput, renderOutOfMemoryRetryInput } from "./prompts";
 import { composeStageInput } from "./stageInput";
+import { createStageInputExec } from "./stageInputExec";
 import { effectiveWorkerLimit } from "@/lib/operator/workerLimit";
 import { renderStagePrompt } from "./prompts";
 import { resolveStageTestGuidance } from "./testGuidance";
@@ -6704,11 +6705,7 @@ async function spawnRunStage(
         if (attempt.activation && JSON.stringify(current) !== expected) abort.abort();
       });
       const watch = setInterval(revalidate, 50);
-      const exec: ExecPort = async (command, args, cwd, env, options) => {
-        revalidate();
-        if (abort.signal.aborted) throw new ActivationSuperseded();
-        return await ports.exec(command, args, cwd, env, { ...options, signal: abort.signal });
-      };
+      const exec = createStageInputExec(ports.exec, abort.signal, revalidate, new ActivationSuperseded());
       try {
         inputRevision = storedLessonRevision();
         const prompt = restartStagePrompt(await composeStageInput(pipeline, bound, attempt.effectiveRole, previousOutput, pipeline.worktreeDir, exec, reserve), attempt);
