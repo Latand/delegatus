@@ -342,7 +342,9 @@ test("provision.sh derives slots from the smaller of the CPU and memory bounds",
   const settings = (cpus: number, kb: number) => spawnSync("/bin/bash", [path.join(import.meta.dir, "provision.sh"), "--print-settings"], {
     env: { PATH: process.env.PATH, LLV_PROVISION_CPUS: String(cpus), LLV_PROVISION_MEMTOTAL_KB: String(kb) } as unknown as NodeJS.ProcessEnv, encoding: "utf8",
   }).stdout;
-  expect(settings(16, 32_083_512)).toBe(`LLV_GATE_SLOTS=3\nMemoryHigh=${32_083_512 - 4 * 1024 * 1024}K\n`);
-  expect(settings(32, 128 * 1024 * 1024)).toBe(`LLV_GATE_SLOTS=8\nMemoryHigh=${124 * 1024 * 1024}K\n`);
+  expect(settings(16, 32_083_512)).toBe(`LLV_GATE_SLOTS=2\nMemoryHigh=${32_083_512 - 4 * 1024 * 1024}K\n`);
+  expect(settings(32, 128 * 1024 * 1024)).toBe(`LLV_GATE_SLOTS=4\nMemoryHigh=${124 * 1024 * 1024}K\n`);
+  // Memory binds when it is the smaller bound.
+  expect(settings(64, 24 * 1024 * 1024)).toBe(`LLV_GATE_SLOTS=2\nMemoryHigh=${20 * 1024 * 1024}K\n`);
   expect(settings(4, 8 * 1024 * 1024)).toBe(`LLV_GATE_SLOTS=1\nMemoryHigh=${4 * 1024 * 1024}K\n`);
 });

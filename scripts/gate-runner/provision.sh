@@ -29,15 +29,17 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-# Slots are the smaller of a CPU bound (three work-slice CPUs per slot, as on
-# the development machine) and a memory bound (one 8 GiB gate unit per slot,
-# 4 GiB kept for sshd, the user manager and git).
+# Slots are the smaller of a CPU bound (six work-slice CPUs per slot: an
+# engine-family pre-push holds one slot and fans its touched tests out eight
+# files at a time, and three such runs on 12 work CPUs ran past their deadline
+# in the rehearsal, docs/design/remote-gate-runner.md §8.12) and a memory bound
+# (one 8 GiB gate unit per slot, 4 GiB kept for sshd, the user manager and git).
 settings() {
   local cpus mem_kb reserve_kb unit_kb by_cpu by_mem slots high_kb
   cpus=${LLV_PROVISION_CPUS:-$(nproc)}
   mem_kb=${LLV_PROVISION_MEMTOTAL_KB:-$(awk '/^MemTotal:/{print $2}' /proc/meminfo)}
   reserve_kb=$((4 * 1024 * 1024)); unit_kb=$((8 * 1024 * 1024))
-  by_cpu=$((cpus * 3 / 4 / 3))
+  by_cpu=$((cpus * 3 / 4 / 6))
   by_mem=$(((mem_kb - reserve_kb) / unit_kb))
   slots=$((by_cpu < by_mem ? by_cpu : by_mem)); ((slots >= 1)) || slots=1
   high_kb=$((mem_kb - reserve_kb))

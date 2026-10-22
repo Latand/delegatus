@@ -239,21 +239,24 @@ seat relayed at 13:16Z. The server is set to be deleted tonight (Q1).
 
 **Concurrent runs.** The runner's slot count is the smaller of two bounds:
 
-- **CPU:** ⌊0.75 × CPUs ÷ 3⌋. Three work-slice CPUs per slot is this
-  machine's ratio: 6 slots (`gate-slot.sh:7`) over 18 work CPUs (`:21`).
-  16 vCPU gives 4.
+- **CPU:** ⌊0.75 × CPUs ÷ 6⌋, six work-slice CPUs per slot. This machine
+  runs 6 slots (`gate-slot.sh:7`) over 18 work CPUs (`:21`), three per slot,
+  but there most slots hold single test files. On the runner a slot usually
+  holds an engine-family pre-push, which fans its touched tests out eight
+  files at a time, and three of those on 12 work CPUs ran past their deadline
+  in the rehearsal (§8.12 step 4). 16 vCPU gives 2.
 - **Memory:** ⌊(RAM − 4 GiB) ÷ 8 GiB⌋. 8 GiB is the per-unit `MemoryMax`
   (`owned-runner.ts:145-159`) that a whole-project typecheck reaches: 7.5 GiB
   through the gate service (`docs/design/agent-signal-sandbox.md:628-629`),
   and one gate unit here sat at its 8,192 MiB cap at 13:38Z. The 4 GiB keeps
   sshd, the user manager, git and the mirror's page cache resident. 30.6 GiB
   gives 3.
-- **Result:** 3 slots on today's server. An AX102 (32 threads, 128 GB) gets
-  min(8, 15) = 8.
+- **Result:** 2 slots on today's server, the CPU bound. An AX102 (32
+  threads, 128 GB) gets min(4, 15) = 4.
 
 Slots do not bound one run's own fan-out. An engine-family pre-push holds one
-slot and peaks at about 15 GiB across its parallel test files (§1.2), so three
-at once want about 45 GiB of a 30.6 GiB host. `provision.sh` therefore gives
+slot and peaks at about 15 GiB across its parallel test files (§1.2), so two
+at once can want about 30 GiB of a 30.6 GiB host. `provision.sh` therefore gives
 the runner's work slice `MemoryHigh` = RAM − 4 GiB. Above that line the
 kernel throttles the slice's processes and swaps their pages, while sshd and
 the user manager outside the slice stay responsive. Within the 16 GB of
@@ -879,7 +882,7 @@ same protocol.
      budget there;
    - `LLV_GATE_PUSH_DEADLINE` from step 2;
    - every `NAME=value` line of `~/.gate-runner.env`, the runner's own
-     settings: `LLV_GATE_SLOTS` (3 on this server, §1.3);
+     settings: `LLV_GATE_SLOTS` (2 on this server, §1.3);
    - the manifest's allowlisted variables.
 
    **Allowlist:**
@@ -950,7 +953,7 @@ file and the memory drop-in.
 - Node 22, git, tar and `systemd-run`;
 - `~/mirror/delegatus.git`, refreshed;
 - Chromium under `~/.cache/ms-playwright`;
-- `~/.gate-runner.env` with `LLV_GATE_SLOTS` (§1.3: 3 for 16 vCPU and
+- `~/.gate-runner.env` with `LLV_GATE_SLOTS` (§1.3: 2 for 16 vCPU and
   30.6 GiB);
 - a user drop-in giving `delegatus-agents-work.slice` its `MemoryHigh`
   (§1.3).
@@ -977,14 +980,14 @@ nothing. The steps are the ones that set up today's server:
 6. derive the concurrency settings from `nproc` and `MemTotal` (§1.3) and
    write them as `gate`:
    - `~/.gate-runner.env` with
-     `LLV_GATE_SLOTS` = max(1, min(⌊0.75 × CPUs ÷ 3⌋, ⌊(MemTotal − 4 GiB) ÷ 8 GiB⌋));
+     `LLV_GATE_SLOTS` = max(1, min(⌊0.75 × CPUs ÷ 6⌋, ⌊(MemTotal − 4 GiB) ÷ 8 GiB⌋));
    - `~/.config/systemd/user/delegatus-agents-work.slice.d/50-memory.conf`
      with `MemoryHigh` = MemTotal − 4 GiB, then
      `systemctl --user daemon-reload`.
 
    `provision.sh --print-settings` prints both values and changes nothing;
    `LLV_PROVISION_CPUS` and `LLV_PROVISION_MEMTOTAL_KB` replace the two
-   readings for its test (T22). Today's server gets 3 slots and 26.6 GiB;
+   readings for its test (T22). Today's server gets 2 slots and 26.6 GiB;
 7. configure SSH: keys only (`PasswordAuthentication no`,
    `PermitRootLogin prohibit-password`, so that later runs of this script can
    still log in), `ClientAliveInterval 15`, `ClientAliveCountMax 3`;
@@ -1215,7 +1218,7 @@ off Linux, as `scripts/gate-slot.test.ts:101` does.
 | T19 | A review export that `reviewExport()` made of a fixture commit, then edited, with a new file and a deleted file, keeping a tracked file that matches an ignore rule; a fixture test file run there; and a copy of the same files without `export.json` | For the export: the test does not run remotely; its exit or output (minus `gate-runner:` lines) differs from a local run; `T` differs from the tree of the export's files; the runner's tree holds `.git` or lacks the ignored tracked file; the bundle carries the exported commit or a lane commit message; any file of the export changes. For the copy: any invocation is recorded, or the decision log lacks its `ineligible` line. |
 | T20 | Containment refused: a stub `systemctl` on the runner's `PATH` refuses `set-property`; in a second case the probe unit exits 69; in a third, the command itself exits 69 after `started` | In the first two, any line from the runner reaches the caller before `gate-runner: running here: containment failed`, the command does not run here, or a `started` record is written. In the third, the client does anything but exit 69. |
 | T21 | `bun test $PWD/<fixture>.test.ts`, and `bun test` with an absolute path outside the tree | The first gives an exit or output (minus `gate-runner:` lines) different from a local run, or its manifest argv holds an absolute path. The second records any invocation. |
-| T22 | `provision.sh --print-settings` with 16 CPUs and `MemTotal` 32,083,512 kB, and with 32 CPUs and 128 GiB | The slots differ from 3 and 8, or `MemoryHigh` differs from `MemTotal` − 4 GiB. |
+| T22 | `provision.sh --print-settings` with 16 CPUs and `MemTotal` 32,083,512 kB, with 32 CPUs and 128 GiB, with 64 CPUs and 24 GiB, and with 4 CPUs and 8 GiB | The slots differ from 2, 4, 2 (the memory bound) and 1, or `MemoryHigh` differs from `MemTotal` − 4 GiB. |
 | T24 | A fixture writes `../exit` = 0, sends `SIGKILL` to its own run's `serve.ts exec`, and fails an assertion; a second sends it `SIGPIPE` instead | The first exits other than 75 with `no verdict: the run's completion record disagrees with its unit`; the second exits other than 1; either reports a pass. `completion()` is also checked alone for a planted 0 against unit codes 255, 0 without a record, and 1. |
 | T25 | A lane commit adds a file holding a known value and the next commit deletes it | Anything but the probe reaches the runner, or the command does not run here with the privacy line. Without the known value the same history runs remotely. |
 | T26 | A passing run whose removal's connection fails; a failing run whose removal never answers (bound lowered by the test-only `LLV_GATE_RUNNER_REMOVE_TIMEOUT_MS`); a passing run whose unit the runner cannot stop (a stub `systemctl`); then a run after their leases are 31 minutes old, beside a live run and a foreign directory | A pass exits other than 75, the failing run other than 1, a retained directory lacks its lease, the health file is not marked, or the last run's sweep removes anything but the three retained runs. |
@@ -1267,11 +1270,13 @@ report.
    directory on the runner, and here, on the same tree. Neither has been
    measured yet.
 4. **Memory.** Run as many engine-family admitted pre-pushes at once as
-   `LLV_GATE_SLOTS` allows (3), from three lane trees. Record the work
-   slice's `memory.peak`, swap used, wall times and verdicts. The step passes
-   when all three end with their verdicts within budget. When one ends by
-   deadline, or swap use passes 8 GiB, `provision.sh`'s memory divisor
-   becomes 12 GiB (2 slots on today's server) and the step repeats.
+   `LLV_GATE_SLOTS` allows, plus one that queues behind them, from three
+   lane trees. Record the work slice's `memory.peak`, swap used, wall times
+   and verdicts. The step passes when all three end with their verdicts
+   within budget. When one ends by deadline, the CPU divisor grows; when
+   swap use passes 8 GiB, the memory divisor becomes 12 GiB; and the step
+   repeats. (The first run, at 3 slots, ended one push by deadline, so the
+   divisor went from 3 to 6 work CPUs, §1.3.)
 5. **Drivers.** One case each of the kanban, phone and conversation-window
    drivers, and one board-geometry case, run remotely, from a lane worktree
    and from a review export. Their frames come back and are opened here.
