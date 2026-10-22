@@ -47,9 +47,12 @@ async function runHook(endpoint: string, credentials: readonly ViewerCredentialF
       if (token) break;
       try {
         const raw = process.getBuiltinModule("fs").readFileSync(credential.path, "utf8");
-        token = credential.format === "compose" ? JSON.parse(raw)?.services?.viewer?.environment?.LLV_TOKEN : raw.trim();
+        const value = credential.format === "compose" ? JSON.parse(raw)?.services?.viewer?.environment?.LLV_TOKEN : raw;
+        const normalized = typeof value === "string" ? value.trim() : "";
+        if (normalized && !/[^\x20-\x7e]/.test(normalized)) token = normalized;
       } catch { /* An installation without a key sends no bearer. */ }
     }
+    if (performance.now() >= deadline) return;
     const headers = { "Content-Type": "application/json", "x-llv-spawn-capability": capability,
       "x-llv-memory-deadline": String(expires), "x-llv-memory-hook": hookId, ...(token ? { Authorization: `Bearer ${token}` } : {}) };
     const response = await fetch(endpoint + "/api/memory/inject", { method: "POST", signal: abort.signal, headers, body: JSON.stringify(input) });
@@ -81,8 +84,8 @@ export function installMemoryHook(home: string, env: NodeJS.ProcessEnv = process
   // An environment-only install has no existing credential file for the host
   // to read after the agent environment is scrubbed. Keep that credential in
   // protected Delegatus state, subject to the control client's origin policy.
-  const explicit = env.LLV_VIEWER_CONTROL_TOKEN?.trim() || env.LLV_TOKEN?.trim();
-  if (explicit && viewerControlToken(env, endpoint) === explicit) {
+  const explicit = env.LLV_VIEWER_CONTROL_TOKEN || env.LLV_TOKEN ? viewerControlToken(env, endpoint) : null;
+  if (explicit) {
     const state = viewerMcpStateContext(env, path.join(os.homedir(), ".config")).stateDirectory;
     assertStateStartupMutation(state, "memory hook credential", env);
     const directory = path.join(state, "memory-hook-credentials");

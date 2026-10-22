@@ -19,7 +19,7 @@ for (const storage of ["machine", "compose"] as const) test(`generated hook read
   const endpoint = `http://127.0.0.1:${server.port}`;
   const keyFile = storage === "machine" ? path.join(root, "config", "delegatus", "token") : viewerComposeSnapshotPath(state, "fixture-release");
   fs.mkdirSync(path.dirname(keyFile), { recursive: true });
-  const writeKey = (key: string) => fs.writeFileSync(keyFile, storage === "machine" ? key : JSON.stringify({ services: { viewer: { environment: { LLV_TOKEN: key } } } }));
+  const writeKey = (key: string) => fs.writeFileSync(keyFile, storage === "machine" ? `  ${key}  ` : JSON.stringify({ services: { viewer: { environment: { LLV_TOKEN: `  ${key}  ` } } } }));
   const first = "synthetic-first-key", second = "synthetic-rotated-key";
   writeKey(first);
   const target = path.join(state, "viewer-release.json");
@@ -39,13 +39,24 @@ for (const storage of ["machine", "compose"] as const) test(`generated hook read
       expect(await new Response(child.stdout).text()).toContain("Synthetic authenticated context");
       expect(await new Response(child.stderr).text()).toBe("");
     }
-    expect(received).toEqual([`Bearer ${first}`, `Bearer ${second}`]);
+    const expected = [`Bearer ${first}`, `Bearer ${second}`];
+    if (storage === "compose") {
+      writeKey("invalid\nfixture");
+      const fallback = "synthetic-fallback-key";
+      fs.writeFileSync(path.join(root, "config", "delegatus", "token"), fallback);
+      const child = Bun.spawn(["bash", "-c", hook.command], { env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+      child.stdin.write(JSON.stringify({ hook_event_name: "UserPromptSubmit", prompt: "Synthetic prompt" })); child.stdin.end();
+      expect(await child.exited).toBe(0);
+      expect(await new Response(child.stdout).text()).toContain("Synthetic authenticated context");
+      expected.push(`Bearer ${fallback}`);
+    }
+    expect(received).toEqual(expected);
     fs.unlinkSync(keyFile);
     const child = Bun.spawn(["bash", "-c", hook.command], { env: { ...env, LLV_SPAWN_CAPABILITY: "" }, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
     child.stdin.write(JSON.stringify({ hook_event_name: "UserPromptSubmit", prompt: "Synthetic prompt" })); child.stdin.end();
     expect(await child.exited).toBe(0);
     expect(await new Response(child.stdout).text()).toBe("");
-    expect(received.length).toBe(2);
+    expect(received.length).toBe(expected.length);
   } finally { server.stop(true); fs.rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -68,7 +79,7 @@ test("an explicit unrelated endpoint receives no ambient access key", async () =
   } finally { server.stop(true); fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test("an environment-only installation keeps its key in Delegatus state when the agent environment is scrubbed", async () => {
+for (const invalidPinned of [false, true]) test(`an environment-only installation keeps its key in Delegatus state when the agent environment is scrubbed (invalid pinned key: ${invalidPinned})`, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-hook-environment-"));
   const state = path.join(root, "state"), home = path.join(root, "codex"); fs.mkdirSync(state);
   let receivedBearer: string | null | undefined;
@@ -79,7 +90,8 @@ test("an environment-only installation keeps its key in Delegatus state when the
   const endpoint = `http://127.0.0.1:${server.port}`;
   fs.writeFileSync(path.join(state, "viewer-release.json"), JSON.stringify({ endpoint }));
   const env = { NODE_ENV: "test" as const, PATH: process.env.PATH, HOME: root, XDG_CONFIG_HOME: path.join(root, "config"), LLV_STATE_DIR: state,
-    LLV_VIEWER_PORT: String(server.port), LLV_TOKEN: "synthetic-environment-key", LLV_SPAWN_CAPABILITY: "synthetic-capability" };
+    LLV_VIEWER_PORT: String(server.port), LLV_TOKEN: "synthetic-environment-key", LLV_SPAWN_CAPABILITY: "synthetic-capability",
+    ...(invalidPinned ? { LLV_VIEWER_CONTROL_TOKEN: "invalid\nfixture" } : {}) };
   try {
     const hook = installCodexMemoryHook(home, env)!;
     for (const file of new Bun.Glob("**/*").scanSync({ cwd: home, absolute: true, onlyFiles: true, dot: true })) {
