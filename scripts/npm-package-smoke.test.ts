@@ -40,7 +40,7 @@ test("MCP package smoke requires initialize followed by a non-empty real tools/l
 test("standalone audit covers every public asset and launcher dependency byte", async () => {
   const work = fs.mkdtempSync(path.join(os.tmpdir(), "llv-package-assets-"));
   const standalone = path.join(work, "dist", "standalone");
-  const files = ["public/audio/cues/launch.mp3", "public/audio/ambient/loop.wav", "public/question-push-sw.js", "bin/mcp-server.mjs", "bin/envAlias.mjs", "vendor/connector/entry.py", "dist/gate/owned-runner.ts", "dist/mcp-server.mjs", "dist/runtime-host.mjs"];
+  const files = ["public/audio/cues/tool-tick-1.mp3", "public/audio/ambient/loop.wav", "public/question-push-sw.js", "bin/mcp-server.mjs", "bin/envAlias.mjs", "vendor/connector/entry.py", "dist/gate/owned-runner.ts", "dist/mcp-server.mjs", "dist/runtime-host.mjs"];
   try {
     for (const name of files) {
       for (const base of [work, standalone]) {

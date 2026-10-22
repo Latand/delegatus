@@ -603,11 +603,11 @@ async function main() {
     const safeOutput = () => scrubOutput(output, tempDirectory);
     await waitForOk(port, "/api/files", server, safeOutput);
     console.log("npm package smoke: /api/files returned 200.");
-    const cue = await probe(port, "/audio/cues/launch.mp3");
+    const cue = await probe(port, "/audio/cues/tool-tick-1.mp3");
     if (cue.status !== 200 || !(cue.bytes > 0) || cue.bytes !== Number(cue.headers["content-length"]) || !String(cue.headers["content-type"]).startsWith("audio/")) {
       throw new Error(`packed audio cue failed: status ${cue.status}, type ${cue.headers["content-type"]}`);
     }
-    console.log("npm package smoke: /audio/cues/launch.mp3 returned audio bytes.");
+    console.log("npm package smoke: /audio/cues/tool-tick-1.mp3 returned audio bytes.");
     if (mcpAssetsOnly) return;
     const resourceResponse = await waitForOk(port, "/api/resources", server, safeOutput);
     assertHealthyResourceDiagnostic(resourceResponse.headers["x-llv-resource-phases"]);

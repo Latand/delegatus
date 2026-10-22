@@ -17,6 +17,7 @@ import { Select } from "@/components/ui/Select";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { useComposer } from "@/hooks/useComposer";
 import { seedLaunchOutbox } from "@/components/conversation/outbox";
+import { awaitReply } from "@/hooks/useRuntime";
 import { playCue } from "@/lib/audio/app";
 import { effortScale } from "@/lib/agent/efforts";
 import { codexModelSupportsImages } from "@/lib/agent/models";
@@ -642,16 +643,13 @@ export function DraftAgentPane({
       /* The server's own launch receipt is the event, and its id is the event's
          identity: a reload that re-POSTs the identical idempotency key gets the
          same launchId back, so the replay is silent. `clientAttemptId` covers a
-         receipt that named no launch — it is durable across the same reload. */
-      const launchEventId = outcome.kind === "launched" || outcome.kind === "failed-launch"
-        ? outcome.launchId ?? candidate.clientAttemptId
-        : null;
-      if (launchEventId) {
-        playCue(
-          outcome.kind === "launched"
-            ? { cue: "launch", eventId: `launch:${launchEventId}` }
-            : { cue: "failure", eventId: `launch-failed:${launchEventId}` },
-        );
+         receipt that named no launch — it is durable across the same reload.
+         Only an accepted launch sounds here (S9); a failed one reaches the
+         needs-you queue as reason `launch` and sounds there, once. */
+      if (outcome.kind === "launched") {
+        playCue({ cue: "launched", eventId: `launch:${outcome.launchId ?? candidate.clientAttemptId}` });
+        /* The launch's first completed turn answers with the reply sound. */
+        if (outcome.conversationId) awaitReply(outcome.conversationId, "launch");
       }
       if (typeof json?.launchId === "string" && typeof json.conversationId === "string") requestFilesRefresh();
       if (outcome.kind === "launched") {
