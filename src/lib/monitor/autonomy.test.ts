@@ -19,6 +19,42 @@ function change(row: SeatTickSettings, fields: SeatTickSettingsChange, actor = o
   return result.settings;
 }
 function enabled() { return change(defaultSeatTickSettings(project), { autonomy: { enabled: true } }); }
+
+test("proactive permission belongs to one episode and only the operator can enable it", () => {
+  const on = change(enabled(), { autonomy: { proactive: { enabled: true } } });
+  expect(on.autonomy?.proactive?.enabled).toBe(true);
+  expect(change(on, { autonomy: { hours: 12 } }).autonomy?.proactive?.enabled).toBe(true);
+  expect(change(on, { autonomy: { hours: 12 } }).autonomy?.startedAt).toBe(at);
+  expect(() => change(defaultSeatTickSettings(project), { autonomy: { proactive: { enabled: true } } })).toThrow("active full autonomy");
+  for (const actor of [seat, { ...seat, kind: "agent" as const }, { ...seat, project: "other" }, { ...operator, conversationId: "conversation_agent" }]) {
+    expect(() => change(enabled(), { autonomy: { proactive: { enabled: true }, why: "operator asked" } }, actor)).toThrow("only the operator");
+  }
+  const off = change(on, { autonomy: { proactive: { enabled: false }, why: "Stop discovery" } }, seat);
+  expect(off.autonomy?.enabled).toBe(true);
+  expect(off.autonomy?.proactive?.enabled).toBe(false);
+  expect(change(off, { autonomy: { proactive: { enabled: true } } }).autonomy?.startedAt).toBe(at);
+  expect(() => change(off, { autonomy: { proactive: { enabled: true }, why: "resume" } }, seat)).toThrow("only the operator");
+  const rootSeat = { ...seat, kind: "gateway" as const };
+  expect(() => change(on, { autonomy: { proactive: { enabled: false } } }, rootSeat)).toThrow("why");
+  expect(change(on, { autonomy: { proactive: { enabled: false }, why: "Stop discovery" } }, rootSeat).autonomy?.proactive?.enabled).toBe(false);
+  expect(() => change(on, { autonomy: { hours: null, why: "Continue" } }, rootSeat)).toThrow("only shorten");
+});
+
+test("proactive permission ends with its parent and never revives in a new episode", () => {
+  const on = change(enabled(), { autonomy: { proactive: { enabled: true } } });
+  const timedSchedule = change(on, { wakeIntervalMinutes: 10, reason: "Frequent checks", until: new Date(now + hour).toISOString() });
+  const scheduleLapse = effectiveSeatTickSettings(timedSchedule, now + hour, hour);
+  expect(seatTickSettingsAfterLapse(project, scheduleLapse).autonomy?.proactive?.enabled).toBe(true);
+  expect(effectiveSeatTickSettings(on, now + 8 * hour, hour).autonomy?.proactive?.enabled).toBe(false);
+  const off = change(on, { autonomy: { enabled: false } });
+  expect(off.autonomy?.proactive?.enabled).toBe(false);
+  expect(change(off, { autonomy: { enabled: true } }).autonomy?.proactive?.enabled).toBe(false);
+  expect(change(on, { enabled: false, reason: "Stop wakes" }).autonomy?.proactive?.enabled).toBe(false);
+  expect(change(on, { autonomy: { enabled: true } }, operator, now + 9 * hour).autonomy?.proactive?.enabled).toBe(false);
+  for (const value of [null, [], true, { enabled: "yes" }]) {
+    expect(() => change(enabled(), { autonomy: { proactive: value as never } })).toThrow("autonomy.proactive");
+  }
+});
 function check(row: SeatTickSettings, time = now): SeatTickCheckInput {
   return { project, now: time, seat: { conversationId: seat.conversationId!, seatEpoch: 1, path: null, designatedAt: null, turn: "idle", activity: null },
     pipelines: [], tasks: [], events: [], pullRequests: [], pullRequestsUnavailable: null, ownLanes: [], signals: [], children: [], childrenUnavailable: null,
