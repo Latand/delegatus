@@ -192,6 +192,10 @@ test("a header-less same-origin local client cannot approve or save secrets", as
 
 
 test("a same-origin local client cannot approve a successfully probed server", async () => {
+  // Reproduce the solo-mode hole; an existing owner would let the older team
+  // gate reject this client before the voice-specific proof is checked.
+  resetTeamStoreForTests();
+  process.env.LLV_STATE_DIR = path.join(root, "solo-spoof-state");
   const store = new VoiceToolsStore(path.join(root, "spoof-state"));
   const hub = new VoiceToolHub(store);
   setVoiceToolHubForTests(hub);
@@ -213,7 +217,12 @@ test("a same-origin local client cannot approve a successfully probed server", a
     const response = await POST(request("POST", { action: "approve", name: "music", digest: ready.digest }, { cookie: "" }));
     expect(response.status).toBe(401);
     expect((await new VoiceToolsStore(store.directory).view()).servers.music.state).toBe("pending");
-  } finally { await peer.stop(true); setVoiceToolHubForTests(new VoiceToolHub(new VoiceToolsStore(path.join(root, "state")))); }
+  } finally {
+    await peer.stop(true);
+    resetTeamStoreForTests();
+    process.env.LLV_STATE_DIR = path.join(root, "state");
+    setVoiceToolHubForTests(new VoiceToolHub(new VoiceToolsStore(path.join(root, "state"))));
+  }
 });
 
 test("both proposal routes, approval and dry run refuse a secret bound to another origin", async () => {

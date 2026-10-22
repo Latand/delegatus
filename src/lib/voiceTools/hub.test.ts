@@ -692,7 +692,8 @@ test("an unbound secret is never sent by the real hub dry run", async () => {
 test("the worker refuses a credential without a destination policy before connecting", async () => {
   const { store, root } = await setup(); const peer = fake();
   const expected = await propose(store, peer.url, { Authorization: { secretRef: "music-token" } });
-  await saveSecrets(store, { "music-token": "synthetic-voice-credential" });
+  // Inject at the worker's real pipe boundary without relying on the store's
+  // destination check or on the current secret-write request format.
   const server = JSON.parse(await fs.readFile(store.file, "utf8")).servers.music;
   expect(expected).toBe(approvalDigest("music", server));
   const child = spawn(process.execPath, [path.join(import.meta.dir, "probe.worker.ts")], {
