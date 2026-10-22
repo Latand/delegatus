@@ -3445,6 +3445,39 @@ test("owner stop custody with no registered execution releases the target on the
   }
 });
 
+test("a live owner run whose stop never confirms settles and frees the target after its bound", async () => {
+  const { OWNER_STOP_PENDING_LIMIT_MS } = await import("./ownerRun");
+  const service = await startTestRelay(() => ({ body: { status: "ok" } }));
+  const paired = relay(`${service.origin}/v1`); paired.targets[0]!.ownerTier = true;
+  updateRelayStore(s => ({ ...s, relays: [paired] }));
+  const requestId = "live_stop_bound";
+  let stops = 0, skew = 0, finished = false;
+  let reached!: () => void;
+  const refused = new Promise<void>(r => { reached = r; });
+  const logging = spyOn(console, "error").mockImplementation(() => {});
+  const ports: import("./ownerRun").OwnerRunPorts = {
+    launch: async () => ({ status: 202, body: { conversationId: "conversation_live_stop_bound" } }),
+    observe: async () => ({ state: "running" }), stopRetryMs: 1, pollMs: 1, now: () => Date.now() + skew,
+    stop: async () => { if (++stops === 3) reached(); throw Error("owner relay conversation control refused"); },
+  };
+  let done: ReturnType<typeof runClaimedRequest> | undefined;
+  try {
+    done = runClaimedRequest(paired, { ...contextRequest, request_id: requestId,
+      input: { ...contextRequest.input, requester: { ...contextRequest.input.requester, is_owner: true } } }, undefined, { timeoutMs: 20, ownerPorts: ports });
+    void done.then(() => { finished = true; });
+    await refused;
+    await new Promise<void>(r => setImmediate(r));
+    expect(finished).toBe(false); expect(advertisedSlots(paired)[0]!.free).toBe(0);
+    skew = OWNER_STOP_PENDING_LIMIT_MS + 1;
+    expect(await done).toMatchObject({ outcome: "failed", reason: "hard_cap" });
+    expect(advertisedSlots(paired)[0]!.free).toBe(1);
+    expect(readRunLedger().runs.find(r => r.requestId === requestId)).toMatchObject({ capacityReleased: true,
+      ownerTurn: { cancel: "interrupt", released: { reason: "stop_unconfirmed" }, diagnostic: { source: "hard-cap" } } });
+  } finally {
+    skew = OWNER_STOP_PENDING_LIMIT_MS + 1; await done; logging.mockRestore(); dropRun(requestId); await service.close();
+  }
+});
+
 for (const age of ["within", "past"] as const) test(`owner stop that stays unconfirmed ${age} its bound ${age === "past" ? "releases" : "keeps"} the target slot`, async () => {
   const relayStore = await import("./store");
   const { OWNER_STOP_PENDING_LIMIT_MS } = await import("./ownerRun");

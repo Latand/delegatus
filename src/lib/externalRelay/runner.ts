@@ -404,9 +404,9 @@ export async function runClaimedRequest(
   releaseCapacity = async () => {
     if (!recorded || capacityReleased) return;
     const held = readRunLedger().runs.find(row => row.requestId === requestId);
-    if (held?.ownerTurn?.cancel && !held.ownerTurn.confirmed) return;
+    if (held && ownerStopPending(held)) return;
     await changeRunAsync(requestId, row => {
-      if (row.ownerTurn?.cancel && !row.ownerTurn.confirmed) return row;
+      if (ownerStopPending(row)) return row;
       return { ...row, capacityReleased: true };
     }, Date.now() + 5000);
     const current = readRunLedger().runs.find(row => row.requestId === requestId);
@@ -428,7 +428,7 @@ export async function runClaimedRequest(
           delay = Math.min(delay * 2, 5000);
           continue;
         }
-        if (!held || held.ownerTurn?.cancel && !held.ownerTurn.confirmed) return;
+        if (!held || ownerStopPending(held)) return;
         try { await releaseCapacity?.(); }
         catch { console.error("External relay completed capacity release retry pending"); }
         if (capacityReleased) return;
