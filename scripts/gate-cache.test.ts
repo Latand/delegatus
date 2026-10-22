@@ -10,9 +10,10 @@ const fixture = () => { const root = mkdtempSync(path.join(tmpdir(), "gate-cache
 const valid = (value: unknown): value is { passed: true } => !!value && typeof value === "object" && "passed" in value && value.passed === true;
 
 test("authority, endpoint and signal-domain inputs distinguish verification environments", () => {
+  const base = { NODE_ENV: "test" as const };
   for (const name of ["LLV_SPAWN_CAPABILITY", "LLV_STRUCTURED_HOST", "LLV_VIEWER_PORT", "LLV_SIGNAL_SANDBOX", "GH_CONFIG_DIR"]) {
-    expect(environmentFingerprint({ [name]: "first" }), name).not.toBe(environmentFingerprint({ [name]: "second" }));
-    expect(environmentFingerprint({ [name]: "first" }), name).not.toBe(environmentFingerprint({}));
+    expect(environmentFingerprint({ ...base, [name]: "first" }), name).not.toBe(environmentFingerprint({ ...base, [name]: "second" }));
+    expect(environmentFingerprint({ ...base, [name]: "first" }), name).not.toBe(environmentFingerprint(base));
   }
 });
 
