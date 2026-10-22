@@ -167,6 +167,15 @@ describe("S8: the conversation this device wrote to has answered", () => {
     expect(h.played.map((r) => r.eventId)).toEqual(["reply:new:t1"]);
   });
 
+  test("a launch recorded with its first turn already running answers when that turn completes", () => {
+    const h = harness();
+    h.step(() => ({}));
+    h.step(() => ({ new: session("new", { turn: "running", activeTurnId: "t1" }) }));
+    h.awaiting.expect("new", { activeTurnId: "t1", settledTurnId: null }, "launch");
+    h.step((s) => ({ ...s, new: { ...s.new!, turn: "idle", activeTurnId: null, settledTurnId: "t1", lastTurnOutcome: "completed" } }));
+    expect(h.played.map((r) => r.eventId)).toEqual(["reply:new:t1"]);
+  });
+
   test("a seat's own tick ending in a conversation nobody wrote to is silent", () => {
     const h = harness(["seat"]);
     h.step(() => ({ seat: session("seat", { settledTurnId: "t0" }) }));

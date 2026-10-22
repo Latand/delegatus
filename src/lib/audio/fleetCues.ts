@@ -82,7 +82,9 @@ export function createAwaitingReplies(now: () => number = Date.now): AwaitingRep
       }
       const ended = session.settledTurnId ?? null;
       if (!ended || ended === wait.settledTurnId) return null;
-      const folded = wait.policy === "steer-if-active" && ended === wait.activeTurnId;
+      /* A steer folds into the running turn; a launch's prompt IS the turn that
+         was already running when the receipt resolved. */
+      const folded = (wait.policy === "steer-if-active" || wait.policy === "launch") && ended === wait.activeTurnId;
       if (ended === wait.activeTurnId && !folded) return null;
       const outcome = session.lastTurnOutcome ?? null;
       if (outcome === "interrupted") return null;

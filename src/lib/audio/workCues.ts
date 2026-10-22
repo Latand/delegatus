@@ -41,6 +41,12 @@ export interface QueueCuePlan {
   requests: CueRequest[];
 }
 
+function parkOccurrence(row: Extract<MobileAttentionEntry, { kind: "pipeline" }>["row"]): string {
+  const stageId = row.stageRef?.id ?? row.review?.stageId ?? "";
+  const attempts = row.pipeline.runs?.find((run) => run.stageId === stageId)?.attempts?.length ?? 0;
+  return `${stageId}:${attempts}`;
+}
+
 /**
  * The request one needs-you entry earns, with its obligation key (the task
  * when the entry names one, else the entry) and its own clock of asking: a
@@ -49,7 +55,10 @@ export interface QueueCuePlan {
  * `createdAt`, the update decision's `at`.
  */
 function needsYouRequest(entry: MobileAttentionEntry, now: number): CueRequest | null {
-  const eventId = `needs-you:${entry.id}`;
+  /* A lane's entry id is the bare pipeline id, so one lane parking twice would
+     spend one identity for good. Its occurrence is the stage it stands on and
+     how many attempts that stage has run: every retry or new round moves it. */
+  const eventId = entry.kind === "pipeline" ? `needs-you:${entry.id}:${parkOccurrence(entry.row)}` : `needs-you:${entry.id}`;
   switch (entry.kind) {
     case "conversation": {
       const cue = SOUND_OF_REASON[entry.item.reason.kind];

@@ -8,6 +8,8 @@ import type { Pipeline } from "@/lib/pipelines/types";
 import type { PrototypeReviewNotice } from "@/lib/prototypeReview/types";
 import type { FileEntry } from "@/lib/types";
 
+import { createCuePlayer, type CueTransport, type EventStartRequest } from "./cuePlayer";
+import { createFakeTimers } from "./fakeTimers.fixture";
 import { createHeardKeys, planDoneCues, planNeedsYouCues, planPipelineCues, type HeardStorage } from "./workCues";
 
 /*
@@ -28,8 +30,9 @@ function conversation(id: string, kind: ConversationReason["kind"], raisedSecond
   return { kind: "conversation", id, item };
 }
 
-function pipelineRow(id: string, seconds: number | null, taskIds: string[] = []): MobileAttentionEntry {
-  return { kind: "pipeline", id, row: { id, seconds, pipeline: { id, taskIds } as unknown as Pipeline } as unknown as MobileBoardPipelineRow };
+function pipelineRow(id: string, seconds: number | null, taskIds: string[] = [], attempts = 1): MobileAttentionEntry {
+  const pipeline = { id, taskIds, runs: [{ stageId: "review", attempts: Array.from({ length: attempts }, () => ({})) }] } as unknown as Pipeline;
+  return { kind: "pipeline", id, row: { id, seconds, stageRef: { id: "review" }, pipeline } as unknown as MobileBoardPipelineRow };
 }
 
 function prototype(id: string, taskId: string | null, createdMsAgo = 5000): MobileAttentionEntry {
@@ -89,7 +92,40 @@ describe("S6 and S7 read the needs-you queue (§4.1)", () => {
 
   test("a parked lane asks from `now − seconds`, and is keyed by its task", () => {
     const plan = planNeedsYouCues([pipelineRow("lane-1", 7, ["task-9"])], baseline(), "p", NOW)!;
-    expect(plan.requests).toEqual([{ cue: "your-move", eventId: "needs-you:lane-1", occurredAt: NOW - 7000, obligation: "task-9" }]);
+    expect(plan.requests).toEqual([{ cue: "your-move", eventId: "needs-you:lane-1:review:1", occurredAt: NOW - 7000, obligation: "task-9" }]);
+  });
+
+  test("a lane that parks a second time earns a new identity, and S6 sounds again after the obligation memory", () => {
+    const events: EventStartRequest[] = [];
+    const transport: CueTransport = { startTyping: () => null, startEvent: (request) => (events.push(request), { cut: () => undefined }) };
+    const timers = createFakeTimers(NOW);
+    const cues = createCuePlayer({
+      transport,
+      prefs: () => ({ cuesEnabled: true, cueVolume: 1, typingEnabled: true }),
+      context: () => ({ hidden: false, phone: false, voiceCall: false, ownsEvents: () => true }),
+      timers,
+      pick: () => 0,
+    });
+    const park = (previous: ReturnType<typeof planNeedsYouCues>, attempts: number) => {
+      const plan = planNeedsYouCues([pipelineRow("lane-1", 0, ["task-1"], attempts)], previous, "p", timers.now())!;
+      for (const request of plan.requests) cues.play(request);
+      timers.advance(5000);
+      return plan;
+    };
+    const first = park(baseline(), 1);
+    const left = planNeedsYouCues([], first, "p", timers.now())!;
+    expect(events).toHaveLength(1);
+
+    /* Parked again within ten minutes for the same task: silent, the obligation was heard. */
+    timers.advance(2 * 60_000);
+    const quick = park(left, 2);
+    expect(events).toHaveLength(1);
+
+    /* Left the queue and parks a third time more than ten minutes later: sounds. */
+    const gone = planNeedsYouCues([], quick, "p", timers.now())!;
+    timers.advance(60 * 60_000);
+    park(gone, 3);
+    expect(events).toHaveLength(2);
   });
 
   test("a parked lane with no clock asks from its first sighting", () => {
