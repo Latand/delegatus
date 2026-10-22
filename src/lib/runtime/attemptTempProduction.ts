@@ -1,6 +1,6 @@
 import { statePath } from "@/lib/configDir";
 import { AttemptTempStore, sweepAttemptTemps, type AttemptTempOwner, type AttemptTempState, type AttemptTempSweepOptions } from "./attemptTempRetention";
-import { findPipelineRecord } from "@/lib/pipelines/store";
+import { pipelineRecordReader } from "@/lib/pipelines/store";
 import type { PipelineStageAttempt } from "@/lib/pipelines/types";
 import { tempSweepMode, isGateTempName, type TempSweepRoot } from "@/lib/tempSweep";
 import { writeJsonDurably } from "@/lib/state/durableJson";
@@ -10,7 +10,8 @@ import { repositoryReferencesAttemptTemp } from "./attemptTempFilesystem";
 
 export async function attemptTempState(owner: AttemptTempOwner): Promise<AttemptTempState> {
   if (!owner.pipelineId) return "orphan";
-  const pipeline = findPipelineRecord(owner.pipelineId);
+  const reader = pipelineRecordReader(owner.pipelineId), version = reader.version();
+  const pipeline = reader.read();
   if (!pipeline) return "orphan";
   if (pipeline.state === "closed") return "closed";
   const matches = (attempt: PipelineStageAttempt) => attempt.launchId === owner.launchId
@@ -23,8 +24,11 @@ export async function attemptTempState(owner: AttemptTempOwner): Promise<Attempt
     && (attempt.definition?.outputs?.length || stage?.outputs?.length || stage?.effectiveRole.roleId === "visual-critic")) return "live";
   if (attempt.retiredLaunches?.some(retired => retired.launchId === owner.launchId)
     || ["passed", "failed", "skipped", "needs_decision"].includes(attempt.state)) {
-    if (pipeline.worktreeDir && fs.existsSync(pipeline.worktreeDir)
-      && await repositoryReferencesAttemptTemp(pipeline.worktreeDir, owner.directory)) return "live";
+    if (pipeline.worktreeDir && fs.existsSync(pipeline.worktreeDir)) {
+      const referenced = await repositoryReferencesAttemptTemp(pipeline.worktreeDir, owner.directory);
+      if (reader.version() !== version) return "unknown";
+      if (referenced) return "live";
+    }
     return "settled";
   }
   return "live";

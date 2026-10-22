@@ -33,12 +33,13 @@ export async function repositoryReferencesAttemptTemp(repository: string, origin
 /** Idle processes can still depend on a symlink in their checkout. Resolve
  * links without descending through them, including currently dangling links. */
 export async function attemptReferencesClear(original: string, current: string, scan: ProcessScan): Promise<boolean> {
-  if (scan.processes.some(process => process.paths.some(file => [file, resolvePhysicalPath(file)]
-    .some(file => inside(file, original) || inside(file, current))))) return false;
+  const roots = [...new Set([original, current, resolvePhysicalPath(original), resolvePhysicalPath(current)])];
+  const referenced = (file: string) => [file, resolvePhysicalPath(file)].some(file => roots.some(root => inside(file, root)));
+  if (scan.processes.some(process => process.paths.some(referenced))) return false;
   if (process.platform === "linux") {
     for (const line of fs.readFileSync("/proc/net/unix", "utf8").split("\n").slice(1)) {
       const socket = line.trim().split(/\s+/).slice(7).join(" ");
-      if (socket.startsWith(path.sep) && [socket, resolvePhysicalPath(socket)].some(socket => inside(socket, original) || inside(socket, current))) return false;
+      if (socket.startsWith(path.sep) && referenced(socket)) return false;
     }
   }
   const repositories = new Set<string>();

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { buildPipeline, savePipelines } from "@/lib/pipelines/store";
 import type { PipelineStageAttempt } from "@/lib/pipelines/types";
 import { materializeStructuredHostAccess } from "./structuredSpawn";
@@ -88,6 +88,15 @@ test.each(["passed", "failed", "needs_decision", "skipped", "committing"] as con
   expect(await attemptTempState({ ...owner, launchId: "prior-launch" })).toBe("settled");
   expect(await attemptTempState({ ...owner, launchId: "unrecorded-launch" })).toBe("unknown");
   fs.mkdirSync(path.join(pipeline.worktreeDir!, "nested"), { recursive: true });
+  if (state !== "committing") {
+    const filesystem = await import("./attemptTempFilesystem");
+    const changed = spyOn(filesystem, "repositoryReferencesAttemptTemp").mockImplementation(async () => {
+      await Promise.resolve(); pipeline.runs[0]!.attempts[0]!.state = "running"; savePipelines([pipeline]); return false;
+    });
+    try { expect(await attemptTempState(owner)).toBe("unknown"); }
+    finally { changed.mockRestore(); }
+    pipeline.runs[0]!.attempts[0]!.state = state; savePipelines([pipeline]);
+  }
   fs.symlinkSync(path.join(owner.directory, "packages"), path.join(pipeline.worktreeDir!, "nested/node_modules"), "dir");
   expect(await attemptTempState(owner)).toBe("live");
   pipeline.stages[0]!.effectiveRole = { ...role, access: "read-only" };
