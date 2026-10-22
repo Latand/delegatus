@@ -84,6 +84,7 @@ reload. Reconnect continues the same call: the voice starts with the
 conversation so far, as much of it as fits the call-memory budget, newest lines
 first and with a note of how many older lines it left out, and does not ask
 again for what you already said. The call's transcript shows every part of the call,
-with a line where the connection dropped. **Talk** starts a new call instead.
+with a line where the connection dropped, and the list of kept calls shows it as
+one call with the actions of every part. **Talk** starts a new call instead.
 A part of a call that read a private Telegram group is not carried into the
 reconnected call.

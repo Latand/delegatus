@@ -68,6 +68,26 @@ test("a listed call whose state row is gone still opens through the session rout
   expect((await session.GET(new NextRequest(`http://127.0.0.1/api/voice-companion/session?sessionId=${minted.sessionId}&after=0`, { headers: headers() }))).status).toBe(409);
 });
 
+test("a resumed call is one listed row, and with its state rows gone it still opens with every part", async () => {
+  const f = fixture();
+  const post = (body: Record<string, unknown>) => session.POST(new NextRequest("http://127.0.0.1/api/voice-companion/session", { method: "POST", headers: headers(), body: JSON.stringify(body) }));
+  const first = await (await start("history-drop")).json();
+  f.admission.record(first.sessionId, { id: "said", kind: "utterance", atMs: 100, data: { text: "Synthetic words.", final: true } });
+  f.admission.record(first.sessionId, { id: "tool-read", kind: "tool", atMs: 400, data: { name: "list_tasks", callId: "read", status: "done", arguments: "{}" } });
+  expect((await post({ action: "close", sessionId: first.sessionId, reason: "transport" })).status).toBe(200);
+  const second = await (await post({ action: "start", project: "fixture", locale: "en", sdp: "v=0", requestId: "history-resume", resume: first.sessionId })).json();
+  f.admission.record(second.sessionId, { id: "tool-board", kind: "tool", atMs: 300, data: { name: "list_pipelines", callId: "board", status: "failed", reason: "Synthetic reason", arguments: "{}" } });
+  await f.service.close(second.sessionId);
+  for (const gone of [false, true]) {
+    if (gone) f.service.storage.change(document => { delete document.sessions[first.sessionId]; delete document.sessions[second.sessionId]; });
+    const { calls } = await (await list()).json();
+    expect(calls.map((call: { sessionId: string }) => call.sessionId)).toEqual([second.sessionId]);
+    expect(calls[0].actions.map((action: { id: string; name: string }) => [action.id, action.name])).toEqual([[`${first.sessionId}.tool-read`, "list_tasks"], ["tool-board", "list_pipelines"]]);
+    const record = await (await transcript(second.sessionId)).json();
+    expect(record.entries.map((entry: { id: string }) => entry.id)).toEqual(expect.arrayContaining([`${first.sessionId}.said`, `${first.sessionId}.tool-read`, "tool-board"]));
+  }
+});
+
 test("a team member lists only the calls they started; another member and an anonymous browser read none of them", async () => {
   const { claimInstall, createInvite, redeemJoin } = await import("@/lib/team/members");
   const { teamStore, resetTeamStoreForTests } = await import("@/lib/team/store");

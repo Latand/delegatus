@@ -321,7 +321,8 @@ export class OfficialVoiceCompanionAdapter implements VoiceCompanionAdapter {
     if (!sessionId) return null;
     const result = await this.request(undefined, `?sessionId=${encodeURIComponent(sessionId)}&view=transcript`);
     if (!Array.isArray(result.entries)) return null;
-    if (result.usage && typeof result.usage === "object") this.emit({ type: "usage.updated", usage: result.usage as CompanionUsage });
+    /* Another retained call's usage is its own record's, and never this page's call's. */
+    if (sessionId === this.observedId && result.usage && typeof result.usage === "object") this.emit({ type: "usage.updated", usage: result.usage as CompanionUsage });
     return result as unknown as SessionTranscriptRecord;
   }
   async calls(): Promise<RetainedCall[]> {

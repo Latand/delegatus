@@ -162,6 +162,35 @@ test("a call whose state row is gone is still listed from its owned journal, and
   expect(retainedCalls(h.storage, h.admission.records, operatorOwns({ memberId: "member-a" }), project => project)).toEqual([]);
 });
 
+test("a call that dropped and was resumed is one row across its parts, as its record is, from the first part's start", async () => {
+  const h = harness([{ status: "queued" }, { status: "failed", code: "conversation_busy" }]);
+  const first = await callWithRequest(h, "fixture", SECRET_WORDS[1]);
+  h.provider.replay(first.providerId, { type: "session.output_transcript.delta", event_id: "voice-1", delta: "Synthetic answer text.", start_ms: 2_000, end_ms: 3_000 });
+  await h.service.drain(first.sessionId);
+  h.provider.disconnect(first.providerId);
+  for (let attempt = 0; attempt < 2_000 && !h.admission.session(first.sessionId).closed; attempt += 1) await new Promise(resolve => setTimeout(resolve, 5));
+  expect(h.service.resumable({ operator: true })?.sessionId).toBe(first.sessionId);
+  h.advance(20_000);
+  const second = await h.service.start({ project: "fixture", locale: "en", sdp: "v=0\r\n", startedBy: { operator: true }, resume: first.sessionId });
+  h.provider.responder = (request, index) => request.input.some(item => item.type === "function_call_output") ? backendResponse(`resp_${index}`, [message("Done.")])
+    : backendResponse(`resp_${index}`, [functionCall("call-again", "request_orchestrator_delegation", { instruction: SECRET_WORDS[2], confirmation_reason: null })]);
+  h.provider.replay(second.providerId, { type: "session.input_transcript.delta", event_id: "said-again", delta: "Synthetic operator words.", start_ms: 0, end_ms: 900 }, delegationCreated("delegation-again", 1_000));
+  await h.service.drain(second.sessionId);
+  await h.service.close(second.sessionId);
+
+  const calls = retainedCalls(h.storage, h.admission.records, operatorOwns({ operator: true }), project => `Name of ${project}`);
+  /* The dropped part is not a call of its own: the call is the part that continued it, opened by its id. */
+  expect(calls.map(call => call.sessionId)).toEqual([second.sessionId]);
+  const [call] = calls;
+  expect(call).toMatchObject({ startedAt: START, live: false, project: "Name of fixture" });
+  expect(call.endedAt).toBe(h.storage.read().sessions[second.sessionId]!.endedAt ?? null);
+  expect(call.actions!.filter(action => action.kind === "request").map(action => [action.status, action.code, action.at >= START + 20_000])).toEqual([["queued", null, false], ["failed", "conversation_busy", true]]);
+  /* Each action names the row it stands for in the record the session route serves for this id. */
+  const record = h.service.transcriptRecord(second.sessionId);
+  for (const action of call.actions!) expect(record.entries.some(entry => entry.id === action.id && entry.kind === action.kind)).toBe(true);
+  expect(JSON.stringify(calls)).not.toContain("Synthetic");
+});
+
 test("refusal and delivery reasons read in the owner's language, from the code the record keeps", () => {
   expect(delegationReason("no_orchestrator", "refused", "en")).toBe("This project has no designated orchestrator, so nothing was sent.");
   expect(delegationReason("no_orchestrator", "refused", "uk")).toContain("оркестратора");
