@@ -15,7 +15,7 @@ import { handoffQueue } from "./handoffQueueStore";
 import { blockingHostActivityFlags } from "./hostActivityFlags";
 import { runtimeIdleKillMatches } from "./contracts";
 import { settleNativeQueueEntry } from "./nativeQueueSettlement";
-import { conversationActorRunning, recordObservedWait, recordWait, restoreMissingRecords } from "./recordWait";
+import { conversationActorRunning, recordObservedWait, recordWait, restoreMissingRecordsAsync } from "./recordWait";
 
 /** How many times a failed switch's hold is asked for before it is given up
     and logged; each attempt waits up to the registry's lock deadline. */
@@ -2152,6 +2152,7 @@ export async function bindStructuredDeliveryQueue(
        own, so a sweep starts whether or not the last one has ended, and a
        conversation whose evidence does not answer holds only itself. */
     const settling = new Set<string>();
+    let restoration: Promise<void> | null = null;
     settlementSweepTimer = setInterval(() => {
       if (stopped || state.activeQueue !== queue) return;
       /* A3: an open record or an ending a crash or the inventory sidecar left
@@ -2160,13 +2161,19 @@ export async function bindStructuredDeliveryQueue(
          Its margin covers a row stamped just before the snapshot. A sweep
          that could not read the store, or failed a backfill, takes none. */
       const sweptAt = Date.now();
-      try {
-        const complete = restoreMissingRecords(registry, progressStore, sweptAt);
-        mirrorSettledReceipts(registry, progressStore);
-        if (complete) progressStore.checkpoint(sweptAt - sweepMs);
-      } catch (error) {
-        controllerDiagnosticError("[structured delivery] progress restoration failed", { error: error instanceof Error ? error.message : String(error) });
-      }
+      if (!restoration) restoration = (async () => {
+        const active = () => {
+          if (stopped || state.activeQueue !== queue) throw new Error("delivery restoration owner retired");
+        };
+        try {
+          const complete = await restoreMissingRecordsAsync(registry, progressStore, sweptAt, active);
+          active();
+          mirrorSettledReceipts(registry, progressStore);
+          if (complete) progressStore.checkpoint(sweptAt - sweepMs);
+        } catch (error) {
+          if (!stopped && state.activeQueue === queue) controllerDiagnosticError("[structured delivery] progress restoration failed", { error: error instanceof Error ? error.message : String(error) });
+        }
+      })().finally(() => { restoration = null; });
       void settleDueSends({
         registry,
         client,

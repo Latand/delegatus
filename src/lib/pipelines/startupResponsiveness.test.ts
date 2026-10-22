@@ -730,3 +730,19 @@ test("history evidence callers across revisions hydrate once and both refuse sta
     read.mockRestore(); decodes.stop(); db.close();
   }
 });
+
+
+test("keyed startup ownership keeps an attempt owner even when membership is absent", async () => {
+  const { root, row } = fixture();
+  const conversationId = "conversation_keyed_owner";
+  const record = { ...row, runs: [{ stageId: "build", attempts: [{ n: 1, state: "passed", conversationId,
+    flowId: null, launchId: null, sessionId: null, agentPath: null, paneId: null, startedAt: "2026-10-22T00:00:00.000Z", completedAt: "2026-10-22T00:00:01.000Z",
+    error: null, output: null, verdict: null, activatedBy: null, effectiveRole: row.stages[0]!.effectiveRole }] }] };
+  const db = new Database(path.join(root, "state.sqlite"));
+  try { db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines'").run(JSON.stringify(record)); }
+  finally { db.close(); }
+  const owners = await loadPipelineOwnershipForStartupAsync([], new Set([conversationId]));
+  expect(owners.map(owner => owner.id)).toEqual([row.id]);
+  expect(owners[0]!.attempts).toEqual([{ conversationId, state: "passed" }]);
+  expect(await loadPipelineOwnershipForStartupAsync([], new Set(["conversation_unrelated"])) ).toEqual([]);
+});

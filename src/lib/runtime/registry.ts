@@ -1,3 +1,6 @@
+import { forEachCooperatively, yieldToRuntime } from "@/lib/cooperative";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { performanceSpans } from "@/lib/performanceSpans";
 import { CODEX_MISSING_ROLLOUT_REASON, isMissingCodexRolloutError } from "./hostEndCause";
 import { verifiedCodexSocketOwner } from "./codexSocketTransport";
 import type {
@@ -780,10 +783,18 @@ export async function demoteSkippedStructuredRegistryHosts(
   admit: <T>(entry: AgentRegistryEntry, mutation: () => T) => Promise<T | undefined> = async (_entry, mutation) => registry.deliveryWriteOrBusy({ label: "registry.startup-demote" }, mutation),
   orphanStop: StructuredOrphanStopDependencies = {},
 ): Promise<void> {
-  const rows = registry.structuredHostEntries().filter((entry) =>
-    entry.structuredHost && !shouldAdopt(entry));
+  const rows: AgentRegistryEntry[] = [];
+  await withViewerOperation("runtime.startup", () => forEachCooperatively(registry.structuredHostEntries(), entry => {
+    performanceSpans.sync("runtime.startup.select", () => {
+      if (entry.structuredHost && !shouldAdopt(entry)) rows.push(entry);
+    });
+  }, { batchSize: 16, timeBudgetMs: 8 }));
+  let slice = performance.now();
   for (const [index, entry] of rows.entries()) {
-    if (index > 0 && index % 16 === 0) await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    if (index > 0 && (index % 16 === 0 || performance.now() - slice >= 8)) {
+      await yieldToRuntime();
+      slice = performance.now();
+    }
     const host = entry.structuredHost!;
     const alreadyDead = entry.status === "dead"
       && host.process === null

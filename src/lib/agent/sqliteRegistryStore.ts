@@ -21,6 +21,7 @@ import { reboundAssembledMcpGrants, rowClaimsBeyondBaselineGrant, type McpGrantP
 import { identityMaterializationFence } from "./identityMaterialization";
 import type { AgentRegistryEntry, ConversationAuthorityFacts, RegistryFile, SeatChildrenAnchor, SeatChildrenPage, SnapshotSpawnProjection, SnapshotTitleConversationProjection } from "./registry";
 import { sessionKeyId } from "./sessionKey";
+import { prepareRegistryEndingsBatch, registryEndingsPrepared } from "./registryEndings";
 import { archiveCandidates, archiveInactiveRegistryRows, installRegistryArchive } from "./registryArchive";
 
 /** The collections the MCP grant decision reads and writes. Touching any one of
@@ -126,7 +127,7 @@ interface RegistryFileReaders {
   path: WeakMap<object, (path: string) => string[]>;
   entryKey: WeakMap<RegistryFile, (entryKey: string) => string[]>;
   coldKey: WeakMap<RegistryFile, (collection: RowCollection) => ReadonlySet<string> | undefined>;
-  endedOwner: WeakMap<RegistryFile, (since: string) => string[]>;
+  endedOwner: WeakMap<RegistryFile, (since: string, page?: { limit: number; after?: string }) => string[]>;
   projection: WeakMap<object, ProjectionReader>;
   liveness: WeakMap<RegistryFile, () => { entries: AgentRegistryEntry[]; receipts: RegistryFile["receipts"][string][] }>;
 }
@@ -418,8 +419,8 @@ export function hotRegistryRows<C extends RowCollection>(file: RegistryFile, col
  * instant decides here; an owner stored without one takes its delivery's, as
  * normalization does. The caller judges each named row as it reads it.
  */
-export function archivedOwnersEndedSince(file: RegistryFile, since: string): string[] | undefined {
-  return endedOwnerReaders.get(file)?.(since);
+export function archivedOwnersEndedSince(file: RegistryFile, since: string, page?: { limit: number; after?: string }): string[] | undefined {
+  return endedOwnerReaders.get(file)?.(since, page);
 }
 
 /** Whether entry-key lookups on this file read the generation identity index. */
@@ -1728,6 +1729,23 @@ export class SqliteAgentRegistryStore {
 
   async prepareRecoveryIndexes(signal?: AbortSignal): Promise<void> {
     if (this.options.readOnly || this.options.allowArchiveMigration === false) return;
+    const endingDeadline = performance.now() + 30_000;
+    let endingsReady = registryEndingsPrepared(this.db);
+    while (!endingsReady) {
+      await yieldToRuntime();
+      signal?.throwIfAborted();
+      if (this.closed) throw new Error("registry closed during ending preparation");
+      if (performance.now() >= endingDeadline) throw new Error("registry ending preparation deadline exceeded");
+      const result = await this.withWriter(() => {
+        signal?.throwIfAborted();
+        if (performance.now() >= endingDeadline) throw new Error("registry ending preparation deadline exceeded");
+        endingsReady = performanceSpans.sync("registry.prepare.endings", () => prepareRegistryEndingsBatch(this.db));
+        this.db.exec("COMMIT");
+        this.writerHeld = false;
+      }, { deadlineMs: Math.max(0, endingDeadline - performance.now()) });
+      if (!result.acquired) throw new Error("registry ending preparation could not acquire its writer");
+    }
+
     for (const [name, table, field, collection, secondField] of [
       ...["heldDeliveries", "deliveryOperationOwners"].flatMap(collection => [
         [`registry_lookup_clientMessageId_${collection}`, "registry_rows", "clientMessageId", collection],
@@ -3072,12 +3090,46 @@ export class SqliteAgentRegistryStore {
     const keys = coldKeys;
     coldKeyReaders.set(file,collection => keys.get(collection));
     projectionReaders.set(file,(collection,projector) => this.projectRows(file,collection,projector,ids.get(collection),identity));
-    if (this.changesReady) endedOwnerReaders.set(file,since => this.db.query<{ row_key: string }, [string]>(
-      `SELECT c.row_key FROM registry_cold c JOIN registry_archive a ON a.id=c.archive_id WHERE c.collection='deliveryOperationOwners'
-        AND CASE WHEN json_type(a.value_json,'$.settledAt')='text' THEN json_extract(a.value_json,'$.settledAt')>=?1
-          ELSE COALESCE(json_extract(a.value_json,'$.settledDelivery.deliveredAt')>=?1,0)
-            OR EXISTS (SELECT 1 FROM ${this.recordsSource} d WHERE d.collection='heldDeliveries' AND d.row_key=json_extract(a.value_json,'$.deliveryId')
-              AND json_extract(d.value_json,'$.deliveredAt')>=?1) END`).all(since).map(row => row.row_key));
+    if (this.changesReady) endedOwnerReaders.set(file,(since, page) => {
+      if (page && (!Number.isSafeInteger(page.limit) || page.limit < 1 || page.limit > 5000)) throw new RangeError("invalid ending page limit");
+      const ready = this.db.query<{ value: string }, []>("SELECT value FROM registry_meta WHERE key='owner_endings_cursor'").get()?.value === "complete";
+      if (ready) {
+        const ms = Date.parse(since);
+        const legacy = this.db.query<{ operation_id: string; ending_text: string }, []>(`SELECT e.operation_id,e.ending_text FROM registry_owner_endings e
+          WHERE e.ending_ms IS NULL AND e.ending_text IS NOT NULL
+            AND EXISTS (SELECT 1 FROM registry_cold c WHERE c.collection='deliveryOperationOwners' AND c.row_key=e.operation_id)
+          LIMIT 129`).all();
+        if (legacy.length > 128) throw new Error("ending projection needs cooperative timestamp preparation");
+        const cursor = page?.after ? this.db.query<{ ending_ms: number | null; ending_text: string; operation_id: string }, [string]>(
+          "SELECT ending_ms,ending_text,operation_id FROM registry_owner_endings WHERE operation_id=?").get(page.after) : null;
+        const after = cursor ? { ms: cursor.ending_ms ?? Date.parse(cursor.ending_text), key: cursor.operation_id } : null;
+        const rows = this.db.query<{ operation_id: string; ending_ms: number }, (number | string)[]>(`SELECT e.operation_id,e.ending_ms FROM registry_owner_endings e
+          WHERE e.ending_ms>=? ${after ? "AND (e.ending_ms,e.operation_id)>(?,?)" : ""}
+            AND EXISTS (SELECT 1 FROM registry_cold c WHERE c.collection='deliveryOperationOwners' AND c.row_key=e.operation_id)
+          ORDER BY e.ending_ms,e.operation_id LIMIT ?`).all(ms, ...(after ? [after.ms,after.key] : []), page?.limit ?? -1);
+        for (const row of legacy) {
+          const ending = Date.parse(row.ending_text);
+          if (ending >= ms && (!after || ending > after.ms || (ending === after.ms && row.operation_id > after.key))) rows.push({ operation_id: row.operation_id, ending_ms: ending });
+        }
+        rows.sort((a,b) => a.ending_ms - b.ending_ms || (a.operation_id < b.operation_id ? -1 : a.operation_id > b.operation_id ? 1 : 0));
+        return (page ? rows.slice(0,page.limit) : rows).map(row => row.operation_id);
+      }
+      // During bootstrap, bound by identity before touching any payload. The
+      // caller checks each named owner's normalized ending and withholds its
+      // checkpoint until the complete migration-era traversal is covered.
+      if (page) return this.db.query<{ row_key: string }, [string, number]>(`SELECT row_key FROM registry_cold
+        WHERE collection='deliveryOperationOwners' AND row_key>? ORDER BY row_key LIMIT ?`)
+        .all(page.after ?? "", page.limit).map(row => row.row_key);
+      // Read-only legacy callers without a page retain their compatibility
+      // selection until a writer prepares the normalized projection.
+      const keys = this.db.query<{ row_key: string }, [string]>(
+        `SELECT c.row_key FROM registry_cold c JOIN registry_archive a ON a.id=c.archive_id WHERE c.collection='deliveryOperationOwners'
+          AND CASE WHEN json_type(a.value_json,'$.settledAt')='text' THEN json_extract(a.value_json,'$.settledAt')>=?1
+            ELSE COALESCE(json_extract(a.value_json,'$.settledDelivery.deliveredAt')>=?1,0)
+              OR EXISTS (SELECT 1 FROM ${this.recordsSource} d WHERE d.collection='heldDeliveries' AND d.row_key=json_extract(a.value_json,'$.deliveryId')
+                AND json_extract(d.value_json,'$.deliveredAt')>=?1) END`).all(since).map(row => row.row_key);
+      return keys;
+    });
     const pinned = this.pinnedRowKeys(file,"conversations",coldGrantChangeId,identity);
     if (this.changesReady) pathReaders.set(file,path => pinned(
       () => this.db.query<{ conversation_id: string }, [string]>(conversationPathSql(this.recordsSource)).all(path).map(row => row.conversation_id),

@@ -433,7 +433,7 @@ test("a view refreshed across mixed entry, receipt, conversation and lineage wri
    checkpoint. Enumerating the collection read and normalized every archived
    owner on each sweep, 0.3 s of the serving release's thread over retained
    history; the archive names the candidates from the instant each stores. */
-test("recent endings among archived operation owners are named without reading the archive", () => {
+test("recent endings among archived operation owners are named without reading the archive", async () => {
   const { dataset, open } = history();
   const db = new Database(dataset.filename);
   const archived = db.query<{ id: number; row_key: string; settled: string }, []>(`SELECT a.id, c.row_key, json_extract(a.value_json, '$.settledAt') AS settled
@@ -457,7 +457,9 @@ test("recent endings among archived operation owners are named without reading t
     db.close();
   }
   const metrics = { reads: 0 };
-  const view = open(metrics).readOnlySnapshot().file;
+  const selectedStore = open(metrics);
+  await selectedStore.prepareReadOnlySnapshot();
+  const view = selectedStore.readOnlySnapshot().file;
   const whole = open().snapshot().file;
   const ended = (since: string) => Object.entries(whole.deliveryOperationOwners)
     .filter(([, owner]) => owner.terminalState !== null && (owner.settledAt ?? "") >= since).map(([key]) => key).sort();
@@ -524,4 +526,98 @@ test("receipt replacement lookups agree across archive, peer replacement and tra
     expect(registryRowsMatching(file, "receipts", "requestDigest", digest)).toEqual([]);
   }, false);
   expect(select()).toEqual([]);
+});
+
+
+test("archived endings page by normalized instant without fetching old owner payloads", async () => {
+  const { dataset, open } = history();
+  const store = open();
+  await store.prepareReadOnlySnapshot();
+  const view = store.readOnlySnapshot().file;
+  const since = "1970-01-01T00:00:00.000Z";
+  const all = archivedOwnersEndedSince(view, since)!;
+  expect(all.length).toBeGreaterThan(32);
+  const page = archivedOwnersEndedSince(view, since, { limit: 16 })!;
+  expect(page.length).toBe(16);
+  const next = archivedOwnersEndedSince(view, since, { limit: 16, after: page.at(-1)! })!;
+  expect(next.length).toBe(16);
+  expect(new Set([...page, ...next]).size).toBe(32);
+  const db = new Database(dataset.filename, { readonly: true });
+  try {
+    const plan = db.query<{ detail: string }, []>(`EXPLAIN QUERY PLAN SELECT operation_id FROM registry_owner_endings
+      WHERE ending_ms >= 0 ORDER BY ending_ms, operation_id LIMIT 16`).all().map(row => row.detail).join(" ");
+    expect(plan).toContain("SEARCH");
+    expect(plan).toContain("ending_ms>?");
+    expect(plan).not.toContain("TEMP B-TREE");
+  } finally { db.close(); }
+});
+
+
+test("ending projection preserves offset and legacy timestamps through archive replacement", async () => {
+  const { dataset, open } = history();
+  const store = open();
+  await store.prepareReadOnlySnapshot();
+  const db = new Database(dataset.filename);
+  const keys = db.query<{ row_key: string }, []>("SELECT row_key FROM registry_cold WHERE collection='deliveryOperationOwners' ORDER BY row_key LIMIT 3").all();
+  try {
+    for (const [index, stamp] of ["2026-10-22T01:00:00+02:00", "Thu, 22 Oct 2026 00:00:00 GMT", "2026-10-22T00:00:00.000Z"].entries()) {
+      const key = keys[index]!.row_key;
+      const version = db.query<{ id: number }, [string, string]>(`INSERT INTO registry_archive(collection,row_key,value_json,row_order)
+        SELECT a.collection,a.row_key,json_set(a.value_json,'$.settledAt',?),a.row_order
+        FROM registry_cold c JOIN registry_archive a ON a.id=c.archive_id
+        WHERE c.collection='deliveryOperationOwners' AND c.row_key=? RETURNING id`).get(stamp, key)!;
+      db.query("UPDATE registry_cold SET archive_id=? WHERE collection='deliveryOperationOwners' AND row_key=?").run(version.id, key);
+    }
+    await store.prepareReadOnlySnapshot();
+    const file = store.readOnlySnapshot().file;
+    const named = archivedOwnersEndedSince(file, "2026-10-22T00:00:00.000Z")!;
+    expect(named).not.toContain(keys[0]!.row_key);
+    expect(named).toContain(keys[1]!.row_key);
+    expect(named).toContain(keys[2]!.row_key);
+    const page = archivedOwnersEndedSince(file, "2026-10-22T00:00:00.000Z", { limit: 1 })!;
+    const next = archivedOwnersEndedSince(file, "2026-10-22T00:00:00.000Z", { limit: 1, after: page[0] })!;
+    expect(new Set([...page, ...next]).size).toBe(2);
+  } finally { db.close(); }
+});
+
+
+test("ending preparation resumes a committed partial cursor in a fresh process", async () => {
+  const { dataset } = history();
+  const db = new Database(dataset.filename);
+  try {
+    db.run("DELETE FROM registry_owner_endings");
+    db.run("DELETE FROM registry_meta WHERE key='owner_endings_cursor'");
+  } finally { db.close(); }
+  const launch = async (finish: boolean) => {
+    const code = `import { Database } from "bun:sqlite";
+      import { prepareRegistryEndingsBatch } from "./src/lib/agent/registryEndings";
+      import { SqliteAgentRegistryStore } from "./src/lib/agent/sqliteRegistryStore";
+      import { normalizeRegistry } from "./src/lib/agent/registry";
+      const filename=${JSON.stringify(dataset.filename)};
+      if (${finish}) {
+        const store=new SqliteAgentRegistryStore(filename,{normalize:normalizeRegistry,initialSnapshot:()=>{throw Error("unexpected import")}});
+        await store.prepareReadOnlySnapshot(); store.close();
+      } else {
+        const db=new Database(filename); db.transaction(()=>prepareRegistryEndingsBatch(db,16))(); db.close();
+      }`;
+    const child = Bun.spawn([process.execPath, "-e", code], { stdout: "pipe", stderr: "pipe", env: { ...process.env, LLV_STATE_OWNER: undefined } });
+    const watchdog = setTimeout(() => child.kill(), 30_000);
+    try {
+      const output = await new Response(child.stderr).text();
+      expect({ exit: await child.exited, error: output }).toEqual({ exit: 0, error: "" });
+    } finally { clearTimeout(watchdog); if (child.exitCode === null) { child.kill(); await child.exited; } }
+  };
+  await launch(false);
+  const partial = new Database(dataset.filename, { readonly: true });
+  try {
+    expect(partial.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM registry_owner_endings").get()!.n).toBe(16);
+    expect(partial.query<{ value: string }, []>("SELECT value FROM registry_meta WHERE key='owner_endings_cursor'").get()!.value).not.toBe("complete");
+  } finally { partial.close(); }
+  await launch(true);
+  const complete = new Database(dataset.filename, { readonly: true });
+  try {
+    expect(complete.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM registry_owner_endings").get()!.n)
+      .toBe(complete.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM registry_rows WHERE collection='deliveryOperationOwners'").get()!.n);
+    expect(complete.query<{ value: string }, []>("SELECT value FROM registry_meta WHERE key='owner_endings_cursor'").get()!.value).toBe("complete");
+  } finally { complete.close(); }
 });

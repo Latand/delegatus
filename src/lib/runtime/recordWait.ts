@@ -1,3 +1,6 @@
+import { yieldToRuntime } from "@/lib/cooperative";
+import { performanceSpans } from "@/lib/performanceSpans";
+import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { ownsItsSettlement, type AgentRegistry, type DeliveryOperationOwner } from "@/lib/agent/registry";
 import { archivedOwnersEndedSince, hotRegistryRows } from "@/lib/agent/sqliteRegistryStore";
 import { ACCOUNT_MIGRATION_PASS_INTERVAL_MS } from "@/lib/accounts/migration/controllerSignal";
@@ -259,7 +262,7 @@ export type RestorableProgress = DeliveryProgressPort & {
 };
 
 const RESTORED_DETAIL = "recorded from the delivery record";
-const RESTORE_ENDED_LIMIT = 5_000;
+const RESTORE_BATCH_LIMIT = 128;
 const ARCHIVED_ENDING_MARGIN_MS = 86_400_000;
 
 /**
@@ -281,7 +284,7 @@ const ARCHIVED_ENDING_MARGIN_MS = 86_400_000;
  * proves nothing, so the sweep takes no checkpoint past it and the next sweep
  * checks again.
  */
-export function restoreMissingRecords(registry: AgentRegistry, progress: RestorableProgress, now = Date.now()): boolean {
+function* restorationSteps(registry: AgentRegistry, progress: RestorableProgress, now: number): Generator<void, boolean> {
   const file = registry.readOnlySnapshot();
   let complete = true;
   /** Whether the record is missing; an unreadable store marks the sweep incomplete. */
@@ -293,6 +296,7 @@ export function restoreMissingRecords(registry: AgentRegistry, progress: Restora
   /* Open work is never archived: only hot rows can be open (#2761). */
   for (const [, delivery] of hotRegistryRows(file, "heldDeliveries")) {
     if (delivery.state !== "held" && delivery.state !== "assigned" && delivery.state !== "delivery-uncertain") continue;
+    yield;
     const operationId = delivery.command.operationId;
     if (!operationId || !missing(operationId)) continue;
     recordWait(progress, registry, delivery, {
@@ -303,29 +307,32 @@ export function restoreMissingRecords(registry: AgentRegistry, progress: Restora
   }
   for (const [operationId, owner] of hotRegistryRows(file, "deliveryOperationOwners")) {
     if (!ownsItsSettlement(owner) || owner.terminalState !== null || !missing(operationId)) continue;
+    yield;
     recordDirectWait(progress, registry, owner, { reason: "checking", detail: RESTORED_DETAIL, sinceMs: Date.parse(owner.createdAt) });
   }
   const mark = progress.completenessMark();
-  /* The endings since the mark, without reading the archive whole: hot owners,
-     and the archived ones whose stored instant can lie in the window. A day's
-     margin covers instants stored in another notation than this one. */
-  const archived = archivedOwnersEndedSince(file, new Date(Math.max(0, mark - ARCHIVED_ENDING_MARGIN_MS)).toISOString());
-  const owners: Array<[string, DeliveryOperationOwner]> = archived
-    ? [...hotRegistryRows(file, "deliveryOperationOwners"),
-      ...archived.flatMap((key): Array<[string, DeliveryOperationOwner]> => {
+  // The indexed page names at most one slice of cold owners. Every remaining
+  // ending is visited before a caller may advance its durable checkpoint.
+  function* endedOwners(): Generator<[string, DeliveryOperationOwner]> {
+    const since = new Date(Math.max(0, mark - ARCHIVED_ENDING_MARGIN_MS)).toISOString();
+    let after: string | undefined;
+    let keys = archivedOwnersEndedSince(file, since, { limit: 64 });
+    if (!keys) { yield* Object.entries(file.deliveryOperationOwners); return; }
+    yield* hotRegistryRows(file, "deliveryOperationOwners");
+    while (keys.length) {
+      for (const key of keys) {
         const owner = file.deliveryOperationOwners[key];
-        return owner ? [[key, owner]] : [];
-      })]
-    : Object.entries(file.deliveryOperationOwners);
-  const ended = owners
-    .filter(([, owner]) => {
-      if (owner.terminalState === null) return false;
-      const settledAt = Date.parse(owner.settledAt ?? "");
-      return Number.isFinite(settledAt) && settledAt >= mark && settledAt <= now;
-    })
-    .sort(([, left], [, right]) => (right.settledAt ?? "").localeCompare(left.settledAt ?? ""))
-    .slice(0, RESTORE_ENDED_LIMIT);
-  for (const [operationId, owner] of ended) {
+        if (owner) yield [key, owner];
+      }
+      after = keys.at(-1)!;
+      keys = archivedOwnersEndedSince(file, since, { limit: 64, after })!;
+    }
+  }
+  for (const [operationId, owner] of endedOwners()) {
+    yield;
+    if (owner.terminalState === null) continue;
+    const settledAt = Date.parse(owner.settledAt ?? "");
+    if (!Number.isFinite(settledAt) || settledAt < mark || settledAt > now) continue;
     if (!missing(operationId)) continue;
     const receipt = sendReceiptFor(file, operationId);
     if (!receipt || receipt.state === "in-flight") continue;
@@ -346,5 +353,57 @@ export function restoreMissingRecords(registry: AgentRegistry, progress: Restora
       logged(error);
     }
   }
-  return complete;
+  return complete && registry.readOnlySnapshot() === file;
+}
+
+
+const restorations = new WeakMap<RestorableProgress, { registry: AgentRegistry; steps: Generator<void, boolean>; now: number }>();
+
+/** A slice never spends a checkpoint on work it has not visited. A restart
+    begins again from the durable mark; already-written records are preserved. */
+export function restoreMissingRecords(registry: AgentRegistry, progress: RestorableProgress, now = Date.now()): boolean {
+  let pending = restorations.get(progress);
+  if (pending && (pending.registry !== registry || pending.now !== now)) { pending.steps.return(false); pending = undefined; }
+  if (!pending) {
+    pending = { registry, steps: restorationSteps(registry, progress, now), now };
+    restorations.set(progress, pending);
+  }
+  try {
+    const started = performance.now();
+    return withViewerOperation("delivery-progress.restore", () => performanceSpans.sync("delivery-progress.restore.slice", () => {
+      for (let count = 0; count < RESTORE_BATCH_LIMIT; count++) {
+        const next = pending.steps.next();
+        if (next.done) { restorations.delete(progress); return next.value; }
+        if (performance.now() - started >= 8) break;
+      }
+      return false;
+    }));
+  } catch (error) {
+    restorations.delete(progress);
+    pending.steps.return(false);
+    throw error;
+  }
+}
+
+export async function restoreMissingRecordsAsync(registry: AgentRegistry, progress: RestorableProgress, now: number,
+  assertActive: () => void = () => {}, deadline = performance.now() + 30_000): Promise<boolean> {
+  try {
+    let complete: boolean;
+    do {
+      await yieldToRuntime();
+      assertActive();
+      if (performance.now() >= deadline) {
+        restorations.get(progress)?.steps.return(false);
+        restorations.delete(progress);
+        return false;
+      }
+      complete = restoreMissingRecords(registry, progress, now);
+    } while (restorations.has(progress));
+    assertActive();
+    return complete;
+  } catch (error) {
+    restorations.get(progress)?.steps.return(false);
+    restorations.delete(progress);
+    throw error;
+  }
 }

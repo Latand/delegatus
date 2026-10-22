@@ -635,3 +635,54 @@ test("an open reservation whose record was owed at a crash gets it back, dated f
   expect(store.get(handOff.command.operationId)).toMatchObject({ originalKey: "handoff-owed-key", waitReason: "checking", terminal: null });
   store.close();
 });
+
+
+test("restoration covers every ending through bounded sweeps before advancing completeness", async () => {
+  const { registry, conversation, filename } = sweepFixture("bounded-restoration");
+  const held = registry.holdDelivery(conversation.id, "ending template", "template-key");
+  registry.recordDeliveryOutcome(held.id, "delivered", null, "delivered");
+  const template = registry.readOnlySnapshot();
+  const owner = template.deliveryOperationOwners[held.command.operationId]!;
+  const delivery = template.heldDeliveries[held.id]!;
+  const file = { ...template, deliveryOperationOwners: {}, heldDeliveries: {} } as typeof template;
+  const settledAt = Date.parse("2026-10-22T00:00:00Z");
+  for (let i = 0; i < 513; i++) {
+    const op = `bounded-operation-${String(i).padStart(4, "0")}`;
+    const id = `bounded-delivery-${i}`;
+    file.deliveryOperationOwners[op] = { ...owner, deliveryId: id, clientMessageId: op,
+      command: { ...owner.command, operationId: op }, settledAt: new Date(settledAt).toISOString() };
+    file.heldDeliveries[id] = { ...delivery, id, clientMessageId: op, command: { ...delivery.command, operationId: op }, deliveredAt: new Date(settledAt).toISOString() };
+  }
+  const reader = { readOnlySnapshot: () => file } as typeof registry;
+  const store = new DeliveryProgressStore(filename, () => settledAt, noTimer);
+  try {
+    expect(restoreMissingRecords(reader, store, settledAt)).toBe(false);
+    const first = Object.keys(file.deliveryOperationOwners).filter(key => store.get(key));
+    expect(first.length).toBeLessThanOrEqual(128);
+    expect(store.flush()).toBe(true);
+    store.close();
+    const registryFile = path.join(path.dirname(filename), "restart-registry.json");
+    fs.writeFileSync(registryFile, JSON.stringify(file));
+    const code = `import {AgentRegistry} from "./src/lib/agent/registry";
+      import {DeliveryProgressStore} from "./src/lib/runtime/deliveryProgress";
+      import {restoreMissingRecordsAsync} from "./src/lib/runtime/recordWait";
+      const registry=new AgentRegistry(${JSON.stringify(registryFile)},undefined,undefined,{sqliteMode:"off"});
+      const store=new DeliveryProgressStore(${JSON.stringify(filename)},()=>${settledAt});
+      if(!await restoreMissingRecordsAsync(registry,store,${settledAt}))throw Error("incomplete restarted restoration");
+      if(!store.flush())throw Error("progress flush refused");store.close();registry.close();`;
+    const child = Bun.spawn([process.execPath, "-e", code], { stdout: "pipe", stderr: "pipe", env: { ...process.env, LLV_STATE_OWNER: undefined } });
+    const watchdog = setTimeout(() => child.kill(), 30_000);
+    try {
+      const error = await new Response(child.stderr).text();
+      expect({ exit: await child.exited, error }).toEqual({ exit: 0, error: "" });
+    } finally { clearTimeout(watchdog); if (child.exitCode === null) { child.kill(); await child.exited; } }
+    const restarted = new DeliveryProgressStore(filename, () => settledAt, noTimer);
+    try {
+      let covered = false;
+      for (let i = 0; i < 100 && !covered; i++) covered = restoreMissingRecords(reader, restarted, settledAt);
+      expect(covered).toBe(true);
+      for (const key of Object.keys(file.deliveryOperationOwners)) expect(restarted.get(key)?.terminal?.state).toBe("delivered");
+      expect(restarted.get("bounded-operation-0512")?.originalKey).toBe("bounded-operation-0512");
+    } finally { restarted.close(); }
+  } finally { store.close(); registry.close(); }
+});

@@ -5,7 +5,8 @@ import path from "node:path";
 import { AgentRegistry, normalizeRegistry, type RegistryFile } from "@/lib/agent/registry";
 import { SqliteAgentRegistryStore } from "@/lib/agent/sqliteRegistryStore";
 import { runStructuredHostRetirementSweep } from "./structuredHostRetirement";
-import { pipelineStartupMemberships } from "./startup";
+import { pipelineStartupMemberships, pipelineStartupMembershipsAsync, startupConversationRows } from "./startup";
+import { demoteSkippedStructuredRegistryHosts } from "./registry";
 import { determined } from "./determinable";
 
 const NOW = Date.parse("2026-10-16T00:00:00Z");
@@ -73,5 +74,81 @@ test("retirement and startup membership payload reads stay flat across tenfold r
       results.push(counts);
     }
     expect(results[1]).toEqual(results[0]);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("a host ownership recheck reads only its current memberships, including aliases", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-keyed-"));
+  try {
+    const file = seeded(root, 32);
+    for (const entry of Object.values(file.entries)) entry.structuredHost = { ...file.entries["codex:reader-0"]!.structuredHost! };
+    const registry = { readOnlySnapshot: () => file } as AgentRegistry;
+    const entry = file.entries["codex:reader-0"]!;
+    // Other resident hosts and pending launches belong to the bulk selection,
+    // never to one host's fresh authorization check.
+    const selected = pipelineStartupMemberships(registry, entry);
+    expect([...selected.selectedIds]).toEqual(["conversation_reader_0", "conversation_reader_alias"]);
+    expect([...selected.byPipeline.keys()]).toEqual(["lane-0"]);
+    file.memberships["conversation_reader_0"]![0]!.containerId = "replacement-lane";
+    expect(pipelineStartupMemberships(registry, entry).byPipeline.has("replacement-lane")).toBe(true);
+    delete file.conversations["conversation_reader_0"];
+    expect(pipelineStartupMemberships(registry, entry).selectedIds.size).toBe(0);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("bulk membership preparation yields, validates its revision and observes cancellation", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-slices-"));
+  try {
+    const file = seeded(root, 128);
+    for (const entry of Object.values(file.entries)) entry.structuredHost = { ...file.entries["codex:reader-0"]!.structuredHost! };
+    let current = file;
+    const registry = { readOnlySnapshot: () => current } as AgentRegistry;
+    let serviced = false;
+    setImmediate(() => { serviced = true; });
+    const selected = await pipelineStartupMembershipsAsync(registry);
+    expect(serviced).toBe(true);
+    expect(selected.selectedIds.size).toBe(131);
+    setImmediate(() => { current = { ...file, conversationRevision: { ...file.conversationRevision, codex: file.conversationRevision.codex + 1 } }; });
+    await expect(pipelineStartupMembershipsAsync(registry)).rejects.toThrow("changed");
+    const abort = new AbortController();
+    setImmediate(() => abort.abort(new Error("cancelled census")));
+    await expect(pipelineStartupMembershipsAsync(registry, { signal: abort.signal })).rejects.toThrow("cancelled census");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("reconciliation services the loop while selecting hosts, before any mutation", async () => {
+  const row = { key: { engine: "codex", sessionId: "released" }, status: "dead", claimOwner: null,
+    structuredHost: { process: null, endpoint: "stdio:released", activeTurnRef: null, pendingAttention: [], activeFlags: [] } } as unknown as RegistryFile["entries"][string];
+  const entries = Array.from({ length: 512 }, () => row);
+  const registry = { structuredHostEntries: () => entries } as unknown as AgentRegistry;
+  let examined = 0, observed = -1, mutations = 0;
+  setImmediate(() => { observed = examined; });
+  await demoteSkippedStructuredRegistryHosts(registry, () => { examined++; return false; }, async () => { mutations++; return undefined; });
+  expect(observed).toBeGreaterThanOrEqual(0);
+  expect(observed).toBeLessThan(512);
+  expect(examined).toBe(512);
+  expect(mutations).toBe(0);
+});
+
+
+test("retained startup conversation traversal yields without omitting history and cancels at a slice boundary", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-conversations-"));
+  try {
+    const file = seeded(root, 256);
+    let examined = 0, observed = -1;
+    setImmediate(() => { observed = examined; });
+    const ids: string[] = [];
+    for await (const conversation of startupConversationRows(file)) { ids.push(conversation.id); examined++; }
+    expect(ids).toEqual(Object.keys(file.conversations));
+    expect(observed).toBeGreaterThanOrEqual(0);
+    expect(observed).toBeLessThan(examined);
+    const abort = new AbortController();
+    setImmediate(() => abort.abort(new Error("cancelled history traversal")));
+    await expect((async () => {
+      for await (const _row of startupConversationRows(file, { signal: abort.signal })) { /* no effect */ }
+    })()).rejects.toThrow("cancelled history traversal");
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
