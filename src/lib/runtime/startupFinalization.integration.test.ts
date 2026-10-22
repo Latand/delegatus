@@ -711,6 +711,16 @@ test("only a changed runtime generation starts incremental recovery after ready"
   let refreshes = 0;
   let generations = 0;
   const client = { ...f.client, startupGeneration: async () => { generations++; return generation; } };
+  let prepared = true;
+  const read = f.registry.readOnlySnapshot.bind(f.registry);
+  const prepare = f.registry.prepareReadOnlySnapshot.bind(f.registry);
+  f.registry.readOnlySnapshot = () => {
+    if (!prepared) throw new Error("replacement generation refreshed synchronously");
+    return read();
+  };
+  f.registry.prepareReadOnlySnapshot = async (signal, options) => {
+    const file = await prepare(signal, options); prepared = true; return file;
+  };
   const dependencies = { registry: f.registry, client, orchestratorSeats: () => [],
     refreshTranscriptState: async () => { refreshes++; },
     adopt: async () => { adoptions++; return []; }, adoptClaude: async () => { adoptions++; return []; },
@@ -721,7 +731,7 @@ test("only a changed runtime generation starts incremental recovery after ready"
     await adoptStructuredHostsAtStartup(dependencies);
     expect(adoptions).toBe(0);
     expect(refreshes).toBe(1);
-    generation = "generation-b";
+    generation = "generation-b"; prepared = false;
     await Promise.all([adoptStructuredHostsAtStartup(dependencies), adoptStructuredHostsAtStartup(dependencies)]);
     expect(adoptions).toBe(0); // No unaccepted hosts in the replacement generation.
     expect(refreshes).toBe(1);
@@ -729,6 +739,7 @@ test("only a changed runtime generation starts incremental recovery after ready"
     await adoptStructuredHostsAtStartup(dependencies);
     expect(adoptions).toBe(0);
   } finally {
+    f.registry.readOnlySnapshot = read; f.registry.prepareReadOnlySnapshot = prepare;
     await bindStructuredDeliveryQueue([], { registry: f.registry, client: null });
     f.journal.close(); f.registry.close();
   }

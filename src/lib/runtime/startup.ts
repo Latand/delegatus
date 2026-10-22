@@ -2134,11 +2134,12 @@ function startStructuredHostPass(
       completed: Boolean(current.ready), generationChanged: replaced,
     });
     if (replaced && client) await bindStructuredDeliveryQueue([], { registry, client, deferStartupWork: true });
-    const scope = replaced ? new Set(Object.keys(registry.readOnlySnapshot().entries)
-      .filter((key) => !current.ready!.some((item) => sessionKeyId(item.key) === key))) : resumeDeferred;
-    const hosts = await startupReadBudget.run({ signal: dependencies.signal, assertActive: dependencies.assertActive, deadline: performance.now() + STRUCTURED_STARTUP_PASS_DEADLINE_MS }, () => withViewerOperation(isolatedRowRetry ? "runtime.startup-row" : "runtime.startup", () =>
-      withStartupRowScope(registry, isolatedRowRetry ? scope : null, () =>
-        adoptStructuredHostsPass({ ...dependencies, registry, client }, scope, admitHeldPendingWork, isolatedRowRetry, dependencies))));
+    const hosts = await startupReadBudget.run({ signal: dependencies.signal, assertActive: dependencies.assertActive, deadline: performance.now() + STRUCTURED_STARTUP_PASS_DEADLINE_MS }, () => withViewerOperation(isolatedRowRetry ? "runtime.startup-row" : "runtime.startup", async () => {
+      const scope = replaced ? new Set(Object.keys((await preparedStartupSnapshot(registry)).entries)
+        .filter((key) => !current.ready!.some((item) => sessionKeyId(item.key) === key))) : resumeDeferred;
+      return withStartupRowScope(registry, isolatedRowRetry ? scope : null, () =>
+        adoptStructuredHostsPass({ ...dependencies, registry, client }, scope, admitHeldPendingWork, isolatedRowRetry, dependencies));
+    }));
     current.generation = generation;
     current.ready = hosts;
     return hosts;
@@ -2938,7 +2939,7 @@ async function adoptStructuredHostsPass(
       const retry = async (): Promise<void> => {
         try { assertActive(); } catch { return; }
         try {
-          const current = registry.readOnlySnapshot().entries[key];
+          const current = startupHostSnapshot(registry, entry.key).entries[key];
           if (!current?.structuredHost || rowRetries.get(key)?.resolved) {
             await startupRowNotice(entry, null, assertActive);
             await rowRetries.clear(key, assertActive);

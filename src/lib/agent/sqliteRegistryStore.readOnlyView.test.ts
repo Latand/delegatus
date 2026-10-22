@@ -80,8 +80,10 @@ test("a prepared reader cooperatively rebuilds its view after a peer archives a 
   const writer = open();
   const initial = await reader.prepareReadOnlySnapshot();
   const template = initial.file.receipts[kept]!;
+  // Four header batches exercise the same cancellation, ordering and yield
+  // contract without making synchronous fixture seeding dominate the test.
   writer.mutate(file => {
-    for (let index = 0; index < 4096; index++) {
+    for (let index = 0; index < 512; index++) {
       const id = `archived-receipt-${index}`;
       file.receipts[id] = { ...template, launchId: id, state: "failed", error: "archived history", createdAt: "2020-01-01T00:00:00Z" };
     }
@@ -108,9 +110,9 @@ test("a prepared reader cooperatively rebuilds its view after a peer archives a 
     const preparationSlices = performanceSpans.snapshot(started).records.filter(record =>
       record.kind === "sync" && ["registry.prepare.slice", "registry.headers"].includes(performanceSites[record.site]!));
     expect(preparationSlices.length).toBeGreaterThan(1);
-    expect(Object.keys(snapshot.file.receipts).filter(id => id.startsWith("archived-receipt-"))).toHaveLength(4096);
+    expect(Object.keys(snapshot.file.receipts).filter(id => id.startsWith("archived-receipt-"))).toHaveLength(512);
     expect(Object.keys(snapshot.file.receipts).filter(id => id.startsWith("archived-receipt-")))
-      .toEqual(Array.from({ length: 4096 }, (_, index) => `archived-receipt-${index}`));
+      .toEqual(Array.from({ length: 512 }, (_, index) => `archived-receipt-${index}`));
   }
   const snapshot = await reader.prepareReadOnlySnapshot();
   expect(Object.keys(snapshot.file.receipts)).toContain("archived-receipt-0");
@@ -160,9 +162,13 @@ test("a retained archived collection keeps its retired reader alive after its ro
   })();
   writer.mutate(file => { file.receipts[kept]!.error = "new generation"; }, false);
   await reader.prepareReadOnlySnapshot();
-  for (let attempt = 0; attempt < 20 && retained.root.deref(); attempt++) {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    // A successful WeakRef.deref keeps its target alive until this job ends.
+    // Release that check before collecting in the next job.
+    await new Promise<void>(resolve => setImmediate(resolve));
     Bun.gc(true);
     await new Promise<void>(resolve => setImmediate(resolve));
+    if (!retained.root.deref()) break;
   }
   expect(retained.root.deref()).toBeUndefined();
   expect(retained.collection["retained-collection-0"]?.error).toBe("receipt-0");
@@ -771,3 +777,35 @@ for (const mode of ["off", "dual-write"] as const) {
     }
   });
 }
+
+test("warm recovery index proof is invalidated by an external schema edit", async () => {
+  const { open, filename, kept } = fixture();
+  const reader = open();
+  const first = await reader.prepareReadOnlySnapshot();
+  const db = new Database(filename);
+  try {
+    db.run("DROP INDEX registry_lookup_launchId");
+    expect(db.query("SELECT name FROM sqlite_master WHERE name='registry_lookup_launchId'").get()).toBeNull();
+    const next = await reader.prepareReadOnlySnapshot();
+    expect(next.file.receipts[kept]?.launchId).toBe(first.file.receipts[kept]?.launchId);
+    expect(db.query("SELECT name FROM sqlite_master WHERE name='registry_lookup_launchId'").get()).not.toBeNull();
+  } finally { db.close(); }
+});
+
+test("a schema edit during yielded recovery verification cannot publish an index proof", async () => {
+  const { open, filename } = fixture();
+  const reader = open();
+  await reader.prepareReadOnlySnapshot();
+  const db = new Database(filename);
+  let edit: ReturnType<typeof setImmediate> | undefined;
+  try {
+    // A missing final index guarantees a second yield after the first index
+    // was checked, so the peer edit lands behind that verified boundary.
+    db.run("DROP INDEX registry_archive_structured_host_kind");
+    const preparing = reader.prepareRecoveryIndexes();
+    edit = setImmediate(() => { edit = setImmediate(() => db.run("DROP INDEX registry_lookup_clientMessageId_heldDeliveries")); });
+    await expect(preparing).rejects.toThrow("indexes changed during preparation");
+    await reader.prepareRecoveryIndexes();
+    expect(db.query("SELECT name FROM sqlite_master WHERE name='registry_lookup_clientMessageId_heldDeliveries'").get()).not.toBeNull();
+  } finally { if (edit) clearImmediate(edit); db.close(); }
+});

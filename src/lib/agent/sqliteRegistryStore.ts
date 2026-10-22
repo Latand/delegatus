@@ -1754,10 +1754,18 @@ export class SqliteAgentRegistryStore {
     return run;
   }
 
+  private recoveryIndexesSignature: string | null = null;
+
   async prepareRecoveryIndexes(signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     if (this.options.readOnly || this.options.allowArchiveMigration === false) return;
-    const endingDeadline = performance.now() + 30_000;
+    const indexSignature = () => `${databaseFileIdentity(this.filename)}:${this.db.query<{ schema_version: number }, []>("PRAGMA schema_version").get()!.schema_version}`;
+    const signature = indexSignature();
     let endingsReady = registryEndingsPrepared(this.db);
+    // Row writes retain the index proof. A schema edit, file replacement or
+    // newly unparsed ending requires preparation again.
+    if (endingsReady && this.recoveryIndexesSignature === signature) return;
+    const endingDeadline = performance.now() + 30_000;
     while (!endingsReady) {
       await yieldToRuntime();
       signal?.throwIfAborted();
@@ -1773,7 +1781,8 @@ export class SqliteAgentRegistryStore {
       if (!result.acquired) throw new Error("registry ending preparation could not acquire its writer");
     }
 
-    for (const [name, table, field, collection, secondField] of [
+    let indexSliceStarted = performance.now(), indexSliceRows = 0;
+    const recoveryIndexes = [
       ...["heldDeliveries", "deliveryOperationOwners"].flatMap(collection => [
         [`registry_lookup_clientMessageId_${collection}`, "registry_rows", "clientMessageId", collection],
         [`registry_archive_clientMessageId_${collection}`, "registry_archive", "clientMessageId", collection],
@@ -1793,8 +1802,13 @@ export class SqliteAgentRegistryStore {
       ["registry_archive_supersedes", "registry_archive", "supersedes.conversationId", "receipts"],
       ["registry_lookup_structuredHost_kind", "registry_rows", "structuredHost.kind", "entries"],
       ["registry_archive_structured_host_kind", "registry_archive", "structuredHost.kind", "entries"],
-    ] as [string, string, string, string, string?][]) {
+    ] as [string, string, string, string, string?][];
+    for (const [name, table, field, collection, secondField] of recoveryIndexes) {
       signal?.throwIfAborted();
+      if (++indexSliceRows >= 16 || performance.now() - indexSliceStarted >= 8) {
+        await yieldToRuntime(); signal?.throwIfAborted();
+        indexSliceStarted = performance.now(); indexSliceRows = 0;
+      }
       if (this.db.query("SELECT 1 FROM sqlite_master WHERE type='index' AND name=?").get(name!)) continue;
       await yieldToRuntime();
       signal?.throwIfAborted();
@@ -1809,6 +1823,13 @@ export class SqliteAgentRegistryStore {
       });
       if (!result.acquired) throw new Error("registry recovery index preparation could not acquire its writer");
     }
+    const before = indexSignature();
+    const names = recoveryIndexes.map(([name]) => name);
+    const found = this.db.query<{ count: number }, string[]>(`SELECT COUNT(*) AS count FROM sqlite_master
+      WHERE type='index' AND name IN (${names.map(() => "?").join(",")})`).get(...names)!.count;
+    const after = indexSignature();
+    if (before !== after || found !== names.length) throw new Error("registry recovery indexes changed during preparation");
+    this.recoveryIndexesSignature = after;
   }
 
   private readOnlySnapshotMeasured(): SqliteRegistrySnapshot {
