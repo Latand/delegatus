@@ -68,6 +68,42 @@ function call(socketPath: string, method: string, params: unknown): Promise<Runt
   });
 }
 
+function deploymentStatus(filename: string, deploymentId: string): ViewerDeploymentStatus | undefined {
+  let db: Database | undefined;
+  try {
+    db = new Database(filename, { readonly: true });
+    return JSON.parse(db.query<{ status_json: string }, [string]>(
+      "SELECT status_json FROM viewer_deployments WHERE deployment_id=?",
+    ).get(deploymentId)!.status_json);
+  } catch (error) {
+    // A successor can be recovering its WAL on this attempt. Let until() retry
+    // under its existing deadline; invalid schema or status still fails.
+    const code = (error as { code?: string })?.code;
+    if (typeof code === "string" && /^SQLITE_(BUSY|LOCKED)(?:_|$)/.test(code)) return undefined;
+    throw error;
+  } finally { db?.close(); }
+}
+
+test("deployment status polling retries a locked database and still reports invalid state", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "host-status-poll-"));
+  const filename = path.join(directory, "runtime-events.sqlite");
+  const writer = new Database(filename);
+  try {
+    writer.exec("CREATE TABLE viewer_deployments (deployment_id TEXT PRIMARY KEY, status_json TEXT)");
+    writer.query("INSERT INTO viewer_deployments VALUES (?, ?)").run("fixture-deployment", JSON.stringify({ terminal: true, phase: "succeeded" }));
+    writer.exec("BEGIN EXCLUSIVE");
+    expect(deploymentStatus(filename, "fixture-deployment")).toBeUndefined();
+    writer.exec("ROLLBACK");
+    const status = deploymentStatus(filename, "fixture-deployment");
+    expect(status?.terminal).toBe(true);
+    expect(status?.phase).toBe("succeeded");
+    writer.query("UPDATE viewer_deployments SET status_json=?").run("invalid JSON");
+    expect(() => deploymentStatus(filename, "fixture-deployment")).toThrow(SyntaxError);
+    writer.exec("DROP TABLE viewer_deployments");
+    expect(() => deploymentStatus(filename, "fixture-deployment")).toThrow("no such table");
+  } finally { writer.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
 test("separate-process succession keeps the stable Viewer available throughout large journal open", async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "host-journal-handoff-"));
   const port = await ephemeralPort(), options = { root, runtimeBin: process.execPath, stateDir: directory, port };
@@ -161,7 +197,10 @@ test("generation read after the singleton fence prevents same-revision self-hand
     writeRuntimeHostHandoffIntent({ revision: successor.revision, image: successor.image, successorContainer: successor.container, predecessorId: previous.container, previousRelease: previous, successorRelease: successor, recordedAt: "2026-01-01T00:00:00.000Z" }, files.handoffIntent);
     writeRuntimeHostRelease(successor, files.release); fence.release();
     let status: ViewerDeploymentStatus | undefined;
-    await until(() => { const db = new Database(path.join(directory, "runtime-events.sqlite"), { readonly: true }); try { status = JSON.parse(db.query<{ status_json: string }, [string]>("SELECT status_json FROM viewer_deployments WHERE deployment_id=?").get(receipt.deploymentId)!.status_json); return status?.terminal === true; } finally { db.close(); } }, s);
+    await until(() => {
+      status = deploymentStatus(path.join(directory, "runtime-events.sqlite"), receipt.deploymentId);
+      return status?.terminal === true;
+    }, s);
     console.log(JSON.stringify({ boot: "staged-generation", phase: status!.phase, untracked: s.log().includes("running generation is untracked"), dockerCalls: fs.existsSync(files.dockerCalls) ? fs.readFileSync(files.dockerCalls, "utf8").trim().split("\n") : [] }));
     expect(status!.phase).toBe("succeeded"); expect(status!.runtimeHostHandoff?.generation).toEqual({ image: successor.image, revision: successor.revision, container: successor.container });
     expect(s.child.exitCode).toBeNull(); expect(fs.existsSync(files.handoffIntent)).toBe(false);

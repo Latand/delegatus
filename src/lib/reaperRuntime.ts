@@ -1,3 +1,4 @@
+import { FLOW_ARCHIVE } from "@/lib/flows/retirement";
 import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { realExec } from "@/lib/workflows/provision";
 import { spawn } from "node:child_process";
@@ -247,6 +248,7 @@ function persistRefreshedMergeEvidence(
 }
 
 export async function refreshMergedFlowIds(flows: Flow[], overrides: ReaperActuationOverrides = {}): Promise<Set<string>> {
+  if (FLOW_ARCHIVE.retired) return new Set();
   const now = (overrides.now ?? Date.now)();
   const merged = new Set<string>();
   const initialRevisions = new Map(flows.map((flow) => [flow.id, flowTransitionRevision(flow)]));

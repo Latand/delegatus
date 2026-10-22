@@ -9,10 +9,7 @@ import { agentRegistry, RegistryReadError, resolveConversationAlias } from "../a
 import { registryRowProjection, type RegistryRowProjector } from "../agent/sqliteRegistryStore";
 import type { ViewerConversationId } from "../accounts/migration/contracts";
 import { forEachCooperatively, yieldToRuntime } from "../cooperative";
-import { tickFlows } from "../flows/engine";
-import { withFlowSnapshot } from "../flows/store";
-import { reconcileEmbeddedReviewFlows, tickPipelines } from "../pipelines/engine";
-import { withPipelineMutation } from "../pipelines/store";
+import { tickPipelines } from "../pipelines/engine";
 import { notifyQuestion } from "../push";
 import { overlayControllerSessionTitles, sessionProjectProjection } from "../session/titleProjection";
 import { deputyConversationRefs } from "../orchestrator/deputies";
@@ -21,7 +18,6 @@ import { waitForStateLock } from "../state/lockWait";
 import { admitScannedConversations, planAdmissions } from "../tasks/membership";
 import { loadPipelinesForProjection } from "../pipelines/store";
 import { panePidMap, resolveTarget } from "../tmux";
-import { tickWorkflows } from "../workflows/engine";
 import { activityVerdict, transcriptTurnResult } from "./activity";
 import type { ConversationCatalogEntry } from "./conversationCatalog";
 import { ctxFor } from "./context";
@@ -520,24 +516,9 @@ export async function reconcileFileControllers(
   await forEachCooperatively(entries, (entry) => {
     if ((entry.pendingQuestion || entry.waitingInput) && !routedToOthers(entry)) void notifyQuestion(entry);
   });
-  await tickFlows(entries);
-  await yieldToRuntime();
-  /* Durable half of the embedded review flow reconcile (issue #798): the files
-     GET applies the same function as a read-model overlay only, so the claim
-     of a flow-first crash recovery and the sync generation persist here, on
-     the controller path, never from a request. */
-  try {
-    await withPipelineMutation((pipelines, persist) =>
-      withFlowSnapshot(async (flows) => {
-        if (reconcileEmbeddedReviewFlows(pipelines, flows)) await persist();
-      }));
-  } catch (error) {
-    console.error("[pipelines] skipping embedded review flow reconcile", error);
-  }
-  await yieldToRuntime();
-  // A controller that finishes its pass may still own the FIFO head an
-  // unfinished peer needs. Keep both ticking for the whole shared pass.
-  const controllers = [tickPipelines, tickWorkflows] as const;
+  // A pass that finishes may still own a FIFO head a held pass needs.
+  // Keep pipeline admission polling until the shared scanner pass settles.
+  const controllers = [tickPipelines] as const;
   const polling: (Promise<void> | null)[] = controllers.map(() => null);
   const watch = setInterval(() => {
     for (const [index, tick] of controllers.entries()) {

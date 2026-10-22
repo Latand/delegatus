@@ -230,6 +230,13 @@ or with `DELEGATUS_TELEMETRY=0` or `DO_NOT_TRACK=1`.
 [What leaves your machine](docs/guide/security-and-privacy.md#what-leaves-your-machine)
 has the details.
 
+Memory profiles and voice-call summaries send selected rules or call text to
+Anthropic through Claude Code, using your subscription. Limits are read through
+Claude Code `/usage`. Delegatus's direct subscription-token request to Anthropic's
+usage endpoint requires **Direct Anthropic API calls with my subscription** under
+**Settings → Install ping → What leaves my machine**. It starts off on new installs;
+existing installations with recorded direct usage keep it on.
+
 ## License
 
 MIT
