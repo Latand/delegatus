@@ -136,6 +136,7 @@ import { preparePipelineRepository, readRepositoryInitialization } from "./initi
 import { classifyProviderCondition, type ProviderCondition } from "./providerConditions";
 import { pipelineDeliveryGuidance, renderCutRetryInput, renderDecisionInput, renderOutOfMemoryRetryInput } from "./prompts";
 import { composeStageInput } from "./stageInput";
+import { createStageInputExec } from "./stageInputExec";
 import { effectiveWorkerLimit } from "@/lib/operator/workerLimit";
 import { renderStagePrompt } from "./prompts";
 import { resolveStageTestGuidance } from "./testGuidance";
@@ -6687,11 +6688,7 @@ async function spawnRunStage(
         if (attempt.activation && JSON.stringify(current) !== expected) abort.abort();
       });
       const watch = setInterval(revalidate, 50);
-      const exec: ExecPort = async (command, args, cwd, env, options) => {
-        revalidate();
-        if (abort.signal.aborted) throw new ActivationSuperseded();
-        return await ports.exec(command, args, cwd, env, { ...options, signal: abort.signal });
-      };
+      const exec = createStageInputExec(ports.exec, abort.signal, revalidate, new ActivationSuperseded());
       try {
         inputRevision = storedLessonRevision();
         const prompt = restartStagePrompt(await composeStageInput(pipeline, bound, attempt.effectiveRole, previousOutput, pipeline.worktreeDir, exec, reserve), attempt);
@@ -11343,7 +11340,13 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
           && operation.epoch === pipeline.delivery?.epoch
           && !deliveryOwnerError(pipeline, pipelineDeliveryLookup({ ...pipeline.delivery!.target, active: true }))
           && (pipeline.stateDetail?.split("\n", 1)[0] === `publishing the passed stage: publisher ${pipeline.delivery!.ownerId} at epoch ${pipeline.delivery!.epoch} is in flight or uncertain`
-            || (operation.state === "settled" && pipeline.stateDetail?.startsWith(`publishing the passed stage: publication ${operation.id} has no progress for `)));
+            || (operation.state === "settled" && pipeline.stateDetail?.startsWith(`publishing the passed stage: publication ${operation.id} has no progress for `))
+            // Reconciliation replaces the old park text with its durable
+            // result. Resume only that publication's park, preserving other
+            // decisions and the attempt's exhausted retry budget.
+            || (operation.state === "settled" && operation.passedStage === true
+              && operation.result?.ok === false && publicationNotLanded(operation.result)
+              && pipeline.stateDetail === operation.result.error && !passed?.publicationRetry?.exhausted));
         if (pipeline.state === "needs_decision" && passed && stageHeadAccepted(passed)
           && (deliveryRefusalCleared || publicationSucceeded || interruptedPublicationCleared)) {
           passed.state = "passed";
