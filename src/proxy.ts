@@ -5,6 +5,7 @@ import { tokensMatch } from "@/lib/authToken";
 import { isTeamAuthPage, teamGate, teamPerimeter } from "@/lib/team/gate";
 import { statePath } from "@/lib/configDir";
 import { activeRestartGate } from "@/lib/selfUpdate/restartGate";
+import { rejectForeignHost } from "@/lib/sameOrigin";
 
 const AUTH_COOKIE = "llv_auth";
 const FRAME_PREFIX = "/api/artifact/frame/";
@@ -66,6 +67,13 @@ function handoffBlock(request: NextRequest): NextResponse | null {
  * `stat`, exactly as before.
  */
 export function proxy(request: NextRequest): NextResponse {
+  // Host is a perimeter boundary even on keyless installs, peer routes and
+  // signed frames. Credentials never authorize an attacker-chosen DNS name.
+  const foreignHost = rejectForeignHost(request);
+  if (foreignHost) return foreignHost;
+  // These assets previously bypassed the proxy matcher. Keep them loadable
+  // without credentials, after checking Host like every other route.
+  if (request.nextUrl.pathname.startsWith("/_next/static/") || request.nextUrl.pathname === "/favicon.ico") return NextResponse.next();
   const perimeter = perimeterCheck(request);
   if (perimeter.response) return perimeter.response;
   if (isPeerRoute(request.nextUrl.pathname)) return handoffBlock(request) ?? NextResponse.next();
@@ -132,6 +140,6 @@ function perimeterCheck(request: NextRequest): PerimeterResult {
   return { response: forbidden(request), bearer: false };
 }
 
-/* `/api/streams` runs this proxy itself, for its own request and for every channel opened on it, so it can
-   stop reading a control body at its limit (src/app/api/streams/route.ts). */
-export const config = { matcher: ["/((?!_next/static|favicon.ico|api/streams$|api/composer-upload$).*)"] };
+/* These routes run this proxy themselves so their request bodies are not
+   cloned and buffered before their handlers can enforce their limits. */
+export const config = { matcher: ["/((?!api/streams$|api/composer-upload$).*)"] };
