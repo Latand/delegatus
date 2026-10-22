@@ -186,15 +186,22 @@ test("read-only patches and unchanged persistence cannot certify disk recovery",
 });
 async function childOwner(c: SqliteStateCollection<Row>) {
   const dir = path.dirname(c.filename);
+  const ready = Promise.withResolvers<void>();
   const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "stateLeaseOwner.fixture.ts"), dir], {
     env: { ...process.env, LLV_STATE_DIR: dir }, stdout: "pipe", stderr: "pipe",
+    ipc(message) { if (message === "ready") ready.resolve(); },
   });
-  try { await until(() => fs.existsSync(path.join(dir, "ready"))); }
+  const stderr = new Response(child.stderr).text();
+  void child.exited.then(async code => ready.reject(Error(`fixture exited before readiness (${code}): ${await stderr}`)));
+  const watchdog = setTimeout(() => ready.reject(Error("fixture startup did not complete")), 30_000);
+  try { await ready.promise; }
   catch (error) { child.kill(); await child.exited; throw error; }
+  finally { clearTimeout(watchdog); }
   return { child, dir, stop: async () => {
     fs.writeFileSync(path.join(dir, "stop"), "");
-    const code = await Promise.race([child.exited, Bun.sleep(3000).then(() => { child.kill(); throw new Error("fixture child did not exit"); })]);
-    expect(code).toBe(0);
+    const timeout = setTimeout(() => child.kill(), 30_000);
+    try { expect(await child.exited).toBe(0); await stderr; }
+    finally { clearTimeout(timeout); }
   } };
 }
 test("cross-process recovery leaves the original owner alive", async () => {
