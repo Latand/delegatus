@@ -314,3 +314,27 @@ for (const automatic of [false, true]) test(`a failed receipt after SQLite busy 
   expect(calls).toBe(2);
   expect(orchestratorSeatFor("atlas").history).toEqual([]);
 });
+
+
+for (const terminal of [false, true]) test(`canonical seat request keeps its project through ${terminal ? "terminal failure" : "a busy retry and name change"}`, async () => {
+  let target = "atlas";
+  const projects: unknown[] = [];
+  const deps = dependencies(async body => {
+    projects.push(body.project);
+    target = "other-project";
+    if (terminal) throw new Error("fixture terminal failure");
+    if (projects.length === 1) throw Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
+    return { status: 200, body: { ok: true, conversationId: "conversation_canonical_retry", path: null } };
+  });
+  deps.resolveProject = () => ({ project: target, displayName: "Atlas Board" });
+  const result = await executeOrchestratorSeatRequest({ ...request, project: "Atlas Board", clientRequestId: "canonical-seat-request" }, deps);
+  if (terminal) {
+    expect(result.status).toBe(500);
+    expect(orchestratorSeatFor("atlas")).toMatchObject({ active: null, pending: null, history: [{ seat: { intent: { error: "fixture terminal failure" } } }] });
+  } else {
+    expect(result.status).toBe(200);
+    expect(orchestratorSeatFor("atlas")).toMatchObject({ active: { conversationId: "conversation_canonical_retry" }, pending: null, history: [] });
+    expect(projects).toEqual(["atlas", "atlas"]);
+  }
+  expect(orchestratorSeatFor("other-project")).toMatchObject({ active: null, pending: null, history: [] });
+});

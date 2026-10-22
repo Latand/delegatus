@@ -1034,17 +1034,21 @@ export function executeOrchestratorSeatRequest(
   triggeredBy: OrchestratorSeatTrigger | null = null,
   admission?: SeatLaunchAdmission,
 ): Promise<SeatCommandResult> {
-  return guardedSeatTransition(rawBody, "seat_transition_failed", async (retryingSqliteRequestId) => {
+  const body = { ...rawBody };
+  let identity: { project: string; displayName: string } | null = null;
+  return guardedSeatTransition(body, "seat_transition_failed", async (retryingSqliteRequestId) => {
     const named = typeof rawBody.project === "string" ? rawBody.project.trim() : "";
     if (!named) return { status: 400, body: { error: "project is required", admission: "refused" } };
-    let identity: { project: string; displayName: string };
-    try {
-      identity = (dependencies.resolveProject ?? resolveSeatProject)(named, text(rawBody.cwd) || undefined);
-    } catch (error) {
-      if (error instanceof ProjectNameRefusal) return { status: 400, body: { error: error.message, ...error.details, admission: "refused" } };
-      throw error;
+    if (!identity) {
+      try {
+        identity = (dependencies.resolveProject ?? resolveSeatProject)(named, text(rawBody.cwd) || undefined);
+      } catch (error) {
+        if (error instanceof ProjectNameRefusal) return { status: 400, body: { error: error.message, ...error.details, admission: "refused" } };
+        throw error;
+      }
     }
-    const result = await runOrchestratorSeatRequest({ ...rawBody, project: identity.project }, dependencies, triggeredBy, admission, retryingSqliteRequestId);
+    body.project = identity.project;
+    const result = await runOrchestratorSeatRequest(body, dependencies, triggeredBy, admission, retryingSqliteRequestId);
     return result.status < 400 ? { ...result, body: { ...result.body, ...identity, project: canonicalOrchestratorProject(identity.project) } } : result;
   }, {
     replay: true,
