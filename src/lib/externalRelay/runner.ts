@@ -393,13 +393,16 @@ export async function runClaimedRequest(
   const callAbort = new AbortController();
   const identityTimers: ReturnType<typeof setTimeout>[] = [];
   let owner: ReturnType<typeof ownerTierFor> = null;
+  // A refused cutoff write can leave cancel absent from the ledger. The
+  // unsettled owner still owns its capacity, chain reservation and files.
+  const ownerRunPending = () => !!owner && !!run && !runFinished;
   executionScope = true;
   releaseCapacity = async () => {
-    if (!recorded || capacityReleased) return;
+    if (!recorded || capacityReleased || ownerRunPending()) return;
     const held = readRunLedger().runs.find(row => row.requestId === requestId);
     if (held?.ownerTurn?.cancel && !held.ownerTurn.confirmed) return;
     await changeRunAsync(requestId, row => {
-      if (row.ownerTurn?.cancel && !row.ownerTurn.confirmed) return row;
+      if (ownerRunPending() || row.ownerTurn?.cancel && !row.ownerTurn.confirmed) return row;
       return { ...row, capacityReleased: true };
     }, Date.now() + 5000);
     const current = readRunLedger().runs.find(row => row.requestId === requestId);
@@ -970,7 +973,7 @@ export async function runClaimedRequest(
       if (conversation && owner) {
         try {
           const custody = readRunLedger().runs.find(r => r.requestId === requestId)?.ownerTurn;
-          releasePin = !(custody?.cancel && !custody.confirmed);
+          releasePin = !ownerRunPending() && !(custody?.cancel && !custody.confirmed);
         } catch { releasePin = false; } // Unreadable custody cannot admit a peer turn.
       }
       if (conversation && releasePin) {
@@ -986,14 +989,14 @@ export async function runClaimedRequest(
         recorder.finish({ outcome: "lease_lost", answer: null, delivery: null, ...loopRecord() });
       try {
         const held = readRunLedger().runs.find(r => r.requestId === requestId);
-        const custodyPending = !!held?.ownerTurn?.cancel && !held.ownerTurn.confirmed;
+        const custodyPending = ownerRunPending() || !!held?.ownerTurn?.cancel && !held.ownerTurn.confirmed;
         if (recorded && !custodyPending && !(completionAccepted && !capacityReleased)) await dropRunAsync(requestId, Date.now() + 5000);
       } catch (error) {
         console.error("External relay run ledger cleanup failed", error instanceof Error ? error.name : "unknown");
       }
       try {
         const held = readRunLedger().runs.find(r => r.requestId === requestId);
-        if (runDir && !(held?.ownerTurn?.cancel && !held.ownerTurn.confirmed)) await fs.promises.rm(runDir, { recursive: true, force: true });
+        if (runDir && !ownerRunPending() && !(held?.ownerTurn?.cancel && !held.ownerTurn.confirmed)) await fs.promises.rm(runDir, { recursive: true, force: true });
       } catch (error) {
         console.error("External relay run directory cleanup failed", error instanceof Error ? error.name : "unknown");
       }

@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { accountManager } from "@/lib/accounts/manager";
 import * as client from "./client";
-import { runClaimedRequest } from "./runner";
+import { advertisedSlots, runClaimedRequest } from "./runner";
+import * as relayStore from "./store";
 import { contextRequest } from "./request.fixture";
 import { updateRelayStore, readRunLedger, reserveRun, dropRun, type PairedRelay } from "./store";
 import { setRelaySwitch } from "./switches";
@@ -23,7 +24,7 @@ async function waitFor(check: () => boolean) {
   expect(check()).toBe(true);
 }
 
-function fixture(id: string, deadlineMs?: number, hardCapMinutes = 1, holdStop = false) {
+function fixture(id: string, deadlineMs?: number, hardCapMinutes = 1, holdStop = false, refuseCompletion = false) {
   let now = epoch;
   jest.useFakeTimers();
   const clock = spyOn(Date, "now").mockImplementation(() => now);
@@ -47,7 +48,10 @@ function fixture(id: string, deadlineMs?: number, hardCapMinutes = 1, holdStop =
   const heartbeats: number[] = [], completions: { at: number; body: unknown }[] = [], stops: string[] = [];
   const wire = spyOn(client, "relayCall").mockImplementation(async (_base, endpoint, _method, body) => {
     if (endpoint.endsWith("/heartbeat")) heartbeats.push(now - epoch);
-    else if (endpoint.endsWith("/complete")) completions.push({ at: now - epoch, body });
+    else if (endpoint.endsWith("/complete")) {
+      completions.push({ at: now - epoch, body });
+      if (refuseCompletion) throw new client.ExternalRelayError("lease_lost", 409);
+    }
     else throw Error("unexpected fixture endpoint");
     return { status: 200, body: { status: "ok" } } as never;
   });
@@ -83,7 +87,7 @@ function fixture(id: string, deadlineMs?: number, hardCapMinutes = 1, holdStop =
       if (pending) await waitFor(() => settled);
       await pending;
       if (holdStop) {
-        await waitFor(() => !readRunLedger().runs.some(row => row.requestId === id && row.ownerTurn?.cancel && !row.ownerTurn.confirmed));
+        await waitFor(() => readRunLedger().runs.find(row => row.requestId === id)?.ownerTurn?.confirmed === true);
         dropRun(id);
       }
       wire.mockRestore(); selection.mockRestore(); quiet.mockRestore(); clock.mockRestore(); jest.useRealTimers();
@@ -139,6 +143,45 @@ test("timeout completion does not wait for an unresponsive owner stop", async ()
     await f.answer();
     expect(f.completions).toHaveLength(1);
   } finally { await f.close(); }
+});
+
+for (const refuseCompletion of [false, true]) test(`timeout retains execution custody when cancellation persistence fails (completion refused: ${refuseCompletion})`, async () => {
+  const f = fixture(`timeout_refused_cutoff_${refuseCompletion}`, 600_000, 30, true, refuseCompletion);
+  const change = relayStore.changeRun;
+  let saved: ReturnType<typeof readRunLedger>["runs"][number] | undefined;
+  let refused = 0;
+  const write = spyOn(relayStore, "changeRun").mockImplementation((id, update) => {
+    if (id === f.request.request_id) { refused++; throw new relayStore.RelayStoreBusy(); }
+    return change(id, update);
+  });
+  try {
+    await f.start();
+    saved = readRunLedger().runs.find(row => row.requestId === f.request.request_id);
+    await f.advance(600_000);
+    await f.result();
+    expect(refused).toBeGreaterThan(0);
+    expect(f.completions).toHaveLength(1);
+    const retained = readRunLedger().runs.find(row => row.requestId === f.request.request_id);
+    expect(retained).toBeDefined();
+    expect(retained?.capacityReleased).not.toBe(true);
+    expect(fs.existsSync(retained!.runDir)).toBe(true);
+    expect(advertisedSlots(f.paired)).toEqual([{ target_id: "target_1", free: 0 }]);
+    // A fresh reader has no in-memory pending-run guard. The durable row
+    // alone must still withhold the execution slot after a Viewer restart.
+    const reader = Bun.spawn([process.execPath, "-e", `
+      import { advertisedSlots } from "./src/lib/externalRelay/runner";
+      import { readRelayStore } from "./src/lib/externalRelay/store";
+      console.log("slots=" + JSON.stringify(advertisedSlots(readRelayStore().relays[0]!)));
+    `], { cwd: process.cwd(), env: { ...process.env }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    const [output, error, code] = await Promise.all([new Response(reader.stdout).text(), new Response(reader.stderr).text(), reader.exited]);
+    expect({ error, code }).toEqual({ error: "", code: 0 });
+    expect(output.split("\n").find(line => line.startsWith("slots="))).toBe('slots=[{"target_id":"target_1","free":0}]');
+  } finally {
+    write.mockRestore();
+    // Keep cleanup effective on the red implementation, which drops custody.
+    if (saved && !readRunLedger().runs.some(row => row.requestId === saved!.requestId)) reserveRun(saved, 1);
+    await f.close();
+  }
 });
 
 test("capacity can become available after five minutes without spending the execution slot while held", async () => {
