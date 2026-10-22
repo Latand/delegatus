@@ -333,3 +333,41 @@ test("ambiguous legacy seat names remain separate even when one candidate is sea
   expect(canonicalProject("Ambiguous Legacy")).toBe("Ambiguous Legacy");
   expect(orchestratorSeatFor("Ambiguous Legacy").active?.conversationId).toBe("conversation_ambiguous_0");
 });
+
+
+test("designation by display name follows a registered folder that gained a repository", async () => {
+  const { createManualProject } = await import("@/lib/projects/curation");
+  const folder = path.join(SANDBOX, "RegisteredFolder");
+  fs.mkdirSync(folder);
+  const before = projectForCwd(folder)!;
+  expect(createManualProject("Registered Board", folder, new Set(), { allowedRoots: [SANDBOX] }).ok).toBe(true);
+  git("init", "-q", "-b", "main", folder);
+  addOrigin(folder, "RegisteredRepo");
+  const project = projectForCwd(folder)!;
+  expect(project).not.toBe(before);
+  const answer = await executeOrchestratorSeatRequest({ project: "Registered Board", cwd: folder, mandate: "Own this board", clientRequestId: "registered-folder-seat" }, seatDependencies());
+  expect(answer.status).toBe(200);
+  expect(answer.body).toMatchObject({ project, displayName: "Registered Board", seat: { project } });
+  expect(canonicalProject(before)).toBe(project);
+  const { resolveSeatProject } = await import("./seatProjectIdentity");
+  expect(resolveSeatProject(project).displayName).toBe("Registered Board");
+});
+
+
+test("legacy display-name recovery follows the registered folder's identity succession", async () => {
+  const { createManualProject } = await import("@/lib/projects/curation");
+  const { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } = await import("./seats");
+  const folder = path.join(SANDBOX, "LegacyMovedFolder");
+  fs.mkdirSync(folder);
+  const before = projectForCwd(folder)!;
+  expect(createManualProject("Moved Legacy Board", folder, new Set(), { allowedRoots: [SANDBOX] }).ok).toBe(true);
+  beginOrchestratorSeatIntent({ project: "Moved Legacy Board", mandate: "Own this board", clientRequestId: "moved-legacy-seat", mode: "spawn", now: "2026-10-21T00:00:00.000Z" });
+  completeOrchestratorSeatIntent({ project: "Moved Legacy Board", clientRequestId: "moved-legacy-seat", conversationId: "conversation_moved_legacy", path: null, now: "2026-10-21T00:00:00.000Z" });
+  git("init", "-q", "-b", "main", folder);
+  addOrigin(folder, "LegacyMovedRepo");
+  const project = projectForCwd(folder)!;
+  recordSeatProjectSuccessions(() => folder);
+  expect(canonicalProject(before)).toBe(project);
+  expect(canonicalProject("Moved Legacy Board")).toBe(project);
+  expect(orchestratorSeatFor(project).active?.conversationId).toBe("conversation_moved_legacy");
+});

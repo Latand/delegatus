@@ -73,10 +73,14 @@ export function recordSeatProjectSuccessions(cwdOf: SeatCwdOf = seatLaunchCwd, l
   const moves: ProjectSuccession[] = [];
   for (const seat of legacy) {
     try {
-      const target = resolveNamedProject(seat.project, directory);
-      const info = roots.get(seatRoots.get(seat) ?? "");
+      let target = resolveNamedProject(seat.project, directory);
+      const cwd = seatRoots.get(seat);
+      pathMoves.push(...recordProjectSuccessions([projectSuccessionFor(target, cwd)]));
+      const displayName = directory.labels.get(target) ?? target;
+      target = canonicalProject(target);
+      const info = roots.get(cwd ?? "");
       if (info && canonicalProject(info.project) !== target) { blocked.add(seat.project); continue; }
-      if (isCanonicalProjectId(target)) moves.push({ source: seat.project, target, displayName: directory.labels.get(target) ?? target });
+      if (isCanonicalProjectId(target)) moves.push({ source: seat.project, target, displayName });
     } catch (error) {
       if (!(error instanceof ProjectNameRefusal)) throw error;
       // Unproven or ambiguous identities stay separate until more evidence exists.
@@ -125,11 +129,16 @@ export function resolveSeatProject(named: string, cwd?: string, sources: NamedPr
       ...(last?.projectCatalog ?? []), ...(info ? [{ ...info, projectRoot: cwd }] : []),
     ] }),
   }, pending ? [pending.project] : []);
-  const project = resolveNamedProject(named, directory);
+  const resolved = resolveNamedProject(named, directory);
+  const label = directory.labels.get(resolved) ?? resolved;
+  const displayName = isCanonicalProjectId(label) ? info?.displayName ?? label : label;
+  const succession = projectSuccessionFor(resolved, cwd);
+  recordProjectSuccessions([succession ? { ...succession, displayName } : null]);
+  const project = canonicalProject(resolved);
   if (info && project !== canonicalProject(info.project)) throw new ProjectNameRefusal("project contradicts the canonical project of cwd", {
     code: "project_mismatch", canonicalProject: canonicalProject(info.project), admission: "refused",
   });
-  return { project, displayName: directory.labels.get(project) ?? project };
+  return { project, displayName };
 }
 
 function seatProjectSources(): NamedProjectSources {

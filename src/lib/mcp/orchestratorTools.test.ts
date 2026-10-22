@@ -801,7 +801,10 @@ for (const probe of [
 ] as const) {
   test(`real ${probe.tool} ${probe.status} refusal is not executed with its original cause`, async () => {
     asCapabilityCaller();
-    if ("operator" in probe) delete process.env.LLV_SPAWN_CAPABILITY;
+    if ("operator" in probe) {
+      delete process.env.LLV_SPAWN_CAPABILITY;
+      persistProjectAliases([{ source: "project-a", target: "dir-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", displayName: "Example project" }]);
+    }
     setDeputyRootResolverForTests(() => probe.gateway ? "conversation_worker" : "conversation_root");
     let posts = 0;
     const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {

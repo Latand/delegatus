@@ -1039,7 +1039,6 @@ export function executeOrchestratorSeatRequest(
     if (!named) return { status: 400, body: { error: "project is required", admission: "refused" } };
     let identity: { project: string; displayName: string };
     try {
-      recordProjectSuccessions([projectSuccessionFor(canonicalOrchestratorProject(named), text(rawBody.cwd))]);
       identity = (dependencies.resolveProject ?? resolveSeatProject)(named, text(rawBody.cwd) || undefined);
     } catch (error) {
       if (error instanceof ProjectNameRefusal) return { status: 400, body: { error: error.message, ...error.details, admission: "refused" } };
