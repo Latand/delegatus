@@ -604,7 +604,7 @@ export function SeatTickBody({ project, projectName, read, state, surface, actio
         ) : null}
       </div>
 
-      {/* FULL AUTONOMY, with Turbo beside it (docs/design/turbo-mode.md §6): right
+      {/* FULL AUTONOMY, then Turbo on its own row (docs/design/turbo-mode.md §6): right
           under the status, so both stay inside the popover's 70vh on a laptop. */}
       {record ? <SeatTickAutonomy state={state} turbo={turbo} row={row} phone={phone} now={now} locale={locale} wakesOn={record?.settings.enabled === true} /> : null}
       <TurboDialog control={turbo} phone={phone} locale={locale} />
@@ -832,17 +832,12 @@ function SeatTickAutonomy({ state, turbo, row, phone, now, locale, wakesOn }: { 
           setDraft(previous => ({ ...previous, enabled: next }));
           if (next) state.setDraft(previous => (previous.enabled ? previous : { ...previous, enabled: true }));
         }} />
-      {phone ? null : <>
-        <span aria-hidden className="h-5 w-px shrink-0 bg-border" />
-        <span aria-hidden data-turbo-head className="shrink-0 text-label font-semibold uppercase tracking-wide text-muted">{t("seatTick.turbo.head")}</span>
-        <TurboSwitch control={turbo} phone={false} describedBy={turboCaptionId} />
-      </>}
     </div>
     <p data-seat-tick-autonomy-about className="text-caption leading-4 text-secondary">{t("seatTick.autonomy.about")}</p>
-    {phone ? <div data-turbo-row className={`flex min-w-0 items-center gap-2 ${row}`}>
-      <p className="min-w-0 flex-1 text-label font-semibold uppercase tracking-wide text-muted">{t("seatTick.turbo.head")}</p>
-      <TurboSwitch control={turbo} phone describedBy={turboCaptionId} />
-    </div> : null}
+    <div data-turbo-row className={`flex min-w-0 items-center gap-2 ${row}`}>
+      <p data-turbo-head className="min-w-0 flex-1 text-label font-semibold uppercase tracking-wide text-muted">{t("seatTick.turbo.head")}</p>
+      <TurboSwitch control={turbo} phone={phone} describedBy={turboCaptionId} />
+    </div>
     <TurboCaption control={turbo} id={turboCaptionId} />
     {draft.enabled ? <label className="flex min-w-0 flex-col gap-1">
       <span className="text-ui text-primary">{t("seatTick.autonomy.durationLabel")}</span>

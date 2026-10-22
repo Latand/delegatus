@@ -111,18 +111,44 @@ afterAll(() => { globalThis.fetch = realFetch; });
 
 const view = () => <SeatTickChip project={PROJECT} projectName="Viewer" />;
 
-test.each(["en", "uk"] as const)("switch failures remain visible in the existing Details section (%s)", async lang => {
+test.each(["en", "uk"] as const)("switch failures remain visible in the existing Details section, in words and without raw ids (%s)", async lang => {
   setLocale(lang);
   const setting = episode();
-  setting.switches = [{ conversationId: "conversation_failed", accountId: "acct-a", model: "gpt-6.1-sol", from: "default", to: "ultrafast", state: "failed", reason: "native tier update refused", at: ago(1) }];
-  getAnswer = record(turboOn(setting));
+  setting.switches = [{ conversationId: "conversation_failed", accountId: "acct-a", model: "gpt-6.1-sol", from: "default", to: "ultrafast", state: "failed", reason: "native tier update refused", at: ago(1) },
+    { conversationId: "conversation_priority", accountId: "acct-b", model: "gpt-6.1-sol", from: null, to: "priority", state: "reverting", reason: "Turbo ended; switch back failed: socket closed", at: ago(1) }];
+  getAnswer = record(turboOn(setting, { titles: { conversation_failed: "Review issue #913" } }));
   await mountOpen();
   const details = dom.document.querySelector("[data-turbo-switch-details]");
   expect(details).not.toBeNull();
-  expect(details!.textContent).toContain(lang === "uk" ? "Деталі перемикань турбо" : "Turbo switch details");
-  expect(details!.textContent).toContain("Account A");
-  expect(details!.textContent).toContain("native tier update refused");
+  const text = details!.textContent ?? "";
+  expect(text).toContain(lang === "uk" ? "Деталі перемикань турбо" : "Turbo switch details");
+  expect(text).toContain("Review issue #913");
+  expect(text).toContain("Account A · GPT-6.1-Sol · " + (lang === "uk" ? "типово" : "standard") + " → Ultrafast");
+  expect(text).toContain("Account B · GPT-6.1-Sol · " + (lang === "uk" ? "типово" : "standard") + " → Fast");
+  expect(text).toContain(lang === "uk" ? "Перемикання відхилено" : "The switch was refused");
+  expect(text).toContain(lang === "uk" ? "Повернення на попередню швидкість не вдалося" : "Switching back to the previous speed failed");
+  expect(text).not.toContain("native tier update refused");
+  expect(text).not.toContain("socket closed");
+  expect(text).not.toMatch(/gpt-6\.1-sol|ultrafast|conversation_/);
+  expect(text).toContain(lang === "uk" ? "Розмова" : "Conversation");
 });
+
+test.each(["en", "uk"] as const)("a failed switch shows in the status line, apart from a clean episode (%s)", async lang => {
+  setLocale(lang);
+  const failed = episode();
+  failed.switches = [{ conversationId: "conversation_failed", accountId: "acct-a", model: "gpt-6.1-sol", from: null, to: "ultrafast", state: "failed", reason: "native tier update refused", at: ago(1) }];
+  getAnswer = record(turboOn(failed, { progress: { ...progress(0, 6), failed: 1 } }));
+  const first = await mountOpen();
+  const withFailure = q("[data-turbo-status]")!.textContent;
+  expect(withFailure).toMatch(lang === "uk" ? /^Турбо до \d\d:\d\d · не перемкнено: 1, див\. Деталі$/ : /^Turbo until \d\d:\d\d · not switched: 1, see Details$/);
+  roots.delete(first); flushSync(() => first.unmount());
+  resetSeatTickSettingsCacheForTests();
+  getAnswer = record(turboOn(episode(), { progress: progress(0, 7) }));
+  await mountOpen();
+  expect(q("[data-turbo-status]")!.textContent).not.toBe(withFailure);
+  expect(q("[data-turbo-status]")!.textContent).not.toMatch(/Деталі|Details/);
+});
+
 async function settle(root: Root, rounds = 5) {
   for (let round = 0; round < rounds; round += 1) { await new Promise(resolve => setTimeout(resolve, 0)); flushSync(() => root.render(view())); }
 }
@@ -154,7 +180,7 @@ function choose(select: HTMLSelectElement, value: string) {
   flushSync(() => select.dispatchEvent(new dom.Event("change", { bubbles: true }) as unknown as Event));
 }
 
-test("the control sits on the Full autonomy row, above the wakes; off, it says what Turbo does", async () => {
+test("the control sits on its own row in the Full autonomy section, above the wakes; off, it says what Turbo does", async () => {
   await mountOpen();
   const section = q("[data-seat-tick-autonomy-section]")!;
   expect(section.contains(control())).toBe(true);
@@ -235,6 +261,18 @@ test("the approval names the paying accounts, removes «until turned off» and i
   expect(q("[data-turbo-about]")?.getAttribute("data-turbo-credits-outcome")).toBe("on");
   expect(q("[data-turbo-about]")?.textContent).toContain("Turbo with credits: after the limit, accounts Account A, Account B pay with credits.");
   expect(q("[data-seat-tick-turbo-mark]")?.getAttribute("data-seat-tick-turbo-mark")).toBe("credits");
+});
+
+test("ticking the credit box brings the whole approval into view above the pinned buttons", async () => {
+  const root = await mountOpen();
+  click(control()); await settle(root);
+  const block = q("[data-turbo-credits]") as HTMLElement;
+  const scrolls: unknown[] = [];
+  (block as unknown as { scrollIntoView: (options: unknown) => void }).scrollIntoView = options => { scrolls.push(options); };
+  check(q<HTMLInputElement>("[data-turbo-credits-toggle]")!, true);
+  await settle(root);
+  expect(scrolls).toEqual([{ block: "nearest" }]);
+  expect(q("[data-turbo-payers]")!.textContent).toContain("Account A");
 });
 
 test("Escape cancels; a failed save rolls back in place and leaves the panel's Save alone", async () => {

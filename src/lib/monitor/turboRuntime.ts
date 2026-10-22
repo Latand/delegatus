@@ -77,6 +77,8 @@ export interface TurboAnswer {
   available: boolean;
   unavailableReason: "no-account" | "no-faster-tier" | "unreadable" | null;
   progress: ReturnType<typeof turboProgress> | null;
+  /** conversation id → title, for the conversations the Details rows name. */
+  titles?: Record<string, string>;
   preview?: { accounts: TurboPreviewAccount[]; conversations: { total: number; stages: number; agents: number } };
 }
 
@@ -97,6 +99,7 @@ export async function turboAnswer(project: string, settings: { turbo?: TurboSett
     available: reason === null, unavailableReason: reason,
     progress: episode ? turboProgress(episode.switches) : null,
   };
+  answer.titles = switchTitles([...answer.history, ...(episode ? [episode] : [])]);
   if (!withPreview || !context) return answer;
   const candidates = await liveCandidates(project);
   const raised = candidates.filter(candidate => {
@@ -116,6 +119,24 @@ export async function turboAnswer(project: string, settings: { turbo?: TurboSett
     conversations: { total: raised.length, stages: raised.filter(item => item.stage).length, agents: raised.filter(item => !item.stage).length },
   };
   return answer;
+}
+
+const TITLE_ROWS = 40;
+const TITLE_CHARS = 120;
+
+/** The titles of the conversations whose switch rows carry a reason (what Details lists), newest first, bounded. */
+function switchTitles(episodes: TurboSetting[]): Record<string, string> {
+  const titles: Record<string, string> = {};
+  try {
+    const registry = agentRegistry();
+    const ids = episodes.flatMap(item => item.switches.filter(row => row.reason).map(row => row.conversationId)).reverse();
+    for (const id of ids) {
+      if (id in titles || Object.keys(titles).length >= TITLE_ROWS) continue;
+      const title = registry.conversation(id as ViewerConversationId)?.generations.at(-1)?.launchProfile.title?.trim();
+      if (title) titles[id] = title.length > TITLE_CHARS ? `${title.slice(0, TITLE_CHARS - 1)}…` : title;
+    }
+  } catch { /* an unreadable registry leaves the rows unnamed */ }
+  return titles;
 }
 
 /** Live hosted Codex conversations of the project, read once per episode change. */

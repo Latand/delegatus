@@ -9,6 +9,7 @@ import { useModalLayer } from "@/components/modalLayer";
 import { useLocale } from "@/lib/i18n";
 import { ENGINE_MODELS } from "@/lib/agent/models";
 import type { TurboAnswer, TurboPreviewAccount } from "@/lib/monitor/turboRuntime";
+import type { TurboSetting } from "@/lib/monitor/turbo";
 import { seatTickLocalTime } from "./seatTickView";
 import type { SeatTickSettingsRead } from "./useSeatTickSettings";
 
@@ -213,13 +214,37 @@ export function TurboStatus({ control, now, locale }: { control: TurboControl; n
   const left = episode.until ? Math.max(0, Date.parse(episode.until) - now) : null;
   const line = `${time ? t("seatTick.turbo.status", { time }) : t("seatTick.turbo.statusUnlimited")}${
     control.state === "switching" ? t("seatTick.turbo.statusSwitching", { done, total }) : ""}${
-    control.state === "ending" && left !== null ? t("seatTick.turbo.statusLeft", { m: Math.ceil(left / 60_000) }) : ""}`;
+    control.state === "ending" && left !== null ? t("seatTick.turbo.statusLeft", { m: Math.ceil(left / 60_000) }) : ""}${
+    progress && progress.failed > 0 ? t("seatTick.turbo.statusFailed", { count: progress.failed }) : ""}`;
   return (
     <div data-turbo-status className="flex min-w-0 items-start gap-2">
       <TurboMark />
       <p className="min-w-0 text-ui text-primary">{line}</p>
     </div>
   );
+}
+
+/** The speed's name as the dialog says it; the stored ids are the API's words. */
+function tierName(tier: string | null | undefined, t: ReturnType<typeof useLocale>["t"]): string {
+  if (tier === "priority") return t("seatTick.turbo.tier.priority");
+  if (tier === "ultrafast") return t("seatTick.turbo.tier.ultrafast");
+  return tier == null || tier === "default" ? t("seatTick.turbo.tier.default") : t("seatTick.turbo.tier.other");
+}
+
+/** The sweep records English machine clauses; the panel shows one plain sentence per kind and keeps the raw text out. */
+function switchReason(row: TurboSetting["switches"][number], t: ReturnType<typeof useLocale>["t"]): string {
+  const reason = row.reason ?? "";
+  const key = /^seat:/.test(reason) ? "seat"
+    : /^Turbo ended before/.test(reason) ? "ended"
+      : /^usage reached|^no (fresh )?usage|^credit margin/.test(reason) ? "usage"
+        : /^cut /.test(reason) ? "cut"
+          : /^continuation pending/.test(reason) ? "continuation"
+            : /switch back failed/.test(reason) || row.state === "reverting" ? "revertFailed"
+              : /speed was changed since/.test(reason) ? "changedSince"
+                : /no longer live/.test(reason) ? "notLive"
+                  : /^reconciled/.test(reason) ? "reconciled"
+                    : row.state === "failed" ? "failed" : row.state === "skipped" ? "skipped" : "other";
+  return t(`seatTick.turbo.reason.${key}`);
 }
 
 /** Per-conversation refusals stay in the panel's existing Details section. */
@@ -232,8 +257,9 @@ export function TurboSwitchDetails({ answer }: { answer: TurboAnswer | undefined
     <h3 className="text-caption font-semibold text-muted">{t("seatTick.turbo.switchDetails")}</h3>
     <ul className="max-h-40 min-w-0 overflow-y-auto rounded-control border border-border bg-sunken p-2">
       {rows.map(({ episode, row }) => <li key={`${episode.startedAt}:${row.conversationId}`} className="min-w-0 break-words text-caption leading-4 text-secondary">
-        <p className="font-semibold text-primary">{episode.plan.find(account => account.accountId === row.accountId)?.label ?? row.accountId} · {row.model} · {row.from ?? "default"} → {row.appliedTier ?? row.to}</p>
-        <p>{row.reason}</p>
+        <p className="font-semibold text-primary">{answer?.titles?.[row.conversationId] ?? t("seatTick.turbo.unnamedConversation")}</p>
+        <p>{episode.plan.find(account => account.accountId === row.accountId)?.label ?? row.accountId} · {ENGINE_MODELS.codex.find(option => option.id === row.model)?.label ?? row.model} · {tierName(row.from, t)} → {tierName(row.appliedTier ?? row.to, t)}</p>
+        <p>{switchReason(row, t)}</p>
       </li>)}
     </ul>
   </section>;
@@ -270,6 +296,7 @@ function OpenTurboDialog({ control, phone, locale }: { control: TurboControl; ph
   const [credits, setCredits] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
+  const creditsRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
   const leadId = useId();
   const creditsAboutId = useId();
@@ -277,6 +304,16 @@ function OpenTurboDialog({ control, phone, locale }: { control: TurboControl; ph
   /* The topmost layer owns Escape and Tab, above the seat tick popover or sheet it opened from. */
   useModalLayer({ containerRef: dialogRef, onClose: close, lockScroll: true });
   useEffect(() => { cancelRef.current?.focus(); }, []);
+  /* Ticking the box brings the whole approval (payer rows and the foot) above the pinned buttons, so
+     the operator sees who pays before confirming. */
+  useEffect(() => {
+    if (!credits) return;
+    const block = creditsRef.current;
+    const body = block?.closest<HTMLElement>("[data-turbo-dialog-body]");
+    if (!block || !body) return;
+    const fits = block.offsetHeight <= body.clientHeight;
+    block.scrollIntoView?.({ block: fits ? "nearest" : "start" });
+  }, [credits]);
   const preview = control.preview.value;
   const accounts = preview?.accounts ?? [];
   const payers = accounts.filter(account => account.holdsCredits && !account.unavailable && Object.keys(account.tiers).length > 0);
@@ -324,7 +361,7 @@ function OpenTurboDialog({ control, phone, locale }: { control: TurboControl; ph
   const right = (
     <div className="flex min-w-0 flex-col gap-3">
       {block(t("seatTick.turbo.dialog.creditsHead"), payers.length ? (
-        <div data-turbo-credits={credits ? "on" : "off"} className={`flex min-w-0 flex-col gap-1.5 rounded-control border px-2.5 py-2 ${credits
+        <div ref={creditsRef} data-turbo-credits={credits ? "on" : "off"} className={`flex min-w-0 flex-col gap-1.5 rounded-control border px-2.5 py-2 ${credits
           ? "border-danger bg-[color-mix(in_oklab,var(--color-danger)_10%,var(--color-card))]"
           : "border-warning bg-[color-mix(in_oklab,var(--color-warning)_8%,var(--color-card))]"}`}>
           <label className={`flex cursor-pointer items-center gap-2 ${phone ? "min-h-11" : ""}`}>

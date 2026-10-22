@@ -980,3 +980,14 @@ The build follows sections 2 and 6 with the operator's decisions of
 - **Known limit:** an older release normalizes the settings row without the
   `turbo` field. Rolling back while Turbo is on drops the episode record, and
   the conversations it sped up keep their tier until they are switched again.
+- **Turbo has its own row on every surface.** The prototype put the «Турбо» head
+  and the switch on the autonomy row on desktop; the build puts them on a row
+  under the autonomy text, as on the phone, because the uk head «Повна
+  автономія» no longer fitted one line in the 318 px popover.
+- **A failed switch shows in the status line** (` · not switched: N, see
+  Details`). Details names each conversation by its title (the answer's
+  `titles`), the model by its catalog label, the speeds as Fast, Ultrafast or
+  standard, and the reason as one localized sentence per kind; the raw error
+  text stays in the record and out of the panel.
+- **Ticking paid credits on a small screen** scrolls the dialog body so the
+  whole approval, payer rows and foot, sits above the pinned buttons.

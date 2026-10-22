@@ -34771,7 +34771,7 @@ describe("turbo mode «Форсаж»", () => {
         credits: { approved: paid, accounts: paid ? ["acct-a", "acct-b"] : [], approvedAt: paid ? new Date().toISOString() : null, withdrawnAt: null, withdrawnBy: null, withdrawnWhy: null },
         switches: state === "on" ? [{ conversationId: "conversation_failed", accountId: "acct-a", model: "gpt-6.1-sol", from: "default", to: "ultrafast", state: "failed", reason: "native tier update refused", at: new Date().toISOString() }] : [] };
       const pending = state === "switching" ? 5 : 0;
-      return { active: true, episode, history: [], available: true, unavailableReason: null, progress: { total: 7, switched: 7 - pending - (state === "on" ? 1 : 0), armed: 0, skipped: 0, failed: state === "on" ? 1 : 0, pending, reverted: 0 } };
+      return { active: true, episode, history: [], titles: { conversation_failed: "Review issue #913" }, available: true, unavailableReason: null, progress: { total: 7, switched: 7 - pending - (state === "on" ? 1 : 0), armed: 0, skipped: 0, failed: state === "on" ? 1 : 0, pending, reverted: 0 } };
     };
     const preview = { accounts: [
       { accountId: "acct-a", label: "Account A", plan: "promax", tiers: plan[0]!.tiers, weeklyPercent: 36, weeklyResetsAt: Math.floor(Date.parse("2026-10-27T00:00:00Z") / 1000), balance: "412", holdsCredits: true, otherProjects: 0, unavailable: null },
@@ -34867,13 +34867,22 @@ describe("turbo mode «Форсаж»", () => {
                 const background = channels(backgroundText);
                 const luminance = (rgb: number[]) => rgb.map(value => value / 255).map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4).reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index]!, 0);
                 const [a, b] = [luminance(color), luminance(background)].sort((left, right) => right - left);
-                return { top: box.top, bottom: box.bottom, viewport: innerHeight, confirmVisible: confirm.bottom <= innerHeight && confirm.top >= 0,
+                /* Every payer row and the foot, measured from text ranges, sit whole above the pinned button bar. */
+                const barTop = node.querySelector("[data-turbo-confirm]")!.parentElement!.getBoundingClientRect().top;
+                const bodyTop = node.querySelector("[data-turbo-dialog-body]")!.getBoundingClientRect().top;
+                const lines = [...node.querySelectorAll("[data-turbo-payers] li"), ...(foot ? [foot] : [])].flatMap(item => {
+                  const range = document.createRange(); range.selectNodeContents(item);
+                  return [...range.getClientRects()].map(rect => ({ top: rect.top, bottom: rect.bottom }));
+                });
+                const approvalCut = lines.filter(line => line.bottom > barTop + 0.5 || line.top < bodyTop - 0.5).length;
+                return { approvalCut, approvalLines: lines.length, top: box.top, bottom: box.bottom, viewport: innerHeight, confirmVisible: confirm.bottom <= innerHeight && confirm.top >= 0,
                   checked: (node.querySelector("[data-turbo-credits-toggle]") as HTMLInputElement | null)?.checked ?? null, footContrast: (a + 0.05) / (b + 0.05), colorText, backgroundText };
               });
               expect(fit.top).toBeGreaterThanOrEqual(0);
               expect(fit.bottom).toBeLessThanOrEqual(fit.viewport + 0.5);
               expect(fit.confirmVisible).toBe(true);
               expect(fit.checked).toBe(shot === "dialog-credits");
+              if (shot === "dialog-credits") { expect(fit.approvalLines).toBeGreaterThan(0); expect(fit.approvalCut).toBe(0); }
               if (shot === "dialog-credits") expect(fit.footContrast, `${fit.colorText} on ${fit.backgroundText}`).toBeGreaterThanOrEqual(4.5);
               await freeze(page);
               await page.screenshot({ path: path.join(out, `${label}-${shot}.png`) });
@@ -34885,12 +34894,24 @@ describe("turbo mode «Форсаж»", () => {
               const caption = await page.locator("[data-turbo-about]:visible").first().textContent();
               await page.screenshot({ path: path.join(out, `${label}-${shot}.png`) });
               if (dockWidth) await page.locator(host).screenshot({ path: path.join(out, `${label}-${shot}-host.png`) });
-              readings.push({ surface, scheme, lang, shot, status, caption, pageErrors: [...pageErrors] });
+              /* The autonomy section head keeps one line beside its toggle, in uk too. */
+              const headLines = await page.locator("[data-seat-tick-autonomy-section]:visible").first().evaluate(node => {
+                const range = document.createRange(); range.selectNodeContents(node.querySelector("p")!);
+                return range.getClientRects().length;
+              });
+              expect(headLines).toBe(1);
+              if (shot === "on") expect(status).toContain(lang === "uk" ? "не перемкнено: 1" : "not switched: 1");
+              else if (on) expect(status).not.toMatch(/не перемкнено|not switched/);
+              readings.push({ surface, scheme, lang, shot, status, caption, headLines, pageErrors: [...pageErrors] });
               if (shot === "on") {
                 await page.locator("[data-seat-tick-details]:visible > summary").click();
                 const detail = page.locator("[data-turbo-switch-details]:visible");
                 await detail.scrollIntoViewIfNeeded();
-                expect(await detail.textContent()).toContain("native tier update refused");
+                const detailText = (await detail.textContent()) ?? "";
+                expect(detailText).toContain("Review issue #913");
+                expect(detailText).toContain(lang === "uk" ? "типово → Ultrafast" : "standard → Ultrafast");
+                expect(detailText).toContain(lang === "uk" ? "Перемикання відхилено" : "The switch was refused");
+                expect(detailText).not.toMatch(/native tier update refused|gpt-6\.1-sol|conversation_failed/);
                 await page.screenshot({ path: path.join(out, `${label}-switch-details.png`) });
               }
             }
