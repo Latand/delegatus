@@ -21,11 +21,18 @@ export const CUE_VOLUME_KEY = "llvAudioCueVolume";
 export const LOOP_ENABLED_KEY = "llvAudioLoopEnabled";
 export const VIEWER_LOOP_ENABLED_KEY = "llvAudioViewerLoopEnabled";
 export const LOOP_VOLUME_KEY = "llvAudioLoopVolume";
+export const TYPING_ENABLED_KEY = "llvAudioTypingEnabled";
 
 export interface AudioPrefs {
   cuesEnabled: boolean;
-  /** 0…1, multiplied into the cue tier gain. */
+  /** 0…1, multiplied into every cue's level. */
   cueVolume: number;
+  /**
+   * «Agent typing»: the typing of agents on screen and the murmur of those
+   * off screen (docs/design/sound-redesign.md §9). The one frequent layer, so
+   * the one an operator may want off while keeping results and questions.
+   */
+  typingEnabled: boolean;
   /**
    * Background music DURING A CALL. Keeps its original key, so a device that
    * opted in before the Viewer switch existed stays opted in.
@@ -48,6 +55,7 @@ export const DEFAULT_AUDIO_PREFS: AudioPrefs = {
   cuesEnabled: true,
   /* Loud enough to notice across a room, quiet enough not to be startling. */
   cueVolume: 0.4,
+  typingEnabled: true,
   loopEnabled: false,
   viewerLoopEnabled: false,
   /* A bed, under the ceiling in `ambientLoop`: present, never in the way. */
@@ -113,6 +121,7 @@ export function readAudioPrefs(storage: PrefStorage | null = activeStorage()): A
   return {
     cuesEnabled: readSwitch(storage, CUES_ENABLED_KEY, DEFAULT_AUDIO_PREFS.cuesEnabled),
     cueVolume: readVolume(storage, CUE_VOLUME_KEY, DEFAULT_AUDIO_PREFS.cueVolume),
+    typingEnabled: readSwitch(storage, TYPING_ENABLED_KEY, DEFAULT_AUDIO_PREFS.typingEnabled),
     loopEnabled: readSwitch(storage, LOOP_ENABLED_KEY, DEFAULT_AUDIO_PREFS.loopEnabled),
     viewerLoopEnabled: readSwitch(storage, VIEWER_LOOP_ENABLED_KEY, DEFAULT_AUDIO_PREFS.viewerLoopEnabled),
     loopVolume: readVolume(storage, LOOP_VOLUME_KEY, DEFAULT_AUDIO_PREFS.loopVolume),
@@ -132,6 +141,7 @@ export function setAudioPrefs(patch: Partial<AudioPrefs>): AudioPrefs {
     try {
       if (patch.cuesEnabled !== undefined) storage.setItem(CUES_ENABLED_KEY, next.cuesEnabled ? "on" : "off");
       if (patch.cueVolume !== undefined) storage.setItem(CUE_VOLUME_KEY, String(next.cueVolume));
+      if (patch.typingEnabled !== undefined) storage.setItem(TYPING_ENABLED_KEY, next.typingEnabled ? "on" : "off");
       if (patch.loopEnabled !== undefined) storage.setItem(LOOP_ENABLED_KEY, next.loopEnabled ? "on" : "off");
       if (patch.viewerLoopEnabled !== undefined) {
         storage.setItem(VIEWER_LOOP_ENABLED_KEY, next.viewerLoopEnabled ? "on" : "off");

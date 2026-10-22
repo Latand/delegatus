@@ -337,7 +337,7 @@ export function AttentionHost({ mobile, bus = focusHandoffBus, deviceId: forcedD
        a directed request never passes through `pending`, so this is its one
        chance to be heard. The request id keys the dedupe, so however many polls
        re-deliver it, it rings once. */
-    playCue({ cue: "attention", eventId: `attention:${request.id}` });
+    playCue({ cue: "your-move", eventId: `attention:${request.id}`, obligation: `attention:${request.id}` });
     if (runningHandoffs.has(request.id)) return;
     /* The pre-move viewport is captured EXACTLY ONCE per tab, durably: a
        duplicate mount or a remount gets the original back from the claim, so

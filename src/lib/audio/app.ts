@@ -1,10 +1,12 @@
 "use client";
 
 import { primeAudio, sharedAudioContext } from "@/lib/chime";
+import { documentHidden, phoneClassDevice } from "@/lib/client/hiddenTraffic";
 
 import { createAmbientLoop, type AmbientLoop, type LoopTransport, type Speaker } from "./ambientLoop";
-import { createCuePlayer, type CueOutcome, type CuePlayer } from "./cuePlayer";
-import { cueAssetAll, CUES, type AudioCue, type CueRequest } from "./cues";
+import { createCuePlayer, type CueContext, type CueOutcome, type CuePlayer } from "./cuePlayer";
+import { typingAssetAll, type CueRequest } from "./cues";
+import { createFocusOwner, watchFocusOwner, type FocusOwner } from "./focusOwner";
 import { AMBIENT_LOOP_ASSET, ambientLoopConfigured } from "./loopAsset";
 import { audioPrefs, subscribeAudioPrefs } from "./prefs";
 import { createWebAudioTransports, type AudioContextLike } from "./webAudioTransport";
@@ -66,6 +68,8 @@ function watchPrefs(): void {
      a fresh retry budget rather than the remains of an earlier one. */
   subscribeAudioPrefs(() => {
     retries = 0;
+    /* A mute empties the event lane's queue: nothing waits to sound after it. */
+    if (!audioPrefs().cuesEnabled) player?.clearQueue();
     ensureAmbientLoop();
   });
 }
@@ -92,10 +96,45 @@ export function configureAmbientTransportForTests(transport: LoopTransport | nul
   loop = null;
 }
 
+/** This tab's claim on the device's event sounds (§8 of docs/design/sound-redesign.md). */
+let eventTab: FocusOwner | null = null;
+function focusOwner(): FocusOwner {
+  eventTab ??= createFocusOwner({
+    storage: () => {
+      try {
+        return typeof window === "undefined" ? null : window.localStorage;
+      } catch {
+        return null;
+      }
+    },
+    now: () => Date.now(),
+    tabId: typeof crypto !== "undefined" && typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`,
+  });
+  return eventTab;
+}
+
+/** Claim, refresh and release this tab's key while the page lives. Returns the cleanup. */
+export function watchEventTab(): () => void {
+  if (typeof window === "undefined" || typeof document === "undefined") return () => undefined;
+  return watchFocusOwner(focusOwner(), window, document);
+}
+
+function cueContext(): CueContext {
+  return {
+    hidden: documentHidden(),
+    phone: phoneClassDevice(),
+    voiceCall: voiceOwners.size > 0,
+    ownsEvents: () => focusOwner().owns(),
+  };
+}
+
 export function cuePlayer(): CuePlayer {
   player ??= createCuePlayer({
     transport: transports.cues,
     prefs: audioPrefs,
+    context: cueContext,
+    /* S6 and S7 duck the opt-in music bed. */
+    onPriorityCue: (cue) => ambientLoop().duckForCue(cue),
   });
   watchPrefs();
   return player;
@@ -149,8 +188,11 @@ export function ensureAmbientLoop(): void {
  * lease over, and the settle lands a microtask later.
  */
 export function setVoiceConnected(owner: unknown, connected: boolean): void {
-  if (connected) voiceOwners.add(owner);
-  else {
+  if (connected) {
+    /* The companion is about to speak: queued event sounds would talk over it. */
+    if (voiceOwners.size === 0) player?.clearQueue();
+    voiceOwners.add(owner);
+  } else {
     voiceOwners.delete(owner);
     /* A card that stopped talking (or unmounted) is not talking, whatever it
        said last: leaving its duck behind would hold the music down for the card
@@ -210,7 +252,7 @@ export function unlockAudioOnGesture(): () => void {
   const stopPriming = primeAudio();
   if (typeof window === "undefined") return stopPriming;
   const unlock = () => {
-    transports.warm(Object.keys(CUES).flatMap((cue) => cueAssetAll(cue as AudioCue)));
+    transports.warm(typingAssetAll());
     /* A device that has already opted in gets its bed the moment it is allowed
        one — the gesture is the last thing standing between the two. Music in the
        Viewer is wanted from the first paint, so the retry budget may well have
@@ -237,6 +279,7 @@ export function ambientLoopAvailable(): boolean {
 export function resetAppAudioForTests(): void {
   player?.reset();
   player = null;
+  eventTab = null;
   loop = null;
   loopTransport = null;
   prefsWatched = false;
