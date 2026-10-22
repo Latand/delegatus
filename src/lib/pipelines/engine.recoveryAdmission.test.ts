@@ -176,7 +176,7 @@ test("#3054: an OOM retry asks for the headroom of its own scoped launch, and wa
   h.setConversationActive(false);
   const at = h.ports.now();
   h.ports.conversationOutOfMemory = async () => ({ at, limitBytes: 8 * GIB, limit: "agent", fatal: true, process: null });
-  const launches: unknown[] = [];
+  const launches: Parameters<NonNullable<PipelinePorts["memoryHeadroom"]>>[1][] = [];
   let available = 4 * GIB;
   /* Stands in for the real port: the requirement is the stage's scoped cap. */
   h.ports.memoryHeadroom = (prior, launch) => {
@@ -190,7 +190,7 @@ test("#3054: an OOM retry asks for the headroom of its own scoped launch, and wa
   let pipeline = loadPipelines()[0]!;
   expect(pipeline.stateDetail).toContain("waiting for memory: 4.0 of 8.0 GB free");
   expect(h.spawnInputs).toHaveLength(spawnsBefore);
-  expect(launches.at(-1)).toEqual({ cwd: pipeline.worktreeDir, project: pipeline.project, role: "builder",
+  expect(launches.at(-1) as unknown).toEqual({ cwd: pipeline.worktreeDir, project: pipeline.project, role: "builder",
     profile: { agentMemoryMaxBytes: 8 * GIB, access: "read-write", sandbox: "full" } });
   available = 8 * GIB;
   h.advanceWallClock(5 * 60_000);
@@ -201,7 +201,7 @@ test("#3054: an OOM retry asks for the headroom of its own scoped launch, and wa
   expect(pipeline.runs[0]!.attempts[1]!.state).toBe("running");
   expect(h.spawnInputs).toHaveLength(spawnsBefore + 1);
   /* The retry launched with the same profile its headroom was measured for. */
-  expect(h.spawnInputs.at(-1)!.runtimeProfile).toEqual((launches.at(-1) as { profile: unknown }).profile);
+  expect(h.spawnInputs.at(-1)!.runtimeProfile).toEqual(launches.at(-1)!.profile as typeof h.spawnInputs[number]["runtimeProfile"]);
   expect(h.spawnInputs.at(-1)!.project).toBe(pipeline.project);
 });
 
