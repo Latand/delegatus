@@ -333,7 +333,7 @@ export function ustarEntry(name: string, body: Buffer, mtime = Math.floor(Date.n
   return Buffer.concat([header, body, padding]);
 }
 
-function packOutputs(dir: string): number {
+async function packOutputs(dir: string): Promise<number> {
   const manifest = JSON.parse(fs.readFileSync(path.join(dir, "manifest.json"), "utf8")) as Manifest;
   const tree = path.join(dir, "tree");
   const env: NodeJS.ProcessEnv = manifest.kind === "git" ? { ...process.env }
@@ -358,9 +358,11 @@ function packOutputs(dir: string): number {
     walk(path.join(dir, "out", name), "", files);
     for (const file of files.sort()) names.push([`out/${name}/${file}`, path.join(dir, "out", name, file)]);
   }
-  for (const [name, full] of names) process.stdout.write(ustarEntry(name, fs.readFileSync(full)));
-  process.stdout.write(Buffer.alloc(1024));
   if (deleted.length) process.stderr.write(`deleted ${deleted.join(" ")}\n`);
+  // process.exit drops what the pipe has not taken yet: wait for each write.
+  const write = (bytes: Buffer) => new Promise<void>((resolve, reject) => process.stdout.write(bytes, error => error ? reject(error) : resolve()));
+  for (const [name, full] of names) await write(ustarEntry(name, fs.readFileSync(full)));
+  await write(Buffer.alloc(1024));
   return 0;
 }
 
@@ -376,7 +378,7 @@ if (import.meta.main) {
   try {
     const dir = runDirectory(argument);
     const code = verb === "run" ? await run(dir) : verb === "exec" ? await exec(dir)
-      : verb === "pack-outputs" ? packOutputs(dir) : verb === "remove" ? remove(dir) : (() => { throw new Error(`unknown verb ${verb}`); })();
+      : verb === "pack-outputs" ? await packOutputs(dir) : verb === "remove" ? remove(dir) : (() => { throw new Error(`unknown verb ${verb}`); })();
     process.exit(code);
   } catch (error) {
     process.stderr.write(`gate-runner serve: ${(error as Error).message}\n`);

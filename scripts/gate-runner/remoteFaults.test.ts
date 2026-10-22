@@ -146,6 +146,7 @@ test("writes outputs", () => {
   fs.writeFileSync("evidence/gate-runner-x/a.json", "{\\"a\\":1}");
   fs.mkdirSync(".artifacts/gate-runner-y", { recursive: true });
   fs.writeFileSync(".artifacts/gate-runner-y/b.png", "png");
+  fs.writeFileSync(".artifacts/gate-runner-y/large.bin", Buffer.alloc(2 * 1024 * 1024, 7));
   fs.writeFileSync(process.env.PD_OUT + "/f.txt", "outside");
   fs.appendFileSync(".githooks/pre-push", "\\necho planted\\n");
   fs.appendFileSync("package.json", " ");
@@ -168,7 +169,9 @@ test("writes outputs", () => {
   expect(fs.readFileSync(path.join(h.fixture, ".artifacts/gate-runner-y/b.png"), "utf8")).toBe("png");
   expect(fs.readFileSync(path.join(outDir, "f.txt"), "utf8")).toBe("outside");
   const changed = Object.keys({ ...before, ...after }).filter(key => before[key] !== after[key]).sort();
-  expect(changed).toEqual([".artifacts/gate-runner-y/b.png", "evidence/gate-runner-x/a.json"]);
+  // Larger than a pipe buffer: the archive must arrive whole.
+  expect(fs.readFileSync(path.join(h.fixture, ".artifacts/gate-runner-y/large.bin")).equals(Buffer.alloc(2 * 1024 * 1024, 7))).toBeTrue();
+  expect(changed).toEqual([".artifacts/gate-runner-y/b.png", ".artifacts/gate-runner-y/large.bin", "evidence/gate-runner-x/a.json"]);
   expect(fs.readdirSync(path.join(h.root, "pd-out"))).toEqual(["f.txt"]);
 
   for (const [name, archive] of [
