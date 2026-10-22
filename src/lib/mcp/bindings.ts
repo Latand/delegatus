@@ -1,3 +1,5 @@
+import { readSelf } from "@/lib/links/self";
+import { readFileConfirmationLink } from "@/lib/telegram/bot/fileConfirmationContract";
 import { FLOW_ARCHIVE, FLOW_RETIREMENT, STAGE_RETIREMENT, FlowRetiredError } from "@/lib/flows/retirement";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { curationAnswer } from "@/lib/memory/curation/answer";
@@ -14,7 +16,7 @@ import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { decidePrototype } from "@/lib/prototypeReview/decision";
 import { deliverPrototypeDecision } from "@/lib/prototypeReview/deliveryWorker";
 import { findPrototypeRound } from "@/lib/prototypeReview/store";
-import { autonomyActive, autonomyMandate, autonomyReportKey, pendingAutonomyReports } from "@/lib/monitor/autonomy";
+import { autonomyActive, proactiveActive, autonomyMandate, autonomyReportKey, pendingAutonomyReports } from "@/lib/monitor/autonomy";
 import { changeSeatTickSettings, markAutonomyReported, markAutonomyDecisionReview } from "@/lib/monitor/seatTickSettings";
 import { pipelinePublishesRemoteBranch } from "@/lib/pipelines/publication";
 import { recordSeatProjectSuccessions, seatLaunchCwd } from "@/lib/orchestrator/seatProjectIdentity";
@@ -771,6 +773,7 @@ async function dispatchViewerControl(
       ...(typeof result.expectedRevision === "number" || result.expectedRevision === null ? { expectedRevision: result.expectedRevision } : {}),
       ...(typeof result.retryAfterSeconds === "number" ? { retryAfterSeconds: result.retryAfterSeconds } : {}),
       ...(Array.isArray(result.sentMessageIds) && result.sentMessageIds.every((id) => typeof id === "number") ? { sentMessageIds: result.sentMessageIds } : {}),
+      ...(readFileConfirmationLink(result.confirmation) ? { confirmation: readFileConfirmationLink(result.confirmation) } : {}),
       ...(text(result.secretClass) ? { secretClass: text(result.secretClass) } : {}),
       ...(refusals.length ? { refusals } : {}),
     });
@@ -4878,6 +4881,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
        see what it is restoring before it restores it. */
     ...(verbose ? { defaults: seatTickScheduleDefaults(project) } : {}),
     autonomy: settings.autonomy || settings.autonomyHistory?.length || verbose ? { active: autonomyActive(settings.autonomy, now), until: settings.autonomy?.until ?? null, startedAt: settings.autonomy?.startedAt ?? null,
+      proactive: { enabled: effective.enabled && proactiveActive(effective.autonomy, now) },
       decisionCount: settings.autonomy?.decisions.length ?? 0, pendingReports: pendingAutonomyReports(settings, now).map(autonomyReportKey),
       ...(verbose ? { mandate: autonomyMandate(settings.autonomy, now).join("\n").trim(), episode: effective.autonomy, history: settings.autonomyHistory ?? [] } : {}) } : { active: false },
     release: { ...RELEASE_DEFAULTS, ...settings.release, effectiveAskBeforePublish: (settings.release?.askBeforePublish ?? true) && !autonomyActive(settings.autonomy, now), status: releaseStatus(project) },
@@ -5360,6 +5364,20 @@ async function telegramBotSend(args: McpToolArgs, control: ViewerControlDependen
   return redactPayload(result);
 }
 
+function telegramFileConfirmation(value: unknown) {
+  const link = readFileConfirmationLink(value);
+  if (!link) return null;
+  const published = readSelf()?.publicUrl;
+  let origin = viewerControlOrigin();
+  if (published) {
+    try {
+      const url = new URL(published);
+      if ((url.protocol === "http:" || url.protocol === "https:") && !url.username && !url.password) origin = url.origin;
+    } catch { /* An invalid saved address keeps the local control origin. */ }
+  }
+  return { ...link, url: new URL(link.url, origin).href };
+}
+
 async function telegramBotSendMedia(args: McpToolArgs, control: ViewerControlDependencies): Promise<McpToolPayload> {
   const result = await dispatchControl(control)("/api/telegram/bot/agent", {
     op: "send_media",
@@ -5373,7 +5391,9 @@ async function telegramBotSendMedia(args: McpToolArgs, control: ViewerControlDep
   }, callerCapabilityHeaders()).catch((error: unknown) => {
     if (error instanceof McpDispatchVerdictError && typeof error.details.code === "string") {
       const code = error.details.code;
-      throw new McpToolRefusal(error.message, { code, retryable: RETRYABLE_TELEGRAM_BOT_CODES.has(code as TelegramBotErrorCode),
+      const confirmation = telegramFileConfirmation(error.details.confirmation);
+      throw new McpToolRefusal(confirmation ? error.message.replace(readFileConfirmationLink(error.details.confirmation)!.url, confirmation.url) : error.message, { code, retryable: RETRYABLE_TELEGRAM_BOT_CODES.has(code as TelegramBotErrorCode),
+        ...(confirmation ? { confirmation } : {}),
         ...(Array.isArray(error.details.refusals) ? { refusals: readTelegramBotRefusals(error.details.refusals) } : {}) });
     }
     throw error;
@@ -5396,10 +5416,12 @@ async function telegramBotSendDocument(args: McpToolArgs, control: ViewerControl
   }, callerCapabilityHeaders()).catch((error: unknown) => {
     if (error instanceof McpDispatchVerdictError && typeof error.details.code === "string") {
       const code = error.details.code;
+      const confirmation = telegramFileConfirmation(error.details.confirmation);
       const { retryAfterSeconds, secretClass } = error.details;
-      throw new McpToolRefusal(error.message, {
+      throw new McpToolRefusal(confirmation ? error.message.replace(readFileConfirmationLink(error.details.confirmation)!.url, confirmation.url) : error.message, {
         code,
         retryable: RETRYABLE_TELEGRAM_BOT_CODES.has(code as TelegramBotErrorCode),
+        ...(confirmation ? { confirmation } : {}),
         ...(Array.isArray(error.details.refusals) ? { refusals: readTelegramBotRefusals(error.details.refusals) } : {}),
         ...(typeof retryAfterSeconds === "number" ? { retryAfterSeconds } : {}),
         ...(typeof secretClass === "string" ? { secretClass } : {}),

@@ -1,12 +1,13 @@
 import { askGist } from "./liveGate";
-import type { CallMemory } from "./callMemory";
+import { CALL_MEMORY_BUDGET, sameCallOwner, type CallMemory } from "./callMemory";
+import { callChain, chainRecord, continuationBlock, DROP_REASONS, RESUME_WINDOW_MS, spoke, STALE_BROWSER_MS, type CallSegment } from "./callResume";
 import type { OwnerHistoryRead } from "@/lib/externalRelay/ownerHistory";
 import { createHash, randomUUID } from "node:crypto";
 import { reportHeaderName } from "@/lib/projects/settings";
 import { projectHandle } from "./projectNames";
 import { hardenedRedact } from "@/lib/view/compactText";
 import type { CompanionCommand, CompanionEvent, CompanionPlan, Locale, Payload } from "./contract";
-import { CompanionStorage, type StoredSession } from "./storage";
+import { CompanionStorage, type SessionStarter, type StoredSession } from "./storage";
 import { CompanionAdmission, type OperatorAttempt } from "./admission";
 import { CompanionBoardReads, READ_TOOL_NAMES, VOICE_IMAGES, type SpeechReadResult } from "./boardReads";
 import { LiveTranscript } from "./liveTranscript";
@@ -104,6 +105,9 @@ interface Options {
   limitTailMs?: number;
 }
 export interface MintedCompanionSession { sessionId: string; providerId: string; sdp: string }
+/** A call that dropped and can go on: the browser offers it in one tap. */
+export interface ResumableCall { sessionId: string; project: string; endedAt: number | null }
+type StartInput = { project: string; locale: Locale; sdp: string; requestId?: string; startedBy?: StoredSession["startedBy"]; resume?: string };
 /** `session.commentary.append` takes at most 500 tokens. A token holds at
  * least one byte, so text of at most 500 UTF-8 bytes always fits, whatever
  * the language. */
@@ -160,16 +164,21 @@ export class CompanionLiveSessions {
       : this.provider.backend !== "codex" ? this.provider : api && "create" in api ? api : undefined;
     return chosen ?? this.provider;
   }
-  async start(input: { project: string; locale: Locale; sdp: string; requestId?: string; startedBy?: StoredSession["startedBy"] }): Promise<MintedCompanionSession> {
+  async start(input: StartInput): Promise<MintedCompanionSession> {
     const requestId = input.requestId ?? randomUUID();
-    if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId)) throw new Error("INVALID_REQUEST");
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId) || (input.resume !== undefined && !/^[A-Za-z0-9_-]{1,200}$/.test(input.resume))) throw new Error("INVALID_REQUEST");
+    // A reconnect first ends the part it continues, when this Viewer still holds it open: its journal is then
+    // whole, and its provider session is not left running beside the new one.
+    // Only the starter's own call: another caller's id never cuts a live call off.
+    if (input.resume && this.active.has(input.resume) && !this.minting.has(requestId)
+      && sameCallOwner(input.startedBy, this.storage.read().sessions[input.resume]?.startedBy)) await this.close(input.resume, "transport").catch(() => undefined);
     // No new paid session while one that lost its owner is still open, or
     // while the provider has not confirmed that an earlier one is closed.
     await this.recover();
     const open = this.orphans().filter(row => row.remoteOpen);
     if (open.some(row => row.mintUncertain && !row.providerId)) throw new Error("MINT_UNCERTAIN");
     if (open.length) throw new Error("PROVIDER_ERROR");
-    const digest = createHash("sha256").update(JSON.stringify([input.project, input.locale, input.sdp, input.startedBy ?? null])).digest("hex");
+    const digest = createHash("sha256").update(JSON.stringify([input.project, input.locale, input.sdp, input.startedBy ?? null, ...(input.resume ? [input.resume] : [])])).digest("hex");
     const previous = Object.values(this.storage.read().sessions).find(row => row.mintRequestId === requestId);
     if (previous) {
       if (previous.mintDigest !== digest) throw new Error("INVALID_REQUEST");
@@ -182,17 +191,18 @@ export class CompanionLiveSessions {
     this.minting.set(requestId, promise);
     try { return await promise; } finally { this.minting.delete(requestId); }
   }
-  private async mint(input: { project: string; locale: Locale; sdp: string; startedBy?: StoredSession["startedBy"] }, requestId: string, digest: string): Promise<MintedCompanionSession> {
+  private async mint(input: StartInput, requestId: string, digest: string): Promise<MintedCompanionSession> {
     const settings = this.storage.settings();
     if (!settings.enabled) throw new Error("COMPANION_DISABLED");
     if (!input.project.trim() || input.project.length > 200 || !["en", "uk"].includes(input.locale)
       || !input.sdp.trim() || input.sdp.length > 96_000) throw new Error("INVALID_REQUEST");
+    const resumed = input.resume ? this.continued(input.resume, input.startedBy) : null;
     const directoryProjects = this.reads.projectRows(input.project).map(({ name, handle }) => ({ name, handle }));
     const session = this.admission.create({ project: input.project, locale: input.locale, authority: "live-model", startedBy: input.startedBy });
     const id = session.id;
-    if (this.options.memory) {
+    if (this.options.memory || resumed) {
       const start = this.admission.transcriptRecord(id).entries.find(row => row.kind === "session_start")!;
-      this.admission.record(id, { ...start, data: { ...start.data, memoryVersion: settings.callMemory ? 1 : 0 } });
+      this.admission.record(id, { ...start, data: { ...start.data, ...(this.options.memory ? { memoryVersion: settings.callMemory ? 1 : 0 } : {}), ...(resumed ? { resumes: input.resume } : {}) } });
     }
     try {
       this.storage.change(document => {
@@ -200,7 +210,6 @@ export class CompanionLiveSessions {
         Object.assign(document.sessions[id], { mintRequestId: requestId, mintDigest: digest, owner: { pid: process.pid, instance: this.instance } });
       });
     } catch (error) { this.admission.retire(id); throw error; }
-    const memory = this.options.memory?.block(input.startedBy) ?? "";
     this.options.memory?.retry(input.startedBy);
     const provider = this.providerFor(settings.backend);
     const codex = provider.backend === "codex";
@@ -213,6 +222,10 @@ export class CompanionLiveSessions {
     // Subscription auth never uses the API key. Transcript masking still
     // protects any credential the installation holds, even in short pieces.
     const secrets = [...new Set([key.trim(), ...this.storage.credentials()])].filter(Boolean);
+    // A reconnect starts with the conversation it continues; earlier calls fill what it leaves of the same budget.
+    const continuation = resumed ? continuationBlock(resumed.segments, { droppedAt: resumed.droppedAt, summary: this.options.memory?.readable(input.startedBy, resumed.segments[0]!.id),
+      clean: text => withoutLocalPaths(withoutCredentials(text, secrets)) }) : "";
+    const memory = [continuation, this.options.memory?.block(input.startedBy, resumed ? { exclude: new Set(resumed.segments.map(row => row.id)), budget: CALL_MEMORY_BUDGET - continuation.length - 1 } : {}) ?? ""].filter(Boolean).join("\n");
     const projects = cleanStrings(directoryProjects, text => withoutLocalPaths(withoutCredentials(text, secrets)));
     const directoryRows: typeof projects = [];
     for (const row of projects) { if (Buffer.byteLength(JSON.stringify([...directoryRows, row])) > 1900) break; directoryRows.push(row); }
@@ -266,8 +279,10 @@ export class CompanionLiveSessions {
           if (active.ended) return;
           const settings = this.storage.settings();
           const chargeMonth = this.storage.read().charges[id]?.month;
-          if (!settings.enabled || (!codex && (chargeMonth !== settings.month || settings.monthlyCapUsd < settings.usageUsd + settings.reservedUsd)) || this.now() - active.lastSeen > 30_000)
-            void this.close(id, settings.enabled ? "cap" : "operator");
+          if (!settings.enabled) void this.close(id, "operator");
+          else if (!codex && (chargeMonth !== settings.month || settings.monthlyCapUsd < settings.usageUsd + settings.reservedUsd)) void this.close(id, "cap");
+          // A browser that stopped reading the call lost it: a drop, offered back to the operator.
+          else if (this.now() - active.lastSeen > 30_000) void this.close(id, "transport");
           else { this.renewVoice(active); this.options.memory?.checkpoint(id); }
         } catch { void this.forceHangup(active); } }, 5_000);
         active.timers.push(watchdog);
@@ -321,7 +336,65 @@ export class CompanionLiveSessions {
     const active = this.active.get(id);
     while (active && (active.processing || active.backend.size)) await Promise.all([active.processing, ...active.backend]);
   }
-  transcriptRecord(id: string) { return this.admission.transcriptRecord(id); }
+  /** The whole call: every part a reconnect continued, in order. */
+  transcriptRecord(id: string) {
+    const record = this.admission.transcriptRecord(id);
+    const journal = this.journals(id, record);
+    const chain = callChain(id, part => journal(part)?.entries ?? null);
+    if (chain.length === 1) return record;
+    return chainRecord(chain.map(part => {
+      const read = journal(part)!;
+      return { id: part, entries: read.entries, truncated: read.truncated, createdAt: this.createdAt(part, read.entries) };
+    }));
+  }
+  private journal(id: string) { try { return this.admission.records.read(id); } catch { return null; } }
+  /** Each part's journal read once per answer. */
+  private journals(id?: string, record?: ReturnType<CompanionLiveSessions["journal"]>) {
+    const read = new Map<string, ReturnType<CompanionLiveSessions["journal"]>>(id && record ? [[id, record]] : []);
+    return (part: string) => { if (!read.has(part)) read.set(part, this.journal(part)); return read.get(part)!; };
+  }
+  private createdAt(id: string, entries: readonly { kind: string; data: Record<string, unknown> }[]): number {
+    const at = entries.find(row => row.kind === "session_start")?.data.createdAt;
+    return typeof at === "number" ? at : this.storage.read().sessions[id]?.createdAt ?? 0;
+  }
+  /** The parts a reconnect continues, refused unless the call is this starter's, dropped and recent, and holds speech. */
+  private continued(id: string, starter: SessionStarter | undefined): { segments: CallSegment[]; droppedAt: number | null } {
+    const session = this.storage.read().sessions[id];
+    const read = this.journals();
+    const journal = read(id);
+    const end = journal?.entries.find(row => row.kind === "session_end")?.data;
+    const endedAt = typeof end?.endedAt === "number" ? end.endedAt : session?.endedAt ?? null;
+    if (!session || session.authority !== "live-model" || !session.closed || !sameCallOwner(starter, session.startedBy) || !journal
+      || !DROP_REASONS.has(String(end?.reason)) || endedAt === null || this.now() - endedAt > RESUME_WINDOW_MS) throw new Error("SESSION_UNAVAILABLE");
+    const segments = callChain(id, part => read(part)?.entries ?? null).map(part => {
+      const entries = read(part)!.entries;
+      return { id: part, entries, createdAt: this.createdAt(part, entries) };
+    });
+    if (!segments.some(row => spoke(row.entries))) throw new Error("SESSION_UNAVAILABLE");
+    return { segments, droppedAt: endedAt };
+  }
+  /** The starter's newest call when it dropped within the window and holds speech: closed by a drop, or still open with
+   * no browser reading it (a reload, a lost network, a Viewer that restarted). A healthy open call is never offered. */
+  resumable(starter: SessionStarter | undefined): ResumableCall | null {
+    // Newest first; of calls started in the same millisecond, the one stored last.
+    const latest = Object.values(this.storage.read().sessions).filter(row => row.authority === "live-model" && sameCallOwner(starter, row.startedBy))
+      .reverse().sort((a, b) => b.createdAt - a.createdAt)[0];
+    if (!latest) return null;
+    let endedAt: number | null = null;
+    const read = this.journals();
+    if (latest.closed) {
+      const end = read(latest.id)?.entries.find(row => row.kind === "session_end")?.data;
+      endedAt = typeof end?.endedAt === "number" ? end.endedAt : latest.endedAt ?? null;
+      if (!DROP_REASONS.has(String(end?.reason)) || endedAt === null || this.now() - endedAt > RESUME_WINDOW_MS) return null;
+    } else {
+      const active = this.active.get(latest.id);
+      const owner = latest.owner;
+      if (active ? active.ended || this.now() - active.lastSeen <= STALE_BROWSER_MS
+        : !!owner && owner.instance !== this.instance && owner.pid !== process.pid && processAlive(owner.pid)) return null;
+    }
+    if (!callChain(latest.id, part => read(part)?.entries ?? null).some(part => spoke(read(part)?.entries ?? []))) return null;
+    return { sessionId: latest.id, project: latest.currentProject ?? latest.project, endedAt };
+  }
   private transcript(active: ActiveSession, snapshots: ReturnType<LiveTranscript["finish"]>): void {
     for (const event of snapshots) {
       this.admission.record(active.id, { id: event.itemId, kind: event.speaker === "operator" ? "utterance" : "reply", atMs: event.startMs ?? 0,
