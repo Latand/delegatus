@@ -44,8 +44,8 @@ export class DocumentRefusal extends Error {
 
 export type DocumentEnvironment = { home: string; stateDir: string };
 
-export type LoadedDocument = { file: File; filename: string; caption: string | null; bytes: number; sha256: string };
-export type DocumentWarning = { code: "document_forbidden_path" | "document_outside_roots" | "document_secret"; reason: string; secretClass?: string; line?: number };
+export type LoadedDocument = { real: string; file: File; filename: string; caption: string | null; bytes: number; sha256: string };
+export type DocumentWarning = { code: "document_forbidden_path" | "document_outside_roots" | "document_secret"; reason: string; path?: string; segment?: string; roots?: string[]; secretClass?: string; line?: number };
 
 /** A collector is used only by the bot's confirmation path. Strict callers omit it. */
 function detected(warnings: DocumentWarning[] | undefined, warning: DocumentWarning): void {
@@ -349,22 +349,30 @@ function extensionOf(name: string): string {
   return path.extname(name).toLowerCase();
 }
 
+/** Keep detector locations legible without exposing the host's home prefix. */
+function displayDocumentPath(filename: string, environment: DocumentEnvironment): string {
+  if (!within(filename, environment.home)) return filename;
+  const relative = path.relative(environment.home, filename).split(path.sep).join("/");
+  return relative ? `$HOME/${relative}` : "$HOME";
+}
+function dotDirectoryWarning(filename: string, segment: string, environment: DocumentEnvironment): DocumentWarning {
+  const location = displayDocumentPath(filename, environment);
+  return { code: "document_forbidden_path", path: location, segment, reason: `${location} passes through dot-directory ${segment}.` };
+}
+
 /** Where a checked path may not be: a dot-directory, the state directory, or
     anywhere but strictly under a root. */
 function refusePlace(real: string, requested: string, realRoots: readonly string[], roots: readonly string[], environment: DocumentEnvironment, warnings?: DocumentWarning[]): void {
   const realDot = dotSegment(real);
-  if (realDot !== null) detected(warnings, { code: "document_forbidden_path", reason: "The file is in a dot-directory." });
+  if (realDot !== null) detected(warnings, dotDirectoryWarning(real, realDot, environment));
   if (forbiddenDirectories(environment).some((forbidden) => within(real, forbidden))) {
     throw new DocumentRefusal("document_forbidden_path", `${requested} is inside the Delegatus state directory, which is never sent`);
   }
   if (realRoots.includes(real)) throw new DocumentRefusal("document_outside_roots", "A document root itself cannot be sent.");
   if (!realRoots.some((root) => within(real, root) && real !== root)) {
-    const displayPath = (filename: string) => {
-      if (!within(filename, environment.home)) return filename;
-      const relative = path.relative(environment.home, filename).split(path.sep).join("/");
-      return relative ? `$HOME/${relative}` : "$HOME";
-    };
-    detected(warnings, { code: "document_outside_roots", reason: `${displayPath(requested)} is outside the allowed document roots (${roots.map(displayPath).join(", ")}); write the file under one of them` });
+    const location = displayDocumentPath(real, environment);
+    const allowed = roots.map(root => displayDocumentPath(root, environment));
+    detected(warnings, { code: "document_outside_roots", path: location, roots: allowed, reason: `${location} is outside the allowed document roots (${allowed.join(", ")}); write the file under one of them` });
   }
 }
 
@@ -397,7 +405,7 @@ export function readUnderRoots<Admitted = void>(
 ): { real: string; bytes: Buffer; admitted: Admitted } {
   /* `..` starts with a dot too, so traversal is refused by the same rule. */
   const requestedDot = dotSegment(requested);
-  if (requestedDot !== null) detected(warnings, { code: "document_forbidden_path", reason: "The file is in a dot-directory." });
+  if (requestedDot !== null) detected(warnings, dotDirectoryWarning(requested, requestedDot, environment));
 
   let real: string;
   try {
@@ -474,13 +482,14 @@ export function loadDocument(input: unknown, roots: readonly string[], environme
   if (typeof caption === "string" && caption.length > DOCUMENT_CAPTION_MAX_CHARS) {
     throw new DocumentRefusal("text_too_long", `document caption exceeds ${DOCUMENT_CAPTION_MAX_CHARS} characters`);
   }
-  if (dotSegment(requested) !== null) detected(warnings, { code: "document_forbidden_path", reason: "The file is in a dot-directory." });
+  const requestedDot = dotSegment(requested);
+  if (requestedDot !== null) detected(warnings, dotDirectoryWarning(requested, requestedDot, environment));
   const filename = shown === undefined || shown === null ? path.basename(requested) : shown;
   if (typeof filename !== "string" || filename.trim() === "" || filename.length > 255 || /[\\/\u0000-\u001f\u007f]/.test(filename) || filename.startsWith(".")) {
     throw new DocumentRefusal("document_invalid", "document.filename must be a plain file name without slashes or a leading dot");
   }
 
-  const { bytes, admitted: { extension, kind } } = readUnderRoots(requested, roots, environment, DOCUMENT_MAX_BYTES, (real) => {
+  const { real, bytes, admitted: { extension, kind } } = readUnderRoots(requested, roots, environment, DOCUMENT_MAX_BYTES, (real) => {
     /* The resolved name decides the type, so a link cannot lend another. */
     const extension = extensionOf(real);
     const realKind = typeClass(extension);
@@ -513,6 +522,7 @@ export function loadDocument(input: unknown, roots: readonly string[], environme
 
   const type = MIME[extension as keyof typeof MIME];
   return {
+    real,
     file: new File([Uint8Array.from(bytes)], filename, { type }),
     filename,
     caption: typeof caption === "string" && caption !== "" ? caption : null,

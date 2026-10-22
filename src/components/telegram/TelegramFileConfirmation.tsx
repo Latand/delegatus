@@ -25,13 +25,17 @@ export function TelegramFileConfirmationView({ view, busy, onDecide }: {
       <dl className="space-y-2 break-words">
         <dt className="font-semibold">{words.chat}</dt><dd>{view.chatTitle} · <code>{view.chatId}</code></dd>
         <dt className="font-semibold">{words.topic}</dt><dd>{view.topicId ?? "—"}</dd>
+        <dt className="font-semibold">{words.replyTo}</dt><dd>{view.options.replyToMessageId ?? "—"}</dd>
+        <dt className="font-semibold">{words.format}</dt><dd>{words[view.options.format]}</dd>
+        <dt className="font-semibold">{words.silent}</dt><dd>{view.options.silent ? words.yes : words.no}</dd>
         <dt className="font-semibold">{words.expires}</dt><dd>{view.expiresAt}</dd>
       </dl>
       <section aria-label={words.files} className="space-y-3">
         <h2 className="font-semibold">{words.files}</h2>
         {view.files.map((file, index) => <div key={index} className="space-y-1 rounded-lg border border-border p-3">
           <p className="break-all font-medium">{file.filename}</p>
-          <p className="break-all text-sm">{file.path}</p>
+          <p className="break-all text-sm">{words.requestedPath}: {file.path}</p>
+          {file.resolvedPath && file.resolvedPath !== file.path && <p data-resolved-path className="break-all text-sm">{words.resolvedPath}: {file.resolvedPath}</p>}
           <p className="break-all text-sm"><code>SHA-256: {file.sha256}</code></p>
           <p className="text-sm">{file.bytes} B</p>
           <p className="whitespace-pre-wrap break-words">{words.caption}: {view.options.document?.caption ?? view.options.images?.[index]?.caption ?? "—"}</p>

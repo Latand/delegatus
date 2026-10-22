@@ -45,7 +45,8 @@ The new request and audit record belong to the Telegram bot service and store.
 Only the owner confirmation route consumes a pending request; MCP receives
 its link. Approval invokes the existing send and publication journals. No
 approval field on an agent send grants authority. The confirmation binds
-normalized send options, bot identity, file hashes, chat identity and topic.
+normalized send options, bot identity, requested and resolved file paths, file
+hashes, chat identity and topic.
 
 The concurrent voice-approval lane owns the voice-tools contracts, seal,
 store, HTTP gate, settings, shared operator authority, shared translations and
@@ -57,18 +58,25 @@ existing paired-owner session verifier and browser perimeter.
 
 A file detector refusal retains its code and adds `confirmation` over HTTP
 and `details.confirmation` over MCP: `id`, a Delegatus-relative `url`, and
-`expiresAt`. It authorizes no send. Open that URL in the same installation.
+`expiresAt`. MCP expands the validated route to an absolute URL using the
+installation's saved public address, or its local control origin when none is
+saved, so an agent can relay a clickable link over Telegram. An untrusted
+response cannot choose a different route or origin. It authorizes no send.
 The paired installation owner signs in through the existing Telegram sign-in
-surface, sees the full file hash, path, name, caption, chat, topic and detector
-reasons, then chooses **Approve and send once** or **Do not send**.
+surface, sees the full file hash, requested path, resolved path when different,
+name,
+caption, chat, topic, reply-to message, caption format, silent-delivery choice
+and detector reasons, then chooses **Approve and send once** or **Do not send**.
 The current state appears before the destination and file details. A completed,
 expired or refused request opens with its outcome as the heading. Sending and
 decision results return the view to the top so the owner can read that state.
 
 The pending request owns a copy of normalized send options. Approval cannot
 submit replacement options. The service reloads every file, runs its detectors,
-checks all hashes and binds the canonical operation to its digest. Telegram
-receives the immutable bytes checked by that reload. The existing bot selector
+checks all hashes and resolved locations and binds the canonical operation to
+its digest. A symlink retarget requires a new confirmation even if its new
+target has identical bytes. Telegram receives the immutable bytes checked by
+that reload. The existing bot selector
 rechecks the live owner, chat permission, connected bot and expiry at its
 transport boundary, including after its asynchronous membership checks. A chat
 migration requires another confirmation. Owner sends use a namespace agent
@@ -76,8 +84,9 @@ send keys cannot claim.
 
 Only secret, dot-directory and outside-roots detector refusals can offer this
 confirmation. State-directory, regular-file, hard-link, descriptor, type,
-size, decoding and chat restrictions still refuse. Strict loader consumers
-never pass the warning collector, so relay uploads keep their existing policy.
+size, decoding and chat restrictions still refuse. A hard refusal after a
+collected detector warning keeps the hard failure's code and reason and offers
+no confirmation. Strict loader consumers never pass the warning collector, so relay uploads keep their existing policy.
 An agent cannot supply approval in a tool argument or the agent route. The
 owner route uses `companionOperator` and `authenticatedOwner`, requiring the
 existing live Telegram session that matches the independently paired owner.
@@ -131,7 +140,9 @@ bun scripts/local-gate.ts pre-push
 The existing conversation-window driver contains the rendered case. It covers
 en/uk, light/dark and 1280×900/390×844, including pending, sent, rejected,
 expired, uncertain, failed, unavailable and owner-sign-in states. The pending
-case clicks the production approval control and verifies exactly one mock
+fixture uses a report-named symlink to a hidden credential file;
+both paths and localized detector locations are checked and captured. It
+clicks the production approval control and verifies exactly one mock
 send. Every state's full status must fit inside the initial viewport before
 any scrolling; non-pending views omit the send question and approval intro.
 The pending case also checks that the sent result is visible after the click.

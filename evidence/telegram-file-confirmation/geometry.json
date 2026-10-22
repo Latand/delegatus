@@ -2,19 +2,19 @@
   "sources": [
     {
       "path": "src/components/telegram/TelegramFileConfirmation.tsx",
-      "sha256": "e5082c6834f7a2fef094cb2607a4eb45123b74c38a57c72f42679e9b30ae0cfe"
+      "sha256": "438f3fa2a66f2fe5c75639c48a8c8a7c28ca3791c6b31d95f9bf820a31bd2d4c"
     },
     {
       "path": "src/lib/telegram/bot/fileConfirmationContract.ts",
-      "sha256": "0c235c8eada3e3b1ef5937f551e4f0cd67ce3120deb1005f5fe0025991a47512"
+      "sha256": "b8f77538daa554fb7cdeb8377239b87eea1d435661ec4878e06341a9685163d1"
     },
     {
       "path": "src/components/conversation/conversationWindowEvidence.fixture.tsx",
-      "sha256": "65d395529dbc2b0d9c69127e540df3db4b5758e06090a7802c65fa8c8521a8f0"
+      "sha256": "aa07bbdef20cb387cb3db8145ab6e99d2c590a6c64e1b1a46024c76d4a3fbac3"
     },
     {
       "path": "src/components/conversation/conversationWindow.browser.test.tsx",
-      "sha256": "d665636bb7dc1ff7eb188c6fe00e18eb94c4f160f93189ca28d10a236bc223ae"
+      "sha256": "57fed279ca63f55337ab861f50b3dbfb2a9aff12236df7760779f0ff2ad7b746"
     }
   ],
   "frames": [
@@ -28,7 +28,8 @@
       },
       "initialStatusText": "Awaiting your decision",
       "overflow": 0,
-      "text": "Sent. This confirmation has been used.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).",
+      "clippedText": [],
+      "text": "Sent. This confirmation has been used.Destination chatFixture reports · -1000000000101Topic7Reply to message42Caption formatHTMLSilent deliveryYesExpires2026-10-22T12:10:00.000ZFilesweekly-report.jsonRequested path: /sandbox/handoff/weekly-report.jsonResolved file: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: /sandbox/.codex/auth.json passes through dot-directory .codex.document_outside_roots: /sandbox/.codex/auth.json is outside the allowed document roots (/sandbox/handoff).document_secret: The file contains what looks like a secret (private_key, line 1).",
       "background": "rgb(244, 241, 236)"
     },
     {
@@ -41,7 +42,8 @@
       },
       "initialStatusText": "Sent. This confirmation has been used.",
       "overflow": 0,
-      "text": "Sent. This confirmation has been used.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).",
+      "clippedText": [],
+      "text": "Sent. This confirmation has been used.Destination chatFixture reports · -1000000000101Topic7Reply to message42Caption formatHTMLSilent deliveryYesExpires2026-10-22T12:10:00.000ZFilesweekly-report.jsonRequested path: /sandbox/handoff/weekly-report.jsonResolved file: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: /sandbox/.codex/auth.json passes through dot-directory .codex.document_outside_roots: /sandbox/.codex/auth.json is outside the allowed document roots (/sandbox/handoff).document_secret: The file contains what looks like a secret (private_key, line 1).",
       "background": "rgb(244, 241, 236)"
     },
     {
@@ -54,7 +56,8 @@
       },
       "initialStatusText": "Send declined.",
       "overflow": 0,
-      "text": "Send declined.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).",
+      "clippedText": [],
+      "text": "Send declined.Destination chatFixture reports · -1000000000101Topic7Reply to message42Caption formatHTMLSilent deliveryYesExpires2026-10-22T12:10:00.000ZFilesweekly-report.jsonRequested path: /sandbox/handoff/weekly-report.jsonResolved file: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: /sandbox/.codex/auth.json passes through dot-directory .codex.document_outside_roots: /sandbox/.codex/auth.json is outside the allowed document roots (/sandbox/handoff).document_secret: The file contains what looks like a secret (private_key, line 1).",
       "background": "rgb(244, 241, 236)"
     },
     {
@@ -67,7 +70,8 @@
       },
       "initialStatusText": "This confirmation has expired. Ask for a new send request.",
       "overflow": 0,
-      "text": "This confirmation has expired. Ask for a new send request.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).",
+      "clippedText": [],
+      "text": "This confirmation has expired. Ask for a new send request.Destination chatFixture reports · -1000000000101Topic7Reply to message42Caption formatHTMLSilent deliveryYesExpires2026-10-22T12:10:00.000ZFilesweekly-report.jsonRequested path: /sandbox/handoff/weekly-report.jsonResolved file: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: /sandbox/.codex/auth.json passes through dot-directory .codex.document_outside_roots: /sandbox/.codex/auth.json is outside the allowed document roots (/sandbox/handoff).document_secret: The file contains what looks like a secret (private_key, line 1).",
       "background": "rgb(244, 241, 236)"
     },
     {
@@ -80,7 +84,8 @@
       },
       "initialStatusText": "Telegram did not confirm delivery. Check the destination before requesting another send.",
       "overflow": 0,
-      "text": "Telegram did not confirm delivery. Check the destination before requesting another send.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).",
+      "clippedText": [],
+      "text": "Telegram did not confirm delivery. Check the destination before requesting another send.Destination chatFixture reports · -1000000000101Topic7Reply to message42Caption formatHTMLSilent deliveryYesExpires2026-10-22T12:10:00.000ZFilesweekly-report.jsonRequested path: /sandbox/handoff/weekly-report.jsonResolved file: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: /sandbox/.codex/auth.json passes through dot-directory .codex.document_outside_roots: /sandbox/.codex/auth.json is outside the allowed document roots (/sandbox/handoff).document_secret: The file contains what looks like a secret (private_key, line 1).",
       "background": "rgb(244, 241, 236)"
     },
     {
@@ -93,7 +98,8 @@
       },
       "initialStatusText": "The send was refused. Review the result before requesting another send.",
       "overflow": 0,
-      "text": "The send was refused. Review the result before requesting another send.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).",
+      "clippedText": [],
+      "text": "The send was refused. Review the result before requesting another send.Destination chatFixture reports · -1000000000101Topic7Reply to message42Caption formatHTMLSilent deliveryYesExpires2026-10-22T12:10:00.000ZFilesweekly-report.jsonRequested path: /sandbox/handoff/weekly-report.jsonResolved file: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: /sandbox/.codex/auth.json passes through dot-directory .codex.document_outside_roots: /sandbox/.codex/auth.json is outside the allowed document roots (/sandbox/handoff).document_secret: The file contains what looks like a secret (private_key, line 1).",
       "background": "rgb(244, 241, 236)"
     },
     {
@@ -106,7 +112,8 @@
       },
       "initialStatusText": "This confirmation is unavailable. Ask for a new send request.",
       "overflow": 0,
-      "text": "This confirmation is unavailable. Ask for a new send request.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).",
+      "clippedText": [],
+      "text": "This confirmation is unavailable. Ask for a new send request.Destination chatFixture reports · -1000000000101Topic7Reply to message42Caption formatHTMLSilent deliveryYesExpires2026-10-22T12:10:00.000ZFilesweekly-report.jsonRequested path: /sandbox/handoff/weekly-report.jsonResolved file: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: /sandbox/.codex/auth.json passes through dot-directory .codex.document_outside_roots: /sandbox/.codex/auth.json is outside the allowed document roots (/sandbox/handoff).document_secret: The file contains what looks like a secret (private_key, line 1).",
       "background": "rgb(244, 241, 236)"
     },
     {
@@ -119,6 +126,7 @@
       },
       "initialStatusText": "Sign in with Telegram as the paired installation owner to review this send.",
       "overflow": 0,
+      "clippedText": [],
       "text": "Sign in with Telegram as the paired installation owner to review this send.Sign in",
       "background": "rgb(244, 241, 236)"
     },
@@ -132,7 +140,8 @@
       },
       "initialStatusText": "Awaiting your decision",
       "overflow": 0,
-      "text": "Sent. This confirmation has been used.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).",
+      "clippedText": [],
+      "text": "Sent. This confirmation has been used.Destination chatFixture reports · -1000000000101Topic7Reply to message42Caption formatHTMLSilent deliveryYesExpires2026-10-22T12:10:00.000ZFilesweekly-report.jsonRequested path: /sandbox/handoff/weekly-report.jsonResolved file: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: /sandbox/.codex/auth.json passes through dot-directory .codex.document_outside_roots: /sandbox/.codex/auth.json is outside the allowed document roots (/sandbox/handoff).document_secret: The file contains what looks like a secret (private_key, line 1).",
       "background": "rgb(17, 18, 24)"
     },
     {
@@ -145,7 +154,8 @@
       },
       "initialStatusText": "Sent. This confirmation has been used.",
       "overflow": 0,
-      "text": "Sent. This confirmation has been used.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).",
+      "clippedText": [],
+      "text": "Sent. This confirmation has been used.Destination chatFixture reports · -1000000000101Topic7Reply to message42Caption formatHTMLSilent deliveryYesExpires2026-10-22T12:10:00.000ZFilesweekly-report.jsonRequested path: /sandbox/handoff/weekly-report.jsonResolved file: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: /sandbox/.codex/auth.json passes through dot-directory .codex.document_outside_roots: /sandbox/.codex/auth.json is outside the allowed document roots (/sandbox/handoff).document_secret: The file contains what looks like a secret (private_key, line 1).",
       "background": "rgb(17, 18, 24)"
     },
     {
@@ -158,7 +168,8 @@
       },
       "initialStatusText": "Send declined.",
       "overflow": 0,
-      "text": "Send declined.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).",
+      "clippedText": [],
+      "text": "Send declined.Destination chatFixture reports · -1000000000101Topic7Reply to message42Caption formatHTMLSilent deliveryYesExpires2026-10-22T12:10:00.000ZFilesweekly-report.jsonRequested path: /sandbox/handoff/weekly-report.jsonResolved file: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: /sandbox/.codex/auth.json passes through dot-directory .codex.document_outside_roots: /sandbox/.codex/auth.json is outside the allowed document roots (/sandbox/handoff).document_secret: The file contains what looks like a secret (private_key, line 1).",
       "background": "rgb(17, 18, 24)"
     },
     {
@@ -171,7 +182,8 @@
       },
       "initialStatusText": "This confirmation has expired. Ask for a new send request.",
       "overflow": 0,
-      "text": "This confirmation has expired. Ask for a new send request.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).",
+      "clippedText": [],
+      "text": "This confirmation has expired. Ask for a new send request.Destination chatFixture reports · -1000000000101Topic7Reply to message42Caption formatHTMLSilent deliveryYesExpires2026-10-22T12:10:00.000ZFilesweekly-report.jsonRequested path: /sandbox/handoff/weekly-report.jsonResolved file: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: /sandbox/.codex/auth.json passes through dot-directory .codex.document_outside_roots: /sandbox/.codex/auth.json is outside the allowed document roots (/sandbox/handoff).document_secret: The file contains what looks like a secret (private_key, line 1).",
       "background": "rgb(17, 18, 24)"
     },
     {
@@ -184,7 +196,8 @@
       },
       "initialStatusText": "Telegram did not confirm delivery. Check the destination before requesting another send.",
       "overflow": 0,
-      "text": "Telegram did not confirm delivery. Check the destination before requesting another send.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).",
+      "clippedText": [],
+      "text": "Telegram did not confirm delivery. Check the destination before requesting another send.Destination chatFixture reports · -1000000000101Topic7Reply to message42Caption formatHTMLSilent deliveryYesExpires2026-10-22T12:10:00.000ZFilesweekly-report.jsonRequested path: /sandbox/handoff/weekly-report.jsonResolved file: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: /sandbox/.codex/auth.json passes through dot-directory .codex.document_outside_roots: /sandbox/.codex/auth.json is outside the allowed document roots (/sandbox/handoff).document_secret: The file contains what looks like a secret (private_key, line 1).",
       "background": "rgb(17, 18, 24)"
     },
     {
@@ -197,7 +210,8 @@
       },
       "initialStatusText": "The send was refused. Review the result before requesting another send.",
       "overflow": 0,
-      "text": "The send was refused. Review the result before requesting another send.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).",
+      "clippedText": [],
+      "text": "The send was refused. Review the result before requesting another send.Destination chatFixture reports · -1000000000101Topic7Reply to message42Caption formatHTMLSilent deliveryYesExpires2026-10-22T12:10:00.000ZFilesweekly-report.jsonRequested path: /sandbox/handoff/weekly-report.jsonResolved file: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: /sandbox/.codex/auth.json passes through dot-directory .codex.document_outside_roots: /sandbox/.codex/auth.json is outside the allowed document roots (/sandbox/handoff).document_secret: The file contains what looks like a secret (private_key, line 1).",
       "background": "rgb(17, 18, 24)"
     },
     {
@@ -210,7 +224,8 @@
       },
       "initialStatusText": "This confirmation is unavailable. Ask for a new send request.",
       "overflow": 0,
-      "text": "This confirmation is unavailable. Ask for a new send request.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).",
+      "clippedText": [],
+      "text": "This confirmation is unavailable. Ask for a new send request.Destination chatFixture reports · -1000000000101Topic7Reply to message42Caption formatHTMLSilent deliveryYesExpires2026-10-22T12:10:00.000ZFilesweekly-report.jsonRequested path: /sandbox/handoff/weekly-report.jsonResolved file: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: /sandbox/.codex/auth.json passes through dot-directory .codex.document_outside_roots: /sandbox/.codex/auth.json is outside the allowed document roots (/sandbox/handoff).document_secret: The file contains what looks like a secret (private_key, line 1).",
       "background": "rgb(17, 18, 24)"
     },
     {
@@ -223,6 +238,7 @@
       },
       "initialStatusText": "Sign in with Telegram as the paired installation owner to review this send.",
       "overflow": 0,
+      "clippedText": [],
       "text": "Sign in with Telegram as the paired installation owner to review this send.Sign in",
       "background": "rgb(17, 18, 24)"
     },
@@ -236,7 +252,8 @@
       },
       "initialStatusText": "Очікує на ваше рішення",
       "overflow": 0,
-      "text": "Надіслано. Це підтвердження вже використано.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
+      "clippedText": [],
+      "text": "Надіслано. Це підтвердження вже використано.Чат доставкиFixture reports · -1000000000101Тема7Відповідь на повідомлення42Формат підписуHTMLБез сповіщенняТакДіє до2026-10-22T12:10:00.000ZФайлиweekly-report.jsonЗапитаний шлях: /sandbox/handoff/weekly-report.jsonФактичний файл: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: /sandbox/.codex/auth.json проходить через прихований каталог .codex.document_outside_roots: /sandbox/.codex/auth.json розташований поза дозволеними каталогами документів (/sandbox/handoff).document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
       "background": "rgb(244, 241, 236)"
     },
     {
@@ -249,7 +266,8 @@
       },
       "initialStatusText": "Надіслано. Це підтвердження вже використано.",
       "overflow": 0,
-      "text": "Надіслано. Це підтвердження вже використано.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
+      "clippedText": [],
+      "text": "Надіслано. Це підтвердження вже використано.Чат доставкиFixture reports · -1000000000101Тема7Відповідь на повідомлення42Формат підписуHTMLБез сповіщенняТакДіє до2026-10-22T12:10:00.000ZФайлиweekly-report.jsonЗапитаний шлях: /sandbox/handoff/weekly-report.jsonФактичний файл: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: /sandbox/.codex/auth.json проходить через прихований каталог .codex.document_outside_roots: /sandbox/.codex/auth.json розташований поза дозволеними каталогами документів (/sandbox/handoff).document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
       "background": "rgb(244, 241, 236)"
     },
     {
@@ -262,7 +280,8 @@
       },
       "initialStatusText": "Надсилання скасовано.",
       "overflow": 0,
-      "text": "Надсилання скасовано.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
+      "clippedText": [],
+      "text": "Надсилання скасовано.Чат доставкиFixture reports · -1000000000101Тема7Відповідь на повідомлення42Формат підписуHTMLБез сповіщенняТакДіє до2026-10-22T12:10:00.000ZФайлиweekly-report.jsonЗапитаний шлях: /sandbox/handoff/weekly-report.jsonФактичний файл: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: /sandbox/.codex/auth.json проходить через прихований каталог .codex.document_outside_roots: /sandbox/.codex/auth.json розташований поза дозволеними каталогами документів (/sandbox/handoff).document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
       "background": "rgb(244, 241, 236)"
     },
     {
@@ -275,7 +294,8 @@
       },
       "initialStatusText": "Термін дії підтвердження минув. Попросіть новий запит.",
       "overflow": 0,
-      "text": "Термін дії підтвердження минув. Попросіть новий запит.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
+      "clippedText": [],
+      "text": "Термін дії підтвердження минув. Попросіть новий запит.Чат доставкиFixture reports · -1000000000101Тема7Відповідь на повідомлення42Формат підписуHTMLБез сповіщенняТакДіє до2026-10-22T12:10:00.000ZФайлиweekly-report.jsonЗапитаний шлях: /sandbox/handoff/weekly-report.jsonФактичний файл: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: /sandbox/.codex/auth.json проходить через прихований каталог .codex.document_outside_roots: /sandbox/.codex/auth.json розташований поза дозволеними каталогами документів (/sandbox/handoff).document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
       "background": "rgb(244, 241, 236)"
     },
     {
@@ -288,7 +308,8 @@
       },
       "initialStatusText": "Telegram не підтвердив доставку. Перевірте чат перед новим запитом на надсилання.",
       "overflow": 0,
-      "text": "Telegram не підтвердив доставку. Перевірте чат перед новим запитом на надсилання.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
+      "clippedText": [],
+      "text": "Telegram не підтвердив доставку. Перевірте чат перед новим запитом на надсилання.Чат доставкиFixture reports · -1000000000101Тема7Відповідь на повідомлення42Формат підписуHTMLБез сповіщенняТакДіє до2026-10-22T12:10:00.000ZФайлиweekly-report.jsonЗапитаний шлях: /sandbox/handoff/weekly-report.jsonФактичний файл: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: /sandbox/.codex/auth.json проходить через прихований каталог .codex.document_outside_roots: /sandbox/.codex/auth.json розташований поза дозволеними каталогами документів (/sandbox/handoff).document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
       "background": "rgb(244, 241, 236)"
     },
     {
@@ -301,7 +322,8 @@
       },
       "initialStatusText": "Надсилання відхилено. Перевірте результат перед новим запитом.",
       "overflow": 0,
-      "text": "Надсилання відхилено. Перевірте результат перед новим запитом.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
+      "clippedText": [],
+      "text": "Надсилання відхилено. Перевірте результат перед новим запитом.Чат доставкиFixture reports · -1000000000101Тема7Відповідь на повідомлення42Формат підписуHTMLБез сповіщенняТакДіє до2026-10-22T12:10:00.000ZФайлиweekly-report.jsonЗапитаний шлях: /sandbox/handoff/weekly-report.jsonФактичний файл: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: /sandbox/.codex/auth.json проходить через прихований каталог .codex.document_outside_roots: /sandbox/.codex/auth.json розташований поза дозволеними каталогами документів (/sandbox/handoff).document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
       "background": "rgb(244, 241, 236)"
     },
     {
@@ -314,7 +336,8 @@
       },
       "initialStatusText": "Це підтвердження недоступне. Попросіть новий запит на надсилання.",
       "overflow": 0,
-      "text": "Це підтвердження недоступне. Попросіть новий запит на надсилання.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
+      "clippedText": [],
+      "text": "Це підтвердження недоступне. Попросіть новий запит на надсилання.Чат доставкиFixture reports · -1000000000101Тема7Відповідь на повідомлення42Формат підписуHTMLБез сповіщенняТакДіє до2026-10-22T12:10:00.000ZФайлиweekly-report.jsonЗапитаний шлях: /sandbox/handoff/weekly-report.jsonФактичний файл: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: /sandbox/.codex/auth.json проходить через прихований каталог .codex.document_outside_roots: /sandbox/.codex/auth.json розташований поза дозволеними каталогами документів (/sandbox/handoff).document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
       "background": "rgb(244, 241, 236)"
     },
     {
@@ -327,6 +350,7 @@
       },
       "initialStatusText": "Для перевірки увійдіть через Telegram як власник, прив’язаний до цієї інсталяції.",
       "overflow": 0,
+      "clippedText": [],
       "text": "Для перевірки увійдіть через Telegram як власник, прив’язаний до цієї інсталяції.Увійти",
       "background": "rgb(244, 241, 236)"
     },
@@ -340,7 +364,8 @@
       },
       "initialStatusText": "Очікує на ваше рішення",
       "overflow": 0,
-      "text": "Надіслано. Це підтвердження вже використано.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
+      "clippedText": [],
+      "text": "Надіслано. Це підтвердження вже використано.Чат доставкиFixture reports · -1000000000101Тема7Відповідь на повідомлення42Формат підписуHTMLБез сповіщенняТакДіє до2026-10-22T12:10:00.000ZФайлиweekly-report.jsonЗапитаний шлях: /sandbox/handoff/weekly-report.jsonФактичний файл: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: /sandbox/.codex/auth.json проходить через прихований каталог .codex.document_outside_roots: /sandbox/.codex/auth.json розташований поза дозволеними каталогами документів (/sandbox/handoff).document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
       "background": "rgb(17, 18, 24)"
     },
     {
@@ -353,7 +378,8 @@
       },
       "initialStatusText": "Надіслано. Це підтвердження вже використано.",
       "overflow": 0,
-      "text": "Надіслано. Це підтвердження вже використано.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
+      "clippedText": [],
+      "text": "Надіслано. Це підтвердження вже використано.Чат доставкиFixture reports · -1000000000101Тема7Відповідь на повідомлення42Формат підписуHTMLБез сповіщенняТакДіє до2026-10-22T12:10:00.000ZФайлиweekly-report.jsonЗапитаний шлях: /sandbox/handoff/weekly-report.jsonФактичний файл: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: /sandbox/.codex/auth.json проходить через прихований каталог .codex.document_outside_roots: /sandbox/.codex/auth.json розташований поза дозволеними каталогами документів (/sandbox/handoff).document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
       "background": "rgb(17, 18, 24)"
     },
     {
@@ -366,7 +392,8 @@
       },
       "initialStatusText": "Надсилання скасовано.",
       "overflow": 0,
-      "text": "Надсилання скасовано.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
+      "clippedText": [],
+      "text": "Надсилання скасовано.Чат доставкиFixture reports · -1000000000101Тема7Відповідь на повідомлення42Формат підписуHTMLБез сповіщенняТакДіє до2026-10-22T12:10:00.000ZФайлиweekly-report.jsonЗапитаний шлях: /sandbox/handoff/weekly-report.jsonФактичний файл: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: /sandbox/.codex/auth.json проходить через прихований каталог .codex.document_outside_roots: /sandbox/.codex/auth.json розташований поза дозволеними каталогами документів (/sandbox/handoff).document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
       "background": "rgb(17, 18, 24)"
     },
     {
@@ -379,7 +406,8 @@
       },
       "initialStatusText": "Термін дії підтвердження минув. Попросіть новий запит.",
       "overflow": 0,
-      "text": "Термін дії підтвердження минув. Попросіть новий запит.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
+      "clippedText": [],
+      "text": "Термін дії підтвердження минув. Попросіть новий запит.Чат доставкиFixture reports · -1000000000101Тема7Відповідь на повідомлення42Формат підписуHTMLБез сповіщенняТакДіє до2026-10-22T12:10:00.000ZФайлиweekly-report.jsonЗапитаний шлях: /sandbox/handoff/weekly-report.jsonФактичний файл: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: /sandbox/.codex/auth.json проходить через прихований каталог .codex.document_outside_roots: /sandbox/.codex/auth.json розташований поза дозволеними каталогами документів (/sandbox/handoff).document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
       "background": "rgb(17, 18, 24)"
     },
     {
@@ -392,7 +420,8 @@
       },
       "initialStatusText": "Telegram не підтвердив доставку. Перевірте чат перед новим запитом на надсилання.",
       "overflow": 0,
-      "text": "Telegram не підтвердив доставку. Перевірте чат перед новим запитом на надсилання.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
+      "clippedText": [],
+      "text": "Telegram не підтвердив доставку. Перевірте чат перед новим запитом на надсилання.Чат доставкиFixture reports · -1000000000101Тема7Відповідь на повідомлення42Формат підписуHTMLБез сповіщенняТакДіє до2026-10-22T12:10:00.000ZФайлиweekly-report.jsonЗапитаний шлях: /sandbox/handoff/weekly-report.jsonФактичний файл: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: /sandbox/.codex/auth.json проходить через прихований каталог .codex.document_outside_roots: /sandbox/.codex/auth.json розташований поза дозволеними каталогами документів (/sandbox/handoff).document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
       "background": "rgb(17, 18, 24)"
     },
     {
@@ -405,7 +434,8 @@
       },
       "initialStatusText": "Надсилання відхилено. Перевірте результат перед новим запитом.",
       "overflow": 0,
-      "text": "Надсилання відхилено. Перевірте результат перед новим запитом.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
+      "clippedText": [],
+      "text": "Надсилання відхилено. Перевірте результат перед новим запитом.Чат доставкиFixture reports · -1000000000101Тема7Відповідь на повідомлення42Формат підписуHTMLБез сповіщенняТакДіє до2026-10-22T12:10:00.000ZФайлиweekly-report.jsonЗапитаний шлях: /sandbox/handoff/weekly-report.jsonФактичний файл: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: /sandbox/.codex/auth.json проходить через прихований каталог .codex.document_outside_roots: /sandbox/.codex/auth.json розташований поза дозволеними каталогами документів (/sandbox/handoff).document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
       "background": "rgb(17, 18, 24)"
     },
     {
@@ -418,7 +448,8 @@
       },
       "initialStatusText": "Це підтвердження недоступне. Попросіть новий запит на надсилання.",
       "overflow": 0,
-      "text": "Це підтвердження недоступне. Попросіть новий запит на надсилання.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
+      "clippedText": [],
+      "text": "Це підтвердження недоступне. Попросіть новий запит на надсилання.Чат доставкиFixture reports · -1000000000101Тема7Відповідь на повідомлення42Формат підписуHTMLБез сповіщенняТакДіє до2026-10-22T12:10:00.000ZФайлиweekly-report.jsonЗапитаний шлях: /sandbox/handoff/weekly-report.jsonФактичний файл: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: /sandbox/.codex/auth.json проходить через прихований каталог .codex.document_outside_roots: /sandbox/.codex/auth.json розташований поза дозволеними каталогами документів (/sandbox/handoff).document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
       "background": "rgb(17, 18, 24)"
     },
     {
@@ -431,6 +462,7 @@
       },
       "initialStatusText": "Для перевірки увійдіть через Telegram як власник, прив’язаний до цієї інсталяції.",
       "overflow": 0,
+      "clippedText": [],
       "text": "Для перевірки увійдіть через Telegram як власник, прив’язаний до цієї інсталяції.Увійти",
       "background": "rgb(17, 18, 24)"
     },
@@ -444,85 +476,92 @@
       },
       "initialStatusText": "Awaiting your decision",
       "overflow": 0,
-      "text": "Sent. This confirmation has been used.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).",
+      "clippedText": [],
+      "text": "Sent. This confirmation has been used.Destination chatFixture reports · -1000000000101Topic7Reply to message42Caption formatHTMLSilent deliveryYesExpires2026-10-22T12:10:00.000ZFilesweekly-report.jsonRequested path: /sandbox/handoff/weekly-report.jsonResolved file: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: /sandbox/.codex/auth.json passes through dot-directory .codex.document_outside_roots: /sandbox/.codex/auth.json is outside the allowed document roots (/sandbox/handoff).document_secret: The file contains what looks like a secret (private_key, line 1).",
       "background": "rgb(244, 241, 236)"
     },
     {
       "frame": "1280-en-light-sent",
       "initialStatus": {
-        "x": 337,
+        "x": 329.5,
         "y": 68,
         "width": 372.296875,
         "height": 22
       },
       "initialStatusText": "Sent. This confirmation has been used.",
       "overflow": 0,
-      "text": "Sent. This confirmation has been used.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).",
+      "clippedText": [],
+      "text": "Sent. This confirmation has been used.Destination chatFixture reports · -1000000000101Topic7Reply to message42Caption formatHTMLSilent deliveryYesExpires2026-10-22T12:10:00.000ZFilesweekly-report.jsonRequested path: /sandbox/handoff/weekly-report.jsonResolved file: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: /sandbox/.codex/auth.json passes through dot-directory .codex.document_outside_roots: /sandbox/.codex/auth.json is outside the allowed document roots (/sandbox/handoff).document_secret: The file contains what looks like a secret (private_key, line 1).",
       "background": "rgb(244, 241, 236)"
     },
     {
       "frame": "1280-en-light-rejected",
       "initialStatus": {
-        "x": 337,
+        "x": 329.5,
         "y": 68,
         "width": 141.15625,
         "height": 22
       },
       "initialStatusText": "Send declined.",
       "overflow": 0,
-      "text": "Send declined.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).",
+      "clippedText": [],
+      "text": "Send declined.Destination chatFixture reports · -1000000000101Topic7Reply to message42Caption formatHTMLSilent deliveryYesExpires2026-10-22T12:10:00.000ZFilesweekly-report.jsonRequested path: /sandbox/handoff/weekly-report.jsonResolved file: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: /sandbox/.codex/auth.json passes through dot-directory .codex.document_outside_roots: /sandbox/.codex/auth.json is outside the allowed document roots (/sandbox/handoff).document_secret: The file contains what looks like a secret (private_key, line 1).",
       "background": "rgb(244, 241, 236)"
     },
     {
       "frame": "1280-en-light-expired",
       "initialStatus": {
-        "x": 337,
+        "x": 329.5,
         "y": 68,
         "width": 560.515625,
         "height": 22
       },
       "initialStatusText": "This confirmation has expired. Ask for a new send request.",
       "overflow": 0,
-      "text": "This confirmation has expired. Ask for a new send request.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).",
+      "clippedText": [],
+      "text": "This confirmation has expired. Ask for a new send request.Destination chatFixture reports · -1000000000101Topic7Reply to message42Caption formatHTMLSilent deliveryYesExpires2026-10-22T12:10:00.000ZFilesweekly-report.jsonRequested path: /sandbox/handoff/weekly-report.jsonResolved file: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: /sandbox/.codex/auth.json passes through dot-directory .codex.document_outside_roots: /sandbox/.codex/auth.json is outside the allowed document roots (/sandbox/handoff).document_secret: The file contains what looks like a secret (private_key, line 1).",
       "background": "rgb(244, 241, 236)"
     },
     {
       "frame": "1280-en-light-uncertain",
       "initialStatus": {
-        "x": 337,
+        "x": 329.5,
         "y": 68,
         "width": 603.828125,
         "height": 50
       },
       "initialStatusText": "Telegram did not confirm delivery. Check the destination before requesting another send.",
       "overflow": 0,
-      "text": "Telegram did not confirm delivery. Check the destination before requesting another send.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).",
+      "clippedText": [],
+      "text": "Telegram did not confirm delivery. Check the destination before requesting another send.Destination chatFixture reports · -1000000000101Topic7Reply to message42Caption formatHTMLSilent deliveryYesExpires2026-10-22T12:10:00.000ZFilesweekly-report.jsonRequested path: /sandbox/handoff/weekly-report.jsonResolved file: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: /sandbox/.codex/auth.json passes through dot-directory .codex.document_outside_roots: /sandbox/.codex/auth.json is outside the allowed document roots (/sandbox/handoff).document_secret: The file contains what looks like a secret (private_key, line 1).",
       "background": "rgb(244, 241, 236)"
     },
     {
       "frame": "1280-en-light-failed",
       "initialStatus": {
-        "x": 337,
+        "x": 329.5,
         "y": 68,
         "width": 559.046875,
         "height": 50
       },
       "initialStatusText": "The send was refused. Review the result before requesting another send.",
       "overflow": 0,
-      "text": "The send was refused. Review the result before requesting another send.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).",
+      "clippedText": [],
+      "text": "The send was refused. Review the result before requesting another send.Destination chatFixture reports · -1000000000101Topic7Reply to message42Caption formatHTMLSilent deliveryYesExpires2026-10-22T12:10:00.000ZFilesweekly-report.jsonRequested path: /sandbox/handoff/weekly-report.jsonResolved file: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: /sandbox/.codex/auth.json passes through dot-directory .codex.document_outside_roots: /sandbox/.codex/auth.json is outside the allowed document roots (/sandbox/handoff).document_secret: The file contains what looks like a secret (private_key, line 1).",
       "background": "rgb(244, 241, 236)"
     },
     {
       "frame": "1280-en-light-unavailable",
       "initialStatus": {
-        "x": 337,
+        "x": 329.5,
         "y": 68,
         "width": 580.53125,
         "height": 22
       },
       "initialStatusText": "This confirmation is unavailable. Ask for a new send request.",
       "overflow": 0,
-      "text": "This confirmation is unavailable. Ask for a new send request.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).",
+      "clippedText": [],
+      "text": "This confirmation is unavailable. Ask for a new send request.Destination chatFixture reports · -1000000000101Topic7Reply to message42Caption formatHTMLSilent deliveryYesExpires2026-10-22T12:10:00.000ZFilesweekly-report.jsonRequested path: /sandbox/handoff/weekly-report.jsonResolved file: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: /sandbox/.codex/auth.json passes through dot-directory .codex.document_outside_roots: /sandbox/.codex/auth.json is outside the allowed document roots (/sandbox/handoff).document_secret: The file contains what looks like a secret (private_key, line 1).",
       "background": "rgb(244, 241, 236)"
     },
     {
@@ -535,6 +574,7 @@
       },
       "initialStatusText": "Sign in with Telegram as the paired installation owner to review this send.",
       "overflow": 0,
+      "clippedText": [],
       "text": "Sign in with Telegram as the paired installation owner to review this send.Sign in",
       "background": "rgb(244, 241, 236)"
     },
@@ -548,85 +588,92 @@
       },
       "initialStatusText": "Awaiting your decision",
       "overflow": 0,
-      "text": "Sent. This confirmation has been used.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).",
+      "clippedText": [],
+      "text": "Sent. This confirmation has been used.Destination chatFixture reports · -1000000000101Topic7Reply to message42Caption formatHTMLSilent deliveryYesExpires2026-10-22T12:10:00.000ZFilesweekly-report.jsonRequested path: /sandbox/handoff/weekly-report.jsonResolved file: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: /sandbox/.codex/auth.json passes through dot-directory .codex.document_outside_roots: /sandbox/.codex/auth.json is outside the allowed document roots (/sandbox/handoff).document_secret: The file contains what looks like a secret (private_key, line 1).",
       "background": "rgb(17, 18, 24)"
     },
     {
       "frame": "1280-en-dark-sent",
       "initialStatus": {
-        "x": 337,
+        "x": 329.5,
         "y": 68,
         "width": 372.296875,
         "height": 22
       },
       "initialStatusText": "Sent. This confirmation has been used.",
       "overflow": 0,
-      "text": "Sent. This confirmation has been used.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).",
+      "clippedText": [],
+      "text": "Sent. This confirmation has been used.Destination chatFixture reports · -1000000000101Topic7Reply to message42Caption formatHTMLSilent deliveryYesExpires2026-10-22T12:10:00.000ZFilesweekly-report.jsonRequested path: /sandbox/handoff/weekly-report.jsonResolved file: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: /sandbox/.codex/auth.json passes through dot-directory .codex.document_outside_roots: /sandbox/.codex/auth.json is outside the allowed document roots (/sandbox/handoff).document_secret: The file contains what looks like a secret (private_key, line 1).",
       "background": "rgb(17, 18, 24)"
     },
     {
       "frame": "1280-en-dark-rejected",
       "initialStatus": {
-        "x": 337,
+        "x": 329.5,
         "y": 68,
         "width": 141.15625,
         "height": 22
       },
       "initialStatusText": "Send declined.",
       "overflow": 0,
-      "text": "Send declined.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).",
+      "clippedText": [],
+      "text": "Send declined.Destination chatFixture reports · -1000000000101Topic7Reply to message42Caption formatHTMLSilent deliveryYesExpires2026-10-22T12:10:00.000ZFilesweekly-report.jsonRequested path: /sandbox/handoff/weekly-report.jsonResolved file: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: /sandbox/.codex/auth.json passes through dot-directory .codex.document_outside_roots: /sandbox/.codex/auth.json is outside the allowed document roots (/sandbox/handoff).document_secret: The file contains what looks like a secret (private_key, line 1).",
       "background": "rgb(17, 18, 24)"
     },
     {
       "frame": "1280-en-dark-expired",
       "initialStatus": {
-        "x": 337,
+        "x": 329.5,
         "y": 68,
         "width": 560.515625,
         "height": 22
       },
       "initialStatusText": "This confirmation has expired. Ask for a new send request.",
       "overflow": 0,
-      "text": "This confirmation has expired. Ask for a new send request.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).",
+      "clippedText": [],
+      "text": "This confirmation has expired. Ask for a new send request.Destination chatFixture reports · -1000000000101Topic7Reply to message42Caption formatHTMLSilent deliveryYesExpires2026-10-22T12:10:00.000ZFilesweekly-report.jsonRequested path: /sandbox/handoff/weekly-report.jsonResolved file: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: /sandbox/.codex/auth.json passes through dot-directory .codex.document_outside_roots: /sandbox/.codex/auth.json is outside the allowed document roots (/sandbox/handoff).document_secret: The file contains what looks like a secret (private_key, line 1).",
       "background": "rgb(17, 18, 24)"
     },
     {
       "frame": "1280-en-dark-uncertain",
       "initialStatus": {
-        "x": 337,
+        "x": 329.5,
         "y": 68,
         "width": 603.828125,
         "height": 50
       },
       "initialStatusText": "Telegram did not confirm delivery. Check the destination before requesting another send.",
       "overflow": 0,
-      "text": "Telegram did not confirm delivery. Check the destination before requesting another send.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).",
+      "clippedText": [],
+      "text": "Telegram did not confirm delivery. Check the destination before requesting another send.Destination chatFixture reports · -1000000000101Topic7Reply to message42Caption formatHTMLSilent deliveryYesExpires2026-10-22T12:10:00.000ZFilesweekly-report.jsonRequested path: /sandbox/handoff/weekly-report.jsonResolved file: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: /sandbox/.codex/auth.json passes through dot-directory .codex.document_outside_roots: /sandbox/.codex/auth.json is outside the allowed document roots (/sandbox/handoff).document_secret: The file contains what looks like a secret (private_key, line 1).",
       "background": "rgb(17, 18, 24)"
     },
     {
       "frame": "1280-en-dark-failed",
       "initialStatus": {
-        "x": 337,
+        "x": 329.5,
         "y": 68,
         "width": 559.046875,
         "height": 50
       },
       "initialStatusText": "The send was refused. Review the result before requesting another send.",
       "overflow": 0,
-      "text": "The send was refused. Review the result before requesting another send.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).",
+      "clippedText": [],
+      "text": "The send was refused. Review the result before requesting another send.Destination chatFixture reports · -1000000000101Topic7Reply to message42Caption formatHTMLSilent deliveryYesExpires2026-10-22T12:10:00.000ZFilesweekly-report.jsonRequested path: /sandbox/handoff/weekly-report.jsonResolved file: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: /sandbox/.codex/auth.json passes through dot-directory .codex.document_outside_roots: /sandbox/.codex/auth.json is outside the allowed document roots (/sandbox/handoff).document_secret: The file contains what looks like a secret (private_key, line 1).",
       "background": "rgb(17, 18, 24)"
     },
     {
       "frame": "1280-en-dark-unavailable",
       "initialStatus": {
-        "x": 337,
+        "x": 329.5,
         "y": 68,
         "width": 580.53125,
         "height": 22
       },
       "initialStatusText": "This confirmation is unavailable. Ask for a new send request.",
       "overflow": 0,
-      "text": "This confirmation is unavailable. Ask for a new send request.Destination chatFixture reports · -1000000000101Topic7Expires2026-10-22T12:10:00.000ZFilescredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: The file is in a dot-directory.document_outside_roots: The file is outside the configured document roots.document_secret: The file contains what looks like a secret (private_key, line 1).",
+      "clippedText": [],
+      "text": "This confirmation is unavailable. Ask for a new send request.Destination chatFixture reports · -1000000000101Topic7Reply to message42Caption formatHTMLSilent deliveryYesExpires2026-10-22T12:10:00.000ZFilesweekly-report.jsonRequested path: /sandbox/handoff/weekly-report.jsonResolved file: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BCaption: Requested file / Запитаний файлDetector warningsdocument_forbidden_path: /sandbox/.codex/auth.json passes through dot-directory .codex.document_outside_roots: /sandbox/.codex/auth.json is outside the allowed document roots (/sandbox/handoff).document_secret: The file contains what looks like a secret (private_key, line 1).",
       "background": "rgb(17, 18, 24)"
     },
     {
@@ -639,6 +686,7 @@
       },
       "initialStatusText": "Sign in with Telegram as the paired installation owner to review this send.",
       "overflow": 0,
+      "clippedText": [],
       "text": "Sign in with Telegram as the paired installation owner to review this send.Sign in",
       "background": "rgb(17, 18, 24)"
     },
@@ -652,85 +700,92 @@
       },
       "initialStatusText": "Очікує на ваше рішення",
       "overflow": 0,
-      "text": "Надіслано. Це підтвердження вже використано.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
+      "clippedText": [],
+      "text": "Надіслано. Це підтвердження вже використано.Чат доставкиFixture reports · -1000000000101Тема7Відповідь на повідомлення42Формат підписуHTMLБез сповіщенняТакДіє до2026-10-22T12:10:00.000ZФайлиweekly-report.jsonЗапитаний шлях: /sandbox/handoff/weekly-report.jsonФактичний файл: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: /sandbox/.codex/auth.json проходить через прихований каталог .codex.document_outside_roots: /sandbox/.codex/auth.json розташований поза дозволеними каталогами документів (/sandbox/handoff).document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
       "background": "rgb(244, 241, 236)"
     },
     {
       "frame": "1280-uk-light-sent",
       "initialStatus": {
-        "x": 337,
+        "x": 329.5,
         "y": 68,
         "width": 475.421875,
         "height": 22
       },
       "initialStatusText": "Надіслано. Це підтвердження вже використано.",
       "overflow": 0,
-      "text": "Надіслано. Це підтвердження вже використано.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
+      "clippedText": [],
+      "text": "Надіслано. Це підтвердження вже використано.Чат доставкиFixture reports · -1000000000101Тема7Відповідь на повідомлення42Формат підписуHTMLБез сповіщенняТакДіє до2026-10-22T12:10:00.000ZФайлиweekly-report.jsonЗапитаний шлях: /sandbox/handoff/weekly-report.jsonФактичний файл: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: /sandbox/.codex/auth.json проходить через прихований каталог .codex.document_outside_roots: /sandbox/.codex/auth.json розташований поза дозволеними каталогами документів (/sandbox/handoff).document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
       "background": "rgb(244, 241, 236)"
     },
     {
       "frame": "1280-uk-light-rejected",
       "initialStatus": {
-        "x": 337,
+        "x": 329.5,
         "y": 68,
         "width": 235.234375,
         "height": 22
       },
       "initialStatusText": "Надсилання скасовано.",
       "overflow": 0,
-      "text": "Надсилання скасовано.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
+      "clippedText": [],
+      "text": "Надсилання скасовано.Чат доставкиFixture reports · -1000000000101Тема7Відповідь на повідомлення42Формат підписуHTMLБез сповіщенняТакДіє до2026-10-22T12:10:00.000ZФайлиweekly-report.jsonЗапитаний шлях: /sandbox/handoff/weekly-report.jsonФактичний файл: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: /sandbox/.codex/auth.json проходить через прихований каталог .codex.document_outside_roots: /sandbox/.codex/auth.json розташований поза дозволеними каталогами документів (/sandbox/handoff).document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
       "background": "rgb(244, 241, 236)"
     },
     {
       "frame": "1280-uk-light-expired",
       "initialStatus": {
-        "x": 337,
+        "x": 329.5,
         "y": 68,
         "width": 562.21875,
         "height": 22
       },
       "initialStatusText": "Термін дії підтвердження минув. Попросіть новий запит.",
       "overflow": 0,
-      "text": "Термін дії підтвердження минув. Попросіть новий запит.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
+      "clippedText": [],
+      "text": "Термін дії підтвердження минув. Попросіть новий запит.Чат доставкиFixture reports · -1000000000101Тема7Відповідь на повідомлення42Формат підписуHTMLБез сповіщенняТакДіє до2026-10-22T12:10:00.000ZФайлиweekly-report.jsonЗапитаний шлях: /sandbox/handoff/weekly-report.jsonФактичний файл: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: /sandbox/.codex/auth.json проходить через прихований каталог .codex.document_outside_roots: /sandbox/.codex/auth.json розташований поза дозволеними каталогами документів (/sandbox/handoff).document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
       "background": "rgb(244, 241, 236)"
     },
     {
       "frame": "1280-uk-light-uncertain",
       "initialStatus": {
-        "x": 337,
+        "x": 329.5,
         "y": 68,
         "width": 541.515625,
         "height": 50
       },
       "initialStatusText": "Telegram не підтвердив доставку. Перевірте чат перед новим запитом на надсилання.",
       "overflow": 0,
-      "text": "Telegram не підтвердив доставку. Перевірте чат перед новим запитом на надсилання.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
+      "clippedText": [],
+      "text": "Telegram не підтвердив доставку. Перевірте чат перед новим запитом на надсилання.Чат доставкиFixture reports · -1000000000101Тема7Відповідь на повідомлення42Формат підписуHTMLБез сповіщенняТакДіє до2026-10-22T12:10:00.000ZФайлиweekly-report.jsonЗапитаний шлях: /sandbox/handoff/weekly-report.jsonФактичний файл: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: /sandbox/.codex/auth.json проходить через прихований каталог .codex.document_outside_roots: /sandbox/.codex/auth.json розташований поза дозволеними каталогами документів (/sandbox/handoff).document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
       "background": "rgb(244, 241, 236)"
     },
     {
       "frame": "1280-uk-light-failed",
       "initialStatus": {
-        "x": 337,
+        "x": 329.5,
         "y": 68,
         "width": 576.328125,
         "height": 50
       },
       "initialStatusText": "Надсилання відхилено. Перевірте результат перед новим запитом.",
       "overflow": 0,
-      "text": "Надсилання відхилено. Перевірте результат перед новим запитом.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
+      "clippedText": [],
+      "text": "Надсилання відхилено. Перевірте результат перед новим запитом.Чат доставкиFixture reports · -1000000000101Тема7Відповідь на повідомлення42Формат підписуHTMLБез сповіщенняТакДіє до2026-10-22T12:10:00.000ZФайлиweekly-report.jsonЗапитаний шлях: /sandbox/handoff/weekly-report.jsonФактичний файл: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: /sandbox/.codex/auth.json проходить через прихований каталог .codex.document_outside_roots: /sandbox/.codex/auth.json розташований поза дозволеними каталогами документів (/sandbox/handoff).document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
       "background": "rgb(244, 241, 236)"
     },
     {
       "frame": "1280-uk-light-unavailable",
       "initialStatus": {
-        "x": 337,
+        "x": 329.5,
         "y": 68,
         "width": 570.078125,
         "height": 50
       },
       "initialStatusText": "Це підтвердження недоступне. Попросіть новий запит на надсилання.",
       "overflow": 0,
-      "text": "Це підтвердження недоступне. Попросіть новий запит на надсилання.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
+      "clippedText": [],
+      "text": "Це підтвердження недоступне. Попросіть новий запит на надсилання.Чат доставкиFixture reports · -1000000000101Тема7Відповідь на повідомлення42Формат підписуHTMLБез сповіщенняТакДіє до2026-10-22T12:10:00.000ZФайлиweekly-report.jsonЗапитаний шлях: /sandbox/handoff/weekly-report.jsonФактичний файл: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: /sandbox/.codex/auth.json проходить через прихований каталог .codex.document_outside_roots: /sandbox/.codex/auth.json розташований поза дозволеними каталогами документів (/sandbox/handoff).document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
       "background": "rgb(244, 241, 236)"
     },
     {
@@ -743,6 +798,7 @@
       },
       "initialStatusText": "Для перевірки увійдіть через Telegram як власник, прив’язаний до цієї інсталяції.",
       "overflow": 0,
+      "clippedText": [],
       "text": "Для перевірки увійдіть через Telegram як власник, прив’язаний до цієї інсталяції.Увійти",
       "background": "rgb(244, 241, 236)"
     },
@@ -756,85 +812,92 @@
       },
       "initialStatusText": "Очікує на ваше рішення",
       "overflow": 0,
-      "text": "Надіслано. Це підтвердження вже використано.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
+      "clippedText": [],
+      "text": "Надіслано. Це підтвердження вже використано.Чат доставкиFixture reports · -1000000000101Тема7Відповідь на повідомлення42Формат підписуHTMLБез сповіщенняТакДіє до2026-10-22T12:10:00.000ZФайлиweekly-report.jsonЗапитаний шлях: /sandbox/handoff/weekly-report.jsonФактичний файл: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: /sandbox/.codex/auth.json проходить через прихований каталог .codex.document_outside_roots: /sandbox/.codex/auth.json розташований поза дозволеними каталогами документів (/sandbox/handoff).document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
       "background": "rgb(17, 18, 24)"
     },
     {
       "frame": "1280-uk-dark-sent",
       "initialStatus": {
-        "x": 337,
+        "x": 329.5,
         "y": 68,
         "width": 475.421875,
         "height": 22
       },
       "initialStatusText": "Надіслано. Це підтвердження вже використано.",
       "overflow": 0,
-      "text": "Надіслано. Це підтвердження вже використано.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
+      "clippedText": [],
+      "text": "Надіслано. Це підтвердження вже використано.Чат доставкиFixture reports · -1000000000101Тема7Відповідь на повідомлення42Формат підписуHTMLБез сповіщенняТакДіє до2026-10-22T12:10:00.000ZФайлиweekly-report.jsonЗапитаний шлях: /sandbox/handoff/weekly-report.jsonФактичний файл: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: /sandbox/.codex/auth.json проходить через прихований каталог .codex.document_outside_roots: /sandbox/.codex/auth.json розташований поза дозволеними каталогами документів (/sandbox/handoff).document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
       "background": "rgb(17, 18, 24)"
     },
     {
       "frame": "1280-uk-dark-rejected",
       "initialStatus": {
-        "x": 337,
+        "x": 329.5,
         "y": 68,
         "width": 235.234375,
         "height": 22
       },
       "initialStatusText": "Надсилання скасовано.",
       "overflow": 0,
-      "text": "Надсилання скасовано.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
+      "clippedText": [],
+      "text": "Надсилання скасовано.Чат доставкиFixture reports · -1000000000101Тема7Відповідь на повідомлення42Формат підписуHTMLБез сповіщенняТакДіє до2026-10-22T12:10:00.000ZФайлиweekly-report.jsonЗапитаний шлях: /sandbox/handoff/weekly-report.jsonФактичний файл: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: /sandbox/.codex/auth.json проходить через прихований каталог .codex.document_outside_roots: /sandbox/.codex/auth.json розташований поза дозволеними каталогами документів (/sandbox/handoff).document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
       "background": "rgb(17, 18, 24)"
     },
     {
       "frame": "1280-uk-dark-expired",
       "initialStatus": {
-        "x": 337,
+        "x": 329.5,
         "y": 68,
         "width": 562.21875,
         "height": 22
       },
       "initialStatusText": "Термін дії підтвердження минув. Попросіть новий запит.",
       "overflow": 0,
-      "text": "Термін дії підтвердження минув. Попросіть новий запит.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
+      "clippedText": [],
+      "text": "Термін дії підтвердження минув. Попросіть новий запит.Чат доставкиFixture reports · -1000000000101Тема7Відповідь на повідомлення42Формат підписуHTMLБез сповіщенняТакДіє до2026-10-22T12:10:00.000ZФайлиweekly-report.jsonЗапитаний шлях: /sandbox/handoff/weekly-report.jsonФактичний файл: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: /sandbox/.codex/auth.json проходить через прихований каталог .codex.document_outside_roots: /sandbox/.codex/auth.json розташований поза дозволеними каталогами документів (/sandbox/handoff).document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
       "background": "rgb(17, 18, 24)"
     },
     {
       "frame": "1280-uk-dark-uncertain",
       "initialStatus": {
-        "x": 337,
+        "x": 329.5,
         "y": 68,
         "width": 541.515625,
         "height": 50
       },
       "initialStatusText": "Telegram не підтвердив доставку. Перевірте чат перед новим запитом на надсилання.",
       "overflow": 0,
-      "text": "Telegram не підтвердив доставку. Перевірте чат перед новим запитом на надсилання.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
+      "clippedText": [],
+      "text": "Telegram не підтвердив доставку. Перевірте чат перед новим запитом на надсилання.Чат доставкиFixture reports · -1000000000101Тема7Відповідь на повідомлення42Формат підписуHTMLБез сповіщенняТакДіє до2026-10-22T12:10:00.000ZФайлиweekly-report.jsonЗапитаний шлях: /sandbox/handoff/weekly-report.jsonФактичний файл: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: /sandbox/.codex/auth.json проходить через прихований каталог .codex.document_outside_roots: /sandbox/.codex/auth.json розташований поза дозволеними каталогами документів (/sandbox/handoff).document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
       "background": "rgb(17, 18, 24)"
     },
     {
       "frame": "1280-uk-dark-failed",
       "initialStatus": {
-        "x": 337,
+        "x": 329.5,
         "y": 68,
         "width": 576.328125,
         "height": 50
       },
       "initialStatusText": "Надсилання відхилено. Перевірте результат перед новим запитом.",
       "overflow": 0,
-      "text": "Надсилання відхилено. Перевірте результат перед новим запитом.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
+      "clippedText": [],
+      "text": "Надсилання відхилено. Перевірте результат перед новим запитом.Чат доставкиFixture reports · -1000000000101Тема7Відповідь на повідомлення42Формат підписуHTMLБез сповіщенняТакДіє до2026-10-22T12:10:00.000ZФайлиweekly-report.jsonЗапитаний шлях: /sandbox/handoff/weekly-report.jsonФактичний файл: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: /sandbox/.codex/auth.json проходить через прихований каталог .codex.document_outside_roots: /sandbox/.codex/auth.json розташований поза дозволеними каталогами документів (/sandbox/handoff).document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
       "background": "rgb(17, 18, 24)"
     },
     {
       "frame": "1280-uk-dark-unavailable",
       "initialStatus": {
-        "x": 337,
+        "x": 329.5,
         "y": 68,
         "width": 570.078125,
         "height": 50
       },
       "initialStatusText": "Це підтвердження недоступне. Попросіть новий запит на надсилання.",
       "overflow": 0,
-      "text": "Це підтвердження недоступне. Попросіть новий запит на надсилання.Чат доставкиFixture reports · -1000000000101Тема7Діє до2026-10-22T12:10:00.000ZФайлиcredentials-readme-for-the-requested-handoff.md/sandbox/.private/credentials-readme-for-the-requested-handoff.mdSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: Шлях до файлу проходить через прихований каталог.document_outside_roots: Файл розташований поза дозволеними каталогами документів.document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
+      "clippedText": [],
+      "text": "Це підтвердження недоступне. Попросіть новий запит на надсилання.Чат доставкиFixture reports · -1000000000101Тема7Відповідь на повідомлення42Формат підписуHTMLБез сповіщенняТакДіє до2026-10-22T12:10:00.000ZФайлиweekly-report.jsonЗапитаний шлях: /sandbox/handoff/weekly-report.jsonФактичний файл: /sandbox/.codex/auth.jsonSHA-256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb256 BПідпис: Requested file / Запитаний файлПопередження детекторівdocument_forbidden_path: /sandbox/.codex/auth.json проходить через прихований каталог .codex.document_outside_roots: /sandbox/.codex/auth.json розташований поза дозволеними каталогами документів (/sandbox/handoff).document_secret: Файл містить дані, схожі на секрет (private_key, рядок 1).",
       "background": "rgb(17, 18, 24)"
     },
     {
@@ -847,6 +910,7 @@
       },
       "initialStatusText": "Для перевірки увійдіть через Telegram як власник, прив’язаний до цієї інсталяції.",
       "overflow": 0,
+      "clippedText": [],
       "text": "Для перевірки увійдіть через Telegram як власник, прив’язаний до цієї інсталяції.Увійти",
       "background": "rgb(17, 18, 24)"
     }

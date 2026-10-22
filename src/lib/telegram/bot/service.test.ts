@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
+import { fileConfirmationReason } from "./fileConfirmationContract";
 
 const SANDBOX = fs.mkdtempSync(path.join(os.tmpdir(), "llv-telegram-bot-service-"));
 const OLD_STATE = process.env.LLV_STATE_DIR;
@@ -428,7 +429,7 @@ test("a photo must come from under the document roots, like a document", async (
   const code = async (filename: string) => (await refusal(() => send([{ path: filename, caption: "" }]))).code;
   const outside = await validImage("shot.png", "png", 1, 1, path.join(SANDBOX, "elsewhere"));
   expect(await code(outside)).toBe("document_outside_roots");
-  expect(await code(mediaFile("qr.png", PNG, path.join(HANDOFF, ".cache")))).toBe("document_forbidden_path");
+  expect(await code(await validImage("qr.png", "png", 1, 1, path.join(HANDOFF, ".cache")))).toBe("document_forbidden_path");
   fs.symlinkSync(outside, path.join(HANDOFF, "linked.png"));
   expect(await code(path.join(HANDOFF, "linked.png"))).toBe("document_outside_roots");
   /* A root that contains the state directory still never reaches into it. */
@@ -556,7 +557,8 @@ test("dot components, symlinks out of a root, hard links and the state directory
   const outside = documentFile(path.join(SANDBOX, "elsewhere", "report.md"), REPORT);
 
   expect(await code({ path: documentFile(path.join(HANDOFF, ".private", "report.md"), REPORT) })).toBe("document_forbidden_path");
-  expect(await code({ path: documentFile(path.join(HANDOFF, ".report.md"), REPORT) })).toBe("document_forbidden_path");
+  /* An invalid shown name is a hard refusal even after a dot-path warning. */
+  expect(await code({ path: documentFile(path.join(HANDOFF, ".report.md"), REPORT) })).toBe("document_invalid");
   /* Written out: path.join would resolve the `..` away before the check. */
   expect(await code({ path: `${HANDOFF}/../../elsewhere/report.md` })).toBe("document_forbidden_path");
 
@@ -1284,4 +1286,70 @@ test("an agent send key cannot pre-use the owner's confirmed document claim", as
   const calls = transport.callsOf("sendDocument");
   expect(calls).toHaveLength(2);
   expect(await (calls[1]!.params.document as File).text()).toBe(fs.readFileSync(flaggedFile, "utf8"));
+});
+
+
+test.each([
+  { kind: "document", retarget: false }, { kind: "media", retarget: false },
+  { kind: "document", retarget: true }, { kind: "media", retarget: true },
+])("%s confirmation discloses and binds the resolved symlink target", async ({ kind, retarget }) => {
+  await allowedTeam();
+  const real = path.join(HOME, ".codex", kind === "document" ? "auth.json" : "auth.png");
+  fs.mkdirSync(path.dirname(real), { recursive: true });
+  if (kind === "document") fs.writeFileSync(real, "{}\n");
+  else await sharp({ create: { width: 2, height: 2, channels: 3, background: "blue" } }).png().toFile(real);
+  fs.mkdirSync(HANDOFF, { recursive: true });
+  const requested = path.join(HANDOFF, kind === "document" ? "weekly-report.json" : "weekly-report.png");
+  fs.symlinkSync(real, requested);
+  const error = await refusal(() => kind === "document" ? sendDocument({ path: requested }) : service.sendMedia({ conversationId: null, clientRequestId: "symlink", chat: "team-reports", images: [{ path: requested, caption: "Report" }] }));
+  const view = service.fileConfirmation(error.extra.confirmation!.id);
+  expect(view.files[0]).toMatchObject({ path: requested, resolvedPath: real });
+  const target = `$HOME/.codex/${path.basename(real)}`;
+  for (const locale of ["en", "uk"] as const) {
+    const reasons = view.reasons.map(reason => fileConfirmationReason(reason, locale));
+    expect(reasons[0]).toContain(target);
+    expect(reasons[0]).toContain(".codex");
+    expect(reasons[1]).toContain(target);
+    expect(reasons[1]).toContain("$HOME/handoff");
+  }
+  if (retarget) {
+    const replacement = path.join(path.dirname(real), kind === "document" ? "other.json" : "other.png");
+    fs.copyFileSync(real, replacement);
+    fs.unlinkSync(requested);
+    fs.symlinkSync(replacement, requested);
+    expect((await refusal(() => service.decideFileConfirmation(view.id, view.digest, true, () => {}))).code).toBe("confirmation_invalid");
+    expect(transport.callsOf("sendDocument")).toHaveLength(0);
+    expect(transport.callsOf("sendPhoto")).toHaveLength(0);
+  } else {
+    const method = kind === "document" ? "sendDocument" : "sendPhoto";
+    transport.script(method, ok({ message_id: 199, date: T0 + 100 }));
+    expect(await service.decideFileConfirmation(view.id, view.digest, true, () => {})).toMatchObject({ messageIds: [199] });
+    const call = transport.callsOf(method)[0]!;
+    const file = (kind === "document" ? call.params.document : call.params.photo) as Blob;
+    expect(Buffer.from(await file.arrayBuffer())).toEqual(fs.readFileSync(real));
+    expect((await refusal(() => service.decideFileConfirmation(view.id, view.digest, true, () => {}))).code).toBe("confirmation_invalid");
+    expect(transport.callsOf(method)).toHaveLength(1);
+  }
+});
+
+test.each(["size", "state"] as const)("a hard %s refusal after a path warning keeps its actual reason and offers no confirmation", async kind => {
+  await allowedTeam();
+  const filename = documentFile(path.join(kind === "state" ? process.env.LLV_STATE_DIR! : HOME, ".private", "report.json"), "{}\n");
+  if (kind === "size") fs.truncateSync(filename, 20 * 1024 * 1024 + 1);
+  const error = await refusal(() => sendDocument({ path: filename }));
+  expect(error.code).toBe(kind === "size" ? "document_too_large" : "document_forbidden_path");
+  expect(error.message).toContain(kind === "size" ? "larger than" : "state directory");
+  expect(error.extra.confirmation).toBeUndefined();
+  expect(transport.callsOf("sendDocument")).toHaveLength(0);
+});
+
+
+test("a hidden undecodable photo keeps its hard refusal and offers no confirmation", async () => {
+  await allowedTeam();
+  const filename = mediaFile("broken.png", PNG, path.join(HANDOFF, ".cache"));
+  const error = await refusal(() => service.sendMedia({ conversationId: null, clientRequestId: "broken-photo", chat: "team-reports", images: [{ path: filename, caption: "" }] }));
+  expect(error.code).toBe("photo_invalid");
+  expect(error.message).toContain("decodable");
+  expect(error.extra.confirmation).toBeUndefined();
+  expect(transport.callsOf("sendPhoto")).toHaveLength(0);
 });

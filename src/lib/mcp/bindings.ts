@@ -1,3 +1,4 @@
+import { readSelf } from "@/lib/links/self";
 import { readFileConfirmationLink } from "@/lib/telegram/bot/fileConfirmationContract";
 import { FLOW_ARCHIVE, FLOW_RETIREMENT, STAGE_RETIREMENT, FlowRetiredError } from "@/lib/flows/retirement";
 import { performanceSpans } from "@/lib/performanceSpans";
@@ -5362,6 +5363,20 @@ async function telegramBotSend(args: McpToolArgs, control: ViewerControlDependen
   return redactPayload(result);
 }
 
+function telegramFileConfirmation(value: unknown) {
+  const link = readFileConfirmationLink(value);
+  if (!link) return null;
+  const published = readSelf()?.publicUrl;
+  let origin = viewerControlOrigin();
+  if (published) {
+    try {
+      const url = new URL(published);
+      if ((url.protocol === "http:" || url.protocol === "https:") && !url.username && !url.password) origin = url.origin;
+    } catch { /* An invalid saved address keeps the local control origin. */ }
+  }
+  return { ...link, url: new URL(link.url, origin).href };
+}
+
 async function telegramBotSendMedia(args: McpToolArgs, control: ViewerControlDependencies): Promise<McpToolPayload> {
   const result = await dispatchControl(control)("/api/telegram/bot/agent", {
     op: "send_media",
@@ -5375,8 +5390,9 @@ async function telegramBotSendMedia(args: McpToolArgs, control: ViewerControlDep
   }, callerCapabilityHeaders()).catch((error: unknown) => {
     if (error instanceof McpDispatchVerdictError && typeof error.details.code === "string") {
       const code = error.details.code;
-      throw new McpToolRefusal(error.message, { code, retryable: RETRYABLE_TELEGRAM_BOT_CODES.has(code as TelegramBotErrorCode),
-        ...(readFileConfirmationLink(error.details.confirmation) ? { confirmation: readFileConfirmationLink(error.details.confirmation) } : {}),
+      const confirmation = telegramFileConfirmation(error.details.confirmation);
+      throw new McpToolRefusal(confirmation ? error.message.replace(readFileConfirmationLink(error.details.confirmation)!.url, confirmation.url) : error.message, { code, retryable: RETRYABLE_TELEGRAM_BOT_CODES.has(code as TelegramBotErrorCode),
+        ...(confirmation ? { confirmation } : {}),
         ...(Array.isArray(error.details.refusals) ? { refusals: readTelegramBotRefusals(error.details.refusals) } : {}) });
     }
     throw error;
@@ -5399,11 +5415,12 @@ async function telegramBotSendDocument(args: McpToolArgs, control: ViewerControl
   }, callerCapabilityHeaders()).catch((error: unknown) => {
     if (error instanceof McpDispatchVerdictError && typeof error.details.code === "string") {
       const code = error.details.code;
+      const confirmation = telegramFileConfirmation(error.details.confirmation);
       const { retryAfterSeconds, secretClass } = error.details;
-      throw new McpToolRefusal(error.message, {
+      throw new McpToolRefusal(confirmation ? error.message.replace(readFileConfirmationLink(error.details.confirmation)!.url, confirmation.url) : error.message, {
         code,
         retryable: RETRYABLE_TELEGRAM_BOT_CODES.has(code as TelegramBotErrorCode),
-        ...(readFileConfirmationLink(error.details.confirmation) ? { confirmation: readFileConfirmationLink(error.details.confirmation) } : {}),
+        ...(confirmation ? { confirmation } : {}),
         ...(Array.isArray(error.details.refusals) ? { refusals: readTelegramBotRefusals(error.details.refusals) } : {}),
         ...(typeof retryAfterSeconds === "number" ? { retryAfterSeconds } : {}),
         ...(typeof secretClass === "string" ? { secretClass } : {}),

@@ -5636,7 +5636,24 @@ describe("owner confirmation of one Telegram file send", () => {
               if (state === "pending") {
                 expect(await page.getByText("b".repeat(64), { exact: false }).count()).toBe(1);
                 expect(await page.getByText("document_secret", { exact: false }).count()).toBe(1);
+                expect(await page.getByText(`${words.requestedPath}: /sandbox/handoff/weekly-report.json`, { exact: true }).count()).toBe(1);
+                expect(await page.getByText(`${words.resolvedPath}: /sandbox/.codex/auth.json`, { exact: true }).count()).toBe(1);
+                expect(await page.getByText(words.replyTo, { exact: true }).count()).toBe(1);
+                expect(await page.getByText("42", { exact: true }).count()).toBe(1);
+                expect(await page.getByText(words.format, { exact: true }).count()).toBe(1);
+                expect(await page.getByText(words.silent, { exact: true }).count()).toBe(1);
+                expect(await page.getByText("HTML", { exact: true }).count()).toBe(1);
+                expect(await page.getByText(words.yes, { exact: true }).count()).toBe(1);
                 await page.screenshot({ path: path.join(output, `${name}-top.png`) });
+                const resolved = page.locator("[data-resolved-path]");
+                await resolved.scrollIntoViewIfNeeded();
+                await page.screenshot({ path: path.join(output, `${name}-paths.png`) });
+                const warnings = page.getByRole("region", { name: words.reasons });
+                await warnings.scrollIntoViewIfNeeded();
+                const warningText = await warnings.textContent();
+                expect(warningText).toContain("/sandbox/.codex/auth.json");
+                expect(warningText).toContain(".codex");
+                await page.screenshot({ path: path.join(output, `${name}-warnings.png`) });
                 const approve = page.getByRole("button", { name: words.approve, exact: true });
                 await approve.scrollIntoViewIfNeeded();
                 expect(await approve.isEnabled()).toBe(true);
@@ -5657,9 +5674,19 @@ describe("owner confirmation of one Telegram file send", () => {
               }
               const reading = await page.evaluate(() => {
                 const main = document.querySelector("main")!;
-                return { overflow: main.scrollWidth - main.clientWidth, text: main.textContent, background: getComputedStyle(main).backgroundColor };
+                const bounds = main.getBoundingClientRect();
+                const walker = document.createTreeWalker(main, NodeFilter.SHOW_TEXT);
+                const clippedText: string[] = [];
+                while (walker.nextNode()) {
+                  const node = walker.currentNode;
+                  if (!node.textContent?.trim()) continue;
+                  const range = document.createRange(); range.selectNodeContents(node);
+                  if ([...range.getClientRects()].some(rect => rect.left < bounds.left - 1 || rect.right > bounds.right + 1)) clippedText.push(node.textContent);
+                }
+                return { overflow: main.scrollWidth - main.clientWidth, clippedText, text: main.textContent, background: getComputedStyle(main).backgroundColor };
               });
               expect(reading.overflow).toBeLessThanOrEqual(1);
+              expect(reading.clippedText).toEqual([]);
               expect(reading.background).not.toBe("rgba(0, 0, 0, 0)");
               expect(pageErrors).toEqual([]);
               evidence.push({ frame: name, initialStatus, initialStatusText: words[state], ...reading });

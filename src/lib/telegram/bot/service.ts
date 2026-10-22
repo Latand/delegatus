@@ -130,11 +130,12 @@ const PHOTO_CAPTION_MAX_CHARS = 1024;
  * in the state directory, a cached QR code in a dot-directory) would be one
  * call from a chat.
  */
-async function photoBlob(filename: string, index: number, roots: readonly string[], environment: DocumentEnvironment, warnings?: DocumentWarning[]): Promise<{ blob: Blob; sha256: string }> {
+async function photoBlob(filename: string, index: number, roots: readonly string[], environment: DocumentEnvironment, warnings?: DocumentWarning[]): Promise<{ blob: Blob; sha256: string; resolvedPath: string }> {
   if (!path.isAbsolute(filename)) throw new TelegramBotError("photo_invalid", `photo ${index + 1} needs an absolute local path`);
   let bytes: Buffer;
+  let resolvedPath: string;
   try {
-    bytes = readUnderRoots(filename, roots, environment, PHOTO_MAX_BYTES, undefined, warnings).bytes;
+    ({ bytes, real: resolvedPath } = readUnderRoots(filename, roots, environment, PHOTO_MAX_BYTES, undefined, warnings));
   } catch (error) {
     if (error instanceof DocumentRefusal && (error.code === "document_outside_roots" || error.code === "document_forbidden_path")) {
       throw new TelegramBotError(error.code, `photo ${index + 1}: ${error.message}`);
@@ -145,7 +146,7 @@ async function photoBlob(filename: string, index: number, roots: readonly string
     // The existing dimension rule admits at most 25M pixels (5000²).
     // Relay uploads apply their narrower 20M cap at their own call site.
     const type = await checkPhotoBytes(bytes, 25_000_000);
-    return { blob: new Blob([Uint8Array.from(bytes)], { type }), sha256: createHash("sha256").update(bytes).digest("hex") };
+    return { resolvedPath, blob: new Blob([Uint8Array.from(bytes)], { type }), sha256: createHash("sha256").update(bytes).digest("hex") };
   } catch {
     throw new TelegramBotError("photo_invalid", `photo ${index + 1} must be a decodable JPEG or PNG within Telegram's photo dimensions`);
   }
@@ -1350,7 +1351,7 @@ export class TelegramBotService {
       throw new TelegramBotError("send_uncertain", "an earlier media send under this clientRequestId never finished, so it may already be posted; use a new clientRequestId only if a duplicate is acceptable", { refusals: publicRefusals(claim.row.attempts) });
     }
 
-    let images: Array<TelegramBotMediaInput & { blob: Blob; sha256: string }>;
+    let images: Array<TelegramBotMediaInput & { blob: Blob; sha256: string; resolvedPath: string }>;
     const reasons: DocumentWarning[] = [];
     try {
       const roots = this.documentRoots(store).roots;
@@ -1366,14 +1367,10 @@ export class TelegramBotService {
         images.push({ path: filename, caption, ...await photoBlob(filename, index, roots, environment, reasons) });
       }
       this.admitFileSend("media", chat, { ...this.fileOptions(input, chat), images: images.map(image => ({ path: image.path, caption: image.caption })) },
-        images.map(image => ({ path: image.path, filename: path.basename(image.path), sha256: image.sha256, bytes: image.blob.size })), reasons, approval);
+        images.map(image => ({ path: image.path, resolvedPath: image.resolvedPath, filename: path.basename(image.path), sha256: image.sha256, bytes: image.blob.size })), reasons, approval);
     } catch (error) {
-      // A hard failure after a detector keeps its original refusal and offers no grant.
-      const first = reasons[0];
-      const refused = first && error instanceof TelegramBotError && (error.code === "photo_invalid" || error.code === "text_too_long")
-        ? new TelegramBotError(first.code, first.reason) : error;
-      store.failSend(sendCallerKey, sendRequestId, refused instanceof TelegramBotError ? refused.code : "photo_invalid", []);
-      throw refused;
+      store.failSend(sendCallerKey, sendRequestId, error instanceof TelegramBotError ? error.code : "photo_invalid", []);
+      throw error;
     }
 
     const selection = this.selection(chat, sendCallerKey, sendRequestId, "canSendPhotos", this.fileApprovalCheck(chat, approval));
@@ -1461,10 +1458,10 @@ export class TelegramBotService {
       document = loadDocument(input.document, this.documentRoots(store).roots, this.deps.documentEnvironment(), reasons);
       const filename = (input.document as { path: string }).path;
       this.admitFileSend("document", chat, { ...this.fileOptions(input, chat), document: { path: filename, filename: document.filename, caption: document.caption } },
-        [{ path: filename, filename: document.filename, sha256: document.sha256, bytes: document.bytes }], reasons, approval);
+        [{ path: filename, resolvedPath: document.real, filename: document.filename, sha256: document.sha256, bytes: document.bytes }], reasons, approval);
     } catch (error) {
       const refused = error instanceof TelegramBotError ? error : error instanceof DocumentRefusal
-        ? new TelegramBotError(reasons[0]?.code ?? error.code, reasons[0]?.reason ?? error.message, error.secretClass ? { secretClass: error.secretClass } : {})
+        ? new TelegramBotError(error.code, error.message, error.secretClass ? { secretClass: error.secretClass } : {})
         : new TelegramBotError("document_invalid", "the document could not be checked on the Viewer host");
       store.failSend(callerKey, clientRequestId, refused.code, []);
       throw refused;

@@ -1891,10 +1891,10 @@ function mountFileConfirmation(root: HTMLElement) {
   const state = params.get("state") ?? "pending";
   const view: FileConfirmationView = {
     id: "fixture-confirmation", digest: "a".repeat(64), kind: "document", chatId: "-1000000000101", chatTitle: "Fixture reports", topicId: 7,
-    options: { conversationId: "conversation_fixture", clientRequestId: "fixture", chat: "-1000000000101", topicId: 7, replyToMessageId: null, format: "plain", silent: false,
-      document: { path: "/sandbox/.private/credentials-readme-for-the-requested-handoff.md", filename: "credentials-readme-for-the-requested-handoff.md", caption: "Requested file / Запитаний файл" } },
-    files: [{ path: "/sandbox/.private/credentials-readme-for-the-requested-handoff.md", filename: "credentials-readme-for-the-requested-handoff.md", sha256: "b".repeat(64), bytes: 256 }],
-    reasons: [{ code: "document_forbidden_path", reason: "The file is in a dot-directory." }, { code: "document_outside_roots", reason: "The file is outside the configured document roots." }, { code: "document_secret", reason: "The file contains what looks like a secret (private_key, line 1).", secretClass: "private_key", line: 1 }],
+    options: { conversationId: "conversation_fixture", clientRequestId: "fixture", chat: "-1000000000101", topicId: 7, replyToMessageId: 42, format: "html", silent: true,
+      document: { path: "/sandbox/handoff/weekly-report.json", filename: "weekly-report.json", caption: "Requested file / Запитаний файл" } },
+    files: [{ path: "/sandbox/handoff/weekly-report.json", resolvedPath: "/sandbox/.codex/auth.json", filename: "weekly-report.json", sha256: "b".repeat(64), bytes: 256 }],
+    reasons: [{ code: "document_forbidden_path", path: "/sandbox/.codex/auth.json", segment: ".codex", reason: "/sandbox/.codex/auth.json passes through dot-directory .codex." }, { code: "document_outside_roots", path: "/sandbox/.codex/auth.json", roots: ["/sandbox/handoff"], reason: "/sandbox/.codex/auth.json is outside the allowed document roots (/sandbox/handoff)." }, { code: "document_secret", reason: "The file contains what looks like a secret (private_key, line 1).", secretClass: "private_key", line: 1 }],
     createdAt: "2026-10-22T12:00:00.000Z", expiresAt: "2026-10-22T12:10:00.000Z", state: state === "owner" ? "pending" : state as FileConfirmationView["state"],
   };
   let sends = 0;

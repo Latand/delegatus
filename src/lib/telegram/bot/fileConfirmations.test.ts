@@ -43,7 +43,7 @@ test("pending authority and audit storage are bounded; expiration releases pendi
   const confirmations = new FileSendConfirmations(() => store, () => new Date(now), () => `fixture-${++sequence}`);
   const snapshot = { kind: "document" as const, botId: "fixture-bot", chatId: "-1000000000101", chatTitle: "Fixture reports", topicId: null,
     options: { conversationId: null, clientRequestId: "fixture", chat: "-1000000000101", topicId: null, replyToMessageId: null, format: "plain" as const, silent: false },
-    files: [{ path: "/sandbox/report.md", filename: "report.md", sha256: "a".repeat(64), bytes: 10 }], reasons: [{ code: "document_secret" as const, reason: "Secret detector" }] };
+    files: [{ path: "/sandbox/report.md", resolvedPath: "/sandbox/report.md", filename: "report.md", sha256: "a".repeat(64), bytes: 10 }], reasons: [{ code: "document_secret" as const, reason: "Secret detector" }] };
   try {
     expect(() => confirmations.request({ ...snapshot, options: { ...snapshot.options, clientRequestId: "x".repeat(128_001) } })).toThrow("confirmation");
     for (let i = 0; i < 128; i++) confirmations.request(snapshot);
