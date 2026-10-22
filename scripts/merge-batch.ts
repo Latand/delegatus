@@ -615,6 +615,9 @@ export class MergeBatch {
         writeFileSync(absolute, Buffer.from(contents, "base64"));
       }
       const reportFile = join(stateDir, "tests.xml");
+      // Add runner options after the file/corpus selection above. Gate args
+      // also serve as the resolution's file inventory and contain paths only.
+      if (gate.id === "tests") args = [...args, "--timeout=60000"];
       if (gate.report) args = [...args, "--reporter=junit", "--reporter-outfile", reportFile];
       if (gate.filter) args = [...args, ...gate.filter];
       const env = gate.id === "tests" ? testEnvironment(stateDir) : isolatedEnvironment(stateDir, process.env);
