@@ -17,10 +17,10 @@ type Capacity =
   | { kind: "unavailable" }
   | { kind: "unknown" };
 
-function capacity(observation: DurableQuotaObservation | undefined, now: number, model?: string | null): Capacity {
+function capacity(observation: DurableQuotaObservation | undefined, now: number, model?: string | null, paidCredits = false): Capacity {
   if (!observation) return { kind: "unknown" };
   const guarded = creditGuardBlock(observation.engine, observation.limits);
-  if (guarded) return { kind: "exhausted", ...guarded };
+  if (guarded && !paidCredits) return { kind: "exhausted", ...guarded };
   const observedAt = Date.parse(observation.observedAt);
   const authCheckedAt = Date.parse(observation.authCheckedAt);
   if (!Number.isFinite(observedAt) || !Number.isFinite(authCheckedAt) || now < observedAt || now < authCheckedAt) {
@@ -33,6 +33,7 @@ function capacity(observation: DurableQuotaObservation | undefined, now: number,
      preserving the account as a fallback while its next probe is pending. */
   if (!authFresh || (!observationFresh && !copilotTranscript)) return { kind: "unknown" };
   if (!observation.authenticated) return observationFresh ? { kind: "unavailable" } : { kind: "unknown" };
+  if (paidCredits) return { kind: "available", remaining: 0 };
   /* The provider's own word that the limit is reached holds without a window
      to read beside it (a workspace member's reading can carry none); it names
      no reset, and holds only while the live reading is fresh. */
@@ -88,12 +89,14 @@ export function selectHeadlessAccount(
   now = Date.now(),
   /** The model this launch names, so capacity is judged on its own window. */
   model?: string | null,
+  /** Project-scoped approval, supplied only by the project account selector. */
+  paidCredits?: (accountId: string) => boolean,
 ): HeadlessAccountSelection {
   const byAccount = new Map(observations.map((observation) => [observation.accountId, observation]));
   const excluded = new Set(excludedIds);
   const candidates = accounts
     .filter((account) => account.authPresent)
-    .map((account) => ({ account, capacity: capacity(byAccount.get(account.id), now, model) }))
+    .map((account) => ({ account, capacity: capacity(byAccount.get(account.id), now, model, paidCredits?.(account.id)) }))
     .filter((candidate) => candidate.capacity.kind !== "unavailable");
   if (!candidates.length) return { kind: "unavailable" };
   for (const attempted of [false, true]) {

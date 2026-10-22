@@ -2,6 +2,7 @@ import type { SeatTickInstructionLine } from "./seatTickInstructions";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { seatMessageKeys } from "@/lib/orchestrator/seatDeliveryKeys";
 import { pendingAutonomyReports, autonomyActive } from "./autonomy";
+import { turboShownRevision } from "./turbo";
 import { expireSeatAutonomy, expireSeatSchedule } from "./seatTickSettings";
 import { releaseControllerForSources } from "@/lib/release/production";
 import type { ReleaseController } from "@/lib/release/run";
@@ -52,7 +53,7 @@ import { withChildFinalMessages } from "./childFinalMessage";
 import { seatTickNoteRevision, seatTickProposalMessage, seatTickWakePayload } from "./report";
 import { SEAT_TICK_WAKE_INTERVAL_MS, seatTickDecision, seatTickPolicy, seatTickWakeCommit, seatTickWakeCommitPlan, seatTurnProgressing } from "./seatTick";
 import { seatTickFenceBoundMs, seatTickFenceLapsesAt, seatTickFenceRetirableOnAge, seatTickFenceSentence, seatTickReportedFence, seatTickWakeFence } from "./seatTickFence";
-import { effectiveSeatTickSettings, readSeatTickSettingsFile, seatTickSettingsAfterLapse, writeSeatTickSettings } from "./seatTickSettings";
+import { effectiveSeatTickSettings, readSeatTickSettingsFile, readTurboSettings, seatTickSettingsAfterLapse, writeSeatTickSettings } from "./seatTickSettings";
 import { readSeatTickState, readSeatTickStateFile, seatTickStateForEpoch, writeSeatTickState } from "./seatTickState";
 import {
   defaultSeatTickSources,
@@ -130,6 +131,8 @@ import type {
  */
 
 export interface SeatTickControllerDependencies {
+  /** Turbo's sweep for a project whose episode needs work; the MCP tool writes from another process. */
+  turbo?: (project: string) => void;
   seatRecovery?: SeatHostRecoveryPorts;
   seatAuth?: SeatAuthRecoveryPorts;
   seatAutoRotation?: SeatAutoRotationPorts;
@@ -1384,6 +1387,7 @@ function needsWorkSources(verdict: SeatTickVerdict): boolean {
 
 function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdict, { kind: "wake" | "proactive" }>, issues: readonly ProposalIssue[] = [], snapshotAt = new Date(input.now).toISOString()) {
   const autonomyShown = autonomyActive(input.settings.autonomy, input.now) ? `${input.settings.autonomy!.startedAt}:${input.settings.autonomy!.updatedAt}` : undefined;
+  const turboShown = turboShownRevision(input.settings.turbo, input.now);
   const noteShown = seatTickNoteRevision(input.settings.monitorPrompt);
   const monitorPromptUnchanged = noteShown !== null && input.state.noteShown === noteShown;
   const terminalChildren = input.children.filter((child) => child.status === "terminal").map((child) => child.outcomeId ?? child.conversationId);
@@ -1392,6 +1396,8 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
     ? seatTickWakePayload({
       autonomy: input.settings.autonomy,
       autonomyUnchanged: !!autonomyShown && input.state.autonomyShown === autonomyShown,
+      turbo: input.settings.turbo,
+      turboUnchanged: !!turboShown && input.state.turboShown === turboShown,
       now: input.now,
       project: input.project,
       workers: input.workers,
@@ -1443,6 +1449,7 @@ function alarmPayload(input: SeatTickCheckInput, verdict: Extract<SeatTickVerdic
     terminalChildren,
     noteShown,
     ...(autonomyShown ? { autonomyShown } : {}),
+    ...(turboShown ? { turboShown } : {}),
     ...(verdict.kind === "wake" && verdict.reasons.some(reason => reason.kind === "autonomy-ended") ? { autonomySummaryFor: pendingAutonomyReports(input.settings, input.now)[0]?.startedAt } : {}),
     bridgeReports: input.reports?.bridgeReports === true,
     frozenText: text,
@@ -2236,6 +2243,21 @@ function followProjectSuccessions(
   }
 }
 
+/** A Turbo change the seat made through the tool lands in the store from
+    another process; the Viewer's sweep notices it here, once per pass. */
+function kickTurboWork(project: string, kick: ((project: string) => void) | undefined): void {
+  try {
+    const row = readTurboSettings(project);
+    if (![row.turbo, ...(row.turboHistory ?? [])].some(episode => episode && !episode.revertedAt)) return;
+    if (kick) kick(project);
+    else void import("./turboRuntime").then(({ kickTurbo }) => kickTurbo(project)).catch(error => {
+      console.error(`[seat tick] turbo sweep failed: ${error instanceof Error ? error.name : "unknown"}`);
+    });
+  } catch (error) {
+    console.error(`[seat tick] turbo discovery failed: ${error instanceof Error ? error.name : "unknown"}`);
+  }
+}
+
 export async function reconcileSeatTick(dependencies: SeatTickControllerDependencies = {}): Promise<SeatTickRunRecord[]> {
   const sources = dependencies.sources ?? defaultSeatTickSources();
   const appendRecord = dependencies.appendRecord ?? appendSeatTickRecord;
@@ -2278,6 +2300,7 @@ export async function reconcileSeatTick(dependencies: SeatTickControllerDependen
     if (!first) await yieldToRuntime();
     first = false;
     try {
+      kickTurboWork(project, dependencies.turbo);
       const record = await runSeatTickCheck(project, { ...dependencies, sources, release: dependencies.release === undefined ? releaseControllerForSources(sources) : dependencies.release, curation: dependencies.curation === undefined ? productionCurationController(sources) : dependencies.curation, maintenance: dependencies.maintenance === undefined ? productionBoardMaintenanceController(sources) : dependencies.maintenance });
       if (record) records.push(record);
     } catch (error) {

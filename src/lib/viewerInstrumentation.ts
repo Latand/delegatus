@@ -107,6 +107,8 @@ interface CurrentReleaseControllerLoaders {
   /** Optional for the same reason. */
   loadTempSweep?: () => Promise<{ startTempSweep: () => void }>;
   /** Optional for the same reason. */
+  loadTurboSweep?: () => Promise<{ startTurboSweep: () => void }>;
+  /** Optional for the same reason. */
   loadWorktreeSweep?: () => Promise<{ startWorktreeSweep: () => void }>;
   /** Optional for the same reason. */
   loadAsksClassifier?: () => Promise<{ startAsksClassifier: () => void }>;
@@ -378,6 +380,7 @@ export async function startCurrentReleaseControllers(
     loadStructuredHostRetirement: () => import("@/lib/runtime/structuredHostRetirement"),
     loadSeatTick: () => import("@/lib/monitor/seatTickController"),
     loadTempSweep: () => import("@/lib/tempSweep"),
+    loadTurboSweep: () => import("@/lib/monitor/turboRuntime"),
     loadWorktreeSweep: () => import("@/lib/pipelines/worktreeSweep"),
     loadDeputySweep: () => import("@/lib/orchestrator/deputySweep"),
     loadRoleMappingRetirements: () => import("@/lib/roles/retirements"),
@@ -483,6 +486,14 @@ export async function startCurrentReleaseControllers(
     seatTick?.startSeatTick();
   } catch (error) {
     console.error("[seat tick] start failed", error instanceof Error ? error.name : "unknown");
+  }
+  /* Turbo (docs/design/turbo-mode.md §2.7): an episode stored on, or ended and
+     not yet returned, resumes from its stored rows after a restart or deploy. */
+  try {
+    const turbo = await loaders.loadTurboSweep?.();
+    turbo?.startTurboSweep();
+  } catch (error) {
+    console.error("[turbo] start failed", error instanceof Error ? error.name : "unknown");
   }
   /* The stale temp directory sweep (#1957): a killed test run, capture or
      stage host leaves its directory behind, and those filled the disk once.
