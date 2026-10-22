@@ -73,6 +73,13 @@ A project can be named by its key, display name or repository folder, in any
 letter case. A name that fits several projects is refused with the
 candidates, and an unknown one with the closest matches.
 
+Seat creation uses the same resolver as pipeline creation, including
+`POST /api/orchestrator/seat` and existing-conversation designation. Seat
+answers carry the canonical `project` key and a separate `displayName`.
+Legacy seats stored under a uniquely resolved display name acquire a project
+alias, preserving their tasks, conversations and seat epoch across restarts.
+Ambiguous legacy names remain separate until their identity can be proved.
+
 ### Bug reports
 
 When an orchestrator hits a Delegatus failure, it asks you first. An

@@ -4240,8 +4240,11 @@ function passedStagePublicationPark(pipeline: Pipeline, attempt: PipelineStageAt
         || detail?.startsWith("the accepted head cannot be verified before completion:") === true)));
 }
 
+const CUSTODY_ACCEPTANCE_RECOVERY = "To accept the stage's own work without a new lane, review the lane head, then call pipeline_action publish with acceptedSha set to that clean worktree HEAD (the lane's creator, its project's seat or the operator); resolve-decision instead continues in a fresh attempt.";
+
 /** Custody can refuse a pass before its head is accepted or completedAt is
- * recorded. A guarded answer may retire that attempt for a fresh repair. */
+ * recorded. A guarded answer may retire that attempt for a fresh repair, or
+ * publish with acceptedSha accepts its reviewed clean head in place. */
 function passedStageCustodyPark(pipeline: Pipeline, attempt: PipelineStageAttempt | null): boolean {
   const detail = pipeline.stateDetail;
   return pipeline.cursor?.state === "committing" && attempt?.state === "needs_decision"
@@ -5184,8 +5187,10 @@ async function commitPassedStage(
     if (remaining > 0) { ports.scheduleTick?.(remaining); return; }
   }
   if (!(await stageCommitRepairSettled(pipeline, stage, attempt, ports, persist))) return;
-  /* Every park after a requested repair keeps the refusal it was about. */
-  const parkStage = (reason: string) => park(pipeline, afterCommitRepair(attempt, reason), attempt);
+  /* Every park after a requested repair keeps the refusal it was about. A
+     custody refusal also names its in-place recovery. */
+  const parkStage = (reason: string) => park(pipeline, afterCommitRepair(attempt,
+    /^(?:settling the stage push:|stage push refused:)/.test(reason) ? `${reason}\n${CUSTODY_ACCEPTANCE_RECOVERY}` : reason), attempt);
   const pushRefusal = await stageAttemptPushRefusal(attempt.launchId);
   if (pushRefusal !== null) { await parkStage(pushRefusal); return; }
   const allowCommit = stage.kind === "run" && attempt.effectiveRole.access === "read-write";
@@ -11357,7 +11362,13 @@ export async function tickPipelines(entries: FileEntry[], ports: PipelinePorts =
           && operation.epoch === pipeline.delivery?.epoch
           && !deliveryOwnerError(pipeline, pipelineDeliveryLookup({ ...pipeline.delivery!.target, active: true }))
           && (pipeline.stateDetail?.split("\n", 1)[0] === `publishing the passed stage: publisher ${pipeline.delivery!.ownerId} at epoch ${pipeline.delivery!.epoch} is in flight or uncertain`
-            || (operation.state === "settled" && pipeline.stateDetail?.startsWith(`publishing the passed stage: publication ${operation.id} has no progress for `)));
+            || (operation.state === "settled" && pipeline.stateDetail?.startsWith(`publishing the passed stage: publication ${operation.id} has no progress for `))
+            // Reconciliation replaces the old park text with its durable
+            // result. Resume only that publication's park, preserving other
+            // decisions and the attempt's exhausted retry budget.
+            || (operation.state === "settled" && operation.passedStage === true
+              && operation.result?.ok === false && publicationNotLanded(operation.result)
+              && pipeline.stateDetail === operation.result.error && !passed?.publicationRetry?.exhausted));
         if (pipeline.state === "needs_decision" && passed && stageHeadAccepted(passed)
           && (deliveryRefusalCleared || publicationSucceeded || interruptedPublicationCleared)) {
           passed.state = "passed";
@@ -13632,9 +13643,18 @@ export async function patchPipeline(
     const publicationFence = remoteActionFence(pipeline);
     const publicationEvidence = passedPublicationEvidence(pipeline);
     let integration: PipelineStageAttempt["publicationIntegration"];
-    if (moved) {
-      if (!awaitingPassedPublication(pipeline) || pipeline.state !== "needs_decision") {
+    // A pass whose commit custody settlement refused: whoever answers the
+    // lane's decisions accepts its clean head after reviewing it, in place.
+    // A refused push can park a lane whose HEAD is still the passed commit;
+    // naming that head accepts it the same way.
+    const custodyAcceptance = req.acceptedSha !== undefined && pipeline.state === "needs_decision"
+      && passedStageCustodyPark(pipeline, pipeline.cursor ? currentAttempt(pipeline, pipeline.cursor.stageId) : null);
+    if (moved || custodyAcceptance) {
+      if (!custodyAcceptance && (!awaitingPassedPublication(pipeline) || pipeline.state !== "needs_decision")) {
         return { error: "accepting a moved head requires a parked passed stage in committing", status: 409 };
+      }
+      if (custodyAcceptance && !mayAnswerPipelineDecision(pipeline, actor, "decision")) {
+        return { error: "only the pipeline creator conversation, the project's current designated seat, or a direct user action can accept a head whose commit custody was refused", status: 403 };
       }
       if (!/^[0-9a-f]{40}$/i.test(accepted)) return { error: "publication requires an exact accepted SHA", status: 400 };
       const head = await currentPipelineBranchHead(pipeline, ports.exec);
@@ -13644,6 +13664,15 @@ export async function patchPipeline(
       if (ancestor.code !== 0) return { error: ancestor.code === 1
         ? "the previously passed commit is not an ancestor of acceptedSha"
         : "could not verify the previously passed commit is an ancestor of acceptedSha", status: 409 };
+      if (custodyAcceptance) {
+        // The stage committer never ran; nothing uncommitted may be left behind.
+        const status = await ports.exec("git", ["status", "--porcelain", "--untracked-files=all"], pipeline.worktreeDir, pipelineLiteralGitEnv());
+        if (status.code !== 0 || status.stdout.trim()) return { error: status.code === 0
+          ? "the lane worktree has uncommitted changes; commit or remove them before accepting its head"
+          : "could not verify the lane worktree is clean", status: 409 };
+      }
+    }
+    if (moved && !custodyAcceptance) {
       const attempt = currentAttempt(pipeline, pipeline.cursor!.stageId)!;
       const boundary = attempt.publicationIntegration?.acceptedSha === pipeline.lastPassedCommit
         ? attempt.publicationIntegration.passedSha : pipeline.lastPassedCommit;
@@ -13686,11 +13715,20 @@ export async function patchPipeline(
         await persist(); requestPipelineTick();
         return { pipeline: current };
       }
-      if (moved) {
-        current.lastPassedCommit = accepted;
-        currentAttempt(current, current.cursor!.stageId)!.publicationIntegration = integration;
+      if (custodyAcceptance && !(current.state === "needs_decision" && passedStageCustodyPark(current, attempt))) {
+        return { error: "the lane changed during accepted-head verification; read it again", status: 409 };
       }
-      const resumesPass = moved || resumablePassedPublication(current);
+      if (moved || custodyAcceptance) {
+        current.lastPassedCommit = accepted;
+        const acceptedAttempt = currentAttempt(current, current.cursor!.stageId)!;
+        if (custodyAcceptance) {
+          // Custody parks before completedAt; the acceptance completes the pass.
+          acceptedAttempt.completedAt ??= ports.now();
+          if (current.delivery) deliveryJournal(current, "recovery", `accepted reviewed head ${accepted} after commit custody was refused: ${
+            redactBounded((current.stateDetail ?? "").split("\n")[0]!, 300)}`, actor?.kind === "agent" ? actor.conversationId : null);
+        } else acceptedAttempt.publicationIntegration = integration;
+      }
+      const resumesPass = moved || custodyAcceptance || resumablePassedPublication(current);
       const acceptedSha = req.acceptedSha === undefined ? current.lastPassedCommit : accepted;
       if (!/^[0-9a-f]{40}$/i.test(acceptedSha)) return { error: "publication requires an exact accepted SHA", status: 400 };
       if (!current.delivery) {

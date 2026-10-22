@@ -130,11 +130,15 @@ for (const suffix of ["proved", "unrecorded", "divergent"] as const) test(`publi
     attempt.state = "needs_decision";
     const guard = await prepareStageGitGuard(launchId, h.repo, realExec, now);
     const identity = agentPublicationIdentityEnv({ ...process.env, ...guard });
-    const made = await realExec("git", ["commit", "--allow-empty", "-m", "passed successor output"], h.repo,
-      { ...identity, ...guard, GIT_AUTHOR_DATE: now, GIT_COMMITTER_DATE: now });
+    const env = { ...identity, ...guard, GIT_AUTHOR_DATE: now, GIT_COMMITTER_DATE: now };
+    // An unrecorded head has no receipt: its object is written outside a
+    // commit command and HEAD reaches it by reset.
+    const made = suffix === "unrecorded"
+      ? await realExec("git", ["commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "passed successor output"], h.repo, env)
+      : await realExec("git", ["commit", "--allow-empty", "-m", "passed successor output"], h.repo, env);
     expect(made.code, made.stderr).toBe(0);
+    if (suffix === "unrecorded") h.git("reset", "-q", "--hard", made.stdout.trim());
     const head = h.git("rev-parse", "HEAD");
-    if (suffix === "unrecorded") fs.unlinkSync(path.join(stageGitReceiptDirectory(launchId), "commits", head));
     if (suffix === "divergent") {
       h.git("checkout", "-q", "--detach", h.passed);
       h.git("commit", "-q", "--allow-empty", "-m", "foreign delivery output");
@@ -157,9 +161,67 @@ for (const suffix of ["proved", "unrecorded", "divergent"] as const) test(`publi
       expect(h.current().lastPassedCommit).toBe(h.head);
       expect(h.pushes()).toBe(0);
       expect(h.git("ls-remote", "origin", `refs/heads/${h.lane.branch}`).split(/\s+/)[0]).toBe(tip);
+      expect(h.current().stateDetail).toContain("pipeline_action publish with acceptedSha");
+    }
+    if (suffix === "unrecorded") {
+      // The seat reviews the refused head and accepts it in place.
+      const stranger = { kind: "agent" as const, role: "worker", conversationId: "conversation-of-another-lane" };
+      expect(await patchPipeline(h.lane.id, { action: "publish", acceptedSha: head }, ports, stranger)).toMatchObject({ status: 403 });
+      fs.writeFileSync(path.join(h.repo, "unsaved.txt"), "keep\n");
+      expect(await patchPipeline(h.lane.id, { action: "publish", acceptedSha: head }, ports)).toMatchObject({ status: 409,
+        error: expect.stringContaining("uncommitted changes") });
+      fs.rmSync(path.join(h.repo, "unsaved.txt"));
+      expect(h.current()).toMatchObject({ state: "needs_decision", lastPassedCommit: h.head });
+      expect((await patchPipeline(h.lane.id, { action: "publish", acceptedSha: head.slice(0, 10) }, ports)).error).toBeUndefined();
+      expect(h.current()).toMatchObject({ state: "running", lastPassedCommit: head });
+      expect(h.current().delivery!.journal.at(-1)).toMatchObject({ kind: "recovery",
+        reason: expect.stringContaining(`accepted reviewed head ${head} after commit custody was refused: settling the stage push:`) });
+      for (let n = 0; n < 3; n++) await tickPipelines([], ports);
+      expect(h.current()).toMatchObject({ lastPassedCommit: head, publishedCommit: head, state: "completed" });
+      expect(h.current().runs[0]!.attempts[0]).toMatchObject({ state: "passed", completedAt: "2026-10-20T11:00:00.000Z" });
+      expect(h.pushes()).toBe(1);
+      expect(h.git("ls-remote", "origin", `refs/heads/${h.lane.branch}`).split(/\s+/)[0]).toBe(head);
     }
     expect(h.current().runs[0]!.attempts).toHaveLength(1);
     expect(h.git("rev-parse", "HEAD")).toBe(head);
+  } finally { h.cleanup(); fs.rmSync(stageGitReceiptDirectory(launchId), { recursive: true, force: true }); }
+});
+
+// A refused foreign push parks a lane whose own HEAD never moved past the
+// passed commit. Accepting that unchanged head is the same in-place recovery.
+test("publish acceptedSha accepts a custody-parked head equal to the passed commit", async () => {
+  const h = fixture();
+  const launchId = "parked-unchanged-head";
+  try {
+    const attempt = h.lane.runs[0]!.attempts[0]!;
+    const now = "2026-10-20T10:00:00.000Z";
+    attempt.startedAt = now; attempt.completedAt = null; attempt.launchId = launchId;
+    attempt.state = "needs_decision";
+    await prepareStageGitGuard(launchId, h.repo, realExec, now);
+    const refusal = `stage push refused: commit ${"f".repeat(40)} was not created in the attempt worktree during this attempt; commit in the lane worktree and let Delegatus publish`;
+    fs.writeFileSync(path.join(stageGitReceiptDirectory(launchId), "refused"), `${refusal}\n`);
+    h.lane.lastPassedCommit = h.head;
+    h.lane.stateDetail = `${refusal}\nTo accept the stage's own work without a new lane, review the lane head, then call pipeline_action publish with acceptedSha set to that clean worktree HEAD.`;
+    savePipelines([h.lane]);
+    const ports = { ...h.ports, now: () => "2026-10-20T11:00:00.000Z" };
+    expect(h.git("rev-parse", "HEAD")).toBe(h.current().lastPassedCommit);
+    const stranger = { kind: "agent" as const, role: "worker", conversationId: "conversation-of-another-lane" };
+    expect(await patchPipeline(h.lane.id, { action: "publish", acceptedSha: h.head }, ports, stranger)).toMatchObject({ status: 403 });
+    fs.writeFileSync(path.join(h.repo, "unsaved.txt"), "keep\n");
+    expect(await patchPipeline(h.lane.id, { action: "publish", acceptedSha: h.head }, ports)).toMatchObject({ status: 409,
+      error: expect.stringContaining("uncommitted changes") });
+    fs.rmSync(path.join(h.repo, "unsaved.txt"));
+    expect(h.current()).toMatchObject({ state: "needs_decision", lastPassedCommit: h.head });
+    expect((await patchPipeline(h.lane.id, { action: "publish", acceptedSha: h.head }, ports)).error).toBeUndefined();
+    expect(h.current()).toMatchObject({ state: "running", lastPassedCommit: h.head });
+    expect(h.current().delivery!.journal.at(-1)).toMatchObject({ kind: "recovery",
+      reason: expect.stringContaining(`accepted reviewed head ${h.head} after commit custody was refused: stage push refused:`) });
+    for (let n = 0; n < 3; n++) await tickPipelines([], ports);
+    expect(h.current()).toMatchObject({ lastPassedCommit: h.head, publishedCommit: h.head, state: "completed" });
+    expect(h.current().runs[0]!.attempts).toHaveLength(1);
+    expect(h.current().runs[0]!.attempts[0]).toMatchObject({ state: "passed", completedAt: "2026-10-20T11:00:00.000Z" });
+    expect(h.pushes()).toBe(1);
+    expect(h.git("ls-remote", "origin", `refs/heads/${h.lane.branch}`).split(/\s+/)[0]).toBe(h.head);
   } finally { h.cleanup(); fs.rmSync(stageGitReceiptDirectory(launchId), { recursive: true, force: true }); }
 });
 
@@ -1092,6 +1154,205 @@ async function legacyPublication(h: ReturnType<typeof fixture>) {
   savePipelines([h.lane]);
 }
 
+async function restartedPublicationController(clock = "2026-10-19T10:00:00.000Z", bounded = false, crashLog?: string) {
+  const script = `const { realExec } = await import(${JSON.stringify(path.join(import.meta.dir, "../workflows/provision.ts"))});
+    const { defaultPipelinePorts, tickPipelines } = await import(${JSON.stringify(path.join(import.meta.dir, "engine.ts"))});
+    const fs = await import("node:fs");
+    const crashLog = ${JSON.stringify(crashLog ?? null)};
+    const fixtureExec = ${publicationFixtureExec.toString()};
+    const ports = { ...defaultPipelinePorts(), exec: async (...args) => {
+      if (crashLog && args[0] === "git" && args[1][0] === "push") {
+        fs.appendFileSync(crashLog, JSON.stringify(args[1]) + "\\n");
+        process.exit(0);
+      }
+      return fixtureExec(...args);
+    }, now: () => ${JSON.stringify(clock)}, scheduleTick: () => {},
+      conversationAgentActive: async () => false, stageHostResident: async () => false,
+      paneAgentAlive: async () => false, getFlow: () => null, worktreePresent: () => true };
+    const { tickPipelinesController } = await import(${JSON.stringify(path.join(import.meta.dir, "controllerPass.ts"))});
+    const { settlePipelineControllerJobs } = await import(${JSON.stringify(path.join(import.meta.dir, "controllerJobs.ts"))});
+    for (let n = 0; n < 8; n++) {
+      if (${bounded}) { await tickPipelinesController([], ports); await settlePipelineControllerJobs(); }
+      else await tickPipelines([], ports);
+    }`;
+  const result = await realExec(process.execPath, ["-e", script], process.cwd(), process.env, { timeoutMs: 30_000 });
+  expect(result.code, result.stderr).toBe(0);
+}
+
+async function leaveDeadPublication(h: ReturnType<typeof fixture>) {
+  h.git("reset", "--hard", h.passed);
+  h.lane.state = "running"; h.lane.stateDetail = null;
+  h.lane.delivery!.operation = { id: "accepted-publication", epoch: 1, sha: h.passed,
+    state: "pending", passedStage: true, requestKey: "pass:build:1" };
+  savePipelines([h.lane]);
+  const script = `const { publishPipelineBranch } = await import(${JSON.stringify(path.join(import.meta.dir, "git.ts"))});
+    const { findPipelineRecord, withDeliveryMutationAsync } = await import(${JSON.stringify(path.join(import.meta.dir, "store.ts"))});
+    const { realExec } = await import(${JSON.stringify(path.join(import.meta.dir, "../workflows/provision.ts"))});
+    const id = ${JSON.stringify(h.lane.id)};
+    await publishPipelineBranch(findPipelineRecord(id), async (...args) => {
+      if (args[0] === "git" && args[1][0] === "push") {
+        await withDeliveryMutationAsync(tx => {
+          const lane = tx.get(id);
+          lane.state = "needs_decision";
+          lane.stateDetail = "publishing the passed stage: publication " + lane.delivery.operation.id + " has no progress for 187s";
+          tx.put(lane);
+        });
+        process.exit(0);
+      }
+      return realExec(...args);
+    }, { acceptedSha: ${JSON.stringify(h.passed)} });`;
+  const died = await realExec(process.execPath, ["-e", script], process.cwd(), process.env, { timeoutMs: 30_000 });
+  expect(died.code, died.stderr).toBe(0);
+  const interrupted = h.current().delivery!.operation!;
+  expect(interrupted.state).toBe("running");
+  expect(interrupted.executor!.pid).not.toBe(process.pid);
+  expect(interrupted.executor!.identity).toBeTruthy();
+  expect(fs.existsSync(interrupted.executor!.lock)).toBe(true);
+}
+
+test.each([false, true])("startup retries a parked publication left by a dead Viewer generation (bounded controller: %s)", async bounded => {
+  const h = fixture();
+  try {
+    await leaveDeadPublication(h);
+    await restartedPublicationController(undefined, bounded);
+    expect(h.current()).toMatchObject({ state: "completed", lastPassedCommit: h.passed, publishedCommit: h.passed });
+    expect(h.current().runs[0]!.attempts).toHaveLength(1);
+    expect(h.git("ls-remote", "origin", `refs/heads/${h.lane.branch}`).split(/\s/)[0]).toBe(h.passed);
+  } finally { h.cleanup(); }
+}, 90_000);
+
+test("bounded startup returns during publication recovery and labels its remote wait", async () => {
+  const h = fixture();
+  const { tickPipelinesController } = await import("./controllerPass");
+  const { settlePipelineControllerJobs, pipelineControllerJobLanes } = await import("./controllerJobs");
+  const { viewerLoopMonitor } = await import("@/lib/viewerLoopMonitor");
+  let enter!: () => void, release!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const released = new Promise<void>(resolve => { release = resolve; });
+  let reads = 0, label: string | undefined;
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await leaveDeadPublication(h);
+    const ports = { ...h.ports, now: () => "2026-10-19T10:00:00.000Z", scheduleTick: () => {},
+      exec: async (...args: Parameters<typeof realExec>) => {
+        if (args[0] === "timeout" && args[1].includes("ls-remote")) {
+          reads++;
+          label = viewerLoopMonitor.current();
+          enter();
+          await released;
+        }
+        return h.ports.exec(...args);
+      } };
+    // The phase completes before the remote observation is allowed to finish.
+    await Promise.race([
+      Promise.all([tickPipelinesController([], ports), entered]),
+      new Promise<never>((_, reject) => { deadline = setTimeout(() => reject(new Error("publication recovery did not reach its remote wait")), 10_000); }),
+    ]);
+    clearTimeout(deadline);
+    expect(label).toBe("pipelines.publication-recovery");
+    expect(pipelineControllerJobLanes()).toEqual([h.lane.id]);
+    await tickPipelinesController([], ports);
+    expect(reads).toBe(1);
+    expect(h.current().delivery!.operation!.state).toBe("running");
+  } finally {
+    clearTimeout(deadline);
+    release();
+    await settlePipelineControllerJobs();
+    h.cleanup();
+  }
+});
+
+test("takeover reconciles the departed publisher generation before changing its epoch", async () => {
+  const h = fixture();
+  try {
+    await leaveDeadPublication(h);
+    const { reconcilePipelinePublication } = await import("./git");
+    const { takeoverPipelineDelivery } = await import("./store");
+    expect(await reconcilePipelinePublication(h.lane.id, 1, realExec, null)).toBeNull();
+    const taken = await takeoverPipelineDelivery(h.lane.id, h.lane.id, 1, "Recover departed publisher", null);
+    expect(taken.error).toBeUndefined();
+    expect(taken.pipeline!.delivery!.epoch).toBe(2);
+  } finally { h.cleanup(); }
+});
+
+test("a matching live publisher generation is never duplicated by startup recovery", async () => {
+  const h = fixture();
+  const { acquirePublicationFileLock, releasePublicationFileLock, reconcilePipelinePublication } = await import("./git");
+  let descriptor: number | null = null;
+  try {
+    await legacyPublication(h);
+    const { procBackend } = await import("@/lib/proc");
+    const current = h.current();
+    const executor = current.delivery!.operation!.executor!;
+    descriptor = await acquirePublicationFileLock(executor.lock);
+    expect(descriptor).not.toBeNull();
+    executor.identity = procBackend.processIdentity(process.pid);
+    delete executor.finished;
+    savePipelines([current]);
+    let remoteReads = 0;
+    expect(await reconcilePipelinePublication(h.lane.id, 1, async (...args) => {
+      remoteReads++; return realExec(...args);
+    }, null)).toContain("still in flight");
+    expect(remoteReads).toBe(0);
+    expect(h.current().delivery!.operation!.state).toBe("running");
+    await restartedPublicationController();
+    expect(h.current().delivery!.operation!.state).toBe("running");
+    expect(h.current().publishedCommit).toBeNull();
+    releasePublicationFileLock(descriptor!); descriptor = null;
+    // The Viewer can survive a failed finished-marker write. Once its
+    // publisher has released the fence, that generation no longer blocks.
+    expect(await reconcilePipelinePublication(h.lane.id, 1, realExec, null)).toBeNull();
+    expect(h.current().delivery!.operation!.state).toBe("settled");
+  } finally { if (descriptor !== null) releasePublicationFileLock(descriptor); h.cleanup(); }
+});
+
+test("departed publication retries exhaust their durable budget across controller restarts", async () => {
+  const h = fixture();
+  try {
+    await leaveDeadPublication(h);
+    const pushes = path.join(h.root, "interrupted-pushes");
+    let clock = Date.parse("2026-10-19T10:00:00.000Z");
+    const restart = () => restartedPublicationController(new Date(clock).toISOString(), false, pushes);
+    // Each retry loses its actual controller process at the push boundary.
+    // A second fresh controller reconciles that death and persists the wait.
+    await restart();
+    expect(h.current().runs[0]!.attempts[0]!.publicationRetry).toMatchObject({ failures: 1 });
+    await restart();
+    expect(h.current().runs[0]!.attempts[0]!.publicationRetry).toMatchObject({ failures: 2 });
+    for (const wait of [5 * 60_000, 15 * 60_000]) {
+      clock += wait;
+      await restart();
+      await restart();
+    }
+    expect(h.current().state).toBe("needs_decision");
+    expect(h.current().stateDetail!.split("\n")[0]).toContain("retried 3 times");
+    expect(h.current().runs[0]!.attempts[0]!.publicationRetry).toMatchObject({ sha: h.passed, failures: 3, exhausted: true });
+    const recorded = () => fs.readFileSync(pushes, "utf8").trim().split("\n").map(line => JSON.parse(line) as string[]);
+    expect(recorded()).toHaveLength(3);
+    for (const argv of recorded()) expect(argv).toContain(`${h.passed}:refs/heads/${h.lane.branch}`);
+    clock += 60 * 60_000;
+    await restart();
+    expect(h.current().state).toBe("needs_decision");
+    expect(recorded()).toHaveLength(3);
+    expect(h.current().runs[0]!.attempts).toHaveLength(1);
+  } finally { h.cleanup(); }
+}, 90_000);
+
+test.each(["paused", "needs_decision"] as const)("startup preserves a newer %s decision over an interrupted publication", async state => {
+  const h = fixture();
+  try {
+    await leaveDeadPublication(h);
+    const current = h.current();
+    current.state = state;
+    current.stateDetail = "a newer operator decision";
+    savePipelines([current]);
+    await restartedPublicationController();
+    expect(h.current().state).toBe(state);
+    expect(h.current().stateDetail).toBe("a newer operator decision");
+    expect(h.current().publishedCommit).toBeNull();
+  } finally { h.cleanup(); }
+});
+
 for (const action of ["publish", "retry-stage"] as const) for (const alreadyRemote of [false, true]) test(`marker-less legacy reconciliation preserves the original passed review for ${action} (already remote: ${alreadyRemote})`, async () => {
   const h = fixture();
   const { reconcilePipelinePublication } = await import("./git");
@@ -1138,7 +1399,7 @@ for (const condition of ["unrelated detail", "no pass", "different passed SHA", 
   } finally { h.cleanup(); }
 });
 
-for (const changed of ["id", "epoch", "sha"] as const) test(`reconciliation leaves a publication whose ${changed} changes during its remote read untouched`, async () => {
+for (const changed of ["id", "epoch", "sha", "executor"] as const) test(`reconciliation leaves a publication whose ${changed} changes during its remote read untouched`, async () => {
   const h = fixture();
   const { reconcilePipelinePublication } = await import("./git");
   try {
@@ -1151,6 +1412,7 @@ for (const changed of ["id", "epoch", "sha"] as const) test(`reconciliation leav
         if (changed === "id") operation.id = "replacement-operation";
         if (changed === "epoch") { operation.epoch = 2; current.delivery!.epoch = 2; }
         if (changed === "sha") operation.sha = h.head;
+        if (changed === "executor") operation.executor!.identity = "replacement-generation";
         savePipelines([current]);
       }
       return result;

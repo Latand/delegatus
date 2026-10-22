@@ -45,6 +45,12 @@ either engine query what both have learned.
 With shared memory switched on for a project, each message you send to a
 Claude or Codex agent also carries the memories selected as relevant to it.
 
+Automatic memory hooks apply to agents launched by Delegatus. Your own Codex
+sessions keep their existing hooks. Delegatus passes its Codex hook through
+launch settings; it stores no access key in the generated program. Upgrade
+cleanup removes earlier global Delegatus hooks and their trust settings while
+preserving your personal entries.
+
 - **Where.** The **Shared memory** page under **Settings** in the sidebar's ⋯
   menu. The Settings row names memory's state in a word: working, off, key
   needed or capped.

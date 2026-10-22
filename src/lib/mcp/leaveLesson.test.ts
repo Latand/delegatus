@@ -96,6 +96,55 @@ test("leave_lesson is a registered, mutating tool with a bounded schema", () => 
   expect(TOOL_INPUT_SCHEMAS.leave_lesson.safeParse({ clientRequestId: "x", lesson: { scope: "team", rule: RULE, why: "w" } }).success).toBe(false);
 });
 
+test("applied and misled accept only rules this attempt received, including on a none answer", async () => {
+  const { learnedRulesForLaunchProfile } = await import("@/lib/memory/roleLaunch");
+  const { roleMemoryCollection, lessonRequest } = await import("@/lib/memory/roleStore");
+  const record = pipeline();
+  const ids = ["r_00000000000000a1", "r_00000000000000a2"];
+  const scope = `role:${PROJECT}:builder`;
+  roleMemoryCollection(true)!.boundedPatch(5, tx => {
+    for (const id of ids) tx.put({ kind: "rule", id, scope, rule: `Check durable ownership before replaying persisted receipts for ${id.at(-1)}.`, why: "An earlier replay accepted a receipt from another owner.", state: "active", hints: [], source: { project: PROJECT, pipelineId: "seed", stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "seed" }, createdAt: "2026-10-22T00:00:00.000Z", changedAt: "2026-10-22T00:00:00.000Z" });
+    tx.put({ kind: "scope", scope, revision: 1, active: ids, history: [] });
+  });
+  await learnedRulesForLaunchProfile({ learnedRules: { project: PROJECT, roleId: "builder" } }, { engine: "codex", conversationId: "conversation_fix", cwd: process.env.LLV_STATE_DIR!, nativeMemoryEnabled: false, attempt: { pipelineId: record.id, stageId: "fix", attempt: 1 } });
+  const api = serviceAs("conversation_fix", false, record);
+  await api.callTool("stage_report", { clientRequestId: "usage-report", verdict: "pass" });
+  const none = "The existing guidance covers this task.";
+  roleMemoryCollection()!.boundedPatch(4, tx => {
+    const current = tx.get(`r:${ids[0]}`);
+    if (current?.kind !== "rule") throw Error("missing usage fixture");
+    tx.put({ ...current, id: "r_00000000000000ff" });
+    tx.put({ kind: "scope", scope, revision: 2, active: [...ids, "r_00000000000000ff"], history: [] });
+  });
+  await learnedRulesForLaunchProfile({ learnedRules: { project: PROJECT, roleId: "builder" } }, { engine: "codex", conversationId: "conversation_fix", cwd: process.env.LLV_STATE_DIR!, nativeMemoryEnabled: false, attempt: { pipelineId: record.id, stageId: "fix", attempt: 2 } });
+  for (const [index, invalid] of [
+    { applied: ids[0] }, { applied: [ids[0], ids[0]] }, { misled: Array(6).fill(ids[1]) }, { applied: [0] },
+  ].entries()) expect(await api.callTool("leave_lesson", { clientRequestId: `usage-invalid-${index}`, none, ...invalid })).toMatchObject({ ok: false });
+  expect(await api.callTool("leave_lesson", { clientRequestId: "usage-foreign", none, applied: ["r_00000000000000ff"] })).toMatchObject({ ok: false, details: { code: "RULE_NOT_DELIVERED" } });
+  expect(await api.callTool("leave_lesson", { clientRequestId: "usage-overlap", none, applied: [ids[0]], misled: [ids[0]] })).toMatchObject({ ok: false });
+  expect(await api.callTool("leave_lesson", { clientRequestId: "usage-ok", none, applied: [ids[0]], misled: [ids[1]] })).toMatchObject({ ok: true });
+  expect(lessonRequest(record.id, "fix", 1)).toMatchObject({ applied: [ids[0]], misled: [ids[1]], none });
+  expect(await api.callTool("leave_lesson", { clientRequestId: "usage-again", none, applied: [ids[0]] })).toMatchObject({ ok: false, details: { code: "LESSON_LIMIT" } });
+});
+
+test.each(["lesson", "rewrite", "problem"] as const)("a %s answer preserves optional delivered-rule measurements", async kind => {
+  const { learnedRulesForLaunchProfile } = await import("@/lib/memory/roleLaunch");
+  const { leaveLessons, recordLessonRequest, lessonRequest } = await import("@/lib/memory/roleStore");
+  const source = { project: PROJECT, pipelineId: `usage-seed-${fixture}`, stageId: "build", attempt: 1, roleId: "builder", fixRound: false, conversationId: "usage-seed" };
+  recordLessonRequest({ ...source, at: "2026-10-22T00:00:00.000Z" });
+  const added = leaveLessons({ source, request: source, lessons: [{ scope: "role", rule: "Verify all persisted owner fields before replaying an acknowledgement.", why: "An earlier replay accepted the wrong owner." }], none: null }).left[0];
+  const id = added.mergedInto ?? added.id;
+  const record = pipeline();
+  await learnedRulesForLaunchProfile({ learnedRules: { project: PROJECT, roleId: "builder" } }, { engine: "codex", conversationId: "conversation_fix", cwd: process.env.LLV_STATE_DIR!, nativeMemoryEnabled: false, attempt: { pipelineId: record.id, stageId: "fix", attempt: 1 } });
+  const api = serviceAs("conversation_fix", false, record);
+  await api.callTool("stage_report", { clientRequestId: "usage-kind-report", verdict: "pass" });
+  const answer = kind === "problem" ? { problem: { statement: "A retained operation is missing its ownership record.", evidence: "The isolated fixture reproduced the missing owner." } }
+    : kind === "rewrite" ? { rewrite: { id, rule: "Check the durable owner and operation identity before replaying a persisted acknowledgement.", why: "The earlier rule omitted the operation identity." } }
+    : { lesson: { scope: "role", rule: "Inspect every consumer of a shared contract before changing its defaults.", why: "An earlier default differed between two consumers." } };
+  expect(await api.callTool("leave_lesson", { clientRequestId: "usage-kind-answer", ...answer, applied: [id], misled: [] })).toMatchObject({ ok: true });
+  expect(lessonRequest(record.id, "fix", 1)).toMatchObject({ applied: [id], misled: [] });
+});
+
 test("an accepted fix report asks for a lesson naming the handed findings, and leave_lesson stores an abstract rule", async () => {
   const review = await call("conversation_review", "stage_report", { verdict: "fail", findings: [{ severity: "P1", text: "empty input throws" }] });
   expect(review.ok).toBe(true);
