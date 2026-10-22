@@ -1,14 +1,14 @@
 import { performanceSpans, performanceProcess } from "@/lib/performanceSpans";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { accountMutationHeld, AccountCommitBusyError } from "@/lib/accounts/accountMutationContext";
-import { recordBlockingWait, currentWaitCorrelation } from "@/lib/blockingWaits";
+import { recordBlockingWait, currentWaitCorrelation, type StateLockHolder } from "@/lib/blockingWaits";
 import { FileTransactionAdmissionError, FileTransactionBusyError } from "./fileTransaction";
 import { isMainThread } from "node:worker_threads";
 
 /** Only acquisition failures carry this type. Never wrap an error raised after
  * an application callback entered: retrying it could repeat external effects. */
 export class StateLockDeferredError extends FileTransactionBusyError {
-  constructor(readonly callSite: string, readonly reason: "sqlite" | "lease" = "sqlite") {
+  constructor(readonly callSite: string, readonly reason: "sqlite" | "lease" = "sqlite", readonly holder?: StateLockHolder) {
     super(`state admission is busy at ${callSite}`);
     this.name = "StateLockDeferredError";
   }
@@ -29,7 +29,7 @@ export function stateLockDeferral(error: unknown): StateLockDeferredError | null
   return null;
 }
 
-type Wait = { start: number; deadline: number; attempts: number; maxSliceMs: number; backoffMs: number; synchronousSleepMs?: number; callSite: string; reason: string; subject?: string; completed?: boolean };
+type Wait = { start: number; deadline: number; attempts: number; maxSliceMs: number; backoffMs: number; synchronousSleepMs?: number; callSite: string; reason: string; subject?: string; completed?: boolean; holder?: StateLockHolder };
 const admission = new AsyncLocalStorage<Wait>();
 /** An admitted callback owns its effects and any later resource admissions.
  * Do not inherit the acquisition retry context into that work. */
@@ -44,7 +44,7 @@ export function outsideStateLockWait<T>(operation: () => T): T {
 }
 const active = new Set<Wait>();
 export const STATE_LOCK_WAIT_MS = 30_000;
-const totals = { completed: 0, refused: 0, totalMs: 0, maxMs: 0, buckets: [0, 0, 0, 0, 0] };
+const totals = { completed: 0, refused: 0, deferred: 0, totalMs: 0, maxMs: 0, buckets: [0, 0, 0, 0, 0] };
 
 /** Fixed-size lifetime counters; the bounded recent sample ring is separate.
  * Histogram boundaries are 5, 50, 250 and 1000 milliseconds. */
@@ -69,7 +69,8 @@ function record(wait: Wait, outcome: string, synchronous: boolean): void {
   const durationMs = performance.now() - wait.start;
   if (outcome !== "waiting") {
     totals.completed++;
-    if (outcome !== "success") totals.refused++;
+    if (outcome === "deferred") totals.deferred++;
+    else if (outcome !== "success") totals.refused++;
     totals.totalMs += durationMs;
     totals.maxMs = Math.max(totals.maxMs, durationMs);
     totals.buckets[durationMs < 5 ? 0 : durationMs < 50 ? 1 : durationMs < 250 ? 2 : durationMs < 1000 ? 3 : 4]!++;
@@ -79,6 +80,7 @@ function record(wait: Wait, outcome: string, synchronous: boolean): void {
     durationMs, refused: outcome !== "success" && outcome !== "waiting",
     correlation: currentWaitCorrelation() ?? { label: wait.callSite },
     stateWait: { callSite: wait.callSite, reason: wait.reason, outcome, attempts: wait.attempts,
+      ...(wait.holder ? { holder: wait.holder } : {}),
       maxSliceMs: wait.maxSliceMs, backoffMs: wait.backoffMs, synchronousSleepMs: wait.synchronousSleepMs ?? 0, release: revision && /^[a-f0-9]{7,40}$/.test(revision) ? revision : null, pid: process.pid, processKind: stateLockProcessKind() },
   });
 }
@@ -100,7 +102,7 @@ export function stateLockAttempt<T>(callSite: string, operation: () => T, subjec
           try { const result = stateLockAttempt(callSite, operation, subject); outcome = "success"; return result; }
           catch (error) {
             if (!(error instanceof StateLockDeferredError)) throw error;
-            wait.callSite = error.callSite; wait.reason = error.reason;
+            wait.callSite = error.callSite; wait.reason = error.reason; wait.holder = error.holder;
             if (performance.now() >= wait.deadline) { outcome = "timeout"; throw new FileTransactionBusyError(`state admission timed out at ${wait.callSite}`); }
             if (!reportedWaiting && performance.now() - start >= 50) {
               reportedWaiting = true;
@@ -130,7 +132,7 @@ export function stateLockAttempt<T>(callSite: string, operation: () => T, subjec
     const deferred = error instanceof StateLockDeferredError ? error : new StateLockDeferredError(callSite);
     refused = true;
     if (!context) record({ start, deadline: start, attempts: 1, maxSliceMs: performance.now() - start, backoffMs: 0,
-      callSite: deferred.callSite, reason: deferred.reason, subject }, "deferred", true);
+      callSite: deferred.callSite, reason: deferred.reason, subject, holder: deferred.holder }, "deferred", true);
     if (accountMutationHeld()) throw new AccountCommitBusyError("state writer is busy during account commit");
     throw deferred;
   } finally {
@@ -165,7 +167,8 @@ export async function waitForStateLock<T>(callSite: string, operation: () => T |
         catch (error) {
           const deferred = stateLockDeferral(error);
           if (!deferred) throw error;
-          wait.callSite = deferred.callSite; wait.reason = deferred.reason;
+          wait.callSite = deferred.callSite; wait.reason = deferred.reason; wait.holder = deferred.holder;
+          if (wait.deadline === wait.start) { outcome = "deferred"; throw deferred; }
           if (performance.now() >= wait.deadline) { outcome = "timeout"; throw new FileTransactionBusyError(`state admission timed out at ${wait.callSite}`); }
           const backoff = Math.min(25, 2 ** Math.min(wait.attempts - 1, 5), wait.deadline - performance.now());
           const before = performance.now();

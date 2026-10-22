@@ -206,7 +206,7 @@ if (kind === "pipeline") {
   } as typeof mutate;
   const boundedPatch = SqliteStateCollection.prototype.boundedPatch;
   SqliteStateCollection.prototype.boundedPatch = function gatedCreate(this: InstanceType<typeof SqliteStateCollection>, limit, operation, ...args) {
-    return boundedPatch.call(this, limit, (tx) => operation({
+    return boundedPatch.bind(this)(limit, (tx) => operation({
       ...tx,
       pipelineLookup: (query) => {
         const result = tx.pipelineLookup(query);

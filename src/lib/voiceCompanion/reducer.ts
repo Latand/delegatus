@@ -1,4 +1,4 @@
-import type { CompanionEvent, CompanionMode, CompanionUsage, Delivery, Id, Proposal, Recipient } from "./contract";
+import type { CompanionEvent, CompanionMode, CompanionUsage, Delivery, Id, Proposal, Recipient, ResumableCall } from "./contract";
 import { admitDelegationProposal, type GateRefusal } from "./gate";
 import { liveProposalRefusal, VOICE_ASK_ENVELOPE_CHARS } from "./liveGate";
 
@@ -115,6 +115,10 @@ export interface CompanionState {
   seen: ReadonlySet<Id>;
   levelSeq: number;
   reports: ReadonlySet<Id>;
+  /** The call dropped and can go on as the same conversation; set by the store, never by an event. */
+  resumable: ResumableCall | null;
+  /** This session continues a call that dropped; set by the store. */
+  reconnected: boolean;
 }
 
 /** Lines kept for the static transcript; the companion shows only the newest. */
@@ -126,7 +130,7 @@ const ID_LIMIT = 200;
 export const INITIAL_COMPANION_STATE: CompanionState = {
   usage: null, orchestratorReports: [], closure: null,
   mode: null, generation: 0, phase: "offline", mouth: 0, playedMs: 0, revision: 0, lines: [], calls: [], delegation: null,
-  playing: null, error: null, errorResetsAt: null, seen: new Set(), levelSeq: -1, reports: new Set(), deliveryCards: [],
+  playing: null, error: null, errorResetsAt: null, seen: new Set(), levelSeq: -1, reports: new Set(), deliveryCards: [], resumable: null, reconnected: false,
 };
 
 const validId = (value: unknown): value is Id => typeof value === "string" && value.length > 0 && value.length <= ID_LIMIT;
