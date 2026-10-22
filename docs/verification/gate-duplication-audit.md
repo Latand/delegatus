@@ -417,3 +417,32 @@ suite. Commit hooks ran whitespace, privacy and lint with no bypass.
 The runtime group retains its complete validated verdict for one invocation,
 so optional cache eviction cannot run a consumer after its build was skipped.
 All existing gate temp-root prefixes and cleanup behavior are preserved.
+
+### Alternating warm controls
+
+A follow-up used one unchanged checkout per product input, alternating the
+old and new implementations three times. The first old run warmed compiler
+output; the first new run established pass receipts. The third pair is shown
+below. Every follow-up run passed. Scope limits, product commit, tree, base,
+dependencies and environment stayed fixed. Load and PSI were sampled every
+five seconds. The docs-only pair above already had comparable load.
+
+| Input | Before / after, seconds | Median load1, before / after | Median PSI, before / after | Passes reused |
+| --- | --- | --- | --- | --- |
+| Small product change | 90.72 / 14.32 | 22.9 / 19.6 | 34.6 / 34.6 | 5 |
+| Merge of main | 20.20 / 6.56 | 18.9 / 18.3 | 15.5 / 13.9 | 3 |
+
+These warm comparisons measure the intended repeated verification. They
+remove about 76 seconds on the small input at matching measured CPU pressure,
+and about 14 seconds on this smaller merge at comparable load and pressure.
+The retained privacy check and receipt validation account for the remaining
+time. Cold-run speed gains are unproven.
+
+The measurements used gate source `f61c6aa84`. Subsequent key hardening binds
+spawn authority, the structured-host stamp, Viewer port, signal domain and
+GitHub configuration path. A read of the owned benchmark environment confirmed
+all five were unset during these runs; their binding does not change these
+comparison inputs. Endpoint invalidation was observed red, then green, through
+the public fingerprint function. The hook regression also covers an unchanged
+endpoint reusing its pass and a changed endpoint forcing a fresh run. Different
+producer and publication execution contexts conservatively run fresh checks.
