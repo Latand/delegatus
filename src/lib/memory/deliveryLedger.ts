@@ -132,7 +132,7 @@ function deliveryLedgerIndexWorkerPath(cwd = process.cwd()): string {
 }
 
 /** Build retained-history indexes in a leased worker before a launch uses the ledger. */
-export async function prepareDeliveryLedgerIndexes(): Promise<void> {
+export async function prepareDeliveryLedgerIndexes(options: { workerStartedBarrierForTest?: string } = {}): Promise<void> {
   const requestedDirectory = statePath("role-memory");
   await fs.promises.mkdir(requestedDirectory, { recursive: true, mode: 0o700 });
   const directory = await fs.promises.realpath(requestedDirectory);
@@ -159,12 +159,22 @@ export async function prepareDeliveryLedgerIndexes(): Promise<void> {
   }
   const pending = indexPreparations.get(filename);
   if (pending) return pending;
+  const workerEnv: NodeJS.ProcessEnv = { ...process.env, LLV_ROLE_MEMORY_DELIVERY_DIRECTORY: directory };
+  delete workerEnv.LLV_ROLE_MEMORY_INDEX_TEST_BARRIER;
+  if (options.workerStartedBarrierForTest !== undefined) {
+    const barrier = path.resolve(options.workerStartedBarrierForTest);
+    const relative = path.relative(directory, barrier);
+    if (!path.isAbsolute(options.workerStartedBarrierForTest) || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      throw Error("memory delivery index test barrier must stay inside its state directory");
+    }
+    workerEnv.LLV_ROLE_MEMORY_INDEX_TEST_BARRIER = barrier;
+  }
   const preparation = new Promise<void>((resolve, reject) => {
     const child = spawnLeasedHelper("role-memory-delivery-index", {
       command: process.execPath,
       args: [deliveryLedgerIndexWorkerPath()],
       cwd: process.cwd(),
-      env: { ...process.env, LLV_ROLE_MEMORY_DELIVERY_DIRECTORY: directory },
+      env: workerEnv,
     }, statePath());
     let settled = false;
     const settle = (error?: Error) => {

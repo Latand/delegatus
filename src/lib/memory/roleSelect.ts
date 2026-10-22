@@ -12,6 +12,7 @@ import { reserveSelectionSpend, settleSelectionSpend } from "./roleSelectionSpen
 
 export const MEMORY_SELECTION_DEADLINE_MS = 3_000;
 export const SHADOW_BLOCK_MAX_BYTES = 24_000;
+const BM25_SCORE_BATCH_SIZE = 16;
 type Scopes = readonly { scope: string; rules: readonly RoleMemoryRule[] }[];
 export interface ShadowSelection { selector: "whole" | "bm25" | "jev"; selectorVersion: string; reason: string; scores: [string, number][]; shadowIds: string[] }
 type Options = { apiKey?: string | null; fetch?: typeof fetch; signal?: AbortSignal; timeoutMs?: number; now?: () => Date };
@@ -44,10 +45,23 @@ async function bm25(rules: readonly RoleMemoryRule[], brief: string, signal: Abo
     documents.push(counts); lengths.push(words.length);
   }
   const mean = lengths.reduce((a, b) => a + b, 0) / (rules.length || 1) || 1;
-  return documents.map((doc, i) => [...query].reduce((sum, word) => {
-    const tf = doc.get(word) ?? 0, df = frequencies.get(word) ?? 0;
-    return sum + Math.log(1 + (rules.length - df + 0.5) / (df + 0.5)) * tf * 2.2 / (tf + 1.2 * (0.25 + 0.75 * lengths[i] / mean));
-  }, 0));
+  const words = [...query];
+  const scores: number[] = [];
+  for (let start = 0; start < documents.length; start += BM25_SCORE_BATCH_SIZE) {
+    signal.throwIfAborted();
+    const end = Math.min(start + BM25_SCORE_BATCH_SIZE, documents.length);
+    for (let i = start; i < end; i++) {
+      const doc = documents[i];
+      let score = 0;
+      for (const word of words) {
+        const tf = doc.get(word) ?? 0, df = frequencies.get(word) ?? 0;
+        score += Math.log(1 + (rules.length - df + 0.5) / (df + 0.5)) * tf * 2.2 / (tf + 1.2 * (0.25 + 0.75 * lengths[i] / mean));
+      }
+      scores.push(score);
+    }
+    if (end < documents.length) { await yieldToRuntime(); signal.throwIfAborted(); }
+  }
+  return scores;
 }
 
 async function pack(scopes: Scopes, rules: RoleMemoryRule[], scores: number[], threshold: number, signal: AbortSignal): Promise<Pick<ShadowSelection, "scores" | "shadowIds">> {

@@ -14,6 +14,17 @@ try {
   if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 }
 const { Database } = await import("bun:sqlite");
+const testBarrier = process.env.LLV_ROLE_MEMORY_INDEX_TEST_BARRIER;
+if (testBarrier) {
+  fs.writeFileSync(path.join(testBarrier, "worker-ready"), "ready");
+  await new Promise<void>((resolve, reject) => {
+    const watcher = fs.watch(testBarrier, () => {
+      if (fs.existsSync(path.join(testBarrier, "continue"))) { watcher.close(); resolve(); }
+    });
+    watcher.once("error", reject);
+    if (fs.existsSync(path.join(testBarrier, "continue"))) { watcher.close(); resolve(); }
+  });
+}
 const db = new Database(filename, { create: true });
 try {
   db.exec("PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;");

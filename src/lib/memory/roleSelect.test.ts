@@ -149,6 +149,23 @@ test("an expired BM25 deadline returns a bounded shadow result", async () => {
   expect(result).toMatchObject({ selector: "whole", reason: "selector-timeout", scores: [], shadowIds: [] });
 });
 
+test("BM25 scoring stops at a cooperative batch after cancellation", async () => {
+  const pool = Array.from({ length: 1_500 }, (_, i) => rule(`r_${i.toString(16).padStart(16, "0")}`, `receipt ownership replay ${i}`));
+  const abort = new AbortController();
+  const originalLog = Math.log;
+  let scoringCalls = 0;
+  Math.log = ((value: number) => {
+    scoringCalls++;
+    if (scoringCalls === 1) abort.abort();
+    return originalLog(value);
+  }) as typeof Math.log;
+  try {
+    const result = await selectRoleMemory([{ scope: "machine", rules: pool }], "receipt ownership replay", { apiKey: null, signal: abort.signal });
+    expect(result).toMatchObject({ selector: "whole", reason: "selector-timeout", scores: [], shadowIds: [] });
+    expect(scoringCalls).toBeLessThanOrEqual(16 * 3);
+  } finally { Math.log = originalLog; }
+});
+
 test("a changed key after provider admission sends no rules", async () => {
   const savedKey = process.env.OPENROUTER_API_KEY;
   process.env.OPENROUTER_API_KEY = "first";

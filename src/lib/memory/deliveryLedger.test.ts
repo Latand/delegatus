@@ -43,15 +43,38 @@ test("an upgrade builds delivery indexes off-loop before the first writer", asyn
     db.exec("COMMIT");
   } finally { db.close(); }
 
-  let ticks = 0;
-  const timer = setInterval(() => { ticks++; }, 5);
-  try { await prepareDeliveryLedgerIndexes(); }
-  finally { clearInterval(timer); }
+  const barrier = path.join(directory, "worker-barrier");
+  fs.mkdirSync(barrier, { recursive: true });
+  let progressed = false;
+  let closeWorkerWatch = () => {};
+  const workerReady = new Promise<void>((resolve, reject) => {
+    const readyFile = path.join(barrier, "worker-ready");
+    const watcher = fs.watch(barrier, () => {
+      if (fs.existsSync(readyFile)) { watcher.close(); resolve(); }
+    });
+    closeWorkerWatch = () => watcher.close();
+    watcher.once("error", reject);
+    if (fs.existsSync(readyFile)) { watcher.close(); resolve(); }
+  });
+  const preparing = prepareDeliveryLedgerIndexes({ workerStartedBarrierForTest: barrier });
+  try {
+    await Promise.race([workerReady, preparing.then(() => { throw Error("delivery index worker completed before its start barrier"); })]);
+    await new Promise<void>(resolve => setImmediate(() => {
+      progressed = true;
+      fs.writeFileSync(path.join(barrier, "continue"), "continue");
+      resolve();
+    }));
+    await preparing;
+  } finally {
+    closeWorkerWatch();
+    fs.writeFileSync(path.join(barrier, "continue"), "continue");
+    if (!progressed) await preparing.catch(() => {});
+  }
   const check = new Database(filename, { readonly: true });
   try {
     expect(check.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM deliveries").get()!.count).toBe(4_000);
     expect(check.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='index'").all().map(row => row.name)).toEqual(expect.arrayContaining(["files_hash", "deliveries_attempt"]));
-    expect(ticks).toBeGreaterThan(0);
+    expect(progressed).toBe(true);
   } finally { check.close(); }
 });
 function lesson(rule: string, attempt = 1, rewrite?: string) {
