@@ -172,7 +172,9 @@ test("a slow Check cannot replace a newer unsafe Save of the same address", asyn
       const headers = new Headers();
       for (const [name, value] of Object.entries(incoming.headers)) if (typeof value === "string") headers.set(name, value);
       if (vouched) headers.set("authorization", "Bearer test-access-key");
-      const response = selfCheckRoute(new NextRequest(`http://localhost${incoming.url}`, { method: "POST", headers }));
+      const request = new NextRequest(`http://localhost${incoming.url}`, { method: "POST", headers });
+      const perimeter = proxy(request);
+      const response = perimeter.headers.get("x-middleware-next") === "1" ? selfCheckRoute(request) : perimeter;
       outgoing.writeHead(response.status, Object.fromEntries(response.headers));
       outgoing.end(Buffer.from(await response.arrayBuffer()));
     };
@@ -239,7 +241,7 @@ test("self-check route is closed without a one-time nonce", () => {
   const request = new NextRequest("http://localhost/api/peer/v1/self-check", { method: "POST", headers: { host: "localhost" } });
   expect(proxy(request).headers.get("x-middleware-next")).toBe("1");
   expect(selfCheckRoute(request).status).toBe(401);
-  const unknown = new NextRequest("http://localhost/api/peer/v1/other", { method: "GET" });
+  const unknown = new NextRequest("http://localhost/api/peer/v1/other", { method: "GET", headers: { host: "localhost" } });
   // The proxy admits the family; each peer route now applies its own token guard.
   expect(proxy(unknown).headers.get("x-middleware-next")).toBe("1");
   for (const host of LOOPBACK_PROBE_HOSTS("443")) expect(isLoopbackHost(host)).toBe(true);
@@ -261,7 +263,9 @@ async function answerAsRoute(incoming: http.IncomingMessage, outgoing: http.Serv
   for (const [name, value] of Object.entries({ ...incoming.headers, ...rewrite })) if (typeof value === "string") headers.set(name, value);
   if (!headers.has("x-forwarded-host") && headers.has("host")) headers.set("x-forwarded-host", headers.get("host")!);
   if (!headers.has("x-forwarded-proto")) headers.set("x-forwarded-proto", (incoming.socket as { encrypted?: boolean }).encrypted ? "https" : "http");
-  const response = selfCheckRoute(new NextRequest(`http://localhost${incoming.url}`, { method: "POST", headers }));
+  const request = new NextRequest(`http://localhost${incoming.url}`, { method: "POST", headers });
+  const perimeter = proxy(request);
+  const response = perimeter.headers.get("x-middleware-next") === "1" ? selfCheckRoute(request) : perimeter;
   outgoing.writeHead(response.status, Object.fromEntries(response.headers));
   outgoing.end(Buffer.from(await response.arrayBuffer()));
 }
@@ -440,20 +444,18 @@ test("a name longer than the 200 characters the box shows still checks ok when t
   expect(await checkBehind(`http://${longName(204)}:{port}`, (headers) => headers)).toMatchObject({ code: "ok" });
 });
 
-test("a Host that only starts with a 200-character address is another site's", async () => {
+test("a Host that only starts with the proposed address is refused before the nonce handler", async () => {
   const address = longName(200);
   const check = await checkBehind(`http://${address}`, (headers) => ({ ...headers, host: `${address}.evil.example` }));
-  expect(check.code).toBe("host-rewritten");
-  expect(check.expected).toBe(address);
-  // The box shows 200 characters of a header and marks the cut.
-  expect(check.seen?.host).toBe(`${address.slice(0, 199)}…`);
+  expect(check).toMatchObject({ code: "unverified" });
+  expect(check.seen).toBeUndefined();
 });
 
 test("a Host longer than any address names none", async () => {
   const address = longName(250);
   const check = await checkBehind(`http://${address}`, (headers) => ({ ...headers, host: `${address}${".".repeat(11)}` }));
-  expect(check.code).toBe("host-rewritten");
-  expect(check.seen?.host).toHaveLength(200);
+  expect(check).toMatchObject({ code: "unverified" });
+  expect(check.seen).toBeUndefined();
 });
 
 test("an answer this server's own route never recorded proves nothing about the address", async () => {
@@ -740,5 +742,57 @@ test("an HTTPS address written as an IP is probed without an IP in the SNI", asy
     const url = new URL(`https://127.0.0.1:${port}`);
     expect(await probeSelfAddress(url, url.host, { certificateAuthority: fs.readFileSync(cert, "utf8") }))
       .toMatchObject({ status: 200, host: url.host, vouched: false });
+  } finally { await close(server); }
+});
+
+test("a pending address probe pins Host only for its one-time self-check POST", async () => {
+  process.env.LLV_TOKEN = "test-access-key";
+  let checked: Promise<void> = Promise.resolve();
+  const server = http.createServer((incoming, outgoing) => {
+    checked = (async () => {
+      const headers = new Headers();
+      for (const [name, value] of Object.entries(incoming.headers)) if (typeof value === "string") headers.set(name, value);
+      const make = (pathname = "/api/peer/v1/self-check", method = "POST", replacement = headers) =>
+        new NextRequest(`http://localhost${pathname}`, { method, headers: replacement });
+      try {
+        expect(proxy(make()).headers.get("x-middleware-next")).toBe("1");
+        for (const pathname of ["/api/files", "/api/search/transcripts", "/api/logs/stream", "/api/peer/v1/other"]) expect(proxy(make(pathname)).status).toBe(403);
+        expect(proxy(make(undefined, "GET")).status).toBe(403);
+        const wrongHost = new Headers(headers);
+        wrongHost.set("host", "foreign.example.test");
+        expect(proxy(make(undefined, undefined, wrongHost)).status).toBe(403);
+        delete process.env.LLV_TOKEN;
+        expect(proxy(make()).status).toBe(403);
+        process.env.LLV_TOKEN = "test-access-key";
+        const clock = spyOn(Date, "now").mockReturnValue(Date.now() + 30_001);
+        try { expect(proxy(make()).status).toBe(403); } finally { clock.mockRestore(); }
+        // A fresh process has no outstanding probe, even with the same nonce.
+        const program = `import {NextRequest} from "next/server"; import {proxy} from "./src/proxy";
+          const response = proxy(new NextRequest("http://localhost/api/peer/v1/self-check", {
+            method:"POST", headers:JSON.parse(process.env.PROBE_HEADERS)
+          })); if(response.status !== 403) process.exit(1);`;
+        const child = Bun.spawn([process.execPath, "-e", program], {
+          cwd: path.resolve(import.meta.dir, "../../.."), env: { ...process.env, PROBE_HEADERS: JSON.stringify(Object.fromEntries(headers)) },
+          stdout: "pipe", stderr: "pipe",
+        });
+        const [exit, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+        expect({ exit, stderr }).toEqual({ exit: 0, stderr: "" });
+        const response = selfCheckRoute(make());
+        expect(response.status).toBe(200);
+        expect(proxy(make()).status).toBe(403);
+        outgoing.writeHead(response.status, Object.fromEntries(response.headers));
+        outgoing.end(Buffer.from(await response.arrayBuffer()));
+      } catch (error) {
+        outgoing.writeHead(500); outgoing.end(); throw error;
+      }
+    })();
+    void checked.catch(() => undefined);
+  });
+  const port = await listen(server);
+  try {
+    const reply = await probeSelfAddress(new URL(`http://proposed.example.test:${port}`), `proposed.example.test:${port}`, { connectionHost: "127.0.0.1" });
+    await checked;
+    expect(reply.status).toBe(200);
+    expect(proxy(new NextRequest("http://localhost/api/peer/v1/self-check", { method: "POST", headers: { host: `proposed.example.test:${port}` } })).status).toBe(403);
   } finally { await close(server); }
 });

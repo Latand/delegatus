@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 
 import type { RuntimeReceipt, RuntimeSession } from "@/components/runtime/runtimeModel";
 
+import { awaitingReplies } from "@/lib/audio/fleetCues";
+
 import { answerRuntime, interruptRuntime, sendRuntimeMessage, sessionForConversation } from "./useRuntime";
 
 /*
@@ -155,4 +157,34 @@ test("composer interrupt uses current-owner routing and waits for a failed recei
     expect(await interruptRuntime(receipt.conversationId, receipt.operationId)).toMatchObject({ ok: false, error: "host refused" });
     expect(calls).toEqual(["/api/conversation-host", "/api/runtime/operations/interrupt-op"]);
   } finally { globalThis.fetch = original; }
+});
+
+describe("a send this tab makes waits for its reply (sound map S8)", () => {
+  async function send(answer: () => Response, conversationId: string) {
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () => answer()) as unknown as typeof fetch;
+    try {
+      return await sendRuntimeMessage({ conversationId, text: "hi", idempotencyKey: `key-${conversationId}` });
+    } finally { globalThis.fetch = original; }
+  }
+
+  test("an accepted send leaves the conversation waiting for its answer", async () => {
+    const before = awaitingReplies.size();
+    await send(() => Response.json({ operationId: "op-1" }, { status: 200 }), "conversation-accepted");
+    expect(awaitingReplies.size()).toBe(before + 1);
+    expect(awaitingReplies.settle({ conversationId: "conversation-accepted", settledTurnId: "t1", lastTurnOutcome: "completed" } as RuntimeSession))
+      .toEqual({ cue: "reply", eventId: "reply:conversation-accepted:t1" });
+  });
+
+  test("a refused send leaves no entry", async () => {
+    const before = awaitingReplies.size();
+    await send(() => Response.json({ error: "refused", delivery: "refused" }, { status: 409 }), "conversation-refused");
+    expect(awaitingReplies.size()).toBe(before);
+  });
+
+  test("a send that may be on the wire keeps waiting", async () => {
+    const before = awaitingReplies.size();
+    await send(() => Response.json({ error: "maybe", delivery: "uncertain" }, { status: 503 }), "conversation-uncertain");
+    expect(awaitingReplies.size()).toBe(before + 1);
+  });
 });

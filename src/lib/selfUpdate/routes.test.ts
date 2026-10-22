@@ -864,6 +864,25 @@ describe("checkout install: a staged build and restarts by the launcher", () => 
     expect(ledger).toMatchObject({ state: "ok", value: { phase: "succeeded", terminal: true } });
   });
 
+  test("deployment status preserves the failed build cause after service replacement", async () => {
+    const h = harness({ failBuildOnce: true, relaunch: true });
+    h.deps.green = { read: async () => ({ state: "green" }) } as unknown as GreenReader;
+    h.service.stop(); h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+    try {
+      const response = await deployPost(post("/runtime/deployments", { revision: tipSha, idempotencyKey: "failed-build-detail" }));
+      expect(response.status).toBe(202);
+      const receipt = await response.json();
+      await until(next => next.update.state === "failed");
+      const read = () => ledgerDeployment(receipt.deploymentId, { NODE_ENV: "test", LLV_STATE_DIR: h.deps.dir.replace(/self-update$/, "") });
+      expect(read()).toMatchObject({ state: "ok", value: { phase: "failed", terminal: true, error: "Release build failed: exit 1" } });
+      h.service.saveNow(); h.service.stop();
+      h.service = new SelfUpdateService(h.deps); setSelfUpdateServiceForTests(h.service);
+      await snapshot();
+      await until(next => next.check.state !== "checking");
+      expect(read()).toMatchObject({ state: "ok", value: { error: "Release build failed: exit 1" } });
+    } finally { h.service.stop(); }
+  });
+
   test("Retry after a verified rollback rebuilds and sends another complete apply", async () => {
     const h = harness();
     const record = JSON.parse(readFileSync(h.recordFile, "utf8")); record.launcher.relaunch = 1;

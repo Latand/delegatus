@@ -35902,3 +35902,122 @@ describe("Telegram multiple bots", () => {
     } finally { await browser.close(); if (tempFd !== null) fs.closeSync(tempFd); server.stop(); }
   }, 300_000);
 });
+
+describe("the sound map's one control: «Agent typing»", () => {
+  /*
+   * docs/design/sound-redesign.md §9: the sound levels gain one switch,
+   * «Звук роботи агентів» / "Agent typing", which turns the typing on screen
+   * and the murmur of agents off screen off together. On the desktop it sits
+   * in the board's ⋯ (Sound levels, opened in place), on the phone in the
+   * header menu's Settings page (Sound, its levels dialog).
+   *
+   * Desktop at 1440×900 and the shortest desktop window, 1000×700; the phone
+   * at 390×844 with a coarse pointer; en and uk, light and dark. It fails when
+   * the switch's label is cut by its scroller or the window, when another
+   * control covers it, when it is not on, or when one click does not store
+   * "off" on this device while leaving sound itself on.
+   *
+   * Frames go to `LLV_SOUND_SWITCH_OUT` (default `.artifacts/sound-switch/`,
+   * never committed), the readings to `evidence/sound-switch/rendered.json`.
+   *
+   *   CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "Agent typing"
+   */
+  const DESKTOP = [{ width: 1440, height: 900 }, { width: 1000, height: 700 }] as const;
+  const PHONE = { width: 390, height: 844 } as const;
+
+  /** Where the label's text is drawn, against what may clip it and what is drawn on top of it. */
+  async function measure(page: Page, panel: string) {
+    return page.evaluate((panelSelector) => {
+      const input = document.querySelector<HTMLInputElement>(`${panelSelector} [data-testid="typing-enabled"]`);
+      const label = input?.closest("label");
+      const text = label?.querySelector("span");
+      if (!input || !label || !text) return null;
+      const range = document.createRange();
+      range.selectNodeContents(text);
+      const rect = range.getBoundingClientRect();
+      let clip = { top: 0, left: 0, right: window.innerWidth, bottom: window.innerHeight };
+      for (let node = label.parentElement; node; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        if (!/(auto|scroll|hidden|clip)/.test(style.overflowY + style.overflowX)) continue;
+        const box = node.getBoundingClientRect();
+        clip = { top: Math.max(clip.top, box.top), left: Math.max(clip.left, box.left), right: Math.min(clip.right, box.right), bottom: Math.min(clip.bottom, box.bottom) };
+      }
+      const centre = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      const box = label.getBoundingClientRect();
+      return {
+        text: text.textContent ?? "",
+        checked: input.checked,
+        rect: [rect.left, rect.top, rect.right, rect.bottom].map((value) => Math.round(value * 10) / 10),
+        clip: [clip.left, clip.top, clip.right, clip.bottom].map((value) => Math.round(value * 10) / 10),
+        whole: rect.top >= clip.top - 0.5 && rect.bottom <= clip.bottom + 0.5 && rect.left >= clip.left - 0.5 && rect.right <= clip.right + 0.5,
+        onTop: Boolean(centre && label.contains(centre)),
+        labelHeight: Math.round(box.height * 10) / 10,
+      };
+    }, panel);
+  }
+
+  browserTest("the switch is whole, on, and stores «off» in both layouts, languages and themes", async () => {
+    const out = path.resolve(process.env.LLV_SOUND_SWITCH_OUT ?? ".artifacts/sound-switch");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    const failures: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        const expected = translate(lang, "sound.typing");
+        for (const viewport of [...DESKTOP, PHONE]) {
+          const phone = viewport === PHONE;
+          const tag = `${phone ? "phone" : "desktop"} ${viewport.width}×${viewport.height} ${lang} ${theme}`;
+          const { context, page, pageErrors } = await openFixture(browser, server.base, viewport, theme, lang, "reduce", phone);
+          try {
+            let panel: string;
+            if (phone) {
+              await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
+              await page.locator('[data-mobile2-open="menu"]').first().click();
+              await page.locator("[data-mobile2-sheet='menu'] [data-mobile2-menu-row='settings']").click();
+              await page.locator("[data-mobile2-sheet='menu'] [data-testid='sound-settings-trigger']").click();
+              panel = "[data-mobile2-sheet='menu'] [data-testid='sound-settings']";
+            } else {
+              await page.locator("[data-kanban-board]").waitFor({ timeout: 30_000 });
+              await openBoardMenu(page);
+              await page.locator("[data-bar-more-menu] [data-testid='sound-settings-trigger']").click();
+              panel = "[data-bar-more-menu] [data-testid='sound-settings']";
+            }
+            await page.locator(`${panel} [data-testid="typing-enabled"]`).scrollIntoViewIfNeeded();
+            const reading = await measure(page, panel);
+            if (!reading) throw new Error("the switch is not drawn");
+            const frame = `${phone ? "phone" : "desktop"}-${viewport.width}-${lang}-${theme}.png`;
+            await page.screenshot({ path: path.join(out, frame) });
+            if (reading.text !== expected) failures.push(`${tag}: label «${reading.text}», expected «${expected}»`);
+            if (!reading.checked) failures.push(`${tag}: the switch starts off`);
+            if (!reading.whole) failures.push(`${tag}: label ${reading.rect} is cut by ${reading.clip}`);
+            if (!reading.onTop) failures.push(`${tag}: something is drawn over the label`);
+            await page.locator(`${panel} [data-testid="typing-enabled"]`).click();
+            const stored = await page.evaluate(() => ({ typing: localStorage.getItem("llvAudioTypingEnabled"), sound: localStorage.getItem("llvSound") }));
+            if (stored.typing !== "off" || stored.sound === "off") failures.push(`${tag}: one click stored ${JSON.stringify(stored)}`);
+            const after = await measure(page, panel);
+            if (after?.checked !== false) failures.push(`${tag}: the switch still reads on after the click`);
+            await page.screenshot({ path: path.join(out, `off-${frame}`) });
+            if (pageErrors.length) failures.push(`${tag}: page errors ${pageErrors.join(" | ")}`);
+            readings.push({ surface: phone ? "phone" : "desktop", ...viewport, lang, theme, frame, ...reading, stored });
+          } catch (error) {
+            failures.push(`${tag}: ${String(error).split("\n")[0]}`);
+            await page.screenshot({ path: path.join(out, `failed-${viewport.width}-${lang}-${theme}.png`) }).catch(() => {});
+          } finally { await context.close(); }
+        }
+      }
+      fs.mkdirSync("evidence/sound-switch", { recursive: true });
+      const sources = ["src/components/SoundToggle.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts"];
+      fs.writeFileSync("evidence/sound-switch/rendered.json", JSON.stringify({
+        capturedAt: new Date().toISOString(),
+        command: "CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t \"Agent typing\" (isolated roots, scripts/gate-slot.sh)",
+        sourceDigests: Object.fromEntries(sources.map((file) => [file, createHash("sha256").update(fs.readFileSync(file)).digest("hex")])),
+        readings,
+        failures,
+      }, null, 2) + "\n");
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 900_000);
+});
