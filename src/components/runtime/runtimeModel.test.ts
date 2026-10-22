@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
+import type { CueRequest } from "@/lib/audio/cues";
+import { createAwaitingReplies, createFleetCueWatcher } from "@/lib/audio/fleetCues";
 import { translate } from "@/lib/i18n";
 
 import type { Flow } from "@/lib/flows/types";
@@ -703,5 +705,41 @@ describe("humanReceiptReasonKey", () => {
       expect(sentence).toContain("/compact");
       expect(sentence.length).toBeGreaterThan(0);
     }
+  });
+});
+
+/* --------------------- the turn's outcome (sound map S8) --------------------- */
+
+describe("a turn's end keeps its outcome", () => {
+  test("`turn-ended` stores completed, interrupted or error as `lastTurnOutcome`", () => {
+    for (const outcome of ["completed", "interrupted", "error"] as const) {
+      let store = installSnapshot(snapshot());
+      store = apply(store, env("turn-started", { type: "session", id: "conv_a" }, 4, { turnId: "t1" }));
+      store = apply(store, env("turn-ended", { type: "session", id: "conv_a" }, 5, { turnId: "t1", outcome }));
+      expect(store.sessions.conv_a?.lastTurnOutcome).toBe(outcome);
+      expect(store.sessions.conv_a?.settledTurnId).toBe("t1");
+    }
+  });
+
+  test("an end that names no known outcome stores none", () => {
+    let store = installSnapshot(snapshot());
+    store = apply(store, env("turn-ended", { type: "session", id: "conv_a" }, 4, { turnId: "t1", outcome: "exploded" }));
+    expect(store.sessions.conv_a?.lastTurnOutcome).toBeNull();
+  });
+});
+
+describe("distant typing hears a session this tab never opened (sound map S2)", () => {
+  test("an `item` event for an unseen session becomes its tool row, and the watcher plays S2", () => {
+    const played: CueRequest[] = [];
+    const watcher = createFleetCueWatcher({ hasLiveFeed: () => false, awaiting: createAwaitingReplies(), play: (request) => void played.push(request) });
+    let store = installSnapshot(snapshot());
+    watcher.observe(store.sessions);
+    store = apply(store, env("turn-started", { type: "session", id: "conv_never_opened" }, 1, { conversationId: "conv_never_opened", turnId: "t1" }));
+    store = apply(store, env("item", { type: "session", id: "conv_never_opened" }, 2, {
+      conversationId: "conv_never_opened", turnId: "t1", phase: "started",
+      item: { type: "commandExecution", id: "call_1", command: "bun test", cwd: "/repo", status: "inProgress" },
+    }));
+    watcher.observe(store.sessions);
+    expect(played).toEqual([{ cue: "distant-typing", eventId: "distant:conv_never_opened:call_1", agentsOffScreen: 1 }]);
   });
 });
