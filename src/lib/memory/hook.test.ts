@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { codexTerminalMemorySetup, installCodexMemoryHook, memoryHookOutput, memoryHookSource } from "./hook";
+import { codexMemoryHookConfig, installCodexMemoryHook, memoryHookOutput, memoryHookSource } from "./hook";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -17,6 +17,7 @@ test("hook crosses the real bearer perimeter and consumes exact FIFO receipts ev
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-hook-"));
   const oldToken = process.env.LLV_TOKEN; process.env.LLV_TOKEN = "synthetic-hook-token";
   const queue = path.join(root, "queue");
+  const keyFile = path.join(root, "key"); fs.writeFileSync(keyFile, process.env.LLV_TOKEN!);
   const prompt = "Identical synthetic prompt";
   fs.writeFileSync(queue, ["operator-old", "machine-new"].map(id => JSON.stringify({ id, digest: crypto.createHash("sha256").update(prompt).digest("hex") })).join("\n") + "\n");
   const received: string[] = [];
@@ -30,7 +31,7 @@ test("hook crosses the real bearer perimeter and consumes exact FIFO receipts ev
   } });
   try {
     for (let i = 0; i < 2; i++) {
-      const proc = Bun.spawn(["bun", "-e", memoryHookSource(`http://127.0.0.1:${server.port}`, process.env.LLV_TOKEN, queue)], { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: { ...process.env, LLV_SPAWN_CAPABILITY: "synthetic-capability" } });
+      const proc = Bun.spawn(["bun", "-e", memoryHookSource(`http://127.0.0.1:${server.port}`, [{ path: keyFile, format: "text" }], queue)], { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: { ...process.env, LLV_SPAWN_CAPABILITY: "synthetic-capability" } });
       proc.stdin.write(JSON.stringify({ hook_event_name: "UserPromptSubmit", prompt })); proc.stdin.end();
       expect(await proc.exited).toBe(0);
       const output = await new Response(proc.stdout).text();
@@ -136,7 +137,7 @@ test("Next production compilation preserves the standalone Claude receipt hook",
     const serialized = memoryHookSource("ENDPOINT", null, "QUEUE");
     const fn = serialized.slice(1, serialized.indexOf(')("ENDPOINT"'));
     const entry = path.join(root, "entry.js");
-    fs.writeFileSync(entry, `const runHook = ${fn}; export function memoryHookSource(endpoint, token, queue) { return "(" + runHook.toString() + ")(" + JSON.stringify(endpoint) + "," + JSON.stringify(token) + "," + JSON.stringify(queue) + ").catch(() => {}).finally(() => { process.exitCode = 0; });"; }`);
+    fs.writeFileSync(entry, `const runHook = ${fn}; export function memoryHookSource(endpoint, token, queue) { return "(" + runHook.toString() + ")(" + JSON.stringify(endpoint) + "," + JSON.stringify(token ?? []) + "," + JSON.stringify(queue) + ").catch(() => {}).finally(() => { process.exitCode = 0; });"; }`);
     await new Promise<void>((resolve, reject) => {
       const compiler = webpack({ mode: "production", target: "node", entry, output: { path: root, filename: "compiled.cjs", library: { type: "commonjs2" } }, externalsPresets: { node: true }, optimization: { minimize: false } });
       compiler.run((error: Error | null, stats: { hasErrors(): boolean; toString(): string }) => {
@@ -159,46 +160,27 @@ test("managed Codex config keeps native hooks and reserves enough tokens for ten
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-hook-config-"));
   try {
     const native = { type: "command", command: "synthetic-native-hook" };
-    fs.writeFileSync(path.join(root, "hooks.json"), JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [native] }] } }));
+    const original = JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [native] }] } }, null, 2) + "\n";
+    fs.writeFileSync(path.join(root, "hooks.json"), original);
     const env: NodeJS.ProcessEnv = { NODE_ENV: "test", LLV_SPAWN_CAPABILITY: "synthetic-capability", LLV_VIEWER_PORT: "8898", LLV_STATE_DIR: root };
     const installed = installCodexMemoryHook(root, env)!;
     // One token per UTF-8 byte bounds any text accepted by the 10K-char block.
     expect(installed.additionalContextLimit).toBeGreaterThanOrEqual(Buffer.byteLength("龘".repeat(10000)));
     installCodexMemoryHook(root, env);
-    const config = JSON.parse(fs.readFileSync(path.join(root, "hooks.json"), "utf8"));
-    expect(config.hooks.UserPromptSubmit).toEqual([{ hooks: [native] }, { hooks: [installed] }]);
+    expect(fs.readFileSync(path.join(root, "hooks.json"), "utf8")).toBe(original);
+    expect(fs.existsSync(path.join(root, "config.toml"))).toBe(false);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test("terminal Codex setup trusts only its exact native-discovered handler without opening a thread", async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-terminal-trust-"));
+test("Codex memory declaration and trust belong to the launch and retain the Unicode limit", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-launch-config-"));
   try {
-    const binary = path.join(root, "fake-codex");
-    fs.writeFileSync(binary, `#!/usr/bin/env bun
-import fs from "node:fs";
-import path from "node:path";
-import readline from "node:readline";
-for await (const line of readline.createInterface({ input: process.stdin })) {
-  const r = JSON.parse(line);
-  if (!r.id) continue;
-  fs.appendFileSync(path.join(process.env.CODEX_HOME, "methods"), r.method + "\\n");
-  let result = {};
-  if (r.method === "hooks/list") {
-    const own = JSON.parse(fs.readFileSync(path.join(process.env.CODEX_HOME, "hooks.json"), "utf8")).hooks.UserPromptSubmit[0].hooks[0];
-    result = { data: [{ hooks: [
-      { key: "own-hook", command: own.command, currentHash: "sha256:" + "a".repeat(64) },
-      { key: "native-hook", command: "native-command", currentHash: "sha256:" + "b".repeat(64) }
-    ] }] };
-  }
-  if (r.method === "config/value/write") fs.appendFileSync(path.join(process.env.CODEX_HOME, "writes"), JSON.stringify(r.params) + "\\n");
-  process.stdout.write(JSON.stringify({ id: r.id, result }) + "\\n");
-}
-`, { mode: 0o700 });
-    const setup = codexTerminalMemorySetup(root, root, binary, { ...process.env, LLV_SPAWN_CAPABILITY: "synthetic-capability" });
-    const proc = Bun.spawn(["bash", "-c", setup], { stdout: "pipe", stderr: "pipe" });
-    expect(await proc.exited).toBe(0);
-    const writes = fs.readFileSync(path.join(root, "writes"), "utf8").trim().split("\n").map(line => JSON.parse(line));
-    expect(writes).toEqual([{ keyPath: 'hooks.state."own-hook".trusted_hash', value: "sha256:" + "a".repeat(64), mergeStrategy: "replace" }]);
-    expect(fs.readFileSync(path.join(root, "methods"), "utf8").trim().split("\n")).toEqual(["initialize", "hooks/list", "config/value/write"]);
+    const hook = installCodexMemoryHook(root, { NODE_ENV: "test", LLV_SPAWN_CAPABILITY: "synthetic-capability", LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" })!;
+    const config = codexMemoryHookConfig(hook);
+    expect(config.UserPromptSubmit).toEqual([{ hooks: [hook] }]);
+    expect(config.state["/<session-flags>/config.toml:user_prompt_submit:0:0"]).toEqual({ enabled: true,
+      trusted_hash: "sha256:" + crypto.createHash("sha256").update(JSON.stringify({ event_name: "user_prompt_submit", hooks: [{ additionalContextLimit: 40000, async: false, command: hook.command, timeout: 2, type: "command" }] })).digest("hex") });
+    expect(fs.existsSync(path.join(root, "hooks.json"))).toBe(false);
+    expect(fs.existsSync(path.join(root, "config.toml"))).toBe(false);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

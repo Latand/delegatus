@@ -76,14 +76,22 @@ for (const engine of ["claude", "codex"] as const) for (const mode of ["fresh", 
   const spec = mode === "fresh" ? freshSpecFor(engine, SANDBOX, { claudeConfigDir: home, codexHome: home, deferClaudeSpawnPolicy: true })
     : resumeSpecForSession(engine, "12345678-1234-1234-1234-123456789abc", SANDBOX, home)!;
   const admitted = withSpawnCapability(spec, "a".repeat(43), { ...process.env, LLV_VIEWER_PORT: String(server.port) });
-  const settings = engine === "codex" ? path.join(home, "hooks.json")
-    : (await import("./spawnPolicy")).claudeSpawnPolicyPaths(home, mode === "fresh" ? path.basename(spec.transcript!, ".jsonl") : "resume-12345678-1234-1234-1234-123456789abc").settingsPath;
-  expect(fs.existsSync(settings)).toBe(true);
-  const hook = JSON.parse(fs.readFileSync(settings, "utf8")).hooks.UserPromptSubmit.flatMap((g: { hooks: Array<{ command: string }> }) => g.hooks).find((h: { command: string }) => h.command.includes("shared-memory"));
+  let hook: { command: string; additionalContextLimit: number };
+  if (engine === "codex") {
+    expect(fs.existsSync(path.join(home, "hooks.json"))).toBe(false);
+    expect(fs.existsSync(path.join(home, "config.toml"))).toBe(false);
+    const script = [...new Bun.Glob(".llv/hooks/memory-launch-*.mjs").scanSync({ cwd: home, absolute: true, dot: true })][0];
+    expect(script).toBeDefined();
+    hook = { command: `bun ${JSON.stringify(script)}`, additionalContextLimit: 40000 };
+    expect(admitted.command).toContain("hooks.UserPromptSubmit=");
+    expect(admitted.command).toContain("/<session-flags>/config.toml:user_prompt_submit:0:0");
+  } else {
+    const settings = (await import("./spawnPolicy")).claudeSpawnPolicyPaths(home, mode === "fresh" ? path.basename(spec.transcript!, ".jsonl") : "resume-12345678-1234-1234-1234-123456789abc").settingsPath;
+    hook = JSON.parse(fs.readFileSync(settings, "utf8")).hooks.UserPromptSubmit.flatMap((g: { hooks: Array<{ command: string }> }) => g.hooks).find((h: { command: string }) => h.command.includes("shared-memory"));
+  }
   expect(hook).toBeDefined();
   expect(hook.additionalContextLimit).toBe(40000);
   expect(admitted.command).toContain("LLV_SPAWN_CAPABILITY");
-  if (engine === "codex") expect(admitted.command).toContain("shared-memory-trust");
   const proc = Bun.spawn(["bash", "-c", hook.command], { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: { ...process.env, LLV_SPAWN_CAPABILITY: "a".repeat(43) } });
   proc.stdin.write(JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "synthetic-session", prompt: "Synthetic terminal operator prompt" })); proc.stdin.end();
   expect(await proc.exited).toBe(0);
@@ -724,7 +732,7 @@ test("managed Codex commands pin file-backed credential storage", () => {
   expect(resumeSpecFor("codex-sessions", transcript)?.command).toContain("cli_auth_credentials_store=file");
   expect(fresh.command.indexOf("cli_auth_credentials_store=file")).toBeLessThan(fresh.command.indexOf("gpt-5"));
   const resumed = resumeSpecFor("codex-sessions", transcript)?.command ?? "";
-  expect(resumed.indexOf("cli_auth_credentials_store=file")).toBeLessThan(resumed.indexOf("resume"));
+  expect(resumed.indexOf("cli_auth_credentials_store=file")).toBeLessThan(resumed.indexOf(" resume "));
 });
 
 test("managed Claude fresh and resume commands pin the transcript owner and scrub shadowing env", () => {

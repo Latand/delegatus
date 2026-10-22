@@ -36,7 +36,7 @@ import { headlessCodexThreadConfig } from "@/lib/codexHeadlessConfig";
 import { codexSubagentConfig, readCodexFeatures } from "@/lib/agent/codexSpawnPolicy";
 import { codexProcessCleanupArgs, codexProcessCleanupConfig } from "@/lib/agent/processCleanupPolicy";
 import { nativeCodexActivityMethod } from "./codexSubagentDetection";
-import { installCodexMemoryHook } from "@/lib/memory/hook";
+import { codexMemoryHookArgs, codexMemoryHookConfig, installCodexMemoryHook } from "@/lib/memory/hook";
 import { grantedPluginServerNames, grantedPlugins } from "@/lib/agent/pluginAllowlist";
 import { hardenedRedact } from "@/lib/view/compactText";
 import { decodeCodexStructuredUserText as decodeStructuredUserWire } from "./codexStructuredUserText";
@@ -1501,6 +1501,7 @@ export class CodexAppServerHost implements EngineHost {
       ...(options.allowSubagents === true ? [] : ["-c", 'approvals_reviewer="user"']),
       ...Object.entries(subagentFeatures).flatMap(([name, enabled]) => ["-c", `features.${name}=${enabled}`]),
       ...cleanupArgs,
+      ...(memoryHook ? codexMemoryHookArgs(memoryHook, (questionPolicy?.config ?? codexProcessCleanupConfig(options.codexHome)).hooks.state) : []),
       ...(options.fileAuthCredentials ? ["-c", "cli_auth_credentials_store=file"] : []),
       ...(options.permissionProfile && options.permissionProfileConfig
         ? [
@@ -1604,18 +1605,9 @@ export class CodexAppServerHost implements EngineHost {
       const cleanup = questionPolicy?.config ?? codexProcessCleanupConfig(options.codexHome);
       if (questionPolicy) config.tools = questionPolicy.tools;
       Object.assign(config.features as Record<string, unknown>, cleanup.features);
-      config.hooks = cleanup.hooks;
-      if (memoryHook) {
-        const hookSetupDeadline = performance.now() + Math.min(250, provisional.requestTimeoutMs);
-        try {
-          const listed = await provisional.rpc("hooks/list", { cwds: [options.cwd] }, Math.max(1, hookSetupDeadline - performance.now()), true) as { data: Array<{ hooks: Array<{ key: string; command?: string; currentHash: string }> }> };
-          for (const hook of listed.data.flatMap(d => d.hooks)) {
-            if (performance.now() >= hookSetupDeadline) break;
-            if (hook.command !== memoryHook.command || !/^sha256:[a-f0-9]{64}$/i.test(hook.currentHash)) continue;
-            await provisional.rpc("config/value/write", { keyPath: `hooks.state.${JSON.stringify(hook.key)}.trusted_hash`, value: hook.currentHash, mergeStrategy: "replace" }, Math.max(1, hookSetupDeadline - performance.now()), true);
-          }
-        } catch { /* untrusted or unavailable hooks abstain; the prompt still runs */ }
-      }
+      const memoryConfig = memoryHook ? codexMemoryHookConfig(memoryHook) : null;
+      config.hooks = { ...cleanup.hooks, ...memoryConfig,
+        state: { ...cleanup.hooks.state, ...memoryConfig?.state } };
       // Resume resolves engine defaults again; replay the same launch access
       // that thread/start received, including named scratch profiles.
       const launchAccess = {
