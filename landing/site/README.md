@@ -69,7 +69,7 @@ its last line, with nothing clipped by the prompt's box or a container around it
 CHROME_BIN=/usr/bin/google-chrome-stable bun landing/site/capture.ts --check-fullscreen
 ```
 
-puts each of the four frames full screen through its control, in both
+puts each of the six frames full screen through its control, in both
 languages at 1440×900 and 390×844, once with the browser's Fullscreen API and
 once as the overlay iPhone Safari gets (no element fullscreen there). It fails
 unless the iframe runs unscaled at the width of the screen and at the height of
@@ -81,14 +81,14 @@ position comes back. PNGs go to `/tmp/landing-fullscreen-renders/`.
 
 | file | what it holds |
 | --- | --- |
-| `index.html` | the four sections, the footer band and the install-box template |
+| `index.html` | the hero and the seven sections below it (run, full autonomy, learned rules, open, limits, reach, FAQ), the footer band and the install-box template |
 | `styles.css` | the page: type, the product's dark tokens, the frames around the demo |
 | `copy.js` | every visible string of the page and of the hero's demo in English and Ukrainian, and the two install prompts |
 | `boardDemo.js` | the hero's demo: the drawn board and phone screens, its one timeline, and when it plays |
 | `mascot.js` | the mascot's three poses (unchanged from A) |
 | `main.js` | language, install boxes, the phone's send-the-link action, the legacy giggle, the release line, and the controller of the live frames |
 | `demo/demo.tsx` | the demo: the real `Viewer`, the answers to its requests, the scripted steps, the views |
-| `demo/world.ts` | the invented harbor-api world at each step, in both languages |
+| `demo/world.ts` | the invented harbor-api world at each step, in both languages, and beside it the seat tick's autonomy episode, the learned rules and their curator, each task's limit spend and the accounts' limit history |
 | `demo/taskIcons.json` | the lucide drawings of the demo's task icons, written by the build |
 | `build.ts` | bundles the demo, compiles the product stylesheet, assembles `dist/` |
 | `audioAssets.ts` | the cue files the demo's Viewer requests at the site root, copied from `public/audio/cues/` into `dist/audio/cues/`; the build fails when one is missing. The 5 MB music bed is left out: the demo bundle loads a loop-asset module with no asset, so the sound menu omits the loop controls |
@@ -310,6 +310,42 @@ on. The landing's tabs change a frame's screen, and the full-screen control
 opens the demo for use. A window with a mouse keeps its frames interactive at
 any width.
 
+## The three later sections
+
+`docs/design/landing-refresh-autonomy-memory.md` is their brief. Each is one
+more frame over the same world, reached by the product's own controls:
+
+| Section | Frame | Views (`data-view`) |
+| --- | --- | --- |
+| Full autonomy | `.live-auto`, 908×760, `data-exact` (the board is scrolled to its In progress column, so the frame's edge falls in the gap after it on every screen) | `autonomy`: the tick switch in the seat's head opens its panel, which spans the chat's column so no word of the chat stands beside it (the phone: the seat sheet, shortened until its last row is whole, then its tick row); `decisions`: the same panel with Details open, standing at the panel's top so the view opens on a heading |
+| Learned rules | `.live-mem`, 1180×760 | `rules`: the board's ⋯, «Learned rules», «All rules», the Orchestrator chip, its first rule expanded (the phone: the menu's project rules); `curator`: the builder's rule, the curator's passes and what it archived; the window's close control takes no focus ring |
+| Limits | `.live-use`, 1444×760 (without the rail the board is 1404 px wide and holds its balanced columns, with the rail 1194 px and it scrolls: either way no card title breaks inside a word) | `spend`: the board with the seat folded, every card's marks; `task`: one card's spend popover (the phone: the task screen at its Limits), drawn larger as the page shrinks the frame and slid to where it covers whole lines or none; `history`: the rail's Claude week button opens the burndown, which takes the board's place beside the rail on a page drawn larger as the frame shrinks |
+
+A frame is drawn at 0.62 of its size on a 1000 px page. `setFrameZoom()` in
+`demo.tsx` reads the iframe's drawn width over its own and sets `--demo-zoom`
+(1 at full size, up to 1.8), which the spend popover and the burndown
+use, so their text stays at about 10 px rendered at every desktop width.
+`data-exact` on a frame (`main.js`) keeps its logical width at every page width
+instead of widening it to the page's.
+
+`autonomy=1` in a frame's query turns full autonomy on for that frame alone:
+at step 5 the orchestrator has answered the retry window itself, so that
+pipeline's Build runs again and nothing waits for the visitor. The reach
+frame keeps its waiting decision. The memory frame keeps its rules in the
+page: a visitor's ×, Undo, Return or «Undo pass» changes that copy, and every
+later read answers it. The example rules are new texts written for strangers
+from rules agents of each kind really carry; `copy.test.ts` holds them to the
+product's length limits.
+
+Where these frames depart from a real install, on purpose:
+
+- The tick panel's release, auto-rotation and Turbo sections are not answered,
+  so they do not draw: the panel stays short enough for the frame, and Turbo
+  is not shipped yet.
+- The phone has no limit history (the burndown lives in the desktop rail's
+  footer only), so the `history` tab hides at phone widths and a phone frame
+  showing it falls back to `spend`.
+
 ## Decisions where the brief was open
 
 - **Frames, not captures.** The product in an iframe keeps its own layout,
@@ -328,8 +364,9 @@ any width.
 - **One message, one row.** The composer keeps its own copy of a sent message
   until the transcript moves 2 s past the delivery, so the demo dates the
   request at the exact moment of the send and the answer at least 2.5 s
-  later. Each frame also clears what another frame left in the shared
-  storage (sent messages, opened conversations) before it draws. The 2.5 s
+  later. Each frame keeps its session and local stores in memory
+  (`demo/frameSession.ts`), so nothing one frame sent, opened, docked or
+  folded reaches another frame or the next visit. The 2.5 s
   timestamp offset is a delivery-order constraint, independent of playback
   speed; the first response starts after 650 ms.
 - **Panels fill the frame.** A pipeline's stages and a conversation opened
@@ -359,10 +396,10 @@ any width.
   last 30 days, with the changelog beside it. The star count left the header.
 
 - **Full screen.** Each frame has a control at the top-right corner of its
-  window: in the bar of the run frame, above the corner of the other two, so
-  the product's own header controls stay clear. The run frame goes full screen
-  as a whole window with its tabs, the other two with a 52 px strip that holds
-  the way out. The frame
+  window: in the tab bar of the run, learned rules and limits frames, above
+  the corner of the others, so the product's own header controls stay clear.
+  A frame with a tab bar goes full screen as a whole window with its tabs, the
+  others with a 52 px strip that holds the way out. The frame
   then runs at the real size of its area, unscaled, so the product's own
   layout applies. Full screen never changes an iframe's `src`. The demo's own
   synthetic Esc (it closes panels between views) does not leave the overlay;
@@ -395,7 +432,7 @@ retry without acknowledging readiness, and retry must recover three results
 in the same iframe. Acknowledgements are checked against the rendered DOM.
 `--search-failure-only` isolates the empty-response and retry check.
 
-To check phone swipes, run `CHROME_BIN=/usr/bin/google-chrome-stable bun landing/site/capture.ts --check-swipe=after` after building. It drives touch gestures at DPR 3 at 390×844 and 375×667 in both languages: a vertical swipe in each direction and a diagonal one over the hero's demo, the install prompt, the conversation composer, each demo frame and plain text. It sets up no nested scroll area, so a frame that takes any of the gesture shows. The page must move within 4 px of what it moves over plain text, in the same direction, with no backwards step in a per-frame `scrollY` trace, and no scroll area inside a frame may change its position. It also checks who may touch a frame: `pointer-events` is `none` on every frame at both phone sizes, in a phone turned sideways, and on the touch tablet's handset; `auto` at 1440×900 and in a 600 px mouse window, and on the tablet's run and open frames. A tap on the landing tab under each frame still switches its screen, and the run frame takes touch in full screen only. The check writes `swipe-after.json` to `LANDING_RENDER_DIR`. Use `--check-swipe=before` to record an unchanged or published baseline without asserting it.
+To check phone swipes, run `CHROME_BIN=/usr/bin/google-chrome-stable bun landing/site/capture.ts --check-swipe=after` after building. It drives touch gestures at DPR 3 at 390×844 and 375×667 in both languages: a vertical swipe in each direction and a diagonal one over the hero's demo, the install prompt, the conversation composer, each demo frame and plain text. It sets up no nested scroll area, so a frame that takes any of the gesture shows. The page must move within 4 px of what it moves over plain text, in the same direction, with no backwards step in a per-frame `scrollY` trace, and no scroll area inside a frame may change its position. It also checks who may touch a frame: `pointer-events` is `none` on every frame at both phone sizes, in a phone turned sideways, and on the touch tablet's handset; `auto` at 1440×900 and in a 600 px mouse window, and on every tablet frame but the handset. A tap on the landing tab under each frame still switches its screen, and the run frame takes touch in full screen only. The check writes `swipe-after.json` to `LANDING_RENDER_DIR`. Use `--check-swipe=before` to record an unchanged or published baseline without asserting it.
 
 The driver records load, tabs and repeated
 EN/UK switches after visiting the lower sections. Chrome traces record script
