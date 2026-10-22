@@ -27,7 +27,8 @@ const DELIVERY_FAILURES: Record<string, { en: string; uk: string }> = {
   member_required: { en: "the call's starter is no longer a team member", uk: "той, хто розпочав розмову, більше не учасник команди" },
   voice_seat_changed: { en: "the orchestrator changed before delivery", uk: "оркестратор змінився до доставки" },
 };
-const knownFailure = (code?: string | null) => (code && Object.hasOwn(DELIVERY_FAILURES, code) ? DELIVERY_FAILURES[code] : null);
+/** The route answers its codes in capitals (`CONVERSATION_CLOSED`); the table is keyed in lower case. */
+const knownFailure = (code?: string | null) => { const key = code?.toLowerCase(); return key && Object.hasOwn(DELIVERY_FAILURES, key) ? DELIVERY_FAILURES[key] : null; };
 export function deliveryFailureReason(code?: string): string {
   const known = knownFailure(code);
   return known ? `The message was not delivered: ${known.en}, so nothing was sent.` : "The delivery failed. Nothing reached the orchestrator.";

@@ -208,6 +208,8 @@ test("refusal and delivery reasons read in the owner's language, from the code t
   expect(delegationReason("no_orchestrator", "refused", "uk")).toContain("оркестратора");
   expect(delegationReason("conversation_busy", "failed", "uk")).toBe("Повідомлення не доставлено: розмова оркестратора була зайнята, тож нічого не надіслано.");
   expect(delegationReason("conversation_busy", "failed", "en")).toBe("The message was not delivered: the orchestrator's conversation was busy, so nothing was sent.");
+  expect(delegationReason("CONVERSATION_BUSY", "failed", "uk")).toContain("була зайнята");
+  expect(delegationReason("CONVERSATION_CLOSED", "failed", "en")).toContain("conversation is closed");
   for (const code of ["some_new_code", "Конфлікт"]) {
     expect(delegationReason(code, "failed", "uk")).not.toMatch(/[A-Za-z]/u);
     expect(delegationReason(code, "failed", "en")).not.toContain(code);
