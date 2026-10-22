@@ -13,7 +13,9 @@ export async function startupFinalizationFixture() {
   const ambient = { ...process.env };
   const isolated = fs.mkdtempSync(path.join(os.tmpdir(), "llv-startup-finalization-"));
   for (const name of Object.keys(process.env)) delete process.env[name];
-  Object.assign(process.env, { PATH: ambient.PATH, NODE_ENV: "test" });
+  Object.assign(process.env, { PATH: ambient.PATH, NODE_ENV: "test",
+    LLV_VIEWER_CONTROL_URL: ambient.LLV_VIEWER_CONTROL_URL ?? "http://127.0.0.1:1",
+    DELEGATUS_CPU_PRESSURE: "off" });
   for (const [name, suffix] of Object.entries({ HOME: "home", XDG_CONFIG_HOME: "config", LLV_STATE_DIR: "state", TMPDIR: "tmp", CODEX_HOME: "codex", LLV_CODEX_HOME: "codex", CLAUDE_CONFIG_DIR: "claude", LLV_CLAUDE_HOME: "claude" })) {
     const directory = path.join(isolated, suffix);
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
