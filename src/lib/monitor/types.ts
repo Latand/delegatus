@@ -938,6 +938,8 @@ export interface SeatTickWakeCommit {
   autonomySummaryFor?: string;
   /** Revision of the autonomy rules shown in this seat epoch. */
   autonomyShown?: string;
+  /** Revision of the Turbo overlay shown in this seat epoch. */
+  turboShown?: string;
   /** The settled outcomes this wake announces, each under the key its report
       must carry (docs/design/orchestrator-reports.md §5.1). A landing records
       them as owed; a wake that never landed announced nothing. */
@@ -1267,6 +1269,8 @@ export interface SeatTickProjectState {
   autonomySummaryFor?: string;
   /** Revision of the autonomy rules shown in this seat epoch. */
   autonomyShown?: string;
+  /** Revision of the Turbo overlay shown in this seat epoch. */
+  turboShown?: string;
   /**
    * The stall tokens a landed wake showed THIS seat, newest last, bounded to
    * {@link SEAT_TICK_REPORTED_STALLS_LIMIT}. A persisted stall whose token is

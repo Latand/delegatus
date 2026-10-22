@@ -57,6 +57,27 @@ const settingsFile = () => {
   return path.join(directory, "seat-tick-settings.json");
 };
 
+test("Turbo persists its original tier and finite credit approval; expiry clears approval and off preserves restoration work", () => {
+  const actor: SeatTickSettingsActor = { kind: "gateway", conversationId: null, project: null, seatEpoch: null };
+  const result = applySeatTickSettingsChange(defaultSeatTickSettings(PROJECT), {
+    turbo: { enabled: true, hours: 1, credits: true, creditAccounts: ["acct-a"] },
+  }, { at: AT, actor, turbo: { allowedAccounts: ["acct-a"], plan: [
+    { accountId: "acct-a", label: "Account A", plan: "pro", tiers: { "gpt-6.1-sol": "priority" }, hadCredits: true },
+  ] } });
+  expect(result.ok).toBe(true);
+  if (!result.ok) throw new Error(result.error);
+  result.settings.turbo!.switches = [{ conversationId: "conversation_turbo", accountId: "acct-a", model: "gpt-6.1-sol", from: "default", to: "priority", state: "switched", at: AT }];
+  const file = settingsFile();
+  writeSeatTickSettings(PROJECT, result.settings, file);
+  const stored = readSeatTickSettings(PROJECT, file);
+  expect(stored.turbo!.switches[0]!.from).toBe("default");
+  expect(effectiveSeatTickSettings(stored, NOW + HOUR_MS, HOUR_MS).turbo).toMatchObject({ enabled: false, endReason: "expired", credits: { approved: false } });
+  const off = applySeatTickSettingsChange(stored, { turbo: { enabled: false } }, { at: NEXT_AT, actor });
+  expect(off.ok).toBe(true);
+  if (!off.ok) throw new Error(off.error);
+  expect(off.settings.turbo).toMatchObject({ enabled: false, credits: { approved: false }, switches: [{ from: "default", state: "switched" }] });
+});
+
 test("legacy imports default invention off even when an imported actor claims a grant", () => {
   const file = settingsFile();
   const actor: SeatTickSettingsActor = { kind: "gateway", project: null, conversationId: null, seatEpoch: null };
