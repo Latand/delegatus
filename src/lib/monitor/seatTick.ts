@@ -2097,6 +2097,7 @@ export function seatTickWakeCommitPlan(
     noteShown?: string | null;
     autonomySummaryFor?: string;
     autonomyShown?: string;
+    turboShown?: string;
     /** The project's Bridge reports setting: off, the landing records no
         owed outcome (docs/design/orchestrator-reports.md §5.1). */
     bridgeReports?: boolean;
@@ -2105,7 +2106,7 @@ export function seatTickWakeCommitPlan(
   },
 ): SeatTickWakeCommit | null {
   const { fingerprint, eventsThrough } = context;
-  const note = { ...(context.autonomyShown ? { autonomyShown: context.autonomyShown } : {}), ...(context.noteShown === undefined ? {} : { noteShown: context.noteShown }), ...(context.autonomySummaryFor ? { autonomySummaryFor: context.autonomySummaryFor } : {}) };
+  const note = { ...(context.autonomyShown ? { autonomyShown: context.autonomyShown } : {}), ...(context.turboShown ? { turboShown: context.turboShown } : {}), ...(context.noteShown === undefined ? {} : { noteShown: context.noteShown }), ...(context.autonomySummaryFor ? { autonomySummaryFor: context.autonomySummaryFor } : {}) };
   if (verdict.kind === "proactive") return { proposal: true, reasons: [], fingerprint, eventsThrough, children: [], announcedLanes: [], announcedDeploys: [], announcedMaintenance: [], shownChildren: [], ...note, ...(context.wakeIntervalMs ? { wakeIntervalMs: context.wakeIntervalMs } : {}) };
   if (verdict.kind !== "wake") return null;
   const framed = context.frozenText === undefined ? null : `\n${context.frozenText}\n`;
@@ -2230,7 +2231,7 @@ export function seatTickWakeCommit(
   const eventsThrough = Math.max(state.eventsThrough ?? 0, commit.eventsThrough);
   /* What the seat now holds of its own note (#2030); a plan that predates the
      field leaves the record as it was. */
-  const note = { ...(commit.autonomyShown ? { autonomyShown: commit.autonomyShown } : {}), ...(commit.noteShown === undefined ? {} : { noteShown: commit.noteShown }), ...(commit.autonomySummaryFor ? { autonomySummaryFor: commit.autonomySummaryFor } : {}) };
+  const note = { ...(commit.autonomyShown ? { autonomyShown: commit.autonomyShown } : {}), ...(commit.turboShown ? { turboShown: commit.turboShown } : {}), ...(commit.noteShown === undefined ? {} : { noteShown: commit.noteShown }), ...(commit.autonomySummaryFor ? { autonomySummaryFor: commit.autonomySummaryFor } : {}) };
   if (commit.proposal) {
     return {
       ...state,
