@@ -98,6 +98,9 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
   readonly endpoint: string;
   readonly startIdentity: string;
   readonly bootEpoch: string;
+  /** Settles once every writer of the startup stderr drain closed, which is
+   * a moment after the native process ended. Resolved for a reconnected owner. */
+  stderrDrained: Promise<void> = Promise.resolve();
   private socket: WebSocket | null = null;
   private poll: ReturnType<typeof setInterval> | null = null;
   private closed = false;
@@ -241,6 +244,7 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
         await new Promise(resolve => setTimeout(resolve, 20));
       }
       const transport = await this.reconnect(owner);
+      if (drain) transport.stderrDrained = drain.finished;
       child.on("close", () => transport.processEnded());
       child.unref();
       return transport;

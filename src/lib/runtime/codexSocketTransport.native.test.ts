@@ -118,6 +118,7 @@ apps = false
 plugins = false
 `);
   let transport: CodexSocketTransport | undefined;
+  let drained: Promise<void> = Promise.resolve();
   let owner: ReturnType<typeof captureProcessIdentity> | undefined;
   const nativeFiles: Array<{ file: string; ino: number; dev: number }> = [];
   const connect = (socket: CodexSocketTransport) => {
@@ -158,6 +159,7 @@ plugins = false
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
     }
+    drained = transport.stderrDrained;
     owner = captureProcessIdentity(transport.pid);
     const alias = transport.endpoint.slice("codex-unix:".length);
     if (fs.lstatSync(alias).isSymbolicLink()) {
@@ -197,6 +199,11 @@ plugins = false
       try { process.kill(-owner.pid, "SIGKILL"); } catch { /* already exited */ }
       await until(() => processIdentityStatus(owner!) === "dead", () => "native fixture process did not exit");
     }
+    // The detached stderr drain ends a moment after its last writer; the runner's
+    // teardown counts a drain still alive as a leaked child.
+    let drainTimer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([drained, new Promise<void>(resolve => { drainTimer = setTimeout(resolve, 5_000); })]);
+    if (drainTimer) clearTimeout(drainTimer);
     for (const recorded of nativeFiles) {
       const entry = fs.lstatSync(recorded.file, { throwIfNoEntry: false });
       if (entry?.ino === recorded.ino && entry.dev === recorded.dev) fs.unlinkSync(recorded.file);
