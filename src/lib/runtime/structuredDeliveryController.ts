@@ -1,3 +1,5 @@
+import { performanceSpans } from "@/lib/performanceSpans";
+import { startupHostSnapshot } from "./startupSnapshot";
 import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { seatRecipientVerdict, seatRecipientVerdictAsync, setSeatChannelNativeWithdrawal } from "@/lib/orchestrator/seatChannel";
 import { conversationIdsResolvingTo, readOnlyConversationLookupFromSnapshot } from "@/lib/agent/registry";
@@ -560,7 +562,7 @@ function registrySessionProjection(
   const generation = conversation?.generations.at(-1);
   if (!conversation || !generation) return null;
   const sessionKey = { engine: conversation.engine, sessionId: generation.id } as const;
-  const entry = registry.readOnlySnapshot().entries[sessionKeyId(sessionKey)] ?? null;
+  const entry = startupHostSnapshot(registry, sessionKey).entries[sessionKeyId(sessionKey)] ?? null;
   const legacy = entry?.host?.kind === "tmux";
   const host = entry?.status === "dead"
     ? "dead"
@@ -2063,7 +2065,8 @@ export async function bindStructuredDeliveryQueue(
         await successor(items, progress, assertActive, deferredConversationIds);
         return;
       }
-      const startupSnapshot = registry.readOnlySnapshot();
+      const startupSnapshot = await registry.prepareReadOnlySnapshot();
+      assertActive();
       /* Read only to skip republishing a projection that already says what
          this pass would say. It decides nothing else: the state published
          below is read off the registry, never off this snapshot, so a read
@@ -2077,7 +2080,12 @@ export async function bindStructuredDeliveryQueue(
         (runtimeSnapshot?.sessions ?? []).map((session) => [session.conversationId, session]),
       );
       await phase("publishing historical host fallbacks");
-      await forEachStartupBatch(Object.values(startupSnapshot.conversations), async (conversation) => {
+      const conversations = (function* () {
+        for (const id in startupSnapshot.conversations) {
+          yield performanceSpans.sync("runtime.startup.conversations", () => startupSnapshot.conversations[id]!);
+        }
+      })();
+      await forEachStartupBatch(conversations, async (conversation) => {
         assertActive();
         if (superseded()) return;
         const generation = conversation.generations.at(-1);

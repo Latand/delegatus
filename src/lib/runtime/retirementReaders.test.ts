@@ -225,3 +225,41 @@ test("a production host membership recheck never rebuilds the global snapshot", 
     } finally {registry.readOnlySnapshot=read;}
   } finally {registry.close();fs.rmSync(root,{recursive:true,force:true});}
 });
+
+
+test("startup batches consume retained rows incrementally and close their iterator on refusal", async () => {
+  const { forEachStartupBatch } = await import("./startupWork");
+  let selected = 0, observed = -1, closed = false;
+  function* rows() { try { for (let n=0;n<128;n++) { selected++; yield n; } } finally { closed=true; } }
+  setImmediate(() => { observed=selected; });
+  await forEachStartupBatch(rows(), async () => {});
+  expect(selected).toBe(128); expect(observed).toBeGreaterThan(0); expect(observed).toBeLessThan(128); expect(closed).toBe(true);
+  selected=0;closed=false;let joined=0;
+  await expect(forEachStartupBatch(rows(), async n => { await Promise.resolve(); joined++; if(n===0)throw new Error("refused row"); })).rejects.toThrow("refused row");
+  expect(joined).toBe(selected); expect(selected).toBeLessThanOrEqual(16); expect(closed).toBe(true);
+});
+
+
+test("a host with no recorded process skips the empty dead-process admission", async () => {
+  const entry={ key:{engine:"codex",sessionId:"no-process"},status:"unhosted",claimOwner:null,claimEpoch:0,
+    structuredHost:{kind:"codex-app-server",process:null,endpoint:"stdio:waiting",writerClaimEpoch:0,activeTurnRef:null,pendingAttention:[],activeFlags:[]} } as unknown as RegistryFile["entries"][string];
+  const file=normalizeRegistry({version:2,entries:{"codex:no-process":entry},receipts:{}});
+  let claims=0,demotions=0,admissions=0;
+  const registry={structuredHostEntries:()=>[entry],readOnlySnapshot:()=>file,conversationForPath:()=>({id:"conversation_no_process"}),
+    withOperationLock:async (_key:unknown,_owner:unknown,run:()=>Promise<void>)=>run(),
+    claimStructuredHost:()=>{claims++;entry.claimOwner="owned";entry.claimEpoch++;return entry;},
+    setStructuredHostClaimed:()=>{demotions++;return entry;},
+  } as unknown as AgentRegistry;
+  await demoteSkippedStructuredRegistryHosts(registry,()=>false,async (_entry,mutation)=>{admissions++;return mutation();});
+  expect(claims).toBe(1);expect(demotions).toBe(1);expect(admissions).toBe(2);
+});
+
+
+test("a synchronous startup visitor refusal joins the work already started", async () => {
+  const { forEachStartupBatch } = await import("./startupWork");
+  const release=Promise.withResolvers<void>();let settled=false;
+  const pending=forEachStartupBatch([0,1],n=>{ if(n===1)throw new Error("synchronous refusal");return release.promise; }).finally(()=>{settled=true;});
+  await Promise.resolve();await Promise.resolve();
+  expect(settled).toBe(false);
+  release.resolve();await expect(pending).rejects.toThrow("synchronous refusal");
+});

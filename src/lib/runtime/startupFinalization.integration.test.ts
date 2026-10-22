@@ -976,3 +976,35 @@ test("only a changed runtime generation starts incremental recovery after ready"
     f.journal.close(); f.registry.close();
   }
 });
+
+
+test("historical fallback publication uses fresh keyed rows after awaited session reads", async () => {
+  const f = fixture(0, true, 40);
+  const { completeStructuredDeliveryQueueStartup } = await import("./structuredDeliveryController");
+  let phase = "";
+  let changed = false;
+  const entry = f.registry.readOnlySnapshot().entries["codex:history_0"]!;
+  const original = f.registry.readOnlySnapshot.bind(f.registry);
+  const client = { ...f.client, readSession: async (identity: Parameters<NonNullable<RuntimeHostClient["readSession"]>>[0]) => {
+    await Promise.resolve();
+    if (!changed && identity.conversationId === "conversation_history_0") {
+      changed = true;
+      f.registry.upsert({ ...entry, status: "idle", updatedAt: "2026-10-22T00:00:00.000Z" });
+    }
+    return f.journal.readSession(identity);
+  } };
+  try {
+    await bindStructuredDeliveryQueue([], { registry: f.registry, client, deferStartupWork: true });
+    f.registry.readOnlySnapshot = () => {
+      if (phase === "publishing historical host fallbacks") throw new Error("fallback rebuilt the whole registry");
+      return original();
+    };
+    await completeStructuredDeliveryQueueStartup([], name => { phase = name; });
+    expect(changed).toBe(true);
+    expect(f.journal.readSession({ conversationId: "conversation_history_0" })?.turn).toBe("idle");
+  } finally {
+    f.registry.readOnlySnapshot = original;
+    await bindStructuredDeliveryQueue([], { registry: f.registry, client: null });
+    f.journal.close(); f.registry.close();
+  }
+});

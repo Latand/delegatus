@@ -807,7 +807,7 @@ export async function demoteSkippedStructuredRegistryHosts(
       && host.activeFlags.length === 0;
     if (alreadyDead) continue;
     const conversation = registry.conversationForPath(entry.artifactPath);
-    if (conversation) {
+    if (conversation && host.process) {
       const reconciled = await admit(entry, () => {
         const latest = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
         return latest && !shouldAdopt(latest) ? reconcileDeadStructuredRegistryHost(registry, conversation.id, entry.key) : undefined;
