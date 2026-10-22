@@ -2,7 +2,7 @@ import path from "node:path";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import { expect, test } from "bun:test";
 
-const { fixture, isolated } = await import("./startupFinalization.fixture");
+const { fixture, isolated } = await (await import("./startupFinalization.fixture")).startupFinalizationFixture();
 const { RuntimeHost } = await import("@/runtime-host/host");
 const { serveRuntimeHost } = await import("@/runtime-host/socket");
 const { UnixRuntimeHostClient } = await import("./client");

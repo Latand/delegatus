@@ -5,7 +5,7 @@ import { monitorEventLoopDelay } from "node:perf_hooks";
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
-const { fixture, isolated } = await import("./startupFinalization.fixture");
+const { fixture, isolated } = await (await import("./startupFinalization.fixture")).startupFinalizationFixture();
 const { AgentRegistry } = await import("@/lib/agent/registry");
 const { sessionKeyId } = await import("@/lib/agent/sessionKey");
 const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
