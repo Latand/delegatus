@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { stateLockWaitsInFlight } from "@/lib/state/lockWait";
+import { assertStateChildSuccess } from "@/lib/state/stateChildResult.fixture";
 import type { ConversationCatalogEntry } from "./conversationCatalog";
 import { ConversationSearchProjection, conversationSearchMatchSql } from "./conversationSearchProjection";
 
@@ -264,7 +265,7 @@ test("persisted text survives a real process restart", async () => {
       stdout: "pipe", stderr: "pipe",
     });
     const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-    expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+    assertStateChildSuccess(code, stderr);
     return JSON.parse(stdout);
   };
   expect(await run("seed")).toEqual({ reads: 1, matches: 1, retained: 1 });
