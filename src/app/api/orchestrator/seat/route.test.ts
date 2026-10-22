@@ -458,3 +458,37 @@ test("unknown and ambiguous seat names refuse before a spawn or intent write", a
     for (const project of projects) expect(orchestratorSeatFor(project)).toMatchObject({ active: null, pending: null });
   } finally { spawn.mockRestore(); }
 });
+
+test("canonical status reads use the folder's resolved display name without curation or a saved alias", async () => {
+  const { projectForCwd } = await import("@/lib/scanner/describe");
+  const { resolveSeatProject } = await import("@/lib/orchestrator/seatProjectIdentity");
+  const root = path.join(sandbox, "NaturalRepo");
+  fs.mkdirSync(path.join(root, ".git"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
+  fs.writeFileSync(path.join(root, ".git", "config"), '[remote "origin"]\nurl = https://example.invalid/team/NaturalRepo.git\n');
+  const project = projectForCwd(root)!;
+  const admissionName = resolveSeatProject(project, root).displayName;
+  const spawn = spyOn(productionSeatCommandDependencies, "spawn").mockImplementation(async () => ({
+    status: 200,
+    body: { ok: true, state: "settled", conversationId: "conversation_natural", path: path.join(sandbox, "natural.jsonl") },
+  }));
+  const stamp = spyOn(productionSeatCommandDependencies, "stampRegistryIdentity").mockImplementation(() => {});
+  const readiness = spyOn(productionSeatCommandDependencies, "engineReadiness").mockImplementation(() => "connected");
+  const report = spyOn(productionSeatCommandDependencies, "startBoardReport").mockImplementation(() => {});
+  const now = spyOn(productionSeatCommandDependencies, "now").mockReturnValue("2026-10-21T00:00:00.000Z");
+  try {
+    const admission = await seatPost(new NextRequest("http://127.0.0.1/api/orchestrator/seat", {
+      method: "POST", headers: { host: "127.0.0.1", "content-type": "application/json" },
+      body: JSON.stringify({ project, cwd: root, mandate: "Own the board", clientRequestId: "natural-seat-request", engine: "codex", model: "gpt-6.1-sol" }),
+    }));
+    expect(admission.status).toBe(200);
+    const admitted = await admission.json() as { project: string; displayName: string };
+
+    const status = await seatGet(new NextRequest(`http://127.0.0.1/api/orchestrator/seat?project=${encodeURIComponent(project)}&cwd=${encodeURIComponent(root)}`));
+    expect(status.status).toBe(200);
+    expect(await status.json()).toMatchObject({ project: admitted.project, displayName: admitted.displayName });
+    expect(admitted.displayName).toBe("NaturalRepo");
+  } finally {
+    for (const mock of [spawn, stamp, readiness, report, now]) mock.mockRestore();
+  }
+});

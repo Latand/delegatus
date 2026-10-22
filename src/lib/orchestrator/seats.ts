@@ -643,6 +643,45 @@ function writeSeatFile(file: OrchestratorSeatFile): void {
   void withViewerOperation("orchestrator.recipient-authority", () => recipientAuthorityIndex(filePath, revision)).catch(() => {});
 }
 
+/** Preserve the seat that canonical-key collapse would otherwise displace.
+    Called under the mutation lock before the project alias is published, so
+    subsequent canonical reads see one active seat and the former one in the
+    ordinary previous-seat history. */
+export function reconcileOrchestratorSeatSuccession(sourceInput: string, targetInput: string, revokedAt: string): boolean {
+  return withAccountMutationLock(() => {
+    const file = readOrchestratorSeatFile();
+    const source = canonicalOrchestratorProject(sourceInput);
+    const target = canonicalOrchestratorProject(targetInput);
+    const sourceSeat = file.seats[source];
+    const targetSeat = file.seats[target];
+    if (!sourceSeat?.conversationId || !targetSeat?.conversationId
+      || sourceSeat.conversationId === targetSeat.conversationId) return true;
+    const sourceConversationId = sourceSeat.conversationId;
+    const targetConversationId = targetSeat.conversationId;
+    const firstKey = Object.keys(file.seats).find(project => project === source || project === target);
+    let winner = firstKey === source ? sourceSeat : targetSeat;
+    const other = winner === sourceSeat ? targetSeat : sourceSeat;
+    if (other.seatEpoch > winner.seatEpoch) winner = other;
+    const displaced = winner === sourceSeat ? targetSeat : sourceSeat;
+    const winnerConversationId = winner === sourceSeat ? sourceConversationId : targetConversationId;
+    const displacedConversationId = winner === sourceSeat ? targetConversationId : sourceConversationId;
+    if (file.revocations.some(row => row.project === target && row.conversationId === displacedConversationId && row.seatEpoch === displaced.seatEpoch)) return true;
+    file.revocations.push({
+      project: target,
+      conversationId: displacedConversationId,
+      seatEpoch: displaced.seatEpoch,
+      revokedAt,
+      successorConversationId: winnerConversationId,
+      triggeredBy: winner.triggeredBy ?? null,
+      activatedAt: displaced.activatedAt,
+      path: displaced.path,
+      engine: displaced.engine ?? null,
+    });
+    writeSeatFile(file);
+    return true;
+  }, { holder: "project succession seat reconciliation" });
+}
+
 /** The active seat, any pending intent, and the terminalized-intent history
     for one project (oldest first). */
 export function orchestratorSeatFor(project: string): {

@@ -32,6 +32,8 @@ function uniqueCatalogMembers(files: readonly Member[] | undefined): readonly Me
 type Sources = {
   /** Seat admission and legacy recovery use only scanner-minted identities. */
   canonicalOnly?: boolean;
+  /** Status polls can resolve retained project evidence without re-reading seats. */
+  includeActiveSeats?: boolean;
   authorizedSeats?(): readonly { project?: string | null }[];
   callerProject?(): string | null;
   lastCompletedCatalog?(): { projectCatalog: readonly Member[]; files: readonly Member[] } | null;
@@ -63,7 +65,7 @@ export function namedProjectDirectory(sources: Sources = {}, extraKeys: readonly
     ...projectKeyIndexSnapshot(),
   ]);
   const members: readonly Member[] = [...(last?.projectCatalog ?? []), ...uniqueCatalogMembers(last?.files), ...[...memberKeys].map(project => ({ project }))];
-  const seats = activeOrchestratorSeats();
+  const seats = sources.includeActiveSeats === false ? [] : activeOrchestratorSeats();
   const authorized = sources.authorizedSeats?.() ?? [];
   const manualProjects = projectCurationSnapshot().manualProjects;
   const caller = sources.callerProject?.();
