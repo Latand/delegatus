@@ -113,7 +113,9 @@ export function processIdentityMayOwn(
     worktree a stage gate guards (#2967). A zombie keeps its pid and start
     token until its parent reaps it, so `processIdentityStatus` still reads it
     `alive`; it can do nothing more, and neither can a process recorded at a
-    pid a zombie holds. Unknown state and unverifiable identities still may
+    pid a zombie holds. A process whose main thread exited while another
+    thread runs still may run: the Linux backend reads every task, not only
+    the leader. Unknown state and unverifiable identities still may
     run. The identity verdict itself is unchanged: a termination ladder that
     signals a zombie's group still needs to see it as the recorded process. */
 export function processIdentityMayRun(

@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import { procBackend } from "@/lib/proc";
-import { startUnreapedChild } from "@/lib/testing/unreapedChild";
+import { startLeaderExitedChild, startUnreapedChild } from "@/lib/testing/unreapedChild";
 
 import {
   captureProcessIdentity,
@@ -104,5 +106,29 @@ test.skipIf(process.platform !== "linux")("a real unreaped child reads exited an
     expect(processIdentityMayRun(fixture.parentIdentity)).toBeTrue();
   } finally {
     await fixture.stop();
+  }
+});
+
+const python = Bun.which("python3");
+
+test.skipIf(process.platform !== "linux" || !python)("a live process whose main thread exited still may run while its other thread writes (#2967)", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "leader-exited-"));
+  const output = path.join(directory, "writes.txt");
+  const fixture = await startLeaderExitedChild(python!, output);
+  try {
+    /* The leader alone reads Z; a thread of the same process is still running. */
+    expect(fs.readFileSync(`/proc/${fixture.identity.pid}/stat`, "utf8")).toMatch(/\) Z /);
+    expect(procBackend.processExited(fixture.identity.pid)).toBeFalse();
+    expect(processIdentityMayRun(fixture.identity)).toBeTrue();
+    const before = fs.readFileSync(output, "utf8").length;
+    const deadline = Date.now() + 5_000;
+    while (fs.readFileSync(output, "utf8").length <= before) {
+      if (Date.now() >= deadline) throw new Error("the surviving thread stopped writing");
+      await Bun.sleep(20);
+    }
+    expect(processIdentityMayRun(fixture.identity)).toBeTrue();
+  } finally {
+    await fixture.stop();
+    fs.rmSync(directory, { recursive: true, force: true });
   }
 });

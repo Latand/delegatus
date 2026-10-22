@@ -1,3 +1,5 @@
+import fs from "node:fs";
+
 import { captureProcessIdentity, type ProcessIdentity } from "@/lib/processIdentity";
 import { procBackend } from "@/lib/proc";
 
@@ -38,6 +40,56 @@ export async function startUnreapedChild(timeoutMs = 5_000): Promise<UnreapedChi
       await new Promise(resolve => setTimeout(resolve, 20));
     }
     return { parent, parentIdentity, zombie, stop };
+  } catch (error) {
+    await stop();
+    throw error;
+  }
+}
+
+/** A live process whose main thread has exited (#2967). Its leader reads Z in
+    /proc/<pid>/stat while a second thread keeps appending a line to `output`
+    every 50 ms, so the process still writes. Only this handle is signalled. */
+export type LeaderExitedChild = {
+  process: ReturnType<typeof Bun.spawn>;
+  identity: ProcessIdentity;
+  stop(): Promise<void>;
+};
+
+const LEADER_EXITED_SCRIPT = `
+import ctypes, sys, threading, time
+def write():
+    while True:
+        with open(sys.argv[1], "a") as output:
+            output.write("x\\n")
+        time.sleep(0.05)
+threading.Thread(target=write).start()
+ctypes.CDLL(None).pthread_exit(None)
+`;
+
+function leaderState(pid: number): string | null {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    return stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/, 1)[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function startLeaderExitedChild(python: string, output: string, timeoutMs = 5_000): Promise<LeaderExitedChild> {
+  const child = Bun.spawn([python, "-I", "-c", LEADER_EXITED_SCRIPT, output], { stdout: "ignore", stderr: "ignore" });
+  const stop = async () => {
+    try { child.kill("SIGKILL"); } catch { /* already gone */ }
+    await child.exited;
+  };
+  try {
+    const identity = captureProcessIdentity(child.pid);
+    const deadline = Date.now() + timeoutMs;
+    while (leaderState(child.pid) !== "Z" || !fs.existsSync(output)) {
+      if (child.exitCode !== null) throw new Error(`leader-exited fixture ended with ${child.exitCode}`);
+      if (Date.now() >= deadline) throw new Error(`process ${child.pid} never ran with an exited leader`);
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    return { process: child, identity, stop };
   } catch (error) {
     await stop();
     throw error;
