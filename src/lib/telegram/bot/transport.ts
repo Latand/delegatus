@@ -177,3 +177,32 @@ export function storedBotId(): string | null {
 export function removeBotToken(): void {
   removeSafeFile(telegramBotTokenPath());
 }
+
+const SENDING_TOKEN_FILE = "bot-tokens.json";
+const sendingTokenPath = () => path.join(statePath("telegram"), SENDING_TOKEN_FILE);
+type SendingToken = { botId: string; token: string; savedAt: string };
+function sendingTokens(): SendingToken[] {
+  const parsed = readSafeJson(sendingTokenPath(), true) as { version?: number; bots?: SendingToken[] } | null;
+  if (!parsed) return [];
+  if (parsed.version !== 1 || !Array.isArray(parsed.bots) || parsed.bots.length > 8
+    || parsed.bots.some(b => !validBotToken(b.token) || b.token.split(":")[0] !== b.botId))
+    throw new Error("invalid sending bot token file");
+  return parsed.bots;
+}
+/** Mutations run under the bot database's outboundState write admission. */
+export function saveSendingBotToken(token: string, botId: string, now: Date): void {
+  if (!validBotToken(token) || token.split(":")[0] !== botId) throw new Error("invalid sending bot token");
+  const bots = sendingTokens().filter(b => b.botId !== botId);
+  if (bots.length >= 8) throw new Error("too many sending bots");
+  bots.push({ botId, token, savedAt: now.toISOString() });
+  atomicSecretWrite(sendingTokenPath(), JSON.stringify({ version: 1, bots }));
+}
+export function withSendingBotTokens<T>(consume: (token: string, botId: string) => T): T[] {
+  return sendingTokens().map(b => consume(b.token, b.botId));
+}
+export function removeSendingBotToken(botId: string): void {
+  const bots = sendingTokens().filter(b => b.botId !== botId);
+  if (bots.length) atomicSecretWrite(sendingTokenPath(), JSON.stringify({ version: 1, bots }));
+  else removeSafeFile(sendingTokenPath());
+}
+export function removeSendingBotTokens(): void { removeSafeFile(sendingTokenPath()); }

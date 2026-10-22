@@ -29,6 +29,8 @@ const { pipelineCorpus } = await import("./fixtures/corpus");
 const { savePipelines, findPipelineRecord } = await import("./store");
 const { defaultPipelinePorts, patchPipeline, tickPipelines } = await import("./engine");
 const { realExec } = await import("@/lib/workflows/provision");
+const { prepareStageGitGuard, stageGitReceiptDirectory } = await import("@/lib/git/stageAttemptGuard");
+const { agentPublicationIdentityEnv } = await import("@/lib/git/agentPublicationIdentity");
 const { registerPipelineTick } = await import("./controllerSignal");
 let restore = registerPipelineTick(async () => {});
 afterAll(() => {
@@ -116,6 +118,50 @@ function fixture() {
     tick: async () => { for (let n = 0; n < 3; n++) await tickPipelines([], ports); },
     cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
+
+for (const suffix of ["proved", "unrecorded", "divergent"] as const) test(`publish without acceptedSha retries a custody-parked stage (${suffix})`, async () => {
+  const h = fixture();
+  const launchId = `parked-successor-${suffix}`;
+  try {
+    h.git("push", "-q", "origin", `${h.passed}:refs/heads/${h.lane.branch}`);
+    const attempt = h.lane.runs[0]!.attempts[0]!;
+    const now = "2026-10-20T10:00:00.000Z";
+    attempt.startedAt = now; attempt.completedAt = null; attempt.launchId = launchId;
+    attempt.state = "needs_decision";
+    const guard = await prepareStageGitGuard(launchId, h.repo, realExec, now);
+    const identity = agentPublicationIdentityEnv({ ...process.env, ...guard });
+    const made = await realExec("git", ["commit", "--allow-empty", "-m", "passed successor output"], h.repo,
+      { ...identity, ...guard, GIT_AUTHOR_DATE: now, GIT_COMMITTER_DATE: now });
+    expect(made.code, made.stderr).toBe(0);
+    const head = h.git("rev-parse", "HEAD");
+    if (suffix === "unrecorded") fs.unlinkSync(path.join(stageGitReceiptDirectory(launchId), "commits", head));
+    if (suffix === "divergent") {
+      h.git("checkout", "-q", "--detach", h.passed);
+      h.git("commit", "-q", "--allow-empty", "-m", "foreign delivery output");
+      h.git("push", "-q", "origin", `HEAD:refs/heads/${h.lane.branch}`);
+      h.git("checkout", "-q", h.lane.branch);
+    }
+    const tip = h.git("ls-remote", "origin", `refs/heads/${h.lane.branch}`).split(/\s+/)[0];
+    h.lane.baseRef = h.head; h.lane.lastPassedCommit = h.head;
+    h.lane.stateDetail = `settling the stage push: commit ${tip} does not descend from the pipeline base; both tips are preserved`;
+    savePipelines([h.lane]);
+    const ports = { ...h.ports, now: () => "2026-10-20T11:00:00.000Z" };
+    expect((await patchPipeline(h.lane.id, { action: "publish" }, ports)).error).toBeUndefined();
+    for (let n = 0; n < 3; n++) await tickPipelines([], ports);
+    if (suffix === "proved") {
+      expect(h.current()).toMatchObject({ lastPassedCommit: head, publishedCommit: head, state: "completed" });
+      expect(h.pushes()).toBe(1);
+    } else {
+      expect(h.current().state).toBe("needs_decision");
+      expect(h.current().stateDetail).toContain("settling the stage push:");
+      expect(h.current().lastPassedCommit).toBe(h.head);
+      expect(h.pushes()).toBe(0);
+      expect(h.git("ls-remote", "origin", `refs/heads/${h.lane.branch}`).split(/\s+/)[0]).toBe(tip);
+    }
+    expect(h.current().runs[0]!.attempts).toHaveLength(1);
+    expect(h.git("rev-parse", "HEAD")).toBe(head);
+  } finally { h.cleanup(); fs.rmSync(stageGitReceiptDirectory(launchId), { recursive: true, force: true }); }
+});
 
 for (const alreadyRemote of [false, true]) test(`parked publication accepts a clean merge descendant and advances (already remote: ${alreadyRemote})`, async () => {
   const h = fixture();
@@ -972,16 +1018,20 @@ for (const dirty of [false, true]) test(`publication refuses unsuccessful depend
   } finally { h.cleanup(); }
 });
 
-for (const action of ["publish", "retry-stage"] as const) test(`next explicit ${action} retries a settled failure without takeover`, async () => {
+for (const action of ["publish", "retry-stage"] as const) test(`next explicit ${action} retains a settled deadline failure before retry`, async () => {
   const h = fixture();
   try {
+    h.ports.now = () => "2026-10-16T10:00:00.000Z";
     h.lane.lastPassedCommit = h.head;
     h.lane.delivery!.operation = { id: "failed", state: "settled", epoch: 1, sha: h.head,
-      result: { ok: false, error: "hook failed" } };
+      result: { ok: false, error: "hook deadline", failure: { step: "publishing the pipeline branch", code: 124, signal: null,
+        durationMs: 60_000, outputTail: "owned runner: deadline expired", retryableDeadline: true } } };
     h.lane.stateDetail = "hook failed"; savePipelines([h.lane]);
     expect((await patchPipeline(h.lane.id, { action }, h.ports)).error).toBeUndefined(); await h.tick();
     expect(h.current()).toMatchObject({ state: "completed", publishedCommit: h.head, delivery: { epoch: 1, ownerId: h.lane.id } });
     expect(h.pushes()).toBe(1);
+    expect(h.current().publicationRecovery?.[h.head]).toMatchObject({ failures: 1, totalAttempts: 1,
+      history: [{ operationId: "failed", cause: "infrastructure-deadline", retryAt: "2026-10-16T10:01:00.000Z" }] });
   } finally { h.cleanup(); }
 });
 
@@ -1341,6 +1391,8 @@ for (const failsAfterWait of [false, true]) test(`capacity retries survive a con
     for (let n = 0; n < 8; n++) await tickPipelines([], ports);
     expect(h.current().state).toBe("running");
     expect(h.current().runs[0]!.attempts[0]!.publicationRetry).toMatchObject({ failures: 1, retryAt: "2026-10-16T10:01:00.000Z" });
+    expect(h.current().publicationRecovery?.[head]).toMatchObject({ failures: 1, totalAttempts: 1,
+      history: [{ cause: "infrastructure-deadline", retryAt: "2026-10-16T10:01:00.000Z" }] });
     const engine = path.join(import.meta.dir, "engine.ts");
     const restart = async () => {
       const script = `const { realExec } = await import(${JSON.stringify(path.join(import.meta.dir, "../workflows/provision.ts"))});
@@ -1355,6 +1407,7 @@ for (const failsAfterWait of [false, true]) test(`capacity retries survive a con
     // A new controller process sees the durable future retry and does no push.
     await restart();
     expect(h.current().runs[0]!.attempts[0]!.publicationRetry!.failures).toBe(1);
+    expect(h.current().publicationRecovery?.[head]!.history).toHaveLength(1);
     // A transient overload clears before the bounded retry budget is spent.
     clock += 60_000; await restart();
     fs.writeFileSync(h.hook, failsAfterWait
@@ -1365,6 +1418,8 @@ for (const failsAfterWait of [false, true]) test(`capacity retries survive a con
     if (failsAfterWait) {
       expect(h.current().stateDetail!.split("\n")[0]).toContain("named publication assertion");
       expect(h.current().publishedCommit).toBeNull();
+      expect(h.current().publicationRecovery?.[head]!.history.at(-1)).toMatchObject({ cause: "check-failure", retryAt: null,
+        detail: expect.stringContaining("named publication assertion") });
     } else expect(h.current().publishedCommit).toBe(head);
   } finally { h.cleanup(); }
 }, 90_000);
@@ -1407,12 +1462,23 @@ test("permanent capacity deadlines stop after three retries across controller re
     for (const wait of [60_000, 5 * 60_000, 15 * 60_000]) { clock += wait; await restart(); }
     expect(fs.readFileSync(attempts, "utf8").trim().split("\n")).toHaveLength(4);
     expect(h.current().state).toBe("needs_decision");
+    const head = h.current().lastPassedCommit;
+    expect(h.current().publicationRecovery?.[head]).toMatchObject({ failures: 4, totalAttempts: 4 });
+    expect(h.current().publicationRecovery?.[head]!.history.map(entry => entry.retryAt)).toEqual([
+      "2026-10-16T11:01:00.000Z", "2026-10-16T11:06:00.000Z", "2026-10-16T11:21:00.000Z", null,
+    ]);
     expect(h.current().runs[0]!.attempts[0]!.publicationRetry).toMatchObject({ failures: 3, exhausted: true });
     expect(h.current().stateDetail!.split("\n")[0]).toContain("after 3 automatic retries");
     clock += 60 * 60_000;
     await restart();
     expect(fs.readFileSync(attempts, "utf8").trim().split("\n")).toHaveLength(4);
     expect(h.current().state).toBe("needs_decision");
+    // An explicit request grants one push and retains the exhausted automatic bound.
+    expect((await patchPipeline(h.lane.id, { action: "retry-stage" }, ports)).error).toBeUndefined();
+    await restart();
+    expect(fs.readFileSync(attempts, "utf8").trim().split("\n")).toHaveLength(5);
+    expect(h.current().state).toBe("needs_decision");
+    expect(h.current().publicationRecovery?.[head]).toMatchObject({ failures: 5, totalAttempts: 5 });
   } finally { h.cleanup(); }
 }, 90_000);
 

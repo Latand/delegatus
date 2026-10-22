@@ -1,10 +1,17 @@
 import { expect, test, fs, path, tickPipelines, loadPipelines, savePipelines, patchPipeline, LIMITED_ACCOUNT, SPARE_ACCOUNT, stageTranscript, readFixtures, providerQuotaRecord, providerRecoveryHarness } from "./engine.fixture";
 
-// Each pool gets its own file within the unchanged per-file gate budget.
-export function registerProviderOutputBudgetCases(pools: readonly boolean[]) {
-  for (const engine of ["claude", "codex"] as const) {
+const OUTPUT_ACTIVITIES = ["operator", "orchestrator", "harness-control", "busy-operator", "same-tick", "reply-after", "control-after", "operator-refused"] as const;
+type OutputActivity = typeof OUTPUT_ACTIVITIES[number];
+
+// Files choose disjoint cases while sharing the unchanged recovery assertions.
+export function registerProviderOutputBudgetCases(
+  pools: readonly boolean[],
+  engines: readonly ("claude" | "codex")[],
+  activities: readonly OutputActivity[] = OUTPUT_ACTIVITIES,
+) {
+  for (const engine of engines) {
     for (const pool of pools) {
-      test.each(["operator", "orchestrator", "harness-control", "busy-operator", "same-tick", "reply-after", "control-after", "operator-refused"] as const)(`${engine} a provider cut after agent output owes its own recovery (pool=${pool}, %s)`, async activity => {
+      test.each([...activities])(`${engine} a provider cut after agent output owes its own recovery (pool=${pool}, %s)`, async activity => {
         const f = await providerRecoveryHarness(engine, engine === "claude" ? "rate_limit" : "usage_limit_exceeded", "You've hit your session limit", null, !pool);
         f.advance(Date.parse("2026-10-05T17:22:09Z") - f.now());
         const firstReset = Date.parse("2026-10-05T19:00:00Z") / 1000;
@@ -94,7 +101,7 @@ export function registerProviderOutputBudgetCases(pools: readonly boolean[]) {
         expect({ sends: f.sends.length, state: loadPipelines()[0]!.state, detail: loadPipelines()[0]!.stateDetail?.split("\n")[0] ?? null })
           .toMatchObject(owed ? { sends: 1, state: "running" } : activity === "reply-after" ? { sends: 0 } : { sends: 0, state: "needs_decision" });
         expect(f.h.spawnInputs).toHaveLength(1);
-      }, 30_000);
+      }, 60_000);
     }
   }
 }

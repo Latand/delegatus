@@ -9,6 +9,7 @@ import { publishHotStateAuthority } from "./hotStateAuthority";
 import { pipelineHostHasLiveWork } from "@/lib/pipelines/hostRetirement";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
+import { assertStateChildSuccess } from "./stateChildResult.fixture";
 
 type Row = { key: string; value: number };
 
@@ -377,7 +378,7 @@ test("a fresh process upgrades the pre-compact reference schema before ordinary 
       });
       if (!store.pipelineOwnerExists([['conversationId','legacy-host']],false)) throw new Error('missing backfill');
     `], { env: { ...process.env, UPGRADE_DATABASE: filename }, encoding: "utf8", timeout: 10_000 });
-    expect({ status: result.status, stderr: result.stderr }).toEqual({ status: 0, stderr: "" });
+    assertStateChildSuccess(result.status, result.stderr);
     const upgraded = new Database(filename);
     try {
       expect(upgraded.query("SELECT * FROM state_rows").all()).toEqual(before);

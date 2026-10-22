@@ -47,7 +47,7 @@ export async function POST(req: NextRequest) {
   if (rejected) return rejected;
   const authority = requireOperatorAuthority(req);
   if (!authority.ok) return NextResponse.json({ error: authority.error, code: "operator_only" }, { status: authority.status });
-  let body: { action?: unknown; token?: unknown; chatId?: unknown; chat?: unknown; alias?: unknown; postAllowed?: unknown; roots?: unknown };
+  let body: { action?: unknown; token?: unknown; chatId?: unknown; chat?: unknown; alias?: unknown; postAllowed?: unknown; bot?: unknown; roots?: unknown };
   try { body = await req.json() as typeof body; } catch { return NextResponse.json({ error: "Invalid JSON", code: "invalid_json" }, { status: 400 }); }
   const service = telegramBotService();
   try {
@@ -58,6 +58,15 @@ export async function POST(req: NextRequest) {
         if (refusal) return refusal;
         return NextResponse.json({ bot: withReportDestinations(await service.connect(body.token)) });
       }
+      case "add_bot": {
+        const refusal = keysOwnerGate(req);
+        if (refusal) return refusal;
+        return NextResponse.json({ bot: withReportDestinations(await service.addBot(body.token)) });
+      }
+      case "remove_bot":
+        return NextResponse.json({ bot: withReportDestinations(await service.removeBot(body.bot)) });
+      case "chat_bot":
+        return NextResponse.json({ bot: withReportDestinations(await service.assignBot(body.chatId, body.bot)) });
       case "refresh":
         return NextResponse.json({ bot: withReportDestinations(await service.refresh()) });
       case "chat":

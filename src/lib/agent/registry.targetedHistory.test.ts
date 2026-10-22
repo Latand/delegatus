@@ -4,7 +4,8 @@ import path from "node:path";
 import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
 
-import { AgentRegistry } from "./registry";
+import { AgentRegistry, normalizeRegistry } from "./registry";
+import { SqliteAgentRegistryStore } from "./sqliteRegistryStore";
 import { buildRegistryPerformanceDataset, scaledRegistryPerformanceShape } from "./registryPerformanceDataset";
 import { lookupOriginalSend } from "@/lib/runtime/sendSettlement";
 
@@ -47,9 +48,12 @@ test("staging a conversation capability leaves unrelated retained receipts unrea
   } finally { f.close(); }
 });
 
-test("an absent original-send key reads only its recipient's retained delivery rows", () => {
+test("an absent original-send key reads only its recipient's retained delivery rows", async () => {
   const f = fixture();
   try {
+    // The production startup path prepares recovery indexes before a keyed
+    // send lookup can use the compound message/recipient selector.
+    await f.registry.prepareRecoveryIndexes();
     expect(lookupOriginalSend(f.registry.readOnlySnapshot(), {
       conversationId: f.receipt.conversationId, clientMessageId: "absent-original-key",
     })).toEqual({ kind: "absent" });
@@ -103,4 +107,47 @@ test("cold claim and quota readers avoid full snapshot construction and observe 
       expect(registry.autoBalancePolicy("codex").enabled).toBe(!policy.enabled);
     } finally { peer.close(); }
   } finally { registry.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("cold session resolution reads the requested identity without constructing a snapshot", () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "targeted-session-read-"));
+  const data = buildRegistryPerformanceDataset(directory, scaledRegistryPerformanceShape(0.02), { sessionsRoot: path.join(directory, "transcripts") });
+  let snapshots = 0, payloads = 0;
+  const registry = new AgentRegistry(path.join(directory, "agent-registry.json"), undefined, undefined, {
+    sqliteMode: "sqlite", sqliteFilename: data.filename, onSqliteSnapshotLoad: () => { snapshots++; },
+    onSqliteRowPayloadRead: (_collection, count) => { payloads += count; },
+  });
+  try {
+    const selected = data.conversations[0]!;
+    expect(registry.sessionTarget(selected.conversationId, "")).toEqual({ path: selected.path, unavailable: false });
+    expect(snapshots).toBe(0);
+    expect(payloads).toBeLessThan(30);
+    payloads = 0;
+    expect(registry.sessionTarget("conversation_absent", "/sessions/absent.jsonl")).toEqual({ path: "/sessions/absent.jsonl", unavailable: false });
+    expect(snapshots).toBe(0);
+    expect(payloads).toBeLessThan(5);
+  } finally { registry.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("keyed session resolution keeps staged paths private by id, alias and raw path and observes peer finalization", () => {
+  const f = fixture();
+  const peer = new SqliteAgentRegistryStore(path.join(f.directory, "agent-registry.sqlite"), {
+    initialSnapshot: normalizeRegistry({ version: 2, entries: {}, receipts: {} }), normalize: normalizeRegistry,
+  });
+  const alias = "conversation_session_alias" as const;
+  try {
+    peer.mutate(file => {
+      const receipt = file.receipts[f.receipt.launchId]!;
+      receipt.state = "host-verified";
+      receipt.transport = "structured";
+      file.conversationAliases[alias] = f.receipt.conversationId;
+    }, false);
+    for (const id of [f.receipt.conversationId, alias, null]) {
+      expect(f.registry.sessionTarget(id, f.receipt.artifactPath).unavailable).toBe(true);
+    }
+    peer.mutate(file => { file.receipts[f.receipt.launchId]!.state = "completed"; }, false);
+    for (const id of [f.receipt.conversationId, alias, null]) {
+      expect(f.registry.sessionTarget(id, f.receipt.artifactPath)).toEqual({ path: f.receipt.artifactPath, unavailable: false });
+    }
+  } finally { peer.close(); f.close(); }
 });

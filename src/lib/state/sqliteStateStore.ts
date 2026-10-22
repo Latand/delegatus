@@ -1,4 +1,5 @@
-import { assertStateStartupMutation } from "@/lib/stateOwnership";
+import { assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
+import { IncompatibleSchemaError, schemaCompileFailure } from "./schemaCompatibility";
 import { blockingWaitRole } from "@/lib/blockingWaits";
 import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import { performanceSpans } from "@/lib/performanceSpans";
@@ -16,7 +17,7 @@ import { procBackend } from "@/lib/proc";
 import { rememberRecordBytes } from "./registryRecords";
 import { installPipelineControllerSchedule, pipelineControllerScheduleIndexes, selectPipelineTickWork, type PipelineTickWork } from "./pipelineControllerSchedule";
 import { installPipelineControllerIndex, type PipelineControllerSelection } from "./pipelineControllerIndex";
-import { installPipelineControllerReferences, pipelineControllerReferencesReady, type PipelineAttemptReference } from "./pipelineControllerReferences";
+import { installPipelineControllerReferences, pipelineControllerReferencesCurrent, pipelineControllerReferencesReady, type PipelineAttemptReference } from "./pipelineControllerReferences";
 import { installPipelineEvidenceIndex, pipelineEvidenceIndexReady } from "./pipelineEvidenceIndex";
 import { databaseFileIdentity, databaseSwapMarker, databaseSwapInProgress, DatabaseReplacedError, openCurrentDatabase } from "./currentDatabase";
 import { collectionReadCache, rememberCollectionReadCache, type ReadCacheSlot } from "./collectionReadCache";
@@ -34,6 +35,9 @@ export class StateLeaseLostError extends FileTransactionBusyError {
   }
 }
 function classifyStateError(error: unknown, detail: string): unknown {
+  if (error instanceof IncompatibleSchemaError) return error;
+  const failure = schemaCompileFailure(error);
+  if (failure) return new IncompatibleSchemaError("state.sqlite", failure, { cause: error });
   if (!isDiskFullError(error)) return error;
   noteStateDiskFull(detail);
   return error instanceof StateDiskFullError ? error : new StateDiskFullError(detail, error);
@@ -475,6 +479,7 @@ function openRawDatabase(filename: string): Database {
           "pipeline_controller_work_update", "pipeline_controller_work_delete", "pipeline_tick_delete"].every(name => names.has(name))
           && pipelineControllerScheduleIndexes.ready(names)
           && pipelineControllerReferencesReady(db, names)
+          && (pipelineControllerReferencesCurrent(db) || !mayRunStateStartupMutation(path.dirname(filename)))
           && pipelineEvidenceIndexReady(db)
           && db.query<{ journal_mode: string }, []>("PRAGMA journal_mode").get()?.journal_mode === "wal"
           && db.query<{ name: string }, []>("PRAGMA table_info(state_collections)").all().some(row => row.name === "change_floor")
@@ -1000,12 +1005,17 @@ export async function readCompactPipelineEvidence<T>(filename: string, prior: Co
   };
   assertActive();
   if (!fs.existsSync(filename)) return null;
+  // Bind the cache key to the file opened for this snapshot. A pathname stat
+  // taken only after BEGIN can observe a replacement inode while SQLite keeps
+  // reading the original one.
+  const openedIdentity = databaseFileIdentity(filename);
   const db = connectReadonlyDatabase(filename);
   try {
     db.exec("BEGIN");
     if (!pipelineEvidenceIndexReady(db)) return null;
     const schema = db.query<{ schema_version: number }, []>("PRAGMA schema_version").get()!.schema_version;
-    const identity = `${databaseFileIdentity(filename)}:${schema}`;
+    if (databaseFileIdentity(filename) !== openedIdentity) throw new StateSnapshotChangedError();
+    const identity = `${openedIdentity}:${schema}`;
     const collections = db.query<{ collection: string }, []>("SELECT collection FROM state_collections WHERE collection IN ('pipelines','pipelines_archive')").all();
     if (collections.length !== 2) return null;
     const sourceRevision = db.query<{ revision: number }, []>("SELECT revision FROM pipeline_evidence_clock WHERE id=1").get()!.revision;

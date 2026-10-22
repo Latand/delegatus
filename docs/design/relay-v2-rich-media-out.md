@@ -1,5 +1,30 @@
 # Relay v2, install side: rich answers, URL buttons and media out
 
+## Amendment: opt-in document originals (2026-10-20)
+
+`RELAY_MEDIA_ANY_DOCUMENT` in `src/lib/externalRelay/mediaInputValidation.ts`
+names the optional capability. Claims advertise it when the service descriptor
+offers it together with `relay_media_in`. The final claimed request must carry
+the capability to admit ready documents outside the existing MIME allowlist;
+without it, those documents still raise 415 `unsupported_media_type`.
+
+With the capability, ready documents retain their supplied sanitized filename
+inside the private per-run media directory. Separators, controls, dot paths and
+names over 128 Unicode scalars are refused before downloading. Filesystem
+reserved characters and device names are adapted on Windows; names exceeding 255 UTF-8
+bytes are shortened. Duplicate names receive numbered suffixes before the
+extension, reserving the other originals' names and comparing names without
+case distinctions. The prompt retains the original name alongside MIME, byte
+size and local path, under the existing untrusted-data notice.
+
+Four refs, 20 MiB per original and 40 MiB total remain the limits. The lease,
+expiry, download deadline, content-length and response MIME checks still apply.
+Allowlisted content retains its existing text, PDF and JPEG/PNG checks. Other
+document types are streamed as untrusted bytes without decoding, extraction or
+execution; non-text extraction metadata must be `unavailable`. Photos and native
+image input remain limited to JPEG/PNG. The runner removes originals at run end,
+and failed or cancelled preparation removes all partial originals.
+
 ## Amendment: mentions, photo references and media input (2026-10-19)
 
 The service contract `docs/design/relay-protocol-v2.md` at `efeac13c`
@@ -40,8 +65,9 @@ and compaction remain outside this amendment.
 - `client.ts` gains an authenticated streaming download using the existing
   DNS pinning and redirect refusal. Only
   `/requests/{request_id}/media/{media_ref}` is constructed, with bearer,
-  version and lease headers. No supplied URL or filename becomes a path.
-  `mediaInput.ts` writes exclusive, generated files below private run scratch,
+  version and lease headers. No supplied URL becomes a path. Without the
+  document capability above, filenames on disk remain generated.
+  `mediaInput.ts` writes exclusive files below private run scratch,
   using pipeline backpressure and counters before each write. Enforce exact
   content length, negotiated MIME, per-file and aggregate byte limits while
   streaming; cancellation, interruption and authorization loss discard partial

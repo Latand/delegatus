@@ -26,6 +26,12 @@ installs run agents in separate transient scopes with `MemoryMax`, no swap and
 `OOMPolicy=continue`, bound to the Viewer service. Agent descendants inherit a
 higher OOM score than the Viewer. No address-space limit is applied.
 
+A heavy command an agent runs through `scripts/gate-slot.sh` leaves the agent's
+ceiling: it runs in its own gate service with `MemoryMax=8G` (`LLV_GATE_MEM`),
+including from inside an agent's signal domain, where it stays in the agent's
+namespaces. Without a reachable user manager a domain's gate runs under the
+agent's ceiling instead, and says so.
+
 An existing user-service install needs this drop-in to survive a kill of a
 process that still shares the service (workers, builds or watchdog-mode agents):
 

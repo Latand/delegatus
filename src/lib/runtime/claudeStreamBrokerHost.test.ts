@@ -233,6 +233,7 @@ class FakeClaude extends EventEmitter {
   readonly signals: NodeJS.Signals[] = [];
   readonly inputs: Array<Record<string, unknown>> = [];
   sessionId = "";
+  viewerStatus: unknown[] = [{ name: "viewer", status: "connected", tools: [{ name: "stage_report" }] }];
 
   constructor(
     private readonly ledger: RecordingDeliveryLedger,
@@ -250,6 +251,11 @@ class FakeClaude extends EventEmitter {
         if (line) {
           const input = JSON.parse(line) as Record<string, unknown>;
           this.inputs.push(input);
+          const control = input.request as { subtype?: string } | undefined;
+          if (input.type === "control_request" && ["initialize", "mcp_status"].includes(control?.subtype ?? "")) {
+            this.emitJson({ type: "control_response", response: { subtype: "success", request_id: input.request_id,
+              response: control?.subtype === "mcp_status" ? { mcpServers: this.viewerStatus } : {} } });
+          }
           const message = input.message as { content?: Array<{ text?: string }> } | undefined;
           if (input.type === "user") {
             this.ledger.order.push(`stdin:${message?.content?.[0]?.text}`);
@@ -286,6 +292,30 @@ function fakeSpawn(
   };
 }
 
+test("Claude refuses fresh and adopted launches with missing or empty Viewer tools before accepting work", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "claude-mcp-launch-"));
+  try {
+    for (const resume of [false, true]) for (const status of [[], [{ name: "viewer", status: "connected", tools: [] }],
+      [{ name: "viewer", status: "failed", error: "isolated MCP startup refused" }]]) {
+      const child = new FakeClaude(new RecordingDeliveryLedger());
+      child.viewerStatus = status;
+      const store = new MemoryEventStore();
+      const options: ClaudeStreamBrokerHostOptions = { cwd: home, claudeConfigDir: home, eventStore: store,
+        deliveryLedger: new RecordingDeliveryLedger(), readTranscript: () => [],
+        readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }), spawnProcess: fakeSpawn(child, {}) };
+      let host: ClaudeStreamBrokerHost | null = null;
+      const error = await (resume ? ClaudeStreamBrokerHost.adopt("00000000-0000-0000-0000-000000000000", options)
+        : ClaudeStreamBrokerHost.start({ ...options, sessionId: "00000000-0000-0000-0000-000000000000" }))
+        .then(value => { host = value; return null; }, reason => reason);
+      try {
+        expect(String(error)).toContain("Viewer MCP launch failed");
+        expect(child.inputs.some(input => input.type === "user")).toBe(false);
+        expect(store.load("00000000-0000-0000-0000-000000000000").some(event => event.kind === "session-status" && event.status === "idle")).toBe(false);
+      } finally { if (host) await (host as ClaudeStreamBrokerHost).release(); }
+    }
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
 test("ledger replay retains the first UUID allocation and accepts its legacy upgrade and a later distinct echo", () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-allocation-replay-"));
   try {
@@ -321,6 +351,56 @@ test("ledger replay retains the first UUID allocation and accepts its legacy upg
 });
 
 test.each([
+  { configured: null, recorded: "default", expected: "default", direct: false, readOnly: false },
+  { configured: null, recorded: "acceptEdits", expected: "acceptEdits", direct: false, readOnly: false },
+  { configured: null, recorded: null, expected: "default", direct: false, readOnly: false },
+  { configured: "bypassPermissions", recorded: "default", expected: "bypassPermissions", direct: false, readOnly: false },
+  { configured: null, recorded: "acceptEdits", expected: "acceptEdits", direct: true, readOnly: false },
+  { configured: null, recorded: "bypassPermissions", expected: "bypassPermissions", direct: true, readOnly: false },
+  { configured: null, recorded: null, expected: "default", direct: true, readOnly: false },
+  { configured: null, recorded: "bypassPermissions", expected: "plan", direct: false, readOnly: true },
+  { configured: null, recorded: "bypassPermissions", expected: "plan", direct: true, readOnly: true },
+])("Claude rehosting keeps configured=$configured recorded=$recorded direct=$direct readOnly=$readOnly permissions", async ({ configured, recorded, expected, direct, readOnly }) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-claude-resume-permissions-"));
+  const sessionId = ["00000000", "0000", "0000", "0000", "000000000001"].join("-");
+  const { claudeTranscriptPath } = await import("@/lib/agent/transcript");
+  const artifactPath = claudeTranscriptPath(directory, sessionId, directory);
+  const registryPath = path.join(directory, "registry.json");
+  const captured: { args?: string[]; options?: SpawnOptionsWithoutStdio } = {};
+  let host: ClaudeStreamBrokerHost | undefined;
+  try {
+    fs.mkdirSync(path.dirname(artifactPath), { recursive: true });
+    fs.writeFileSync(artifactPath, JSON.stringify({ type: "user", permissionMode: recorded }) + "\n");
+    const registry = new AgentRegistry(registryPath, undefined, undefined, { sqliteMode: "off" });
+    registry.upsert({ key: { engine: "claude", sessionId }, artifactPath, cwd: directory, accountId: null,
+      launchProfile: emptyLaunchProfile({ cwd: directory, permissionMode: configured, readOnly }),
+      status: "dead", host: null, claimEpoch: 0, claimOwner: null, pendingAction: null });
+    const reopened = new AgentRegistry(registryPath, undefined, undefined, { sqliteMode: "off" });
+    const entry = reopened.readOnlySnapshot().entries[`claude:${sessionId}`]!;
+    const options = await claudeStartupHostOptions(entry, null, null, { NODE_ENV: "test" });
+    const { claudeStructuredHostOptions } = await import("./structuredSpawn");
+    const structured = await claudeStructuredHostOptions({
+      spec: { engine: "claude", command: "", windowName: "claude-resume", transcript: artifactPath,
+        cwd: directory, launchProfile: entry.launchProfile },
+      account: { engine: "claude", accountId: "default", kind: "legacy", home: directory,
+        transcriptRoot: directory, env: { NODE_ENV: "test" } },
+    }, { env: { NODE_ENV: "test" }, host: {} });
+    expect(structured.permissionMode).toBe(expected);
+    host = await ClaudeStreamBrokerHost.adopt(sessionId, {
+      ...options, ...(direct ? { permissionMode: undefined, claudeProjectsDir: directory } : {}),
+      eventStore: new MemoryEventStore(), readTranscript: () => [],
+      readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      spawnProcess: fakeSpawn(new FakeClaude(new RecordingDeliveryLedger()), captured),
+    });
+    expect(captured.args![captured.args!.indexOf("--permission-mode") + 1]).toBe(expected);
+    expect(captured.args).not.toContain("--dangerously-skip-permissions");
+  } finally {
+    await host?.release();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test.each([
   { sandbox: "full", readOnly: false },
   { sandbox: "full", readOnly: true },
   { sandbox: "restricted", readOnly: false },
@@ -339,7 +419,11 @@ test.each([
   try {
     const reloaded = new AgentRegistry(registry.filename, undefined, undefined, { sqliteMode: "off" });
     const entry = reloaded.readOnlySnapshot().entries[`claude:${sessionId}`]!;
-    const options = await claudeStartupHostOptions(entry, null, null, { NODE_ENV: "test", HOME: directory, LLV_STATE_DIR: process.env.LLV_STATE_DIR });
+    const prioritySource = JSON.stringify({ database: path.join(directory, "tasks.sqlite"), taskIds: ["stage-task"] });
+    const options = await claudeStartupHostOptions(entry, null, null, {
+      NODE_ENV: "test", HOME: directory, LLV_STATE_DIR: process.env.LLV_STATE_DIR,
+      LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource,
+    });
     const captured: { args?: string[]; options?: SpawnOptionsWithoutStdio } = {};
     const host = await ClaudeStreamBrokerHost.adopt(sessionId, { ...options,
       eventStore: new MemoryEventStore(), readTranscript: () => [],
@@ -353,6 +437,10 @@ test.each([
       expect(args[args.indexOf("--permission-mode") + 1]).toBe(sandbox === null ? "plan" : "bypassPermissions");
       const denied = args[args.indexOf("--disallowedTools") + 1];
       expect(denied.includes("Edit,Write,NotebookEdit")).toBe(sandbox === null);
+      expect(captured.options?.env).toMatchObject({ LLV_GATE_CPU_PRIORITY_SOURCE: prioritySource });
+      expect(captured.options?.env?.LLV_STATE_DIR).toBe(path.join(
+        captured.options?.env?.XDG_CONFIG_HOME ?? "", "agent-log-viewer", "state",
+      ));
     } finally { await host.release(); }
   } finally {
     if (previousState === undefined) delete process.env.LLV_STATE_DIR;
@@ -1950,7 +2038,7 @@ describe("ClaudeStreamBrokerHost", () => {
       [STRUCTURED_HOST_STAMP_ENV]: structuredHostStamp(),
     });
     expect(await host.send({ id: "managed-entry", text: "managed prompt" })).toEqual({ outcome: "turn-started", turnId: "managed-entry" });
-    expect(child.inputs).toHaveLength(0);
+    expect(child.inputs.filter(input => input.type === "user")).toHaveLength(0);
     await host.release();
   });
 

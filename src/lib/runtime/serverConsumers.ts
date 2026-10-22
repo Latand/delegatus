@@ -1,3 +1,4 @@
+import { assertFlowExecution } from "@/lib/flows/retirement";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { agentRegistry } from "@/lib/agent/registry";
 import { isoNow, newRound } from "@/lib/flows/engine";
@@ -18,6 +19,7 @@ function readyNote(value: string | null): string | null {
 }
 
 export function advanceFlowFromRuntime(flow: Flow, note: string | null): boolean {
+  assertFlowExecution();
   const ready = readyNote(note);
   if (!ready || (flow.state !== "waiting_ready" && flow.state !== "fixing")) return false;
   flow.rounds.push(newRound(flow, "marker", ready));
@@ -54,7 +56,8 @@ export function recordSpawnTurnEnded(
 
 export function createServerRuntimeConsumers(): RuntimeConsumerPorts {
   return {
-    flowReady(flowId, note) {
+    async flowReady(flowId, note) {
+      assertFlowExecution();
       return withFlowMutation(async (flows, persist) => {
         const flow = flows.find((item) => item.id === flowId);
         if (!flow) return undefined;
@@ -62,7 +65,8 @@ export function createServerRuntimeConsumers(): RuntimeConsumerPorts {
         return flow;
       });
     },
-    workflowStageCompleted(workflowId, stage) {
+    async workflowStageCompleted(workflowId, stage) {
+      assertFlowExecution();
       return withWorkflowMutation(async (workflows, persist) => {
         const workflow = workflows.find((item) => item.id === workflowId);
         if (!workflow) return undefined;

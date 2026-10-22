@@ -1,3 +1,4 @@
+import { assertFlowExecution } from "./retirement";
 import { DEFAULT_REVIEW_ROUNDS } from "@/lib/reviewHistory/limits";
 import crypto from "node:crypto";
 import path from "node:path";
@@ -176,6 +177,7 @@ export async function createFlowFromRequest(
   preparedGit?: PreparedFlowGit,
   assertAuthorized?: () => void,
 ): Promise<{ flow?: Flow; error?: string; status?: number }> {
+  assertFlowExecution();
   const normalizedSpec = normalizeFlowSpec(req.spec);
   if (!normalizedSpec.ok) {
     return { error: "spec must be a string", status: 400 };
@@ -374,6 +376,7 @@ async function stopReviewer(flow: Flow, round: Round): Promise<boolean> {
  * extend/close already exist.
  */
 export async function cancelRound(id: string): Promise<{ flow?: Flow; error?: string; status?: number }> {
+  assertFlowExecution();
   const flows = loadFlows();
   const flow = flows.find((item) => item.id === id);
   if (!flow) return { error: "flow not found", status: 404 };
@@ -415,6 +418,7 @@ export async function closeFlow(id: string): Promise<{
       what it stopped instead of claiming nothing was running (#670). */
   stoppedReviewer?: { round: number } | null;
 }> {
+  assertFlowExecution();
   const flows = loadFlows();
   const flow = flows.find((item) => item.id === id);
   if (!flow) return { error: "flow not found", status: 404 };
@@ -455,6 +459,7 @@ export function patchFlow(
   req: PatchFlowRequest,
   actor: PauseResumeActor | null = OPERATOR_PAUSE_RESUME_ACTOR,
 ): { flow?: Flow; error?: string; status?: number } {
+  assertFlowExecution();
   if (req.action === "agent-decision") return { error: "agent decisions require the authenticated MCP owner contract", status: 403 };
   const flows = loadFlows();
   const flow = flows.find((item) => item.id === id);

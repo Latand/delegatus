@@ -8,6 +8,9 @@ import { finishTreeTrash, removeTreeViaTrash, scanProcesses, type ProcessScan } 
 import type { LauncherRecord } from "./launcher";
 import { runGit } from "./git";
 import { RetentionWorker } from "./retentionWorker";
+import { retentionProcessScan, withSelfObservation } from "./retentionInspection";
+import { quarantineTree, sealProcessLinks } from "./gatedTrash";
+import { installStateOwnershipGraph, MODULE_CONSUMER_SOURCE } from "./stateOwnershipGraph.fixture";
 
 const DAY = 86_400_000;
 const LOOP_PROBE_INTERVAL_MS = 10;
@@ -115,24 +118,60 @@ function fixture(count = 8) {
     launcher: { pid: 42, startIdentity: "fixture" }, web: { ...processEntry }, runtimeHost: { ...processEntry }, port: 0, socket: path.join(root, "host.sock"), updatedAt: "" };
   fs.writeFileSync(record.releasePointer, JSON.stringify({ dir: dirs[0], sha: shas[0] }));
   const commands: string[][] = [];
-  const locked = new Set<string>();
-  const git: NonNullable<RetentionPorts["git"]> = async (args, cwd) => {
+  const locked = new Set<string>(); const unregistered = new Set<string>();
+  const git: NonNullable<RetentionPorts["git"]> = async (args, at) => {
     commands.push(args);
-    if (args[0] === "worktree" && args[1] === "list") return { code: 0, stderr: "", stdout: dirs.filter(dir => fs.existsSync(dir)).map(dir =>
-      `worktree ${dir}\0HEAD ${shas[dirs.indexOf(dir)]}\0${locked.has(dir) ? "locked fixture\0" : ""}\0`).join("") };
+    // A quarantined release answers Git as the release it was.
+    const cwd = path.basename(path.dirname(at)).startsWith(".delegatus-trash-") ? path.join(path.dirname(path.dirname(at)), path.basename(at)) : at;
+    // Like Git, a registration whose directory is missing stays listed as prunable until removed.
+    if (args[0] === "worktree" && args[1] === "list") return { code: 0, stderr: "", stdout: dirs.filter(dir => !unregistered.has(dir)).map(dir =>
+      `worktree ${dir}\0HEAD ${shas[dirs.indexOf(dir)]}\0${locked.has(dir) ? "locked fixture\0" : ""}${fs.existsSync(dir) ? "" : "prunable gitdir file points to non-existent location\0"}\0`).join("") };
     if (args[0] === "rev-parse") return { code: 0, stderr: "", stdout: shas[dirs.indexOf(cwd)]! };
     if (args[0] === "status") return { code: 0, stderr: "", stdout: "" };
     if (args[0] === "ls-files") return { code: 0, stderr: "", stdout: "H fixture.txt\0" };
     if (args[0] === "for-each-ref") return { code: 0, stderr: "", stdout: "refs/heads/main\n" };
-    if (args[0] === "worktree" && args[1] === "remove") { fs.rmSync(args.at(-1)!, { recursive: true, force: true }); return { code: 0, stderr: "", stdout: "" }; }
+    if (args[0] === "worktree" && args[1] === "remove") { fs.rmSync(args.at(-1)!, { recursive: true, force: true }); unregistered.add(args.at(-1)!); return { code: 0, stderr: "", stdout: "" }; }
     throw new Error(`unexpected Git command: ${args.join(" ")}`);
   };
   const inputs: RetentionInputs = {};
-  const ports: RetentionPorts = { git, scan: () => EMPTY, mountPoints: () => [], now: () => now, env: {},
+  const ports: RetentionPorts = { maxCandidates: 128, git, scan: () => EMPTY, mountPoints: () => [], now: () => now, env: {},
     lockHead: () => () => {}, reportFile: path.join(root, "state/retention.json") };
   return { root, dirs, shas, record, inputs, ports, commands, locked, now, run: () => retainReleases(record, inputs, ports) };
 }
 const exists = fs.existsSync;
+
+test("a scoped partial scan protects only its affected release, including caches", async () => {
+  const h = fixture();
+  h.ports.scan = () => ({ ...EMPTY, uncertain: [{ pid: 123, reason: "maps:EACCES", roots: [h.dirs[1]!] }] });
+  const report = await h.run();
+  expect(report.errors).toEqual([]);
+  expect(report.kept).toContainEqual(expect.objectContaining({ dir: h.dirs[1], reason: "process-unreadable:123:maps:EACCES" }));
+  expect(exists(path.join(h.dirs[1]!, ".next/cache/webpack/cache"))).toBeTrue();
+  expect(report.removed.some(row => row.dir === h.dirs[2])).toBeTrue();
+});
+
+test("an unscoped unreadable process keeps every release with its reason", async () => {
+  const h = fixture();
+  h.ports.scan = () => ({ ...EMPTY, uncertain: [{ pid: 123, reason: "fd:EACCES", roots: [h.record.releasesDir] }] });
+  const report = await h.run();
+  expect(report.errors).toEqual([]);
+  expect(report.removed).toEqual([]);
+  expect(report.kept.filter(row => row.reason.startsWith("process-unreadable:")).length).toBeGreaterThan(0);
+  for (const dir of h.dirs) expect(exists(path.join(dir, ".next/cache/webpack/cache"))).toBeTrue();
+});
+
+test("a pass bounds release work and a later pass drains the remaining backlog", async () => {
+  const h = fixture(12);
+  const at = new Date(h.now - 10 * DAY);
+  for (const dir of h.dirs) for (const file of [dir, path.join(dir, ".next/DELEGATUS_RELEASE_READY"), path.join(dir, ".next/BUILD_ID")]) fs.utimesSync(file, at, at);
+  Object.assign(h.ports, { maxCandidates: 2 });
+  const first = await h.run();
+  expect(first.removed).toHaveLength(1);
+  expect(first.kept.some(row => row.reason === "pass-budget")).toBeTrue();
+  const second = await h.run();
+  expect(second.removed).toHaveLength(2);
+  expect(second.removed.every(row => !first.removed.some(old => old.dir === row.dir))).toBeTrue();
+});
 
 test("keep decisions over 87 releases use one inventory; destructive steps use fresh helper scans", async () => {
   const h = fixture(87);
@@ -174,6 +213,7 @@ test("a separately sampled 120 ms loop stall exceeds the 50 ms budget", async ()
 
 test("the loop stays within 50 ms while counting 87 retained release trees", async () => {
   const h = fixture(87);
+  h.ports.maxCandidates = 100;
   h.inputs.inFlight = [...h.dirs];
   for (const dir of h.dirs) {
     const tree = path.join(dir, "node_modules/fixture");
@@ -315,6 +355,107 @@ test("a process acquired after an earlier removal still protects a later release
   expect(children.at(-1)!.signalCode).toBeNull();
 }, 30_000);
 
+test("recovery advances past four held journals on a later pass", async () => {
+  const h = fixture(0); h.record.checkout = null; h.ports.maxCandidates = 4;
+  // Intact quarantines count toward the newest kept: the fifth is the oldest.
+  h.ports.env = { LLV_SELF_UPDATE_KEEP_RELEASES: "1" };
+  const dirs = Array.from({ length: 5 }, (_, index) => path.join(h.record.releasesDir, `npm-2.0.${index}`));
+  fs.writeFileSync(h.record.releasePointer, JSON.stringify({ dir: dirs[0] }));
+  const journals: string[] = [];
+  for (const [index, dir] of dirs.entries()) {
+    fs.mkdirSync(dir); fs.writeFileSync(path.join(dir, "package.json"), "{}");
+    for (const entry of [path.join(dir, "package.json"), dir]) fs.utimesSync(entry, index === 4 ? 1 : 10 + index, index === 4 ? 1 : 10 + index);
+    const journal = path.join(path.dirname(h.ports.reportFile!), `package-trash-${String(journals.length).padStart(3, "0")}.json`);
+    await expect(removeTreeViaTrash(dir, { journal, held: () => false, remove: async () => { throw new Error("interrupted"); } })).rejects.toThrow("interrupted");
+    journals.push(journal);
+  }
+  const heldTrash = new Set(journals.slice(0, 4).map(file => JSON.parse(fs.readFileSync(file, "utf8")).trash as string));
+  h.ports.scan = () => ({ ...EMPTY, processes: [...heldTrash].map((entry, index) => ({ pid: index + 100, namespace: EMPTY.ownNamespace, stamped: false, paths: [entry] })) });
+  const first = await h.run();
+  expect(first.removed).toEqual([]);
+  expect(JSON.parse(fs.readFileSync(h.ports.reportFile!, "utf8")).recoveryCursor).toBe(path.basename(journals[3]!));
+  const second = await h.run();
+  expect(second.errors).toEqual([]);
+  expect(second.removed).toContainEqual(expect.objectContaining({ dir: dirs[4] }));
+  expect(fs.existsSync(dirs[4]!)).toBeFalse();
+  for (const journal of journals.slice(0, 4)) expect(fs.existsSync(journal)).toBeTrue();
+}, 30_000);
+
+test("a process entering a recovered trash tree during owner IPC is refused, by either path", async () => {
+  const h = fixture(0); h.record.checkout = null;
+  const dir = path.join(h.record.releasesDir, "npm-4.0.0"); fs.mkdirSync(dir); fs.writeFileSync(path.join(dir, "package.json"), "{}");
+  fs.utimesSync(path.join(dir, "package.json"), 1, 1); fs.utimesSync(dir, 1, 1);
+  // A newer release fills the one newest slot, so the quarantined one may go.
+  h.ports.env = { LLV_SELF_UPDATE_KEEP_RELEASES: "1" };
+  const newer = path.join(h.record.releasesDir, "npm-5.0.0"); fs.mkdirSync(newer); fs.writeFileSync(path.join(newer, "package.json"), "{}");
+  fs.utimesSync(path.join(newer, "package.json"), 2, 2); fs.utimesSync(newer, 2, 2);
+  fs.writeFileSync(h.record.releasePointer, JSON.stringify({ dir: path.join(h.record.releasesDir, "npm-0.0.0") }));
+  const journal = path.join(path.dirname(h.ports.reportFile!), "package-trash-recovery-race.json");
+  await expect(removeTreeViaTrash(dir, { journal, held: () => false, remove: async () => { throw new Error("interrupted"); } })).rejects.toThrow("interrupted");
+  const legacyTrash = JSON.parse(fs.readFileSync(journal, "utf8")).trash as string;
+  let gated: string | undefined;
+  h.ports.scan = () => {
+    const gate = fs.readdirSync(h.record.releasesDir).find(name => name.startsWith(".delegatus-trash-npm-4.0.0-") && path.join(h.record.releasesDir, name) !== legacyTrash);
+    if (gate) gated = path.join(h.record.releasesDir, gate, "npm-4.0.0");
+    return EMPTY;
+  };
+  const refusals: (string | undefined)[] = [];
+  const originalCurrent = h.ports.current;
+  h.ports.current = async () => {
+    if (gated && !refusals.length) {
+      // The journal's own trash path is gone, and the gate is closed.
+      for (const cwd of [legacyTrash, gated]) {
+        const holder = spawn(process.execPath, ["-e", "process.stdout.write('ready'); setInterval(() => {}, 1000)"], {
+          cwd, env: HOLDER_ENV(), stdio: ["ignore", "pipe", "ignore"] });
+        children.push(holder);
+        await new Promise<void>((resolve, reject) => {
+          holder.once("error", error => { refusals.push((error as NodeJS.ErrnoException).code); children.splice(children.indexOf(holder), 1); resolve(); });
+          holder.stdout!.once("data", () => reject(new Error("holder entered recovered trash")));
+        });
+      }
+    }
+    return originalCurrent?.() ?? { record: h.record, inputs: h.inputs, fenced: true };
+  };
+  const report = await h.run();
+  expect(report.errors).toEqual([]);
+  expect(refusals).toEqual(["ENOENT", "EACCES"]);
+  expect(report.removed).toContainEqual(expect.objectContaining({ dir }));
+  expect(fs.existsSync(journal)).toBeFalse();
+  expect(fs.readdirSync(h.record.releasesDir).some(name => name.startsWith(".delegatus-trash-"))).toBeFalse();
+}, 30_000);
+
+test("a process entering cache trash during owner IPC is refused at the closed gate", async () => {
+  const h = fixture();
+  const cache = path.join(h.dirs[0]!, ".next/cache/webpack");
+  let gate: string | undefined;
+  let refusal: NodeJS.ErrnoException | undefined;
+  h.ports.scan = () => {
+    const found = fs.readdirSync(path.dirname(cache)).find(name => name.startsWith(".delegatus-trash-webpack-"));
+    if (found) gate = path.join(path.dirname(cache), found);
+    return EMPTY;
+  };
+  const originalCurrent = h.ports.current;
+  h.ports.current = async () => {
+    if (gate && !refusal) {
+      const holder = spawn(process.execPath, ["-e", "process.stdout.write('ready'); setInterval(() => {}, 1000)"], {
+        cwd: path.join(gate, "webpack"), env: HOLDER_ENV(), stdio: ["ignore", "pipe", "ignore"],
+      });
+      children.push(holder);
+      await new Promise<void>((resolve, reject) => {
+        holder.once("error", error => { refusal = error; children.splice(children.indexOf(holder), 1); resolve(); });
+        holder.stdout!.once("data", () => reject(new Error("holder entered a closed gate")));
+      });
+    }
+    return originalCurrent?.() ?? { record: h.record, inputs: h.inputs, fenced: true };
+  };
+  const report = await h.run();
+  expect(report.errors).toEqual([]);
+  expect(refusal?.code).toBe("EACCES");
+  expect(fs.existsSync(cache)).toBeFalse();
+  expect(fs.readdirSync(path.dirname(cache)).some(name => name.startsWith(".delegatus-trash-"))).toBeFalse();
+  expect(exists(path.join(h.dirs[0]!, ".next/cache/fetch-cache/runtime"))).toBeTrue();
+}, 30_000);
+
 test("recent and newest-K releases are kept; K follows LLV_SELF_UPDATE_KEEP_RELEASES", async () => {
   const h = fixture(); h.ports.env = { LLV_SELF_UPDATE_KEEP_RELEASES: "1" };
   fs.utimesSync(path.join(h.dirs[1]!, ".next/BUILD_ID"), new Date(h.now), new Date(h.now));
@@ -433,6 +574,59 @@ function packageContainerFixture() {
   return { ...h, dirs, target: dirs[2]! };
 }
 
+test.each(["active", "rollback", "serving", "in-flight"] as const)(
+  "owner protection acquired during the final process scan preserves package trash (%s)", async protection => {
+    const h = packageContainerFixture();
+    const servingSha = "ab".repeat(20);
+    const packageMetadata = path.join(h.target, "node_modules/delegatus-cli/package.json");
+    fs.mkdirSync(path.dirname(packageMetadata), { recursive: true });
+    fs.writeFileSync(packageMetadata, JSON.stringify({ gitHead: servingSha }));
+    h.ports.current = () => structuredClone({ record: h.record, inputs: h.inputs, fenced: true });
+    let acquired = false;
+    h.ports.scan = () => {
+      const quarantined = fs.readdirSync(h.record.releasesDir).some(name => name.startsWith(`.delegatus-trash-${path.basename(h.target)}-`));
+      if (quarantined && !acquired) {
+        acquired = true;
+        if (protection === "active") fs.writeFileSync(h.record.releasePointer, JSON.stringify({ dir: h.target }));
+        if (protection === "rollback") h.inputs.rollbackPackage = h.target;
+        if (protection === "serving") h.record.web.revision = servingSha;
+        if (protection === "in-flight") h.inputs.inFlight = [h.target];
+      }
+      return EMPTY;
+    };
+
+    const report = await h.run();
+    expect(acquired).toBeTrue();
+    expect(report.errors).toEqual([]);
+    expect(fs.existsSync(path.join(h.target, "package.json"))).toBeTrue();
+    expect(report.removed.some(row => row.dir === h.target)).toBeFalse();
+    expect(report.kept).toContainEqual(expect.objectContaining({ dir: h.target, reason: protection }));
+  },
+);
+
+test("owner protection acquired during the final recovery scan preserves package trash", async () => {
+  const h = packageContainerFixture();
+  const journal = path.join(path.dirname(h.ports.reportFile!), "package-trash-recovery-race.json");
+  await expect(removeTreeViaTrash(h.target, { journal, held: () => false, remove: async () => { throw new Error("interrupted"); } }))
+    .rejects.toThrow("interrupted");
+  h.ports.current = () => structuredClone({ record: h.record, inputs: h.inputs, fenced: true });
+  let acquired = false;
+  h.ports.scan = () => {
+    const quarantined = fs.readdirSync(h.record.releasesDir).some(name => name.startsWith(`.delegatus-trash-${path.basename(h.target)}-`));
+    if (quarantined && !acquired) { acquired = true; h.inputs.rollbackPackage = h.target; }
+    return EMPTY;
+  };
+
+  const report = await h.run();
+  const trash = fs.readdirSync(h.record.releasesDir).find(name => name.startsWith(`.delegatus-trash-${path.basename(h.target)}-`));
+  expect(acquired).toBeTrue();
+  expect(report.errors).toEqual([]);
+  expect(trash).toBeDefined();
+  expect(fs.existsSync(path.join(h.record.releasesDir, trash!, "package.json"))).toBeTrue();
+  expect(fs.existsSync(journal)).toBeTrue();
+  expect(report.kept).toContainEqual(expect.objectContaining({ dir: h.target, reason: "rollback" }));
+});
+
 function dirtyNestedRepository(directory: string) {
   fs.mkdirSync(directory, { recursive: true });
   const git = (args: string[]) => {
@@ -474,13 +668,25 @@ test("package trash replay preserves a dirty nested Git checkout", async () => {
 });
 
 test("one failed removal is reported and the next candidate is still reclaimed", async () => {
-  const h = fixture(); const run = h.ports.git!;
-  h.ports.git = async (args, cwd) => args[1] === "remove" && args.at(-1) === h.dirs[1]
-    ? { code: 1, stdout: "", stderr: "fixture removal refused" } : run(args, cwd);
+  const h = fixture(); const failing = path.basename(h.dirs[1]!);
+  h.ports.removeTree = async entry => {
+    // Removal runs from inside the quarantined tree: entries are relative.
+    if (path.basename(process.cwd()) === failing && entry !== ".next/DELEGATUS_RELEASE_READY") throw new Error("fixture removal refused");
+    await fs.promises.rm(entry, { recursive: true, force: true });
+  };
   const report = await h.run();
   expect(report.errors).toHaveLength(1);
-  expect(exists(h.dirs[1]!)).toBeTrue(); expect(exists(h.dirs[2]!)).toBeFalse();
-  expect(exists(path.join(h.dirs[1]!, ".next/DELEGATUS_RELEASE_READY"))).toBeFalse();
+  expect(exists(h.dirs[1]!)).toBeFalse(); expect(exists(h.dirs[2]!)).toBeFalse();
+  expect(report.removed.some(row => row.dir === h.dirs[1])).toBeFalse();
+  // The partial tree stays journaled behind its gate, never ready, and the next pass finishes it.
+  const gate = fs.readdirSync(h.record.releasesDir).find(name => name.startsWith(`.delegatus-trash-${failing}-`))!;
+  expect(exists(path.join(h.record.releasesDir, gate, failing, ".next/DELEGATUS_RELEASE_READY"))).toBeFalse();
+  h.ports.removeTree = undefined;
+  const resumed = await h.run();
+  expect(resumed.errors).toEqual([]);
+  expect(resumed.removed.map(row => row.dir)).toContain(h.dirs[1]);
+  expect(fs.readdirSync(h.record.releasesDir).some(name => name.startsWith(".delegatus-trash-"))).toBeFalse();
+  expect(h.commands.filter(args => args[0] === "worktree" && args[1] === "remove" && args.at(-1) === h.dirs[1])).toHaveLength(1);
 });
 
 test("retention never prunes other registrations", async () => {
@@ -548,11 +754,12 @@ test.each(["tracked-edit", "untracked-file", "unpublished-commit"])("release ret
   if (kind === "unpublished-commit") expect(h.git(["status", "--porcelain"], h.candidate)).toBe("");
 });
 
-test("a late release edit is refused by Git's final removal guard", async () => {
+test("a release edit landing after the final ref check is refused by the quarantine status check", async () => {
   const h = realReleaseFixture(); let changed = false; const git = h.ports.git!;
   h.ports.git = async (args, cwd) => {
-    if (args[0] === "worktree" && args[1] === "remove" && args.at(-1) === h.candidate) {
-      changed = true; fs.writeFileSync(path.join(h.candidate, "source.txt"), "late operator edit\n");
+    // The last Git read before the rename; the edit lands at the release path.
+    if (!changed && args[0] === "status" && path.basename(path.dirname(cwd)).startsWith(".delegatus-trash-")) {
+      changed = true; fs.writeFileSync(path.join(cwd, "source.txt"), "late operator edit\n");
     }
     return git(args, cwd);
   };
@@ -623,8 +830,32 @@ test.each(["active", "rollback", "process", "mount"] as const)("late %s protecti
 
 test("a clean disposable release still expires", async () => {
   const h = realReleaseFixture(); const report = await h.run();
+  expect(report.errors).toEqual([]);
   expect(report.removed.map(row => row.dir)).toContain(h.candidate);
   expect(fs.existsSync(h.active)).toBeTrue(); expect(fs.existsSync(h.candidate)).toBeFalse();
+  const listed = h.git(["worktree", "list", "--porcelain"]);
+  expect(listed).not.toContain(h.candidate); expect(listed).toContain(h.active); expect(listed).toContain(h.newest);
+  expect(fs.readdirSync(h.record.releasesDir).some(name => name.startsWith(".delegatus-trash-"))).toBeFalse();
+});
+
+test("an interrupted release removal finishes next pass even after its registration was pruned", async () => {
+  const h = realReleaseFixture();
+  h.ports.removeTree = async entry => {
+    // Fail only the release-level removal; its generated `.next` output goes first, from its own gate.
+    if (path.basename(process.cwd()) === path.basename(h.candidate)) throw new Error("interrupted release removal");
+    await fs.promises.rm(entry, { recursive: true, force: true });
+  };
+  const interrupted = await h.run();
+  expect(interrupted.errors).toHaveLength(1);
+  expect(fs.existsSync(h.candidate)).toBeFalse();
+  h.git(["worktree", "prune"]);
+  h.ports.removeTree = undefined;
+  const resumed = await h.run();
+  expect(resumed.errors).toEqual([]);
+  expect(resumed.removed.map(row => row.dir)).toContain(h.candidate);
+  expect(h.git(["worktree", "list", "--porcelain"])).not.toContain(h.candidate);
+  expect(fs.readdirSync(h.record.releasesDir).some(name => name.startsWith(".delegatus-trash-"))).toBeFalse();
+  expect(fs.existsSync(h.active)).toBeTrue(); expect(fs.existsSync(h.newest)).toBeTrue();
 });
 
 test("ten successive applies stay bounded by protected plus newest K", async () => {
@@ -702,7 +933,7 @@ test.each([false, true])("package trash resumes safely with a new active pointer
   fs.writeFileSync(h.record.releasePointer, JSON.stringify({ dir: dirs[0] })); h.inputs.rollbackPackage = dirs[1];
   h.ports.removeTree = async () => { throw new Error("interrupted package removal"); };
   const interrupted = await h.run(); expect(interrupted.errors.length).toBeGreaterThan(0);
-  const journals = fs.readdirSync(path.dirname(h.ports.reportFile!)).filter(name => name.startsWith("package-trash-"));
+  const journals = fs.readdirSync(path.dirname(h.ports.reportFile!)).filter(name => name.startsWith("package-trash-") && name.endsWith(".json"));
   expect(journals.length).toBeGreaterThan(0);
   const row = JSON.parse(fs.readFileSync(path.join(path.dirname(h.ports.reportFile!), journals[0]!), "utf8"));
   expect(exists(row.directory)).toBeFalse(); expect(exists(row.trash)).toBeTrue();
@@ -857,7 +1088,7 @@ test.each(["throw", "partial"])("a %s safety scan after package rename restores 
 test.each(["active", "rollback", "serving", "in-flight"])("fresh %s authority is read after awaiting the helper safety scan", async protection => {
   const h = fixture(4); const target = h.dirs[1]!;
   h.inputs.inFlight = [h.dirs[0]!]; h.ports.env = { LLV_SELF_UPDATE_KEEP_RELEASES: "1" }; h.ports.scan = undefined;
-  h.ports.current = () => structuredClone({ record: h.record, inputs: h.inputs });
+  h.ports.current = () => structuredClone({ record: h.record, inputs: h.inputs, fenced: true });
   let scans = 0; let acquired = false;
   h.ports.inspection = {
     scan: async () => {
@@ -934,4 +1165,316 @@ test.skipIf(process.platform !== "linux")("87 keep decisions request exactly one
     expect(fs.readFileSync(path.join(h.root, "requests"), "utf8").split("\n").filter(kind => kind === "scan")).toHaveLength(1);
     const pid = Number(fs.readFileSync(path.join(h.root, "helper-pid"), "utf8")); expect(() => process.kill(pid, 0)).toThrow();
   } finally { await worker.close(); }
+}, 30_000);
+
+// Every scan point of a pass, found by a calibration run. A real proc root
+// limited to this process and the probe's holders keeps each scan cheap.
+type ScanProbe = (scan: number, location: string | null) => Promise<void>;
+function scopedProcRoot(root: string, pids: number[]) {
+  const proc = fs.mkdtempSync(path.join(root, "proc-"));
+  fs.symlinkSync("/proc/self", path.join(proc, "self"));
+  for (const pid of new Set([process.pid, ...pids])) fs.symlinkSync(`/proc/${pid}`, path.join(proc, String(pid)));
+  return proc;
+}
+function probedInspection(h: ReturnType<typeof fixture>, probe: ScanProbe, located: () => string | null) {
+  let scans = 0;
+  const inspection: NonNullable<RetentionPorts["inspection"]> = {
+    scan: async root => {
+      const proc = scopedProcRoot(h.root, children.flatMap(child => child.pid && child.exitCode === null && child.signalCode === null ? [child.pid] : []));
+      const snapshot = retentionProcessScan(root, proc);
+      fs.rmSync(proc, { recursive: true, force: true });
+      await probe(++scans, located());
+      return snapshot;
+    },
+    bytes: async () => 0, close: async () => {},
+  };
+  return { inspection, scans: () => scans };
+}
+/** The release at its path, or wherever retention quarantined it. */
+function quarantineLocator(releases: string, target: string, marker: string) {
+  return () => {
+    if (fs.existsSync(target)) return target;
+    const gate = fs.readdirSync(releases).find(name => name.startsWith(`.delegatus-trash-${path.basename(target)}-`));
+    if (!gate) return null;
+    const outer = path.join(releases, gate);
+    return fs.existsSync(path.join(outer, marker)) ? outer : path.join(outer, path.basename(target));
+  };
+}
+const HOLDER_ENV = () => ({ PATH: process.env.PATH, NODE_ENV: "test" as const, HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+  TMPDIR: process.env.TMPDIR, LLV_STATE_DIR: process.env.LLV_STATE_DIR, LLV_VIEWER_CONTROL_URL: process.env.LLV_VIEWER_CONTROL_URL });
+/** Start a real holder of `location`; resolves whether it acquired the tree. */
+async function startHolder(kind: "cwd" | "fd" | "mapped" | "module", location: string, file: string, cwd: string): Promise<ChildProcess | null> {
+  const keep = "process.stdout.write('ready'); setInterval(() => {}, 1000);";
+  const args = kind === "cwd" ? ["-e", keep]
+    : kind === "fd" ? ["-e", `globalThis.held = require("node:fs").openSync(process.env.HOLD_PATH, "r"); ${keep}`]
+      : kind === "mapped" ? ["-e", `globalThis.held = Bun.mmap(process.env.HOLD_PATH); ${keep}`]
+        : [path.join(location, "holder.js")];
+  let child: ChildProcess;
+  try {
+    child = spawn(process.execPath, args, { cwd: kind === "cwd" ? location : cwd, env: { ...HOLDER_ENV(), HOLD_PATH: path.join(location, file) },
+      stdio: ["ignore", "pipe", "ignore"] });
+  } catch { return null; }
+  children.push(child);
+  return new Promise(resolve => {
+    // A refused spawn never exits; it is no child to stop.
+    child.once("error", () => { children.splice(children.indexOf(child) >>> 0, 1); resolve(null); });
+    child.stdout!.once("data", () => resolve(child));
+    child.once("exit", () => resolve(null));
+  });
+}
+const alive = (child: ChildProcess) => child.exitCode === null && child.signalCode === null;
+async function settleChildren() {
+  for (const child of children.splice(0)) {
+    if (!alive(child)) continue;
+    const exited = new Promise<void>(resolve => child.once("exit", () => resolve())); child.kill("SIGKILL"); await exited;
+  }
+}
+
+function packageRaceFixture() {
+  const h = packageContainerFixture();
+  const servingSha = "ab".repeat(20);
+  const metadata = path.join(h.target, "node_modules/delegatus-cli/package.json");
+  fs.mkdirSync(path.dirname(metadata), { recursive: true }); fs.writeFileSync(metadata, JSON.stringify({ gitHead: servingSha }));
+  fs.writeFileSync(path.join(h.target, "holder.js"), "process.stdout.write('ready'); setInterval(() => {}, 1000);");
+  h.ports.current = () => structuredClone({ record: h.record, inputs: h.inputs, fenced: true });
+  h.ports.scan = undefined;
+  return { ...h, servingSha, marker: "package.json" };
+}
+function checkoutRaceFixture() {
+  const h = fixture(3); h.ports.env = { LLV_SELF_UPDATE_KEEP_RELEASES: "1" };
+  const target = h.dirs[1]!;
+  fs.writeFileSync(path.join(target, "holder.js"), "process.stdout.write('ready'); setInterval(() => {}, 1000);");
+  h.ports.current = () => structuredClone({ record: h.record, inputs: h.inputs, fenced: true });
+  h.ports.scan = undefined;
+  return { ...h, target, servingSha: h.shas[1]!, marker: ".next/BUILD_ID" };
+}
+type RaceFixture = ReturnType<typeof packageRaceFixture> | ReturnType<typeof checkoutRaceFixture>;
+const RACE_LAYOUTS = { package: packageRaceFixture, checkout: checkoutRaceFixture } as const;
+async function calibratedScans(layout: keyof typeof RACE_LAYOUTS) {
+  const h = RACE_LAYOUTS[layout]();
+  const probe = probedInspection(h, async () => {}, () => null); h.ports.inspection = probe.inspection;
+  const report = await h.run();
+  expect(report.errors).toEqual([]);
+  expect(report.removed.map(row => row.dir)).toContain(h.target);
+  return probe.scans();
+}
+function acquireHold(h: RaceFixture, kind: "active" | "rollback" | "serving" | "in-flight") {
+  if (kind === "active") fs.writeFileSync(h.record.releasePointer, JSON.stringify({ dir: h.target }));
+  if (kind === "rollback") h.inputs.rollbackPointers = [JSON.stringify({ dir: h.target })];
+  if (kind === "serving") h.record.web.revision = h.servingSha;
+  if (kind === "in-flight") h.inputs.inFlight = [h.target];
+}
+
+test.skipIf(process.platform !== "linux").each(["package", "checkout"] as const)(
+  "an owner hold acquired during any process scan keeps the %s release", async layout => {
+    const total = await calibratedScans(layout);
+    expect(total).toBeGreaterThan(1);
+    const removedAfterHold: string[] = [];
+    for (const kind of ["active", "rollback", "serving", "in-flight"] as const) {
+      for (let at = 1; at <= total; at++) {
+        const h = RACE_LAYOUTS[layout]();
+        let acquired = false;
+        h.ports.inspection = probedInspection(h, async (scan, where) => { if (scan === at && where) { acquired = true; acquireHold(h, kind); } },
+          quarantineLocator(h.record.releasesDir, h.target, h.marker)).inspection;
+        const report = await h.run();
+        expect(report.errors).toEqual([]);
+        if (acquired && (!fs.existsSync(path.join(h.target, h.marker)) || report.removed.some(row => row.dir === h.target)))
+          removedAfterHold.push(`${kind}@scan${at}/${total}`);
+      }
+    }
+    expect(removedAfterHold).toEqual([]);
+  }, 120_000);
+
+test.skipIf(process.platform !== "linux").each(["package", "checkout"] as const)(
+  "a real holder started after any scan snapshot is refused or keeps the %s release", async layout => {
+    const total = await calibratedScans(layout);
+    const deletedUnderHolder: string[] = [];
+    let refused = 0; let protectedByHolder = 0;
+    for (const kind of ["cwd", "fd", "mapped", "module"] as const) {
+      for (let at = 1; at <= total; at++) {
+        const h = RACE_LAYOUTS[layout]();
+        let holder: ChildProcess | null = null; let tried = false; let location: string | null = null;
+        h.ports.inspection = probedInspection(h, async (scan, where) => {
+          if (scan !== at || !where) return;
+          tried = true; location = where;
+          holder = await startHolder(kind, where, h.marker, h.root);
+        }, quarantineLocator(h.record.releasesDir, h.target, h.marker)).inspection;
+        const report = await h.run();
+        expect(report.errors).toEqual([]);
+        if (tried && holder && alive(holder) && !fs.existsSync(path.join(location!, h.marker)) && !fs.existsSync(path.join(h.target, h.marker)))
+          deletedUnderHolder.push(`${kind}@scan${at}/${total}`);
+        if (tried && holder && report.removed.some(row => row.dir === h.target)) deletedUnderHolder.push(`${kind}@scan${at}/${total}:reported`);
+        if (tried && !holder) refused++;
+        if (tried && holder && fs.existsSync(path.join(h.target, h.marker))) protectedByHolder++;
+        await settleChildren();
+      }
+    }
+    expect(deletedUnderHolder).toEqual([]);
+    // Both outcomes occur: early holders keep the release, late ones are refused.
+    expect(refused).toBeGreaterThan(0); expect(protectedByHolder).toBeGreaterThan(0);
+  }, 300_000);
+
+test.each(["package", "checkout"] as const)("a hold acquired at any owner read keeps the %s release, and the final read fences later holds", async layout => {
+  // Each read replies with the state from before its hold, as an IPC reply in
+  // flight would. The owner fences holds on a release once retention claims
+  // it, so a hold either lands before that claim (and keeps the release,
+  // renamed or not) or is refused.
+  const total = await calibratedScans(layout);
+  const removedUnderHold: string[] = [];
+  let refusedHolds = 0; let keptByHold = 0;
+  for (const kind of ["rollback", "serving", "in-flight"] as const) {
+    for (let at = 1; ; at++) {
+      const h = RACE_LAYOUTS[layout]();
+      h.ports.inspection = probedInspection(h, async () => {}, () => null).inspection;
+      const claims = new Set<string>(); let reads = 0; let acquired = false;
+      h.ports.current = ((claim?: string) => {
+        if (claim) claims.add(claim);
+        const reply = structuredClone({ record: h.record, inputs: h.inputs, fenced: true });
+        if (++reads === at) {
+          if ([...claims].some(dir => h.target === dir || h.target.startsWith(dir + path.sep) || dir.startsWith(h.target + path.sep))) refusedHolds++;
+          else { acquired = true; acquireHold(h, kind); }
+        }
+        return reply;
+      }) as RetentionPorts["current"];
+      const report = await h.run();
+      expect(report.errors).toEqual([]);
+      if (reads < at) break;
+      if (acquired && (!fs.existsSync(path.join(h.target, h.marker)) || report.removed.some(row => row.dir === h.target))) removedUnderHold.push(`${kind}@read${at}`);
+      if (acquired && fs.existsSync(path.join(h.target, h.marker))) keptByHold++;
+    }
+  }
+  expect(total).toBeGreaterThan(0);
+  expect(removedUnderHold).toEqual([]);
+  expect(refusedHolds).toBeGreaterThan(0); expect(keptByHold).toBeGreaterThan(0);
+}, 120_000);
+
+test.each(["package", "checkout"] as const)("an owner that cannot fence holds never authorizes removal of the %s release", async layout => {
+  const h = RACE_LAYOUTS[layout]();
+  h.ports.inspection = probedInspection(h, async () => {}, () => null).inspection;
+  h.ports.current = () => structuredClone({ record: h.record, inputs: h.inputs, fenced: false });
+  const report = await h.run();
+  expect(report.errors).toEqual([]);
+  expect(fs.existsSync(path.join(h.target, h.marker))).toBeTrue();
+  expect(report.kept).toContainEqual(expect.objectContaining({ dir: h.target, reason: "owner-unfenced" }));
+});
+
+test.skipIf(process.platform !== "linux").each(["package", "checkout"] as const)(
+  "a holder entering through the remover's /proc cwd after the final scan is refused or keeps the %s release", async layout => {
+    const h = RACE_LAYOUTS[layout]();
+    const locate = quarantineLocator(h.record.releasesDir, h.target, h.marker);
+    h.ports.inspection = probedInspection(h, async () => {}, () => null).inspection;
+    let tried = 0; const entered: ChildProcess[] = [];
+    h.ports.current = (async () => {
+      const where = locate();
+      if (where && where !== h.target) {
+        tried++;
+        const holder = await startHolder("cwd", `/proc/${process.pid}/cwd`, h.marker, h.root);
+        if (holder) entered.push(holder);
+      }
+      return structuredClone({ record: h.record, inputs: h.inputs, fenced: true });
+    }) as RetentionPorts["current"];
+    const report = await h.run();
+    expect(report.errors).toEqual([]);
+    expect(tried).toBeGreaterThan(0);
+    if (entered.some(alive)) {
+      expect(fs.existsSync(path.join(h.target, h.marker))).toBeTrue();
+      expect(report.removed.some(row => row.dir === h.target)).toBeFalse();
+    } else expect(report.removed.some(row => row.dir === h.target)).toBeTrue();
+    await settleChildren();
+  }, 60_000);
+
+/** A Bun process outside the release that imports one of its modules by a
+ * path it receives over stdin, keeping only what the import leaves behind. */
+async function startModuleConsumer(file: string, cwd: string) {
+  const child = spawn(process.execPath, ["-e", MODULE_CONSUMER_SOURCE], { cwd, env: HOLDER_ENV(), stdio: ["pipe", "pipe", "inherit"] });
+  children.push(child);
+  const ready = new Promise<boolean>(resolve => {
+    child.once("error", () => { children.splice(children.indexOf(child) >>> 0, 1); resolve(false); });
+    child.stdout!.once("data", () => resolve(true));
+    child.once("exit", () => resolve(false));
+  });
+  child.stdin!.write(file + "\n");
+  expect(await ready).toBeTrue();
+  return child;
+}
+
+test.skipIf(process.platform !== "linux").each(["package", "checkout"] as const)(
+  "a process that loaded the real state-ownership module from the %s release keeps it for its lifetime", async layout => {
+    const h = RACE_LAYOUTS[layout]();
+    // A copy of the real module graph, loaded from inside the tree as a
+    // checkout release built in place loads it; nothing here calls the hold.
+    const entry = installStateOwnershipGraph(h.target);
+    h.ports.inspection = probedInspection(h, async () => {}, () => null).inspection;
+    h.ports.current = () => structuredClone({ record: h.record, inputs: h.inputs, fenced: true });
+    const consumer = await startModuleConsumer(entry, h.root);
+    // The consumer names the release in no argv, environment, cwd or mapping:
+    // only the release root descriptor stateOwnership's own load opened.
+    const own = retentionProcessScan(h.record.releasesDir, scopedProcRoot(h.root, [consumer.pid!])).processes.find(proc => proc.pid === consumer.pid);
+    expect(own?.references ?? []).toEqual([]);
+    expect(own?.paths ?? []).toEqual([h.target]);
+    const report = await h.run();
+    expect(report.errors).toEqual([]);
+    expect(alive(consumer)).toBeTrue();
+    expect(fs.existsSync(entry)).toBeTrue();
+    expect(report.kept).toContainEqual(expect.objectContaining({ dir: h.target, reason: "process" }));
+    await settleChildren();
+    const after = await h.run();
+    expect(after.errors).toEqual([]);
+    expect(after.removed.map(row => row.dir)).toContain(h.target);
+  }, 60_000);
+
+test.each(["package", "checkout"] as const)("a whole %s release quarantined before a crash is restored when a raised keep count names it", async layout => {
+  const h = layout === "package" ? packageContainerFixture() : realReleaseFixture();
+  const target = layout === "package" ? (h as ReturnType<typeof packageContainerFixture>).target : (h as ReturnType<typeof realReleaseFixture>).candidate;
+  const marker = layout === "package" ? "package.json" : "source.txt";
+  const sha = layout === "package" ? "" : (h as ReturnType<typeof realReleaseFixture>).git(["rev-parse", "HEAD"], target);
+  const state = path.dirname(h.ports.reportFile!); fs.mkdirSync(state, { recursive: true });
+  // The state a pass leaves when it dies after the rename, before removal.
+  expect(quarantineTree(target, path.join(state, `${layout === "package" ? "package" : "release"}-trash-crash.json`), { sha })).not.toBeNull();
+  expect(fs.existsSync(target)).toBeFalse();
+  h.ports.env = { LLV_SELF_UPDATE_KEEP_RELEASES: "2" };
+  const report = await h.run();
+  expect(report.errors).toEqual([]);
+  expect(report.removed.some(row => row.dir === target)).toBeFalse();
+  expect(fs.existsSync(path.join(target, marker))).toBeTrue();
+  expect(fs.readdirSync(h.record.releasesDir).some(name => name.startsWith(".delegatus-trash-"))).toBeFalse();
+});
+
+test("a replayed checkout deletion preserves bytes written into its partial tree", async () => {
+  const h = realReleaseFixture();
+  h.ports.removeTree = async entry => {
+    if (path.basename(process.cwd()) === path.basename(h.candidate)) throw new Error("interrupted release removal");
+    await fs.promises.rm(entry, { recursive: true, force: true });
+  };
+  const interrupted = await h.run();
+  expect(interrupted.errors).toHaveLength(1);
+  const state = path.dirname(h.ports.reportFile!);
+  const journal = fs.readdirSync(state).find(name => name.startsWith("release-trash-") && name.endsWith(".json"))!;
+  const row = JSON.parse(fs.readFileSync(path.join(state, journal), "utf8"));
+  expect(row.deleting).toBeTrue();
+  fs.writeFileSync(path.join(row.trash, "source.txt"), "new uncommitted operator bytes\n");
+  h.ports.removeTree = undefined;
+  const resumed = await h.run();
+  expect(resumed.removed.some(entry => entry.dir === h.candidate)).toBeFalse();
+  expect(fs.readFileSync(path.join(row.trash, "source.txt"), "utf8")).toBe("new uncommitted operator bytes\n");
+});
+
+test.skipIf(process.platform !== "linux")("a helper scan of the sealed remover is replaced by the remover's own observation", async () => {
+  const h = fixture(2);
+  const proc = path.join(h.root, "proc"); fs.mkdirSync(proc);
+  fs.symlinkSync("/proc/self", path.join(proc, "self")); fs.symlinkSync(`/proc/${process.pid}`, path.join(proc, String(process.pid)));
+  const worker = new RetentionWorker({ executable: process.execPath, entry: path.join(import.meta.dir, "retention.fixture.ts"), args: [h.root, "inspect"] });
+  const cwd = process.cwd(); process.chdir(h.dirs[1]!);
+  let unseal: (() => void) | null = null;
+  try {
+    await worker.bytes(h.root);
+    unseal = sealProcessLinks();
+    expect(unseal).not.toBeNull();
+    const helper = await worker.scan(h.record.releasesDir);
+    // The helper, another process, cannot read a sealed process.
+    expect(helper.uncertain?.some(row => row.pid === process.pid)).toBeTrue();
+    const observed = withSelfObservation(helper, h.record.releasesDir);
+    expect(observed.uncertain?.some(row => row.pid === process.pid)).toBeFalse();
+    expect(observed.processes.find(proc => proc.pid === process.pid)?.paths).toContain(h.dirs[1]!);
+  } finally { process.chdir(cwd); unseal?.(); await worker.close(); }
 }, 30_000);

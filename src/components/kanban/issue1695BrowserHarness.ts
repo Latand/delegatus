@@ -1370,3 +1370,91 @@ export async function captureAttentionRing(browser: Browser, base: string, out: 
   const failures = readings.flatMap((reading) => reading.failures.map((failure) => `${phone ? "phone" : "desktop"} ${reading.width} ${reading.scheme}: ${failure}`));
   return { failures, readings };
 }
+
+/** The existing Telegram settings panel, used by both browser evidence drivers. */
+export async function captureTelegramMultiBot(browser: Browser, base: string, out: string, phone: boolean) {
+  const readings: unknown[] = [];
+  const viewports = phone ? [{ width: 390, height: 844 }] : [{ width: 1440, height: 900 }, { width: 1000, height: 700 }];
+  for (const { width, height } of viewports) {
+    for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+      for (const scene of ["multi-one", "multi-kicked", "multi-refused", "multi-ready"]) {
+        const context = await browser.newContext({ viewport: { width, height }, colorScheme: scheme, ...(phone ? { hasTouch: true, isMobile: true } : {}) });
+        try {
+          await context.addInitScript(({ lang, scheme }) => { localStorage.setItem("llv_lang", lang); localStorage.setItem("llv_theme", scheme); }, { lang, scheme });
+          const page = await context.newPage();
+          await page.goto(`${base}/?bot=${scene}#p=atlas`);
+          if (phone) {
+            await page.locator('[data-mobile2-open="menu"]').first().click();
+            await page.locator('[data-mobile2-menu-row="accounts"]').click();
+            await page.locator("[data-mobile2-telegram] button").first().click();
+          } else {
+            const footer = page.locator("[data-rail-footer]").first();
+            await footer.waitFor();
+            if (await footer.getAttribute("data-rail-footer") === "folded") await page.click("[data-rail-footer-toggle]");
+            await page.locator(`button[aria-label="${lang === "uk" ? "Підключення Telegram" : "Telegram connection"}"]`).click();
+          }
+          const panel = page.locator(`[role="dialog"][aria-label="Telegram"] section[aria-label="${lang === "uk" ? "Бот" : "Bot"}"]`);
+          await panel.waitFor();
+          const add = panel.locator("details").filter({ has: page.locator("summary", { hasText: lang === "uk" ? "Додати ще одного бота" : "Add another bot" }) });
+          const row = panel.locator("li").filter({ hasText: "Team Reports" }).first();
+          await row.waitFor();
+          await row.scrollIntoViewIfNeeded();
+          if (scene === "multi-kicked") {
+            const states = await row.locator("[data-telegram-bot-posting-state]").allTextContents();
+            const removed = lang === "uk" ? "видалено з чату" : "removed from the chat";
+            const mayPost = lang === "uk" ? "Агентам можна писати" : "Agents may post";
+            const frame = `${phone ? "phone" : "desktop"}-${width}-${lang}-${scheme}`;
+            if (states.length !== 2 || !states[0]?.includes(removed) || !states[1]?.includes(mayPost)) {
+              throw new Error(`${frame}: bot posting states are not visible in words: ${JSON.stringify(states)}`);
+            }
+            const overflow = await row.evaluate(el => el.scrollWidth > el.clientWidth
+              || [...el.querySelectorAll<HTMLElement>("[data-telegram-bot-posting-state]")].some(state => state.getBoundingClientRect().right > el.getBoundingClientRect().right + 1));
+            if (overflow) throw new Error(`${frame}: bot posting states overflow the chat row`);
+          }
+          if (scene === "multi-refused" && !await row.locator('[data-telegram-delivery="refused"]').isVisible()) throw new Error("refused chat is hidden");
+          const key = `${phone ? "phone" : "desktop"}-${width}-${lang}-${scheme}-${scene}`;
+          const frames: string[] = [];
+          const capture = async (suffix = "") => {
+            const name = `${key}${suffix}.png`;
+            await page.screenshot({ path: path.join(out, name) });
+            frames.push(name);
+          };
+          const before = await panel.evaluate(el => ({ panelWidth: el.getBoundingClientRect().width, overflow: el.scrollWidth - el.clientWidth,
+            controls: [...el.querySelectorAll<HTMLElement>("button,input,select")].map(c => ({ label: c.getAttribute("aria-label"), disabled: (c as HTMLButtonElement).disabled })) }));
+          if (before.overflow > 1) throw new Error(`${key}: panel overflows horizontally`);
+          const clipping = await row.evaluate(el => {
+            const card = el.getBoundingClientRect();
+            const dialog = el.closest('[role="dialog"]')!.getBoundingClientRect();
+            return card.top < dialog.top || card.bottom > dialog.bottom || card.left < dialog.left || card.right > dialog.right;
+          });
+          if (clipping) throw new Error(`${key}: chat card is clipped`);
+          await capture();
+          if (scene === "multi-ready") {
+            await row.locator("select").selectOption("release_fixture_bot");
+            await page.waitForFunction(() => (document.querySelector('select[aria-label$=": Team Reports"]') as HTMLSelectElement)?.value === "release_fixture_bot");
+            const remove = panel.getByRole("button", { name: lang === "uk" ? "Видалити" : "Remove", exact: true }).first();
+            await remove.click();
+            const confirm = panel.getByRole("button", { name: lang === "uk" ? "Підтвердити" : "Confirm", exact: true });
+            await confirm.locator("..").scrollIntoViewIfNeeded();
+            const confirmationOverflows = await confirm.evaluate(el => [...el.parentElement!.children].some(child => child.scrollWidth > child.clientWidth + 1));
+            if (confirmationOverflows) throw new Error(`${key}: remove confirmation overflows`);
+            await capture("-remove");
+            await confirm.click();
+            await page.waitForFunction(() => (window as unknown as { evidence: { botPosts: Array<{action: string}> } }).evidence.botPosts.some(p => p.action === "remove_bot"));
+          }
+          if (scene === "multi-one") {
+            await add.locator("summary").click();
+            await add.scrollIntoViewIfNeeded();
+            await capture("-add");
+            await add.locator('input[type="password"]').fill("12345:" + "not-a-real-token-".repeat(2) + "fake");
+            await add.locator('button[type="submit"]').click();
+            await page.waitForFunction(() => (window as unknown as { evidence: { botPosts: Array<{action: string}> } }).evidence.botPosts.some(p => p.action === "add_bot"));
+          }
+          const actions = await page.evaluate(() => (window as unknown as { evidence: { botPosts: Array<{action: string}> } }).evidence.botPosts.map(p => p.action));
+          readings.push({ key, width, height, ...before, actions, frames });
+        } finally { await context.close(); }
+      }
+    }
+  }
+  return readings;
+}

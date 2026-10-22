@@ -1,4 +1,6 @@
 import { shortId } from "@/lib/shortIds";
+import { publicationFailurePhase } from "./publicationHistory";
+export { publicationFailurePhase } from "./publicationHistory";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -22,6 +24,8 @@ import { publicationDeadlineOnly } from "./publication";
 import type { Pipeline, PipelinePublicationFailure, PipelinePublicationResult } from "./types";
 import { pathIsDeclaredOutput } from "./stageAccess";
 import { CpuContainmentUnavailable, wrapWorkCommand } from "@/lib/runtime/cpuPlacement";
+import { cpuPriorityEnv } from "@/lib/runtime/cpuPriority";
+import { instanceCpuPrioritySource } from "@/lib/runtime/cpuAdmissionScope";
 import { isCpuPressureDetail, machineCpuPressureGate, machineCpuPressurePollMs, waitForCpuPressure } from "@/lib/runtime/cpuPressure";
 import { lessonPublicationEnv, RoleMemoryRefusal } from "@/lib/memory/roleStore";
 import { CONTROLLER_ARTIFACT_GIT_PATHS, CONTROLLER_ARTIFACT_PATHSPECS, protectExistingControllerArtifacts } from "./controllerArtifacts";
@@ -798,7 +802,7 @@ async function commitStageTree(pipeline: Pipeline, parent: string, tree: string,
   const marker = `Delegatus-Stage-Settlement: ${crypto.randomUUID()}`;
   await beforeCommit?.();
   const commit = await exec("git", ["commit", ...[...messages, marker].flatMap(message => ["-m", message])], cwd,
-    pipelineLiteralGitEnv(controllerCommitIdentityEnv()), { timeoutMs: STAGE_COMMIT_TIMEOUT_MS });
+    pipelineLiteralGitEnv({ ...controllerCommitIdentityEnv(), ...cpuPriorityEnv(instanceCpuPrioritySource(pipeline.taskIds)) }), { timeoutMs: STAGE_COMMIT_TIMEOUT_MS });
   if (commit.code !== 0) {
     const current = await exec("git", ["rev-parse", "HEAD"], cwd);
     if (current.code === 0 && current.stdout.trim() !== parent) return changed();
@@ -1556,21 +1560,6 @@ function publicationFailureDetail(failure: PipelinePublicationFailure): string {
   return redactPublicationText(`${failure.step}: ${status} (${failure.durationMs} ms)\n${failure.outputTail || "no output"}`);
 }
 
-/** The hook's verdict for one member of a group it runs at once (a native
-    Codex version), `pre-push: <check>: failed (<code>) after <n> s`. */
-const HOOK_MEMBER_FAILED = /^pre-push: ([^;:]{1,60}): failed \(/;
-/** The last phase the hook announced with its own `pre-push: <phase>` marker,
-    or the group member it last named as failed after that. A member that
-    passed is never a phase. */
-export function publicationFailurePhase(failure: PipelinePublicationFailure): string | null {
-  for (const line of failure.outputTail.split("\n").map((line) => line.trim()).reverse()) {
-    const member = HOOK_MEMBER_FAILED.exec(line);
-    if (member) return member[1]!;
-    if (/^pre-push: [^;:]{1,60}$/.test(line)) return line.slice("pre-push: ".length);
-  }
-  return null;
-}
-
 /** What stopped a publication, in one line a person can act on. The hook's
     phase markers name the phase; `(fail)` lines name tests. */
 export function publicationFailureCause(failure: PipelinePublicationFailure): string {
@@ -1899,7 +1888,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       let shown: Promise<void> = Promise.resolve();
       let replaced: { detail: string | null } | null = null;
       const admitted = await waitForCpuPressure(machineCpuPressureGate(), { subject: PUBLICATION_INSTALL_SUBJECT, signal: abort.signal,
-        pollMs: machineCpuPressurePollMs(),
+        pollMs: machineCpuPressurePollMs(), priority: instanceCpuPrioritySource(pipeline.taskIds),
         onReason: (reason) => {
           replaced ??= { detail: findPipelineRecord(pipeline.id)?.stateDetail ?? null };
           shown = shown.then(() => showInstallHold(reason, null));
@@ -1937,7 +1926,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       if (preparingDependencies && !await waitForPublicationInstall()) return { code: null, stdout: "", stderr: "publication superseded" };
       if (command === "git" && args[0] === "push") writeStarted = true;
       const started = performance.now();
-      const executed = await exec(launch.command, launch.args, cwd, pipelineLiteralGitEnv(env), { ...options, signal: abort.signal, inheritFd: descriptor });
+      const executed = await exec(launch.command, launch.args, cwd, pipelineLiteralGitEnv({ ...env, ...cpuPriorityEnv(instanceCpuPrioritySource(pipeline.taskIds)) }), { ...options, signal: abort.signal, inheritFd: descriptor });
       if (executed.code !== 0 && ((command === "git" && args[0] === "push") || preparingDependencies)) {
         // Redact the whole output before taking its tail; clipping first can
         // remove the prefix that identifies a secret to the shared redactor.

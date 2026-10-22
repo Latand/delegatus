@@ -876,20 +876,11 @@ export type BeginSeatIntentResult =
   /** The same key already completed: designation and injection both happened. */
   | { kind: "completed"; seat: OrchestratorSeat };
 
-/**
- * Persist the designate-and-inject intent BEFORE any side effect. Idempotent on
- * `clientRequestId`: a replay of a completed intent short-circuits to the active
- * seat (deliver nothing twice), and a replay of a STILL-LIVE pending one returns
- * it for the caller to finish. A NEW key is blocked (`in_progress`) only by a
- * genuinely in-flight pending intent — one with no terminal error whose epoch is
- * at or above the project's active seat. An ABANDONED pending intent — terminal
- * `intent.error` recorded, or epoch below the active seat — is TERMINALIZED in
- * the same write: moved out of the blocking `pending` position into the bounded
- * durable `history`, never deleted, and the new intent proceeds. A terminal
- * error outranks the idempotency key, so the intent that failed is cleared by
- * the very next begin whichever key sends it (issue #1067 AC 5).
- */
-export function beginOrchestratorSeatIntent(input: {
+/** `replayOnly` was set and this key holds no live pending or completed
+    intent: nothing was written. */
+export type NotReplayedSeatIntent = { kind: "not_replayed" };
+
+export interface BeginSeatIntentInput {
   project: string;
   mandate: string;
   /** The role table this intent's delivery carries; see `OrchestratorSeat.roleTable`. */
@@ -905,8 +896,28 @@ export function beginOrchestratorSeatIntent(input: {
   /** Who triggered this designation, resolved from the request by the caller —
       never read off a caller-supplied body, so attribution cannot be dictated. */
   triggeredBy?: OrchestratorSeatTrigger | null;
+  /** Finish this key's own intent only: a mandate that failed preflight may
+      still replay what its first attempt admitted, and never begins anew. */
+  replayOnly?: boolean;
   now?: string;
-}): BeginSeatIntentResult {
+}
+
+/**
+ * Persist the designate-and-inject intent BEFORE any side effect. Idempotent on
+ * `clientRequestId`: a replay of a completed intent short-circuits to the active
+ * seat (deliver nothing twice), and a replay of a STILL-LIVE pending one returns
+ * it for the caller to finish. A NEW key is blocked (`in_progress`) only by a
+ * genuinely in-flight pending intent — one with no terminal error whose epoch is
+ * at or above the project's active seat. An ABANDONED pending intent — terminal
+ * `intent.error` recorded, or epoch below the active seat — is TERMINALIZED in
+ * the same write: moved out of the blocking `pending` position into the bounded
+ * durable `history`, never deleted, and the new intent proceeds. A terminal
+ * error outranks the idempotency key, so the intent that failed is cleared by
+ * the very next begin whichever key sends it (issue #1067 AC 5).
+ */
+export function beginOrchestratorSeatIntent(input: BeginSeatIntentInput & { replayOnly?: false }): BeginSeatIntentResult;
+export function beginOrchestratorSeatIntent(input: BeginSeatIntentInput): BeginSeatIntentResult | NotReplayedSeatIntent;
+export function beginOrchestratorSeatIntent(input: BeginSeatIntentInput): BeginSeatIntentResult | NotReplayedSeatIntent {
   return withAccountMutationLock(() => {
     const file = readOrchestratorSeatFile();
     const project = canonicalOrchestratorProject(input.project);
@@ -932,6 +943,9 @@ export function beginOrchestratorSeatIntent(input: {
     if (pending) {
       const abandoned = pending.intent.error !== null || (active !== undefined && pending.seatEpoch < active.seatEpoch);
       if (!abandoned) return { kind: "in_progress", seat: pending };
+    }
+    if (input.replayOnly) return { kind: "not_replayed" };
+    if (pending) {
       terminalized = recordTerminalization(file, {
         seat: pending,
         reason: pending.intent.error !== null ? "terminal_error" : "superseded_epoch",

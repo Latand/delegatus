@@ -1,4 +1,5 @@
 import { projectStoreSignature } from "@/lib/projects/persistence";
+import { isPublicationRecovery, mergePublicationRecovery, publicationInterrupted, PUBLICATION_RETRY_DELAYS_MS, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
 import { deepFreeze } from "@/lib/deepFreeze";
 import { pipelinePauseInputSchema } from "./pauseMetadata";
 import { forEachCooperatively } from "@/lib/cooperative";
@@ -368,6 +369,8 @@ function isAttempt(value: unknown, index: number): boolean {
     isSpawnActivation(attempt.activation) &&
     isStageReport(attempt.report) &&
     isRetiredLaunches(attempt.retiredLaunches) &&
+    (attempt.fencedMessageRetries === undefined || typeof attempt.fencedMessageRetries === "number"
+      && Number.isSafeInteger(attempt.fencedMessageRetries) && attempt.fencedMessageRetries >= 0) &&
     isUnresolvedTermination(attempt.unresolvedTermination) &&
     isPermissionDenials(attempt.permissionDenials)
   );
@@ -903,6 +906,7 @@ function isPipelineShape(value: unknown): value is Pipeline {
     isCloseCustody(pipeline) &&
     (pipeline.activationCloseRequested === undefined || typeof pipeline.activationCloseRequested === "boolean") &&
     (pipeline.delivery === undefined || (isDelivery(pipeline.delivery) && (!pipeline.delivery.active || pipeline.delivery.ownerId === pipeline.id))) &&
+    isPublicationRecovery(pipeline.publicationRecovery) &&
     (pipeline.creationRequest === undefined || (typeof pipeline.creationRequest.key === "string" && !!pipeline.creationRequest.key && typeof pipeline.creationRequest.digest === "string")) &&
     (pipeline.refreshOf === undefined || isRefreshOf(pipeline.refreshOf)) &&
     typeof pipeline.task === "string" &&
@@ -1221,9 +1225,22 @@ async function preparePipelineEvidence(mode: "startup" | "health" | "ownership" 
   assertPipelineEvidenceBudget(budget);
   const signature = evidenceSignature();
   assertPipelineEvidenceBudget(budget);
-  const pendingKey = `${signature}:${mode}`;
-  const existing = budget ? undefined : pendingEvidence.get(`${signature}:startup`) ?? (mode !== "startup" ? pendingEvidence.get(`${signature}:ownership`) ?? pendingEvidence.get(`${signature}:health`) : undefined) ?? pendingEvidence.get(pendingKey);
-  if (existing) { performanceSpans.event("pipeline.shared"); return existing; }
+  const filename = stateDatabaseFile();
+  // Share a cold read across writes to this database. Freshness still belongs
+  // to each caller; a replacement file must start its own read.
+  const pendingNamespace = JSON.stringify([filename, evidenceFileIdentity(filename)]);
+  const pendingKey = `${pendingNamespace}:${mode}`;
+  const existing = budget ? undefined : pendingEvidence.get(`${pendingNamespace}:startup`) ?? (mode !== "startup" ? pendingEvidence.get(`${pendingNamespace}:ownership`) ?? pendingEvidence.get(`${pendingNamespace}:health`) : undefined) ?? pendingEvidence.get(pendingKey);
+  if (existing) {
+    performanceSpans.event("pipeline.shared");
+    const evidence = await existing;
+    // A completed promise can remain here until its owner resumes. Recheck
+    // both the joining caller's revision and writes since the producer checked.
+    if (evidence.signature !== signature || evidence.signature !== evidenceSignature()) {
+      throw new PipelineEvidenceChangedError("pipeline evidence changed during preparation");
+    }
+    return evidence;
+  }
   const pending = withViewerOperation("pipelines.evidence", async () => {
     assertPipelineEvidenceBudget(budget);
     const pipelines: Pipeline[] = [];
@@ -1245,8 +1262,10 @@ async function preparePipelineEvidence(mode: "startup" | "health" | "ownership" 
           if (value.ownership) ownership.push(value.ownership);
           if (value.issue) issues.push(value.issue);
         }
-        if (signature !== evidenceSignature()) throw new PipelineEvidenceChangedError("pipeline evidence changed during preparation");
+        // Preserve revision-tagged validation even when this snapshot loses
+        // its freshness race. The next read revalidates only changed rows.
         compactEvidence = prepared;
+        if (signature !== evidenceSignature()) throw new PipelineEvidenceChangedError("pipeline evidence changed during preparation");
         return { pipelines, ownership, issues, signature };
       }
       compactEvidence = undefined;
@@ -1995,6 +2014,16 @@ export async function takeoverPipelineDelivery(id: string, expectedOwner: string
     const old = tx.get(expectedOwner);
     if (old?.delivery?.operation?.state === "running") return { error: `publisher ${expectedOwner} at epoch ${expectedEpoch} is in flight or its outcome is uncertain; reconcile it before takeover`, status: 409 };
     if (pipeline.state === "closed" || pipeline.state === "completed") return { error: "a terminal lane cannot take ownership", status: 409 };
+    const refused = old?.delivery?.operation;
+    if (old && refused?.state === "settled" && refused.result?.ok === false) {
+      const attempt = old.runs.find(run => run.stageId === old.cursor?.stageId)?.attempts.at(-1);
+      recordPublicationFailure(old, attempt, { operationId: refused.id, epoch: refused.epoch, at: new Date().toISOString(),
+        cause: refused.result.failure?.retryableDeadline ? "infrastructure-deadline"
+          : publicationInterrupted(refused.result) ? "interrupted" : "check-failure",
+        detail: refused.result.error.slice(0, 400), recoverable: recoverablePublication(refused.result) },
+      publicationInterrupted(refused.result) && !refused.result.failure ? [0, ...PUBLICATION_RETRY_DELAYS_MS.slice(1)] : PUBLICATION_RETRY_DELAYS_MS);
+    }
+    pipeline.publicationRecovery = mergePublicationRecovery(old?.publicationRecovery, pipeline.publicationRecovery);
     if (old?.delivery) {
       old.delivery.active = false;
       old.delivery.publish = "disabled";
@@ -2147,6 +2176,21 @@ export function pipelineRecordReader(pipelineId: string) {
 /** Full-record read by id: the hot registry first, then the archive. */
 export function findPipelineRecord(pipelineId: string): Pipeline | null {
   return pipelineStore().get(pipelineId) ?? archiveStore().get(pipelineId);
+}
+
+/** Bounded feed for consumers that need task membership changes without loading
+ * the full pipeline registry. The cursor follows the active collection log. */
+export function pipelineTaskBindingSource() {
+  const collection = pipelineStore();
+  return {
+    revision: () => collection.revision(),
+    changesAfter: (revision: number, key: string, limit: number) => collection.changesAfter(revision, key, limit),
+    parse: (valueJson: string) => {
+      const pipeline = decodePipeline(JSON.parse(valueJson));
+      if (!pipeline) throw new PipelineStoreError("invalid pipeline row in task-binding feed");
+      return pipeline;
+    },
+  };
 }
 
 /** Validates durable task membership at the pipeline store seam. */
