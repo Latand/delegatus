@@ -853,7 +853,7 @@ async function main(argv: string[]): Promise<number> {
       if (returned) {
         markUnhealthy(env, "outputs were not returned");
         remove();
-        say(`gate-runner: no verdict: outputs were not returned (${returned})`);
+        say(`gate-runner: no verdict: outputs were not returned (${redact(returned)})`);
         logDecision(env, "remote", "outputs refused", shapeName, kind);
         return 75;
       }
