@@ -632,6 +632,26 @@ function wholeLines(box: HTMLElement, gap = 6) {
     box.scrollTop += nudge;
   }
 }
+/** Where a box that starts at its top and must keep its first line can stand on whole lines: the middle of the first run of scroll positions that cut no line at either edge, or the top when there is none. */
+function wholeFromTop(box: HTMLElement) {
+  const frame = box.getBoundingClientRect();
+  const top = frame.top + box.clientTop;
+  const bottom = top + box.clientHeight;
+  box.scrollTop = 0;
+  /* The room above the first line is all a scroll may take. */
+  const reach = Math.min(...textLines(box).map((line) => line.top)) - top + 0.5;
+  const whole = () => !lineAcross(box, top) && !lineAcross(box, bottom);
+  let first = -1;
+  let last = -1;
+  for (let at = 0; at <= reach && at <= box.scrollHeight - box.clientHeight; at += 1) {
+    box.scrollTop = at;
+    if (whole()) {
+      if (first < 0) first = at;
+      last = at;
+    } else if (first >= 0) break;
+  }
+  box.scrollTop = first < 0 ? 0 : Math.floor((first + last) / 2);
+}
 /** Scrolls the nearest box that scrolls `target` until it sits at that box's top, on whole lines; the page outside stays put. */
 function scrollToTop(target: Element, gap = 8) {
   const box = scroller(target);
@@ -726,7 +746,19 @@ async function navigateView(view: string) {
     }
     if (view === "autonomy") settleAutonomy(await openSeatTick());
     if (view === "decisions") await showDecisions(await openSeatTick());
-    if (view === "rules") await openRules("orchestrator", RULE_IDS.O1);
+    if (view === "rules") {
+      const rulesWindow = await openRules("orchestrator", RULE_IDS.O1);
+      const box = scroller(rulesWindow.querySelector(`[data-learned-rule="${RULE_IDS.O1}"]`)!);
+      if (box) {
+        /* The opened rule grows over a few frames; the lines are judged once the window has stopped growing. */
+        for (let frames = 0, still = 0, height = -1; still < 3 && frames < 60; frames += 1) {
+          await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+          still = box.scrollHeight === height ? still + 1 : 0;
+          height = box.scrollHeight;
+        }
+        wholeFromTop(box);
+      }
+    }
     if (view === "curator") {
       const rulesWindow = await openRules("builder", null);
       rulesWindow.querySelector<HTMLDetailsElement>("details[data-curation-history]")!.open = true;

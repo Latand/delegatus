@@ -352,21 +352,21 @@ export function buildWorld(step: number, lang: Lang, bootSeconds: number, stepSe
     createdAt: ago(updatedAgo + 30 * MIN), updatedAt: ago(updatedAgo), revision: `task-v1:00000000-0000-4000-8000-${String(revision++).padStart(12, "0")}`,
   }) as unknown as BoardTask;
   const tasks: BoardTask[] = [
-    task("t-errors", "inbox", L("Document refund error codes\nOne table in the API reference: code, meaning, whether a retry is safe.", "Описати коди помилок повернень\nОдна таблиця в довіднику API: код, значення, чи безпечно повторювати."), [], 55 * MIN, "pink", "file-text"),
+    task("t-errors", "inbox", L("Document refund errors\nOne table in the API reference: code, meaning, whether a retry is safe.", "Описати коди помилок\nОдна таблиця в довіднику API: код, значення, чи безпечно повторювати."), [], 55 * MIN, "pink", "file-text"),
     task("t-keys", "assigned", L("Rotate webhook signing keys\nSign with the new key, accept both for a day, then drop the old one.", "Ротація ключів підпису вебхуків\nПідписувати новим ключем, добу приймати обидва, потім прибрати старий."), [keys], 9 * MIN, "amber", "key-round"),
     task("t-retries", "assigned", L("Back off webhook retries\nExponential backoff with jitter, and a limit on how long a delivery retries.", "Затримка повторів вебхуків\nЕкспоненційна затримка з джитером і межа, як довго доставка повторюється."), [retries], retriesDecided ? at(5) : 20 * MIN, "teal", "repeat"),
-    task("t-ledger", "blocked", L("Move invoices to the new ledger\nWaiting on finance to confirm the rounding rule for partial refunds.", "Перенести рахунки в новий реєстр\nЧекаємо, поки фінансисти підтвердять правило округлення часткових повернень."), [], 5 * 60 * MIN, "amber", "book-open", PROJECT,
+    task("t-ledger", "blocked", L("Move invoices to ledger\nWaiting on finance to confirm the rounding rule for partial refunds.", "Рахунки в новий реєстр\nЧекаємо, поки фінансисти підтвердять правило округлення часткових повернень."), [], 5 * 60 * MIN, "amber", "book-open", PROJECT,
       { kind: "external", note: L("finance confirms the rounding rule", "фінансисти підтвердять правило округлення") }),
     task("t-charges", "done", L("Paginate GET /charges\nCursor pagination, 50 per page, capped at 200.", "Пагінація GET /charges\nПагінація курсором, 50 на сторінку, не більше 200."), [charges], 3 * 60 * MIN, "lime", "list-ordered"),
-    task("t-ratelimit", "inbox", L("Rate-limit refunds per merchant\nAt most 20 a minute; answer 429 with Retry-After.", "Обмежити частоту повернень для мерчанта\nНе більше 20 на хвилину; відповідати 429 з Retry-After."), [], 80 * MIN, "teal", "shield-check"),
-    task("t-export", "inbox", L("Export refunds as CSV\nFor the finance team's monthly close.", "Експорт повернень у CSV\nДля щомісячного закриття у фінансистів."), [], 2 * 60 * MIN, "lime", "download"),
+    task("t-ratelimit", "inbox", L("Rate-limit per merchant\nAt most 20 a minute; answer 429 with Retry-After.", "Ліміт на мерчанта\nНе більше 20 на хвилину; відповідати 429 з Retry-After."), [], 80 * MIN, "teal", "shield-check"),
+    task("t-export", "inbox", L("Export refunds as CSV\nFor the finance team's monthly close.", "Експорт у CSV\nДля щомісячного закриття у фінансистів."), [], 2 * 60 * MIN, "lime", "download"),
     task("t-logs", "assigned", L("Structured request logs\nOne JSON line per request: route, status, duration, request id.", "Структуровані логи запитів\nОдин JSON-рядок на запит: маршрут, статус, тривалість, id запиту."), [logs], 14 * MIN, "slate", "scroll-text"),
     task("t-receipts", "assigned", L("Email a receipt for each refund\nSent once the provider confirms, in the merchant's language.", "Квитанція на кожне повернення\nНадсилається після підтвердження провайдера, мовою мерчанта."), [receipts], 32 * MIN, "lime", "mail", PROJECT, { kind: "pr", ref: "131", note: "" }),
-    task("t-v1", "blocked", L("Retire the v1 charges endpoint\nTwo merchants still call it; waiting on their move to v2.", "Прибрати ендпоінт платежів v1\nДва мерчанти ще його викликають; чекаємо, поки перейдуть на v2."), [], 26 * 60 * MIN, "slate", "archive", PROJECT,
+    task("t-v1", "blocked", L("Retire v1 endpoint\nTwo merchants still call it; waiting on their move to v2.", "Прибрати v1 платежів\nДва мерчанти ще його викликають; чекаємо, поки перейдуть на v2."), [], 26 * 60 * MIN, "slate", "archive", PROJECT,
       { kind: "external", note: L("two merchants move to v2", "двоє мерчантів перейдуть на v2") }),
-    task("t-health", "done", L("Report replica lag in /health\nDegraded above 5 s of lag, down above 60 s.", "Затримка репліки в /health\nDegraded понад 5 с затримки, down понад 60 с."), [health], 6 * 60 * MIN, "teal", "activity"),
+    task("t-health", "done", L("Report replica lag in /health\nDegraded above 5 s of lag, down above 60 s.", "Лаг репліки в /health\nDegraded понад 5 с затримки, down понад 60 с."), [health], 6 * 60 * MIN, "teal", "activity"),
     task("t-postgres", "done", L("Upgrade to Postgres 17\nEvery migration replayed on a copy first; no downtime.", "Оновлення до Postgres 17\nУсі міграції спершу на копії; без простою."), [postgres], 26 * 60 * MIN, "teal", "database"),
-    task("t-timeouts", "done", L("Time out provider calls after 10 s\nA hung provider no longer holds a worker.", "Тайм-аут викликів провайдера 10 с\nЗавислий провайдер більше не тримає воркера."), [timeouts], 30 * 60 * MIN, "coral", "timer"),
+    task("t-timeouts", "done", L("Add provider timeout\nA hung provider no longer holds a worker.", "Тайм-аут провайдера\nЗавислий провайдер більше не тримає воркера."), [timeouts], 30 * 60 * MIN, "coral", "timer"),
   ];
   const otherFile = (id: string) => others.find((entry) => entry.file.name === `${id}.jsonl`)!;
   tasks.push(

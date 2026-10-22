@@ -319,7 +319,7 @@ more frame over the same world, reached by the product's own controls:
 | --- | --- | --- |
 | Full autonomy | `.live-auto`, 900×760 | `autonomy`: the tick switch in the seat's head opens its panel (the phone: the seat sheet, then its tick row); `decisions`: the same panel with Details open, scrolled to the decision log |
 | Learned rules | `.live-mem`, 1180×760 | `rules`: the board's ⋯, «Learned rules», «All rules», the Orchestrator chip, its first rule expanded (the phone: the menu's project rules); `curator`: the builder's rule, the curator's passes and what it archived |
-| Limits | `.live-use`, 1180×760 | `spend`: the board with the seat folded, every card's marks; `task`: one card's spend popover (the phone: the task screen at its Limits); `history`: the rail's Claude week button opens the burndown |
+| Limits | `.live-use`, 1444×760 (without the rail the board is 1404 px wide and holds its balanced columns, with the rail 1194 px and it scrolls: either way no card title breaks inside a word) | `spend`: the board with the seat folded, every card's marks; `task`: one card's spend popover (the phone: the task screen at its Limits); `history`: the rail's Claude week button opens the burndown |
 
 `autonomy=1` in a frame's query turns full autonomy on for that frame alone:
 at step 5 the orchestrator has answered the retry window itself, so that
