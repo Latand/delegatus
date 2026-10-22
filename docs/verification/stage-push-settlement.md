@@ -329,3 +329,77 @@ five pre-existing and zero flaky failures (head 429,207 ms). The proof file's
 also pass with their assertions unchanged. TypeScript, changed-file ESLint and
 the committed-fingerprint publication privacy gate pass. No push, rebase,
 merge or runtime restart is part of this correction.
+
+## PR successor provisioning bases and main ancestry (2026-10-22)
+
+Observed on starting revision `351d63b1`: a successor whose provisioning
+`baseBranch` names its PR branch refuses a stage's merge of current main.
+The real-remote reproductions in `src/lib/pipelines/stageAttemptPush.test.ts:67`
+advance main before and after creating the lane record, respectively. They
+create the merge through the generated attempt hooks, restore a stale tracking
+ref, then call the production `commitAndAdoptStageBranch` settlement path.
+Both fail on the starting revision with the reported missing-creation refusal
+for the imported main commit. Both pass after this change.
+
+### Exact cause and the successful counterexamples
+
+At `351d63b1`, `src/lib/pipelines/stageAttemptPush.ts:345` constructs
+`refs/heads/${pipeline.baseBranch}`. Lines 346 and 351 query that branch on
+the delivery remote and fetch its exact SHA, bounded to five and ten seconds.
+The first unreceipted ancestor triggers this read, at line 398; the sampled tip
+is reused only within that settlement call. The check never reads cached
+`origin/main`. Thus a main commit already published before lane creation can
+still fail: the freshly verified branch is the PR branch.
+
+The provisioning branch comes from the caller's `baseBranch`, defaulting to
+main (`src/lib/pipelines/engine.ts:12329`, `:12395` and `:12404`). Delivery's
+branch and PR number do not replace that choice. With an explicit `baseRef`,
+creation resolves locally without a fetch (`engine.ts:12374`,
+`src/lib/pipelines/git.ts:175`). Otherwise the controller resolves the branch
+at provisioning (`engine.ts:8638`); `git.ts:240` bounds its fetch to 60 seconds.
+That startup fetch selects the checkout's starting commit independently of
+settlement's later ancestor proof.
+
+The retained primary pipeline records show:
+
+| Lane | Created, UTC | Provisioning base | Settlement observation |
+| --- | --- | --- | --- |
+| `61c8e017` | 2026-10-21 20:37:56.560 | PR branch | Refused main ancestor `99b45bc7` in both build attempts. |
+| `c8ece66c` | 2026-10-22 01:10:52.999 | PR branch | Refused main ancestor `c0870096` in its merge stage. |
+| `972bb442` | 2026-10-21 21:56:20.510 | main | Published sync-stage merge `c58753f2`; its main parent was `8d8d88bc`. |
+| `a87fa971` | 2026-10-21 23:07:06.395 | main | Published sync-stage merge `f87268e5`; its main parent was `5f811d62`. |
+
+The two successful lanes verified main because their provisioning base was
+main. Their retained sync-stage reports also record merges with hooks enabled.
+The shared refusal wording in `93e9ab14` has a separate trigger: its base was
+main, and its third attempt was refused for merge `a0517575` made by an earlier
+attempt. Creation-receipt recovery belongs to PR #3156. Its reviewed diff
+leaves the production settlement function unchanged; this change leaves its
+guard, receipt writer, engine recovery and existing test cases untouched.
+The local-gate files owned by PR #3128 are also unchanged.
+
+### Resulting proof and verification
+
+`src/lib/pipelines/stageAttemptPush.ts:348` now names origin's main for the
+imported-ancestor exemption. It queries that remote directly and fetches the
+exact observed SHA before checking reachability. A forged or stale tracking
+ref supplies no proof. The existing lazy, per-call cache and five/ten-second
+bounds remain. A failed remote operation defers; an absent or malformed main
+cannot authorize the imported commit. Main never supplies a creation receipt
+for the attempt's own merge.
+
+The producer and consumers keep their existing contracts: provisioning writes
+`baseBranch`/`baseRef`; stage hooks write attempt commit receipts;
+`commitAndAdoptStageBranch` invokes settlement and retains its head guard;
+producer repair invokes the same verifier with its accepted-head boundary;
+publication consumes the accepted SHA. No stored fields or schemas change.
+The existing published, tested clean-integration recovery keeps its additional
+forge and default-branch checks.
+
+The focused regressions also cover pushed and repair settlement, foreign
+parents with a forged tracking-main ref, and lookup/fetch timeouts, missing
+main and malformed remote output. Local, pushed and repair paths all refuse
+foreign parents. On the starting revision the pushed case incorrectly passes:
+the delivery branch can attest its own foreign suffix. The corrected proof
+refuses it and preserves both tips. All test repositories and state are private;
+no live installation is exercised. This change claims no performance gain.
