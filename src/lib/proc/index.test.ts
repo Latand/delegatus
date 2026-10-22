@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
 
+import { startUnreapedChild } from "@/lib/testing/unreapedChild";
+
 import { linuxBackend } from "./linux";
 import { portableBackend } from "./portable";
 import { selectProcBackend } from "./index";
@@ -36,4 +38,16 @@ test("every backend answers the whole contract", () => {
   const methods = Object.keys(linuxBackend).sort();
   expect(Object.keys(windowsBackend).sort()).toEqual(methods);
   expect(Object.keys(portableBackend).sort()).toEqual(methods);
+});
+
+test.skipIf(process.platform !== "linux")("a real unreaped child keeps its /proc entry and start token but reads exited (#2967)", async () => {
+  const fixture = await startUnreapedChild();
+  try {
+    expect(linuxBackend.pidAlive(fixture.zombie.pid)).toBeTrue();
+    expect(linuxBackend.processIdentity(fixture.zombie.pid)).toBe(fixture.zombie.startIdentity);
+    expect(linuxBackend.processExited(fixture.zombie.pid)).toBeTrue();
+    expect(linuxBackend.processExited(fixture.parent.pid)).toBeFalse();
+  } finally {
+    await fixture.stop();
+  }
 });
