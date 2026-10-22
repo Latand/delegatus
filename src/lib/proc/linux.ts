@@ -62,10 +62,38 @@ function processIdentity(pid: number): string | null {
   return startTicks ? `${pid}:${startTicks}` : null;
 }
 
-/** State Z (exited, not yet reaped) or X (being torn down) in /proc/<pid>/stat. */
-function processExited(pid: number): boolean {
-  const state = statFields(pid)?.[0];
+function exitedState(state: string | undefined): boolean {
   return state === "Z" || state === "X" || state === "x";
+}
+
+/** State Z (exited, not yet reaped) or X (being torn down) in every task of
+    the process. /proc/<pid>/stat reads only the thread-group leader, which
+    turns Z as soon as the main thread exits while other threads keep running
+    (#2967); such a process still runs, so each thread must have exited too.
+    A thread that vanishes mid-scan has exited; any other unreadable task
+    leaves the process running. */
+function processExited(pid: number): boolean {
+  if (!exitedState(statFields(pid)?.[0])) return false;
+  const taskDir = path.join(PROC, String(pid), "task");
+  let tids: string[];
+  try {
+    tids = fs.readdirSync(taskDir);
+  } catch {
+    return false;
+  }
+  for (const tid of tids) {
+    if (!/^\d+$/.test(tid)) continue;
+    let stat: string;
+    try {
+      stat = fs.readFileSync(path.join(taskDir, tid, "stat"), "utf8");
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ESRCH") continue;
+      return false;
+    }
+    if (!exitedState(stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/, 1)[0])) return false;
+  }
+  return true;
 }
 
 /** utime + stime from /proc/<pid>/stat, in milliseconds. USER_HZ is 100 on

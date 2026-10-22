@@ -16,6 +16,9 @@ export interface ProcessIdentityProbe {
   pidAlive(pid: number): boolean;
   processIdentity(pid: number): string | null;
   bootEpoch(): string | null;
+  /** Exited and not yet reaped (Linux state Z or X). Only `processIdentityMayRun`
+      asks it; a probe without it reports no such state. */
+  processExited?(pid: number): boolean;
 }
 
 export type ProcessIdentityStatus = "alive" | "dead" | "unverified";
@@ -62,6 +65,7 @@ const defaultProbe: ProcessIdentityProbe = {
   pidAlive: (pid) => procBackend.pidAlive(pid),
   processIdentity: (pid) => procBackend.processIdentity(pid),
   bootEpoch: systemBootEpoch,
+  processExited: (pid) => procBackend.processExited(pid),
 };
 
 export function captureProcessIdentity(
@@ -103,6 +107,23 @@ export function processIdentityMayOwn(
   probe: ProcessIdentityProbe = defaultProbe,
 ): boolean {
   return processIdentityStatus(identity, probe) !== "dead";
+}
+
+/** Whether a recorded process may still do work, such as writing in a
+    worktree a stage gate guards (#2967). A zombie keeps its pid and start
+    token until its parent reaps it, so `processIdentityStatus` still reads it
+    `alive`; it can do nothing more, and neither can a process recorded at a
+    pid a zombie holds. A process whose main thread exited while another
+    thread runs still may run: the Linux backend reads every task, not only
+    the leader. Unknown state and unverifiable identities still may
+    run. The identity verdict itself is unchanged: a termination ladder that
+    signals a zombie's group still needs to see it as the recorded process. */
+export function processIdentityMayRun(
+  identity: Readonly<ProcessIdentity>,
+  probe: ProcessIdentityProbe = defaultProbe,
+): boolean {
+  if (processIdentityStatus(identity, probe) === "dead") return false;
+  return !probe.processExited?.(identity.pid);
 }
 
 export function processIdentityProvenDead(

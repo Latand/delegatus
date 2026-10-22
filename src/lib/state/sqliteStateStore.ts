@@ -1,12 +1,12 @@
 import { assertStateStartupMutation, mayRunStateStartupMutation } from "@/lib/stateOwnership";
 import { IncompatibleSchemaError, schemaCompileFailure } from "./schemaCompatibility";
-import { blockingWaitRole } from "@/lib/blockingWaits";
+import { blockingWaitRole, type StateLockHolder } from "@/lib/blockingWaits";
 import { observeSqlite, parseSqliteJson } from "@/lib/sqliteReadAttribution";
 import { performanceSpans } from "@/lib/performanceSpans";
 import crypto from "node:crypto";
 import { viewerLoopMonitor, withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { forEachCooperatively, mapCooperatively, yieldToRuntime } from "@/lib/cooperative";
-import { StateLockDeferredError, stateLockAttempt, stateLockDeferral, waitForStateLock } from "./lockWait";
+import { StateLockDeferredError, stateLockAttempt, stateLockDeferral, stateLockProcessKind, waitForStateLock } from "./lockWait";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -2793,7 +2793,7 @@ export class SqliteStateCollection<T> {
     `).run(cutoff, this.options.collection);
   }
 
-  private tryAcquireLease(db: Database, ownerToken: string): boolean {
+  private tryAcquireLease(db: Database, ownerToken: string): true | StateLockHolder {
     try {
       db.exec("BEGIN IMMEDIATE");
       const held = db.query<LeaseRow, [string]>(`
@@ -2803,7 +2803,8 @@ export class SqliteStateCollection<T> {
       const now = Date.now();
       if (held && !leaseIsStale(held, this.filename, this.options.collection, now)) {
         db.exec("ROLLBACK");
-        return false;
+        return { kind: held.owner_pid === process.pid ? stateLockProcessKind() : "other-process",
+          ageMs: Math.max(0, now - held.acquired_at) };
       }
       if (held) db.query("DELETE FROM state_leases WHERE collection = ?").run(this.options.collection);
       db.query(`
@@ -2839,9 +2840,10 @@ export class SqliteStateCollection<T> {
       const db = connectDatabase(this.filename);
       const ownerToken = crypto.randomUUID();
       try {
-        if (this.tryAcquireLease(db, ownerToken)) return ownerToken;
+        const acquired = this.tryAcquireLease(db, ownerToken);
+        if (acquired === true) return ownerToken;
         this.assertDiskHasSpace();
-        throw new StateLockDeferredError("state.lease", "lease");
+        throw new StateLockDeferredError("state.lease", "lease", acquired);
       } finally { db.close(); }
     }, this.options.collection);
   }
