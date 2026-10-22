@@ -322,3 +322,29 @@ test("one startup spawn marker repair does not assemble registry history", () =>
     expect(registry.startupHostSnapshot(entry.key).entries["codex:reader-0"]?.pendingAction).toBe("spawn");
   } finally { registry.readOnlySnapshot = original; registry.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test("spawn recovery selection services timers between keyed batches without losing receipts", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-spawn-selection-"));
+  const filename = path.join(root, "registry.json");
+  const initial = seeded(root, 64);
+  fs.writeFileSync(filename, JSON.stringify(initial));
+  new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite" }).close();
+  let reads = 0, observed = -1, armed = false;
+  const registry = new AgentRegistry(filename, undefined, undefined, { sqliteMode: "sqlite",
+    onSqliteRowPayloadRead: (collection, count) => {
+      if (collection !== "receipts") return;
+      reads += count;
+      if (!armed) { armed = true; setImmediate(() => { observed = reads; }); }
+    } });
+  try {
+    const ids = Object.keys(initial.receipts);
+    const snapshot = await registry.prepareSpawnRecoverySnapshot(ids);
+    expect(Object.keys(snapshot.receipts).sort()).toEqual(ids.sort());
+    expect(observed).toBeGreaterThan(0);
+    expect(observed).toBeLessThan(reads);
+    const abort = new AbortController();
+    setImmediate(() => abort.abort(new Error("cancelled spawn selection")));
+    await expect(registry.prepareSpawnRecoverySnapshot(ids, [], () => abort.signal.throwIfAborted()))
+      .rejects.toThrow("cancelled spawn selection");
+  } finally { registry.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});

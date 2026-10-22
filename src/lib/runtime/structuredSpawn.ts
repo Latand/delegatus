@@ -1636,8 +1636,8 @@ async function recoverPendingStructuredSpawnPass(
     afterEventSeq = next;
     batch = await client.effectBatch(["runtime.spawn"], afterEventSeq);
   }
-  const snapshot = registry.spawnRecoverySnapshot([...open.map(receipt => receipt.launchId), ...spawnEffects.keys()],
-    activity.sessions.filter(session => session.host !== "dead").map(session => session.conversationId));
+  const snapshot = await registry.prepareSpawnRecoverySnapshot([...open.map(receipt => receipt.launchId), ...spawnEffects.keys()],
+    activity.sessions.filter(session => session.host !== "dead").map(session => session.conversationId), assertActive);
 
   // Historical failures need one identity snapshot for this pass. Fetching the
   // entire runtime once per failed receipt multiplies startup admission work
@@ -1669,7 +1669,7 @@ async function recoverPendingStructuredSpawnPass(
   let previous: string | undefined;
   const reportRecovery = async () => {
     if (!options.reportProgress) return;
-    const current = registry.spawnRecoverySnapshot(selected.map(receipt => receipt.launchId));
+    const current = await registry.prepareSpawnRecoverySnapshot(selected.map(receipt => receipt.launchId), [], assertActive);
     const completed = selected.filter(receipt => ["completed", "failed", "conflicted"].includes(current.receipts[receipt.launchId]?.state ?? "")).length;
     // Deferred identities remain durably pending; examining one never closes it.
     await options.reportProgress({ examined, total: selected.length, completed, deferred: selected.length - completed });

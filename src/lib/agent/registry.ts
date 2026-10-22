@@ -3,6 +3,7 @@ import { liveRootSession } from "@/lib/root/adopt";
 import { StateLockDeferredError, stateLockAttempt, stateLockDeferral, waitForStateLock } from "@/lib/state/lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { performanceSpans } from "@/lib/performanceSpans";
+import { forEachCooperatively, yieldToRuntime } from "@/lib/cooperative";
 import { normalizeHostMemory, type HostMemoryState } from "@/lib/runtime/agentMemoryState";
 import { normalizeHostEndCause, type HostEndCause } from "@/lib/runtime/hostEndCause";
 import { recordBlockingWait, withWaitCorrelation, type BlockingWaitCorrelation } from "@/lib/blockingWaits";
@@ -6202,6 +6203,31 @@ export class AgentRegistry {
           if (canonical !== launcher) result.conversationAliases[launcher] = canonical;
         }
       }
+      return result;
+    }, { skipColdKeyInitialization: true });
+  }
+
+  /** Selection is conservative across batches. Recovery still rereads each
+      receipt and fences its current owner before any effect. */
+  async prepareSpawnRecoverySnapshot(launchIds: readonly string[] = [], runtimeConversations: readonly string[] = [],
+    assertActive: () => void = () => {}): Promise<RegistryFile> {
+    return withViewerOperation("runtime.spawn-recovery", async () => {
+      await yieldToRuntime();
+      assertActive();
+      const result = normalizeRegistry({ version: 2, entries: {}, receipts: {} });
+      const inputs = [
+        ...[...new Set(launchIds)].map(id => ({ launch: id, conversation: undefined })),
+        ...[...new Set(runtimeConversations)].map(id => ({ launch: undefined, conversation: id })),
+      ];
+      await forEachCooperatively(inputs, input => {
+        assertActive();
+        const selected = performanceSpans.sync("runtime.startup.select", () => this.spawnRecoverySnapshot(
+          input.launch === undefined ? [] : [input.launch], input.conversation === undefined ? [] : [input.conversation]));
+        for (const collection of ["entries", "receipts", "memberships", "conversationAliases"] as const) {
+          Object.assign(result[collection], selected[collection]);
+        }
+      }, { batchSize: 8, timeBudgetMs: 8 });
+      assertActive();
       return result;
     });
   }
