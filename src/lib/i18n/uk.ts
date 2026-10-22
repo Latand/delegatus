@@ -2385,6 +2385,8 @@ export const uk: Record<keyof typeof en, Message> = {
   "voiceCompanion.phase.speaking": "Говорю",
   "voiceCompanion.talk": "Говорити",
   "voiceCompanion.end": "Завершити розмову",
+  "voiceCompanion.reconnect": "Відновити розмову",
+  "voiceCompanion.reconnected": "Зʼєднання обірвалося · відновлено",
   "voiceCompanion.mute": "Вимкнути мікрофон",
   "voiceCompanion.unmute": "Увімкнути мікрофон",
   "voiceCompanion.collapse": "Згорнути",
