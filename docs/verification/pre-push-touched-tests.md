@@ -625,8 +625,8 @@ Each attempt runs the real pre-push entry point in a scratch clone with its own 
 
 | Side | Qualifying runs | Current sample P90 (s) | File expirations | Refusals | NEW lines |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| before | 7 | 1166.6 | 6 | 4 | 1 |
-| after | 22 | 476.4 | 0 | 0 | 0 |
+| before | 10 | 1006.8 | 7 | 5 | 2 |
+| after | 29 | 476.4 | 0 | 0 | 0 |
 
 The sample P90 is provisional until all runs complete. An incomplete baseline or runner error is a refusal even when it emits no NEW assertion line.
 
@@ -682,6 +682,18 @@ The sample P90 is provisional until all runs complete. An incomplete baseline or
 | after-322 | after | 1 | 24.06 / 36.28 / 40.33 | 38.3 | 518.0 | outlier | 0 | 0 |
 | after-123 | after | 2 | 18.15 / 31.43 / 38.89 | 3.4 | 507.4 | outlier | 0 | 0 |
 | after-24 | after | 3 | 16.43 / 28.46 / 34.30 | 3.4 | 426.5 | yes | 0 | 0 |
+| after-422 | after | 1 | 11.20 / 37.81 / 68.20 | 3.3 | 602.4 | outlier | 0 | 0 |
+| after-522 | after | 1 | 10.32 / 26.52 / 32.99 | 3.4 | 400.8 | yes | 0 | 0 |
+| after-223 | after | 2 | 10.95 / 31.50 / 55.02 | 3.3 | 723.7 | outlier | 0 | 0 |
+| before-08 | before | 2 | 18.82 / 28.34 / 45.13 | 9.5 | 861.3 | yes | 1 | 1 |
+| after-323 | after | 2 | 7.75 / 28.92 / 37.20 | 3.2 | 472.8 | yes | 0 | 0 |
+| after-25 | after | 1 | 8.03 / 27.47 / 31.67 | 5.3 | 386.4 | yes | 0 | 0 |
+| after-26 | after | 2 | 14.92 / 25.65 / 27.10 | 3.3 | 364.7 | yes | 0 | 0 |
+| before-09 | before | 3 | 11.61 / 29.82 / 36.95 | 3.2 | 966.9 | yes | 0 | 0 |
+| after-27 | after | 3 | 11.45 / 26.63 / 34.49 | 3.7 | 402.3 | yes | 0 | 0 |
+| after-28 | after | 1 | 11.83 / 27.43 / 37.03 | 3.4 | 412.3 | yes | 0 | 0 |
+| after-29 | after | 2 | 6.19 / 28.01 / 33.99 | 3.1 | 378.8 | yes | 0 | 0 |
+| before-10 | before | 1 | 8.08 / 26.45 / 48.22 | 3.3 | 1006.8 | yes | 0 | 0 |
 
 The ten split families retain all 1,078 registered cases, including their names, parameter values and assertion bodies. The preserved calibration and JUnit inventory established that partition before the campaign. The measured timeout exceptions are described in `docs/design/pre-push-gate-under-load.md#2-fix`.
 
@@ -709,6 +721,12 @@ The resumed campaign began with three qualifying after-runs and one before-run. 
 | batch-18 | 1 | 0 | 0 |
 | batch-20 | 2 | 0 | 0 |
 | batch-21 | 3 | 1 | 0 |
+| batch-22 | 1 | 0 | 0 |
+| batch-23 | 3 | 1 | 1 |
+| batch-24 | 3 | 3 | 0 |
+| batch-26 | 1 | 0 | 1 |
+| batch-28 | 3 | 3 | 0 |
+| batch-29 | 1 | 0 | 1 |
 
 Two before-runs fell below the required load band as their remaining files and baseline work used fewer CPUs. Observed test CPU usage averaged at least 3.78 CPUs in `before-02`, against 7.04 in `after-306`. Future before-runs use a four-CPU foreground estimate for initial load padding; after-runs retain eight. New records include `paddingForegroundCpuEstimate`; earlier records used eight. The real gate retains its eight head workers and existing quotas, deadlines and verdict rules. Every earlier qualifier and outlier stays in the sample.
 
@@ -756,3 +774,17 @@ A separate, non-counting control reran the same frozen branch as `after-21`: 408
 The quiet-window dispatches are closed. The remaining sample is 8 after-runs and 3 before-runs. The after sample has no expirations and no NEW failures; its P90 remains provisional until all 30 qualifying runs complete. The two refusal controls and the isolated integration gate are complete. All attempted load conditions, including outliers, remain in the record.
 
 While the campaign had no active acceptance run, 27 retained hold samples ranged from 18.10 to 52.98, with median 26.54. These observations explain the dispatch holds and contribute no acceptance run. The separate supervision-ledger control also contributes no acceptance run.
+
+### Second quiet-window continuation
+
+The window started at 01:55 UTC on 2026-10-22, with a 04:55 UTC cutoff for new hooks and an immediate dispatch stop on a seat message. Current main was merged by merge commit before verification; the paired campaign retains its frozen inputs, translated process identities, eighteen-CPU shared work slice and three-CPU file quota. The prior 22 after and 7 before qualifiers remain unchanged; before-run 6 remains excluded.
+
+Current sample: 29/30 after and 10/10 before. After P90: 476.4 s; 0 file expirations and 0 NEW failures. Every load outlier remains in the table.
+
+The isolated full integration gate on merged source `75369593ceb7` completed with exit 0 in 374.8 s including admission, after a fresh frozen-lockfile install. Its source, command and log digests and classifications are recorded in `engineLoadCampaign.secondQuietWindowContinuation`.
+
+Dispatch is closed. Remaining: 1 after and 0 before. The active run was allowed to finish with owned cleanup.
+
+The window completed 12 attempts: seven qualifying after-runs, three qualifying before-runs and two after load outliers. All 764 recorded test services and 95 owned padding scopes are quiescent. All 62 raw and published records reconcile. The last hook started at 04:48:14 UTC; after-run 30 was never submitted.
+
+Later upstream main `026855f85090` changed 56 files after the window-start merge. The read-only merge check found content conflicts in `src/lib/pipelines/engine.ports.test.ts` and `src/lib/pipelines/engine.recovery.test.ts`: upstream retired embedded-flow cases whose bodies this fix partitioned into sibling files. The next integration merge must carry those case changes into the split files and reverify the integrated source. The campaign keeps its frozen trees; the successful window-start integration remains the check of this checkpoint's product source.
