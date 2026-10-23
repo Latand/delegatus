@@ -221,30 +221,36 @@ export class VoiceToolSessions implements VoiceToolCalls {
     if (changed) void this.store.markChanged(live.name, live.approval, false).catch(() => undefined);
   }
   private dispatch(live: Live, tool: string, args: unknown, timeoutMs: number, signal?: AbortSignal): Promise<WorkerResult> {
-    const run = () => new Promise<WorkerResult>(resolve => {
-      if (live.state === "closed" || !live.input) { resolve({ status: "failed", code: "TOOL_SERVER_UNAVAILABLE" }); return; }
-      const id = randomUUID();
-      let settled = false;
-      const finish = (result: WorkerResult) => {
-        if (settled) return;
-        settled = true; live.pending.delete(id); cancel(); signal?.removeEventListener("abort", expire);
-        resolve(result);
-      };
-      // The call's own deadline: the worker is told to cancel, which sends MCP notifications/cancelled.
-      const expire = () => {
-        try { live.input?.write(JSON.stringify({ type: "cancel", id }) + "\n"); } catch { /* the close handler answers */ }
-        finish({ status: "failed", code: "TOOL_TIMEOUT" });
-      };
-      const cancel = this.schedule(expire, timeoutMs);
+    let resolve!: (result: WorkerResult) => void;
+    const answered = new Promise<WorkerResult>(done => { resolve = done; });
+    let id: string | undefined;
+    let settled = false;
+    const finish = (result: WorkerResult) => {
+      if (settled) return;
+      settled = true; if (id) live.pending.delete(id); cancel(); signal?.removeEventListener("abort", expire);
+      resolve(result);
+    };
+    // One deadline from the moment the call is asked, a wait behind an earlier call to the same server included.
+    // A call already sent is cancelled in the worker, which sends MCP notifications/cancelled.
+    const expire = () => {
+      if (id) try { live.input?.write(JSON.stringify({ type: "cancel", id }) + "\n"); } catch { /* the close handler answers */ }
+      finish({ status: "failed", code: "TOOL_TIMEOUT" });
+    };
+    const cancel = this.schedule(expire, timeoutMs);
+    if (signal?.aborted) expire();
+    else signal?.addEventListener("abort", expire, { once: true });
+    const run = () => {
+      if (settled) return answered;
+      if (live.state === "closed" || !live.input) { finish({ status: "failed", code: live.closedBy ?? "TOOL_SERVER_UNAVAILABLE" }); return answered; }
+      id = randomUUID();
       live.pending.set(id, finish);
-      if (signal?.aborted) { expire(); return; }
-      signal?.addEventListener("abort", expire, { once: true });
       try { live.input.write(JSON.stringify({ type: "call", id, tool, arguments: args, timeoutMs }) + "\n"); }
       catch { finish({ status: "failed", code: "TOOL_SERVER_UNAVAILABLE" }); }
-    });
-    const next = live.chain.then(run, run);
-    live.chain = next.catch(() => undefined);
-    return next;
+      return answered;
+    };
+    // The next call to this server goes out once this one is answered or given up.
+    live.chain = live.chain.then(run, run).catch(() => undefined);
+    return answered;
   }
   /** After a committed registry write: a server whose approval no longer stands loses its running child. */
   private reconcile(): void {

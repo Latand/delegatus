@@ -32,7 +32,13 @@ function manualClock() {
   const timers: { ms: number; callback: () => void; live: boolean }[] = [];
   return {
     schedule: (callback: () => void, ms: number) => { const timer = { ms, callback, live: true }; timers.push(timer); return () => { timer.live = false; }; },
-    fire(ms: number) { const due = timers.filter(timer => timer.ms === ms && timer.live); for (const timer of due) { timer.live = false; timer.callback(); } return due.length; },
+    /** Fires every live timer of that length, or only the one at `index` among them, oldest first. */
+    fire(ms: number, index?: number) {
+      const live = timers.filter(timer => timer.ms === ms && timer.live);
+      const due = index === undefined ? live : live.slice(index, index + 1);
+      for (const timer of due) { timer.live = false; timer.callback(); }
+      return due.length;
+    },
     pending: (ms: number) => timers.filter(timer => timer.ms === ms && timer.live).length,
   };
 }
@@ -135,6 +141,33 @@ test("a hung tool call ends on its own deadline and the server is told to cancel
   expect(await sessions.call("call_a", snapshot, "music__echo", { text: "next" })).toMatchObject({ status: "done", content: "late" });
 }, 30_000);
 
+test("a call queued behind a hung call to the same server ends on its own deadline and is never sent", async () => {
+  const { store, hub, sessions, clock } = await setup();
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const server = fakeServer({ call: async call => { if (call.arguments.text === "hang") await held; return { content: [{ type: "text", text: `echo:${call.arguments.text}` }] }; } });
+  await approve(store, hub, { ...http("music", server.url), callTimeoutMs: 5_000 }, both);
+  const snapshot = sessions.snapshot(operator);
+  sessions.open("call_a", snapshot); sessions.open("call_b", snapshot);
+  try {
+    const first = sessions.call("call_a", snapshot, "music__echo", { text: "hang" });
+    await until(() => server.calls.length === 1, "the hung call to reach the server");
+    const second = sessions.call("call_b", snapshot, "music__echo", { text: "queued" });
+    await until(() => clock.pending(5_000) === 2, "the queued call's own deadline");
+    // Only the queued call's deadline fires: it answers at once although the hung call is still in flight.
+    let settled = false; void first.then(() => { settled = true; });
+    expect(clock.fire(5_000, 1)).toBe(1);
+    expect(await second).toEqual({ status: "failed", code: "TOOL_TIMEOUT", speech: "Music did not answer in time." });
+    expect(settled).toBe(false);
+    expect(server.calls.map(call => call.arguments.text)).toEqual(["hang"]);
+    release();
+    expect(await first).toMatchObject({ status: "done", content: "echo:hang" });
+  } finally { release(); }
+  // The given-up call never reaches the server; the next one does.
+  expect(await sessions.call("call_b", snapshot, "music__echo", { text: "next" })).toMatchObject({ status: "done", content: "echo:next" });
+  expect(server.calls.map(call => call.arguments.text)).toEqual(["hang", "next"]);
+}, 30_000);
+
 test("a server that is down fails its calls, and two failed starts make it unavailable for the rest of that call only", async () => {
   const { store, hub, sessions } = await setup();
   const server = fakeServer();
@@ -228,7 +261,7 @@ test.skipIf(!process.env.LLV_VOICE_TOOLS_BUILT_ROOT)("the production worker bund
     process.chdir(root);
     const snapshot = sessions.snapshot(operator);
     sessions.open("call_a", snapshot);
-    expect(await sessions.call("call_a", snapshot, "music__echo", { text: "built" })).toEqual({ status: "done", content: "echo:built", speech: "Music answered." });
+    expect(await sessions.call("call_a", snapshot, "music__echo", { text: "built" })).toEqual({ status: "done", content: 'echo:{"text":"built"}', speech: "Music answered." });
     expect(await sessions.call("call_a", snapshot, "music__echo", { text: 1 })).toMatchObject({ code: "INVALID_TOOL_ARGUMENTS" });
   } finally { process.chdir(previous); }
 }, 30_000);
