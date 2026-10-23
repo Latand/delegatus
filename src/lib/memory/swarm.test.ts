@@ -186,6 +186,46 @@ test("withdrawal re-render retains a removed pack entry and rejects a forged fro
   expect(frozenSwarmRule("swarm:builder", entry().id, digest(PRIVATE), `- [${entry().id}] ${TEXT}`)).toBeNull();
 });
 
+for (const engineOff of [false, true]) test(`swarm off preserves the original orchestrator withdrawal block with engine memory off = ${engineOff}`, async () => {
+  expect(preferences().swarmRules).toBe(false);
+  const scope = `role:${PROJECT}:orchestrator`;
+  const rules: RoleMemoryRule[] = [PRIVATE, TEXT].map((rule, index) => ({
+    kind: "rule", id: `r_000000000000000${index + 1}`, scope, rule, why: WHY,
+    state: "active", hints: [], source: { ...source, roleId: "orchestrator" }, createdAt: NOW, changedAt: NOW,
+  }));
+  roleMemoryCollection(true)!.boundedPatch(3, tx => {
+    for (const rule of rules) tx.put(rule);
+    tx.put({ kind: "scope", scope, revision: 1, active: rules.map(rule => rule.id), history: [] });
+  });
+  if (engineOff) fs.writeFileSync(path.join(process.env.LLV_STATE_DIR!, "memory-source.json"), JSON.stringify({ schemaVersion: 1, source: "delegatus", phase: "active", changedAt: NOW }));
+  const orchestrator = { learnedRules: { project: PROJECT, roleId: "orchestrator" } };
+  const first = await learnedRulesForLaunchProfile(orchestrator, start());
+  expect(first).toContain("2 role · 0 project · 0 machine");
+  expect(first).toContain(PRIVATE);
+  expect(first).toContain(engineOff ? "leave_lesson is your only memory that lasts beyond this conversation" : "while your engine's own memory reaches one account");
+  deleteRule(rules[0].id, NOW);
+  // Literal pre-swarm output: a renderer-derived expectation would miss pointer changes.
+  const expected = `Learned rules (Delegatus role memory): 1 role · 0 project · 0 machine
+Earlier seats and stage agents left these. They are rules of thumb: the operator's word, your mandate and the project's instruction files win where they disagree. Keep them on this machine: act on a rule in your own words and never paste its text into a brief, task, report, message, commit, pull request or issue; name it by its id.
+
+Role rules · Orchestrator on this project
+- [r_0000000000000002] Read the project instruction files before changing code.
+
+Role rules · Orchestrator on every project
+- none yet
+
+Project rules · every role on this project
+- none yet
+
+Machine rules · every project on this machine
+- none yet
+
+If you are this project's designated seat, this is your role's memory: every later seat of this project reads it, on any engine and account, while your engine's own memory reaches one account. When you meet a problem that can come back, settle it in the same turn. A practice (how to brief, what to check before you report, how the operator wants a thing done) becomes a rule: call leave_lesson with lesson, or with rewrite and the id of a rule above that proved wrong or too narrow. A concrete defect goes to the board: find or create its task with create_task, and tell the operator in chat when it is critical (it blocks accepted work, loses data, or will hit every lane). A problem report that a wake delivers says what to do with it. leave_lesson's description gives the levels and limits.`;
+  expect(await learnedRulesForLaunchProfile(orchestrator, start())).toBe(expected);
+  expect(await learnedRulesForLaunchProfile(orchestrator, start())).toBe(expected);
+  expect(memoryDeliveries().at(-1)!.delivery.removed).toEqual([{ id: rules[0].id, reason: "deleted", at: NOW }]);
+});
+
 test("opt-out hides a frozen swarm selection without losing the original selection", async () => {
   seed(); updatePreferences({ swarmRules: true });
   const first = await learnedRulesForLaunchProfile(profile, start());

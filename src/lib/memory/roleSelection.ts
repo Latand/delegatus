@@ -88,7 +88,7 @@ function withdrawn(row: RoleMemorySelection) {
     scopes[index].rules.push({ ...exact as RoleMemoryRule, id, scope: row.scopes[index] });
     return true;
   });
-  return { scopes, row: entries.length === row.entries.length ? row : { ...row, block: renderLearnedRulesSelection(scopes, Infinity, { engineMemoryOff: engineMemoryOff() }).block, entries, removed } };
+  return { scopes, row: entries.length === row.entries.length ? row : { ...row, block: renderLearnedRulesSelection(scopes).block, entries, removed } };
 }
 
 /** Called inside ledger admission; every contender reads the row the single

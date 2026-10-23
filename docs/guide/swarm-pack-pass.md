@@ -37,8 +37,8 @@ it automatically.
    the approved pack ships in the next release. Nothing edits installed packs
    between releases.
 
-The curator archives guidance already delivered by the same role's swarm
-scope as `in-instructions`, with `src/lib/memory/swarmRules.json` as `where`.
+The curator archives guidance held by the same role's serving swarm pack as
+`in-instructions`, with `swarm:<id>` as `where`, only while receiving is on.
 Installations with receiving off retain their local guidance. Shipped text is
 public under the publication gate's normalization; a local rule's `why` and
 all other local lesson texts remain private. The rules window shows the swarm
