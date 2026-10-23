@@ -227,6 +227,16 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       const parentN = child.restartContext?.previousAttempt ?? decision?.attempt;
       if (parentN === undefined) break;
       const parent = attempts.get(parentN);
+      // A failed parent whose launch was refused before any reservation ran
+      // nothing and holds no receipts; the edge continues through it to the
+      // attempt it replaced (issue #3158). It proves no commit of its own.
+      if (!decision && parent && parent.n < child.n && parent.state === "failed" && parent.completedAt
+        && !parent.launchId && !parent.conversationId && !parent.agentPath && !parent.paneId
+        && child.restartContext?.previousAttempt === parent.n && (child.restartContext.transcriptPath ?? null) === null
+        && (parent.restartRecovery?.replacementAttempt === undefined || parent.restartRecovery.replacementAttempt === child.n)) {
+        child = parent;
+        continue;
+      }
       if (!parent || parent.n >= child.n || !parent.launchId || !parent.completedAt
         || (!decision && (child.restartContext?.previousAttempt !== parent.n
           || child.restartContext.transcriptPath !== parent.agentPath

@@ -3,6 +3,7 @@
 import { primeAudio, sharedAudioContext } from "@/lib/chime";
 import { documentHidden, phoneClassDevice } from "@/lib/client/hiddenTraffic";
 
+import { clearSoundCaptions, pushSoundCaption } from "./captions";
 import { createAmbientLoop, type AmbientLoop, type LoopTransport, type Speaker } from "./ambientLoop";
 import { createCuePlayer, type CueContext, type CueOutcome, type CuePlayer } from "./cuePlayer";
 import { typingAssetAll, type CueRequest } from "./cues";
@@ -69,7 +70,10 @@ function watchPrefs(): void {
   subscribeAudioPrefs(() => {
     retries = 0;
     /* A mute empties the event lane's queue: nothing waits to sound after it. */
-    if (!audioPrefs().cuesEnabled) player?.clearQueue();
+    if (!audioPrefs().cuesEnabled) {
+      player?.clearQueue();
+      clearSoundCaptions();
+    }
     ensureAmbientLoop();
   });
 }
@@ -135,6 +139,8 @@ export function cuePlayer(): CuePlayer {
     context: cueContext,
     /* S6 and S7 duck the opt-in music bed. */
     onPriorityCue: (cue) => ambientLoop().duckForCue(cue),
+    /* The caption of each event sound that really started (docs/design/sound-captions.md). */
+    onPlayed: (sound, batch, captions) => pushSoundCaption({ sound, batch, captions }),
   });
   watchPrefs();
   return player;

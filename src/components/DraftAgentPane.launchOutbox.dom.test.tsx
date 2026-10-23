@@ -152,7 +152,11 @@ test("an accepted launch waits for its first answer (sound map S8); a failed one
   await launchWithPrompt("answer me when you are done");
   /* The first completed turn of the launched conversation is the answer. */
   const session = { conversationId: "conversation_reply", settledTurnId: "turn-1", lastTurnOutcome: "completed" } as Parameters<typeof awaitingReplies.settle>[0];
-  expect(awaitingReplies.settle(session)).toEqual({ cue: "reply", eventId: "reply:conversation_reply:turn-1" });
+  expect(awaitingReplies.settle(session)).toEqual({
+    cue: "reply",
+    eventId: "reply:conversation_reply:turn-1",
+    caption: { what: "reply", subject: null, target: { kind: "conversation", conversationId: "conversation_reply" } },
+  });
 
   flushSync(() => root?.unmount());
   root = null;
