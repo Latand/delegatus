@@ -182,15 +182,18 @@ test("contended delivery yields to the loop and captures rules and native input 
   await learnedRulesForLaunchProfile(profile, input);
   const db = new Database(path.join(process.env.LLV_STATE_DIR!, "role-memory", "delivery.sqlite"));
   db.exec("BEGIN IMMEDIATE");
+  // The held writer keeps admission retrying until this test releases it; a
+  // delivery that settles first stopped retrying, whatever the runner's speed.
+  let settled = false;
   const waitForAttempt = async (attempts: number) => {
-    const deadline = performance.now() + 3000;
     while (!stateLockWaitsInFlight().some(wait => wait.callSite === "memory.delivery" && wait.attempts >= attempts)) {
-      if (performance.now() > deadline) throw Error("delivery admission did not retry");
+      if (settled) throw Error("delivery admission did not retry");
       await new Promise<void>(resolve => setImmediate(resolve));
     }
   };
   let progressed = false;
   const pending = learnedRulesForLaunchProfile(profile, input);
+  void pending.then(() => { settled = true; }, () => { settled = true; });
   try {
     await new Promise<void>(resolve => setImmediate(() => { progressed = true; resolve(); }));
     await waitForAttempt(2);

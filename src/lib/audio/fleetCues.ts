@@ -90,7 +90,11 @@ export function createAwaitingReplies(now: () => number = Date.now): AwaitingRep
       if (outcome === "interrupted") return null;
       waits.delete(session.conversationId);
       if (outcome !== "completed") return null;
-      return { cue: "reply", eventId: `reply:${session.conversationId}:${ended}` };
+      return {
+        cue: "reply",
+        eventId: `reply:${session.conversationId}:${ended}`,
+        caption: { what: "reply", subject: null, target: { kind: "conversation", conversationId: session.conversationId } },
+      };
     },
 
     size: () => waits.size,

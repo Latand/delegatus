@@ -102,7 +102,7 @@ export async function recordOutbound(filename: string, message: OutboundMessage)
     db.query(`INSERT OR IGNORE INTO relay_outbound
       (key, bot_id, chat_id, topic_id, date, message_id, value_json, state, is_question, send_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(key, message.botId, message.chatId, message.topicId, message.date, message.messageId,
-        JSON.stringify(message), message.target ? "pending" : "unrouted", isOutboundQuestion(message) ? 1 : 0, message.sendKey);
+        JSON.stringify(message), message.botId.startsWith("clone:") ? "published" : message.target ? "pending" : "unrouted", isOutboundQuestion(message) ? 1 : 0, message.sendKey);
     pruneOutbound(db, message.date - 30 * 86400);
     if (message.origin === "operator" || message.origin === "system") return;
     db.query(`INSERT OR REPLACE INTO messages
