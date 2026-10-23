@@ -32,24 +32,27 @@ export function memorySourceLine(view: MemorySourceView | null, readFailed: bool
   const state = memorySourceState(view, readFailed);
   const reason = (value: NonNullable<MemorySourceView["lastFailure"]>["reason"]) => t(`memorySource.reason.${value}`);
   const hold = view?.import?.hold ? ` ${t("memorySource.hold", { reason: reason(view.import.hold) })}` : "";
+  /* Admission holds the import's next passes (§4.5), and an undone pass is told after the state's words (§4.7). */
+  const waits = view?.import?.admission ? ` ${t("memorySource.admission", { reason: t(`memorySource.admission.${view.import.admission}`) })}` : "";
+  const undo = view?.import?.undo ? ` ${view.import.undo.state === "undone" ? t("memorySource.undone") : t("memorySource.partlyUndone", { count: view.import.undo.kept })}` : "";
   const failure = view?.lastFailure ? ` ${t("memorySource.lastFailure", { reason: reason(view.lastFailure.reason) })}` : "";
   switch (state) {
     case "loading": return t("memorySource.loading");
     case "unknown": return t("memorySource.readFailed");
     case "unchosen": return t("memorySource.unchosen") + failure;
-    case "preparing": return t("memorySource.preparing") + hold;
+    case "preparing": return t("memorySource.preparing") + hold + waits;
     case "importing": {
       const counts = view!.import!.counts!;
       /* Files are counted; parts are named only while a file of several still has one left (§4.4). */
       const parts = counts.pendingParts > counts.pendingFiles ? t("memorySource.partsLeft", { count: counts.pendingParts }) : "";
-      return t("memorySource.importing", { done: counts.files - counts.pendingFiles, total: counts.files, parts }) + hold;
+      return t("memorySource.importing", { done: counts.files - counts.pendingFiles, total: counts.files, parts }) + hold + waits + undo;
     }
     case "draining": {
       const left = view!.import?.remainingGenerations ?? 0;
-      return (left ? t("memorySource.draining", { count: left }) : t("memorySource.drainingLast")) + hold;
+      return (left ? t("memorySource.draining", { count: left }) : t("memorySource.drainingLast")) + hold + waits + undo;
     }
-    case "active": return t("memorySource.active") + hold;
-    case "engines": return [t("memorySource.engines"), syncLine(view!.sync, t, locale, now)].filter(Boolean).join(" ") + failure;
+    case "active": return t("memorySource.active") + hold + undo;
+    case "engines": return [t("memorySource.engines"), syncLine(view!.sync, t, locale, now)].filter(Boolean).join(" ") + undo + failure;
   }
 }
 
@@ -85,7 +88,7 @@ export function MemorySourceRow({ phone = false, readEveryMs = READ_MS }: { phon
         const response = await fetch("/api/memory/source", { signal: abort.signal, cache: "no-store" });
         if (!response.ok) throw Error("read refused");
         const value = await response.json() as MemorySourceView;
-        if (current === revision.current && !abort.signal.aborted) { setView(value); setReadFailed(false); }
+        if (current === revision.current && !abort.signal.aborted) { setView(value); setReadFailed(false); setSaveFailed(false); }
       } catch { if (current === revision.current && !abort.signal.aborted) setReadFailed(true); }
     };
     void read();

@@ -20,16 +20,20 @@ export interface CurationAdmissionPorts {
   sources: SeatTickAdmissionSources;
   archive?: (pass: CuratorPass) => void;
 }
+export type AdmissionHoldKind = "memoryOff" | "wakesOff" | "curatorOff" | "update" | "deployment";
 /** In the engines position only an import pass of the synced import is admitted (memory-source-switch.md §4.9). */
-export function admissionHeld(project: string, ports: CurationAdmissionPorts, pass?: Pick<CuratorPass, "importBatch"> | null): string | null {
-  if (!roleMemoryEnabled() && !syncCurationOpen(pass?.importBatch?.importId)) return "curation: paused, memory off";
+export function admissionHold(project: string, ports: CurationAdmissionPorts, pass?: Pick<CuratorPass, "importBatch"> | null): { kind: AdmissionHoldKind; text: string } | null {
+  if (!roleMemoryEnabled() && !syncCurationOpen(pass?.importBatch?.importId)) return { kind: "memoryOff", text: "curation: paused, memory off" };
   const settings = effectiveSeatTickSettings(ports.sources.settings(project), ports.sources.now(), SEAT_TICK_WAKE_INTERVAL_MS);
-  if (!settings.enabled) return "curation: paused, wakes off";
-  if (settings.curation?.enabled === false) return "curation: paused, curator off";
-  if (activeDrain()) return "curation: held for the automatic update";
+  if (!settings.enabled) return { kind: "wakesOff", text: "curation: paused, wakes off" };
+  if (settings.curation?.enabled === false) return { kind: "curatorOff", text: "curation: paused, curator off" };
+  if (activeDrain()) return { kind: "update", text: "curation: held for the automatic update" };
   const deployment = ports.sources.latestDeployment();
-  if (deployment.state === "ok" && deployment.value && !deployment.value.terminal) return "curation: waits, a deployment is running";
+  if (deployment.state === "ok" && deployment.value && !deployment.value.terminal) return { kind: "deployment", text: "curation: waits, a deployment is running" };
   return null;
+}
+export function admissionHeld(project: string, ports: CurationAdmissionPorts, pass?: Pick<CuratorPass, "importBatch"> | null): string | null {
+  return admissionHold(project, ports, pass)?.text ?? null;
 }
 function hostEvidence(project: string, ports: CurationAdmissionPorts) {
   const now = ports.sources.now();

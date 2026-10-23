@@ -3,6 +3,7 @@ import { requireOperatorAuthority } from "@/lib/agent/operatorAuthority";
 import { scheduleMemoryImport } from "@/lib/memory/importController";
 import { memorySource, selectMemorySource } from "@/lib/memory/source";
 import { memoryImportFailure, memoryImportStatus, memorySyncState } from "@/lib/memory/importStatus";
+import { memoryImportAdmissionHold, memoryImportUndo } from "@/lib/memory/importState";
 import { setMemorySyncInterval, validSyncInterval } from "@/lib/memory/importSync";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { MemorySourceView } from "@/lib/memory/viewTypes";
@@ -14,7 +15,9 @@ export async function GET() {
   const status = memoryImportStatus();
   const sync = memorySyncState();
   const failure = memoryImportFailure();
-  const body: MemorySourceView = { ...memorySource(), ...(status ? { import: status } : {}), ...(sync ? { sync } : {}), ...(failure ? { lastFailure: failure } : {}) };
+  const admission = memoryImportAdmissionHold(), undo = memoryImportUndo();
+  const imported = status ? { ...status, ...(admission ? { admission } : {}), ...(undo ? { undo } : {}) } : null;
+  const body: MemorySourceView = { ...memorySource(), ...(imported ? { import: imported } : {}), ...(sync ? { sync } : {}), ...(failure ? { lastFailure: failure } : {}) };
   return Response.json(body, { headers: { "Cache-Control": "no-store" } });
 }
 

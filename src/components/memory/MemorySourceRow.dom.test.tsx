@@ -133,6 +133,22 @@ for (const lang of ["en", "uk"] as const) test(`${lang}: counts, parts, agents l
   /* A hold names its reason after the state's words. */
   expect(line({ ...VIEWS.draining, import: { ...VIEWS.draining.import, hold: "source_changed" } }))
     .toBe(`${t("memorySource.draining", { count: 2 })} ${t("memorySource.hold", { reason: t("memorySource.reason.source_changed") })}`);
+  /* An admission hold and an undone import name themselves after the state's words (§4.5, §4.7). */
+  for (const admission of ["memoryOff", "wakesOff", "curatorOff", "update", "deployment"] as const) {
+    const text = line({ ...VIEWS.importing, import: { ...VIEWS.importing.import, admission } });
+    expect(text).toBe(`${DESIGN[lang].importing} ${t("memorySource.admission", { reason: t(`memorySource.admission.${admission}`) })}`);
+    expect(text).not.toMatch(/undefined|\{|memorySource\.|memoryOff|wakesOff|curatorOff/);
+  }
+  expect(line({ ...VIEWS.importing, import: { ...VIEWS.importing.import, admission: "wakesOff" } })).toContain(lang === "en" ? "The import is waiting: orchestrator wakes are off." : "Імпорт чекає: пробудження оркестратора вимкнено.");
+  expect(line({ ...VIEWS.active, import: { ...VIEWS.active.import, undo: { state: "undone", kept: 0 } } })).toBe(`${DESIGN[lang].active} ${lang === "en" ? "The import was undone." : "Імпорт скасовано."}`);
+  const partly = (kept: number) => line({ ...VIEWS.active, import: { ...VIEWS.active.import, undo: { state: "partlyUndone", kept } } });
+  expect(partly(1)).toBe(`${DESIGN[lang].active} ${lang === "en" ? "The import was partly undone: 1 rule stays because of later edits." : "Імпорт скасовано частково: 1 правило лишається через пізніші правки."}`);
+  expect(partly(3)).toContain(lang === "en" ? "3 rules stay" : "3 правила лишаються");
+  expect(partly(5)).toContain(lang === "en" ? "5 rules stay" : "5 правил лишається");
+  expect(line({ ...VIEWS.engines, import: { counts: null, remainingGenerations: 0, hold: null, undo: { state: "undone", kept: 0 } } }))
+    .toContain(lang === "en" ? "Delegatus rules are paused." : "Правила Delegatus на паузі.");
+  expect(line({ ...VIEWS.engines, import: { counts: null, remainingGenerations: 0, hold: null, undo: { state: "undone", kept: 0 } } }))
+    .toContain(lang === "en" ? "The import was undone." : "Імпорт скасовано.");
   /* A failed import put the switch back: the off line names why. */
   for (const reason of ["integrity", "backup_refused", "source_changed", "interrupted", "failed"] as const) {
     const text = line({ ...VIEWS.unchosen, lastFailure: { reason, at: "2026-10-23T11:00:00.000Z" } });
@@ -257,4 +273,18 @@ test("the phone's row takes the sheet's 44 px switch and its type; the desktop's
   const desktop = await render(false);
   expect(switchOf(desktop).className).toContain("h-6");
   expect(desktop.querySelector("[data-memory-source-line]")!.className).toContain("text-[11px]");
+});
+
+test("a write that landed before the connection dropped: the next read moves the switch and clears the notice", async () => {
+  let server: Name = "active";
+  serve(() => VIEWS[server], () => { server = "engines"; return Promise.reject(new TypeError("fetch failed")); });
+  const host = document.createElement("div"); document.body.appendChild(host); root = createRoot(host);
+  await act(async () => { root!.render(<MemorySourceRow readEveryMs={10} />); });
+  await settle();
+  await act(async () => { switchOf(host).click(); });
+  for (let step = 0; step < 200 && stateOf(host) !== "engines"; step++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 1)); });
+  expect(stateOf(host)).toBe("engines");
+  expect(switchOf(host).getAttribute("aria-checked")).toBe("false");
+  expect(host.querySelector("[data-memory-source-failed]")).toBeNull();
+  expect(lineOf(host)).not.toContain(translate("en", "memorySource.saveFailed"));
 });

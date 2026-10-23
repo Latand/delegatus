@@ -111,3 +111,46 @@ test("an import that failed after the current choice is named on the read; a new
   chooseSource("active");
   expect((await read()).lastFailure).toBeUndefined();
 });
+
+test("GET names the admission hold in front of the import's pending passes, by word and only while parts are pending", async () => {
+  const { writeImportRows } = await import("@/lib/memory/importStore");
+  const { defaultSeatTickSettings, writeSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+  const progress = (pendingParts: number) => ({ files: 351, parts: 351, pendingFiles: pendingParts, pendingParts, pendingLoadedParts: pendingParts, adopted: 80, dropped: 40 });
+  const seed = (pendingParts: number) => writeImportRows([{ kind: "import", id: "fixture-import", state: "ready", at: "2026-10-17T00:00:00.000Z", previous: null,
+    backup: path.join(root, "backups", "engine-memory", "fixture-import"), files: 351, candidates: 351, parts: 351, hostProject: "held-project", progress: progress(pendingParts) }]);
+  const read = async () => (await GET()).json();
+  chooseSource("importing"); await seed(231);
+  /* Nothing holds it: no word. */
+  expect((await read()).import.admission).toBeUndefined();
+  /* Seat wakes off for the host project. */
+  writeSeatTickSettings("held-project", { ...defaultSeatTickSettings("held-project"), enabled: false });
+  const held = await read();
+  expect(held.import).toMatchObject({ admission: "wakesOff", counts: { pendingParts: 231 } });
+  expect(JSON.stringify(held)).not.toContain("curation:");
+  expect(JSON.stringify(held)).not.toContain(root);
+  /* Nothing left to pass: the hold stops nothing, so it is not named. */
+  await seed(0);
+  expect((await read()).import.admission).toBeUndefined();
+  /* The automatic update draining holds every project. */
+  writeSeatTickSettings("held-project", defaultSeatTickSettings("held-project"));
+  await seed(10);
+  fs.mkdirSync(path.join(root, "self-update"), { recursive: true });
+  fs.writeFileSync(path.join(root, "self-update", "auto-drain.json"), JSON.stringify({ id: "drain", target: "release", since: "2026-10-17T00:00:00.000Z", until: 0, persistent: true }));
+  expect((await read()).import.admission).toBe("update");
+  /* The engines position names no hold: the sync is not the import. */
+  chooseSource("engines");
+  expect((await read()).import?.admission).toBeUndefined();
+});
+
+test("the driver's frame states read back through GET with the hold or the undo they draw", async () => {
+  const { MEMORY_SOURCE_FRAME_STATES, seedMemorySourceState } = await import("@/lib/memory/fixtures/sourceStates");
+  const wanted: Partial<Record<typeof MEMORY_SOURCE_FRAME_STATES[number], { admission?: string; undo?: unknown }>> = {
+    "importing-held": { admission: "wakesOff" }, "draining-held": { admission: "update" },
+    "active-undone": { undo: { state: "undone", kept: 0 } }, "active-partly-undone": { undo: { state: "partlyUndone", kept: 1 } },
+  };
+  for (const state of MEMORY_SOURCE_FRAME_STATES) {
+    await seedMemorySourceState(state);
+    const body = await (await GET()).json();
+    expect({ state, admission: body.import?.admission, undo: body.import?.undo }).toEqual({ state, admission: wanted[state]?.admission, undo: wanted[state]?.undo });
+  }
+});

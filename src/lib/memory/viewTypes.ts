@@ -24,6 +24,10 @@ export interface MemorySourceView {
     counts: { files: number; parts: number; pendingFiles: number; pendingParts: number; pendingLoadedParts: number; adopted: number; dropped: number } | null;
     remainingGenerations: number;
     hold: MemoryImportReason | null;
+    /** The admission hold in front of the import's pending passes (§4.5): a word, never a message. */
+    admission?: "memoryOff" | "wakesOff" | "curatorOff" | "update" | "deployment";
+    /** An undone import pass (§4.7): `partlyUndone` carries the count of rules kept by later edits. */
+    undo?: { state: "undone" | "partlyUndone"; kept: number };
   };
   sync?: { intervalHours: number; lastAt: string | null; nextAt: string | null; added: number; capped: boolean; failure: MemoryImportReason | null };
   /** The newest import that failed since the current choice, which put the switch back. */

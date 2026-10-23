@@ -60,8 +60,16 @@ where it stands:
   run, new engine notes are imported daily by default, and the line says when
   that last ran and how many notes were new.
 
+When something holds the import's next step, the line says so after its
+words: orchestrator wakes are off, the role memory curator is off, learned
+rules are off, an automatic update is finishing, or a deployment is running.
+The import resumes when that is cleared. If you undo an import pass in the
+rules window, the line adds that the import was undone, or partly undone with
+the number of rules that stay because a later edit touched them.
+
 The switch moves as soon as you press it, and the change is saved in the
-background. If the save is refused, the switch goes back and the line says so.
+background. If the save is refused, the switch goes back and the line says so until the
+next reading of the installation's state.
 If an import stops, for example because a backup copy did not match its
 source, the switch goes back to where it was and the line names the reason.
 Delegatus only reads the engines' memory files: before the import it backs
