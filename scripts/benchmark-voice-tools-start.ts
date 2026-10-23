@@ -7,6 +7,7 @@
      is included (the route awaits exactly this call);
    - the bytes of the first backend request of a delegation (`provider.respond` body as JSON);
    - the bytes of the Live session configuration the call is minted with.
+   The call has call memory as the Viewer passes it, switched off and with a summarizer that refuses, so no model runs.
    The registry holds the same synthetic catalog on every revision: N approved HTTP servers with 32 selected tools in
    total, written through the store's own proposal, probe record and approval, so the data is identical before and after.
    No server is contacted and no child process is started. Run the same file on the base and on the head and compare. */
@@ -26,6 +27,7 @@ const { CompanionAdmission } = await import("../src/lib/voiceCompanion/admission
 const { CompanionLiveSessions } = await import("../src/lib/voiceCompanion/liveSession");
 const { FakeLiveProvider, backendResponse, delegationCreated, message } = await import("../src/lib/voiceCompanion/fakeProvider");
 const { fixtureBoardReads } = await import("../src/lib/voiceCompanion/boardReads.fixture");
+const { CallMemory } = await import("../src/lib/voiceCompanion/callMemory");
 const { VoiceToolsStore } = await import("../src/lib/voiceTools/store");
 const { validateCatalog, digest } = await import("../src/lib/voiceTools/contracts");
 // Present from slice 2 on; the base has no voice side of the hub.
@@ -53,7 +55,8 @@ async function registry(count: number) {
 }
 // One storage and admission for every side: each call is closed before the next one starts.
 const storage = new CompanionStorage();
-storage.updateSettings({ enabled: true, monthlyCapUsd: 10_000 });
+// Call memory is switched off, as the Viewer passes it (server.ts) without a model behind it: its summarizer refuses.
+storage.updateSettings({ enabled: true, monthlyCapUsd: 10_000, callMemory: false });
 const admission = new CompanionAdmission(storage, { recipient: () => ({ project: "fixture", conversationId: "conversation_fixture", seatEpoch: 1, engine: "claude" }),
   send: async () => ({ status: "queued", operationId: "operation_fixture" }), reports: () => [] });
 const reads = fixtureBoardReads({ tasks: () => [], pipelines: () => [], activity: async () => [], messages: async () => [] });
@@ -62,6 +65,7 @@ function service(store: InstanceType<typeof VoiceToolsStore>) {
   provider.responder = (_request, at) => backendResponse(`resp_${at}`, [message("Done.")]);
   const voiceTools = sessionsModule ? new sessionsModule.VoiceToolSessions(store) as { snapshot(starter: unknown): unknown } : undefined;
   return { provider, voiceTools, live: new CompanionLiveSessions(storage, admission, reads, provider, { key: () => "synthetic-credential", closeTimeoutMs: 1, timers: false,
+    memory: new CallMemory(storage, admission.records, async () => { throw new Error("NO_MODEL_IN_BENCHMARK"); }),
     ...(voiceTools ? { voiceTools: voiceTools as never } : {}) }) };
 }
 const counts = [0, 8, 16];

@@ -230,9 +230,13 @@ export class CompanionLiveSessions {
     const directoryProjects = this.reads.projectRows(input.project).map(({ name, handle }) => ({ name, handle }));
     const session = this.admission.create({ project: input.project, locale: input.locale, authority: "live-model", startedBy: input.startedBy });
     const id = session.id;
-    if (this.options.memory || resumed) {
+    // The added tools come from the hub's memory: no file is read and no server is contacted here.
+    const voiceTools = this.options.voiceTools?.snapshot(input.startedBy) ?? EMPTY_VOICE_TOOLS;
+    // One rewrite of the start record carries the memory version, the call it resumes and the snapshot it took.
+    if (this.options.memory || resumed || voiceTools.servers.length) {
       const start = this.admission.transcriptRecord(id).entries.find(row => row.kind === "session_start")!;
-      this.admission.record(id, { ...start, data: { ...start.data, ...(this.options.memory ? { memoryVersion: settings.callMemory ? 1 : 0 } : {}), ...(resumed ? { resumes: input.resume } : {}) } });
+      this.admission.record(id, { ...start, data: { ...start.data, ...(this.options.memory ? { memoryVersion: settings.callMemory ? 1 : 0 } : {}), ...(resumed ? { resumes: input.resume } : {}),
+        ...(voiceTools.servers.length ? { voiceTools: snapshotRecord(voiceTools) } : {}) } });
     }
     try {
       this.storage.change(document => {
@@ -251,12 +255,6 @@ export class CompanionLiveSessions {
     this.admission.protect(key);
     // Subscription auth never uses the API key. Transcript masking still
     // protects any credential the installation holds, even in short pieces.
-    // The added tools come from the hub's memory: no file is read and no server is contacted here.
-    const voiceTools = this.options.voiceTools?.snapshot(input.startedBy) ?? EMPTY_VOICE_TOOLS;
-    if (voiceTools.servers.length) {
-      const start = this.admission.transcriptRecord(id).entries.find(row => row.kind === "session_start")!;
-      this.admission.record(id, { ...start, data: { ...start.data, voiceTools: snapshotRecord(voiceTools) } });
-    }
     const secrets = [...new Set([key.trim(), ...this.storage.credentials(), ...(voiceTools.servers.length ? this.options.voiceTools!.secrets(voiceTools) : [])])].filter(Boolean);
     // A reconnect starts with the conversation it continues; earlier calls fill what it leaves of the same budget.
     const continuation = resumed ? continuationBlock(resumed.segments, { droppedAt: resumed.droppedAt, summary: this.options.memory?.readable(input.startedBy, resumed.segments[0]!.id),
