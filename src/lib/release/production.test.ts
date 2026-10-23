@@ -63,6 +63,15 @@ test("a manually pushed and published tag covers an older frozen cut", async () 
     async (name, version) => { expect(name).toBe("release-fixture"); expect(version).toBe("1.15.0"); return true; })).toBe("v1.15.0");
 });
 
+test("review: an unpublished higher tag does not hide a published covering release", async () => {
+  const h = await repository();
+  await h.git("tag", "v1.16.0", h.next);
+  const checked: string[] = [];
+  expect(await supersedingReleaseTag(h.repo, { cut: h.cut, lastTag: "v1.13.0" }, undefined,
+    async (_name, version) => { checked.push(version); return version === "1.15.0"; })).toBe("v1.15.0");
+  expect(checked).toEqual(["1.16.0", "1.15.0"]);
+});
+
 test("a tag before the cut and an unpublished tag cannot supersede a release", async () => {
   const h = await repository();
   expect(await supersedingReleaseTag(h.repo, { cut: h.next, lastTag: "v1.13.0" }, undefined,

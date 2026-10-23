@@ -35,16 +35,26 @@ async function registryHasRelease(packageName: string, version: string): Promise
 /** A tag alone cannot prove publication, and an unrelated cut cannot supersede this run. */
 export async function supersedingReleaseTag(repoDir: string, saved: { cut: string; lastTag: string }, run: typeof command = command,
   published: typeof registryHasRelease = registryHasRelease): Promise<string | null> {
-  const tag = await latestReleaseTag(repoDir, run);
   const old = saved.lastTag.slice(1).split(".").map(BigInt);
-  const next = tag.version.split(".").map(BigInt);
-  const difference = next.findIndex((part, index) => part !== old[index]);
-  if (difference < 0 || next[difference] < old[difference]) return null;
-  const revision = await run("git", ["rev-parse", `${tag.name}^{commit}`], repoDir);
-  try { await run("git", ["merge-base", "--is-ancestor", saved.cut, revision], repoDir); }
-  catch (error) { if ((error as { code?: number }).code === 1) return null; throw error; }
+  await run("git", ["fetch", "origin", "main", "--tags"], repoDir);
+  const lines = (await run("git", ["for-each-ref", "--sort=-version:refname", "--format=%(refname:short)", "refs/tags/v*"], repoDir)).split("\n");
+  const candidates = lines.filter(name => /^v\d+\.\d+\.\d+$/.test(name)).filter(name => {
+    const next = name.slice(1).split(".").map(BigInt);
+    for (let index = 0; index < old.length; index++) {
+      if (next[index] !== old[index]) return next[index] > old[index];
+    }
+    return false;
+  });
+  if (candidates.length === 0) return null;
   const pkg = JSON.parse(await run("git", ["show", "origin/main:package.json"], repoDir));
-  return await published(pkg.name, tag.version) ? tag.name : null;
+  for (const name of candidates) {
+    const version = name.slice(1);
+    const revision = await run("git", ["rev-parse", `${name}^{commit}`], repoDir);
+    try { await run("git", ["merge-base", "--is-ancestor", saved.cut, revision], repoDir); }
+    catch (error) { if ((error as { code?: number }).code === 1) continue; throw error; }
+    if (await published(pkg.name, version)) return name;
+  }
+  return null;
 }
 export async function changesSinceRelease(repoDir: string, tag: string, cut: string, run: typeof command = command): Promise<ReleaseChange[]> {
   const git = (...args: string[]) => run("git", args, repoDir);

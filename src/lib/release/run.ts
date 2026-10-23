@@ -90,6 +90,9 @@ async function reconcileRun(project: string, ports: ReleasePorts): Promise<strin
   const outcome = lane?.state === "completed" && lane.merged ? "published"
     : lane?.state === "closed" ? lane.declined ? "declined" : "failed" : null;
   if (outcome) return settle(project, ports, run, outcome) ? `release: ${outcome}` : null;
+  // Once a creation receipt binds the run, only the pipeline lifecycle can settle it.
+  // A done task or a manually pushed tag may predate the pipeline's verification/merge.
+  if (run.pipelineId) return lane ? null : "release: pipeline unreadable";
   if (run.taskId && ports.taskDone(project, run.taskId)) {
     return settle(project, ports, run, "completed", "task-done") ? "release: completed" : null;
   }
@@ -102,7 +105,7 @@ async function reconcileRun(project: string, ports: ReleasePorts): Promise<strin
   if (run.taskId && ports.taskDone(project, run.taskId)) {
     return settle(project, ports, run, "completed", "task-done") ? "release: completed" : null;
   }
-  return run.pipelineId ? lane ? null : "release: pipeline unreadable" : admit(project, ports);
+  return admit(project, ports);
 }
 export function productionReleaseController(ports: ReleasePorts): ReleaseController {
   return {
