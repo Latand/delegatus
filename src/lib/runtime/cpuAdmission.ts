@@ -125,72 +125,82 @@ export class CpuAdmissionQueue {
   constructor(file: string, private readonly now = Date.now, private readonly spacingMs = CPU_QUEUE_SPACING_MS, private readonly maxWaitMs = CPU_QUEUE_MAX_WAIT_MS, private readonly unpolledMs = CPU_QUEUE_UNPOLLED_MS,
     private readonly observer: { status(identity: ProcessIdentity): ProcessIdentityStatus; exited(identity: ProcessIdentity): boolean } = {
       status: processIdentityStatus, exited: identity => procBackend.processExited(identity.pid),
-    }) {
+    }, busyTimeoutMs = 5_000) {
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     const sqlite = process.getBuiltinModule?.("bun:sqlite") as typeof import("bun:sqlite") | undefined;
     if (!sqlite?.Database) throw new Error("CPU admission requires the supported Bun runtime");
     this.db = observeSqlite(new sqlite.Database(file, { create: true }), "cpu-admission");
-    fs.chmodSync(file, 0o600);
-    this.db.exec("PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;");
-    this.db.exec("CREATE TABLE IF NOT EXISTS tickets (seq INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE NOT NULL, since INTEGER NOT NULL, owner TEXT); CREATE TABLE IF NOT EXISTS suspended (key TEXT PRIMARY KEY); CREATE TABLE IF NOT EXISTS admission (id INTEGER PRIMARY KEY, last INTEGER); INSERT OR IGNORE INTO admission VALUES (1, NULL);");
-    this.db.exec("CREATE TABLE IF NOT EXISTS stage_admissions (key TEXT PRIMARY KEY);");
-    // The last trigger marks the whole step. It commits with the column and
-    // the first bound under one writer lock, so no checker of any release
-    // ever reads a file that has the column and not the rest.
-    const recordsPolls = () => this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'tickets_gone'").get() !== null;
-    if (!recordsPolls()) {
-      const opened = this.now();
+    try {
+      fs.chmodSync(file, 0o600);
+      this.db.exec(`PRAGMA busy_timeout=${Math.max(0, Math.floor(busyTimeoutMs))}`);
+      this.db.exec("PRAGMA journal_mode=WAL");
+      this.db.exec("PRAGMA synchronous=FULL");
+      this.db.exec("CREATE TABLE IF NOT EXISTS tickets (seq INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE NOT NULL, since INTEGER NOT NULL, owner TEXT)");
+      this.db.exec("CREATE TABLE IF NOT EXISTS suspended (key TEXT PRIMARY KEY)");
+      this.db.exec("CREATE TABLE IF NOT EXISTS admission (id INTEGER PRIMARY KEY, last INTEGER)");
+      this.db.exec("INSERT OR IGNORE INTO admission VALUES (1, NULL)");
+      this.db.exec("CREATE TABLE IF NOT EXISTS stage_admissions (key TEXT PRIMARY KEY);");
+      // The last trigger marks the whole step. It commits with the column and
+      // the first bound under one writer lock, so no checker of any release
+      // ever reads a file that has the column and not the rest.
+      const recordsPolls = () => this.db.query("SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'tickets_gone'").get() !== null;
+      if (!recordsPolls()) {
+        const opened = this.now();
+        this.db.transaction(() => {
+          if (recordsPolls()) return;
+          if (!this.db.query<{ name: string }, []>("PRAGMA table_info(tickets)").all().some(column => column.name === "polled")) this.db.exec("ALTER TABLE tickets ADD COLUMN polled INTEGER");
+          this.db.exec("CREATE TABLE IF NOT EXISTS unpolled (key TEXT PRIMARY KEY)");
+          // The first cut of this change recorded polls with this one trigger.
+          this.db.exec("DROP TRIGGER IF EXISTS tickets_polled");
+          this.db.exec("CREATE TRIGGER tickets_poll BEFORE INSERT ON tickets BEGIN UPDATE tickets SET polled = NEW.since WHERE key = NEW.key AND owner IS NULL; DELETE FROM unpolled WHERE key = NEW.key; END");
+          this.db.exec("CREATE TRIGGER tickets_queued AFTER INSERT ON tickets WHEN NEW.owner IS NULL AND NEW.polled IS NULL BEGIN UPDATE tickets SET polled = NEW.since WHERE seq = NEW.seq; END");
+          this.db.exec("CREATE TRIGGER suspended_hold BEFORE INSERT ON suspended BEGIN DELETE FROM unpolled WHERE key = NEW.key; END");
+          this.db.exec("CREATE TRIGGER suspended_keep BEFORE DELETE ON suspended WHEN OLD.key IN (SELECT key FROM unpolled) BEGIN SELECT RAISE(IGNORE); END");
+          this.db.exec("CREATE TRIGGER suspended_release AFTER DELETE ON suspended BEGIN UPDATE tickets SET polled = NULL WHERE key = OLD.key AND owner IS NULL; END");
+          // A ticket queued before polls existed may have a live checker: it
+          // gets one bound from here to show it, whatever its age.
+          this.db.query("UPDATE tickets SET polled = ? WHERE owner IS NULL AND polled IS NULL").run(opened);
+          this.db.exec("CREATE TRIGGER tickets_gone AFTER DELETE ON tickets BEGIN DELETE FROM unpolled WHERE key = OLD.key; DELETE FROM suspended WHERE key = OLD.key; END");
+        }).immediate();
+      }
       this.db.transaction(() => {
-        if (recordsPolls()) return;
-        if (!this.db.query<{ name: string }, []>("PRAGMA table_info(tickets)").all().some(column => column.name === "polled")) this.db.exec("ALTER TABLE tickets ADD COLUMN polled INTEGER");
-        this.db.exec("CREATE TABLE IF NOT EXISTS unpolled (key TEXT PRIMARY KEY)");
-        // The first cut of this change recorded polls with this one trigger.
-        this.db.exec("DROP TRIGGER IF EXISTS tickets_polled");
-        this.db.exec("CREATE TRIGGER tickets_poll BEFORE INSERT ON tickets BEGIN UPDATE tickets SET polled = NEW.since WHERE key = NEW.key AND owner IS NULL; DELETE FROM unpolled WHERE key = NEW.key; END");
-        this.db.exec("CREATE TRIGGER tickets_queued AFTER INSERT ON tickets WHEN NEW.owner IS NULL AND NEW.polled IS NULL BEGIN UPDATE tickets SET polled = NEW.since WHERE seq = NEW.seq; END");
-        this.db.exec("CREATE TRIGGER suspended_hold BEFORE INSERT ON suspended BEGIN DELETE FROM unpolled WHERE key = NEW.key; END");
-        this.db.exec("CREATE TRIGGER suspended_keep BEFORE DELETE ON suspended WHEN OLD.key IN (SELECT key FROM unpolled) BEGIN SELECT RAISE(IGNORE); END");
-        this.db.exec("CREATE TRIGGER suspended_release AFTER DELETE ON suspended BEGIN UPDATE tickets SET polled = NULL WHERE key = OLD.key AND owner IS NULL; END");
-        // A ticket queued before polls existed may have a live checker: it
-        // gets one bound from here to show it, whatever its age.
-        this.db.query("UPDATE tickets SET polled = ? WHERE owner IS NULL AND polled IS NULL").run(opened);
-        this.db.exec("CREATE TRIGGER tickets_gone AFTER DELETE ON tickets BEGIN DELETE FROM unpolled WHERE key = OLD.key; DELETE FROM suspended WHERE key = OLD.key; END");
+        const columns = this.db.query<{ name: string }, []>("PRAGMA table_info(tickets)").all();
+        if (!columns.some(column => column.name === "priority")) this.db.exec("ALTER TABLE tickets ADD COLUMN priority INTEGER NOT NULL DEFAULT 1");
+        if (!columns.some(column => column.name === "source")) this.db.exec("ALTER TABLE tickets ADD COLUMN source TEXT");
+        if (!columns.some(column => column.name === "fifo_seq")) {
+          this.db.exec("ALTER TABLE tickets ADD COLUMN fifo_seq INTEGER");
+          this.db.exec("UPDATE tickets SET fifo_seq = seq");
+        }
+        this.db.exec("CREATE TABLE IF NOT EXISTS ticket_order (id INTEGER PRIMARY KEY CHECK (id = 1), next INTEGER NOT NULL)");
+        if (!this.db.query("SELECT 1 FROM ticket_order WHERE id = 1").get()) {
+          const next = this.db.query<{ next: number }, []>("SELECT COALESCE(MAX(fifo_seq), 0) + 1 AS next FROM tickets").get()!.next;
+          this.db.query("INSERT INTO ticket_order VALUES (1, ?)").run(next);
+        }
+        this.db.exec("DROP TRIGGER IF EXISTS tickets_fifo");
+        this.db.exec(`CREATE TRIGGER tickets_fifo AFTER INSERT ON tickets BEGIN
+          UPDATE tickets SET fifo_seq = COALESCE(fifo_seq, (SELECT next FROM ticket_order WHERE id = 1)) WHERE key = NEW.key;
+          UPDATE ticket_order SET next = MAX(next, (SELECT COALESCE(MAX(fifo_seq), 0) + 1 FROM tickets)) WHERE id = 1;
+          -- Rebuild the seq view for every membership change. Older helpers
+          -- write only seq/since/owner, so this trigger is their ordering
+          -- boundary even when the new row's default priority is unchanged.
+          -- Offset first to avoid collisions in the primary key.
+          UPDATE tickets SET seq = seq + (SELECT COALESCE(MAX(seq), 0) + COUNT(*) + 1 FROM tickets);
+          UPDATE tickets SET seq = (
+            SELECT COUNT(*) FROM tickets AS earlier
+            WHERE earlier.priority < tickets.priority
+               OR (earlier.priority = tickets.priority AND earlier.fifo_seq <= tickets.fifo_seq)
+          );
+          UPDATE sqlite_sequence SET seq = (SELECT COUNT(*) FROM tickets) WHERE name = 'tickets';
+        END`);
+        this.db.exec("CREATE INDEX IF NOT EXISTS tickets_priority_seq ON tickets(priority, seq)");
       }).immediate();
+      // Repair a queue left in the inconsistent order produced by the earlier
+      // priority implementation before any old or new checker can claim it.
+      this.db.transaction(() => this.orderLegacyTicketsByPriority()).immediate();
+    } catch (error) {
+      this.db.close();
+      throw error;
     }
-    this.db.transaction(() => {
-      const columns = this.db.query<{ name: string }, []>("PRAGMA table_info(tickets)").all();
-      if (!columns.some(column => column.name === "priority")) this.db.exec("ALTER TABLE tickets ADD COLUMN priority INTEGER NOT NULL DEFAULT 1");
-      if (!columns.some(column => column.name === "source")) this.db.exec("ALTER TABLE tickets ADD COLUMN source TEXT");
-      if (!columns.some(column => column.name === "fifo_seq")) {
-        this.db.exec("ALTER TABLE tickets ADD COLUMN fifo_seq INTEGER");
-        this.db.exec("UPDATE tickets SET fifo_seq = seq");
-      }
-      this.db.exec("CREATE TABLE IF NOT EXISTS ticket_order (id INTEGER PRIMARY KEY CHECK (id = 1), next INTEGER NOT NULL)");
-      if (!this.db.query("SELECT 1 FROM ticket_order WHERE id = 1").get()) {
-        const next = this.db.query<{ next: number }, []>("SELECT COALESCE(MAX(fifo_seq), 0) + 1 AS next FROM tickets").get()!.next;
-        this.db.query("INSERT INTO ticket_order VALUES (1, ?)").run(next);
-      }
-      this.db.exec("DROP TRIGGER IF EXISTS tickets_fifo");
-      this.db.exec(`CREATE TRIGGER tickets_fifo AFTER INSERT ON tickets BEGIN
-        UPDATE tickets SET fifo_seq = COALESCE(fifo_seq, (SELECT next FROM ticket_order WHERE id = 1)) WHERE key = NEW.key;
-        UPDATE ticket_order SET next = MAX(next, (SELECT COALESCE(MAX(fifo_seq), 0) + 1 FROM tickets)) WHERE id = 1;
-        -- Rebuild the seq view for every membership change. Older helpers
-        -- write only seq/since/owner, so this trigger is their ordering
-        -- boundary even when the new row's default priority is unchanged.
-        -- Offset first to avoid collisions in the primary key.
-        UPDATE tickets SET seq = seq + (SELECT COALESCE(MAX(seq), 0) + COUNT(*) + 1 FROM tickets);
-        UPDATE tickets SET seq = (
-          SELECT COUNT(*) FROM tickets AS earlier
-          WHERE earlier.priority < tickets.priority
-             OR (earlier.priority = tickets.priority AND earlier.fifo_seq <= tickets.fifo_seq)
-        );
-        UPDATE sqlite_sequence SET seq = (SELECT COUNT(*) FROM tickets) WHERE name = 'tickets';
-      END`);
-      this.db.exec("CREATE INDEX IF NOT EXISTS tickets_priority_seq ON tickets(priority, seq)");
-    }).immediate();
-    // Repair a queue left in the inconsistent order produced by the earlier
-    // priority implementation before any old or new checker can claim it.
-    this.db.transaction(() => this.orderLegacyTicketsByPriority()).immediate();
   }
   close(): void { this.db.close(); }
   cancel(key: string): void {

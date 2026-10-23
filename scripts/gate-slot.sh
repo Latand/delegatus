@@ -174,16 +174,23 @@ if [[ -n ${LLV_CPU_WAIT_ROOTS:-} && ${LLV_CPU_WAIT_ROOTS:-} != '[]' ]]; then
     sleep 0.02
   done
 fi
+# Propagate helper failures; only a lost slot race retries.
+claim() {
+  local code=0
+  "${LLV_GATE_BUN:-bun}" "$admission" --claim "$queue_key" "$owner_pid" || code=$?
+  if [[ $code != 0 && $code != 75 ]]; then exit "$code"; fi
+  return "$code"
+}
 queue_key="command:$$:$RANDOM:$RANDOM"
 while :; do
   "${LLV_GATE_BUN:-bun}" "$admission" --wait "$queue_key" "$owner_pid"
   if ! command -v flock >/dev/null; then
-    if "${LLV_GATE_BUN:-bun}" "$admission" --claim "$queue_key" "$owner_pid"; then end_cpu_wait; run "$@"; fi
+    if claim; then end_cpu_wait; run "$@"; fi
   else
     for ((i=1; i<=slots; i++)); do
       exec 9>"$lock_dir/llv-heavy-gate.slot$i.lock"
       if flock -n 9; then
-        if "${LLV_GATE_BUN:-bun}" "$admission" --claim "$queue_key" "$owner_pid"; then end_cpu_wait; run "$@"; fi
+        if claim; then end_cpu_wait; run "$@"; fi
       fi
       exec 9>&-
     done
