@@ -1,4 +1,4 @@
-import { ROLE_MEMORY_BOUND, type RoleMemoryRule } from "./roleTypes";
+import { ROLE_MEMORY_BOUND, type RoleMemoryRule, type RuleLeftReason } from "./roleTypes";
 
 /* Consolidation applies the budget to curated rules without a model call: a lesson
    that repeats an active rule (case, spacing and a closing full stop aside)
@@ -14,6 +14,11 @@ import { ROLE_MEMORY_BOUND, type RoleMemoryRule } from "./roleTypes";
 
 export function codePoints(text: string): number {
   return [...text].length;
+}
+
+/** The rule archived for `reason` at `at`, with the departure appended to its log. */
+export function archivedRule(rule: RoleMemoryRule, at: string, reason: RuleLeftReason, curated = !!rule.curatedAt): RoleMemoryRule {
+  return { ...rule, state: "archived", reason, changedAt: at, departures: [...rule.departures ?? [], { at, reason, curated }] };
 }
 
 export function ruleLine(rule: Pick<RoleMemoryRule, "id" | "rule" | "why">): string {
@@ -66,7 +71,7 @@ export function retainRules(rules: readonly RoleMemoryRule[], at: string, protec
     if (index < 0) index = active.findIndex(rule => !!rule.curatedAt && !protectedIds.has(rule.id));
     if (index < 0) break;
     const [left] = active.splice(index, 1);
-    changed.push({ ...left!, state: "archived", reason: "budget", changedAt: at });
+    changed.push(archivedRule(left!, at, "budget"));
     archived.push(left!.id);
   }
   return { active, changed, archived };

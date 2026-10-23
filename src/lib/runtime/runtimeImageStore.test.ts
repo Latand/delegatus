@@ -521,7 +521,8 @@ test("an aged writer lock stays owned while its exact process identity is alive"
   }), { mode: 0o600 });
   fs.utimesSync(lock, new Date(1), new Date(1));
 
-  expect(() => new RuntimeImageStore(root, { writerLockStaleMs: 0, writerLockWaitMs: 10 }))
+  let clock = 1_000;
+  expect(() => new RuntimeImageStore(root, { writerLockStaleMs: 0, writerLockWaitMs: 10, now: () => clock++ }))
     .toThrow("runtime image writer lock timed out");
   expect(fs.existsSync(lock)).toBe(true);
 });
@@ -539,7 +540,8 @@ test("an aged writer lock with a backend that cannot fingerprint still respects 
   }), { mode: 0o600 });
   fs.utimesSync(lock, new Date(1), new Date(1));
 
-  expect(() => new RuntimeImageStore(root, { writerLockStaleMs: 0, writerLockWaitMs: 10 }))
+  let clock = 1_000;
+  expect(() => new RuntimeImageStore(root, { writerLockStaleMs: 0, writerLockWaitMs: 10, now: () => clock++ }))
     .toThrow("runtime image writer lock timed out");
   expect(fs.existsSync(lock)).toBe(true);
 });
@@ -555,7 +557,10 @@ test("an aged writer lock is recovered after its owning process exits", () => {
   }), { mode: 0o600 });
   fs.utimesSync(lock, new Date(1), new Date(1));
 
-  new RuntimeImageStore(root, { writerLockStaleMs: 0, writerLockWaitMs: 10 });
+  // Reclaiming the stale directory and acquiring the replacement take two
+  // passes. Advance the budget by clock reads, independent of filesystem speed.
+  let clock = 1_000;
+  new RuntimeImageStore(root, { writerLockStaleMs: 0, writerLockWaitMs: 10, now: () => clock++ });
 
   expect(fs.existsSync(lock)).toBe(false);
 });
@@ -575,7 +580,8 @@ test("an aged writer lock is recovered when its pid was reused by another proces
   }), { mode: 0o600 });
   fs.utimesSync(lock, new Date(1), new Date(1));
 
-  new RuntimeImageStore(root, { writerLockStaleMs: 0, writerLockWaitMs: 10 });
+  let clock = 1_000;
+  new RuntimeImageStore(root, { writerLockStaleMs: 0, writerLockWaitMs: 10, now: () => clock++ });
 
   expect(fs.existsSync(lock)).toBe(false);
 });

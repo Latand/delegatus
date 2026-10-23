@@ -133,6 +133,20 @@ test("a webhook elsewhere says reading is blocked and why", () => {
   expect(html).toContain("can post but not read");
 });
 
+test("a clone keeps a removed bot's group active and names its posting capability", () => {
+  const html = render(connected({ chats: [chat({ alias: "reports", postAllowed: true, postable: true, member: true,
+    bots: [
+      { name: "Report clone", username: null, assigned: false, member: true, status: null, canPost: true, canSendPhotos: false,
+        canSendDocuments: false, canManageTopics: false, reason: null, checkedAt: null },
+      { name: "Removed bot", username: "removed_fixture_bot", assigned: false, member: false, status: "kicked", canPost: false,
+        canSendPhotos: false, canSendDocuments: false, canManageTopics: false, reason: "bot_not_in_chat", checkedAt: null },
+    ] })] }));
+  expect(html).toContain('aria-label="Report clone: Agents may post"');
+  expect(html).toContain('aria-label="Removed bot: removed from the chat"');
+  expect(html).not.toContain("No longer a member (1)");
+  expect(html).not.toContain('option value="Report clone"');
+});
+
 test("a rejected token asks for a new one in place", () => {
   const html = render(connected({ receiving: "token_rejected" }));
   expect(html).toContain("Telegram rejected the token");
