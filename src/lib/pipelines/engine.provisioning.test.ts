@@ -22,7 +22,8 @@ for (const writable of [false, true]) test(`a stage preserves borrowed dependenc
       return await spawn(...args);
     };
     await tickPipelines([], h.ports);
-    expect(observed).toBe(true);
+    await tickPipelines([], h.ports);
+    expect(observed, loadPipelines()[0]?.stateDetail ?? "stage was not dispatched").toBe(true);
     expect(fs.statSync(path.join(source, "node_modules")).isDirectory()).toBe(true);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
