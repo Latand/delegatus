@@ -471,6 +471,7 @@ test("account_limits answers each account's windows and tiers, narrowed by engin
       accounts: { claude: [{ accountId: "a", authPresent: true }, { accountId: "b", authPresent: true }], codex: [], copilot: [] },
       active: { claude: "a", codex: null, copilot: null },
       project: "project-fixture",
+      model: "opus",
       bindings: [
         { engine: "claude", accountId: "a", project: "project-fixture", createdAt: "2026-09-01T00:00:00.000Z" },
         { engine: "claude", accountId: "b", project: "project-fixture", createdAt: "2026-09-01T00:00:00.000Z" },
@@ -478,12 +479,22 @@ test("account_limits answers each account's windows and tiers, narrowed by engin
       observations: {
         claude: {
           a: {
-            ...observation("claude", "a", 10, 10),
-            limits: { ...observation("claude", "a", 10, 10).limits, weekly: { usedPercent: 10, resetsAt: now / 1000 + 2 * 86_400, windowMinutes: 10_080 } },
+            ...observation("claude", "a", 50, 50),
+            limits: {
+              ...observation("claude", "a", 50, 50).limits,
+              session: { usedPercent: 50, resetsAt: now / 1000 + 2 * 86_400, windowMinutes: 300 },
+              weekly: { usedPercent: 50, resetsAt: now / 1000 + 2 * 86_400, windowMinutes: 10_080 },
+              tiers: [{ tier: "opus", usedPercent: 10, resetsAt: now / 1000 + 4 * 86_400, windowMinutes: 10_080 }],
+            },
           },
           b: {
-            ...observation("claude", "b", 50, 50),
-            limits: { ...observation("claude", "b", 50, 50).limits, weekly: { usedPercent: 50, resetsAt: now / 1000 + 86_400, windowMinutes: 10_080 } },
+            ...observation("claude", "b", 10, 10),
+            limits: {
+              ...observation("claude", "b", 10, 10).limits,
+              session: { usedPercent: 10, resetsAt: now / 1000 + 3 * 86_400, windowMinutes: 300 },
+              weekly: { usedPercent: 10, resetsAt: now / 1000 + 3 * 86_400, windowMinutes: 10_080 },
+              tiers: [{ tier: "opus", usedPercent: 50, resetsAt: now / 1000 + 86_400, windowMinutes: 10_080 }],
+            },
           },
         }, codex: {}, copilot: {},
       },

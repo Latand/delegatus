@@ -6,6 +6,8 @@ import { createRoot, type Root } from "react-dom/client";
 import type { AccountOption, EngineAccountsState } from "@/hooks/useEngineAccounts";
 import { installActEnv } from "@/test-helpers/actEnv";
 import { getLocale, setLocale, translate } from "@/lib/i18n";
+import { selectProjectAccount } from "@/lib/accounts/projectSelection";
+import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 
 import { MobileAccountsBody, mobileAccountCorner, mobileAccountState } from "./AccountsPanel";
 import { createReceiptStore, type ReceiptStore } from "./mobile/MobileReceipt";
@@ -158,13 +160,13 @@ afterEach(async () => {
   document.body.replaceChildren();
 });
 
-async function mount(engines: EngineAccountsState[], receipts: ReceiptStore = createReceiptStore()): Promise<{ host: HTMLDivElement; receipts: ReceiptStore; rerender(next: EngineAccountsState[]): Promise<void> }> {
+async function mount(engines: EngineAccountsState[], receipts: ReceiptStore = createReceiptStore(), nextChosenAccountIds?: Partial<Record<"claude" | "codex", string | null>>): Promise<{ host: HTMLDivElement; receipts: ReceiptStore; rerender(next: EngineAccountsState[]): Promise<void> }> {
   const host = document.createElement("div");
   document.body.append(host);
   const root = createRoot(host);
   mounted.push({ root, host });
   const render = async (next: EngineAccountsState[]) => {
-    await act(async () => root.render(<MobileAccountsBody engines={next} now={NOW} receipts={receipts} />));
+    await act(async () => root.render(<MobileAccountsBody engines={next} now={NOW} receipts={receipts} nextChosenAccountIds={nextChosenAccountIds} />));
   };
   await render(engines);
   return { host, receipts, rerender: render };
@@ -203,9 +205,28 @@ test.each(["en", "uk"] as const)("phone panel marks and leads with the reset-awa
   const previous = getLocale();
   setLocale(locale);
   try {
+    const now = NOW * 1_000;
+    const observation = (accountId: string, usedPercent: number, resetDays: number): DurableQuotaObservation => ({
+      engine: "claude", accountId, authenticated: true,
+      authCheckedAt: new Date(now - 60_000).toISOString(), observedAt: new Date(now - 60_000).toISOString(),
+      provenance: { source: "live", reason: null, staleSince: null }, bootId: "phone-reset-choice",
+      limits: {
+        session: { usedPercent, resetsAt: NOW + resetDays * DAY },
+        weekly: { usedPercent, resetsAt: NOW + resetDays * DAY },
+        plan: "max", capturedAt: NOW - 60,
+      },
+    });
+    const selected = selectProjectAccount({
+      project: "project-fixture", engine: "claude",
+      accounts: [{ id: "a", authPresent: true }, { id: "b", authPresent: true }],
+      observations: [observation("a", 10, 2), observation("b", 50, 1)],
+      bindings: [], preferredId: "a", model: "sonnet", now,
+    });
+    expect(selected).toEqual({ kind: "available", accountId: "b" });
+    const selectedId = selected.kind === "available" ? selected.accountId : null;
     const a = account({ id: "a", label: "Account A" });
-    const b = account({ id: "b", label: "Account B", nextChosen: true });
-    const view = await mount([engineState("claude", [a, b], "a")]);
+    const b = account({ id: "b", label: "Account B" });
+    const view = await mount([engineState("claude", [a, b], "a")], createReceiptStore(), { claude: selectedId });
     const rows = [...view.host.querySelectorAll('[data-mobile2-account]')];
     expect(rows.map((row) => row.getAttribute("data-mobile2-account"))).toEqual(["b", "a"]);
     expect(rows[0]?.textContent).toContain(translate(locale, "accounts.nextForUnpinnedShort"));

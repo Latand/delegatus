@@ -5,6 +5,8 @@ import { flushSync } from "react-dom";
 
 import { createEngineAccountsStore, type AccountRemovalRefusal, type AccountRemovalSummary, type ClaudeLoginView, type EngineAccountsState } from "@/hooks/useEngineAccounts";
 import { getLocale, setLocale, translate } from "@/lib/i18n";
+import { selectProjectAccount } from "@/lib/accounts/projectSelection";
+import type { DurableQuotaObservation } from "@/lib/accounts/migration/contracts";
 
 import { AccountsPanel, type ProjectAccountContext } from "./AccountsPanel";
 import { formatQuotaAsOf, formatResetClock, formatResetEta } from "./rateLimit";
@@ -134,7 +136,26 @@ test.each(["en", "uk"] as const)("desktop panel marks and leads with the reset-a
       { id: "a", label: "Account A", authPresent: true, authHealth: "authenticated" as const, loginPending: false, loginState: "authenticated" as const, deviceAuth: null },
       { id: "b", label: "Account B", authPresent: true, authHealth: "authenticated" as const, loginPending: false, loginState: "authenticated" as const, deviceAuth: null },
     ];
-    const projectContext: ProjectAccountContext = { project: "project-fixture", nextChosenAccountId: "b", restricted: true, allowed: [], carrying: [], outsidePool: [] };
+    const now = Date.parse("2026-09-01T00:00:00.000Z");
+    const observation = (accountId: string, usedPercent: number, resetDays: number): DurableQuotaObservation => ({
+      engine: "claude", accountId, authenticated: true,
+      authCheckedAt: new Date(now - 60_000).toISOString(), observedAt: new Date(now - 60_000).toISOString(),
+      provenance: { source: "live", reason: null, staleSince: null }, bootId: "panel-reset-choice",
+      limits: {
+        session: { usedPercent, resetsAt: now / 1000 + resetDays * 86_400 },
+        weekly: { usedPercent, resetsAt: now / 1000 + resetDays * 86_400 },
+        plan: "max", capturedAt: now / 1000 - 60,
+      },
+    });
+    const selected = selectProjectAccount({
+      project: "project-fixture", engine: "claude",
+      accounts: [{ id: "a", authPresent: true }, { id: "b", authPresent: true }],
+      observations: [observation("a", 10, 2), observation("b", 50, 1)],
+      bindings: [], preferredId: "a", model: "sonnet", now,
+    });
+    expect(selected).toEqual({ kind: "available", accountId: "b" });
+    const selectedId = selected.kind === "available" ? selected.accountId : null;
+    const projectContext: ProjectAccountContext = { project: "project-fixture", nextChosenAccountId: selectedId, restricted: false, allowed: [], carrying: [], outsidePool: [] };
     const view = await mount(state(login(), { accounts, active: "a" }), "footer", projectContext);
     mounted.push(view);
     const rows = [...view.host.querySelectorAll("[data-account-row]")];

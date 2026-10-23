@@ -1594,27 +1594,39 @@ function MobileEngineSection({ state, now, focusAccountId, receipts }: { state: 
 }
 
 /** The screen's body over given engine states — the shape the tests drive. */
-export function MobileAccountsBody({ engines, now, focusAccountId = null, receipts = tabReceipts }: {
+export function MobileAccountsBody({ engines, now, focusAccountId = null, receipts = tabReceipts, nextChosenAccountIds }: {
   engines: EngineAccountsState[];
   /** Unix seconds the reset ETAs and staleness are read against. */
   now: number;
   /** The account a badge tap steered here (issue #229): scrolled to and ringed. */
   focusAccountId?: string | null;
   receipts?: ReceiptStore;
+  /** The project route's shared selector result, keyed by engine. */
+  nextChosenAccountIds?: Partial<Record<"claude" | "codex", string | null>>;
 }) {
+  const projected = nextChosenAccountIds
+    ? engines.map((state) => ({
+        ...state,
+        accounts: state.accounts.map((account) => ({
+          ...account,
+          nextChosen: nextChosenAccountIds[state.engine] === account.id,
+        })),
+      }))
+    : engines;
   return (
     <div data-mobile2-accounts-body className="flex flex-col pb-5 pt-1">
-      {engines.map((state) => <MobileEngineSection key={state.engine} state={state} now={now} focusAccountId={focusAccountId} receipts={receipts} />)}
+      {projected.map((state) => <MobileEngineSection key={state.engine} state={state} now={now} focusAccountId={focusAccountId} receipts={receipts} />)}
     </div>
   );
 }
 
 /** The screen the shell mounts under its bar: both engines' stores, the
     presentation clock, and the focus a badge asked for. */
-export function MobileAccountsPanel({ receipts }: { receipts?: ReceiptStore }) {
+export function MobileAccountsPanel({ receipts, project }: { receipts?: ReceiptStore; project?: string | null }) {
   const claude = useEngineAccounts("claude");
   const codex = useEngineAccounts("codex");
   const [focus, setFocus] = useState<string | null>(null);
+  const [nextChoice, setNextChoice] = useState<{ project: string; ids: Partial<Record<"claude" | "codex", string | null>> } | null>(null);
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
   useEffect(() => {
     const id = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 30_000);
@@ -1627,5 +1639,32 @@ export function MobileAccountsPanel({ receipts }: { receipts?: ReceiptStore }) {
     if (pending) setFocus(pending.accountId);
     return onAccountPanelRequest((request) => setFocus(request.accountId));
   }, []);
-  return <MobileAccountsBody engines={[claude, codex]} now={now} focusAccountId={focus} receipts={receipts} />;
+  useEffect(() => {
+    if (!project) return;
+    let live = true;
+    void (async () => {
+      try {
+        const response = await fetch(`/api/account-project-bindings?project=${encodeURIComponent(project)}`, { cache: "no-store" });
+        if (!response.ok) return;
+        const payload: unknown = await response.json();
+        if (!payload || typeof payload !== "object") return;
+        const engines = (payload as { engines?: unknown }).engines;
+        if (!engines || typeof engines !== "object") return;
+        const ids: Partial<Record<"claude" | "codex", string | null>> = {};
+        for (const engine of ["claude", "codex"] as const) {
+          const block = (engines as Record<string, unknown>)[engine];
+          if (block && typeof block === "object") {
+            const id = (block as { nextChosenAccountId?: unknown }).nextChosenAccountId;
+            if (typeof id === "string" || id === null) ids[engine] = id;
+          }
+        }
+        if (live) setNextChoice({ project, ids });
+      } catch {
+        // Keep account rows usable when the project view is unavailable.
+      }
+    })();
+    return () => { live = false; };
+  }, [project]);
+  const nextChosenAccountIds = nextChoice && nextChoice.project === project ? nextChoice.ids : undefined;
+  return <MobileAccountsBody engines={[claude, codex]} now={now} focusAccountId={focus} receipts={receipts} nextChosenAccountIds={nextChosenAccountIds} />;
 }
