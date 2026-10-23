@@ -9973,6 +9973,109 @@ describe("#2072 one pipeline block, desktop and phone", () => {
     if (failures.length) throw new Error(failures.join("\n"));
     expect(failures).toEqual([]);
   }, 900_000);
+
+  /* #2184: on the Blocked shelf of the `stages` scenario the lane «Show the
+     account limit reset time on the card» once printed its uk state word
+     «Потребує рішення» over the failed stage's return counter «↺1/1». At the
+     issue's windows (1440×900, a 280 px scroller shelf; 1920×1080, the wide
+     board) and at a narrow 220 px shelf between them, in en and uk, light and
+     dark: the state word's ink meets no counter's ink, no text of the block
+     is cut by the card or a clipping box without an ellipsis, and its
+     controls stay whole inside the card. Card
+     frames go to PIPELINE_RETURN_PNG_DIR (default
+     `.artifacts/pipeline-block-return/`), never into the repository. */
+  browserTest("a Blocked lane's state word keeps clear of its return counter and every word of its block stays whole", async () => {
+    const out = path.resolve(process.env.PIPELINE_RETURN_PNG_DIR ?? ".artifacts/pipeline-block-return");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const readings: Record<string, unknown> = {};
+    const VIEWPORTS = [{ width: 1440, height: 900 }, { width: 1600, height: 900 }, { width: 1760, height: 1000 }, { width: 1920, height: 1080 }] as const;
+    try {
+      for (const viewport of VIEWPORTS) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const label = `${viewport.width}x${viewport.height}-${lang}-${scheme}`;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, viewport, scheme, lang, "reduce");
+        try {
+          const selector = `${card("t-limits")} [data-pipeline="p-limits"]`;
+          await page.waitForSelector(selector, { timeout: 30_000 });
+          await page.locator(card("t-limits")).scrollIntoViewIfNeeded();
+          await page.waitForTimeout(300);
+          const reading = await page.locator(selector).evaluate((block) => {
+            type Box = { left: number; top: number; right: number; bottom: number };
+            const box = (r: DOMRect): Box => ({ left: r.left, top: r.top, right: r.right, bottom: r.bottom });
+            const cut = (a: Box, b: Box): Box => ({ left: Math.max(a.left, b.left), top: Math.max(a.top, b.top), right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom) });
+            const area = (r: Box) => Math.max(0, r.right - r.left) * Math.max(0, r.bottom - r.top);
+            const cardEl = block.closest<HTMLElement>(".card")!;
+            const clipOf = (el: Element) => {
+              let clip: Box = { left: -1e9, top: -1e9, right: 1e9, bottom: 1e9 };
+              for (let up: Element | null = el; up; up = up.parentElement) {
+                const style = getComputedStyle(up);
+                if (style.overflowX !== "visible" || style.overflowY !== "visible") clip = cut(clip, box(up.getBoundingClientRect()));
+                if (up === cardEl) { clip = cut(clip, box(up.getBoundingClientRect())); break; }
+              }
+              return clip;
+            };
+            /* Each text's laid-out ink, and what of it the card and its clipping boxes let show. */
+            const texts: Array<{ el: Element; text: string; natural: Box[]; lost: number; ellipsis: boolean }> = [];
+            const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+            for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+              const el = node.parentElement;
+              if (!node.nodeValue?.trim() || !el || getComputedStyle(el).visibility === "hidden") continue;
+              const range = document.createRange();
+              range.selectNodeContents(node);
+              const natural = [...range.getClientRects()].filter((r) => r.width * r.height > 0.5).map(box);
+              if (!natural.length) continue;
+              const clip = clipOf(el);
+              const lost = Math.max(...natural.map((r) => { const v = cut(r, clip); return Math.max(v.left - r.left, r.right - v.right, v.top - r.top, r.bottom - v.bottom, area(v) ? 0 : r.right - r.left); }));
+              let ellipsis = false;
+              for (let up: Element | null = el; up && up !== cardEl; up = up.parentElement) {
+                const style = getComputedStyle(up);
+                if (style.textOverflow === "ellipsis" && up.scrollWidth > up.clientWidth + 1) ellipsis = true;
+                if (style.webkitLineClamp && style.webkitLineClamp !== "none") ellipsis = true;
+              }
+              texts.push({ el, text: node.nodeValue.trim(), natural, lost, ellipsis });
+            }
+            const inkOf = (selectorText: string) => texts.filter((entry) => entry.el.closest(selectorText)).flatMap((entry) => entry.natural.map((r) => cut(r, clipOf(entry.el))));
+            const words = inkOf(".pstate-word");
+            const counters = inkOf(".pret");
+            const overlap = words.reduce((sum, a) => sum + counters.reduce((inner, b) => inner + area(cut(a, b)), 0), 0);
+            return {
+              shelf: Math.round(block.closest<HTMLElement>(".column")!.getBoundingClientRect().width),
+              status: block.closest<HTMLElement>(".column")!.dataset.status ?? "",
+              stateWords: [...block.querySelectorAll(".pstate-word")].map((el) => el.textContent?.trim() ?? ""),
+              counters: [...block.querySelectorAll(".pret")].map((el) => el.textContent?.trim() ?? ""),
+              overlap: Math.round(overlap * 10) / 10,
+              cut: texts.filter((entry) => entry.lost > 1 && !entry.ellipsis).map((entry) => `«${entry.text.slice(0, 40)}» loses ${Math.round(entry.lost)} px`),
+              /* The block's controls and their marks (the stages chevron) stay whole inside the card. */
+              outside: [...block.querySelectorAll<HTMLElement>("button, a, button > svg")].filter((el) => el.getClientRects().length).flatMap((el) => {
+                const r = box(el.getBoundingClientRect());
+                const v = cut(r, clipOf(el));
+                const lost = Math.max(v.left - r.left, r.right - v.right, v.top - r.top, r.bottom - v.bottom);
+                return lost > 1 ? [`${el.tagName.toLowerCase()} «${(el.getAttribute("aria-label") ?? el.textContent ?? "").trim().slice(0, 30)}» loses ${Math.round(lost)} px`] : [];
+              }),
+            };
+          });
+          readings[label] = reading;
+          if (reading.status !== "blocked") failures.push(`${label}: the lane stands in ${reading.status}, not Blocked`);
+          if (!reading.stateWords.includes(translate(lang, "pipelineState.needs_decision"))) failures.push(`${label}: state words ${reading.stateWords.join(", ")}`);
+          if (!reading.counters.includes("↺1/1")) failures.push(`${label}: counters ${reading.counters.join(", ")}`);
+          if (reading.overlap > 0) failures.push(`${label}: the state word meets the return counter over ${reading.overlap} px²`);
+          for (const entry of [...reading.cut, ...reading.outside]) failures.push(`${label}: ${entry}`);
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          await page.locator(card("t-limits")).screenshot({ path: path.join(out, `${label}-card.png`) });
+          await page.screenshot({ path: path.join(out, `${label}.png`) });
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(out, "readings.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 900_000);
 });
 
 describe("#2102 task icons on the desktop board and the Overview", () => {

@@ -143,6 +143,15 @@
    way into the stages, whose chevron ends the row at the card's edge. */
 .pblock .pb-tail { flex: none; display: inline-flex; align-items: center; gap: 2px; margin-left: auto; min-height: 22px; }
 .pblock .pb-tail .pb-open { margin-left: 0; margin-right: -4px; }
+/* A 220 px shelf (the narrow layout) cannot hold a long state word, its age
+   and the chevron on one line: the uk «потребує рішення · 60 хв тому» ran
+   and the chevron past the card's edge (#2184), and the en chevron too.
+   There the tail may shrink and its age wraps under the word; the chevron's
+   4 px reach into the card's padding moves from the opener to the tail, so
+   the tail keeps the width the row always gave it. */
+.kb .board.narrow .card.shelf .pblock .pb-tail { flex-shrink: 1; min-width: 0; margin-right: -4px; }
+.kb .board.narrow .card.shelf .pblock .pb-tail .pb-open { margin-right: 0; }
+.kb .board.narrow .card.shelf .pblock .pb-meta { flex-shrink: 1; min-width: 0; flex-wrap: wrap; justify-content: flex-end; }
 .pblock .pb-graph { min-width: 0; }
 
 .pblock .stage-report { margin: 2px 0 0; font-size: var(--text-label); color: var(--color-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
