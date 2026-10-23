@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -39,6 +39,14 @@ import { allowedKillTarget, lastResourceTargetRefs, noteSessionTargets } from "@
 import { GET as settingsGET, PUT as settingsPUT } from "@/app/api/projects/settings/route";
 import { setBridgeReports, setMergeOnReview, setReportTelegram } from "@/lib/projects/settings";
 import { registerPipelineTick } from "@/lib/pipelines/controllerSignal";
+import * as scanner from "@/lib/scanner";
+import * as sourceCwd from "@/app/api/spawn/sourceCwd";
+import { GET as spawnGET } from "@/app/api/spawn/route";
+import { spawnSuggestions } from "@/lib/agent/spawnCommand";
+import { GET as seatGET } from "@/app/api/orchestrator/seat/route";
+import { beginOrchestratorSeatIntent, completeOrchestratorSeatIntent } from "@/lib/orchestrator/seats";
+import { GET as memberGET } from "@/app/api/team/workspaces/[id]/members/route";
+import { GET as workspacesGET } from "@/app/api/team/workspaces/route";
 
 const W1 = `w_${"a".repeat(32)}`;
 const W2 = `w_${"b".repeat(32)}`;
@@ -97,6 +105,76 @@ afterEach(() => {
 });
 
 describe("workspace authority", () => {
+  test("spawn suggestions with an own source and no project never return foreign directories", async () => {
+    const dirs = ["alpha", "beta"].map(name => path.join(root, name));
+    const entries = dirs.map((cwd, index) => {
+      fs.mkdirSync(cwd);
+      const transcript = path.join(root, `${index}.jsonl`);
+      fs.writeFileSync(transcript, JSON.stringify({ type: "session_meta", payload: { cwd } }) + "\n");
+      return catalogEntryToFileEntry({ path: transcript, root: "codex-sessions", name: String(index), project: projectForCwd(cwd)!, title: "test", firstPrompt: "", engine: "codex", kind: "session", fmt: "codex", mtime: now / 1000 + index, size: fs.statSync(transcript).size }, now);
+    });
+    replaceConversationCatalog(entries.map(entry => ({ ...entry, kind: "session", fmt: "codex", engine: "codex", title: "test", firstPrompt: "" })));
+    for (let index = 0; index < entries.length; index++) placeProject(store, owner, entries[index]!.project!, index === 0 ? W1 : W2);
+    const files = spyOn(scanner, "listFiles").mockResolvedValue(entries);
+    const source = spyOn(sourceCwd, "sourceCwdStatus").mockReturnValue({ cwd: dirs[0]!, cwdExists: true });
+    try {
+      const url = `/api/spawn?src=${encodeURIComponent(entries[0]!.path)}`;
+      for (const actor of [member, manager]) {
+        const response = await spawnGET(request(url, actor));
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({ dirs: [dirs[0]!], cwd: dirs[0]!, cwdExists: true });
+        expect((await spawnGET(request(`/api/spawn?src=${encodeURIComponent(entries[1]!.path)}`, actor))).status).toBe(403);
+      }
+      const response = await spawnGET(request(url, owner));
+      expect(response.status).toBe(200);
+      expect((await response.json()).dirs).toEqual([dirs[0]!, dirs[1]!]);
+      expect((await spawnGET(request(url, outsider))).status).toBe(403);
+      source.mockReturnValue({ cwd: dirs[1]!, cwdExists: true });
+      expect(await (await spawnGET(request(url, member))).json()).toMatchObject({ dirs: [dirs[0]!], cwd: null, cwdExists: false });
+      source.mockReturnValue({ cwd: dirs[0]!, cwdExists: true });
+      files.mockImplementationOnce(async () => { store.removeWorkspaceMember(W1, member.id); return entries; });
+      expect((await spawnGET(request(url, member))).status).toBe(403);
+      store.putWorkspaceMember(W1, member.id, "member", owner.id, new Date(now).toISOString());
+      files.mockImplementationOnce(async () => { store.removeWorkspaceMember(W1, member.id); return entries; });
+      expect(await (await spawnSuggestions(request(url, member))).json()).toMatchObject({ dirs: [], cwd: null, cwdExists: false });
+    } finally { files.mockRestore(); source.mockRestore(); }
+  });
+
+  test("scope=all with an own project redacts foreign seat identities for non-owners", async () => {
+    const foreignPath = path.join(root, "foreign-seat.jsonl");
+    beginOrchestratorSeatIntent({ project: "repo-beta", mandate: "fixture", clientRequestId: "seat-beta", mode: "existing", conversationId: "conversation_beta_seat", now: new Date(now).toISOString() });
+    completeOrchestratorSeatIntent({ project: "repo-beta", clientRequestId: "seat-beta", conversationId: "conversation_beta_seat", path: foreignPath, now: new Date(now).toISOString(), preparedAuthCredentialBaseline: null });
+    for (const actor of [member, manager]) {
+      const response = await seatGET(request("/api/orchestrator/seat?project=repo-alpha&scope=all", actor));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ all: null });
+      expect((await seatGET(request("/api/orchestrator/seat?scope=all", actor))).status).toBe(403);
+    }
+    for (const query of ["scope=all", "project=repo-alpha&scope=all"]) {
+      const response = await seatGET(request(`/api/orchestrator/seat?${query}`, owner));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ all: { conversationIds: ["conversation_beta_seat"], paths: [foreignPath] } });
+    }
+    expect((await seatGET(request("/api/orchestrator/seat?project=repo-alpha&scope=all", outsider))).status).toBe(403);
+  });
+
+  test("membership reads and invite choices follow live workspace roles", async () => {
+    for (const actor of [owner, manager, member, outsider]) {
+      const answer = await (await workspacesGET(request("/api/team/workspaces", actor))).json();
+      expect(answer.managedWorkspaceIds).toEqual(actor === owner ? [W1, W2] : actor === manager ? [W1] : []);
+      const response = await memberGET(request(`/api/team/workspaces/${W1}/members`, actor), { params: Promise.resolve({ id: W1 }) });
+      expect(response.status).toBe(actor === outsider ? 403 : 200);
+      if (response.status === 200) {
+        const body = await response.json();
+        expect(body.canManage).toBe(actor === owner || actor === manager);
+        expect(body.members.map((row: { id: string }) => row.id).sort()).toEqual([manager.id, member.id, owner.id].sort());
+        expect(body.candidates.map((row: { id: string }) => row.id)).toEqual(actor === member ? [] : [outsider.id]);
+      }
+    }
+    expect((await memberGET(request(`/api/team/workspaces/${W2}/members`, manager), { params: Promise.resolve({ id: W2 }) })).status).toBe(403);
+    const response = await memberGET(request(`/api/team/workspaces/${W1}/members`, manager), { params: Promise.resolve().then(() => { store.removeWorkspaceMember(W1, manager.id); return { id: W1 }; }) });
+    expect(response.status).toBe(403);
+  });
   test("resource pane targets stay owner-only beside an authorized conversation on both mounts", async () => {
     const registry = agentRegistry();
     const receipt = registry.beginSpawn("codex", root, { project: "repo-alpha", title: "Own conversation" });

@@ -25,6 +25,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const view: WorkspacesView = {
       mode: "team",
       canManage: authed.live.member.role === "owner",
+      managedWorkspaceIds: scope.workspaces.filter(workspace => ["owner", "manager"].includes(scope.role(workspace.id))).map(workspace => workspace.id),
       workspaces: scope.workspaces,
     };
     if (req.nextUrl.searchParams.get("catalog") === "1") {

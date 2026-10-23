@@ -33,8 +33,8 @@ snapshots load one ownership resolver for the whole batch.
 
 | Record | Producers and defaults | Consumers and cascades |
 |---|---|---|
-| `workspace_members` | Owner or workspace manager through `PUT /api/team/workspaces/[id]/members`; invite redemption inserts role `member` in the redemption transaction. No implicit membership for a plain invite. | Workspace gates, directory, Activity, board/runtime projection and streams. Workspace deletion removes its rows; member status is checked on each request. Reopening the store retains membership. |
-| Invite challenge `payload.workspaceId` | Owner may omit it; a manager must name a workspace they manage. Uses the existing durable challenge payload; no secret is published. | Redemption rechecks the active inviter and workspace authority before consuming the challenge, creating the person, membership and session in one transaction. List/withdraw checks the same workspace permission. A missing/deleted workspace refuses redemption. |
+| `workspace_members` | Workspace page Members controls call the owner/manager route. Owner or workspace manager through `PUT /api/team/workspaces/[id]/members`; invite redemption inserts role `member` in the redemption transaction. No implicit membership for a plain invite. | Workspace gates, directory, Activity, board/runtime projection and streams. Workspace deletion removes its rows; member status is checked on each request. Reopening the store retains membership. |
+| Invite challenge `payload.workspaceId` | Team Members invite dialog selects a workspace; its choices come from `managedWorkspaceIds` in the directory response. Owner may omit it; a manager must name a workspace they manage. Uses the existing durable challenge payload; no secret is published. | Redemption rechecks the active inviter and workspace authority before consuming the challenge, creating the person, membership and session in one transaction. List/withdraw checks the same workspace permission. A missing/deleted workspace refuses redemption. |
 | Project placement | Existing canonical project rows; manager may move Unassigned or their own managed project into a workspace they manage, or return their own project to Unassigned. Owner keeps all placements. | The existing alias resolver determines the workspace on every lookup. Task ids, pipeline ids and persisted conversation ownership take precedence over submitted hints; the cwd is checked independently at launch. Deputy ask ids, retry ids, seat ids and saved request replays are checked against stored ownership. |
 | Activity scope | Server supplies canonical readable keys, including discovered Unassigned projects for managers. | Human and agent inputs are filtered before time aggregation. Token queries apply the same restriction to totals, series, lists and comparisons; the permission snapshot participates in the cache key. |
 
@@ -276,7 +276,7 @@ served API route has no declared decision or a project handler loses its gate.
 | `/api/team/workspace-projects` | PUT | team |
 | `/api/team/workspaces` | GET, POST | team |
 | `/api/team/workspaces/[id]` | DELETE, PATCH | team |
-| `/api/team/workspaces/[id]/members` | DELETE, PUT | team |
+| `/api/team/workspaces/[id]/members` | DELETE, GET, PUT | team |
 | `/api/telegram` | GET, POST | owner |
 | `/api/telegram/bot` | GET, POST | owner |
 | `/api/telegram/bot/agent` | GET, POST | owner |
@@ -308,77 +308,74 @@ served API route has no declared decision or a project handler loses its gate.
 
 ## Verification
 
-Checks run through `gate-remote` and the admitted gate wrapper, with private
-HOME, config, TMPDIR and state roots. The focused test comparison against
-`d8c9778dc` completed all 13 selected files with zero new failures. Twelve files
-passed completely. The existing files-projection suite retained the same ten
-failing assertions on both revisions; the comparator classified all ten as
-pre-existing, with no skipped assertions or flaky classifications.
+The review follow-up closes two collection leaks: spawn suggestions check every
+returned cwd against the current workspace scope, including the source cwd and
+empty-result fallback, after the awaited catalog read. The seat panel returns
+`all: null` to non-owners on both the project and `scope=all` branches. Owners
+retain their existing answers.
+
+The existing Team Members invite dialog offers an owner every workspace or
+Team page only; a manager sees their managed workspaces. A generated link names
+its workspace. The workspace page's Members section places an existing person,
+changes member/manager roles and removes membership through the existing
+transactional write route. Its new GET checks the live workspace role after
+awaited parameters, exposes membership to readers and candidates to managers.
+Failed loads offer retry; refused writes retain the previous membership.
+
+Focused API cases live in `src/lib/team/workspaceAccess.test.ts`; invite payload,
+refusal and retry cases in `src/components/team/teamRows.dom.test.tsx`. Rendered
+checks extend the existing `team workspaces slice (b)` block in
+`src/components/kanban/kanbanBoard.browser.test.tsx`, with English/Ukrainian,
+light/dark and 1440/390 px variants. Frames stay in the stage's scratch export.
+
+Checks through the admitted wrapper and `gate-remote`:
+
+- A twelve-file isolated comparison against `99624db7a` reports zero new
+  failures, zero skipped assertions and zero flaky classifications. Eleven
+  files pass completely. `src/app/api/spawn/route.test.ts` retains 23 existing
+  failures; three further whole-file runs on each revision each report the
+  identical 70 passing and 23 failing tests.
+- Whole-project `bun x tsc --noEmit --incremental false` exits 0. The project's
+  ESLint comparison across 113 changed TypeScript files reports zero introduced
+  errors and four existing errors in `src/components/team/MembersTab.tsx`.
+- The final rendered matrix passes 280 assertions across 128 frames. All frames
+  are inspected visually. A local isolated run matches the remote authorization
+  suite: 27/27 passing. Removing the two read-leak fixes in a scratch export
+  makes both regression tests fail on the reported foreign directory and seat
+  identities.
+- The rendered driver checks actual controls, text-range visibility, clipping,
+  hit targets, selected-value visibility, scoped invite results and read/write
+  refusals. QR frames wait for image decoding.
+
+The focused comparison command is:
 
 ```sh
-bash scripts/gate-slot.sh bun scripts/local-gate-tests.ts --base d8c9778dc \
+bash scripts/gate-slot.sh gate-remote -- bun scripts/local-gate-tests.ts --base 99624db7a \
+  src/components/team/teamRows.dom.test.tsx \
+  src/components/team/WorkspacesTab.dom.test.tsx \
+  src/components/team/workspaceFilter.test.ts \
   src/lib/team/workspaceAccess.test.ts \
   src/lib/team/workspaceRoutes.test.ts \
   src/lib/team/workspaces.test.ts \
   src/lib/team/workspaceFilesResponse.test.ts \
-  src/proxy.team.test.ts \
   src/app/api/team/workspaces.routes.test.ts \
-  src/lib/runtime/sse.test.ts \
-  src/lib/logTailStream.test.ts \
-  src/app/api/artifact/route.test.ts \
-  src/app/api/image/route.test.ts \
-  src/app/api/runtime/snapshot/route.test.ts \
-  src/lib/activity/tokenReport.test.ts \
-  src/app/api/files/route.test.ts
+  src/app/api/spawn/route.test.ts \
+  src/app/api/spawn/sourceCwd.test.ts \
+  src/app/api/orchestrator/seat/route.test.ts \
+  src/lib/i18n/i18n.test.ts
 ```
 
-Whole-project `bunx tsc --noEmit` and ESLint on the 19 source/test files
-changed by the fix both exited 0. Publication privacy checks use the committed
-fingerprints, and both added commits run the repository hooks.
-
-The authorization cases cover private home files through both file routes,
-symlinks, unknown placements, catalog-file success, and deputy reads, retries
-and saved-request replays. Projection cases cover scoped 304/gzip responses,
-overlapping refresh/eviction, scope changes and revocation during awaited reads. Stream cases
-cover batch admission, revocation and unavailable authorization.
-
-`docs/design/workspaces.md` matches the complete base copy at `c2d19d9d`;
-`git diff c2d19d9d..HEAD -- docs/design/workspaces.md` is empty. No workflow or
-UI files changed in the fix, so no new rendered frames are included.
-
-### Authorization review follow-up
-
-`src/lib/team/workspaceAccess.test.ts` covers resource-pane kill and attach on
-both mounts with an authorized conversation beside the pane target. Refusals
-preserve the allowlist and invoke no pane effects; owner attach and kill still
-succeed. Settings cases cover each switch and clearing the report destination,
-unchanged persisted settings on refusal, manager and owner success, and a
-manager downgraded while target resolution is awaiting its parameters.
-The first two regression cases both failed on the reviewed code (200 instead
-of 403); all 24 workspace-access tests pass with the fixes.
-
-An isolated eight-file comparison against `d4eed38dd` reports zero new
-failures, zero skipped assertions and zero flaky classifications. Its one
-pre-existing failure is the Telegram topic-link discovery assertion in
-`src/app/api/projects/settings/route.test.ts`. The selected files are:
+The render command is:
 
 ```sh
-bash scripts/gate-slot.sh gate-remote -- bun scripts/local-gate-tests.ts --base d4eed38dd \
-  src/lib/team/workspaceAccess.test.ts \
-  src/lib/team/workspaceRoutes.test.ts \
-  src/app/api/projects/settings/route.test.ts \
-  src/app/api/conversation-host/route.test.ts \
-  src/app/api/tmux/route.test.ts \
-  src/app/api/conversation-host/longText.test.ts \
-  src/proxy.team.test.ts \
-  src/proxy.test.ts
+bash scripts/gate-slot.sh gate-remote -- env LLV_KANBAN_BROWSER_TEST=1 \
+  bun test src/components/kanban/kanbanBoard.browser.test.tsx \
+  --test-name-pattern 'team workspaces slice \(b\)'
 ```
 
-Whole-project `bunx tsc --noEmit --incremental false` and ESLint on the two
-changed TypeScript files pass through `gate-remote`. The workspace-access
-suite also passes locally in a private scratch export (24/24), matching the
-remote outcomes. Publication privacy scans the complete three changed files.
-No performance gain is claimed.
+Every run uses isolated HOME, XDG_CONFIG_HOME, TMPDIR and
+LLV_STATE_DIR. No performance gain is claimed. The pinned design remains the
+unchanged base copy. No workflow files change.
 
 ## Changed files
 
@@ -464,15 +461,25 @@ No performance gain is claimed.
 - `src/app/api/tmux/route.test.ts`
 - `src/app/api/tmux/route.ts`
 - `src/app/api/tmux/targets/route.ts`
+- `src/components/kanban/issue1695Evidence.fixture.tsx`
+- `src/components/kanban/kanbanBoard.browser.test.tsx`
+- `src/components/team/MembersTab.tsx`
+- `src/components/team/WorkspacePage.tsx`
+- `src/components/team/teamRows.dom.test.tsx`
+- `src/components/team/workspacesEvidence.fixture.ts`
 - `src/lib/activity/report.ts`
 - `src/lib/activity/tokenReport.test.ts`
 - `src/lib/activity/tokenReport.ts`
+- `src/lib/agent/spawnCommand.ts`
+- `src/lib/i18n/en.ts`
+- `src/lib/i18n/uk.ts`
 - `src/lib/logTailStream.test.ts`
 - `src/lib/logTailStream.ts`
 - `src/lib/runtime/sse.test.ts`
 - `src/lib/runtime/sse.ts`
 - `src/lib/scanner/conversationCatalog.test.ts`
 - `src/lib/scanner/conversationCatalog.ts`
+- `src/lib/team/contract.ts`
 - `src/lib/team/gate.ts`
 - `src/lib/team/members.ts`
 - `src/lib/team/store.ts`

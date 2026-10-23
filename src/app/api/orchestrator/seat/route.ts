@@ -92,7 +92,7 @@ async function workspaceGET(req: NextRequest): Promise<NextResponse<SeatStatus |
   let displayName = project;
   const cwd = req.nextUrl.searchParams.get("cwd")?.trim() || undefined;
   if (req.nextUrl.searchParams.get("scope")?.trim() === "all") {
-    return NextResponse.json({ all: withDeputyRefs(allSeatConversationsIn(readOrchestratorSeatFileOrNull()), readDeputyFileOrNull()) });
+    return NextResponse.json({ all: requestWorkspaceScope(req)?.owner === false ? null : withDeputyRefs(allSeatConversationsIn(readOrchestratorSeatFileOrNull()), readDeputyFileOrNull()) });
   }
   if (!project) return NextResponse.json({ error: "project is required" }, { status: 400 });
   try {
