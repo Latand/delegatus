@@ -2,7 +2,7 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeEach, expect, test } from "bun:test";
+import { afterAll, beforeEach, expect, spyOn, test } from "bun:test";
 import { NextRequest } from "next/server";
 
 // Isolate before importing the route's state-resolving module graph.
@@ -939,3 +939,42 @@ for (const loseResponse of [false, true]) test(`MCP relay follows a seat rotated
   expect(posts).toBe(1);
   expect(delivered).toHaveLength(1);
 });
+
+
+for (const mode of ["accepted", "refused", "uncertain", "exception", "null"] as const) {
+  test(`linked transport selection never retries an owned send: ${mode}`, async () => {
+    const { deliverLinkedSeatMessage, setLinkedSeatEnqueueForTests } = await import("@/lib/links/seatMessageDelivery");
+    const delivery = await import("@/lib/delivery");
+    actor("project-b");
+    let probes = 0;
+    const guard = () => {};
+    const failure = new Error("structured answer lost");
+    const legacy = spyOn(delivery, "deliverConversationMessage").mockImplementation(async input => {
+      expect(input.admissionGuard).toBe(guard);
+      expect(input.pid).toBeNull();
+      return { ok: true, target: null, outcome: "held", operationId: "legacy-dispatch" } as never;
+    });
+    setLinkedSeatEnqueueForTests(async input => {
+      probes++;
+      expect(input.admissionGuard).toBe(guard);
+      expect(input.text).toContain("Prepared linked words.");
+      if (mode === "exception") throw failure;
+      if (mode === "null") return null;
+      if (mode === "accepted") return { ok: true, structured: true, outcome: "queued", target: null, operationId: "linked-dispatch" } as never;
+      return { ok: false, structured: true, outcome: "failed", status: 409, error: "Dispatch refused", code: "fixture-refused",
+        ...(mode === "uncertain" ? { operationId: "linked-uncertain" } : {}) };
+    });
+    try {
+      const pending = deliverLinkedSeatMessage("project-b", "Prepared linked words.", "Shared project", `peer:00112233:dispatch-${mode}`, guard);
+      if (mode === "exception") await expect(pending).rejects.toBe(failure);
+      else expect(await pending).toEqual(mode === "accepted" ? { st: "accepted", operationId: "linked-dispatch" }
+        : mode === "null" ? { st: "accepted", operationId: "legacy-dispatch" }
+        : mode === "uncertain" ? { st: "retry" } : { st: "refused", code: "fixture-refused" });
+      expect(probes).toBe(1);
+      expect(legacy).toHaveBeenCalledTimes(mode === "null" ? 1 : 0);
+    } finally {
+      legacy.mockRestore();
+      setLinkedSeatEnqueueForTests(null);
+    }
+  });
+}
