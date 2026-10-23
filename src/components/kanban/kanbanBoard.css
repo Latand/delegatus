@@ -435,6 +435,12 @@
 .kb .card .clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; word-break: break-word; }
 .kb .card .title.pending { color: var(--color-muted); font-weight: 500; font-style: italic; }
 .kb .card .tools { display: flex; gap: 2px; flex-shrink: 0; margin-top: -4px; margin-right: -6px; }
+/* A 220 px shelf (the narrow layout) cannot hold the task icon, a readable
+   title and the card's controls on one line: the controls take their own row
+   under the title, at its right edge, so the title keeps the card's width
+   (#2194). Wider cards keep the one-row head. */
+.kb .board.narrow .card.shelf .head { flex-wrap: wrap; }
+.kb .board.narrow .card.shelf .tools { flex: 0 0 100%; justify-content: flex-end; margin-top: 0; }
 /* The task's icon (#2102) leads the title in a fixed box; the title keeps
    `flex: 1`, so the icon never takes its room. Both sit on the title's first
    baseline: a zero-width letter gives the icon box a baseline, and its content

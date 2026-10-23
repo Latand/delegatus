@@ -15385,6 +15385,132 @@ describe("asks you: an agent that asked the operator, on its card, in the report
   }, 600_000);
 });
 
+describe("narrow shelf card titles read as words", () => {
+  /*
+   * #2194: in the narrow layout (a board 1200–1399 px wide, 220 px shelves) a
+   * shelf card's title shared its row with the task icon, the fold chevron, ×
+   * and ⋯, so about 70 px were left and a title showed a word or two. Over the
+   * evidence fixture's `stages` scenario, with the Viewer's sidebar open, at
+   * window widths that put the board at both ends of the narrow range and
+   * between, in en and uk, light and dark:
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chromium> \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "narrow shelf card titles"
+   *
+   * Gated, for every shelf card in view: the title spans the card's row beside
+   * its icon; the first line breaks between words; the card's controls sit
+   * whole inside the card, under nothing, and meet no title ink. Frames go to
+   * NARROW_SHELF_PNG_DIR (default `.artifacts/narrow-shelf-titles/`), never
+   * into the repository, with `readings.json` beside them.
+   */
+  const WIDTHS = [1460, 1550, 1600, 1640] as const;
+
+  browserTest("every shelf card's title uses its row at each narrow width, en and uk, light and dark", async () => {
+    const out = path.resolve(process.env.NARROW_SHELF_PNG_DIR ?? ".artifacts/narrow-shelf-titles");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch(LAUNCH);
+    const failures: string[] = [];
+    const readings: Record<string, unknown> = {};
+    try {
+      for (const width of WIDTHS) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const label = `${width}x900-${lang}-${scheme}`;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=stages`, { width, height: 900 }, scheme, lang, "reduce");
+        try {
+          await page.waitForSelector("[data-kanban-board] .card.shelf .head .title", { timeout: 30_000 });
+          /* The seat stands above the columns at this height: bring the shelves' first cards into view. */
+          await page.evaluate(() => document.querySelector("[data-kanban-board] .column .col-head")?.scrollIntoView({ block: "start" }));
+          await page.waitForTimeout(300);
+          const reading = await page.evaluate(() => {
+            const board = document.querySelector<HTMLElement>("[data-kanban-board]")!;
+            const grid = board.querySelector<HTMLElement>(".board")!;
+            const box = (r: DOMRect) => ({ left: r.left, top: r.top, right: r.right, bottom: r.bottom });
+            const meets = (a: ReturnType<typeof box>, b: ReturnType<typeof box>) => Math.min(a.right, b.right) - Math.max(a.left, b.left) > 0.5 && Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top) > 0.5;
+            const cards = [...board.querySelectorAll<HTMLElement>(".column .card.shelf")].filter((card) => {
+              const r = card.getBoundingClientRect();
+              return r.width > 0 && r.top >= 0 && r.bottom <= window.innerHeight;
+            }).map((card) => {
+              const cardBox = box(card.getBoundingClientRect());
+              const pad = parseFloat(getComputedStyle(card).paddingLeft) + parseFloat(getComputedStyle(card).paddingRight);
+              const icon = card.querySelector<HTMLElement>(".head > .task-icon")!;
+              const title = card.querySelector<HTMLElement>(".head > .title")!;
+              const clamp = title.querySelector<HTMLElement>(".clamp")!;
+              const text = clamp.textContent ?? "";
+              /* Each character's line, from its own range: the first line ends where the top moves. */
+              const node = [...clamp.childNodes].find((child) => child.nodeType === Node.TEXT_NODE) ?? clamp.firstChild!;
+              const tops: number[] = [];
+              for (let index = 0; index < (node.textContent ?? "").length; index++) {
+                const range = document.createRange();
+                range.setStart(node, index);
+                range.setEnd(node, index + 1);
+                tops.push(range.getClientRects()[0]?.top ?? NaN);
+              }
+              const chars = node.textContent ?? "";
+              const breakAt = tops.findIndex((top, index) => index > 0 && Math.abs(top - tops[0]!) > 4);
+              const firstLine = breakAt > 0 ? chars.slice(0, breakAt) : chars;
+              const midWord = breakAt > 0 && /\S/.test(chars[breakAt - 1]!) && /\S/.test(chars[breakAt]!) && !/[-‐–—/]/.test(chars[breakAt - 1]!);
+              const ink = (() => {
+                const range = document.createRange();
+                range.selectNodeContents(clamp);
+                const clip = box(clamp.getBoundingClientRect());
+                return [...range.getClientRects()].map(box).filter((r) => meets(r, clip));
+              })();
+              const tools = [...card.querySelectorAll<HTMLElement>(".head > .tools > *")].filter((tool) => tool.getClientRects().length).map((tool) => {
+                const r = box(tool.getBoundingClientRect());
+                const hit = document.elementFromPoint((r.left + r.right) / 2, (r.top + r.bottom) / 2);
+                return {
+                  label: tool.getAttribute("aria-label") ?? tool.className,
+                  inside: r.left >= cardBox.left - 0.5 && r.right <= cardBox.right + 0.5 && r.top >= cardBox.top - 0.5 && r.bottom <= cardBox.bottom + 0.5,
+                  covered: !(hit && (hit === tool || tool.contains(hit))),
+                  onTitle: ink.some((line) => meets(line, r)),
+                };
+              });
+              return {
+                id: card.dataset.id ?? "",
+                status: card.closest<HTMLElement>(".column")?.dataset.status ?? "",
+                text: text.slice(0, 60),
+                rowWidth: Math.round(cardBox.right - cardBox.left - pad),
+                iconWidth: Math.round(icon.getBoundingClientRect().width),
+                titleWidth: Math.round(title.getBoundingClientRect().width),
+                firstLine, midWord, tools,
+              };
+            });
+            return {
+              mode: grid.classList.contains("narrow") ? "narrow" : grid.className,
+              boardWidth: Math.round(board.getBoundingClientRect().width),
+              shelves: [...board.querySelectorAll<HTMLElement>(".column")].filter((column) => column.querySelector(".card.shelf")).map((column) => Math.round(column.getBoundingClientRect().width)),
+              cards,
+            };
+          });
+          readings[label] = reading;
+          if (reading.mode !== "narrow") failures.push(`${label}: board ${reading.boardWidth} px is ${reading.mode}, not narrow`);
+          if (reading.shelves.some((shelf) => Math.abs(shelf - 220) > 1)) failures.push(`${label}: shelves ${reading.shelves.join(", ")} != 220`);
+          if (reading.cards.length < 3) failures.push(`${label}: only ${reading.cards.length} shelf cards in view`);
+          for (const card of reading.cards) {
+            /* The title takes its row beside the icon, the 6 px gap and nothing else. */
+            if (card.titleWidth < card.rowWidth - card.iconWidth - 12) failures.push(`${label}: ${card.id} title ${card.titleWidth} px of a ${card.rowWidth} px row`);
+            if (card.midWord) failures.push(`${label}: ${card.id} first line breaks inside a word: «${card.firstLine}»`);
+            for (const tool of card.tools) {
+              if (!tool.inside) failures.push(`${label}: ${card.id} ${tool.label} leaves the card`);
+              if (tool.covered) failures.push(`${label}: ${card.id} ${tool.label} is under something`);
+              if (tool.onTitle) failures.push(`${label}: ${card.id} ${tool.label} meets the title`);
+            }
+          }
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+          await page.screenshot({ path: path.join(out, `${label}.png`) });
+        } finally {
+          await context.close();
+        }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.writeFileSync(path.join(out, "readings.json"), `${JSON.stringify({ readings, failures }, null, 2)}\n`);
+    expect(failures).toEqual([]);
+  }, 600_000);
+});
+
 describe("the orchestrator's parallel self in the seat's feed", () => {
   /*
    * Rendered evidence for docs/design/ghost-seat.md §6 at the desktop width:
