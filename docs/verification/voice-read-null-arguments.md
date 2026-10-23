@@ -2,8 +2,9 @@ Voice read argument recovery verification, 2026-10-23. Fixes #3226.
 
 Product source: `8d5e73b1e`; main baseline: `faf571855a09e79f3ba33e6278e48a51404426fb`.
 The five changed source and test files in the remote checkout matched the
-committed files byte for byte by SHA-256. Main was fetched again and still
-pointed to that baseline.
+committed files byte for byte by SHA-256. The final main recheck found
+`95d52f4db9`, which changes only seat-rotation scheduling and its test.
+None of the voice validation modules or test files here changed on main.
 
 On main, `src/lib/voiceCompanion/readSchemas.ts:36` excludes `since` from
 `orchestrator_messages`. The unknown-key guards in
