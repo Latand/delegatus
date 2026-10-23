@@ -2948,6 +2948,7 @@ test.each(["codex", "claude"] as const)(
     const scheduledRetryDelays: number[] = [];
     const startupLogs: unknown[][] = [];
     let restoreClock = () => {};
+    let engineIdentity: { pid: number; startIdentity: string | null } | null = null;
     dependencies.schedule = (callback, delayMs) => {
       scheduledRetries.push(callback); scheduledRetryDelays.push(delayMs);
       return { unref() {} };
@@ -2959,6 +2960,7 @@ test.each(["codex", "claude"] as const)(
         viewer: { pid: number; startIdentity: string | null };
         engine: { pid: number; startIdentity: string | null };
       };
+      engineIdentity = identities.engine;
       expect(new Set([process.pid, identities.viewer.pid, identities.engine.pid]).size).toBe(3);
       expect(procBackend.processIdentity(identities.viewer.pid)).toBe(identities.viewer.startIdentity);
       expect(procBackend.processIdentity(identities.engine.pid)).toBe(identities.engine.startIdentity);
@@ -3053,6 +3055,12 @@ test.each(["codex", "claude"] as const)(
       await bindStructuredDeliveryQueue([], { registry, client: null });
       if (procBackend.pidAlive(incumbent.pid)) incumbent.kill("SIGKILL");
       await incumbent.exited;
+      if (engineIdentity
+        && engineIdentity.startIdentity !== null
+        && procBackend.processIdentity(engineIdentity.pid) === engineIdentity.startIdentity) {
+        try { process.kill(engineIdentity.pid, "SIGKILL"); } catch { /* fixture process already exited */ }
+        await waitFor(() => !procBackend.pidAlive(engineIdentity!.pid), 5_000);
+      }
       for (const replacement of replacements) {
         if (procBackend.pidAlive(replacement.pid)) replacement.kill("SIGKILL");
         await replacement.exited;
