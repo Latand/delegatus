@@ -587,7 +587,27 @@ test("one FTS match remains retrievable in a two-hundred-thousand-topic inventor
       db.query("INSERT INTO memory_fts VALUES ('match', 'Widget', 'Widget uses Bun.', 'Widget uses Bun.')").run();
     })();
 
-    expect((await index.injectionCandidates("widget", "project-a", "codex", "large-inventory-turn"))).toHaveLength(1);
+    // The frozen clock cannot expose a scan, so record the statements recall
+    // prepares and require each plan to avoid scanning or materializing the
+    // whole inventory table.
+    const prepared = new Set<string>();
+    const originalQuery = Database.prototype.query;
+    const recorder = spyOn(Database.prototype, "query").mockImplementation(function (this: Database, sql: string) {
+      if (this !== db) prepared.add(sql);
+      return originalQuery.call(this, sql);
+    } as typeof Database.prototype.query);
+    try {
+      expect((await index.injectionCandidates("widget", "project-a", "codex", "large-inventory-turn"))).toHaveLength(1);
+    } finally { recorder.mockRestore(); }
+    const selects = [...prepared].filter(sql => /^\s*(SELECT|WITH)\b/i.test(sql) && /\bmemory_entries\b/.test(sql));
+    expect(selects.length).toBeGreaterThanOrEqual(3);
+    for (const sql of selects) {
+      const plan = db.query<{ detail: string }, []>(`EXPLAIN QUERY PLAN ${sql}`).all().map(row => row.detail);
+      for (const detail of plan) {
+        expect(detail, sql).not.toMatch(/^(SCAN|MATERIALIZE)\b.*\b(memory_entries|inventory)\b/);
+        expect(detail, sql).not.toMatch(/^SCAN (e|memory_entries)(\s|$)/);
+      }
+    }
   } finally { db.close(); index.close(); }
 }, 20000);
 
