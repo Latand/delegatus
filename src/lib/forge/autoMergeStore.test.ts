@@ -408,7 +408,7 @@ test("a stopped merge is stored, raises lane-merge with its two answers, and ret
         });
       }
       if (args[0] === "api" && args[1] === `repos/${REPO}/pulls/7/reviews?per_page=100`) return "";
-      if (args[0] === "api" && args[1] === `repos/${REPO}/rules/branches/main`) return "[[]]";
+      if (args[0] === "api" && args[1] === `repos/${REPO}/rules/branches/main`) return "[]";
       if (args[0] === "api" && args[1] === `repos/${REPO}/branches/main`) return "[]";
       if (args[0] === "repo") return JSON.stringify({ squashMergeAllowed: true });
       if (args[0] === "pr" && args[1] === "merge") { mergeState = "MERGED"; return ""; }
@@ -504,7 +504,7 @@ test("a completed lane with no PR keeps its task open, persists a visible block,
         });
       }
       if (args[0] === "api" && args[1] === `repos/${REPO}/pulls/7/reviews?per_page=100`) return "";
-      if (args[0] === "api" && args[1] === `repos/${REPO}/rules/branches/main`) return "[[]]";
+      if (args[0] === "api" && args[1] === `repos/${REPO}/rules/branches/main`) return "[]";
       if (args[0] === "api" && args[1] === `repos/${REPO}/branches/main`) return "[]";
       if (args[0] === "repo") return JSON.stringify({ squashMergeAllowed: true });
       if (args[0] === "pr" && args[1] === "merge") { merged = true; return ""; }
@@ -567,7 +567,7 @@ test("a human change request persists, and retry-merge waits for that reviewer's
         { reviewer: "reviewer-a", isBot: false, state: "CHANGES_REQUESTED" },
         ...(approved ? [{ reviewer: "reviewer-a", isBot: false, state: "APPROVED" }] : []),
       ].map((review) => JSON.stringify(review)).join("\n");
-      if (args[0] === "api" && args[1]?.includes("/rules/branches/")) return "[[]]";
+      if (args[0] === "api" && args[1]?.includes("/rules/branches/")) return "[]";
       if (args[0] === "api") return "[]";
       if (args[0] === "repo") return JSON.stringify({ squashMergeAllowed: true });
       if (args[0] === "pr" && args[1] === "merge") { merged = true; return ""; }
@@ -979,7 +979,7 @@ test("a timed-out lane retries old duplicate green checks and merges after a rea
         mergeable: "MERGEABLE", mergeStateStatus: "CLEAN",
         statusCheckRollup: [{ name: "privacy-tracker-audit", status: "IN_PROGRESS", conclusion: "" }] });
       if (args[1]?.includes("/reviews")) return "";
-      if (args[1]?.includes("/rules/branches/")) return "[[]]";
+      if (args[1]?.includes("/rules/branches/")) return "[]";
       if (args[1]?.includes("/branches/")) return '["privacy-tracker-audit"]';
       throw new Error("unexpected fixture read");
     },
@@ -1015,7 +1015,7 @@ test("a timed-out lane retries old duplicate green checks and merges after a rea
                 completedAt: "${iso(T0 - MERGE_WAIT_LIMIT_MS)}" })) });
             if (args[0] === "repo") return '{"squashMergeAllowed":true}';
             if (args[1].includes("/reviews")) return "";
-            if (args[1].includes("/rules/branches/")) return "[[]]";
+            if (args[1].includes("/rules/branches/")) return "[]";
             if (args[1].includes("/branches/")) return '["privacy-tracker-audit"]';
             throw new Error("unexpected fixture read");
           },

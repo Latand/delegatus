@@ -150,7 +150,7 @@ The preliminary scratch three-way merge combined `autoMerge.ts`,
 Reapplication with `git apply --3way` likewise exited 1 for that conflict;
 resolution and the staged whitespace check exited 0. Four importer fixtures
 answer the added rules read. #3238's two new store/restart fixtures now answer
-`/rules/branches/` with `[[]]` before their broad `/branches/` matchers.
+`/rules/branches/` with `[]` before their broad `/branches/` matchers.
 
 The controller supplies production ports and schedules the sweep; the pipeline
 engine consumes merge admission and retry behavior; auto-refresh consumes merge
@@ -161,9 +161,13 @@ There is no schema or persisted record change. The existing 30-minute cache
 and 30-second GitHub subprocess deadline remain; no performance gain is claimed.
 
 GitHub documents that [branch rules include active inherited rules](https://docs.github.com/en/rest/repos/rules#get-rules-for-a-branch).
-The CLI's [pagination and slurp options](https://cli.github.com/manual/gh_api)
-collect each page into an outer array. Malformed later pages reject the whole
-read before its contexts enter the cache.
+The CLI's [pagination and JSON filtering](https://cli.github.com/manual/gh_api)
+use `gh api repos/{owner}/{repo}/rules/branches/{branch} --paginate --jq '@json'`
+to emit one compact JSON page per line, preserving empty arrays. This works
+with GitHub CLI 2.45; `--slurp` first appeared in
+[2.48](https://github.com/cli/cli/releases/tag/v2.48.0). Every page is parsed
+and validated before its contexts enter the cache. A missing response or a
+malformed later page rejects the whole read.
 
 ## Validation and handoff
 
@@ -306,9 +310,10 @@ invalid hold durations. All 12 cases passed.
 | Final `git diff --check`, `git diff --cached --check` and workflow diff check | 0 each | No whitespace errors or workflow changes |
 | Final `bun run privacy:check` | 0 | Publication check on the complete staged report and code |
 
-The final production source blob is
+The production source blob at that verification was
 `340abfb0fa369ad13076d5660040787ddba9b29e`. Its delta from integrated main
-retains exactly the two production corrections in the verified Cloud patch.
+retained the two production corrections in the verified Cloud patch.
+The compatibility repair below supersedes its rules-read command.
 The source audit, overlap handling and every nonzero verification exit remain
 recorded above; the baseline failures were not discarded by the reruns.
 
@@ -320,3 +325,92 @@ remains `3e570adfba80059eaba26a978402a2e73a02978e`, including #3238.
 
 The hooked commit outcome and the final clean-worktree check are supplied in
 the stage completion report. No push is part of this task.
+
+
+## GitHub CLI 2.45 compatibility repair
+
+An independent correctness pass found that the rules-read command required
+GitHub CLI 2.48. The installed CLI is 2.45.0: appending `--help` to the original
+`--paginate --slurp` command exits 1 with an unknown-flag error before a request.
+The replacement `--paginate --jq '@json'` command exits 0 in that same offline
+probe. A separate loopback HTTP probe using 2.45.0 emitted `[]` for an empty
+response and two compact array records for a two-page response.
+
+`src/lib/forge/autoMerge.ts` now parses one JSON page per nonblank output line.
+It validates every page and every required context before caching the combined
+classic and inherited requirements. Empty arrays remain valid; absent output,
+invalid JSON and malformed later pages refuse readiness. All four importer
+fixture files, including embedded restart programs, now return the same page
+format. The merge-landing correction and #3238's queue recovery are retained.
+
+`src/lib/forge/autoMerge.test.ts` covers empty and paginated rules through
+settled merges, malformed later JSON and page shapes, and retry after a failed
+read without partial cache reuse. When `gh` is installed, two additional cases
+validate the actual read arguments offline and drive discovery with the real
+CLI against an owned loopback server: empty rules merge, inherited requirements
+hold the lane until green, and a malformed second page blocks it. The CLI
+children use an inert credential, bounded execution and the test's isolated
+state; the listener binds port 0 and is closed by the case that created it.
+
+The Cloud patch and report hashes were rechecked against the manifest and both
+matched. The initial compatibility recheck of `origin/main` at
+`4e5e060772b7de182665fe8c76731d4729c0713b` changes neither the eleven workflow
+files nor the merge source, check-rollup dependency, package manifest or lockfile
+relative to the tested integrated main base. No workflow changes are included.
+
+The final source and fixtures were checked with Bun 1.4.0 through the stage's
+`gate-slot.sh` wrapper and one sequential `gate-remote` call. The runner had
+no GitHub CLI installed, so this call downloaded the official 2.45.0 Linux
+release into its own scratch directory, verified it against that release's
+checksum file, and placed it first on PATH. Both real-CLI cases executed.
+Every test file ran in its own process with fresh HOME, XDG_CONFIG_HOME,
+LLV_STATE_DIR, TMPDIR and GitHub configuration. The main comparison used a
+detached scratch clone with the same origin at
+`3e570adfba80059eaba26a978402a2e73a02978e`.
+
+| `bun test --timeout=60000` file | Main exit / passes | Repaired branch exit / passes |
+| --- | --- | --- |
+| `src/lib/forge/autoMerge.test.ts` | 0 / 67 | 0 / 92 |
+| `src/lib/forge/autoMergeStore.test.ts` | 0 / 99 | 0 / 99 |
+| `src/lib/forge/autoRefresh.test.ts` | 0 / 42 | 0 / 42 |
+| `src/lib/forge/taskFinish.test.ts` | 0 / 18 | 0 / 18 |
+| `src/lib/pipelines/engine.ports.part2.test.ts` | 0 / 51 | 0 / 51 |
+| `src/lib/pipelines/engine.ports.part3.test.ts` | 0 / 18 | 0 / 18 |
+| `src/lib/tasks/doneVisibility.test.ts` | 0 / 16 | 0 / 16 |
+| `src/lib/forge/checkRollup.test.ts` | 0 / 13 | 0 / 13 |
+| `src/lib/orchestrator/prompt.test.ts` (additional source-reference check) | 0 / 67 | 0 / 67 |
+| `src/lib/mainThreadInstrumentation.test.ts` (additional source-extraction check) | 1 / 19 | 1 / 19 |
+
+The eight required/importer and check-rollup files passed 324 tests on main
+and 349 on the repaired branch, with four existing engine skips on each.
+The additional instrumentation file has the same six failures on both:
+merge-sweep extraction, two retention-scan cases, two byte-count cases and
+revalidation-timer extraction. Its extracted fixtures lack current dependency
+bindings or expect earlier synchronous behavior. It is unchanged and outside
+this compatibility correction; these failures remain recorded explicitly.
+
+
+| Final compatibility check | Exit | Evidence |
+| --- | --- | --- |
+| `bun x tsc --noEmit --incremental false` | 0 | Full typecheck, no diagnostics |
+| Same six-file `bun x eslint` command above | 0 | Zero errors; the same three unchanged import warnings |
+| `bun test --timeout=60000 src/lib/forge/autoMerge.test.ts --test-name-pattern 'required-check arguments\|GitHub CLI emits'` with final tests and pre-fix production source | 1, expected | Both cases fail: unsupported `--slurp`, then the empty-rules lane is blocked instead of merged |
+| Sequential paired/static/negative-control driver | 1 | `RAN_COUNT 20 FAIL_COUNT 2`; both nonzero file runs are the additional instrumentation file, one on each revision; static checks and the negative-control expectation pass |
+
+The negative control substituted production source from the preceding Cloud
+application commit into another detached scratch clone, retaining the final
+fixtures. The repaired source blob is
+`4df5199b3ffe9b23445a91be96345bfd8ca07765`; its merge test blob is
+`7d1cb9c9fb1f271e36a39191e29458e37b294e13`. Downloaded logs were reconciled
+against all 20 planned file runs, including matching the six instrumentation
+failure names across revisions. Neither real-CLI boundary test was skipped
+in this final run. The initial runner-only check before installing the private
+CLI passed 90 tests and skipped those two cases; it is superseded by the
+92-pass result above.
+
+
+The final reference recheck observed `origin/main` at
+`62235181a310ad5783cb0fc0342721772efa7b54`. The workflow files, package/lockfile,
+merge source and check-rollup dependency remain unchanged from the tested
+main base. Final whitespace and publication privacy checks passed before the
+hooked follow-up commit. The stage adds a commit without rebasing or pushing.

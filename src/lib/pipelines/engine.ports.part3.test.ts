@@ -349,7 +349,7 @@ for (const stallMs of [0, 27_000]) test(`refresh completion advances its parent 
           mergeCommit: merged ? { oid: "f".repeat(40) } : null, mergedAt: merged ? new Date(clock).toISOString() : null,
         });
         if (args[0] === "api" && args[1]?.includes("/reviews")) return "";
-        if (args[0] === "api" && args[1]?.includes("/rules/branches/")) return "[[]]";
+        if (args[0] === "api" && args[1]?.includes("/rules/branches/")) return "[]";
         if (args[0] === "api" && args[1]?.includes("/branches/")) return '["ci"]';
         if (args[0] === "repo") return '{"squashMergeAllowed":true}';
         throw new Error(`unexpected forge read ${args.join(" ")}`);

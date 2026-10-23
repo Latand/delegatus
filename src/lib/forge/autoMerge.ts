@@ -234,9 +234,11 @@ async function requiredContexts(repository: string, base: string, ports: AutoMer
   }
   // This endpoint returns active rules, including inherited rulesets; do not
   // enumerate repository rulesets (which would miss inherited requirements).
-  const rulesRaw = await ports.run(["api", `repos/${repository}/rules/branches/${branch}`, "--paginate", "--slurp"]);
-  const pages: unknown = JSON.parse(rulesRaw);
-  if (!Array.isArray(pages) || pages.length === 0) throw new Error("gh returned invalid branch rules");
+  // Keep each page intact (including an empty array) on gh 2.45, which has
+  // --paginate and --jq but no --slurp. Validate every page before caching.
+  const rulesRaw = await ports.run(["api", `repos/${repository}/rules/branches/${branch}`, "--paginate", "--jq", "@json"]);
+  const pages = rulesRaw.split("\n").filter((line) => line.trim()).map((line): unknown => JSON.parse(line));
+  if (pages.length === 0) throw new Error("gh returned invalid branch rules");
   const contexts = new Set<string>(parsed);
   for (const page of pages) {
     if (!Array.isArray(page)) throw new Error("gh returned invalid branch rules page");
