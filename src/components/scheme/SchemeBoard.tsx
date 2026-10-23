@@ -545,7 +545,7 @@ export function SchemeBoard({
     if (!overlayOpen) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      const el = event.target as HTMLElement | null;
+      const el = event.target instanceof HTMLElement ? event.target : null;
       if (el && (el.closest("dialog[open]") || ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) || el.isContentEditable)) return;
       event.preventDefault();
       event.stopPropagation();
@@ -562,7 +562,7 @@ export function SchemeBoard({
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "F2") return;
-      const el = event.target as HTMLElement | null;
+      const el = event.target instanceof HTMLElement ? event.target : null;
       if (el && (el.closest("dialog[open]") || ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) || el.isContentEditable)) return;
       const path = selectedRef.current;
       if (!path) return;

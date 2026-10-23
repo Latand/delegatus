@@ -1418,7 +1418,7 @@ function EscapeToClose({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      const el = event.target as HTMLElement | null;
+      const el = event.target instanceof HTMLElement ? event.target : null;
       if (el && (el.closest("dialog[open]") || ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) || el.isContentEditable)) return;
       event.preventDefault();
       event.stopPropagation();
