@@ -9,6 +9,78 @@ import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIden
 const binary = process.env.LLV_CODEX_BINARY ?? "codex";
 const version = spawnSync(binary, ["--version"], { encoding: "utf8", timeout: 5_000 }).stdout?.trim();
 
+for (const mode of ["exit", "wrapped", "large", "boundary", "secret", "signal", "wrappedsignal", "missing", "timeout", "ownership", "success", "chatty", "managedexit", "shimexit", "managedsecret", "throwkey", "throwclipped"] as const) {
+  test.skipIf(process.platform !== "linux")(`callback startup ${mode} preserves a bounded redacted cause on repeated launches`, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "callback-"));
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        fs.rmSync(path.join(root, "ready"), { force: true });
+        fs.rmSync(path.join(root, "ready.release"), { force: true });
+        const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "codexSocketTransport.fixture.ts"), root, mode], {
+          env: { ...process.env, DELEGATUS_CPU_PRESSURE: "off" }, stdout: "pipe", stderr: "pipe",
+        });
+        const output = new Response(child.stdout).text();
+        const stderr = new Response(child.stderr).text();
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([child.exited, new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error("owned callback fixture exceeded its parent deadline")), 15_000);
+          })]);
+          expect(child.exitCode, await stderr).toBe(0);
+          const message = JSON.parse(await output).error as string;
+          if (mode === "success") {
+            expect(message).toBe("connected: probe");
+            continue;
+          }
+          if (mode === "chatty") {
+            // Writes before and after readiness and after the Viewer disconnected stay bounded.
+            expect(message).toMatch(/^connected: probe; flooded; sink \d+\/\d+$/);
+            const [afterConnected, final] = message.match(/\d+/g)!.map(Number);
+            expect(afterConnected).toBeLessThanOrEqual(16 * 1024);
+            expect(final).toBeLessThanOrEqual(16 * 1024);
+            continue;
+          }
+          if (mode === "missing") {
+            expect(message).toContain("ENOENT");
+            expect(message).not.toContain(root);
+            expect(message).toStartWith("Codex callback listener failed before dispatch: ");
+            continue;
+          }
+          if (mode.startsWith("throw")) {
+            // A refusing wrapper keeps its structural detail beside the redacted cause.
+            expect(message).toStartWith("agent signal sandbox unavailable: ");
+            expect(message).toContain("EADDRINUSE: callback bind refused");
+            expect(message).not.toContain("private".repeat(8));
+            expect(message).not.toContain(root);
+            expect(message).not.toContain("KEYPAYLOAD");
+            expect(message).not.toContain("PRIVATE KEY");
+            expect(message).toContain("[redacted]");
+            expect(message.length).toBeLessThanOrEqual(2400);
+            continue;
+          }
+          expect(message).toContain(mode === "ownership" ? "ownership could not be verified"
+            : mode === "timeout" ? "timed out after 10000ms" : mode === "signal" || mode === "wrappedsignal" ? "exited on signal SIGTERM" : "exited with code 23");
+          expect(message).toContain("EADDRINUSE: callback bind refused");
+          expect(message).not.toContain("private".repeat(8));
+          expect(message).not.toContain(root);
+          if (mode === "large" || mode === "boundary") expect(message).toContain("[stderr clipped]");
+          if (mode === "secret" || mode === "managedsecret" || mode.startsWith("throw")) {
+            expect(message).not.toContain("KEYPAYLOAD");
+            expect(message).not.toContain("PRIVATE KEY");
+            expect(message).toContain("[redacted]");
+          }
+          expect(message.length).toBeLessThanOrEqual(2400);
+          expect(message.startsWith("Codex callback listener failed before dispatch: ")).toBe(mode !== "ownership");
+        } finally {
+          if (timer) clearTimeout(timer);
+          if (child.exitCode === null) child.kill("SIGKILL");
+          await child.exited;
+        }
+      }
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  }, 40_000);
+}
+
 // Every reviewed pin exposes the native private socket transport.
 test.skipIf(process.platform === "win32" || !["codex-cli 0.154.0", "codex-cli 0.159.0", "codex-cli 0.162.1", "codex-cli 0.163.0"].includes(version))("native Codex replays a pending approval on reconnect and resolves its answer once", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "cb-native-"));
@@ -46,6 +118,7 @@ apps = false
 plugins = false
 `);
   let transport: CodexSocketTransport | undefined;
+  let drained: Promise<void> = Promise.resolve();
   let owner: ReturnType<typeof captureProcessIdentity> | undefined;
   const nativeFiles: Array<{ file: string; ino: number; dev: number }> = [];
   const connect = (socket: CodexSocketTransport) => {
@@ -86,6 +159,7 @@ plugins = false
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
     }
+    drained = transport.stderrDrained;
     owner = captureProcessIdentity(transport.pid);
     const alias = transport.endpoint.slice("codex-unix:".length);
     if (fs.lstatSync(alias).isSymbolicLink()) {
@@ -125,6 +199,11 @@ plugins = false
       try { process.kill(-owner.pid, "SIGKILL"); } catch { /* already exited */ }
       await until(() => processIdentityStatus(owner!) === "dead", () => "native fixture process did not exit");
     }
+    // The detached stderr drain ends a moment after its last writer; the runner's
+    // teardown counts a drain still alive as a leaked child.
+    let drainTimer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([drained, new Promise<void>(resolve => { drainTimer = setTimeout(resolve, 5_000); })]);
+    if (drainTimer) clearTimeout(drainTimer);
     for (const recorded of nativeFiles) {
       const entry = fs.lstatSync(recorded.file, { throwIfNoEntry: false });
       if (entry?.ino === recorded.ino && entry.dev === recorded.dev) fs.unlinkSync(recorded.file);
