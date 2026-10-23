@@ -1575,9 +1575,18 @@ export function publicationFailureCause(failure: PipelinePublicationFailure): st
   const failed = [...new Set(lines.filter((line) => line.startsWith("(fail) ") || (line.startsWith("NEW ") && !line.includes("<runner error>")))
     .map((line) => line.slice(line.startsWith("NEW ") ? 4 : 7).replace(/ \[[\d.]+m?s\]$/, "")))];
   const tests = failed.length ? `, ${failed.length} failing test${failed.length === 1 ? "" : "s"}, first: ${failed[0]!.slice(0, 120)}` : "";
-  if (phase) return `the repository's pre-push hook failed in its "${phase}" phase (${status}${tests})`;
+  const runner = runnerNoVerdict(failure.outputTail);
+  const lost = runner ? `; the gate runner returned no verdict: ${runner}` : "";
+  if (phase) return `the repository's pre-push hook failed in its "${phase}" phase (${status}${tests}${lost})`;
+  if (runner) return `git push was refused (${status}${tests}${lost})`;
   const last = lines.filter(Boolean).at(-1);
   return `git push was refused (${status}${tests})${last ? `: ${last.slice(0, 160)}` : ""}`;
+}
+
+/** The remote gate runner's line for a started run that lost its verdict
+    (scripts/gate-runner/client.ts); its retries run on this machine. */
+function runnerNoVerdict(output: string): string | null {
+  return /^gate-runner: no verdict: ([^\n]{1,160})/m.exec(output)?.[1] ?? null;
 }
 
 /** The hook's line for a decisive check its push budget stopped before a
@@ -1595,6 +1604,9 @@ export function hookBudgetStop(output: string): { ms: number; check: string } | 
     the Viewer itself died with the push. */
 export function publicationInterruptionCause(failure?: PipelinePublicationFailure): string {
   const phase = failure ? publicationFailurePhase(failure) : null;
+  const runner = failure ? runnerNoVerdict(failure.outputTail) : null;
+  // The hook's last phase marker is its admission line when the checks ran remotely.
+  if (runner) return `the gate runner returned no verdict for the hook's checks (${runner}), and the push did not reach the remote`;
   if (failure?.hookBudgetMs) {
     const budget = `the pre-push hook's ${Math.round(failure.hookBudgetMs / 60_000)}-minute budget ran out`;
     // The check the hook named is exact; the last phase marker is a group at best.
@@ -1938,7 +1950,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
         const output = redactPublicationOutput(executed.stdout, executed.stderr);
         const tail = output.slice(-4000);
         const lines = output.split("\n");
-        const checks = [...new Set(lines.filter((line) => line.startsWith("pre-push: ")))].slice(-16);
+        const checks = [...new Set(lines.filter((line) => line.startsWith("pre-push: ") || line.startsWith("gate-runner: no verdict:")))].slice(-16);
         const tests = [...new Set(lines.filter((line) => /^(?:\(fail\) |NEW (?!.*<runner error>))/.test(line)))].slice(0, 8);
         const phases = [...checks, ...tests].filter((line) => !tail.includes(line)).map((line) => line.slice(0, 160)).join("\n");
         // Long diagnostics must not erase the hook phases or failing test names.
