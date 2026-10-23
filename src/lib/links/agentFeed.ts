@@ -124,7 +124,7 @@ function rowFor(file: FileEntry, tasks: ReturnType<typeof taskLookup>, projects:
   if (!identity) return null;
   const task = tasks.assigned(conversationId, file.path);
   const membership = (conversationId ? snapshot.memberships[conversationId] : undefined)?.find((item) => item.kind === "pipeline" && item.containerId && item.stageId);
-  const attemptMatch = attemptFor(conversationId, file.path);
+  const attemptMatch = membership ? undefined : attemptFor(conversationId, file.path);
   const pipeline = membership ? pipelines.get(membership.containerId!) : attemptMatch?.pipeline;
   const stageId = membership?.stageId ?? attemptMatch?.stageId;
   const boundTask = task ?? (pipeline ? tasks.pipeline(pipeline) : undefined);
@@ -173,6 +173,8 @@ export class AgentFeed {
   private scanned: readonly FileEntry[] | null = null;
   private seenTasks: readonly unknown[] | null = null;
   private seenPipelines: readonly Pipeline[] | null = null;
+  // One index per feed, built on demand and released when its immutable source changes.
+  private attemptLookup: ReturnType<typeof pipelineAttemptLookup> | null = null;
   private owned = false;
   private projectsKey = "";
   private seatRevision = "";
@@ -207,6 +209,7 @@ export class AgentFeed {
     if (privacyChanged || projectsKey !== this.projectsKey) this.resetSnapshot = null;
     this.scanned = files;
     this.seenTasks = tasks;
+    if (pipelines !== this.seenPipelines) this.attemptLookup = null;
     this.seenPipelines = pipelines;
     this.projectsKey = projectsKey;
     this.seatRevision = seatRevision;
@@ -237,7 +240,8 @@ export class AgentFeed {
     const taskFor = taskLookup(candidates.length ? tasks : []);
     const pipelineById = new Map<string, Pipeline>();
     for (const pipeline of pipelines ?? []) if (!pipelineById.has(pipeline.id)) pipelineById.set(pipeline.id, pipeline);
-    const attemptFor = pipelineAttemptLookup(pipelines ?? []);
+    const attemptFor = (conversationId: string | undefined, path: string) =>
+      (this.attemptLookup ??= pipelineAttemptLookup(pipelines ?? []))(conversationId, path);
     const next = new Map<string, AgentRow>();
     const selectedPaths = new Map<string, string>();
     for (const file of candidates) {
