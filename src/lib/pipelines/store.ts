@@ -1134,6 +1134,11 @@ export async function selectControllerPipelines(kind: import("@/lib/state/pipeli
   return pipelineStore().pipelineControllerSelection(kind, throughOrder, controllerPipelineKeys());
 }
 
+/** Indexed row + scheduling generation, including writers that bypass the
+ * collection revision. This read never decodes history or waits on a lease. */
+export function controllerPipelineVersionNow(id: string): string {
+  return pipelineStore().pipelineControllerVersion(id);
+}
 export async function controllerPipelineVersion(id: string): Promise<string> {
   return withViewerOperation("pipelines.controller-read", () => waitForStateLock("pipelines.controller-version", () => stateLockAttempt("pipelines.controller-version", () => performanceSpans.sync("controller.ownership", () => pipelineStore().pipelineControllerVersion(id)))));
 }
@@ -1563,7 +1568,7 @@ function lazyControllerArray<T>(source: T[]): T[] {
   });
 }
 
-function cloneControllerPipeline(pipeline: Pipeline): Pipeline {
+export function cloneControllerPipeline(pipeline: Pipeline): Pipeline {
   if (!controllerReferences(pipeline.id)) return cloneLoadedPipeline(pipeline);
   return performanceSpans.sync("pipeline.copy", () => {
     const copy: Pipeline = structuredClone({ ...pipeline, runs: [],

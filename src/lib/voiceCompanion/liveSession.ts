@@ -336,9 +336,10 @@ export class CompanionLiveSessions {
     const active = this.active.get(id);
     while (active && (active.processing || active.backend.size)) await Promise.all([active.processing, ...active.backend]);
   }
-  /** The whole call: every part a reconnect continued, in order. */
-  transcriptRecord(id: string) {
-    const record = this.admission.transcriptRecord(id);
+  /** The whole call: every part a reconnect continued, in order. A retained call whose state row is gone reads from
+   * its journal, which the caller has already proved its own (`CompanionTranscriptRecords.journalSession`). */
+  transcriptRecord(id: string, journalOnly = false) {
+    const record = journalOnly ? this.admission.records.read(id) : this.admission.transcriptRecord(id);
     const journal = this.journals(id, record);
     const chain = callChain(id, part => journal(part)?.entries ?? null);
     if (chain.length === 1) return record;

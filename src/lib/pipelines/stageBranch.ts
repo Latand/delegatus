@@ -1,3 +1,7 @@
+import { isStoredPipeline } from "./store";
+import { statePath } from "@/lib/configDir";
+import { readCompactPipelineEvidence, pipelineEvidenceRevision, stateEvidenceVersion, type CompactEvidenceCache } from "@/lib/state/sqliteStateStore";
+import { waitForStateLock } from "@/lib/state/lockWait";
 import { settleStageAttemptPush } from "./stageAttemptPush";
 import { performanceSpans } from "@/lib/performanceSpans";
 import type { ExecPort } from "@/lib/workflows/provision";
@@ -19,6 +23,64 @@ export function stageBranchOwnershipFence(pipelines: readonly Pipeline[], ownerI
     pipeline.delivery?.target, pipeline.delivery?.active, pipeline.delivery?.ownerId,
     pipeline.delivery?.epoch, pipeline.delivery?.publish, pipelineTerminal(pipeline),
   ]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))));
+}
+
+type BranchAuthority = { id: string; fence: string };
+// One compact database projection per process; replacement/eviction drops it.
+// Never retain historical payloads or an unbounded collection of state roots.
+let branchAuthorityCache: CompactEvidenceCache<BranchAuthority> | undefined;
+const MAX_BRANCH_AUTHORITY_ROWS = 32_768;
+
+/** The existing evidence journal includes raw SQL, older writers, deletes and
+ * archive moves. Jobs share compact observations; unchanged polls read a
+ * revision only, and changed reads project deltas with cooperative batches.
+ */
+export function stageBranchOwnershipReader(ownerId: string) {
+  const filename = statePath("state.sqlite");
+  let version: string | null = null;
+  let revision: string | null = null;
+  let token = "";
+  let pending: Promise<string> | undefined;
+  const current = () => {
+    if (version === null) return false;
+    const observed = stateEvidenceVersion(filename);
+    if (observed === version) return true;
+    // Acquiring a mutation lease writes the same database. Only pipeline-row
+    // evidence changes can invalidate peer authority, not lease bookkeeping.
+    if (revision !== null && pipelineEvidenceRevision(filename) === revision) {
+      version = observed;
+      return true;
+    }
+    return false;
+  };
+  const read = (): Promise<string> => {
+    if (current()) return Promise.resolve(token);
+    if (pending) return pending;
+    pending = waitForStateLock("pipelines.stage-ownership", async () => {
+      const before = pipelineEvidenceRevision(filename);
+      const next = await readCompactPipelineEvidence(filename, branchAuthorityCache, (record, collection) => {
+        if (collection !== "pipelines") return { id: "", fence: "" };
+        if (!isStoredPipeline(record))
+          throw new Error("pipeline ownership is unreadable");
+        return { id: record.id, fence: stageBranchOwnershipFence([record], "") };
+      });
+      // A coherent projection remains useful after a freshness race. Retain
+      // it so the next admission reads deltas instead of restarting history.
+      if (next && next.rows.size <= MAX_BRANCH_AUTHORITY_ROWS
+        && (branchAuthorityCache?.identity !== next.identity || (branchAuthorityCache.sourceRevision ?? -1) <= (next.sourceRevision ?? -1)))
+        branchAuthorityCache = next;
+      else if (next && next.rows.size > MAX_BRANCH_AUTHORITY_ROWS) branchAuthorityCache = undefined;
+      const afterVersion = stateEvidenceVersion(filename);
+      if (!next || before === null || pipelineEvidenceRevision(filename) !== before)
+        throw new Error("pipeline ownership changed during preparation");
+      token = JSON.stringify([...next.rows.values()].filter(row => row.value.id && row.value.id !== ownerId).map(row => row.value.fence).sort());
+      version = afterVersion;
+      revision = before;
+      return token;
+    }).finally(() => { pending = undefined; });
+    return pending;
+  };
+  return { read, current };
 }
 
 /** Forge reads run before the controller mutation. Pin the observation to the
