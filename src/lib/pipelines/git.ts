@@ -759,30 +759,10 @@ async function recoverStageCommit(
   return { ok: true, sha: head };
 }
 
-/** Capture only the exact, live parent link settlement creates. Recheck its
-    identity before releasing it so a replacement install is preserved. */
-function stageToolchainRelease(pipeline: Pipeline): (() => void) | undefined {
-  if (path.resolve(pipeline.repoDir) === path.resolve(pipeline.worktreeDir)) return;
-  const local = path.join(pipeline.worktreeDir, "node_modules");
-  const target = path.resolve(pipeline.repoDir, "node_modules");
-  try {
-    const owned = fs.lstatSync(local);
-    if (!owned.isSymbolicLink() || fs.readlinkSync(local) !== target || !fs.existsSync(local)) return;
-    return () => {
-      try {
-        const current = fs.lstatSync(local);
-        if (current.isSymbolicLink() && current.dev === owned.dev && current.ino === owned.ino
-          && fs.readlinkSync(local) === target) fs.unlinkSync(local);
-      } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-    };
-  } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-}
-
-/** Settlement runs after the agent's turn, including read-only turns which
-    never installed dependencies. Share the parent checkout's installed tools
-    for the commit through an absent, ignored node_modules. Remove our link
-    afterward so a later install cannot write into the parent checkout.
-    Preserve any local install or unrelated link, including dangling links. */
+/** Settlement runs repository hooks against an isolated snapshot of the source
+    toolchain. Inputs may differ because the source changed after provisioning;
+    clone or copy the source installation in that case, and preserve any local
+    install or unrelated link, including dangling links. */
 async function prepareStageToolchain(pipeline: Pipeline, exec: ExecPort): Promise<(() => void) | undefined> {
   if (path.resolve(pipeline.repoDir) === path.resolve(pipeline.worktreeDir)) return;
   const local = path.join(pipeline.worktreeDir, "node_modules");
@@ -794,10 +774,8 @@ async function prepareStageToolchain(pipeline: Pipeline, exec: ExecPort): Promis
   const ignored = await exec("git", ["check-ignore", "--quiet", "node_modules/"], pipeline.worktreeDir);
   if (ignored.code === 1) return;
   if (ignored.code !== 0) throw new Error(`checking ignored settlement dependencies: ${(ignored.stderr || ignored.stdout).trim()}`);
-  const target = path.resolve(parent);
-  try { fs.symlinkSync(target, local, "dir"); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === "EEXIST") return; throw error; }
-  return stageToolchainRelease(pipeline);
+  const prepared = await prepareWorktreeDependencies(pipeline, { allowMismatchedInputs: true });
+  if (prepared === "private-install") throw new Error("could not prepare an isolated repository hook toolchain");
 }
 
 /** Git owns its short-lived index lock and hook protocol. Verify the actual
@@ -864,10 +842,9 @@ export async function commitPipelineStage(
   receiptFile?: string,
   control?: StageCommitControl,
 ): Promise<PipelineGitResult> {
-  // A Viewer exit can bypass the commit's finally. Reap that link before
-  // inspecting paths or recovering an already-landed commit; borrow anew only
-  // after staging, so every successful settlement leaves publication safe.
-  try { stageToolchainRelease(pipeline)?.(); }
+  // A Viewer exit can leave a source-owned link behind. Reap it before
+  // inspecting paths or recovering an already-landed commit.
+  try { isolateWorktreeDependencies(pipeline); }
   catch (error) {
     return { ok: false, error: `committing the passed stage: releasing interrupted repository hook toolchain: ${error instanceof Error ? error.message : "unknown failure"}` };
   }

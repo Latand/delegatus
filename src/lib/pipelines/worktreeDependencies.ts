@@ -65,10 +65,10 @@ export function isolateWorktreeDependencies(pipeline: Pick<Pipeline, "repoDir" |
 }
 
 export async function prepareWorktreeDependencies(pipeline: Pick<Pipeline, "repoDir" | "worktreeDir" | "stages">,
-  options: { platform?: NodeJS.Platform; copyFile?: typeof fs.copyFile; signal?: AbortSignal } = {}): Promise<DependencySharing> {
+  options: { platform?: NodeJS.Platform; copyFile?: typeof fs.copyFile; signal?: AbortSignal; allowMismatchedInputs?: boolean } = {}): Promise<DependencySharing> {
   const source = path.join(pipeline.repoDir, "node_modules"), local = path.join(pipeline.worktreeDir, "node_modules");
   if (path.resolve(source) === path.resolve(local) || await entry(local)) return "unchanged";
-  if (!(await entry(source)) || !await matchingDependencyInputs(pipeline.repoDir, pipeline.worktreeDir)) return "private-install";
+  if (!(await entry(source)) || (!options.allowMismatchedInputs && !await matchingDependencyInputs(pipeline.repoDir, pipeline.worktreeDir))) return "private-install";
   const platform = options.platform ?? process.platform;
   if (platform === "darwin" || platform === "linux") {
     const scratch = await fs.mkdtemp(path.join(pipeline.worktreeDir, ".delegatus-dependencies-"));
@@ -77,7 +77,7 @@ export async function prepareWorktreeDependencies(pipeline: Pick<Pipeline, "repo
       const root = await fs.realpath(source);
       await cloneTree(root, cloned, root, cloned, options.copyFile ?? fs.copyFile, options.signal);
       options.signal?.throwIfAborted();
-      if (!await matchingDependencyInputs(pipeline.repoDir, pipeline.worktreeDir)) return "private-install";
+      if (!options.allowMismatchedInputs && !await matchingDependencyInputs(pipeline.repoDir, pipeline.worktreeDir)) return "private-install";
       if (await entry(local)) return "unchanged";
       await fs.rename(cloned, local);
       return "clone";
@@ -98,7 +98,7 @@ export async function prepareWorktreeDependencies(pipeline: Pick<Pipeline, "repo
     try {
       await cloneTree(root, copied, root, copied, options.copyFile ?? fs.copyFile, options.signal, false);
       options.signal?.throwIfAborted();
-      if (!await matchingDependencyInputs(pipeline.repoDir, pipeline.worktreeDir)) return "private-install";
+      if (!options.allowMismatchedInputs && !await matchingDependencyInputs(pipeline.repoDir, pipeline.worktreeDir)) return "private-install";
       if (await entry(local)) return "unchanged";
       await fs.rename(copied, local);
       return "copy";

@@ -57,6 +57,24 @@ test("package installs: controller commits use repository identity with tool att
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 
+test("package installs: settlement hooks use isolated dependencies when lane inputs differ", async () => {
+  const f = await fixture();
+  try {
+    expect(await provisionPipelineWorktreeAsync(f.subject, async (c, a, cwd) => await f.exec(c, a, cwd))).toMatchObject({ ok: true });
+    fs.rmSync(path.join(f.lane, "node_modules"), { recursive: true, force: true });
+    fs.writeFileSync(path.join(f.repo, "package.json"), '{"name":"fixture","private":true,"dependencies":{"source-only":"1"}}\n');
+    fs.writeFileSync(path.join(f.lane, "report.txt"), "stage report\n");
+    const hooks = await f.git("rev-parse", "--git-path", "hooks");
+    const hook = path.resolve(f.repo, hooks, "pre-commit");
+    fs.mkdirSync(path.dirname(hook), { recursive: true });
+    fs.writeFileSync(hook, "#!/bin/sh\nmkdir -p node_modules/fixture\nprintf generated > node_modules/fixture/generated.js\n", { mode: 0o755 });
+    expect(await commitPipelineStage(f.subject, "review", false, f.exec, ["report.txt"])).toMatchObject({ ok: true });
+    expect(fs.readFileSync(path.join(f.repo, "node_modules/fixture/index.js"), "utf8")).toBe("original\n");
+    expect(fs.existsSync(path.join(f.repo, "node_modules/fixture/generated.js"))).toBe(false);
+    expect(fs.readFileSync(path.join(f.lane, "node_modules/fixture/generated.js"), "utf8")).toBe("generated");
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});
+
 test("package installs: a real offline npm install changes only the writable lane", async () => {
   const f = await fixture();
   try {

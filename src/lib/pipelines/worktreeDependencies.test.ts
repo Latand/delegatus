@@ -63,6 +63,19 @@ test.each(["darwin", "linux", "win32"] as const)("%s fallback gives a read-only 
   } finally { f.close(); }
 });
 
+test("a resumed read-only lane releases an old source link before package code runs", async () => {
+  const f = fixture();
+  try {
+    fs.symlinkSync(f.source, f.local, "dir");
+    isolateWorktreeDependencies(f.pipeline);
+    expect(fs.existsSync(f.local)).toBe(false);
+    expect(await prepareWorktreeDependencies(f.pipeline, { platform: "win32", copyFile: unavailable })).toBe("copy");
+    fs.mkdirSync(path.join(f.local, "fixture"), { recursive: true });
+    fs.writeFileSync(path.join(f.local, "fixture/existing-link.js"), "generated\n");
+    expect(fs.existsSync(path.join(f.source, "fixture/existing-link.js"))).toBe(false);
+  } finally { f.close(); }
+});
+
 test.each(["darwin", "linux", "win32"] as const)("%s keeps a writable lane private when CoW is unavailable", async platform => {
   const f = fixture(true);
   try {

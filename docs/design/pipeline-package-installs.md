@@ -8,9 +8,9 @@ in place. Dependencies must be ignored by Git before provisioning adds them.
 
 | Platform | First choice | Fallback |
 | --- | --- | --- |
-| macOS | Per-file APFS clonefile through `COPYFILE_FICLONE_FORCE` | Directory symlink for a lane with only read-only stages |
-| Linux | Per-file filesystem reflink through `COPYFILE_FICLONE_FORCE` | Directory symlink for a lane with only read-only stages |
-| Windows and other platforms | Directory link for a lane with only read-only stages | Private install for writers |
+| macOS | Per-file APFS clonefile through `COPYFILE_FICLONE_FORCE` | Private writable copy |
+| Linux | Per-file filesystem reflink through `COPYFILE_FICLONE_FORCE` | Private writable copy |
+| Windows and other platforms | Private writable copy | Private install if copying is unsupported |
 
 A forced clone fails when the filesystem cannot share blocks. It never silently
 copies the full installation. Each cloned file has its own inode; dependency
@@ -19,14 +19,17 @@ rebased into the clone. A link outside the installation prevents writable
 sharing. Disk-full and permission errors stop provisioning and preserve the
 source; they do not select the sharing fallback.
 
-A writable stage on a filesystem without CoW needs a private install, using its
-package manager's usual shared download cache. This safety exception avoids
-letting an installer follow a symlink into the source repository. An access
-change from read-only to writable releases the borrowed source link before
-launch. Publication releases it before its frozen Bun install. These paths
-preserve private installations and unrelated links. Read-only settlement may
-borrow the source toolchain just for the repository hook and releases that
-link afterward.
+A private install is required during stage provisioning when manifests,
+lockfiles or package-manager configuration differ, when workspaces or local
+dependencies need lane-local resolution, or when even a private copy cannot be
+made. The package manager uses its usual shared download cache. This avoids
+letting an installer follow a link into the source repository. Every stage
+launch releases a source-owned dependency link, including resumed read-only
+stages, while preserving private installations and unrelated links. Publication
+releases a source-owned link before its frozen Bun install. Settlement prepares an isolated clone or copy
+for repository hooks even when the source and lane inputs differ, then leaves
+that private tree in the lane; hooks therefore keep running without writing to
+the source installation.
 
 `worktreeDependencies.test.ts` exercises the platform choices, clone flags,
 private writes, internal links, failure cleanup and access transitions. The
