@@ -20,7 +20,9 @@ Project settings use the canonical project key, role variants inherit their
 role's cap, and the stage cap and the role variant selector travel with the
 durable launch profile through resume and recovery. A resume that names no
 stage cap keeps the conversation's; an explicit null clears it. Project and
-role defaults are read again at launch.
+role defaults are read again at launch. A pipeline stage that names no role
+takes Builder's cap, at launch, in `create_pipeline` previews and in OOM
+recovery alike.
 A role's cap belongs to no engine or model: changing the row's model or engine
 in the Agents table, the banner's bulk move and the maintainer's picker keep
 it, and only the row's reset clears it.
