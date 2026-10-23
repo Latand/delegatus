@@ -139,13 +139,26 @@ describe("retained worktree drilldown", () => {
             const scroller = (element.querySelector("[data-worktree-body]") ?? element.parentElement)!;
             const failures = measure(element);
             const rows = [...element.querySelectorAll("[data-retained-worktree]")];
+            const channels = (color: string) => color.match(/[\d.]+/g)!.slice(0, 3).map(Number);
+            const background = channels(getComputedStyle(element).backgroundColor);
+            const luminance = (rgb: number[]) => rgb.map(value => value / 255).map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4)
+              .reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index]!, 0);
+            const rowText = rows.flatMap(row => [...row.querySelectorAll("p, span")].map(text => {
+              const style = getComputedStyle(text);
+              let opacity = 1;
+              for (let parent: Element | null = text; parent; parent = parent.parentElement) opacity *= Number(getComputedStyle(parent).opacity);
+              const alpha = (Number(style.color.match(/[\d.]+/g)?.[3] ?? 1)) * opacity;
+              const foreground = channels(style.color).map((channel, index) => channel * alpha + background[index]! * (1 - alpha));
+              const [high, low] = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
+              return { text: text.textContent, opacity, contrast: (high! + 0.05) / (low! + 0.05) };
+            }));
             const sizes = rows.map(row => {
               const size = row.querySelector("[data-worktree-size]")?.getBoundingClientRect(); const box = row.getBoundingClientRect();
               return size ? box.right - size.right : null;
             });
             return { failures, left: bounds.left, right: bounds.right, top: bounds.top, bottom: bounds.bottom, text: element.textContent,
               scrollTop: scroller.scrollTop, scrollable: scroller.scrollHeight > scroller.clientHeight + 1,
-              focused: element.contains(document.activeElement), background: getComputedStyle(element).backgroundColor, sizeInset: sizes };
+              focused: element.contains(document.activeElement), background: getComputedStyle(element).backgroundColor, sizeInset: sizes, rowText };
           };
           const geometry = await target.evaluate(reading);
           expect(geometry.failures).toEqual([]);
@@ -154,6 +167,12 @@ describe("retained worktree drilldown", () => {
           if (name !== "entry") expect(geometry.background).not.toBe("rgba(0, 0, 0, 0)");
           // A size sits against the row's right padding whether or not it wrapped.
           for (const inset of geometry.sizeInset) if (inset !== null) expect(inset).toBeLessThan(14);
+          // Include every ancestor's applied opacity: readable color tokens alone
+          // do not protect the retained content while the next request is held.
+          for (const row of geometry.rowText) {
+            expect(row.opacity, `${name}: ${row.text}`).toBe(1);
+            expect(row.contrast, `${name}: ${row.text}`).toBeGreaterThanOrEqual(4.5);
+          }
           await page.screenshot({ path: path.join(out, `${width}-${lang}-${theme}-${name}.png`) });
           if (geometry.scrollable) {
             const covered = await target.evaluate(async element => {
@@ -197,7 +216,8 @@ describe("retained worktree drilldown", () => {
           // Sizes read in the entry's units; no raw byte counts anywhere.
           expect(firstText).toContain("1 MiB");
           expect(firstText).not.toMatch(/\d[ ,  ]\d{3}\s?(B|Б)\b/);
-          // The report time is shown once; only the row observed earlier carries its own.
+          // Fresh decisions have differing raw timestamps within the report's
+          // displayed minute; only the row observed earlier carries its own.
           expect(await dialog.locator("[data-retained-worktree] p.text-muted").filter({ hasText: text("worktrees.observed", { at: "" }).trim() }).count()).toBe(1);
           expect(await dialog.locator("header p").first().innerText()).toBe(text("worktrees.hint"));
           expect(await dialog.locator("header p").first().evaluate(element => { const r = document.createRange(); r.selectNodeContents(element); return r.getClientRects().length; })).toBe(1);
@@ -211,11 +231,15 @@ describe("retained worktree drilldown", () => {
           await page.waitForFunction(() => document.querySelector("[data-worktree-body]")?.getAttribute("aria-busy") === "true");
           expect(await boxes()).toEqual(stable);
           expect(await dialog.locator("[data-retained-worktree]").count()).toBe(4);
+          expect(await dialog.getByRole("status", { name: text("worktrees.loading") }).isVisible()).toBe(true);
+          expect(await next.isEnabled()).toBe(false);
+          expect(await previous.isEnabled()).toBe(false);
           await frame("paging");
           await page.evaluate(() => (window as unknown as { __releaseWorktreePage: () => void }).__releaseWorktreePage());
           await state("ready");
           await page.waitForFunction(() => document.querySelector("[data-worktree-range]")?.textContent?.startsWith("5–8"));
           expect(await boxes()).toEqual(stable);
+          expect(await dialog.getByRole("status", { name: text("worktrees.loading") }).count()).toBe(0);
           // Row five has no recorded time or size.
           expect(await dialog.innerText()).toContain(text("worktrees.unknownSize"));
           expect(await dialog.innerText()).toContain(text("worktrees.observed", { at: text("worktrees.unknownTime") }));

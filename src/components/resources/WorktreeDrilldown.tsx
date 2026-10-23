@@ -44,7 +44,7 @@ export function WorktreeDrilldown({ onClose }: { onClose: () => void }) {
   };
   const date = (at: string | null) => at ? new Date(at).toLocaleString(locale, { dateStyle: "medium", timeStyle: "short" }) : t("worktrees.unknownTime");
   const page = result?.page;
-  // The previous page stays on screen, dimmed, until the next one arrives, so the dialog never changes size under the pager.
+  // Keep the previous page readable until the next one arrives, so the dialog never changes size under the pager.
   const loadingMore = !!page && result?.cursor !== cursor;
   const paged = !!page && page.rows.length > 0 && (!!page.previousCursor || !!page.nextCursor);
   return createPortal(
@@ -64,7 +64,7 @@ export function WorktreeDrilldown({ onClose }: { onClose: () => void }) {
             <p>{t(`worktrees.${result.error}` as MessageKey)}</p>
             {result.error !== "denied" ? <button type="button" className={`${BUTTON} mt-3`} onClick={() => { dialog.current?.focus(); setResult(null); setCursor(null); setRetry(value => value + 1); }}>{t("worktrees.reload")}</button> : null}
           </div> : page ? <>
-            {page.rows.length === 0 ? <p>{t("worktrees.empty")}</p> : <ol className={`space-y-3 ${loadingMore ? "opacity-50" : ""}`}>
+            {page.rows.length === 0 ? <p>{t("worktrees.empty")}</p> : <ol className="space-y-3">
               {page.rows.map((row, index) => <li key={page.start + index} className="rounded-lg border border-border px-3 py-2 text-xs leading-relaxed [overflow-wrap:anywhere]" data-retained-worktree="">
                 <p className="font-semibold">{row.task ?? (row.pipelineId ? t("worktrees.pipeline", { id: row.pipelineId }) : t("worktrees.noTask"))}</p>
                 <p className="font-mono text-muted">{row.repository ? `${row.repository} · ` : ""}{row.checkout}</p>
@@ -72,14 +72,17 @@ export function WorktreeDrilldown({ onClose }: { onClose: () => void }) {
                   <span>{t(`worktrees.reason.${row.reason}` as MessageKey)}</span>
                   <span className="ml-auto shrink-0 tabular-nums" data-worktree-size="">{row.bytes === null ? t("worktrees.unknownSize") : fmtBytes(row.bytes)}</span>
                 </div>
-                {row.observedAt === page.at ? null : <p className="text-muted">{t("worktrees.observed", { at: date(row.observedAt) })}</p>}
+                {row.observedAt !== null && date(row.observedAt) === date(page.at) ? null : <p className="text-muted">{t("worktrees.observed", { at: date(row.observedAt) })}</p>}
               </li>)}
             </ol>}
           </> : null}
         </div>
         {paged && page ? <footer className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-border p-3">
           <button type="button" className={BUTTON} disabled={loadingMore || !page.previousCursor} onClick={() => navigate(page.previousCursor)}>{t("worktrees.previous")}</button>
-          <span className="text-xs text-muted" data-worktree-range="">{t("worktrees.range", { first: page.start + 1, last: page.start + page.rows.length, total: page.total })}</span>
+          <span className="inline-flex items-center gap-2 text-xs text-muted" data-worktree-range="">
+            <span role="status" aria-label={t("worktrees.loading")} className={`size-3 shrink-0 animate-spin rounded-full border-2 border-current border-r-transparent ${loadingMore ? "" : "invisible"}`} />
+            {t("worktrees.range", { first: page.start + 1, last: page.start + page.rows.length, total: page.total })}
+          </span>
           <button type="button" className={BUTTON} disabled={loadingMore || !page.nextCursor} onClick={() => { if (page.nextCursor) navigate(page.nextCursor); }}>{t("worktrees.next")}</button>
         </footer> : null}
       </div>

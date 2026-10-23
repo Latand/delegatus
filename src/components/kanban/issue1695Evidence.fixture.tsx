@@ -4912,7 +4912,8 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
         checkout: index === 2 ? "../checkouts/retain-the-unpublished-export-and-its-source-evidence" : `worktrees/export-${index + 1}`,
         reason: (["open-pipeline", "not-created-by-delegatus", "local-only-commits", "ignored-files", "retention"] as const)[index % 5],
         bytes: index === 4 ? null : (index + 1) * 1048576,
-        observedAt: index === 4 ? null : index === 2 ? "2026-10-22T09:00:00.000Z" : at,
+        // Fresh sweep decisions follow the report clock by milliseconds or seconds.
+        observedAt: index === 4 ? null : index === 2 ? "2026-10-23T09:59:59.999Z" : `2026-10-23T10:00:0${index % 2}.${String(index + 1).padStart(3, "0")}Z`,
       }));
       return json({ at, mode: "on", total: rows.length, start, rows: rows.slice(start, start + 4),
         previousCursor: start ? String(Math.max(0, start - 4)) : null, nextCursor: start + 4 < rows.length ? String(start + 4) : null });
