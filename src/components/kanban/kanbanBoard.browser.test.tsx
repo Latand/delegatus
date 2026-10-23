@@ -23250,6 +23250,11 @@ describe("floating voice companion", () => {
        that list's end is, then those of its foot once its action row is. A row taller than the phone's dialog is
        read in these frames. */
     const defining: Record<string, (lang: "en" | "uk") => { head: string[]; tools?: string[]; foot: string[] }> = {
+      ...Object.fromEntries((["macos", "windows", "linux"] as const).map(platform => [`uncontained-${platform}`, (lang: "en" | "uk") => ({
+        head: [translate(lang, "voiceCompanion.tools.state.pending")],
+        foot: [translate(lang, `voiceCompanion.tools.containment.${platform === "macos" ? "MACOS" : platform === "windows" ? "WINDOWS" : "BWRAP_MISSING"}`),
+          translate(lang, "voiceCompanion.tools.uncontained.warning"), translate(lang, "voiceCompanion.tools.uncontained.once"), translate(lang, "voiceCompanion.tools.uncontained.confirm")],
+      })])),
       empty: lang => ({ head: [translate(lang, "voiceCompanion.tools.empty")], foot: [] }),
       "sign-in-required": lang => ({ head: [translate(lang, "voiceCompanion.tools.signIn")], foot: [] }),
       pending: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example",
@@ -23375,6 +23380,17 @@ describe("floating voice companion", () => {
             await page.waitForSelector("[data-voice-tool-state='enabled']");
             await page.locator("[data-voice-tool-server]").evaluate(element => element.scrollIntoView({ block: "start" }));
             await page.screenshot({ path: path.join(out, `${label}-approved.png`) });
+          }
+          if (state.startsWith("uncontained-")) {
+            const confirm = page.locator("[data-voice-tool-action='confirm-uncontained']");
+            await confirm.scrollIntoViewIfNeeded();
+            if (phone) await confirm.tap(); else await confirm.click();
+            await page.waitForSelector("[data-voice-tool-confirmation]");
+            expect(await page.locator("[data-voice-tool-uncontained]").count()).toBe(0);
+            expect(await page.locator("[data-voice-tool-dry-run]").getAttribute("data-voice-tool-dry-run")).toBe("OK");
+            const run = page.locator("[data-voice-tool-action='dry-run']");
+            await run.scrollIntoViewIfNeeded(); await run.click();
+            await page.waitForSelector("[data-voice-tool-uncontained]");
           }
           if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
         } finally { await context.close(); }
