@@ -128,7 +128,7 @@ test("SQL selection uses its recency index for both page forms and clamps at 100
     for (const sql of queries) {
       const params = sql.includes("< (?, ?)") ? [Date.parse("2026-09-20T12:00:00Z"), Date.parse("2026-09-20T12:00:00Z"), "deployment-0140", 3] : [101];
       const plan = query(`EXPLAIN QUERY PLAN ${sql}`).all(...params) as Array<{ detail: string }>;
-      expect(plan.some(row => row.detail.includes("deployment_list_recent"))).toBe(true);
+      expect(plan.some(row => row.detail.includes("deployment_list_started"))).toBe(true);
       expect(plan.some(row => /TEMP B-TREE/.test(row.detail))).toBe(false);
       if (params.length > 1) expect(plan.some(row => row.detail.includes("SEARCH"))).toBe(true);
       expect(sql).not.toContain("session");
@@ -183,7 +183,7 @@ test("index backfills legacy rows and stays correct for old-host writes and muta
   const filename = path.join(directory, "journal.sqlite");
   let journal = new RuntimeJournal(filename);
   const db = seed(journal, 2);
-  db.exec("DROP INDEX deployment_list_recent");
+  db.exec("DROP INDEX deployment_list_started");
   journal.close();
   journal = new RuntimeJournal(filename);
   const legacy = new Database(filename);
@@ -197,4 +197,26 @@ test("index backfills legacy rows and stays correct for old-host writes and muta
     // Old snapshots remain available to a previous Viewer throughout hand-over.
     expect(journal.snapshot().deployments).toContainEqual(updated);
   } finally { legacy.close(); journal.close(); fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("the started-at expression equals the subsec form it replaced, without needing SQLite 3.42", () => {
+  // The previous expression, kept here as the reference. Bun's own SQLite runs both.
+  const subsec = "COALESCE(CAST(round(unixepoch(json_extract(state_json, '$.createdAt'), 'subsec') * 1000) AS INTEGER), CAST(round(unixepoch(json_extract(state_json, '$.updatedAt'), 'subsec') * 1000) AS INTEGER), -8640000000000000)";
+  expect(DEPLOYMENT_LIST_STARTED_AT).not.toContain("subsec");
+  const db = new Database(":memory:");
+  try {
+    db.exec("CREATE TABLE entities(state_json TEXT)");
+    const stamps = ["2026-09-20T12:00:00.000Z", "2026-09-19T12:00:00.123Z", "2026-09-19T12:00:00.999Z", "2026-09-19T12:00:00Z",
+      "2026-09-19 12:00:00.5", "2026-09-19T15:00:00.001+03:00", "1970-01-01T00:00:00.000Z", "1969-12-31T23:59:59.999Z",
+      "2099-12-31T23:59:59.987Z", "2026-02-29T00:00:00Z", "not a date", ""];
+    const insert = db.query("INSERT INTO entities VALUES (?)");
+    for (const createdAt of stamps) insert.run(JSON.stringify({ createdAt, updatedAt: "2026-10-01T00:00:00.250Z" }));
+    insert.run(JSON.stringify({ updatedAt: "2026-10-01T00:00:00.250Z" }));
+    insert.run(JSON.stringify({}));
+    const rows = db.query<{ next: number; previous: number }, []>(`SELECT ${DEPLOYMENT_LIST_STARTED_AT} AS next, ${subsec} AS previous FROM entities`).all();
+    expect(rows).toHaveLength(stamps.length + 2);
+    for (const row of rows) expect(row.next).toBe(row.previous);
+    expect(rows[1]!.next).toBe(Date.parse("2026-09-19T12:00:00.123Z"));
+    expect(rows.at(-1)!.next).toBe(-8640000000000000);
+  } finally { db.close(); }
 });

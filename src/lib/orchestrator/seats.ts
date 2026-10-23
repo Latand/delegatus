@@ -643,6 +643,96 @@ function writeSeatFile(file: OrchestratorSeatFile): void {
   void withViewerOperation("orchestrator.recipient-authority", () => recipientAuthorityIndex(filePath, revision)).catch(() => {});
 }
 
+/** Preserve the seat that canonical-key collapse would otherwise displace.
+    Called under the mutation lock before the project alias is published, so
+    subsequent canonical reads see one active seat and the former one in the
+    ordinary previous-seat history. */
+export function reconcileOrchestratorSeatSuccession(sourceInput: string, targetInput: string, revokedAt: string): boolean {
+  return withAccountMutationLock(() => {
+    /* Validate every strict migration field first, then retain fields such as
+       provisional rollback custody that the strict retirement projection does
+       not expose. Both reads are under the mutation lock. */
+    readOrchestratorSeatMigrationEvidence();
+    const file = readOrchestratorSeatFile();
+    const source = canonicalOrchestratorProject(sourceInput);
+    const target = canonicalOrchestratorProject(targetInput);
+    if (source === target) return true;
+    const sourceSeat = file.seats[source];
+    const targetSeat = file.seats[target];
+    let changed = false;
+    if (sourceSeat || targetSeat) {
+      const winner = sourceSeat && targetSeat
+        ? (sourceSeat.seatEpoch > targetSeat.seatEpoch ? sourceSeat : targetSeat)
+        : sourceSeat ?? targetSeat!;
+      const displaced = sourceSeat && targetSeat
+        ? (winner === sourceSeat ? targetSeat : sourceSeat)
+        : null;
+      const rollback = winner === sourceSeat ? file.rollbacks[source] : file.rollbacks[target];
+      file.seats[target] = { ...winner, project: target };
+      delete file.seats[source];
+      if (rollback) file.rollbacks[target] = { ...rollback, project: target };
+      else delete file.rollbacks[target];
+      delete file.rollbacks[source];
+      if ((sourceSeat && sourceSeat.project !== target) || (targetSeat && targetSeat.project !== target)) changed = true;
+      if (displaced?.conversationId && winner.conversationId && displaced.conversationId !== winner.conversationId
+        && !file.revocations.some(row => row.project === target
+          && row.conversationId === displaced.conversationId && row.seatEpoch === displaced.seatEpoch)) {
+        file.revocations.push({
+          project: target,
+          conversationId: displaced.conversationId,
+          seatEpoch: displaced.seatEpoch,
+          revokedAt,
+          successorConversationId: winner.conversationId,
+          triggeredBy: winner.triggeredBy ?? null,
+          activatedAt: displaced.activatedAt,
+          path: displaced.path,
+          engine: displaced.engine ?? null,
+        });
+        changed = true;
+      }
+    }
+
+    const sourcePending = file.pending[source];
+    const targetPending = file.pending[target];
+    if (sourcePending || targetPending) {
+      const winner = sourcePending && targetPending
+        ? (sourcePending.seatEpoch > targetPending.seatEpoch ? sourcePending : targetPending)
+        : sourcePending ?? targetPending!;
+      const displaced = sourcePending && targetPending
+        ? (winner === sourcePending ? targetPending : sourcePending)
+        : null;
+      file.pending[target] = { ...winner, project: target };
+      delete file.pending[source];
+      if ((sourcePending && sourcePending.project !== target) || (targetPending && targetPending.project !== target)) changed = true;
+      if (displaced) {
+        const alreadyRecorded = file.history.some(entry => entry.reason === "superseded_epoch"
+          && entry.seat.project === target
+          && entry.seat.seatEpoch === displaced.seatEpoch
+          && entry.seat.intent.clientRequestId === displaced.intent.clientRequestId
+          && entry.seat.conversationId === displaced.conversationId);
+        if (!alreadyRecorded) {
+          recordTerminalization(file, {
+            seat: { ...displaced, project: target },
+            reason: "superseded_epoch",
+            terminalizedAt: revokedAt,
+          });
+          changed = true;
+        }
+      }
+    }
+
+    if (file.seatLineage) {
+      const remapped = file.seatLineage.map(entry => entry.project === source ? { ...entry, project: target } : entry);
+      const deduplicated = [...new Map(remapped.map(entry => [`${entry.project}\0${entry.conversationId}\0${entry.seatEpoch}`, entry])).values()];
+      if (JSON.stringify(file.seatLineage) !== JSON.stringify(deduplicated)) changed = true;
+      file.seatLineage = deduplicated;
+    }
+
+    if (changed) writeSeatFile(file);
+    return true;
+  }, { holder: "project succession seat reconciliation" });
+}
+
 /** The active seat, any pending intent, and the terminalized-intent history
     for one project (oldest first). */
 export function orchestratorSeatFor(project: string): {
@@ -799,6 +889,15 @@ export function allSeatConversationsIn(file: OrchestratorSeatFile | null): SeatC
     previous.conversationIds.add(revocation.conversationId);
     if (revocation.path) previous.paths.add(revocation.path);
   }
+  /* A pending intent can name an existing conversation. If identity
+     succession displaces that intent, its terminalization is the durable
+     record that keeps the conversation out of cleanup after the alias lands. */
+  for (const entry of file.history) {
+    if (entry.reason !== "superseded_epoch") continue;
+    const seat = entry.seat;
+    if (seat.conversationId) previous.conversationIds.add(seat.conversationId);
+    if (seat.path) previous.paths.add(seat.path);
+  }
   return {
     conversationIds: [...held.conversationIds],
     paths: [...held.paths],
@@ -876,20 +975,11 @@ export type BeginSeatIntentResult =
   /** The same key already completed: designation and injection both happened. */
   | { kind: "completed"; seat: OrchestratorSeat };
 
-/**
- * Persist the designate-and-inject intent BEFORE any side effect. Idempotent on
- * `clientRequestId`: a replay of a completed intent short-circuits to the active
- * seat (deliver nothing twice), and a replay of a STILL-LIVE pending one returns
- * it for the caller to finish. A NEW key is blocked (`in_progress`) only by a
- * genuinely in-flight pending intent — one with no terminal error whose epoch is
- * at or above the project's active seat. An ABANDONED pending intent — terminal
- * `intent.error` recorded, or epoch below the active seat — is TERMINALIZED in
- * the same write: moved out of the blocking `pending` position into the bounded
- * durable `history`, never deleted, and the new intent proceeds. A terminal
- * error outranks the idempotency key, so the intent that failed is cleared by
- * the very next begin whichever key sends it (issue #1067 AC 5).
- */
-export function beginOrchestratorSeatIntent(input: {
+/** `replayOnly` was set and this key holds no live pending or completed
+    intent: nothing was written. */
+export type NotReplayedSeatIntent = { kind: "not_replayed" };
+
+export interface BeginSeatIntentInput {
   project: string;
   mandate: string;
   /** The role table this intent's delivery carries; see `OrchestratorSeat.roleTable`. */
@@ -905,8 +995,28 @@ export function beginOrchestratorSeatIntent(input: {
   /** Who triggered this designation, resolved from the request by the caller —
       never read off a caller-supplied body, so attribution cannot be dictated. */
   triggeredBy?: OrchestratorSeatTrigger | null;
+  /** Finish this key's own intent only: a mandate that failed preflight may
+      still replay what its first attempt admitted, and never begins anew. */
+  replayOnly?: boolean;
   now?: string;
-}): BeginSeatIntentResult {
+}
+
+/**
+ * Persist the designate-and-inject intent BEFORE any side effect. Idempotent on
+ * `clientRequestId`: a replay of a completed intent short-circuits to the active
+ * seat (deliver nothing twice), and a replay of a STILL-LIVE pending one returns
+ * it for the caller to finish. A NEW key is blocked (`in_progress`) only by a
+ * genuinely in-flight pending intent — one with no terminal error whose epoch is
+ * at or above the project's active seat. An ABANDONED pending intent — terminal
+ * `intent.error` recorded, or epoch below the active seat — is TERMINALIZED in
+ * the same write: moved out of the blocking `pending` position into the bounded
+ * durable `history`, never deleted, and the new intent proceeds. A terminal
+ * error outranks the idempotency key, so the intent that failed is cleared by
+ * the very next begin whichever key sends it (issue #1067 AC 5).
+ */
+export function beginOrchestratorSeatIntent(input: BeginSeatIntentInput & { replayOnly?: false }): BeginSeatIntentResult;
+export function beginOrchestratorSeatIntent(input: BeginSeatIntentInput): BeginSeatIntentResult | NotReplayedSeatIntent;
+export function beginOrchestratorSeatIntent(input: BeginSeatIntentInput): BeginSeatIntentResult | NotReplayedSeatIntent {
   return withAccountMutationLock(() => {
     const file = readOrchestratorSeatFile();
     const project = canonicalOrchestratorProject(input.project);
@@ -932,6 +1042,9 @@ export function beginOrchestratorSeatIntent(input: {
     if (pending) {
       const abandoned = pending.intent.error !== null || (active !== undefined && pending.seatEpoch < active.seatEpoch);
       if (!abandoned) return { kind: "in_progress", seat: pending };
+    }
+    if (input.replayOnly) return { kind: "not_replayed" };
+    if (pending) {
       terminalized = recordTerminalization(file, {
         seat: pending,
         reason: pending.intent.error !== null ? "terminal_error" : "superseded_epoch",

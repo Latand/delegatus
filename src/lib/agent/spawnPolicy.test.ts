@@ -9,6 +9,8 @@ import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity"
 import { applyClaudeSpawnPolicy, fenceViewerSpawnPrompt, viewerMcpHttpUrl, viewerMcpServerEnv, viewerMcpTransport, viewerMcpTransportForLaunch, NATIVE_MULTI_AGENT_HOOK_MATCHER, NATIVE_MULTI_AGENT_TOOLS, NATIVE_SUBAGENT_DENY_MESSAGE, prepareManagedClaudeSpawnHome, viewerMcpServerEntry, VIEWER_SPAWN_PROMPT_FENCE } from "./spawnPolicy";
 import { viewerControlOrigin, viewerControlToken } from "@/lib/mcp/controlEndpoint";
 import { telegramMcpUrl } from "@/lib/telegram/packaging";
+import { headlessCodexThreadConfig } from "@/lib/codexHeadlessConfig";
+import { withAgentConfigSandbox } from "@/lib/runtime/agentConfigSandbox";
 
 const homes: string[] = [];
 const TELEGRAM_HEADERS = {
@@ -24,6 +26,75 @@ function home(): string {
   homes.push(directory);
   return directory;
 }
+
+test("an explicit isolated state directory takes precedence over an inherited host stamp", () => {
+  const root = home();
+  const state = path.join(root, "isolated-state");
+  expect(viewerMcpServerEnv({ LLV_STATE_DIR: state, LLV_STRUCTURED_HOST: path.join(root, "other-install") }).LLV_STATE_DIR).toBe(state);
+});
+
+test.each(["linux", "darwin"])("Viewer state pin survives %s sandbox and registered environment overrides", (layout) => {
+  const root = home();
+  const names = ["XDG_CONFIG_HOME", "LLV_STATE_DIR", "LLV_STRUCTURED_HOST", "LLV_VIEWER_DEPLOY_TARGET"] as const;
+  const previous = Object.fromEntries(names.map(name => [name, process.env[name]]));
+  const realState = path.join(root, "operator", "state");
+  const source: NodeJS.ProcessEnv = { ...process.env, LLV_STRUCTURED_HOST: undefined, LLV_STATE_DIR: realState,
+    XDG_CONFIG_HOME: path.join(root, "operator", "config"),
+    TMPDIR: path.join(root, layout === "darwin" ? "private/var/folders/example/T" : "tmp") };
+  const agent = withAgentConfigSandbox({ NODE_ENV: "test" }, source, path.join(root, ".claude"));
+  agent.LLV_STRUCTURED_HOST = realState;
+  const registered = { command: "delegatus-mcp", env: {
+    LLV_STATE_DIR: agent.LLV_STATE_DIR, DELEGATUS_STATE_DIR: agent.LLV_STATE_DIR,
+    XDG_CONFIG_HOME: agent.XDG_CONFIG_HOME, LLV_VIEWER_DEPLOY_TARGET: path.join(root, "stale-release.json"), EXTRA: "kept",
+  } };
+  const account = path.join(root, "account");
+  fs.mkdirSync(account);
+  fs.writeFileSync(path.join(account, ".claude.json"), JSON.stringify({ mcpServers: { viewer: registered } }));
+  try {
+    for (const host of [source, agent]) {
+      for (const name of names) {
+        if (host[name] === undefined) delete process.env[name]; else process.env[name] = host[name];
+      }
+      const policy = applyClaudeSpawnPolicy(account, { profileId: "state-pin", viewerTransport: "stdio" });
+      const claude = JSON.parse(fs.readFileSync(policy.mcpConfigPath, "utf8")).mcpServers.viewer;
+      const codex = headlessCodexThreadConfig({ config: { mcp_servers: { viewer: registered } } }, false, undefined, undefined, "stdio");
+      for (const entry of [claude, (codex.mcp_servers as Record<string, { env: Record<string, string> }>).viewer]) {
+        expect(entry.env.LLV_STATE_DIR).toBe(realState);
+        expect(entry.env.LLV_VIEWER_DEPLOY_TARGET).toBeUndefined();
+        expect(entry.env.EXTRA).toBe("kept");
+      }
+    }
+    expect(agent.LLV_STATE_DIR).not.toBe(realState);
+  } finally {
+    for (const name of names) {
+      if (previous[name] === undefined) delete process.env[name]; else process.env[name] = previous[name];
+    }
+  }
+});
+
+test.each(["linux", "darwin"])("authenticated Viewer MCP launch recovers the real config root from the %s host stamp", async layout => {
+  const root = home();
+  const sandboxConfig = path.join(root, layout === "darwin" ? "private/var/folders/example/T" : "tmp", "llv-spawn-sandbox/.claude/config");
+  const realConfig = path.join(root, "operator", "config");
+  const realState = path.join(realConfig, "agent-log-viewer", "state");
+  fs.mkdirSync(path.dirname(realState), { recursive: true });
+  fs.mkdirSync(realState);
+  const key = crypto.randomUUID();
+  fs.writeFileSync(path.join(path.dirname(realState), "token"), key);
+  const viewer = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request =>
+    request.headers.get("authorization") === `Bearer ${key}` ? Response.json({ ok: true }) : new Response("credential required", { status: 403 }),
+  });
+  try {
+    const env = viewerMcpServerEnv({ HOME: root, XDG_CONFIG_HOME: sandboxConfig,
+      LLV_STATE_DIR: path.join(sandboxConfig, "agent-log-viewer", "state"), LLV_STRUCTURED_HOST: realState,
+      LLV_VIEWER_PORT: String(viewer.port), PATH: process.env.PATH });
+    expect(env.LLV_STATE_DIR).toBe(realState);
+    expect(env.XDG_CONFIG_HOME).toBe(realConfig);
+    const origin = viewerControlOrigin(env);
+    const token = viewerControlToken(env, origin);
+    expect(await fetch(origin, { headers: token ? { authorization: `Bearer ${token}` } : {} })).toHaveProperty("status", 200);
+  } finally { viewer.stop(true); }
+});
 
 test.each([[false, false], [false, true], [true, false], [true, true]] as const)("Claude publication settings override inherited settings env (account: %s, configured: %s)", (accountSettings, configured) => {
   const accountHome = home();

@@ -49,13 +49,26 @@ function rewriteReceiptFileAsV1(receiptPath: string): void {
   }));
 }
 
-async function waitForFile(filename: string, timeoutMs = 3_000): Promise<boolean> {
+// A child's milestone is bounded by the test's own timeout, never by runner
+// speed: process startup under load can take seconds. Pass the child to stop
+// waiting as soon as it exits without reaching the milestone.
+const MILESTONE_TIMEOUT_MS = 60_000;
+const SLOW_FLOW_ACTION_LINE = /^\[mcp slow\] pid=\d+ role=[a-z-]+ tool=flow_action(?: [a-zA-Z]+Ms=\d+)+$/;
+
+async function waitForAnyFile(filenames: string[], child?: { exited: Promise<number> }, timeoutMs = MILESTONE_TIMEOUT_MS): Promise<string | null> {
   const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (fs.existsSync(filename)) return true;
+  let exited = false;
+  void child?.exited.then(() => { exited = true; }, () => { exited = true; });
+  while (Date.now() < deadline && !exited) {
+    const found = filenames.find((filename) => fs.existsSync(filename));
+    if (found) return found;
     await Bun.sleep(10);
   }
-  return fs.existsSync(filename);
+  return filenames.find((filename) => fs.existsSync(filename)) ?? null;
+}
+
+async function waitForFile(filename: string, timeoutMs = MILESTONE_TIMEOUT_MS, child?: { exited: Promise<number> }): Promise<boolean> {
+  return await waitForAnyFile([filename], child, timeoutMs) === filename;
 }
 
 async function waitForFileCount(directory: string, prefix: string, count: number, timeoutMs = 10_000): Promise<boolean> {
@@ -1340,6 +1353,8 @@ describe("MCP tool service", () => {
     const handoffReadyPath = path.join(directory, "handoff-ready");
     const handoffReleasePath = path.join(directory, "handoff-release");
     const reuseReadyPath = path.join(directory, "reuse-ready");
+    const reuseWaitingPath = `${reuseReadyPath}-waiting`;
+    const reuseProceedPath = `${reuseReadyPath}-proceed`;
     const reuseReleasePath = path.join(directory, "reuse-release");
     const countPath = path.join(directory, "binding-count");
     const reaperResultPath = path.join(directory, "reaper-result.json");
@@ -1369,7 +1384,7 @@ describe("MCP tool service", () => {
       stdout: "ignore",
       stderr: "pipe",
     }));
-    expect(await waitForFile(handoffReadyPath)).toBeTrue();
+    expect(await waitForFile(handoffReadyPath, undefined, reaper)).toBeTrue();
     expect(fs.existsSync(lockPath)).toBeFalse();
     expect(fs.statSync(pinPath).ino).toBe(staleInode);
 
@@ -1395,9 +1410,18 @@ describe("MCP tool service", () => {
       stdout: "ignore",
       stderr: "pipe",
     }));
-    const enteredBeforeRelease = await waitForFile(reuseReadyPath, 250);
+    // The successor signals an acquisition retry taken while the lock is free
+    // and the handoff still paused. Forced reuse during the handoff reaches the
+    // ready file instead, without such a retry.
+    expect(await waitForAnyFile([reuseWaitingPath, reuseReadyPath], first)).toBe(reuseWaitingPath);
+    expect(fs.existsSync(reuseReadyPath)).toBeFalse();
     fs.writeFileSync(handoffReleasePath, "release");
-    expect(await waitForFile(reuseReadyPath)).toBeTrue();
+    // The retiring generation finishes its own namespace cleanup before it
+    // claims, so its result proves the retired inode is free. Letting the
+    // successor retry before that leaves two generations racing one inode name.
+    expect(await waitForFile(reaperResultPath, undefined, reaper)).toBeTrue();
+    fs.writeFileSync(reuseProceedPath, "proceed");
+    expect(await waitForFile(reuseReadyPath, undefined, first)).toBeTrue();
     expect(Number(fs.readFileSync(reuseReadyPath, "utf8"))).toBe(staleInode);
     fs.writeFileSync(reuseReleasePath, "release");
     const processes = await Promise.all([
@@ -1406,18 +1430,22 @@ describe("MCP tool service", () => {
       childResult(second),
     ]);
 
-    expect(enteredBeforeRelease).toBeFalse();
-    expect(processes).toEqual([
-      { exit: 0, error: "" },
-      { exit: 0, error: "" },
-      { exit: 0, error: "" },
+    // Contended claimants may report the threshold-gated slow-call line on a
+    // loaded runner; any other stderr output still fails.
+    expect(processes.map(({ exit, error }) => ({
+      exit,
+      unexpected: error.split("\n").filter((line) => line && !SLOW_FLOW_ACTION_LINE.test(line)),
+    }))).toEqual([
+      { exit: 0, unexpected: [] },
+      { exit: 0, unexpected: [] },
+      { exit: 0, unexpected: [] },
     ]);
     const results = [reaperResultPath, firstResultPath, secondResultPath]
       .map((filename) => JSON.parse(fs.readFileSync(filename, "utf8")) as { ok: boolean; replayed: boolean });
     expect(results.filter((result) => result.ok && !result.replayed)).toHaveLength(1);
     expect(fs.readFileSync(countPath, "utf8").trim().split("\n")).toHaveLength(1);
     expect(recoveryArtifacts(directory)).toEqual([]);
-  }, 12_000);
+  }, 60_000);
 
   test("successors remain responsive and bounded while namespace release is paused", async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-lock-namespace-busy-"));
@@ -1904,6 +1932,7 @@ describe("MCP tool service", () => {
     try {
       const listed = await client.listTools();
       expect(listed.tools.map((tool) => tool.name)).toEqual([
+        "voice_tools",
         "spawn_agent",
         "send_message",
         "message_receipt",
@@ -2145,17 +2174,20 @@ test("async SQLite receipts retry each transition and a contended completion nev
   const store = await openAsyncMcpReceiptStore(filename);
   const holder = new Database(filename);
   const { stateLockWaitsInFlight } = await import("@/lib/state/lockWait");
-  const waiting = async () => {
-    const deadline = Date.now() + 2000;
+  // This connection holds the lock until the wait is observed, so a receipt
+  // operation that settles first never waited, whatever the runner's speed.
+  const waiting = async (pending: Promise<unknown>) => {
+    let settled = false;
+    void pending.then(() => { settled = true; }, () => { settled = true; });
     while (!stateLockWaitsInFlight().some(wait => wait.callSite.startsWith("mcp.receipts.") && wait.attempts >= 2)) {
-      if (Date.now() >= deadline) throw new Error("receipt operation did not yield while waiting for its lock");
+      if (settled) throw new Error("receipt operation did not yield while waiting for its lock");
       await Bun.sleep(1);
     }
   };
   const contended = async <T>(operation: () => T | Promise<T>) => {
     holder.exec("BEGIN IMMEDIATE");
     const result = operation();
-    try { await waiting(); }
+    try { await waiting(Promise.resolve(result)); }
     finally { holder.exec("ROLLBACK"); }
     return result;
   };
@@ -2191,13 +2223,14 @@ test("async SQLite receipts retry each transition and a contended completion nev
     const service = createMcpToolService(bindings, store);
     const args = { flowId: "flow_fixture", action: "pause", clientRequestId: "async-completion" };
     const completed = service.callTool("flow_action", args);
-    try { await waiting(); }
+    try { await waiting(completed); }
     finally { if (holder.inTransaction) holder.exec("ROLLBACK"); }
     expect(await completed).toMatchObject({ ok: true, effect: 1 });
     expect(await service.callTool("flow_action", args)).toMatchObject({ ok: true, replayed: true, effect: 1 });
     expect(effects).toBe(1);
   } finally { holder.close(); store.close(); }
-}, 10_000);
+  // Nothing here measures elapsed time, so the runner's own timeout bounds it.
+}, 60_000);
 
 const OTHER: McpRequestCaller = { kind: "worker", conversationId: "conversation_other", project: "proj-a" };
 const OTHER_PROJECT: McpRequestCaller = { kind: "worker", conversationId: "conversation_owner", project: "proj-b" };
@@ -3344,4 +3377,20 @@ test("hook transport proof is excluded from logical receipt arguments and downst
   expect(input).not.toHaveProperty("nativeCallerProof");
   expect(await harness.service.callTool("send_message", { ...SEND, nativeCallerProof: "y".repeat(43) })).toMatchObject({ ok: true, replayed: true });
   expect(harness.bindingCalls).toHaveLength(1);
+});
+
+
+test("retirement failures keep their terminal code and durable receipt on every mutation path", async () => {
+  for (const tool of ["flow_action", "pipeline_action", "stage_report", "create_pipeline"] as const) {
+    const code = tool === "flow_action" ? "FLOW_RETIRED" : "STAGE_KIND_RETIRED";
+    let calls = 0;
+    const service = createMcpToolService({ [tool]: async () => {
+      calls++;
+      throw new McpToolRefusal("Retired; use pipeline run stages.", { code, status: 410, retryable: false });
+    } } as unknown as McpToolBindings, new MemoryMcpReceiptStore());
+    const args = { clientRequestId: `retired-${tool}`, action: "pause" };
+    expect(await service.callTool(tool, args)).toMatchObject({ ok: false, code, retryable: false, replayed: false });
+    expect(await service.callTool(tool, args)).toMatchObject({ ok: false, code, retryable: false, replayed: true });
+    expect(calls).toBe(1);
+  }
 });

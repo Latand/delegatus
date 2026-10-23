@@ -1,3 +1,6 @@
+import { readSelf } from "@/lib/links/self";
+import { readFileConfirmationLink } from "@/lib/telegram/bot/fileConfirmationContract";
+import { FLOW_ARCHIVE, FLOW_RETIREMENT, STAGE_RETIREMENT, FlowRetiredError } from "@/lib/flows/retirement";
 import { performanceSpans } from "@/lib/performanceSpans";
 import { curationAnswer } from "@/lib/memory/curation/answer";
 import { resolvePrototypeReviewId as resolveStoredReviewId } from "@/lib/prototypeReview/store";
@@ -13,9 +16,12 @@ import { registryRowsMatching } from "@/lib/agent/sqliteRegistryStore";
 import { decidePrototype } from "@/lib/prototypeReview/decision";
 import { deliverPrototypeDecision } from "@/lib/prototypeReview/deliveryWorker";
 import { findPrototypeRound } from "@/lib/prototypeReview/store";
-import { autonomyActive, autonomyMandate, autonomyReportKey, pendingAutonomyReports } from "@/lib/monitor/autonomy";
+import { autonomyActive, proactiveActive, autonomyMandate, autonomyReportKey, pendingAutonomyReports } from "@/lib/monitor/autonomy";
+import { endedTurbo, turboActive, turboMandate, turboNeedsPlan, turboProgress } from "@/lib/monitor/turbo";
+import { turboChangeContext } from "@/lib/monitor/turboRuntime";
 import { changeSeatTickSettings, markAutonomyReported, markAutonomyDecisionReview } from "@/lib/monitor/seatTickSettings";
 import { pipelinePublishesRemoteBranch } from "@/lib/pipelines/publication";
+import { recordSeatProjectSuccessions, seatLaunchCwd } from "@/lib/orchestrator/seatProjectIdentity";
 import { namedProjectDirectory, resolveNamedProject, ProjectNameRefusal } from "@/lib/projects/nameResolution";
 import { releaseStatus } from "@/lib/release/answer";
 import { releaseControlChange } from "@/lib/release/store";
@@ -105,7 +111,7 @@ import type { AttentionRequestV1, FocusIntent, FocusTarget, ZoomIntent } from "@
 import { applyBoardCommand } from "@/lib/board/command";
 import { boardFor } from "@/lib/board/store";
 import { conversationDeliverabilityFromRecord } from "@/lib/conversation/deliverability";
-import { backoffDelayMs, DeadlineExceededError, deadlineSignal } from "@/lib/deadline";
+import { backoffDelayMs, DeadlineExceededError, deadlineSignal, systemScheduler, type DeadlineScheduler } from "@/lib/deadline";
 import { cancelRound, closeFlow, patchFlow } from "@/lib/flows/commands";
 import { flowSelectionSource } from "@/lib/flows/store";
 import { getFlowsWithPresets } from "@/lib/flows/engine";
@@ -158,6 +164,7 @@ import {
   readSeatTickSettings,
   writeSeatTickSettings,
   type SeatTickNoteLineEdits,
+  type SeatTickSettings,
   type SeatTickSettingsActor,
   type SeatTickSettingsChange,
 } from "@/lib/monitor/seatTickSettings";
@@ -179,7 +186,8 @@ import { ORCHESTRATOR_PROMPT_VERSION, ORCHESTRATOR_SYSTEM_PROMPT } from "@/lib/o
 import { contextReading, readOrchestratorTranscriptFacts, rotationRecommendation } from "@/lib/orchestrator/health";
 import { contextWindowPolicyFor } from "@/lib/orchestrator/contextPolicy";
 import { splitRelayMessageText } from "@/lib/orchestrator/relayText";
-import { leaveLessonForSeat, leaveLessonForConversation, lessonRequestForReport } from "@/lib/memory/roleStage";
+import { leaveLessonForOperator, leaveLessonForSeat, leaveLessonForConversation, lessonRequestForReport } from "@/lib/memory/roleStage";
+import { operatorMemoryEnabled, storedOperatorRoot } from "@/lib/memory/operatorMemory";
 import { readMemoryProblem } from "@/lib/memory/roleProblems";
 import { RoleMemoryRefusal } from "@/lib/memory/roleStore";
 import { withoutStoredLessonsAsync, renderReportAsync, scrubIssueReportAsync } from "@/lib/memory/privacy";
@@ -284,8 +292,9 @@ import {
   type McpToolPayload,
 } from "./server";
 import { parseSelectedContextRef } from "@/lib/selection/selectedContext";
-import { RETRYABLE_TELEGRAM_BOT_CODES, type TelegramBotErrorCode } from "@/lib/telegram/bot/contracts";
+import { RETRYABLE_TELEGRAM_BOT_CODES, readTelegramBotRefusals, type TelegramBotErrorCode } from "@/lib/telegram/bot/contracts";
 import { telegramSetUp } from "@/lib/telegram/launchReadiness";
+import { voiceTools } from "./voiceTools";
 
 import {
   accountLimitRows,
@@ -375,13 +384,13 @@ function controlRetryDelay(attempt: number): number {
   return backoffDelayMs(attempt, { baseMs: CONTROL_RETRY_BASE_MS, maxMs: CONTROL_RETRY_MAX_MS });
 }
 
-async function waitForControlRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
+async function waitForControlRetry(delayMs: number, signal?: AbortSignal, scheduler = systemScheduler): Promise<void> {
   if (signal?.aborted) throw signal.reason;
   await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(finish, delayMs);
+    const timer = scheduler.setTimeout(finish, delayMs);
     const onAbort = () => finish(signal?.reason);
     function finish(error?: unknown) {
-      clearTimeout(timer);
+      scheduler.clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
       if (error !== undefined) reject(error);
       else resolve();
@@ -647,6 +656,7 @@ async function dispatchViewerControl(
   headers: Record<string, string> = {},
   context: McpToolCallContext = {},
   pinConfiguredEndpoint = false,
+  scheduler: DeadlineScheduler = systemScheduler,
 ): Promise<Record<string, unknown>> {
   const baseUrl = viewerControlOrigin(process.env, pinConfiguredEndpoint);
   const token = viewerControlToken(process.env, baseUrl);
@@ -678,6 +688,7 @@ async function dispatchViewerControl(
   while (true) {
     context.assertCaller?.();
     attempt = deadlineSignal(Math.min(CONTROL_ATTEMPT_TIMEOUT_MS, Math.max(1, expiresAt - Date.now())), {
+      scheduler,
       signal: context.signal,
       reason: "Viewer control dispatch timed out",
     });
@@ -708,7 +719,7 @@ async function dispatchViewerControl(
           // Every preceding attempt was affirmatively refused before sending.
           // Keep the same durable binding, body and downstream key.
           try {
-            await waitForControlRetry(delayMs, context.signal);
+            await waitForControlRetry(delayMs, context.signal, scheduler);
           } catch {
             // Cancellation here cannot turn a refused connection into a send.
             throw refusedSend();
@@ -746,11 +757,13 @@ async function dispatchViewerControl(
   }
   if (result.error || (!response.ok && result.state !== "busy")) {
     const message = controlFailureMessage(response.status, result.error);
+    const refusals = readTelegramBotRefusals(result.refusals);
     const operationId = text(result.operationId);
     const launchId = text(result.launchId);
     if (operationId || launchId) {
       throw new McpDispatchVerdictError(message, {
         status: response.status,
+        ...(refusals.length ? { refusals } : {}),
         ...(operationId ? { operationId } : {}),
         ...(launchId ? { launchId } : {}),
         ...(text(result.conversationId) ? { conversationId: text(result.conversationId) } : {}),
@@ -766,7 +779,9 @@ async function dispatchViewerControl(
       ...(typeof result.expectedRevision === "number" || result.expectedRevision === null ? { expectedRevision: result.expectedRevision } : {}),
       ...(typeof result.retryAfterSeconds === "number" ? { retryAfterSeconds: result.retryAfterSeconds } : {}),
       ...(Array.isArray(result.sentMessageIds) && result.sentMessageIds.every((id) => typeof id === "number") ? { sentMessageIds: result.sentMessageIds } : {}),
+      ...(readFileConfirmationLink(result.confirmation) ? { confirmation: readFileConfirmationLink(result.confirmation) } : {}),
       ...(text(result.secretClass) ? { secretClass: text(result.secretClass) } : {}),
+      ...(refusals.length ? { refusals } : {}),
     });
   }
   return result;
@@ -774,6 +789,7 @@ async function dispatchViewerControl(
 
 export function productionViewerControlDependencies(
   pinConfiguredEndpoint = false,
+  scheduler: DeadlineScheduler = systemScheduler,
 ): ViewerControlDependencies {
   return {
     get: (pathname, context) => getViewerControl(pathname, context, pinConfiguredEndpoint),
@@ -790,6 +806,7 @@ export function productionViewerControlDependencies(
       headers,
       context,
       pinConfiguredEndpoint,
+      scheduler,
     ),
   };
 }
@@ -950,6 +967,10 @@ export interface ViewerMcpDomainDependencies {
       Null means the invariant "a registered session has a canonical project"
       is violated, and unscoped directive routing fails closed diagnostically. */
   callerProject?(): string | null;
+  /** The operator's own root conversation (no role, no parent, depth zero, no
+      membership) with its canonical project, or null. Production reads the
+      registry; leave_lesson admits it only while Delegatus memory is on. */
+  operatorConversation?(conversationId: string): { project: string | null } | null;
   /** The canonical projects of the repository this Viewer deploys (#1321) —
       the only projects whose designated seat may execute a deploy. Production
       derives them from the canonical Viewer remote, never from the caller's
@@ -1037,6 +1058,18 @@ function viewerOwnProjects(): string[] {
   const configured = process.env.LLV_VIEWER_CANONICAL_REMOTE?.trim();
   const remote = configured || viewerPackageManifest.repository.url.trim();
   return [...new Set(viewerRepositoryProjects(remote, process.cwd()).map(canonicalOrchestratorProject))];
+}
+
+/** The registry's proof that a caller is the operator's own root conversation:
+    the conversation's durable operator-origin stamp plus the root shape. */
+export function operatorConversationFromSnapshot(snapshot: RegistrySnapshot, conversationId: string): { project: string | null } | null {
+  const conversation = readOnlyConversationLookupFromSnapshot(snapshot).conversation(conversationId as `conversation_${string}`);
+  if (!conversation || !storedOperatorRoot(conversation, snapshot.memberships[conversation.id])) return null;
+  return { project: callerProjectFromSnapshot(snapshot, conversation.id) };
+}
+
+function productionOperatorConversation(conversationId: string): { project: string | null } | null {
+  return operatorConversationFromSnapshot(agentRegistry().readOnlySnapshot(), conversationId);
 }
 
 /**
@@ -2396,6 +2429,7 @@ async function createPipeline(args: McpToolArgs, context?: McpToolCallContext, d
   if (!result.pipeline) {
     if (context?.dispatch) context.dispatch.attempted = false;
     const message = result.error ?? "could not create pipeline";
+    if (result.code === STAGE_RETIREMENT.code) throw new McpToolRefusal(message, { ...STAGE_RETIREMENT, retryable: false });
     /* #1026: a rejected create carries every violated constraint with its field
        and expected shape, so an agent composing its first pipeline reads the
        whole contract from one answer — the same list an HTTP caller receives. */
@@ -2488,6 +2522,7 @@ async function pipelineAction(args: McpToolArgs, dependencies: ViewerMcpDomainDe
     : await dependencies.patchPipeline(pipelineId, request as PatchPipelineRequest);
   if (!result.pipeline) {
     const message = result.error ?? "could not update pipeline";
+    if (result.code === STAGE_RETIREMENT.code) throw new McpToolRefusal(message, { ...STAGE_RETIREMENT, retryable: false });
     /* A refused close carries the hosts it stopped and the one it could not
        (#670); an agent driving the board must not get less than an HTTP caller. */
     if (result.details) throw new McpToolRefusal(message, { code: result.code, details: result.details });
@@ -2659,13 +2694,29 @@ async function leaveLesson(args: McpToolArgs, dependencies: ViewerMcpDomainDepen
     const seat = caller.conversationId && (caller.kind === "manager" || caller.kind === "gateway")
       ? (dependencies.authorizedSeats?.() ?? authorizedManagerSeats(productionManagerAuthoritySources())).find(row => row.conversationId === caller.conversationId)
       : null;
+    const answer = { lesson: args.lesson, rewrite: args.rewrite, none: args.none, problem: args.problem, applied: args.applied, misled: args.misled };
+    /* The operator's own root conversation, in Delegatus mode only: proven by
+       the registry, never by an argument (memory-source-switch.md §3.3). */
+    const operator = () => {
+      if (!caller.conversationId || caller.role || !operatorMemoryEnabled()) return null;
+      const found = (dependencies.operatorConversation ?? productionOperatorConversation)(caller.conversationId);
+      return found ? { project: found.project, conversationId: caller.conversationId } : null;
+    };
     if (caller.kind === "manager" && !seat) throw new RoleMemoryRefusal("LESSON_NOT_A_SEAT", "this caller has no active project designation");
-    if (caller.kind === "gateway" && !seat) throw new RoleMemoryRefusal("LESSON_NOT_A_SEAT", "this gateway conversation has no active project designation");
-    const answer = { lesson: args.lesson, rewrite: args.rewrite, none: args.none, problem: args.problem };
-    const result = seat ? leaveLessonForSeat(seat, answer) : leaveLessonForConversation(
-      dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? [], caller.conversationId, answer,
-    );
-    return { ...result };
+    if (caller.kind === "gateway" && !seat) {
+      const own = operator();
+      if (own) return { ...leaveLessonForOperator(own, answer) };
+      throw new RoleMemoryRefusal("LESSON_NOT_A_SEAT", "this gateway conversation has no active project designation");
+    }
+    if (seat) return { ...leaveLessonForSeat(seat, answer) };
+    try {
+      return { ...leaveLessonForConversation(dependencies.listPipelineRecords?.() ?? dependencies.getPipelines?.().pipelines ?? [], caller.conversationId, answer) };
+    } catch (error) {
+      // Only a conversation that holds no stage attempt at all may be the operator's.
+      const own = error instanceof RoleMemoryRefusal && error.code === "LESSON_NOT_AN_ATTEMPT" && caller.kind === "agent" ? operator() : null;
+      if (!own) throw error;
+      return { ...leaveLessonForOperator(own, answer) };
+    }
   } catch (error) {
     if (error instanceof RoleMemoryRefusal) {
       throw new McpToolRefusal(error.message, { code: error.code, status: error.code === "LESSON_INVALID" ? 400 : 409 });
@@ -3934,6 +3985,8 @@ function reportDestinations(seq: number, telegram: BridgeReportTelegram | null):
           ...(telegram.messageIds?.length ? { messageIds: telegram.messageIds } : {}),
           ...(telegram.code ? { code: telegram.code, retryable: isRetryableReportSend(telegram.code) } : {}),
           ...(telegram.message ? { message: telegram.message } : {}),
+          ...(telegram.bot ? { bot: telegram.bot } : {}),
+          ...(telegram.refusals ? { refusals: telegram.refusals } : {}),
         },
       }
       : {}),
@@ -3970,9 +4023,10 @@ async function postReportTelegram(
     outcome = { ok: false, code: "telegram_failed", message: error instanceof Error ? error.message : String(error) };
   }
   const at = new Date().toISOString();
+  const evidence = { ...(outcome.bot ? { bot: outcome.bot } : {}), ...(outcome.refusals ? { refusals: outcome.refusals } : {}) };
   return recordBridgeReportTelegram(reportId, outcome.ok
-    ? { state: "sent", messageIds: outcome.messageIds, at }
-    : { state: outcome.code === "send_uncertain" ? "uncertain" : "failed", code: outcome.code, message: outcome.message ?? `Telegram report send failed (${outcome.code})`, at })?.telegram ?? null;
+    ? { state: "sent", messageIds: outcome.messageIds, at, ...evidence }
+    : { state: outcome.code === "send_uncertain" ? "uncertain" : "failed", code: outcome.code, message: outcome.message ?? `Telegram report send failed (${outcome.code})`, at, ...evidence })?.telegram ?? null;
 }
 
 export interface ReportTelegramSend {
@@ -3982,9 +4036,9 @@ export interface ReportTelegramSend {
   clientRequestId: string;
 }
 
-export type ReportTelegramSendOutcome =
+export type ReportTelegramSendOutcome = { bot?: string; refusals?: { bot: string; code: string }[] } & (
   | { ok: true; messageIds: number[] }
-  | { ok: false; code: string; message?: string };
+  | { ok: false; code: string; message?: string });
 
 async function productionSendReportTelegram(input: ReportTelegramSend, control: ViewerControlDependencies | null): Promise<ReportTelegramSendOutcome> {
   if (!control) return { ok: false, code: "telegram_failed", message: "no Viewer control is available to post through" };
@@ -3997,12 +4051,14 @@ async function productionSendReportTelegram(input: ReportTelegramSend, control: 
       text: input.html,
       format: "html",
       silent: true,
-    }, callerCapabilityHeaders()) as { messageIds?: unknown };
+    }, callerCapabilityHeaders()) as { messageIds?: unknown; sentBy?: { username?: string | null }; refusals?: import("@/lib/telegram/bot/contracts").TelegramBotRefusal[] };
     const messageIds = Array.isArray(result?.messageIds) ? result.messageIds.filter((id): id is number => Number.isInteger(id)) : [];
-    return { ok: true, messageIds };
+    return { ok: true, messageIds, ...(result.sentBy?.username ? { bot: result.sentBy.username } : {}),
+      ...(result.refusals ? { refusals: readTelegramBotRefusals(result.refusals).map(r => ({ bot: r.bot.username ?? r.bot.name, code: r.code })) } : {}) };
   } catch (error) {
     if (error instanceof McpDispatchVerdictError && typeof error.details.code === "string") {
-      return { ok: false, code: error.details.code, message: error.message };
+      return { ok: false, code: error.details.code, message: error.message,
+        ...(Array.isArray(error.details.refusals) ? { refusals: readTelegramBotRefusals(error.details.refusals).map(r => ({ bot: r.bot.username ?? r.bot.name, code: r.code })) } : {}) };
     }
     return { ok: false, code: "telegram_failed", message: error instanceof Error ? error.message : String(error) };
   }
@@ -4385,7 +4441,10 @@ function orchestratorDispatchRefusal(error: unknown): McpDispatchNotExecutedErro
 
 /** Resolve names through the directory shared with voice and transcript search. */
 function resolveOrchestratorToolProject(named: string, dependencies: ViewerMcpDomainDependencies, requireActiveSeat = true): string {
-  try { return resolveNamedProject(named, namedProjectDirectory(dependencies), requireActiveSeat); }
+  try {
+    recordSeatProjectSuccessions(seatLaunchCwd, true);
+    return resolveNamedProject(named, namedProjectDirectory(dependencies), requireActiveSeat);
+  }
   catch (error) {
     if (error instanceof ProjectNameRefusal) throw new McpToolRefusal(error.message, error.details);
     throw error;
@@ -4688,6 +4747,7 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
 
   const change: SeatTickSettingsChange = {};
   if (args.autonomy !== undefined) change.autonomy = args.autonomy as SeatTickSettingsChange["autonomy"];
+  if (args.turbo !== undefined) change.turbo = args.turbo as SeatTickSettingsChange["turbo"];
   if (args.autonomyDecision !== undefined) change.autonomyDecision = structuredClone(args.autonomyDecision) as SeatTickSettingsChange["autonomyDecision"];
   if (args.release !== undefined) change.release = args.release as SeatTickSettingsChange["release"];
   if (args.autoRotate !== undefined) change.autoRotate = args.autoRotate as SeatTickSettingsChange["autoRotate"];
@@ -4757,13 +4817,17 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
         instructionActor = { ...actor, kind: "manager", project: authorizedProject, seatEpoch: null };
       }
     }
-    const context = { at: new Date().toISOString(), actor, instructionActor };
+    /* Paid credits spend money: the tool never approves them; the operator ticks them in the panel. */
+    if ((change.turbo as { credits?: unknown } | undefined)?.credits === true) throw new Error("paid credits are approved only in the operator's Turbo dialog");
+    const context = { at: new Date().toISOString(), actor, instructionActor, ...(turboNeedsPlan(change.turbo) ? { turbo: turboChangeContext(project) } : {}) };
     const applied = dependencies.writeTickSettings || dependencies.readTickSettings
       ? applySeatTickSettingsChange(current, change, context)
       : changeSeatTickSettings(project, change, context);
     if (!applied.ok) throw new Error(applied.error);
     if (change.release) releaseControlChange(project, change.release, actor, applied.settings.updatedAt!);
     if (dependencies.writeTickSettings || dependencies.readTickSettings) writeSettings(project, applied.settings);
+    /* The Viewer owns Codex hosts and runs the sweep from its seat-tick pass.
+       MCP writes only the durable setting; its process cannot dispatch host RPCs. */
     if (review) {
       const taskId = change.autonomyDecision?.taskId ?? null;
       const authorize = () => {
@@ -4801,6 +4865,8 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
   delete settingsWithoutPrompt.release;
   delete settingsWithoutPrompt.autonomy;
   delete settingsWithoutPrompt.autonomyHistory;
+  delete settingsWithoutPrompt.turbo;
+  delete settingsWithoutPrompt.turboHistory;
   /* #2030: a write is acknowledged, never read back. The caller holds what it
      sent; the revision and the stored length are what it needs to know the row
      took it. A change to another project's tick still says so out loud. */
@@ -4862,8 +4928,10 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
        see what it is restoring before it restores it. */
     ...(verbose ? { defaults: seatTickScheduleDefaults(project) } : {}),
     autonomy: settings.autonomy || settings.autonomyHistory?.length || verbose ? { active: autonomyActive(settings.autonomy, now), until: settings.autonomy?.until ?? null, startedAt: settings.autonomy?.startedAt ?? null,
+      proactive: { enabled: effective.enabled && proactiveActive(effective.autonomy, now) },
       decisionCount: settings.autonomy?.decisions.length ?? 0, pendingReports: pendingAutonomyReports(settings, now).map(autonomyReportKey),
       ...(verbose ? { mandate: autonomyMandate(settings.autonomy, now).join("\n").trim(), episode: effective.autonomy, history: settings.autonomyHistory ?? [] } : {}) } : { active: false },
+    ...(settings.turbo || settings.turboHistory?.length || verbose ? { turbo: turboToolAnswer(settings, now, verbose) } : {}),
     release: { ...RELEASE_DEFAULTS, ...settings.release, effectiveAskBeforePublish: (settings.release?.askBeforePublish ?? true) && !autonomyActive(settings.autonomy, now), status: releaseStatus(project) },
     autoRotate: { enabled: settings.autoRotate?.enabled ?? false, thresholdPercent: settings.autoRotate?.thresholdPercent ?? 50,
       ...(verbose ? { setBy: settings.autoRotate?.setBy ?? null, updatedAt: settings.autoRotate?.updatedAt ?? null, why: settings.autoRotate?.why ?? null } : {}),
@@ -4880,6 +4948,16 @@ async function seatTickSettingsTool(args: McpToolArgs, dependencies: ViewerMcpDo
     ...fenceAnswer,
     ...reportAsk,
   });
+}
+
+/** Turbo for the seat: whether it is on, the credit approval and the switch progress. */
+function turboToolAnswer(settings: SeatTickSettings, now: number, verbose: boolean) {
+  const episode = endedTurbo(settings.turbo, now);
+  if (!episode && (!verbose || !settings.turboHistory?.length)) return { active: false };
+  return { active: turboActive(episode, now), until: episode?.until ?? null, startedAt: episode?.startedAt ?? null,
+    credits: episode ? { approved: episode.credits.approved, accounts: episode.credits.accounts } : null,
+    progress: episode ? turboProgress(episode.switches) : null,
+    ...(verbose ? { overlay: turboMandate(episode, now).join("\n").trim(), episode, history: settings.turboHistory ?? [] } : {}) };
 }
 
 /** What the tick owes the report log for a project, and the report to file
@@ -5334,6 +5412,7 @@ async function telegramBotSend(args: McpToolArgs, control: ViewerControlDependen
       throw new McpToolRefusal(error.message, {
         code,
         retryable: RETRYABLE_TELEGRAM_BOT_CODES.has(code as TelegramBotErrorCode),
+        ...(Array.isArray(error.details.refusals) ? { refusals: readTelegramBotRefusals(error.details.refusals) } : {}),
         ...(typeof retryAfterSeconds === "number" ? { retryAfterSeconds } : {}),
         ...(Array.isArray(sentMessageIds) ? { sentMessageIds } : {}),
       });
@@ -5341,6 +5420,20 @@ async function telegramBotSend(args: McpToolArgs, control: ViewerControlDependen
     throw error;
   });
   return redactPayload(result);
+}
+
+function telegramFileConfirmation(value: unknown) {
+  const link = readFileConfirmationLink(value);
+  if (!link) return null;
+  const published = readSelf()?.publicUrl;
+  let origin = viewerControlOrigin();
+  if (published) {
+    try {
+      const url = new URL(published);
+      if ((url.protocol === "http:" || url.protocol === "https:") && !url.username && !url.password) origin = url.origin;
+    } catch { /* An invalid saved address keeps the local control origin. */ }
+  }
+  return { ...link, url: new URL(link.url, origin).href };
 }
 
 async function telegramBotSendMedia(args: McpToolArgs, control: ViewerControlDependencies): Promise<McpToolPayload> {
@@ -5356,7 +5449,10 @@ async function telegramBotSendMedia(args: McpToolArgs, control: ViewerControlDep
   }, callerCapabilityHeaders()).catch((error: unknown) => {
     if (error instanceof McpDispatchVerdictError && typeof error.details.code === "string") {
       const code = error.details.code;
-      throw new McpToolRefusal(error.message, { code, retryable: RETRYABLE_TELEGRAM_BOT_CODES.has(code as TelegramBotErrorCode) });
+      const confirmation = telegramFileConfirmation(error.details.confirmation);
+      throw new McpToolRefusal(confirmation ? error.message.replace(readFileConfirmationLink(error.details.confirmation)!.url, confirmation.url) : error.message, { code, retryable: RETRYABLE_TELEGRAM_BOT_CODES.has(code as TelegramBotErrorCode),
+        ...(confirmation ? { confirmation } : {}),
+        ...(Array.isArray(error.details.refusals) ? { refusals: readTelegramBotRefusals(error.details.refusals) } : {}) });
     }
     throw error;
   });
@@ -5378,10 +5474,13 @@ async function telegramBotSendDocument(args: McpToolArgs, control: ViewerControl
   }, callerCapabilityHeaders()).catch((error: unknown) => {
     if (error instanceof McpDispatchVerdictError && typeof error.details.code === "string") {
       const code = error.details.code;
+      const confirmation = telegramFileConfirmation(error.details.confirmation);
       const { retryAfterSeconds, secretClass } = error.details;
-      throw new McpToolRefusal(error.message, {
+      throw new McpToolRefusal(confirmation ? error.message.replace(readFileConfirmationLink(error.details.confirmation)!.url, confirmation.url) : error.message, {
         code,
         retryable: RETRYABLE_TELEGRAM_BOT_CODES.has(code as TelegramBotErrorCode),
+        ...(confirmation ? { confirmation } : {}),
+        ...(Array.isArray(error.details.refusals) ? { refusals: readTelegramBotRefusals(error.details.refusals) } : {}),
         ...(typeof retryAfterSeconds === "number" ? { retryAfterSeconds } : {}),
         ...(typeof secretClass === "string" ? { secretClass } : {}),
       });
@@ -5410,6 +5509,7 @@ async function createOrchestrator(args: McpToolArgs, control: ViewerControlDepen
     project: typeof (result.seat as { project?: unknown } | undefined)?.project === "string"
       ? (result.seat as { project: string }).project
       : project,
+    ...(typeof result.displayName === "string" ? { displayName: result.displayName } : {}),
     conversationId: result.conversationId ?? null,
     transcriptPath: result.path ?? null,
     seat: result.seat ?? null,
@@ -5754,7 +5854,7 @@ function listFlows(args: McpToolArgs, dependencies: ViewerMcpDomainDependencies)
       project,
     });
   const { rows: flows, ...pagination } = page;
-  return redactPayload({ ...pagination, flows, compact: !fullAnswer(args),
+  return redactPayload({ ...pagination, flows, ...FLOW_ARCHIVE, compact: !fullAnswer(args),
     omittedRecordCount: fullAnswer(args) ? 0 : flows.length,
     readMore: "Pass nextCursor as cursor with the same filters and a fresh clientRequestId. full:true, compact:false or get_flow(flowId) reads complete records." });
 }
@@ -5764,10 +5864,7 @@ async function getFlow(args: McpToolArgs, dependencies: ViewerMcpDomainDependenc
   const source = dependencies.flowSelectionSource?.();
   const flow = source ? source.read(flowId) : dependencies.getFlowsWithPresets().flows.find((candidate) => candidate.id === flowId);
   if (!flow) throw new Error("flow not found");
-  const { flowDecisionContext } = await import("@/lib/flows/decisions");
-  const caller = attributionOf(dependencies);
-  return redactPayload({ flowId, flow, ...(caller.conversationId && caller.conversationId === flow.implementerConversationId
-    ? { decisionContext: await flowDecisionContext(flow) } : {}) });
+  return redactPayload({ flowId, flow, ...FLOW_ARCHIVE });
 }
 
 function mutationReceipt(operationId: string): { operationId: string; receipt: { operationId: string; status: "delivered" } } {
@@ -5790,23 +5887,16 @@ async function flowAction(args: McpToolArgs, dependencies: ViewerMcpDomainDepend
     const { submitFlowDecision } = await import("@/lib/flows/decisions");
     const { flowDecisionRequestSchema } = await import("@/lib/flows/decisionSchema");
     const request = flowDecisionRequestSchema.parse(args);
-    const result = await submitFlowDecision(request, flowDecisionCaller(attributionOf(dependencies)));
-    return redactPayload({ ...result, outcome: result.decision.disposition === "accepted" ? "accepted" : "settled",
+    let result: Awaited<ReturnType<typeof submitFlowDecision>>;
+    try { result = await submitFlowDecision(request, flowDecisionCaller(attributionOf(dependencies))); }
+    catch (error) {
+      if (error instanceof FlowRetiredError) throw new McpToolRefusal(FLOW_RETIREMENT.error, { ...FLOW_RETIREMENT, retryable: false });
+      throw error;
+    }
+    return redactPayload({ ...result, ...FLOW_ARCHIVE, outcome: result.decision.disposition === "accepted" ? "accepted" : "settled",
       nextAction: result.decision.disposition === "accepted" ? "original-key-lookup" : "follow-disposition" });
   }
-  const request = withoutKeys(args, ["flowId", "clientRequestId"]) as PatchFlowRequest;
-  const result = action === "cancel-round"
-    ? await dependencies.cancelRound(flowId)
-    : action === "close"
-      ? await dependencies.closeFlow(flowId)
-      /* set-roles carries the actor so the sizing rules judge the agent's
-         reviewer (docs/design/model-sizing-tiers.md §2). */
-      : action === "pause" || action === "resume" || action === "set-roles"
-        ? dependencies.patchFlow(flowId, request, pauseResumeActorOf(dependencies))
-        : dependencies.patchFlow(flowId, request);
-  if (!result.flow) throw new Error(result.error ?? "could not update flow");
-  const operationId = mcpOperationId("flow_action", requestId(args));
-  return redactPayload({ flowId, flow: result.flow, ...mutationReceipt(operationId) });
+  throw new McpToolRefusal(FLOW_RETIREMENT.error, { ...FLOW_RETIREMENT, retryable: false });
 }
 
 /** A seat's list scope comes from its authenticated designation. */
@@ -8170,6 +8260,7 @@ export function viewerMcpBindings(
     account_project_binding: async (args) => accountProjectBindingTool(args, domainDependencies),
     role_presets: async (args) => waitForStateLock("mcp.role-presets", () => rolePresetsTool(args, domainDependencies)),
     auto_updates: (args, context) => autoUpdatesTool(args, viewerControlForCall(controlDependencies, context), domainDependencies),
+    voice_tools: (args, context) => voiceTools(args, viewerControlForCall(controlDependencies, context), attributionOf(domainDependencies).conversationId ?? null),
     account_limits: async (args) => accountLimitsTool(args, domainDependencies),
     create_orchestrator: orchestratorProjectBinding(domainDependencies, (args, context) => createOrchestrator(args, viewerControlForCall(controlDependencies, context)), false, false),
     send_message_to_orchestrator: (args, context) => sendMessageToOrchestrator(args, viewerControlForCall(controlDependencies, context), domainDependencies, context),

@@ -198,6 +198,160 @@ function installedPackage(serverSource = `
   return { root, launcher: path.join(root, "bin", "mcp-server.mjs") };
 }
 
+test("an empty tools/list is a protocol error naming the selected state directory", async () => {
+  const { root, launcher } = installedPackage(`
+    const { createInterface } = await import("node:readline");
+    createInterface({ input: process.stdin }).on("line", line => {
+      const request = JSON.parse(line);
+      if (request.id === undefined) return;
+      const result = request.method === "initialize"
+        ? { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "viewer", version: "1" } }
+        : { tools: [] };
+      console.log(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }));
+    });
+  `);
+  const state = path.join(root, "state");
+  const session = stdioSession(process.execPath, launcher, root, { HOME: root, XDG_CONFIG_HOME: root,
+    LLV_STATE_DIR: state, LLV_STRUCTURED_HOST: "", LLV_SPAWN_CAPABILITY: "", LLV_VIEWER_DEPLOY_TARGET: "" });
+  try {
+    expect((await session.call(1, "initialize")).error).toBeUndefined();
+    const listed = await session.call(2, "tools/list");
+    expect(listed.result).toBeUndefined();
+    expect(JSON.stringify(listed.error)).toContain("empty tools/list");
+    expect(listed.error).toMatchObject({ code: -32002, message: expect.stringContaining(state) });
+  } finally {
+    session.process.stdin.end();
+    await new Promise<void>(resolve => session.process.once("close", () => resolve()));
+  }
+});
+
+test.each([
+  ["linux", (root: string) => path.join(root, "tmp", "llv-spawn-sandbox", ".claude", "config")],
+  ["darwin", (root: string) => path.join(root, "private", "var", "folders", "tmp", "llv-spawn-sandbox", ".claude", "config")],
+])("%s: the packaged MCP launcher preserves an explicit state beside sandboxed config", async (_layout, sandboxConfig) => {
+  const { root, launcher } = installedPackage(`
+    const { createInterface } = await import("node:readline");
+    createInterface({ input: process.stdin }).on("line", line => {
+      const request = JSON.parse(line);
+      if (request.id === undefined) return;
+      const result = request.method === "initialize"
+        ? { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: process.env.LLV_STATE_DIR, version: "1" } }
+        : { tools: [{ name: "probe", inputSchema: { type: "object" } }] };
+      console.log(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }));
+    });
+  `);
+  const explicitState = path.join(root, "isolated-state");
+  const session = stdioSession(process.execPath, launcher, root, {
+    HOME: root,
+    XDG_CONFIG_HOME: sandboxConfig(root),
+    LLV_STATE_DIR: explicitState,
+    LLV_STRUCTURED_HOST: path.join(root, "real-install", "delegatus", "state"),
+    LLV_SPAWN_CAPABILITY: "",
+    LLV_VIEWER_DEPLOY_TARGET: "",
+  });
+  try {
+    expect((await session.call(1, "initialize")).result.serverInfo.name).toBe(explicitState);
+  } finally {
+    session.process.stdin.end();
+    await new Promise<void>(resolve => session.process.once("close", () => resolve()));
+  }
+});
+
+test.each(["node", "bun"])("%s: an explicit missing release target fails initialize after startup with the state directory and missing path", async runtime => {
+  const { root, launcher } = installedPackage();
+  const target = path.join(root, "missing-release.json");
+  const state = path.join(root, "state");
+  const session = stdioSession(Bun.which(runtime)!, launcher, root, { HOME: root, XDG_CONFIG_HOME: root, LLV_STATE_DIR: state,
+    LLV_STRUCTURED_HOST: "", LLV_SPAWN_CAPABILITY: "", LLV_VIEWER_DEPLOY_TARGET: target });
+  let stderr = "";
+  let sawStartup!: () => void;
+  const startup = new Promise<void>(resolve => { sawStartup = resolve; });
+  session.process.stderr.on("data", chunk => {
+    stderr += String(chunk);
+    if (stderr.includes(target) && stderr.includes("missing")) sawStartup();
+  });
+  try {
+    // The request cannot itself satisfy this barrier: the launcher has already
+    // selected and diagnosed its target before the client initializes.
+    await startup;
+    const response = await session.call(1, "initialize");
+    expect((response.error as { message: string }).message).toContain(state);
+    expect((response.error as { message: string }).message).toContain(target);
+    expect(response.result).toBeUndefined();
+  } finally {
+    session.process.stdin.end();
+    if (session.process.exitCode === null && session.process.signalCode === null) {
+      await new Promise<void>(resolve => session.process.once("close", () => resolve()));
+    }
+  }
+});
+
+test.each(["linux", "darwin"])("a direct %s sandbox launcher uses the real host state stamp", async layout => {
+  const { root, launcher } = installedPackage(`
+    const { createInterface } = await import("node:readline");
+    createInterface({ input: process.stdin }).on("line", line => {
+      const request = JSON.parse(line);
+      if (request.id === undefined) return;
+      console.log(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: {
+        protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: process.env.LLV_STATE_DIR, version: "1" },
+      } }));
+    });
+  `);
+  const state = path.join(root, "operator", "state");
+  const config = path.join(root, layout === "darwin" ? "private/var/folders/example/T" : "tmp", "llv-spawn-sandbox/.claude/config");
+  const session = stdioSession(process.execPath, launcher, root, { HOME: root, XDG_CONFIG_HOME: config,
+    LLV_STATE_DIR: path.join(config, "agent-log-viewer/state"), LLV_STRUCTURED_HOST: state, LLV_SPAWN_CAPABILITY: "", LLV_VIEWER_DEPLOY_TARGET: "" });
+  try {
+    expect((await session.call(1, "initialize")).result.serverInfo.name).toBe(state);
+    expect(fs.existsSync(config)).toBe(false);
+  } finally {
+    session.process.stdin.end();
+    await new Promise<void>(resolve => session.process.once("close", () => resolve()));
+  }
+});
+
+test.each(["linux", "darwin"])("the %s sandbox launcher authenticates initialize from the stamped install config", async layout => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "llv-authenticated-mcp-"));
+  sandboxes.push(root);
+  const realConfig = path.join(root, "operator", "config");
+  const realApp = path.join(realConfig, "agent-log-viewer");
+  const state = path.join(realApp, "state");
+  const sandboxConfig = path.join(root, layout === "darwin" ? "private/var/folders/example/T" : "tmp", "llv-spawn-sandbox/.claude/config");
+  fs.mkdirSync(state, { recursive: true });
+  const key = "isolated-install-key";
+  fs.writeFileSync(path.join(realApp, "token"), key);
+  const control = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request =>
+    request.headers.get("authorization") === `Bearer ${key}` ? new Response("initialized") : new Response("credential required", { status: 403 }),
+  });
+  const { launcher } = installedPackage(`
+    import fs from "node:fs";
+    import path from "node:path";
+    import { createInterface } from "node:readline";
+    createInterface({ input: process.stdin }).on("line", async line => {
+      const request = JSON.parse(line);
+      if (request.id === undefined) return;
+      if (request.method === "initialize") {
+        const token = fs.readFileSync(path.join(process.env.XDG_CONFIG_HOME, "agent-log-viewer", "token"), "utf8");
+        const response = await fetch("http://127.0.0.1:${control.port}", { headers: { authorization: "Bearer " + token } });
+        if (!response.ok) return console.log(JSON.stringify({ jsonrpc: "2.0", id: request.id, error: { code: -32002, message: "authenticated initialize refused" } }));
+        return console.log(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "viewer", version: "1" } } }));
+      }
+      console.log(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: { tools: [{ name: "stage_report" }] } }));
+    });
+  `);
+  const session = stdioSession(process.execPath, launcher, root, { HOME: root, XDG_CONFIG_HOME: sandboxConfig,
+    LLV_STATE_DIR: path.join(sandboxConfig, "agent-log-viewer", "state"), LLV_STRUCTURED_HOST: state,
+    LLV_VIEWER_PORT: String(control.port), LLV_SPAWN_CAPABILITY: "", LLV_VIEWER_DEPLOY_TARGET: "" });
+  try {
+    expect((await session.call(1, "initialize")).result.serverInfo.name).toBe("viewer");
+    expect(fs.existsSync(sandboxConfig)).toBe(false);
+  } finally {
+    control.stop(true);
+    session.process.stdin.end();
+    await new Promise<void>(resolve => session.process.once("close", () => resolve()));
+  }
+});
+
 function git(cwd: string, ...args: string[]): string {
   const result = spawnSync("git", ["-c", "user.name=Fixture", "-c", "user.email=noreply", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8" });
   if (result.status !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr}`);
@@ -262,11 +416,22 @@ test.skipIf(process.env.LLV_CODEX_MCP_ENV_TEST !== "1")("native Codex forwards t
   const stateDir = path.join(root, "state");
   const capability = "S".repeat(43);
   fs.mkdirSync(path.join(root, ".codex"));
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.writeFileSync(path.join(stateDir, "viewer-release.json"), JSON.stringify({
+    revision: "4".repeat(40), image: "viewer:fixture", container: "viewer-fixture", endpoint: "http://127.0.0.1:1",
+  }));
   const digest = createHash("sha256").update(capability).digest("hex");
   const receipt = { spawnCapabilityDigest: digest, createdAt: new Date(Date.now() - 30 * 60_000).toISOString() };
-  const config = headlessCodexThreadConfig({ config: { mcp_servers: {
-    viewer: { command: process.execPath, args: [launcher], env: { LLV_STATE_DIR: stateDir } },
-  } } });
+  const previousState = process.env.LLV_STATE_DIR;
+  let config: Record<string, unknown>;
+  try {
+    process.env.LLV_STATE_DIR = stateDir;
+    config = headlessCodexThreadConfig({ config: { mcp_servers: {
+      viewer: { command: process.execPath, args: [launcher], env: { LLV_STATE_DIR: stateDir } },
+    } } });
+  } finally {
+    if (previousState === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previousState;
+  }
   const session = stdioSession(process.env.LLV_CODEX_BINARY ?? "codex", "app-server", root, {
     HOME: root, CODEX_HOME: path.join(root, ".codex"), XDG_CONFIG_HOME: path.join(root, "config"),
     LLV_STATE_DIR: stateDir, LLV_SPAWN_CAPABILITY: capability,

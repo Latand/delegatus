@@ -104,24 +104,9 @@ export const GROUP_MOVE_TRANSITION = `left ${MOVE_MS}ms ${MOVE_EASE}, top ${MOVE
    purpose: essential text stays readable. Each header is also constrained to
    its own envelope, including adjacent one-stage pipelines. */
 export const GROUP_LABEL_BASE_PX = 11;
-/** Inverse-zoom ceiling on the counter-scaling. Infinity = never cap, so the
-    label stays a fixed on-screen size down to the minimum zoom. A finite value
-    would let it shrink below readability — kept here so the render string and the
-    on-screen computation below can never disagree. */
-export const GROUP_LABEL_INV_Z_CAP = Number.POSITIVE_INFINITY;
-/** The CSS `font-size` the label renders at, derived from the cap. */
+/** The CSS `font-size` keeps the label at a fixed on-screen size. */
 export function groupLabelFontSize(): string {
-  const scale = Number.isFinite(GROUP_LABEL_INV_Z_CAP)
-    ? `min(var(--inv-z, 1), ${GROUP_LABEL_INV_Z_CAP})`
-    : "var(--inv-z, 1)";
-  return `calc(${GROUP_LABEL_BASE_PX}px * ${scale})`;
-}
-/** On-screen px the label renders at for a given camera zoom (world font ×
-    zoom). Constant at GROUP_LABEL_BASE_PX while uncapped — proving map
-    readability; a re-added finite cap makes this drop at low zoom and fails the
-    test. */
-export function groupLabelScreenPx(zoom: number): number {
-  return GROUP_LABEL_BASE_PX * Math.min(1 / zoom, GROUP_LABEL_INV_Z_CAP) * zoom;
+  return `calc(${GROUP_LABEL_BASE_PX}px * var(--inv-z, 1))`;
 }
 
 /** Round-chip click on a strip, delivered to that flow's deck. */

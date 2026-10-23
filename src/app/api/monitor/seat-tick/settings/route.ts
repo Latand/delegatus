@@ -10,6 +10,8 @@ import {
   type SeatTickSettingsChange,
 } from "@/lib/monitor/seatTickSettings";
 import { seatTickSettingsAnswer, type SeatTickSettingsAnswer } from "@/lib/monitor/seatTickSettingsAnswer";
+import { kickTurbo, turboAnswer, turboChangeContext, type TurboAnswer } from "@/lib/monitor/turboRuntime";
+import { turboNeedsPlan, type TurboChangeContext } from "@/lib/monitor/turbo";
 import { activeOrchestratorSeats, canonicalOrchestratorProject, orchestratorSeatFor } from "@/lib/orchestrator/seats";
 import { rejectCrossOrigin } from "@/lib/sameOrigin";
 import type { ApiError } from "@/lib/types";
@@ -90,11 +92,16 @@ function settingsActor(req: NextRequest, project: string): SeatTickSettingsActor
 
 const NO_STORE = { "Cache-Control": "no-store" };
 
+/** Turbo beside the record (docs/design/turbo-mode.md §2.1); `preview` only when the dialog asks for it. */
+async function withTurbo(answer: SeatTickSettingsAnswer, preview: boolean): Promise<SeatTickSettingsAnswer & { turbo: TurboAnswer }> {
+  return { ...answer, turbo: await turboAnswer(answer.project, answer.settings, Date.parse(answer.at) || Date.now(), preview) };
+}
+
 export async function GET(req: NextRequest): Promise<NextResponse<SeatTickSettingsAnswer | ApiError>> {
   const project = projectFrom(req.nextUrl.searchParams.get("project"));
   if (!project) return NextResponse.json({ error: "project is required" }, { status: 400 });
   try {
-    return NextResponse.json(seatTickSettingsAnswer(project, false, settingsActor(req, project)), { headers: NO_STORE });
+    return NextResponse.json(await withTurbo(seatTickSettingsAnswer(project, false, settingsActor(req, project)), req.nextUrl.searchParams.get("turboPreview") === "1"), { headers: NO_STORE });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "seat tick settings are unreadable" }, { status: 500 });
   }
@@ -119,6 +126,7 @@ export async function PUT(req: NextRequest): Promise<NextResponse<SeatTickSettin
      the rule in the refusal it returns. */
   const change: SeatTickSettingsChange = {};
   if (body.autonomy !== undefined) change.autonomy = body.autonomy as SeatTickSettingsChange["autonomy"];
+  if (body.turbo !== undefined) change.turbo = body.turbo as SeatTickSettingsChange["turbo"];
   if (body.release !== undefined) change.release = body.release as SeatTickSettingsChange["release"];
   if (body.autoRotate !== undefined) change.autoRotate = body.autoRotate as SeatTickSettingsChange["autoRotate"];
   if (body.maintenance !== undefined) change.maintenance = body.maintenance as SeatTickSettingsChange["maintenance"];
@@ -149,6 +157,10 @@ export async function PUT(req: NextRequest): Promise<NextResponse<SeatTickSettin
     /* Inside the try: attribution reads the seat file, and an unreadable one
        must answer as a failure rather than as an uncaught throw. */
     const actor = settingsActor(req, project);
+    if (change.autonomy?.proactive?.enabled === true
+      && (actor.kind !== "gateway" || !operatorBrowserRequest(req) || req.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER))) {
+      return NextResponse.json({ error: "only the operator browser may enable proactive autonomy" }, { status: 403 });
+    }
     if (body.clearUnknownInstructions === true) {
       if (actor.kind !== "gateway" || !operatorBrowserRequest(req) || req.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER)) {
         return NextResponse.json({ error: "only the operator browser can remove instructions with unknown authors" }, { status: 403 });
@@ -162,14 +174,32 @@ export async function PUT(req: NextRequest): Promise<NextResponse<SeatTickSettin
       change.replaceOtherInstructions = true;
     }
     if (Object.keys(change).length === 0) {
-      return NextResponse.json(seatTickSettingsAnswer(project, false, actor), { headers: NO_STORE });
+      return NextResponse.json(await withTurbo(seatTickSettingsAnswer(project, false, actor), false), { headers: NO_STORE });
     }
     const instructionActor = actor.kind === "gateway" && (req.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER) || !operatorBrowserRequest(req))
       ? { ...actor, kind: "unidentified" as const } : actor;
-    const applied = changeSeatTickSettings(project, change, { at: new Date().toISOString(), actor, instructionActor });
+    /* Paid credits spend money: approved only from the operator's own browser,
+       never by a script that merely named no conversation. */
+    const turboRaw = change.turbo as Record<string, unknown> | undefined;
+    if (turboRaw && typeof turboRaw === "object" && turboRaw.credits === true
+      && (actor.kind !== "gateway" || !operatorBrowserRequest(req) || req.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER))) {
+      return NextResponse.json({ error: "only the operator's own browser can approve paid credits" }, { status: 403 });
+    }
+    if (change.turbo !== undefined && actor.kind === "gateway"
+      && (!operatorBrowserRequest(req) || req.headers.has(VIEWER_SPAWN_CAPABILITY_HEADER))) {
+      return NextResponse.json({ error: "only the operator's own browser or the identified project seat may change Turbo" }, { status: 403 });
+    }
+    let turbo: TurboChangeContext | undefined;
+    if (turboNeedsPlan(change.turbo)) {
+      try { turbo = turboChangeContext(project); }
+      catch (error) { return NextResponse.json({ error: `the project's account bindings are unreadable: ${error instanceof Error ? error.message : "unknown"}` }, { status: 503 }); }
+    }
+    const applied = changeSeatTickSettings(project, change, { at: new Date().toISOString(), actor, instructionActor, ...(turbo ? { turbo } : {}) });
     if (!applied.ok) return NextResponse.json({ error: applied.error }, { status: 400 });
     if (change.release) releaseControlChange(project, change.release, actor, applied.settings.updatedAt!);
-    return NextResponse.json({ ...seatTickSettingsAnswer(project, true, actor), ...(applied.notes ? { notes: applied.notes } : {}) }, { headers: NO_STORE });
+    /* The switch runs off the request path; the answer returns at once. */
+    if (change.turbo !== undefined) void kickTurbo(project);
+    return NextResponse.json({ ...await withTurbo(seatTickSettingsAnswer(project, true, actor), false), ...(applied.notes ? { notes: applied.notes } : {}) }, { headers: NO_STORE });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "seat tick settings could not be written" }, { status: 500 });
   }

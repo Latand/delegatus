@@ -9,6 +9,7 @@ import { publishHotStateAuthority } from "./hotStateAuthority";
 import { pipelineHostHasLiveWork } from "@/lib/pipelines/hostRetirement";
 import type { Pipeline } from "@/lib/pipelines/types";
 import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
+import { assertStateChildSuccess } from "./stateChildResult.fixture";
 
 type Row = { key: string; value: number };
 
@@ -105,11 +106,10 @@ test.each([
     try {
       // Simulate the previously installed protocol, including its false clean
       // receipt, stale live owner and missing scheduler obligation.
-      const trigger = db.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE name='pipeline_ref_inputs_update_v2'").get();
-      if (trigger) {
-        db.exec("DROP TRIGGER pipeline_ref_inputs_update_v2");
-        db.exec(trigger.sql.replace("pipeline_ref_inputs_update_v2", "pipeline_ref_inputs_update"));
-      }
+      const trigger = db.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE name='pipeline_ref_inputs_update'").get()!;
+      expect(trigger.sql).toContain("ORDER BY terminal DESC,position");
+      db.exec("DROP TRIGGER pipeline_ref_inputs_update");
+      db.exec(trigger.sql.replace("ORDER BY terminal DESC,position", "ORDER BY position"));
       db.exec("UPDATE pipeline_attempt_refs SET terminal=0");
       db.exec("UPDATE pipeline_owner_refs SET live=1");
       db.exec("UPDATE state_rows SET controller_active=0");
@@ -135,6 +135,76 @@ test.each([
       ]);
     } finally { upgraded.close(); }
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("bounded task project evidence seeks only selected projects and shares the write budget", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bounded-task-evidence-"));
+  const filename = path.join(dir, "state.sqlite");
+  type Task = Row & { project: string };
+  let decoded = 0;
+  const options = { collection: "tasks", schemaVersion: 1, busyMessage: "busy", key: (row: Task) => row.key,
+    clone: structuredClone, decode: (raw: unknown) => { decoded++; return raw as Task; } };
+  const rows = [
+    { key: "one", project: "old", value: 1 }, { key: "two", project: "current", value: 2 },
+    ...Array.from({ length: 2_000 }, (_, n) => ({ key: `foreign-${n}`, project: "other", value: n })),
+  ];
+  let store: SqliteStateCollection<Task> | undefined;
+  try {
+    initializeStateCollections(filename, [{ ...options, migrationId: "evidence", loadRecords: () => rows }]);
+    store = new SqliteStateCollection<Task>(filename, options);
+    decoded = 0;
+    store.boundedPatch(5, tx => {
+      expect(tx.taskProjectRows(["current", "old", "current"]).map(row => row.key)).toEqual(["two", "one"]);
+      tx.put({ key: "admitted", project: "current", value: 3 });
+    });
+    expect(decoded).toBe(2);
+    expect(() => store!.boundedPatch(5, tx => {
+      tx.taskProjectRows(["current", "old"]);
+      tx.put({ key: "refused", project: "current", value: 4 });
+    })).toThrow("budget");
+    expect(store.get("refused")).toBeNull();
+    const db = new Database(filename);
+    try {
+      const plan = db.query<{ detail: string }, [string, number]>(`EXPLAIN QUERY PLAN
+        SELECT value_json FROM state_rows INDEXED BY state_rows_task_project
+        WHERE collection='tasks' AND json_valid(value_json) AND json_extract(value_json,'$.project')=?
+        ORDER BY row_key LIMIT ?`).all("current", 16);
+      expect(plan.some(row => row.detail.includes("SEARCH") && row.detail.includes("state_rows_task_project"))).toBe(true);
+      expect(plan.some(row => /SCAN|TEMP B-TREE/.test(row.detail))).toBe(false);
+    } finally { db.close(); }
+  } finally { store?.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("bounded companion writes commit together, rollback together and share a finite budget", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bounded-companion-"));
+  const filename = path.join(dir, "state.sqlite");
+  const options = (collection: string) => ({ collection, schemaVersion: 1, busyMessage: "busy", key: (row: Row) => row.key,
+    clone: structuredClone, decode: (raw: unknown) => raw as Row });
+  initializeStateCollections(filename, ["first", "second"].map(name => ({ ...options(name), migrationId: name, loadRecords: () => [] })));
+  const first = new SqliteStateCollection<Row>(filename, options("first"));
+  const second = new SqliteStateCollection<Row>(filename, options("second"));
+  try {
+    const put = (budget: number, crash = false) => first.boundedPatch(budget, tx => {
+      tx.put({ key: "task", value: 1 });
+    }, undefined, { collection: second, prepare: () => {
+      if (crash) throw new Error("crash after task write");
+      return { records: [{ key: "allowance", value: 2 }] };
+    } });
+    expect(() => put(2, true)).toThrow("crash after task write");
+    expect(first.get("task")).toBeNull();
+    expect(second.get("allowance")).toBeNull();
+    expect(() => put(1)).toThrow("budget");
+    expect(first.get("task")).toBeNull();
+    expect(second.get("allowance")).toBeNull();
+    put(2);
+    expect(first.get("task")?.value).toBe(1);
+    expect(second.get("allowance")?.value).toBe(2);
+    // Reverse collection order must take the same two leases in the same order.
+    second.boundedPatch(2, tx => tx.put({ key: "allowance", value: 3 }), undefined,
+      { collection: first, prepare: () => ({ records: [{ key: "task", value: 4 }] }) });
+    expect(first.get("task")?.value).toBe(4);
+    expect(second.get("allowance")?.value).toBe(3);
+  } finally { first.close(); second.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("controller caches follow decoding authority and refuse writes that race snapshot preparation", async () => {
@@ -488,7 +558,7 @@ test("a fresh process upgrades the pre-compact reference schema before ordinary 
     const db = new Database(filename);
     // The previous schema has reference tables and the delete sentinel, but
     // maintains references directly from state_rows, without compact inputs.
-    for (const name of ["pipeline_refs_insert", "pipeline_refs_update", "pipeline_ref_inputs_insert", "pipeline_ref_inputs_update_v2"]) db.exec(`DROP TRIGGER ${name}`);
+    for (const name of ["pipeline_refs_insert", "pipeline_refs_update", "pipeline_ref_inputs_insert", "pipeline_ref_inputs_update"]) db.exec(`DROP TRIGGER ${name}`);
     db.exec("DROP TRIGGER pipeline_refs_delete");
     db.exec("DROP TABLE pipeline_ref_inputs");
     db.exec("CREATE TRIGGER pipeline_refs_delete AFTER DELETE ON state_rows WHEN OLD.collection='pipelines' BEGIN DELETE FROM pipeline_attempt_refs WHERE row_key=OLD.row_key; DELETE FROM pipeline_owner_refs WHERE row_key=OLD.row_key; END");
@@ -502,7 +572,7 @@ test("a fresh process upgrades the pre-compact reference schema before ordinary 
       });
       if (!store.pipelineOwnerExists([['conversationId','legacy-host']],false)) throw new Error('missing backfill');
     `], { env: { ...process.env, UPGRADE_DATABASE: filename }, encoding: "utf8", timeout: 10_000 });
-    expect({ status: result.status, stderr: result.stderr }).toEqual({ status: 0, stderr: "" });
+    assertStateChildSuccess(result.status, result.stderr);
     const upgraded = new Database(filename);
     try {
       expect(upgraded.query("SELECT * FROM state_rows").all()).toEqual(before);

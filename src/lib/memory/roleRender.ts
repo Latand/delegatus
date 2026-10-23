@@ -14,6 +14,19 @@ const STAGE_NOTICE = "Earlier agents left these when they finished their stages.
 const SEAT_NOTICE = "Earlier seats and stage agents left these. They are rules of thumb: the operator's word, your mandate and the project's instruction files win where they disagree. Keep them on this machine: act on a rule in your own words and never paste its text into a brief, task, report, message, commit, pull request or issue; name it by its id.";
 const SEAT_POINTER = "If you are this project's designated seat, this is your role's memory: every later seat of this project reads it, on any engine and account, while your engine's own memory reaches one account. When you meet a problem that can come back, settle it in the same turn. A practice (how to brief, what to check before you report, how the operator wants a thing done) becomes a rule: call leave_lesson with lesson, or with rewrite and the id of a rule above that proved wrong or too narrow. A concrete defect goes to the board: find or create its task with create_task, and tell the operator in chat when it is critical (it blocks accepted work, loses data, or will hit every lane). A problem report that a wake delivers says what to do with it. leave_lesson's description gives the levels and limits.";
 const MAINTAINER_POINTER = "You leave no rules in this run. This project's seat keeps the rules for your role and opens the tasks for defects.";
+/* Delegatus mode (memory-source-switch.md §3.3): the engines' own memory is off
+   at every engine start, so these rules are the only memory that lasts. */
+const SEAT_POINTER_DELEGATUS = SEAT_POINTER.replace("while your engine's own memory reaches one account", "and your engine's own memory is off on this installation, so leave_lesson is your only memory that lasts beyond this conversation");
+const OPERATOR_NOTICE = "Earlier seats and agents on this machine left these. They are rules of thumb: the operator's word and the project's instruction files win where they disagree. Keep them on this machine: never copy a rule into a commit, pull request, issue, task or message; name it by its id.";
+const OPERATOR_POINTER = "Your engine's own memory is off on this installation; these rules are the memory that lasts. When the operator corrects you, or you learn a practice that changes what any agent does on another task in this project or on this machine, call leave_lesson with lesson and scope project or machine, or with rewrite and the id of a rule above that proved wrong or too narrow. leave_lesson's description gives the limits.";
+
+/** Who reads the block, beyond what its scopes say. */
+export interface LearnedRulesReader {
+  /** The operator's own root conversation (no role, no parent). */
+  reader?: "operator";
+  /** Delegatus mode: the engines' own memory is off for this start. */
+  engineMemoryOff?: boolean;
+}
 
 function roleTitle(roleId: string): string {
   const words = roleId.replaceAll("-", " ");
@@ -28,14 +41,14 @@ export function scopeHeading(scope: string): string {
 }
 
 /** Four matching scopes, each rendered as separate rules with their ids. */
-export function renderLearnedRules(scopes: readonly { scope: string; rules: readonly RoleMemoryRule[] }[], maxBytes = Infinity): string {
-  return renderLearnedRulesSelection(scopes, maxBytes).block;
+export function renderLearnedRules(scopes: readonly { scope: string; rules: readonly RoleMemoryRule[] }[], maxBytes = Infinity, reader: LearnedRulesReader = {}): string {
+  return renderLearnedRulesSelection(scopes, maxBytes, reader).block;
 }
 
 /** Metadata and text share the same byte-ceiling selection. */
-export function renderLearnedRulesSelection(scopes: readonly { scope: string; rules: readonly RoleMemoryRule[] }[], maxBytes = Infinity) {
+export function renderLearnedRulesSelection(scopes: readonly { scope: string; rules: readonly RoleMemoryRule[] }[], maxBytes = Infinity, reader: LearnedRulesReader = {}) {
   const selected = scopes.map(entry => ({ scope: entry.scope, rules: [...entry.rules] }));
-  let block = renderBlock(selected);
+  let block = renderBlock(selected, reader);
   let omitted = 0;
   while (utf8.encode(block).byteLength > maxBytes) {
     const largest = selected.filter(entry => entry.rules.length).sort((a, b) =>
@@ -43,22 +56,23 @@ export function renderLearnedRulesSelection(scopes: readonly { scope: string; ru
     if (!largest) throw new Error("learned-rule headings exceed the engine instruction limit");
     largest.rules.pop();
     omitted += 1;
-    block = renderBlock(selected);
+    block = renderBlock(selected, reader);
   }
   if (omitted) console.warn(`[role-memory] omitted ${omitted} lowest-ranked rules from this engine start at the byte ceiling`);
   return { block, rules: selected.flatMap(scope => scope.rules) };
 }
 
-function renderBlock(scopes: readonly { scope: string; rules: readonly RoleMemoryRule[] }[]): string {
-  const reader = scopes.map(entry => scopeRole(entry.scope)).find(role => role !== null);
+function renderBlock(scopes: readonly { scope: string; rules: readonly RoleMemoryRule[] }[], options: LearnedRulesReader): string {
+  const role = scopes.map(entry => scopeRole(entry.scope)).find(role => role !== null);
+  const reader = role ?? (options.reader === "operator" ? "operator" : undefined);
   const count = (kind: string) => scopes.filter((entry) => scopeKind(entry.scope) === kind).reduce((sum, entry) => sum + entry.rules.length, 0);
   const counts = [...(scopes.some((entry) => scopeKind(entry.scope) === "role") ? [`${count("role")} role`] : []), `${count("project")} project`, `${count("machine")} machine`].join(" · ");
   return [
     `${LEARNED_RULES_HEADING}: ${counts}`,
-    reader === "orchestrator" ? SEAT_NOTICE : reader === "maintainer" ? STAGE_NOTICE.replace("Earlier agents", "Earlier agents and this project's seat") : STAGE_NOTICE,
+    reader === "orchestrator" ? SEAT_NOTICE : reader === "maintainer" ? STAGE_NOTICE.replace("Earlier agents", "Earlier agents and this project's seat") : reader === "operator" ? OPERATOR_NOTICE : STAGE_NOTICE,
     ...scopes.flatMap((entry) => ["", scopeHeading(entry.scope), ...(entry.rules.length ? entry.rules.map(ruleLine) : ["- none yet"])]),
     "",
-    reader === "orchestrator" ? SEAT_POINTER : reader === "maintainer" ? MAINTAINER_POINTER : LESSON_POINTER,
+    reader === "orchestrator" ? (options.engineMemoryOff ? SEAT_POINTER_DELEGATUS : SEAT_POINTER) : reader === "maintainer" ? MAINTAINER_POINTER : reader === "operator" ? OPERATOR_POINTER : LESSON_POINTER,
   ].join("\n");
 }
 
@@ -102,6 +116,7 @@ export function lessonRequestLines(handed: HandedFindings | null): string[] {
     "A rule is a generic instruction to do a check that changes behaviour on a different task. A concrete defect, inconsistency or documentation/specification mismatch in this project is a problem to report to its designated seat.",
     "- problem: {statement, evidence}, a short observed problem and the evidence for it. The seat decides whether to propose a task or issue and asks the operator; create none yourself. Concrete file paths and project-specific broken facts belong here; machine rules must hold across projects.",
     "No lesson may be about a task. What happened on this task alone (a pull request, commit, lane, id, incident, or one module's quirk) belongs in your stage report; leave_lesson refuses it and stores nothing.",
+    "Any answer may also carry applied and misled, each up to five distinct exact ids of rules this attempt received. applied changed what you did; misled was wrong or stale. Use each id in only one field.",
     ...(fixRound ? ["A mistake made in one file is a class when it can be made in another."] : []),
     "Every agent of a level reads all its rules: choose the narrowest true level:",
     "- role: only that role acts on it, in its own kind of work on this project; yours unless you name another. Reviewers and verifiers take no rules, so their own know-how has no memory scope.",

@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { stateLockWaitsInFlight } from "@/lib/state/lockWait";
+import { assertStateChildSuccess } from "@/lib/state/stateChildResult.fixture";
 import type { ConversationCatalogEntry } from "./conversationCatalog";
 import { ConversationSearchProjection, conversationSearchMatchSql } from "./conversationSearchProjection";
 
@@ -237,18 +238,19 @@ test("SQLite admission yields while a peer holds the write lock, then resumes", 
   const peer = new Database(filename);
   peer.exec("BEGIN IMMEDIATE");
   const controller = new AbortController();
-  const deadline = setTimeout(() => controller.abort(), 2000);
   let pending: Promise<ConversationCatalogEntry[]> | undefined;
   try {
     pending = store.search([row(2)], "orchard", { readText: text, signal: controller.signal });
-    while (!stateLockWaitsInFlight().some(wait => wait.callSite === "catalog.search.update")) {
-      controller.signal.throwIfAborted();
-      await new Promise<void>(resolve => setImmediate(resolve));
-    }
+    // The peer holds the lock until the wait is observed. A search that settles
+    // first never waited; the test's own timeout bounds a search that hangs.
+    let settled = false;
+    void pending.then(() => { settled = true; }, () => { settled = true; });
+    const waiting = () => stateLockWaitsInFlight().some(wait => wait.callSite === "catalog.search.update");
+    while (!settled && !waiting()) await new Promise<void>(resolve => setImmediate(resolve));
+    expect(waiting()).toBe(true);
     peer.exec("COMMIT");
     expect(await pending).toHaveLength(1);
   } finally {
-    clearTimeout(deadline);
     controller.abort();
     if (peer.inTransaction) peer.exec("ROLLBACK");
     peer.close();
@@ -264,7 +266,7 @@ test("persisted text survives a real process restart", async () => {
       stdout: "pipe", stderr: "pipe",
     });
     const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-    expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+    assertStateChildSuccess(code, stderr);
     return JSON.parse(stdout);
   };
   expect(await run("seed")).toEqual({ reads: 1, matches: 1, retained: 1 });

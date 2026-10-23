@@ -1,3 +1,5 @@
+// Pre-S5 embedded-flow execution cases stay as history until S8 deletion.
+// Supported run-reviewer cases and flows/retirement.test.ts remain active.
 import { expect, test, spawn, spawnSync, fs, path, ACCOUNT_STORE_BUSY_MESSAGE, AccountMutationBusyError, defaultPipelinePorts, reconcileEmbeddedReviewFlows, tickPipelines, newRound, setRelayDeliveryForTest, tickFlow, registerPipelineTick, loadPipelines, savePipelines, interruptionObligationDirectory, patchPipeline, closeAndDrain, ORIGIN_MAIN_SHA, entry, harness, REMOTE_BRANCH, create, exhaustVerdictRecovery, withRuntimeSnapshot, DEPLOY_WINDOW_MS, forbiddenSleep, frozenWallClock, HISTORICAL_VERDICT_MISS, DEPLOY_CUT_HOLD, READ_ONLY_RERUN, deployCutObligations, structuredLatest, reviewParkedAfterRestart, STAGE_HEAD, PASS_TEXT, makeStructuredAttempt, stalledEntry, countDurableReads, pinStageHead, runningStructuredStage } from "./engine.fixture";
 import type { Flow, FileEntry } from "./engine.fixture";
 
@@ -148,7 +150,8 @@ test("mixed controller waits publish only the current busy retry time", async ()
   pipeline = loadPipelines()[0]!;
   const rebindingRetryAfter = pipeline.runs[0]!.attempts[0]!.controllerWait!.retryAfter;
   expect(rebindingRetryAfter).not.toBe(firstRetryAfter);
-  expect(pipeline.stateDetail).toBeNull();
+  expect(pipeline.stateDetail).toBe(`stage spawn deferred: waiting for the delivery controller (rebinding); retry at ${rebindingRetryAfter}`);
+  expect(pipeline.stateDetail).not.toContain(firstRetryAfter);
   expect(spawnCalls).toBe(1);
 
   Object.assign(h.ports, { structuredDeliveryPublication: () => "ready" as const });
@@ -442,7 +445,7 @@ test("a controller that is between publications is never spawned into (#1191)", 
   expect(scheduled).toEqual([1_000]);
   expect(loadPipelines()[0]!).toMatchObject({
     state: "running",
-    stateDetail: null,
+    stateDetail: expect.stringContaining("waiting for the delivery controller (rebinding)"),
     cursor: { stageId: "plan", state: "pending" },
   });
 
@@ -546,7 +549,7 @@ test("a process without a delivery controller publication defers stage activatio
   const deferred = loadPipelines()[0]!;
   expect(spawnCalls).toBe(0);
   expect(deferred.state).toBe("running");
-  expect(deferred.stateDetail).toBeNull();
+  expect(deferred.stateDetail).toBe("stage spawn deferred: waiting for the delivery controller (unbound)");
   expect(deferred.cursor).toMatchObject({ stageId: "plan", state: "pending" });
   expect(deferred.runs[0]!.attempts).toHaveLength(1);
   expect(deferred.runs[0]!.attempts.at(-1)!.state).toBe("pending");
@@ -1541,7 +1544,7 @@ test("an ended structured stage overrides a stale live marker with bounded trans
   expect(loadPipelines()[0]!.stateDetail).toContain("completed assistant turn has not been ingested");
 });
 
-test("fa6aa690 parked production state reconciles its canonical verdict and advances once (#356)", async () => {
+test.skip("fa6aa690 parked production state reconciles its canonical verdict and advances once (#356)", async () => {
   const h = harness();
   await create(h.ports, [
     { id: "diagnose_and_fix", kind: "run", role: { roleId: "builder" }, engine: "codex", access: "read-write", prompt: "Fix the defect", next: "review_phase0" },
@@ -2259,7 +2262,7 @@ test("role-less run stages persist the Builder registry runtime", async () => {
   });
 });
 
-test("review-loop stage delegates to one regular flow and maps approval", async () => {
+test.skip("review-loop stage delegates to one regular flow and maps approval", async () => {
   const h = harness();
   const stages = [
     { id: "build", kind: "run", role: { roleId: "builder" }, engine: "codex", prompt: "build", next: "review" },
@@ -2280,7 +2283,7 @@ test("review-loop stage delegates to one regular flow and maps approval", async 
   expect(loadPipelines()[0]!.runs[1]!.attempts[0]!.verdict).toEqual({ status: "pass", confidence: 1 });
 });
 
-test("pipeline 8fa12bb4 creates review flow from a terminal builder's durable identity with an empty scanner slice", async () => {
+test.skip("pipeline 8fa12bb4 creates review flow from a terminal builder's durable identity with an empty scanner slice", async () => {
   const h = harness();
   h.ports.spawnAgent = async (_input, onReserved) => {
     onReserved({ launchId: "launch-1", conversationId: "conversation_stage_1" });
@@ -2326,7 +2329,7 @@ test("pipeline 8fa12bb4 creates review flow from a terminal builder's durable id
   expect(h.calls).toContain("flow-implementer:conversation_stage_1");
 });
 
-test("retrying a parked review-loop appends a fresh attempt and flow", async () => {
+test.skip("retrying a parked review-loop appends a fresh attempt and flow", async () => {
   const h = harness();
   const stages = [
     { id: "build", kind: "run", role: { roleId: "builder" }, ["prompt"]: "build", next: "review" },
@@ -2348,7 +2351,7 @@ test("retrying a parked review-loop appends a fresh attempt and flow", async () 
   expect(reviewRun.attempts[1]!.flowId).toBe("flow-2");
 });
 
-test("retrying a parked review-loop fast-forwards to the pushed repair and records the reviewer SHA (#522)", async () => {
+test.skip("retrying a parked review-loop fast-forwards to the pushed repair and records the reviewer SHA (#522)", async () => {
   const h = harness();
   const reviewRepo = path.join(process.env.LLV_STATE_DIR!, "retry-review-repo");
   fs.mkdirSync(reviewRepo, { recursive: true });
@@ -2427,7 +2430,7 @@ test("retrying a parked review-loop fast-forwards to the pushed repair and recor
   expect(h.calls.indexOf("flow-close:flow-1")).toBeLessThan(h.calls.indexOf(`git merge --ff-only --no-overwrite-ignore ${repairHead}`));
 });
 
-test("issue 533: an in-loop repair advances expectedReviewHeadSha with reviewHeadSha from d03cc211 to 5755f992", async () => {
+test.skip("issue 533: an in-loop repair advances expectedReviewHeadSha with reviewHeadSha from d03cc211 to 5755f992", async () => {
   const h = harness();
   const stages = [
     { id: "build", kind: "run", role: { roleId: "builder" }, ["prompt"]: "build", next: "review" },
@@ -2464,7 +2467,7 @@ test("issue 533: an in-loop repair advances expectedReviewHeadSha with reviewHea
   expect(attempt.reviewHeadSha).toBe(actualReviewHead);
 });
 
-test("a divergent pipeline branch leaves a retried review parked with an actionable decision (#522)", async () => {
+test.skip("a divergent pipeline branch leaves a retried review parked with an actionable decision (#522)", async () => {
   const h = harness();
   const stages = [
     { id: "build", kind: "run", role: { roleId: "builder" }, ["prompt"]: "build", next: "review" },
@@ -2500,7 +2503,7 @@ test("a divergent pipeline branch leaves a retried review parked with an actiona
   expect(loadPipelines()[0]).toMatchObject({ state: "needs_decision", stateDetail: expect.stringContaining("diverged") });
 });
 
-test("reopening an embedded review flow resumes its parked pipeline attempt", async () => {
+test.skip("reopening an embedded review flow resumes its parked pipeline attempt", async () => {
   const h = harness();
   const stages = [
     { id: "build", kind: "run", role: { roleId: "builder" }, engine: "codex", prompt: "build", next: "review" },
@@ -2526,7 +2529,7 @@ test("reopening an embedded review flow resumes its parked pipeline attempt", as
   expect(reviewRun.attempts[0]).toMatchObject({ flowId: "flow-1", state: "reviewing", error: null });
 });
 
-test("retry-stage adopts a partially created flow and records its reviewer on the pipeline attempt", async () => {
+test.skip("retry-stage adopts a partially created flow and records its reviewer on the pipeline attempt", async () => {
   const h = harness();
   const stages = [
     { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "build", next: "review" },
@@ -2580,7 +2583,7 @@ test("retry-stage adopts a partially created flow and records its reviewer on th
   expect(createCalls).toBe(1);
 });
 
-test("retry-stage recovers after the three identical pipeline 8fa12bb4 review creation failures", async () => {
+test.skip("retry-stage recovers after the three identical pipeline 8fa12bb4 review creation failures", async () => {
   const h = harness();
   const stages = [
     { id: "build", kind: "run", role: { roleId: "builder" }, prompt: "build", next: "review" },
@@ -2622,7 +2625,7 @@ test("retry-stage recovers after the three identical pipeline 8fa12bb4 review cr
   expect(recovered[3]).toMatchObject({ state: "reviewing", flowId: "flow-1", error: null });
 });
 
-test("review-loop startup parks when advance fails", async () => {
+test.skip("review-loop startup parks when advance fails", async () => {
   const h = harness();
   const stages = [
     { id: "build", kind: "run", prompt: "build", next: "review" },
@@ -2638,7 +2641,7 @@ test("review-loop startup parks when advance fails", async () => {
   expect(loadPipelines()[0]!.stateDetail).toContain("advance rejected");
 });
 
-test("a paused review flow parks its pipeline", async () => {
+test.skip("a paused review flow parks its pipeline", async () => {
   const h = harness();
   const stages = [
     { id: "build", kind: "run", prompt: "build", next: "review" },
@@ -2656,7 +2659,7 @@ test("a paused review flow parks its pipeline", async () => {
   expect(loadPipelines()[0]!.stateDetail).toContain("kickoff delivery failed");
 });
 
-test("a review-flow host claim retry keeps the stage running with the safe claim detail (#921)", async () => {
+test.skip("a review-flow host claim retry keeps the stage running with the safe claim detail (#921)", async () => {
   const h = harness();
   const stages = [
     { id: "build", kind: "run", prompt: "build", next: "review" },
@@ -2699,7 +2702,7 @@ test("a review-flow host claim retry keeps the stage running with the safe claim
   expect(loadPipelines()[0]).toMatchObject({ state: "running", stateDetail: null });
 });
 
-test("an accepted-but-unsettled relay retry is not mislabeled as a host-claim failure (#921, #1065)", async () => {
+test.skip("an accepted-but-unsettled relay retry is not mislabeled as a host-claim failure (#921, #1065)", async () => {
   const h = harness();
   const stages = [
     { id: "build", kind: "run", prompt: "build", next: "review" },
@@ -2728,7 +2731,7 @@ test("an accepted-but-unsettled relay retry is not mislabeled as a host-claim fa
   expect(loadPipelines()[0]!.stateDetail).not.toContain("host claim retry");
 });
 
-test("a bound review flow paused while relaying resumes without operator action", async () => {
+test.skip("a bound review flow paused while relaying resumes without operator action", async () => {
   const h = harness();
   const stages = [
     { id: "build", kind: "run", prompt: "build", next: "review" },
@@ -2809,7 +2812,7 @@ test("a bound review flow paused while relaying resumes without operator action"
   expect(loadPipelines()[0]).toMatchObject({ state: "running", stateDetail: null });
 });
 
-test("a parked review stage ingests ten verdicts when relay terminalization races ingestion (#921)", async () => {
+test.skip("a parked review stage ingests ten verdicts when relay terminalization races ingestion (#921)", async () => {
   const h = harness();
   const stages = [
     { id: "build", kind: "run", prompt: "build", next: "review" },
@@ -3003,7 +3006,7 @@ test("a parked review stage ingests ten verdicts when relay terminalization race
   expect(JSON.stringify(loadPipelines()[0])).toBe(stableSettlement);
 });
 
-test("an operator pause during relay stays paused across pipeline reconciliation", async () => {
+test.skip("an operator pause during relay stays paused across pipeline reconciliation", async () => {
   const h = harness();
   const stages = [
     { id: "build", kind: "run", prompt: "build", next: "review" },

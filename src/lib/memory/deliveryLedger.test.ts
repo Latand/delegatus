@@ -5,8 +5,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { stateLockWaitsInFlight } from "@/lib/state/lockWait";
+import { assertStateChildSuccess } from "@/lib/state/stateChildResult.fixture";
 import { learnedRulesForLaunchProfile } from "./roleLaunch";
-import { DELIVERY_LEDGER_STARTS, engineMemoryVersion, memoryDeliveries, type MemoryEngineStart } from "./deliveryLedger";
+import { DELIVERY_LEDGER_STARTS, engineMemoryVersion, memoryDeliveries, prepareDeliveryLedgerIndexes, type MemoryEngineStart } from "./deliveryLedger";
 import { learnedRulesSnapshot, leaveLessons, recordLessonRequest, roleMemoryCollection } from "./roleStore";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-delivery-test-"));
 let draw = 0;
@@ -25,9 +26,57 @@ async function runChild(script: string): Promise<void> {
     const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => { child.kill("SIGKILL"); void child.exited.then(() => reject(Error("memory-ledger child exceeded its deadline"))); }, 30_000); });
     const result = Promise.all([child.exited, new Response(child.stderr).text()]);
     const [code, stderr] = await Promise.race([result, timeout]);
-    expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+    assertStateChildSuccess(code, stderr);
   } finally { if (timer) clearTimeout(timer); }
 }
+
+test("an upgrade builds delivery indexes off-loop before the first writer", async () => {
+  const directory = path.join(process.env.LLV_STATE_DIR!, "role-memory");
+  fs.mkdirSync(directory, { recursive: true });
+  const filename = path.join(directory, "delivery.sqlite");
+  const db = new Database(filename);
+  try {
+    db.exec("CREATE TABLE deliveries (sequence INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL); CREATE TABLE versions (hash TEXT PRIMARY KEY, content BLOB NOT NULL); CREATE TABLE files (sequence INTEGER REFERENCES deliveries(sequence) ON DELETE CASCADE, hash TEXT REFERENCES versions(hash), PRIMARY KEY(sequence, hash)); BEGIN IMMEDIATE");
+    const insert = db.query("INSERT INTO deliveries(body) VALUES (?)");
+    const body = JSON.stringify({ attempt: { pipelineId: "prior-pipeline", stageId: "build", attempt: 1 }, conversationId: "prior-conversation", retained: "history".repeat(128) });
+    for (let i = 0; i < 4_000; i++) insert.run(body);
+    db.exec("COMMIT");
+  } finally { db.close(); }
+
+  const barrier = path.join(directory, "worker-barrier");
+  fs.mkdirSync(barrier, { recursive: true });
+  let progressed = false;
+  let closeWorkerWatch = () => {};
+  const workerReady = new Promise<void>((resolve, reject) => {
+    const readyFile = path.join(barrier, "worker-ready");
+    const watcher = fs.watch(barrier, () => {
+      if (fs.existsSync(readyFile)) { watcher.close(); resolve(); }
+    });
+    closeWorkerWatch = () => watcher.close();
+    watcher.once("error", reject);
+    if (fs.existsSync(readyFile)) { watcher.close(); resolve(); }
+  });
+  const preparing = prepareDeliveryLedgerIndexes({ workerStartedBarrierForTest: barrier });
+  try {
+    await Promise.race([workerReady, preparing.then(() => { throw Error("delivery index worker completed before its start barrier"); })]);
+    await new Promise<void>(resolve => setImmediate(() => {
+      progressed = true;
+      fs.writeFileSync(path.join(barrier, "continue"), "continue");
+      resolve();
+    }));
+    await preparing;
+  } finally {
+    closeWorkerWatch();
+    fs.writeFileSync(path.join(barrier, "continue"), "continue");
+    if (!progressed) await preparing.catch(() => {});
+  }
+  const check = new Database(filename, { readonly: true });
+  try {
+    expect(check.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM deliveries").get()!.count).toBe(4_000);
+    expect(check.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='index'").all().map(row => row.name)).toEqual(expect.arrayContaining(["files_hash", "deliveries_attempt"]));
+    expect(progressed).toBe(true);
+  } finally { check.close(); }
+});
 function lesson(rule: string, attempt = 1, rewrite?: string) {
   const source = { project: "ledger-project", pipelineId: "ledger-pipeline", stageId: "build", attempt, roleId: "builder", fixRound: false, conversationId: "conversation_ledger" };
   recordLessonRequest({ ...source, at: "2026-10-16T00:00:00.000Z" });
@@ -119,7 +168,7 @@ test("retention survives a real process restart and removes only unreferenced fi
 import { learnedRulesForLaunchProfile } from ${JSON.stringify(path.join(import.meta.dir, "roleLaunch.ts"))}; await learnedRulesForLaunchProfile(${JSON.stringify(profile)}, ${JSON.stringify(input)});`;
   const child = Bun.spawn([process.execPath, "-e", script], { env: { ...process.env, HOME: input.home, XDG_CONFIG_HOME: path.join(input.home!, "config") }, stdout: "pipe", stderr: "pipe" });
   const [code, error] = await Promise.all([child.exited, new Response(child.stderr).text()]);
-  expect(error).toBe(""); expect(code).toBe(0);
+  assertStateChildSuccess(code, error);
   expect(memoryDeliveries()[0]!.sequence).toBe(DELIVERY_LEDGER_STARTS);
   expect(memoryDeliveries()[1]!.delivery.engineMemory[0]!.hash).toBe(digest("Current engine version."));
   expect(engineMemoryVersion(oldHash)).toBeNull();
@@ -133,15 +182,18 @@ test("contended delivery yields to the loop and captures rules and native input 
   await learnedRulesForLaunchProfile(profile, input);
   const db = new Database(path.join(process.env.LLV_STATE_DIR!, "role-memory", "delivery.sqlite"));
   db.exec("BEGIN IMMEDIATE");
+  // The held writer keeps admission retrying until this test releases it; a
+  // delivery that settles first stopped retrying, whatever the runner's speed.
+  let settled = false;
   const waitForAttempt = async (attempts: number) => {
-    const deadline = performance.now() + 3000;
     while (!stateLockWaitsInFlight().some(wait => wait.callSite === "memory.delivery" && wait.attempts >= attempts)) {
-      if (performance.now() > deadline) throw Error("delivery admission did not retry");
+      if (settled) throw Error("delivery admission did not retry");
       await new Promise<void>(resolve => setImmediate(resolve));
     }
   };
   let progressed = false;
   const pending = learnedRulesForLaunchProfile(profile, input);
+  void pending.then(() => { settled = true; }, () => { settled = true; });
   try {
     await new Promise<void>(resolve => setImmediate(() => { progressed = true; resolve(); }));
     await waitForAttempt(2);
@@ -153,7 +205,7 @@ test("contended delivery yields to the loop and captures rules and native input 
   expect(progressed).toBe(true);
   const row = memoryDeliveries()[1]!.delivery;
   expect(row.engineMemory[0]!.hash).toBe(digest("After admission."));
-  expect(row.rules[0]!.hash).toBe(digest("Check current ownership before replaying stored operation acknowledgements."));
+  expect(row.rules[0]!.hash).toBe(digest("Verify ownership before replaying any persisted acknowledgement."));
   expect(row.bytes).toBe(Buffer.byteLength(block!));
 });
 

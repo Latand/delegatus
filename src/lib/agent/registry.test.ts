@@ -279,6 +279,26 @@ describe("agent registry", () => {
     ]);
     expect(journal[0]).toMatchObject({ key: `codex:${key.sessionId}`, root: root.pid, pids: [root.pid, child.pid] });
     expect(journal[1]).toMatchObject({ removed: [root.pid, child.pid] });
+
+    // An earlier capture withdrawn after a later stop re-captured its tree
+    // leaves every identity to that later stop; the later one withdraws as before.
+    const grandchild = { pid: 42_003, startIdentity: "42003:grandchild" };
+    const earlier = store.captureStructuredTerminationSurvivors(key, root, [root, child, grandchild], "refused-stop");
+    expect(earlier).toMatchObject({ added: [child, grandchild] });
+    const later = store.captureStructuredTerminationSurvivors(key, root, [child, grandchild], "partial-stop");
+    expect(later).toMatchObject({ added: [], previousCaptureId: earlier!.captureId });
+    expect(store.withdrawStructuredTerminationSurvivors(key, root, earlier!, "refused-stop")).toBeTrue();
+    expect(row()!.structuredTerminationSurvivors).toEqual([root, child, grandchild]);
+    expect(row()!.structuredTerminationCaptureId).toBe(later!.captureId);
+    expect(store.withdrawStructuredTerminationSurvivors(key, root, later!, "partial-stop")).toBeTrue();
+    expect(row()!.structuredTerminationSurvivors).toEqual([root, child, grandchild]);
+    expect(row()!.structuredTerminationCaptureId).toBe(earlier!.captureId);
+    const tail = fs.readFileSync(path.join(path.dirname(store.filename), "host-termination-journal.ndjson"), "utf8")
+      .trim().split("\n").slice(-4).map(line => JSON.parse(line) as { event: string; source: string; removed?: number[] });
+    expect(tail.map(line => `${line.event}:${line.source}`)).toEqual([
+      "captured:refused-stop", "captured:partial-stop", "withdrawal-superseded:refused-stop", "withdrawn:partial-stop",
+    ]);
+    expect(tail[2]).toMatchObject({ removed: [] });
   });
 
   test("snapshot lookup preserves aliases and first path ownership without disk reads", () => {
@@ -1892,6 +1912,9 @@ describe("agent registry", () => {
       store.conversation(conversation.id)!.migration!.operationId, store.conversation(conversation.id)!.migration!.providerReceipt!);
     expect(final.id).toBe(conversation.id);
     expect(final.generations.map((generation) => generation.path)).toEqual(["/a.jsonl", "/b.jsonl", "/a2.jsonl"]);
+    expect(final.generations.slice(1).map((generation) => generation.quotaCustody)).toEqual([
+      { accountId: "b", artifactPath: "/b.jsonl" }, { accountId: "a", artifactPath: "/a2.jsonl" },
+    ]);
     expect(store.canonicalPath("/a.jsonl")).toBe("/a2.jsonl");
   });
 

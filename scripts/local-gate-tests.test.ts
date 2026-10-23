@@ -1,6 +1,6 @@
 import { afterEach, expect, spyOn, test, setDefaultTimeout } from "bun:test";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import path from "node:path";
 import { appendOwnershipFailure, compareTests, confirmFailures, FLAKY_RERUNS, FLAKY_BUDGET_MS, parseReport, touchedTests, type TestSite, type TestRun } from "./local-gate-tests";
@@ -54,7 +54,7 @@ test("a new failure blocks by file and full test identity", async () => {
   const cli = spawnSync(process.execPath, [path.join(root, "scripts/local-gate-tests.ts"), "--base", f.base, "./example.test.ts"], { cwd: f.dir, env: f.env, encoding: "utf8" });
   expect(cli.status).toBe(1); expect(cli.stdout).toContain("NEW example.test.ts");
 });
-test("a failure on both first samples is PRE-EXISTING from the CLI, costs no reruns and is never cached", async () => {
+test("a failure on both first samples is PRE-EXISTING and its first observation cannot be reused", async () => {
   const marker = path.join(gateTemporaryRoot(), `gate-marker-${process.pid}-${Math.random()}`); roots.push(marker);
   const f = fixture(`import { test, expect } from "bun:test"; import { appendFileSync } from "node:fs"; appendFileSync(${JSON.stringify(marker)}, ${JSON.stringify("run\n")}); test("old red", () => expect(false).toBe(true));`);
   const samples = () => readFileSync(marker, "utf8").trim().split("\n").length;
@@ -118,6 +118,37 @@ test("per-file processes isolate globals and distinct state/HOME/TMPDIR before i
   const result = await f.run(["./example.test.ts", "./second.test.ts"]);
   expect(result.introduced).toHaveLength(0);
 });
+
+test("gate samples allow tests beyond five seconds and retain explicit timeouts", async () => {
+  const f = fixture(`import { test } from "bun:test";
+    test("default exceeds five seconds", async () => { await Bun.sleep(6_000); });
+    test("explicit deadline still refuses", async () => { await new Promise(() => {}); }, 50);
+  `);
+  const result = await f.run();
+  expect(result.introduced).toHaveLength(0);
+  expect(result.preexisting.map(site => site.name)).toEqual(["explicit deadline still refuses"]);
+  expect(f.logs.join("\n")).toContain("0 new failures, 1 pre-existing failures");
+});
+
+test.each([150_000, 150_001])("head file growth hint uses half the file budget: %i ms", async elapsedMs => {
+  const f = fixture(source(true));
+  let now = 0;
+  const clock = spyOn(performance, "now").mockImplementation(() => now);
+  const spawn = Bun.spawn;
+  const launch = spyOn(Bun, "spawn").mockImplementation(((...args: Parameters<typeof Bun.spawn>) => {
+    const child = spawn(...args);
+    // Advance the parent's clock only after its real test runner settles.
+    void child.exited.then(() => { now = elapsedMs; });
+    return child;
+  }) as typeof Bun.spawn);
+  try {
+    expect((await f.run()).introduced).toHaveLength(0);
+    const line = f.logs.find(line => line.startsWith("touched-tests: head file "))!;
+    expect(line).toContain(`${elapsedMs}ms wall; 0 failures; complete`);
+    expect(line.includes("over half the 300 s file budget; split it")).toBe(elapsedMs > 150_000);
+  } finally { launch.mockRestore(); clock.mockRestore(); }
+});
+
 test("duplicate names match occurrences and keep suite ancestry", async () => {
   const site: TestSite = { file: "f.test.ts", name: "same", suite: "suite", kind: "test" };
   const base = { failures: [site], passed: [], elapsedMs: 0, completed: [site.file] };
@@ -252,7 +283,8 @@ test("real pre-push entry permits PRE-EXISTING and refuses NEW after privacy/typ
   execFileSync("git", ["--git-dir", remote, "fetch", f.dir, "HEAD:main"], { env: f.env, stdio: "pipe" });
   f.git("remote", "set-url", "origin", remote); f.git("update-ref", "refs/remotes/origin/main", hookBase);
   writeFileSync(path.join(f.dir, "example.test.ts"), `// harmless\n${source(false)}`);
-  const env = { ...f.env, PATH: `${path.join(f.dir, "shims")}:${f.env.PATH}`, FIXTURE_BUN: process.execPath, LLV_GATE_BUN: process.execPath, FIXTURE_CALLS: calls, LLV_SKIP_HOOKS: "0", LLV_GATE_LOCK_DIR: f.dir };
+  const env = { ...f.env, PATH: `${path.join(f.dir, "shims")}:${f.env.PATH}`, FIXTURE_BUN: process.execPath, LLV_GATE_BUN: process.execPath, FIXTURE_CALLS: calls, LLV_SKIP_HOOKS: "0", LLV_GATE_LOCK_DIR: f.dir,
+    LLV_GATE_CHECK_ENV: "FIXTURE_BUN,FIXTURE_CALLS" };
   const hook = () => { const result = spawnSync("bash", [".githooks/pre-push"], { cwd: f.dir, env, encoding: "utf8" }); return { ...result, stdout: result.stdout + result.stderr }; };
   const accepted = hook(); if (accepted.status !== 0) throw new Error(accepted.stdout + accepted.stderr); expect(accepted.status).toBe(0);
   expect(accepted.stdout).toContain("PRE-EXISTING example.test.ts: contract > same name & Unicode Ω");
@@ -620,6 +652,7 @@ test("paired target", () => expect(side === "base" || (${JSON.stringify(mode)} =
     const server = createServer();
     const ready = new Map<number, Map<string, import("node:net").Socket>>();
     const sockets = new Set<import("node:net").Socket>();
+    let missingPeerReady: (() => void) | undefined;
     server.on("connection", socket => {
       sockets.add(socket);
       socket.once("close", () => sockets.delete(socket));
@@ -632,6 +665,7 @@ test("paired target", () => expect(side === "base" || (${JSON.stringify(mode)} =
         const peers = ready.get(message.run) ?? new Map<string, import("node:net").Socket>();
         ready.set(message.run, peers);
         peers.set(message.side, socket);
+        if (mode === "missing-peer") missingPeerReady?.();
         if (peers.has("base") && peers.has("head") && mode !== "missing-peer") {
           for (const peer of peers.values()) peer.end("release");
           ready.delete(message.run);
@@ -660,11 +694,18 @@ test("paired target", () => expect(side === "base" || (${JSON.stringify(mode)} =
       };
       child.once("error", error => finish(error));
       child.once("close", (status, signal) => finish(timedOut ? new Error("rendezvous control exceeded its outer watchdog") : undefined, status ?? (signal ? 1 : null)));
-      watchdog = setTimeout(() => {
+      const halt = () => {
         timedOut = true;
         if (child.pid && process.platform !== "win32") process.kill(-child.pid, "SIGTERM");
         else child.kill("SIGTERM");
-      }, mode === "missing-peer" ? 1000 : 45000);
+      };
+      watchdog = setTimeout(halt, 45000);
+      // Start the missing-peer window after a real retry reaches the barrier.
+      // Toolchain fingerprinting and baseline setup precede that observation.
+      missingPeerReady = () => {
+        if (watchdog) clearTimeout(watchdog);
+        watchdog = setTimeout(halt, 1000);
+      };
     }); } catch (error) { watchdogError = error; }
     finally {
       for (const socket of sockets) socket.destroy();
@@ -937,4 +978,68 @@ test("a red branch samples only failing files and names only failing assertions"
   const result = await touchedTests(f.dir, base, ["good.test.ts", "example.test.ts"], { env: f.env, log: line => f.logs.push(line) });
   expect(result.preexisting).toHaveLength(1); expect(result.introduced).toHaveLength(0);
   expect(f.logs.join("\n")).toContain("1 failing file(s)");
+});
+
+
+test("a base failure needs two matching fresh observations before a later process reuses it", () => {
+  const markerRoot = mkdtempSync(path.join(gateTemporaryRoot(), "gate-base-cache-")); roots.push(markerRoot);
+  const marker = path.join(markerRoot, "samples");
+  const f = fixture(`import { test, expect } from "bun:test"; import { appendFileSync } from "node:fs";
+    import { basename } from "node:path"; appendFileSync(${JSON.stringify(marker)}, basename(process.cwd()) === "baseline" ? "base\\n" : "head\\n");
+    test("stable old failure", () => expect(false).toBe(true));`);
+  const samples = () => readFileSync(marker, "utf8").trim().split("\n").filter(line => line === "base").length;
+  const run = () => {
+    const cli = cliAt(f, f.base); expect(cli.status, cli.stderr).toBe(0);
+    expect(cli.stdout).toContain("PRE-EXISTING example.test.ts: stable old failure"); return cli.stdout;
+  };
+  run(); expect(samples()).toBe(1);
+  run(); expect(samples()).toBe(2);
+  expect(run()).toContain("reused baseline"); expect(samples()).toBe(2);
+  f.git("commit", "--allow-empty", "-m", "new base");
+  const other = cliAt(f, f.git("rev-parse", "HEAD")); expect(other.status).toBe(0); expect(samples()).toBe(3);
+});
+
+
+test("baseline cache misses on changed filters, dependency inputs and origin", () => {
+  const f = fixture(`import { test, expect } from "bun:test";
+    test("first old", () => expect(false).toBe(true)); test("second old", () => expect(false).toBe(true));`);
+  const run = () => { const cli = cliAt(f, f.base); expect(cli.status, cli.stderr).toBe(0); return cli.stdout; };
+  run(); run(); expect(run()).toContain("reused baseline");
+  writeFileSync(path.join(f.dir, "example.test.ts"), 'import { test, expect } from "bun:test"; test("first old", () => expect(false).toBe(true));');
+  expect(run()).not.toContain("reused baseline"); run(); expect(run()).toContain("reused baseline");
+  writeFileSync(path.join(f.dir, "package.json"), '{"name":"changed-input"}');
+  expect(run()).not.toContain("reused baseline"); run(); expect(run()).toContain("reused baseline");
+  f.git("remote", "set-url", "origin", "https://example.invalid/another.git");
+  expect(run()).not.toContain("reused baseline");
+});
+
+test("two disagreeing base observations never certify a failure", () => {
+  const markerRoot = mkdtempSync(path.join(gateTemporaryRoot(), "gate-base-mixed-")); roots.push(markerRoot);
+  const marker = path.join(markerRoot, "count");
+  const f = fixture(`import { test, expect } from "bun:test"; import { existsSync, readFileSync, writeFileSync } from "node:fs";
+    import { basename } from "node:path";
+    const isBase = basename(process.cwd()) === "baseline";
+    const count = isBase && existsSync(${JSON.stringify(marker)}) ? Number(readFileSync(${JSON.stringify(marker)}, "utf8")) : 0;
+    if (isBase) writeFileSync(${JSON.stringify(marker)}, String(count + 1));
+    test("changing old failure", () => expect(isBase && count % 2 === 1).toBe(true));`);
+  for (let index = 0; index < 3; index++) {
+    const cli = cliAt(f, f.base); expect(cli.status, cli.stderr).toBe(0);
+    expect(cli.stdout).not.toContain("reused baseline");
+  }
+});
+
+test("a comparator source change invalidates confirmed baseline evidence across processes", () => {
+  const f = fixture(source(false));
+  const tool = path.join(f.dir, "tool"), scripts = path.join(tool, "scripts");
+  cpSync(path.join(root, "scripts"), scripts, { recursive: true });
+  for (const file of ["src", "node_modules", "tsconfig.json", "test-preload.ts", "bunfig.toml"])
+    symlinkSync(path.join(root, file), path.join(tool, file), ["src", "node_modules"].includes(file) ? "dir" : "file");
+  const comparator = path.join(scripts, "local-gate-tests.ts");
+  const run = () => {
+    const result = spawnSync(process.execPath, [comparator, "--base", f.base, "./example.test.ts"], { cwd: f.dir, env: f.env, encoding: "utf8" });
+    expect(result.status, result.stdout + result.stderr).toBe(0); return result.stdout;
+  };
+  run(); run(); expect(run()).toContain("reused baseline");
+  writeFileSync(comparator, readFileSync(comparator, "utf8") + "\n// Changed comparator input.\n");
+  expect(run()).not.toContain("reused baseline");
 });

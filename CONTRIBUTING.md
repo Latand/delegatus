@@ -170,6 +170,11 @@ alias the operator defined with `gh alias set` is not expanded.
 - **Batch landing** (`scripts/merge-batch.ts`) checks its principal against an
   installation endpoint. Run from a launched agent in a declared repository,
   that check and the merge both go through the shim.
+  A refused check names the missing App routing and asks the installation
+  owner to declare the repository, then launch a new merger: an existing
+  agent keeps its launch environment. When routing is already declared, the
+  refusal asks the owner to check the encrypted App credential and repository
+  installation. Child-command diagnostics are withheld.
 
 The App's registration and its verified installation id live in the operator's
 encrypted Secret Service collection, as one item with the attributes
@@ -260,9 +265,11 @@ compares each changed file with its version at the merge base with `origin/main`
 Only additional errors block: counts are matched per file, rule and message,
 excluding locations/source frames embedded in React diagnostics. New files have
 an empty baseline; deleted files are ignored. The output names introduced sites
-and counts existing base errors. Warnings do not block; tool/config failures do.
-Privacy and TypeScript still check absolutely. Base linting runs only for the
-selected files, in the same gate slot as head linting. Controller stage commits
+and counts existing base errors in files with head errors. Warnings do not
+block; tool/config failures do.
+Privacy and TypeScript still check absolutely. Base linting runs only for
+selected files with head errors, in the same gate slot as head linting.
+Controller stage commits
 allow fifteen minutes for hooks; a controller deadline keeps the passed attempt
 in committing and retries with backoff, without asking the stage to repair
 files or parking the lane. CPU admission and its wait accounting follow the
@@ -292,7 +299,8 @@ explicit caller deadline takes precedence. File, phase and paired-confirmation
 budgets remain unchanged.
 
 The three verdicts read as follows.
-`PRE-EXISTING`: the assertion failed the initial sample on both sides. It is
+`PRE-EXISTING`: the assertion failed the initial sample on both sides. Its
+initial base sample may be reused under the cache rules below. It is
 classified on those two samples, runs no further, and permits the push.
 `FLAKY`: the assertion failed the initial head sample, passed the initial base
 sample, and then gave mixed results on at least one side. It is listed with the
@@ -358,8 +366,39 @@ Four independent base samples detect it with probability `34.39%` overall;
 rare or correlated failures can still evade this bounded sampling. Head
 recovery supplies a separate opportunity to identify intermittency.
 
-Baseline results are not cached. Every failure receives a fresh base sample
-and fresh filtered confirmation runs.
+Initial complete baseline assertion samples are cached only after two matching
+fresh observations. The key includes the immutable base commit, file, failing
+name filter, origin, dependency graph, comparator source closure, Bun binary,
+platform, environment and budgets. Local/workspace dependencies, diagnostics
+and incomplete runs are never cached. Every confirmation round stays fresh.
+Baseline entries expire after 24 hours.
+
+A clean pre-push records each completed check under the clone's common Git
+directory (`delegatus-gate/passes`). A repeated hook, including publication,
+can reuse it only for the same head commit and tree, merge base, command,
+toolchain, environment and comparator sources. Ignored working-tree inputs
+(such as generated TypeScript declarations) and installed dependency bytes are
+also bound; Git metadata and compiler-owned incremental output are excluded.
+Inputs are checked again before
+reuse and after completion. Dirty trees never read or create pass receipts.
+Privacy, frozen install and the advisory audit always run fresh. The runtime
+build and its consumers reuse together; a partial runtime chain rebuilds.
+Head commit and branch also bind history-sensitive tests. Pass receipts expire
+after seven days. Each receipt family retains at most 256 records and 32 MiB; unavailable or malformed entries run the check again.
+Each reuse prints the step, recorded time, tree and base with its reason.
+Types, lint and tests run in one private, canonical environment
+(`checkEnvironment` in `scripts/gate-cache.ts`). An agent's session, forge
+authority and Viewer endpoint, a commit identity and push credentials never
+reach them, whoever starts the hook. A caller hands another input to the checks
+by naming it in `LLV_GATE_CHECK_ENV`; it is keyed like the rest. The signal
+boundary counts only by its host epoch, so a stage agent's clean hook run is
+reused when the Viewer publishes the same tree on that host.
+
+ESLint uses its native content cache for head files, keyed by the dependency
+and configuration digests. It retains eight generations of at most 4 MiB under
+`delegatus-gate/eslint` in the common Git directory. Base text always gets a
+fresh lint, and only for files with head errors. Neither cache changes hosted
+required checks.
 
 Mandatory privacy inspection runs without admission alongside the isolated
 pre-push checks. Both verdicts must pass; either refusal or timeout stops the
@@ -428,7 +467,11 @@ refuses with exit 69 unless `DELEGATUS_AGENT_CPU=off`
 (`LLV_OWNED_RUN_TIMEOUT_MS`, default fifteen minutes) and a kernel watchdog. A recorded caller start
 identity detects a hard-killed wrapper; detached descendants stay owned by the
 service. Surviving children fail the command before the manager reaps them.
-Linux requires a reachable user systemd manager. macOS and Windows use an
+Linux requires a reachable user systemd manager. A stage agent in a signal
+domain gets the same service and limits: the service runs its command inside
+the agent's own namespaces. Only without a reachable manager does such a gate
+run in a leaf of the agent's scope, under the agent's memory cap, and it says
+so on stderr. macOS and Windows use an
 independent identity-bound guardian with best-effort execution and one warning
 per owning run; a detached child can escape between guardian polls. The strong
 lifetime guarantee applies to Linux native containment, as recorded in
@@ -437,10 +480,17 @@ An existing `NODE_OPTIONS` is preserved. Production builds cap page-data
 workers at two to fit the gate's three-CPU quota. The Viewer build and its
 runtime consumers share a private source tree with read-only dependencies;
 they neither contend on another build's `.next/lock` nor consume its output.
+Checkout self-update installation and compilation have immediate admission in a high-weight scope
+beside the agent work slice. Nonempty command output renews a 30-minute silence
+bound, with total bounds of one hour for install and two hours for compilation,
+and bounded child cleanup. Package updates keep pressure admission and work quotas. The deployment
+record preserves the failed phase and cause, including load at a build timeout.
+See `docs/design/cpu-placement.md#release-build-admission-and-deadlines`.
+
 The hook labels CPU admission for publication checks and prints its measured
 queue wait, excluded from the execution budget.
 
-Run an individual test as `bash scripts/gate-slot.sh bun test <file>` with an
+Run an individual test as `bash scripts/gate-slot.sh bun run test <file>` with an
 isolated home, config, state and temporary root. The preload registers real
 Node and Bun children before spawn returns, checks for survivors, and reaps
 them before deleting its temporary root. Direct and nested Linux test runners
@@ -494,3 +544,12 @@ After this workflow switch, a merge already waiting on a removed check name
 may need to be re-armed once. Main's branch protection requires exactly three
 checks, `privacy-publication`, `privacy-tracker-audit` and `runtime-gate`, with
 strict updates enabled.
+
+## Running selected tests
+
+Use `bun run test <explicit test files>` through `scripts/gate-slot.sh`, with
+private HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR and a closed
+LLV_VIEWER_CONTROL_URL. The package command passes a 60-second default timeout
+to every file. Bun ignores a `[test] timeout` key, and a preload timeout reaches
+only its first file on the pinned runtime. Explicit per-test timeouts still
+apply. The pre-push comparator and merger pass the same CLI timeout.

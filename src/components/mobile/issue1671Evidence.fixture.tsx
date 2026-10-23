@@ -21,10 +21,17 @@ import { writeProfile } from "@/components/runtimeProfile";
 import { ReceiptChip } from "@/components/runtime/ReceiptChip";
 import type { RuntimeReceipt } from "@/components/runtime/runtimeModel";
 import { Viewer } from "@/components/Viewer";
+import { refreshTeamView } from "@/components/team/teamClient";
+import { TeamPage } from "@/components/team/TeamPage";
+import { WorkspacePage } from "@/components/team/WorkspacePage";
+import { FIXTURE_WORKSPACE_IDS, workspacesFixture } from "@/components/team/workspacesEvidence.fixture";
+import { WORKSPACE_STORAGE_KEY } from "@/components/team/workspacesClient";
 import { setVoiceCompanionAdapterForTests } from "@/components/voiceCompanion/VoiceCompanionHost";
 import type { VoiceCompanionAdapter } from "@/lib/voiceCompanion/contract";
+import { sampleCallHistory } from "@/components/voiceCompanion/transcriptSample.fixture";
 import { scenarioScript } from "@/lib/voiceCompanion/scenarios";
 import { createSimulatedCompanion, realClock } from "@/lib/voiceCompanion/simulator";
+import { OfficialVoiceCompanionAdapter } from "@/lib/voiceCompanion/liveAdapter";
 import { getRuntimeBus } from "@/hooks/runtimeBus";
 import { applyBoardMutations, type BoardMutationV1 } from "@/lib/board/mutations";
 import type { Pipeline } from "@/lib/pipelines/types";
@@ -169,12 +176,13 @@ const MENU_STATE = new URLSearchParams(location.search).get("menu-state");
    shell's own host mounts the phone's voice head. `product` keeps the real voice, whose session route is never to
    be asked; `sim` hands the host a simulator that speaks the long scenario and records each start, each project it
    is told and each close on `window.phoneVoice`. `&voice-long=1` fills the seat's conversation past the screen, so
-   what the head and its words cover is measured over real rows. */
+   what the head and its words cover is measured over real rows. `history` opens as after a reload, with no call of
+   its own and `sampleCallHistory`'s three retained calls, which the conversation panel's picker opens (GitHub #2975). */
 const VOICE_SCENE = new URLSearchParams(location.search).get("voice");
 const VOICE_LONG = new URLSearchParams(location.search).has("voice-long");
 const phoneVoice = { starts: [] as string[], projects: [] as Array<string | null>, closes: 0, sessionRequests: 0 };
 Object.assign(window, { phoneVoice });
-if (VOICE_SCENE === "sim" || VOICE_SCENE === "reads") {
+if (VOICE_SCENE === "sim" || VOICE_SCENE === "reads" || VOICE_SCENE === "history") {
   const uk = localStorage.getItem("llv_lang") === "uk";
   setVoiceCompanionAdapterForTests((): VoiceCompanionAdapter => {
     const simulated = createSimulatedCompanion({
@@ -189,8 +197,26 @@ if (VOICE_SCENE === "sim" || VOICE_SCENE === "reads") {
       command: (command) => simulated.command(command),
       close: () => { phoneVoice.closes += 1; return simulated.close(); },
       ...(VOICE_SCENE === "reads" ? { transcript: async () => (await serverFetch("/evidence/voice-transcript")).json() } : {}),
+      ...(VOICE_SCENE === "history" ? (() => {
+        /* The requests went to the fixture's own running orchestrator, so its link opens a conversation the phone knows. */
+        const history = sampleCallHistory(uk ? "uk" : "en", "atlas", "conversation_running");
+        return { calls: async () => history.calls, transcript: async (sessionId?: string) => history.records[sessionId ?? history.calls[0]!.sessionId] ?? null };
+      })() : {}),
     };
   });
+}
+/* `?voice=drop`: the product's own adapter, its session and resume routes answered by the driver over the network
+   (`serverFetch`, so `page.route` sees them), with a stand-in for the microphone and the peer connection.
+   `window.phoneVoice.lose()` fails that connection, as a lost network does. */
+if (VOICE_SCENE === "drop") {
+  setVoiceCompanionAdapterForTests((): VoiceCompanionAdapter => new OfficialVoiceCompanionAdapter({
+    fetch: ((input: RequestInfo | URL, init?: RequestInit) => serverFetch(input, init)) as typeof fetch,
+    media: (callbacks) => {
+      Object.assign(phoneVoice, { lose: () => callbacks.lost("PROVIDER_ERROR") });
+      return { open: async () => "v=0\r\n", answer: async () => {}, mute: () => {}, interrupt: () => {}, close: async () => {} };
+    },
+    cues: { prepare: () => {}, connect: () => {}, disconnect: () => {}, dispose: () => {} },
+  }));
 }
 function voiceFeed(feed: string): string {
   if (!VOICE_LONG) return feed;
@@ -1175,6 +1201,11 @@ if (OVERVIEW_SCENE) {
     (entry as { project: string }).project = fileProject.get(entry.path) ?? (loose++ % 2 ? OVERVIEW_KEYS.forge : OVERVIEW_KEYS.delegatus);
   }
   kanbanFiles.push({ ...files[0]!, project: OVERVIEW_KEYS.forge } as FileEntry);
+  /* The workspace scenes show each project by the name a scanned file carries,
+     so the sheet's rows read forge-api, atlas-docs and delegatus as the bar does. */
+  if (new URLSearchParams(location.search).get("scenario")?.startsWith("workspaces")) {
+    for (const entry of kanbanFiles) (entry as { projectName?: string }).projectName = OVERVIEW_NAMES[entry.project];
+  }
   /* What ⋯ › Hidden tasks lists: a finished group hidden an hour ago, and an
      empty task taken off the board. */
   for (const row of kanbanTasks as Array<Record<string, unknown>>) {
@@ -1226,7 +1257,17 @@ const botChat = (over: Record<string, unknown>) => ({
   lastMessageAt: iso(600), lastPostAt: null, lastPostBy: null, storedMessages: 12, ...over,
 });
 /* `typed`: one group whose title suggests no alias, so the field shows. */
-const telegramBot = BOT_SCENE === "typed"
+const telegramBot = BOT_SCENE === "pairing"
+  ? {
+    connected: false,
+    bot: null,
+    receiving: "stopped",
+    lastUpdateAt: null,
+    lastCheckedAt: null,
+    chats: [botChat({ alias: null, postAllowed: false, postable: false, lastMessageAt: null, storedMessages: 0 })],
+    limits: [],
+  }
+  : BOT_SCENE === "typed"
   ? {
     connected: true,
     bot: { name: "Atlas Reports", username: "atlas_reports_bot", canReadAllGroupMessages: false, canJoinGroups: true },
@@ -1236,7 +1277,7 @@ const telegramBot = BOT_SCENE === "typed"
     chats: [botChat({ chatId: "-1000000000505", title: "Реліз", type: "group" })],
     limits: [],
   }
-  : BOT_SCENE === "chats" || BOT_SCENE === "webhook" || BOT_SCENE === "refused"
+  : BOT_SCENE === "chats" || BOT_SCENE === "webhook" || BOT_SCENE === "refused" || BOT_SCENE === "clone"
   ? {
     connected: true,
     bot: { name: "Atlas Reports", username: "atlas_reports_bot", canReadAllGroupMessages: false, canJoinGroups: true },
@@ -1277,6 +1318,43 @@ const telegramBot = BOT_SCENE === "typed"
   }
   : { connected: false, bot: null, receiving: "stopped", lastUpdateAt: null, lastCheckedAt: null, chats: [], limits: [] };
 
+/* Several connected bots, shown through the existing Telegram panel. */
+const multiBots = [
+  { name: "Atlas Reports", username: "atlas_reports_bot", receiving: true, tokenState: "ok" },
+  { name: "Release Helper", username: "release_fixture_bot", receiving: false, tokenState: "ok" },
+];
+if (BOT_SCENE === "clone") {
+  const chats = telegramBot.chats;
+  Object.assign(chats[0]!, { seesAllMessages: false, member: true, postable: true, assignedBot: null,
+    bots: [
+      { name: "Report clone", username: null, assigned: false, member: true, status: null, canPost: true,
+        canSendPhotos: false, canSendDocuments: false, canManageTopics: false, reason: null, checkedAt: null },
+      { name: "Atlas Reports", username: "atlas_reports_bot", assigned: false, member: false, status: "kicked", canPost: false,
+        canSendPhotos: false, canSendDocuments: false, canManageTopics: false, reason: "bot_not_in_chat", checkedAt: "2026-10-20T12:00:00Z" },
+    ] });
+}
+if (BOT_SCENE === "pairing") {
+  Object.assign(telegramBot.chats[0]!, { bots: [
+    { name: "Report clone", username: null, assigned: false, member: true, status: null, canPost: true,
+      canSendPhotos: false, canSendDocuments: false, canManageTopics: false, reason: null, checkedAt: null },
+    { name: "Atlas Reports", username: "atlas_reports_bot", assigned: false, member: false, status: "kicked", canPost: false,
+      canSendPhotos: false, canSendDocuments: false, canManageTopics: false, reason: "bot_not_in_chat", checkedAt: null },
+  ] });
+}
+if (BOT_SCENE?.startsWith("multi-")) {
+  const bots = BOT_SCENE === "multi-one" ? multiBots.slice(0, 1) : multiBots;
+  const refused = BOT_SCENE === "multi-refused";
+  const kicked = BOT_SCENE === "multi-kicked" || refused;
+  const chatBots = bots.map((b, index) => ({ name: b.name, username: b.username, assigned: false,
+    member: !(refused || (kicked && index === 0)), status: refused || (kicked && index === 0) ? "kicked" : "administrator",
+    canPost: !(refused || (kicked && index === 0)), canSendPhotos: true, canSendDocuments: true, canManageTopics: true,
+    reason: refused || (kicked && index === 0) ? "bot_not_in_chat" : null, checkedAt: "2026-10-20T12:00:00Z" }));
+  Object.assign(telegramBot, { connected: true, bot: { name: bots[0]!.name, username: bots[0]!.username, canReadAllGroupMessages: false, canJoinGroups: true }, bots,
+    receiving: "webhook_elsewhere", lastUpdateAt: null, lastCheckedAt: "2026-10-20T12:00:00Z",
+    chats: [botChat({ alias: "team-reports", postAllowed: true, postable: !refused, member: !refused, bots: chatBots, assignedBot: null,
+      lastDelivery: refused ? { state: "refused", at: "2026-10-20T12:00:00Z", refusals: bots.map(b => ({ bot: { name: b.name, username: b.username }, code: "forbidden", reason: "Removed from chat", source: "send", at: "2026-10-20T12:00:00Z" })) } : null })] });
+}
+
 /* Each project's report destination (orchestrator-reports §5.6.1), keyed by
    project: `atlas` never chose, and two invented projects with seats, one
    posting to the team group and one never chosen. */
@@ -1288,6 +1366,23 @@ const reportChoices: Record<string, { chat: string | null; name?: string } | nul
 const REPORT_LABELS: Record<string, string> = { [PROJECT]: "atlas", "-projects-ledger": "ledger", "-projects-mesh": "mesh" };
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+
+/* Team workspaces (docs/design/workspaces.md §13.9): `&scenario=workspaces` with `?overview=1` is the Overview's
+   three projects on a team install, forge-api in Client work, atlas-docs in Research and delegatus in none;
+   `workspaces-team` and `workspaces-page` mount the Team page's Workspaces tab and one workspace's page.
+   `&member=1` signs the member in, `&ws=client|research|long|all` is the stored choice. The routes answer here. */
+const WORKSPACE_PARAMS = new URLSearchParams(location.search);
+const WORKSPACE_SCENE = WORKSPACE_PARAMS.get("scenario")?.startsWith("workspaces") ?? false;
+const WORKSPACES = WORKSPACE_SCENE ? workspacesFixture({
+  uk: localStorage.getItem("llv_lang") === "uk",
+  member: WORKSPACE_PARAMS.has("member"),
+  projects: Object.values(OVERVIEW_KEYS).map((project, index) => ({ project, displayName: OVERVIEW_NAMES[project]!, smt: now - (index + 1) * 3_600 })),
+  placed: { client: [OVERVIEW_KEYS.forge], research: [OVERVIEW_KEYS.docs], long: [] },
+}) : null;
+if (WORKSPACES) {
+  const chosen = WORKSPACE_PARAMS.get("ws");
+  if (chosen) localStorage.setItem(WORKSPACE_STORAGE_KEY, chosen === "all" ? "all" : FIXTURE_WORKSPACE_IDS[chosen as keyof typeof FIXTURE_WORKSPACE_IDS] ?? chosen);
+}
 
 /* The one request that leaves the page: the evidence server draws task icons from lucide (#2102). */
 const serverFetch = window.fetch.bind(window);
@@ -1305,6 +1400,10 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 
   if (RUNTIME_PERF && url.pathname === "/api/runtime/snapshot") return serverFetch(input, init);
   const method = (init?.method ?? "GET").toUpperCase();
+  if (WORKSPACES) {
+    const answered = await WORKSPACES.answer(url, init);
+    if (answered) return answered;
+  }
   /* The voice head's scenes: the companion on in the settings, and no session route at all. */
   if (VOICE_SCENE && url.pathname === "/api/voice-companion/settings") {
     return json({ enabled: true, backend: "api", monthlyCapUsd: 20, keySource: "file", keyEnvironment: "OPENAI_API_KEY", month: "2026-10", usageUsd: 0.4, reservedUsd: 0, incomplete: false, uncertainSession: false });
@@ -1805,11 +1904,20 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   if (url.pathname === "/api/telegram/bot" && method === "POST") {
     const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
-    evidence.botPosts.push(body);
+    evidence.botPosts.push({ ...body, ...(body.token ? { token: "[redacted]" } : {}) });
     const row = (telegramBot.chats as Array<Record<string, unknown>>).find((entry) => entry.chatId === body.chatId);
     if (body.action === "chat" && row) {
       const alias = typeof body.alias === "string" && body.alias !== "" ? body.alias : null;
       Object.assign(row, { alias, postAllowed: alias !== null && body.postAllowed === true, postable: alias !== null && body.postAllowed === true });
+    }
+    if (["add_bot", "remove_bot", "chat_bot"].includes(String(body.action))) {
+      const state = telegramBot as unknown as { bots: typeof multiBots; chats: Array<Record<string, unknown>> };
+      if (body.action === "add_bot") state.bots = [...multiBots];
+      if (body.action === "remove_bot") state.bots = state.bots.filter(b => b.username !== body.bot);
+      for (const chat of state.chats) {
+        if (body.action === "chat_bot" && row === chat) chat.assignedBot = body.bot;
+        chat.bots = state.bots.map(b => ({ ...b, member: true, status: "administrator", canPost: true, canSendPhotos: true, canSendDocuments: true, canManageTopics: true, assigned: chat.assignedBot === b.username, reason: null, checkedAt: "2026-10-20T12:00:00Z" }));
+      }
     }
     /* A chat added by id: Telegram's getChat named it, with no update read. */
     if (body.action === "add") {
@@ -1937,6 +2045,10 @@ function VoiceFullSheet() {
     </MobileSheet>
   );
 }
-createRoot(document.getElementById("root")!).render(new URLSearchParams(location.search).has("switch-receipts")
+/* The team view is read once the fetch double above answers it. */
+if (WORKSPACES) void refreshTeamView();
+createRoot(document.getElementById("root")!).render(WORKSPACE_PARAMS.get("scenario") === "workspaces-team" ? <TeamPage initialTab="workspaces" initialCreate={WORKSPACE_PARAMS.has("create")} />
+  : WORKSPACE_PARAMS.get("scenario") === "workspaces-page" ? <WorkspacePage id={FIXTURE_WORKSPACE_IDS[(WORKSPACE_PARAMS.get("page") ?? "client") as keyof typeof FIXTURE_WORKSPACE_IDS]} />
+  : new URLSearchParams(location.search).has("switch-receipts")
   ? <SwitchReceiptFixture /> : new URLSearchParams(location.search).has("scroll-history")
   ? <ScrollHistoryFixture /> : VOICE_SCENE ? <><Viewer /><VoiceFullSheet /></> : <Viewer />);

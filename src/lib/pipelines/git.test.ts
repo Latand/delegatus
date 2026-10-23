@@ -1,3 +1,4 @@
+import { cpuPriorityFromEnv } from "../runtime/cpuPriority";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { CONTROLLER_ARTIFACT_GIT_PATHS, CONTROLLER_ARTIFACT_PATHSPECS } from "./controllerArtifacts";
 import crypto from "node:crypto";
@@ -8,6 +9,7 @@ import path from "node:path";
 import { Database } from "bun:sqlite";
 import { stopFixtureProcess } from "@/lib/testing/fixtureProcess";
 
+import { readWorktreeProvenance } from "./worktreeProvenance";
 import { commitPipelineStage, currentPipelineRemoteBranchHead, mapReplayPatchLocation, pipelineWorktreeChanges, provisionPipelineWorktree, provisionPipelineWorktreeAsync, realProvisionExec, resolveDeliveryRemote, resolvePipelineBaseAsync, publishPipelineBranch, reconcilePipelinePublication, reconcilePipelineStageHead, resetPipelineStage, resolvePipelineBase, synchronizePipelineRetryHead } from "./git";
 import { controllerCommitIdentityEnv } from "@/lib/git/controllerCommitIdentity";
 import type { Pipeline } from "./types";
@@ -224,6 +226,8 @@ test("a real stale dirty checkout provisions from the freshly fetched origin/mai
 
     expect((await provisionPipelineWorktree(subject, realExec))).toEqual({ ok: true, sha: currentMain, baseBranch: "main" });
     expect((await git(subject.worktreeDir, "rev-parse", "HEAD"))).toBe(currentMain);
+    // The worktree sweep's proof that Delegatus made this checkout.
+    expect(readWorktreeProvenance(subject.worktreeDir, { commonDir: path.join(source, ".git") })).toMatchObject({ creator: "pipeline", id: subject.id });
     expect((await git(source, "rev-parse", "HEAD"))).toBe(staleHead);
     expect((await git(source, "status", "--porcelain"))).toBe("?? dirty.txt");
   } finally {
@@ -3223,6 +3227,7 @@ test("the publication's dependency install and its push run without the Viewer's
     fs.writeFileSync(path.join(box.subject.worktreeDir, "package.json"), "{}\n");
     fs.writeFileSync(path.join(box.subject.worktreeDir, "bun.lock"), "{}\n");
     const head = (await box.commit("stage.txt", "stage work\n"));
+    box.subject.taskIds = ["priority-task-a", "priority-task-b"];
     Object.assign(process.env, settings);
     const seen = new Map<string, Record<string, string | undefined>>();
     const exec: ExecPort = (command, args, cwd, env, options) => {
@@ -3233,7 +3238,10 @@ test("the publication's dependency install and its push run without the Viewer's
     };
     expect(await publishPipelineBranch(box.subject, exec, { acceptedSha: head })).toEqual({ ok: true, sha: head, remote: "published" });
     expect([...seen.keys()].sort()).toEqual(["install", "push"]);
-    for (const env of seen.values()) for (const key of Object.keys(settings)) expect(env[key]).toBeUndefined();
+    for (const env of seen.values()) {
+      for (const key of Object.keys(settings)) expect(env[key]).toBeUndefined();
+      expect(cpuPriorityFromEnv(env)).toEqual({ database: path.join(process.env.LLV_STATE_DIR!, "state.sqlite"), taskIds: ["priority-task-a", "priority-task-b"] });
+    }
   } finally {
     for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
     fs.rmSync(box.root, { recursive: true, force: true });

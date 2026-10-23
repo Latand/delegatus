@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveStageTestGuidance } from "./testGuidance";
+import { resolveSignalTooling } from "@/lib/runtime/agentSignalSandbox";
 
 test("standalone assembly finds the install and quotes its wrapper for another checkout", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "installed-gate-guidance-"));
@@ -18,11 +19,13 @@ test("standalone assembly finds the install and quotes its wrapper for another c
     fs.writeFileSync(path.join(install, "package.json"), JSON.stringify({ name: "delegatus-cli" }));
     fs.writeFileSync(path.join(standalone, "package.json"), JSON.stringify({ name: "delegatus-cli" }));
     fs.writeFileSync(path.join(install, "bin", "cli.mjs"), "");
-    fs.writeFileSync(wrapper, '#!/bin/bash\nprintf "%s\\n" "$@"\n');
-    for (const file of ["owned-runner.ts", "cpu-admission.ts"]) fs.writeFileSync(path.join(install, "scripts", file), "");
+    fs.writeFileSync(wrapper, '#!/bin/bash\n# LLV_SIGNAL_SANDBOX\nprintf "%s\\n" "$@"\n');
+    for (const file of ["owned-runner.ts", "cpu-admission.ts"]) fs.writeFileSync(path.join(install, "scripts", file), "runSandboxGate");
+    fs.writeFileSync(path.join(install, "bin", "agent-signal-sandbox.py"), "");
     const guidance = resolveStageTestGuidance(standalone);
     const command = guidance.match(/: (bash .+?) <project-test-command>/)?.[1];
     expect(command).toBeDefined();
+    expect(guidance).toContain(`Run heavy checks (test suites, typecheck, builds) one at a time through this wrapper by default, since agent scopes have a 4–8 GB memory cap: ${command} <command>.`);
     const result = spawnSync("bash", ["-c", `${command} npm test -- src/example.test.ts`], { cwd: checkout, encoding: "utf8", timeout: 5_000 });
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("npm\ntest\n--\nsrc/example.test.ts\n");
@@ -31,4 +34,41 @@ test("standalone assembly finds the install and quotes its wrapper for another c
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("packed tooling resolves without source files and the container bridge publishes host-visible bundles", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "packed-signal-tooling-"));
+  const scripts = path.join(root, "dist/gate");
+  const previous = process.env.LLV_DOCKER_NSENTER_SHIMS;
+  try {
+    fs.mkdirSync(scripts, { recursive: true }); fs.mkdirSync(path.join(root, "bin"));
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "delegatus-cli" }));
+    fs.writeFileSync(path.join(root, "bin/cli.mjs"), "");
+    fs.writeFileSync(path.join(root, "bin/agent-signal-sandbox.py"), "# packed launcher");
+    fs.writeFileSync(path.join(scripts, "gate-slot.sh"), "# LLV_SIGNAL_SANDBOX");
+    for (const name of ["owned-runner.ts", "cpu-admission.ts", "test-child-guardian.ts"]) fs.writeFileSync(path.join(scripts, name), "// runSandboxGate");
+    delete process.env.LLV_DOCKER_NSENTER_SHIMS;
+    expect(resolveSignalTooling(root).gate).toBe(fs.realpathSync(path.join(scripts, "gate-slot.sh")));
+    process.env.LLV_DOCKER_NSENTER_SHIMS = "1";
+    const tooling = resolveSignalTooling(root);
+    expect(tooling.gate).toStartWith(path.join(os.homedir(), ".cache/delegatus/signal-tooling/"));
+    expect(fs.readFileSync(tooling.launcher, "utf8")).toBe("# packed launcher");
+    expect(resolveSignalTooling(root)).toEqual(tooling);
+    fs.unlinkSync(path.join(scripts, "test-child-guardian.ts"));
+    expect(resolveStageTestGuidance(root)).toContain("Gate wrapper unavailable");
+    expect(() => resolveSignalTooling(root)).toThrow("Gate wrapper unavailable");
+  } finally {
+    if (previous === undefined) delete process.env.LLV_DOCKER_NSENTER_SHIMS; else process.env.LLV_DOCKER_NSENTER_SHIMS = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("an install without resolvable gate tooling composes the fallback brief", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "unresolved-gate-guidance-"));
+  try {
+    const guidance = resolveStageTestGuidance(root);
+    expect(guidance).toStartWith("Gate wrapper unavailable: installed Delegatus gate tooling could not be resolved.");
+    expect(guidance).toContain("Run heavy checks one at a time directly and report that shared gate containment was unavailable");
+    expect(guidance).not.toContain("never bypass it");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

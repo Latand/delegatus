@@ -1,4 +1,5 @@
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
+import { retainProactiveScope, validProactiveProvenance } from "./proactiveScope";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import fs from "node:fs";
 import { readFindingKey, reconcileOpenFindings, validStoredFinding } from "./finding";
@@ -51,6 +52,7 @@ function committedRows(tasks: BoardTask[], before: ReturnType<typeof snapshotTas
   for (const task of tasks) {
     task.project = canonical(task.project);
     const prior = before.get(task.id);
+    retainProactiveScope(task, prior ? (persistedRows.get(prior.ref) as BoardTask | undefined) ?? prior.ref : undefined);
     const completed = withTaskCompletion(task, prior ? { ...task, status: prior.status } : task);
     Object.assign(task, completed);
     /* A writer that moved the task without naming itself leaves the earlier
@@ -197,6 +199,7 @@ function coerceTask(value: unknown, canonical = canonicalProject): BoardTask | n
     typeof raw.project === "string" &&
     isTaskStatus(raw.status) &&
     typeof raw.text === "string" &&
+    (raw.proactive === undefined || validProactiveProvenance(raw.proactive)) &&
     (raw.details === undefined || typeof raw.details === "string") &&
     (raw.placement === undefined || isPlacement(raw.placement)) &&
     (raw.pos === undefined || isFinitePos(raw.pos)) &&
@@ -391,6 +394,15 @@ function parseLegacyBody(raw: unknown): LegacyTasksBody {
   return { ...body, migrations, mirrorOf };
 }
 
+/** Only atomic admission creates invention provenance: a mirror row cannot add
+    it to a task that never carried it. */
+function withoutAddedProvenance(row: TaskStateRow, held: TaskStateRow | undefined): TaskStateRow {
+  if (!taskRowKey(row).startsWith("t:") || row.proactive === undefined || held?.proactive !== undefined) return row;
+  const rest = { ...row };
+  delete rest.proactive;
+  return rest;
+}
+
 /** Merge a `tasks.json` that changed after the import (a rollback release wrote
     it, or an older writer raced a fence). Who changed a row is read from row
     revisions: a SQLite row not rewritten since `baseline` is the one the file
@@ -417,7 +429,7 @@ function mergeLegacyTasks(filePath: string, body: LegacyTasksBody, baseline: Sta
       const key = taskRowKey(row);
       const held = current.get(key);
       if (!held) {
-        records.push(row);
+        records.push(withoutAddedProvenance(row, undefined));
         summary.added += 1;
         summary.keys.push(key);
         continue;
@@ -432,7 +444,14 @@ function mergeLegacyTasks(filePath: string, body: LegacyTasksBody, baseline: Sta
           continue;
         }
       }
-      records.push(row);
+      const incomingTask = key.startsWith("t:") ? coerceTask(row) : null;
+      const previousTask = key.startsWith("t:") ? coerceTask(held) : null;
+      if (incomingTask && previousTask?.proactive) {
+        retainProactiveScope(incomingTask, previousTask);
+        records.push(incomingTask as unknown as TaskStateRow);
+      } else {
+        records.push(withoutAddedProvenance(row, held));
+      }
       summary.replaced += 1;
       summary.keys.push(key);
     }
@@ -981,4 +1000,32 @@ export function mutateTaskTelegramPolls(taskId: string, reviewId: string,
 
 export function mutateTasksAsync<R>(mutate: (tasks: BoardTask[]) => { tasks: BoardTask[] | undefined; result: R }, filePath = TASKS_FILE): Promise<R> {
   return waitForStateLock("tasks.mutation", () => mutateTasks(mutate, filePath), { subject: "tasks" });
+}
+
+/** Targeted task + companion transaction. Both leases are acquired in canonical
+ * order before reading, and SQLite commits both rows together. Board evidence
+ * seeks only the project's raw keys, including aliases, under a finite budget;
+ * an oversized or unreadable project refuses admission without spending a slot. */
+export async function patchTaskCompanion<C, R>(companion: SqliteStateCollection<C>,
+  prepare: (get: (id: string) => BoardTask | null, boardTasks: (projects: readonly string[]) => BoardTask[]) => { task?: BoardTask; records: C[]; result: R }, filePath = TASKS_FILE): Promise<R> {
+  return withViewerOperation("tasks.proactive.admission", () => waitForStateLock("tasks.proactive.admission", () => {
+    const tasks = taskCollection(filePath, "write")!;
+    let records: C[] = [];
+    return tasks.boundedPatch(1_024, tx => {
+      const patch = prepare(id => {
+        const raw = tx.get(`t:${id}`);
+        return raw ? coerceTask(raw) : null;
+      }, projects => tx.taskProjectRows(projects).map(raw => {
+        const task = coerceTask(raw);
+        if (!task) throw new Error("invalid persisted task row");
+        return task;
+      }));
+      records = patch.records;
+      if (patch.task) {
+        stampTaskRevisions([patch.task], new Map(), false);
+        tx.put(patch.task as unknown as TaskStateRow);
+      }
+      return patch.result;
+    }, undefined, { collection: companion, prepare: () => ({ records }) });
+  }, { waitMs: 5_000, subject: "tasks.proactive" }));
 }

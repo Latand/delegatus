@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, openSync, closeSync, readFileSync, 
 import path from "node:path";
 import { decodeXML } from "entities";
 import { gateTemporaryRoot, isolatedEnvironment } from "./local-gate";
+import { cacheDirectory, environmentFingerprint, fileFingerprint, fingerprint, GateCache, gateToolFiles, installedFingerprint } from "./gate-cache";
 import { cpuWaitBudget } from "../src/lib/runtime/cpuAdmissionBudget";
 
 export interface TestSite { file: string; suite: string; name: string; kind: "test" | "error"; occurrence?: number }
@@ -286,7 +287,7 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
     let result: Bun.Subprocess;
     let exitCode: number;
     try {
-      result = Bun.spawn({ cmd: [process.execPath, path.join(import.meta.dir, "owned-runner.ts"), "--budget", String(Math.min(budgets.fileMs, remaining) + 5_000), process.execPath, path.join(import.meta.dir, "owned-runner.ts"), ...(process.platform === "linux" ? [] : ["--portable"]), process.execPath, "test", `./${file}`, "--reporter=junit", `--reporter-outfile=${report}`, ...filter],
+      result = Bun.spawn({ cmd: [process.execPath, path.join(import.meta.dir, "owned-runner.ts"), "--budget", String(Math.min(budgets.fileMs, remaining) + 5_000), process.execPath, path.join(import.meta.dir, "owned-runner.ts"), ...(process.platform === "linux" ? [] : ["--portable"]), process.execPath, "test", `./${file}`, "--timeout=60000", "--reporter=junit", `--reporter-outfile=${report}`, ...filter],
         // Keep the independent five-second cleanup allowance, measured as
         // execution time by the outer guard. A fixed wall timeout here would
         // kill a healthy supervisor during a nested CPU queue wait.
@@ -316,7 +317,10 @@ async function runFiles(root: string, files: readonly string[], sandbox: string,
       if (filtered) throw new Error(`${label}: ${file}: ${message}; elapsed ${(performance.now() - started).toFixed(0)}ms`);
       failures.push({ file, suite: "", name: `${RUNNER_ERROR}${message.split(root).join("<checkout>")}`, kind: "error" });
     } finally { rmSync(privateRoot, { recursive: true, force: true }); }
-    options.log?.(`touched-tests: ${label} file ${file}: ${(performance.now() - fileStarted).toFixed(0)}ms wall; ${failures.length} failures; ${completed.length ? "complete" : "incomplete"}`);
+    const elapsedMs = performance.now() - fileStarted;
+    const hint = label === "head" && elapsedMs > budgets.fileMs / 2
+      ? `; over half the ${budgets.fileMs / 1000} s file budget; split it` : "";
+    options.log?.(`touched-tests: ${label} file ${file}: ${elapsedMs.toFixed(0)}ms wall; ${failures.length} failures; ${completed.length ? "complete" : "incomplete"}${hint}`);
     results[index] = { failures, passed, completed, elapsedMs: 0 };
   }
   }));
@@ -348,6 +352,18 @@ function dependencyGraph(root: string) {
   const localResolution = resolutions.some(value => /@(?:file|link|workspace):/.test(value));
   const shareable = !manifest.workspaces && !localResolution && !dependencies.some(group => Object.values(group ?? {}).some(local));
   return { fingerprint, shareable };
+}
+
+interface BaselineRecord { run: TestRun; signature: string; confirmed: boolean }
+function isBaselineRecord(value: unknown): value is BaselineRecord {
+  if (!value || typeof value !== "object") return false;
+  const record = value as BaselineRecord, run = record.run;
+  const sites = (value: unknown): value is TestSite[] => Array.isArray(value) && value.every(site =>
+    site && typeof site.file === "string" && typeof site.suite === "string" && typeof site.name === "string" && site.kind === "test"
+    && (site.occurrence === undefined || Number.isSafeInteger(site.occurrence) && site.occurrence >= 0));
+  return typeof record.confirmed === "boolean" && typeof record.signature === "string" && !!run
+    && sites(run.failures) && sites(run.passed) && Array.isArray(run.completed) && run.completed.every(file => typeof file === "string")
+    && typeof run.elapsedMs === "number" && Number.isFinite(run.elapsedMs);
 }
 
 export async function touchedTests(root: string, baseRef: string, selected: readonly string[], options: { env?: NodeJS.ProcessEnv; log?: (line: string) => void; budgets?: TestBudgets } = {}) {
@@ -415,7 +431,52 @@ export async function touchedTests(root: string, baseRef: string, selected: read
     const empty: TestRun = { failures: [], passed: [], completed: [], elapsedMs: 0 };
     // One bounded pool lets assertion samples progress while a full-file
     // diagnostic sample runs. Select the filter independently for each file.
-    const baseline = oldFiles.length ? await runFiles(prepareBaseline(), oldFiles, sandbox, inherited, "baseline", { ...runOptions, sites: head.failures }) : empty;
+    // Cache only complete assertion samples. Error/ownership evidence is never
+    // reusable. Two independent, matching fresh observations certify failures;
+    // a candidate alone cannot grant a baseline allowance. Confirmation below
+    // always runs fresh, including when this initial sample was reused.
+    const cache = new GateCache<BaselineRecord>(cacheDirectory(root, "baselines"), isBaselineRecord, 24 * 60 * 60_000);
+    const toolRoot = path.resolve(import.meta.dir, "..");
+    let tools: Array<[string, string]> = [], installed: string | undefined;
+    try {
+      if (oldFiles.length) {
+        tools = gateToolFiles(toolRoot).map(file => [file, fileFingerprint(path.join(toolRoot, file))]);
+        installed = installedFingerprint(root);
+      }
+    } catch { log("touched-tests: baseline reuse disabled: tool inputs could not be fingerprinted"); }
+    const environment = environmentFingerprint(inherited);
+    const context = [3, base, remote, Bun.version, process.platform, process.arch, fileFingerprint(process.execPath), graph.fingerprint, installed, tools, environment, budgets];
+    const cacheKey = (file: string) => fingerprint([context, file,
+      head.failures.some(site => site.file === file && site.kind === "error") ? "whole file"
+        : testNameFilter(head.failures.filter(site => site.file === file).sort((a, b) => comparisonKey(a).localeCompare(comparisonKey(b))))]);
+    const cached = new Map<string, TestRun>();
+    // Local links can observe a changing directory outside the immutable base.
+    if (graph.shareable && installed) for (const file of oldFiles) {
+      const record = cache.read(cacheKey(file));
+      if (record?.confirmed && record.run.completed.length === 1 && record.run.completed[0] === file
+        && [...record.run.failures, ...record.run.passed].every(site => site.file === file)) {
+        cached.set(file, record.run);
+        log(`touched-tests: reused baseline for ${file} at ${base.slice(0, 12)}; matching base, filter, comparator and toolchain, skipped`);
+      }
+    }
+    const freshFiles = oldFiles.filter(file => !cached.has(file));
+    const fresh = freshFiles.length ? await runFiles(prepareBaseline(), freshFiles, sandbox, inherited, "baseline", { ...runOptions, sites: head.failures }) : empty;
+    let unchangedTools = false;
+    try {
+      unchangedTools = !!installed && installedFingerprint(root) === installed && environmentFingerprint(inherited) === environment
+        && fingerprint(gateToolFiles(toolRoot).map(file => [file, fileFingerprint(path.join(toolRoot, file))])) === fingerprint(tools);
+    } catch { /* A changed or unreadable input cannot certify a new record. */ }
+    if (graph.shareable && unchangedTools) for (const file of freshFiles) {
+      const run: TestRun = { failures: fresh.failures.filter(site => site.file === file), passed: fresh.passed.filter(site => site.file === file),
+        completed: fresh.completed.filter(done => done === file), elapsedMs: 0 };
+      if (run.completed.length !== 1 || [...run.failures, ...run.passed].some(site => site.kind !== "test")) continue;
+      const signature = fingerprint([run.failures.map(comparisonKey).sort(), run.passed.map(comparisonKey).sort(), run.completed]);
+      const previous = cache.read(cacheKey(file));
+      cache.write(cacheKey(file), { run, signature, confirmed: previous?.signature === signature });
+    }
+    const samples = [fresh, ...cached.values()];
+    const baseline: TestRun = { failures: samples.flatMap(run => run.failures), passed: samples.flatMap(run => run.passed),
+      completed: samples.flatMap(run => run.completed), elapsedMs: fresh.elapsedMs };
     log(`touched-tests: baseline run ${(performance.now() - baselineStarted).toFixed(0)}ms (tests ${baseline.elapsedMs.toFixed(0)}ms; ${oldFiles.length} failing file(s))`);
     log(`touched-tests: ${files.filter(file => !baseFiles.has(file)).length} new file(s), judged on head alone`);
     // A base file that did not finish certifies nothing, unless the head fails
@@ -432,6 +493,8 @@ export async function touchedTests(root: string, baseRef: string, selected: read
       if (!retryFiles.length) return { failures: [], passed: [], completed: [], elapsedMs: 0 };
       return await runFiles(side === "head" ? root : prepareBaseline(deadline), retryFiles, sandbox, inherited, `${side} rerun`, { ...runOptions, ...(sites.some(site => site.kind === "error") ? {} : { sites }), deadline });
     });
+    // Observed intermittency cannot become a frozen baseline allowance.
+    for (const file of new Set(comparison.flaky.map(site => site.file))) cache.remove(cacheKey(file));
     if (diagnosticReruns) log(`touched-tests: between-tests diagnostic retry: ${diagnosticReruns} isolated full-file run (shared budget ${FLAKY_BUDGET_MS}ms)`);
     if (reruns) log(`touched-tests: flaky confirmation ${reruns / 2} round${reruns === 2 ? "" : "s"} per side (maximum ${FLAKY_RERUNS}), ${(performance.now() - retryStarted).toFixed(0)}ms (shared budget ${FLAKY_BUDGET_MS}ms)`);
     for (const site of comparison.flaky) log(`FLAKY ${site.file}: ${site.suite ? `${site.suite} > ` : ""}${diagnosticName(site)} (base ${site.base.pass} pass/${site.base.fail} fail; head ${site.head.pass} pass/${site.head.fail} fail)`);

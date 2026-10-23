@@ -2025,6 +2025,88 @@
 .chronology.phone .chronology-earlier button, .chronology.phone .chronology-detail summary { min-height: 44px; display: inline-flex; align-items: center; }
 /* An entry that opens its conversation is a whole 44 px row on the phone. */
 .chronology.phone .chronology-open { display: flex; align-items: center; width: 100%; min-height: 44px; }
+/* ── Task limit spend (docs/design/task-limit-spend.md §7.2, variant 2) ─────
+   At the end of the state line, per provider: its engine mark and a scale of
+   four cells, filled in the engine's colour; a bar, so it never reads as the
+   round engine mark or the state dot. No digits on the card: the numbers and
+   each account's week are in the popover. Unscoped: the phone's card draws
+   the same line, and the popover is portalled to the document. */
+.spend { position: relative; display: inline-flex; flex: none; align-items: center; gap: 8px; white-space: nowrap; font-size: var(--text-label); line-height: 16px; font-variant-numeric: tabular-nums; color: var(--color-secondary); border-radius: 4px; }
+.spend[role="button"] { cursor: help; }
+/* The marks are small; their target is not (as the state dot's). */
+.spend[role="button"]::after { content: ""; position: absolute; inset: -6px -4px; }
+.spend[role="button"]:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.spend-p { display: inline-flex; align-items: center; gap: 3px; }
+/* No limit readings: the word, in muted ink. */
+.spend-p[data-kind="norate"] .spend-n { color: var(--color-muted); }
+.spend-p .scale { display: block; width: 15px; height: 8px; flex: none; }
+.spend-p .scale rect { fill: var(--border-strong); }
+.spend-p .scale rect.on { fill: currentColor; }
+.spend-p[data-engine="claude"] .scale { color: var(--color-claude-mark); }
+.spend-p[data-engine="codex"] .scale { color: var(--color-codex-mark); }
+/* A lower bound is the one figure in amber: part of the work is uncounted. */
+.spend-p[data-kind="floor"] .scale { color: var(--color-warning); }
+.spend-p .scale-floor { font-weight: 600; color: var(--color-warning); margin-right: -1px; }
+/* At the end of the words while they leave room, otherwise on a row of its
+   own under them, so the marks never clamp the state sentence. */
+.card-state:has(> .spend) { flex-wrap: wrap; row-gap: 2px; }
+.card-state:has(> .spend) > :is(.card-state-toggle, .card-state-words) { flex: 1 1 auto; max-width: calc(100% - 15px); }
+.card-state > .spend { margin-left: auto; padding-left: 4px; }
+/* Done cards sit on the quiet surface; Codex's cut-out follows it. */
+.kb .card.done .spend, [data-phone-card][class*="bg-quiet"] .spend { --engine-mark-cut: var(--surface-quiet); }
+
+/* The popover: the state dot's bubble, with a provider block per engine. */
+.spend-pop { width: max-content; text-align: left; }
+.spend-pop:has(.meter) { max-width: 320px; }
+.spend-pop .pop-title { display: block; font-weight: 600; margin-bottom: 4px; }
+.spend-pop .pop-row { display: flex; align-items: flex-start; gap: 5px; }
+.spend-pop .pop-block { display: block; }
+/* A provider's block (headline, account lines, note) stands apart from the next one. */
+.spend-pop .pop-row + .pop-row { margin-top: 4px; }
+.spend-pop :is(.pop-row, .pop-block) + .pop-block, .spend-pop .pop-block + .pop-row { margin-top: 8px; }
+.spend-pop .pop-row > [data-engine-mark] { margin-top: 2px; }
+.spend-pop .pop-main { min-width: 0; }
+.spend-pop .pop-main b { font-weight: 600; }
+.spend-pop .pop-sub { display: block; color: var(--color-secondary); }
+.spend-pop .pop-note { display: block; margin-top: 6px; padding-top: 5px; border-top: 1px solid var(--border-default); color: var(--color-muted); }
+.spend-pop .pop-warn { color: var(--color-warning); }
+.spend-pop .meter-note { margin: 2px 0 0 17px; }
+/* An account's line: the sidebar's limit line, with the task's part drawn
+   over the week the account has used so far. */
+.spend-pop .meter { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; min-height: 18px; margin-left: 17px; }
+/* Account labels are the operator's own, up to 80 characters: one too long for
+   the line takes a line of its own above its figure and bar, wrapping as it
+   needs, and the figure stays at the line's end, so the digits keep one x. */
+.spend-pop .meter-label { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; color: var(--color-secondary); }
+.spend-pop .meter-value { flex: none; color: var(--color-muted); font-variant-numeric: tabular-nums; }
+.spend-pop .meter-bar { width: 44px; }
+:is(.spend-pop, .phone-spend) .meter-figure { display: flex; flex: none; align-items: center; gap: 8px; margin-left: auto; }
+/* The task's figure in a fixed slot: its sign (<, ≥) right-aligned in a cell
+   of its own, so «task» and the digits start at one x on every line. */
+:is(.spend-pop, .phone-spend) .meter-value b { color: var(--color-primary); font-weight: 600; }
+:is(.spend-pop, .phone-spend) .meter-sign { display: inline-block; width: 0.7em; text-align: right; }
+:is(.spend-pop, .phone-spend) .meter-sign:empty::before { content: "\00a0"; }
+:is(.spend-pop, .phone-spend) .meter-num { display: inline-block; min-width: 2.6em; text-align: left; }
+:is(.spend-pop, .phone-spend) .meter-bar { position: relative; display: block; flex: none; height: 4px; overflow: hidden; border-radius: 999px; background: var(--surface-sunken); }
+:is(.spend-pop, .phone-spend) .meter-bar .week { position: absolute; inset: 0 auto 0 0; background: var(--border-strong); }
+:is(.spend-pop, .phone-spend) .meter-bar .task { position: absolute; top: 0; bottom: 0; min-width: 2px; }
+:is(.spend-pop, .phone-spend) .meter-bar .task[data-engine="claude"] { background: var(--color-claude-mark); }
+:is(.spend-pop, .phone-spend) .meter-bar .task[data-engine="codex"] { background: var(--color-codex-mark); }
+
+/* The phone's task screen: the popover's lines as one section, the album row's form. */
+.phone-spend { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 12px; background: var(--surface-card); box-shadow: var(--shadow-1); font-size: var(--text-ui); line-height: 17px; color: var(--color-primary); }
+.phone-spend .pop-row { display: flex; align-items: flex-start; gap: 6px; }
+.phone-spend .pop-row > [data-engine-mark] { margin-top: 2px; }
+.phone-spend .pop-main b { font-weight: 600; }
+.phone-spend .pop-sub { display: block; color: var(--color-secondary); }
+.phone-spend .pop-note { color: var(--color-muted); font-size: var(--text-label); line-height: 16px; padding-top: 6px; border-top: 1px solid var(--border-default); }
+.phone-spend .pop-warn { color: var(--color-warning); }
+.phone-spend .meter-note { margin-left: 18px; font-size: var(--text-label); line-height: 16px; }
+.phone-spend .meter { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; min-height: 20px; margin-left: 18px; font-size: var(--text-label); }
+.phone-spend .meter-label { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; color: var(--color-secondary); }
+.phone-spend .meter-value { flex: none; color: var(--color-muted); font-variant-numeric: tabular-nums; }
+.phone-spend .meter-bar { width: 64px; }
+
 /* A closed card that has not started: its priority mark alone, at the line's end. */
 .card-state.prio-only { justify-content: flex-end; }
 .card-state.prio-only .motion-line { flex: 1; }

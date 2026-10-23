@@ -27,6 +27,7 @@ import { CORPUS_BODY_MARKERS, pipelineCorpus } from "@/lib/pipelines/fixtures/co
 import type { Pipeline } from "@/lib/pipelines/types";
 import { registerPipelineTick } from "@/lib/pipelines/controllerSignal";
 import { statePath } from "@/lib/configDir";
+import { assertStateChildSuccess } from "@/lib/state/stateChildResult.fixture";
 import { initialAuto, writeAuto } from "@/lib/selfUpdate/auto";
 import { drainFile, releaseDrain, writeDrain } from "@/lib/selfUpdate/drain";
 import { listRoles } from "@/lib/roles/registry";
@@ -1675,7 +1676,7 @@ test("board_snapshot returns an inert bounded board projection with durable line
   expect(rawScans).toBe(0);
 });
 
-test("flow tools read durable flows and return a stable action receipt", async () => {
+test("flow tools read archives and refuse new action effects", async () => {
   const flows = [
     { id: "flow_open", project: "viewer", state: "waiting_ready", closedAt: null },
     { id: "flow_closed", project: "viewer", state: "closed", closedAt: "2026-07-23T01:00:00.000Z" },
@@ -1697,31 +1698,14 @@ test("flow tools read durable flows and return a stable action receipt", async (
     count: 1,
     flows: [{ id: "flow_open" }],
   });
-  expect(await bindings.get_flow({ clientRequestId: "get-flow", flowId: "flow_open" })).toEqual({
-    flowId: "flow_open",
-    flow: flows[0],
+  expect(await bindings.get_flow({ clientRequestId: "get-flow", flowId: "flow_open" })).toMatchObject({
+    flowId: "flow_open", flow: flows[0], retired: true,
   });
-  const actionResult = await bindings.flow_action({ clientRequestId: "pause-flow", flowId: "flow_open", action: "pause" });
-  const actionOperationId = actionResult.operationId as string;
-  expect(actionResult).toMatchObject({
-    flowId: "flow_open",
-    receipt: { status: "delivered" },
-    flow: { state: "paused" },
-  });
-  expect(actionOperationId).toMatch(/^mcp_flow_action_[0-9a-f]{24}$/);
-  expect((actionResult.receipt as { operationId: string }).operationId).toBe(actionOperationId);
-  expect(actions).toEqual([{
-    id: "flow_open",
-    action: "pause",
-    actor: { kind: "agent", role: "reviewer", conversationId: "conversation_reviewer" },
-  }]);
-  /* set-roles carries the agent too, so the sizing rules judge its reviewer. */
-  await bindings.flow_action({ clientRequestId: "set-roles-flow", flowId: "flow_open", action: "set-roles", roles: { reviewer: { engine: "claude", model: "sonnet" } } });
-  expect(actions.at(-1)).toEqual({
-    id: "flow_open",
-    action: "set-roles",
-    actor: { kind: "agent", role: "reviewer", conversationId: "conversation_reviewer" },
-  });
+  for (const action of ["pause", "resume", "set-roles", "cancel-round", "close"]) {
+    await expect(bindings.flow_action({ clientRequestId: `retired-${action}`, flowId: "flow_open", action }))
+      .rejects.toMatchObject({ details: { code: "FLOW_RETIRED", retryable: false } });
+  }
+  expect(actions).toEqual([]);
 });
 
 test("list_pipelines applies project, state, and closed filters to the durable registry", async () => {
@@ -3169,7 +3153,7 @@ test("create_pipeline batches every invalid stage model with each engine catalog
     src: path.join(sandbox, "creator.jsonl"),
     stages: [
       { id: "build", kind: "run", engine: "codex", model: "gpt-5.6-codex", prompt: "build", next: "review" },
-      { id: "review", kind: "review-loop", engine: "claude", model: "claude-fable-5", prompt: "review", next: null },
+      { id: "review", kind: "run", role: { roleId: "reviewer" }, engine: "claude", model: "claude-fable-5", prompt: "review", next: null },
     ],
   }, { signal: undefined, deadlineAt: Date.now() + 30_000 } as never).then(
     () => null,
@@ -3270,6 +3254,38 @@ test("seat_tick_settings turns its own project's tick off indefinitely, with the
      itself does at its next check. */
   const read = await bindings.seat_tick_settings({ clientRequestId: "tick-read-back" });
   expect(read).toMatchObject({ changed: false, effective: { enabled: false } });
+});
+
+test.each([{ change: { enabled: false }, active: false }, { change: { credits: false }, active: true }])("Turbo revocation through the seat ignores unreadable account bindings: %j", async ({ change, active }) => {
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-mcp-turbo-revocation-"));
+  sandboxes.push(sandbox);
+  const previous = process.env.LLV_STATE_DIR;
+  process.env.LLV_STATE_DIR = path.join(sandbox, "state");
+  setSystemTime(new Date("2026-10-21T12:00:00.000Z"));
+  try {
+    const { applySeatTickSettingsChange, defaultSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+    const { seedAccountSource } = await import("@/lib/accounts/accountsStoreFixture");
+    const { BINDINGS_SOURCE } = await import("@/lib/accounts/accountsStore");
+    const { allowedAccountIdsForProject } = await import("@/lib/accounts/projectBindings");
+    beginOrchestratorSeatIntent({ project: "viewer", mandate: "Own the board", clientRequestId: "turbo_revoke_seed", mode: "spawn" });
+    completeOrchestratorSeatIntent({ project: "viewer", clientRequestId: "turbo_revoke_seed", conversationId: TICK_SEAT, path: null });
+    const { bindings, store } = tickSettingsBindings({ callerProject: "viewer" });
+    const seeded = applySeatTickSettingsChange(defaultSeatTickSettings("viewer"), { turbo: { enabled: true, hours: 2, credits: true, creditAccounts: ["acct-a"] } }, {
+      at: new Date().toISOString(), actor: { kind: "gateway", project: null, conversationId: null, seatEpoch: null },
+      turbo: { allowedAccounts: ["acct-a"], plan: [{ accountId: "acct-a", label: "Account A", plan: "pro", tiers: { "gpt-6.1-sol": "priority" }, hadCredits: true }] },
+    });
+    if (!seeded.ok) throw new Error(seeded.error);
+    store.set("viewer", seeded.settings);
+    seedAccountSource(BINDINGS_SOURCE, { schemaVersion: 1, bindings: [{ engine: "codex" }] });
+    expect(() => allowedAccountIdsForProject("viewer", "codex")).toThrow("unreadable");
+    await bindings.seat_tick_settings({ clientRequestId: "turbo_revoke", turbo: { ...change, why: "withdraw the acceleration approval" } });
+    const setting = (store.get("viewer") as import("@/lib/monitor/seatTickSettings").SeatTickSettings).turbo;
+    expect(setting?.enabled).toBe(active);
+    expect(setting?.credits.approved).toBe(false);
+  } finally {
+    if (previous === undefined) delete process.env.LLV_STATE_DIR; else process.env.LLV_STATE_DIR = previous;
+    setSystemTime();
+  }
 });
 
 /* Why the tick is mute, in the answer the seat reads when it asks (#1746). The
@@ -3481,6 +3497,7 @@ test("a plain seat_tick_settings read of a fenced, paused project with a note st
 
   const verbose = await bindings.seat_tick_settings({ clientRequestId: "tick-size-verbose", verbose: true });
   expect(verbose).toMatchObject({
+    autonomy: { active: false, proactive: { enabled: false } },
     settings: { enabled: false, reason },
     monitorPrompt: note,
     effective: { reason },
@@ -4448,7 +4465,7 @@ test("task placement bindings require atomic guards and classify field refusals 
   `], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
   const output = await new Response(child.stdout).text();
   const error = await new Response(child.stderr).text();
-  expect([await child.exited, error]).toEqual([0, ""]);
+  assertStateChildSuccess(await child.exited, error);
   const result = JSON.parse(output);
   expect(result.missing).toMatchObject({ ok: false, code: "TASK_INVALID_FIELD", retryable: false, details: { field: "expectedProject" } });
   for (const invalid of result.invalid) {
@@ -4542,14 +4559,8 @@ test("MCP task writes normalize holds, preserve step operator reasons and server
   `], { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
   const output = await new Response(child.stdout).text();
   const error = await new Response(child.stderr).text();
-  expect(await child.exited).toBe(0);
-  // Cold SQLite setup can emit a structured async lock-wait diagnostic; it is not child failure.
-  const stderrLines = error.split(/\r?\n/).filter(Boolean);
-  const waitLines = stderrLines.filter(line => line.startsWith("[blocking-wait] "));
-  expect(stderrLines.filter(line => !line.startsWith("[blocking-wait] "))).toEqual([]);
-  for (const line of waitLines) {
-    expect(JSON.parse(line.slice("[blocking-wait] ".length))).toMatchObject({ site: "state-write-lock", synchronous: false });
-  }
+  // Cold schema admission can finish successfully after the telemetry threshold.
+  assertStateChildSuccess(await child.exited, error);
   const result = JSON.parse(output) as { createdTask: BoardTask; updatedTask: BoardTask; readTask: BoardTask; normalizedCreate: BoardTask; unknownUpdate: BoardTask; normalizedUpdate: BoardTask; operatorUpdate: BoardTask; operatorRead: BoardTask; statuses: string[] };
   expect(result.createdTask.hold).toMatchObject({ by: "agent", conversationId: "conversation_create_bound", note: "Waiting for capacity" });
   expect(result.updatedTask.hold).toMatchObject({ by: "agent", conversationId: "conversation_update_bound", note: "Capacity is still full" });

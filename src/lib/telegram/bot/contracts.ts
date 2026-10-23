@@ -1,3 +1,5 @@
+import { scrubTelegramDiagnostic } from "./diagnostics";
+
 /**
  * Public contracts for the Telegram bot account
  * (`docs/design/telegram-bot-account.md`).
@@ -5,7 +7,7 @@
  * Everything in this file may cross the browser boundary or reach an agent
  * through the Viewer MCP, so nothing here can carry the bot token, the bot's
  * numeric id or a Telegram user id. The token lives only in the owner-only
- * `bot-token.json` and in the closure of the one transport built from it.
+ * receiving and sending token files, and in their transports' closures.
  */
 
 /** How the update poller is doing, in one word. Every value has a sentence in
@@ -52,7 +54,9 @@ export type TelegramBotErrorCode =
   | "document_too_large"
   | "document_secret"
   | "document_roots_invalid"
+  | "confirmation_invalid"
   | "format_invalid"
+  | "not_enough_rights"
   | "forbidden"
   | "rate_limited"
   | "send_uncertain"
@@ -127,9 +131,58 @@ export const RECEIVING_NOTES: Record<TelegramBotReceiving, string> = {
   stopped: "Not receiving: the bot is not connected in this Viewer.",
 };
 
+export type TelegramPostingBot = {
+  name: string;
+  username: string | null;
+  receiving: boolean;
+  tokenState: "ok" | "rejected";
+};
+export type TelegramBotRefusal = {
+  bot: Pick<TelegramPostingBot, "name" | "username">;
+  code: TelegramBotErrorCode;
+  reason: string;
+  source: "send" | "check";
+  at: string;
+};
+/** Bound and project a refusal crossing the Viewer HTTP/MCP boundary. */
+export function readTelegramBotRefusals(value: unknown): TelegramBotRefusal[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 9).flatMap((row: unknown) => {
+    if (!row || typeof row !== "object") return [];
+    const r = row as Partial<TelegramBotRefusal>;
+    if (!r.bot || typeof r.bot.name !== "string" || !(r.bot.username === null || typeof r.bot.username === "string")
+      || (typeof r.bot.username === "string" && !/^[A-Za-z][A-Za-z0-9_]{3,31}$/.test(r.bot.username))
+      || typeof r.code !== "string" || !/^[a-z_]{1,40}$/.test(r.code) || typeof r.reason !== "string"
+      || (r.source !== "send" && r.source !== "check") || typeof r.at !== "string" || r.at.length > 64 || !Number.isFinite(Date.parse(r.at))) return [];
+    return [{ bot: { name: scrubTelegramDiagnostic(r.bot.name).slice(0, 128), username: r.bot.username?.slice(0, 32) ?? null },
+      code: r.code, reason: scrubTelegramDiagnostic(r.reason), source: r.source, at: r.at }];
+  });
+}
+
+export type TelegramChatBot = Pick<TelegramPostingBot, "name" | "username"> & {
+  assigned: boolean;
+  member: boolean | null;
+  status: TelegramBotMemberStatus | null;
+  canPost: boolean | null;
+  canSendPhotos: boolean | null;
+  canSendDocuments: boolean | null;
+  canManageTopics: boolean | null;
+  reason: string | null;
+  checkedAt: string | null;
+};
+export type TelegramLastDelivery = {
+  at: string;
+  state: "sent" | "refused" | "uncertain";
+  bot?: Pick<TelegramPostingBot, "name" | "username">;
+  refusals: TelegramBotRefusal[];
+};
+
 /** One chat as the operator panel sees it. */
 export type TelegramBotChatView = {
   chatId: string;
+  bots?: TelegramChatBot[];
+  assignedBot?: string | null;
+  lastDelivery?: TelegramLastDelivery | null;
   title: string;
   type: TelegramChatType;
   username: string | null;
@@ -163,6 +216,7 @@ export type TelegramBotIdentity = {
 /** The operator surface's whole payload. No token, no bot id. */
 export type TelegramBotStatusPayload = {
   connected: boolean;
+  bots?: TelegramPostingBot[];
   bot: TelegramBotIdentity | null;
   receiving: TelegramBotReceiving;
   lastUpdateAt: string | null;
@@ -191,6 +245,8 @@ export type TelegramBotAttribution = { conversationId: string } | { unidentified
 
 /** One chat as an agent sees it (`telegram_bot_chats`). */
 export type TelegramBotAgentChat = {
+  bots?: TelegramChatBot[];
+  lastDelivery?: TelegramLastDelivery | null;
   /** The value the other tools accept: the alias when set, else the chat id. */
   chat: string;
   chatId: string;
@@ -209,6 +265,7 @@ export type TelegramBotAgentChat = {
 };
 
 export type TelegramBotChatsAnswer = {
+  bots?: TelegramPostingBot[];
   bot: {
     connected: boolean;
     name: string | null;
@@ -257,6 +314,8 @@ export type TelegramBotMessagesAnswer = {
 };
 
 export type TelegramBotSendAnswer = {
+  sentBy?: Pick<TelegramPostingBot, "name" | "username">;
+  refusals?: TelegramBotRefusal[];
   chat: string;
   chatId: string;
   messageIds: number[];

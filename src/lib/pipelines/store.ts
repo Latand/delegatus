@@ -1,4 +1,5 @@
 import { projectStoreSignature } from "@/lib/projects/persistence";
+import { isPublicationRecovery, mergePublicationRecovery, publicationInterrupted, PUBLICATION_RETRY_DELAYS_MS, recordPublicationFailure, recoverablePublication } from "./publicationHistory";
 import { deepFreeze } from "@/lib/deepFreeze";
 import { pipelinePauseInputSchema } from "./pauseMetadata";
 import { forEachCooperatively } from "@/lib/cooperative";
@@ -221,6 +222,12 @@ function isRuntimeSwitches(value: unknown): boolean {
     && (!index || item.seq > value[index - 1].seq)
     && typeof item.requestedAt === "string" && Number.isFinite(Date.parse(item.requestedAt)) && isActor(item.actor)
     && ["fork", "handoff"].includes(item.mode)
+    && (item.inPlace === undefined || item.inPlace === true && item.mode === "fork")
+    && (item.cut === undefined || ["boundary", "none"].includes(item.cut))
+    && (item.tierCut === undefined || ["cut", "armed", "none", "turn-ended", "cancelled", "host-gone", "unknown"].includes(item.tierCut))
+    && (item.appliedServiceTier === undefined || item.appliedServiceTier === null || typeof item.appliedServiceTier === "string")
+    && (item.cutTurnId === undefined || typeof item.cutTurnId === "string")
+    && (item.turbo === undefined || typeof item.turbo === "string" && item.turbo.length <= 80)
     && ["requested", "cutting", "switching", "continuing", "committed", "rolled-back", "failed", "superseded"].includes(item.phase)
     && (!["requested", "cutting", "switching", "continuing"].includes(item.phase) || ++open <= 1)
     && seat(item.from) && seat(item.to)
@@ -252,7 +259,16 @@ function isStageSuspension(value: unknown): boolean {
     && dated(suspension.requestedAt)
     && (suspension.stoppedAt === undefined || dated(suspension.stoppedAt))
     && (suspension.stopRevision === undefined || Number.isSafeInteger(suspension.stopRevision) && (suspension.stopRevision as number) >= 0)
-    && (suspension.operatorStoppedAt === undefined || dated(suspension.operatorStoppedAt));
+    && (suspension.operatorStoppedAt === undefined || dated(suspension.operatorStoppedAt))
+    && (suspension.hold === undefined || isSuspensionHold(suspension.hold));
+}
+
+function isSuspensionHold(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const hold = value as Record<string, unknown>;
+  return typeof hold.accountId === "string" && hold.accountId.length > 0
+    && (hold.resetsAt === null || Number.isSafeInteger(hold.resetsAt) && (hold.resetsAt as number) >= 0)
+    && (hold.observedAt === null || typeof hold.observedAt === "string" && Number.isFinite(Date.parse(hold.observedAt)));
 }
 
 function isPublicationTextRepair(value: unknown): boolean {
@@ -362,15 +378,29 @@ function isAttempt(value: unknown, index: number): boolean {
     isVerdictRecovery(attempt.verdictRecovery) &&
     isRuntimeSwitches(attempt.runtimeSwitches) &&
     isStageSuspension(attempt.suspension) &&
+    (attempt.accountHolds === undefined || Array.isArray(attempt.accountHolds) && attempt.accountHolds.every(isSuspensionHold)) &&
     (attempt.runtimeEvidenceSince === undefined || typeof attempt.runtimeEvidenceSince === "string" && Number.isFinite(Date.parse(attempt.runtimeEvidenceSince))) &&
     (attempt.runtimeAccountPin === undefined || isNullableString(attempt.runtimeAccountPin)) &&
     isAttemptDefinition(attempt.definition) &&
     isSpawnActivation(attempt.activation) &&
     isStageReport(attempt.report) &&
     isRetiredLaunches(attempt.retiredLaunches) &&
+    (attempt.fencedMessageRetries === undefined || typeof attempt.fencedMessageRetries === "number"
+      && Number.isSafeInteger(attempt.fencedMessageRetries) && attempt.fencedMessageRetries >= 0) &&
     isUnresolvedTermination(attempt.unresolvedTermination) &&
+    isPriorWriterStop(attempt.priorWriterStop) &&
     isPermissionDenials(attempt.permissionDenials)
   );
+}
+
+function isPriorWriterStop(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const stop = value as Record<string, unknown>;
+  return typeof stop.conversationId === "string" && stop.conversationId.length > 0
+    && Number.isSafeInteger(stop.tries) && (stop.tries as number) >= 0
+    && typeof stop.lastAt === "string" && Number.isFinite(Date.parse(stop.lastAt))
+    && isNullableString(stop.error);
 }
 
 /** The automatic permission denials an attempt recorded (#2215). */
@@ -903,6 +933,7 @@ function isPipelineShape(value: unknown): value is Pipeline {
     isCloseCustody(pipeline) &&
     (pipeline.activationCloseRequested === undefined || typeof pipeline.activationCloseRequested === "boolean") &&
     (pipeline.delivery === undefined || (isDelivery(pipeline.delivery) && (!pipeline.delivery.active || pipeline.delivery.ownerId === pipeline.id))) &&
+    isPublicationRecovery(pipeline.publicationRecovery) &&
     (pipeline.creationRequest === undefined || (typeof pipeline.creationRequest.key === "string" && !!pipeline.creationRequest.key && typeof pipeline.creationRequest.digest === "string")) &&
     (pipeline.refreshOf === undefined || isRefreshOf(pipeline.refreshOf)) &&
     typeof pipeline.task === "string" &&
@@ -1124,6 +1155,11 @@ export async function selectControllerPipelines(kind: import("@/lib/state/pipeli
   return pipelineStore().pipelineControllerSelection(kind, throughOrder, controllerPipelineKeys());
 }
 
+/** Indexed row + scheduling generation, including writers that bypass the
+ * collection revision. This read never decodes history or waits on a lease. */
+export function controllerPipelineVersionNow(id: string): string {
+  return pipelineStore().pipelineControllerVersion(id);
+}
 export async function controllerPipelineVersion(id: string): Promise<string> {
   return withViewerOperation("pipelines.controller-read", () => waitForStateLock("pipelines.controller-version", () => stateLockAttempt("pipelines.controller-version", () => performanceSpans.sync("controller.ownership", () => pipelineStore().pipelineControllerVersion(id)))));
 }
@@ -1221,9 +1257,22 @@ async function preparePipelineEvidence(mode: "startup" | "health" | "ownership" 
   assertPipelineEvidenceBudget(budget);
   const signature = evidenceSignature();
   assertPipelineEvidenceBudget(budget);
-  const pendingKey = `${signature}:${mode}`;
-  const existing = budget ? undefined : pendingEvidence.get(`${signature}:startup`) ?? (mode !== "startup" ? pendingEvidence.get(`${signature}:ownership`) ?? pendingEvidence.get(`${signature}:health`) : undefined) ?? pendingEvidence.get(pendingKey);
-  if (existing) { performanceSpans.event("pipeline.shared"); return existing; }
+  const filename = stateDatabaseFile();
+  // Share a cold read across writes to this database. Freshness still belongs
+  // to each caller; a replacement file must start its own read.
+  const pendingNamespace = JSON.stringify([filename, evidenceFileIdentity(filename)]);
+  const pendingKey = `${pendingNamespace}:${mode}`;
+  const existing = budget ? undefined : pendingEvidence.get(`${pendingNamespace}:startup`) ?? (mode !== "startup" ? pendingEvidence.get(`${pendingNamespace}:ownership`) ?? pendingEvidence.get(`${pendingNamespace}:health`) : undefined) ?? pendingEvidence.get(pendingKey);
+  if (existing) {
+    performanceSpans.event("pipeline.shared");
+    const evidence = await existing;
+    // A completed promise can remain here until its owner resumes. Recheck
+    // both the joining caller's revision and writes since the producer checked.
+    if (evidence.signature !== signature || evidence.signature !== evidenceSignature()) {
+      throw new PipelineEvidenceChangedError("pipeline evidence changed during preparation");
+    }
+    return evidence;
+  }
   const pending = withViewerOperation("pipelines.evidence", async () => {
     assertPipelineEvidenceBudget(budget);
     const pipelines: Pipeline[] = [];
@@ -1245,8 +1294,10 @@ async function preparePipelineEvidence(mode: "startup" | "health" | "ownership" 
           if (value.ownership) ownership.push(value.ownership);
           if (value.issue) issues.push(value.issue);
         }
-        if (signature !== evidenceSignature()) throw new PipelineEvidenceChangedError("pipeline evidence changed during preparation");
+        // Preserve revision-tagged validation even when this snapshot loses
+        // its freshness race. The next read revalidates only changed rows.
         compactEvidence = prepared;
+        if (signature !== evidenceSignature()) throw new PipelineEvidenceChangedError("pipeline evidence changed during preparation");
         return { pipelines, ownership, issues, signature };
       }
       compactEvidence = undefined;
@@ -1453,6 +1504,7 @@ function reviveLoadedPipeline(pipeline: Pipeline, resolveProject: (project: stri
         ? run.attempts.map((attempt) => ({
             ...attempt,
             ...(attempt.suspension ? { suspension: { ...attempt.suspension } } : {}),
+            ...(attempt.accountHolds ? { accountHolds: attempt.accountHolds.map((hold) => ({ ...hold })) } : {}),
             ...(attempt.runtimeSwitches ? { runtimeSwitches: structuredClone(attempt.runtimeSwitches) } : {}),
             launchId: attempt.launchId ?? null,
             conversationId: attempt.conversationId ?? null,
@@ -1538,7 +1590,7 @@ function lazyControllerArray<T>(source: T[]): T[] {
   });
 }
 
-function cloneControllerPipeline(pipeline: Pipeline): Pipeline {
+export function cloneControllerPipeline(pipeline: Pipeline): Pipeline {
   if (!controllerReferences(pipeline.id)) return cloneLoadedPipeline(pipeline);
   return performanceSpans.sync("pipeline.copy", () => {
     const copy: Pipeline = structuredClone({ ...pipeline, runs: [],
@@ -2001,6 +2053,16 @@ export async function takeoverPipelineDelivery(id: string, expectedOwner: string
     const old = tx.get(expectedOwner);
     if (old?.delivery?.operation?.state === "running") return { error: `publisher ${expectedOwner} at epoch ${expectedEpoch} is in flight or its outcome is uncertain; reconcile it before takeover`, status: 409 };
     if (pipeline.state === "closed" || pipeline.state === "completed") return { error: "a terminal lane cannot take ownership", status: 409 };
+    const refused = old?.delivery?.operation;
+    if (old && refused?.state === "settled" && refused.result?.ok === false) {
+      const attempt = old.runs.find(run => run.stageId === old.cursor?.stageId)?.attempts.at(-1);
+      recordPublicationFailure(old, attempt, { operationId: refused.id, epoch: refused.epoch, at: new Date().toISOString(),
+        cause: refused.result.failure?.retryableDeadline ? "infrastructure-deadline"
+          : publicationInterrupted(refused.result) ? "interrupted" : "check-failure",
+        detail: refused.result.error.slice(0, 400), recoverable: recoverablePublication(refused.result) },
+      publicationInterrupted(refused.result) && !refused.result.failure ? [0, ...PUBLICATION_RETRY_DELAYS_MS.slice(1)] : PUBLICATION_RETRY_DELAYS_MS);
+    }
+    pipeline.publicationRecovery = mergePublicationRecovery(old?.publicationRecovery, pipeline.publicationRecovery);
     if (old?.delivery) {
       old.delivery.active = false;
       old.delivery.publish = "disabled";
@@ -2156,6 +2218,21 @@ export function pipelineRecordReader(pipelineId: string) {
 /** Full-record read by id: the hot registry first, then the archive. */
 export function findPipelineRecord(pipelineId: string): Pipeline | null {
   return pipelineStore().get(pipelineId) ?? archiveStore().get(pipelineId);
+}
+
+/** Bounded feed for consumers that need task membership changes without loading
+ * the full pipeline registry. The cursor follows the active collection log. */
+export function pipelineTaskBindingSource() {
+  const collection = pipelineStore();
+  return {
+    revision: () => collection.revision(),
+    changesAfter: (revision: number, key: string, limit: number) => collection.changesAfter(revision, key, limit),
+    parse: (valueJson: string) => {
+      const pipeline = decodePipeline(JSON.parse(valueJson));
+      if (!pipeline) throw new PipelineStoreError("invalid pipeline row in task-binding feed");
+      return pipeline;
+    },
+  };
 }
 
 /** Validates durable task membership at the pipeline store seam. */

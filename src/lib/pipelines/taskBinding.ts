@@ -38,9 +38,20 @@ export function projectTaskPipelineIds(
   tasks: readonly BoardTask[],
   pipelines: readonly Pipeline[],
 ): TaskPipelineReadModel[] {
+  if (!tasks.length) return [];
+  const requested = new Set(tasks.map(task => task.id));
+  const byTask = new Map<string, string[]>();
+  for (const pipeline of pipelines) {
+    for (const id of new Set(pipeline.taskIds)) {
+      if (!requested.has(id)) continue;
+      const linked = byTask.get(id);
+      if (linked) linked.push(pipeline.id);
+      else byTask.set(id, [pipeline.id]);
+    }
+  }
   return tasks.map((task) => ({
     ...task,
-    pipelineIds: pipelines.filter((pipeline) => pipeline.taskIds.includes(task.id)).map((pipeline) => pipeline.id),
+    pipelineIds: [...(byTask.get(task.id) ?? [])],
   }));
 }
 

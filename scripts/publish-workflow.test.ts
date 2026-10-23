@@ -283,6 +283,16 @@ test("the exact npm package is built before a narrow hermetic release gate", () 
   expect(workflow).not.toContain("deepen-to-evidence-revision.sh");
 });
 
+test("the exact tarball must pass installed MCP and audio smoke before publishing", () => {
+  const name = "Verify installed package MCP tools and audio before publication";
+  const smoke = workflowStepScript(name);
+  expect(smoke).toContain('bash scripts/gate-slot.sh bun scripts/npm-package-smoke.mjs --mcp-assets "$PACKAGE_TARBALL"');
+  expect(workflow.indexOf(`- name: ${name}`)).toBeGreaterThan(workflow.indexOf("- name: Build and inspect npm package"));
+  expect(workflow.indexOf(`- name: ${name}`)).toBeLessThan(workflow.indexOf("- name: Publish package with OIDC"));
+  expect(workflow).toContain("PACKAGE_TARBALL: ${{ steps.package.outputs.tarball }}");
+  expect(smoke).toContain("set -euo pipefail");
+});
+
 test("registry preflight makes trusted publication idempotent and verifies the result", () => {
   const preflight = workflow.indexOf("name: Check npm registry");
   const packageStep = workflow.indexOf("name: Build and inspect npm package");

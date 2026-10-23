@@ -3,6 +3,7 @@ import { Window } from "happy-dom";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 
+import { awaitingReplies } from "@/lib/audio/fleetCues";
 import { setLocale } from "@/lib/i18n";
 
 import { DraftAgentPane, setDraftCwd } from "./DraftAgentPane";
@@ -140,6 +141,36 @@ test("a launched spawn seeds the prompt as the conversation's first launch-owned
   const queue = readOutbox("conversation_seed");
   expect(queue).toHaveLength(1);
   expect(queue[0]).toMatchObject({ id: "launch-seed", text: "the operator's first ask", state: "delivering", launchOwned: true });
+});
+
+test("an accepted launch waits for its first answer (sound map S8); a failed one waits for nothing", async () => {
+  stubFetch(() => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ ok: true, state: "settled", launched: true, path: "/real/rollout.jsonl", launchId: "launch-reply", conversationId: "conversation_reply" }),
+  } as Response));
+  await launchWithPrompt("answer me when you are done");
+  /* The first completed turn of the launched conversation is the answer. */
+  const session = { conversationId: "conversation_reply", settledTurnId: "turn-1", lastTurnOutcome: "completed" } as Parameters<typeof awaitingReplies.settle>[0];
+  expect(awaitingReplies.settle(session)).toEqual({
+    cue: "reply",
+    eventId: "reply:conversation_reply:turn-1",
+    caption: { what: "reply", subject: null, target: { kind: "conversation", conversationId: "conversation_reply" } },
+  });
+
+  flushSync(() => root?.unmount());
+  root = null;
+  document.body.replaceChildren();
+  const before = awaitingReplies.size();
+  stubFetch(() => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ ok: true, state: "settled", launched: false, error: "No healthy Claude account is available.", path: "spawn:launch-failed", launchId: "launch-failed", conversationId: "conversation_failed" }),
+  } as Response));
+  const { host } = await launchWithPrompt("this one fails");
+  /* The card shows the failure; it is heard once, as a fault from the needs-you queue. */
+  expect(host.textContent).toContain("No healthy Claude account is available.");
+  expect(awaitingReplies.size()).toBe(before);
 });
 
 test("the seeded launch bubble adopts into the materialized conversation window", async () => {

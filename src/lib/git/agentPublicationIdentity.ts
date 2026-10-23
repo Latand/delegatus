@@ -34,9 +34,12 @@ export function agentPublicationIdentityEnv(source: AgentEnvironment): Record<st
 
 export function agentCodexPublicationPolicy(policy: unknown, source: AgentEnvironment): Record<string, unknown> {
   const identity = agentPublicationIdentityEnv(source);
+  const shellBindings = source.LLV_GATE_CPU_PRIORITY_SOURCE === undefined
+    ? {} : { LLV_GATE_CPU_PRIORITY_SOURCE: source.LLV_GATE_CPU_PRIORITY_SOURCE };
+  const set = { ...identity, ...shellBindings };
   const configured = policy && typeof policy === "object" && !Array.isArray(policy)
     ? policy as Record<string, unknown> : {};
-  const override: Record<string, unknown> = { set: identity };
+  const override: Record<string, unknown> = { set };
   const included = configured.include_only;
   const filters = configured.filters;
   if (included != null && (!Array.isArray(included) || included.some((name) => typeof name !== "string"))) {
@@ -49,10 +52,10 @@ export function agentCodexPublicationPolicy(policy: unknown, source: AgentEnviro
     // Includes filter after `set`; add only the Git fields to an existing
     // inclusion bound. Exclusions run before `set` and remain untouched.
     if (Object.values(filters).includes("include")) {
-      override.filters = Object.fromEntries(Object.keys(identity).map((key) => [key, "include"]));
+      override.filters = Object.fromEntries(Object.keys(set).map((key) => [key, "include"]));
     }
   } else if (Array.isArray(included) && included.length) {
-    override.include_only = [...new Set([...included, ...Object.keys(identity)])];
+    override.include_only = [...new Set([...included, ...Object.keys(set)])];
   }
   return override;
 }

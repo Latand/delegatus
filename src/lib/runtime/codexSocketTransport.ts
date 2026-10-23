@@ -4,14 +4,17 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
-import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
+import { execFile, spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from "node:child_process";
 import WebSocket from "ws";
 import { procBackend } from "@/lib/proc";
+import { redactBounded } from "@/lib/monitor/redact";
 import { captureProcessIdentity, processIdentityStatus } from "@/lib/processIdentity";
 import { signalProcessGroup } from "@/lib/processGroup";
 import type { ProcessIdentity } from "@/lib/agent/registry";
+import { startupStderrText } from "./startupStderr";
+import { bindSignalDomain, nativeProcessId, normalizeSignalBoundaryOff, recordSignalBoundaryOff, signalAgentDomain, signalBoundaryOff, signalDomain, type AgentSignalDomain, type SignalBoundaryOff } from "./agentSignalSandbox";
 
-export interface CodexSocketOwner { endpoint: string; process: ProcessIdentity }
+export interface CodexSocketOwner { endpoint: string; process: ProcessIdentity; signalDomain?: AgentSignalDomain; signalBoundary?: SignalBoundaryOff }
 export type CodexTransport = Pick<ChildProcessWithoutNullStreams, "pid" | "stdin" | "stdout" | "stderr" | "kill"> & EventEmitter;
 const prefix = "codex-unix:";
 
@@ -47,6 +50,44 @@ function verifiedSocket(owner: CodexSocketOwner): string | null {
 
 export function verifiedCodexSocketOwner(owner: CodexSocketOwner): boolean { return verifiedSocket(owner) !== null; }
 
+/** Bytes of native stderr kept for a startup diagnostic. Everything after is discarded. */
+const STDERR_KEEP_BYTES = 16 * 1024;
+
+interface StderrDrain { writer: number; finished: Promise<void> }
+
+/** Native stderr goes to a FIFO read by a detached drain that keeps the first
+ * STDERR_KEEP_BYTES in `file` and discards the rest, so a listener that outlives
+ * its Viewer never fills the disk and never sees a closed stderr. `finished`
+ * settles when every writer closed. Resolves to null when the drain could not
+ * start; the caller then discards native stderr. */
+async function startStderrDrain(fifo: string, file: string): Promise<StderrDrain | null> {
+  const made = await new Promise<boolean>(resolve => {
+    execFile("mkfifo", ["-m", "600", fifo], { timeout: 5_000 }, error => resolve(!error));
+  });
+  if (!made) return null;
+  let writer: number | undefined;
+  try {
+    // A writer must exist before the drain opens the read end.
+    writer = fs.openSync(fifo, fs.constants.O_RDWR);
+    // dd copies the first bytes unbuffered; cat then discards the rest.
+    const script = `umask 077; exec 3<"$1" 4>"$2" || exit 1; echo ready; exec >/dev/null
+trap '' HUP; dd bs=1 count="$3" <&3 >&4 2>/dev/null; cat <&3 >/dev/null`;
+    const drain = spawn("sh", ["-c", script, "sh", fifo, file, String(STDERR_KEEP_BYTES)], { stdio: ["ignore", "pipe", "ignore"], detached: true });
+    const finished = new Promise<void>(resolve => { drain.once("close", () => resolve()); drain.once("error", () => resolve()); });
+    drain.unref();
+    const ready = await new Promise<boolean>(resolve => {
+      const timer = setTimeout(() => resolve(false), 5_000);
+      drain.stdout!.once("data", () => { clearTimeout(timer); resolve(true); });
+      drain.once("close", () => { clearTimeout(timer); resolve(false); });
+    });
+    drain.stdout!.destroy();
+    if (ready) return { writer, finished };
+    drain.kill("SIGKILL");
+  } catch { /* fall through to discarding */ }
+  if (writer !== undefined) fs.closeSync(writer);
+  return null;
+}
+
 /** A private native app-server listener outlives its Viewer connection. The
  * registry's process identity and writer claim fence admission to this socket. */
 export class CodexSocketTransport extends EventEmitter implements CodexTransport {
@@ -57,6 +98,9 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
   readonly endpoint: string;
   readonly startIdentity: string;
   readonly bootEpoch: string;
+  /** Settles once every writer of the startup stderr drain closed, which is
+   * a moment after the native process ended. Resolved for a reconnected owner. */
+  stderrDrained: Promise<void> = Promise.resolve();
   private socket: WebSocket | null = null;
   private poll: ReturnType<typeof setInterval> | null = null;
   private closed = false;
@@ -83,6 +127,10 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
   static async reconnect(owner: CodexSocketOwner): Promise<CodexSocketTransport> {
     if (!verifiedCodexSocketOwner(owner)) throw new Error("Codex callback owner cannot be verified");
     const transport = new CodexSocketTransport(owner);
+    if (owner.signalDomain) {
+      if (owner.signalDomain.native.startIdentity !== owner.process.startIdentity || owner.signalDomain.native.bootEpoch !== owner.process.bootEpoch) throw new Error("Codex callback signal identity changed");
+      bindSignalDomain(transport, owner.signalDomain);
+    } else if (normalizeSignalBoundaryOff(owner.signalBoundary)) recordSignalBoundaryOff(transport, owner.signalBoundary!);
     try { await transport.connect(); }
     catch (error) { transport.disconnect(); throw error; }
     if (!verifiedCodexSocketOwner(owner)) { transport.disconnect(); throw new Error("Codex callback owner changed while connecting"); }
@@ -95,6 +143,8 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
 
   static async launch(command: string, args: string[], options: SpawnOptionsWithoutStdio,
     wrap?: (base: (command: string, args: string[], options: SpawnOptionsWithoutStdio) => ChildProcessWithoutNullStreams) => (command: string, args: string[], options: SpawnOptionsWithoutStdio) => ChildProcessWithoutNullStreams,
+    launch?: (command: string, args: string[], options: SpawnOptionsWithoutStdio,
+      base: (command: string, args: string[], options: SpawnOptionsWithoutStdio) => ChildProcessWithoutNullStreams) => Promise<ChildProcessWithoutNullStreams>,
   ): Promise<CodexSocketTransport> {
     const root = path.join(process.env.HOME ?? os.homedir(), ".cache", "delegatus", "s");
     fs.mkdirSync(root, { recursive: true, mode: 0o700 });
@@ -102,8 +152,53 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
     const directory = fs.mkdtempSync(path.join(root, "dlg-codex-"));
     fs.chmodSync(directory, 0o700);
     const file = path.join(directory, "rpc.sock");
+    const diagnosticFile = path.join(directory, "startup.stderr");
+    const fifo = path.join(directory, "startup.fifo");
+    const drain = await startStderrDrain(fifo, diagnosticFile);
+    let writer: number | null = drain?.writer ?? null;
+    fs.rmSync(fifo, { force: true });
+    let diagnosticFd = drain ? fs.openSync(diagnosticFile, "r") : undefined;
+    const diagnostic = async (ended: boolean) => {
+      if (diagnosticFd === undefined) return "";
+      const fd = diagnosticFd;
+      // The drain copies byte by byte on its own schedule. Once the process ended its
+      // last bytes are in flight until the drain finishes; a live one is read when steady.
+      let size = fs.fstatSync(fd).size;
+      if (ended) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        await Promise.race([drain!.finished, new Promise<void>(resolve => { timer = setTimeout(resolve, 1_000); })]);
+        if (timer) clearTimeout(timer);
+        size = fs.fstatSync(fd).size;
+      } else {
+        for (let still = 0, waited = 0; (still < 2 || size === 0) && waited < 500; waited += 10) {
+          await new Promise(resolve => setTimeout(resolve, 10));
+          const next = fs.fstatSync(fd).size;
+          still = next === size ? still + 1 : 0;
+          size = next;
+        }
+      }
+      return startupStderrText(fd, size);
+    };
+    const startupFailure = (reason: string, ownership = false) => new Error(ownership
+      ? `Codex callback listener ownership could not be verified (${reason})`
+      : `Codex callback listener failed before dispatch: ${reason}`);
+    const closeDiagnostic = () => {
+      if (diagnosticFd !== undefined) fs.closeSync(diagnosticFd);
+      diagnosticFd = undefined;
+      if (writer !== null) fs.closeSync(writer);
+      writer = null;
+      fs.rmSync(diagnosticFile, { force: true });
+    };
     const base = (binary: string, argv: string[], env: SpawnOptionsWithoutStdio): ChildProcessWithoutNullStreams => {
-      const child = spawn(binary, argv, { ...env, stdio: "ignore" });
+      // Keep native stdio independent of the Viewer: a bounded drain outlives it.
+      // A wrapper reads its own diagnostic name back after its setup fails.
+      if (writer !== null && env.env?.LLV_SIGNAL_DIAGNOSTIC) fs.symlinkSync(diagnosticFile, env.env.LLV_SIGNAL_DIAGNOSTIC);
+      let child: ReturnType<typeof spawn>;
+      try { child = spawn(binary, argv, { ...env, stdio: ["ignore", "ignore", writer ?? "ignore"] }); }
+      finally {
+        if (writer !== null) fs.closeSync(writer);
+        writer = null;
+      }
       const streams = { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() };
       // Bun exposes read-only stream properties. The memory-cell adapter needs
       // stream handles, while the native process itself keeps no Viewer pipes.
@@ -114,30 +209,68 @@ export class CodexSocketTransport extends EventEmitter implements CodexTransport
       } }) as ChildProcessWithoutNullStreams;
     };
     let child: ChildProcessWithoutNullStreams;
-    try { child = (wrap ? wrap(base) : base)(command, [...args, "--listen", `unix://${file}`], options); }
-    catch (error) { fs.rmdirSync(directory); throw error; }
+    try { child = launch ? await launch(command, [...args, "--listen", `unix://${file}`],
+      { ...options, env: { ...(options.env ?? process.env), LLV_SIGNAL_IGNORE_NATIVE_STDIO: "1", LLV_SIGNAL_KEEP_NATIVE_STDERR: "1" } }, base)
+      : (wrap ? wrap(base) : base)(command, [...args, "--listen", `unix://${file}`], options); }
+    catch (error) {
+      const detail = await diagnostic(true);
+      closeDiagnostic();
+      fs.rmdirSync(directory);
+      const reason = error instanceof Error ? error.message : String(error);
+      // A wrapper that read the same redacted startup stderr already carries it.
+      throw new Error(redactBounded(`${reason}${detail && !reason.includes(detail) ? `; stderr: ${detail}` : ""}`, 2400));
+    }
     let failure: Error | undefined;
     child.on("error", error => { failure = error; });
-    const identity = child.pid ? procBackend.processIdentity(child.pid) : null;
+    // spawn reports errors such as ENOENT on the next turn, without a pid.
+    if (!child.pid) await new Promise<void>(resolve => setImmediate(resolve));
+    const monitorIdentity = child.pid ? procBackend.processIdentity(child.pid) : null;
+    const pid = nativeProcessId(child);
+    const identity = pid ? procBackend.processIdentity(pid) : null;
     try {
-      if (!child.pid || !identity) throw failure ?? new Error("Codex callback process identity is unavailable");
-      const owner = { endpoint: prefix + file, process: captureProcessIdentity(child.pid, undefined, identity) };
+      if (!pid || !identity) throw startupFailure(failure ? redactBounded(failure.message, 300)
+        : child.exitCode !== null ? `exited with code ${child.exitCode}`
+          : child.signalCode !== null ? `exited on signal ${child.signalCode}` : "process identity is unavailable",
+      !failure && child.exitCode === null && child.signalCode === null);
+      const owner = { endpoint: prefix + file, process: captureProcessIdentity(pid, undefined, identity), signalDomain: signalDomain(child), signalBoundary: signalBoundaryOff(child) };
       const deadline = Date.now() + 10_000;
       while (!verifiedCodexSocketOwner(owner)) {
-        if (failure || child.exitCode !== null || child.signalCode !== null || Date.now() >= deadline) throw failure ?? new Error("Codex callback listener did not start or its ownership could not be verified");
+        if (failure || child.exitCode !== null || child.signalCode !== null || Date.now() >= deadline) {
+          const reason = failure ? redactBounded(failure.message, 300)
+            : child.exitCode !== null ? `exited with code ${child.exitCode}`
+              : child.signalCode !== null ? `exited on signal ${child.signalCode}` : "timed out after 10000ms";
+          throw startupFailure(reason, fs.lstatSync(file, { throwIfNoEntry: false }) !== undefined);
+        }
         await new Promise(resolve => setTimeout(resolve, 20));
       }
       const transport = await this.reconnect(owner);
+      if (drain) transport.stderrDrained = drain.finished;
       child.on("close", () => transport.processEnded());
       child.unref();
       return transport;
     } catch (error) {
-      if (child.pid && child.exitCode === null && child.signalCode === null && (!identity || procBackend.processIdentity(child.pid) === identity)) {
-        signalProcessGroup(child.pid, "SIGKILL", process.kill);
-        await new Promise<void>(resolve => { if (child.exitCode !== null || child.signalCode !== null) resolve(); else child.once("close", () => resolve()); });
+      const detail = await diagnostic(child.exitCode !== null || child.signalCode !== null);
+      const message = redactBounded(`${error instanceof Error ? error.message : String(error)}${detail ? `; stderr: ${detail}` : ""}`, 2400);
+      if (child.pid && child.exitCode === null && child.signalCode === null
+        && monitorIdentity && procBackend.processIdentity(child.pid) !== monitorIdentity) {
+        throw new Error(`Codex callback setup cleanup identity changed; ${message}`, { cause: error });
+      }
+      if (child.pid && child.exitCode === null && child.signalCode === null && (!monitorIdentity || procBackend.processIdentity(child.pid) === monitorIdentity)) {
+        const stopped = new Promise<void>(resolve => { if (child.exitCode !== null || child.signalCode !== null) resolve(); else child.once("close", () => resolve()); });
+        const signalled = signalAgentDomain(child, "SIGKILL");
+        if (signalled === undefined) signalProcessGroup(child.pid, "SIGKILL", process.kill);
+        else if (!signalled) throw new Error(`Codex callback setup cleanup identity could not be verified; ${message}`, { cause: error });
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([stopped, new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(() => reject(new Error(`Codex callback setup cleanup did not settle; ${message}`, { cause: error })), 3_000);
+          })]);
+        } finally { if (timer) clearTimeout(timer); }
       }
       fs.rmSync(directory, { recursive: true, force: true });
-      throw error;
+      throw new Error(message, { cause: error });
+    } finally {
+      closeDiagnostic();
     }
   }
 

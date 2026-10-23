@@ -59,7 +59,8 @@ const CHATS = [
  * Mounts the section the way the hook drives it: a save marks the section
  * busy at once, which disables its controls, exactly as `act()` does.
  */
-async function mount(documents: TelegramBotStatusPayload["documents"] = { roots: ["/fixture-home/handoff"], custom: false }): Promise<{ saves: Array<[string, string, boolean]>; rootSaves: string[][]; section: HTMLElement }> {
+async function mount(documents: TelegramBotStatusPayload["documents"] = { roots: ["/fixture-home/handoff"], custom: false },
+  overrides: Partial<TelegramBotStatusPayload> = {}): Promise<{ saves: Array<[string, string, boolean]>; rootSaves: string[][]; section: HTMLElement }> {
   const saves: Array<[string, string, boolean]> = [];
   const rootSaves: string[][] = [];
   const status: TelegramBotStatusPayload = {
@@ -69,6 +70,7 @@ async function mount(documents: TelegramBotStatusPayload["documents"] = { roots:
     receiving: "polling",
     chats: CHATS,
     documents,
+    ...overrides,
   };
   const render = (busy: boolean) => root!.render(<TelegramBotSection state={stateFor(busy)} />);
   const stateFor = (busy: boolean): TelegramBotState => ({
@@ -100,6 +102,18 @@ const switchFor = (section: HTMLElement, title: string) =>
   section.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="Agents may post: ${title}"]`)!;
 const fieldFor = (section: HTMLElement, title: string) =>
   section.querySelector<HTMLInputElement>(`input[aria-label="Alias agents use: ${title}"]`);
+
+test("paired clone groups stay visible and allowlisted while the bot token is disconnected", async () => {
+  const cloneChat = chat({ bots: [{ name: "Report clone", username: null, assigned: false, member: true, status: null, canPost: true,
+    canSendPhotos: false, canSendDocuments: false, canManageTopics: false, reason: null, checkedAt: null }] });
+  const { saves, section } = await mount(undefined, { connected: false, bot: null, chats: [cloneChat] });
+  expect(section.querySelector('input[type="password"]')).not.toBeNull();
+  const toggle = switchFor(section, "Team Reports");
+  expect(toggle).not.toBeNull();
+  expect(toggle.getAttribute("aria-checked")).toBe("false");
+  await act(async () => toggle.click());
+  expect(saves).toEqual([["-1000000000101", "team-reports", true]]);
+});
 
 /* React's own onChange for the controlled field: order-independent across
    test files, unlike a dispatched input event. */

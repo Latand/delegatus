@@ -1,4 +1,7 @@
 import { worktreeMapStore } from "@/lib/projects/persistence";
+import { AgentRegistry } from "@/lib/agent/registry";
+import { emptyLaunchProfile } from "@/lib/accounts/migration/contracts";
+import { processIdentityProvenDead } from "@/lib/processIdentity";
 import { createHash } from "node:crypto";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
@@ -22,7 +25,10 @@ import type { RunState as MergeBatchState } from "../../../scripts/merge-batch";
 
 import {
   FINISHED_WORKTREE_RETENTION_MS,
+  CONVERSATION_PROCESS_PROBE_LIMIT,
+  WORKTREE_SWEEP_INTERVAL_MS,
   classifyStatus,
+  conversationCwdStatus,
   exclusiveBytes,
   allocatedBytes,
   forgeCacheMergedPullRequests,
@@ -37,12 +43,15 @@ import {
   startWorktreeSweep,
   stopWorktreeSweep,
   sweepMergedWorktrees,
+  worktreeSweepForeign,
   worktreeSweepMode,
   worktreeSweepStatus,
   type MergedPullRequest,
   type SweptPipeline,
   type WorktreeSweepPorts,
+  type WorktreeSweepReport,
 } from "./worktreeSweep";
+import { readWorktreeProvenance, recordWorktreeProvenance, WORKTREE_PROVENANCE_FILE } from "./worktreeProvenance";
 
 /* Every repository here is a throwaway under the test's temp root, and the
    state directory is the test's own: nothing reads or removes the operator's
@@ -86,6 +95,8 @@ function repository(): string {
   const root = path.join(caseDir, "widgets");
   fs.mkdirSync(root, { recursive: true });
   git(["init", "-q", "-b", "main"], root);
+  // The isolated test preload supplies an empty Git template.
+  fs.mkdirSync(path.join(root, ".git", "info"), { recursive: true });
   git(["remote", "add", "origin", `https://github.com/${REPOSITORY}.git`], root);
   fs.writeFileSync(path.join(root, ".gitignore"), "node_modules/\n");
   fs.writeFileSync(path.join(root, "README.md"), "widgets\n");
@@ -94,9 +105,11 @@ function repository(): string {
   return root;
 }
 
-/** A linked worktree on a new branch with one commit of its own. */
-function lane(root: string, dir: string, branch: string): { dir: string; tip: string } {
+/** A linked worktree on a new branch with one commit of its own. Delegatus
+    made it, and recorded so the way a workflow does, unless `handMade`. */
+function lane(root: string, dir: string, branch: string, handMade = false): { dir: string; tip: string } {
   git(["worktree", "add", "-q", "-b", branch, dir, "main"], root);
+  if (!handMade) expect(recordWorktreeProvenance(dir, { creator: "workflow", id: `wf-${branch}` }, new Date(0))).toBe(true);
   fs.writeFileSync(path.join(dir, `${branch.replace(/\W/g, "-")}.txt`), `${branch}\n`);
   git(["add", "."], dir);
   git(["commit", "-q", "-m", `work on ${branch}`], dir);
@@ -120,6 +133,7 @@ function ports(overrides: Partial<WorktreeSweepPorts> & { prs?: MergedPullReques
   const { prs = [], ...rest } = overrides;
   return {
     mode: "on",
+    timeBudgetMs: 60_000,
     // Existing Git fixtures model already quiet trees through the stat port.
     inspect: (dir, settings) => inspectTree(dir, { ...settings, stat: file => {
       const stat = fs.lstatSync(file); stat.mtimeMs = 1; stat.ctimeMs = 1; return stat;
@@ -202,7 +216,7 @@ test("a completed lane without a merged PR stays through retention, its clock st
   }));
   expect(report.removed).toEqual([]);
   expect(report.kept).toEqual([expect.objectContaining({ path: dir, reason: "retention", pipelineId: "pipe-widgets-pipeline-cccc", firstSettledAt: report.at })]);
-  expect(report.kept[0]!.detail).toBe(`eligible after ${new Date(Date.parse(report.at) + FINISHED_WORKTREE_RETENTION_MS).toISOString()}`);
+  expect(report.kept[0]!.detail).toBe(`eligible after ${new Date(Date.parse(report.at) + 3_600_000).toISOString()} when clean with every commit on a remote, otherwise after ${new Date(Date.parse(report.at) + FINISHED_WORKTREE_RETENTION_MS).toISOString()}`);
   expect(fs.existsSync(dir)).toBe(true);
   expect(branchExists(root, "pipeline/cccc")).toBe(true);
 });
@@ -791,6 +805,402 @@ test("live or waiting conversations: hosted, freshly starting, or holding a queu
   expect(cwds.sort()).toEqual(["/w/assigned", "/w/idle", "/w/live", "/w/queued", "/w/starting", "/w/uncertain"]);
 });
 
+function finishedRegistryConversation(dir: string) {
+  const filename = path.join(process.env.LLV_STATE_DIR!, "agent-registry.json");
+  const registry = new AgentRegistry(filename, () => false, undefined, { sqliteMode: "sqlite" });
+  const sessionId = createHash("sha256").update("finished-sweep-conversation").digest("hex").slice(0, 32)
+    .replace(/(.{8})(.{4})(.{4})(.{4})(.{12})/, "$1-$2-$3-$4-$5");
+  const key = { engine: "codex" as const, sessionId };
+  const artifactPath = path.join(caseDir, `${key.sessionId}.jsonl`);
+  const processIdentity = { pid: 61001, startIdentity: "finished-host", bootEpoch: "fixture-boot" };
+  registry.upsert({ key, artifactPath, cwd: dir, accountId: null, status: "idle", host: null,
+    claimEpoch: 1, claimOwner: null, pendingAction: null,
+    structuredHost: { kind: "codex-app-server", endpoint: "stdio:finished", process: processIdentity,
+      writerClaimEpoch: 1, eventCursor: 1, protocolVersion: null, activeTurnRef: null,
+      pendingAttention: [], activeFlags: [] } });
+  registry.reconcileConversations([{ engine: "codex", path: artifactPath, accountId: null,
+    launchProfile: emptyLaunchProfile({ cwd: dir }),
+    turn: { state: "terminal", source: "lifecycle", terminalAt: "2026-10-01T00:00:00Z" },
+    observedAt: "2026-10-01T00:00:00Z" }]);
+  expect(registry.captureStructuredTerminationSurvivors(key, processIdentity,
+    [{ pid: 61002, startIdentity: "finished-child", bootEpoch: "fixture-boot" }])).not.toBeNull();
+  return { registry, filename, key, processIdentity, artifactPath };
+}
+
+test("a settled registry conversation with dead captured hosts releases its linked checkout", async () => {
+  const root = repository();
+  const { dir, tip } = lane(root, path.join(caseDir, "finished-lane"), "pipeline/finished");
+  const { filename, key } = finishedRegistryConversation(dir);
+  // Reopen the actual SQLite layout: capture evidence outlives the host.
+  const reopened = new AgentRegistry(filename, () => false, undefined, { sqliteMode: "sqlite" });
+  expect(reopened.readOnlySnapshot().entries[`codex:${key.sessionId}`]?.status).toBe("idle");
+  const report = await sweepMergedWorktrees(ports({
+    pipelines: [pipeline({ repoDir: root, worktreeDir: dir, branch: "pipeline/finished" })],
+    prs: [merged(71, "pipeline/finished", tip)],
+    conversationCwds: () => liveOrWaitingConversationCwds(reopened.readOnlySnapshot(),
+      Date.parse("2026-10-21T00:00:00Z"), () => true),
+  }));
+  expect(report.kept.filter(row => row.reason === "live-conversation")).toEqual([]);
+  expect(report.removed.map(row => row.path)).toEqual([dir]);
+  expect(fs.existsSync(dir)).toBe(false);
+});
+
+test("a failed migration's parked message releases its dead conversation's linked checkout", async () => {
+  const root = repository();
+  const { dir, tip } = lane(root, path.join(caseDir, "parked-lane"), "pipeline/parked");
+  const { registry, filename, artifactPath } = finishedRegistryConversation(dir);
+  const conversation = registry.conversationForPath(artifactPath)!;
+  const migration = { intentId: "parked-switch", targetId: "target", revision: 1,
+    error: null, updatedAt: "2026-10-01T00:00:00Z" };
+  registry.setConversationMigration(conversation.id, { ...migration, phase: "preparing" });
+  const delivery = registry.holdDelivery(conversation.id, "Continue when the switch completes", "parked-message");
+  expect(delivery).toMatchObject({ state: "held", generationId: null, attempts: 0, waitReason: "switching-accounts" });
+  registry.setConversationMigration(conversation.id, { ...migration, phase: "failed-recoverable", error: "successor failed" });
+  const reopened = new AgentRegistry(filename, () => false, undefined, { sqliteMode: "sqlite" });
+  const report = await sweepMergedWorktrees(ports({
+    pipelines: [pipeline({ repoDir: root, worktreeDir: dir, branch: "pipeline/parked", state: "closed" })],
+    prs: [merged(72, "pipeline/parked", tip)],
+    conversationCwds: () => liveOrWaitingConversationCwds(reopened.readOnlySnapshot(),
+      Date.parse("2026-10-21T00:00:00Z"), () => true),
+  }));
+  expect(report.kept.filter(row => row.reason === "live-conversation")).toEqual([]);
+  expect(report.removed.map(row => row.path)).toEqual([dir]);
+  expect(reopened.readOnlySnapshot().heldDeliveries[delivery.id]?.state).toBe("held");
+});
+
+for (const owner of ["structured", "survivor", "claimant", "tmux-agent", "tmux-pane"] as const)
+  test.each(["alive", "unverified"] as const)(`a ${owner} owner that is %s protects a settled registry conversation`, (verdict) => {
+    const { registry, filename, key } = finishedRegistryConversation(caseDir);
+    const entry = registry.readOnlySnapshot().entries[`codex:${key.sessionId}`]!;
+    const identity = (pid: number) => ({ pid, startIdentity: `owner-${pid}`, bootEpoch: "fixture-boot" });
+    registry.upsert({ ...entry, status: "dead", claimOwner: `structured-host:${JSON.stringify(identity(61005))}`,
+      host: { kind: "tmux", endpoint: "fixture", server: identity(61006), paneId: "%1", windowName: "fixture",
+        agent: identity(61003), panePid: identity(61004), argv: [] } });
+    const livePid = { structured: 61001, survivor: 61002, claimant: 61005, "tmux-agent": 61003, "tmux-pane": 61004 }[owner];
+    const reopened = new AgentRegistry(filename, () => false, undefined, { sqliteMode: "sqlite" });
+    const cwds = liveOrWaitingConversationCwds(reopened.readOnlySnapshot(), Date.parse("2026-10-21T00:00:00Z"),
+      current => processIdentityProvenDead(current, {
+        pidAlive: pid => pid === livePid,
+        processIdentity: () => verdict === "unverified" ? null : (livePid === 61001 ? "finished-host"
+          : livePid === 61002 ? "finished-child" : `owner-${livePid}`),
+        bootEpoch: () => "fixture-boot",
+      }));
+    expect(cwds).toEqual([caseDir]);
+  });
+
+test.each(["busy", "unknown", "pending", "active-turn", "missing-owner", "unreadable-claim"] as const)(
+  "%s evidence keeps the captured conversation's checkout", (kind) => {
+    const { registry, key } = finishedRegistryConversation(caseDir);
+    const file = structuredClone(registry.readOnlySnapshot());
+    const entry = file.entries[`codex:${key.sessionId}`]!;
+    const conversation = Object.values(file.conversations)[0]!;
+    if (kind === "busy" || kind === "unknown") conversation.turn.state = kind;
+    if (kind === "pending") entry.pendingAction = "resume";
+    if (kind === "active-turn") entry.structuredHost!.activeTurnRef = "current-turn";
+    if (kind === "missing-owner") { entry.structuredHost!.process = null; entry.structuredTerminationSurvivors = []; }
+    if (kind === "unreadable-claim") entry.claimOwner = "unreadable-owner";
+    expect(liveOrWaitingConversationCwds(file, Date.parse("2026-10-21T00:00:00Z"), () => true)).toEqual([caseDir]);
+  });
+
+test.each(["held", "assigned", "delivery-uncertain"] as const)("a runnable %s message keeps its checkout", (state) => {
+  const { registry, artifactPath } = finishedRegistryConversation(caseDir);
+  const conversation = registry.conversationForPath(artifactPath)!;
+  registry.setConversationMigration(conversation.id, { intentId: "switch", phase: "preparing",
+    targetId: "target", revision: 1, error: null, updatedAt: "2026-10-01T00:00:00Z" });
+  const delivery = registry.holdDelivery(conversation.id, "Continue", "queued-message");
+  const file = structuredClone(registry.readOnlySnapshot());
+  file.heldDeliveries[delivery.id]!.state = state;
+  file.conversations[conversation.id]!.migration!.phase = state === "held" ? "committed" : "failed-recoverable";
+  expect(liveOrWaitingConversationCwds(file, Date.parse("2026-10-21T00:00:00Z"), () => true)).toEqual([caseDir]);
+});
+
+test.each(["requested", "waiting-turn", "preparing", "successor-starting", "verifying"] as const)(
+  "a %s migration keeps its checkout before its successor publishes a host", (phase) => {
+    const { registry, artifactPath } = finishedRegistryConversation(caseDir);
+    const conversation = registry.conversationForPath(artifactPath)!;
+    registry.setConversationMigration(conversation.id, { intentId: "active-switch", phase,
+      targetId: "target", revision: 1, error: null, updatedAt: "2026-10-01T00:00:00Z" });
+    expect(liveOrWaitingConversationCwds(registry.readOnlySnapshot(),
+      Date.parse("2026-10-21T00:00:00Z"), () => true)).toEqual([caseDir]);
+  });
+
+test("bounded owner proof rotates across passes and releases settled dead rows beyond the budget", () => {
+  const { registry } = finishedRegistryConversation(caseDir);
+  const snapshot = registry.readOnlySnapshot();
+  const template = Object.values(snapshot.entries)[0]!;
+  const conversation = Object.values(snapshot.conversations)[0]!;
+  const entries: typeof snapshot.entries = {};
+  const conversations: typeof snapshot.conversations = {};
+  for (let index = 0; index <= CONVERSATION_PROCESS_PROBE_LIMIT; index++) {
+    const generationId = `settled-generation-${String(index).padStart(5, "0")}`;
+    const key = `${conversation.engine}:${generationId}`;
+    entries[key] = { ...template, key: key as unknown as typeof template.key, cwd: path.join(caseDir, String(index)), status: "dead",
+      structuredHost: { ...template.structuredHost!, process: { pid: 70000 + index,
+        startIdentity: `proof-${index}`, bootEpoch: "fixture-boot" } },
+      structuredTerminationSurvivors: [] };
+    conversations[`settled-conversation-${index}`] = {
+      ...conversation,
+      id: `settled-conversation-${index}` as typeof conversation.id,
+      generations: conversation.generations.map((generation, generationIndex) =>
+        generationIndex === conversation.generations.length - 1 ? { ...generation, id: generationId } : generation),
+    };
+  }
+  const settled = { entries, conversations };
+  const calls: number[] = [];
+  for (let pass = 0; pass < 2; pass++) {
+    let probes = 0;
+    const at = pass * WORKTREE_SWEEP_INTERVAL_MS;
+    const cwds = liveOrWaitingConversationCwds(settled, at, () => { probes++; return true; });
+    calls.push(probes);
+    expect(probes).toBeLessThanOrEqual(CONVERSATION_PROCESS_PROBE_LIMIT);
+    if (pass === 0) expect(cwds.length).toBeGreaterThan(0);
+  }
+  expect(calls).toEqual([CONVERSATION_PROCESS_PROBE_LIMIT, 1]);
+});
+
+test("dead conversations sharing a checkout stay on one proof page", () => {
+  const { registry } = finishedRegistryConversation(caseDir);
+  const snapshot = registry.readOnlySnapshot();
+  const template = Object.values(snapshot.entries)[0]!;
+  const conversation = Object.values(snapshot.conversations)[0]!;
+  const sharedCwd = path.join(caseDir, "0-shared-checkout");
+  const entries: typeof snapshot.entries = {};
+  const conversations: typeof snapshot.conversations = {};
+  for (let index = 0; index <= CONVERSATION_PROCESS_PROBE_LIMIT; index++) {
+    const generationId = `shared-generation-${String(index).padStart(5, "0")}`;
+    const key = `${conversation.engine}:${generationId}`;
+    entries[key] = { ...template, key: key as unknown as typeof template.key,
+      cwd: index === 0 || index === CONVERSATION_PROCESS_PROBE_LIMIT ? sharedCwd : path.join(caseDir, `row-${String(index).padStart(5, "0")}`),
+      status: "dead", structuredHost: { ...template.structuredHost!, process: { pid: 71000 + index,
+        startIdentity: `shared-${index}`, bootEpoch: "fixture-boot" } }, structuredTerminationSurvivors: [] };
+    conversations[`shared-conversation-${index}`] = {
+      ...conversation,
+      id: `shared-conversation-${index}` as typeof conversation.id,
+      generations: conversation.generations.map((generation, generationIndex) => generationIndex === conversation.generations.length - 1
+        ? { ...generation, id: generationId } : generation),
+    };
+  }
+  let probes = 0;
+  const status = conversationCwdStatus({ entries, conversations }, 0, () => { probes++; return true; });
+  expect(probes).toBe(CONVERSATION_PROCESS_PROBE_LIMIT);
+  expect(status.held).not.toContain(sharedCwd);
+  expect(status.deferred).not.toContain(sharedCwd);
+});
+
+test("dead owners in separate checkout subdirectories converge across proof pages", () => {
+  const { registry } = finishedRegistryConversation(caseDir);
+  const snapshot = registry.readOnlySnapshot();
+  const template = Object.values(snapshot.entries)[0]!;
+  const conversation = Object.values(snapshot.conversations)[0]!;
+  const entries: typeof snapshot.entries = {};
+  const conversations: typeof snapshot.conversations = {};
+  for (let index = 0; index <= CONVERSATION_PROCESS_PROBE_LIMIT; index++) {
+    const generationId = `subdir-generation-${String(index).padStart(5, "0")}`;
+    const key = `${conversation.engine}:${generationId}`;
+    entries[key] = { ...template, key: key as unknown as typeof template.key,
+      cwd: path.join(caseDir, index === 0 ? "src" : "tests", `row-${index}`), status: "dead",
+      structuredHost: { ...template.structuredHost!, process: { pid: 72000 + index,
+        startIdentity: `subdir-${index}`, bootEpoch: "fixture-boot" } }, structuredTerminationSurvivors: [] };
+    conversations[`subdir-conversation-${index}`] = { ...conversation,
+      id: `subdir-conversation-${index}` as typeof conversation.id,
+      generations: conversation.generations.map((generation, generationIndex) => generationIndex === conversation.generations.length - 1
+        ? { ...generation, id: generationId } : generation) };
+  }
+  const state = { entries, conversations };
+  for (let pass = 0; pass < 2; pass++) {
+    const at = pass * WORKTREE_SWEEP_INTERVAL_MS;
+    let probes = 0;
+    const result = conversationCwdStatus(state, at, () => { probes++; return true; });
+    expect(probes).toBeLessThanOrEqual(CONVERSATION_PROCESS_PROBE_LIMIT);
+    expect(result.held.length + result.deferred.length).toBeLessThanOrEqual(CONVERSATION_PROCESS_PROBE_LIMIT + 1);
+  }
+  let result = conversationCwdStatus(state, 2 * WORKTREE_SWEEP_INTERVAL_MS, () => true);
+  for (let pass = 3; pass < 20 && (result.held.length || result.deferred.length); pass++)
+    result = conversationCwdStatus(state, pass * WORKTREE_SWEEP_INTERVAL_MS, () => true);
+  expect(result.held).toEqual([]);
+  expect(result.deferred).toEqual([]);
+});
+
+test("unreadable claim remains held without letting readable peers exceed the proof budget", () => {
+  const { registry } = finishedRegistryConversation(caseDir);
+  const snapshot = registry.readOnlySnapshot();
+  const template = Object.values(snapshot.entries)[0]!;
+  const conversation = Object.values(snapshot.conversations)[0]!;
+  const entries: typeof snapshot.entries = {};
+  const conversations: typeof snapshot.conversations = {};
+  for (let index = 0; index <= CONVERSATION_PROCESS_PROBE_LIMIT; index++) {
+    const generationId = `unreadable-generation-${String(index).padStart(5, "0")}`;
+    const key = `${conversation.engine}:${generationId}`;
+    entries[key] = { ...template, key: key as unknown as typeof template.key, cwd: caseDir, status: "dead",
+      structuredHost: { ...template.structuredHost!, process: { pid: 73000 + index,
+        startIdentity: `unreadable-${index}`, bootEpoch: "fixture-boot" } },
+      structuredTerminationSurvivors: [], ...(index === CONVERSATION_PROCESS_PROBE_LIMIT ? { claimOwner: "malformed" } : {}) };
+    conversations[`unreadable-conversation-${index}`] = { ...conversation,
+      id: `unreadable-conversation-${index}` as typeof conversation.id,
+      generations: conversation.generations.map((generation, generationIndex) => generationIndex === conversation.generations.length - 1
+        ? { ...generation, id: generationId } : generation) };
+  }
+  let probes = 0;
+  const result = conversationCwdStatus({ entries, conversations }, 0, () => { probes++; return true; });
+  expect(probes).toBeLessThanOrEqual(CONVERSATION_PROCESS_PROBE_LIMIT);
+  expect(result.held).toContain(caseDir);
+});
+
+test("a live owner shared by many settled entries is probed once per pass and keeps every checkout", () => {
+  const { registry } = finishedRegistryConversation(caseDir);
+  const snapshot = registry.readOnlySnapshot();
+  const template = Object.values(snapshot.entries)[0]!;
+  const conversation = Object.values(snapshot.conversations)[0]!;
+  const entries: typeof snapshot.entries = {};
+  const conversations: typeof snapshot.conversations = {};
+  const shared = { pid: 75999, startIdentity: "shared-live", bootEpoch: "fixture-boot" };
+  for (let index = 0; index <= CONVERSATION_PROCESS_PROBE_LIMIT; index++) {
+    const generationId = `claimed-generation-${String(index).padStart(5, "0")}`;
+    const key = `${conversation.engine}:${generationId}`;
+    entries[key] = { ...template, key: key as unknown as typeof template.key,
+      cwd: path.join(caseDir, `claimed-${String(index).padStart(5, "0")}`), status: "idle",
+      claimOwner: `structured-host:${JSON.stringify(shared)}`,
+      structuredHost: { ...template.structuredHost!, process: { pid: 75000 + index,
+        startIdentity: `claimed-${index}`, bootEpoch: "fixture-boot" } }, structuredTerminationSurvivors: [] };
+    conversations[`claimed-conversation-${index}`] = { ...conversation,
+      id: `claimed-conversation-${index}` as typeof conversation.id,
+      turn: { ...conversation.turn, state: "idle" },
+      generations: conversation.generations.map((generation, generationIndex) => generationIndex === conversation.generations.length - 1
+        ? { ...generation, id: generationId } : generation) };
+  }
+  const cwds = Object.values(entries).map(entry => entry.cwd).sort();
+  for (let pass = 0; pass < 4; pass++) {
+    const probed: string[] = [];
+    const result = conversationCwdStatus({ entries, conversations }, pass * WORKTREE_SWEEP_INTERVAL_MS, identity => {
+      probed.push(JSON.stringify(identity));
+      return identity.startIdentity !== shared.startIdentity;
+    });
+    expect(probed.length).toBeLessThanOrEqual(CONVERSATION_PROCESS_PROBE_LIMIT);
+    expect(new Set(probed).size).toBe(probed.length);
+    expect([...result.held, ...result.deferred].sort()).toEqual(cwds);
+  }
+});
+
+test("proof-page deferrals preserve a finished lane's retention clock until proofs converge, and fresh activity restarts it", async () => {
+  const root = repository();
+  const { dir, tip } = lane(root, path.join(caseDir, "zz-proof-target"), "pipeline/proof-target");
+  const { registry } = finishedRegistryConversation(dir);
+  const snapshot = registry.readOnlySnapshot();
+  const template = Object.values(snapshot.entries)[0]!;
+  const conversation = Object.values(snapshot.conversations)[0]!;
+  const entries: typeof snapshot.entries = {};
+  const conversations: typeof snapshot.conversations = {};
+  const generation = (id: string, generationId: string) => ({ ...conversation, id: id as typeof conversation.id,
+    generations: conversation.generations.map((item, index) => index === conversation.generations.length - 1
+      ? { ...item, id: generationId } : item) });
+  for (let index = 0; index <= CONVERSATION_PROCESS_PROBE_LIMIT; index++) {
+    const generationId = `retention-generation-${String(index).padStart(5, "0")}`;
+    const key = `${conversation.engine}:${generationId}`;
+    entries[key] = { ...template, key: key as unknown as typeof template.key,
+      cwd: index === CONVERSATION_PROCESS_PROBE_LIMIT ? dir : path.join(caseDir, `aa-proof-${String(index).padStart(5, "0")}`),
+      status: "dead", structuredHost: { ...template.structuredHost!, process: { pid: 74000 + index,
+        startIdentity: `retention-${index}`, bootEpoch: "fixture-boot" } }, structuredTerminationSurvivors: [] };
+    conversations[`retention-conversation-${index}`] = generation(`retention-conversation-${index}`, generationId);
+  }
+  /* Owner pages hold sorted proof keys; start on the hour that selects the
+     page without the target, so the first pass must defer it. */
+  const proofKey = (identity: object) => createHash("sha256").update(JSON.stringify(identity)).digest("hex");
+  const targetIdentity = { pid: 74000 + CONVERSATION_PROCESS_PROBE_LIMIT,
+    startIdentity: `retention-${CONVERSATION_PROCESS_PROBE_LIMIT}`, bootEpoch: "fixture-boot" };
+  const keys = Object.values(entries).map(entry => proofKey(entry.structuredHost!.process!)).sort();
+  const targetPage = Math.floor(keys.indexOf(proofKey(targetIdentity)) / CONVERSATION_PROCESS_PROBE_LIMIT);
+  const closedAt = "2026-10-01T00:00:00.000Z";
+  const hourOf = (hour: number) => Date.parse(closedAt) + hour * WORKTREE_SWEEP_INTERVAL_MS;
+  const start = Math.floor(hourOf(0) / WORKTREE_SWEEP_INTERVAL_MS) % 2 === targetPage ? 1 : 0;
+  const owner = pipeline({ repoDir: root, worktreeDir: dir, branch: "pipeline/proof-target", state: "closed",
+    baseRef: tip, closedAt });
+  const freshKey = `${conversation.engine}:fresh-generation`;
+  const freshPid = 79000;
+  let freshAlive = true;
+  let previous: Awaited<ReturnType<typeof sweepMergedWorktrees>> | undefined;
+  const reports: Awaited<ReturnType<typeof sweepMergedWorktrees>>[] = [];
+  const probes: number[] = [];
+  const sweep = async (hour: number) => {
+    const at = hourOf(hour);
+    let count = 0;
+    const report = await sweepMergedWorktrees(ports({ pipelines: [owner], prs: [], previous, now: () => at,
+      conversationCwds: () => conversationCwdStatus({ entries, conversations }, at, identity => {
+        count++;
+        return identity.pid !== freshPid || !freshAlive;
+      }) }));
+    probes.push(count);
+    reports.push(report);
+    previous = report;
+    return report;
+  };
+  for (const hour of [start, start + 1, start + 2]) await sweep(hour);
+  expect(reports[0]!.kept).toContainEqual(expect.objectContaining({ path: dir, reason: "live-conversation",
+    firstSettledAt: closedAt, detail: "owner proof deferred by per-pass budget" }));
+  // Earlier dead proofs persist, so the next pass probes only what is left.
+  expect(reports[1]!.kept).toContainEqual(expect.objectContaining({ path: dir, reason: "retention", firstSettledAt: closedAt }));
+  expect(reports[2]!.kept).toContainEqual(expect.objectContaining({ path: dir, reason: "retention", firstSettledAt: closedAt }));
+  expect(probes.every(count => count <= CONVERSATION_PROCESS_PROBE_LIMIT)).toBe(true);
+  expect(probes[0]! + probes[1]!).toBe(CONVERSATION_PROCESS_PROBE_LIMIT + 1);
+  expect(probes[2]).toBe(0);
+
+  /* A new conversation starts in the checkout: its unknown owner is probed,
+     found alive, and the activity drops the retention clock. */
+  entries[freshKey] = { ...template, key: freshKey as unknown as typeof template.key, cwd: path.join(dir, "src"), status: "dead",
+    structuredHost: { ...template.structuredHost!, process: { pid: freshPid, startIdentity: "fresh", bootEpoch: "fixture-boot" } },
+    structuredTerminationSurvivors: [] };
+  conversations["fresh-conversation"] = generation("fresh-conversation", "fresh-generation");
+  const busy = await sweep(start + 3);
+  const busyRow = busy.kept.find(row => row.path === dir);
+  expect(busyRow).toEqual(expect.objectContaining({ reason: "live-conversation" }));
+  expect(busyRow?.detail).toBeUndefined();
+  expect(busyRow?.firstSettledAt).toBeUndefined();
+  freshAlive = false;
+  const restarted = await sweep(start + 4);
+  expect(restarted.kept).toContainEqual(expect.objectContaining({ path: dir, reason: "retention", firstSettledAt: restarted.at }));
+  expect(probes.slice(3)).toEqual([1, 1]);
+  // The original clock would have released it by hour 98; the restarted one keeps it.
+  expect((await sweep(98)).kept).toContainEqual(expect.objectContaining({ path: dir, reason: "retention", firstSettledAt: restarted.at }));
+  expect(fs.existsSync(dir)).toBe(true);
+  remoteRepository(root); git(["push", "-q", "origin", "pipeline/proof-target"], root);
+  expect((await sweep(start + 4 + 97)).removed.map(row => row.path)).toContain(dir);
+  expect(fs.existsSync(dir)).toBe(false);
+});
+
+test.each(["process", "conversation", "delivery"] as const)("a late %s still prevents removal after captured hosts were proven dead", async (kind) => {
+  const root = repository();
+  const { dir, tip } = lane(root, path.join(caseDir, "late-holder"), "pipeline/late-holder");
+  const { registry, key, processIdentity, artifactPath } = finishedRegistryConversation(dir);
+  const conversation = registry.conversationForPath(artifactPath)!;
+  const migration = { intentId: "retry-switch", targetId: "target", revision: 1,
+    error: null, updatedAt: "2026-10-01T00:00:00Z" };
+  if (kind === "delivery") {
+    registry.setConversationMigration(conversation.id, { ...migration, phase: "preparing" });
+    registry.holdDelivery(conversation.id, "Continue after retry", "retry-message");
+    registry.setConversationMigration(conversation.id, { ...migration, phase: "failed-recoverable" });
+  }
+  let measured = false;
+  const report = await sweepMergedWorktrees(ports({
+    pipelines: [pipeline({ repoDir: root, worktreeDir: dir, branch: "pipeline/late-holder" })],
+    prs: [merged(73, "pipeline/late-holder", tip)],
+    conversationCwds: () => liveOrWaitingConversationCwds(registry.readOnlySnapshot(),
+      Date.parse("2026-10-21T00:00:00Z"), identity => identity.pid !== 61008),
+    scan: () => measured && kind === "process"
+      ? { ownNamespace: null, processes: [{ pid: 61007, paths: [dir], namespace: null, stamped: false }] } : NO_PROCESSES,
+    measure: async () => {
+      measured = true;
+      if (kind === "conversation") registry.captureStructuredTerminationSurvivors(key, processIdentity,
+        [{ pid: 61008, startIdentity: "late-holder", bootEpoch: "fixture-boot" }]);
+      if (kind === "delivery") registry.setConversationMigration(conversation.id, { ...migration, phase: "preparing" });
+      return 1;
+    },
+  }));
+  expect(measured).toBe(true);
+  expect(report.removed).toEqual([]);
+  expect(report.kept).toContainEqual(expect.objectContaining({ path: dir,
+    reason: kind === "process" ? "in-use" : "live-conversation" }));
+  expect(fs.existsSync(dir)).toBe(true);
+});
+
 test("the porcelain listing parses branches, detached heads, locks and prunable entries", () => {
   const raw = [
     "worktree /r", "HEAD aaa", "branch refs/heads/main", "",
@@ -1120,14 +1530,14 @@ test.each(["replacement", "graft"].flatMap(override => ["remote", "merged"].map(
   expect(git(["rev-parse", `refs/heads/${owner.branch}`], root)).toBe(tip);
 });
 
-test.each(["completed", "closed"] as const)("a retained %s lane without a PR frees a tip equal to its base", async state => {
-  const root = repository();
+test.each(["completed", "closed"] as const)("a retained %s lane without a PR frees its remotely preserved base", async state => {
+  const root = repository(); remoteRepository(root);
   const dir = path.join(caseDir, "widgets-pipeline-base");
   git(["worktree", "add", "-q", "-b", "pipeline/base", dir, "main"], root);
   const baseRef = git(["rev-parse", "HEAD"], dir);
   const owner = pipeline({ id: "base", repoDir: root, worktreeDir: dir, branch: "pipeline/base", state, baseRef, closedAt: OLD_TERMINAL });
   const report = await sweepMergedWorktrees(ports({ pipelines: [owner], now: () => RETAIN_NOW }));
-  expect(report.removed).toEqual([expect.objectContaining({ path: dir, pr: null, preservation: "base" })]);
+  expect(report.removed).toEqual([expect.objectContaining({ path: dir, pr: null, preservation: "remote-ref" })]);
   expect(fs.existsSync(dir)).toBe(false);
   expect(fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "worktree-map.json"))).toBe(true);
 });
@@ -1152,15 +1562,15 @@ test("retention, local-only commits and stale remote-tracking refs preserve fini
   expect(branchExists(root, "pipeline/local")).toBe(true);
 });
 
-test.each(["merge-batch", "review-export", "attribution"])("an unowned %s checkout under a temp root follows the same retention and remote proof", async role => {
+test.each(["merge-batch", "review-export", "attribution"])("with the foreign opt-in, an unrecorded %s checkout under a temp root follows the same retention and remote proof", async role => {
   const root = repository(); remoteRepository(root);
   const temp = path.join(caseDir, "tmp");
   const dir = path.join(temp, `llv-${role}-fixture/checkout`);
   git(["worktree", "add", "--detach", dir, "main"], root);
-  const first = await sweepMergedWorktrees(ports({ repositories: [root], tempRoots: [temp], now: () => RETAIN_NOW }));
+  const first = await sweepMergedWorktrees(ports({ foreign: true, repositories: [root], tempRoots: [temp], now: () => RETAIN_NOW }));
   expect(first.removed).toHaveLength(0);
   expect(first.kept).toEqual([expect.objectContaining({ path: dir, reason: "retention", firstSettledAt: first.at })]);
-  const options = ports({ repositories: [root], tempRoots: [temp], previous: first, now: () => RETAIN_NOW + FINISHED_WORKTREE_RETENTION_MS });
+  const options = ports({ foreign: true, repositories: [root], tempRoots: [temp], previous: first, now: () => RETAIN_NOW + FINISHED_WORKTREE_RETENTION_MS });
   const dry = await sweepMergedWorktrees({ ...options, mode: "dry-run" });
   expect(dry.removed).toHaveLength(1);
   expect(fs.existsSync(dir)).toBe(true);
@@ -1427,7 +1837,7 @@ test("past retention, a remote that does not answer proves nothing and the check
   expect(branchExists(root, "pipeline/offline")).toBe(true);
 });
 
-test("a retained lane whose HEAD equals its base releases its checkout and keeps its branch", async () => {
+test("a retained lane whose base is local keeps its checkout and branch", async () => {
   const root = repository();
   git(["commit", "-q", "--allow-empty", "-m", "local base"], root);
   const dir = path.join(caseDir, "widgets-pipeline-localbase");
@@ -1436,7 +1846,9 @@ test("a retained lane whose HEAD equals its base releases its checkout and keeps
   git(["remote", "set-url", "origin", path.join(caseDir, "no-such-remote.git")], root);
   const owner = pipeline({ id: "localbase", repoDir: root, worktreeDir: dir, branch: "pipeline/localbase", baseRef, closedAt: OLD_TERMINAL });
   const report = await sweepMergedWorktrees(ports({ pipelines: [owner], now: () => RETAIN_NOW }));
-  expect(report.removed).toEqual([expect.objectContaining({ path: dir, preservation: "base" })]);
+  expect(report.removed).toEqual([]);
+  expect(report.kept[0]!.reason).toBe("local-only-commits");
+  expect(fs.existsSync(dir)).toBe(true);
   expect(branchExists(root, "pipeline/localbase")).toBe(true);
 });
 
@@ -1617,8 +2029,8 @@ test("a checkout made by hand outside a temp root is never retained, however old
   const root = repository(); remoteRepository(root);
   const dir = path.join(caseDir, "hand-made");
   git(["worktree", "add", "-q", "--detach", dir, "main"], root);
-  const first = await sweepMergedWorktrees(ports({ repositories: [root], now: () => RETAIN_NOW }));
-  const later = await sweepMergedWorktrees(ports({ repositories: [root], previous: first, now: () => RETAIN_NOW + 10 * FINISHED_WORKTREE_RETENTION_MS }));
+  const first = await sweepMergedWorktrees(ports({ foreign: true, repositories: [root], now: () => RETAIN_NOW }));
+  const later = await sweepMergedWorktrees(ports({ foreign: true, repositories: [root], previous: first, now: () => RETAIN_NOW + 10 * FINISHED_WORKTREE_RETENTION_MS }));
   expect(later.removed).toEqual([]);
   expect(later.kept).toEqual([expect.objectContaining({ path: dir, reason: "no-merged-pr" })]);
   expect(later.kept[0]!.firstSettledAt).toBeUndefined();
@@ -1630,6 +2042,7 @@ test("activity restarts the retention clock of a role's temp checkout", async ()
   const temp = path.join(caseDir, "tmp");
   const dir = path.join(temp, "llv-merge-batch/checkout");
   git(["worktree", "add", "-q", "--detach", dir, "main"], root);
+  expect(recordWorktreeProvenance(dir, { creator: "merge-batch", id: "batch" })).toBe(true);
   const first = await sweepMergedWorktrees(ports({ repositories: [root], tempRoots: [temp], now: () => RETAIN_NOW }));
   const busy = await sweepMergedWorktrees(ports({ repositories: [root], tempRoots: [temp], previous: first, conversationCwds: () => [dir], now: () => RETAIN_NOW + FINISHED_WORKTREE_RETENTION_MS }));
   expect(busy.kept).toEqual([{ path: dir, reason: "live-conversation", bytes: expect.any(Number) }]);
@@ -1969,11 +2382,142 @@ test("a handmade checkout inside a temp root never gains role ownership", async 
   const temp = path.join(caseDir, "tmp");
   const dir = path.join(temp, "personal-checkout");
   git(["worktree", "add", "-q", "--detach", dir, "main"], root);
-  const first = await sweepMergedWorktrees(ports({ repositories: [root], tempRoots: [temp], now: () => RETAIN_NOW }));
-  const later = await sweepMergedWorktrees(ports({ repositories: [root], tempRoots: [temp], previous: first, now: () => RETAIN_NOW + 10 * FINISHED_WORKTREE_RETENTION_MS }));
+  const first = await sweepMergedWorktrees(ports({ foreign: true, repositories: [root], tempRoots: [temp], now: () => RETAIN_NOW }));
+  const later = await sweepMergedWorktrees(ports({ foreign: true, repositories: [root], tempRoots: [temp], previous: first, now: () => RETAIN_NOW + 10 * FINISHED_WORKTREE_RETENTION_MS }));
   expect(later.kept[0]!.reason).toBe("no-merged-pr");
   expect(later.kept[0]!.firstSettledAt).toBeUndefined();
   expect(fs.existsSync(dir)).toBe(true);
+});
+
+/** The creation record in a checkout's Git registration. */
+const provenanceFile = (dir: string) => path.join(git(["rev-parse", "--absolute-git-dir"], dir), WORKTREE_PROVENANCE_FILE);
+const BATCH_BRANCH = "merge-batch/22222222-2222-2222-2222-222222222222";
+
+/** Clean, merged, hand-made checkouts in every layout a Delegatus checkout
+    can have, including names and paths that look like Delegatus made them. */
+function handMadeCheckouts(root: string, temp: string) {
+  const layouts: [string, string][] = [
+    [path.join(caseDir, "widgets-pipeline-handmade"), "pipeline/handmade"],
+    [path.join(root, ".worktrees", "handmade"), "handmade/nested"],
+    [path.join(root, ".claude", "worktrees", "handmade"), "handmade/claude"],
+    [path.join(temp, "llv-review-export-handmade/checkout"), "handmade/role"],
+    [path.join(temp, "llv-merger-handmade/merge-batch-fixture/checkout"), BATCH_BRANCH],
+  ];
+  const lanes = layouts.map(([dir, branch], index) => ({ ...lane(root, dir, branch, true), branch, number: 300 + index }));
+  return { lanes, prs: lanes.map(made => merged(made.number, made.branch, made.tip)) };
+}
+
+test("a hand-made worktree whose branch has a merged PR survives every sweep while the foreign opt-in is off", async () => {
+  const root = repository();
+  const temp = path.join(caseDir, "tmp");
+  const { lanes, prs } = handMadeCheckouts(root, temp);
+  const tracked = lanes.map(made => git(["ls-files", "-s"], made.dir));
+  let previous: WorktreeSweepReport | null = null;
+  for (const at of [RETAIN_NOW, RETAIN_NOW + 2 * 3_600_000, RETAIN_NOW + FINISHED_WORKTREE_RETENTION_MS, RETAIN_NOW + 10 * FINISHED_WORKTREE_RETENTION_MS]) {
+    for (const mode of ["dry-run", "on"] as const) {
+      const report: WorktreeSweepReport = await sweepMergedWorktrees(ports({ mode, repositories: [root], tempRoots: [temp], prs, previous, now: () => at }));
+      expect(report.removed).toEqual([]);
+      expect(report.trimmed).toEqual([]);
+      expect(report.kept.map(kept => [kept.path, kept.reason]).sort()).toEqual(lanes.map(made => [made.dir, "not-created-by-delegatus"]).sort());
+      for (const kept of report.kept) expect(kept.detail).toStartWith("not created by Delegatus");
+      expect(report.keptCounts).toEqual({ "not-created-by-delegatus": lanes.length });
+      previous = report;
+    }
+  }
+  lanes.forEach((made, index) => {
+    expect(fs.existsSync(path.join(made.dir, "node_modules/dep/index.js"))).toBe(true);
+    expect(git(["ls-files", "-s"], made.dir)).toBe(tracked[index]!);
+  });
+  expect(fs.existsSync(path.join(process.env.LLV_STATE_DIR!, "worktree-map.json"))).toBe(false);
+});
+
+test("the foreign opt-in lets the same guards and proofs remove hand-made worktrees", async () => {
+  const root = repository();
+  const temp = path.join(caseDir, "tmp");
+  const { lanes, prs } = handMadeCheckouts(root, temp);
+  const dirty = lane(root, path.join(caseDir, "handmade-dirty"), "handmade/dirty", true);
+  fs.writeFileSync(path.join(dirty.dir, "notes.txt"), "not committed\n");
+  const report = await sweepMergedWorktrees(ports({ foreign: true, repositories: [root], tempRoots: [temp],
+    prs: [...prs, merged(399, "handmade/dirty", dirty.tip)], now: () => RETAIN_NOW }));
+  const batch = lanes.find(made => made.branch === BATCH_BRANCH)!;
+  expect(report.removed.map(removal => removal.path).sort()).toEqual(lanes.filter(made => made !== batch).map(made => made.dir).sort());
+  /* What held them before this setting existed holds them now. */
+  expect(Object.fromEntries(report.kept.map(kept => [kept.path, kept.reason]))).toEqual({ [batch.dir]: "retention", [dirty.dir]: "uncommitted" });
+  expect(fs.readFileSync(path.join(dirty.dir, "notes.txt"), "utf8")).toBe("not committed\n");
+});
+
+test("a Delegatus-created worktree is still retired: by its creation record, or by its pipeline from before records existed", async () => {
+  const root = repository();
+  const recorded = lane(root, path.join(caseDir, "recorded"), "wf/recorded");
+  /* A pipeline lane provisioned before creation records existed. */
+  const legacy = lane(root, path.join(caseDir, "widgets-pipeline-legacy"), "pipeline/legacy");
+  fs.rmSync(provenanceFile(legacy.dir));
+  expect(readWorktreeProvenance(legacy.dir)).toBeNull();
+  const report = await sweepMergedWorktrees(ports({ repositories: [root],
+    pipelines: [pipeline({ repoDir: root, worktreeDir: legacy.dir, branch: "pipeline/legacy" })],
+    prs: [merged(401, "wf/recorded", recorded.tip), merged(402, "pipeline/legacy", legacy.tip)] }));
+  expect(report.kept).toEqual([]);
+  expect(report.removed.map(removal => removal.path).sort()).toEqual([recorded.dir, legacy.dir].sort());
+  for (const dir of [recorded.dir, legacy.dir]) expect(fs.existsSync(dir)).toBe(false);
+});
+
+test("a merge batch checkout from before creation records is retired only while its state names it", async () => {
+  const batch = mergerBatch();
+  fs.rmSync(provenanceFile(batch.dir));
+  const orphaned = await sweepMergedWorktrees(batch.options);
+  expect(orphaned.kept).toEqual([expect.objectContaining({ path: batch.dir, reason: "not-created-by-delegatus" })]);
+  batch.state.rows[1]!.status = "needs-review";
+  batch.save();
+  const first = await sweepMergedWorktrees(batch.options);
+  expect(first.kept).toEqual([expect.objectContaining({ path: batch.dir, reason: "retention" })]);
+  const after = await sweepMergedWorktrees({ ...batch.options, previous: first, now: () => RETAIN_NOW + FINISHED_WORKTREE_RETENTION_MS });
+  expect(after.removed.map(removal => removal.path)).toEqual([batch.dir]);
+});
+
+test("a creation record proves only the registration it was written for", async () => {
+  const root = repository();
+  const made = lane(root, path.join(caseDir, "made"), "wf/made");
+  const handMade = lane(root, path.join(caseDir, "copied-record"), "handmade/copied", true);
+  fs.copyFileSync(provenanceFile(made.dir), provenanceFile(handMade.dir));
+  expect(readWorktreeProvenance(handMade.dir)).toBeNull();
+  /* A record of another repository's registration proves nothing here. */
+  const other = path.join(caseDir, "other");
+  fs.mkdirSync(other);
+  git(["init", "-q", "-b", "main"], other);
+  expect(readWorktreeProvenance(made.dir, { commonDir: path.join(other, ".git") })).toBeNull();
+  expect(readWorktreeProvenance(made.dir, { commonDir: path.join(root, ".git") })).toMatchObject({ creator: "workflow", id: "wf-wf/made" });
+  /* A moved checkout no longer matches what Git wrote at creation. */
+  const moved = lane(root, path.join(caseDir, "before-move"), "wf/moved");
+  const target = path.join(caseDir, "after-move");
+  git(["worktree", "move", moved.dir, target], root);
+  expect(readWorktreeProvenance(target)).toBeNull();
+  /* A malformed record is no record. */
+  const malformed = lane(root, path.join(caseDir, "malformed"), "wf/malformed");
+  fs.writeFileSync(provenanceFile(malformed.dir), "{");
+  const report = await sweepMergedWorktrees(ports({ repositories: [root], prs: [merged(501, "handmade/copied", handMade.tip),
+    merged(502, "wf/moved", moved.tip), merged(503, "wf/malformed", malformed.tip)] }));
+  expect(Object.fromEntries(report.kept.map(kept => [kept.path, kept.reason]))).toEqual({ [made.dir]: "no-merged-pr",
+    [handMade.dir]: "not-created-by-delegatus", [target]: "not-created-by-delegatus", [malformed.dir]: "not-created-by-delegatus" });
+  expect(report.removed).toEqual([]);
+});
+
+test("the creation record is written once, and a retry keeps the first one", () => {
+  const root = repository();
+  const dir = path.join(caseDir, "once");
+  git(["worktree", "add", "-q", "-b", "wf/once", dir, "main"], root);
+  expect(recordWorktreeProvenance(dir, { creator: "pipeline", id: "first" }, new Date(0))).toBe(true);
+  expect(recordWorktreeProvenance(dir, { creator: "pipeline", id: "second" }, new Date(1))).toBe(true);
+  expect(readWorktreeProvenance(dir)).toEqual({ version: 1, creator: "pipeline", id: "first", gitdir: path.join(fs.realpathSync(dir), ".git"), createdAt: new Date(0).toISOString() });
+  expect(fs.readdirSync(path.dirname(provenanceFile(dir))).filter(name => name.endsWith(".tmp"))).toEqual([]);
+  /* Neither the main checkout nor a missing path takes a record. */
+  expect(recordWorktreeProvenance(root, { creator: "pipeline", id: "main" })).toBe(false);
+  expect(recordWorktreeProvenance(path.join(caseDir, "absent"), { creator: "pipeline", id: "absent" })).toBe(false);
+});
+
+test("the foreign opt-in reads on only when set to on", () => {
+  expect(worktreeSweepForeign({})).toBe(false);
+  for (const value of ["", "0", "off", "false", "no", "yes please"]) expect(worktreeSweepForeign({ LLV_WORKTREE_SWEEP_FOREIGN: value })).toBe(false);
+  for (const value of ["1", "on", "true", " ON "]) expect(worktreeSweepForeign({ LLV_WORKTREE_SWEEP_FOREIGN: value })).toBe(true);
 });
 
 for (const idle of [false, true]) test.skipIf(process.platform !== "linux")(`host temp role checkouts with idle host ${idle} use namespace Git and preserve local work`, async () => {
@@ -1986,6 +2530,8 @@ for (const idle of [false, true]) test.skipIf(process.platform !== "linux")(`hos
   const canonical = path.join(canonicalRoot, "llv-host-role/checkout");
   const actual = path.join(proc, "root", canonical);
   git(["worktree", "add", "-q", "--detach", actual, "main"], root);
+  // Read back through the namespace view: the record proves who made it.
+  expect(recordWorktreeProvenance(actual, { creator: "merge-batch", id: "host-role" })).toBe(true);
   const patches: { mockRestore(): void }[] = [];
   {
     const readlink = fs.readlinkSync;
@@ -2091,7 +2637,7 @@ test.each(["role", "pipeline"])("activity while a %s checkout is young restarts 
   const dir = kind === "role" ? path.join(temp, "llv-review-export/checkout") : path.join(caseDir, "widgets-pipeline-retained");
   git(["worktree", "add", "-q", "--detach", dir, "main"], root);
   const owner = pipeline({ repoDir: root, worktreeDir: dir, branch: "", closedAt: new Date(RETAIN_NOW).toISOString() });
-  const options = ports({ repositories: [root], pipelines: kind === "pipeline" ? [owner] : [], tempRoots: [temp], now: () => RETAIN_NOW });
+  const options = ports({ foreign: kind === "role", repositories: [root], pipelines: kind === "pipeline" ? [owner] : [], tempRoots: [temp], now: () => RETAIN_NOW });
   const first = await sweepMergedWorktrees(options);
   const busy = await sweepMergedWorktrees({ ...options, previous: first, conversationCwds: () => [dir], now: () => RETAIN_NOW + FINISHED_WORKTREE_RETENTION_MS - 60_000 });
   expect(busy.kept[0]!.reason).toBe("live-conversation");
@@ -2163,6 +2709,200 @@ test("a lane that settles again during measurement receives fresh retention", as
   expect(report.removed).toEqual([]);
   expect(report.kept[0]!.reason).toBe("retention");
   expect(fs.existsSync(dir)).toBe(true);
+});
+
+/* Operator decision 2026-10-21: a clean finished lane whose every commit a
+   remote advertises is freed one hour after it settles; anything else keeps
+   the four days. The clock is frozen; file times come from the stat port. */
+const HOUR = 3_600_000;
+const SETTLED = Date.parse("2026-10-10T08:00:00Z");
+const writtenAt = (at: () => number): NonNullable<WorktreeSweepPorts["inspect"]> => (dir, settings) =>
+  inspectTree(dir, { ...settings, stat: file => {
+    const stat = fs.lstatSync(file); stat.mtimeMs = at(); stat.ctimeMs = at(); return stat;
+  } });
+
+function pushedLane(name: string, push = true) {
+  const root = repository(); remoteRepository(root);
+  const branch = `pipeline/${name}`;
+  const { dir, tip } = lane(root, path.join(caseDir, `widgets-pipeline-${name}`), branch);
+  if (push) git(["push", "-q", "origin", branch], root);
+  const owner = pipeline({ repoDir: root, worktreeDir: dir, branch, state: "closed", closedAt: new Date(SETTLED).toISOString() });
+  return { root, branch, dir, tip, owner };
+}
+
+test("a clean finished lane whose commits are all on the remote is freed one hour after it settles, not before", async () => {
+  const { root, branch, dir, owner } = pushedLane("pushed");
+  const options = (at: number, previous?: WorktreeSweepReport) => ports({ pipelines: [owner], previous, now: () => at,
+    inspect: writtenAt(() => SETTLED - 10 * 60_000) });
+  const young = await sweepMergedWorktrees(options(SETTLED + HOUR - 1));
+  expect(young.removed).toEqual([]);
+  expect(young.kept).toEqual([expect.objectContaining({ path: dir, reason: "retention", firstSettledAt: owner.closedAt,
+    detail: `eligible after ${new Date(SETTLED + HOUR).toISOString()} when clean with every commit on a remote, otherwise after ${new Date(SETTLED + FINISHED_WORKTREE_RETENTION_MS).toISOString()}` })]);
+  expect(fs.existsSync(dir)).toBe(true);
+  const due = await sweepMergedWorktrees(options(SETTLED + HOUR, young));
+  expect(due.removed).toEqual([expect.objectContaining({ path: dir, pr: null, preservation: "remote-ref", branch, pipelineId: owner.id })]);
+  expect(fs.existsSync(dir)).toBe(false);
+  expect(git(["worktree", "list", "--porcelain"], root)).not.toContain(dir);
+  // The branch and its commit stay; only the checkout went.
+  expect(branchExists(root, branch)).toBe(true);
+  const map = worktreeMapStore.read(path.join(process.env.LLV_STATE_DIR!, "worktree-map.json")) as Record<string, { repo: string }>;
+  expect(map[dir]?.repo).toBe(fs.realpathSync(root));
+});
+
+test("a late delivery release starts a pushed lane's hour when the previous report does not list it", async () => {
+  const { root, branch, dir, owner } = pushedLane("late-release");
+  const releasedAt = SETTLED + 3 * HOUR - 5 * 60_000;
+  owner.delivery = {
+    target: { repository: REPOSITORY, remote: "origin", branch },
+    disposition: "owner", publish: "enabled", ownerId: owner.id, epoch: 1, active: false,
+    journal: [{ at: new Date(releasedAt).toISOString(), kind: "release", ownerId: owner.id, epoch: 1,
+      conversationId: null, reason: "fixture delivery settled" }],
+  };
+  const options = (at: number) => ports({ pipelines: [owner], previous: null, now: () => at,
+    inspect: writtenAt(() => SETTLED - 10 * 60_000) });
+
+  const beforeReleaseGrace = await sweepMergedWorktrees(options(releasedAt + HOUR - 1));
+  expect(beforeReleaseGrace.removed).toEqual([]);
+  expect(beforeReleaseGrace.kept).toEqual([expect.objectContaining({ path: dir, reason: "retention",
+    firstSettledAt: new Date(releasedAt).toISOString() })]);
+  expect(fs.existsSync(dir)).toBe(true);
+
+  const due = await sweepMergedWorktrees(options(releasedAt + HOUR));
+  expect(due.removed).toEqual([expect.objectContaining({ path: dir, pr: null, preservation: "remote-ref", branch, pipelineId: owner.id })]);
+  expect(fs.existsSync(dir)).toBe(false);
+  expect(branchExists(root, branch)).toBe(true);
+});
+
+test("a clean finished lane with an unpushed commit keeps the four-day retention", async () => {
+  const { root, branch, dir, tip, owner } = pushedLane("unpushed", false);
+  let previous: WorktreeSweepReport | undefined;
+  for (const at of [SETTLED + HOUR, SETTLED + 3 * 24 * HOUR, SETTLED + FINISHED_WORKTREE_RETENTION_MS - 1]) {
+    previous = await sweepMergedWorktrees(ports({ pipelines: [owner], previous, now: () => at }));
+    expect(previous.removed).toEqual([]);
+    expect(previous.kept).toEqual([expect.objectContaining({ path: dir, reason: "retention", firstSettledAt: owner.closedAt,
+      detail: `eligible after ${new Date(SETTLED + FINISHED_WORKTREE_RETENTION_MS).toISOString()}; a commit of HEAD is in no ref a remote advertises` })]);
+  }
+  const retained = await sweepMergedWorktrees(ports({ pipelines: [owner], previous, now: () => SETTLED + FINISHED_WORKTREE_RETENTION_MS }));
+  expect(retained.kept[0]!.reason).toBe("local-only-commits");
+  expect(fs.existsSync(dir)).toBe(true);
+  expect(git(["rev-parse", `refs/heads/${branch}`], root)).toBe(tip);
+});
+
+test.each(["modified", "untracked"])("a pushed finished lane with %s files is kept past the hour", async change => {
+  const { dir, owner } = pushedLane(`dirty-${change}`);
+  if (change === "modified") fs.appendFileSync(path.join(dir, "README.md"), "local edit\n");
+  else fs.writeFileSync(path.join(dir, "notes.txt"), "not committed\n");
+  const report = await sweepMergedWorktrees(ports({ pipelines: [owner], now: () => SETTLED + 2 * HOUR }));
+  expect(report.removed).toEqual([]);
+  expect(report.kept).toEqual([expect.objectContaining({ path: dir, reason: "uncommitted" })]);
+  expect(fs.existsSync(dir)).toBe(true);
+});
+
+test("past its hour a pushed lane still yields to a live process and to an open owner", async () => {
+  const { root, branch, dir, owner } = pushedLane("guarded");
+  const sleeper = spawn("sleep", ["60"], { cwd: dir, stdio: "ignore" });
+  children.push(sleeper);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const held = await sweepMergedWorktrees(ports({ pipelines: [owner], now: () => SETTLED + 2 * HOUR, scan: () => scanProcesses() }));
+  expect(held.kept).toEqual([expect.objectContaining({ path: dir, reason: "in-use", detail: `pid ${sleeper.pid}` })]);
+  sleeper.kill("SIGKILL");
+  await new Promise((resolve) => sleeper.once("exit", resolve));
+  const reopened = pipeline({ id: "guarded-rerun", repoDir: root, worktreeDir: dir, branch, state: "running" });
+  const open = await sweepMergedWorktrees(ports({ pipelines: [owner, reopened], now: () => SETTLED + 2 * HOUR }));
+  expect(open.kept).toEqual([expect.objectContaining({ path: dir, reason: "open-pipeline" })]);
+  expect(fs.existsSync(dir)).toBe(true);
+});
+
+test("a pushed finished lane whose remote cannot be read is kept: unknown is protective", async () => {
+  const { root, dir, owner } = pushedLane("unreadable-remote");
+  git(["remote", "set-url", "origin", path.join(caseDir, "no-such-remote.git")], root);
+  let previous: WorktreeSweepReport | undefined;
+  for (const at of [SETTLED + HOUR, SETTLED + 2 * HOUR]) {
+    previous = await sweepMergedWorktrees(ports({ pipelines: [owner], previous, now: () => at }));
+    expect(previous.removed).toEqual([]);
+    expect(previous.kept).toEqual([expect.objectContaining({ path: dir, reason: "retention", firstSettledAt: owner.closedAt,
+      detail: `eligible after ${new Date(SETTLED + FINISHED_WORKTREE_RETENTION_MS).toISOString()}; no remote of the repository answered` })]);
+  }
+  expect(fs.existsSync(dir)).toBe(true);
+});
+
+test("fresh activity in a pushed finished lane restarts its hour", async () => {
+  const { dir, owner } = pushedLane("active");
+  let written = SETTLED - 10 * 60_000;
+  let talking: string[] = [];
+  let previous: WorktreeSweepReport | undefined;
+  const sweep = async (at: number) => (previous = await sweepMergedWorktrees(ports({ pipelines: [owner], previous, now: () => at,
+    conversationCwds: () => talking, inspect: writtenAt(() => written) })));
+  // A conversation resumes there before the hour is up.
+  talking = [dir];
+  expect((await sweep(SETTLED + 50 * 60_000)).kept[0]).toEqual(expect.objectContaining({ reason: "live-conversation" }));
+  expect(previous!.kept[0]!.firstSettledAt).toBeUndefined();
+  talking = [];
+  const restarted = SETTLED + 70 * 60_000;
+  expect((await sweep(restarted)).kept[0]).toEqual(expect.objectContaining({ reason: "retention", firstSettledAt: new Date(restarted).toISOString() }));
+  // A write inside the checkout within the hour is activity too.
+  written = restarted + 30 * 60_000;
+  expect((await sweep(restarted + HOUR)).kept[0]).toEqual(expect.objectContaining({ reason: "recent-writes" }));
+  expect(previous!.kept[0]!.firstSettledAt).toBeUndefined();
+  const quiet = restarted + 2 * HOUR;
+  expect((await sweep(quiet)).kept[0]).toEqual(expect.objectContaining({ reason: "retention", firstSettledAt: new Date(quiet).toISOString() }));
+  expect(fs.existsSync(dir)).toBe(true);
+  expect((await sweep(quiet + HOUR)).removed).toEqual([expect.objectContaining({ path: dir, preservation: "remote-ref" })]);
+  expect(fs.existsSync(dir)).toBe(false);
+});
+
+test("a pushed lane that settles again during measurement gets a fresh hour", async () => {
+  const { dir, owner } = pushedLane("resettled-hour");
+  const at = SETTLED + 2 * HOUR;
+  const report = await sweepMergedWorktrees(ports({ pipelines: [owner], now: () => at,
+    measure: async () => { owner.closedAt = new Date(at).toISOString(); return 10; } }));
+  expect(report.removed).toEqual([]);
+  expect(report.kept[0]).toEqual(expect.objectContaining({ reason: "retention", firstSettledAt: new Date(at).toISOString(),
+    detail: `eligible after ${new Date(at + HOUR).toISOString()} when clean with every commit on a remote, otherwise after ${new Date(at + FINISHED_WORKTREE_RETENTION_MS).toISOString()}` }));
+  expect(fs.existsSync(dir)).toBe(true);
+});
+
+test("a merged lane whose branch the remote still advertises leaves after its quiet hour", async () => {
+  const { branch, dir, tip, owner } = pushedLane("merged-pushed");
+  const options = (at: number) => ports({ pipelines: [owner], prs: [merged(15, branch, tip)], now: () => at, inspect: writtenAt(() => SETTLED + HOUR) });
+  expect((await sweepMergedWorktrees(options(SETTLED + 2 * HOUR - 1))).kept).toEqual([expect.objectContaining({ path: dir, reason: "recent-writes" })]);
+  const report = await sweepMergedWorktrees(options(SETTLED + 2 * HOUR));
+  expect(report.removed).toEqual([expect.objectContaining({ path: dir, pr: { number: 15, url: merged(15, "", "").url }, preservation: "merged-pr" })]);
+  expect(fs.existsSync(dir)).toBe(false);
+});
+
+test("the hour applies only to pipeline lanes a remote advertises: role checkouts and a merged lane whose branch is gone keep their old waits", async () => {
+  const { root, branch, dir, tip, owner } = pushedLane("merged-recent");
+  git(["push", "-q", "origin", "--delete", branch], root);
+  // The squash-merged lane's commit is on no advertised ref now, so a write
+  // two hours ago still meets the merged path's one-day quiet floor.
+  const merged14 = await sweepMergedWorktrees(ports({ pipelines: [owner], prs: [merged(14, branch, tip)],
+    now: () => SETTLED + 3 * HOUR, inspect: writtenAt(() => SETTLED + HOUR) }));
+  expect(merged14.kept).toEqual([expect.objectContaining({ path: dir, reason: "recent-writes" })]);
+  expect(fs.existsSync(dir)).toBe(true);
+  const temp = path.join(caseDir, "tmp");
+  const role = path.join(temp, "llv-review-export-fixture/checkout");
+  git(["worktree", "add", "--detach", role, "main"], root);
+  const first = await sweepMergedWorktrees(ports({ foreign: true, repositories: [root], tempRoots: [temp], now: () => SETTLED }));
+  const later = await sweepMergedWorktrees(ports({ foreign: true, repositories: [root], tempRoots: [temp], previous: first, now: () => SETTLED + 2 * HOUR }));
+  expect(later.kept).toContainEqual(expect.objectContaining({ path: role, reason: "retention",
+    detail: `eligible after ${new Date(SETTLED + FINISHED_WORKTREE_RETENTION_MS).toISOString()}` }));
+  expect(fs.existsSync(role)).toBe(true);
+});
+
+test("one pass reads each repository's remote once to screen its pushed lanes", async () => {
+  const root = repository(); remoteRepository(root);
+  const owners = ["a", "b", "c", "d"].map(name => {
+    const branch = `pipeline/screen-${name}`;
+    const { dir } = lane(root, path.join(caseDir, `screen-${name}`), branch);
+    return pipeline({ repoDir: root, worktreeDir: dir, branch, state: "completed", closedAt: new Date(SETTLED).toISOString() });
+  });
+  const base = ports({});
+  let lsRemote = 0;
+  const report = await sweepMergedWorktrees(ports({ pipelines: owners, now: () => SETTLED + 2 * HOUR,
+    git: async (args, cwd) => { if (args[0] === "ls-remote") lsRemote++; return base.git(args, cwd); } }));
+  expect(report.kept.map(kept => kept.reason)).toEqual(["retention", "retention", "retention", "retention"]);
+  expect(lsRemote).toBe(1);
 });
 
 
@@ -2277,7 +3017,7 @@ test("same-size hidden tracked edits with restored mtime survive the last Git re
 
 
 test.each(["native", "unrelated-docker-view", "docker-local-copy"])("a private agent mount view leaves %s cleanup on ordinary Git", async kind => {
-  const root = repository();
+  const root = repository(); remoteRepository(root);
   const mergedLane = lane(root, path.join(caseDir, "tmp/merged"), "topic/native-merged");
   const retained = path.join(caseDir, "tmp/retained");
   git(["worktree", "add", "-q", "--detach", retained, "main"], root);
@@ -2502,18 +3242,18 @@ for (const version of [0, 2, 4]) test(`an unsupported merger state version ${ver
   expect(fs.existsSync(batch.dir)).toBe(true);
 });
 
-for (const proof of ["base", "remote-ref"]) for (const timestamp of ["closedAt", "completedAt"]) test.each(["final-list", "final-status", "last-files"])(`late ${timestamp} during %s restarts retention with ${proof} preservation`, async phase => {
+for (const proof of ["published-base", "remote-ref"]) for (const timestamp of ["closedAt", "completedAt"]) test.each(["final-list", "final-status", "last-files"])(`late ${timestamp} during %s restarts retention with ${proof} preservation`, async phase => {
   const root = repository();
   const dir = path.join(caseDir, "widgets-pipeline-late-settle");
   const branch = "topic/late-settle";
-  if (proof === "base") git(["worktree", "add", "-q", "-b", branch, dir, "main"], root);
+  if (proof === "published-base") { remoteRepository(root); git(["worktree", "add", "-q", "-b", branch, dir, "main"], root); }
   else {
     lane(root, dir, branch);
     remoteRepository(root); git(["push", "-q", "origin", branch], root);
   }
   const attempt = { n: 1, state: "passed", completedAt: OLD_TERMINAL } as Pipeline["runs"][number]["attempts"][number];
   const owner = pipeline({ id: "late-settle", repoDir: root, worktreeDir: dir, branch,
-    ...(proof === "base" ? { baseRef: git(["rev-parse", "HEAD"], dir) } : {}),
+    ...(proof === "published-base" ? { baseRef: git(["rev-parse", "HEAD"], dir) } : {}),
     ...(timestamp === "closedAt" ? { closedAt: OLD_TERMINAL } : { runs: [{ attempts: [attempt] } as Pipeline["runs"][number]] }),
   });
   const ordinary = ports({ pipelines: [owner], now: () => RETAIN_NOW });
@@ -2647,4 +3387,302 @@ test("stale worktree cache trim tolerates only the quarantine root's real rename
     } }) }));
   expect(report.trimmed).toContainEqual(expect.objectContaining({ path: cache }));
   expect(fs.existsSync(cache)).toBeFalse();
+});
+
+
+test("a sweep slice bounds unchanged settled-lane scans and resumes after report reload", async () => {
+  const root = repository();
+  const dirs = Array.from({ length: 12 }, (_, n) => path.join(caseDir, `widgets-pipeline-${String(n).padStart(2, "0")}`));
+  for (const dir of dirs) fs.mkdirSync(dir);
+  const listing = [`worktree ${root}\0HEAD ${"a".repeat(40)}\0branch refs/heads/main\0\0`,
+    ...dirs.map(dir => `worktree ${dir}\0HEAD ${"a".repeat(40)}\0branch refs/heads/lane\0\0`)].join("");
+  let scans = 0;
+  const visited = new Set<string>();
+  const base = ports({ pipelines: dirs.map((dir, n) => pipeline({ id: String(n).padStart(2, "0"), repoDir: root, worktreeDir: dir, branch: "lane" })),
+    now: () => Date.parse("2026-10-22T00:00:00Z"), maxCandidates: 3,
+    scan: () => { scans++; return NO_PROCESSES; },
+    phase: (phase, directory) => { if (phase === "candidate" && directory) visited.add(directory); },
+  });
+  const git = base.git;
+  base.git = async (args, cwd) => args[0] === "worktree" && args[1] === "list"
+    ? { code: 0, stdout: listing, stderr: "" } : git(args, cwd);
+  for (let n = 0; n < 4; n++) {
+    scans = 0;
+    const report = await sweepMergedWorktrees(base);
+    expect(scans).toBe(1);
+    expect(report.progress?.visited).toBe(3);
+    // The next owner receives only the serialized report, with no in-memory cursor.
+    base.previous = JSON.parse(JSON.stringify(report));
+  }
+  expect([...visited].sort()).toEqual(dirs.sort());
+  // A constantly changing lane cannot starve the fair scan after discovery.
+  visited.clear();
+  for (let n = 0; n < 12; n++) {
+    base.pipelines[0]!.state = n % 2 ? "closed" : "running";
+    base.previous = JSON.parse(JSON.stringify(await sweepMergedWorktrees(base)));
+  }
+  expect([...visited].sort()).toEqual(dirs.sort());
+});
+
+test("pipeline base equality never authorizes deleting an unpublished commit", async () => {
+  const root = repository();
+  const target = lane(root, path.join(caseDir, "private-base"), "private-base");
+  const owner = pipeline({ repoDir: root, worktreeDir: target.dir, branch: "private-base", baseRef: target.tip,
+    closedAt: "2026-10-01T00:00:00Z" });
+  const report = await sweepMergedWorktrees(ports({ pipelines: [owner], now: () => Date.parse("2026-10-22T00:00:00Z") }));
+  expect(report.removed).toEqual([]);
+  expect(report.kept).toContainEqual(expect.objectContaining({ path: target.dir, reason: "local-only-commits" }));
+  expect(fs.existsSync(target.dir)).toBe(true);
+});
+
+
+test("a restarted sweep helper continues the persisted discovery queue", () => {
+  const visited = new Set<string>();
+  for (let n = 0; n < 4; n++) {
+    const child = spawnSync(process.execPath, [path.join(process.cwd(), "src/lib/pipelines/worktreeSweep.fixture.ts"), "--slice"], {
+      cwd: process.cwd(), env: { ...process.env, SWEEP_TEST_ROOT: caseDir }, encoding: "utf8", timeout: 20_000,
+    });
+    expect(child.status).toBe(0);
+    const response = JSON.parse(child.stdout);
+    expect(response.visited).toHaveLength(2);
+    for (const dir of response.visited) { expect(visited.has(dir)).toBe(false); visited.add(dir); }
+  }
+  expect(visited.size).toBe(8);
+});
+
+test("a slice's elapsed-work budget defers candidates without spending their retention", async () => {
+  const root = repository();
+  const first = lane(root, path.join(caseDir, "budget-a"), "budget-a");
+  const second = lane(root, path.join(caseDir, "budget-b"), "budget-b");
+  let clock = 0;
+  const report = await sweepMergedWorktrees(ports({ repositories: [root], maxCandidates: 8, timeBudgetMs: 10,
+    monotonicNow: () => clock, phase: phase => { if (phase === "candidate") clock += 10; } }));
+  expect(report.progress?.visited).toBe(1);
+  expect(report.progress?.complete).toBe(false);
+  expect(report.kept.filter(row => row.reason === "deferred")).toHaveLength(1);
+  expect(fs.existsSync(first.dir) && fs.existsSync(second.dir)).toBe(true);
+});
+
+
+test.each([false, true])("sweep continuation uses the persisted completion flag %s", async complete => {
+  const callbacks: Array<() => void> = [], delays: number[] = [];
+  startWorktreeSweep({ env: {}, firstDelayMs: 100, intervalMs: 60_000,
+    schedule: (callback, delay) => { callbacks.push(callback); delays.push(delay); return { unref() {} } as ReturnType<typeof setTimeout>; },
+    sweep: async () => ({ progress: { complete, visited: 1 } }),
+  });
+  callbacks[0]!();
+  await new Promise(resolve => setImmediate(resolve));
+  expect(delays).toEqual([100, complete ? 60_000 : 5000]);
+});
+
+
+test("repository rotation and independent cursors prevent unchanged repositories starving peers", async () => {
+  const roots = [path.join(caseDir, "repo-a"), path.join(caseDir, "repo-b")];
+  for (const root of roots) fs.mkdirSync(root);
+  const owners = roots.flatMap((root, r) => Array.from({ length: 4 }, (_, n) => {
+    const id = `${r}-${n}`, dir = `${root}-pipeline-${id}`;
+    fs.mkdirSync(dir);
+    return pipeline({ id, repoDir: root, worktreeDir: dir, branch: "lane" });
+  }));
+  const visited = new Set<string>();
+  const input = ports({ pipelines: owners, maxCandidates: 2,
+    git: async (args, cwd) => ({ code: 0, stderr: "", stdout: args[0] === "rev-parse" ? path.join(cwd, ".git")
+      : args[0] === "worktree" ? [cwd, ...owners.filter(owner => owner.repoDir === cwd).map(owner => owner.worktreeDir)]
+        .map(dir => `worktree ${dir}\0HEAD ${"a".repeat(40)}\0branch refs/heads/lane\0\0`).join("") : "" }),
+    phase: (phase, dir) => { if (phase === "candidate" && dir) { expect(visited.has(dir)).toBe(false); visited.add(dir); } },
+  });
+  for (let cycle = 0; cycle < 2; cycle++) {
+    visited.clear();
+    for (let n = 0; n < 4; n++) input.previous = JSON.parse(JSON.stringify(await sweepMergedWorktrees(input)));
+    expect(visited.size).toBe(8);
+  }
+});
+
+/** Repositories of closed lanes behind a fake Git, as the operator machine
+    shapes them: every lane registered, nothing on disk but its directory. */
+function closedLaneRepositories(repositories: number, lanes: number, closedAt: string) {
+  const roots = Array.from({ length: repositories }, (_, r) => path.join(caseDir, `shape-${r}`));
+  for (const root of roots) fs.mkdirSync(root);
+  const owners = roots.flatMap((root, r) => Array.from({ length: lanes }, (_, n) => {
+    const id = `${r}-${String(n).padStart(2, "0")}`, dir = `${root}-pipeline-${id}`;
+    fs.mkdirSync(dir);
+    return pipeline({ id, repoDir: root, worktreeDir: dir, branch: `lane-${id}`, state: "closed", closedAt });
+  }));
+  const git: WorktreeSweepPorts["git"] = async (args, cwd) => ({ code: 0, stderr: "", stdout: args[0] === "rev-parse" ? path.join(cwd, ".git")
+    : args[0] === "remote" && args[1] === "get-url" ? `https://github.com/${REPOSITORY}.git\n`
+    : args[0] === "worktree" ? [cwd, ...owners.filter(owner => owner.repoDir === cwd).map(owner => owner.worktreeDir)]
+      .map(dir => `worktree ${dir}\0HEAD ${"a".repeat(40)}\0branch refs/heads/lane\0\0`).join("") : "" });
+  return { roots, owners, git };
+}
+
+test("a slice whose discovery outlasts its budget still visits a candidate and drains the queue", async () => {
+  const { owners, git } = closedLaneRepositories(2, 8, "2026-10-22T00:00:00Z");
+  // The forge read alone spends more than the whole selection budget.
+  let clock = 0, forgeReads = 0;
+  const visited = new Set<string>();
+  const input = ports({ mode: "dry-run", pipelines: owners, git, timeBudgetMs: 1000, monotonicNow: () => clock,
+    now: () => Date.parse("2026-10-22T00:30:00Z"),
+    mergedPullRequests: () => { forgeReads++; clock += 1100; return []; },
+    // Three candidates spend the budget, so the slice ends inside the first repository.
+    phase: (phase, dir) => { if (phase === "candidate" && dir) { clock += 400; visited.add(dir); } },
+  });
+  let pending = Infinity;
+  for (let slice = 0; slice < 16; slice++) {
+    forgeReads = 0;
+    const report = await sweepMergedWorktrees(input);
+    expect(report.progress!.visited).toBeGreaterThanOrEqual(1);
+    // Once spent, the next repository's forge read waits for its own turn.
+    expect(forgeReads).toBe(1);
+    expect(report.progress!.pending.length).toBeLessThan(pending);
+    pending = report.progress!.pending.length;
+    input.previous = JSON.parse(JSON.stringify(report));
+    if (report.progress!.complete) break;
+  }
+  expect(input.previous!.progress!.complete).toBe(true);
+  expect(visited.size).toBe(16);
+});
+
+test("a zero-progress slice waits the normal interval instead of re-arming at five seconds", async () => {
+  const callbacks: Array<() => void> = [], delays: number[] = [];
+  startWorktreeSweep({ env: {}, firstDelayMs: 100, intervalMs: 60_000,
+    schedule: (callback, delay) => { callbacks.push(callback); delays.push(delay); return { unref() {} } as ReturnType<typeof setTimeout>; },
+    sweep: async () => ({ progress: { complete: false, visited: 0, pending: ["a"] } }),
+  });
+  callbacks[0]!();
+  await new Promise(resolve => setImmediate(resolve));
+  expect(delays).toEqual([100, 60_000]);
+});
+
+test("every lane whose retention ended is visited in the first sweep after its deadline", async () => {
+  const { owners, git } = closedLaneRepositories(1, 64, "2026-10-22T00:00:00Z");
+  let at = Date.parse("2026-10-22T00:30:00Z");
+  const visited = new Set<string>();
+  const input = ports({ mode: "dry-run", pipelines: owners, git, now: () => at,
+    phase: (phase, dir) => { if (phase === "candidate" && dir) visited.add(dir); } });
+  /** One hourly sweep: its first slice plus every continuation. */
+  const sweep = async () => {
+    visited.clear();
+    let slices = 0;
+    do {
+      input.previous = JSON.parse(JSON.stringify(await sweepMergedWorktrees(input)));
+      slices++;
+    } while (!input.previous!.progress!.complete && slices < 16);
+    return { slices, report: input.previous! };
+  };
+  const drained = await sweep();
+  expect(drained.slices).toBe(4);
+  expect(drained.report.kept.filter(row => row.reason === "retention")).toHaveLength(64);
+  // Each retention row records when it can change: the end of the lane's hour.
+  expect(new Set(Object.values(drained.report.progress!.due!))).toEqual(new Set([Date.parse("2026-10-22T01:00:00Z")]));
+
+  // Before the deadline an hourly sweep visits only its fair 16.
+  at = Date.parse("2026-10-22T00:50:00Z");
+  expect((await sweep()).slices).toBe(1);
+  expect(visited.size).toBe(16);
+
+  at = Date.parse("2026-10-27T00:00:00Z");
+  const expired = await sweep();
+  expect(visited.size).toBe(64);
+  expect(expired.slices).toBeLessThanOrEqual(4);
+  expect(expired.report.kept.filter(row => row.reason === "retention" && row.detail?.startsWith("eligible after 2026-10-22"))).toEqual([]);
+});
+
+test("a recent write is revisited when it ages past the quiet floor", async () => {
+  // Two slices drain 32 lanes without the fair cursor wrapping onto the busy one.
+  const { roots, owners, git } = closedLaneRepositories(1, 32, "2026-10-01T00:00:00Z");
+  const busy = owners[0]!.worktreeDir;
+  let at = Date.parse("2026-10-22T00:00:00Z");
+  const written = at - 60_000;
+  const visited = new Set<string>();
+  const input = ports({ mode: "dry-run", pipelines: owners, git, now: () => at,
+    inspect: (dir, settings) => inspectTree(dir, { ...settings, stat: file => {
+      const stat = fs.lstatSync(file); stat.mtimeMs = stat.ctimeMs = dir === busy ? written : 1; return stat;
+    } }),
+    phase: (phase, dir) => { if (phase === "candidate" && dir) visited.add(dir); } });
+  while (!input.previous?.progress?.complete) input.previous = JSON.parse(JSON.stringify(await sweepMergedWorktrees(input)));
+  expect(input.previous!.kept).toContainEqual(expect.objectContaining({ path: busy, reason: "recent-writes" }));
+  expect(input.previous!.progress!.due![busy]).toBe(written + 24 * 3_600_000);
+  // The fair cursor sits on it, so only its deadline can bring it back soon.
+  input.maxCandidates = 2;
+  const slice = async (time: number) => {
+    at = time;
+    visited.clear();
+    input.previous!.progress!.cursors![roots[0]!] = busy;
+    input.previous = JSON.parse(JSON.stringify(await sweepMergedWorktrees(input)));
+    return visited.has(busy);
+  };
+  expect(await slice(written + 24 * 3_600_000 - 1)).toBe(false);
+  expect(await slice(written + 24 * 3_600_000)).toBe(true);
+});
+
+test("lanes kept while the forge is down are all revisited by the first hourly sweep after it answers", async () => {
+  const { owners, git } = closedLaneRepositories(1, 32, "2026-10-22T00:00:00Z");
+  let at = Date.parse("2026-10-22T00:30:00Z");
+  let forge: MergedPullRequest[] | null = null;
+  const visited = new Set<string>();
+  const input = ports({ mode: "dry-run", pipelines: owners, git, now: () => at, mergedPullRequests: () => forge,
+    phase: (phase, dir) => { if (phase === "candidate" && dir) visited.add(dir); } });
+  const sweep = async () => {
+    visited.clear();
+    let slices = 0;
+    do {
+      input.previous = JSON.parse(JSON.stringify(await sweepMergedWorktrees(input)));
+      slices++;
+    } while (!input.previous!.progress!.complete && slices < 16);
+    return input.previous!;
+  };
+  const down = await sweep();
+  expect(down.keptCounts).toEqual({ "forge-unavailable": 32 });
+  // The earlier of the next hourly sweep and the end of the lanes' hour.
+  const due = down.progress!.due!;
+  expect(Object.keys(due)).toHaveLength(32);
+  expect(new Set(Object.values(due))).toEqual(new Set([Date.parse("2026-10-22T01:00:00Z")]));
+
+  forge = [];
+  at = Date.parse("2026-10-22T02:00:00Z");
+  const recovered = await sweep();
+  expect(visited.size).toBe(32);
+  expect(recovered.keptCounts["forge-unavailable"]).toBeUndefined();
+  expect(recovered.keptCounts).toEqual({ retention: 32 });
+});
+
+test("a lane past its hour kept while the forge is down is rechecked at the next hourly sweep", async () => {
+  const { owners, git } = closedLaneRepositories(1, 4, "2026-10-21T00:00:00Z");
+  const at = Date.parse("2026-10-22T00:30:00Z");
+  const report = await sweepMergedWorktrees(ports({ mode: "dry-run", pipelines: owners, git, now: () => at, mergedPullRequests: () => null }));
+  expect(report.keptCounts).toEqual({ "forge-unavailable": 4 });
+  // The four-day retention ends later than the next hourly sweep.
+  expect(new Set(Object.values(report.progress!.due!))).toEqual(new Set([at + 3_600_000]));
+});
+
+for (const failure of ["git status failed", "unreadable-tree"] as const) test(`a lane kept for a transient failure (${failure}) is revisited by the next hourly sweep`, async () => {
+  const { roots, owners, git } = closedLaneRepositories(1, 32, "2026-10-01T00:00:00Z");
+  const failing = owners[0]!.worktreeDir;
+  let at = Date.parse("2026-10-22T00:00:00Z");
+  const visited = new Set<string>();
+  const input = ports({ mode: "dry-run", pipelines: owners, now: () => at,
+    git: async (args, cwd) => failure === "git status failed" && args[0] === "status" && cwd === failing
+      ? { code: 128, stdout: "", stderr: "fatal: index file corrupt" } : git(args, cwd),
+    inspect: (dir, settings) => {
+      if (failure === "unreadable-tree" && dir === failing) throw new Error("EACCES");
+      return inspectTree(dir, { ...settings, stat: file => { const stat = fs.lstatSync(file); stat.mtimeMs = stat.ctimeMs = 1; return stat; } });
+    },
+    phase: (phase, dir) => { if (phase === "candidate" && dir) visited.add(dir); } });
+  while (!input.previous?.progress?.complete) input.previous = JSON.parse(JSON.stringify(await sweepMergedWorktrees(input)));
+  expect(input.previous!.kept).toContainEqual(failure === "unreadable-tree"
+    ? expect.objectContaining({ path: failing, reason: "unreadable-tree" })
+    : expect.objectContaining({ path: failing, reason: "uncommitted", detail: expect.stringContaining("git status failed") }));
+  expect(input.previous!.progress!.due![failing]).toBe(at + 3_600_000);
+  // The fair cursor sits on it, so only its due time can bring it back soon.
+  input.maxCandidates = 2;
+  const slice = async (time: number) => {
+    at = time;
+    visited.clear();
+    input.previous!.progress!.cursors![roots[0]!] = failing;
+    input.previous = JSON.parse(JSON.stringify(await sweepMergedWorktrees(input)));
+    return visited.has(failing);
+  };
+  const due = input.previous!.progress!.due![failing]!;
+  expect(await slice(due - 1)).toBe(false);
+  expect(await slice(due)).toBe(true);
 });

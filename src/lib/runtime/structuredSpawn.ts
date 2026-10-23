@@ -17,6 +17,7 @@ import { explicitLaunchProfileSandbox, launchProfileEngineReadOnly, type LaunchP
 import { learnedRulesForLaunchProfile, memoryStartIdentity } from "@/lib/memory/roleLaunch";
 import { codexNativeMemoryEnabled } from "@/lib/agent/codexSpawnPolicy";
 import type { SpawnAccountAdmission } from "@/lib/agent/accountLiveness";
+import { readClaudePermissionMode } from "@/lib/agent/claudePermissionMode";
 import { effectiveClaudePermissionMode, resolveCopilotBinary, type AgentEngine, type ResumeSpec } from "@/lib/agent/cli";
 import { identityMaterializationFence, resolveConversationAlias, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt, type StructuredHostColumns } from "@/lib/agent/registry";
 import { sessionKey, sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
@@ -61,6 +62,8 @@ import { TELEGRAM_GRANT_REVOKED_BEFORE_LAUNCH, TELEGRAM_SEAT_INACTIVE_BEFORE_LAU
 import { STAGED_RECOVERY_PREFIX, stagedLaunchRecovery, type StagedLaunchRecovery } from "./stagedRecovery";
 import type { SeatTickSources } from "@/lib/monitor/seatTickSources";
 import { RoleMemoryChanged, withCurrentRoleMemory, withoutStoredLessonsAsync } from "@/lib/memory/privacy";
+import { AttemptTempStore, type AttemptTempOwner } from "./attemptTempRetention";
+import { stateLockAttempt, waitForStateLock } from "@/lib/state/lockWait";
 import { roleMemoryRevisionToken, ROLE_MEMORY_CHANGED_MESSAGE } from "@/lib/memory/roleStore";
 
 export type SpawnedStructuredHost = EngineHost & {
@@ -162,7 +165,8 @@ function githubConfigDirectory(sourceEnv: NodeJS.ProcessEnv): string {
 
     Every pipeline stage (an explicit profile, either sandbox) runs with
     `TMPDIR` in its own scratch directory under `statePath("scratch")`, on the
-    disk the state lives on, and the directory goes with the host (#1957). A
+    disk the state lives on. Attempt settlement queues its retirement; live
+    process references and declared evidence hold it (#1957). A
     reviewer's export of the head it reviews, about a gigabyte with its
     dependencies, used to land in the shared temp filesystem and stay there
     until the quota ran out. A full-access Claude stage keeps its
@@ -173,8 +177,9 @@ export function materializeStructuredHostAccess(
   sourceEnv: NodeJS.ProcessEnv,
   capability: string | null,
   scratchParent?: string,
+  owner?: Pick<AttemptTempOwner, "pipelineId" | "launchId" | "retainUntilClose">,
 ): StructuredHostAccessMaterialization {
-  const baseEnv = {
+  const baseEnv: NodeJS.ProcessEnv = {
     ...sourceEnv,
     ...(capability ? { LLV_SPAWN_CAPABILITY: capability } : {}),
   };
@@ -193,11 +198,30 @@ export function materializeStructuredHostAccess(
   const resolvedScratchParent = scratchParent ?? statePath("scratch");
   fs.mkdirSync(resolvedScratchParent, { recursive: true, mode: 0o700 });
   const scratchDirectory = fs.mkdtempSync(path.join(resolvedScratchParent, restricted ? "llv-read-only-stage-" : "llv-stage-"));
+  let configDirectory: string | undefined;
   try {
     fs.chmodSync(scratchDirectory, 0o700);
     const temporaryDirectory = path.join(scratchDirectory, "tmp");
     fs.mkdirSync(temporaryDirectory, { mode: 0o700 });
-    const cleanup = () => fs.rmSync(scratchDirectory, { recursive: true, force: true });
+    if (owner) {
+      // The mounted home has the same path in the Viewer and agent mount
+      // namespaces. Container /tmp and host /tmp can name different inodes.
+      const configParent = path.join(sourceEnv.HOME || os.homedir(), ".cache", "delegatus", "attempt-temp");
+      fs.mkdirSync(configParent, { recursive: true, mode: 0o700 });
+      configDirectory = fs.mkdtempSync(path.join(configParent, "llv-stage-config-"));
+      const store = new AttemptTempStore();
+      try {
+        for (const directory of [scratchDirectory, configDirectory]) store.register({ ...owner, directory, createdAt: Date.now() });
+      } finally { store.close(); }
+    }
+    const cleanup = owner ? () => {
+      try {
+        const store = new AttemptTempStore();
+        try { for (const directory of [scratchDirectory, configDirectory!]) store.release(directory); }
+        finally { store.close(); }
+      } catch { console.error("[attempt temp] release checkpoint deferred to settlement tick"); }
+    } : () => fs.rmSync(scratchDirectory, { recursive: true, force: true });
+    if (configDirectory) baseEnv.LLV_AGENT_SANDBOX_ROOT = configDirectory;
     if (!restricted) {
       return {
         env: {
@@ -236,8 +260,22 @@ export function materializeStructuredHostAccess(
     };
   } catch (error) {
     fs.rmSync(scratchDirectory, { recursive: true, force: true });
+    if (configDirectory) fs.rmSync(configDirectory, { recursive: true, force: true });
     throw error;
   }
+}
+
+function tempOwnerForSpawn(input: StructuredSpawnInput) {
+  const memberships = input.registry.readOnlySnapshot().memberships[input.registry.canonicalConversationId(input.receipt.conversationId)] ?? [];
+  const owners = memberships.filter(member => member.kind === "pipeline");
+  // Two lanes cannot both own one attempt root. An ambiguous conversation
+  // keeps the unowned contract: its scratch goes with the host.
+  return owners.length === 1 ? { pipelineId: owners[0]!.containerId, launchId: input.receipt.launchId, retainUntilClose: false } : undefined;
+}
+
+async function materializeAttemptAccess(input: StructuredSpawnInput, capability: string | null) {
+  return waitForStateLock("temp.attempt-register", () => stateLockAttempt("temp.attempt-register", () =>
+    materializeStructuredHostAccess(structuredHostAccessPolicy(input.spec.launchProfile), input.account.env, capability, undefined, tempOwnerForSpawn(input))));
 }
 
 /** Runtime admission calls carry the durable launch id as their idempotency
@@ -2046,13 +2084,13 @@ export async function startCopilotStructuredHost(
   capability: string,
   overrides: Partial<CopilotAcpHostOptions> = {},
 ): Promise<CopilotAcpHost> {
-  const profile = input.spec.launchProfile ?? {} as LaunchProfile;
   const resumeSessionId = structuredResumeSessionId(input);
   const initialEventCursor = resumeSessionId
     ? input.registry.readOnlySnapshot().entries[sessionKeyId({ engine: "copilot", sessionId: resumeSessionId })]?.structuredHost?.eventCursor
     : undefined;
-  const access = materializeStructuredHostAccess(structuredHostAccessPolicy(profile), input.account.env, capability);
+  const access = await materializeAttemptAccess(input, capability);
   const options = { ...copilotHostOptions(input, access, initialEventCursor), ...overrides };
+  await input.authorize?.();
   return resumeSessionId
     ? await CopilotAcpHost.adopt(resumeSessionId, options)
     : await CopilotAcpHost.start(options);
@@ -2087,7 +2125,8 @@ export async function claudeStructuredHostOptions(
         : input.account.claudeProvider.model
       : profile.model ?? undefined,
     effort: profile.effort ?? undefined,
-    permissionMode: effectiveClaudePermissionMode(profile),
+    permissionMode: effectiveClaudePermissionMode({ ...profile, permissionMode: profile.permissionMode
+      ?? (profile.readOnly ? "plan" : await readClaudePermissionMode(input.spec.transcript)) }),
     initialEventCursor,
     env: access.env,
     ...access.host,
@@ -2134,7 +2173,7 @@ export async function defaultStartHost(
     && (!Number.isSafeInteger(initialEventCursor) || initialEventCursor < 0)) {
     throw new Error("structured resume event cursor is invalid");
   }
-  const access = materializeStructuredHostAccess(structuredHostAccessPolicy(profile), input.account.env, capability);
+  const access = await materializeAttemptAccess(input, capability);
   const env = access.env;
   if (input.engine === "codex") {
     const nativeMemoryEnabled = await codexNativeMemoryEnabled(input.account.home, profile.allowSubagents, profile.cleanMemory === true);

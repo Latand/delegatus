@@ -13,19 +13,23 @@ import { claudeProviderForHome, claudeProviderLauncherPath, claudeSettingsPath, 
 import { homeDirectory } from "@/lib/platformHome";
 import { agentCodexPublicationArgs, agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
 import { readCodexShellPolicy } from "@/lib/git/codexShellPolicy";
-import { codexTerminalMemorySetup } from "@/lib/memory/hook";
+import { codexMemoryHookArgs, installCodexMemoryHook } from "@/lib/memory/hook";
 import { isUnderClaudeSubagentsDir } from "@/lib/scanner/claudeNative";
 import { telegramSessionReaderPath } from "@/lib/telegram/packaging";
 import { TELEGRAM_CONNECTOR_TOKEN_ENV, telegramSessionPath } from "@/lib/telegram/sessionStore";
 
 import { claudeTranscriptPath, headCwd } from "./transcript";
+import { normalizedClaudePermissionMode, readClaudePermissionModeSync } from "./claudePermissionMode";
 import { grantedMcpServers } from "./mcpAllowlist";
 import { grantedPlugins } from "./pluginAllowlist";
 import { normalizeClaudeLaunchModel } from "./models";
-import { applyClaudeSpawnPolicy, claudeSpawnPolicyPaths, VIEWER_SPAWN_CAPABILITY_ENV } from "./spawnPolicy";
-import { explicitLaunchProfileSandbox, launchProfileEngineReadOnly, type LaunchProfile } from "@/lib/accounts/migration/contracts";
+import {
+  applyClaudeSpawnPolicy, claudeSpawnPolicyPaths, viewerMcpHttpCodexEntry,
+  viewerMcpServerEntry, viewerMcpTransportForLaunch, VIEWER_SPAWN_CAPABILITY_ENV,
+} from "./spawnPolicy";
+import { explicitLaunchProfileSandbox, launchProfileCodexSandbox, launchProfileEngineReadOnly, type LaunchProfile } from "@/lib/accounts/migration/contracts";
 import { codexSubagentArgs } from "./codexSpawnPolicy";
-import { codexProcessCleanupArgs } from "./processCleanupPolicy";
+import { codexProcessCleanupArgs, codexProcessCleanupConfig } from "./processCleanupPolicy";
 
 export { ENGINE_EFFORTS, isEngineEffort } from "./efforts";
 
@@ -82,6 +86,10 @@ export function resolveBinary(name: string): string {
     }
   }
   return findAgentBinary(name, { home }) ?? name;
+}
+
+function resolveCodexBinary(hostTerminal = false): string {
+  return process.env.LLV_CODEX_BINARY?.trim() || (hostTerminal ? resolveHostBinary : resolveBinary)("codex");
 }
 
 /** Binary path as the OPERATOR'S OWN terminal resolves it. Inside the runtime
@@ -148,7 +156,7 @@ export interface ResumeSpec {
   printMode?: true;
   launchProfile?: LaunchProfile;
   /** Only legacy launches probe native policy; structured hosts read it themselves. */
-  codexPublication?: { home: string; command: string; mcpServers: string[]; subcommand?: string };
+  codexPublication?: { home: string; command: string; mcpServers: string[]; operatorDecisionForms?: boolean; subcommand?: string; viewerMcpArgs?: string };
   claudeTerminalPolicy?: { home: string; options: Parameters<typeof applyClaudeSpawnPolicy>[1] };
 }
 
@@ -156,7 +164,7 @@ export async function prepareAgentPublicationSpec(spec: ResumeSpec): Promise<Res
   const input = spec.codexPublication;
   if (!input) return spec;
   const source = { ...process.env, CODEX_HOME: input.home };
-  const policy = await readCodexShellPolicy(process.env.LLV_CODEX_BINARY ?? resolveBinary("codex"), spec.cwd, source);
+  const policy = await readCodexShellPolicy(resolveCodexBinary(), spec.cwd, source);
   const args = agentCodexPublicationArgs(policy, source).map(shellQuote).join(" ");
   return { ...spec, command: telegramScopedCommand(`${codexEnvPrefix(input.home, input.mcpServers)} ${input.command} ${args}${input.subcommand ?? ""}`, input.mcpServers) };
 }
@@ -166,17 +174,34 @@ export function withSpawnCapability(spec: ResumeSpec, capability: string, source
   const identity = Object.entries(agentPublicationIdentityEnv(source))
     .map(([key, value]) => `${key}=${shellQuote(value!)}; export ${key};`).join(" ");
   const publicationEnv = { ...source, LLV_SPAWN_CAPABILITY: capability };
-  let memorySetup = "";
+  let command = spec.command;
   try {
     if (spec.claudeTerminalPolicy) {
       const policy = spec.claudeTerminalPolicy;
       applyClaudeSpawnPolicy(policy.home, { ...policy.options, publicationEnv });
     }
-    if (spec.codexPublication) memorySetup = codexTerminalMemorySetup(spec.codexPublication.home, spec.cwd, resolveHostBinary("codex"), publicationEnv);
+    if (spec.codexPublication && !spec.launchProfile?.cleanMemory) {
+      const input = spec.codexPublication;
+      const hook = installCodexMemoryHook(input.home, publicationEnv);
+      if (hook) {
+        const policy = input.operatorDecisionForms ? codexOperatorQuestionPolicy(input.home).config : codexProcessCleanupConfig(input.home);
+        const args = codexMemoryHookArgs(hook, policy.hooks.state).map(shellQuote).join(" ");
+        command = command.replace(input.command, `${input.command} ${args}`);
+      }
+    }
   } catch { /* optional memory setup cannot stop terminal launch */ }
+  if (spec.codexPublication?.viewerMcpArgs) {
+    // Terminal HTTP remains opt-in. Select only after the receipt capability
+    // exists, using the same access-gate check as structured hosts. Existing
+    // registrations retain their transport: Codex merges their fields.
+    const requested = source.DELEGATUS_MCP_TRANSPORT ?? source.LLV_MCP_TRANSPORT;
+    const flag = { ...source, LLV_MCP_TRANSPORT: requested?.trim() || "stdio" };
+    const transport = viewerMcpTransportForLaunch(publicationEnv, flag);
+    if (transport === "http") command = command.replace(spec.codexPublication.viewerMcpArgs, codexViewerMcpArgs(transport, flag));
+  }
   return {
     ...spec,
-    command: `( ${VIEWER_SPAWN_CAPABILITY_ENV}=${shellQuote(capability)}; export ${VIEWER_SPAWN_CAPABILITY_ENV}; ${identity} ${memorySetup} ${spec.command} )`,
+    command: `( ${VIEWER_SPAWN_CAPABILITY_ENV}=${shellQuote(capability)}; export ${VIEWER_SPAWN_CAPABILITY_ENV}; ${identity} ${command} )`,
   };
 }
 
@@ -256,6 +281,9 @@ export interface ResumeSpecOptions {
   serviceTier?: string | null;
   /** Execution policy inherited from the generation being replaced. */
   readOnly?: boolean | null;
+  /** Explicit execution sandbox. When present, repository readOnly metadata
+      must not be reinterpreted as an engine restriction. */
+  sandbox?: LaunchProfile["sandbox"];
   permissionMode?: string | null;
   allowSubagents?: boolean;
   operatorDecisionForms?: boolean;
@@ -293,7 +321,7 @@ function configuredCodexMcpServers(home: string, cwd: string): string[] {
   const env: NodeJS.ProcessEnv = { ...process.env, CODEX_HOME: home };
   delete env.LLV_TOKEN;
   // eslint-disable-next-line no-restricted-syntax -- Legacy terminal-launch MCP discovery invoked by serving launch controls.
-  const listed = spawnSync(process.env.LLV_CODEX_BINARY ?? resolveBinary("codex"), ["-c", "features.plugins=false", "mcp", "list", "--json"], {
+  const listed = spawnSync(resolveCodexBinary(), ["-c", "features.plugins=false", "mcp", "list", "--json"], {
     cwd,
     env,
     encoding: "utf8",
@@ -311,9 +339,24 @@ function configuredCodexMcpServers(home: string, cwd: string): string[] {
   throw new Error("Codex MCP configuration could not be enumerated safely");
 }
 
-function codexMcpRuntimeOverrides(home: string, cwd: string, allowlist: readonly string[]): string[] {
+function codexViewerMcpArgs(transport: "stdio" | "http", source: NodeJS.ProcessEnv = process.env): string {
+  const entry = transport === "http" ? viewerMcpHttpCodexEntry(source)
+    : { ...viewerMcpServerEntry(process.cwd(), source), env_vars: [VIEWER_SPAWN_CAPABILITY_ENV] };
+  // Codex's -c parser accepts TOML leaves. Header and environment keys may
+  // contain punctuation, so quote them rather than treating them as paths.
+  const leaves = (prefix: string, values: Record<string, unknown>): string[] => Object.entries(values).flatMap(([key, value]) => {
+    const name = `${prefix}.${/^[A-Za-z0-9_-]+$/.test(key) ? key : JSON.stringify(key)}`;
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? leaves(name, value as Record<string, unknown>) : [`${name}=${JSON.stringify(value)}`];
+  });
+  return leaves("mcp_servers.viewer", { ...entry, enabled: true, default_tools_approval_mode: "approve" })
+    .map(override => `-c ${shellQuote(override)}`).join(" ");
+}
+
+function codexMcpRuntimeOverrides(home: string, cwd: string, allowlist: readonly string[]): { overrides: string[]; viewerMcpArgs: string } {
   const enabled = new Set(allowlist);
-  return [
+  const configured = configuredCodexMcpServers(home, cwd);
+  const overrides = [
     /* Plugin-contributed servers (computer-use, github, …) carry no
        `[mcp_servers.*]` block in config.toml, so a fabricated
        `mcp_servers.<name>.enabled` override for them leaves codex a server
@@ -322,11 +365,12 @@ function codexMcpRuntimeOverrides(home: string, cwd: string, allowlist: readonly
        and the enumeration runs under the same flag so the override list can
        never name a plugin server. */
     "features.plugins=false",
-    ...configuredCodexMcpServers(home, cwd).map((name) => {
+    ...configured.map((name) => {
       const key = /^[A-Za-z0-9_-]+$/.test(name) ? name : JSON.stringify(name);
       return `mcp_servers.${key}.enabled=${enabled.has(name)}`;
     }),
   ];
+  return { overrides, viewerMcpArgs: configured.includes("viewer") ? "" : codexViewerMcpArgs("stdio") };
 }
 
 function pushClaudePolicyArgs(
@@ -340,10 +384,10 @@ function pushClaudePolicyArgs(
 }
 
 export function effectiveClaudePermissionMode(
-  options: Pick<ResumeSpecOptions, "readOnly" | "permissionMode">,
+  options: Pick<ResumeSpecOptions, "readOnly" | "sandbox" | "permissionMode">,
 ): string {
-  if (options.permissionMode) return options.permissionMode;
-  return options.readOnly ? "plan" : "bypassPermissions";
+  return normalizedClaudePermissionMode(options.permissionMode)
+    ?? (launchProfileEngineReadOnly(options) ? "plan" : "default");
 }
 
 /** Boot spec for a brand-new agent (no prior conversation) in a chosen directory. */
@@ -358,7 +402,9 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
     const args = [resolveBinary("claude")];
     /* Read-only rounds must not inherit the skip-permissions bypass: with it,
        denying Edit/Write still leaves Bash free to mutate the worktree. */
-    const permissionMode = effectiveClaudePermissionMode(options);
+    const permissionMode = effectiveClaudePermissionMode({
+      ...options, permissionMode: options.permissionMode ?? (options.readOnly ? "plan" : "bypassPermissions"),
+    });
     if (options.readOnly) args.push("--permission-mode", permissionMode, "--disallowedTools", `Edit,Write,NotebookEdit${options.operatorDecisionForms ? ",AskUserQuestion,ExitPlanMode" : ""}`);
     else if (permissionMode === "bypassPermissions") args.push("--dangerously-skip-permissions");
     else args.push("--permission-mode", permissionMode);
@@ -457,12 +503,13 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
       },
     };
   }
-  const args = [resolveBinary("codex")];
+  const args = [resolveCodexBinary()];
   if (engineMemoryOff(options)) args.push("-c", "features.memories=false");
   const home = options.codexHome ?? accountForSpawn().home;
   args.push(...agentCodexPublicationArgs({}, process.env));
   if (isManagedCodexHome(home)) args.push("-c", "cli_auth_credentials_store=file");
-  for (const override of codexMcpRuntimeOverrides(home, cwd, mcpServers)) args.push("-c", override);
+  const mcp = codexMcpRuntimeOverrides(home, cwd, mcpServers);
+  for (const override of mcp.overrides) args.push("-c", override);
   if (options.model) args.push("-m", options.model);
   if (options.effort) args.push("-c", `model_reasoning_effort=${options.effort}`);
   if (options.serviceTier) args.push("-c", `service_tier=${options.serviceTier === "standard" ? "default" : options.serviceTier}`);
@@ -471,10 +518,10 @@ export function freshSpecFor(engine: AgentEngine, cwd: string, options: FreshSpe
   args.push(...codexSubagentArgs(args[0], options.allowSubagents, process.env, true));
   args.push(...codexProcessCleanupArgs(home));
   if (options.operatorDecisionForms) args.push(...codexOperatorQuestionPolicy(home).args);
-  const command = args.map(shellQuote).join(" ");
+  const command = args.map(shellQuote).join(" ") + (mcp.viewerMcpArgs ? ` ${mcp.viewerMcpArgs}` : "");
   return {
     command: telegramScopedCommand(`${codexEnvPrefix(home, mcpServers)} ${command}`, mcpServers),
-    codexPublication: { home, command, mcpServers },
+    codexPublication: { home, command, mcpServers, operatorDecisionForms: options.operatorDecisionForms, viewerMcpArgs: mcp.viewerMcpArgs },
     cwd,
     windowName: "codex-new",
     engine: "codex",
@@ -554,6 +601,8 @@ export function resumeSpecFor(root: string, pathname: string, options: ResumeSpe
   if (!eligibility.ok) return null;
   return resumeSpecForSession(eligibility.engine, eligibility.sessionId, eligibility.cwd, eligibility.home, {
     ...options, operatorDecisionForms: options.operatorDecisionForms || operatorDecisionFormsRequired(null, pathname),
+    permissionMode: options.permissionMode ?? (eligibility.engine === "claude"
+      ? launchProfileEngineReadOnly(options) ? "plan" : readClaudePermissionModeSync(pathname) : null),
   });
 }
 
@@ -587,14 +636,15 @@ export function resumeSpecForSession(
     });
     const args = [(options.hostTerminal ? resolveHostBinary : resolveBinary)("claude")];
     const permissionMode = effectiveClaudePermissionMode(options);
-    if (options.readOnly || permissionMode === "plan") {
+    const engineReadOnly = launchProfileEngineReadOnly(options);
+    if (engineReadOnly || permissionMode === "plan") {
       args.push("--permission-mode", "plan", "--disallowedTools", `Edit,Write,NotebookEdit${options.operatorDecisionForms ? ",AskUserQuestion,ExitPlanMode" : ""}`);
-    } else if (permissionMode !== "bypassPermissions" && /^[a-zA-Z-]+$/.test(permissionMode)) {
-      args.push("--permission-mode", permissionMode);
-    } else {
+    } else if (permissionMode === "bypassPermissions") {
       args.push("--dangerously-skip-permissions");
+    } else {
+      args.push("--permission-mode", permissionMode);
     }
-    if (options.operatorDecisionForms && !options.readOnly && permissionMode !== "plan") args.push("--disallowedTools", "AskUserQuestion,ExitPlanMode");
+    if (options.operatorDecisionForms && !engineReadOnly && permissionMode !== "plan") args.push("--disallowedTools", "AskUserQuestion,ExitPlanMode");
     pushClaudePolicyArgs(args, policy);
     const launchModel = providerLaunchModel(home, normalizeClaudeLaunchModel(options.model));
     if (launchModel) args.push("--model", launchModel);
@@ -611,36 +661,40 @@ export function resumeSpecForSession(
         cwd, mcpServers, baseSettingsPath: managed ? claudeSettingsPath() : null, profileId: `resume-${sessionId}`,
         mcpStatePath: managed ? path.join(home, ".claude.json") : path.join(path.dirname(home), ".claude.json"),
       } },
-      launchProfile: { ...emptyLaunchProfileForResume(cwd, launchModel, options.effort ?? null), ...(options.cleanMemory !== undefined ? { cleanMemory: options.cleanMemory } : {}), readOnly: options.readOnly ?? null, permissionMode, allowSubagents: options.allowSubagents ?? false, mcpServers, plugins: grantedPlugins(options.plugins) },
+      launchProfile: { ...emptyLaunchProfileForResume(cwd, launchModel, options.effort ?? null), ...(options.cleanMemory !== undefined ? { cleanMemory: options.cleanMemory } : {}), readOnly: options.readOnly ?? null, sandbox: explicitLaunchProfileSandbox(options), permissionMode, allowSubagents: options.allowSubagents ?? false, mcpServers, plugins: grantedPlugins(options.plugins) },
     };
   }
-  let command = `${(options.hostTerminal ? resolveHostBinary : resolveBinary)("codex")}`;
+  const codexBinary = resolveCodexBinary(options.hostTerminal);
+  let command = shellQuote(codexBinary);
   if (engineMemoryOff(options)) command += " -c features.memories=false";
   const publicationArgs = agentCodexPublicationArgs({}, process.env);
   command += ` ${publicationArgs.map(shellQuote).join(" ")}`;
   if (isManagedCodexHome(home)) command += " -c cli_auth_credentials_store=file";
-  for (const override of codexMcpRuntimeOverrides(home, cwd, mcpServers)) command += ` -c ${shellQuote(override)}`;
+  const mcp = codexMcpRuntimeOverrides(home, cwd, mcpServers);
+  for (const override of mcp.overrides) command += ` -c ${shellQuote(override)}`;
+  if (mcp.viewerMcpArgs) command += ` ${mcp.viewerMcpArgs}`;
   if (options.model) command += ` -m ${shellQuote(options.model)}`;
   if (options.effort) command += ` -c ${shellQuote(`model_reasoning_effort=${options.effort}`)}`;
   if (options.serviceTier) command += ` -c ${shellQuote(`service_tier=${options.serviceTier === "standard" ? "default" : options.serviceTier}`)}`;
   else if (options.fast != null) command += ` -c ${shellQuote(`service_tier=${options.fast ? "priority" : "standard"}`)}`;
-  if (options.readOnly) command += " --sandbox read-only";
+  const codexSandbox = launchProfileCodexSandbox(options);
+  if (codexSandbox) command += ` --sandbox ${codexSandbox}`;
   if (options.permissionMode && ["untrusted", "on-request", "never"].includes(options.permissionMode)) {
     command += ` --ask-for-approval ${shellQuote(options.permissionMode)}`;
   }
-  command += ` ${codexSubagentArgs((options.hostTerminal ? resolveHostBinary : resolveBinary)("codex"), options.allowSubagents, process.env, true).join(" ")}`;
+  command += ` ${codexSubagentArgs(codexBinary, options.allowSubagents, process.env, true).join(" ")}`;
   command += ` ${codexProcessCleanupArgs(home).map(shellQuote).join(" ")}`;
   if (options.operatorDecisionForms) command += ` ${codexOperatorQuestionPolicy(home).args.map(shellQuote).join(" ")}`;
   // Publication must stay with the other global options before resume.
   const subcommand = ` resume ${sessionId}`;
   return {
     command: telegramScopedCommand(`${codexEnvPrefix(home, mcpServers)} ${command}${subcommand}`, mcpServers),
-    codexPublication: { home, command, mcpServers, subcommand },
+    codexPublication: { home, command, mcpServers, subcommand, operatorDecisionForms: options.operatorDecisionForms, viewerMcpArgs: mcp.viewerMcpArgs },
     cwd,
     windowName: "codex-resume",
     engine: "codex",
     launchProfile: { ...emptyLaunchProfileForResume(cwd, options.model ?? null, options.effort ?? null),
-      ...(options.cleanMemory !== undefined ? { cleanMemory: options.cleanMemory } : {}), fast: options.serviceTier ? !["default", "standard"].includes(options.serviceTier) : options.fast ?? null, serviceTier: options.serviceTier ?? null, readOnly: options.readOnly ?? null, permissionMode: options.permissionMode ?? null, allowSubagents: options.allowSubagents ?? false, mcpServers, plugins: grantedPlugins(options.plugins) },
+      ...(options.cleanMemory !== undefined ? { cleanMemory: options.cleanMemory } : {}), fast: options.serviceTier ? !["default", "standard"].includes(options.serviceTier) : options.fast ?? null, serviceTier: options.serviceTier ?? null, readOnly: options.readOnly ?? null, sandbox: explicitLaunchProfileSandbox(options), permissionMode: options.permissionMode ?? null, allowSubagents: options.allowSubagents ?? false, mcpServers, plugins: grantedPlugins(options.plugins) },
   };
 }
 

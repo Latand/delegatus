@@ -43,8 +43,7 @@ import { sampleAnswer, sampleMemory } from "@/lib/memory/profile.fixture";
 import { createProfileService } from "@/lib/memory/profileService";
 import type { MemoryProfileView, ProfileRow } from "@/lib/memory/profileTypes";
 import type { RoleMemoryProjectView } from "@/lib/memory/roleTypes";
-import { directProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profileModel";
-import { readClaudeCredentials } from "@/lib/accounts/claudeCredentials";
+import { prepareProfileCaller, MEMORY_PROFILE_MODEL } from "@/lib/memory/profileModel";
 
 /*
  * The one rendered-evidence driver for the kanban board. Every case here runs
@@ -952,8 +951,8 @@ describe("CPU admission queue", () => {
     const browser = await chromium.launch(LAUNCH);
     const readings: unknown[] = [];
     try {
-      for (const stalled of [false, true]) for (const lang of ["en", "uk"] as const) for (const width of [1440, 1000, 390]) {
-        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=cpu-queue${stalled ? "-stalled" : ""}`, { width, height: 900 }, "dark", lang, "reduce", width === 390);
+      for (const theme of ["light", "dark"] as const) for (const stalled of [false, true]) for (const lang of ["en", "uk"] as const) for (const width of [1440, 1000, 390]) {
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=cpu-queue${stalled ? "-stalled" : ""}`, { width, height: 900 }, theme, lang, "reduce", width === 390);
         try {
           if (width === 390) await page.locator('[data-phone-kanban-tab="assigned"]').click();
           const selector = width === 390 ? '[data-phone-card="task:t-search"]' : card("t-search");
@@ -961,16 +960,16 @@ describe("CPU admission queue", () => {
           const line = target.locator("[data-cpu-queue]");
           await line.waitFor(); await target.scrollIntoViewIfNeeded();
           const text = stalled
-            ? lang === "en" ? "CPU queue is stalled · 7th · nothing started for 62 min" : "Черга CPU стоїть · 7-й · нічого не стартувало 62 хв"
-            : lang === "en" ? "Waiting for the CPU queue · 2nd · up to 7 min" : "Чекає черги CPU · 2-й · до 7 хв";
+            ? lang === "en" ? "CPU queue is stalled · 7th · nothing started for 62 min · High" : "Черга CPU стоїть · 7-й · нічого не стартувало 62 хв · Високий"
+            : lang === "en" ? "Waiting for the CPU queue · 2nd · up to 7 min · High" : "Чекає черги CPU · 2-й · до 7 хв · Високий";
           expect(await line.textContent()).toBe(text);
           expect(await target.textContent()).toContain("#2190");
           expect(await target.locator('[data-motion="working"]').count()).toBe(0);
           const geometry = await line.evaluate(element => ({ clipped: element.scrollWidth > element.clientWidth + 1, width: element.clientWidth, text: element.textContent }));
           expect(geometry.clipped).toBe(false);
           expect(pageErrors).toEqual([]);
-          await target.screenshot({ path: path.join(out, `${stalled ? "stalled" : "variant-1"}-${width}-${lang}.png`) });
-          readings.push({ lang, viewport: width, ...(stalled ? { stalled } : {}), ...geometry });
+          await target.screenshot({ path: path.join(out, `${stalled ? "stalled" : "variant-1"}-${width}-${lang}-${theme}.png`) });
+          readings.push({ lang, theme, viewport: width, ...(stalled ? { stalled } : {}), ...geometry });
           if (width === 390) {
             await target.click();
             const lane = page.locator('[data-phone-task-lane="p-search"]');
@@ -989,8 +988,8 @@ describe("CPU admission queue", () => {
               expect(box.clipped).toBe(false); expect(box.visible).toBe(true);
               expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
               expect(pageErrors).toEqual([]);
-              await page.screenshot({ path: path.join(out, `phone-${stalled ? "stalled-" : ""}${surface}-${lang}.png`) });
-              readings.push({ lang, viewport: width, surface, ...(stalled ? { stalled } : {}), ...box });
+              await page.screenshot({ path: path.join(out, `phone-${stalled ? "stalled-" : ""}${surface}-${lang}-${theme}.png`) });
+              readings.push({ lang, theme, viewport: width, surface, ...(stalled ? { stalled } : {}), ...box });
             }
           }
         } finally { await context.close(); }
@@ -1002,16 +1001,68 @@ describe("CPU admission queue", () => {
   }, 120_000);
 });
 
+describe("subscription API consent", () => {
+  browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1")("consent is reviewable in both languages and themes", async () => {
+    const out = path.resolve(".artifacts/subscription-api"); fs.mkdirSync(out, { recursive: true });
+    let enabled = false;
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/telemetry": { enabled: false, locked: false, noticeDismissed: true },
+      "/api/subscription-api-consent": async (request: Request) => {
+        if (request.method === "PUT") enabled = (await request.json()).enabled;
+        return Response.json({ version: 1, enabled, source: "operator" });
+      },
+    });
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
+    const readings: unknown[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const phone of [false, true]) {
+        enabled = false;
+        const viewport = phone ? { width: 390, height: 844 } : { width: 1000, height: 700 };
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=memory-settings&header=1&lang=${lang}`, viewport, theme, lang, "reduce", phone);
+        try {
+          await page.locator(phone ? '[data-mobile2-open="menu"]' : "[data-rail-menu]").first().click();
+          await page.locator(phone ? '[data-mobile2-menu-row="settings"]' : "[data-rail-menu-settings]").click();
+          await page.locator(phone ? '[data-mobile2-menu-row="ping"]' : "[data-rail-menu-ping]").click();
+          const section = page.locator("[data-subscription-api]"); await section.waitFor();
+          expect(await section.locator("h3").innerText()).toBe(translate(lang, "subscriptionApi.title"));
+          const toggle = section.getByRole("switch");
+          await toggle.waitFor({ state: "visible" });
+          expect(await toggle.isChecked()).toBe(false);
+          const geometry = await section.evaluate(element => {
+            const panel = element.closest("[data-telemetry-settings]")!;
+            const button = element.querySelector("input")!;
+            const label = button.closest("label")!;
+            const box = label.getBoundingClientRect(), edge = panel.getBoundingClientRect();
+            return { visible: box.top >= edge.top && box.bottom <= edge.bottom, overflow: element.scrollWidth > element.clientWidth, scrolls: panel.scrollHeight > panel.clientHeight };
+          });
+          expect(geometry.visible).toBe(true); expect(geometry.overflow).toBe(false);
+          expect(await section.innerText()).toContain("api.anthropic.com/api/oauth/usage");
+          await page.screenshot({ path: path.join(out, `${phone ? "phone" : "desktop"}-${lang}-${theme}.png`) });
+          await toggle.click();
+          await page.waitForFunction(() => document.querySelector<HTMLInputElement>('[data-subscription-api] input')?.checked === true);
+          await toggle.click();
+          await page.waitForFunction(() => document.querySelector<HTMLInputElement>('[data-subscription-api] input')?.checked === false);
+          expect(pageErrors).toEqual([]);
+          readings.push({ lang, theme, viewport, ...geometry });
+        } finally { await context.close(); }
+      }
+      fs.mkdirSync("evidence/subscription-api", { recursive: true });
+      const sources = ["src/components/telemetry/SubscriptionApiSetting.tsx", "src/components/telemetry/TelemetrySettings.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts"];
+      fs.writeFileSync("evidence/subscription-api/readings.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx",
+        revision: process.env.LLV_EVIDENCE_REVISION ?? "working-tree", recordedAt: new Date().toISOString(),
+        command: "LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<browser> bun test src/components/kanban/kanbanBoard.browser.test.tsx -t 'subscription API consent'",
+        sources: Object.fromEntries(sources.map(source => [source, createHash("sha256").update(fs.readFileSync(source)).digest("hex")])), readings }, null, 2) + "\n");
+    } finally { await browser.close(); server.stop(); }
+  }, 120_000);
+});
+
 describe("memory profile", () => {
-  browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1" && !!process.env.MEMORY_PROFILE_BENCHMARK)("direct-call timings reach the visible page", async () => {
+  browserCase(process.env.LLV_KANBAN_BROWSER_TEST === "1" && !!process.env.MEMORY_PROFILE_BENCHMARK)("CLI timings reach the visible page", async () => {
     // Explicit private input is supplied only for an opt-in local timing run. No source text is captured.
-    const input = JSON.parse(fs.readFileSync(process.env.MEMORY_PROFILE_BENCHMARK!, "utf8")) as { rules: RoleMemoryProjectView; credentialHome: string };
-    const credentials = readClaudeCredentials(input.credentialHome);
-    const token = credentials.state === "present" ? credentials.document.claudeAiOauth?.accessToken : null;
-    if (typeof token !== "string") throw Error("benchmark credential unavailable");
+    const input = JSON.parse(fs.readFileSync(process.env.MEMORY_PROFILE_BENCHMARK!, "utf8")) as { rules: RoleMemoryProjectView };
     const out = path.resolve(".artifacts/memory-profile"); fs.mkdirSync(out, { recursive: true });
     const rows = new Map<string, ProfileRow>();
-    const service = createProfileService({ rules: () => input.rules, read: (_, locale) => structuredClone(rows.get(locale) ?? null), write: row => rows.set(row.locale, structuredClone(row)), model: MEMORY_PROFILE_MODEL, prepare: async () => directProfileCaller(token, MEMORY_PROFILE_MODEL) });
+    const service = createProfileService({ rules: () => input.rules, read: (_, locale) => structuredClone(rows.get(locale) ?? null), write: row => rows.set(row.locale, structuredClone(row)), model: MEMORY_PROFILE_MODEL, prepare: prepareProfileCaller });
     const server = await serveEvidenceFixture(out, undefined, {
       "/api/role-memory": () => Response.json(input.rules),
       "/api/role-memory/profile": async (request: Request) => {
@@ -7320,7 +7371,7 @@ describe("the header's menu, built: variant 2's icon row, variant 3's rows", () 
             await page.keyboard.press("Escape");
             if (await page.locator(PANEL).count() || !await page.evaluate(() => document.activeElement?.hasAttribute("data-rail-menu"))) failures.push(`${tag}: Escape from the keys page did not close the menu onto ⋯`);
             await page.keyboard.press("Enter");
-            /* Once per frame: «Install ping» opens the product's dialog, which keeps the ping alone. */
+            /* Once per frame: «Install ping» opens the product's dialog, which keeps the install ping and subscription API consent. */
             await page.locator("[data-rail-menu-settings]").click();
             await page.locator("[data-rail-menu-ping]").click();
             const dialog = page.locator("[data-telemetry-settings]");
@@ -15406,6 +15457,271 @@ describe("the orchestrator's parallel self in the seat's feed", () => {
   }, 600_000);
 });
 
+describe("task limit spend: a scale on the card's state line, the numbers in its popover", () => {
+  /*
+   * docs/design/task-limit-spend.md §7.2, variant 2 as approved: each provider
+   * that did work on a task draws its engine mark and a four-cell scale at the
+   * end of the card's state line, with no digits; the popover lists each
+   * provider's weekly estimate (≈, ≥, <1%), each account's figure beside its
+   * week so far, the 5-hour share while it lasts and the ±30 % note. The phone's
+   * card face carries the marks passively and reads them into its label; the
+   * task screen lists the numbers as one section. States: one provider, two,
+   * several accounts of one provider, tiny, large with a lower bound, no limit
+   * readings, still counting (nothing drawn), and the answer a non-owner gets.
+   *
+   *   LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chromium> bun test src/components/kanban/kanbanBoard.browser.test.tsx -t 'task limit spend'
+   *
+   * Frames go to TASK_SPEND_PNG_DIR (default `.artifacts/task-spend/`) with
+   * `readings.json` beside them; nothing is written into the tree.
+   */
+  const CASES = {
+    "t-upload": { state: "one provider", marks: [["codex", "num", 1]], pop: [/Codex ≈1%/] },
+    "t-search": { state: "two providers", marks: [["claude", "num", 1], ["codex", "num", 1]], pop: [/Claude ≈3%/, /Codex ≈2%/, /0[.,]4%/, /5-(hour|годин)/] },
+    "t-export": { state: "several accounts", marks: [["claude", "tiny", 0], ["codex", "num", 2]], pop: [/Claude <1%/, /Codex ≈7%/, /A · Pro/, /B · Plus/, /D · Pro/] },
+    "t-links": { state: "tiny", marks: [["claude", "tiny", 0]], pop: [/Claude <1%/, /0[.,]3%/] },
+    "t-interrupt": { state: "large, lower bound", marks: [["claude", "floor", 2], ["codex", "num", 4]], pop: [/Claude ≥12%/, /Codex ≈34%/, /(task|задача) ≥ ?12%/] },
+    "t-disk": { state: "no limit readings", marks: [["claude", "norate", null], ["codex", "num", 1]], pop: [/Claude — /, /41/, /Codex ≈1%/] },
+  } as const;
+  const COUNTING = "t-merge-a";
+  const WIDTHS = [1440, 1280, 820, 390] as const;
+
+  browserTest("every state at 1440, 1280, 820 and 390, en and uk, light and dark", async () => {
+    const out = path.resolve(process.env.TASK_SPEND_PNG_DIR ?? ".artifacts/task-spend");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const failures: string[] = [];
+    const readings: unknown[] = [];
+    /* The marks of one card: each provider's engine, kind and filled cells, and how the line fits. */
+    const marksReading = (page: Page, selector: string) => page.evaluate((selector) => {
+      const host = document.querySelector<HTMLElement>(selector);
+      const spend = host?.querySelector<HTMLElement>(".spend");
+      if (!host || !spend) return null;
+      const box = (r: DOMRect) => ({ left: r.left, right: r.right, top: r.top, bottom: r.bottom });
+      const words = host.querySelector(".card-state-words");
+      const ranges: ReturnType<typeof box>[] = [];
+      if (words) { const range = document.createRange(); range.selectNodeContents(words); for (const r of range.getClientRects()) if (r.width > 0) ranges.push(box(r)); }
+      const own = box(spend.getBoundingClientRect());
+      const hit = (a: ReturnType<typeof box>, b: ReturnType<typeof box>) => a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5;
+      const cardBox = box((host.closest(".card, [data-phone-card]") ?? host).getBoundingClientRect());
+      return {
+        role: spend.getAttribute("role"), label: spend.getAttribute("aria-label"), hidden: spend.getAttribute("aria-hidden"),
+        providers: [...spend.querySelectorAll<HTMLElement>(".spend-p")].map((p) => ({
+          engine: p.dataset.engine, kind: p.dataset.kind,
+          cells: p.querySelector("svg.scale") ? p.querySelectorAll("svg.scale rect.on").length : null,
+          word: p.querySelector(".spend-n")?.textContent ?? null, floorSign: Boolean(p.querySelector(".scale-floor")),
+        })),
+        digits: /\d/.test(spend.textContent ?? ""),
+        overlapsWords: ranges.some((r) => hit(r, own)),
+        insideCard: own.left >= cardBox.left - 0.5 && own.right <= cardBox.right + 0.5 && own.top >= cardBox.top - 0.5 && own.bottom <= cardBox.bottom + 0.5,
+        own,
+      };
+    }, selector);
+    const popReading = (page: Page, id: string) => page.evaluate((id) => {
+      const pop = document.querySelector<HTMLElement>(`[data-spend-pop="${id}"]`)!.closest<HTMLElement>("[role=tooltip]")!;
+      const r = pop.getBoundingClientRect();
+      const lines = [...pop.querySelectorAll<HTMLElement>(".pop-title, .pop-main, .meter, .meter-note, .pop-note")].map((el) => el.innerText.replace(/\s+/g, " ").trim());
+      /* No line is cut: an account label, whatever its length, is printed whole. */
+      const clipped = [...pop.querySelectorAll<HTMLElement>(".meter-label, .meter-value, .pop-main")].filter((el) => el.scrollWidth > el.clientWidth + 1).length;
+      const labels = [...pop.querySelectorAll<HTMLElement>(".meter-label")].map((el) => ({ text: el.textContent ?? "", lines: new Set([...el.getClientRects()].map((b) => Math.round(b.top))).size, height: el.getBoundingClientRect().height }));
+      /* Every account line, its label's text, its value and its bar stay inside the bubble. */
+      const textRects = [...pop.querySelectorAll<HTMLElement>(".meter-label")].flatMap((el) => { const range = document.createRange(); range.selectNodeContents(el); return [...range.getClientRects()]; });
+      const outside = [...[...pop.querySelectorAll<HTMLElement>(".meter, .meter-figure, .meter-value, .meter-bar")].map((el) => el.getBoundingClientRect()), ...textRects].filter((b) =>
+        b.left < r.left - 0.5 || b.right > r.right + 0.5 || b.top < r.top - 0.5 || b.bottom > r.bottom + 0.5).length;
+      /* The task figure's digits start at one x on every account line. */
+      const numX = [...pop.querySelectorAll<HTMLElement>(".meter-num")].map((el) => Math.round(el.getBoundingClientRect().left));
+      return { box: { left: r.left, right: r.right, top: r.top, bottom: r.bottom }, viewport: { width: innerWidth, height: innerHeight }, lines, clipped, labels, outside, numX, bg: getComputedStyle(pop).backgroundColor };
+    }, id);
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const width of WIDTHS) {
+        const phone = width === 390;
+        const label = `${lang}-${theme}-${width}`;
+        const height = phone ? 844 : 900;
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?spend=1`, { width, height }, theme, lang, "reduce", phone);
+        try {
+          if (!phone) {
+            await page.locator(`${card("t-search")} [data-spend="t-search"]`).waitFor({ state: "attached", timeout: 30_000 });
+            /* Under the seat the board is a strip of columns, or one column behind tabs below 768 px of board. */
+            const column = async (id: string) => {
+              if (await page.locator(card(id)).isVisible()) return;
+              const status = await page.locator(card(id)).evaluate((element) => element.closest<HTMLElement>(".column")?.dataset.status ?? "");
+              await page.locator(`.tabs-nav [data-tab="${status}"]`).first().click();
+            };
+            await column("t-search");
+            /* The seat stands over the board: a tall window shows both, then the case goes on at the named height. */
+            await page.setViewportSize({ width, height: 1900 });
+            await page.locator("[data-kanban-board]").scrollIntoViewIfNeeded();
+            await page.screenshot({ path: path.join(out, `${label}-board.png`) });
+            await page.setViewportSize({ width, height });
+            const counting = await page.locator(`${card(COUNTING)} .spend`).count();
+            if (counting) failures.push(`${label}: the still-counting task draws marks`);
+            for (const [id, expected] of Object.entries(CASES)) {
+              const host = page.locator(card(id));
+              await column(id);
+              await host.scrollIntoViewIfNeeded();
+              await host.screenshot({ path: path.join(out, `${label}-${id}-card.png`) });
+              const marks = await marksReading(page, `${card(id)} .card-state`);
+              readings.push({ label, id, state: expected.state, marks });
+              if (!marks) { failures.push(`${label} ${id}: no marks`); continue; }
+              const got = marks.providers.map((p) => [p.engine, p.kind, p.cells]);
+              if (JSON.stringify(got) !== JSON.stringify(expected.marks)) failures.push(`${label} ${id}: marks ${JSON.stringify(got)} ≠ ${JSON.stringify(expected.marks)}`);
+              if (marks.digits) failures.push(`${label} ${id}: the card's marks carry digits`);
+              if (marks.overlapsWords) failures.push(`${label} ${id}: the marks overlap the state sentence`);
+              if (!marks.insideCard) failures.push(`${label} ${id}: the marks leave the card ${JSON.stringify(marks.own)}`);
+              if (marks.role !== "button" || !marks.label) failures.push(`${label} ${id}: the marks are no labelled control`);
+              const trigger = page.locator(`[data-spend="${id}"]`);
+              await trigger.hover();
+              await page.locator(`[data-spend-pop="${id}"]`).waitFor({ timeout: 5_000 });
+              const pop = await popReading(page, id);
+              readings.push({ label, id, popover: pop });
+              const text = pop.lines.join("\n");
+              for (const want of expected.pop) if (!want.test(text)) failures.push(`${label} ${id}: the popover lacks ${want}:\n${text}`);
+              if (!/±30%/.test(text)) failures.push(`${label} ${id}: no ±30% note`);
+              if (pop.clipped) failures.push(`${label} ${id}: ${pop.clipped} popover lines are cut`);
+              if (pop.outside) failures.push(`${label} ${id}: ${pop.outside} account lines or bars leave the bubble`);
+              /* The fixture's 80-character label cannot share a line with its figure: it is printed whole, on lines of its own. */
+              if (id === "t-interrupt" && !pop.labels.some((l) => l.text.length > 80 && text.includes(l.text.replace(/\s+/g, " ")))) failures.push(`${label} ${id}: the 80-character account label is not printed whole: ${JSON.stringify(pop.labels)}`);
+              if (new Set(pop.numX).size > 1) failures.push(`${label} ${id}: account figures start at ${pop.numX.join(", ")}`);
+              if (pop.box.left < 0 || pop.box.top < 0 || pop.box.right > pop.viewport.width || pop.box.bottom > pop.viewport.height) failures.push(`${label} ${id}: the popover leaves the window ${JSON.stringify(pop.box)}`);
+              const cardBox = (await host.boundingBox())!;
+              const clip = { x: Math.max(0, Math.min(cardBox.x, pop.box.left) - 8), y: Math.max(0, Math.min(cardBox.y, pop.box.top) - 8) };
+              await page.screenshot({ path: path.join(out, `${label}-${id}-popover.png`), clip: { ...clip,
+                width: Math.min(width, Math.max(cardBox.x + cardBox.width, pop.box.right) + 8) - clip.x,
+                height: Math.min(height, Math.max(cardBox.y + cardBox.height, pop.box.bottom) + 8) - clip.y } });
+              await page.mouse.move(0, 0);
+              await page.locator(`[data-spend-pop="${id}"]`).waitFor({ state: "detached", timeout: 5_000 });
+            }
+            /* The keyboard: focus opens it, Escape closes it. */
+            await column("t-search");
+            await page.locator('[data-spend="t-search"]').focus();
+            await page.locator('[data-spend-pop="t-search"]').waitFor({ timeout: 5_000 });
+            await page.keyboard.press("Escape");
+            await page.locator('[data-spend-pop="t-search"]').waitFor({ state: "detached", timeout: 5_000 });
+          } else {
+            for (const [tab, ids] of [["assigned", ["t-search", "t-export", "t-upload", "t-links", "t-disk"]], ["done", ["t-interrupt"]]] as const) {
+              await page.locator(`[data-phone-kanban-tab="${tab}"]`).click();
+              await page.locator(`[data-phone-card="task:${ids[0]}"] .spend`).waitFor({ timeout: 30_000 });
+              if (tab === "assigned" && await page.locator(`[data-phone-card="task:${COUNTING}"] .spend`).count()) failures.push(`${label}: the still-counting task draws marks`);
+              for (const id of ids) {
+                const face = page.locator(`[data-phone-card="task:${id}"]`);
+                await face.scrollIntoViewIfNeeded();
+                await page.screenshot({ path: path.join(out, `${label}-${tab}-${id}.png`) });
+                const marks = await marksReading(page, `[data-phone-card="task:${id}"] .card-state`);
+                const faceLabel = await face.getAttribute("aria-label");
+                readings.push({ label, id, state: CASES[id].state, marks, faceLabel });
+                if (!marks) { failures.push(`${label} ${id}: no marks on the phone card`); continue; }
+                const got = marks.providers.map((p) => [p.engine, p.kind, p.cells]);
+                if (JSON.stringify(got) !== JSON.stringify(CASES[id].marks)) failures.push(`${label} ${id}: phone marks ${JSON.stringify(got)}`);
+                if (marks.role !== null || marks.hidden !== "true") failures.push(`${label} ${id}: the phone face's marks are not passive`);
+                if (marks.overlapsWords || !marks.insideCard || marks.digits) failures.push(`${label} ${id}: phone marks ${JSON.stringify(marks)}`);
+                if (!faceLabel?.includes(translate(lang, "taskSpend.aria", { parts: "" }).trim())) failures.push(`${label} ${id}: the face's label does not read the spend: ${faceLabel}`);
+              }
+            }
+            /* The task screen's section, for two tasks: two providers, and the lower bound. */
+            for (const [tab, id] of [["assigned", "t-search"], ["done", "t-interrupt"], ["assigned", "t-disk"]] as const) {
+              await page.locator(`[data-phone-kanban-tab="${tab}"]`).click();
+              await page.locator(`[data-phone-card="task:${id}"]`).click();
+              const section = page.locator(`[data-phone-task-spend="${id}"]`);
+              await section.waitFor({ timeout: 10_000 });
+              await section.scrollIntoViewIfNeeded();
+              const box = (await section.boundingBox())!;
+              if (box.x < 0 || box.x + box.width > width || box.y < 0 || box.y + box.height > height) failures.push(`${label} ${id}: the Limits section is not whole on screen ${JSON.stringify(box)}`);
+              const text = (await section.innerText()).replace(/[ \t]+/g, " ");
+              /* As in the popover: every account label whole, inside the section, and the digits at one x. */
+              const fit = await section.evaluate((el) => {
+                const r = el.getBoundingClientRect();
+                const cut = [...el.querySelectorAll<HTMLElement>(".meter-label, .meter-value, .pop-main")].filter((node) => node.scrollWidth > node.clientWidth + 1).length;
+                const rects = [...el.querySelectorAll<HTMLElement>(".meter-label")].flatMap((node) => { const range = document.createRange(); range.selectNodeContents(node); return [...range.getClientRects()]; });
+                const outside = [...[...el.querySelectorAll<HTMLElement>(".meter, .meter-figure, .meter-value, .meter-bar")].map((node) => node.getBoundingClientRect()), ...rects].filter((b) => b.left < r.left - 0.5 || b.right > r.right + 0.5).length;
+                const numX = [...el.querySelectorAll<HTMLElement>(".meter-num")].map((node) => Math.round(node.getBoundingClientRect().left));
+                return { cut, outside, numX, labels: [...el.querySelectorAll<HTMLElement>(".meter-label")].map((node) => node.textContent ?? "") };
+              });
+              readings.push({ label, id, section: text, fit });
+              if (fit.cut) failures.push(`${label} ${id}: ${fit.cut} Limits lines are cut`);
+              if (fit.outside) failures.push(`${label} ${id}: ${fit.outside} account lines leave the Limits section`);
+              if (new Set(fit.numX).size > 1) failures.push(`${label} ${id}: Limits figures start at ${fit.numX.join(", ")}`);
+              if (id === "t-interrupt" && !fit.labels.some((l) => l.length > 80)) failures.push(`${label} ${id}: the 80-character account label is not whole in the Limits section: ${JSON.stringify(fit.labels)}`);
+              for (const want of CASES[id].pop) if (!want.test(text)) failures.push(`${label} ${id}: the Limits section lacks ${want}`);
+              await page.screenshot({ path: path.join(out, `${label}-task-${id}.png`) });
+              await page.goBack();
+              await page.locator(`[data-phone-kanban-tab="${tab}"]`).waitFor({ timeout: 10_000 });
+            }
+          }
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join("; ")}`);
+        } finally { await context.close(); }
+      }
+      /* A member who is not the owner gets each provider's figure and no account detail. */
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        const label = `guest-${lang}-${theme}-1440`;
+        const { context, page } = await openFixture(browser, `${server.base}?spend=guest`, VIEWPORT, theme, lang, "reduce");
+        try {
+          await page.locator('[data-spend="t-search"]').waitFor({ timeout: 30_000 });
+          await page.locator('[data-spend="t-search"]').hover();
+          await page.locator('[data-spend-pop="t-search"]').waitFor({ timeout: 5_000 });
+          const pop = await popReading(page, "t-search");
+          readings.push({ label, popover: pop });
+          if (pop.lines.some((line) => / · (Max|Pro)/.test(line)) || pop.numX.length) failures.push(`${label}: account detail reached a guest: ${pop.lines.join(" | ")}`);
+          const cardBox = (await page.locator(card("t-search")).boundingBox())!;
+          await page.screenshot({ path: path.join(out, `${label}-popover.png`), clip: { x: cardBox.x - 8, y: Math.max(0, pop.box.top - 8), width: cardBox.width + 16, height: cardBox.y + cardBox.height - pop.box.top + 16 } });
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+      fs.writeFileSync(path.join(out, "readings.json"), `${JSON.stringify({ capturedAt: new Date().toISOString(), readings, failures }, null, 2)}\n`);
+    }
+    expect(failures).toEqual([]);
+  }, 900_000);
+
+  browserTest("a touch screen at desktop width: a tap opens the marks' popover and the state dot's, a second tap or a tap outside closes them", async () => {
+    const out = path.resolve(process.env.TASK_SPEND_PNG_DIR ?? ".artifacts/task-spend");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const failures: string[] = [];
+    try {
+      for (const width of [820, 1280] as const) for (const lang of ["en", "uk"] as const) {
+        const label = `touch-${lang}-${width}`;
+        /* A tablet: a touch screen with no mouse, at a width that draws the desktop board. */
+        const context = await browser.newContext({ viewport: { width, height: 900 }, hasTouch: true, colorScheme: "light", reducedMotion: "reduce" });
+        await context.addInitScript(`try { localStorage.setItem("llv_lang", ${JSON.stringify(lang)}); } catch {}`);
+        try {
+          const page = await context.newPage();
+          await page.goto(`${server.base}?spend=1`);
+          const host = page.locator(card("t-search"));
+          await host.locator('[data-spend="t-search"]').waitFor({ state: "attached", timeout: 30_000 });
+          if (!await host.isVisible()) {
+            const status = await host.evaluate((element) => element.closest<HTMLElement>(".column")?.dataset.status ?? "");
+            await page.locator(`.tabs-nav [data-tab="${status}"]`).first().tap();
+          }
+          await host.scrollIntoViewIfNeeded();
+          for (const [name, trigger, pop] of [
+            ["marks", host.locator('[data-spend="t-search"]'), page.locator('[data-spend-pop="t-search"]')],
+            ["state dot", host.locator("[data-card-state-dot]"), page.locator("[data-card-state-pop]")],
+          ] as const) {
+            const shows = (open: boolean) => pop.waitFor({ state: open ? "attached" : "detached", timeout: 3_000 }).then(() => true, () => false);
+            await trigger.tap();
+            if (!await shows(true)) { failures.push(`${label}: a tap on the ${name} opens nothing (aria-expanded=${await trigger.getAttribute("aria-expanded")})`); continue; }
+            if (await trigger.getAttribute("aria-expanded") !== "true") failures.push(`${label}: the open ${name} do not say so`);
+            if (name === "marks") await page.screenshot({ path: path.join(out, `${label}-t-search-tap.png`) });
+            await trigger.tap();
+            if (!await shows(false)) failures.push(`${label}: a second tap on the ${name} leaves it open`);
+            await trigger.tap();
+            if (!await shows(true)) failures.push(`${label}: a third tap on the ${name} opens nothing`);
+            /* Outside: a column's heading, plain text. */
+            await page.locator(".kb .col-head h2:visible").first().tap();
+            if (!await shows(false)) failures.push(`${label}: a tap outside leaves the ${name} open`);
+          }
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    expect(failures).toEqual([]);
+  }, 600_000);
+});
+
 describe("a task's album: every picture its agents made, one click from the card", () => {
   /*
    * The album button sits in a task card's foot with the picture count and a
@@ -22602,7 +22918,173 @@ describe("floating voice companion", () => {
       fs.mkdirSync("evidence/voice-companion",{ recursive:true });
       fs.writeFileSync("evidence/voice-companion/call-memory.json",JSON.stringify({ driver:"src/components/kanban/kanbanBoard.browser.test.tsx",synthetic:true,viewportBasis:"configured scene width",measurements },null,2)+"\n");
     } finally { await browser.close(); server.stop(); }
-  });
+    /* 32 page loads ran 77 s on a loaded machine before the Tools section joined the dialog: past the 90 s default once it did. */
+  }, 300_000);
+
+  /*
+   * The Tools section of the voice settings (docs/design/voice-extensible-tools.md §4.8 item 1,
+   * `&voicetools=<state>`): no servers, a pending proposal with a secret still needed, a passed
+   * dry run with tools being chosen, a failed dry run, an approval with «ask before acting» off and
+   * on, a rejected proposal, a server turned off, every visible field at its schema maximum, and two refused presses: «ask before acting» on an
+   * approved server whose change and re-approval are refused together (the row stays approved and the
+   * switch flips back) and Run dry run refused by the hub's limit. Each state is read at 1440, 820 and 390,
+   * in both languages and themes: its defining words are whole on screen once the section is
+   * scrolled to, no text range leaves the dialog or the window, the page never scrolls sideways,
+   * and every control is at least 24 px tall (44 on the phone). Wherever Run dry run starts a command,
+   * the full filesystem sandbox warning is beside it. Approving a chosen tool and
+   * flipping «ask before acting» on an approved server are pressed for real (a tap on the phone).
+   * Frames go to `$LLV_VOICE_TOOLS_OUT` (default `.artifacts/voice-tools`), never committed.
+   */
+  browserTest("voice tools settings render every state on desktop and phone", async () => {
+    const out = path.resolve(process.env.LLV_VOICE_TOOLS_OUT ?? ".artifacts/voice-tools");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+    const failures: string[] = [];
+    const measurements: unknown[] = [];
+    const dryRun = (lang: "en" | "uk") => [translate(lang, "voiceCompanion.tools.action.dryRun"), translate(lang, "voiceCompanion.tools.dryRunHint")];
+    /* Each state's defining words: those of a row's head once the row is scrolled to, those of its tool list once
+       that list's end is, then those of its foot once its action row is. A row taller than the phone's dialog is
+       read in these frames. */
+    const defining: Record<string, (lang: "en" | "uk") => { head: string[]; tools?: string[]; foot: string[] }> = {
+      empty: lang => ({ head: [translate(lang, "voiceCompanion.tools.empty")], foot: [] }),
+      "sign-in-required": lang => ({ head: [translate(lang, "voiceCompanion.tools.signIn")], foot: [] }),
+      pending: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example",
+        translate(lang, "voiceCompanion.tools.secretValue", { name: "SPOTIFY_CLIENT_ID" }), "SPOTIFY_REDIRECT_URI=http://127.0.0.1:8888/callback"],
+        foot: [translate(lang, "voiceCompanion.tools.secretNeeded"), translate(lang, "voiceCompanion.tools.dryRun.none"), ...dryRun(lang), translate(lang, "voiceCompanion.tools.action.reject")] }),
+      review: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example"],
+        tools: ["skip"], foot: [translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.approve"), ...dryRun(lang)] }),
+      failed: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "--notes", "/srv/delegatus/mcp-servers/notes/server.ts", "NOTES_FORMAT=markdown"],
+        foot: [translate(lang, "voiceCompanion.tools.dryRun.TIMEOUT"), ...dryRun(lang)] }),
+      approved: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.enabled"), "spotify-mcp-example"],
+        foot: [translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.disable"), translate(lang, "voiceCompanion.tools.action.remove")] }),
+      "approved-ask": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.enabled"), "spotify-mcp-example"],
+        foot: [translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.disable"), translate(lang, "voiceCompanion.tools.action.remove")] }),
+      long: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.changed"), "a234567890123456789012_x", "X-Request-Source=delegatus-voice"],
+        foot: [translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.reject")] }),
+      "approved-refused": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.enabled"), "spotify-mcp-example"],
+        foot: [translate(lang, "voiceCompanion.tools.refused.SELECTION_BOUNDS"), translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.disable")] }),
+      "dry-run-busy": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example"],
+        foot: [...dryRun(lang), translate(lang, "voiceCompanion.tools.refused.dryRun.BUSY")] }),
+      "destination-refused": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example"],
+        tools: ["skip"], foot: [translate(lang, "voiceCompanion.tools.refused.SECRET_DESTINATION"), translate(lang, "voiceCompanion.tools.ask"), translate(lang, "voiceCompanion.tools.action.approve")] }),
+      "destination-result": lang => ({ head: [translate(lang, "voiceCompanion.tools.state.pending"), "spotify-mcp-example"],
+        foot: [translate(lang, "voiceCompanion.tools.dryRun.SECRET_DESTINATION"), ...dryRun(lang)] }),
+      rejected: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.rejected"), "spotify-mcp-example"],
+        foot: [...dryRun(lang), translate(lang, "voiceCompanion.tools.action.remove")] }),
+      disabled: lang => ({ head: [translate(lang, "voiceCompanion.tools.state.disabled"), "spotify-mcp-example"],
+        foot: [translate(lang, "voiceCompanion.tools.ask"), ...dryRun(lang), translate(lang, "voiceCompanion.tools.action.approve"), translate(lang, "voiceCompanion.tools.action.remove")] }),
+    };
+    /* The refused states are read after their press, which every language and theme makes. */
+    const refusedPress: Record<string, string> = { "approved-refused": "[data-voice-tool-ask]", "dry-run-busy": "[data-voice-tool-action='dry-run']",
+      "destination-refused": "[data-voice-tool-action='approve']" };
+    try {
+      for (const width of [1440, 1000, 820, 390]) {
+        // Release each width's renderers before the next matrix, bounding retained browser memory.
+        await browser?.close();
+        browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: process.env.LLV_CHROME_TMPDIR ?? process.env.TMPDIR } });
+        for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) for (const state of Object.keys(defining)) {
+        const label = `${width}-${lang}-${scheme}-${state}`;
+        const phone = width === 390;
+        const { context, page, pageErrors } = await openVoice(browser, server.base, `&mount=product&backend=codex&voicetools=${state}`, { viewport: { width, height: width === 1000 ? 700 : 844 }, lang, scheme, product: true, phone, motion: "reduce" });
+        try {
+          await page.evaluate(() => window.dispatchEvent(new Event("delegatus:open-voice-companion-settings")));
+          const section = page.locator("[data-voice-tools]");
+          await section.waitFor();
+          await page.waitForFunction(() => !document.querySelector("[data-voice-tools-status]")?.textContent?.includes("…"));
+          const row = page.locator("[data-voice-tool-server]").first();
+          if (refusedPress[state]) {
+            const control = page.locator(refusedPress[state]);
+            await control.scrollIntoViewIfNeeded();
+            if (phone) await control.tap(); else await control.click();
+            await page.waitForSelector("[data-voice-tools-refused]");
+            await page.waitForFunction(selector => !(document.querySelector(selector) as HTMLInputElement | HTMLButtonElement).disabled, refusedPress[state]);
+            if (state === "approved-refused") {
+              expect(await page.locator("[data-voice-tool-ask]").isChecked()).toBe(false);
+              expect(await page.locator("[data-voice-tool-state]").getAttribute("data-voice-tool-state")).toBe("enabled");
+            }
+          }
+          for (const part of ["head", "secrets", "tools", "foot"] as const) {
+            const words = part === "secrets" ? (await page.locator("[data-voice-tool-reference]").count() ? [translate(lang, "voiceCompanion.tools.destinations")] : []) : defining[state](lang)[part] ?? [];
+            if (!words.length) continue;
+            if (state === "empty" || state === "sign-in-required") await section.scrollIntoViewIfNeeded();
+            /* The head: the row's top at the dialog's top. The tools: the list's end at the dialog's bottom. The foot: its last line (the action row, or a line or refusal under it) at the dialog's bottom. */
+            else await page.evaluate(([selector, top]) => document.querySelector(selector)!.scrollIntoView({ block: top ? "start" : "end" }), [part === "head" ? "[data-voice-tool-server]" : part === "secrets" ? "[data-voice-tool-reference]" : part === "tools" ? "[data-voice-tool-tools]" : "[data-voice-tool-server] > :last-child", part === "head"] as const);
+            await page.screenshot({ path: path.join(out, `${label}-${part}.png`) });
+            const read = await page.evaluate(({ words, phone, part }) => {
+              const dialog = document.querySelector<HTMLElement>("[data-voice-companion-settings]")!;
+              const box = dialog.getBoundingClientRect();
+              const section = document.querySelector<HTMLElement>("[data-voice-tools]")!;
+              const inside = (rect: DOMRect) => rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5 && rect.right <= innerWidth + 0.5;
+              const walker = document.createTreeWalker(section, NodeFilter.SHOW_TEXT);
+              let outside = 0;
+              for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                if (!node.textContent?.trim()) continue;
+                const range = document.createRange(); range.selectNodeContents(node);
+                for (const rect of range.getClientRects()) if (rect.width > 0 && !inside(rect)) outside++;
+              }
+              /* Each defining phrase: every text range of it inside the dialog's visible box and the window; a short word on one line. */
+              const shown = words.map(word => {
+                const searchRoot = part === "tools" ? section.querySelector("[data-voice-tool-tools]") ?? section : section;
+                const all = document.createTreeWalker(searchRoot, NodeFilter.SHOW_TEXT);
+                for (let node = all.nextNode(); node; node = all.nextNode()) {
+                  const at = node.textContent?.indexOf(word) ?? -1;
+                  if (at < 0) continue;
+                  const range = document.createRange(); range.setStart(node, at); range.setEnd(node, at + word.length);
+                  const rects = [...range.getClientRects()].filter(rect => rect.width > 0);
+                  return rects.length > 0 && rects.every(rect => rect.top >= Math.max(0, box.top) - 0.5 && rect.bottom <= Math.min(innerHeight, box.bottom) + 0.5 && inside(rect))
+                    && (word.includes(" ") || word.length > 32 || new Set(rects.map(rect => Math.round(rect.top))).size === 1);
+                }
+                return false;
+              });
+              const small = [...section.querySelectorAll<HTMLElement>("button, input, [role=switch]")].filter(control => {
+                const rect = (control.closest("label") ?? control).getBoundingClientRect();
+                return rect.height < (phone ? 44 : 24) - 0.5;
+              }).map(control => control.outerHTML.slice(0, 80));
+              return { viewportOverflow: document.documentElement.scrollWidth > innerWidth + 1, dialogOverflow: dialog.scrollWidth > dialog.clientWidth + 1, outside, shown, small,
+                background: getComputedStyle(dialog).backgroundColor, rows: section.querySelectorAll("[data-voice-tool-server]").length };
+            }, { words, phone, part });
+            measurements.push({ label: `${label}-${part}`, ...read });
+            if (read.viewportOverflow || read.dialogOverflow) failures.push(`${label}: scrolls sideways`);
+            if (read.outside) failures.push(`${label}: ${read.outside} text box(es) outside the dialog`);
+            read.shown.forEach((whole, at) => { if (!whole) failures.push(`${label}-${part}: «${words[at]}» is not whole on screen`); });
+            if (read.small.length) failures.push(`${label}: small targets ${read.small.join(" | ")}`);
+          }
+          expect(await row.count()).toBe(state === "empty" || state === "sign-in-required" ? 0 : 1);
+          if (state === "approved" || state === "approved-ask") {
+            const ask = page.locator("[data-voice-tool-ask]");
+            expect(await ask.isChecked()).toBe(state === "approved-ask");
+            if (lang === "en" && scheme === "light") {
+              if (phone) await ask.tap(); else await ask.click();
+              await page.waitForFunction(checked => (document.querySelector("[data-voice-tool-ask]") as HTMLInputElement | null)?.checked === checked && !(document.querySelector("[data-voice-tool-ask]") as HTMLInputElement).disabled, state !== "approved-ask");
+              expect(await page.locator("[data-voice-tool-state]").getAttribute("data-voice-tool-state")).toBe("enabled");
+              await page.locator("[data-voice-tool-actions]").evaluate(element => element.scrollIntoView({ block: "end" }));
+              await page.screenshot({ path: path.join(out, `${label}-flipped.png`) });
+            }
+          }
+          if (state === "review" && lang === "en" && scheme === "light") {
+            const play = page.locator("[data-voice-tool='play'] input");
+            if (phone) await play.tap(); else await play.click();
+            await page.waitForFunction(() => (document.querySelector("[data-voice-tool='play'] input") as HTMLInputElement | null)?.checked === true && !(document.querySelector("[data-voice-tool='play'] input") as HTMLInputElement).disabled);
+            const approve = page.locator("[data-voice-tool-action='approve']");
+            await approve.scrollIntoViewIfNeeded();
+            if (phone) await approve.tap(); else await approve.click();
+            await page.waitForSelector("[data-voice-tool-state='enabled']");
+            await page.locator("[data-voice-tool-server]").evaluate(element => element.scrollIntoView({ block: "start" }));
+            await page.screenshot({ path: path.join(out, `${label}-approved.png`) });
+          }
+          if (pageErrors.length) failures.push(`${label}: page errors ${pageErrors.join(" | ")}`);
+        } finally { await context.close(); }
+      }
+      }
+      fs.mkdirSync("evidence/voice-companion", { recursive: true });
+      const sources = ["src/components/kanban/kanbanBoard.browser.test.tsx", "src/components/kanban/issue1695Evidence.fixture.tsx", "src/components/voiceCompanion/VoiceToolsSetting.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts", "src/app/globals.css"];
+      fs.writeFileSync("evidence/voice-companion/voice-tools.json", JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", synthetic: true, viewportBasis: "configured scene width",
+        command: "LLV_KANBAN_BROWSER_TEST=1 CHROME_BIN=<chromium> bun test src/components/kanban/kanbanBoard.browser.test.tsx --test-name-pattern 'voice tools settings render every state'",
+        sources: Object.fromEntries(sources.map(source => [source, createHash("sha256").update(fs.readFileSync(source)).digest("hex")])), failures, measurements }, null, 2) + "\n");
+      expect(failures).toEqual([]);
+    } finally { await browser?.close(); server.stop(); }
+  }, 900_000);
 
   /*
    * Audit B24: a press on a voice setting flips at once, and a refusal brings it
@@ -24879,6 +25361,158 @@ describe("floating voice companion", () => {
       const processes = await close();
       expect(processes.leftAfterClose, "every browser process this case started has exited").toBe(0);
       record("transcript.json", { driver: DRIVER, variant: 2, rule: "call and month sums sit at the foot of the transcript above a thin monthly-cap meter; the call's share is teal", processes, readings });
+    }
+  }, 1_800_000);
+
+  /* GitHub #2975: after a call the owner reads what the voice did. The page opens as after a reload, with no call of
+     its own (`&history=1`, `sampleCallHistory`): the character opens the newest retained call, the panel's picker
+     opens each earlier one, and an opened request says why it was not sent or delivered and links the orchestrator
+     conversation it went to. Every text the case names is measured whole inside the panel's body and the viewport,
+     from its text ranges. `LLV_VOICE_COMPANION_ONLY` runs it when it names `history`. Images go to
+     `<hand-off>/history`, never into the tree. */
+  browserTest("call history after a reload: the newest retained call, a picker for each earlier one, and a request's reason and orchestrator link, 1440 and 1000, en and uk, light and dark", async () => {
+    if (ONLY && !ONLY.includes("history")) return;
+    /* The first action of an opened call (a tool call or a request to the orchestrator) and its status text. */
+    const FIRST_ACTION = ['.vc-tr-list > li:is([data-kind="call"], [data-kind="request"])', '.vc-tr-list > li:is([data-kind="call"], [data-kind="request"]) .vc-call-state'];
+    const out = path.join(HANDOFF, "history");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const { browser, close } = await launchOwned();
+    const readings: unknown[] = [];
+    /** Whether each text range of each element is whole inside the panel's body (or, for the picker row, the panel) and the viewport. */
+    const whole = (page: Page, selectors: string[]) => page.evaluate(({ list, controlSelector }) => {
+      const view = document.querySelector<HTMLElement>("[data-companion-transcript-view]")!;
+      const body = view.querySelector<HTMLElement>("[data-transcript-body]")!;
+      const result: Record<string, { found: boolean; whole: boolean; text: string }> = {};
+      for (const selector of list) {
+        const element = view.querySelector<HTMLElement>(selector);
+        if (!element) { result[selector] = { found: false, whole: false, text: "" }; continue; }
+        const clip = (body.contains(element) ? body : view).getBoundingClientRect();
+        const range = document.createRange(); range.selectNodeContents(element);
+        const rects = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+        /* Nothing else stands over the text: the topmost element at each piece's middle is the element itself. */
+        const uncovered = rects.every((rect) => { const top = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2); return !!top && (element === top || element.contains(top)); });
+        result[selector] = { found: true, text: element.innerText, whole: rects.length > 0 && uncovered && rects.every((rect) => rect.top >= clip.top - 0.5 && rect.bottom <= clip.bottom + 0.5
+          && rect.left >= clip.left - 0.5 && rect.right <= clip.right + 0.5 && rect.top >= 0 && rect.bottom <= innerHeight && rect.left >= 0 && rect.right <= innerWidth) };
+      }
+      /* A closed select draws its chosen option's text itself: measured with its own font against its content box. */
+      const picker = view.querySelector<HTMLSelectElement>("select[data-transcript-calls]")!;
+      const style = getComputedStyle(picker);
+      const context = document.createElement("canvas").getContext("2d")!;
+      context.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+      const label = picker.selectedOptions[0]?.textContent ?? "";
+      const room = picker.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - 20;
+      const box = view.getBoundingClientRect(); const pick = picker.getBoundingClientRect();
+      return { result, picker: { label, fits: context.measureText(label).width <= room, height: pick.height, inside: pick.left >= box.left && pick.right <= box.right && pick.top >= box.top && pick.bottom <= box.bottom
+          && document.elementFromPoint(pick.left + pick.width / 2, pick.top + pick.height / 2) === picker },
+        panelInside: box.left >= 0 && box.top >= 0 && box.right <= innerWidth && box.bottom <= innerHeight, sideways: body.scrollWidth - body.clientWidth,
+        /* The page's own top bar: no control of the page that starts in its first 48 px stands under the panel. */
+        covered: [...document.querySelectorAll<HTMLElement>(controlSelector)].filter((control) => !view.contains(control) && !control.closest("[data-voice-companion]"))
+          .map((control) => ({ control, rect: control.getBoundingClientRect() }))
+          .filter(({ rect }) => rect.width > 0 && rect.height > 0 && rect.top < 48 && rect.left < box.right && rect.right > box.left && rect.top < box.bottom && rect.bottom > box.top)
+          .map(({ control, rect }) => `${control.tagName.toLowerCase()} ${(control.innerText || control.getAttribute("aria-label") || "").slice(0, 24)} ${Math.round(rect.left)},${Math.round(rect.top)}`),
+        top: Math.round(box.top),
+        /* A row of the list the body's top edge runs through: a retained call opens at its start, so none is cut there. */
+        cutByTop: [...body.querySelectorAll<HTMLElement>(".vc-tr-list > li")].filter((row) => { const rect = row.getBoundingClientRect(); return rect.top < body.getBoundingClientRect().top - 0.5 && rect.bottom > body.getBoundingClientRect().top + 0.5; })
+          .map((row) => row.getAttribute("data-kind") ?? ""),
+        scrolled: Math.round(body.scrollTop),
+        /* The open request's name, whole inside its own line. */
+        title: [...view.querySelectorAll<HTMLElement>("[data-transcript-request] [data-human-label]")].map((node) => ({ text: node.innerText, whole: node.scrollWidth <= node.clientWidth && node.scrollHeight <= node.clientHeight + 1 })),
+        /* The space between the end of what is read above each label of the opened request and the label itself, from the text. */
+        gaps: [...view.querySelectorAll<HTMLElement>(".vc-tr-detail .vc-tr-label")].map((label) => {
+          const previous = label.previousElementSibling as HTMLElement | null;
+          if (!previous) return null;
+          const ink = (node: HTMLElement) => {
+            if (node.matches("pre, .vc-instruction")) { const rect = node.getBoundingClientRect(); return { top: rect.top, bottom: rect.bottom }; }
+            const range = document.createRange(); range.selectNodeContents(node);
+            const rects = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+            return { top: Math.min(...rects.map((rect) => rect.top)), bottom: Math.max(...rects.map((rect) => rect.bottom)) };
+          };
+          return { label: label.textContent ?? "", after: previous.matches("[data-transcript-reason]") ? "reason" : previous.tagName.toLowerCase(), gap: Math.round((ink(label).top - ink(previous).bottom) * 10) / 10 };
+        }).filter((gap) => gap !== null) as Array<{ label: string; after: string; gap: number }> };
+    }, { list: selectors, controlSelector: CONTROL_SELECTOR });
+    /** Opens the shown call's request and scrolls its line to the top of the body. */
+    const openRequest = async (page: Page) => {
+      const request = page.locator('[data-companion-transcript-view] [data-transcript-call="request_orchestrator_delegation"]');
+      await request.locator("[data-transcript-toggle]").click();
+      await request.locator("[data-transcript-detail]").waitFor();
+      await request.evaluate((element) => { const body = element.closest<HTMLElement>("[data-transcript-body]")!; body.scrollTop += element.getBoundingClientRect().top - body.getBoundingClientRect().top - 8; });
+      await page.waitForTimeout(150);
+    };
+    try {
+      for (const viewport of SIZES) for (const lang of ["en", "uk"] as const) for (const scheme of ["light", "dark"] as const) {
+        const label = `${viewport.width}-${lang}-${scheme}`;
+        const { context, page, pageErrors } = await openVoice(browser, server.base, "&history=1", { viewport, scheme, lang, motion: "reduce" });
+        try {
+          /* The fixture's own attention notices are the page's, not the panel's: they are dismissed as in the cases above. */
+          for (let notice = 0; notice < 3 && await page.locator("[data-attention-toast-dismiss]").count(); notice++) await page.locator("[data-attention-toast-dismiss]").first().click();
+          const grip = page.locator("[data-voice-companion] [data-grip]");
+          await page.waitForFunction(() => document.querySelector("[data-voice-companion] [data-grip]")?.getAttribute("aria-expanded") === "false", null, { timeout: 10_000 });
+          expect(await page.locator("[data-companion-talk]").count(), `${label}: no call runs`).toBe(1);
+          await grip.focus();
+          await page.keyboard.press("Enter");
+          const panel = page.locator("[data-companion-transcript-view]");
+          const picker = panel.locator("select[data-transcript-calls]");
+          await picker.waitFor({ timeout: 5_000 });
+          await page.waitForTimeout(250);
+          const options = await picker.locator("option").allTextContents();
+          expect(options.length, `${label}: three retained calls`).toBe(3);
+          expect(await picker.inputValue(), `${label}: the newest call opens`).toBe("call_delegation");
+          expect(await panel.locator("[data-transcript-request]").first().getAttribute("data-stage")).toBe("delivered");
+          const newest = await whole(page, [".vc-tr-title", ".vc-tr-sub", ...FIRST_ACTION]);
+          await page.screenshot({ path: path.join(out, `history-${label}-1-newest.png`) });
+
+          await picker.selectOption("call_failed_delivery");
+          await panel.locator('[data-transcript-request][data-stage="failed"]').waitFor({ timeout: 5_000 });
+          const failedStart = await whole(page, FIRST_ACTION);
+          await openRequest(page);
+          const failed = await whole(page, ['[data-transcript-request][data-stage="failed"] .vc-call-state', "[data-transcript-reason]", "a[data-transcript-orchestrator]"]);
+          expect(failed.result["[data-transcript-reason]"]!.text, `${label}: the delivery failure says why`).toContain(lang === "uk" ? "нічого не надіслано" : "nothing was sent");
+          expect(failed.result["a[data-transcript-orchestrator]"]!.text, `${label}: the orchestrator link names its project`).toBe("Atlas");
+          await page.screenshot({ path: path.join(out, `history-${label}-2-failed.png`) });
+
+          await picker.selectOption("call_refused");
+          await panel.locator('[data-transcript-request][data-stage="refused"]').waitFor({ timeout: 5_000 });
+          const refusedStart = await whole(page, FIRST_ACTION);
+          await openRequest(page);
+          const refused = await whole(page, ['[data-transcript-request][data-stage="refused"] .vc-call-state', "[data-transcript-reason]"]);
+          expect(refused.result["[data-transcript-reason]"]!.text, `${label}: the refusal says why`).toContain(lang === "uk" ? "немає призначеного оркестратора" : "no designated orchestrator");
+          expect(await panel.locator("a[data-transcript-orchestrator]").count(), `${label}: a refusal before any orchestrator links none`).toBe(0);
+          await page.screenshot({ path: path.join(out, `history-${label}-3-refused.png`) });
+
+          /* Each call opens at its start: its first action row and that row's status text stand whole in the body and no row is cut by the body's top edge. */
+          for (const [step, reading] of [["newest", newest], ["failed", failedStart], ["refused", refusedStart]] as const) {
+            expect(Object.entries(reading.result).filter(([selector, value]) => FIRST_ACTION.includes(selector) && (!value.found || !value.whole)).map(([selector]) => selector), `${label} ${step}: the first action row and its status are whole on opening`).toEqual([]);
+            expect([reading.scrolled, reading.cutByTop], `${label} ${step}: opened at the start, no row cut by the body's top edge`).toEqual([0, []]);
+          }
+          for (const [step, reading] of [["newest", newest], ["failed", failed], ["refused", refused]] as const) {
+            expect(Object.entries(reading.result).filter(([, value]) => !value.found || !value.whole).map(([selector]) => selector), `${label} ${step}: every named text is whole`).toEqual([]);
+            expect([reading.panelInside, reading.picker.inside, reading.picker.fits, reading.sideways <= 1], `${label} ${step}: panel, picker and its label fit`).toEqual([true, true, true, true]);
+            expect(reading.covered, `${label} ${step}: the panel (top at ${reading.top}) stands below the page's top bar`).toEqual([]);
+          }
+          for (const [step, reading] of [["failed", failed], ["refused", refused]] as const) {
+            expect(reading.title.filter((title) => !title.whole), `${label} ${step}: the request's name is whole in its line`).toEqual([]);
+            const reason = reading.gaps.find((gap) => gap.after === "reason");
+            const others = reading.gaps.filter((gap) => gap.after !== "reason").map((gap) => gap.gap);
+            expect(reason, `${label} ${step}: a label follows the reason`).toBeDefined();
+            expect(reason!.gap, `${label} ${step}: the reason has the space the other blocks leave above their next label (${JSON.stringify(reading.gaps)})`).toBeGreaterThanOrEqual(Math.min(...others) - 1);
+            expect(reason!.gap, `${label} ${step}: and within the 12 to 18 px the opened request leaves above its other labels`).toBeGreaterThanOrEqual(12);
+            expect(reason!.gap).toBeLessThanOrEqual(18);
+          }
+          expect(failed.result["[data-transcript-reason]"]!.text, `${label}: the failure reason reads in the owner's language, with no code in it`).not.toMatch(lang === "uk" ? /[A-Za-z]/u : /[(_)]/u);
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("[data-companion-transcript-view]", { state: "detached", timeout: 5_000 });
+          expect(pageErrors, label).toEqual([]);
+          readings.push({ viewport: viewport.width, lang, scheme, options, newest, failed, refused });
+        } finally { await context.close(); }
+      }
+    } finally {
+      fs.writeFileSync(path.join(out, "readings.json"), `${JSON.stringify(readings, null, 2)}\n`);
+      server.stop();
+      const processes = await close();
+      expect(processes.leftAfterClose, "every browser process this case started has exited").toBe(0);
+      if (!ONLY) record("call-history.json", { driver: DRIVER, issue: 2975, fixture: "?scenario=voice-companion&history=1", synthetic: true,
+        rule: "after a reload the character opens the newest retained call; the panel's picker opens each retained call, named by its time, project and number of actions; an opened request says in the owner's language why it was not sent or delivered and links the orchestrator conversation it went to", processes, readings });
     }
   }, 1_800_000);
 
@@ -30520,6 +31154,7 @@ describe("operator decision forms: the «Рішення» column beside the seat
   const OUT = path.resolve(process.env.OPERATOR_DECISIONS_PNG_DIR ?? ".artifacts/operator-decisions");
   const SEAT_ASK = `pr_${"d".repeat(32)}`;
   const LANE_ROUND = `pr_${"c".repeat(32)}`;
+  const SEAT_SECOND = `pr_${"e".repeat(32)}`;
   browserTest("question skip: inline card and feed record at desktop and 390 in both languages", async () => {
     const out = path.resolve(process.env.QUESTION_SKIP_CARD_PNG_DIR ?? ".artifacts/operator-decisions/question-skip"); fs.mkdirSync(out, { recursive: true });
     const server = await serveEvidenceFixture(out);
@@ -30616,6 +31251,10 @@ describe("operator decision forms: the «Рішення» column beside the seat
           try {
             await page.waitForSelector('[data-decision-column="decisions"] [data-decision-list="3"]', { timeout: 30_000 });
             await page.waitForSelector("[data-decision-pointer-open]", { timeout: 30_000 });
+            /* The newest question stands open first; the lane's older round opens from its row. */
+            const newest = await page.locator('[data-decision-column] [data-decision-card="open"]').getAttribute("data-decision-review");
+            if (newest !== SEAT_SECOND) fail(`the column opened ${newest} first, expected the newest`);
+            await page.locator(`[data-decision-column] [data-decision-row="${LANE_ROUND}"]`).click();
             await page.mouse.move(0, 0);
             await page.waitForTimeout(600);
             const lane = await readForm(page, "[data-decision-column]");
@@ -30672,12 +31311,16 @@ describe("operator decision forms: the «Рішення» column beside the seat
             if (strip?.trim() !== t("decisions.waiting", { count: 3 })) fail(`the line reads «${strip}»`);
             await page.locator("[data-decision-strip]").click();
             await page.waitForSelector('[data-decision-column="decisions"] [data-decision-list="3"]', { timeout: 10_000 });
+            /* The lane's round, with its two thumbnails, opens from its row under the newest question. */
+            await page.locator(`[data-decision-column] [data-decision-row="${LANE_ROUND}"]`).click();
+            await page.waitForSelector(`[data-decision-column] [data-decision-card="open"][data-decision-review="${LANE_ROUND}"]`, { timeout: 10_000 });
+            await page.mouse.move(0, 0);
             await page.waitForTimeout(400);
             const column = await readForm(page, "[data-decision-column]");
             const composer = await page.evaluate(() => Boolean(document.querySelector("[data-orchestrator-panel] textarea")));
             readings[`${label}-open`] = { ...column, composer };
             await page.screenshot({ path: path.join(OUT, `${label}-open.png`) });
-            if (!column.sendReachable || column.minOptionHeight < 36 || column.titleCut || column.horizontalOverflow || column.thumbsOverlap || !composer) fail(`the column in place reads ${JSON.stringify({ ...column, composer })}`);
+            if (column.review !== LANE_ROUND || column.thumbs.length !== 2 || !column.sendReachable || column.minOptionHeight < 36 || column.titleCut || column.horizontalOverflow || column.thumbsOverlap || !composer) fail(`the column in place reads ${JSON.stringify({ ...column, composer })}`);
             if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
           } catch (error) {
             fail(error instanceof Error ? error.message.split("\n")[0]! : String(error));
@@ -30703,12 +31346,14 @@ describe("operator decision forms: the «Рішення» column beside the seat
             if (line.height < 44 || line.text !== t("decisions.waiting", { count: 3 })) fail(`the line reads ${JSON.stringify(line)}`);
             await page.locator("[data-decision-strip]").click();
             await page.waitForSelector('[data-mobile2-sheet="decisions"] [data-decision-list="3"]', { timeout: 10_000 });
+            await page.locator(`[data-mobile2-sheet="decisions"] [data-decision-row="${LANE_ROUND}"]`).click();
+            await page.waitForSelector(`[data-mobile2-sheet="decisions"] [data-decision-card="open"][data-decision-review="${LANE_ROUND}"]`, { timeout: 10_000 });
             await page.waitForTimeout(500);
             const sheet = await readForm(page, '[data-mobile2-sheet="decisions"]');
             const tabs = await page.locator('[data-mobile2-sheet="decisions"] [data-decision-tab]').count();
             readings[`${label}-sheet`] = { ...sheet, tabs };
             await page.screenshot({ path: path.join(OUT, `${label}-sheet.png`) });
-            if (tabs !== 2 || !sheet.sendReachable || sheet.minOptionHeight < 44 || sheet.titleCut || sheet.horizontalOverflow || sheet.thumbsOverlap) fail(`the sheet reads ${JSON.stringify({ ...sheet, tabs })}`);
+            if (tabs !== 2 || sheet.review !== LANE_ROUND || sheet.thumbs.length !== 2 || !sheet.sendReachable || sheet.minOptionHeight < 44 || sheet.titleCut || sheet.horizontalOverflow || sheet.thumbsOverlap) fail(`the sheet reads ${JSON.stringify({ ...sheet, tabs })}`);
             await page.locator('[data-mobile2-sheet="decisions"] [data-decision-tab="reports"]').click();
             await page.waitForSelector('[data-mobile2-sheet="decisions"] [data-report-log]', { timeout: 10_000 });
             await page.screenshot({ path: path.join(OUT, `${label}-reports.png`) });
@@ -30725,6 +31370,159 @@ describe("operator decision forms: the «Рішення» column beside the seat
     }
     fs.mkdirSync("evidence/operator-decisions", { recursive: true });
     fs.writeFileSync("evidence/operator-decisions/column.json", `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings, failures }, null, 2)}\n`);
+    if (failures.length) throw new Error(failures.join("\n"));
+  }, 900_000);
+
+  /*
+   * The open form folds and the newest decision comes first, over
+   * `&decisions=long` (the first seat question carries a ninety-character
+   * title): at 1440 in the column beside the chat, at 1000 in the transcript's
+   * place, and at 390 in the phone's sheet, uk and en, light and dark. Each
+   * frame reads the list newest first with the newest form open; a press on its
+   * header folds it, every row reads folded, the keyboard lands on the folded
+   * row, and nothing is answered; Enter opens it again and Space folds it. The
+   * long-titled form, opened from its row, keeps its title whole and its time
+   * and fold mark clear of it. At 1440 the feed's pointer opens its own form in
+   * the folded column.
+   *
+   *   CHROME_BIN=google-chrome-stable LLV_KANBAN_BROWSER_TEST=1 \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "folds back to its row"
+   *
+   * Readings go to `evidence/operator-decisions/fold.json`; frames to
+   * OPERATOR_DECISIONS_PNG_DIR or `.artifacts/operator-decisions/`, never committed.
+   */
+  browserTest("the open form folds back to its row and the newest decision is listed first at 1440, 1000 and 390", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(path.join(OUT, "bundle-root-fold"));
+    const browser = await chromium.launch(LAUNCH);
+    const readings: Record<string, unknown> = {};
+    const failures: string[] = [];
+    const ORDER = [SEAT_SECOND, SEAT_ASK, LANE_ROUND];
+    /* The list as drawn: its order, which form stands open, each row whole, the open header's parts apart. */
+    const readFold = (page: Page, scope: string) => page.evaluate((root) => {
+      const within = document.querySelector<HTMLElement>(root);
+      const list = within?.querySelector<HTMLElement>("[data-decision-list]") ?? null;
+      const frame = list?.getBoundingClientRect();
+      const box = (rect: DOMRect) => ({ x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.width), h: Math.round(rect.height) });
+      const apart = (a: DOMRect, b: DOMRect) => a.right <= b.left + 0.5 || b.right <= a.left + 0.5 || a.bottom <= b.top + 0.5 || b.bottom <= a.top + 0.5;
+      const textRects = (node: Element) => { const range = document.createRange(); range.selectNodeContents(node); return [...range.getClientRects()]; };
+      const rows = [...list?.querySelectorAll<HTMLElement>("[data-decision-row]") ?? []].map((row) => {
+        const rect = row.getBoundingClientRect();
+        /* A folded title ends in «…» by design: its box stays inside the row and its line is whole in height. */
+        const title = row.querySelector<HTMLElement>("span.flex-1");
+        const span = title?.getBoundingClientRect();
+        const lines = title ? new Set(textRects(title).map((part) => Math.round(part.top))).size : 0;
+        return { id: row.dataset.decisionRow, expanded: row.getAttribute("aria-expanded"), label: row.getAttribute("aria-label"), text: title?.textContent ?? "", ...box(rect),
+          inside: Boolean(frame && rect.top >= frame.top - 0.5 && rect.bottom <= frame.bottom + 0.5 && rect.left >= frame.left - 0.5 && rect.right <= frame.right + 0.5),
+          truncated: title ? title.scrollWidth > title.clientWidth + 0.5 : null,
+          titleInside: Boolean(span && lines === 1 && span.left >= rect.left && span.right <= rect.right + 0.5 && span.top >= rect.top && span.bottom <= rect.bottom + 0.5) };
+      });
+      const card = list?.querySelector<HTMLElement>("[data-decision-card]") ?? null;
+      const fold = card?.querySelector<HTMLElement>("[data-decision-collapse]") ?? null;
+      const header = fold?.getBoundingClientRect();
+      const title = card?.querySelector<HTMLElement>("[data-decision-title]") ?? null;
+      const time = fold?.querySelector("time")?.getBoundingClientRect();
+      const mark = fold?.querySelector("svg:last-child")?.getBoundingClientRect();
+      const titleRects = title ? textRects(title) : [];
+      const hit = header ? document.elementFromPoint(header.left + header.width / 2, header.top + Math.min(header.height / 2, 12)) : null;
+      return {
+        order: [...list?.querySelectorAll<HTMLElement>("[data-decision-row], [data-decision-card]") ?? []].map((node) => node.dataset.decisionRow ?? node.dataset.decisionReview),
+        expanded: list?.dataset.decisionExpanded ?? null,
+        rows,
+        open: card && fold && header ? {
+          review: card.dataset.decisionReview, ariaExpanded: fold.getAttribute("aria-expanded"), label: fold.getAttribute("aria-label"), header: box(header),
+          title: title?.textContent ?? "", titleWhole: titleRects.length > 0 && titleRects.every((part) => part.right <= header.right + 0.5 && part.bottom <= header.bottom + 0.5),
+          timeApart: Boolean(time && titleRects.every((part) => apart(part, time))), markApart: Boolean(mark && time && apart(mark, time) && titleRects.every((part) => apart(part, mark))),
+          markInside: Boolean(mark && mark.right <= header.right + 0.5 && mark.top >= header.top), uncovered: Boolean(hit && fold.contains(hit)),
+        } : null,
+        focused: (document.activeElement as HTMLElement | null)?.dataset.decisionRow ?? ((document.activeElement as HTMLElement | null)?.hasAttribute("data-decision-collapse") ? `fold:${document.activeElement!.closest<HTMLElement>("[data-decision-review]")?.dataset.decisionReview}` : document.activeElement?.tagName ?? null),
+        horizontalOverflow: document.documentElement.scrollWidth > innerWidth,
+      };
+    }, scope);
+    try {
+      for (const width of [1440, 1000, 390] as const) for (const lang of ["uk", "en"] as const) for (const scheme of ["light", "dark"] as const) {
+        const t = (key: string, vars?: Record<string, string | number>) => translate(lang, key as never, vars);
+        const phone = width === 390;
+        const label = `fold-${width}-${lang}-${scheme}`;
+        const fail = (text: string) => failures.push(`${label}: ${text}`);
+        const scope = phone ? '[data-mobile2-sheet="decisions"]' : '[data-decision-column="decisions"]';
+        const titles: Record<string, string> = {
+          [SEAT_SECOND]: lang === "uk" ? "Акаунт для нічних лейнів Codex" : "Account for the night Codex lanes",
+          [SEAT_ASK]: lang === "uk" ? "Де закріпити список «Готово» і коли деплоїти його після мержу, на кожній інстанції проєкту" : "Where to pin the «Done» list and when to deploy it after the merge, for every instance of the project",
+          [LANE_ROUND]: lang === "uk" ? "Вікно підтвердження оновлення" : "Update confirmation window",
+        };
+        const { context, page, pageErrors } = await openFixture(browser, `${server.base}?decisions=long`, phone ? { width: 390, height: 844 } : { width, height: 900 }, scheme, lang, "reduce", phone);
+        const shot = (state: string) => page.screenshot({ path: path.join(OUT, `${label}-${state}.png`) });
+        try {
+          if (phone) {
+            await page.click("[data-mobile2-seat-open]", { timeout: 30_000 });
+            await page.locator("[data-decision-strip]").click({ timeout: 30_000 });
+          } else if (width === 1000) await page.locator('[data-orchestrator-panel] [data-decision-strip="3"]').click({ timeout: 30_000 });
+          await page.waitForSelector(`${scope} [data-decision-list="3"]`, { timeout: 30_000 });
+          await page.mouse.move(0, 0);
+          await page.waitForTimeout(500);
+          /* Newest first, and the newest stands open. */
+          const first = await readFold(page, scope);
+          readings[`${label}-expanded`] = first;
+          await shot("expanded");
+          if (JSON.stringify(first.order) !== JSON.stringify(ORDER) || first.expanded !== SEAT_SECOND) fail(`the list opens ${JSON.stringify({ order: first.order, expanded: first.expanded })}`);
+          if (!first.open || first.open.ariaExpanded !== "true" || first.open.label !== t("decisions.collapseAria", { title: titles[SEAT_SECOND]! }) || !first.open.titleWhole || !first.open.timeApart || !first.open.markApart || !first.open.markInside || !first.open.uncovered || (phone && first.open.header.h < 44)) fail(`the open header reads ${JSON.stringify(first.open)}`);
+          /* A press on the header's title folds it; nothing is answered. */
+          await page.locator(`${scope} [data-decision-review="${SEAT_SECOND}"] [data-decision-title]`).click();
+          await page.waitForSelector(`${scope} [data-decision-card]`, { state: "detached", timeout: 5_000 });
+          const folded = await readFold(page, scope);
+          readings[`${label}-collapsed`] = folded;
+          await shot("collapsed");
+          const posts = await page.evaluate(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts.length);
+          if (JSON.stringify(folded.rows.map((row) => row.id)) !== JSON.stringify(ORDER) || folded.expanded !== "" || folded.open || posts) fail(`folded, the list reads ${JSON.stringify({ ...folded, posts })}`);
+          for (const row of folded.rows) {
+            if (row.expanded !== "false" || row.label !== t("decisions.expandAria", { title: titles[row.id!]! }) || row.text !== titles[row.id!] || !row.inside || !row.titleInside || row.h < 44) fail(`the row of ${row.id} reads ${JSON.stringify(row)}`);
+          }
+          if (folded.focused !== SEAT_SECOND) fail(`the keyboard landed on ${folded.focused}`);
+          if (folded.horizontalOverflow) fail("the folded list scrolls sideways");
+          /* The keyboard: Enter opens the folded row, Space folds it again. */
+          await page.keyboard.press("Enter");
+          await page.waitForSelector(`${scope} [data-decision-card="open"][data-decision-review="${SEAT_SECOND}"]`, { timeout: 5_000 });
+          const reopened = await readFold(page, scope);
+          if (reopened.focused !== `fold:${SEAT_SECOND}`) fail(`after Enter the keyboard is on ${reopened.focused}`);
+          await page.keyboard.press("Space");
+          await page.waitForSelector(`${scope} [data-decision-card]`, { state: "detached", timeout: 5_000 });
+          readings[`${label}-keyboard`] = { reopened: reopened.focused, refolded: (await readFold(page, scope)).focused };
+          /* The long-titled form opens from its row: its title whole, its time and fold mark clear of it. */
+          await page.locator(`${scope} [data-decision-row="${SEAT_ASK}"]`).click();
+          await page.waitForSelector(`${scope} [data-decision-card="open"][data-decision-review="${SEAT_ASK}"]`, { timeout: 5_000 });
+          await page.locator(`${scope} [data-decision-review="${SEAT_ASK}"] [data-decision-collapse]`).scrollIntoViewIfNeeded();
+          await page.waitForTimeout(300);
+          const long = await readFold(page, scope);
+          readings[`${label}-long`] = long;
+          await shot("long-open");
+          if (!long.open || long.open.review !== SEAT_ASK || long.open.title !== titles[SEAT_ASK] || !long.open.titleWhole || !long.open.timeApart || !long.open.markApart || !long.open.markInside || long.horizontalOverflow) fail(`the long form's header reads ${JSON.stringify(long.open)}`);
+          /* A request from the feed opens its form in the folded column. */
+          if (width === 1440) {
+            await page.locator(`${scope} [data-decision-review="${SEAT_ASK}"] [data-decision-collapse]`).click();
+            await page.waitForSelector(`${scope} [data-decision-card]`, { state: "detached", timeout: 5_000 });
+            await page.locator("[data-decision-pointer-open]").click();
+            await page.waitForSelector(`${scope} [data-decision-card="open"][data-decision-review="${SEAT_ASK}"]`, { timeout: 5_000 });
+            await page.waitForTimeout(300);
+            const requested = await readFold(page, scope);
+            readings[`${label}-requested`] = requested;
+            await shot("requested");
+            if (requested.expanded !== SEAT_ASK) fail(`the pointer opened ${requested.expanded}`);
+          }
+          const sent = await page.evaluate(() => (window as unknown as { decisionPosts: unknown[] }).decisionPosts.length);
+          if (sent) fail(`${sent} answers were posted while folding`);
+          if (pageErrors.length) fail(`page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          fail(error instanceof Error ? error.message.split("\n")[0]! : String(error));
+          await shot("failed").catch(() => {});
+        } finally { await context.close(); }
+      }
+    } finally {
+      await browser.close();
+      server.stop();
+    }
+    fs.mkdirSync("evidence/operator-decisions", { recursive: true });
+    fs.writeFileSync("evidence/operator-decisions/fold.json", `${JSON.stringify({ driver: "src/components/kanban/kanbanBoard.browser.test.tsx", readings, failures }, null, 2)}\n`);
     if (failures.length) throw new Error(failures.join("\n"));
   }, 900_000);
 
@@ -30779,6 +31577,8 @@ describe("operator decision forms: the «Рішення» column beside the seat
           try {
             if (!phone) await page.waitForSelector("[data-decision-pointer-open]", { timeout: 30_000 });
             await openList(page);
+            await page.locator(`${scope} [data-decision-row="${LANE_ROUND}"]`).click();
+            await page.waitForSelector(`${scope} [data-decision-card="open"][data-decision-review="${LANE_ROUND}"]`);
             const lane = await readParts(page, scope);
             if (!lane.source || !lane.source.whole || /[…]|\.\.\./.test(lane.source.text) || /\d+\s*(variant|варіант)/i.test(lane.source.text) || !lane.source.text.includes("Restore search results") && !lane.source.text.includes("Відновити")) fail(`the lane's source line reads ${JSON.stringify(lane.source)}`);
             if (lane.horizontalOverflow) fail("the lane's round scrolls sideways");
@@ -30865,7 +31665,6 @@ describe("operator decision forms: the «Рішення» column beside the seat
    * the next read of the board takes its row and its count away as well.
    * Readings go to `evidence/operator-decisions/mirror.json`.
    */
-  const SEAT_SECOND = `pr_${"e".repeat(32)}`;
   const waitingCount = (page: Page, phone: boolean) => page.evaluate((onPhone) => onPhone
     ? Number(document.querySelector<HTMLElement>("[data-mobile2-attention-count]")?.dataset.mobile2AttentionCount ?? "0")
     : Number((document.querySelector("[data-attention-count] .tabular-nums")?.textContent ?? document.querySelector("[data-needs-you-title]")?.textContent?.match(/\d+\s*$/)?.[0] ?? "0")), phone);
@@ -31014,7 +31813,9 @@ describe("operator decision forms: the «Рішення» column beside the seat
             await page.locator("[data-decision-strip]").click({ timeout: 30_000 });
           }
           await page.waitForSelector(`${scope} [data-decision-list="3"]`, { timeout: 30_000 });
-          await page.locator(`${scope} [data-decision-row="${SEAT_SECOND}"]`).click();
+          /* The newest round stands open first; a row is pressed only where it is folded. */
+          const folded = page.locator(`${scope} [data-decision-row="${SEAT_SECOND}"]`);
+          if (await folded.count()) await folded.click();
           const card = `${scope} [data-decision-card="open"][data-decision-review="${SEAT_SECOND}"]`;
           await page.waitForSelector(card, { timeout: 10_000 });
           await page.locator(`${card} [data-prototype-option="account:1"]`).click();
@@ -33014,6 +33815,9 @@ describe("operator decision forms: rejecting the task's prototype variants", () 
             await page.locator("[data-mobile2-seat-open]").click();
             await page.locator("[data-decision-strip]").click();
           }
+          const lane = page.locator(`[data-decision-row="pr_${"c".repeat(32)}"]`);
+          await lane.waitFor({ timeout: 30_000 });
+          await lane.click();
           const card = page.locator('[data-decision-card="open"]');
           await card.waitFor({ timeout: 30_000 });
           const reject = card.locator("[data-decision-reject]");
@@ -34111,6 +34915,221 @@ describe("full autonomy", () => {
 });
 
 
+describe("turbo mode «Форсаж»", () => {
+  browserTest("turbo: the switch beside Full autonomy, the confirmation with its credit approval, and every state on board, dock and phone", async () => {
+    const out = path.resolve(process.env.LLV_TURBO_FRAMES ?? ".artifacts/turbo-mode");
+    fs.mkdirSync(out, { recursive: true });
+    const { defaultSeatTickSettings, writeSeatTickSettings } = await import("@/lib/monitor/seatTickSettings");
+    const { seatTickSettingsAnswer } = await import("@/lib/monitor/seatTickSettingsAnswer");
+    const gateway = { kind: "gateway" as const, project: null, conversationId: null, seatEpoch: null };
+    type TurboState = "off" | "switching" | "on" | "on-credits" | "ending" | "disabled";
+    let state: TurboState = "off";
+    const plan = [
+      { accountId: "acct-a", label: "Account A", plan: "promax", tiers: { "gpt-6.1-sol": "ultrafast" as const, "gpt-6-astra": "ultrafast" as const, "gpt-6-luna": "priority" as const }, hadCredits: true },
+      { accountId: "acct-b", label: "Account B", plan: "pro", tiers: { "gpt-6.1-sol": "priority" as const }, hadCredits: true },
+      { accountId: "acct-c", label: "Account C", plan: "prolite", tiers: { "gpt-6.1-sol": "priority" as const }, hadCredits: false },
+    ];
+    const turbo = () => {
+      if (state === "off" || state === "disabled") return { active: false, episode: null, history: [], available: state === "off", unavailableReason: state === "off" ? null : "no-faster-tier", progress: null };
+      const minutes = state === "ending" ? 8 : 115;
+      const paid = state === "on-credits";
+      const episode = { enabled: true, startedAt: new Date(Date.now() - 5 * 60_000).toISOString(), until: new Date(Date.now() + minutes * 60_000).toISOString(), endedAt: null, endReason: null,
+        updatedAt: new Date().toISOString(), setBy: gateway, why: null, plan,
+        credits: { approved: paid, accounts: paid ? ["acct-a", "acct-b"] : [], approvedAt: paid ? new Date().toISOString() : null, withdrawnAt: null, withdrawnBy: null, withdrawnWhy: null },
+        switches: state === "on" ? [{ conversationId: "conversation_failed", accountId: "acct-a", model: "gpt-6.1-sol", from: "default", to: "ultrafast", state: "failed", reason: "native tier update refused", at: new Date().toISOString() }] : [] };
+      const pending = state === "switching" ? 5 : 0;
+      return { active: true, episode, history: [], titles: { conversation_failed: "Review issue #913" }, available: true, unavailableReason: null, progress: { total: 7, switched: 7 - pending - (state === "on" ? 1 : 0), armed: 0, skipped: 0, failed: state === "on" ? 1 : 0, pending, reverted: 0 } };
+    };
+    const preview = { accounts: [
+      { accountId: "acct-a", label: "Account A", plan: "promax", tiers: plan[0]!.tiers, weeklyPercent: 36, weeklyResetsAt: Math.floor(Date.parse("2026-10-27T00:00:00Z") / 1000), balance: "412", holdsCredits: true, otherProjects: 0, unavailable: null },
+      { accountId: "acct-b", label: "Account B", plan: "pro", tiers: plan[1]!.tiers, weeklyPercent: 58, weeklyResetsAt: Math.floor(Date.parse("2026-10-25T00:00:00Z") / 1000), balance: "75", holdsCredits: true, otherProjects: 2, unavailable: null },
+      { accountId: "acct-c", label: "Account C", plan: "prolite", tiers: plan[2]!.tiers, weeklyPercent: 12, weeklyResetsAt: Math.floor(Date.parse("2026-10-28T00:00:00Z") / 1000), balance: null, holdsCredits: false, otherProjects: 0, unavailable: null },
+    ], conversations: { total: 7, stages: 3, agents: 4 } };
+    const writes: unknown[] = [];
+    const answer = (project: string, withPreview = false) => {
+      writeSeatTickSettings(project, { ...defaultSeatTickSettings(project), project });
+      const read = seatTickSettingsAnswer(project, false, gateway, { now: Date.now });
+      return { ...read, turbo: { ...turbo(), ...(withPreview ? { preview } : {}) } };
+    };
+    const server = await serveEvidenceFixture(out, undefined, {
+      "/api/monitor/seat-tick/settings": async (request: Request) => {
+        const url = new URL(request.url);
+        const project = url.searchParams.get("project") ?? "atlas";
+        if (request.method !== "PUT") return Response.json(answer(project, url.searchParams.get("turboPreview") === "1"));
+        const body = await request.json() as { project: string; turbo?: { enabled?: boolean; credits?: boolean } };
+        writes.push(body);
+        if (body.turbo) state = body.turbo.enabled === false ? "off" : body.turbo.credits ? "on-credits" : "switching";
+        return Response.json({ ...answer(body.project), changed: true });
+      },
+      "/api/roles": { revision: "fixture", health: "ok", launchChoices: [], roles: [{ id: "maintainer", name: "Maintainer", config: { engine: "claude", model: "opus", effort: "high" } }] },
+    });
+    const browserTemp = fs.mkdtempSync(path.join(os.tmpdir(), "turbo-browser-"));
+    const browserTempFd = fs.openSync(browserTemp, "r");
+    const socketRoot = process.platform === "linux" ? `/proc/${process.pid}/fd/${browserTempFd}` : browserTemp;
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"], env: { ...process.env, TMPDIR: socketRoot } });
+    const readings: unknown[] = [];
+    const chipSelector = '[role="slider"][data-seat-tick-switch]';
+    const freeze = (page: Page) => page.evaluate(() => { for (const animation of document.getAnimations()) { animation.pause(); animation.currentTime = 600; } });
+    try {
+      for (const surface of ["board", "tablet", "dock-440", "dock-360", "phone"] as const) for (const scheme of ["light", "dark"] as const) for (const lang of ["uk", "en"] as const) {
+        const phone = surface === "phone";
+        const dockWidth = surface === "dock-440" ? 440 : surface === "dock-360" ? 360 : null;
+        const width = phone ? 390 : surface === "tablet" ? 915 : 1440;
+        const host = phone ? '[data-mobile2-sheet="seat"]' : dockWidth ? "[data-orchestrator-dock]" : "[data-kanban-seat]:not(.side)";
+        const label = `${width}-${scheme}-${lang}${dockWidth ? `-${surface}` : ""}`;
+        for (const shot of ["off", "dialog", "dialog-credits", "switching", "on", "on-credits", "ending", "disabled"] as const) {
+          state = shot === "dialog" || shot === "dialog-credits" ? "off" : shot;
+          const { context, page, pageErrors } = await openFixture(browser, `${server.base}?scenario=seat-head&tick=driver${dockWidth ? `&dockWidth=${dockWidth}` : ""}`, { width, height: phone ? 844 : 900 }, scheme, lang, "no-preference", phone);
+          try {
+            await page.evaluate(value => document.documentElement.setAttribute("data-role-frame", value), DEFAULT_ROLE_FRAME);
+            const toastDismiss = page.locator("[data-attention-toast-dismiss]");
+            await toastDismiss.waitFor({ timeout: 2000 }).catch(error => { if (error.name !== "TimeoutError") throw error; });
+            if (await toastDismiss.isVisible()) await toastDismiss.click();
+            if (phone) await page.locator("[data-mobile2-open=seat]").first().click();
+            await page.locator(host).waitFor();
+            const chip = page.locator(`${host} ${chipSelector}:visible`).first();
+            await chip.waitFor();
+            const on = shot !== "off" && shot !== "dialog" && shot !== "dialog-credits" && shot !== "disabled";
+            if (on) await chip.locator("[data-seat-tick-turbo-mark]").waitFor();
+            await chip.locator("[data-seat-tick-thumb]").click();
+            const control = page.locator("[data-turbo-control]:visible").first();
+            await control.waitFor();
+            expect(await control.getAttribute("aria-checked")).toBe(String(on));
+            expect(await control.getAttribute("data-turbo")).toBe(shot === "dialog" || shot === "dialog-credits" ? "off" : shot === "on-credits" ? "on" : shot);
+            // The control sits in the autonomy section, which leads the editable sections.
+            const section = await page.locator("[data-seat-tick-autonomy-section]:visible").first().evaluate((node, turboSelector) => ({
+              holdsControl: !!node.querySelector(turboSelector),
+              beforeWakes: !!node.compareDocumentPosition(document.querySelector("[data-seat-tick-enabled]")!) && (node.compareDocumentPosition(document.querySelector("[data-seat-tick-enabled]")!) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+            }), "[data-turbo-control]");
+            expect(section).toEqual({ holdsControl: true, beforeWakes: true });
+            if (shot === "dialog" || shot === "dialog-credits") {
+              await control.click();
+              const dialog = page.locator("[data-turbo-dialog]");
+              await dialog.waitFor();
+              await page.locator("[data-turbo-account]").first().waitFor();
+              if (shot === "dialog-credits") await page.locator("[data-turbo-credits-toggle]").check();
+              const fit = await dialog.evaluate(node => {
+                const box = node.getBoundingClientRect();
+                const confirm = node.querySelector("[data-turbo-confirm]")!.getBoundingClientRect();
+                const foot = node.querySelector("[data-turbo-credits] p:last-of-type") as HTMLElement | null;
+                const credits = node.querySelector("[data-turbo-credits]") as HTMLElement | null;
+                const colorText = getComputedStyle(foot!).color;
+                const backgroundText = getComputedStyle(credits!).backgroundColor;
+                const channels = (value: string) => {
+                  const parsed = value.match(/[\d.]+/g)!.slice(0, 3).map(Number);
+                  if (value.startsWith("color(srgb ")) return parsed.map(channel => channel * 255);
+                  if (value.startsWith("oklab(")) {
+                    const [lightness, a, b] = parsed;
+                    const l = (lightness! + 0.3963377774 * a! + 0.2158037573 * b!) ** 3;
+                    const m = (lightness! - 0.1055613458 * a! - 0.0638541728 * b!) ** 3;
+                    const s = (lightness! - 0.0894841775 * a! - 1.291485548 * b!) ** 3;
+                    return [4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+                      -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+                      -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s]
+                      .map(channel => (channel <= 0.0031308 ? 12.92 * channel : 1.055 * channel ** (1 / 2.4) - 0.055) * 255);
+                  }
+                  return parsed;
+                };
+                const color = channels(colorText);
+                const background = channels(backgroundText);
+                const luminance = (rgb: number[]) => rgb.map(value => value / 255).map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4).reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index]!, 0);
+                const [a, b] = [luminance(color), luminance(background)].sort((left, right) => right - left);
+                /* Every payer row and the foot, measured from text ranges, sit whole above the pinned button bar. */
+                const barTop = node.querySelector("[data-turbo-confirm]")!.parentElement!.getBoundingClientRect().top;
+                const bodyTop = node.querySelector("[data-turbo-dialog-body]")!.getBoundingClientRect().top;
+                const lines = [...node.querySelectorAll("[data-turbo-payers] li"), ...(foot ? [foot] : [])].flatMap(item => {
+                  const range = document.createRange(); range.selectNodeContents(item);
+                  return [...range.getClientRects()].map(rect => ({ top: rect.top, bottom: rect.bottom }));
+                });
+                const approvalCut = lines.filter(line => line.bottom > barTop + 0.5 || line.top < bodyTop - 0.5).length;
+                return { approvalCut, approvalLines: lines.length, top: box.top, bottom: box.bottom, viewport: innerHeight, confirmVisible: confirm.bottom <= innerHeight && confirm.top >= 0,
+                  checked: (node.querySelector("[data-turbo-credits-toggle]") as HTMLInputElement | null)?.checked ?? null, footContrast: (a + 0.05) / (b + 0.05), colorText, backgroundText };
+              });
+              expect(fit.top).toBeGreaterThanOrEqual(0);
+              expect(fit.bottom).toBeLessThanOrEqual(fit.viewport + 0.5);
+              expect(fit.confirmVisible).toBe(true);
+              expect(fit.checked).toBe(shot === "dialog-credits");
+              if (shot === "dialog-credits") { expect(fit.approvalLines).toBeGreaterThan(0); expect(fit.approvalCut).toBe(0); }
+              if (shot === "dialog-credits") expect(fit.footContrast, `${fit.colorText} on ${fit.backgroundText}`).toBeGreaterThanOrEqual(4.5);
+              await freeze(page);
+              await page.screenshot({ path: path.join(out, `${label}-${shot}.png`) });
+              readings.push({ surface, scheme, lang, shot, fit, pageErrors: [...pageErrors] });
+            } else {
+              await freeze(page);
+              await control.scrollIntoViewIfNeeded();
+              const status = on ? await page.locator("[data-turbo-status]:visible").first().textContent() : null;
+              const caption = await page.locator("[data-turbo-about]:visible").first().textContent();
+              await page.screenshot({ path: path.join(out, `${label}-${shot}.png`) });
+              if (dockWidth) await page.locator(host).screenshot({ path: path.join(out, `${label}-${shot}-host.png`) });
+              /* The autonomy section head keeps one line beside its toggle, in uk too. */
+              const headLines = await page.locator("[data-seat-tick-autonomy-section]:visible").first().evaluate(node => {
+                const range = document.createRange(); range.selectNodeContents(node.querySelector("p")!);
+                return range.getClientRects().length;
+              });
+              expect(headLines).toBe(1);
+              if (shot === "on") expect(status).toContain(lang === "uk" ? "не перемкнено: 1" : "not switched: 1");
+              else if (on) expect(status).not.toMatch(/не перемкнено|not switched/);
+              readings.push({ surface, scheme, lang, shot, status, caption, headLines, pageErrors: [...pageErrors] });
+              if (shot === "on") {
+                await page.locator("[data-seat-tick-details]:visible > summary").click();
+                const detail = page.locator("[data-turbo-switch-details]:visible");
+                await detail.scrollIntoViewIfNeeded();
+                const detailText = (await detail.textContent()) ?? "";
+                expect(detailText).toContain("Review issue #913");
+                expect(detailText).toContain(lang === "uk" ? "типово → Ultrafast" : "standard → Ultrafast");
+                expect(detailText).toContain(lang === "uk" ? "Перемикання відхилено" : "The switch was refused");
+                expect(detailText).not.toMatch(/native tier update refused|gpt-6\.1-sol|conversation_failed/);
+                await page.screenshot({ path: path.join(out, `${label}-switch-details.png`) });
+              }
+            }
+            expect(pageErrors).toEqual([]);
+          } catch (error) {
+            await page.screenshot({ path: path.join(out, `${label}-${shot}-failure.png`) });
+            fs.writeFileSync(path.join(out, "failure.json"), JSON.stringify({ label, shot, writes, body: await page.locator("body").innerText() }, null, 2));
+            throw error;
+          } finally { await context.close(); }
+        }
+      }
+      // The shortest desktop window: the Turbo row and its caption stay above the popover's scroll edge, and the dialog fits whole.
+      for (const turboState of ["off", "on"] as const) {
+        state = turboState;
+        const { context, page } = await openFixture(browser, `${server.base}?scenario=seat-head&tick=driver&dockWidth=440`, { width: 1000, height: 700 }, "light", "en");
+        try {
+          const chip = page.locator(`[data-orchestrator-dock] ${chipSelector}:visible`).first();
+          await chip.waitFor();
+          await chip.locator("[data-seat-tick-thumb]").click();
+          await page.locator("[data-turbo-control]:visible").first().waitFor();
+          const edge = await page.evaluate(() => {
+            const popover = document.querySelector("[data-seat-tick-popover]")!;
+            let scroller: Element | null = popover;
+            for (const node of [popover, ...popover.querySelectorAll("*")]) if (/(auto|scroll)/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight) { scroller = node; break; }
+            const visibleBottom = Math.min(scroller!.getBoundingClientRect().bottom, innerHeight);
+            const caption = document.querySelector("[data-turbo-about]")!.getBoundingClientRect();
+            const control = document.querySelector("[data-turbo-control]")!.getBoundingClientRect();
+            return { visibleBottom, captionBottom: caption.bottom, controlBottom: control.bottom, scrollTop: scroller!.scrollTop };
+          });
+          expect(edge.scrollTop).toBe(0);
+          expect(edge.controlBottom).toBeLessThanOrEqual(edge.visibleBottom);
+          expect(edge.captionBottom).toBeLessThanOrEqual(edge.visibleBottom);
+          if (turboState === "off") {
+            await page.locator("[data-turbo-control]:visible").first().click();
+            await page.locator("[data-turbo-account]").first().waitFor();
+            const body = await page.locator("[data-turbo-dialog-body]").evaluate(node => ({ scrollHeight: node.scrollHeight, clientHeight: node.clientHeight }));
+            expect(body.scrollHeight).toBeLessThanOrEqual(body.clientHeight + 1);
+          }
+          await freeze(page);
+          await page.screenshot({ path: path.join(out, `1000x700-light-en-${turboState}.png`) });
+          readings.push({ surface: "board-1000x700", turboState, edge });
+        } finally { await context.close(); }
+      }
+      fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify({ readings, writes }, null, 2) + "\n");
+    } finally {
+      await browser.close(); server.stop(); fs.closeSync(browserTempFd);
+      fs.rmSync(browserTemp, { recursive: true, force: true });
+    }
+  }, 900_000);
+});
+
 describe("pipeline repository initialization", () => {
   browserTest("the picker admits a new folder and shows a concrete refusal", async () => {
     const out = path.resolve(".artifacts/pipeline-repository-initialization");
@@ -34201,6 +35220,8 @@ describe("saved decision delivery", () => {
             const folded = column.locator(`[data-decision-row="${id}"]`);
             if (await folded.count()) await folded.click();
             await column.locator(`[data-decision-review="${id}"] [data-decision-retry]`).click();
+            /* The delivered record leaves and the newest left opens in its place: wait, or the next row turns under the press. */
+            await column.locator(`[data-decision-review="${id}"], [data-decision-row="${id}"]`).first().waitFor({ state: "detached" });
           }
           await column.locator("[data-decision-list-empty]").waitFor();
           await column.locator("[data-decision-tab-count]").waitFor({ state: "hidden" });
@@ -34812,4 +35833,975 @@ describe("finished work leaves In progress", () => {
       fs.writeFileSync(path.join(out, "readings.json"), JSON.stringify(readings, null, 2));
     } finally { await browser?.close(); if (tempFd !== null) fs.closeSync(tempFd); server.stop(); }
   }, 120_000);
+});
+
+/*
+ * Team workspaces, slice (a) (docs/design/workspaces.md §13.5 D1–D7, §13.9):
+ * the rail's chip and its menu as owner and member, the All view with Move to…,
+ * the Team page's Workspaces tab and New workspace, and one workspace's page,
+ * at 1440×900, 1000×700, 820×900 and 390×844, in en and uk, light and dark.
+ * The rail frames are desktop only (at 390 the board is the phone's, framed by
+ * the phone driver); the Team and workspace pages are framed at every width.
+ * Every state is
+ * reached through the real controls, its defining words are measured from
+ * text ranges on the first screen, and every menu and dialog stays inside the
+ * window. Frames go to `.artifacts/team-workspaces/`; the readings are
+ * committed to `evidence/team-workspaces/rendered.json`.
+ */
+describe("team workspaces slice (a)", () => {
+  browserTest("chip, menu, All with Move to…, Workspaces tab, New workspace and the workspace page", async () => {
+    const out = path.resolve(process.env.LLV_WORKSPACES_OUT ?? ".artifacts/team-workspaces");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(path.join(out, "bundle-root"));
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const failures: string[] = [];
+    const readings: Array<Record<string, unknown>> = [];
+    const words = (lang: "en" | "uk", key: string, params?: Record<string, string | number>) => translate(lang, key as never, params as never);
+    /* The ids `workspacesEvidence.fixture.ts` gives its workspaces. */
+    const FIXTURE_IDS = { client: `w_${"c1".repeat(16)}` };
+    const names = {
+      en: { client: "Client work", long: "Northwind customer data platform rollout" },
+      uk: { client: "Клієнтська робота", long: "Впровадження платформи даних Northwind" },
+    };
+
+    /** Each text node under `selector` that contains `text`: its range boxes, and whether all of them sit inside the
+        window and inside every clipping ancestor (a scroll edge or the window cutting a word fails). */
+    const measure = (page: Page, selector: string, text: string) => page.evaluate(({ selector, text }) => {
+      const roots = [...document.querySelectorAll<HTMLElement>(selector)].filter((element) => element.getClientRects().length > 0);
+      const boxes: Array<{ left: number; top: number; right: number; bottom: number }> = [];
+      let cut = false;
+      const words = (element: Element) => (element.textContent ?? "").replace(/\s+/g, " ");
+      for (const root of roots) {
+        if (!words(root).includes(text)) continue;
+        /* The deepest element that holds the words: only its text is measured, not a whole list around it. */
+        let holder: Element = root;
+        for (let child = [...holder.children].find((candidate) => words(candidate).includes(text)); child; child = [...holder.children].find((candidate) => words(candidate).includes(text))) holder = child;
+        const walker = document.createTreeWalker(holder, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          if (!(node.textContent ?? "").trim()) continue;
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          for (const rect of range.getClientRects()) {
+            if (rect.width === 0) continue;
+            boxes.push({ left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom });
+            if (rect.top < -0.5 || rect.bottom > innerHeight + 0.5 || rect.left < -0.5 || rect.right > innerWidth + 0.5) cut = true;
+            for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+              const style = getComputedStyle(parent);
+              if (style.overflowY === "visible" && style.overflowX === "visible") continue;
+              const clip = parent.getBoundingClientRect();
+              if (rect.top < clip.top - 0.5 || rect.bottom > clip.bottom + 0.5) cut = true;
+            }
+          }
+        }
+        break;
+      }
+      return { found: boxes.length > 0, cut, boxes: boxes.slice(0, 6).map((box) => Object.values(box).map((value) => Math.round(value))) };
+    }, { selector, text });
+    const inside = (page: Page, selector: string) => page.evaluate((selector) => {
+      const element = [...document.querySelectorAll<HTMLElement>(selector)].find((candidate) => candidate.getClientRects().length > 0);
+      if (!element) return null;
+      const box = element.getBoundingClientRect();
+      return { box: [box.left, box.top, box.width, box.height].map(Math.round), inside: box.left >= -0.5 && box.top >= -0.5 && box.right <= innerWidth + 0.5 && box.bottom <= innerHeight + 0.5 };
+    }, selector);
+
+    /* Every element `selector` matches whose text the box cuts (an ellipsis): a name must be whole. */
+    const cutNames = (page: Page, selector: string) => page.evaluate((selector) => [...document.querySelectorAll<HTMLElement>(selector)]
+      .filter((element) => element.getClientRects().length > 0 && element.scrollWidth > element.clientWidth + 0.5)
+      .map((element) => element.textContent ?? ""), selector);
+    /* A rail heading that counts nothing under it. */
+    const emptyHeadings = (page: Page) => page.evaluate(() => [...document.querySelectorAll<HTMLElement>("[data-rail-section]")]
+      .filter((label) => label.querySelector("[data-rail-count]")?.textContent?.trim() === "0")
+      .map((label) => label.textContent ?? ""));
+
+    async function frame(page: Page, tag: string, state: string, defining: Array<[selector: string, text: string]>, popover?: string) {
+      for (const [selector, text] of defining) {
+        const reading = await measure(page, selector, text);
+        if (!reading.found) failures.push(`${tag} ${state}: «${text}» is not on the first screen in ${selector}`);
+        else if (reading.cut) failures.push(`${tag} ${state}: «${text}» is cut ${JSON.stringify(reading.boxes)}`);
+      }
+      let box: unknown = null;
+      if (popover) {
+        const reading = await inside(page, popover);
+        box = reading?.box ?? null;
+        if (!reading) failures.push(`${tag} ${state}: ${popover} is not open`);
+        else if (!reading.inside) failures.push(`${tag} ${state}: ${popover} leaves the window ${JSON.stringify(reading.box)}`);
+      }
+      const file = `${tag}-${state}.png`.replace(/\s+/g, "-");
+      await page.screenshot({ path: path.join(out, file) });
+      readings.push({ tag, state, defining: defining.map(([, text]) => text), popover: popover ?? null, box, file });
+    }
+
+    try {
+      /* 1000×700 is the short desktop window, where a dialog's body scrolls. */
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const [width, height] of [[1440, 900], [1000, 700], [820, 900], [390, 844]] as const) {
+        const tag = `${lang}-${theme}-${width}`;
+        const phone = width === 390;
+        let chipRight: number | null = null;
+        const open = async (query: string) => {
+          const opened = await openFixture(browser, `${server.base}?${query}`, { width, height }, theme, lang, "reduce", phone);
+          return opened;
+        };
+        if (!phone) {
+          /* D1: the chip names the chosen workspace in place of the product name; the rail lists its projects alone. */
+          {
+            const { context, page, pageErrors } = await open("scenario=workspaces&rail=1&railview=overview&ws=client");
+            try {
+              await page.locator("[data-workspace-chip]").waitFor();
+              await page.locator("[data-rail-project]").first().waitFor();
+              const listed = await page.locator("[data-rail-project]").evaluateAll((rows) => rows.map((row) => row.getAttribute("data-rail-project")));
+              if (JSON.stringify([...listed].sort()) !== JSON.stringify(["acme-ledger", "harbor-docs"])) failures.push(`${tag} D1: the rail lists ${JSON.stringify(listed)}`);
+              if (await page.locator("[data-rail-brand]").count()) failures.push(`${tag} D1: the product name is still in the header`);
+              await frame(page, tag, "D1-client", [["[data-workspace-chip]", names[lang].client]]);
+              const empty = await emptyHeadings(page);
+              if (empty.length) failures.push(`${tag} D1: a heading counts nothing under it ${JSON.stringify(empty)}`);
+              chipRight = await page.locator("[data-workspace-chip]").evaluate((chip) => chip.getBoundingClientRect().right);
+              /* D2 as the owner: the menu with the counts, the check, settings, New and Manage. */
+              await page.locator("[data-workspace-chip]").click();
+              await page.locator("[data-workspace-menu]").waitFor();
+              await frame(page, tag, "D2-owner", [
+                ["[data-workspace-menu]", words(lang, "workspaces.heading")],
+                ["[data-workspace-menu]", words(lang, "workspaces.all")],
+                ["[data-workspace-menu]", words(lang, "workspaces.settings")],
+                ["[data-workspace-menu]", words(lang, "workspaces.new")],
+                ["[data-workspace-menu]", words(lang, "workspaces.manage")],
+              ], "[data-workspace-menu]");
+              if (pageErrors.length) failures.push(`${tag} D1/D2: page errors ${pageErrors.join("; ")}`);
+            } finally { await context.close(); }
+          }
+          /* D2 as a member: the rows and Manage only. */
+          {
+            const { context, page } = await open("scenario=workspaces&rail=1&railview=overview&ws=client&member=1");
+            try {
+              await page.locator("[data-workspace-chip]").click();
+              await page.locator("[data-workspace-menu]").waitFor();
+              const links = await page.locator("[data-workspace-link]").evaluateAll((items) => items.map((item) => item.getAttribute("data-workspace-link")));
+              if (JSON.stringify(links) !== JSON.stringify(["manage"])) failures.push(`${tag} D2 member: the menu offers ${JSON.stringify(links)}`);
+              await frame(page, tag, "D2-member", [["[data-workspace-menu]", words(lang, "workspaces.manage")]], "[data-workspace-menu]");
+            } finally { await context.close(); }
+          }
+          /* The longest name truncates inside the chip, clear of the hide control. */
+          {
+            const { context, page } = await open("scenario=workspaces&rail=1&railview=overview&ws=long");
+            try {
+              await page.locator("[data-workspace-chip]").waitFor();
+              const chip = await page.evaluate(() => {
+                const label = document.querySelector<HTMLElement>("[data-workspace-chip-label]")!;
+                const chipBox = document.querySelector<HTMLElement>("[data-workspace-chip]")!.getBoundingClientRect();
+                const hide = document.querySelector<HTMLElement>("[data-rail-hide]")!.getBoundingClientRect();
+                const labelBox = label.getBoundingClientRect();
+                return { truncated: label.scrollWidth > label.clientWidth, labelRight: labelBox.right, chipRight: chipBox.right, hideLeft: hide.left };
+              });
+              if (!chip.truncated) failures.push(`${tag} long name: the chip label is not truncated`);
+              if (chip.labelRight > chip.chipRight + 0.5 || chip.chipRight > chip.hideLeft + 0.5) failures.push(`${tag} long name: the chip overruns ${JSON.stringify(chip)}`);
+              readings.push({ tag, state: "chip-long", ...chip, clientChipRight: chipRight });
+              /* The chip fills the header: its edge stands where it stood for a short name. */
+              if (chipRight === null || Math.abs(chip.chipRight - chipRight) > 0.5) failures.push(`${tag} long name: the chip's right edge moved from ${chipRight} to ${chip.chipRight}`);
+              await frame(page, tag, "D1-long", [["[data-workspace-chip]", names[lang].long.slice(0, 8)]]);
+            } finally { await context.close(); }
+          }
+          /* D3: All, the sections in order, Move on the selected Unassigned row, and its menu. */
+          {
+            const { context, page, pageErrors } = await open("scenario=workspaces&rail=1&railview=overview&ws=all");
+            try {
+              await page.locator("[data-rail-workspace-section='unassigned']").waitFor();
+              /* The headings count once the catalog's rows have arrived, not while the sections stand empty. */
+              await page.locator("[data-rail-project='paper-kite']").waitFor();
+              await page.locator("[data-rail-project='acme-ledger']").waitFor();
+              const order = await page.locator("[data-rail-workspace-section]").evaluateAll((items) => items.map((item) => item.getAttribute("data-rail-workspace-section")));
+              if (order.at(-1) !== "unassigned" || order.length !== 4) failures.push(`${tag} D3: sections ${JSON.stringify(order)}`);
+              /* Each heading counts what the switcher counts for its workspace, pinned projects included. */
+              const headed = await page.locator("[data-rail-workspace-section]").evaluateAll((items) => Object.fromEntries(items
+                .filter((item) => item.getAttribute("data-rail-workspace-section") !== "unassigned")
+                .map((item) => [item.getAttribute("data-rail-workspace-section"), Number(item.querySelector("[data-rail-count]")?.textContent)])));
+              await page.locator("[data-workspace-chip]").click();
+              await page.locator("[data-workspace-menu]").waitFor();
+              const menuCounts = await page.locator("[data-workspace-option]").evaluateAll((items) => Object.fromEntries(items
+                .filter((item) => item.getAttribute("data-workspace-option") !== "all")
+                .map((item) => [item.getAttribute("data-workspace-option"), Number(/\d+/.exec(item.textContent ?? "")?.[0])])));
+              await page.keyboard.press("Escape");
+              await page.waitForFunction(() => !document.querySelector("[data-workspace-menu]"));
+              readings.push({ tag, state: "D3-counts", headed, menuCounts });
+              if (JSON.stringify(headed) !== JSON.stringify(menuCounts)) failures.push(`${tag} D3: headings count ${JSON.stringify(headed)}, the switcher ${JSON.stringify(menuCounts)}`);
+              if (await page.locator("[data-rail-section]").filter({ has: page.locator("[data-testid='crown-marker']") }).count()) failures.push(`${tag} D3: a Pinned section stands apart from the workspaces`);
+              const marked = await page.locator("[data-rail-pinned-mark]").evaluateAll((marks) => marks.map((mark) => mark.closest("[data-rail-project]")?.getAttribute("data-rail-project")).sort());
+              if (JSON.stringify(marked) !== JSON.stringify(["acme-ledger", "harbor-docs"])) failures.push(`${tag} D3: the pinned rows' crowns ${JSON.stringify(marked)}`);
+              await page.locator("[data-rail-project='paper-kite']").click();
+              const move = page.locator("[data-rail-project='paper-kite']").locator("xpath=..").locator("[data-rail-move]");
+              await move.waitFor();
+              await frame(page, tag, "D3-all", [
+                ["[data-rail-workspace-section='unassigned']", words(lang, "workspaces.unassigned")],
+                ["[data-workspace-chip]", words(lang, "workspaces.all")],
+                ["[data-rail-move]:not(.opacity-0)", words(lang, "workspaces.move")],
+                ["[data-rail-project='paper-kite']", "Paper Kite"],
+              ]);
+              await move.click();
+              await page.locator("[data-workspace-popover='move']").waitFor();
+              /* The menu covers neither the row's own name nor its control. */
+              const covers = await page.evaluate(() => {
+                const menu = document.querySelector("[data-workspace-popover='move']")!.getBoundingClientRect();
+                const own = [document.querySelector("[data-rail-project='paper-kite'] [data-rail-name]"), document.querySelector("[data-rail-project='paper-kite']")?.parentElement?.querySelector("[data-rail-move]")]
+                  .map((element) => element!.getBoundingClientRect());
+                return own.some((box) => box.left < menu.right && box.right > menu.left && box.top < menu.bottom && box.bottom > menu.top);
+              });
+              if (covers) failures.push(`${tag} D3: the Move to… menu covers its own row`);
+              await frame(page, tag, "D3-move", [["[data-workspace-popover='move']", words(lang, "workspaces.moveTo")], ["[data-workspace-popover='move']", names[lang].client]], "[data-workspace-popover='move']");
+              const cutTargets = await cutNames(page, "[data-workspace-popover='move'] [data-workspace-move-to] span.truncate");
+              if (cutTargets.length) failures.push(`${tag} D3: Move to… cuts ${JSON.stringify(cutTargets)}`);
+              /* The move lands: the row joins Client work and leaves Unassigned. */
+              await page.locator(`[data-workspace-move-to='${FIXTURE_IDS.client}']`).click();
+              await page.waitForFunction(() => !document.querySelector("[data-workspace-popover='move']"));
+              const moved = await page.evaluate(() => [...document.querySelectorAll("[data-rail-workspace-section], [data-rail-project]")]
+                .map((element) => element.getAttribute("data-rail-workspace-section") ?? element.getAttribute("data-rail-project")));
+              const at = moved.indexOf("paper-kite");
+              const start = moved.indexOf(FIXTURE_IDS.client);
+              const next = moved.findIndex((entry, index) => index > start && entry !== null && entry.startsWith("w_") || (index > start && entry === "unassigned"));
+              if (at < 0 || start < 0 || at < start || (next >= 0 && at > next)) failures.push(`${tag} D3: after the move the order is ${JSON.stringify(moved)}`);
+              if (pageErrors.length) failures.push(`${tag} D3: page errors ${pageErrors.join("; ")}`);
+            } finally { await context.close(); }
+          }
+        }
+        /* D4 as the owner and as a member, P4 at 390. */
+        for (const member of [false, true]) {
+          const { context, page, pageErrors } = await open(`scenario=workspaces-team&rail=1${member ? "&member=1" : ""}`);
+          try {
+            await page.locator("[data-team-workspaces]").waitFor();
+            await page.locator("[data-workspace-unassigned]").waitFor();
+            const defining: Array<[string, string]> = [
+              ["[data-team-tab='workspaces'][aria-selected='true']", words(lang, "team.tabs.workspaces")],
+              ["[data-team-workspaces]", words(lang, "workspaces.lead")],
+              [`[data-workspace-row='${FIXTURE_IDS.client}']`, names[lang].client],
+            ];
+            if (!member) defining.push(["[data-workspace-create-open]", words(lang, "workspaces.new")]);
+            await frame(page, tag, member ? "D4-member" : "D4-owner", defining);
+            await page.locator("#workspaces-unassigned-title").scrollIntoViewIfNeeded();
+            await frame(page, tag, member ? "D4-member-unassigned" : "D4-owner-unassigned", [
+              ["#workspaces-unassigned-title", `${words(lang, "workspaces.unassignedTitle")} · 2`],
+              ...(member ? [] : [["[data-workspace-move-open]", words(lang, "workspaces.moveTo")] as [string, string]]),
+            ]);
+            if (member && await page.locator("[data-workspace-create-open], [data-workspace-row-menu], [data-workspace-move-open]").count()) failures.push(`${tag} D4 member: an owner's control is drawn`);
+            if (!member) {
+              await page.locator(`[data-workspace-row='${FIXTURE_IDS.client}'] [data-workspace-row-menu]`).click();
+              await page.locator("[data-workspace-popover='row']").waitFor();
+              await frame(page, tag, "D4-row-menu", [["[data-workspace-popover='row']", words(lang, "workspaces.deleteBlocked")]], "[data-workspace-popover='row']");
+              /* The menu hangs under ⋯, its right edge on the button's, inside the list. */
+              const hung = await page.evaluate((id) => {
+                const menu = document.querySelector("[data-workspace-popover='row']")!.getBoundingClientRect();
+                const trigger = document.querySelector(`[data-workspace-row='${id}'] [data-workspace-row-menu]`)!.getBoundingClientRect();
+                const list = document.querySelector(`[data-workspace-row='${id}']`)!.parentElement!.getBoundingClientRect();
+                return { menuLeft: menu.left, menuRight: menu.right, menuTop: menu.top, triggerRight: trigger.right, triggerBottom: trigger.bottom, listLeft: list.left, listRight: list.right };
+              }, FIXTURE_IDS.client);
+              readings.push({ tag, state: "D4-row-menu-place", ...hung });
+              if (hung.menuRight > hung.triggerRight + 0.5 || hung.menuRight > hung.listRight + 0.5 || hung.menuLeft < hung.listLeft - 0.5 || hung.menuTop < hung.triggerBottom - 0.5) failures.push(`${tag} D4: the row menu stands outside its list ${JSON.stringify(hung)}`);
+            }
+            if (pageErrors.length) failures.push(`${tag} D4: page errors ${pageErrors.join("; ")}`);
+          } finally { await context.close(); }
+        }
+        /* D5 (P5 at 390): New workspace, opened by `?create=1` as the switcher's row opens it; Create stays reachable. */
+        {
+          const { context, page, pageErrors } = await open("scenario=workspaces-team&rail=1&create=1");
+          try {
+            await page.locator("[data-team-dialog='workspace-create']").waitFor();
+            await frame(page, tag, "D5", [
+              ["[data-team-dialog='workspace-create']", words(lang, "workspaces.new")],
+              ["[data-team-dialog='workspace-create']", words(lang, "workspaces.create.name")],
+              ["[data-team-dialog='workspace-create']", words(lang, "workspaces.create.colour")],
+              ["[data-team-dialog='workspace-create']", words(lang, "workspaces.create.projects")],
+            ], "[data-team-dialog='workspace-create']");
+            /* The eight swatches share one row, or stand four to a row. */
+            const swatchRows = await page.locator("[data-workspace-color]").evaluateAll((items) => {
+              const rows = new Map<number, number>();
+              for (const item of items) { const top = Math.round(item.getBoundingClientRect().top); rows.set(top, (rows.get(top) ?? 0) + 1); }
+              return [...rows.values()];
+            });
+            readings.push({ tag, state: "D5-swatch-rows", swatchRows });
+            if (!(swatchRows.length === 1 && swatchRows[0] === 8) && !swatchRows.every((count) => count === 4)) failures.push(`${tag} D5: the swatches stand ${JSON.stringify(swatchRows)} to a row`);
+            const cutChecks = await cutNames(page, "[data-workspace-check-name]");
+            if (cutChecks.length) failures.push(`${tag} D5: the checklist cuts ${JSON.stringify(cutChecks)}`);
+            await page.locator("[data-workspace-create-submit]").scrollIntoViewIfNeeded();
+            await frame(page, tag, "D5-submit", [
+              ["[data-team-dialog='workspace-create']", words(lang, "workspaces.create.projectsHint")],
+              ["[data-workspace-create-submit]", words(lang, "workspaces.create.submit")],
+            ], "[data-team-dialog='workspace-create']");
+            /* The refusal of an empty name says why, in the dialog. */
+            await page.locator("[data-workspace-create-submit]").click();
+            /* The reason stands under Name, and Cancel and Create stay whole inside the dialog and the window. */
+            await frame(page, tag, "D5-refused", [
+              ["[data-workspace-create-error]", words(lang, "workspaces.error.nameRequired")],
+              ["[data-team-dialog-footer]", words(lang, "common.cancel")],
+              ["[data-workspace-create-submit]", words(lang, "workspaces.create.submit")],
+            ], "[data-team-dialog='workspace-create']");
+            await page.locator("[data-workspace-create-name]").fill(lang === "uk" ? "Дизайн" : "Design");
+            await page.locator("[data-workspace-check='atlas'] input").check();
+            await page.locator("[data-workspace-create-submit]").click();
+            await page.waitForFunction(() => !document.querySelector("[data-team-dialog='workspace-create']"));
+            const rows = await page.locator("[data-workspace-row-name]").allInnerTexts();
+            if (!rows.includes(lang === "uk" ? "Дизайн" : "Design")) failures.push(`${tag} D5: the created workspace is not listed ${JSON.stringify(rows)}`);
+            if (pageErrors.length) failures.push(`${tag} D5: page errors ${pageErrors.join("; ")}`);
+          } finally { await context.close(); }
+        }
+        /* D6 and D7 (P6 at 390): the workspace page, Rename inline, Add project, and Delete refused while it has projects. */
+        {
+          const { context, page, pageErrors } = await open("scenario=workspaces-page&rail=1&page=client");
+          try {
+            await page.locator("[data-workspace-title]").waitFor();
+            await frame(page, tag, "D6", [
+              ["[data-workspace-back]", words(lang, "activity.back")],
+              ["[data-workspace-title]", names[lang].client],
+              ["[data-workspace-sub]", words(lang, "workspaces.page.sub", { projects: words(lang, "mobile2.projects.count", { count: 2 }) })],
+              ["[data-workspace-remove]", words(lang, "workspaces.page.remove")],
+              ["[data-workspace-delete-blocked]", words(lang, "workspaces.deleteBlocked")],
+            ]);
+            if (await page.locator("[data-workspace-delete]").isEnabled()) failures.push(`${tag} D7: Delete is enabled on a workspace with projects`);
+            /* Remove starts where the project's name starts, or is a bordered button. */
+            const remove = await page.evaluate(() => {
+              const row = document.querySelector("[data-workspace-project]")!;
+              const button = row.querySelector<HTMLElement>("[data-workspace-remove]")!;
+              const name = row.querySelector<HTMLElement>("span.truncate")!.getBoundingClientRect();
+              return { removeLeft: button.getBoundingClientRect().left, nameLeft: name.left, border: getComputedStyle(button).borderTopWidth };
+            });
+            readings.push({ tag, state: "D6-remove", ...remove });
+            if (remove.border === "0px" && Math.abs(remove.removeLeft - remove.nameLeft) > 1) failures.push(`${tag} D6: Remove is loose text off the name's edge ${JSON.stringify(remove)}`);
+            if (phone && Math.abs(remove.removeLeft - remove.nameLeft) > 1) failures.push(`${tag} P6: Remove does not start where the name starts ${JSON.stringify(remove)}`);
+            const headingTop = () => page.locator("#workspace-projects-title").evaluate((heading) => heading.getBoundingClientRect().top);
+            const before = await headingTop();
+            await page.locator("[data-workspace-rename]").click();
+            await page.locator("[data-workspace-rename-field]").waitFor();
+            await frame(page, tag, "D6-rename", [["[data-workspace-page]", words(lang, "team.member.save")], ["[data-workspace-page]", words(lang, "common.cancel")]]);
+            /* The field shows the whole name being edited. */
+            const field = await page.locator("[data-workspace-rename-field]").evaluate((input: HTMLInputElement) => ({
+              value: input.value, width: Math.round(input.getBoundingClientRect().width), scrollWidth: input.scrollWidth, clientWidth: input.clientWidth,
+            }));
+            readings.push({ tag, state: "D6-rename-field", ...field });
+            if (field.value !== names[lang].client) failures.push(`${tag} D6: the rename field holds ${JSON.stringify(field.value)}`);
+            if (field.width < 200 || field.scrollWidth > field.clientWidth) failures.push(`${tag} D6: the rename field cuts the name ${JSON.stringify(field)}`);
+            /* On the phone the field takes the content width (390 less the page's 12 px sides and the dot), with Save and Cancel under it. */
+            if (phone && field.width < 340) failures.push(`${tag} P6: the rename field does not take its own line ${JSON.stringify(field)}`);
+            /* On the desktop the inline field moves nothing: Save, Cancel and Delete share a centre, and Projects keeps its place. */
+            const renameLine = await page.evaluate(() => {
+              const form = document.querySelector("[data-workspace-rename-field]")!.closest("form")!;
+              const centre = (element: Element) => { const box = element.getBoundingClientRect(); return Math.round((box.top + box.bottom) / 2); };
+              const [save, cancel] = [...form.querySelectorAll("button")];
+              return { field: centre(form.querySelector("input")!), save: centre(save!), cancel: centre(cancel!), remove: centre(document.querySelector("[data-workspace-delete]")!), dot: Boolean(form.querySelector("[data-workspace-dot]")) };
+            });
+            const after = await headingTop();
+            readings.push({ tag, state: "D6-rename-line", ...renameLine, headingBefore: before, headingAfter: after });
+            /* On the phone the field takes its own line and Save and Cancel the one under it, so Projects moves down. */
+            if (!phone && Math.abs(after - before) > 0.5) failures.push(`${tag} D6: Rename moves the Projects heading from ${before} to ${after}`);
+            if (phone && renameLine.save <= renameLine.field) failures.push(`${tag} P6: Save stands beside the rename field ${JSON.stringify(renameLine)}`);
+            if (renameLine.save !== renameLine.cancel || (!phone && renameLine.save !== renameLine.remove)) failures.push(`${tag} D6: Save, Cancel and Delete stand on different lines ${JSON.stringify(renameLine)}`);
+            if (!renameLine.dot) failures.push(`${tag} D6: the title's colour dot leaves while renaming`);
+            await page.keyboard.press("Escape");
+            await page.locator("[data-workspace-add]").click();
+            await page.locator("[data-workspace-popover='add']").waitFor();
+            await frame(page, tag, "D6-add", [["[data-workspace-popover='add']", words(lang, "workspaces.page.add")], ["[data-workspace-popover='add']", "Paper Kite"]], "[data-workspace-popover='add']");
+            const cutAdd = await cutNames(page, "[data-workspace-popover='add'] [data-workspace-check-name]");
+            if (cutAdd.length) failures.push(`${tag} D6: Add project cuts ${JSON.stringify(cutAdd)}`);
+            /* Remove every project: Delete is offered, and deleting goes back to the list. */
+            await page.keyboard.press("Escape");
+            for (let left = await page.locator("[data-workspace-remove]").count(); left > 0; left -= 1) await page.locator("[data-workspace-remove]").first().click();
+            await page.locator("[data-workspace-empty]").waitFor();
+            if (!await page.locator("[data-workspace-delete]").isEnabled()) failures.push(`${tag} D7: Delete stays disabled on an empty workspace`);
+            await frame(page, tag, "D7-empty", [["[data-workspace-empty]", words(lang, "workspaces.page.empty")], ["[data-workspace-delete]", words(lang, "workspaces.delete")]]);
+            if (pageErrors.length) failures.push(`${tag} D6: page errors ${pageErrors.join("; ")}`);
+          } finally { await context.close(); }
+        }
+      }
+      fs.mkdirSync("evidence/team-workspaces", { recursive: true });
+      fs.writeFileSync("evidence/team-workspaces/rendered.json", JSON.stringify({
+        driver: "src/components/kanban/kanbanBoard.browser.test.tsx", block: "team workspaces slice (a)",
+        frames: readings.length, failures, readings,
+      }, null, 2) + "\n");
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 900_000);
+});
+
+// docs/design/telegram-multi-bot.md: keep multiple bots inside the Telegram panel.
+describe("Telegram multiple bots", () => {
+  browserTest("Telegram multiple bots settings and refused chats", async () => {
+    const { captureTelegramMultiBot, serveEvidenceFixture } = await import("@/components/kanban/issue1695BrowserHarness");
+    const out = path.resolve(".artifacts/telegram-multi-bot/desktop");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out, "src/components/mobile/issue1671Evidence.fixture.tsx");
+    const tempFd = process.platform === "linux" ? fs.openSync(out, "r") : null;
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, ignoreDefaultArgs: ["--hide-scrollbars"], args: ["--no-sandbox", "--disable-dev-shm-usage"],
+      ...(tempFd === null ? {} : { env: { ...process.env, TMPDIR: `/proc/${process.pid}/fd/${tempFd}` } }),
+    }).catch(error => { if (tempFd !== null) fs.closeSync(tempFd); server.stop(); throw error; });
+    try {
+      const readings = await captureTelegramMultiBot(browser, server.base, out, false);
+      fs.mkdirSync("evidence/telegram-multi-bot", { recursive: true });
+      fs.writeFileSync("evidence/telegram-multi-bot/desktop.json", JSON.stringify({ readings }, null, 2) + "\n");
+    } finally { await browser.close(); if (tempFd !== null) fs.closeSync(tempFd); server.stop(); }
+  }, 300_000);
+});
+
+describe("the sound map's one control: «Agent typing»", () => {
+  /*
+   * docs/design/sound-redesign.md §9: the sound levels gain one switch,
+   * «Звук роботи агентів» / "Agent typing", which turns the typing on screen
+   * and the murmur of agents off screen off together. On the desktop it sits
+   * in the board's ⋯ (Sound levels, opened in place), on the phone in the
+   * header menu's Settings page (Sound, its levels dialog).
+   *
+   * Desktop at 1440×900 and the shortest desktop window, 1000×700; the phone
+   * at 390×844 with a coarse pointer; en and uk, light and dark. It fails when
+   * the switch's label is cut by its scroller or the window, when another
+   * control covers it, when it is not on, or when one click does not store
+   * "off" on this device while leaving sound itself on.
+   *
+   * Frames go to `LLV_SOUND_SWITCH_OUT` (default `.artifacts/sound-switch/`,
+   * never committed), the readings to `evidence/sound-switch/rendered.json`.
+   *
+   *   CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "Agent typing"
+   */
+  const DESKTOP = [{ width: 1440, height: 900 }, { width: 1000, height: 700 }] as const;
+  const PHONE = { width: 390, height: 844 } as const;
+
+  /** Where the label's text is drawn, against what may clip it and what is drawn on top of it. */
+  async function measure(page: Page, panel: string) {
+    return page.evaluate((panelSelector) => {
+      const input = document.querySelector<HTMLInputElement>(`${panelSelector} [data-testid="typing-enabled"]`);
+      const label = input?.closest("label");
+      const text = label?.querySelector("span");
+      if (!input || !label || !text) return null;
+      const range = document.createRange();
+      range.selectNodeContents(text);
+      const rect = range.getBoundingClientRect();
+      let clip = { top: 0, left: 0, right: window.innerWidth, bottom: window.innerHeight };
+      for (let node = label.parentElement; node; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        if (!/(auto|scroll|hidden|clip)/.test(style.overflowY + style.overflowX)) continue;
+        const box = node.getBoundingClientRect();
+        clip = { top: Math.max(clip.top, box.top), left: Math.max(clip.left, box.left), right: Math.min(clip.right, box.right), bottom: Math.min(clip.bottom, box.bottom) };
+      }
+      const centre = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      const box = label.getBoundingClientRect();
+      return {
+        text: text.textContent ?? "",
+        checked: input.checked,
+        rect: [rect.left, rect.top, rect.right, rect.bottom].map((value) => Math.round(value * 10) / 10),
+        clip: [clip.left, clip.top, clip.right, clip.bottom].map((value) => Math.round(value * 10) / 10),
+        whole: rect.top >= clip.top - 0.5 && rect.bottom <= clip.bottom + 0.5 && rect.left >= clip.left - 0.5 && rect.right <= clip.right + 0.5,
+        onTop: Boolean(centre && label.contains(centre)),
+        labelHeight: Math.round(box.height * 10) / 10,
+      };
+    }, panel);
+  }
+
+  browserTest("the switch is whole, on, and stores «off» in both layouts, languages and themes", async () => {
+    const out = path.resolve(process.env.LLV_SOUND_SWITCH_OUT ?? ".artifacts/sound-switch");
+    fs.mkdirSync(out, { recursive: true });
+    const server = await serveEvidenceFixture(out);
+    const browser = await chromium.launch({ ...LAUNCH, ignoreDefaultArgs: ["--hide-scrollbars"] });
+    const readings: unknown[] = [];
+    const failures: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) {
+        const expected = translate(lang, "sound.typing");
+        for (const viewport of [...DESKTOP, PHONE]) {
+          const phone = viewport === PHONE;
+          const tag = `${phone ? "phone" : "desktop"} ${viewport.width}×${viewport.height} ${lang} ${theme}`;
+          const { context, page, pageErrors } = await openFixture(browser, server.base, viewport, theme, lang, "reduce", phone);
+          try {
+            let panel: string;
+            if (phone) {
+              await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
+              await page.locator('[data-mobile2-open="menu"]').first().click();
+              await page.locator("[data-mobile2-sheet='menu'] [data-mobile2-menu-row='settings']").click();
+              await page.locator("[data-mobile2-sheet='menu'] [data-testid='sound-settings-trigger']").click();
+              panel = "[data-mobile2-sheet='menu'] [data-testid='sound-settings']";
+            } else {
+              await page.locator("[data-kanban-board]").waitFor({ timeout: 30_000 });
+              await openBoardMenu(page);
+              await page.locator("[data-bar-more-menu] [data-testid='sound-settings-trigger']").click();
+              panel = "[data-bar-more-menu] [data-testid='sound-settings']";
+            }
+            await page.locator(`${panel} [data-testid="typing-enabled"]`).scrollIntoViewIfNeeded();
+            const reading = await measure(page, panel);
+            if (!reading) throw new Error("the switch is not drawn");
+            const frame = `${phone ? "phone" : "desktop"}-${viewport.width}-${lang}-${theme}.png`;
+            await page.screenshot({ path: path.join(out, frame) });
+            if (reading.text !== expected) failures.push(`${tag}: label «${reading.text}», expected «${expected}»`);
+            if (!reading.checked) failures.push(`${tag}: the switch starts off`);
+            if (!reading.whole) failures.push(`${tag}: label ${reading.rect} is cut by ${reading.clip}`);
+            if (!reading.onTop) failures.push(`${tag}: something is drawn over the label`);
+            await page.locator(`${panel} [data-testid="typing-enabled"]`).click();
+            const stored = await page.evaluate(() => ({ typing: localStorage.getItem("llvAudioTypingEnabled"), sound: localStorage.getItem("llvSound") }));
+            if (stored.typing !== "off" || stored.sound === "off") failures.push(`${tag}: one click stored ${JSON.stringify(stored)}`);
+            const after = await measure(page, panel);
+            if (after?.checked !== false) failures.push(`${tag}: the switch still reads on after the click`);
+            await page.screenshot({ path: path.join(out, `off-${frame}`) });
+            if (pageErrors.length) failures.push(`${tag}: page errors ${pageErrors.join(" | ")}`);
+            readings.push({ surface: phone ? "phone" : "desktop", ...viewport, lang, theme, frame, ...reading, stored });
+          } catch (error) {
+            failures.push(`${tag}: ${String(error).split("\n")[0]}`);
+            await page.screenshot({ path: path.join(out, `failed-${viewport.width}-${lang}-${theme}.png`) }).catch(() => {});
+          } finally { await context.close(); }
+        }
+      }
+      fs.mkdirSync("evidence/sound-switch", { recursive: true });
+      const sources = ["src/components/SoundToggle.tsx", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts"];
+      fs.writeFileSync("evidence/sound-switch/rendered.json", JSON.stringify({
+        capturedAt: new Date().toISOString(),
+        command: "CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t \"Agent typing\" (isolated roots, scripts/gate-slot.sh)",
+        sourceDigests: Object.fromEntries(sources.map((file) => [file, createHash("sha256").update(fs.readFileSync(file)).digest("hex")])),
+        readings,
+        failures,
+      }, null, 2) + "\n");
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 900_000);
+});
+
+describe("sound captions", () => {
+  /*
+   * docs/design/sound-captions.md §6: each event sound that plays shows a short
+   * toast on the right of the desktop view, where «Потрібні ви» shows. The page
+   * (`?scenario=sound-captions`) is the default board plus one lane whose visual
+   * critic is running, and exposes `soundCaptionsFixture`:
+   *   - `push` puts a caption on the real stack (the layout and timing states);
+   *   - `passStage` turns the critic's attempt to `passed`, which the next poll
+   *     carries through the real planner, event lane and cue player (the real
+   *     path, with Chrome started to allow audio without a gesture).
+   *
+   * Desktop at 1440×900, 1000×700 and 640×700 (the narrowest desktop window),
+   * the phone at 390×844 with a coarse pointer; en and uk, light and dark. It
+   * fails when a toast is cut by the window or its own box, when two boxes or a
+   * box and the island or the question toast intersect, when the stack is not
+   * bounded to four with the newest last, when a toast outlives 2 s with no
+   * pointer, when a hover does not hold it, when a click does not reach its
+   * lane, when a muted stage still captions, when an opened task has a line of its
+   * conversation, a control or an icon under a toast, when a stack on a free place
+   * has text, a control or an icon under it, when a stack with no free place shows
+   * more toasts than the width keeps or covers a control, when the docked panel does
+   * not move it, or when the phone draws any.
+   *
+   * Frames go to `LLV_SOUND_CAPTIONS_OUT` (default `.artifacts/sound-captions/`,
+   * never committed), the readings to `evidence/sound-captions/rendered.json`.
+   *
+   *   CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 \
+   *     bun test src/components/kanban/kanbanBoard.browser.test.tsx -t "sound captions"
+   */
+  const DESKTOP = [{ width: 1440, height: 900 }, { width: 1000, height: 700 }, { width: 640, height: 700 }] as const;
+  const PHONE = { width: 390, height: 844 } as const;
+  const OUT = path.resolve(process.env.LLV_SOUND_CAPTIONS_OUT ?? ".artifacts/sound-captions");
+  const SCENARIO_URL = (base: string) => `${base}?scenario=sound-captions`;
+  const AUTOPLAY = { ...LAUNCH, args: [...(LAUNCH.args ?? []), "--autoplay-policy=no-user-gesture-required"], ignoreDefaultArgs: ["--hide-scrollbars"] };
+
+  type Stack = {
+    column: { right: number; placement: string } | null;
+    island: number[] | null;
+    questionToast: number[] | null;
+    header: number[] | null;
+    toasts: Array<{
+      sound: string; what: string; tag: string; line: string; who: string | null; subject: string | null; subjectTitle: string | null;
+      rect: number[]; leaving: boolean; folded: boolean; lineHeight: number; subjectLines: number; lineWhole: boolean; subjectWhole: boolean; covered: boolean;
+      /** Lines of page text a person can see under the toast, and the controls (a sample of each). */
+      textUnder: string[]; controlsUnder: string[];
+    }>;
+    viewport: { width: number; height: number };
+  };
+
+  async function readStack(page: Page): Promise<Stack> {
+    return page.evaluate(() => {
+      const round = (rect: DOMRect | { left: number; top: number; right: number; bottom: number }) => [rect.left, rect.top, rect.right, rect.bottom].map((value) => Math.round(value * 10) / 10);
+      const visible = (selector: string) => [...document.querySelectorAll<HTMLElement>(selector)].map((element) => element.getBoundingClientRect()).filter((rect) => rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < innerHeight).sort((a, b) => b.bottom - a.bottom)[0];
+      const column = document.querySelector<HTMLElement>("[data-sound-captions]");
+      const island = visible("[data-attention-island]");
+      const questionToast = visible("[data-attention-toast]");
+      const header = visible(".kb .agent-window .aw-head");
+      const textRange = (element: Element) => {
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        const rects = [...range.getClientRects()].filter((rect) => rect.width > 0);
+        return { rects, box: range.getBoundingClientRect() };
+      };
+      /* What the page shows under a toast, apart from the column: the first thing at the middle of the overlap that is not a toast. */
+      const shownAt = (element: Element, overlap: { left: number; right: number; top: number; bottom: number }) => {
+        const hit = document.elementsFromPoint((overlap.left + overlap.right) / 2, (overlap.top + overlap.bottom) / 2).find((candidate) => !column?.contains(candidate));
+        return Boolean(hit) && (element.contains(hit!) || hit!.contains(element));
+      };
+      const underToast = (box: DOMRect) => {
+        const cut = (rect: { left: number; right: number; top: number; bottom: number }) => ({ left: Math.max(rect.left, box.left), right: Math.min(rect.right, box.right), top: Math.max(rect.top, box.top), bottom: Math.min(rect.bottom, box.bottom) });
+        const textUnder: string[] = [];
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        const range = document.createRange();
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          const parent = node.parentElement;
+          if (!parent || !node.nodeValue?.trim() || column?.contains(parent) || parent.tagName === "STYLE" || parent.tagName === "SCRIPT") continue;
+          range.selectNodeContents(node);
+          for (const line of range.getClientRects()) {
+            const overlap = cut(line);
+            if (overlap.right - overlap.left >= 1 && overlap.bottom - overlap.top >= 1 && shownAt(parent, overlap)) textUnder.push((node.nodeValue ?? "").trim().slice(0, 40));
+          }
+        }
+        /* An icon-size control, or an icon inside a wider one: a row's blank part may sit under a toast, what it shows may not. */
+        const controlsUnder: string[] = [];
+        for (const control of document.querySelectorAll<HTMLElement>("a[href], button, input, select, textarea, summary, [role='button'], [role='tab'], [role='menuitem']")) {
+          if (column?.contains(control) || getComputedStyle(control).pointerEvents === "none") continue;
+          const own = control.getBoundingClientRect();
+          const parts: Array<{ element: Element; rect: DOMRect }> = own.width * own.height <= 6000 ? [{ element: control, rect: own }]
+            : [...control.querySelectorAll("svg, img")].filter((icon) => !icon.parentElement?.closest("svg")).map((icon) => ({ element: icon, rect: icon.getBoundingClientRect() }));
+          for (const part of parts) {
+            const overlap = cut(part.rect);
+            if (overlap.right - overlap.left >= 1 && overlap.bottom - overlap.top >= 1 && shownAt(part.element, overlap)) controlsUnder.push((control.getAttribute("aria-label") ?? control.textContent ?? control.tagName).trim().slice(0, 40));
+          }
+        }
+        return { textUnder, controlsUnder };
+      };
+      const toasts = [...document.querySelectorAll<HTMLElement>(".sc-toast")].map((toast) => {
+        const box = toast.getBoundingClientRect();
+        const folded = toast.hasAttribute("data-folded");
+        const under = folded ? { textUnder: [], controlsUnder: [] } : underToast(box);
+        const line = toast.querySelector<HTMLElement>(".sc-line")!;
+        const subject = toast.querySelector<HTMLElement>(".sc-subject");
+        const lineText = textRange(line);
+        const subjectText = subject ? textRange(subject) : null;
+        const inside = (rect: DOMRect) => rect.left >= box.left - 0.5 && rect.right <= box.right + 0.5 && rect.top >= box.top - 0.5 && rect.bottom <= box.bottom + 0.5
+          && rect.left >= -0.5 && rect.right <= innerWidth + 0.5 && rect.top >= -0.5 && rect.bottom <= innerHeight + 0.5;
+        const centre = document.elementFromPoint((lineText.box.left + lineText.box.right) / 2, (lineText.box.top + lineText.box.bottom) / 2);
+        return {
+          sound: toast.dataset.soundCaption ?? "", what: toast.dataset.captionWhat ?? "", tag: toast.tagName,
+          line: line.textContent ?? "", who: toast.querySelector(".sc-who")?.textContent ?? null,
+          subject: subject?.textContent ?? null, subjectTitle: subject?.title ?? null,
+          rect: round(box), leaving: toast.hasAttribute("data-leaving"), folded, ...under,
+          lineHeight: Math.round(parseFloat(getComputedStyle(line).lineHeight) * 10) / 10,
+          subjectLines: subjectText ? new Set(subjectText.rects.map((rect) => Math.round(rect.top))).size : 0,
+          lineWhole: lineText.rects.every(inside), subjectWhole: subjectText ? subjectText.rects.every((rect) => rect.top >= box.top - 0.5 && rect.bottom <= box.bottom + 0.5) : true,
+          covered: !(centre && toast.contains(centre)),
+        };
+      });
+      return {
+        column: column ? { right: Math.round((document.documentElement.clientWidth - column.getBoundingClientRect().right) * 10) / 10, placement: column.dataset.placement ?? "" } : null,
+        island: island ? round(island) : null, questionToast: questionToast ? round(questionToast) : null, header: header ? round(header) : null,
+        toasts, viewport: { width: innerWidth, height: innerHeight },
+      };
+    });
+  }
+
+  /** The toasts a person sees. */
+  const live = (stack: Stack) => stack.toasts.filter((toast) => !toast.leaving && !toast.folded);
+  /** The toasts in the stack, folded ones too: what the store holds. */
+  const held = (stack: Stack) => stack.toasts.filter((toast) => !toast.leaving);
+  const intersects = (a: number[], b: number[]) => a[0]! < b[2]! - 0.5 && b[0]! < a[2]! - 0.5 && a[1]! < b[3]! - 0.5 && b[1]! < a[3]! - 0.5;
+  const push = (page: Page, sound: string, batch: number, captions: unknown[]) =>
+    page.evaluate((payload) => (window as unknown as { soundCaptionsFixture: { push(p: unknown): void } }).soundCaptionsFixture.push(payload), { sound, batch, captions });
+
+  /* The planners cut a subject to 90 characters, so the longest one a toast meets is 90. */
+  const LONG = "Make every sound say what it announced, and about whom, without covering the board or the agent being read".slice(0, 90);
+  const LANE_TARGET = { kind: "lane", pipelineId: "p-captions", project: "atlas" };
+  const CRITIC = { id: "visual-critic", kind: "run", role: { roleId: "visual-critic" } };
+
+  /** What a stack must satisfy whatever its content: whole, inside the window, apart from each other and from the island and the question toast. */
+  function layoutFailures(tag: string, stack: Stack, strict = false): string[] {
+    const failures: string[] = [];
+    const toasts = live(stack);
+    /* A free place covers nothing at all. A page with none (a dense board at a narrow window) leaves the newest toast alone, over the least. */
+    const free = stack.column?.placement === "free";
+    if (strict && !free && toasts.length) failures.push(`${tag}: the stack found no free place, it covers text or controls`);
+    const keep = stack.viewport.width >= 1100 ? 2 : 1;
+    if (!free && toasts.length > keep) failures.push(`${tag}: ${toasts.length} toasts stand on a place that covers text, expected at most ${keep}`);
+    for (const [index, toast] of toasts.entries()) {
+      const [left, top, right, bottom] = toast.rect as [number, number, number, number];
+      if (left < 0 || top < 0 || right > stack.viewport.width || bottom > stack.viewport.height) failures.push(`${tag}: toast ${index} ${toast.rect} leaves the ${stack.viewport.width}×${stack.viewport.height} window`);
+      if (right - left > 300.5) failures.push(`${tag}: toast ${index} is ${right - left}px wide, over 300`);
+      if (!toast.lineWhole) failures.push(`${tag}: toast ${index} line «${toast.line}» is cut`);
+      if (!toast.subjectWhole) failures.push(`${tag}: toast ${index} subject is cut`);
+      if (toast.subjectLines > 1) failures.push(`${tag}: toast ${index} subject wraps to ${toast.subjectLines} lines`);
+      if (toast.covered) failures.push(`${tag}: toast ${index} is covered by another element`);
+      if (free && toast.textUnder.length) failures.push(`${tag}: toast ${index} covers ${toast.textUnder.length} lines of text: «${toast.textUnder.slice(0, 3).join("» «")}»`);
+      if (toast.controlsUnder.length) failures.push(`${tag}: toast ${index} covers controls: «${toast.controlsUnder.slice(0, 3).join("» «")}»`);
+      if (toast.lineHeight < 20 - 0.5) failures.push(`${tag}: toast ${index} line is ${toast.lineHeight}px tall, under the 20px leading`);
+      for (const [other, rest] of toasts.entries()) if (other > index && intersects(toast.rect, rest.rect)) failures.push(`${tag}: toasts ${index} and ${other} overlap`);
+      for (const [name, rect] of [["island", stack.island], ["question toast", stack.questionToast], ["agent window header", stack.header]] as const) {
+        if (rect && intersects(toast.rect, rect)) failures.push(`${tag}: toast ${index} covers the ${name} ${rect}`);
+      }
+      if (index > 0 && toast.rect[1]! < toasts[index - 1]!.rect[1]!) failures.push(`${tag}: toast ${index} is above the one before it, so the newest is not last`);
+    }
+    return failures;
+  }
+
+  async function settle(page: Page) {
+    await page.locator("[data-kanban-board]").waitFor({ timeout: 30_000 });
+    await page.waitForFunction(() => Boolean((window as unknown as { soundCaptionsFixture?: unknown }).soundCaptionsFixture), undefined, { timeout: 30_000 });
+    await page.locator(`${card("t-export")} .tile`).first().waitFor({ timeout: 30_000 });
+  }
+
+  browserTest("layout: whole, bounded, newest last, clear of the island, above an opened task, moved by the docked panel, in every window, language and theme", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser = await chromium.launch(AUTOPLAY);
+    const readings: unknown[] = [];
+    const failures: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) for (const theme of ["light", "dark"] as const) for (const viewport of DESKTOP) {
+        const tag = `${viewport.width}×${viewport.height} ${lang} ${theme}`;
+        const { context, page, pageErrors } = await openFixture(browser, SCENARIO_URL(server.base), viewport, theme, lang, "no-preference");
+        try {
+          await settle(page);
+          /* Five pushes 300 ms apart: four stay, the first is gone, the newest is last. */
+          const kinds: Array<[string, unknown[]]> = [
+            ["reply", [{ what: "reply", subject: "Fix the board", target: null }]],
+            ["step", [{ what: "step", subject: "Sound captions: say what each sound means", stage: CRITIC, target: LANE_TARGET }]],
+            ["landed", [{ what: "merged", subject: LONG, pr: 3218, target: LANE_TARGET }]],
+            ["your-move", [{ what: "question", subject: "Which of the two variants do you want?", target: null }]],
+            ["fault", [{ what: "memory", subject: LONG, target: null }]],
+          ];
+          for (const [sound, captions] of kinds) {
+            await push(page, sound, 1, captions);
+            await page.waitForTimeout(300);
+          }
+          await page.waitForTimeout(200);
+          const stacked = await readStack(page);
+          /* The store holds four; the page folds the oldest where no free place holds them all, newest kept. */
+          const shown = held(stacked);
+          if (shown.length !== 4) failures.push(`${tag}: ${shown.length} toasts after five pushes, expected 4`);
+          if (shown.map((toast) => toast.sound).join() !== "step,landed,your-move,fault") failures.push(`${tag}: order ${shown.map((toast) => toast.sound)}`);
+          if (!live(stacked).length) failures.push(`${tag}: every toast is folded`);
+          if (live(stacked).at(-1)?.sound !== "fault") failures.push(`${tag}: the newest toast is not the one on show`);
+          failures.push(...layoutFailures(`${tag} stacked`, stacked));
+          if (stacked.column && stacked.column.right !== 16) failures.push(`${tag}: stack right edge is ${stacked.column.right}px from the window, expected 16`);
+          const expectedStep = translate(lang, "soundCaption.step", { stage: translate(lang, "roleCopy.visual-critic.name") });
+          if (shown[0]?.line !== expectedStep) failures.push(`${tag}: the step toast reads «${shown[0]?.line}», expected «${expectedStep}»`);
+          if (shown[0]?.who !== translate(lang, "roleCopy.visual-critic.name")) failures.push(`${tag}: the stage name is not set apart: ${shown[0]?.who}`);
+          if (shown[3]?.line !== translate(lang, "soundCaption.memory")) failures.push(`${tag}: the longest toast reads «${shown[3]?.line}»`);
+          if (shown[3]?.subjectTitle !== LONG) failures.push(`${tag}: the full subject is not in the toast's title`);
+          await page.screenshot({ path: path.join(OUT, `stacked-${viewport.width}-${lang}-${theme}.png`) });
+          await page.waitForTimeout(2600);
+          const gone = await readStack(page);
+          if (gone.toasts.length) failures.push(`${tag}: ${gone.toasts.length} toasts remain 2.6 s after the last push`);
+
+          /* The question toast: the stack starts under it and never covers it. */
+          await push(page, "your-move", 1, [{ what: "question", subject: "Which variant?", target: null }]);
+          await page.waitForTimeout(250);
+          const single = await readStack(page);
+          failures.push(...layoutFailures(`${tag} single`, single));
+          if (single.island && live(single)[0] && live(single)[0]!.rect[1]! < single.island[3]! + 7.5) failures.push(`${tag}: the toast starts ${live(single)[0]!.rect[1]! - single.island[3]!}px under the island, expected 8`);
+          await page.screenshot({ path: path.join(OUT, `single-${viewport.width}-${lang}-${theme}.png`) });
+
+          /* An opened task: its window draws at 64, the toast at 84, under the window's header. */
+          await page.waitForTimeout(2300);
+          await page.click(`${card("t-export")} .tile >> nth=0`);
+          await page.waitForSelector("[data-agent-window] .reader-slot:not([data-incoming])", { timeout: 15_000 });
+          await push(page, "reply", 1, [{ what: "reply", subject: "Fix the board", target: null }]);
+          await page.waitForTimeout(350);
+          const opened = await readStack(page);
+          failures.push(...layoutFailures(`${tag} task open`, opened, true));
+          const first = live(opened)[0];
+          if (!opened.header) failures.push(`${tag}: no agent window header to measure against`);
+          else if (!first) failures.push(`${tag}: no toast with a task open`);
+          else if (first.rect[1]! < opened.header[3]! + 7.5) failures.push(`${tag}: the toast starts at ${first.rect[1]}, under ${opened.header[3]}+8 of the window header`);
+          readings.push({ tag, ...viewport, lang, theme, stacked: shown.map((toast) => ({ sound: toast.sound, line: toast.line, rect: toast.rect, folded: toast.folded, textUnder: toast.textUnder.length })), placement: stacked.column?.placement ?? null, single: live(single).map((toast) => toast.rect), singlePlacement: single.column?.placement ?? null, island: single.island, taskOpen: { header: opened.header, toast: first?.rect ?? null } });
+          await page.screenshot({ path: path.join(OUT, `task-open-${viewport.width}-${lang}-${theme}.png`) });
+          if (pageErrors.length) failures.push(`${tag}: page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          failures.push(`${tag}: ${String(error).split("\n")[0]}`);
+          await page.screenshot({ path: path.join(OUT, `failed-${viewport.width}-${lang}-${theme}.png`) }).catch(() => {});
+        } finally { await context.close(); }
+      }
+      writeEvidence("layout", readings, failures);
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 1_800_000);
+
+  browserTest("timing and clicks: 2 s, a hover holds, leaving resumes, a click reaches the lane, the docked panel moves the stack", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser = await chromium.launch(AUTOPLAY);
+    const readings: unknown[] = [];
+    const failures: string[] = [];
+    try {
+      for (const lang of ["en", "uk"] as const) {
+        const tag = `1440×900 ${lang}`;
+        const { context, page, pageErrors } = await openFixture(browser, SCENARIO_URL(server.base), DESKTOP[0], "light", lang, "no-preference");
+        try {
+          await settle(page);
+          const count = async () => live(await readStack(page)).length;
+          const caption = [{ what: "reply", subject: "Fix the board", target: null }];
+
+          /* Expiry: no pointer, 2 s. */
+          await push(page, "reply", 1, caption);
+          await page.waitForTimeout(1500);
+          if (await count() !== 1) failures.push(`${tag}: the toast left before 1.5 s`);
+          await page.waitForTimeout(1000);
+          if (await count() !== 0) failures.push(`${tag}: the toast was still there 2.5 s after it appeared`);
+
+          /* Hover: held far past 2 s, then leaving gives it at least 1 s. */
+          await page.mouse.move(5, 5);
+          await push(page, "reply", 1, caption);
+          await page.waitForTimeout(250);
+          const at = live(await readStack(page))[0]!;
+          await page.mouse.move((at.rect[0]! + at.rect[2]!) / 2, (at.rect[1]! + at.rect[3]!) / 2);
+          await page.waitForTimeout(3500);
+          if (await count() !== 1) failures.push(`${tag}: a hovered toast left within 3.5 s`);
+          const held = await readStack(page);
+          await page.screenshot({ path: path.join(OUT, `hover-held-${lang}.png`) });
+          await page.mouse.move(5, 5);
+          await page.waitForTimeout(700);
+          if (await count() !== 1) failures.push(`${tag}: the toast left 0.7 s after the pointer did`);
+          await page.waitForTimeout(1500);
+          if (await count() !== 0) failures.push(`${tag}: the toast was still there 2.2 s after the pointer left`);
+
+          /* Keyboard focus holds the same way. */
+          await push(page, "step", 1, [{ what: "step", subject: "Sound captions", stage: CRITIC, target: LANE_TARGET }]);
+          await page.waitForTimeout(250);
+          await page.locator(".sc-toast").first().focus();
+          await page.waitForTimeout(2800);
+          if (await count() !== 1) failures.push(`${tag}: a focused toast left within 3 s`);
+          const focusRing = await page.evaluate(() => { const style = getComputedStyle(document.querySelector(".sc-toast:focus-visible")!); return `${style.outlineStyle} ${style.outlineWidth}`; }).catch(() => "none");
+          if (!/solid 2px/.test(focusRing)) failures.push(`${tag}: the focus ring reads «${focusRing}»`);
+          await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+          /* Frozen with about 1.75 s left, so it is still up a second later and gone by 2.2 s. */
+          await page.waitForTimeout(1000);
+          if (await count() !== 1) failures.push(`${tag}: the toast left the instant focus did`);
+          await page.waitForTimeout(1200);
+          if (await count() !== 0) failures.push(`${tag}: the toast stayed after focus left`);
+
+          /* A click: the lane's card flashes, the toast is gone. */
+          await page.evaluate(() => {
+            const flashed = { value: false };
+            Object.assign(window, { captionFlash: flashed });
+            const watch = new MutationObserver((records) => { for (const record of records) if ((record.target as HTMLElement).classList?.contains("flash")) flashed.value = true; });
+            watch.observe(document.querySelector("[data-kanban-board]")!, { subtree: true, attributes: true, attributeFilter: ["class"] });
+          });
+          await push(page, "step", 1, [{ what: "step", subject: "Sound captions", stage: CRITIC, target: LANE_TARGET }]);
+          await page.waitForTimeout(250);
+          await page.locator(".sc-toast").first().click();
+          await page.waitForTimeout(800);
+          const flashed = await page.evaluate(() => (window as unknown as { captionFlash: { value: boolean } }).captionFlash.value);
+          if (!flashed) failures.push(`${tag}: a click on the lane's toast did not reach its card`);
+          if (await count() !== 0) failures.push(`${tag}: the clicked toast is still there`);
+
+          /* A mouse click on one of two toasts must not leave the other held: the focus and the pointer go with the removed button. */
+          await page.mouse.move(5, 5);
+          await push(page, "step", 1, [{ what: "step", subject: "Sound captions", stage: CRITIC, target: LANE_TARGET }]);
+          await push(page, "reply", 1, [{ what: "reply", subject: "Fix the board", target: LANE_TARGET }]);
+          await page.waitForTimeout(250);
+          if (await count() !== 2) failures.push(`${tag}: ${await count()} toasts before the two-toast click, expected 2`);
+          await page.locator(".sc-toast").first().click();
+          await page.mouse.move(5, 5);
+          await page.waitForTimeout(2500);
+          if (await count() !== 0) failures.push(`${tag}: the second toast was still there 2.5 s after the first was clicked away`);
+
+          /* The needs-you panel docked: the stack's right edge moves with the question toast's. */
+          await page.evaluate(() => localStorage.setItem("llvNeedsYouPanel", "open"));
+          await page.reload();
+          await settle(page);
+          await push(page, "reply", 1, caption);
+          await page.waitForTimeout(350);
+          const docked = await readStack(page);
+          if (docked.column?.right !== 336) failures.push(`${tag}: with the panel docked the stack is ${docked.column?.right}px from the window, expected 336`);
+          failures.push(...layoutFailures(`${tag} docked`, docked));
+          await page.screenshot({ path: path.join(OUT, `panel-docked-${lang}.png`) });
+          readings.push({ tag, held: live(held).map((toast) => toast.rect), dockedRight: docked.column?.right ?? null, flashed });
+          if (pageErrors.length) failures.push(`${tag}: page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          failures.push(`${tag}: ${String(error).split("\n")[0]}`);
+          await page.screenshot({ path: path.join(OUT, `failed-timing-${lang}.png`) }).catch(() => {});
+        } finally { await context.close(); }
+      }
+      writeEvidence("timing", readings, failures);
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 900_000);
+
+  browserTest("the real path: a stage passing is heard once and captioned once; muted, nothing; muting clears; the phone shows none", async () => {
+    fs.mkdirSync(OUT, { recursive: true });
+    const server = await serveEvidenceFixture(OUT);
+    const browser = await chromium.launch(AUTOPLAY);
+    const readings: unknown[] = [];
+    const failures: string[] = [];
+    const passTheStage = (page: Page) => page.evaluate(() => (window as unknown as { soundCaptionsFixture: { passStage(): void } }).soundCaptionsFixture.passStage());
+    try {
+      for (const lang of ["uk", "en"] as const) {
+        const tag = `real path ${lang}`;
+        const { context, page, pageErrors } = await openFixture(browser, SCENARIO_URL(server.base), DESKTOP[0], lang === "uk" ? "light" : "dark", lang, "no-preference");
+        try {
+          await settle(page);
+          await page.mouse.click(700, 450);
+          await page.waitForTimeout(1500);
+          await passTheStage(page);
+          await page.waitForSelector('.sc-toast[data-sound-caption="step"]', { timeout: 30_000 });
+          await page.waitForTimeout(250);
+          const stack = await readStack(page);
+          const shown = live(stack);
+          const name = translate(lang, "roleCopy.visual-critic.name");
+          if (shown.length !== 1) failures.push(`${tag}: ${shown.length} toasts for one stage`);
+          if (shown[0]?.line !== translate(lang, "soundCaption.step", { stage: name })) failures.push(`${tag}: the toast reads «${shown[0]?.line}»`);
+          const task = lang === "uk" ? "Підписи до звуків: що означає кожен" : "Sound captions: say what each sound means";
+          if (shown[0]?.subject !== task) failures.push(`${tag}: line 2 reads «${shown[0]?.subject}»`);
+          if (shown[0]?.tag !== "BUTTON") failures.push(`${tag}: the step toast is not a button`);
+          failures.push(...layoutFailures(tag, stack));
+          await page.screenshot({ path: path.join(OUT, `real-path-${lang}.png`) });
+          await page.waitForTimeout(3000);
+          if (live(await readStack(page)).length) failures.push(`${tag}: the toast stayed past 2 s`);
+          readings.push({ tag, line: shown[0]?.line, subject: shown[0]?.subject, rect: shown[0]?.rect });
+          if (pageErrors.length) failures.push(`${tag}: page errors ${pageErrors.join(" | ")}`);
+        } catch (error) {
+          failures.push(`${tag}: ${String(error).split("\n")[0]}`);
+          await page.screenshot({ path: path.join(OUT, `failed-real-${lang}.png`) }).catch(() => {});
+        } finally { await context.close(); }
+      }
+
+      /* Muted: the stage passes and nothing is captioned; muting with a toast up removes it. */
+      {
+        const tag = "muted en";
+        const { context, page } = await openFixture(browser, SCENARIO_URL(server.base), DESKTOP[0], "light", "en", "no-preference");
+        try {
+          await settle(page);
+          await page.mouse.click(700, 450);
+          await push(page, "reply", 1, [{ what: "reply", subject: "Fix the board", target: null }]);
+          await page.waitForTimeout(300);
+          if (live(await readStack(page)).length !== 1) failures.push(`${tag}: no toast to mute`);
+          await openBoardMenu(page);
+          await page.locator(`[data-bar-more-menu] button[aria-pressed="true"]`, { hasText: translate("en", "sound.mute") }).click();
+          await page.waitForTimeout(300);
+          if ((await readStack(page)).toasts.length) failures.push(`${tag}: muting left a toast on screen`);
+          await page.keyboard.press("Escape");
+          await passTheStage(page);
+          await page.waitForTimeout(9000);
+          const after = await readStack(page);
+          if (after.toasts.length || after.column) failures.push(`${tag}: a muted stage drew ${after.toasts.length} toasts`);
+          await page.screenshot({ path: path.join(OUT, "muted-en.png") });
+          readings.push({ tag, toastsAfterMutedStage: after.toasts.length });
+        } catch (error) {
+          failures.push(`${tag}: ${String(error).split("\n")[0]}`);
+        } finally { await context.close(); }
+      }
+
+      /* The phone: the same stage, nothing in the DOM. */
+      for (const lang of ["en", "uk"] as const) {
+        const tag = `phone 390×844 ${lang}`;
+        const { context, page } = await openFixture(browser, SCENARIO_URL(server.base), PHONE, "light", lang, "no-preference", true);
+        try {
+          await page.waitForSelector("[data-phone-kanban]", { timeout: 30_000 });
+          await page.waitForFunction(() => Boolean((window as unknown as { soundCaptionsFixture?: unknown }).soundCaptionsFixture), undefined, { timeout: 30_000 });
+          await push(page, "reply", 1, [{ what: "reply", subject: "Fix the board", target: null }]);
+          await passTheStage(page);
+          await page.waitForTimeout(6000);
+          const drawn = await page.evaluate(() => document.querySelectorAll("[data-sound-captions], [data-sound-caption], .sc-toast").length);
+          if (drawn) failures.push(`${tag}: ${drawn} caption elements in the DOM`);
+          await page.screenshot({ path: path.join(OUT, `phone-${lang}.png`) });
+          readings.push({ tag, captionElements: drawn });
+        } catch (error) {
+          failures.push(`${tag}: ${String(error).split("\n")[0]}`);
+        } finally { await context.close(); }
+      }
+      writeEvidence("real-path", readings, failures);
+      expect(failures).toEqual([]);
+    } finally { await browser.close(); server.stop(); }
+  }, 900_000);
+
+  function writeEvidence(part: string, readings: unknown[], failures: string[]) {
+    fs.mkdirSync("evidence/sound-captions", { recursive: true });
+    const sources = ["src/components/SoundCaptions.tsx", "src/components/soundCaptionPlacement.ts", "src/components/soundCaptionStyles.ts", "src/lib/audio/captions.ts", "src/lib/i18n/en.ts", "src/lib/i18n/uk.ts"];
+    fs.writeFileSync(`evidence/sound-captions/rendered-${part}.json`, JSON.stringify({
+      capturedAt: new Date().toISOString(),
+      command: "CHROME_BIN=<chrome> LLV_KANBAN_BROWSER_TEST=1 bun test src/components/kanban/kanbanBoard.browser.test.tsx -t \"sound captions\" (isolated roots, scripts/gate-slot.sh)",
+      sourceDigests: Object.fromEntries(sources.map((file) => [file, createHash("sha256").update(fs.readFileSync(file)).digest("hex")])),
+      readings,
+      failures,
+    }, null, 2) + "\n");
+  }
 });

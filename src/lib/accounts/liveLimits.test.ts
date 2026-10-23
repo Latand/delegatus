@@ -1,3 +1,5 @@
+import * as headlessCli from "@/lib/agent/claudeHeadless";
+import { setSubscriptionApiConsent } from "@/lib/accounts/subscriptionApiConsent";
 import { afterAll, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
@@ -6,6 +8,9 @@ import path from "node:path";
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "login-limits-"));
 const previousState = process.env.LLV_STATE_DIR;
 process.env.LLV_STATE_DIR = path.join(root, "state");
+setSubscriptionApiConsent(true);
+const cliFallback = spyOn(headlessCli, "runHeadlessClaudeOnce").mockResolvedValue({ status: "failed", records: [] });
+
 const { createManagedClaudeAccount } = await import("./claude");
 const { agentRegistry } = await import("@/lib/agent/registry");
 const { refreshAccountLimits, recordLiveObservation, exhaustionNeedsLiveRead } = await import("./liveLimits");
@@ -62,6 +67,7 @@ test("paid metadata survives a window-only read; a proved reset restores admissi
 });
 
 afterAll(() => {
+  cliFallback.mockRestore();
   if (previousState === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousState;
   fs.rmSync(root, { recursive: true, force: true });

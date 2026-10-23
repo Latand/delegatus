@@ -1,5 +1,57 @@
 # Pipeline continuation after host restart
 
+## Publication repair and retry recovery
+
+A refused publication reserves one repair request under a durable message key.
+Its 20-minute window starts at `refusedAt`, including delivery admission and
+the repair turn. The controller settles the keyed send through the normal
+delivery receipt resolver. A failed send ends the repair; at the deadline, a
+held reservation is withdrawn under asynchronous writer admission and its
+operation identity is checked again before the write. Claimed or uncertain
+deliveries retain their uncertainty. Late delivery preflight also checks that
+the repair is still owed and inside its original window.
+
+After a failed or expired repair, `resolve-decision` and `retry-stage` accept
+recovery when delivery failed, the producer is gone, the producer finished, or
+an expired reservation proves no dispatch. A failed delivery can retain
+duplicate-risk evidence from an earlier dispatch; that evidence alone does
+not keep the repair pending. A confirmed gone producer releases stale busy and
+queued markers from its old transcript and projection. Live or unverified
+producers retain the active-turn, background-work and outstanding-message
+guards. Unknown producer activity with an uncertain delivery also refuses.
+A stored failed receipt survives a read outage for the same operation.
+The refusal names the delivery operation and
+its current state. Producer and receipt reads occur outside the shared pipeline
+mutation lease; revision, attempt and repair identity guards apply afterwards.
+
+The next controller tick refreshes parked repair records, including legacy
+records with no send key or start timestamps. Failed deliveries and gone
+producers settle the repair without another prompt or automatic publication;
+the lane stays parked for an answer. The action paths also refresh this evidence.
+An accepted decision reserves one fresh attempt and records the revision the
+caller answered, so replaying that answer preserves its reservation even when
+the evidence refresh changed the old repair record.
+
+`publicationRecovery` retains failed publication operations by accepted SHA,
+including their cause, operation identity, ownership epoch and next retry time.
+An infrastructure deadline is recorded separately from a check failure; the
+check failure's detail retains the first named assertion when available.
+Automatic attempts use the existing 1/5/15-minute delays. The first interrupted
+publisher with no failure evidence retains its immediate retry. Exhaustion
+records a null next retry time. An exhausted infrastructure deadline parks for
+capacity recovery and requests no producer repair. An explicit request permits one further push
+without renewing the automatic allowance for that head. New stage attempts,
+controller restarts and delivery takeover preserve the counter. Takeover also
+records a settled failure the old controller has not observed yet.
+
+Each head retains its newest 64 failure records and a total count. The compact
+pipeline read exposes the current head's counters and newest four failures;
+the full read retains all stored records and other heads. These are persisted
+records, with no process-local cache.
+The focused regressions are `publicationRecovery.test.ts`,
+`repairDelivery.test.ts`, `publicationHistory.test.ts`,
+`parkedPublication.test.ts` and `store.test.ts` in `src/lib/pipelines`.
+
 ## Observed failure
 
 Read-only evidence collected on 2026-10-09 from `get_pipeline(full: true)`,

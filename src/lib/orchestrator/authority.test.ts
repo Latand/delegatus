@@ -97,6 +97,26 @@ test("identity survives migration: seats and revocations compare by canonical al
   }))).toEqual([{ conversationId: "conversation_new", path: null, project: "proj-a" }]);
 });
 
+test("revocations resolve once per decision and a later decision reads a new revocation", () => {
+  let resolutions = 0;
+  const revocations: OrchestratorRevocation[] = Array.from({ length: 100 }, (_, index) => ({
+    project: "project-a", conversationId: `conversation_revoked-${index}`, seatEpoch: 1,
+    revokedAt: "2026-10-01T00:00:00.000Z",
+  }));
+  const value = sources({
+    activeSeats: () => [seat({ conversationId: "conversation_a", project: "project-a", seatEpoch: 2 }),
+      seat({ conversationId: "conversation_b", project: "project-b", seatEpoch: 2 })],
+    revocations: () => revocations,
+    resolveAlias: id => { resolutions++; return id === "conversation_old" ? "conversation_a" : id; },
+  });
+  expect(ids(value)).toEqual(["conversation_a", "conversation_b"]);
+  expect(resolutions).toBe(102);
+  revocations.push({ project: "project-a", conversationId: "conversation_old", seatEpoch: 2, revokedAt: "2026-10-01T00:01:00.000Z" });
+  resolutions = 0;
+  expect(ids(value)).toEqual(["conversation_b"]);
+  expect(resolutions).toBe(103);
+});
+
 /* docs/design/ghost-seat.md §4: a deputy speaks for its seat only while that
    seat holds the project at the same epoch, the record is live, and nothing
    revoked the seat. */

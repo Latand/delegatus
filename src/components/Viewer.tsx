@@ -1,13 +1,14 @@
 "use client";
 
-import { ChevronRight, Crown, X } from "lucide-react";
+import { ChevronRight, Crown, Folders, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
 
 import { formatConversationHash, isArchivedPredecessor, parseConversationHash, resolveConversationTarget, withoutArchivedPredecessors, type ConversationHash } from "@/lib/accounts/identity";
 import { navigateToFragment, NOTIFICATION_OPEN_MESSAGE, setFragmentNavigator } from "@/lib/navigation/fragmentNavigation";
 import { createTraversalFence, FOCUS_HISTORY_STATE_KEY, focusEntryFor, parseFocusHistoryState, recordFocusNavigation, recordProjectNavigation, retargetRecordedProject, setFocusHistoryOwner } from "@/lib/navigation/focusHistory";
 import { onAccountPanelRequest } from "@/lib/accounts/openPanel";
-import { useAgentChimes } from "@/hooks/useAgentChimes";
+import { useFleetCues } from "@/hooks/useFleetCues";
+import { useWorkCues } from "@/hooks/useWorkCues";
 import { useArchivedProjects } from "@/hooks/useArchivedProjects";
 import { useProjectCuration } from "@/hooks/useProjectCuration";
 import { useEffectiveFlows } from "@/components/flows/flowModel";
@@ -32,13 +33,15 @@ import { PrototypeReviewHost } from "./prototypeReview/PrototypeReviewHost";
 import { openPrototypeReview } from "@/hooks/usePrototypeReview";
 import type { PrototypeReviewNotice } from "@/lib/prototypeReview/types";
 import { useDismissalOverlay, usePrototypeDismissalOverlay } from "./attention/dismissalOverlay";
-import { useDoneItems } from "./attention/doneItems";
+import { useDoneItems, useDoneItemsLoaded } from "./attention/doneItems";
 import { clearNotice, markNoticesSeen, usePhoneNotices } from "./attention/phoneNotices";
 import { BootShell } from "./BootShell";
 import { AttentionIsland } from "./attention/AttentionIsland";
 import { AttentionPanel, type AttentionPanelPlacement } from "./attention/AttentionPanel";
 import { needsYouCounts } from "./attention/needsYouPanel";
 import { AttentionToast } from "./attention/AttentionToast";
+import { SoundCaptions } from "./SoundCaptions";
+import type { CaptionTarget } from "@/lib/audio/captions";
 import { attentionEntryProject, buildNeedsYouQueue, laneFocusId, laneFocusPath, type MobileAttentionEntry } from "./attention/attentionQueue";
 import { MobileAttentionSheet, type MobileNoticeRow } from "./attention/MobileAttentionSheet";
 import { roleNameById } from "./builderCopy";
@@ -82,6 +85,10 @@ import { ProjectDashboard, queueColumnOpen } from "./ProjectDashboard";
 import { buildProjectSummaries, isChildConversation, OVERVIEW, projectKey, railProjectOrder } from "./projectModel";
 import { workingAgentCounts } from "./workingAgents";
 import { ProjectRail, RAIL_HIDDEN_STORAGE_KEY } from "./ProjectRail";
+import { useTeamView } from "./team/teamClient";
+import { WorkspaceDot, type WorkspaceRailState } from "./team/WorkspaceSwitch";
+import { ALL_WORKSPACES, effectiveWorkspace, followSelection, workspaceScope } from "./team/workspaceFilter";
+import { placeProject, useStoredWorkspace, useWorkspaces } from "./team/workspacesClient";
 import { StateWritesAlert } from "./StateWritesAlert";
 import { DeploymentStatusPill } from "./runtime/DeploymentStatusPill";
 import { StagingBadge } from "./StagingBadge";
@@ -435,10 +442,6 @@ function ViewerApp() {
   /* This tab's optimistic flow closes apply before anything renders: the X
      on a flow strip clears the reviewer side of the scheme instantly. */
   const flows = useEffectiveFlows(polledFlows);
-  /* A stand-in served for a scope still loading (#1432) is not scanned for
-     chimes: it is the last certified payload under a new label, and scanning
-     it would let the pinned answer's hydrated rows ring instead of seeding. */
-  useAgentChimes(files, requestScope, scopeCertified);
   const { archivedProjects, archiveProject, unarchiveProject } = useArchivedProjects(files, projectAliases);
   const catalogProjects = useMemo(() => new Set(projectCatalog.map((entry) => entry.project)), [projectCatalog]);
   /* The setup guide's Project step offers the projects the rail lists, the
@@ -699,6 +702,45 @@ function ViewerApp() {
     applyProject(nextProject);
     recordProjectNavigation(projectUrl(nextProject));
   }, [applyProject]);
+
+  /* Workspaces (docs/design/workspaces.md §13.4): on a team install with at
+     least one, the rail, the phone's project sheet and the Overview show the
+     chosen workspace's projects. Nothing else is filtered. Without one, none
+     of them receives anything and each draws what it always drew. */
+  const teamView = useTeamView({ load: false });
+  const workspacesView = useWorkspaces({ enabled: teamView?.mode === "team" });
+  const teamWorkspaces = workspacesView?.mode === "team" && workspacesView.workspaces.length ? workspacesView : null;
+  const [storedWorkspace, setStoredWorkspace] = useStoredWorkspace();
+  const currentWorkspace = effectiveWorkspace(teamWorkspaces, storedWorkspace);
+  const workspaceState = useMemo<WorkspaceRailState | undefined>(() => (teamWorkspaces ? {
+    view: teamWorkspaces,
+    chosen: currentWorkspace,
+    choose: (next) => {
+      setStoredWorkspace(next);
+      /* The board leaves a project the new choice does not list, for the
+         Overview of the choice. */
+      const scope = workspaceScope(teamWorkspaces, next);
+      if (scope && project !== OVERVIEW && !scope.has(project)) selectProject(OVERVIEW);
+    },
+    place: placeProject,
+    leave: (path) => (isMobile ? mobileNav.leave(path) : window.location.assign(path)),
+  } : undefined), [teamWorkspaces, currentWorkspace, setStoredWorkspace, project, selectProject, isMobile, mobileNav]);
+  /* A link, a search result or a notification can select a project outside
+     the chosen workspace: the choice follows it, so its row is in the rail. */
+  useEffect(() => {
+    if (!teamWorkspaces) return;
+    const next = followSelection(teamWorkspaces, currentWorkspace, project);
+    if (next !== currentWorkspace) setStoredWorkspace(next);
+  }, [project, teamWorkspaces, currentWorkspace, setStoredWorkspace]);
+  const workspaceEyebrow = useMemo(() => {
+    if (!teamWorkspaces) return undefined;
+    const chosen = currentWorkspace === ALL_WORKSPACES ? null : teamWorkspaces.workspaces.find((workspace) => workspace.id === currentWorkspace);
+    return chosen ? (
+      <><WorkspaceDot color={chosen.color} size={7} /><span className="min-w-0 truncate">{chosen.name}</span></>
+    ) : (
+      <><Folders className="h-3 w-3 shrink-0" aria-hidden /><span className="min-w-0 truncate">{t("workspaces.all")}</span></>
+    );
+  }, [teamWorkspaces, currentWorkspace, t]);
 
   /* A phone screen of another project, from a link (#2105): a task or a lane a
      message names. Over the Overview it goes on the stack like any screen, and
@@ -1030,7 +1072,17 @@ function ViewerApp() {
      title and the phone's badge, until it is accepted. The rail's ⏸, «Dismiss
      all», the agents' read and the board report stay decisions only. */
   const doneItems = useDoneItems();
+  const doneLoaded = useDoneItemsLoaded();
   const waitingCount = needsYou.length + doneItems.length;
+  /* The sound map (docs/design/sound-redesign.md): what needs the operator,
+     what landed and what was released, from the same queue and feed the badge
+     reads, so a sound and the badge cannot disagree. A stand-in served for a
+     scope still loading (#1432) is not planned on: it is the last certified
+     payload under a new label, and planning on it would let the pinned
+     answer's hydrated rows sound instead of seeding. */
+  useWorkCues(needsYou, pipelines, doneItems, requestScope, loaded && scopeCertified, doneLoaded);
+  /* Agents working off screen, and the answer to this tab's own message. */
+  useFleetCues();
   /* The rail's ⏸, the Overview's rows and the phone's project sheet count
      this same grouping, one number per project with the panel's sections. */
   const needsYouByProject = useMemo(() => needsYouCounts(needsYou), [needsYou]);
@@ -1409,6 +1461,16 @@ function ViewerApp() {
     prototypeJump.current = notice;
     selectProject(notice.project);
   }, [project, selectProject]);
+  /* Lands on a lane's card, whichever project it is in. */
+  const focusLane = useCallback(
+    (pipelineId: string, laneProject: string) => {
+      setPendingHash(null);
+      if (laneProject !== project) selectProject(laneProject);
+      focusNonceRef.current += 1;
+      setFocusRequest({ path: laneFocusPath(pipelineId), nonce: focusNonceRef.current, catalog: false });
+    },
+    [project, selectProject],
+  );
   const openAttentionEntry = useCallback(
     (entry: MobileAttentionEntry) => {
       if (entry.kind === "update") { openSelfUpdate(); return; }
@@ -1418,13 +1480,9 @@ function ViewerApp() {
         requestFocus(entry.item.file.path);
         return;
       }
-      const lane = entry.row.pipeline;
-      setPendingHash(null);
-      if (lane.project !== project) selectProject(lane.project);
-      focusNonceRef.current += 1;
-      setFocusRequest({ path: laneFocusPath(lane.id), nonce: focusNonceRef.current, catalog: false });
+      focusLane(entry.row.pipeline.id, entry.row.pipeline.project);
     },
-    [project, applyProject, selectProject, requestFocus, openPrototypeEntry],
+    [project, applyProject, requestFocus, openPrototypeEntry, focusLane],
   );
 
   useEffect(() => {
@@ -1529,6 +1587,40 @@ function ViewerApp() {
   }, [files]);
 
   const toastFile = toastPath ? files.find((file) => file.path === toastPath) : null;
+
+  /* A sound caption's click (docs/design/sound-captions.md §4): the entry it
+     announced when it is still waiting, else the conversation or lane behind it. */
+  const openCaptionTarget = useCallback(
+    (first: CaptionTarget): void => {
+      let target: CaptionTarget | null = first;
+      if (target.kind === "needs-you") {
+        const { entryId } = target;
+        const entry = needsYou.find((candidate) => candidate.id === entryId);
+        if (entry) {
+          jumpToEntry(entry);
+          return;
+        }
+        target = target.then;
+      }
+      if (!target || target.kind === "needs-you") return;
+      if (target.kind === "lane") {
+        focusLane(target.pipelineId, target.project);
+        return;
+      }
+      const { path, conversationId } = target;
+      const file = allFiles.find((candidate) => (path && candidate.path === path) || (conversationId && candidate.conversationId === conversationId));
+      if (file) openFile(file);
+    },
+    [needsYou, jumpToEntry, focusLane, allFiles, openFile],
+  );
+  /* A caption that names only a conversation takes that conversation's title. */
+  const captionConversationTitle = useCallback(
+    (conversationId: string): string | null => {
+      const file = allFiles.find((candidate) => candidate.conversationId === conversationId);
+      return file ? cleanTitle(file.title, 90) || null : null;
+    },
+    [allFiles],
+  );
 
   /* Crowned conversations pinned atop the panel, mirroring the scheme's
      favorites row (issue #224). */
@@ -1659,6 +1751,7 @@ function ViewerApp() {
           onDismiss={() => setToastPath(null)}
         />
       ) : null,
+      workspaceEyebrow,
       renderSheet: (name, close) => {
         if (name === "projects") {
           return (
@@ -1678,6 +1771,7 @@ function ViewerApp() {
               onSelect={selectProject}
               onCreateProject={createProject}
               onClose={close}
+              workspace={workspaceState}
             />
           );
         }
@@ -1730,7 +1824,7 @@ function ViewerApp() {
         return null;
       },
     };
-  }, [isMobile, shellEntries, shellDone, toastFile, openFile, openOverOverview, mobileNav, files, allFiles, railCatalog, projectDisplayNames, pipelines, workflows, archivedProjects, crownedProjects, project, clock, needsYouByProject, loaded, catalogFailures, selectProject, createProject, jumpToItem, openPrototypeEntry, phoneNotices.unseen, noticeRows, railOrder, needsOnly, needsOnlyAvailable]);
+  }, [isMobile, shellEntries, shellDone, toastFile, openFile, openOverOverview, mobileNav, files, allFiles, railCatalog, projectDisplayNames, pipelines, workflows, archivedProjects, crownedProjects, project, clock, needsYouByProject, loaded, catalogFailures, selectProject, createProject, jumpToItem, openPrototypeEntry, phoneNotices.unseen, noticeRows, railOrder, needsOnly, needsOnlyAvailable, workspaceState, workspaceEyebrow]);
 
   const shell = (
     <div className="flex h-full">
@@ -1739,7 +1833,7 @@ function ViewerApp() {
         <button type="button" className="rounded-[8px] bg-brand px-3 py-1.5 font-semibold text-on-brand pointer-coarse:min-h-11" onClick={() => window.location.reload()}>{t("selfUpdate.reconnect.reload")}</button>
       </div> : null}
       {isMobile || railHidden ? null : (
-        <ProjectRail onHide={toggleRail} files={files} projectCatalog={railCatalog} projectDisplayNames={projectDisplayNames} pipelines={pipelines} workflows={workflows} archivedProjects={archivedProjects} crownedProjects={crownedProjects} selected={project} now={clock} needsYouCounts={needsYouByProject} loaded={loaded} catalogFailures={catalogFailures} onSelect={selectProject} onToggleCrown={toggleCrown} onCreateProject={createProject} />
+        <ProjectRail onHide={toggleRail} files={files} projectCatalog={railCatalog} projectDisplayNames={projectDisplayNames} pipelines={pipelines} workflows={workflows} archivedProjects={archivedProjects} crownedProjects={crownedProjects} selected={project} now={clock} needsYouCounts={needsYouByProject} loaded={loaded} catalogFailures={catalogFailures} onSelect={selectProject} onToggleCrown={toggleCrown} onCreateProject={createProject} workspace={workspaceState} />
       )}
       {/* Hidden rail (issue #1819): one small control at the top-left edge of
           the main area brings it back, and nothing else of the rail is left on
@@ -1867,6 +1961,7 @@ function ViewerApp() {
             onOpenSearch={openSearch}
             mobileShell={mobileShell}
             onOpenConversation={openOverOverview}
+            workspace={workspaceState}
           />
         ) : (
           <ProjectDashboard
@@ -1919,6 +2014,17 @@ function ViewerApp() {
           root agent's focus handoff when there is one to answer. Renders
           nothing at all the rest of the time. */}
       <AttentionHost mobile={isMobile} />
+      {/* A short toast for each event sound that plays, beside the needs-you
+          chip. Fixed at the toast layer so an opened task does not cover it;
+          nothing mounts on the phone. */}
+      <SoundCaptions
+        mobile={isMobile}
+        right={panelDocked ? PANEL_WIDTH + 16 : 16}
+        hidden={panelFloating}
+        suppressPath={toastFile && !panelFloating ? toastFile.path : null}
+        titleOf={captionConversationTitle}
+        onOpen={openCaptionTarget}
+      />
       {/* A task's prototype review, opened from its card or from the orchestrator's notice. */}
       <PrototypeReviewHost tasks={tasks} seatDecisions={seatDecisions} />
       {/* #1054: the global "find my messages" palette. Mounted here so one

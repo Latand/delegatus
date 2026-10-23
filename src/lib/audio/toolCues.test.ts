@@ -35,7 +35,7 @@ describe("a newly appended call ticks even when it arrives already settled", () 
        sees the settled event. It must still tick, once. */
     const appended = [row(tool({ id: "fast-1", status: "ok", srcCall: 10 }))];
     expect(scanner.scan(appended, 12)).toEqual([
-      { cue: "tool-tick", eventId: "tool:conv-1:fast-1", pan: 0 },
+      { cue: "typing", eventId: "tool:conv-1:fast-1", pan: 0 },
     ]);
     /* The same window re-parsed is a duplicate observation, not a new call. */
     expect(scanner.scan(appended, 12)).toEqual([]);
@@ -46,11 +46,11 @@ describe("a newly appended call ticks even when it arrives already settled", () 
     expect(scanner.scan([], 10)).toEqual([]);
     const appended = [row(tool({ id: "boom", status: "err", srcCall: 10 }))];
     expect(scanner.scan(appended, 12)).toEqual([
-      { cue: "tool-tick", eventId: "tool:conv-1:boom", pan: 0 },
+      { cue: "typing", eventId: "tool:conv-1:boom", pan: 0 },
     ]);
   });
 
-  test("a fast Viewer MCP call keeps its distinct cue", () => {
+  test("a fast Viewer MCP call is typing like any other call", () => {
     const scanner = createToolCueScanner("conv-1");
     expect(scanner.scan([], 10)).toEqual([]);
     const mcp = tool({
@@ -61,7 +61,7 @@ describe("a newly appended call ticks even when it arrives already settled", () 
       mcp: { serverName: "viewer", toolName: "send_message", args: {}, result: null },
     });
     expect(scanner.scan([row(mcp)], 12)).toEqual([
-      { cue: "viewer-mcp", eventId: "tool:conv-1:call-mcp", pan: 0 },
+      { cue: "typing", eventId: "tool:conv-1:call-mcp", pan: 0 },
     ]);
   });
 
@@ -75,7 +75,7 @@ describe("a newly appended call ticks even when it arrives already settled", () 
       t0: null,
     } as FeedEntry["item"];
     expect(scanner.scan([row(group)], 13)).toEqual([
-      { cue: "tool-tick", eventId: "tool:conv-1:fast-a", pan: 0 },
+      { cue: "typing", eventId: "tool:conv-1:fast-a", pan: 0 },
     ]);
   });
 });
@@ -114,7 +114,7 @@ describe("history is silent, wherever it comes from", () => {
       row(tool({ id: "before", status: "ok", srcCall: 4 })),
       row(tool({ id: "after", status: "ok", srcCall: 10 })),
     ], 12)).toEqual([
-      { cue: "tool-tick", eventId: "tool:conv-1:after", pan: 0 },
+      { cue: "typing", eventId: "tool:conv-1:after", pan: 0 },
     ]);
   });
 
@@ -125,7 +125,7 @@ describe("history is silent, wherever it comes from", () => {
       row(tool({ id: "live", status: "run", srcCall: 90 })),
     ];
     expect(scanner.scan(opened, 100)).toEqual([
-      { cue: "tool-tick", eventId: "tool:conv-1:live", pan: 0 },
+      { cue: "typing", eventId: "tool:conv-1:live", pan: 0 },
     ]);
   });
 });
@@ -139,7 +139,7 @@ describe("only work that is happening now ticks", () => {
     ];
 
     expect(toolActivityCues(items, "conv-1")).toEqual([
-      { cue: "tool-tick", eventId: "tool:conv-1:call-live", pan: 0 },
+      { cue: "typing", eventId: "tool:conv-1:call-live", pan: 0 },
     ]);
   });
 
@@ -149,8 +149,8 @@ describe("only work that is happening now ticks", () => {
   });
 });
 
-describe("Viewer MCP calls get their own cue", () => {
-  test("an in-flight Viewer MCP call is not ordinary tool texture", () => {
+describe("Viewer MCP calls are typing too (critique row 4)", () => {
+  test("an in-flight Viewer MCP call rings the same typing as any tool", () => {
     const mcp = tool({
       id: "call-mcp",
       tool: "mcp__viewer__send_message",
@@ -158,7 +158,7 @@ describe("Viewer MCP calls get their own cue", () => {
     });
 
     expect(toolActivityCues([row(mcp)], "conv-1")).toEqual([
-      { cue: "viewer-mcp", eventId: "tool:conv-1:call-mcp", pan: 0 },
+      { cue: "typing", eventId: "tool:conv-1:call-mcp", pan: 0 },
     ]);
   });
 });
@@ -196,7 +196,7 @@ describe("folded command groups", () => {
     } as FeedEntry["item"];
 
     expect(toolActivityCues([row(group)], "conv-1")).toEqual([
-      { cue: "tool-tick", eventId: "tool:conv-1:b", pan: 0 },
+      { cue: "typing", eventId: "tool:conv-1:b", pan: 0 },
     ]);
   });
 

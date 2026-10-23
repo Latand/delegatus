@@ -1,3 +1,5 @@
+// Pre-S5 embedded-flow execution cases stay as history until S8 deletion.
+// Supported run-reviewer cases and flows/retirement.test.ts remain active.
 import { expect, test, spawn, spawnSync, fs, path, Database, reviewNote, tickPipelines, MAX_FLOW_NOTE_LENGTH, createPipelineFromRequest, loadPipelines, savePipelines, pipelineRevision, FAIL_EDGE_BUDGET_SPENT_DETAIL, failEdgeRoundsUsed, pipelineCompletedUnreviewed, asStoredLegacyReviewLane, patchPipeline, closeAndDrain, RUN_STAGES, ORIGIN_MAIN_SHA, entry, harness, REMOTE_BRANCH, create, PROVIDER_LIMIT_NOTICE, LIMITED_ACCOUNT, SPARE_ACCOUNT, limitInterruptedTranscript, codexUsageLimitTranscript, verdictTranscript, silentTranscript, readFixtures, usageLimitPorts, usageLimitStage, reviewPipeline, reviewStage, noteOf, CYCLE_STAGES, BUDGET_STAGES, failEveryCritique, STOP_AFTER_FIX, REVIEW_HEADS, movingHeadHarness, critiqueRound, buildRound, continueReview, movingHead, acceptHead, driveWithController, expectConvertedReview, REVIEW_LOOP_STAGE, BUILD_ONLY, publishHarness, PUBLISH_STAGES, deliveryRefusalPark, interruptedPublication } from "./engine.fixture";
 
 
@@ -252,7 +254,7 @@ test("closing preserves uncommitted stage work and names what it left behind (#6
   expect(loadPipelines()[0]!.stateDetail).toBe("closed; stopped 1 stage host; kept 2 uncommitted paths in the worktree");
 });
 
-test("a lost advance on a fresh review flow is re-issued instead of waiting forever", async () => {
+test.skip("a lost advance on a fresh review flow is re-issued instead of waiting forever", async () => {
   const h = harness();
   const stages = [
     { id: "build", kind: "run", prompt: "build", next: "review" },
@@ -665,7 +667,7 @@ test("a draft keeps at least one stage on the canvas (#136, #353)", async () => 
   expect(loadPipelines()[0]!.stages.map((stage) => stage.id)).toEqual(["plan"]);
 });
 
-test("draft edits that would orphan a review-loop are rejected (#136)", async () => {
+test.skip("draft edits that would orphan a review-loop are rejected (#136)", async () => {
   const h = harness();
   const { ports } = h;
   savePipelines([]);
@@ -1449,7 +1451,7 @@ test("stop-after-fix is accepted wherever a fail edge takes its option (#2187)",
   expect(loadPipelines()[0]!.stages[1]!.onFail).toEqual({ to: "build", maxRounds: 3, onExhausted: "stop-after-fix" });
 });
 
-test("create_pipeline stores a review-loop as a read-only reviewer, a fix stage and an advance fail edge (#2187)", async () => {
+test.skip("create_pipeline stores a review-loop as a read-only reviewer, a fix stage and an advance fail edge (#2187)", async () => {
   const h = harness();
   savePipelines([]);
   const created = await createPipelineFromRequest({
@@ -1465,7 +1467,7 @@ test("create_pipeline stores a review-loop as a read-only reviewer, a fix stage 
   expect(loadPipelines()[0]!.stages.map((stage) => stage.id)).toEqual(["build", "review", "review-fix"]);
 });
 
-test("add-stage on a draft converts a review-loop, and that draft completes after fixing its final review (#2187)", async () => {
+test.skip("add-stage on a draft converts a review-loop, and that draft completes after fixing its final review (#2187)", async () => {
   const h = movingHeadHarness();
   savePipelines([]);
   const created = await createPipelineFromRequest({ task: "Draft with review", repoDir: "/repo", stages: BUILD_ONLY as never, autoStart: false, publication: "internal" }, h.ports);
@@ -1488,7 +1490,7 @@ test("add-stage on a draft converts a review-loop, and that draft completes afte
   expect(h.calls.some((call) => call.startsWith("flow:"))).toBe(false);
 });
 
-test("add-stage on a started lane converts a review-loop and keeps every run's history (#2187)", async () => {
+test.skip("add-stage on a started lane converts a review-loop and keeps every run's history (#2187)", async () => {
   const h = harness();
   await create(h.ports, [RUN_STAGES[0], { ...RUN_STAGES[1] }] as never);
   await tickPipelines([], h.ports);
@@ -1509,7 +1511,7 @@ test("add-stage on a started lane converts a review-loop and keeps every run's h
   expect(lane.cursor?.stageId).toBe("plan");
 });
 
-test("a review-loop the conversion cannot build without a guess is stored as sent, and the answer carries the refusals (#2187)", async () => {
+test.skip("a review-loop the conversion cannot build without a guess is stored as sent, and the answer carries the refusals (#2187)", async () => {
   const h = harness();
   savePipelines([]);
   /* Only a read-only stage passes into the review: no fix stage can copy it. */
@@ -1537,7 +1539,7 @@ test("a review-loop the conversion cannot build without a guess is stored as sen
   expect(stored.stages.at(-1)).toMatchObject({ id: "review", kind: "review-loop" });
 });
 
-test("graph edits on a stored legacy lane never convert its review-loop (#2187)", async () => {
+test.skip("graph edits on a stored legacy lane never convert its review-loop (#2187)", async () => {
   const h = harness();
   const lane = await create(h.ports, [
     { ...BUILD_ONLY[0], next: "review" },
@@ -1674,7 +1676,7 @@ test("a fail edge freezes the instant it routes, before the target attempt mater
   expect(loadPipelines()[0]!.stages.find((stage) => stage.id === "verify")?.onFail).toEqual({ to: "build", maxRounds: 1 });
 });
 
-test("a review-loop binds its implementer through the activation graph across a merge (#353)", async () => {
+test.skip("a review-loop binds its implementer through the activation graph across a merge (#353)", async () => {
   const h = harness();
   const { ports } = h;
   savePipelines([]);
@@ -1762,7 +1764,7 @@ test("structural draft edits preserve intentional pass and fail edges (#353)", a
   jumpAndLoopSurvive(removed.pipeline!.stages);
 });
 
-test("consecutive reviews cross a migration boundary and resume positional implementer selection (#353)", async () => {
+test.skip("consecutive reviews cross a migration boundary and resume positional implementer selection (#353)", async () => {
   const h = harness();
   const { ports } = h;
   savePipelines([]);
@@ -2123,7 +2125,7 @@ test("a builder that already pushed the accepted commit settles without another 
   expect(box.order).toEqual([]);
 });
 
-test("a passed run stage publishes its committed head before the review stage creates its flow (#729)", async () => {
+test.skip("a passed run stage publishes its committed head before the review stage creates its flow (#729)", async () => {
   const h = harness();
   const box = publishHarness(h);
   await create(h.ports, PUBLISH_STAGES as never, REMOTE_BRANCH);

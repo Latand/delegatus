@@ -1,5 +1,6 @@
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { runtimeDataCorruptionCode } from "@/lib/runtime/dataCorruption";
+import { schemaCompileFailure } from "@/lib/state/schemaCompatibility";
 import { checkpointHotStateRollbackMirrorsForDemotion } from "./state/checkpointRollbackMirrors";
 export { checkpointHotStateRollbackMirrorsForDemotion } from "./state/checkpointRollbackMirrors";
 import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
@@ -105,6 +106,8 @@ interface CurrentReleaseControllerLoaders {
   loadDeputySweep?: () => Promise<{ startDeputySweep: () => void }>;
   /** Optional for the same reason. */
   loadTempSweep?: () => Promise<{ startTempSweep: () => void }>;
+  /** Optional for the same reason. */
+  loadTurboSweep?: () => Promise<{ startTurboSweep: () => void }>;
   /** Optional for the same reason. */
   loadWorktreeSweep?: () => Promise<{ startWorktreeSweep: () => void }>;
   /** Optional for the same reason. */
@@ -349,6 +352,16 @@ export async function initializeHotStateStoresAtStartup(
   // Requests consume the persisted narrow projections from their first call.
   const { readHistoryProjection } = await import("@/lib/state/historyProjection");
   await readHistoryProjection(() => undefined, { startup: true, signal: options.signal });
+  // MCP readers cannot install missing receipt indexes in operator state.
+  // Prepare the existing schema and legacy import under the serving owner's
+  // startup fence, before a thread's first task call reaches its worker.
+  const { openAsyncMcpReceiptStore } = await import("@/lib/mcp/server");
+  await waitForStateLock("mcp.receipts.startup", async () => {
+    const receipts = await openAsyncMcpReceiptStore(statePath("mcp-receipts.sqlite"), {
+      legacyFilePath: statePath("mcp-receipts.json"),
+    });
+    receipts.close();
+  }, { signal: options.signal });
   if (boundary.authority?.mode === "preparing") {
     return completeHotStatePreparation(path.dirname(statePath("state.sqlite")), boundary.authority);
   }
@@ -367,6 +380,7 @@ export async function startCurrentReleaseControllers(
     loadStructuredHostRetirement: () => import("@/lib/runtime/structuredHostRetirement"),
     loadSeatTick: () => import("@/lib/monitor/seatTickController"),
     loadTempSweep: () => import("@/lib/tempSweep"),
+    loadTurboSweep: () => import("@/lib/monitor/turboRuntime"),
     loadWorktreeSweep: () => import("@/lib/pipelines/worktreeSweep"),
     loadDeputySweep: () => import("@/lib/orchestrator/deputySweep"),
     loadRoleMappingRetirements: () => import("@/lib/roles/retirements"),
@@ -472,6 +486,14 @@ export async function startCurrentReleaseControllers(
     seatTick?.startSeatTick();
   } catch (error) {
     console.error("[seat tick] start failed", error instanceof Error ? error.name : "unknown");
+  }
+  /* Turbo (docs/design/turbo-mode.md §2.7): an episode stored on, or ended and
+     not yet returned, resumes from its stored rows after a restart or deploy. */
+  try {
+    const turbo = await loaders.loadTurboSweep?.();
+    turbo?.startTurboSweep();
+  } catch (error) {
+    console.error("[turbo] start failed", error instanceof Error ? error.name : "unknown");
   }
   /* The stale temp directory sweep (#1957): a killed test run, capture or
      stage host leaves its directory behind, and those filled the disk once.
@@ -664,6 +686,13 @@ export function classifyStructuredHostStartupError(
       action: "Correct the structured-host configuration and restart the Viewer.",
     };
   }
+  if (name === "IncompatibleSchemaError" || schemaCompileFailure(error)) {
+    return {
+      disposition: "terminal",
+      category: "configuration",
+      action: "The state database holds a statement this SQLite cannot compile; it is not damaged. Run a Delegatus release that supports this SQLite, then restart the Viewer.",
+    };
+  }
   if (name === "RegistryParityError"
     || name === "RegistryBackendIdentityError"
     || runtimeDataCorruptionCode(error)
@@ -820,6 +849,8 @@ export async function completeViewerRuntimeActivation(
   steps.publishHotStateActivation();
   await steps.runClaudeLoginRecovery?.();
   await steps.runWorktreeRecovery?.();
+  const { retireLegacyCodexMemoryHooksAtStartup } = await import("@/lib/memory/hookMigration");
+  await retireLegacyCodexMemoryHooksAtStartup();
   steps.startStructuredHosts?.();
   await steps.prepareBoard?.();
   await steps.startControllers();
@@ -829,15 +860,16 @@ export async function completeViewerRuntimeActivation(
 /** Check every state database before a store opens one (#1870 slice 10):
     a damaged one is replaced by its newest good backup, or starts empty. The
     returned `start` raises the board cards and arms the backup timer once the
-    release is ready. A failure here never blocks activation. */
+    release is ready. A failed schema recovery blocks store initialization. */
 export async function checkStateDatabasesBeforeStores(
   stateDirectory: string,
 ): Promise<{ start(ownsTraffic: () => boolean): void }> {
+  const { checkStateDatabasesInWorker, startStateDurability, SchemaRecoveryError } = await import("@/lib/state/durability");
   try {
-    const { checkStateDatabasesInWorker, startStateDurability } = await import("@/lib/state/durability");
     const incidents = await checkStateDatabasesInWorker(stateDirectory);
     return { start: (ownsTraffic) => { startStateDurability({ stateDirectory, incidents, ownsTraffic }); } };
   } catch (error) {
+    if (error instanceof SchemaRecoveryError) throw error;
     console.error("[state durability] activation check failed", error instanceof Error ? error.message : String(error));
     return { start: () => {} };
   }
@@ -903,6 +935,9 @@ export async function installSpawnCapabilityResolverAtStartup(): Promise<void> {
 
 export async function registerViewerRuntime(): Promise<void> {
   viewerLoopMonitor.start();
+  // The validated persisted catalog is prepared without contacting any server.
+  void import("./voiceTools/hub").then(({ voiceToolHub }) => voiceToolHub().store.load())
+    .catch(() => console.error("[voice-tools] REGISTRY_UNAVAILABLE"));
   // Background diagnostics never hold readiness or reach the runtime host.
   void import("./loopProfilerServing").then(({ startServingLoopProfiler }) => startServingLoopProfiler(viewerLoopMonitor)).catch(() => {});
   await installServingNextRenderMonitor();
@@ -965,8 +1000,15 @@ export async function registerViewerRuntime(): Promise<void> {
     await startManagedRetirementGuard(hotStateDirectory, activatedReleaseRevision);
     const durability = await startupBarrier.run(() => checkStateDatabasesBeforeStores(hotStateDirectory));
     assertStartupActive();
+    await startupBarrier.run(async () => {
+      const { prepareDeliveryLedgerIndexes } = await import("@/lib/memory/deliveryLedger");
+      await prepareDeliveryLedgerIndexes();
+    });
+    assertStartupActive();
     const { sweepOldLearnedRulesFiles } = await import("@/lib/memory/roleLaunch");
     try { sweepOldLearnedRulesFiles(); } catch { console.warn("[role-memory] old launch-file cleanup unavailable"); }
+    const { startRoleSelectionRetention } = await import("@/lib/memory/roleSelectionRetention");
+    startRoleSelectionRetention();
     const authority = await initializeHotStateStoresAtStartup(boundary, { signal: startupAbort.signal });
     const { ensureLegacyCollectionsImported } = await import("@/lib/state/legacyCollections");
     await ensureLegacyCollectionsImported();

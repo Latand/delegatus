@@ -8,6 +8,7 @@ import { buildPipeline, PIPELINES_SCHEMA_VERSION } from "@/lib/pipelines/store";
 import { ClaudeStreamBrokerHost, FileClaudeDeliveryLedger } from "./claudeStreamBrokerHost";
 import { FileRuntimeEventStore } from "./eventStore";
 import type { RuntimeEvent } from "./engineHost";
+import os from "node:os";
 import { pathIsInside, prepareClaudeIntegrationTestHome } from "./integrationTestHome";
 
 const claudeBinary = process.env.LLV_CLAUDE_BINARY ?? "claude";
@@ -24,6 +25,44 @@ afterAll(() => {
   mcpDefaultHome?.cleanup();
   mcpCustomHome?.cleanup();
 });
+
+test.skipIf(process.env.LLV_CLAUDE_MCP_STARTUP_TEST !== "1")("native Claude verifies its Viewer catalog before any model turn", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-mcp-startup-"));
+  const account = path.join(root, "account");
+  fs.mkdirSync(account);
+  const server = path.join(root, "server.mjs");
+  fs.writeFileSync(server, `
+    import { createInterface } from "node:readline";
+    createInterface({ input: process.stdin }).on("line", line => {
+      const request = JSON.parse(line);
+      if (request.id === undefined) return;
+      const result = request.method === "initialize"
+        ? { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "viewer", version: "1" } }
+        : { tools: process.env.EMPTY_TOOLS === "1" ? [] : [{ name: "stage_report", inputSchema: { type: "object" } }] };
+      console.log(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }));
+    });
+  `);
+  try {
+    for (const empty of [false, true]) {
+      fs.writeFileSync(path.join(account, ".claude.json"), JSON.stringify({ mcpServers: { viewer: {
+        command: process.execPath, args: [server], env: { EMPTY_TOOLS: empty ? "1" : "0" },
+      } } }));
+      let host: ClaudeStreamBrokerHost | null = null;
+      const sessionId = ["00000000", "0000", "4000", "8000", empty ? "000000000002" : "000000000001"].join("-");
+      const error = await ClaudeStreamBrokerHost.start({ cwd: root, claudeConfigDir: account,
+        sessionId,
+        env: { PATH: process.env.PATH, HOME: root, NODE_ENV: "test" }, requestTimeoutMs: 15_000,
+        eventStore: new FileRuntimeEventStore(path.join(root, `events-${empty}`)),
+        deliveryLedger: new FileClaudeDeliveryLedger(path.join(root, `deliveries-${empty}`)),
+        readAuthStatus: () => ({ loggedIn: true, authMethod: "claude.ai", subscriptionType: "max" }),
+      }).then(value => { host = value; return null; }, reason => reason);
+      try {
+        if (empty) expect(String(error)).toContain("Viewer MCP launch failed");
+        else expect(error).toBeNull();
+      } finally { if (host) await (host as ClaudeStreamBrokerHost).release(); }
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}, 45_000);
 
 async function waitFor(
   iterator: AsyncIterator<RuntimeEvent>,

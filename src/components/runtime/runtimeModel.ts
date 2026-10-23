@@ -260,6 +260,12 @@ export interface RuntimeDrift {
   at: string;
 }
 
+export type RuntimeTurnOutcome = "completed" | "interrupted" | "error";
+
+function isRuntimeTurnOutcome(value: unknown): value is RuntimeTurnOutcome {
+  return value === "completed" || value === "interrupted" || value === "error";
+}
+
 export interface RuntimeSession {
   conversationId: string;
   sessionKey: { engine: RuntimeEngine; sessionId: string };
@@ -297,6 +303,10 @@ export interface RuntimeSession {
   activeTurnId: string | null;
   /** Client-retained terminal identity, so batched renders need no running frame. */
   settledTurnId?: string | null;
+  /** How the turn named by `settledTurnId` ended, from its `turn-ended` event.
+      The reply sound (S8 of docs/design/sound-redesign.md) plays only for a
+      turn that completed, never for one the operator's own send interrupted. */
+  lastTurnOutcome?: RuntimeTurnOutcome | null;
   pendingReconfigure?: RuntimePendingReconfigure | null;
   /** Unresolved drift notice, if any. */
   drift?: RuntimeDrift | null;
@@ -714,6 +724,7 @@ function reduceKnown(store: RuntimeStore, env: RuntimeEnvelope, revision: number
         turn: "idle",
         activeTurnId: null,
         settledTurnId: p.turnId ?? s.activeTurnId ?? s.settledTurnId ?? null,
+        lastTurnOutcome: isRuntimeTurnOutcome(p.outcome) ? p.outcome : null,
         voiceDeliveries: p.turnId
           ? completeVoiceTurn(
             s.voiceDeliveries,

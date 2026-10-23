@@ -31,7 +31,7 @@ const CONTROLLER_ACTIONS = new Set<PipelineAction>(["start", "resume", "retry-st
 
 type PipelineApiError = ApiError & {
   code?: "RUNTIME_SWITCH_IN_PROGRESS" | "STAGE_ALREADY_REPORTED" | "ATTEMPT_STARTING" | "RUNTIME_SWITCH_UNAVAILABLE" | PipelineRepoPreflightErrorCode | PipelineGuardErrorCode | "store_busy" | typeof ENGINE_NOT_CONNECTED
-    | "WORK_LINK_INVALID" | "WORK_LINK_AUTO" | "WORK_LINK_LIMIT" | "orchestrator_seat_revoked" | "orchestrator_seat_authority_unavailable" | "TASK_RUNS_ELSEWHERE";
+    | "WORK_LINK_INVALID" | "WORK_LINK_AUTO" | "WORK_LINK_LIMIT" | "orchestrator_seat_revoked" | "orchestrator_seat_authority_unavailable" | "TASK_RUNS_ELSEWHERE" | "STAGE_KIND_RETIRED";
   /** With ENGINE_NOT_CONNECTED: the stage, role and engine (#1876). */
   details?: EngineNotConnectedDetails;
   /** #1766: set when the registry lock refused before the action was admitted,
@@ -107,7 +107,9 @@ export async function PATCH(
   }
   const { id } = await ctx.params;
   try {
+    // publish needs its caller only to accept a head whose commit custody was refused.
     const actor = body.action === "resolve-decision" || body.action === "continue-review" || body.action === "accept-head" || body.action === "override-stage"
+      || body.action === "publish"
       ? admission.actor
       : undefined;
     const result = await patchPipeline(id, body, undefined, actor);

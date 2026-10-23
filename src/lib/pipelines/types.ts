@@ -365,6 +365,19 @@ export type PipelineRuntimeSeat = {
 export type PipelineRuntimeSwitch = {
   id: string; seq: number; requestedAt: string; actor: PauseResumeActor;
   mode: "fork" | "handoff";
+  /** A same-account, tier-only fork the live thread takes with
+      `thread/settings/update`: nothing restarts (docs/design/turbo-mode.md §2.6).
+      Additive on purpose: a release that predates it still reads the record as
+      a fork and would finish it through its own restart path. */
+  inPlace?: true;
+  /** in-place only: `boundary` cuts a running turn after its tool item; `none` lets it finish. */
+  cut?: "boundary" | "none";
+  /** in-place only: what the live thread did with the tier. */
+  tierCut?: "cut" | "armed" | "none" | "turn-ended" | "cancelled" | "host-gone" | "unknown";
+  appliedServiceTier?: string | null;
+  cutTurnId?: string;
+  /** The Turbo episode that asked for this switch, when it did. */
+  turbo?: string;
   from: PipelineRuntimeSeat & { conversationId: string; launchId: string | null; sessionId: string | null; agentPath: string | null };
   to: PipelineRuntimeSeat & { accountPinned: boolean };
   phase: "requested" | "cutting" | "switching" | "continuing" | "committed" | "rolled-back" | "failed" | "superseded";
@@ -379,10 +392,19 @@ export type PipelineRuntimeSwitch = {
   handoff?: { prompt: string; digest: string; bytes: number };
 };
 
+/** A confirmed usage exhaustion of one account. It stands while later reads
+    only age that reading, and ends at its reset (unix seconds) or when a
+    reading newer than `observedAt` shows capacity (issue #3158). */
+export type PipelineAccountHold = { accountId: string; resetsAt: number | null; observedAt: string | null };
+
 export type PipelineStageAttempt = {
   n: number;
   /** Stop custody for pause or account evacuation. A replacement keeps this checkout. */
-  suspension?: { reason: "pause" | "account"; detail: string; requestedAt: string; stoppedAt?: string; stopRevision?: number; operatorStoppedAt?: string };
+  suspension?: { reason: "pause" | "account"; detail: string; requestedAt: string; stoppedAt?: string; stopRevision?: number; operatorStoppedAt?: string;
+    hold?: PipelineAccountHold };
+  /** Holds an account suspension of this attempt confirmed, kept when the
+      attempt, never launched, launches again on another account. */
+  accountHolds?: PipelineAccountHold[];
   runtimeSwitches?: PipelineRuntimeSwitch[];
   /** Monotonic verdict fence survives bounded switch-history retention. */
   runtimeEvidenceSince?: string;
@@ -473,7 +495,8 @@ export type PipelineStageAttempt = {
   publicationIntegration?: { passedSha: string; acceptedSha: string; mainSha: string };
   /** Automatic retries of a publication the stage cannot have caused to fail:
       a refusal of an unchanged head, or a push interrupted before it landed.
-      Each failed operation is counted once; `exhausted` waits for retry-stage. */
+      Each failed operation is counted once; `exhausted` waits for an explicit
+      push, while publicationRecovery keeps the per-head automatic bound. */
   publicationRetry?: { sha: string; operationId: string; failures: number; retryAt: string; exhausted?: boolean };
   /** Bounded PR summary corrections preserve the accepted verdict and SHA.
       Persisted before delivery so a restart reuses the same request. */
@@ -629,6 +652,8 @@ export type PipelineStageAttempt = {
     sendUncertain?: true;
     requestedAt?: string;
     clientMessageId?: string;
+    /** Keyed delivery evidence; safeToReplace requires affirmative no-dispatch evidence. */
+    delivery?: PipelineRepairDelivery;
     /** Missing on older settled repairs, which already permitted a commit. */
     outcome?: { status: "accepted" } | { status: "rejected"; reason: string };
     settledAt?: string;
@@ -662,6 +687,9 @@ export type PipelineStageAttempt = {
       without this count left behind starts it past every id that engine
       could have spent (#1678 review 3). */
   spawnCalls?: number;
+  /** Proven fenced first messages replaced in this attempt. Retained across
+      successful spawn handshakes and controller restarts; at most three. */
+  fencedMessageRetries?: number;
   /** After a privacy revision conflict, require two stable revision
       observations across persisted ticks before composing again. */
   roleMemoryWait?: { revision: string; observations: number; retryAfter: string; ready?: boolean };
@@ -718,9 +746,22 @@ export type PipelineStageAttempt = {
       close may terminalize this attempt, however dead the registry row looks;
       the record is cleared once every one is proven gone. */
   unresolvedTermination?: PipelineUnresolvedTermination;
+  /** Automatic stops this attempt, still waiting to launch, sent to a settled
+      earlier stage agent whose recorded processes still run in the worktree.
+      Bounded: the lane parks once the tries are spent. */
+  priorWriterStop?: PipelinePriorWriterStop;
   /** Tool permission requests this attempt's agent raised and nobody could
       answer, each denied so the turn went on (#2215). Bounded, oldest first. */
   permissionDenials?: PipelinePermissionDenial[];
+};
+
+export type PipelinePriorWriterStop = {
+  /** The earlier stage conversation the stops were sent to. */
+  conversationId: string;
+  tries: number;
+  lastAt: string;
+  /** What the last stop answered, verbatim. */
+  error: string | null;
 };
 
 export type PipelinePermissionDenial = {
@@ -889,6 +930,23 @@ export type PipelineDeliveryTarget = {
   rejectedHead?: string;
 };
 
+export type PipelineRepairDelivery = {
+  operationId: string | null;
+  state: "unreserved" | "in-flight" | "delivered" | "failed" | "unavailable";
+  safeToReplace: boolean;
+};
+
+export type PipelinePublicationRecovery = {
+  sha: string;
+  /** Recoverable failures across attempts, manual retries and ownership epochs. */
+  failures: number;
+  totalAttempts: number;
+  /** Newest 64 failed operations; totalAttempts includes omitted older records. */
+  history: Array<{ operationId: string; epoch: number; at: string;
+    cause: "infrastructure-deadline" | "interrupted" | "check-failure";
+    detail: string; retryAt: string | null }>;
+};
+
 export type PipelinePublicationFailure = {
   step: string;
   code: number | null;
@@ -1045,6 +1103,8 @@ export type Pipeline = {
   remoteAction?: PipelineRemoteAction;
   /** Legacy lanes observe their repository identity before claiming delivery. */
   publicationAdmission?: { id: string; sha: string; fence: string; state: "pending" | "settled"; error?: string };
+  /** Per-head publication recovery survives a takeover and a new stage attempt. */
+  publicationRecovery?: Record<string, PipelinePublicationRecovery>;
   creationRequest?: { key: string; digest: string };
   id: string;
   task: string;
@@ -1343,6 +1403,10 @@ export type PatchPipelineRequest = {
   resumeCondition?: import("./pauseMetadata").PipelineResumeCondition;
   action: PipelineAction;
   applyNow?: boolean;
+  /** override-stage applyNow of a tier-only change: `none` lets the running turn finish (Turbo's revert). */
+  applyNowCut?: "boundary" | "none";
+  /** override-stage: the Turbo episode key; boundary tier changes affect the running attempt only. */
+  turbo?: string;
   /** Board task used by link-task and unlink-task. */
   taskId?: string;
   /** for link-task (#2187 §5.1): whether this pipeline finishes the task.

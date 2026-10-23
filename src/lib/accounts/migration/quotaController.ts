@@ -18,6 +18,7 @@ import { agentRegistry, RegistryWriterBusyError, type AgentRegistry } from "@/li
 import { logQuotaEvent } from "@/lib/events";
 import { adoptClaudeLimitsSnapshot, readClaudeAccountLimits, readCodexLimits } from "@/lib/limits";
 import { readCopilotTranscriptLimits } from "@/lib/limits/copilotTranscriptLimits";
+import { recordLimitSamples } from "@/lib/limitsHistoryStore";
 
 import type { DurableQuotaObservation } from "./contracts";
 import type { QuotaEngine, QuotaObservation, QuotaResetCredits } from "./quotaPolicy";
@@ -368,6 +369,11 @@ export class QuotaController {
     }));
     if (!accepted.acquired) throw new RegistryWriterBusyError("quota.commit");
     const observations = accepted.value;
+    if (engine === "codex") {
+      recordLimitSamples("codex", observations.flatMap(observation => observation.authenticated && observation.limits
+        && (observation.provenance.source === "live" || observation.provenance.source === "transcript")
+        ? [{ accountId: observation.accountId, limits: observation.limits, source: observation.provenance.source }] : []), now);
+    }
     const accounts = new Map(snapshot.accounts.map(({ account }) => [account.id, account]));
     observations.forEach((observation) => {
       const account = accounts.get(observation.accountId)!;

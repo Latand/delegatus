@@ -2,11 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
 import { AgentRegistry, normalizeRegistry, type RegistryFile } from "./registry";
 import { registryRowsMatching, SqliteAgentRegistryStore } from "./sqliteRegistryStore";
+import { viewerLoopMonitor } from "@/lib/viewerLoopMonitor";
+import { performanceSites, performanceSpans } from "@/lib/performanceSpans";
 
 /* The shared read-only registry view (viewer-hot-path-clones): every reader of
    `readOnlySnapshot` holds the same objects, so none may change them, and every
@@ -72,6 +74,245 @@ test("cooperative preparation publishes one complete frozen view and follows pee
   } finally { db.close(); }
 });
 
+test("a prepared reader cooperatively rebuilds its view after a peer archives a row", async () => {
+  const { open, kept } = fixture();
+  const reader = open();
+  const writer = open();
+  const initial = await reader.prepareReadOnlySnapshot();
+  const template = initial.file.receipts[kept]!;
+  writer.mutate(file => {
+    for (let index = 0; index < 4096; index++) {
+      const id = `archived-receipt-${index}`;
+      file.receipts[id] = { ...template, launchId: id, state: "failed", error: "archived history", createdAt: "2020-01-01T00:00:00Z" };
+    }
+  }, false);
+  expect(writer.archiveInactive(1)).toBe(1);
+  const controller = new AbortController();
+  const canceled = reader.prepareReadOnlySnapshot(controller.signal);
+  setImmediate(() => controller.abort(new Error("retired warm refresh")));
+  await expect(canceled).rejects.toThrow("retired warm refresh");
+  for (let pass = 0; pass < 3; pass++) {
+    expect(writer.archiveInactive(1)).toBe(1);
+    const syncSnapshot = spyOn(SqliteAgentRegistryStore.prototype, "readOnlySnapshot");
+    let yielded = false;
+    const turn = new Promise<boolean>(resolve => setImmediate(() => { yielded = true; resolve(true); }));
+    const started = performance.now();
+    const refreshed = reader.prepareReadOnlySnapshot();
+    let snapshot!: Awaited<typeof refreshed>;
+    try {
+      expect(await Promise.race([refreshed.then(() => false), turn])).toBe(true);
+      expect(yielded).toBe(true);
+      snapshot = await refreshed;
+      expect(syncSnapshot).not.toHaveBeenCalled();
+    } finally { syncSnapshot.mockRestore(); }
+    const preparationSlices = performanceSpans.snapshot(started).records.filter(record =>
+      record.kind === "sync" && ["registry.prepare.slice", "registry.headers"].includes(performanceSites[record.site]!));
+    expect(preparationSlices.length).toBeGreaterThan(1);
+    expect(Object.keys(snapshot.file.receipts).filter(id => id.startsWith("archived-receipt-"))).toHaveLength(4096);
+    expect(Object.keys(snapshot.file.receipts).filter(id => id.startsWith("archived-receipt-")))
+      .toEqual(Array.from({ length: 4096 }, (_, index) => `archived-receipt-${index}`));
+  }
+  const snapshot = await reader.prepareReadOnlySnapshot();
+  expect(Object.keys(snapshot.file.receipts)).toContain("archived-receipt-0");
+  expect(snapshot.file.receipts["archived-receipt-0"]?.state).toBe("failed");
+}, 30_000);
+
+test("held prepared views keep lazy archived payloads and indexes alive across repeated refreshes", async () => {
+  const { open, kept } = fixture();
+  const reader = open();
+  const writer = open();
+  const seeded = reader.readOnlySnapshot().file.receipts[kept]!;
+  writer.mutate(file => {
+    for (let index = 0; index < 4; index++) {
+      const id = `held-archive-${index}`;
+      file.receipts[id] = { ...seeded, launchId: id, state: "failed", error: `original-${index}`, createdAt: "2020-01-01T00:00:00Z" };
+    }
+  }, false);
+  expect(writer.archiveInactive(2)).toBe(2);
+  const held = await reader.prepareReadOnlySnapshot();
+
+  for (let index = 0; index < 3; index++) {
+    writer.mutate(file => { file.receipts[kept]!.error = `peer-${index}`; }, false);
+    await reader.prepareReadOnlySnapshot();
+  }
+
+  expect(held.file.receipts["held-archive-0"]?.error).toBe("original-0");
+  expect(registryRowsMatching(held.file, "receipts", "launchId", "held-archive-0").map(row => row.error))
+    .toEqual(["original-0"]);
+  expect((await reader.prepareReadOnlySnapshot()).file.receipts[kept]?.error).toBe("peer-2");
+});
+
+test("a retained archived collection keeps its retired reader alive after its root is collected", async () => {
+  const { open, kept } = fixture();
+  const reader = open();
+  const writer = open();
+  const seed = reader.readOnlySnapshot().file.receipts[kept]!;
+  writer.mutate(file => {
+    for (let index = 0; index < 8; index++) {
+      const id = `retained-collection-${index}`;
+      file.receipts[id] = { ...seed, launchId: id, state: "failed", error: `receipt-${index}`, createdAt: "2020-01-01T00:00:00Z" };
+    }
+  }, false);
+  expect(writer.archiveInactive(8)).toBeGreaterThan(0);
+  // Reading a WeakRef keeps its target alive until the task ends, so a
+  // collection in the same task could never release the root. The test sees
+  // the root only through its own finalization callback.
+  let rootCollected = false;
+  const observer = new FinalizationRegistry<void>(() => { rootCollected = true; });
+  const retained = await (async () => {
+    const view = await reader.prepareReadOnlySnapshot();
+    observer.register(view.file, undefined);
+    return { collection: view.file.receipts };
+  })();
+  writer.mutate(file => { file.receipts[kept]!.error = "new generation"; }, false);
+  await reader.prepareReadOnlySnapshot();
+  const nextTask = () => new Promise<void>(resolve => setImmediate(resolve));
+  for (let attempt = 0; attempt < 50 && !rootCollected; attempt++) {
+    await nextTask();
+    Bun.gc(true);
+    await nextTask();
+  }
+  expect(rootCollected).toBe(true);
+  // The store's finalizer for the same root is queued by the same collection.
+  for (let turn = 0; turn < 3; turn++) await nextTask();
+  expect(retained.collection["retained-collection-0"]?.error).toBe("receipt-0");
+});
+
+test("the first keyed archived read visits only its requested payload", async () => {
+  const { open, kept, filename } = fixture();
+  const reads: Array<[string, number]> = [];
+  const writer = open();
+  const seed = writer.readOnlySnapshot().file.receipts[kept]!;
+  writer.mutate(file => {
+    for (let index = 0; index < 128; index++) {
+      const id = `keyed-archive-${index}`;
+      file.receipts[id] = { ...seed, launchId: id, state: "failed", error: `payload-${index}`, createdAt: "2020-01-01T00:00:00Z" };
+    }
+  }, false);
+  expect(writer.archiveInactive(128)).toBeGreaterThan(0);
+  const coldReader = new SqliteAgentRegistryStore(filename,
+    { readOnly: true, normalize: normalizeRegistry,
+      initialSnapshot: normalizeRegistry({ version: 2, entries: {}, receipts: {} }),
+      onRowPayloadRead: (collection,count) => reads.push([collection,count]) });
+  stores.push(coldReader);
+  const view = await coldReader.prepareReadOnlySnapshot();
+  reads.length = 0;
+  expect(view.file.receipts["keyed-archive-73"]?.error).toBe("payload-73");
+  expect(reads).toEqual([["receipts",1]]);
+});
+
+test("deferred cold-key initialization moves the first session view onto cooperative preparation", async () => {
+  const { open, filename, kept } = fixture();
+  const seed = open();
+  const template = seed.readOnlySnapshot().file.receipts[kept]!;
+  seed.mutate(file => {
+    for (let index = 0; index < 640; index++) {
+      const id = `cold-session-receipt-${index}`;
+      file.receipts[id] = { ...template, launchId: id, state: "failed", error: "cold session history", createdAt: "2020-01-01T00:00:00Z" };
+    }
+  }, false);
+  expect(seed.archiveInactive(1)).toBe(1);
+  seed.close();
+  stores.splice(stores.indexOf(seed), 1);
+  const deferred = new SqliteAgentRegistryStore(filename, {
+    deferColdKeyInitialization: true, normalize: normalizeRegistry,
+    initialSnapshot: normalizeRegistry({ version: 2, entries: {}, receipts: {} }),
+  });
+  stores.push(deferred);
+  expect((deferred as unknown as { db: Database }).db.query<{ timeout: number }, []>("PRAGMA busy_timeout").get()?.timeout).toBe(0);
+  let yielded = false;
+  const turn = new Promise<boolean>(resolve => setImmediate(() => { yielded = true; resolve(true); }));
+  const preparation = deferred.prepareReadOnlySnapshot();
+  expect(await Promise.race([preparation.then(() => false), turn])).toBe(true);
+  const snapshot = await preparation;
+  expect(snapshot.file.receipts["cold-session-receipt-0"]?.state).toBe("failed");
+  expect(yielded).toBe(true);
+});
+
+test("hot operation owners normalize in bounded batches and retain hydrated values", async () => {
+  const { open } = fixture();
+  const reader = open();
+  const template = Object.values(reader.readOnlySnapshot().file.deliveryOperationOwners)[0]!;
+  reader.mutate(file => {
+    for (let index = 0; index < 128; index++) {
+      const operationId = `batch-owner-${index}`;
+      file.deliveryOperationOwners[operationId] = {
+        ...template,
+        deliveryId: `batch-missing-delivery-${index}`,
+        requestDigest: `batch-digest-${index}`,
+        command: { ...template.command, operationId },
+      };
+    }
+  }, false);
+  const started = performance.now();
+  const prepared = await reader.prepareReadOnlySnapshot();
+  const normalized = performanceSpans.snapshot(started).records.filter(record =>
+    record.kind === "sync" && performanceSites[record.site] === "registry.prepare.normalize");
+  expect(normalized.reduce((count, record) => count + record.count, 0)).toBeGreaterThanOrEqual(3);
+  expect(normalized.reduce((rows, record) => rows + record.rows, 0)).toBe(129);
+  expect(Object.keys(prepared.file.deliveryOperationOwners).filter(id => id.startsWith("batch-owner-")).length).toBe(128);
+  expect(prepared.file.deliveryOperationOwners["batch-owner-127"]?.command.operationId).toBe("batch-owner-127");
+});
+
+test("cooperative cold headers use an iterator and retain ordered rows after restart", async () => {
+  const { open, filename, kept } = fixture();
+  const store = open();
+  const template = store.readOnlySnapshot().file.receipts[kept]!;
+  store.mutate(file => {
+    for (let index = 0; index < 750; index++) {
+      const id = `ordered-receipt-${index}`;
+      file.receipts[id] = { ...template, launchId: id, state: "failed", error: "synthetic terminal history", createdAt: "2020-01-01T00:00:00Z" };
+    }
+  }, false);
+  expect(store.archiveInactive(1024)).toBeGreaterThan(128);
+  const expected = new Database(filename, { readonly: true });
+  let keys: string[];
+  try {
+    keys = expected.query<{ row_key: string }, []>("SELECT row_key FROM registry_records WHERE collection='receipts' ORDER BY row_order").all().map(row => row.row_key);
+    const plan = expected.query<{ detail: string }, []>("EXPLAIN QUERY PLAN SELECT c.collection,c.row_key,c.archive_id,a.row_order FROM registry_cold c JOIN registry_archive a ON a.id=c.archive_id").all();
+    expect(plan.some(row => row.detail.includes("TEMP B-TREE"))).toBe(false);
+    expect(plan.some(row => row.detail.includes("SEARCH a USING INTEGER PRIMARY KEY"))).toBe(true);
+  }
+  finally { expected.close(); }
+  const query = Database.prototype.query;
+  let iterations = 0;
+  const probe = spyOn(Database.prototype, "query").mockImplementation(function(this: Database, sql: string) {
+    const statement = query.call(this, sql);
+    if (sql.startsWith("SELECT c.collection,c.row_key,c.archive_id")) {
+      expect(sql).not.toContain("ORDER BY");
+      const iterate = statement.iterate.bind(statement);
+      statement.all = () => { throw Error("unbounded cold header materialization"); };
+      statement.iterate = (...args: never[]) => { iterations++; return iterate(...args); };
+    }
+    return statement;
+  } as typeof query);
+  try {
+    const view = await store.prepareReadOnlySnapshot();
+    expect(Object.keys(view.file.receipts)).toEqual(keys);
+    expect(iterations).toBe(1);
+    const reopened = new SqliteAgentRegistryStore(filename, { readOnly: true, normalize: normalizeRegistry, initialSnapshot: normalizeRegistry({ version: 2, entries: {}, receipts: {} }) });
+    stores.push(reopened);
+    expect((await reopened.prepareReadOnlySnapshot()).file).toEqual(view.file);
+    expect(iterations).toBe(2);
+  } finally { probe.mockRestore(); }
+});
+
+test("registry reads label cold loads and resumed preparation, including a failed preparation and retry", async () => {
+  const { open, filename } = fixture();
+  open();
+  const labels: Array<string | undefined> = [];
+  let refuse = false;
+  const reader = new SqliteAgentRegistryStore(filename, { readOnly: true, normalize: normalizeRegistry, initialSnapshot: normalizeRegistry({ version: 2, entries: {}, receipts: {} }),
+    onSnapshotLoad: () => { labels.push(viewerLoopMonitor.current()); if (refuse) throw Error("refused read"); } });
+  stores.push(reader);
+  reader.readOnlySnapshot();
+  refuse = true;
+  await expect(reader.prepareReadOnlySnapshot()).rejects.toThrow("refused read");
+  refuse = false;
+  await reader.prepareReadOnlySnapshot();
+  expect(labels).toEqual(["registry.read", "registry.prepare", "registry.prepare"]);
+});
+
 test("recovery index preparation yields while a peer owns the writer", async () => {
   const { open, filename } = fixture();
   const store = open();
@@ -98,6 +339,16 @@ test("an aborted preparation leaves keyed reads and the next preparation usable"
   await expect(store.prepareReadOnlySnapshot(controller.signal)).rejects.toThrow("retired preparation");
   expect(store.read(file => file.receipts[kept]?.launchId)).toBe(kept);
   expect((await store.prepareReadOnlySnapshot()).file.receipts[kept]?.launchId).toBe(kept);
+});
+
+test("closing the owner during asynchronous preparation refuses publication", async () => {
+  const { open } = fixture();
+  const store = open();
+  const preparing = store.prepareReadOnlySnapshot();
+  store.close();
+  await expect(preparing).rejects.toThrow();
+  const replacement = open();
+  expect((await replacement.prepareReadOnlySnapshot()).file.version).toBe(2);
 });
 
 test("structured host lookup keeps a held view through peer deletion and replacement", async () => {

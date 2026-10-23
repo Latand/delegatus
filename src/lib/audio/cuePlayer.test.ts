@@ -1,270 +1,381 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 
-import { createCuePlayer, type CueStartRequest, type CueTransport } from "./cuePlayer";
-import { cueAsset, cueAssetAll, type AudioCue } from "./cues";
+import { createCuePlayer, distantIntervalMs, TYPING_VOICES, type CueContext, type CuePrefs, type CueTransport, type EventStartRequest, type TypingStartRequest } from "./cuePlayer";
+import type { CueCaption } from "./captions";
+import type { AudioCue, CueRequest } from "./cues";
+import { createFakeTimers } from "./fakeTimers.fixture";
 
-/** A transport that records what it was asked to play and can refuse, the way a
-    locked audio graph does. */
+/** A transport that records what it was asked to play and can refuse, the way a locked graph does. */
 function recorder(options: { refuse?: boolean } = {}) {
-  const started: CueStartRequest[] = [];
-  const stopped: AudioCue[] = [];
-  const ended: (() => void)[] = [];
+  const typing: TypingStartRequest[] = [];
+  const events: EventStartRequest[] = [];
+  const cut: string[] = [];
   const transport: CueTransport = {
-    start(request) {
+    startTyping(request) {
       if (options.refuse) return null;
-      started.push(request);
-      ended.push(request.onEnded);
-      return { stop: () => stopped.push(request.cue) };
+      typing.push(request);
+      return { stop: () => undefined };
+    },
+    startEvent(request) {
+      if (options.refuse) return null;
+      events.push(request);
+      return { cut: () => void cut.push(request.sound) };
     },
   };
-  return {
-    transport,
-    started,
-    stopped,
-    /** Let the n-th started voice finish, as the audio graph would. */
-    finish(index: number) {
-      ended[index]?.();
-    },
-    cues: () => started.map((request) => request.cue),
-  };
+  return { transport, typing, events, cut, finish: (index: number) => typing[index]!.onEnded() };
 }
 
-const prefs = { cuesEnabled: true, cueVolume: 1 };
-let device: typeof prefs;
+let prefs: CuePrefs;
+let context: CueContext & { owner: boolean };
 
 beforeEach(() => {
-  device = { ...prefs };
+  prefs = { cuesEnabled: true, cueVolume: 1, typingEnabled: true };
+  context = { hidden: false, phone: false, voiceCall: false, owner: true, ownsEvents: () => context.owner };
 });
 
-function player(sink: ReturnType<typeof recorder>) {
-  return createCuePlayer({ transport: sink.transport, prefs: () => device });
+function player(sink = recorder(), extra: { onPriorityCue?: (cue: AudioCue) => void } = {}) {
+  const timers = createFakeTimers(10_000_000);
+  const cues = createCuePlayer({ transport: sink.transport, prefs: () => prefs, context: () => context, timers, pick: () => 0, ...extra });
+  return { cues, sink, timers };
 }
 
 describe("de-duplication on a stable event identity", () => {
-  test("one logical event plays once, however many times it is observed", () => {
-    const sink = recorder();
-    const cues = player(sink);
-
-    /* A 4s attention poll, a re-render, and a reconnect replay all report the
-       same request id. */
-    expect(cues.play({ cue: "attention", eventId: "attention:req-7" })).toBe("played");
-    expect(cues.play({ cue: "attention", eventId: "attention:req-7" })).toBe("deduped");
-    expect(cues.play({ cue: "attention", eventId: "attention:req-7" })).toBe("deduped");
-
-    expect(sink.started).toHaveLength(1);
+  test("one logical event is considered once, however many times it is observed", () => {
+    const { cues, sink, timers } = player();
+    expect(cues.play({ cue: "your-move", eventId: "attention:req-7" })).toBe("scheduled");
+    expect(cues.play({ cue: "your-move", eventId: "attention:req-7" })).toBe("deduped");
+    timers.advance(10_000);
+    expect(sink.events.map((e) => e.sound)).toEqual(["your-move"]);
   });
 
-  test("different logical events with the same cue both play", () => {
-    const sink = recorder();
-    const cues = player(sink);
-
-    cues.play({ cue: "failure", eventId: "launch-failed:a" });
-    cues.play({ cue: "failure", eventId: "launch-failed:b" });
-
-    expect(sink.cues()).toEqual(["failure", "failure"]);
+  test("a muted event is spent, so nothing floods out after the unmute", () => {
+    const { cues, sink, timers } = player();
+    prefs.cuesEnabled = false;
+    expect(cues.play({ cue: "fault", eventId: "f1" })).toBe("disabled");
+    prefs.cuesEnabled = true;
+    expect(cues.play({ cue: "fault", eventId: "f1" })).toBe("deduped");
+    timers.advance(60_000);
+    expect(sink.events).toEqual([]);
   });
 
-  test("a blocked event is spent, so nothing floods out after the unlock", () => {
-    const locked = recorder({ refuse: true });
-    const cues = createCuePlayer({ transport: locked.transport, prefs: () => device });
-    expect(cues.play({ cue: "success", eventId: "lifecycle:success:/a:1" })).toBe("blocked");
-
-    /* Same player, transport now willing: the event is history, not a backlog. */
-    const open = recorder();
-    const later = createCuePlayer({ transport: open.transport, prefs: () => device });
-    expect(cues.play({ cue: "success", eventId: "lifecycle:success:/a:1" })).toBe("deduped");
-    /* And a genuinely new transition of the same conversation still rings. */
-    expect(later.play({ cue: "success", eventId: "lifecycle:success:/a:2" })).toBe("played");
-    expect(open.started).toHaveLength(1);
+  test("a blocked typing call is spent too", () => {
+    const { cues } = player(recorder({ refuse: true }));
+    expect(cues.play({ cue: "typing", eventId: "tool:a:1" })).toBe("blocked");
+    expect(cues.play({ cue: "typing", eventId: "tool:a:1" })).toBe("deduped");
   });
 
   test("the identity memory is bounded and evicts the oldest first", () => {
     const sink = recorder();
-    const cues = createCuePlayer({ transport: sink.transport, prefs: () => device, dedupeCapacity: 3 });
-
-    for (const id of ["e1", "e2", "e3", "e4"]) cues.play({ cue: "tool-tick", eventId: id });
-    /* e1 was evicted by e4, so it is playable again; e4 is still remembered. */
-    expect(cues.play({ cue: "tool-tick", eventId: "e4" })).toBe("deduped");
-    expect(cues.play({ cue: "tool-tick", eventId: "e1" })).not.toBe("deduped");
+    const cues = createCuePlayer({ transport: sink.transport, prefs: () => prefs, context: () => context, timers: createFakeTimers(), dedupeCapacity: 2 });
+    cues.play({ cue: "typing", eventId: "a" });
+    cues.play({ cue: "typing", eventId: "b" });
+    cues.play({ cue: "typing", eventId: "c" });
+    expect(cues.play({ cue: "typing", eventId: "c" })).toBe("deduped");
+    expect(cues.play({ cue: "typing", eventId: "a" })).not.toBe("deduped");
   });
 });
 
-describe("bounded overlap", () => {
-  test("a burst of tool ticks is bounded by the overlap cap", () => {
-    const sink = recorder();
-    const cues = player(sink);
-
-    for (let index = 0; index < 20; index += 1) {
-      cues.play({ cue: "tool-tick", eventId: `tool:conv:call-${index}`, delayMs: index * 220 });
-    }
-
-    expect(sink.started).toHaveLength(3);
-    expect(cues.activeVoices()).toHaveLength(3);
+describe("staleness (§6.1)", () => {
+  test("an event whose own time is 2 minutes old is absorbed silently, and spent", () => {
+    const { cues, timers } = player();
+    const now = timers.now();
+    expect(cues.play({ cue: "step", eventId: "s1", occurredAt: now - 120_000 })).toBe("stale");
+    expect(cues.play({ cue: "step", eventId: "s1", occurredAt: now })).toBe("deduped");
+    expect(cues.play({ cue: "step", eventId: "s2", occurredAt: now - 119_000 })).toBe("scheduled");
   });
 
-  test("each newly appended call earns exactly one sound when cap allows", () => {
-    const sink = recorder();
-    const cues = createCuePlayer({ transport: sink.transport, prefs: () => device, maxConcurrent: 10 });
-
-    cues.play({ cue: "tool-tick", eventId: "tool:conv:a" });
-    cues.play({ cue: "tool-tick", eventId: "tool:conv:b", delayMs: 220 });
-    cues.play({ cue: "viewer-mcp", eventId: "tool:conv:c", delayMs: 440 });
-
-    expect(sink.started).toHaveLength(3);
-    expect(sink.started.map((r) => r.cue)).toEqual(["tool-tick", "tool-tick", "viewer-mcp"]);
+  test("a source may name its own bound: a deploy sounds up to 5 minutes", () => {
+    const { cues, timers } = player();
+    expect(cues.play({ cue: "released", eventId: "d1", occurredAt: timers.now() - 4 * 60_000, maxAgeMs: 5 * 60_000 })).toBe("scheduled");
+    expect(cues.play({ cue: "released", eventId: "d2", occurredAt: timers.now() - 5 * 60_000, maxAgeMs: 5 * 60_000 })).toBe("stale");
   });
 
-  test("a tick after the previous one finished plays again", () => {
-    const sink = recorder();
-    const cues = player(sink);
+  test("what is observed live carries no clock and is never stale", () => {
+    const { cues } = player();
+    expect(cues.play({ cue: "reply", eventId: "r1" })).toBe("scheduled");
+  });
+});
 
-    cues.play({ cue: "tool-tick", eventId: "tool:conv:1" });
+describe("typing has its own pool (S1)", () => {
+  test("three voices, then a burst is dropped; a finished voice frees a place", () => {
+    const { cues, sink } = player();
+    const outcomes = Array.from({ length: 5 }, (_, i) => cues.play({ cue: "typing", eventId: `t${i}` }));
+    expect(outcomes).toEqual(["played", "played", "played", "dropped", "dropped"]);
+    expect(TYPING_VOICES).toBe(3);
     sink.finish(0);
-    cues.play({ cue: "tool-tick", eventId: "tool:conv:2" });
-
-    expect(sink.started).toHaveLength(2);
+    expect(cues.play({ cue: "typing", eventId: "t9" })).toBe("played");
   });
 
-  test("simultaneous voices never exceed the cap", () => {
-    const sink = recorder();
-    const cues = createCuePlayer({ transport: sink.transport, prefs: () => device, maxConcurrent: 3 });
-
-    cues.play({ cue: "success", eventId: "s1" });
-    cues.play({ cue: "success", eventId: "s2" });
-    cues.play({ cue: "launch", eventId: "l1" });
-    expect(cues.activeVoices()).toHaveLength(3);
-
-    /* A fourth salient cue has nothing weaker to displace: dropped outright,
-       never queued. */
-    expect(cues.play({ cue: "launch", eventId: "l2" })).toBe("dropped");
-    expect(cues.activeVoices()).toHaveLength(3);
-    expect(sink.started).toHaveLength(3);
+  test("a full typing pool never holds back an event sound", () => {
+    const { cues, sink, timers } = player();
+    for (let i = 0; i < 3; i++) cues.play({ cue: "typing", eventId: `t${i}` });
+    cues.play({ cue: "released", eventId: "deploy" });
+    timers.advance(1);
+    expect(sink.events.map((e) => e.sound)).toEqual(["released"]);
   });
 
-  test("at the cap, priority news displaces routine texture", () => {
-    const sink = recorder();
-    const cues = createCuePlayer({ transport: sink.transport, prefs: () => device, maxConcurrent: 2 });
-
-    cues.play({ cue: "tool-tick", eventId: "t1" });
-    cues.play({ cue: "viewer-mcp", eventId: "m1" });
-    expect(cues.activeVoices()).toEqual(["tool-tick", "viewer-mcp"]);
-
-    expect(cues.play({ cue: "failure", eventId: "f1" })).toBe("played");
-    /* The quieter of the two routine voices was stopped, not the failure held. */
-    expect(sink.stopped).toEqual(["tool-tick"]);
-    expect(cues.activeVoices()).toEqual(["viewer-mcp", "failure"]);
+  test("a slice plays at the routine gain × volume, staggered and panned as asked", () => {
+    const { cues, sink } = player();
+    prefs.cueVolume = 0.4;
+    cues.play({ cue: "typing", eventId: "t1", pan: 3, delayMs: 220 });
+    expect(sink.typing[0]).toMatchObject({ src: "/audio/cues/tool-tick-1.mp3", gain: 0.2, pan: 1, delaySeconds: 0.22, distant: false });
   });
 
-  test("routine cues never displace each other at the cap", () => {
-    const sink = recorder();
-    const cues = createCuePlayer({ transport: sink.transport, prefs: () => device, maxConcurrent: 1 });
+  test("«Agent typing» off, a hidden tab and a connected call each silence it", () => {
+    for (const set of [() => { prefs.typingEnabled = false; }, () => { context.hidden = true; }, () => { context.voiceCall = true; }]) {
+      prefs = { cuesEnabled: true, cueVolume: 1, typingEnabled: true };
+      context = { hidden: false, phone: false, voiceCall: false, owner: true, ownsEvents: () => context.owner };
+      set();
+      const { cues, sink } = player();
+      expect(cues.play({ cue: "typing", eventId: "t" })).toBe("disabled");
+      expect(cues.play({ cue: "distant-typing", eventId: "d", agentsOffScreen: 3 })).toBe("disabled");
+      expect(sink.typing).toEqual([]);
+    }
+  });
 
-    cues.play({ cue: "viewer-mcp", eventId: "m1" });
-    expect(cues.play({ cue: "tool-tick", eventId: "t1" })).toBe("dropped");
-    expect(sink.stopped).toEqual([]);
+  test("a phone keeps S1 for the conversation it shows", () => {
+    context.phone = true;
+    const { cues } = player();
+    expect(cues.play({ cue: "typing", eventId: "t" })).toBe("played");
   });
 });
 
-describe("the loudness hierarchy", () => {
-  test("priority cues are never quieter than routine ones", () => {
-    const sink = recorder();
-    const cues = createCuePlayer({ transport: sink.transport, prefs: () => device, maxConcurrent: 99 });
-
-    for (const cue of ["attention", "failure", "launch", "success", "viewer-mcp", "tool-tick"] as const) {
-      cues.play({ cue, eventId: `one-of-each:${cue}` });
-      sink.finish(sink.started.length - 1);
-    }
-    const gainOf = (cue: AudioCue) => sink.started.find((request) => request.cue === cue)!.gain;
-
-    expect(gainOf("attention")).toBe(gainOf("failure"));
-    expect(gainOf("attention")).toBeGreaterThan(gainOf("launch"));
-    expect(gainOf("launch")).toBe(gainOf("success"));
-    expect(gainOf("success")).toBeGreaterThan(gainOf("viewer-mcp"));
-    expect(gainOf("viewer-mcp")).toBe(gainOf("tool-tick"));
-    /* And every cue plays its own bundled master, at the tier gain — nothing
-       re-levels the file itself. */
-    const started = sink.started.map((request) => request.src);
-    expect(started.slice(0, 5)).toEqual([
-      cueAsset("attention"), cueAsset("failure"), cueAsset("launch"),
-      cueAsset("success"), cueAsset("viewer-mcp"),
-    ]);
-    /* tool-tick draws a random slice of one master take; any registered
-       variant is that cue's own bundled file. */
-    expect(cueAssetAll("tool-tick")).toContain(started[5]);
+describe("distant typing (S2)", () => {
+  test("its pace is one slice every clamp(8/√n, 3, 8) seconds", () => {
+    expect(distantIntervalMs(1)).toBe(8000);
+    expect(distantIntervalMs(4)).toBe(4000);
+    expect(distantIntervalMs(7)).toBeCloseTo(3024, 0);
+    expect(distantIntervalMs(8)).toBe(3000);
+    expect(distantIntervalMs(26)).toBe(3000);
+    expect(distantIntervalMs(0)).toBe(8000);
   });
 
-  test("the device volume scales every tier and keeps the ordering", () => {
-    const sink = recorder();
-    device.cueVolume = 0.4;
-    const cues = createCuePlayer({ transport: sink.transport, prefs: () => device, maxConcurrent: 99 });
+  test("one agent off screen murmurs at most every 8 s, one room away", () => {
+    const { cues, sink, timers } = player();
+    expect(cues.play({ cue: "distant-typing", eventId: "d1", agentsOffScreen: 1 })).toBe("played");
+    timers.advance(7_000);
+    expect(cues.play({ cue: "distant-typing", eventId: "d2", agentsOffScreen: 1 })).toBe("dropped");
+    timers.advance(1_000);
+    expect(cues.play({ cue: "distant-typing", eventId: "d3", agentsOffScreen: 1 })).toBe("played");
+    expect(sink.typing.every((request) => request.distant)).toBe(true);
+    expect(Math.abs(sink.typing[0]!.pan)).toBeLessThanOrEqual(0.3);
+  });
 
-    cues.play({ cue: "attention", eventId: "a" });
-    cues.play({ cue: "tool-tick", eventId: "t" });
+  test("eight or more agents off screen murmur every 3 s", () => {
+    const { cues, timers } = player();
+    cues.play({ cue: "distant-typing", eventId: "d1", agentsOffScreen: 8 });
+    timers.advance(2_999);
+    expect(cues.play({ cue: "distant-typing", eventId: "d2", agentsOffScreen: 8 })).toBe("dropped");
+    timers.advance(1);
+    expect(cues.play({ cue: "distant-typing", eventId: "d3", agentsOffScreen: 8 })).toBe("played");
+  });
 
-    const [priority, routine] = sink.started;
-    expect(priority.gain).toBeCloseTo(0.4, 5);
-    expect(routine.gain).toBeCloseTo(0.2, 5);
-    expect(priority.gain).toBeGreaterThan(routine.gain);
+  test("it is skipped within 1 s of S1: the near layer already said it", () => {
+    const { cues, timers } = player();
+    cues.play({ cue: "typing", eventId: "t1" });
+    timers.advance(900);
+    expect(cues.play({ cue: "distant-typing", eventId: "d1", agentsOffScreen: 3 })).toBe("dropped");
+    timers.advance(200);
+    expect(cues.play({ cue: "distant-typing", eventId: "d2", agentsOffScreen: 3 })).toBe("played");
+  });
+
+  test("a phone never plays it", () => {
+    context.phone = true;
+    const { cues } = player();
+    expect(cues.play({ cue: "distant-typing", eventId: "d", agentsOffScreen: 3 })).toBe("disabled");
   });
 });
 
-describe("degradation and settings", () => {
-  test("a device with cues muted plays nothing and throws nothing", () => {
-    const sink = recorder();
-    device.cuesEnabled = false;
-    const cues = player(sink);
-
-    expect(cues.play({ cue: "attention", eventId: "a1" })).toBe("disabled");
-    expect(sink.started).toEqual([]);
+describe("event sounds (S3–S9) and the context", () => {
+  test("a hidden desktop tab still plays event sounds", () => {
+    context.hidden = true;
+    const { cues, sink, timers } = player();
+    cues.play({ cue: "landed", eventId: "l1" });
+    timers.advance(5_000);
+    expect(sink.events.map((e) => e.sound)).toEqual(["landed"]);
   });
 
-  test("an autoplay-locked device degrades silently, event after event", () => {
-    const locked = recorder({ refuse: true });
-    const cues = createCuePlayer({ transport: locked.transport, prefs: () => device });
-
-    for (let index = 0; index < 5; index += 1) {
-      expect(cues.play({ cue: "tool-tick", eventId: `t${index}` })).toBe("blocked");
-    }
-    /* Nothing wedged: no voice is left registered against the cap. */
-    expect(cues.activeVoices()).toEqual([]);
+  test("a hidden phone plays nothing", () => {
+    context.phone = true;
+    context.hidden = true;
+    const { cues } = player();
+    expect(cues.play({ cue: "your-move", eventId: "y" })).toBe("disabled");
   });
 
-  test("a priority cue notifies the bed, routine texture does not", () => {
-    const sink = recorder();
+  test("a tab that does not own the device's event sounds plays none", () => {
+    context.owner = false;
+    const { cues, sink, timers } = player();
+    expect(cues.play({ cue: "your-move", eventId: "y" })).toBe("dropped");
+    timers.advance(10_000);
+    expect(sink.events).toEqual([]);
+    /* Its own typing still plays. */
+    expect(cues.play({ cue: "typing", eventId: "t" })).toBe("played");
+  });
+
+  test("during a call, S3 and S9 are off and S4–S8 play 6 dB down", () => {
+    context.voiceCall = true;
+    const { cues, sink, timers } = player();
+    expect(cues.play({ cue: "step", eventId: "s" })).toBe("disabled");
+    expect(cues.play({ cue: "launched", eventId: "l" })).toBe("disabled");
+    cues.play({ cue: "your-move", eventId: "y" });
+    timers.advance(3_000);
+    expect(sink.events).toEqual([{ sound: "your-move", volume: 0.5, pan: 0, batch: 1 }]);
+  });
+
+  test("a call that connects while a sound waits in its window keeps S3 out", () => {
+    const { cues, sink, timers } = player();
+    cues.play({ cue: "step", eventId: "s" });
+    context.voiceCall = true;
+    timers.advance(2_000);
+    expect(sink.events).toEqual([]);
+  });
+
+  test("a mute that arrives while a sound waits in its window wins", () => {
+    const { cues, sink, timers } = player();
+    cues.play({ cue: "your-move", eventId: "y" });
+    prefs.cuesEnabled = false;
+    timers.advance(3_000);
+    expect(sink.events).toEqual([]);
+  });
+
+  test("the volume scales every event sound", () => {
+    prefs.cueVolume = 0.4;
+    const { cues, sink, timers } = player();
+    cues.play({ cue: "released", eventId: "d" });
+    timers.advance(1);
+    expect(sink.events[0]!.volume).toBeCloseTo(0.4, 6);
+  });
+
+  test("S6 and S7 duck the music when they start; results do not", () => {
     const ducked: AudioCue[] = [];
+    const { cues, timers } = player(recorder(), { onPriorityCue: (cue) => ducked.push(cue) });
+    cues.play({ cue: "released", eventId: "d" });
+    cues.play({ cue: "fault", eventId: "f" });
+    timers.advance(60_000);
+    expect(ducked).toEqual(["fault"]);
+  });
+
+  test("clearQueue forgets what waits behind the playing sound", () => {
+    const { cues, sink, timers } = player();
+    cues.play({ cue: "released", eventId: "d" });
+    timers.advance(100);
+    cues.play({ cue: "reply", eventId: "r" });
+    timers.advance(1_600);
+    cues.clearQueue();
+    timers.advance(60_000);
+    expect(sink.events.map((e) => e.sound)).toEqual(["released"]);
+  });
+
+  test("the settings preview plays at once, outside the lane", () => {
+    const { cues, sink } = player();
+    const request: CueRequest = { cue: "step", eventId: "preview:1", preview: true };
+    expect(cues.play(request)).toBe("played");
+    expect(sink.events.map((e) => e.sound)).toEqual(["step"]);
+  });
+
+  test("a device that refuses audio degrades silently, event after event", () => {
+    const { cues, timers } = player(recorder({ refuse: true }));
+    for (let i = 0; i < 5; i++) expect(() => cues.play({ cue: "your-move", eventId: `y${i}` })).not.toThrow();
+    expect(() => timers.advance(120_000)).not.toThrow();
+  });
+});
+
+describe("onPlayed: the caption hook (docs/design/sound-captions.md §2)", () => {
+  const caption = (subject: string): CueCaption => ({ what: "reply", subject, target: null });
+
+  function captioned(sink = recorder()) {
+    const played: Array<{ sound: string; batch: number; captions: string[] }> = [];
+    const timers = createFakeTimers(10_000_000);
     const cues = createCuePlayer({
       transport: sink.transport,
-      prefs: () => device,
-      onPriorityCue: (cue) => ducked.push(cue),
+      prefs: () => prefs,
+      context: () => context,
+      timers,
+      pick: () => 0,
+      onPlayed: (sound, batch, captions) => played.push({ sound, batch, captions: captions.map((entry) => entry.subject ?? "") }),
     });
+    return { cues, sink, timers, played };
+  }
 
-    cues.play({ cue: "attention", eventId: "a" });
-    cues.play({ cue: "tool-tick", eventId: "t" });
-    cues.play({ cue: "failure", eventId: "f" });
-
-    expect(ducked).toEqual(["attention", "failure"]);
+  test("fires once the sound has started, with the batch and the captions of every joined request", () => {
+    const { cues, timers, played, sink } = captioned();
+    cues.play({ cue: "reply", eventId: "r1", caption: caption("one") });
+    cues.play({ cue: "reply", eventId: "r2", caption: caption("two") });
+    expect(played).toEqual([]);
+    timers.advance(1500);
+    expect(played).toEqual([{ sound: "reply", batch: 2, captions: ["one", "two"] }]);
+    expect(sink.events).toHaveLength(1);
   });
 
-  test("several cues from one poll cascade rather than sounding as a chord", () => {
-    const sink = recorder();
-    const cues = createCuePlayer({ transport: sink.transport, prefs: () => device, maxConcurrent: 99 });
-
-    cues.play({ cue: "success", eventId: "s1", delayMs: 0 });
-    cues.play({ cue: "success", eventId: "s2", delayMs: 220 });
-    cues.play({ cue: "success", eventId: "s3", delayMs: 440 });
-
-    expect(sink.started.map((request) => request.delaySeconds)).toEqual([0, 0.22, 0.44]);
-    /* Staggered but already counted: a delay cannot smuggle voices past the cap. */
-    expect(cues.activeVoices()).toHaveLength(3);
+  test("an event with no caption still reports, with an empty list", () => {
+    const { cues, timers, played } = captioned();
+    cues.play({ cue: "released", eventId: "d1" });
+    timers.advance(10);
+    expect(played).toEqual([{ sound: "released", batch: 1, captions: [] }]);
   });
 
-  test("pan is passed through and clamped to the stereo field", () => {
-    const sink = recorder();
-    const cues = createCuePlayer({ transport: sink.transport, prefs: () => device, maxConcurrent: 99 });
+  test("a muted tab shows nothing: a mute that arrived while the sound waited in its window wins", () => {
+    const { cues, timers, played, sink } = captioned();
+    cues.play({ cue: "reply", eventId: "r1", caption: caption("one") });
+    prefs.cuesEnabled = false;
+    timers.advance(5000);
+    expect(played).toEqual([]);
+    expect(sink.events).toEqual([]);
+  });
 
-    cues.play({ cue: "success", eventId: "s1", pan: -0.5 });
-    cues.play({ cue: "launch", eventId: "s2", pan: 4 });
+  test("a sound at volume 0 is not heard, so it shows nothing", () => {
+    const { cues, timers, played, sink } = captioned();
+    prefs.cueVolume = 0;
+    cues.play({ cue: "released", eventId: "d1", caption: caption("one") });
+    timers.advance(10);
+    expect(sink.events).toHaveLength(1);
+    expect(played).toEqual([]);
+  });
 
-    expect(sink.started.map((request) => request.pan)).toEqual([-0.5, 1]);
+  test("a step during a voice call is quiet, so it shows nothing; a result still does", () => {
+    const { cues, timers, played } = captioned();
+    context.voiceCall = true;
+    expect(cues.play({ cue: "step", eventId: "s1", caption: caption("step") })).toBe("disabled");
+    cues.play({ cue: "released", eventId: "d1", caption: caption("deploy") });
+    timers.advance(10);
+    expect(played).toEqual([{ sound: "released", batch: 1, captions: ["deploy"] }]);
+  });
+
+  test("a call that connects while the sound waits in its window silences a quiet class", () => {
+    const { cues, timers, played } = captioned();
+    cues.play({ cue: "step", eventId: "s1", pipeline: "p", caption: caption("step") });
+    context.voiceCall = true;
+    timers.advance(5000);
+    expect(played).toEqual([]);
+  });
+
+  test("a transport that will not play (autoplay lock, no graph) shows nothing", () => {
+    const { cues, timers, played } = captioned(recorder({ refuse: true }));
+    cues.play({ cue: "released", eventId: "d1", caption: caption("deploy") });
+    timers.advance(10);
+    expect(played).toEqual([]);
+  });
+
+  test("the settings preview plays at once and never captions", () => {
+    const { cues, played, sink } = captioned();
+    expect(cues.play({ cue: "step", eventId: "preview:step", preview: true, caption: caption("preview") })).toBe("played");
+    expect(sink.events).toHaveLength(1);
+    expect(played).toEqual([]);
+  });
+
+  test("a cut sound's replay does not caption a second time", () => {
+    const { cues, timers, played } = captioned();
+    cues.play({ cue: "landed", eventId: "landed:p", pipeline: "p", caption: caption("landed") });
+    timers.advance(5000);
+    cues.play({ cue: "your-move", eventId: "move", caption: caption("move") });
+    timers.advance(3000);
+    timers.advance(60_000);
+    expect(played.map((entry) => entry.sound)).toEqual(["landed", "your-move"]);
+  });
+
+  test("a typing sound is not an event sound and never captions", () => {
+    const { cues, played } = captioned();
+    expect(cues.play({ cue: "typing", eventId: "tool:1" })).toBe("played");
+    expect(played).toEqual([]);
   });
 });

@@ -9,6 +9,10 @@ import type { AgentRegistry } from "@/lib/agent/registry";
 import type { ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { recordMemoryDelivery, type MemoryEngineStart } from "./deliveryLedger";
 import { roleMemoryEnabled } from "./settings";
+import { applyOperatorMemorySelector, operatorMemoryEnabled } from "./operatorMemory";
+import { memorySelection, prepareRoleSelection, selectionCandidate, frozenSelection } from "./roleSelection";
+import { MEMORY_SELECTION_DEADLINE_MS, selectRoleMemory } from "./roleSelect";
+import { stateLockDeferral, waitForStateLock } from "@/lib/state/lockWait";
 
 /** Leave headroom below Linux's single-argument ceiling, including the notice. */
 export const LEARNED_RULES_MAX_BYTES = 120_000;
@@ -21,7 +25,14 @@ export function roleMemoryProfileForIdentity(
   roleId: "orchestrator" | "maintainer" | null | undefined,
   project: string | null | undefined,
   designatedSeat = false,
+  /** Proven from the durable record (operatorRootConversation): the selector is re-derived for Delegatus mode. */
+  operatorRoot = false,
 ): LaunchProfile | null | undefined {
+  if (profile && !roleId && !designatedSeat) {
+    const next = { ...profile };
+    applyOperatorMemorySelector(next, project, operatorRoot);
+    return next.learnedRules === profile.learnedRules ? profile : next;
+  }
   if (!profile || !roleId || !project || project === "*") return profile;
   if (roleId !== "orchestrator" && roleId !== "maintainer") return profile;
   if (!designatedSeat) return profile;
@@ -48,14 +59,38 @@ export async function learnedRulesForLaunchProfile(profile: Pick<LaunchProfile, 
   const clean = profile?.cleanMemory === true;
   const select = () => {
     if (!marker || clean || roleIsClean(marker.roleId) || !roleMemoryEnabled()) return undefined;
-    try { return learnedRulesSnapshot(marker.project, marker.roleId, LEARNED_RULES_MAX_BYTES); }
-    catch {
+    // An operator selector reads rules only while the engines' memory is off.
+    if (marker.reader === "operator" && !operatorMemoryEnabled()) return undefined;
+    try { return learnedRulesSnapshot(marker.project, marker.roleId, LEARNED_RULES_MAX_BYTES, marker.reader === "operator" ? "operator" : undefined); }
+    catch (error) {
+      if (stateLockDeferral(error)) throw error;
       // Store diagnostics can contain private text; log only the cause class.
       console.warn("[role-memory] learned rules unavailable at engine start; starting without rules");
       return undefined;
     }
   };
-  return start ? recordMemoryDelivery(start, clean, select) : select()?.block;
+  if (!start?.attempt || !marker || clean || roleIsClean(marker.roleId) || !roleMemoryEnabled()) return start ? recordMemoryDelivery(start, clean, select) : select()?.block;
+  await prepareRoleSelection();
+  const existing = await waitForStateLock("memory.selection-read", () => memorySelection(start.attempt!));
+  const snapshot = existing ? undefined : await waitForStateLock("memory.selection-snapshot", select);
+  if (!existing && !snapshot) return recordMemoryDelivery(start, clean, select);
+  const candidate = existing ?? selectionCandidate(start.attempt, snapshot!);
+  if (!existing && snapshot) {
+    const deadline = performance.now() + MEMORY_SELECTION_DEADLINE_MS;
+    try {
+      const { findPipelineRecord } = await import("@/lib/pipelines/store");
+      const pipeline = await waitForStateLock("memory.selection-brief", () => findPipelineRecord(start.attempt!.pipelineId), { waitMs: Math.max(0, deadline - performance.now()) });
+      const stage = pipeline?.stages.find(stage => stage.id === start.attempt!.stageId);
+      const brief = [pipeline?.task?.slice(0, 2000), pipeline?.spec?.slice(0, 8000), stage?.prompt?.slice(0, 3000)].filter(Boolean).join("\n");
+      Object.assign(candidate, await selectRoleMemory(snapshot.candidates, brief, { timeoutMs: Math.max(0, deadline - performance.now()) }), { shadow: process.env.LLV_ROLE_MEMORY_SHADOW !== "off" });
+    } catch {
+      Object.assign(candidate, { shadow: process.env.LLV_ROLE_MEMORY_SHADOW !== "off", reason: "selector-error" });
+    }
+  }
+  return recordMemoryDelivery(start, clean, () => {
+    if (!roleMemoryEnabled()) return undefined;
+    return frozenSelection(candidate, snapshot);
+  });
 }
 
 /** Retire old pointer files only at activation by the state owner. */

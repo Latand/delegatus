@@ -22,23 +22,47 @@ const {
 } = await import("./app");
 const { configureAudioPrefsStorage, setAudioPrefs } = await import("./prefs");
 const { FADE_OUT_SECONDS } = await import("./ambientLoop");
+const { pushSoundCaption, resetSoundCaptionsForTests, soundCaptionsSnapshot } = await import("./captions");
 
 afterEach(() => {
+  resetSoundCaptionsForTests();
   resetAppAudioForTests();
   configureAudioPrefsStorage(undefined);
 });
 
 describe("no audio graph", () => {
   test("every cue is refused quietly, and the identity is still spent", () => {
-    expect(playCue({ cue: "attention", eventId: "a1" })).toBe("blocked");
-    expect(playCue({ cue: "attention", eventId: "a1" })).toBe("deduped");
-    expect(playCue({ cue: "tool-tick", eventId: "t1" })).toBe("blocked");
+    /* An event sound enters the lane and finds no graph when its window
+       closes; typing finds none at once. */
+    expect(playCue({ cue: "your-move", eventId: "a1" })).toBe("scheduled");
+    expect(playCue({ cue: "your-move", eventId: "a1" })).toBe("deduped");
+    expect(playCue({ cue: "typing", eventId: "t1" })).toBe("blocked");
+    expect(playCue({ cue: "step", eventId: "preview", preview: true })).toBe("blocked");
+  });
+
+  test("a lane with no graph to play on stays free, and throws nothing", async () => {
+    expect(playCue({ cue: "released", eventId: "r1" })).toBe("scheduled");
+    expect(playCue({ cue: "released", eventId: "r2" })).toBe("scheduled");
+    await Bun.sleep(5);
   });
 
   test("a mute is honoured before anything else is attempted", () => {
     configureAudioPrefsStorage({ getItem: () => "off", setItem: () => undefined });
     resetAppAudioForTests();
-    expect(playCue({ cue: "failure", eventId: "f1" })).toBe("disabled");
+    expect(playCue({ cue: "fault", eventId: "f1" })).toBe("disabled");
+    expect(playCue({ cue: "typing", eventId: "t1" })).toBe("disabled");
+  });
+
+  test("turning sound off takes the captions off the screen with it", () => {
+    const store = new Map<string, string>();
+    configureAudioPrefsStorage({ getItem: (key) => store.get(key) ?? null, setItem: (key, value) => void store.set(key, value) });
+    resetAppAudioForTests();
+    /* The first cue creates the player, which is what watches the switches. */
+    playCue({ cue: "step", eventId: "watch" });
+    pushSoundCaption({ sound: "reply", batch: 1, captions: [] });
+    expect(soundCaptionsSnapshot()).toHaveLength(1);
+    setAudioPrefs({ cuesEnabled: false });
+    expect(soundCaptionsSnapshot()).toEqual([]);
   });
 
   test("connecting and disconnecting a call is safe and leaves nothing playing", () => {

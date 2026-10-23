@@ -83,9 +83,9 @@ test("the real controller returns while a 20 second fenced Git job remains pendi
     finally { db.close(); }
   } finally { release.resolve(); await settlePipelineControllerJobs(); }
   expect(pipelineControllerJobLanes()).toEqual([]);
-}, 30_000);
+}, 60_000);
 
-test.each(["branch", "repository", "claim", "release", "remove", "archive", "progress"] as const)("a %s peer change retains stage-job authority fences", async change => {
+test.each(["branch", "repository", "claim", "release", "remove", "archive", "progress", "raw-owner", "raw-peer"] as const)("a %s peer change retains stage-job authority fences", async change => {
   const { h, lane } = await committing();
   const peer = structuredClone(lane);
   peer.id = "controller-peer";
@@ -111,6 +111,16 @@ test.each(["branch", "repository", "claim", "release", "remove", "archive", "pro
     if (change === "release") { updated.state = "closed"; updated.closedAt = h.ports.now(); }
     if (change === "progress") updated.stateDetail = "peer progress";
     savePipelines(change === "remove" ? rows.filter(row => row.id !== peer.id) : rows);
+    if (change === "raw-owner" || change === "raw-peer") {
+      const db = new Database(path.join(process.env.LLV_STATE_DIR!, "state.sqlite"));
+      try {
+        const row = change === "raw-owner" ? rows.find(row => row.id === lane.id)! : updated;
+        if (change === "raw-owner") row.stateDetail = "concurrent raw edit";
+        else { row.task += " raw branch"; Object.assign(row, pipelineIdentity(row.id, row.task, row.repoDir)); }
+        // Keep the collection and row revision unchanged, as an older SQL writer can.
+        db.query("UPDATE state_rows SET value_json=? WHERE collection='pipelines' AND row_key=?").run(JSON.stringify(row), row.id);
+      } finally { db.close(); }
+    }
     if (change === "archive") expect(await archiveSettledPipelines(Date.parse(h.ports.now()) + 4 * 24 * 60 * 60 * 1000)).toBe(1);
     await new Promise(resolve => setTimeout(resolve, 120));
     expect(signal?.aborted).toBe(change !== "progress");
@@ -969,4 +979,94 @@ test("a coalesced controller pass captures its deadline after already-ready runt
   await runtimeReady;
   expect(captured.length).toBeGreaterThan(0);
   expect(captured[0]).toBe("2026-10-16T00:01:00.000Z");
+});
+
+
+test("nested controller jobs retain their bounded attempt selection", async () => {
+  const { h, lane } = await committing();
+  const original = lane.runs[0]!.attempts[0]!;
+  lane.runs[0]!.attempts = Array.from({ length: 1024 }, (_, n) => ({ ...structuredClone(original), n: n + 1,
+    historical: true, state: "failed", output: "x".repeat(4096), launchId: null, verdict: { status: "fail" } }));
+  lane.runs[0]!.attempts.push({ ...original, n: 1025 });
+  savePipelines([lane]);
+  const refs = await controllerAttemptWindow(lane.id, 0, "build");
+  const references = new Map([[lane.id, [...refs.window, ...refs.current]]]);
+  const { controllerReferences, controllerTickFingerprint } = await import("./controllerScope");
+  await withControllerPipelineScope([lane.id], async () => {
+    await withControllerPipelineScope([lane.id], async () => {
+      expect(controllerReferences(lane.id)?.length).toBeLessThanOrEqual(18);
+      expect(controllerReferences(lane.id)).toBeDefined();
+      const current = await findControllerPipeline(lane.id);
+      expect(controllerTickFingerprint(current!).length).toBeLessThan(150_000);
+    });
+  }, new Set(refs.window.map(ref => JSON.stringify([lane.id, ref.stageId, ref.n]))), references);
+});
+
+
+test("settlement polling reads revisions without cloning retained lane history", async () => {
+  const { h, lane } = await committing();
+  const original = lane.runs[0]!.attempts[0]!;
+  lane.runs[0]!.attempts = Array.from({ length: 1024 }, (_, n) => ({ ...structuredClone(original), n: n + 1,
+    historical: true, state: "failed", output: "x".repeat(4096), launchId: null, verdict: { status: "fail" } }));
+  lane.runs[0]!.attempts.push({ ...original, n: 1025 });
+  const peers = Array.from({ length: 16 }, (_, n) => {
+    const peer = structuredClone(lane); peer.id = `poll-peer-${n}`;
+    Object.assign(peer, pipelineIdentity(peer.id, peer.task, peer.repoDir));
+    peer.state = "paused"; peer.cursor = { ...lane.cursor!, state: "running" };
+    peer.runs = [{ ...lane.runs[0]!, attempts: [{ ...original, state: "running", verdict: null,
+      launchId: null, conversationId: null, agentPath: null, paneId: null }] }];
+    peer.delivery = undefined;
+    return peer;
+  });
+  savePipelines([lane, ...peers]);
+  const entered = latch(), release = latch();
+  const exec = h.ports.exec;
+  let held = false;
+  h.ports.exec = async (command, args, cwd, env, options) => {
+    if (!held && options?.inheritFd !== undefined) { held = true; entered.resolve(); await release.promise; }
+    return exec(command, args, cwd, env, options);
+  };
+  try {
+    await tickPipelinesController([], h.ports);
+    await until(entered.promise, 10_000);
+    const reads = spyOn(SqliteStateCollection.prototype, "get");
+    try {
+      const samples = [];
+      for (let n = 0; n < (process.env.LLV_CONTROLLER_POLL_EVIDENCE ? 3 : 1); n++) {
+        const cpu = process.cpuUsage(), at = performance.now();
+        let last = at, gaps = 0, maxGapMs = 0;
+        const timer = setInterval(() => { const now = performance.now(), gap = now-last-10;
+          maxGapMs = Math.max(maxGapMs, gap); if (gap >= 50) gaps++; last = now; },10);
+        try { await new Promise(resolve => setTimeout(resolve, process.env.LLV_CONTROLLER_POLL_EVIDENCE ? 3000 : 250)); }
+        finally { clearInterval(timer); }
+        const used = process.cpuUsage(cpu);
+        samples.push({ cpuMs: (used.user+used.system)/1000, wallMs: performance.now()-at, gaps, maxGapMs,
+          load: (await import("node:os")).loadavg() });
+      }
+      if (process.env.LLV_CONTROLLER_POLL_EVIDENCE) fs.appendFileSync(process.env.LLV_CONTROLLER_POLL_EVIDENCE,
+        JSON.stringify({ lanes:17, attempts:1025, samples })+"\n");
+      expect(reads.mock.calls).toHaveLength(0);
+    } finally { reads.mockRestore(); }
+  } finally { release.resolve(); await settlePipelineControllerJobs(); }
+});
+
+
+test("shared compact authority observations keep each job's own lane out of its peer token", async () => {
+  const { lane } = await committing();
+  const peer = structuredClone(lane); peer.id = "authority-peer";
+  Object.assign(peer, pipelineIdentity(peer.id, peer.task, peer.repoDir));
+  peer.state = "closed"; peer.closedAt = "2026-10-22T00:00:00Z"; peer.cursor = null;
+  peer.runs = peer.runs.map(run => ({ ...run, attempts: [] })); peer.delivery = undefined;
+  savePipelines([lane, peer]);
+  const { stageBranchOwnershipReader } = await import("./stageBranch");
+  const owner = stageBranchOwnershipReader(lane.id), other = stageBranchOwnershipReader(peer.id);
+  const originalOwner = await owner.read(), originalOther = await other.read();
+  await withPipelineMutation(async (rows, persist) => {
+    const current = rows.find(row => row.id === lane.id)!;
+    current.task += " changed branch";
+    Object.assign(current, pipelineIdentity(current.id, current.task, current.repoDir));
+    await persist([current]);
+  });
+  expect(await owner.read()).toBe(originalOwner);
+  expect(await other.read()).not.toBe(originalOther);
 });

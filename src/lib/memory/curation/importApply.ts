@@ -75,7 +75,7 @@ export function prepareImportEdits(pass: CuratorPass, input: CurationApply, now:
     const row = candidate(item.id, pending); context.note(item.note);
     const problem = problemInput(item), id = newId(), scope = projectScope(row.occurrences[0].project ?? pass.project);
     context.target(scope);
-    create({ kind: "rule", id, scope, rule: problem.statement, why: "Imported concrete evidence for the project seat agenda.", hints: rulePrivacyHints(`${problem.statement}\n${problem.evidence}`), source: source(row, pending, scope), state: "archived", reason: "problem", problem, problemEpisode: `${pass.id}:${now}`, note: item.note, createdAt: now, changedAt: now, curatedAt: now });
+    create({ kind: "rule", id, scope, rule: problem.statement, why: "Imported concrete evidence for the project seat agenda.", hints: rulePrivacyHints(`${problem.statement}\n${problem.evidence}`), source: source(row, pending, scope), state: "archived", reason: "problem", departures: [{ at: now, reason: "problem", curated: true }], problem, problemEpisode: `${pass.id}:${now}`, note: item.note, createdAt: now, changedAt: now, curatedAt: now });
     row.dispositions.push({ at: now, pass: pass.id, kind: "drop", reason: "problem", ruleIds: [id], occurrences: pending, note: item.note });
   }
   if (pass.importBatch) for (const id of pass.importBatch.candidates) {

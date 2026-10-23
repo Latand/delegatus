@@ -2,10 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { stageGitReceiptDirectory } from "@/lib/git/stageAttemptGuard";
 import { agentPublicationIdentityEnv } from "@/lib/git/agentPublicationIdentity";
+import { projectIdentityFromRemote } from "@/lib/projects/identity";
 import { githubRepositoryOfRemote } from "@/lib/forge/workLinks";
 import { rollupChecksWithIdentity } from "@/lib/forge/checkRollup";
 import type { ExecPort } from "@/lib/workflows/provision";
-import { pipelineLiteralGitEnv, verifyPassedHeadIntegration, type PipelineGitResult } from "./git";
+import { DEFAULT_PIPELINE_BASE_BRANCH, pipelineLiteralGitEnv, verifyPassedHeadIntegration, type PipelineGitResult } from "./git";
 import type { Pipeline, PipelineStageAttempt } from "./types";
 
 class StagePushRemoteUnavailable extends Error {}
@@ -226,6 +227,16 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       const parentN = child.restartContext?.previousAttempt ?? decision?.attempt;
       if (parentN === undefined) break;
       const parent = attempts.get(parentN);
+      // A failed parent whose launch was refused before any reservation ran
+      // nothing and holds no receipts; the edge continues through it to the
+      // attempt it replaced (issue #3158). It proves no commit of its own.
+      if (!decision && parent && parent.n < child.n && parent.state === "failed" && parent.completedAt
+        && !parent.launchId && !parent.conversationId && !parent.agentPath && !parent.paneId
+        && child.restartContext?.previousAttempt === parent.n && (child.restartContext.transcriptPath ?? null) === null
+        && (parent.restartRecovery?.replacementAttempt === undefined || parent.restartRecovery.replacementAttempt === child.n)) {
+        child = parent;
+        continue;
+      }
       if (!parent || parent.n >= child.n || !parent.launchId || !parent.completedAt
         || (!decision && (child.restartContext?.previousAttempt !== parent.n
           || child.restartContext.transcriptPath !== parent.agentPath
@@ -281,15 +292,24 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       // its remote before deciding that this stage produced nothing.
     }
     const tip = repair ? null : await remoteHead();
+    // A remote's pushurl may deliberately point at a mirror and is editable
+    // independently from the repository that owns the delivery branch. Main
+    // ancestry must be proved against the remote's fetch URL.
+    const fetchUrl = await exec("git", ["remote", "get-url", remote], pipeline.worktreeDir);
+    const deliveryUrl = fetchUrl.code === 0 ? fetchUrl.stdout.trim() : remote;
+    const fetchRepository = projectIdentityFromRemote(deliveryUrl, pipeline.worktreeDir)?.project;
+    if (!fetchRepository || fetchRepository !== delivery.target.repository) {
+      return refuse("the delivery fetch URL does not match the persisted repository");
+    }
     const url = await exec("git", ["remote", "get-url", "--push", remote], pipeline.worktreeDir);
-    const expectedUrl = url.code === 0 ? url.stdout.trim() : remote;
+    const expectedPushUrl = url.code === 0 ? url.stdout.trim() : remote;
     if (tip && tip !== start.head) {
       const fetched = await exec("git", ["fetch", "--no-tags", remote, ref], pipeline.worktreeDir, undefined, { timeoutMs: 10000 });
       if (fetched.code !== 0) throw new StagePushRemoteUnavailable();
     }
     for (const candidate of repair ? [] : candidates) {
       const receipt = await smallFile(path.join(directory!, "pushes", candidate));
-      if (receipt !== `${ref}\n${expectedUrl}\n`) return refuse("the push receipt names another delivery target");
+      if (receipt !== `${ref}\n${expectedPushUrl}\n`) return refuse("the push receipt names another delivery target");
       if (!tip || (await exec("git", ["merge-base", "--is-ancestor", candidate, tip], pipeline.worktreeDir)).code !== 0) {
         return refuse("the recorded push candidate was not confirmed on the delivery remote");
       }
@@ -342,19 +362,26 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
     let integrationBase: string | null = null;
     const verifiedBase = async (): Promise<string | null> => {
       if (baseTip !== undefined) return baseTip;
-      const baseRef = `refs/heads/${pipeline.baseBranch}`;
-      const found = await exec("git", ["ls-remote", "--refs", remote, baseRef], pipeline.worktreeDir, undefined, { timeoutMs: 5000 });
+      // The provisioning base may be the PR branch being published. It
+      // cannot attest its own imported commits. Read main from the delivery
+      // fetch URL; an independently configured push URL cannot authorize
+      // commits from another repository.
+      const baseRef = `refs/heads/${DEFAULT_PIPELINE_BASE_BRANCH}`;
+      const found = await exec("git", ["ls-remote", "--refs", deliveryUrl, baseRef], pipeline.worktreeDir, undefined, { timeoutMs: 5000 });
       if (found.code !== 0) throw new StagePushRemoteUnavailable();
       const [sha, name] = found.stdout.trim().split(/\s+/);
       if (!found.stdout.trim()) return baseTip = null;
       if (name !== baseRef || !/^[0-9a-f]{40}$/.test(sha) || found.stdout.trim().split("\n").length !== 1) throw new Error("base branch has no exact tip");
-      const fetched = await exec("git", ["fetch", "--no-tags", remote, sha], pipeline.worktreeDir, undefined, { timeoutMs: 10000 });
+      const fetched = await exec("git", ["fetch", "--no-tags", deliveryUrl, sha], pipeline.worktreeDir, undefined, { timeoutMs: 10000 });
       if (fetched.code !== 0) throw new StagePushRemoteUnavailable();
       return baseTip = sha;
     };
     const verifiedSuffix = async (target: string, from = repair?.acceptedHead ?? anchor): Promise<string | null> => {
       if (target === from) return null;
       if (target === tip && integrationBase !== null) return null;
+      // A successor can start beyond its delivery branch. That older tip is
+      // already accepted history; only the attempt's new suffix needs proof.
+      if (target === publishedPrefix && (await exec("git", ["merge-base", "--is-ancestor", target, pipeline.lastPassedCommit], pipeline.worktreeDir)).code === 0) return null;
       let suffixAnchor = from;
       if ((await exec("git", ["merge-base", "--is-ancestor", suffixAnchor, target], pipeline.worktreeDir)).code !== 0) {
         if (repair || directories.length > 1) {
@@ -396,7 +423,7 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
           if (base && (await exec("git", ["merge-base", "--is-ancestor", sha, base], pipeline.worktreeDir)).code === 0) continue;
           if (!repair && directories.length === 1 && target === tip && base) {
             const integration = await verifyPassedHeadIntegration(pipeline, from, target, exec, base);
-            if (integration.ok && await publishedIntegrationGreen(pipeline, target, base, expectedUrl, exec)) {
+            if (integration.ok && await publishedIntegrationGreen(pipeline, target, base, deliveryUrl, exec)) {
               integrationBase = base;
               return null;
             }
@@ -453,7 +480,7 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       const error = await verifiedSuffix(tip);
       if (error) return refuse(error);
     }
-    if (pushed !== null && pushed !== `${ref}\n${expectedUrl}\n`) return refuse("the push receipt names another delivery target");
+    if (pushed !== null && pushed !== `${ref}\n${expectedPushUrl}\n`) return refuse("the push receipt names another delivery target");
     if (publishedPrefix) {
       const error = await verifiedSuffix(head);
       if (error) return refuse(error);
@@ -480,7 +507,7 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
     }
     const proofError = await verifiedSuffix(tip);
     if (proofError) return refuse(proofError);
-    if (integrationBase && !await integrationOrigin(pipeline, integrationBase, expectedUrl, exec)) return refuse("origin's default branch raced the integration proof");
+    if (integrationBase && !await integrationOrigin(pipeline, integrationBase, deliveryUrl, exec)) return refuse("origin's default branch raced the integration proof");
     const status = await exec("git", ["status", "--porcelain"], pipeline.worktreeDir);
     const branch = await exec("git", ["branch", "--show-current"], pipeline.worktreeDir);
     if (status.code !== 0 || status.stdout.trim() || branch.code !== 0
@@ -493,7 +520,7 @@ export async function settleStageAttemptPush(pipeline: Pipeline, attempt: Pipeli
       if (merged.code !== 0) return refuse("the proved push could not fast-forward the lane");
     }
     if (await remoteHead() !== tip
-      || (integrationBase && !await integrationOrigin(pipeline, integrationBase, expectedUrl, exec))) return refuse("the adopted remote moved before acceptance");
+      || (integrationBase && !await integrationOrigin(pipeline, integrationBase, deliveryUrl, exec))) return refuse("the adopted remote moved before acceptance");
     const final = await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir);
     const clean = await exec("git", ["status", "--porcelain"], pipeline.worktreeDir);
     const finalBranch = await exec("git", ["branch", "--show-current"], pipeline.worktreeDir);

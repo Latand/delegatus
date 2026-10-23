@@ -14,8 +14,12 @@ including when one rejects. An occurrence retires after a complete paired round.
 Missing assertions, unexpected runner diagnostics, incomplete baseline evidence
 and failed ownership cleanup retain their refusal paths. Same-name occurrences
 remain separate; Bun's name filter can execute a retired occurrence alongside
-an unresolved occurrence with the same name. No result survives a comparator
-process, and no baseline result is cached.
+an unresolved occurrence with the same name. Only the initial baseline assertion
+sample can survive a comparator process.
+It is reused after two matching complete fresh observations on the same base,
+file, filter, origin, dependency inputs, comparator sources, Bun binary and
+environment. Diagnostics and incomplete runs are never cached; confirmation
+rounds always run fresh. Entries expire after 24 hours.
 
 The consumers are the pre-push touched and Linux selections in
 `scripts/local-gate.ts`, direct review comparisons, and local shared native
@@ -614,3 +618,195 @@ in the JSON.
 | `src/lib/runtime/structuredSpawn.integration.test.ts` | 21.5 | — | 30.1 | — | 0/0 → 0/0 |
 | `src/lib/runtime/structuredSpawn.memory.test.ts` | 0.6 | — | 1.2 | — | 0/0 → 0/0 |
 | `src/lib/runtime/structuredSpawn.terminalize.test.ts` | 7.9 | — | 15.3 | — | 0/0 → 0/0 |
+
+## Loaded engine-family campaign
+
+Status: complete. All required qualifying runs and both refusal controls passed their acceptance checks. The required sample is 30 qualifying after-runs, ten before-runs and two refusal controls. All attempts, including load outliers, are retained in `evidence/perf/pre-push-touched-tests.json#engineLoadCampaign`.
+
+The fixed comparison uses main `144c87e12af0` before the fix and `04df47ce7042` after it, with three captured lane heads and their merged trees recorded in the manifest. The stage merged current main at resumption (`51d851863f7d`); the paired campaign keeps its original inputs so the earlier qualifying runs remain comparable. The separate final gate verified the integrated source after the last main merge (see the completed campaign and integration below).
+
+Each attempt runs the real pre-push entry point in a scratch clone with its own HOME, config, temp and state roots and a closed Viewer control URL. The local bare origin pins the side’s main revision. No scratch commit or push is created. Load and owned file services are sampled every two seconds. Only an execution-period median load from 25 through 30 qualifies. Outer admission is excluded from complete-gate time; any nested wait is retained in that wall time and also reported by the comparator. Kernel samples retain the three-CPU file quota and eighteen-CPU work quota. CPU counters are sampled lower bounds; short services can finish between samples.
+
+| Side | Qualifying runs | Complete sample P90 (s) | File expirations | Refusals | NEW lines |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| before | 10 | 1006.8 | 7 | 5 | 2 |
+| after | 30 | 472.8 | 0 | 0 | 0 |
+
+P90 uses the nearest-rank observation at `ceil(0.9 × run count)` in the complete qualifying sample. An incomplete baseline or runner error is a refusal even when it emits no NEW assertion line.
+
+| Attempt | Side | Branch | Load min / median / max | Outer admission (s) | Complete gate (s) | Qualifies | Expirations | Exit |
+| --- | --- | ---: | --- | ---: | ---: | --- | ---: | ---: |
+| after-01 | after | 1 | 17.64 / 30.50 / 45.84 | 41.6 | 643.1 | outlier | 0 | 0 |
+| after-101 | after | 1 | 22.72 / 26.46 / 38.68 | 1.5 | 431.1 | yes | 0 | 0 |
+| after-02 | after | 2 | 19.72 / 28.60 / 36.25 | 37.4 | 508.2 | yes | 0 | 0 |
+| after-03 | after | 3 | 21.53 / 32.92 / 37.94 | 25.5 | 459.9 | outlier | 0 | 0 |
+| after-103 | after | 3 | 20.36 / 25.15 / 31.17 | 17.1 | 421.5 | yes | 0 | 0 |
+| before-01 | before | 1 | 9.91 / 29.19 / 36.47 | 36.2 | 1166.6 | yes | 5 | 1 |
+| after-04 | after | 1 | 26.41 / 35.68 / 49.79 | 1.8 | 542.1 | outlier | 0 | 0 |
+| after-104 | after | 1 | 20.02 / 36.03 / 41.26 | 1.4 | 518.6 | outlier | 0 | 0 |
+| after-204 | after | 1 | 23.54 / 29.75 / 34.75 | 29.6 | 461.2 | yes | 0 | 0 |
+| after-05 | after | 2 | 20.72 / 35.44 / 46.92 | 183.7 | 594.9 | outlier | 0 | 0 |
+| after-105 | after | 2 | 15.22 / 32.88 / 40.30 | 1.2 | 518.3 | outlier | 0 | 0 |
+| after-205 | after | 2 | 19.51 / 25.41 / 34.94 | 45.6 | 476.4 | yes | 0 | 0 |
+| after-06 | after | 3 | 24.21 / 35.52 / 45.57 | 76.3 | 521.6 | outlier | 0 | 0 |
+| after-106 | after | 3 | 18.91 / 30.17 / 36.57 | 107.6 | 487.0 | outlier | 0 | 0 |
+| after-206 | after | 3 | 13.62 / 33.46 / 51.23 | 1.2 | 449.9 | outlier | 0 | 0 |
+| after-306 | after | 3 | 19.85 / 27.60 / 32.79 | 77.6 | 414.9 | yes | 0 | 0 |
+| before-02 | before | 2 | 14.88 / 20.78 / 42.33 | 3.2 | 1124.8 | outlier | 4 | 1 |
+| before-102 | before | 2 | 12.16 / 19.46 / 30.93 | 37.3 | 879.5 | outlier | 1 | 1 |
+| before-202 | before | 2 | 7.39 / 31.94 / 41.28 | 1.3 | 967.3 | outlier | 1 | 1 |
+| before-302 | before | 2 | 6.79 / 26.84 / 34.43 | 1.3 | 842.1 | yes | 0 | 1 |
+| after-07 | after | 1 | 5.83 / 27.98 / 38.06 | 1.2 | 432.1 | yes | 0 | 0 |
+| after-08 | after | 2 | 7.75 / 28.16 / 35.83 | 1.0 | 384.6 | yes | 0 | 0 |
+| after-09 | after | 3 | 8.50 / 27.80 / 31.06 | 1.2 | 400.5 | yes | 0 | 0 |
+| before-03 | before | 3 | 7.94 / 26.40 / 39.11 | 1.0 | 783.4 | yes | 0 | 0 |
+| after-10 | after | 1 | 3.80 / 27.75 / 34.06 | 7.0 | 395.7 | yes | 0 | 0 |
+| after-11 | after | 2 | 6.23 / 28.78 / 31.83 | 1.1 | 435.1 | yes | 0 | 0 |
+| after-12 | after | 3 | 11.62 / 39.60 / 69.29 | 9.1 | 546.9 | outlier | 0 | 0 |
+| after-112 | after | 3 | 12.41 / 26.44 / 32.09 | 1.2 | 379.7 | yes | 0 | 0 |
+| before-04 | before | 1 | 9.22 / 28.25 / 37.94 | 1.2 | 916.4 | yes | 0 | 1 |
+| after-13 | after | 1 | 6.42 / 27.97 / 59.52 | 3.1 | 495.0 | yes | 0 | 0 |
+| after-14 | after | 2 | 4.96 / 27.36 / 31.90 | 0.9 | 385.1 | yes | 0 | 0 |
+| after-15 | after | 3 | 9.66 / 27.07 / 35.00 | 1.0 | 395.2 | yes | 0 | 0 |
+| before-05 | before | 2 | 8.47 / 28.68 / 32.91 | 1.3 | 945.7 | yes | 0 | 0 |
+| after-16 | after | 1 | 10.84 / 29.22 / 32.31 | 1.0 | 425.0 | yes | 0 | 0 |
+| after-17 | after | 2 | 6.41 / 28.72 / 31.98 | 3.0 | 470.4 | yes | 0 | 0 |
+| after-18 | after | 3 | 6.44 / 29.19 / 31.36 | 0.8 | 414.4 | yes | 0 | 0 |
+| before-106 | before | 3 | 5.40 / 27.85 / 35.61 | 3.3 | 952.8 | yes | 0 | 0 |
+| after-19 | after | 1 | 3.95 / 26.69 / 38.08 | 2.9 | 404.7 | yes | 0 | 0 |
+| after-90-assertion | after | 1 | 10.55 / 27.68 / 38.64 | 11.2 | 402.1 | control | 0 | 1 |
+| after-91-hang | after | 2 | 11.38 / 26.09 / 31.86 | 3.2 | 594.9 | control | 0 | 1 |
+| after-20 | after | 2 | 12.36 / 27.40 / 30.51 | 23.6 | 439.3 | yes | 0 | 0 |
+| after-21 | after | 3 | 17.02 / 26.59 / 32.19 | 494.1 | 402.8 | yes | 0 | 0 |
+| before-07 | before | 1 | 16.80 / 29.36 / 63.94 | 954.7 | 908.8 | yes | 1 | 1 |
+| after-22 | after | 1 | 20.66 / 44.06 / 69.83 | 62.1 | 703.0 | outlier | 0 | 0 |
+| after-122 | after | 1 | 22.05 / 31.28 / 39.39 | 4.0 | 507.7 | outlier | 0 | 0 |
+| after-222 | after | 1 | 23.35 / 35.73 / 42.31 | 682.1 | 606.8 | outlier | 0 | 0 |
+| after-23 | after | 2 | 27.98 / 40.04 / 56.20 | 183.7 | 599.0 | outlier | 0 | 0 |
+| after-322 | after | 1 | 24.06 / 36.28 / 40.33 | 38.3 | 518.0 | outlier | 0 | 0 |
+| after-123 | after | 2 | 18.15 / 31.43 / 38.89 | 3.4 | 507.4 | outlier | 0 | 0 |
+| after-24 | after | 3 | 16.43 / 28.46 / 34.30 | 3.4 | 426.5 | yes | 0 | 0 |
+| after-422 | after | 1 | 11.20 / 37.81 / 68.20 | 3.3 | 602.4 | outlier | 0 | 0 |
+| after-522 | after | 1 | 10.32 / 26.52 / 32.99 | 3.4 | 400.8 | yes | 0 | 0 |
+| after-223 | after | 2 | 10.95 / 31.50 / 55.02 | 3.3 | 723.7 | outlier | 0 | 0 |
+| before-08 | before | 2 | 18.82 / 28.34 / 45.13 | 9.5 | 861.3 | yes | 1 | 1 |
+| after-323 | after | 2 | 7.75 / 28.92 / 37.20 | 3.2 | 472.8 | yes | 0 | 0 |
+| after-25 | after | 1 | 8.03 / 27.47 / 31.67 | 5.3 | 386.4 | yes | 0 | 0 |
+| after-26 | after | 2 | 14.92 / 25.65 / 27.10 | 3.3 | 364.7 | yes | 0 | 0 |
+| before-09 | before | 3 | 11.61 / 29.82 / 36.95 | 3.2 | 966.9 | yes | 0 | 0 |
+| after-27 | after | 3 | 11.45 / 26.63 / 34.49 | 3.7 | 402.3 | yes | 0 | 0 |
+| after-28 | after | 1 | 11.83 / 27.43 / 37.03 | 3.4 | 412.3 | yes | 0 | 0 |
+| after-29 | after | 2 | 6.19 / 28.01 / 33.99 | 3.1 | 378.8 | yes | 0 | 0 |
+| before-10 | before | 1 | 8.08 / 26.45 / 48.22 | 3.3 | 1006.8 | yes | 0 | 0 |
+| after-30 | after | 3 | 10.61 / 28.45 / 33.22 | 9.3 | 390.4 | yes | 0 | 0 |
+
+The ten split families retain all 1,078 registered cases, including their names, parameter values and assertion bodies. The preserved calibration and JUnit inventory established that partition before the campaign. The measured timeout exceptions are described in `docs/design/pre-push-gate-under-load.md#2-fix`.
+
+The resumed campaign began with three qualifying after-runs and one before-run. No test or verdict rule changed during resumption. Batches retain every attempted load condition and stop between attempts. Complete-gate time includes the driver’s owned cleanup after hook exit.
+
+| Resumed batch | Attempts | Qualifying after | Qualifying before |
+| --- | ---: | ---: | ---: |
+| batch-01 | 3 | 1 | 0 |
+| batch-02 | 4 | 1 | 0 |
+| batch-03 | 4 | 1 | 0 |
+| batch-04 | 1 | 0 | 0 |
+| batch-05 | 4 | 3 | 1 |
+| batch-06 | 1 | 0 | 1 |
+| batch-07 | 3 | 2 | 0 |
+| batch-08 | 3 | 2 | 1 |
+| batch-09 | 4 | 3 | 1 |
+| batch-10 | 3 | 2 | 0 |
+| batch-11 | 1 | 0 | 1 |
+| batch-12 | 1 | 1 | 0 |
+| batch-13 | 1 | 0 | 0 |
+| batch-14 | 1 | 0 | 0 |
+| batch-15 | 1 | 1 | 0 |
+| batch-16 | 2 | 1 | 1 |
+| batch-17 | 1 | 0 | 0 |
+| batch-18 | 1 | 0 | 0 |
+| batch-20 | 2 | 0 | 0 |
+| batch-21 | 3 | 1 | 0 |
+| batch-22 | 1 | 0 | 0 |
+| batch-23 | 3 | 1 | 1 |
+| batch-24 | 3 | 3 | 0 |
+| batch-26 | 1 | 0 | 1 |
+| batch-28 | 3 | 3 | 0 |
+| batch-29 | 1 | 0 | 1 |
+| batch-30 | 1 | 1 | 0 |
+
+Two before-runs fell below the required load band as their remaining files and baseline work used fewer CPUs. Observed test CPU usage averaged at least 3.78 CPUs in `before-02`, against 7.04 in `after-306`. Future before-runs use a four-CPU foreground estimate for initial load padding; after-runs retain eight. New records include `paddingForegroundCpuEstimate`; earlier records used eight. The real gate retains its eight head workers and existing quotas, deadlines and verdict rules. Every earlier qualifier and outlier stays in the sample.
+
+Static padding still produced an above-band before-run (`before-202`, median 31.94). Future attempts on both sides use the two-second load samples to adjust only their own padding scopes every 30 seconds, with at most twelve requested active scopes. A load above 30 removes one scope; above 35 removes up to two. Below 25 adds one scope after the first 90 seconds and after pending stops finish. Start and stop requests are recorded per run. The gate continues during asynchronous stop requests, and all owned launcher and stop-command handles settle at cleanup. Each new invocation follows a separate three-minute cooldown. All method epochs retain the same qualifying load band and frozen test inputs.
+
+The separate merged-source engine comparison passed on `b68b4fb6c5b1`: 46 explicit engine files, 425.9 s including admission, exit 0, zero NEW failures. Its command, source digest and log digest are recorded in `integratedEngineComparison`. Other final project checks were outstanding at that checkpoint.
+
+The high-load `after-05` outlier captured two existing 15-second explicit test timeouts in `engine.providerReset.part3.test.ts`; filtered retries passed and the comparator classified the occurrences as flaky. At that checkpoint, the 30/10 sample and the two controls remained incomplete.
+
+The recovery attempt merged current main before continuing. Its process now has a private PID namespace; both frozen campaign runners capture local process identities and launch user-manager services without namespace support. The host process view showed that the preceding run was still alive after its agent restarted. That run was allowed to finish, and its campaign pause flag prevented another dispatch. Its later 889.5-second result is excluded from acceptance at the campaign owner’s direction and retained under `discardedRuns`. That recovery attempt submitted no new hook. At that checkpoint, the remaining runs required a compatible execution context or an agreed new measurement epoch. At that checkpoint, the merged dependency lock differed from the captured inputs; final project and integration checks were still outstanding.
+
+The supported-wrapper probe completed with exit 0 and an effective ancestor quota of three CPUs (`60000 20000`), outside the historical shared work slice. A read-only identity probe found that the frozen local-PID owner differs from the host identity, while the supported helper translates it correctly. The environment observations and procedures are retained in `engineLoadCampaign.continuationEnvironment`. No acceptance hook was dispatched from the recovery attempt. That recovery window also retained its 06:00 UTC dispatch cutoff.
+
+### Managed-runner continuation
+
+The approved adapter translates its namespace-local supervisor identity with `cpuOwnerIdentity`, then invokes the unchanged frozen host service runner. The hook, comparator, admission rules, worker count and fixture trees are unchanged. The host probe verified a three-CPU supervisor under the historical eighteen-CPU shared work slice. Every observed test-file service in the equivalence control retained its three-CPU quota.
+
+The full equivalence control reran the branch used by `after-18`: 390.8 s complete-gate time, 2.9 s outer admission, load 7.42/27.37/35.15, exit 0, zero expirations and zero NEW failures. Its prior paired observation took 414.4 s. Runtime, source and gate digests matched; all owned padding scopes were quiescent afterward. This control contributes no acceptance run. The adapter and raw evidence digests are in `engineLoadCampaign.managedRunnerContinuation`.
+
+At the previous 06:00 UTC checkpoint, the ledger contained 20/30 qualifying after-runs and 6/10 before-runs. Before-run 6 remains excluded. 2 refusal controls are recorded. That window checked the pause flag and stopped new dispatches at 06:00 UTC; its current run and owned cleanup could finish afterward. Only this campaign's recorded processes and scopes are stopped.
+
+| Refusal control | Complete gate (s) | Median load | Result |
+| --- | ---: | ---: | --- |
+| assertion | 402.1 | 27.68 | Named injected failure refused; zero unrelated NEW failures |
+| hang | 594.9 | 26.09 | Named injected failure refused; zero unrelated NEW failures |
+
+Both controls remove their temporary test and restore the frozen tracked tree. The hanging control records its initial timeout plus three independent head confirmations, each near 60 seconds. These intentional failures contribute no qualifying after-run.
+
+The isolated integration gate on source `61b10d71b898` completed with exit 0 in 340.8 s. It used a fresh frozen-lockfile install. The source digest, exact command and log digest are recorded in `managedRunnerContinuation`.
+
+The integration comparison retained two baseline failures: `scripts/merge-batch.test.ts` (the real main scanner publishes a healthy remainder with a stale branch hook) and `src/lib/pipelines/engine.controllerPass.test.ts` (a bounded reconciliation preserves another lane’s CPU ticket and FIFO age). Both failed on the fresh baseline too; the gate reported zero NEW failures.
+
+### Final quiet-window continuation
+
+The resumed window began at 21:10 UTC on 2026-10-21 after merging current main by merge commit. The six frozen input trees and gate digests were verified against the preserved ledger before dispatch. The adapter continues to translate process identities and runs the frozen service runner in the same eighteen-CPU shared work slice with three CPUs per file. Before-run 6 remains excluded.
+
+Current qualifying counts: 22/30 after and 7/10 before. After P90 is 476.4 s, with 0 expirations and 0 NEW failures. All attempted load conditions remain in the table. The dispatch cutoff for this window is 01:10 UTC on 2026-10-22; a seat stop message closes dispatch immediately and permits the current run and owned cleanup to finish.
+
+The separate integration pre-push on merged source `e3f85d8efbb4` completed with exit 0 in 583.5 s including its admission waits, using a fresh frozen-lockfile install. Commands, source and log digests, named checks and classifications are recorded in `engineLoadCampaign.quietWindowContinuation`.
+
+The recovered private adapter now preserves ancestor queue-wait ledgers across both environment boundaries. During `before-07`, 953.6 s of completed, recorded admission wait was restored to its two owned supervisors. Their execution allowances and all frozen hook deadlines stayed unchanged. The run finished with a complete refusal after its provider-reset file expired at 300 seconds.
+
+A separate, non-counting control reran the same frozen branch as `after-21`: 408.4 s against 402.8 s, median load 26.19, exit 0, zero expirations and zero NEW failures. Source, runtime and gate digests and all 65 head file invocations matched. It retained the three-CPU file quota and eighteen-CPU work slice; both ancestor ledgers received the same 243.7 s of actual queue-wait credit. All observed file services and owned padding scopes were quiescent. The control contributes no acceptance sample; its verification releases the held qualifying record for `before-07`.
+
+The quiet-window dispatches are closed. The remaining sample is 8 after-runs and 3 before-runs. The after sample has no expirations and no NEW failures; its P90 remains provisional until all 30 qualifying runs complete. The two refusal controls and the isolated integration gate are complete. All attempted load conditions, including outliers, remain in the record.
+
+While the campaign had no active acceptance run, 27 retained hold samples ranged from 18.10 to 52.98, with median 26.54. These observations explain the dispatch holds and contribute no acceptance run. The separate supervision-ledger control also contributes no acceptance run.
+
+### Second quiet-window continuation
+
+The window started at 01:55 UTC on 2026-10-22, with a 04:55 UTC cutoff for new hooks and an immediate dispatch stop on a seat message. Current main was merged by merge commit before verification; the paired campaign retains its frozen inputs, translated process identities, eighteen-CPU shared work slice and three-CPU file quota. The prior 22 after and 7 before qualifiers remain unchanged; before-run 6 remains excluded.
+
+Current sample: 29/30 after and 10/10 before. After P90: 476.4 s; 0 file expirations and 0 NEW failures. Every load outlier remains in the table.
+
+The isolated full integration gate on merged source `75369593ceb7` completed with exit 0 in 374.8 s including admission, after a fresh frozen-lockfile install. Its source, command and log digests and classifications are recorded in `engineLoadCampaign.secondQuietWindowContinuation`.
+
+Dispatch is closed. Remaining: 1 after and 0 before. The active run was allowed to finish with owned cleanup.
+
+The window completed 12 attempts: seven qualifying after-runs, three qualifying before-runs and two after load outliers. All 764 recorded test services and 95 owned padding scopes are quiescent. All 62 raw and published records reconcile. The last hook started at 04:48:14 UTC; after-run 30 was never submitted.
+
+Later upstream main `026855f85090` changed 56 files after the window-start merge. The read-only merge check found content conflicts in `src/lib/pipelines/engine.ports.test.ts` and `src/lib/pipelines/engine.recovery.test.ts`: upstream retired embedded-flow cases whose bodies this fix partitioned into sibling files. The next integration merge must carry those case changes into the split files and reverify the integrated source. The campaign keeps its frozen trees; the successful window-start integration remains the check of this checkpoint's product source.
+
+### Completed campaign and integration
+
+The final window started at 05:40 UTC on 2026-10-22, with a 06:25 UTC dispatch cutoff and an immediate stop on a seat message. Main was merged by merge commit. Upstream retired embedded-flow registrations were carried into their split locations; no extra cases were retired. All six paired campaign input trees, the frozen driver, the managed adapter and CPU quotas were preserved. Before-run 6 remains excluded.
+
+Final qualifying sample: 30/30 after and 10/10 before. After P90 is 472.8 s, against 1006.8 s before. The after sample has 0 per-file expirations, 0 NEW failures and 0 refusals. All outliers and the two successful refusal controls remain recorded.
+
+The isolated integration pre-push on merged source `132932cd96db` completed with exit 0 in 319.6 s including admission, following a fresh frozen-lockfile install. The gate retained its fresh baseline classification; the new-failure count was 0. Source, commands, classifications and log digests are recorded in `engineLoadCampaign.finalQuietWindowContinuation`.
+
+All 63 recorded test services and 5 padding scopes from this window are quiescent. All 63 raw and published records reconcile, and earlier evidence rows remain unchanged. The verified code digest matches the final product source. Dispatch is closed; other lanes' processes were untouched.
+
+### Workflow publication repair
+
+The publisher completed its checks and the remote refused the optional Windows workflow command changes because the publishing App lacks workflow permission. The repair restores `.github/workflows/platform-tests.yml` to the published main contents and defers those two CI command changes. The accepted gate implementation, test partitions, 30/10 campaign records and all prior commits are retained.
+
+A fresh frozen-lockfile install and the full isolated `bun scripts/local-gate.ts pre-push` on source `a40ccffbf035` passed in 326.2 s including admission. Privacy, types, lint, touched tests, Linux checks, audit and supply chain passed. The controllerPass failure reproduced on the fresh baseline; there were zero NEW failures. The managed supervisor is inactive. Source and log digests are recorded in `engineLoadCampaign.publicationRepair`. Publication is left to the controller.

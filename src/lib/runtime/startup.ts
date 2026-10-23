@@ -6,6 +6,7 @@ import { waitForStateLock } from "@/lib/state/lockWait";
 import { withViewerOperation } from "@/lib/viewerLoopMonitor";
 import { operatorDecisionFormsRequired } from "@/lib/orchestrator/operatorDecisionForms";
 import { learnedRulesForLaunchProfile, memoryStartIdentity, roleMemoryProfileForIdentity } from "@/lib/memory/roleLaunch";
+import { storedOperatorRoot } from "@/lib/memory/operatorMemory";
 import { codexNativeMemoryEnabled } from "@/lib/agent/codexSpawnPolicy";
 import fs from "node:fs";
 
@@ -16,6 +17,7 @@ import { turnStateFromRecords } from "@/lib/accounts/migration/turnState";
 import { launchProfileEngineReadOnly, type ViewerConversationId } from "@/lib/accounts/migration/contracts";
 import { agentRegistry, conversationIdsResolvingTo, resolveConversationAlias, structuredClaimIdentity, type AgentRegistry, type AgentRegistryEntry, type ProcessIdentity, type RegistryFile, type SpawnReceipt } from "@/lib/agent/registry";
 import { registryRowsMatching, registryConversationsForEntryKey } from "@/lib/agent/sqliteRegistryStore";
+import { readClaudePermissionMode } from "@/lib/agent/claudePermissionMode";
 import { effectiveClaudePermissionMode } from "@/lib/agent/cli";
 import { sessionKeyId, type SessionKey } from "@/lib/agent/sessionKey";
 import { activeOrchestratorSeats, type OrchestratorSeat } from "@/lib/orchestrator/seats";
@@ -1969,7 +1971,8 @@ export async function claudeStartupHostOptions(
         : owner.claudeProvider.model
       : entry.launchProfile?.model ?? undefined,
     effort: entry.launchProfile?.effort ?? undefined,
-    permissionMode: effectiveClaudePermissionMode(entry.launchProfile ?? {}),
+    permissionMode: effectiveClaudePermissionMode({ ...entry.launchProfile, permissionMode: entry.launchProfile?.permissionMode
+      ?? (entry.launchProfile?.readOnly ? "plan" : await readClaudePermissionMode(entry.artifactPath)) }),
   };
 }
 
@@ -2322,7 +2325,7 @@ async function adoptStructuredHostsPass(
         const current = startupSnapshot(registry).entries[sessionKeyId(entry.key)];
         if (!current || !shouldAdopt(current)) return null;
         const socketOwner = current.structuredHost?.process && verifiedCodexSocketOwner({ endpoint: current.structuredHost.endpoint, process: current.structuredHost.process })
-          ? { endpoint: current.structuredHost.endpoint, process: current.structuredHost.process } : undefined;
+          ? { endpoint: current.structuredHost.endpoint, process: current.structuredHost.process, signalDomain: current.structuredHost.signalDomain, signalBoundary: current.structuredHost.signalBoundary } : undefined;
         return (await registry.deliveryWriteOrBusy({ label: "registry.claimStructuredHost" }, registry.claimStructuredHost.bind(registry, entry.key, owner, { allowUnhosted: true, reconnectCodex: socketOwner })));
       }, "claiming startup host");
     const codexCandidateCount = adoptionCandidates.filter((entry) => entry.key.engine === "codex").length;
@@ -2379,6 +2382,7 @@ async function adoptStructuredHostsPass(
           memoryRole,
           memoryProject,
           Boolean(seatMembership && seatMembership.containerId === memoryProject),
+          storedOperatorRoot(conversation, conversation ? startupSnapshot(registry).memberships[conversation.id] : undefined),
         ) ?? undefined;
         const owner = resolveCodexOwner(entry);
         // The surviving process retains its original MCP capability and launch
@@ -2452,6 +2456,7 @@ async function adoptStructuredHostsPass(
           memoryRole,
           memoryProject,
           Boolean(seatMembership && seatMembership.containerId === memoryProject),
+          storedOperatorRoot(conversation, conversation ? startupSnapshot(registry).memberships[conversation.id] : undefined),
         ) ?? undefined;
         const options = {
           ...await claudeStartupHostOptions(

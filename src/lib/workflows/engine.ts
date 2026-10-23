@@ -1,3 +1,4 @@
+import { assertFlowExecution } from "@/lib/flows/retirement";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -596,6 +597,7 @@ interface TickResult {
 }
 
 export async function tickWorkflows(entries: FileEntry[], ports: WorkflowPorts = defaultPorts()): Promise<TickResult> {
+  assertFlowExecution();
   if (store.__llvWorkflowTick) {
     ports.cpuAdmissionReconcile?.();
     return { workflows: loadWorkflows(), changed: false };
@@ -688,6 +690,7 @@ export async function patchWorkflow(
   ports: WorkflowPorts = defaultPorts(),
   actor: PauseResumeActor | null = OPERATOR_PAUSE_RESUME_ACTOR,
 ): Promise<{ workflow?: Workflow; error?: string; status?: number }> {
+  assertFlowExecution();
   const workflows = loadWorkflows();
   const wf = workflows.find((item) => item.id === id);
   if (!wf) return { error: "workflow not found", status: 404 };
@@ -788,6 +791,7 @@ export async function createWorkflowFromRequest(
   req: CreateWorkflowRequest,
   ports: WorkflowPorts = defaultPorts(),
 ): Promise<{ workflow?: Workflow; error?: string; status?: number }> {
+  assertFlowExecution();
   const task = typeof req.task === "string" ? req.task.trim() : "";
   if (!task) return { error: "task brief is required", status: 400 };
   const repoDir = typeof req.repoDir === "string" ? req.repoDir.trim() : "";

@@ -44,6 +44,7 @@ const NOW = new Date("2026-09-25T18:45:00Z");
 const deploymentId = (head: string) => [head, "0000", "4000", "8000", "0".repeat(12)].join("-");
 
 let transport: InstanceType<typeof FakeBotTransport>;
+let sendingTransport: InstanceType<typeof FakeBotTransport> | null = null;
 let wireTransport: ReturnType<typeof createBotApiTransport> | null = null;
 let wireControl = false;
 let bot: InstanceType<typeof TelegramBotService>;
@@ -53,7 +54,7 @@ let tasks: BoardTask[] = [];
 function newBot() {
   return new TelegramBotService({
     ...productionTelegramBotDependencies(),
-    transportFor: () => wireTransport ?? transport,
+    transportFor: token => token.split(":")[0] === "5151515" && sendingTransport ? sendingTransport : wireTransport ?? transport,
     now: () => NOW,
     sleep: async () => {},
     conversationTitle: () => null,
@@ -144,6 +145,7 @@ beforeEach(async () => {
   locale = "en";
   tasks = [];
   transport = new FakeBotTransport();
+  sendingTransport = null;
   bot = newBot();
 });
 afterEach(async () => {
@@ -396,6 +398,20 @@ test("a rate-limited post is re-sent on replay byte for byte, under a new reques
   expect(sends).toHaveLength(2);
   expect(sends[1]!.params.text).toBe(stored);
   expect(readBridgeReportLog().reports[0]!.telegram).toMatchObject({ state: "sent", attempts: 2, html: stored });
+});
+
+test("clone rate-limit wait reaches the bridge caller and stored failed copy", async () => {
+  await connectTeamChat();
+  setReportTelegram(PROJECT, { chat: "team-reports", name: "Delegatus" }, "operator");
+  bot.send = async () => { throw new TelegramBotError("rate_limited", "Celestia is rate-limiting sends; retry after 7 s", { retryAfterSeconds: 7 }); };
+  const first = await file({ key: "clone-rate-limit", summary: "One lane running." });
+  expect(first.destinations?.telegram).toMatchObject({ state: "failed", code: "rate_limited", retryable: true,
+    message: "Celestia is rate-limiting sends; retry after 7 s" });
+  expect(readBridgeReportLog().reports[0]!.telegram).toMatchObject({ state: "failed", code: "rate_limited",
+    message: "Celestia is rate-limiting sends; retry after 7 s" });
+  const replay = await file({ key: "clone-rate-limit", summary: "Changed replay" });
+  expect(replay.destinations?.telegram?.message).toBe("Celestia is rate-limiting sends; retry after 7 s");
+  expect(transport.callsOf("sendMessage")).toHaveLength(0);
 });
 
 test("a failed post is not re-sent on replay once the project chose the log only", async () => {
@@ -833,4 +849,23 @@ test("MCP callers cannot attach server-derived card links to a report", async ()
   const answer = await file({ key: "server-derived-cards", summary: "Checked the current work.", cards: ["foreign-card"] });
   expect(answer.ok).toBe(true);
   expect(readBridgeReportLog().reports.at(-1)?.cards).toBeUndefined();
+});
+
+test("a bridge report retains every bot refusal through HTTP, MCP, storage and replay", async () => {
+  await withWireBot(async (sends, reject) => {
+    sendingTransport = new FakeBotTransport();
+    sendingTransport.handlers.getMe = () => ok({id:5151515,is_bot:true,first_name:"Second bot",username:"second_fixture_bot"});
+    sendingTransport.handlers.getChatMember = () => ok({status:"administrator"});
+    await bot.addBot(fakeBotToken("5151515"));
+    reject(403,"bot was kicked from the supergroup chat");
+    sendingTransport.script("sendMessage",refused(400,"not enough rights to send text messages"));
+    const answer = await file({key:"multi-bot-refusals",summary:"Two reports remain available in Delegatus."});
+    expect(answer.destinations?.telegram).toMatchObject({state:"failed",code:"forbidden",refusals:[{bot:"report_test_bot",code:"forbidden"},{bot:"second_fixture_bot",code:"not_enough_rights"}]});
+    const saved = readBridgeReportLog().reports.at(-1)!.telegram;
+    expect(saved?.refusals).toHaveLength(2);
+    expect(saved?.state).toBe("failed");
+    await file({key:"multi-bot-refusals",summary:"Unchanged logical report."});
+    expect(sends).toHaveLength(1);
+    expect(sendingTransport.callsOf("sendMessage")).toHaveLength(1);
+  });
 });

@@ -1,4 +1,6 @@
 import { shortId } from "@/lib/shortIds";
+import { publicationFailurePhase } from "./publicationHistory";
+export { publicationFailurePhase } from "./publicationHistory";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -21,7 +23,10 @@ import { deliveryJournal, deliveryOwnerError, findPipelineRecord, pipelineArtifa
 import { publicationDeadlineOnly } from "./publication";
 import type { Pipeline, PipelinePublicationFailure, PipelinePublicationResult } from "./types";
 import { pathIsDeclaredOutput } from "./stageAccess";
+import { recordWorktreeProvenance } from "./worktreeProvenance";
 import { CpuContainmentUnavailable, wrapWorkCommand } from "@/lib/runtime/cpuPlacement";
+import { cpuPriorityEnv } from "@/lib/runtime/cpuPriority";
+import { instanceCpuPrioritySource } from "@/lib/runtime/cpuAdmissionScope";
 import { isCpuPressureDetail, machineCpuPressureGate, machineCpuPressurePollMs, waitForCpuPressure } from "@/lib/runtime/cpuPressure";
 import { lessonPublicationEnv, RoleMemoryRefusal } from "@/lib/memory/roleStore";
 import { CONTROLLER_ARTIFACT_GIT_PATHS, CONTROLLER_ARTIFACT_PATHSPECS, protectExistingControllerArtifacts } from "./controllerArtifacts";
@@ -200,6 +205,7 @@ export async function provisionPipelineWorktree(pipeline: Pipeline, exec: ExecPo
   const base = (await exec("git", ["rev-parse", "HEAD"], pipeline.worktreeDir));
   if (base.code !== 0 || !base.stdout.trim()) return failure("resolving the pipeline base ref", base);
   if (base.stdout.trim() !== pipeline.baseRef) return { ok: false, error: "the pipeline worktree does not match its persisted base" };
+  recordWorktreeProvenance(pipeline.worktreeDir, { creator: "pipeline", id: pipeline.id });
   return { ok: true, sha: pipeline.baseRef, baseBranch: pipeline.baseBranch };
 }
 
@@ -425,6 +431,9 @@ async function provisionPipelineCheckout(pipeline: Pipeline, exec: ProvisionExec
     const unlock = await exec("git", ["worktree", "unlock", pipeline.worktreeDir], pipeline.repoDir, signal);
     if (unlock.code !== 0) return failure("unlocking the finished pipeline checkout", unlock);
   }
+  // The worktree sweep removes only checkouts with a record of who made them.
+  // The pipeline's own record names this path too, so a failed write keeps it sweepable.
+  recordWorktreeProvenance(pipeline.worktreeDir, { creator: "pipeline", id: pipeline.id });
   return { ok: true, sha: base.stdout.trim(), baseBranch: pipeline.baseBranch };
 }
 
@@ -798,7 +807,7 @@ async function commitStageTree(pipeline: Pipeline, parent: string, tree: string,
   const marker = `Delegatus-Stage-Settlement: ${crypto.randomUUID()}`;
   await beforeCommit?.();
   const commit = await exec("git", ["commit", ...[...messages, marker].flatMap(message => ["-m", message])], cwd,
-    pipelineLiteralGitEnv(controllerCommitIdentityEnv()), { timeoutMs: STAGE_COMMIT_TIMEOUT_MS });
+    pipelineLiteralGitEnv({ ...controllerCommitIdentityEnv(), ...cpuPriorityEnv(instanceCpuPrioritySource(pipeline.taskIds)) }), { timeoutMs: STAGE_COMMIT_TIMEOUT_MS });
   if (commit.code !== 0) {
     const current = await exec("git", ["rev-parse", "HEAD"], cwd);
     if (current.code === 0 && current.stdout.trim() !== parent) return changed();
@@ -1556,21 +1565,6 @@ function publicationFailureDetail(failure: PipelinePublicationFailure): string {
   return redactPublicationText(`${failure.step}: ${status} (${failure.durationMs} ms)\n${failure.outputTail || "no output"}`);
 }
 
-/** The hook's verdict for one member of a group it runs at once (a native
-    Codex version), `pre-push: <check>: failed (<code>) after <n> s`. */
-const HOOK_MEMBER_FAILED = /^pre-push: ([^;:]{1,60}): failed \(/;
-/** The last phase the hook announced with its own `pre-push: <phase>` marker,
-    or the group member it last named as failed after that. A member that
-    passed is never a phase. */
-export function publicationFailurePhase(failure: PipelinePublicationFailure): string | null {
-  for (const line of failure.outputTail.split("\n").map((line) => line.trim()).reverse()) {
-    const member = HOOK_MEMBER_FAILED.exec(line);
-    if (member) return member[1]!;
-    if (/^pre-push: [^;:]{1,60}$/.test(line)) return line.slice("pre-push: ".length);
-  }
-  return null;
-}
-
 /** What stopped a publication, in one line a person can act on. The hook's
     phase markers name the phase; `(fail)` lines name tests. */
 export function publicationFailureCause(failure: PipelinePublicationFailure): string {
@@ -1581,9 +1575,18 @@ export function publicationFailureCause(failure: PipelinePublicationFailure): st
   const failed = [...new Set(lines.filter((line) => line.startsWith("(fail) ") || (line.startsWith("NEW ") && !line.includes("<runner error>")))
     .map((line) => line.slice(line.startsWith("NEW ") ? 4 : 7).replace(/ \[[\d.]+m?s\]$/, "")))];
   const tests = failed.length ? `, ${failed.length} failing test${failed.length === 1 ? "" : "s"}, first: ${failed[0]!.slice(0, 120)}` : "";
-  if (phase) return `the repository's pre-push hook failed in its "${phase}" phase (${status}${tests})`;
+  const runner = runnerNoVerdict(failure.outputTail);
+  const lost = runner ? `; the gate runner returned no verdict: ${runner}` : "";
+  if (phase) return `the repository's pre-push hook failed in its "${phase}" phase (${status}${tests}${lost})`;
+  if (runner) return `git push was refused (${status}${tests}${lost})`;
   const last = lines.filter(Boolean).at(-1);
   return `git push was refused (${status}${tests})${last ? `: ${last.slice(0, 160)}` : ""}`;
+}
+
+/** The remote gate runner's line for a started run that lost its verdict
+    (scripts/gate-runner/client.ts); its retries run on this machine. */
+function runnerNoVerdict(output: string): string | null {
+  return /^gate-runner: no verdict: ([^\n]{1,160})/m.exec(output)?.[1] ?? null;
 }
 
 /** The hook's line for a decisive check its push budget stopped before a
@@ -1601,6 +1604,9 @@ export function hookBudgetStop(output: string): { ms: number; check: string } | 
     the Viewer itself died with the push. */
 export function publicationInterruptionCause(failure?: PipelinePublicationFailure): string {
   const phase = failure ? publicationFailurePhase(failure) : null;
+  const runner = failure ? runnerNoVerdict(failure.outputTail) : null;
+  // The hook's last phase marker is its admission line when the checks ran remotely.
+  if (runner) return `the gate runner returned no verdict for the hook's checks (${runner}), and the push did not reach the remote`;
   if (failure?.hookBudgetMs) {
     const budget = `the pre-push hook's ${Math.round(failure.hookBudgetMs / 60_000)}-minute budget ran out`;
     // The check the hook named is exact; the last phase marker is a group at best.
@@ -1899,7 +1905,7 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       let shown: Promise<void> = Promise.resolve();
       let replaced: { detail: string | null } | null = null;
       const admitted = await waitForCpuPressure(machineCpuPressureGate(), { subject: PUBLICATION_INSTALL_SUBJECT, signal: abort.signal,
-        pollMs: machineCpuPressurePollMs(),
+        pollMs: machineCpuPressurePollMs(), priority: instanceCpuPrioritySource(pipeline.taskIds),
         onReason: (reason) => {
           replaced ??= { detail: findPipelineRecord(pipeline.id)?.stateDetail ?? null };
           shown = shown.then(() => showInstallHold(reason, null));
@@ -1937,14 +1943,14 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
       if (preparingDependencies && !await waitForPublicationInstall()) return { code: null, stdout: "", stderr: "publication superseded" };
       if (command === "git" && args[0] === "push") writeStarted = true;
       const started = performance.now();
-      const executed = await exec(launch.command, launch.args, cwd, pipelineLiteralGitEnv(env), { ...options, signal: abort.signal, inheritFd: descriptor });
+      const executed = await exec(launch.command, launch.args, cwd, pipelineLiteralGitEnv({ ...env, ...cpuPriorityEnv(instanceCpuPrioritySource(pipeline.taskIds)) }), { ...options, signal: abort.signal, inheritFd: descriptor });
       if (executed.code !== 0 && ((command === "git" && args[0] === "push") || preparingDependencies)) {
         // Redact the whole output before taking its tail; clipping first can
         // remove the prefix that identifies a secret to the shared redactor.
         const output = redactPublicationOutput(executed.stdout, executed.stderr);
         const tail = output.slice(-4000);
         const lines = output.split("\n");
-        const checks = [...new Set(lines.filter((line) => line.startsWith("pre-push: ")))].slice(-16);
+        const checks = [...new Set(lines.filter((line) => line.startsWith("pre-push: ") || line.startsWith("gate-runner: no verdict:")))].slice(-16);
         const tests = [...new Set(lines.filter((line) => /^(?:\(fail\) |NEW (?!.*<runner error>))/.test(line)))].slice(0, 8);
         const phases = [...checks, ...tests].filter((line) => !tail.includes(line)).map((line) => line.slice(0, 160)).join("\n");
         // Long diagnostics must not erase the hook phases or failing test names.
@@ -2043,15 +2049,26 @@ export async function publishPipelineBranch(pipeline: Pipeline, exec: ExecPort, 
 /** Explicit recovery reads the remote only after proving the previous executor
     and all its fenced Git children can no longer write. No age-based election. */
 export async function reconcilePipelinePublication(id: string, expectedEpoch: number, exec: ExecPort, conversationId: string | null): Promise<string | null> {
+  return withViewerOperation("pipelines.publication-recovery", () => reconcilePublication(id, expectedEpoch, exec, conversationId));
+}
+
+async function reconcilePublication(id: string, expectedEpoch: number, exec: ExecPort, conversationId: string | null): Promise<string | null> {
   const pipeline = findPipelineRecord(id);
   const operation = pipeline?.delivery?.operation;
   if (!pipeline?.delivery || pipeline.delivery.epoch !== expectedEpoch) return "publication owner or epoch changed";
   if (operation?.state !== "running") return null;
   const executor = operation.executor;
   if (!executor?.lockIdentity) return "publisher quiescence is unknown; no executor lock identity was recorded";
+  // The start token identifies the Viewer generation, including PID reuse.
+  // Its children can outlive it, so only the inherited kernel fence below
+  // proves quiescence. Conversely, a free fence permits settlement even when
+  // a live Viewer failed to persist its finished marker.
+  const generationRunning = !executor.finished && executor.identity
+    && procBackend.processIdentity(executor.pid) === executor.identity
+    && !(procBackend.name === "linux" && procBackend.processExited(executor.pid));
   // The parent takes this lock before recording the operation and holds it
-  // through its final Git command. A free lock therefore proves quiescence
-  // even when a live Viewer could not persist its finished marker.
+  // through its final Git command. A departed generation's children can still
+  // inherit it, so its process identity alone never authorizes replacement.
   const reconciled = await withPublicationFileLock(executor.lock, async () => {
     const remote = (await readRemotePipelineBranch(pipeline, exec, "reconciling the interrupted publisher"));
     if (!remote.ok) return redactBounded(redactPublicationText(remote.error), 4500);
@@ -2059,7 +2076,11 @@ export async function reconcilePipelinePublication(id: string, expectedEpoch: nu
       const current = tx.get(id);
       if (!current?.delivery || current.delivery.epoch !== expectedEpoch || current.delivery.operation?.id !== operation.id
         || current.delivery.operation.state !== "running" || current.delivery.operation.epoch !== expectedEpoch
-        || current.delivery.operation.sha !== operation.sha) return "publication changed while reconciling";
+        || current.delivery.operation.sha !== operation.sha
+        || current.delivery.operation.executor?.pid !== executor.pid
+        || current.delivery.operation.executor.identity !== executor.identity
+        || current.delivery.operation.executor.lock !== executor.lock
+        || current.delivery.operation.executor.lockIdentity !== executor.lockIdentity) return "publication changed while reconciling";
       // The publisher can persist its outcome between the initial record read
       // and quiescence. Use the fenced transaction's latest durable evidence.
       const retained = current.delivery.operation.executor?.result;
@@ -2075,10 +2096,14 @@ export async function reconcilePipelinePublication(id: string, expectedEpoch: nu
           : { ok: false, error: "interrupted publication did not leave its accepted head on the remote" };
       if (!result.ok && (!retained || (retained.ok && retained.uncertain))) result.outcome = "not-landed";
       const attempt = current.runs.find((run) => run.stageId === current.cursor?.stageId)?.attempts.at(-1);
+      const publicationPark = current.stateDetail?.startsWith("publishing the passed stage:") === true
+        || current.stateDetail?.startsWith("the worktree moved ") === true
+        || current.stateDetail?.startsWith("the accepted head cannot be verified before completion:") === true
+        || current.stateDetail === "interrupted publication did not leave its accepted head on the remote";
       // Older engines parked the accepted attempt itself. Preserve its pass
       // before replacing the legacy display prefix, and upgrade the operation
       // so subsequent recovery uses durable identity rather than diagnostics.
-      if (current.state === "needs_decision" && current.cursor?.state === "committing"
+      if (current.state === "needs_decision" && publicationPark && current.cursor?.state === "committing"
         && current.lastPassedCommit === operation.sha && current.delivery.ownerId === id
         && !deliveryOwnerError(current, tx.pipelineLookup({ ...current.delivery.target, active: true }))
         && (current.delivery.operation.passedStage === true || (current.delivery.operation.passedStage === undefined
@@ -2089,14 +2114,16 @@ export async function reconcilePipelinePublication(id: string, expectedEpoch: nu
       }
       current.delivery.operation = { ...current.delivery.operation, state: "settled", result };
       if (result.ok) current.publishedCommit = operation.sha;
-      else if ((current.state === "needs_decision" || current.state === "running") && current.cursor?.state === "committing"
+      else if ((current.state === "running" || (current.state === "needs_decision" && publicationPark)) && current.cursor?.state === "committing"
         && current.lastPassedCommit === operation.sha) current.stateDetail = result.error;
       deliveryJournal(current, "recovery", "publisher quiescent; remote reconciled", conversationId);
       tx.put(current);
       return null;
     });
   }, executor.lockIdentity);
-  return reconciled.locked ? reconciled.value : "publisher child is still in flight or its lock could not be checked";
+  return reconciled.locked ? reconciled.value : generationRunning
+    ? "the recorded publisher generation is still in flight"
+    : "publisher child is still in flight or its lock could not be checked";
 }
 
 async function executePipelinePublication(pipeline: Pipeline, exec: ExecPort, request: PipelinePublishRequest): Promise<PipelinePublishResult> {

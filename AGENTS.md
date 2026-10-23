@@ -97,7 +97,9 @@ Touched tests run the branch first, up to eight explicit head files at once, eac
 with fresh state, HOME and TMPDIR under the OS temp root. Only files failing on
 the branch are sampled on the merge base with `origin/main`, filtered to the
 failing assertions; runner errors require the full file. A green branch needs
-no baseline checkout. No baseline results are cached. Only new failures block;
+no baseline checkout. Only complete baseline assertion samples with two matching
+fresh observations are cached for 24 hours; diagnostics and confirmation rounds
+always run fresh. Only new failures block;
 output retains pre-existing failures, describe ancestry, test names and
 between-tests errors. An incomplete baseline for a red branch blocks unless
 both sides are broken the same way, which lists as pre-existing.
@@ -132,6 +134,25 @@ from the producer that wrote them; its park keeps the cause on the first line.
 `LLV_SKIP_HOOKS=1` is the escape hatch for a false positive. Pre-push warns if
 the branch is behind `origin/main`. Missing local media tools defer named media
 files to the required CI OCR gate. See CONTRIBUTING.md for slot settings.
+
+## Heavy commands may run on the gate runner
+
+When `~/.config/delegatus/gate-runner.json` exists under the account's passwd
+home (`{"ssh": "<alias>"}`), a top-level `scripts/gate-slot.sh` call from a git
+work tree or a review export with its `export.json` runs on that SSH host
+instead of here (`docs/design/remote-gate-runner.md`, `scripts/gate-runner/`):
+the hook's admitted checks, `bun test`, `bunx tsc`, `local-gate-tests.ts`,
+`eslint-changes.ts` and the three browser test drivers. Privacy, fetch, push,
+pre-commit, builds, the board geometry capture and everything else stay here. The client ships the exact
+working tree as a git bundle after the tree's own privacy scan, and the runner
+starts nothing unless it reproduces the same tree id. Its lines start with
+`gate-runner:`. `running here: <reason>` means the command ran on this machine
+as before; a run that started there and lost its end record exits 75 with
+`gate-runner: no verdict: …`, which the publication retries, and gates then
+stay here for 30 minutes. `LLV_GATE_RUNNER=off` keeps one command here, and a
+campaign that measures this machine's gates must set it; `isolatedEnvironment`
+sets it for every isolated check. Decisions are logged to
+`~/.cache/delegatus-gate/runner-decisions.log` under the passwd home.
 
 # Two ways to do real damage here (both happened, 2026-07-24)
 
@@ -269,6 +290,21 @@ Three consequences worth keeping:
 
 The runtime host is this repository's critical runtime: changes to it, to
 deploys and to the Bun pin are high risk and take three review rounds.
+
+# macOS runs the SQLite Apple ships: first-party SQL compiles on 3.39
+
+On macOS bun:sqlite loads the system SQLite (3.39.5 on macOS 13, the oldest
+macOS Bun supports; 3.43.2 on 14 and 15). On Linux and Windows Bun links its
+own newer SQLite, so SQL that needs 3.42+ (`subsec`), 3.44+ (aggregate
+`ORDER BY`, `concat`) or 3.45+ (`jsonb_*`) passes every local check and fails
+only on a user's Mac. Releases 1.13.0 to 1.15.0 shipped such triggers and
+stopped macOS installs from starting. `src/lib/state/minimumSqlite.test.ts`
+builds 3.39.4 from the official amalgamation and runs the state store on it.
+`--preload ./src/lib/state/minimumSqlite.preload.ts` runs any other suite on
+it. The `Minimum macOS SQLite` job in `platform-tests.yml` does both. A
+schema statement the running SQLite cannot compile is never treated as a
+corrupt database (`src/lib/state/schemaCompatibility.ts`,
+`docs/design/state-sqlite-migration.md` §7.4).
 
 # Host deploy command and team authentication
 

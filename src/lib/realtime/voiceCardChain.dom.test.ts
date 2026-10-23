@@ -29,12 +29,13 @@ import { codexRealtimeClient } from "./codexRealtimeClient";
  * - the REAL `conversation_messages` binding, resolving a card it was given no
  *   argument for, through the production translation of the endpoint's answer.
  *
- * Only two things are elided. The HTTP hop is a direct call (covered over a real
+ * The HTTP hop is a direct call (covered over a real
  * socket in `voiceUtteranceWiring.test.ts`), and the native metadata is supplied
  * rather than produced by a running Codex — the parser that reads it off a real
  * request envelope is covered in `nativeWorkMetadata.test.ts`, and what an
  * actual 0.154.0 puts there is recorded in
- * `docs/design/native-voice-work-identity.md`.
+ * `docs/design/native-voice-work-identity.md`. Activity recording is omitted:
+ * its cold registry/statistics I/O is independent of voice-card attribution.
  */
 
 const dom = new Window();
@@ -134,10 +135,13 @@ async function control(body: Record<string, unknown>) {
     : action === "utteranceContext"
       ? { caller: { kind: "conversation" as const, conversationId: CALLER }, operator: false }
       : { caller: { kind: "session" as const, realtimeSessionId: String(body.realtimeSessionId ?? "") }, operator: false };
-  return executeRealtimeControl({ conversationId: CALLER, ...body }, () => voiceHost(), authority);
+  return executeRealtimeControl({ conversationId: CALLER, ...body }, () => voiceHost(), authority, {
+    recordOperatorRequest: () => null,
+  });
 }
 
 let published: Record<string, unknown>[] = [];
+const pendingRequests = new Set<Promise<unknown>>();
 
 beforeEach(() => {
   resetVoiceViewBindings();
@@ -156,15 +160,17 @@ beforeEach(() => {
     transcripts.set(card, file);
   }
   dom.localStorage.clear();
-  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+  globalThis.fetch = ((_url: unknown, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     published.push(body);
-    const result = await control(body);
-    return {
+    const request = control(body).then((result) => ({
       ok: result.status < 400,
       status: result.status,
       json: async () => result.body,
-    } as unknown as Response;
+    } as unknown as Response));
+    pendingRequests.add(request);
+    void request.then(() => pendingRequests.delete(request), () => pendingRequests.delete(request));
+    return request;
   }) as typeof fetch;
   viewBus.reportIdentity(DESK);
   viewBus.reportCards([...transcripts].map(([conversationId, file]) => ({
@@ -172,7 +178,9 @@ beforeEach(() => {
   })));
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await codexRealtimeClient(CALLER).stop();
+  await settle();
   resetVoiceViewBindings();
   viewBus.reportIdentity(null);
   viewBus.reportCards([]);
@@ -195,10 +203,13 @@ async function liveCall(): Promise<StubPeerConnection> {
   return peer;
 }
 
-/** Every publication on this leg is fire-and-forget, so the assertions have to
-    let the microtasks it queued run before they look. */
+/** Drain the actual publications and their response/retry continuations before
+    asserting, including requests that yield to I/O rather than microtasks. */
 async function settle(): Promise<void> {
-  for (let index = 0; index < 12; index += 1) await Promise.resolve();
+  do {
+    await Promise.all([...pendingRequests]);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  } while (pendingRequests.size);
 }
 
 /** The operator finishes speaking: this is where the browser pairs the spoken

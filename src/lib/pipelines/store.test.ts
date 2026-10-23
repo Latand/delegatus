@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { isEffectiveRole, archiveSettledPipelines, buildPipeline, checkpointPipelineRollbackMirrorsForDemotion, findPipelineRecord, loadPipelinesForStartup, loadPipelinesForRetirement, pipelineGraphError, loadArchivedPipelines, loadArchivedPipelinesForOwnership, archivedPipelinesRevision, loadPipelines, PIPELINES_SCHEMA_VERSION, savePipelines, withPipelineMutation, withPipelineStartupAdmission } from "./store";
+import { isEffectiveRole, archiveSettledPipelines, buildPipeline, checkpointPipelineRollbackMirrorsForDemotion, findPipelineRecord, loadPipelinesForStartup, loadPipelinesForRetirement, pipelineGraphError, loadArchivedPipelines, loadArchivedPipelinesForOwnership, archivedPipelinesRevision, loadPipelines, PIPELINES_SCHEMA_VERSION, savePipelines, withPipelineMutation, withPipelineStartupAdmission, pipelineTaskBindingSource } from "./store";
 import type { Pipeline, PipelineStage } from "./types";
 import { createPipelineWithDelivery, deliveryOwnerError, pipelineDeliveryLookup, takeoverPipelineDelivery, withDeliveryMutation } from "./store";
 import { stageVerdictFrom } from "./verdict";
@@ -20,6 +20,18 @@ test("a one-stage merger pipeline accepts its role and persists the effective re
     srcPath: null, srcConversationId: null, now: "2026-10-02T00:00:00.000Z" });
   expect(pipeline.stages[0]!.effectiveRole).toEqual(effectiveRole);
 });
+
+test("pipeline task binding feed reports bounded persisted membership changes", async () => isolatedDelivery(() => {
+  const pipeline=buildPipeline({id:"binding-feed",task:"Binding feed",project:"fixture",repoDir:"/repo",stages:[],srcPath:null,srcConversationId:null,now:"2026-10-01T00:00:00.000Z",state:"draft"});
+  pipeline.taskIds=["task-a"];
+  savePipelines([pipeline]);
+  const source=pipelineTaskBindingSource(),revision=source.revision();
+  pipeline.taskIds=["task-b"];
+  savePipelines([pipeline]);
+  const page=source.changesAfter(revision,"",10);
+  expect(page.entries).toHaveLength(1);
+  expect(source.parse(page.entries[0]!.valueJson!).taskIds).toEqual(["task-b"]);
+}));
 
 const deliveryTarget = { repository: "repo-delivery-fixture", remote: "", branch: "refs/heads/review-target", pr: 637, rejectedHead: "a".repeat(40) };
 function deliveryFixture(id: string): Pipeline {
@@ -216,6 +228,39 @@ test("a competing lane's explicit takeover fences the parked owner", async () =>
   expect(old).toMatchObject({ state: "needs_decision", delivery: { active: false, publish: "disabled", epoch: 1 } });
   expect(deliveryOwnerError(old, pipelineDeliveryLookup({ ...deliveryTarget, active: true }))).toContain(comparison.id);
   expect((await takeoverPipelineDelivery(owner.id, owner.id, 1, "stale retry", null)).status).toBe(409);
+}));
+
+test("takeover retains per-head publication recovery in a new process", async () => isolatedDelivery(async root => {
+  const owner = await createPipelineWithDelivery(deliveryFixture("history-owner"), deliveryTarget);
+  const sha = "a".repeat(40);
+  owner.publicationRecovery = { [sha]: { sha, failures: 2, totalAttempts: 2, history: [{ operationId: "deadline-operation",
+    epoch: 1, at: "2026-10-16T10:00:00.000Z", cause: "infrastructure-deadline", detail: "check execution deadline",
+    retryAt: "2026-10-16T10:05:00.000Z" }] } };
+  savePipelines([owner]);
+  const comparison = await createPipelineWithDelivery(deliveryFixture("history-successor"), deliveryTarget);
+  const taken = await takeoverPipelineDelivery(comparison.id, owner.id, 1, "continue publication", null);
+  expect(taken.pipeline?.publicationRecovery).toEqual(owner.publicationRecovery);
+  const { realExec } = await import("@/lib/workflows/provision");
+  const script = `const { findPipelineRecord } = await import(${JSON.stringify(path.join(import.meta.dir, "store.ts"))});`;
+  const result = await realExec(process.execPath, ["-e", script
+    + `console.log(JSON.stringify(findPipelineRecord(${JSON.stringify(comparison.id)})?.publicationRecovery));`], process.cwd(),
+  { ...process.env, LLV_STATE_DIR: root, LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" }, { timeoutMs: 30_000 });
+  expect(result.code, result.stderr).toBe(0);
+  expect(JSON.parse(result.stdout)).toEqual(owner.publicationRecovery);
+}));
+
+test("takeover records a settled failure before the old controller observes it", async () => isolatedDelivery(async () => {
+  const owner = await createPipelineWithDelivery(deliveryFixture("unobserved-owner"), deliveryTarget);
+  const sha = "a".repeat(40);
+  owner.delivery!.operation = { id: "unobserved-deadline", sha, epoch: 1, state: "settled", result: { ok: false,
+    error: "a check reached its execution deadline", failure: { step: "publishing the pipeline branch", code: 124,
+      signal: null, durationMs: 1, outputTail: "owned runner: deadline expired", retryableDeadline: true } } };
+  savePipelines([owner]);
+  const comparison = await createPipelineWithDelivery(deliveryFixture("unobserved-successor"), deliveryTarget);
+  const taken = await takeoverPipelineDelivery(comparison.id, owner.id, 1, "continue publication", null);
+  expect(taken.pipeline?.publicationRecovery?.[sha]).toMatchObject({ failures: 1, totalAttempts: 1,
+    history: [{ operationId: "unobserved-deadline", cause: "infrastructure-deadline", retryAt: expect.any(String) }] });
+  expect(findPipelineRecord(owner.id)!.publicationRecovery).toEqual(taken.pipeline?.publicationRecovery);
 }));
 
 test("terminal release retains receipts through archive and takeover fences epochs and in-flight writes", async () => isolatedDelivery(async () => {
@@ -1098,6 +1143,21 @@ test("suspension custody round-trips independently and rejects malformed stop ev
     { ...suspension, requestedAt: null }, { ...suspension, operatorStoppedAt: 123 },
     { ...suspension, stopRevision: -1 }, { ...suspension, stopRevision: "1" }]) {
     lane.runs[0]!.attempts[0]!.suspension = bad as never;
+    expect(() => savePipelines([lane])).toThrow("malformed pipeline record");
+  }
+}));
+
+test("account holds a relaunched attempt keeps round-trip independently and reject malformed entries (#3158)", async () => isolatedDelivery(() => {
+  const lane = providerStoreFixture();
+  const accountHolds = [{ accountId: "account-b", resetsAt: 1_792_000_000, observedAt: "2026-10-15T00:00:00Z" },
+    { accountId: "account-c", resetsAt: null, observedAt: null }];
+  lane.runs[0]!.attempts[0]!.accountHolds = accountHolds;
+  savePipelines([lane]);
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.accountHolds).toEqual(accountHolds);
+  loadPipelines()[0]!.runs[0]!.attempts[0]!.accountHolds![0]!.resetsAt = 1;
+  expect(loadPipelines()[0]!.runs[0]!.attempts[0]!.accountHolds![0]!.resetsAt).toBe(1_792_000_000);
+  for (const bad of [{}, [{}], [{ ...accountHolds[0], accountId: 7 }], [{ ...accountHolds[0], resetsAt: "soon" }]]) {
+    lane.runs[0]!.attempts[0]!.accountHolds = bad as never;
     expect(() => savePipelines([lane])).toThrow("malformed pipeline record");
   }
 }));

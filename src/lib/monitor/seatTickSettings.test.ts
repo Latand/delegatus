@@ -57,6 +57,61 @@ const settingsFile = () => {
   return path.join(directory, "seat-tick-settings.json");
 };
 
+test("Turbo persists its original tier and finite credit approval; expiry clears approval and off preserves restoration work", () => {
+  const actor: SeatTickSettingsActor = { kind: "gateway", conversationId: null, project: null, seatEpoch: null };
+  const result = applySeatTickSettingsChange(defaultSeatTickSettings(PROJECT), {
+    turbo: { enabled: true, hours: 1, credits: true, creditAccounts: ["acct-a"] },
+  }, { at: AT, actor, turbo: { allowedAccounts: ["acct-a"], plan: [
+    { accountId: "acct-a", label: "Account A", plan: "pro", tiers: { "gpt-6.1-sol": "priority" }, hadCredits: true },
+  ] } });
+  expect(result.ok).toBe(true);
+  if (!result.ok) throw new Error(result.error);
+  result.settings.turbo!.switches = [{ conversationId: "conversation_turbo", accountId: "acct-a", model: "gpt-6.1-sol", from: "default", to: "priority", state: "switched", at: AT }];
+  const file = settingsFile();
+  writeSeatTickSettings(PROJECT, result.settings, file);
+  const stored = readSeatTickSettings(PROJECT, file);
+  expect(stored.turbo!.switches[0]!.from).toBe("default");
+  expect(effectiveSeatTickSettings(stored, NOW + HOUR_MS, HOUR_MS).turbo).toMatchObject({ enabled: false, endReason: "expired", credits: { approved: false } });
+  const off = applySeatTickSettingsChange(stored, { turbo: { enabled: false } }, { at: NEXT_AT, actor });
+  expect(off.ok).toBe(true);
+  if (!off.ok) throw new Error(off.error);
+  expect(off.settings.turbo).toMatchObject({ enabled: false, credits: { approved: false }, switches: [{ from: "default", state: "switched" }] });
+});
+
+test("legacy imports default invention off even when an imported actor claims a grant", () => {
+  const file = settingsFile();
+  const actor: SeatTickSettingsActor = { kind: "gateway", project: null, conversationId: null, seatEpoch: null };
+  const changed = applySeatTickSettingsChange(defaultSeatTickSettings(PROJECT), { autonomy: { enabled: true, proactive: { enabled: true } } }, { at: AT, actor });
+  if (!changed.ok) throw new Error(changed.error);
+  fs.writeFileSync(file, JSON.stringify({ version: 1, projects: { [PROJECT]: changed.settings } }));
+  const imported = readSeatTickSettings(PROJECT, file);
+  expect(imported.autonomy?.enabled).toBe(true);
+  expect(imported.autonomy?.proactive?.enabled).toBe(false);
+});
+
+test("a persisted child grant survives a fresh process while expiry and a new episode remove it", async () => {
+  const file = settingsFile();
+  const actor: SeatTickSettingsActor = { kind: "gateway", project: null, conversationId: null, seatEpoch: null };
+  const changed = applySeatTickSettingsChange(defaultSeatTickSettings(PROJECT), { autonomy: { enabled: true, proactive: { enabled: true } } }, { at: AT, actor });
+  if (!changed.ok) throw new Error(changed.error);
+  writeSeatTickSettings(PROJECT, changed.settings, file);
+  const script = `import { readSeatTickSettings, effectiveSeatTickSettings } from './src/lib/monitor/seatTickSettings';
+    const row = readSeatTickSettings(process.argv[1], process.argv[2]);
+    console.log(JSON.stringify([row.autonomy?.proactive, effectiveSeatTickSettings(row, Number(process.argv[3]), 3600000).autonomy?.proactive]));`;
+  const child = Bun.spawn([process.execPath, "--eval", script, PROJECT, file, String(NOW + 8 * HOUR_MS)], { stdout: "pipe", stderr: "pipe", env: { ...process.env } });
+  const watchdog = setTimeout(() => child.kill(), 15_000);
+  try {
+    const [out, err, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect(err).toBe("");
+    expect(exit).toBe(0);
+    expect(JSON.parse(out)).toEqual([{ enabled: true }, { enabled: false }]);
+  } finally { clearTimeout(watchdog); if (child.exitCode === null) child.kill(); await child.exited; }
+  const next = applySeatTickSettingsChange(readSeatTickSettings(PROJECT, file), { autonomy: { enabled: true } }, { at: new Date(NOW + 9 * HOUR_MS).toISOString(), actor });
+  if (!next.ok) throw new Error(next.error);
+  expect(next.settings.autonomy?.proactive?.enabled).toBe(false);
+  expect(next.settings.autonomyHistory?.[0]?.proactive?.enabled).toBe(false);
+});
+
 function change(current: SeatTickSettings, input: Parameters<typeof applySeatTickSettingsChange>[1]) {
   return applySeatTickSettingsChange(current, input, { at: AT, actor: SEAT });
 }

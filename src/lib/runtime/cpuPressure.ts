@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { cpuPriorityFromEnv, type CpuPrioritySource } from "./cpuPriority";
 import { randomUUID } from "node:crypto";
 import { cpuCommandOwner, type CpuQueueWait } from "./cpuAdmission";
 import { instanceCpuAdmissionQueue } from "./cpuAdmissionScope";
@@ -13,7 +14,7 @@ import { delegatusSetting } from "./cpuPlacement";
  * publication's dependency install and a release install or build wait while
  * the machine's CPU pressure is high: each is held once `some avg10` reaches
  * the hold threshold and released only after the value has stayed below the
- * release threshold for the release window. A persistent FIFO queue admits
+ * release threshold for the release window. A persistent priority queue admits
  * the head after ten minutes even when pressure stays high, with short spacing
  * between admissions. Operator sends, receipt reconciliation and recovery never ask.
  * A failed sample admits: the work scopes' CPU quotas still bound the work.
@@ -24,7 +25,7 @@ export interface CpuPressurePolicy { holdAt: number; releaseBelow: number; relea
 export const DEFAULT_CPU_PRESSURE_POLICY: CpuPressurePolicy = { holdAt: 30, releaseBelow: 20, releaseAfterMs: 10_000, deferAfterMs: 120_000 };
 
 export type CpuPressureHold = { since: number; avg10: number; deferred: boolean; policy: CpuPressurePolicy; queue?: CpuQueueWait };
-export type CpuStartGate = { check(key?: string): CpuPressureHold | null; cancel?(key: string): void };
+export type CpuStartGate = { check(key?: string, priority?: CpuPrioritySource): CpuPressureHold | null; cancel?(key: string): void };
 
 /** `some avg10` from /proc/pressure/cpu, or null when the text has none. */
 export function parseCpuPressure(text: string): number | null {
@@ -73,7 +74,7 @@ export class CpuPressureGate {
 
 /** Queue position and whole minutes change only as the wait progresses. */
 export function cpuPressureHoldDetail(hold: CpuPressureHold, subject = "stage start"): string {
-  if (hold.queue) return cpuQueueDetail(hold.queue.position, hold.queue.remainingMs, hold.queue.stalledMs);
+  if (hold.queue) return cpuQueueDetail(hold.queue.position, hold.queue.remainingMs, hold.queue.stalledMs, hold.queue.priority);
   const since = new Date(hold.since).toISOString();
   return hold.deferred
     ? `${subject} deferred by CPU pressure: held since ${since} (avg10 ${hold.avg10}% ≥ ${hold.policy.holdAt}%); it starts once pressure stays below ${hold.policy.releaseBelow}% for ${hold.policy.releaseAfterMs / 1000} s`
@@ -91,14 +92,14 @@ export function isCpuPressureDetail(detail: string | null | undefined, subject: 
  * the wait; the caller then starts nothing.
  */
 export async function waitForCpuPressure(gate: CpuStartGate | null, options: {
-  subject: string; onReason: (reason: string) => void; signal?: AbortSignal; pollMs?: number;
+  subject: string; onReason: (reason: string) => void; signal?: AbortSignal; pollMs?: number; priority?: CpuPrioritySource;
 }): Promise<boolean> {
   let shown: string | null = null;
   const key = `command:${randomUUID()}`;
   try {
     for (;;) {
       if (options.signal?.aborted) return false;
-      const hold = gate?.check(key) ?? null;
+      const hold = gate?.check(key, options.priority) ?? null;
       if (!hold) return true;
       const reason = cpuPressureHoldDetail(hold, options.subject);
       if (reason !== shown) { shown = reason; options.onReason(reason); }
@@ -112,7 +113,7 @@ export async function waitForCpuPressure(gate: CpuStartGate | null, options: {
 }
 
 const globalGate = globalThis as unknown as { __llvCpuPressureGate?: CpuStartGate | null; __llvCpuPressurePollMs?: number };
-/** The process-wide FIFO; pressure off skips sampling and keeps admission. */
+/** The process-wide priority queue; pressure off skips sampling and keeps admission. */
 export function machineCpuPressureGate(): CpuStartGate | null {
   if (globalGate.__llvCpuPressureGate !== undefined) return globalGate.__llvCpuPressureGate;
   const policy = cpuPressurePolicy();
@@ -121,10 +122,10 @@ export function machineCpuPressureGate(): CpuStartGate | null {
     now: Date.now,
   }) : null;
   return globalGate.__llvCpuPressureGate = {
-    check: (key = `command:${process.pid}`) => {
+    check: (key = `command:${process.pid}`, priority = cpuPriorityFromEnv()) => {
       const held = pressure?.check();
       const durable = key.startsWith("stage:") || key.startsWith("workflow:");
-      const queue = instanceCpuAdmissionQueue().check(key, !held, durable ? undefined : cpuCommandOwner());
+      const queue = instanceCpuAdmissionQueue().check(key, !held, durable ? undefined : cpuCommandOwner(), true, priority);
       return queue ? { since: queue.since, avg10: held?.avg10 ?? 0, deferred: false, policy: policy ?? DEFAULT_CPU_PRESSURE_POLICY, queue } : null;
     },
     cancel: (key) => instanceCpuAdmissionQueue().cancel(key),

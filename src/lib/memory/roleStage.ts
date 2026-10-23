@@ -4,10 +4,11 @@ import { ROLE_IDS } from "@/lib/roles/types";
 import { automaticMemoryExcluded, roleIsClean } from "./eligibility";
 import { LESSON_MATCH_MIN_CHARS, lettersAndDigits } from "./roleConsolidate";
 import { lessonRequestLines, type HandedFindings } from "./roleRender";
-import { leaveSeatLessons, leaveLessons, lessonRequest, recordLessonRequest, roleMemoryCollection, RoleMemoryRefusal, type LeftLesson } from "./roleStore";
+import { leaveOperatorLessons, leaveSeatLessons, leaveLessons, lessonRequest, recordLessonRequest, roleMemoryCollection, RoleMemoryRefusal, type LeftLesson } from "./roleStore";
 import { assertGenericRule, problemInput } from "./roleProblems";
 import { scopeKind } from "./roleScopes";
 import { roleMemoryEnabled, roleMemorySelectorEnabled } from "./settings";
+import { operatorMemoryEnabled } from "./operatorMemory";
 import { lessonText, lessonTextLength, RULE_MAX_CHARS, RULE_MIN_CHARS, WHY_MAX_CHARS, type LessonInput, type ScopeKind, type RewriteInput, type ProblemInput } from "./roleTypes";
 
 /* The three points where role memory meets a pipeline stage: the selector at
@@ -68,7 +69,18 @@ function recognisable(value: string, field: string): string {
   return value;
 }
 
-export interface LessonAnswerArgs { lesson?: unknown; rewrite?: unknown; none?: unknown; lessons?: unknown; problem?: unknown }
+export interface LessonAnswerArgs { lesson?: unknown; rewrite?: unknown; none?: unknown; lessons?: unknown; problem?: unknown; applied?: unknown; misled?: unknown }
+
+export function lessonUsage(args: Pick<LessonAnswerArgs, "applied" | "misled">): { applied?: string[]; misled?: string[] } {
+  const parse = (value: unknown): string[] | undefined => {
+    if (value === undefined) return undefined;
+    if (!Array.isArray(value) || value.length > 5 || value.some(id => typeof id !== "string" || !/^r_[a-f0-9]{16}$/.test(id)) || new Set(value).size !== value.length) throw new RoleMemoryRefusal("LESSON_INVALID", "applied and misled must each contain up to five distinct exact rule ids");
+    return value;
+  };
+  const applied = parse(args.applied), misled = parse(args.misled);
+  if (applied?.some(id => misled?.includes(id))) throw new RoleMemoryRefusal("LESSON_INVALID", "a rule cannot be both applied and misled in one answer");
+  return { ...(applied ? { applied } : {}), ...(misled ? { misled } : {}) };
+}
 
 /** Fixed identifiers of a single change/run; semantic generality belongs to the agent and curator. */
 export function taskIdentifier(rule: string): string | null {
@@ -139,6 +151,7 @@ export function leaveLessonForConversation(pipelines: readonly Pipeline[], conve
   if (!roleMemoryEnabled()) throw new RoleMemoryRefusal("LESSON_SWITCHED_OFF", "learned rules are switched off on this installation");
   if (!target) throw new RoleMemoryRefusal("LESSON_NOT_REQUESTED", "report the stage with stage_report first; its answer asks for the lesson");
   const parsed = parseLessons(args, roleId);
+  const usage = lessonUsage(args);
   if (parsed.rewrite) {
     const row = roleMemoryCollection()?.get(`r:${parsed.rewrite.id}`);
     if (row?.kind === "rule") assertGenericRule(parsed.rewrite.rule, scopeKind(row.scope));
@@ -149,7 +162,7 @@ export function leaveLessonForConversation(pipelines: readonly Pipeline[], conve
       project: target.pipeline.project, pipelineId: target.pipeline.id, stageId: target.stageId, attempt: target.attempt.n,
       roleId, fixRound: target.attempt.activatedBy?.edge === "fail", conversationId,
     },
-    lessons: parsed.lessons, none: parsed.none, rewrite: parsed.rewrite, problem: parsed.problem, now,
+    lessons: parsed.lessons, none: parsed.none, rewrite: parsed.rewrite, problem: parsed.problem, ...usage, now,
   });
   return { pipelineId: target.pipeline.id, stageId: target.stageId, attempt: target.attempt.n, ...result };
 }
@@ -159,6 +172,8 @@ export function leaveLessonForSeat(seat: { project: string | null; conversationI
   if (!seat.project || seat.project === "*") throw new RoleMemoryRefusal("LESSON_NOT_A_SEAT", "the designated seat has no concrete project");
   if (!roleMemoryEnabled()) throw new RoleMemoryRefusal("LESSON_SWITCHED_OFF", "learned rules are switched off on this installation");
   try {
+    const usage = lessonUsage(args);
+    if (usage.applied?.length || usage.misled?.length) throw new RoleMemoryRefusal("RULE_NOT_DELIVERED", "usage measurement belongs to a stage attempt's delivered rules");
     const parsed = parseLessons(args, "orchestrator");
     if (parsed.none !== null) throw new RoleMemoryRefusal("LESSON_INVALID", "an unasked seat gives lesson or rewrite; there is no request to decline");
     if (parsed.problem) throw new RoleMemoryRefusal("LESSON_IS_PROBLEM", "a seat handles its own defects");
@@ -170,6 +185,32 @@ export function leaveLessonForSeat(seat: { project: string | null; conversationI
     return { project: seat.project, roleId: "orchestrator" as const, ...result };
   } catch (error) {
     if (error instanceof RoleMemoryRefusal && error.code === "LESSON_IS_PROBLEM") throw new RoleMemoryRefusal(error.code, "this names a defect: find or create its board task with create_task. Tell the operator in chat when it is critical. For a practice that holds on other tasks, express the generic check without the project's fact");
+    if (error instanceof RoleMemoryRefusal && error.code === "LESSON_ABOUT_ONE_TASK") throw new RoleMemoryRefusal(error.code, "the rule names one task or run; it belongs on that task's card. If it holds elsewhere, say it without the identifier");
+    throw error;
+  }
+}
+
+/** The binding supplies the server-resolved operator root conversation and its
+    project; this only runs in Delegatus mode (memory-source-switch.md §3.3). */
+export function leaveLessonForOperator(caller: { project: string | null; conversationId: string }, args: LessonAnswerArgs, now = new Date().toISOString()) {
+  if (!caller.project || caller.project === "*" || !operatorMemoryEnabled()) throw new RoleMemoryRefusal("LESSON_NOT_AN_ATTEMPT", "a lesson is left by a stage that was asked for one, by a project's designated orchestrator seat, or by the operator's own conversation while Delegatus memory is on; this conversation is none of them");
+  if (!roleMemoryEnabled()) throw new RoleMemoryRefusal("LESSON_SWITCHED_OFF", "learned rules are switched off on this installation");
+  try {
+    const usage = lessonUsage(args);
+    if (usage.applied?.length || usage.misled?.length) throw new RoleMemoryRefusal("RULE_NOT_DELIVERED", "usage measurement belongs to a stage attempt's delivered rules");
+    const lesson = args.lesson as { scope?: unknown } | undefined;
+    if (lesson && typeof lesson === "object" && lesson.scope === "role") throw new RoleMemoryRefusal("LESSON_WRONG_LEVEL", "an operator conversation leaves project or machine rules; a role's practice is its seat's or its stages'");
+    const parsed = parseLessons(args, null);
+    if (parsed.none !== null) throw new RoleMemoryRefusal("LESSON_INVALID", "an unasked conversation gives lesson or rewrite; there is no request to decline");
+    if (parsed.problem) throw new RoleMemoryRefusal("LESSON_IS_PROBLEM", "a defect is not a rule");
+    if (parsed.rewrite) {
+      const row = roleMemoryCollection()?.get(`r:${parsed.rewrite.id}`);
+      if (row?.kind === "rule") assertGenericRule(parsed.rewrite.rule, scopeKind(row.scope));
+    }
+    const result = leaveOperatorLessons({ source: { origin: "operator", project: caller.project, roleId: null, fixRound: false, conversationId: caller.conversationId }, lessons: parsed.lessons, rewrite: parsed.rewrite, now });
+    return { project: caller.project, roleId: null, ...result };
+  } catch (error) {
+    if (error instanceof RoleMemoryRefusal && error.code === "LESSON_IS_PROBLEM") throw new RoleMemoryRefusal(error.code, "this names a defect: find or create its board task with create_task, or tell the operator in chat. For a practice that holds on other tasks, express the generic check without the project's fact");
     if (error instanceof RoleMemoryRefusal && error.code === "LESSON_ABOUT_ONE_TASK") throw new RoleMemoryRefusal(error.code, "the rule names one task or run; it belongs on that task's card. If it holds elsewhere, say it without the identifier");
     throw error;
   }

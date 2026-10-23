@@ -16,6 +16,7 @@ const { TelegramBotService, productionTelegramBotDependencies, setTelegramBotSer
 const { FakeBotTransport, fakeBotToken, ok } = await import("@/lib/telegram/bot/fakeTransport");
 const { setCallerConversationResolverForTests } = await import("@/lib/agent/operatorAuthority");
 const { VIEWER_SPAWN_CAPABILITY_HEADER } = await import("@/lib/agent/capabilityHeader");
+const { clonePairing } = await import("@/lib/externalRelay/clone.fixture");
 
 const BOT_ID = 4242424;
 const TOKEN = fakeBotToken(String(BOT_ID));
@@ -35,9 +36,11 @@ let service: InstanceType<typeof TelegramBotService>;
 beforeEach(() => {
   fs.rmSync(process.env.LLV_STATE_DIR!, { recursive: true, force: true });
   transport = new FakeBotTransport();
+  let confirmationSequence = 0;
   service = new TelegramBotService({
     ...productionTelegramBotDependencies(),
     transportFor: () => transport,
+    fileConfirmationId: () => `operator-route-fixture-${++confirmationSequence}`,
     sleep: async () => {},
     conversationTitle: () => "Report writer",
     documentEnvironment: () => ({ home: HOME, stateDir: process.env.LLV_STATE_DIR! }),
@@ -115,6 +118,34 @@ test("agent media route uses the caller capability and topic link for an album",
   expect(transport.callsOf("sendMediaGroup")[0]!.params.message_thread_id).toBe(5);
 });
 
+test.each(["send_media", "send_document"])("%s names the outside file and allowed roots relative to the host home", async (op) => {
+  await connected();
+  service.setChat(String(TEAM.id), "team-reports", true);
+  fs.mkdirSync(HOME, { recursive: true });
+  const outside = path.join(HOME, "outside.jpg");
+  fs.writeFileSync(outside, await sharp({ create: { width: 1, height: 1, channels: 3, background: { r: 12, g: 34, b: 56 } } }).jpeg().toBuffer());
+  const check = async (roots: string) => {
+    const response = await agentRoute.POST(request("/api/telegram/bot/agent", {
+      method: "POST", headers: AGENT,
+      body: { op, clientRequestId: `${op}-${roots}`, chat: "team-reports", images: [{ path: outside, caption: "" }], document: { path: outside } },
+    }));
+    expect(response.status).toBe(403);
+    const body = await response.json();
+    expect(body.code).toBe("document_outside_roots");
+    expect(body.retryable).toBe(false);
+    expect(body.error).toStartWith(`$HOME/outside.jpg is outside the allowed document roots (${roots}); write the file under one of them`);
+    expect(body.confirmation.id).toMatch(/^operator-route-fixture-\d+$/);
+    expect(body.confirmation.url).toBe(`/telegram-file-confirmation?id=${body.confirmation.id}`);
+    expect(body.error).toContain(body.confirmation.url);
+    expect(Number.isFinite(Date.parse(body.confirmation.expiresAt))).toBe(true);
+    expect(body.error).not.toContain(HOME);
+  };
+  await check("$HOME/handoff");
+  service.setDocumentRoots([path.join(HOME, "reports"), path.join(HOME, "exports")]);
+  await check("$HOME/reports, $HOME/exports");
+  expect(transport.calls.filter(call => call.method.startsWith("send"))).toHaveLength(0);
+});
+
 test("agent send resolves a public topic link and forwards message_thread_id", async () => {
   await connected();
   transport.script("getUpdates", ok([{ update_id: 3, my_chat_member: { chat: { ...TEAM, username: "public_reports", is_forum: true }, date: 3, new_chat_member: { status: "administrator" } } }]));
@@ -142,6 +173,9 @@ test("an agent capability is refused every operator action, so no agent widens i
   await connected();
   for (const body of [
     { action: "connect", token: TOKEN },
+    { action: "add_bot", token: fakeBotToken("5151515") },
+    { action: "remove_bot", bot: "second_fixture_bot" },
+    { action: "chat_bot", chatId: String(TEAM.id), bot: "second_fixture_bot" },
     { action: "chat", chatId: String(TEAM.id), alias: "team-reports", postAllowed: true },
     { action: "documents", roots: [SANDBOX] },
     { action: "remove" },
@@ -218,6 +252,37 @@ test("with no bot connected the chats read still answers, with a note naming the
   expect(await status.json()).toMatchObject({ bot: { connected: false, receiving: "stopped" } });
 });
 
+test("paired clone discovery reaches the tokenless operator status and chat allowlist save", async () => {
+  await service.remove();
+  const relay = clonePairing("http://relay.invalid");
+  const route = { id: "fixture-route", relay, targetId: "fixture-clone", name: "Report clone" };
+  let discoveries = 0;
+  service = new TelegramBotService({
+    ...productionTelegramBotDependencies(),
+    clones: {
+      discoverChats: async () => { discoveries++; return [{ chatId: String(TEAM.id), title: TEAM.title }]; },
+      route: async () => route, peek: () => route, valid: () => true, invalidate: () => {},
+      send: async () => { throw new Error("unused in status test"); },
+    },
+    transportFor: () => transport,
+    documentEnvironment: () => ({ home: HOME, stateDir: process.env.LLV_STATE_DIR! }),
+  });
+  setTelegramBotServiceForTests(service);
+
+  const status = await operatorRoute.GET(request("/api/telegram/bot"));
+  expect(status.status).toBe(200);
+  expect(await status.json()).toMatchObject({ bot: { connected: false, chats: [{ chatId: String(TEAM.id), member: true, postAllowed: false }] } });
+  expect(discoveries).toBe(1);
+  const listing = await agentRoute.GET(request("/api/telegram/bot/agent?op=chats"));
+  expect(listing.status).toBe(200);
+  expect(await listing.json()).toMatchObject({ bot: { connected: false }, chats: [{ chatId: String(TEAM.id), alias: null }] });
+  expect(discoveries).toBe(2);
+  const saved = await operatorRoute.POST(request("/api/telegram/bot", { method: "POST", body: { action: "chat", chatId: String(TEAM.id), alias: "team-reports", postAllowed: true } }));
+  expect(saved.status).toBe(200);
+  expect(await saved.json()).toMatchObject({ bot: { connected: false, chats: [{ chatId: String(TEAM.id), alias: "team-reports", postAllowed: true, postable: true }] } });
+  expect(transport.calls).toEqual([]);
+});
+
 /* A post-only bot: the operator adds a chat by id and sends a test post; an
    agent can do neither, and no answer carries the token or the bot id. */
 test("add and test are the operator's: a chat added by id is allowed, a test post goes out, and an agent is refused both", async () => {
@@ -249,4 +314,31 @@ test("add and test are the operator's: a chat added by id is allowed, a test pos
   expect(transport.callsOf("sendMessage")[0]!.params).toMatchObject({ chat_id: -1000000000404, disable_notification: true });
   expect(String(transport.callsOf("sendMessage")[0]!.params.text)).toContain("Delegatus");
   expect(transport.callsOf("getUpdates")).toEqual([]);
+});
+
+test("the existing operator surface adds, assigns and removes an extra bot without exposing its token", async () => {
+  await connected();
+  service.setChat(String(TEAM.id),"team-reports",true);
+  const extraToken=fakeBotToken("5151515");
+  const before=transport.calls.length;
+  const unstamped=await operatorRoute.POST(request("/api/telegram/bot",{method:"POST",body:{action:"add_bot",token:extraToken}}));
+  expect(unstamped.status).toBe(403);
+  expect(transport.calls.length).toBe(before);
+  transport.script("getMe",ok({id:5151515,is_bot:true,first_name:"Second bot",username:"second_fixture_bot"}));
+  transport.handlers.getChatMember=()=>ok({status:"administrator"});
+  const added=await operatorRoute.POST(request("/api/telegram/bot",{method:"POST",headers:PAGE,body:{action:"add_bot",token:extraToken}}));
+  expect(added.status).toBe(200);
+  const body=await added.json();
+  expect(body.bot.bots).toHaveLength(2);
+  expect(JSON.stringify(body)).not.toContain(extraToken);
+  expect(JSON.stringify(body)).not.toContain("5151515");
+  const assigned=await operatorRoute.POST(request("/api/telegram/bot",{method:"POST",body:{action:"chat_bot",chatId:String(TEAM.id),bot:"second_fixture_bot"}}));
+  expect(assigned.status).toBe(200);
+  expect((await assigned.json()).bot.chats[0].assignedBot).toBe("second_fixture_bot");
+  const removed=await operatorRoute.POST(request("/api/telegram/bot",{method:"POST",body:{action:"remove_bot",bot:"second_fixture_bot"}}));
+  expect(removed.status).toBe(200);
+  const status=(await removed.json()).bot;
+  expect(status.bots).toHaveLength(1);
+  expect(status.chats).toHaveLength(1);
+  expect(status.chats[0].assignedBot).toBeNull();
 });
