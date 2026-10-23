@@ -219,3 +219,44 @@ The integration batch recorded all four test files, and the latest-main
 routing comparison recorded its one complete file. Production code remained
 identical to the tree that passed the full hook. Publication hook settings and
 budgets were unchanged.
+
+## Interrupted verification continuation
+
+The interrupted run completed its full importer comparison on 2026-10-23:
+102 selected files on the branch at `e336511c` and main at `62235181`, with
+204 distinct results and matching `RAN_COUNT` and expected counts. No selected
+file was missing. Each observation used a fresh isolated environment and a
+detached process; the main control used a Git clone with the same origin.
+`evidence/nightly-release-leftovers/importers.json` retains every selected path,
+paired exit and test counts, input revisions, timestamps and final source digests.
+
+The complete recovery file passed 81 tests on each revision. Git custody
+passed 168 branch tests and 153 main tests; publication recovery passed 113
+on each. Twenty-six files retained identical failing assertions on both
+revisions. CPU polling was the only differing file and required the repeated
+whole-file controls below. Touched-file ESLint passed with nine warnings on
+unchanged lines.
+
+The continuation merged main through `fd7a0a14` with a merge commit. Its changed
+files do not overlap this task's source, fixtures or tests. The shared phone
+fixture and driver had changed in an earlier main integration, so the rendered
+record was regenerated with refreshed source digests even though the markdown
+source itself is unchanged.
+
+The follow-up completed all 16 observations. History-hook forwarding passed
+148 tests per revision; forge credentials, shell policy, runtime identity and
+environment isolation also passed, retaining their existing opt-in skips.
+Three fresh whole-file CPU-polling runs per revision each produced two passes
+and one failure of the same FIFO-spacing assertion. No assertion or timing
+bound was changed.
+
+A final main read reached `19bbd6d7`. Its subsequent account-health change
+does not overlap the task files or alter the guard interfaces. It remains
+outside the recorded integration cutoff.
+
+Final remote checks on the integrated source all exited 0: TypeScript with
+`--noEmit --incremental false`, ESLint on all 12 touched TypeScript files, and
+the existing phone driver filtered to `phone markdown links` (204 assertions).
+All 12 regenerated frames were visually inspected at 360/390/430 px, en/uk,
+light/dark. Geometry is identical to the previous record, with zero clipped
+or covered link characters; every recorded source digest now matches.

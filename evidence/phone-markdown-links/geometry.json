@@ -1,8 +1,8 @@
 {
   "sources": {
     "src/components/feed/markdown.tsx": "240f1d37ed81b3833ffdfa2bf9eec9efdcccf5eb9dad4f08ef46e36d5055f15c",
-    "src/components/mobile/issue1671Evidence.fixture.tsx": "05ab2e77840a9e320b3fd6f8c6b56999be86a6ac55b7c615946ed50d9871516e",
-    "src/components/mobile/issue1671Evidence.browser.test.tsx": "fd2e1829a46b9ca444f5d9ddc75eacfe6be558da2ac689df1cd8b93e5418b84b"
+    "src/components/mobile/issue1671Evidence.fixture.tsx": "8b72586c2d4dc577a57183e6e1841e46e5dd9dd7b55444d523ee7c93688263be",
+    "src/components/mobile/issue1671Evidence.browser.test.tsx": "f31d16d8eb40f41ac7c938f27d53faaee4384a159110184ea813f0ee6fed645e"
   },
   "readings": [
     {
