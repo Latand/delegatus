@@ -292,6 +292,70 @@ test("dead-process reconciles go through the batch admission in bounded prefixes
 });
 
 
+/* Retained termination survivors refuse the dead-process reconcile and every
+   claim. A Codex row that still holds them settles in its batched admission;
+   survivors settled meanwhile, or a broker whose claim refusal may stop its
+   recorded orphan, keep the single-row claim path. */
+for (const variant of ["codex row still fenced", "survivors settled during the batch", "broker row with a recorded process"] as const) {
+  test(`a dead-process row fenced by termination survivors skips the claim path unless it can claim (${variant})`, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "startup-survivor-fence-"));
+    const session = ["22222222", "2222", "4222", "8222", "222222222222"].join("-");
+    const key = { engine: "codex" as const, sessionId: session };
+    const artifactPath = `/sessions/${session}.jsonl`;
+    // Every recorded process reads as gone, so only the survivors fence the row.
+    const registry = new AgentRegistry(path.join(root, "registry.json"), () => false, undefined,
+      { sqliteMode: "sqlite", sqliteFilename: path.join(root, "registry.sqlite") });
+    try {
+      const { emptyLaunchProfile } = await import("@/lib/accounts/migration/contracts");
+      registry.reconcileConversations([{ engine: "codex", path: artifactPath, accountId: null, launchProfile: emptyLaunchProfile({ cwd: "/repo", title: "Survivor fence" }),
+        turn: { state: "terminal", source: "lifecycle", terminalAt: CREATED }, observedAt: CREATED }]);
+      const survivor = { pid: 990003, startIdentity: "fixture-survivor", bootEpoch: "fixture-boot" };
+      const recorded = { pid: 990002, startIdentity: "fixture-process", bootEpoch: "fixture-boot" };
+      registry.upsert({ key, artifactPath, cwd: "/repo", accountId: null, status: "dead", host: null, claimEpoch: 3, claimOwner: null, pendingAction: null,
+        structuredHost: { kind: variant === "broker row with a recorded process" ? "claude-broker" : "codex-app-server", endpoint: "stdio:fixture",
+          process: recorded, eventCursor: 0, protocolVersion: "1", writerClaimEpoch: 3, activeTurnRef: null, pendingAttention: [], activeFlags: [] } });
+      const capture = registry.captureStructuredTerminationSurvivors(key, recorded, [survivor], "survivor-fence-test")!;
+      const before = registry.readOnlySnapshot().entries[`codex:${session}`]!;
+      let locks = 0, single = 0;
+      const lock = registry.withOperationLock.bind(registry);
+      const locked = spyOn(registry, "withOperationLock").mockImplementation(((...args: Parameters<typeof lock>) => {
+        locks++;
+        // The broker's claim path would run its orphan stop; counting its entry suffices.
+        return variant === "broker row with a recorded process" ? Promise.resolve(undefined) : lock(...args);
+      }) as typeof lock);
+      const answers: Array<boolean | undefined> = [];
+      try {
+        await demoteSkippedStructuredRegistryHosts(registry, () => false, async (_entry, mutation) => { single++; return mutation(); },
+          undefined, undefined, async rows => rows.map(row => {
+            const answer = row.mutation();
+            answers.push(answer);
+            if (variant === "survivors settled during the batch") {
+              expect(registry.withdrawStructuredTerminationSurvivors(key, recorded, capture, "survivor-fence-test")).toBe(true);
+            }
+            return answer;
+          }));
+      } finally { locked.mockRestore(); }
+      // The reconcile refused under the survivors in every variant.
+      expect(answers).toEqual([false]);
+      const after = registry.readOnlySnapshot().entries[`codex:${session}`]!;
+      if (variant === "codex row still fenced") {
+        expect({ locks, single }).toEqual({ locks: 0, single: 0 });
+        expect(after).toMatchObject({ status: "dead", claimOwner: null, claimEpoch: 3, structuredTerminationSurvivors: [survivor] });
+        expect(after.structuredHost).toEqual(before.structuredHost);
+      } else if (variant === "survivors settled during the batch") {
+        expect(locks).toBe(1);
+        expect(single).toBe(2);
+        expect(after).toMatchObject({ status: "dead", claimOwner: null });
+        expect(after.structuredTerminationSurvivors ?? []).toEqual([]);
+        expect(after.structuredHost).toMatchObject({ endpoint: "stdio:released", process: null });
+      } else {
+        expect({ locks, single }).toEqual({ locks: 1, single: 0 });
+      }
+    } finally { registry.close(); fs.rmSync(root, { recursive: true, force: true }); }
+  });
+}
+
+
 test("a synchronous startup visitor refusal joins the work already started", async () => {
   const { forEachStartupBatch } = await import("./startupWork");
   const release=Promise.withResolvers<void>();let settled=false;

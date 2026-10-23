@@ -812,7 +812,7 @@ export async function demoteSkippedStructuredRegistryHosts(
       if (answered.length === 0 || answered.length > pending.length) throw new Error("structured demotion admission answered no prefix of its rows");
       const done = pending.splice(0, answered.length);
       for (const [index, reconciled] of answered.entries()) {
-        if (reconciled === false) await demoteClaimedRow(done[index]!.entry);
+        if (reconciled === false && !claimFencedBySurvivors(done[index]!.entry)) await demoteClaimedRow(done[index]!.entry);
       }
     }
   };
@@ -844,6 +844,19 @@ export async function demoteSkippedStructuredRegistryHosts(
     await demoteClaimedRow(entry);
   }
   await flush();
+
+  /* Retained termination survivors refuse the reconcile above and every
+     claim until something settles them, so the claim path below can change
+     nothing for such a row. On a production copy 969 of 1,105 dead-process
+     rows held survivors, and each still paid an operation lock and a
+     single-row admission per boot. A broker row with a recorded process keeps
+     the claim path, whose refusal may stop that orphan. Reads the latest row:
+     survivors settled meanwhile take the claim path as before. */
+  function claimFencedBySurvivors(entry: AgentRegistryEntry): boolean {
+    const latest = startupHostSnapshot(registry, entry.key).entries[sessionKeyId(entry.key)];
+    if (!latest || (latest.structuredTerminationSurvivors?.length ?? 0) === 0) return false;
+    return !(latest.structuredHost?.kind === "claude-broker" && latest.structuredHost.process !== null);
+  }
 
   async function demoteClaimedRow(entry: AgentRegistryEntry): Promise<void> {
     const owner = captureProcessIdentity(process.pid);
