@@ -151,6 +151,42 @@ export function explicitDelegationRequest(utterance: string): GateVerdict {
   return { admit: true };
 }
 
+/* A spoken yes to a confirmation that waits: "yes", "go ahead", "send it", "так", "давай", "відправляй". */
+const AGREEMENT = /(?<![\p{L}'])(?:yes|yeah|yep|yup|sure|ok|okay|agreed|confirm(?:ed)?|go ahead|do it|send it|please do|так|ага|авжеж|звісно|звичайно|гаразд|добре|давай|згоден|згодна|підтверджую|відправляй|надсилай|надішли|відправ|да|конечно|хорошо|согласен|подтверждаю|отправляй|отправь)(?![\p{L}'])/u;
+/* Every word a spoken yes may hold: the yes itself, and what it sends, to whom and when ("Yes, send it to the
+   orchestrator now."). Any other word answers something else ("Так, а що зараз грає?", "Давай подивимось…"). */
+const AGREEMENT_WORDS = new Set([
+  "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "agreed", "confirm", "confirmed", "go", "ahead", "do", "send", "please", "right", "away",
+  "it", "this", "that", "the", "request", "message", "to", "orchestrator", "now", "delegatus",
+  "так", "ага", "авжеж", "звісно", "звичайно", "гаразд", "добре", "давай", "згоден", "згодна", "підтверджую", "відправляй", "надсилай", "надішли", "відправ",
+  "будь", "ласка", "це", "його", "її", "оркестратору", "зараз", "делегатусе",
+  "да", "конечно", "хорошо", "согласен", "подтверждаю", "отправляй", "отправь", "пожалуйста", "это", "его", "сейчас",
+]);
+
+/** Whether the operator's own words agree to send a request that waits for them, and say nothing else: every
+ * sentence is a yes, no word declines, takes it back, makes it conditional or asks something, and no sentence is a
+ * question. Read where text the operator did not speak may have asked the backend to answer for them (design
+ * docs/design/voice-extensible-tools.md §3.6). */
+export function spokenAgreement(utterance: string): boolean {
+  const all = gateSentences(utterance);
+  return all.length > 0 && all.every((sentence) => AGREEMENT.test(sentence) && !sentence.includes("?")
+    && (sentence.match(/[\p{L}\p{N}']+/gu) ?? []).every((word) => AGREEMENT_WORDS.has(word)));
+}
+
+/* An imperative sending verb in the operator's own words: "send it", "forward this", "pass it on", "відправ", "передай". */
+const SEND_IMPERATIVE = /(?<![\p{L}'])(?:send|forward|relay|deliver|pass\s+(?:(?:it|this|that|them)\s+)?(?:on|along|to)|відправ(?:те|ляй|ляйте)?|надішли(?:те)?|надсилай(?:те)?|передай(?:те)?|перешли(?:те)?|пересилай(?:те)?|отправь(?:те)?|отправляй(?:те)?)(?![\p{L}'])/u;
+
+/** Whether the operator's own words ask to send something, in a form the strict grammar of
+ * `explicitDelegationRequest` does not cover ("Check what is playing and send it to the orchestrator."): a sentence
+ * holds an imperative sending verb, and no sentence negates, takes it back, makes it conditional or asks something.
+ * Read once an added tool's answer is in the backend's context (design §3.6). */
+export function spokenSendRequest(utterance: string): boolean {
+  const all = gateSentences(utterance);
+  return all.some((sentence) => SEND_IMPERATIVE.test(sentence))
+    && !all.some((sentence) => sentence.includes("?") || NEGATION.test(sentence) || RETRACTION.test(sentence) || CONDITION.test(sentence)
+      || FOLLOWUP_CONDITION.test(sentence) || TRAILING_CONDITION.test(sentence));
+}
+
 /**
  * Whether a delegation may be raised, and whether a confirmation that waits
  * may still stand. Raised: its source is the operator's last input in this
