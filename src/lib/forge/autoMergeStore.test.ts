@@ -31,6 +31,27 @@ const { FlowPipelineController } = await import("@/lib/pipelines/controller");
 const { controllerPipelineKeys, withControllerPipelineScope } = await import("@/lib/pipelines/controllerScope");
 const { registerPipelineTick, requestPipelineTick } = await import("@/lib/pipelines/controllerSignal");
 
+/** Known successful state diagnostics do not change a child's result. */
+function expectMergeChildSuccess(code: number, error: string): void {
+  if (error) console.error(error.trimEnd());
+  expect(code, error).toBe(0);
+  for (const line of error.split("\n").filter(Boolean)) {
+    const waitPrefix = "[blocking-wait] ";
+    const holdPrefix = "[state transaction-hold] ";
+    if (line.startsWith(waitPrefix)) {
+      expect(JSON.parse(line.slice(waitPrefix.length))).toMatchObject({
+        site: "state-write-lock", stateWait: { outcome: "success" },
+      });
+    } else {
+      expect(line.startsWith(holdPrefix), error).toBe(true);
+      const hold = JSON.parse(line.slice(holdPrefix.length));
+      expect(hold.collection).toBe("pipelines");
+      expect(hold.heldMs).toBeNumber();
+      expect(hold.heldMs).toBeGreaterThanOrEqual(0);
+    }
+  }
+}
+
 afterAll(() => {
   if (previousStateDir === undefined) delete process.env.LLV_STATE_DIR;
   else process.env.LLV_STATE_DIR = previousStateDir;
@@ -205,7 +226,7 @@ describe("global merge admission", () => {
       stdout: "pipe", stderr: "pipe",
     });
     const [output, error, code] = await Promise.all([new Response(reader.stdout).text(), new Response(reader.stderr).text(), reader.exited]);
-    expect({ code, error }).toEqual({ code: 0, error: "" });
+    expectMergeChildSuccess(code, error);
     expect(JSON.parse(output)).toEqual([["missed-admission", HEAD]]);
   });
 
@@ -387,6 +408,7 @@ test("a stopped merge is stored, raises lane-merge with its two answers, and ret
         });
       }
       if (args[0] === "api" && args[1] === `repos/${REPO}/pulls/7/reviews?per_page=100`) return "";
+      if (args[0] === "api" && args[1] === `repos/${REPO}/rules/branches/main`) return "[[]]";
       if (args[0] === "api" && args[1] === `repos/${REPO}/branches/main`) return "[]";
       if (args[0] === "repo") return JSON.stringify({ squashMergeAllowed: true });
       if (args[0] === "pr" && args[1] === "merge") { mergeState = "MERGED"; return ""; }
@@ -482,6 +504,7 @@ test("a completed lane with no PR keeps its task open, persists a visible block,
         });
       }
       if (args[0] === "api" && args[1] === `repos/${REPO}/pulls/7/reviews?per_page=100`) return "";
+      if (args[0] === "api" && args[1] === `repos/${REPO}/rules/branches/main`) return "[[]]";
       if (args[0] === "api" && args[1] === `repos/${REPO}/branches/main`) return "[]";
       if (args[0] === "repo") return JSON.stringify({ squashMergeAllowed: true });
       if (args[0] === "pr" && args[1] === "merge") { merged = true; return ""; }
@@ -544,6 +567,7 @@ test("a human change request persists, and retry-merge waits for that reviewer's
         { reviewer: "reviewer-a", isBot: false, state: "CHANGES_REQUESTED" },
         ...(approved ? [{ reviewer: "reviewer-a", isBot: false, state: "APPROVED" }] : []),
       ].map((review) => JSON.stringify(review)).join("\n");
+      if (args[0] === "api" && args[1]?.includes("/rules/branches/")) return "[[]]";
       if (args[0] === "api") return "[]";
       if (args[0] === "repo") return JSON.stringify({ squashMergeAllowed: true });
       if (args[0] === "pr" && args[1] === "merge") { merged = true; return ""; }
@@ -922,7 +946,7 @@ describe("refresh retry recovery", () => {
         TMPDIR: path.join(childRoot, "tmp"), LLV_STATE_DIR: sandbox, LLV_STAGING: "1", LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" }, stdout: "pipe", stderr: "pipe",
     });
     const [output, error, code] = await Promise.all([new Response(reader.stdout).text(), new Response(reader.stderr).text(), reader.exited]);
-    expect({ code, error }).toEqual({ code: 0, error: "" });
+    expectMergeChildSuccess(code, error);
     expect(JSON.parse(output)).toEqual({ error: null, lanes: [["refresh-child", "queued", "d".repeat(40)], ["refresh-parent", "queued", HEAD]] });
   });
 
@@ -955,6 +979,7 @@ test("a timed-out lane retries old duplicate green checks and merges after a rea
         mergeable: "MERGEABLE", mergeStateStatus: "CLEAN",
         statusCheckRollup: [{ name: "privacy-tracker-audit", status: "IN_PROGRESS", conclusion: "" }] });
       if (args[1]?.includes("/reviews")) return "";
+      if (args[1]?.includes("/rules/branches/")) return "[[]]";
       if (args[1]?.includes("/branches/")) return '["privacy-tracker-audit"]';
       throw new Error("unexpected fixture read");
     },
@@ -990,6 +1015,7 @@ test("a timed-out lane retries old duplicate green checks and merges after a rea
                 completedAt: "${iso(T0 - MERGE_WAIT_LIMIT_MS)}" })) });
             if (args[0] === "repo") return '{"squashMergeAllowed":true}';
             if (args[1].includes("/reviews")) return "";
+            if (args[1].includes("/rules/branches/")) return "[[]]";
             if (args[1].includes("/branches/")) return '["privacy-tracker-audit"]';
             throw new Error("unexpected fixture read");
           },
@@ -1001,7 +1027,7 @@ test("a timed-out lane retries old duplicate green checks and merges after a rea
         TMPDIR: path.join(root, "tmp"), LLV_STATE_DIR: sandbox, LLV_STAGING: "1", LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" },
         stdout: "pipe", stderr: "pipe" });
       const [output, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-      expect({ code, error }).toEqual({ code: 0, error: "" });
+      expectMergeChildSuccess(code, error);
       const result = JSON.parse(output);
       expect(result.state).toBe(elapsed ? "merged" : "waiting-checks");
       expect(result.writes).toEqual(elapsed ? [["pr", "merge", "7", "--repo", REPO, "--squash", "--match-head-commit", HEAD]] : []);

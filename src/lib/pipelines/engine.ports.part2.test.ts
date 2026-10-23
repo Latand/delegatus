@@ -490,6 +490,7 @@ test("fallback verdict preserves the pre-output PR head through real settlement 
           statusCheckRollup: [{ __typename: "CheckRun", name: "ci", status: "COMPLETED", conclusion: "SUCCESS", startedAt: completed.closedAt }],
           mergeCommit: merged ? { oid: "f".repeat(40) } : null, mergedAt: merged ? new Date(clock).toISOString() : null,
         });
+        if (args[0] === "api" && args[1] === "repos/acme/widgets/rules/branches/main") return "[[]]";
         if (args[0] === "api" && args[1] === "repos/acme/widgets/branches/main") return "[]";
         if (args[0] === "api" && args[1] === "repos/acme/widgets/pulls/11/reviews?per_page=100") return "";
         if (args[0] === "repo") return JSON.stringify({ squashMergeAllowed: true });
