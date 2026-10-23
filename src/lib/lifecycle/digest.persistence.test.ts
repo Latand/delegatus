@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { resetLegacyDocumentStoresForTests } from "@/lib/state/legacyDocumentStore";
+import { resetLegacyDocumentStoresForTests, setLegacyDocumentWriteHookForTests } from "@/lib/state/legacyDocumentStore";
 import { waitForStateLock } from "@/lib/state/lockWait";
 import { injectStateWriteFaultForTests, readStateCollectionRevision, readStateImport } from "@/lib/state/sqliteStateStore";
 import { HOT_STATE_BACKEND } from "@/lib/state/hotStateAuthority";
@@ -17,6 +17,7 @@ const originalState = process.env.LLV_STATE_DIR;
 const roots: string[] = [];
 
 afterEach(() => {
+  setLegacyDocumentWriteHookForTests(null);
   injectStateWriteFaultForTests(null);
   resetLegacyDocumentStoresForTests();
   if (originalState === undefined) delete process.env.LLV_STATE_DIR;
@@ -24,17 +25,18 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
-function fixture() {
+function fixture(subscriberId = "subscriber-a", scope: { project?: string; pipelineId?: string; conversationId?: string } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "digest-persistence-"));
   roots.push(directory);
   process.env.LLV_STATE_DIR = directory;
   const file = path.join(directory, "lifecycle-digests.json");
   const database = path.join(directory, "state.sqlite");
   const subscriber = { cursorSeq: 7, lastRelayAt: new Date(T0).toISOString(), updatedAt: new Date(T0).toISOString() };
-  const key = digestScopeKey({ subscriberId: "subscriber-a" });
+  const request = { subscriberId, ...scope };
+  const key = digestScopeKey(request);
   const text = JSON.stringify({ version: 1, subscribers: { [key]: subscriber } });
   fs.writeFileSync(file, text);
-  return { directory, file, database, subscriber, key, text };
+  return { directory, file, database, subscriber, key, rowKey: JSON.stringify(key), text, request };
 }
 
 async function child(source: string) {
@@ -120,7 +122,7 @@ test("a killed cursor transaction retains the previous cursor and throttle", asy
   expect(readDigestSubscriber("subscriber-a")).toEqual(f.subscriber);
   const revision = readStateCollectionRevision(f.database, "lifecycle_digests");
   const crashed = await child(`lifecycleDigestStore.patchRows(file, 1, tx => {
-    tx.put({ key: digestScopeKey({ subscriberId: "subscriber-a" }), value: { cursorSeq: 99 } });
+    tx.put({ key: JSON.stringify(digestScopeKey({ subscriberId: "subscriber-a" })), value: { cursorSeq: 99 } });
     process.kill(process.pid, "SIGKILL");
   });`);
   expect(crashed.signal, crashed.stderr).toBe("SIGKILL");
@@ -129,22 +131,104 @@ test("a killed cursor transaction retains the previous cursor and throttle", asy
   expect(seedLifecycleDigestCursor("subscriber-b", T0).cursorSeq).toBe(0);
 });
 
-test("rollback mirror edits reconcile by row without replacing newer SQLite cursors", () => {
+const scopes = [
+  { name: "ordinary", subscriberId: "subscriber-a", scope: {} },
+  { name: "NUL", subscriberId: "subscriber\u0000a", scope: {} },
+  { name: "high surrogate", subscriberId: String.fromCharCode(0xd800), scope: {} },
+  { name: "low surrogate", subscriberId: String.fromCharCode(0xdc00), scope: {} },
+  { name: "scoped surrogates", subscriberId: "subscriber-a", scope: {
+    project: String.fromCharCode(0xd800), pipelineId: "pipeline\u0000a", conversationId: String.fromCharCode(0xdc00),
+  } },
+];
+
+for (const { name, subscriberId, scope } of scopes) {
+  test(`rollback mirror preserves newer SQLite cursors for ${name} keys`, () => {
+    const f = fixture(subscriberId, scope);
+    lifecycleDigestStore.importLegacy(f.file);
+    lifecycleDigestStore.checkpointRollbackMirror(f.file);
+    const mirror = JSON.parse(fs.readFileSync(f.file, "utf8"));
+    expect(mirror.subscribers[f.key]).toEqual(f.subscriber);
+    const newer = { ...f.subscriber, cursorSeq: 9 };
+    lifecycleDigestStore.patchRows(f.file, 1, tx => tx.put({ key: f.rowKey, value: newer }));
+    mirror.subscribers[f.key].cursorSeq = 8;
+    mirror.subscribers[digestScopeKey({ subscriberId: "subscriber-b" })] = { ...f.subscriber, cursorSeq: 4 };
+    fs.writeFileSync(f.file, JSON.stringify(mirror));
+    const result = lifecycleDigestStore.importLegacy(f.file);
+    expect(result.incident?.summary?.conflicts).toEqual([f.rowKey]);
+    expect(lifecycleDigestStore.read(f.file).subscribers[f.key]).toEqual(newer);
+    expect(readDigestSubscriber("subscriber-b")?.cursorSeq).toBe(4);
+    expect(fs.statSync(f.file).isDirectory()).toBe(true);
+  });
+}
+
+test("empty and rate-held polls never request a durable writer", () => {
   const f = fixture();
-  readDigestSubscriber("subscriber-a");
-  lifecycleDigestStore.checkpointRollbackMirror(f.file);
-  const mirror = JSON.parse(fs.readFileSync(f.file, "utf8"));
-  expect(mirror.subscribers[f.key]).toEqual(f.subscriber);
-  const newer = { ...f.subscriber, cursorSeq: 9 };
-  lifecycleDigestStore.patchRows(f.file, 1, tx => tx.put({ key: f.key, value: newer }));
-  mirror.subscribers[f.key].cursorSeq = 8;
-  mirror.subscribers[digestScopeKey({ subscriberId: "subscriber-b" })] = { ...f.subscriber, cursorSeq: 4 };
-  fs.writeFileSync(f.file, JSON.stringify(mirror));
-  const result = lifecycleDigestStore.importLegacy(f.file);
-  expect(result.incident?.summary?.conflicts).toEqual([f.key]);
-  expect(readDigestSubscriber("subscriber-a")).toEqual(newer);
-  expect(readDigestSubscriber("subscriber-b")?.cursorSeq).toBe(4);
-  expect(fs.statSync(f.file).isDirectory()).toBe(true);
+  fs.writeFileSync(f.file, JSON.stringify({ version: 1, subscribers: { [f.key]: { ...f.subscriber, cursorSeq: 0 } } }));
+  lifecycleDigestStore.importLegacy(f.file);
+  const revision = readStateCollectionRevision(f.database, "lifecycle_digests");
+  let writes = 0;
+  setLegacyDocumentWriteHookForTests(collection => {
+    if (collection === "lifecycle_digests") {
+      writes++;
+      throw new Error("unexpected digest writer admission");
+    }
+  });
+  for (const subscriberId of ["subscriber-a", "subscriber-b"]) {
+    expect(pollLifecycleDigest({ subscriberId, now: T0 }).relay).toBeNull();
+  }
+  appendLifecycleEvents([{ key: "routine-a", type: "stage_started", at: new Date(T0).toISOString() }]);
+  const holder = new Database(f.database);
+  try {
+    holder.exec("BEGIN IMMEDIATE");
+    for (const subscriberId of ["subscriber-a", "subscriber-b"]) {
+      expect(pollLifecycleDigest({ subscriberId, now: T0 + 1_000 })).toMatchObject({
+        relay: null, pending: 1, heldUntil: new Date(T0 + 300_000).toISOString(),
+      });
+    }
+  } finally { holder.exec("ROLLBACK"); holder.close(); }
+  expect(writes).toBe(0);
+  expect(readStateCollectionRevision(f.database, "lifecycle_digests")).toBe(revision);
+  expect(readDigestSubscriber("subscriber-b")).toBeNull();
+});
+
+for (const { name, subscriberId, scope } of scopes) {
+  test(`keyed reads, polls, seeds and mirrors preserve ${name} scope keys`, async () => {
+    const f = fixture(subscriberId, scope);
+    appendLifecycleEvents(Array.from({ length: 8 }, (_, i) => ({
+      key: `terminal-${i}`, type: "stage_completed" as const, at: new Date(T0).toISOString(), ...scope,
+    })));
+    const read = () => lifecycleDigestStore.read(f.file).subscribers[f.key];
+    expect(read()).toEqual(f.subscriber);
+    expect(pollLifecycleDigest({ ...f.request, now: T0, acknowledge: false }).cursor).toBe(8);
+    expect(read()?.cursorSeq).toBe(7);
+    expect(pollLifecycleDigest({ ...f.request, now: T0 }).cursor).toBe(8);
+    expect(read()?.cursorSeq).toBe(8);
+    const next = await child(`console.log(JSON.stringify(pollLifecycleDigest(${JSON.stringify({ ...f.request, now: T0 })})));`);
+    expect(next.code, next.stderr).toBe(0);
+    expect(JSON.parse(next.stdout.trim())).toMatchObject({ cursor: 8, relay: null });
+    const seededId = `${subscriberId}-seed`;
+    expect(seedLifecycleDigestCursor(seededId, T0).cursorSeq).toBe(8);
+    expect(readDigestSubscriber(seededId)?.cursorSeq).toBe(8);
+    lifecycleDigestStore.checkpointRollbackMirror(f.file);
+    const mirror = JSON.parse(fs.readFileSync(f.file, "utf8"));
+    expect(mirror.subscribers[f.key]?.cursorSeq).toBe(8);
+    expect(mirror.subscribers[digestScopeKey({ subscriberId: seededId })]?.cursorSeq).toBe(8);
+  });
+}
+
+test("a due poll rechecks a competing acknowledgment before emitting a relay", () => {
+  const f = fixture();
+  lifecycleDigestStore.importLegacy(f.file);
+  appendLifecycleEvents([{ key: "terminal-a", type: "stage_completed", at: new Date(T0).toISOString() }]);
+  let competingRelays = 0;
+  setLegacyDocumentWriteHookForTests(collection => {
+    if (collection !== "lifecycle_digests") return;
+    setLegacyDocumentWriteHookForTests(null);
+    if (pollLifecycleDigest({ subscriberId: "subscriber-b", now: T0 }).relay) competingRelays++;
+  });
+  expect(pollLifecycleDigest({ subscriberId: "subscriber-b", now: T0 }).relay).toBeNull();
+  expect(competingRelays).toBe(1);
+  expect(readDigestSubscriber("subscriber-b")?.cursorSeq).toBe(1);
 });
 
 test("a full-disk commit refuses acknowledgment and retries the same relay", () => {
@@ -208,7 +292,7 @@ test("a failed seed leaves no subscriber and can be retried", () => {
 test("keyed readers retain the legacy normalizer for damaged subscriber fields", () => {
   const f = fixture();
   lifecycleDigestStore.importLegacy(f.file);
-  lifecycleDigestStore.patchRows(f.file, 1, tx => tx.put({ key: f.key, value: { cursorSeq: -1, lastRelayAt: 42 } }));
+  lifecycleDigestStore.patchRows(f.file, 1, tx => tx.put({ key: f.rowKey, value: { cursorSeq: -1, lastRelayAt: 42 } }));
   expect(readDigestSubscriber("subscriber-a")).toEqual({ cursorSeq: 0, lastRelayAt: null, updatedAt: new Date(0).toISOString() });
   appendLifecycleEvents([{ key: "terminal-a", type: "stage_completed", at: new Date(T0).toISOString() }]);
   expect(pollLifecycleDigest({ subscriberId: "subscriber-a", now: T0 }).cursor).toBe(1);

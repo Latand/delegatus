@@ -24,12 +24,17 @@ fields. An unreadable legacy file starts an empty subscriber set, preserves
 the damaged bytes and records the import gap. This can replay a digest.
 
 The `lifecycle_digests` collection in `state.sqlite` holds one row per scope.
-Reads use a keyed lookup. Seeding and acknowledgment use a transaction with
+SQLite keys use JSON string encoding so arbitrary UTF-16 strings, including
+lone surrogates, round-trip through row revision queries. Legacy imports and
+rollback mirrors retain the original length-prefixed JSON object keys.
+Reads use a keyed lookup. Empty and rate-held polls evaluate without writer
+admission. A due acknowledgment reads and evaluates again inside its writer
+transaction so a competing acknowledgment cannot emit the same relay twice.
+Seeding and acknowledgment use a transaction with
 a two-row-operation budget: one lookup and at most one upsert. No subscriber
 snapshot is read during a poll, and no application cursor cache is added.
 The journal content and relay policy remain unchanged. Busy journal reads
 defer through the shared admission helper under `lifecycle.digest.journal`.
-No latency improvement is claimed.
 
 The shared `smallStore` and `LegacyDocumentStore` implementation provides
 zero-timeout lock admission, release authority checks, count and digest

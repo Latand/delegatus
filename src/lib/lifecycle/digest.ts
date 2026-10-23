@@ -145,6 +145,12 @@ function readState(filePath: string): DigestStateFile {
   }
 }
 
+/** JSON string encoding preserves lone UTF-16 surrogates through SQLite TEXT
+ * keys and its revision queries. The legacy document keeps its original keys. */
+function digestRowKey(scopeKey: string): string {
+  return JSON.stringify(scopeKey);
+}
+
 /** One row per serialized subscriber scope. The shared importer retains the
  * legacy bytes and fences old writers until the dated rollback removal. */
 export const lifecycleDigestStore = smallStore<DigestStateFile>({
@@ -152,8 +158,8 @@ export const lifecycleDigestStore = smallStore<DigestStateFile>({
   empty: emptyState,
   parse: normalizeState,
   readLegacy: readState,
-  toRows: (file) => Object.entries(file.subscribers).map(([key, value]) => ({ key, value })),
-  fromRows: (rows) => normalizeState({ subscribers: Object.fromEntries(rows.map((row) => [row.key, row.value])) }),
+  toRows: (file) => Object.entries(file.subscribers).map(([key, value]) => ({ key: digestRowKey(key), value })),
+  fromRows: (rows) => normalizeState({ subscribers: Object.fromEntries(rows.map((row) => [JSON.parse(row.key) as string, row.value])) }),
   toFile: (file) => file,
 });
 
@@ -167,7 +173,7 @@ export const lifecycleDigestStore = smallStore<DigestStateFile>({
  * hours — replaying its whole history as if it had never polled.
  */
 function subscriberForScope(scopeKey: string): DigestSubscriberState | null {
-  return normalizeSubscriber(lifecycleDigestStore.readRow(digestStatePath(), scopeKey)?.value);
+  return normalizeSubscriber(lifecycleDigestStore.readRow(digestStatePath(), digestRowKey(scopeKey))?.value);
 }
 
 /** The unscoped subscriber — the same scope {@link seedLifecycleDigestCursor}
@@ -383,19 +389,17 @@ export function pollLifecycleDigest(request: LifecycleDigestRequest): LifecycleD
   const journal = stateLockAttempt("lifecycle.digest.journal", readLifecycleJournal);
   const now = Number.isFinite(request.now) ? request.now as number : Date.now();
   const scopedId = digestScopeKey(request);
-  if (request.acknowledge === false) {
-    /* The same key the acknowledging branch below writes under — a dry run that
-       reported a cursor the real poll does not hold would be a diagnostic that
-       lies about exactly the thing it exists to show. */
-    const subscriber = subscriberForScope(scopedId) ?? { cursorSeq: 0, lastRelayAt: null, updatedAt: new Date(now).toISOString() };
-    return evaluateDigest(journal, request, subscriber);
-  }
+  const initialSubscriber = { cursorSeq: 0, lastRelayAt: null, updatedAt: new Date(now).toISOString() };
+  const preview = evaluateDigest(journal, request, subscriberForScope(scopedId) ?? initialSubscriber);
+  if (request.acknowledge === false || !preview.relay) return preview;
+  const rowKey = digestRowKey(scopedId);
   return lifecycleDigestStore.patchRows(digestStatePath(), 2, (tx) => {
-    const subscriber = normalizeSubscriber(tx.get(scopedId)?.value)
-      ?? { cursorSeq: 0, lastRelayAt: null, updatedAt: new Date(now).toISOString() };
+    // Another process may have acknowledged after the preview. Recheck under
+    // the writer lease so concurrent due polls still emit only one relay.
+    const subscriber = normalizeSubscriber(tx.get(rowKey)?.value) ?? initialSubscriber;
     const result = evaluateDigest(journal, request, subscriber);
     if (!result.relay) return result;
-    tx.put({ key: scopedId, value: {
+    tx.put({ key: rowKey, value: {
       cursorSeq: result.cursor,
       lastRelayAt: new Date(now).toISOString(),
       updatedAt: new Date(now).toISOString(),
@@ -411,12 +415,12 @@ export function pollLifecycleDigest(request: LifecycleDigestRequest): LifecycleD
  */
 export function seedLifecycleDigestCursor(subscriberId: string, now = Date.now()): DigestSubscriberState {
   const head = stateLockAttempt("lifecycle.digest.journal", readLifecycleJournal).lastSeq;
-  const scopedId = digestScopeKey({ subscriberId });
+  const rowKey = digestRowKey(digestScopeKey({ subscriberId }));
   return lifecycleDigestStore.patchRows(digestStatePath(), 2, (tx) => {
-    const existing = normalizeSubscriber(tx.get(scopedId)?.value);
+    const existing = normalizeSubscriber(tx.get(rowKey)?.value);
     if (existing) return existing;
     const seeded: DigestSubscriberState = { cursorSeq: head, lastRelayAt: null, updatedAt: new Date(now).toISOString() };
-    tx.put({ key: scopedId, value: seeded });
+    tx.put({ key: rowKey, value: seeded });
     return seeded;
   });
 }
