@@ -15,6 +15,7 @@ import {
   headlessRuns,
   reviewerEnvironment,
   terminateHeadlessReviewerGroup,
+  terminateHeadlessReviewerGroupAndWait,
   type HeadlessReviewRuntime,
   type LiveRun,
 } from "./headless";
@@ -292,9 +293,9 @@ export function buildEphemeralCommand(
     reviewerPath: null,
   };
 }
-export function runEphemeralAgent(
+export async function runEphemeralAgent(
   request: EphemeralAgentRequest,
-): EphemeralAgentRun {
+): Promise<EphemeralAgentRun> {
   let built: EphemeralCommand;
   try {
     built = buildEphemeralCommand(request);
@@ -377,7 +378,7 @@ export function runEphemeralAgent(
   });
   const ticker = setInterval(tail, 250);
   ticker.unref();
-  const launched = launchDetached({
+  const launch = () => launchDetached({
     key: request.key,
     built,
     cwd: request.session?.cwd ?? path.join(request.runDir, "cwd"),
@@ -432,6 +433,27 @@ export function runEphemeralAgent(
       });
     },
   });
+  let launched: ReturnType<typeof launchDetached>;
+  try {
+    if (request.engine === "codex") {
+      const { waitForCodexProcess, withCodexCliLaunch } = await import("@/lib/codexUpdate/installation");
+      launched = await withCodexCliLaunch(request.runtime?.command ?? built.command, async () => launch(), async result => {
+        if (!result?.pid) return;
+        try { await waitForCodexProcess(result.pid); }
+        catch (error) {
+          const run = headlessRuns.get(request.key);
+          if (run) await terminateHeadlessReviewerGroupAndWait(result.pid, run.identity, { ownedByLiveHandle: true, graceMs: 0, killWaitMs: 1_000 });
+          throw error;
+        }
+      });
+    } else launched = launch();
+  } catch (error) {
+    clearInterval(ticker);
+    finish({ status: "failed", answer: null, durationMs: 0, code: null, signal: null });
+    const run = headlessRuns.get(request.key);
+    if (run?.child.pid) await terminateHeadlessReviewerGroupAndWait(run.child.pid, run.identity, { ownedByLiveHandle: true, graceMs: 0, killWaitMs: 1_000 });
+    throw error;
+  }
   if (!launched) {
     clearInterval(ticker);
     finish({

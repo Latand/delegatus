@@ -12,6 +12,42 @@ import { writeJsonDurably } from "@/lib/state/durableJson";
 export class UpdateCommandFailure extends Error {
   constructor(message: string, readonly diagnostics: string) { super(message); }
 }
+
+function groupHasRunningProcesses(groupId: number): boolean | null {
+  if (process.platform === "linux") {
+    let entries: string[];
+    try { entries = fs.readdirSync("/proc"); } catch { return null; }
+    let uncertain = false;
+    for (const entry of entries) {
+      if (!/^\d+$/.test(entry)) continue;
+      try {
+        const stat = fs.readFileSync(`/proc/${entry}/stat`, "utf8");
+        const fields = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\s+/);
+        if (Number(fields[2]) === groupId && fields[0] !== "Z" && fields[0] !== "X" && fields[0] !== "x") return true;
+      } catch (error) { if (!["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException).code ?? "")) uncertain = true; }
+    }
+    return uncertain ? null : false;
+  }
+  if (process.platform === "win32") return null;
+  try { process.kill(-groupId, 0); return true; }
+  catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM" ? true
+      : (error as NodeJS.ErrnoException).code === "ESRCH" ? false : null;
+  }
+}
+
+async function stopAndVerifyGroup(child: ReturnType<typeof spawn>): Promise<void> {
+  if (!child.pid) return;
+  signalDetachedProcessGroup(child, "SIGKILL");
+  const deadline = Date.now() + 5_000;
+  for (;;) {
+    const running = groupHasRunningProcesses(child.pid);
+    if (running === false) return;
+    if (Date.now() >= deadline) throw new Error("could not verify failed command process group stopped");
+    await new Promise<void>(resolve => setTimeout(resolve, 25));
+  }
+}
+
 export function runUpdateCommand(binary: string, args: string[], env: NodeJS.ProcessEnv, timeoutMs: number, cwd?: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(binary, args, { env, cwd, detached: true, stdio: ["ignore", "pipe", "pipe"] });
@@ -21,10 +57,13 @@ export function runUpdateCommand(binary: string, args: string[], env: NodeJS.Pro
     child.stdout.on("data", (chunk: Buffer) => { bytes += chunk.length; if (bytes > 16 * 1024 * 1024) stop(); else output += chunk.toString(); });
     child.stderr.on("data", (chunk: Buffer) => { bytes += chunk.length; diagnostic = (diagnostic + chunk.toString()).slice(-16 * 1024); if (bytes > 16 * 1024 * 1024) stop(); });
     child.once("error", () => { failure ??= new Error("command could not start"); });
-    child.once("close", code => {
+    child.once("close", async code => {
       clearTimeout(timer);
-      if (failure || code !== 0) reject(new UpdateCommandFailure(failure?.message ?? `command exit ${code}`, diagnostic));
-      else resolve(output);
+      if (failure || code !== 0) {
+        try { await stopAndVerifyGroup(child); }
+        catch (error) { reject(new UpdateCommandFailure(`${failure?.message ?? `command exit ${code}`}; ${error instanceof Error ? error.message : "group cleanup failed"}`, diagnostic)); return; }
+        reject(new UpdateCommandFailure(failure?.message ?? `command exit ${code}`, diagnostic));
+      } else resolve(output);
     });
   });
 }

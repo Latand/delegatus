@@ -2,7 +2,8 @@ import { afterEach, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { productionUpdatePorts, UpdateCommandFailure } from "./production";
+import { productionUpdatePorts, runUpdateCommand, UpdateCommandFailure } from "./production";
+import { procBackend } from "@/lib/proc";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -49,6 +50,22 @@ test("probe reports the exact failed boundary", async () => {
   const ports = productionUpdatePorts({ bun: process.execPath, probeFile: path.join(root, "missing-probe.test.ts"), scratch: path.join(root, "scratch"), current: () => true, report: async () => {} });
   await expect(ports.probe("0.164.0", stub)).rejects.toMatchObject({ check: "app-server schema" });
   await expect(ports.probe("0.163.0", stub)).rejects.toMatchObject({ check: "native queue fixture" });
+});
+
+test("a failed command kills and verifies an unrefed descendant before rejecting", async () => {
+  const root = directory(), pidFile = path.join(root, "descendant.pid");
+  const source = `const {spawn}=require('node:child_process');const fs=require('node:fs');const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});child.unref();fs.writeFileSync(${JSON.stringify(pidFile)},String(child.pid));process.exit(23);`;
+  await expect(runUpdateCommand(process.execPath, ["-e", source], { NODE_ENV: "test" }, 5_000)).rejects.toThrow("command exit 23");
+  const pid = Number(fs.readFileSync(pidFile, "utf8"));
+  expect(procBackend.pidAlive(pid) && !procBackend.processExited(pid)).toBeFalse();
+});
+
+test("a timed out command kills and verifies an unrefed descendant before rejecting", async () => {
+  const root = directory(), pidFile = path.join(root, "timeout-descendant.pid");
+  const source = `const {spawn}=require('node:child_process');const fs=require('node:fs');const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});child.unref();fs.writeFileSync(${JSON.stringify(pidFile)},String(child.pid));setInterval(()=>{},1000);`;
+  await expect(runUpdateCommand(process.execPath, ["-e", source], { NODE_ENV: "test" }, 200)).rejects.toThrow("deadline or output bound");
+  const pid = Number(fs.readFileSync(pidFile, "utf8"));
+  expect(procBackend.pidAlive(pid) && !procBackend.processExited(pid)).toBeFalse();
 });
 
 test.skipIf(process.env.CODEX_UPDATE_NATIVE_SMOKE !== "1")("package artifacts install and probe a real CLI in a private prefix", async () => {

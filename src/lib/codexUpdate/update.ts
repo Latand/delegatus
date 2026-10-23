@@ -81,7 +81,7 @@ export async function updateCodex(binary: string, ports: UpdatePorts, rollback =
     const previous = state.previous;
     try {
       const from = installedTarget(binary);
-      await ports.prune?.([from, state.pending?.target, state.previous?.target].filter((target): target is string => !!target));
+      await ports.prune?.([from, state.pending?.target, state.pending?.from, state.previous?.target].filter((target): target is string => !!target));
       if (rollback) {
         if (!state.previous) throw new Error("no rollback version");
         if (from !== state.previous.from) throw new Error("installed CLI changed before rollback");

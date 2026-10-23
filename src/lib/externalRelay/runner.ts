@@ -30,6 +30,8 @@ import { procBackend } from "@/lib/proc";
 import {
   runEphemeralAgent,
   EphemeralProfileError,
+  type EphemeralAgentRun,
+  type EphemeralAgentResult,
 } from "@/lib/agent/ephemeral";
 import type { HeadlessReviewRuntime } from "@/lib/agent/headless";
 import { relayCall, ExternalRelayError } from "./client";
@@ -409,7 +411,7 @@ export async function runClaimedRequest(
   let runDir: string | null = null;
   let capacityReleased = false;
   let duplicate = false;
-  let run: ReturnType<typeof runEphemeralAgent> | null = null;
+  let run: EphemeralAgentRun | null = null;
   let runFinished = false;
   const callAbort = new AbortController();
   const identityTimers: ReturnType<typeof setTimeout>[] = [];
@@ -734,7 +736,7 @@ export async function runClaimedRequest(
       steps.observe({ currentTool: pendingServiceTools > 0 ? "relay_tool" : null });
     } : undefined);
     if (owner && !prototype && caps?.rich) ownerParts = openOwnerAnswer(relay.id, request, runDir, [relay.credential], () => !leaseUnavailable && !callAbort.signal.aborted && ownerRelayAuthorized(relay.id, target.id, requestId),callAbort.signal);
-    let result: Awaited<ReturnType<typeof runEphemeralAgent>["done"]> | null = null;
+    let result: EphemeralAgentResult | null = null;
     let completion: ExternalRelayDecision | null = null;
     for (rounds = 1; rounds <= (loop ? RELAY_TOOL_ROUNDS : 1); rounds++) {
       if (Date.now() >= deadline.at) return await finish(declined(leaseId, "busy"));
@@ -799,7 +801,7 @@ export async function runClaimedRequest(
             recorder?.bindConversation(conversationId);
           },
           ...(steps ? { onProgress: steps.observe } : {}),
-        }) : runEphemeralAgent({
+        }) : await runEphemeralAgent({
           ...(conversation ? { session: { mode: conversation.sessionId ? "resume" as const : "start" as const, id: conversation.sessionId ?? (target.engine === "claude" ? crypto.randomUUID() : null), cwd: conversation.cwd!, codexHome: conversationCodexHome(conversation) } } : {}),
           key: loop ? `external-relay:${requestId}:${rounds}` : `external-relay:${requestId}`,
           engine: target.engine,

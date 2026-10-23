@@ -6,6 +6,9 @@ import { updateCodex, CHECK_INTERVAL_MS, newer, type UpdateNotice, type UpdatePo
 import { installedTarget, updateDirectory, withCliSwitch, withCodexCliLaunch } from "./installation";
 import { codexProcessesPresent, runUpdateCommand } from "./production";
 import { isTerminalHighSignalEvent } from "@/lib/lifecycle/vocabulary";
+import { runHeadlessCodexOnce } from "@/lib/agent/headless";
+import { headlessFixtureTransport, setHeadlessSpawnForTests } from "@/lib/runtime/agentSignalSandbox";
+import { spawn } from "node:child_process";
 
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true }); });
@@ -187,6 +190,36 @@ describe("Codex CLI automatic updates", () => {
     expect(switches).toBe(1); expect(work.notices[0]?.line).toBe("Codex CLI 0.164.0: updated");
     await updateCodex(work.binary, work.ports, true); expect(installedTarget(work.binary)).toBe(work.old);
   });
+  test("recovery retains the immediate predecessor before production pruning and rollback", async () => {
+    const work = fixture(), versions = path.join(work.root, "versions"); fs.mkdirSync(versions);
+    const original = packageAt(path.join(versions, "0.163.0"), "0.163.0");
+    const first = packageAt(path.join(versions, "0.164.0"), "0.164.0");
+    const second = packageAt(path.join(versions, "0.165.0"), "0.165.0");
+    fs.unlinkSync(work.binary); fs.symlinkSync(original, work.binary);
+    const ownedFile = path.join(versions, "owned.json"); fs.writeFileSync(ownedFile, JSON.stringify([path.join(versions, "0.163.0")]));
+    const production = (await import("./production")).productionUpdatePorts({ bun: process.execPath, probeFile: "unused", scratch: path.join(work.root, "scratch"), versionsDirectory: versions, current: () => true, report: async () => {} });
+    work.ports.prune = production.prune;
+    work.ports.install = async version => {
+      const target = version === "0.164.0" ? first : second, owned = JSON.parse(fs.readFileSync(ownedFile, "utf8")) as string[];
+      if (!owned.includes(path.join(versions, version))) fs.writeFileSync(ownedFile, JSON.stringify([...owned, path.join(versions, version)]));
+      return target;
+    };
+    await updateCodex(work.binary, work.ports);
+    work.setNow(CHECK_INTERVAL_MS);
+    work.ports.latest = async () => "0.165.0";
+    const originalRename = fs.renameSync;
+    const rename = spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      originalRename(from, to);
+      if (to === work.binary && fs.realpathSync(work.binary) === second) throw new Error("committed rename then crash");
+    });
+    try { await expect(updateCodex(work.binary, work.ports)).rejects.toThrow("recovery"); }
+    finally { rename.mockRestore(); }
+    expect(fs.existsSync(path.join(versions, "0.164.0"))).toBeTrue();
+    await updateCodex(work.binary, work.ports);
+    expect(installedTarget(work.binary)).toBe(second);
+    await updateCodex(work.binary, work.ports, true);
+    expect(installedTarget(work.binary)).toBe(first);
+  });
   test("launches and the idle switch use the same admission", async () => {
     const work = fixture(); let release!: () => void, entered!: () => void;
     const ready = new Promise<void>(resolve => { entered = resolve; });
@@ -217,6 +250,35 @@ describe("Codex CLI automatic updates", () => {
     } finally {
       child.stdin.end(); if (child.exitCode === null) child.kill("SIGKILL"); await child.exited;
       await pending;
+    }
+  });
+  test("headless Codex waits for switch admission and promotion waits for the running process", async () => {
+    const work = fixture(), started = path.join(work.root, "started"), release = path.join(work.root, "release");
+    fs.writeFileSync(work.old, `#!${process.execPath}\nconst fs=require('node:fs');const a=process.argv;fs.writeFileSync(${JSON.stringify(started)},'started');while(!fs.existsSync(${JSON.stringify(release)}))Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10);fs.writeFileSync(a[a.indexOf('--output-last-message')+1],'ready');\n`, { mode: 0o700 });
+    const previousTransport = headlessFixtureTransport(); setHeadlessSpawnForTests(spawn);
+    const launch = () => runHeadlessCodexOnce({ key: `headless-${path.basename(work.root)}`, cwd: path.join(work.root, "cwd"), prompt: "fixture", model: null, effort: null, account: null,
+      artifactDir: path.join(work.root, "artifacts"), timeoutMs: 10_000, sandbox: "read-only", runtime: { command: work.binary } });
+    let running!: Promise<Awaited<ReturnType<typeof launch>>>;
+    try {
+      await withCliSwitch(work.binary, async () => {
+        running = launch();
+        const queue = path.join(updateDirectory(work.binary), "switch.write-locks"), deadline = Date.now() + 5_000;
+        while (fs.readdirSync(queue).length < 2 && Date.now() < deadline) await Bun.sleep(5);
+        expect(fs.readdirSync(queue).length).toBeGreaterThanOrEqual(2);
+        expect(fs.existsSync(started)).toBeFalse();
+      });
+      const deadline = Date.now() + 5_000;
+      while (!fs.existsSync(started) && Date.now() < deadline) await Bun.sleep(5);
+      expect(fs.existsSync(started)).toBeTrue();
+      let idleChecks = 0; work.ports.idle = async () => { idleChecks++; return false; };
+      await updateCodex(work.binary, work.ports);
+      expect(installedTarget(work.binary)).toBe(work.old); expect(idleChecks).toBe(1);
+      fs.writeFileSync(release, "go"); expect((await running).status).toBe("done");
+      work.ports.idle = async () => true; await updateCodex(work.binary, work.ports);
+      expect(installedTarget(work.binary)).toBe(work.candidate);
+    } finally {
+      fs.writeFileSync(release, "go"); setHeadlessSpawnForTests(previousTransport);
+      if (running) await running;
     }
   });
   test("daily budget and pending candidate survive real process replacement", async () => {

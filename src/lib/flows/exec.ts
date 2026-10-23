@@ -55,16 +55,25 @@ export async function startHeadlessReview(
     completionSignaled = true;
     requestPipelineTick();
   };
-  const launched = launchDetached({
-    key,
-    built,
-    cwd,
-    stdoutPath: stdoutPathFor(flowId, round),
-    stderrPath: stderrPathFor(flowId, round),
-    timeoutMs,
-    runtime,
-    onExit: signalCompletion,
-  });
+  let launched: ReturnType<typeof launchDetached>;
+  if (role.engine === "codex") {
+    const { waitForCodexProcess, withCodexCliLaunch } = await import("@/lib/codexUpdate/installation");
+    launched = await withCodexCliLaunch(runtime?.command ?? built.command, async () => launchDetached({
+      key, built, cwd, stdoutPath: stdoutPathFor(flowId, round), stderrPath: stderrPathFor(flowId, round), timeoutMs, runtime, onExit: signalCompletion,
+    }), async result => {
+      if (!result?.pid) return;
+      try { await waitForCodexProcess(result.pid); }
+      catch (error) {
+        const run = runs.get(key);
+        if (run) await terminateHeadlessReviewerGroupAndWait(result.pid, run.identity, { ownedByLiveHandle: true, graceMs: 0, killWaitMs: 1_000 });
+        throw error;
+      }
+    });
+  } else {
+    launched = launchDetached({
+      key, built, cwd, stdoutPath: stdoutPathFor(flowId, round), stderrPath: stderrPathFor(flowId, round), timeoutMs, runtime, onExit: signalCompletion,
+    });
+  }
   if (!launched) return idle;
   return { pid: launched.pid, identity: launched.identity, sessionId: built.sessionId, reviewerPath: built.reviewerPath };
 }
