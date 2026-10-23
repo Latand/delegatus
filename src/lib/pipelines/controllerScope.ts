@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { pipelineAttemptMayBeWorking } from "./hostRetirement";
+import { pipelineAttemptMayBeWorking } from "./attemptWorking";
 import type { Pipeline, PipelineStageHostRef } from "./types";
 import type { PipelineAttemptReference } from "@/lib/state/pipelineControllerReferences";
 

@@ -2,6 +2,7 @@ import type { RuntimeEngine, RuntimeProviderRecoveryRef } from "@/lib/runtime/co
 import { durableStageTurnEvidence } from "./durableEvidence";
 import { liveBackgroundTasks } from "./backgroundTasks";
 import { classifyProviderCondition } from "./providerConditions";
+import { pipelineAttemptMayBeWorking } from "./attemptWorking";
 import type { Pipeline, PipelineStageAttempt, PipelineStageHostRef } from "./types";
 
 type RecoveryTarget = { conversationId: string; sessionId: string; agentPath: string | null; engine: RuntimeEngine };
@@ -15,13 +16,8 @@ export function pipelineAttemptReleased(pipeline: Pipeline, attempt: PipelineSta
     || (!!latest && !latest.historical && latest.n !== attempt.n));
 }
 
-/** A working state or a missing turn-end stamp leaves a turn possibly open. A
-    release never proves idleness: such a host retires only on positive runtime
-    idle evidence and never by its recorded identity alone. */
-export function pipelineAttemptMayBeWorking(attempt: PipelineStageAttempt): boolean {
-  return ["pending", "spawning", "running", "reviewing", "committing"].includes(attempt.state)
-    || !(attempt.verdict || attempt.completedAt);
-}
+// Dependency-free so the controller scope can share it without its imports.
+export { pipelineAttemptMayBeWorking };
 
 /** Fresh pipeline ownership for an engine-issued recovery. A ref never grants
     authority to a source owner, publication, or a different/current attempt. */
