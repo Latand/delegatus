@@ -292,9 +292,14 @@ export class SelfUpdateService {
     // their controllers, even when future automatic updates are switched off.
     this.refreshDrain();
     if (this.auto.enabled) this.ensureChecked();
-    this.autoTimer = setInterval(() => { void this.autoTick().then(() => this.retentionTick()); }, 60_000);
+    const checkCodex = () => {
+      if (!this.stopped) void import("@/lib/codexUpdate/controller").then(({ codexUpdateTick }) => codexUpdateTick())
+        .catch(() => console.error("[codex update] scheduler failed"));
+    };
+    this.autoTimer = setInterval(() => { void this.autoTick().then(() => this.retentionTick()); checkCodex(); }, 60_000);
     this.autoTimer.unref?.();
     void this.autoTick().then(() => this.retentionTick());
+    checkCodex();
   }
 
   /** Owner-only startup and cadence work, independent of automatic updates.

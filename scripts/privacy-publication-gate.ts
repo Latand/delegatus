@@ -1106,12 +1106,72 @@ function gitPaths(repository: string, arguments_: string[]): { error: boolean; p
   };
 }
 
-function changedPaths(arguments_: string[], repository: string): { error: boolean; paths: string[] } {
+type PublicationRange = { base: string; error: boolean; notices: string[] };
+
+/** Resolve in the inspection repository, which may lag the trusted checkout. */
+function publicationRange(repository: string, requestedBase: string): PublicationRange {
+  const git = (args: string[], fetching = false) => Bun.spawnSync({
+    cmd: ["git", "-C", repository, ...args],
+    env: { ...withoutUnsupportedApiCredentials(process.env), GIT_TERMINAL_PROMPT: "0" },
+    stdout: "pipe", stderr: "pipe", timeout: fetching ? 30_000 : 10_000,
+  });
+  const unreadable = (reason: string): PublicationRange => ({
+    base: requestedBase, error: true, notices: [`publication_range: unreadable: ${reason}`],
+  });
+  const commit = (ref: string): string | undefined => {
+    const result = git(["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`]);
+    const hash = result.stdout.toString().trim();
+    return result.exitCode === 0 && COMMIT_HASH.test(hash) ? hash : undefined;
+  };
+  const head = commit("HEAD");
+  if (!head) return unreadable("candidate HEAD object unavailable");
+  let base = commit(requestedBase);
+  if (!base) {
+    // CI supplies an immutable object id. Never interpret a supplied revision
+    // expression as a fetch refspec, URL or option, or fetch in the trusted tree.
+    if (!COMMIT_HASH.test(requestedBase)) return unreadable("requested base cannot be resolved as a commit");
+    git(["fetch", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head", "origin", requestedBase], true);
+    base = commit(requestedBase);
+    if (!base) return unreadable("requested base object unavailable after fetch from origin");
+  }
+  const shallow = git(["rev-parse", "--is-shallow-repository"]);
+  if (shallow.exitCode !== 0) return unreadable("cannot determine candidate history completeness");
+  const shallowState = shallow.stdout.toString().trim();
+  if (shallowState !== "true" && shallowState !== "false") {
+    return unreadable("cannot determine candidate history completeness");
+  }
+  if (shallowState === "true") {
+    // A readable merge base alone cannot prove a shallow branch's complete
+    // commit set. Recover both sides before any message or identity read.
+    const fetched = git(["fetch", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head",
+      "--unshallow", "origin", base, head], true);
+    if (fetched.exitCode !== 0) return unreadable("candidate history unavailable after fetch from origin");
+    const recoveredShallow = git(["rev-parse", "--is-shallow-repository"]);
+    if (recoveredShallow.exitCode !== 0) return unreadable("cannot verify candidate history completeness after fetch from origin");
+    const recoveredState = recoveredShallow.stdout.toString().trim();
+    if (recoveredState === "true") {
+      return unreadable("candidate history remains shallow after fetch from origin");
+    }
+    if (recoveredState !== "false") return unreadable("cannot verify candidate history completeness after fetch from origin");
+  }
+  const result = git(["merge-base", "--all", base, head]);
+  const bases = result.stdout.toString().trim().split("\n");
+  if (result.exitCode !== 0 || !bases.every((hash) => COMMIT_HASH.test(hash))) {
+    return unreadable("no readable common ancestor between base and candidate HEAD");
+  }
+  if (bases.length !== 1) return unreadable("multiple merge bases require an explicit ancestor base");
+  const ancestor = git(["merge-base", "--is-ancestor", base, head]);
+  if (ancestor.exitCode !== 0 && ancestor.exitCode !== 1) return unreadable("cannot verify base ancestry");
+  return { base: bases[0], error: false, notices: ancestor.exitCode === 1
+    ? [`publication_range: base is not an ancestor of HEAD; inspecting from merge-base ${bases[0]}`] : [] };
+}
+
+function changedPaths(arguments_: string[], repository: string, resolvedBase?: string): { error: boolean; paths: string[] } {
   const baseIndex = arguments_.indexOf("--base");
   const base = baseIndex === -1 ? "origin/main" : arguments_[baseIndex + 1];
   if (!base || base.startsWith("--")) return { error: true, paths: [] };
   const commands = [
-    ["diff", "--name-only", "--diff-filter=ACMRT", "-z", `${base}...HEAD`],
+    ["diff", "--name-only", "--diff-filter=ACMRT", "-z", `${resolvedBase ?? base}...HEAD`],
     ["diff", "--name-only", "--diff-filter=ACMRT", "-z"],
     ["diff", "--cached", "--name-only", "--diff-filter=ACMRT", "-z"],
     ["ls-files", "--others", "--exclude-standard", "-z"],
@@ -2275,7 +2335,7 @@ export function inspectPaths(
 
 export function formatPrivacyReport(findings: Map<FindingClass, number>, notices: string[] = []): string {
   if (findings.size === 0) {
-    return "PRIVACY GATE: PASS\n";
+    return ["PRIVACY GATE: PASS", ...notices, ""].join("\n");
   }
   const lines = ["PRIVACY GATE: FAIL"];
   for (const [finding, count] of [...findings].sort(([left], [right]) => left.localeCompare(right))) {
@@ -2740,25 +2800,32 @@ if (import.meta.main) {
   const arguments_ = process.argv.slice(2);
   const repositoryArgument = argumentValue(arguments_, "--repository");
   const inspectionRoot = repositoryArgument ? resolve(repositoryArgument) : (repositoryRoot ?? resolve("."));
-  const trustedBase = argumentValue(arguments_, "--base") ?? "origin/main";
+  const requestedBase = argumentValue(arguments_, "--base") ?? "origin/main";
   const repositoryPath = safePath(inspectionRoot);
   const repositoryError = repositoryPath.status !== "safe" || !repositoryPath.metadata?.isDirectory();
   const explicitPaths = requestedPaths(arguments_);
+  const range = !repositoryError && (explicitPaths === undefined || arguments_.includes("--check-commits"))
+    ? publicationRange(inspectionRoot, requestedBase)
+    : { base: requestedBase, error: false, notices: [] };
+  const trustedBase = range.base;
   const selection = explicitPaths === undefined
-    ? changedPaths(arguments_, inspectionRoot)
+    ? changedPaths(arguments_, inspectionRoot, trustedBase)
     : {
       error: explicitPaths.length === 0,
       paths: explicitPaths.map((path) => isAbsolute(path) ? path : resolve(inspectionRoot, path)),
     };
-  const notices: string[] = [];
+  const notices: string[] = [...range.notices];
   const pathFindings = inspectPaths(
     selection.paths,
-    selection.error || repositoryError,
+    false,
     arguments_.includes("--require-known-values"),
     inspectionRoot,
     trustedBase,
     notices,
   );
+  if (selection.error || repositoryError || range.error) {
+    pathFindings.set("inspection_error", (pathFindings.get("inspection_error") ?? 0) + 1);
+  }
   if (arguments_.includes("--check-commits")) {
     for (const [finding, count] of commitMessageFindings(inspectionRoot, trustedBase, notices)) {
       pathFindings.set(finding, (pathFindings.get(finding) ?? 0) + count);

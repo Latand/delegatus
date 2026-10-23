@@ -1570,3 +1570,75 @@ once.
 - A dependency cache keyed by lockfile fingerprint: the warm Bun cache makes
   the per-run install about 0.6 s.
 - Other projects (Q2).
+
+### 8.14 Direct comparator entry and placement verification
+
+The 2026-10-23 follow-up checks three entry paths against the requirement to
+leave this machine's CPU available for agents:
+
+| Entry | Before this follow-up | Routing |
+| --- | --- | --- |
+| `.githooks/pre-push` or `bun scripts/local-gate.ts pre-push` | Already remote when eligible and healthy. | The parent keeps privacy here and sends its `--admitted` half through `gate-slot.sh` with the parent's environment. It does this before creating any isolated child check. |
+| The same parent invoked through `gate-slot.sh` | The client declined the unadmitted command shape, wrote `here` to its decision file, and the wrapper exported `LLV_GATE_RUNNER=off` before the parent dispatched its checks. | The wrapper recognizes the checkout's privacy parent and runs it under the existing ownership fence without taking a local slot. Its heavy half can then dispatch remotely. The parent still has its local service, memory cap and cancellation fence. |
+| `bun scripts/local-gate-tests.ts --base <ref> <files...>` | A direct invocation created local file-runner services without consulting the client. An invocation through `gate-slot.sh` was already eligible. | The CLI now re-enters through `gate-slot.sh` before isolation, passing `--admitted` to the new process. Head samples, baseline checkout and confirmation samples all stay in that one run. |
+| Viewer publication hook | Already remote under the same eligibility and health conditions. | `pipelinePublicationHookEnv` removes the Viewer's `NODE_ENV` and private settings while retaining gate configuration. The push then invokes the same hook. |
+
+The wrapper recognizes the Bun parent and the checkout's executable hook,
+including a hook invoked through Bash. It verifies the script's directory
+against its Git root and requires the runner directory. Other commands
+retain their usual admission. The comparator's imported API retains its
+local result object; native verification calls it inside the hook's admitted
+run. An isolated
+hook child, a test fixture or a runner process has `LLV_GATE_RUNNER=off` or
+`NODE_ENV=test` and stays on its current machine. The CLI's argument also
+survives a fresh process during local fallback. No inner sample ships a
+second tree. SIGTERM and SIGINT reach the wrapper, and the CLI awaits its
+exit after the client's remote cleanup. The wrapped parent's existing
+ownership fence may end its client before removal is confirmed; the remote
+work still stops, and its lease stays for the existing sweep. Exit 75 remains
+a missing verdict.
+
+The decision log read during diagnosis showed successful remote pre-push
+runs alongside local fallbacks. At 11:12Z a pre-push fell back because a
+lost remote verdict had marked the runner unhealthy until 11:15Z. A remote
+pre-push completed successfully at 11:26Z. A journal read for
+11:15–11:22Z also showed comparator file-runner services here; the baseline
+CLI rehearsal separately proves the missing dispatch. Healthy
+hardware alone does not clear the persisted cooldown; an already-started
+local run continues locally after it expires. This follow-up preserves
+that fallback and the privacy scan before upload.
+
+The placement record is `evidence/gate-runner-entry-routing.json`. Its
+procedure uses private fixture checkouts with the real entry points,
+wrapper, client, server, privacy scanner and configured SSH transport. Each
+fixture has one stable failing test on both revisions and a compiler scope
+restricted to that test. Only a comment changes against its base. The
+publication rehearsal applies `pipelinePublicationHookEnv` and invokes the
+hook directly, without publishing a ref. The comparator runs its head and
+baseline samples against the same test.
+
+For each entry, run the same command twice with the starting comparator
+and wrapper, and twice with their final versions. Count distinct `delegatus-gate-*`
+service starts from the user journal within each invocation's start/end
+timestamps, retaining only messages naming that fixture's owned runner.
+Record the remote run id, exit code, load and source digests for the wrapper
+and comparator.
+Both samples of each version gave these counts; all sixteen invocations
+exited 0 and retained the single pre-existing assertion failure:
+
+| Entry | Local services before | Local services after | One final remote run id |
+| --- | --- | --- | --- |
+| Agent pre-push | 0 | 0 | `7534f59506e9` |
+| Agent pre-push through the wrapper | 7 | 1 (privacy parent) | `7357967f583b` |
+| Direct comparator | 2 | 0 | `a618ad4d9de6` |
+| Publication hook rehearsal | 0 | 0 | `0334d4020b6f` |
+
+Each final invocation started exactly one remote run. This measures
+placement, with no latency or throughput claim. Regression
+cases in `scripts/gate-runner/remoteHook.test.ts`,
+`scripts/gate-runner/remoteEntry.test.ts` and
+`scripts/gate-runner/remoteLifecycle.test.ts` cover comparison verdicts,
+one remote dispatch, local fallback, private-tree refusal, lost verdicts
+and cancellation with a held descendant lock. Existing receipt tests cover
+the publication's reuse rules. Cancellation fixtures run the mock SSH session
+in its own scope so it can observe the local transport closing.

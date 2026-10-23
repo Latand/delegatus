@@ -5,7 +5,8 @@ import type { Locale } from "@/lib/i18n/core";
 
 const key = (row: Pick<ProfileRow, "project" | "locale">) => JSON.stringify([row.project, row.locale]);
 const seed = { collection: "memory_profile", schemaVersion: 1, migrationId: "memory-profile-v1", key, loadRecords: (): ProfileRow[] => [] };
-function collection(create: boolean): SqliteStateCollection<ProfileRow> | null {
+/** Exported for the install transfer, which initializes the collection through its owner. */
+export function memoryProfileCollection(create: boolean): SqliteStateCollection<ProfileRow> | null {
   const file = statePath("state.sqlite");
   if (!create && !stateCollectionsInitialized(file, [seed])) return null;
   if (create) initializeStateCollections(file, [seed]);
@@ -18,8 +19,8 @@ function collection(create: boolean): SqliteStateCollection<ProfileRow> | null {
   });
 }
 export function readProfileRow(project: string, locale: Locale): ProfileRow | null {
-  return collection(false)?.get(key({ project, locale })) ?? null;
+  return memoryProfileCollection(false)?.get(key({ project, locale })) ?? null;
 }
 export function writeProfileRow(row: ProfileRow): void {
-  collection(true)!.boundedPatch(1, tx => tx.put(row));
+  memoryProfileCollection(true)!.boundedPatch(1, tx => tx.put(row));
 }

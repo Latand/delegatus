@@ -2288,6 +2288,58 @@ export class SqliteStateCollection<T> {
     await waitForStateLock("state.patch", () => this.patchSync(prepare, options), { subject: this.options.collection });
   }
 
+  /** Upserts across any number of collections of one database in a single
+      SQLite transaction: the companion write generalised. Leases are taken in
+      collection-name order, like `patchSync`, so two such writers cannot
+      deadlock. `beforeCommit` runs inside the transaction after every merge;
+      a throw there rolls every collection back. */
+  static commitPatchesSync(
+    patches: readonly { collection: SqliteStateCollection<unknown>; records: readonly unknown[]; deleteKeys?: readonly string[] }[],
+    options: {
+      /** Runs first inside the transaction, with the committed revision and row
+          count of any collection; a throw rolls back before anything is written. */
+      beforeMerge?: (read: { revision(collection: string): number | null; rows(collection: string): number }) => void;
+      beforeCommit?: () => void;
+      busyMessage?: string;
+    } = {},
+  ): void {
+    if (!patches.length) return;
+    const filename = patches[0]!.collection.filename;
+    const names = new Set<string>();
+    for (const patch of patches) {
+      if (patch.collection.filename !== filename) throw new Error("a combined state write needs collections of one database");
+      if (names.has(patch.collection.options.collection)) throw new Error(`duplicate collection in a combined state write: ${patch.collection.options.collection}`);
+      names.add(patch.collection.options.collection);
+    }
+    assertSqliteWriteAuthority(filename);
+    const ordered = [...patches].sort((a, b) => a.collection.options.collection.localeCompare(b.collection.options.collection));
+    const leases: { collection: SqliteStateCollection<unknown>; token: string }[] = [];
+    try {
+      for (const patch of ordered) leases.push({ collection: patch.collection, token: patch.collection.acquireLeaseSync() });
+      const db = connectDatabase(filename);
+      let changed = false;
+      try {
+        withImmediateTransaction(db, options.busyMessage ?? "state is busy", () => {
+          assertSqliteWriteAuthority(filename);
+          options.beforeMerge?.({
+            revision: collection => db.query<{ revision: number }, [string]>("SELECT revision FROM state_collections WHERE collection = ?").get(collection)?.revision ?? null,
+            rows: collection => db.query<{ count: number }, [string]>("SELECT COUNT(*) AS count FROM state_rows WHERE collection = ?").get(collection)?.count ?? 0,
+          });
+          for (const [index, patch] of ordered.entries()) {
+            if (patch.collection.mergeRows(db, leases[index]!.token, patch.records, patch.deleteKeys ?? [])) changed = true;
+          }
+          options.beforeCommit?.();
+        });
+      } finally { db.close(); }
+      if (changed) {
+        secureDatabaseFiles(filename);
+        for (const patch of ordered) patch.collection.invalidateAfterCommit();
+      }
+    } finally {
+      for (const lease of leases.reverse()) lease.collection.releaseLeaseSync(lease.token);
+    }
+  }
+
   /** One prepared, indexed revision reader per in-flight pipeline operation.
       Check the file fence before reusing its statement, as openCurrentDatabase
       does before preparing one. A swap rebinds it to the replacement inode. */
