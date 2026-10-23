@@ -2247,6 +2247,67 @@ test("barge-in during a backend await keeps reports held when the older request 
   } finally { release(); await f.service.drain(s.sessionId); await f.service.close(s.sessionId); }
 });
 
+test("every display segment of an older answer, spoken after newer input, keeps reports held", async () => {
+  const f = fixture("synthetic-credential", undefined, () => Date.parse("2026-10-11T12:05:00Z"));
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  let release!: () => void;
+  let started!: () => void;
+  const ready = new Promise<void>(resolve => { started = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  f.provider.responder = async (_request, index) => {
+    if (index === 0) { started(); await held; }
+    return backendResponse(`answer-${index}`, [message(index === 0 ? "Earlier answer." : "Newer answer.")]);
+  };
+  try {
+    f.provider.replay(s.providerId, said("Read the board", 100), delegationCreated("earlier", 600));
+    await ready;
+    f.reports.push({ id: "while-waiting", seq: 1, project: "fixture", at: "2026-10-11T12:00:00Z", class: "completed", body: "HELD_REPORT",
+      origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+    f.provider.replay(s.providerId, said("Actually, read the pipelines", 2000));
+    await f.service.events(s.sessionId, 0);
+    release();
+    await f.service.drain(s.sessionId);
+    // The transcript starts a new display item after a pause of 1,500 ms: both are the earlier answer's speech.
+    f.provider.replay(s.providerId, said("Earlier answer.", 3000, "output"), said("It continues.", 5000, "output"));
+    await f.service.drain(s.sessionId);
+    await f.service.events(s.sessionId, 0);
+    expect(spoken(f)).toMatchObject([{ delegation_id: "earlier" }]);
+    expect(f.admission.reportSpeech(s.sessionId)).toMatchObject([{ handed: 0 }]);
+    f.provider.replay(s.providerId, delegationCreated("newer", 6000));
+    await f.service.drain(s.sessionId);
+    expect(spoken(f)).toMatchObject([{ delegation_id: "earlier" }, { delegation_id: "newer" }, { delegation_id: null, content: expect.stringContaining("HELD_REPORT") }]);
+    await f.service.events(s.sessionId, 0);
+    expect(spoken(f)).toHaveLength(3);
+  } finally { release(); await f.service.drain(s.sessionId); await f.service.close(s.sessionId); }
+});
+
+test("an older answer already speaking when newer input interrupts it keeps reports held as it continues", async () => {
+  const f = fixture("synthetic-credential", undefined, () => Date.parse("2026-10-11T12:05:00Z"));
+  const s = await f.service.start({ project: "fixture", locale: "en", sdp: "v=0" });
+  f.provider.responder = (_request, index) => backendResponse(`answer-${index}`, [message(index === 0 ? "Earlier answer." : "Newer answer.")]);
+  try {
+    f.provider.replay(s.providerId, said("Read the board", 100), delegationCreated("earlier", 600));
+    await f.service.drain(s.sessionId);
+    expect(spoken(f)).toMatchObject([{ delegation_id: "earlier" }]);
+    f.provider.replay(s.providerId, said("Earlier answer", 1000, "output"));
+    f.provider.replay(s.providerId, said("Actually, read the pipelines", 2000));
+    await f.service.drain(s.sessionId);
+    f.reports.push({ id: "while-speaking", seq: 1, project: "fixture", at: "2026-10-11T12:00:00Z", class: "completed", body: "HELD_REPORT",
+      origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+    await f.service.command(s.sessionId, { type: "interrupt", responseId: "earlier" });
+    f.provider.replay(s.providerId, said(" goes on.", 2500, "output"));
+    await f.service.drain(s.sessionId);
+    await f.service.events(s.sessionId, 0);
+    expect(spoken(f)).toMatchObject([{ delegation_id: "earlier" }]);
+    expect(f.admission.reportSpeech(s.sessionId)).toMatchObject([{ handed: 0 }]);
+    f.provider.replay(s.providerId, delegationCreated("newer", 3000));
+    await f.service.drain(s.sessionId);
+    expect(spoken(f)).toMatchObject([{ delegation_id: "earlier" }, { delegation_id: "newer" }, { delegation_id: null, content: expect.stringContaining("HELD_REPORT") }]);
+    await f.service.events(s.sessionId, 0);
+    expect(spoken(f)).toHaveLength(3);
+  } finally { await f.service.close(s.sessionId); }
+});
+
 test("barge-in between report parts preserves speechHanded and resumes in order after the request", async () => {
   const f = fixture("synthetic-credential", undefined, () => Date.parse("2026-10-11T12:05:00Z"));
   const attach = f.provider.attach.bind(f.provider);

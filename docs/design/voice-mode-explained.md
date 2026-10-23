@@ -414,8 +414,14 @@ Browser  : microphone always open; voice audio plays; no local ducking
   parts from the first valid operator transcript fragment. An API delegation
   keeps them held until its answer has been handed over and its work has
   settled. A newer input generation survives an older delegation's completion.
-  For a direct voice answer, output starting at or after the latest input's
-  end releases the hold. Earlier overlapping output leaves it in place.
+  A Codex backing turn holds them while it runs, and its completion releases
+  only an input the turn was given or steered to cover. For a direct voice
+  answer, output starting at or after the latest input's end releases the
+  hold. Earlier overlapping output leaves it in place, and so does any speech
+  while input was dictated within the 15-second hold window of an answer's
+  start or end: the voice speaks that answer in as many transcript items as it
+  needs, so only the request's own answer, or the lapse of the window, releases
+  the hold.
   Live exposes no speech-start or turn-done event
   ([transcript deltas](https://developers.openai.com/api/docs/guides/live-conversations#transcript-deltas)),
   so this guard starts with recognized input. Microphone levels continue to

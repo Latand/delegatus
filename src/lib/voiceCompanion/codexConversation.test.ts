@@ -206,6 +206,46 @@ test("a report filed while the operator dictates waits for the voice's answer, t
   } finally { await f.close(); }
 }, 15_000);
 
+test("an earlier backing turn's answer cannot release a report held for newer input; the newer turn's answer does", async () => {
+  let at = Date.parse("2026-10-11T00:00:00Z");
+  const f = await fixture([], undefined, () => at);
+  const appended = () => f.wire().filter(row => row.method === "thread/realtime/appendSpeech");
+  const owed = () => f.admission.reportSpeech(f.session.sessionId);
+  const settle = async () => { await f.service.drain(f.session.sessionId); await f.service.events(f.session.sessionId, 0); };
+  try {
+    at += 100;
+    f.replay(delta("user", "Read the board"), done("user", "Read the board"), handoff("A", "Read the board"), turn("A"));
+    await until(() => f.admission.session(f.session.sessionId).inputs.some(row => row.final));
+    await settle();
+    at += 100;
+    f.replay(delta("user", "Actually, read the pipelines"));
+    await until(() => f.admission.session(f.session.sessionId).inputs.length > 1);
+    f.reports.push({ id: "during-turns", seq: 1, project: "fixture", at: "2026-10-11T00:00:00Z", class: "completed", body: "Held report.",
+      origin: { kind: "manager", conversationId: "conversation_fixture", role: "orchestrator" } });
+    await settle();
+    expect(owed()).toMatchObject([{ reportId: "during-turns", handed: 0 }]);
+    // The earlier turn finishes and its answer is spoken before the newer input is handed off.
+    at += 100;
+    f.replay(note("turn/completed", { turn: { id: "A", status: "completed" } }), delta("assistant", "Board answer."), done("assistant", "Board answer."));
+    await until(() => f.admission.events(f.session.sessionId, 0).some(row => row.type === "transcript.snapshot" && row.final && JSON.stringify(row).includes("Board answer.")));
+    await settle();
+    expect(owed()).toMatchObject([{ reportId: "during-turns", handed: 0 }]);
+    at += 100;
+    f.replay(handoff("B", "Actually, read the pipelines"), turn("B"));
+    await settle();
+    expect(owed()).toMatchObject([{ reportId: "during-turns", handed: 0 }]);
+    at += 100;
+    f.replay(note("turn/completed", { turn: { id: "B", status: "completed" } }), delta("assistant", "Pipelines answer."), done("assistant", "Pipelines answer."));
+    await until(() => appended().length === 1);
+    expect(appended()[0]!.params.text).toContain("Held report.");
+    await settle();
+    expect(owed()).toEqual([]);
+    await f.service.context(f.session.sessionId, "second");
+    await until(() => f.wire().some(row => row.method === "thread/realtime/appendText"));
+    expect(appended()).toHaveLength(1);
+  } finally { await f.close(); }
+}, 15_000);
+
 test("a project switch injects both model contexts once and the next projectless send uses the new project", async () => {
   const f = await fixture();
   try {

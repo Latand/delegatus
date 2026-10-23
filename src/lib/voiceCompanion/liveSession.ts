@@ -53,7 +53,7 @@ function triedTool(name: string, args: string, speech: string): string {
 }
 /** A backing turn's project, send source turn and waiting confirmation stay frozen; the operator's latest
  * attempt steered into it moves on, and it alone binds hang-up intent and an explicit ask again. */
-interface CodexTurnContext { project: string | null; sourceTurn?: number; confirmationProposalId: string | null; endSourceTurn?: number; attempt?: OperatorAttempt; privateHistory?: boolean }
+interface CodexTurnContext { generation?: number; project: string | null; sourceTurn?: number; confirmationProposalId: string | null; endSourceTurn?: number; attempt?: OperatorAttempt; privateHistory?: boolean }
 interface ActiveSession {
   projectDirectory: string;
   id: string; providerId: string; transcript: LiveTranscript; connection?: LiveConnection;
@@ -72,8 +72,11 @@ interface ActiveSession {
    * a direct voice answer from output that preceded the operator's words. */
   inputGeneration: number;
   inputPending?: { generation: number; endMs: number; at: number };
-  /** An answer to an earlier request, appended after newer operator input: its spoken transcript is not an answer to that input. */
-  supersededAnswer?: { itemId?: string };
+  /** Clock of the latest answer activity: a Live answer appended, or a Codex backing turn started or completed. The voice
+   * speaks that answer in as many transcript items as it needs, so speech near it cannot tell which request it answers. */
+  answerAt?: number;
+  /** Codex backing turns that have started and not completed; they hold reports like backend work. */
+  runningTurns: Set<string>;
   /** Timeline end of input already handed to a delegation or answered: a later fragment ending by it repairs those words. */
   inputHandledMs: number;
   abort: AbortController;
@@ -241,7 +244,7 @@ export class CompanionLiveSessions {
     const directoryRows: typeof projects = [];
     for (const row of projects) { if (Buffer.byteLength(JSON.stringify([...directoryRows, row])) > 1900) break; directoryRows.push(row); }
     const projectDirectory = directoryRows.length ? `Known projects (context data): ${JSON.stringify(directoryRows)}` : "";
-    const active: ActiveSession = { id, memory, projectDirectory, providerId: "", transcript: new LiveTranscript(secrets), provider, codex, key, secrets, queue: [], seen: new Set(), inputGeneration: 0, inputHandledMs: 0,
+    const active: ActiveSession = { id, memory, projectDirectory, providerId: "", transcript: new LiveTranscript(secrets), provider, codex, key, secrets, queue: [], seen: new Set(), inputGeneration: 0, inputHandledMs: 0, runningTurns: new Set(),
       delegations: new Set(), reads: new Map(), reading: new Map(), backend: new Set(), abort: new AbortController(), timers: [], ended: false, endRequested: false, lastSeen: this.now(),
       createdAt: this.now(), voiceAllowanceSeconds: LIVE_SESSION_LIMIT_MS / 1_000, codexTurns: new Map() };
     this.active.set(id, active);
@@ -330,9 +333,9 @@ export class CompanionLiveSessions {
       try {
         let releasedInput = false;
         while (active.queue.length && !active.ended) {
-          const pending = active.inputPending;
+          const pending = !!active.inputPending || active.runningTurns.size > 0;
           await this.observe(active, active.queue.shift());
-          releasedInput ||= !!pending && !active.inputPending;
+          releasedInput ||= pending && !active.inputPending && !active.runningTurns.size;
         }
         if (releasedInput) this.speakReports(active);
         this.settleClosed(active);
@@ -434,8 +437,16 @@ export class CompanionLiveSessions {
         this.codexTurn(active, event.turnId, active.codexTurn);
         active.runningCodexTurnId = event.turnId;
       }
+      if (typeof event.turnId === "string" && event.turnId.length <= 200) { active.runningTurns.add(event.turnId); active.answerAt = this.now(); }
     } else if (event.type === "codex.turn.completed" && active.codex) {
       if (event.turnId === active.runningCodexTurnId) active.runningCodexTurnId = undefined;
+      if (typeof event.turnId === "string") {
+        active.runningTurns.delete(event.turnId);
+        active.answerAt = this.now();
+        // The turn answers the input it was given or steered to cover; it is the voice's own turn that speaks the answer.
+        const covered = active.codexTurns.get(event.turnId)?.generation;
+        if (covered !== undefined && active.inputPending && covered >= active.inputPending.generation) this.inputHandled(active);
+      }
     } else if (event.type === "session.input_transcript.delta" || event.type === "session.output_transcript.delta") {
       if (typeof event.delta === "string" && typeof event.start_ms === "number" && typeof event.end_ms === "number") {
         const timed = !!event.delta.trim() && Number.isFinite(event.start_ms) && Number.isFinite(event.end_ms) && event.start_ms >= 0 && event.end_ms >= event.start_ms;
@@ -444,9 +455,9 @@ export class CompanionLiveSessions {
           active.inputPending = { generation: ++active.inputGeneration, endMs: Math.max(event.end_ms, active.inputPending?.endMs ?? 0), at: this.now() };
         if (!input && event.delta.trim() && active.lastHandoff) active.lastHandoff.replied = true;
         const snapshots = active.transcript.fragment(input ? "operator" : "companion", event.delta, event.start_ms, event.end_ms);
-        // The voice's own words answer pending input only when no backend work is in flight and they are not a superseded answer's speech.
-        const answers = timed && !input && this.answersInput(active, snapshots.findLast(row => row.speaker === "companion" && !row.final)?.itemId);
-        if (answers && !active.backend.size && active.inputPending && event.start_ms >= active.inputPending.endMs) this.inputHandled(active);
+        // The voice's own words answer pending input only when no backend work is in flight and no answer to an earlier request may still be speaking.
+        const answers = timed && !input && !this.answerNear(active);
+        if (answers && !active.backend.size && !active.runningTurns.size && active.inputPending && event.start_ms >= active.inputPending.endMs) this.inputHandled(active);
         this.transcript(active, snapshots);
       }
     } else if (active.codex && (event.type === "session.input_transcript.done" || event.type === "session.output_transcript.done")) {
@@ -476,8 +487,8 @@ export class CompanionLiveSessions {
         const stored = this.admission.session(active.id);
         const running = active.runningCodexTurnId ? active.codexTurns.get(active.runningCodexTurnId) : undefined;
         // A handoff steered into the running turn is a later operator attempt, unless it duplicates the previous handoff.
-        if (running) Object.assign(running, { endSourceTurn: turn }, duplicate ? {} : { attempt });
-        active.codexTurn = { project: stored.currentProject === undefined ? stored.project : stored.currentProject, sourceTurn: turn, confirmationProposalId: this.admission.awaiting(active.id)?.proposalId ?? null,
+        if (running) Object.assign(running, { endSourceTurn: turn, generation: active.inputGeneration }, duplicate ? {} : { attempt });
+        active.codexTurn = { generation: active.inputGeneration, project: stored.currentProject === undefined ? stored.project : stored.currentProject, sourceTurn: turn, confirmationProposalId: this.admission.awaiting(active.id)?.proposalId ?? null,
           privateHistory: active.privateHistory === true };
       } else this.delegate(active, delegation.id, turn, attempt);
     } else if (event.type === "codex.plan" && active.codex) {
@@ -785,23 +796,17 @@ export class CompanionLiveSessions {
 
   /** Speakable context for Live, tied to its delegation. */
   private say(active: ActiveSession, delegationId: string | null, text: string, inputGeneration?: number): void {
-    if (!this.append(active, delegationId, speakable(withoutLocalPaths(withoutCredentials(text, active.secrets)))) || inputGeneration === undefined || !active.inputPending) return;
-    if (inputGeneration === active.inputPending.generation) this.inputHandled(active);
-    else active.supersededAnswer = {};
+    if (!this.append(active, delegationId, speakable(withoutLocalPaths(withoutCredentials(text, active.secrets))))) return;
+    active.answerAt = this.now();
+    if (inputGeneration !== undefined && inputGeneration === active.inputPending?.generation) this.inputHandled(active);
   }
-  /** Whether the voice item being spoken can answer the operator's pending input. The first item after a superseded
-   * answer was appended is that answer's own speech and releases nothing. */
-  private answersInput(active: ActiveSession, itemId: string | undefined): boolean {
-    const superseded = active.supersededAnswer;
-    if (!superseded) return true;
-    if (itemId === undefined) return false;
-    superseded.itemId ??= itemId;
-    if (superseded.itemId === itemId) return false;
-    active.supersededAnswer = undefined;
-    return true;
+  /** Whether an answer to a request may be speaking while the pending input was dictated: input within the hold window
+   * of an answer's start or end, or dictated before it, never takes the voice's next words as its own answer. Only the
+   * request's own answer, or the lapse of the hold, releases it. */
+  private answerNear(active: ActiveSession): boolean {
+    return active.answerAt !== undefined && !!active.inputPending && active.inputPending.at - active.answerAt < INPUT_HOLD_MS;
   }
   private inputHandled(active: ActiveSession): void {
-    active.supersededAnswer = undefined;
     active.inputHandledMs = Math.max(active.inputHandledMs, active.inputPending?.endMs ?? 0);
     active.inputPending = undefined;
   }
@@ -836,7 +841,7 @@ export class CompanionLiveSessions {
   }
   /** Report parts wait while the operator speaks and while their request is handled; the poll rechecks a lapsed hold. */
   private reportsHeld(active: ActiveSession): boolean {
-    return active.ended || !!active.closePromise || !active.connection || active.backend.size > 0 || active.queue.length > 0
+    return active.ended || !!active.closePromise || !active.connection || active.backend.size > 0 || active.runningTurns.size > 0 || active.queue.length > 0
       || (!!active.inputPending && this.now() - active.inputPending.at < INPUT_HOLD_MS);
   }
   private append(active: ActiveSession, delegationId: string | null, content: string): boolean {
