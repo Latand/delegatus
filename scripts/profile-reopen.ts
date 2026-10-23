@@ -391,6 +391,19 @@ function rowsExpression(surface: Surface, target: Seeded): string {
 
 const deepLink = (origin: string, entry: Seeded) => `${origin}/#f=${encodeURIComponent(entry.diskPath)}`;
 
+/** In-app conversation links go through the Viewer's delegated click handler.
+ * Assigning the hash invokes the cold resolver instead of that navigation. */
+function followConversationLink(entry: Seeded): string {
+  return `(() => {
+    const link = document.createElement('a');
+    link.href = ${js(`#f=${encodeURIComponent(entry.diskPath)}`)};
+    link.hidden = true;
+    document.body.append(link);
+    link.click();
+    link.remove();
+  })()`;
+}
+
 function sampleFor(surface: Surface, target: Seeded, origin: string, timeoutMs: number): string {
   return sampleExpression({
     check: paintedCheck(surface, target),
@@ -460,7 +473,7 @@ async function retrying<T>(what: string, run: () => Promise<T>): Promise<T> {
 async function stepAway(cdp: Cdp, surface: Surface, target: Seeded, neighbour: Seeded, elsewhere: Seeded): Promise<void> {
   const away = surface === "phone" ? neighbour : elsewhere;
   await retrying("in-app step away", async () => {
-    await cdp.evaluate(`location.hash = ${js(`#f=${encodeURIComponent(away.diskPath)}`)}`);
+    await cdp.evaluate(followConversationLink(away));
     await cdp.evaluate(sampleFor(surface, away, "0", 60_000));
   });
   const gone = await cdp.evaluate<{ rows: number; focused: string | null }>(
@@ -511,7 +524,7 @@ async function runSurface(cdp: Cdp, origin: string, surface: Surface, targets: T
       await stepAway(cdp, surface, entry, other, elsewhere);
       session.push(await retrying("reopen in session", () => cdp.evaluate<Sample>(`(async () => {
         const since = performance.now();
-        location.hash = ${js(`#f=${encodeURIComponent(entry.diskPath)}`)};
+        ${followConversationLink(entry)};
         return (${sampleFor(surface, entry, "since", 60_000)});
       })()`)));
     }
@@ -641,7 +654,8 @@ function revision(): { commit: string; dirty: boolean; buildId: string } {
 
 async function main(): Promise<void> {
   const { small, large, other, elsewhere, total } = seedHome();
-  const env = seededEnvironment(root, { nodeEnv: "production" });
+  const env = { ...seededEnvironment(root, { nodeEnv: "production" }),
+    LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:9", DELEGATUS_TELEMETRY: "0" };
   const origin = `http://127.0.0.1:${PORT}`;
   if (!fs.existsSync(path.join(repoRoot, ".next", "BUILD_ID"))) {
     throw new Error("no production build found: run `bun run build` first — this profile never measures `next dev`");

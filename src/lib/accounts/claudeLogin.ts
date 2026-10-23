@@ -262,6 +262,10 @@ export const realClaudeLoginPorts: ClaudeLoginPorts = {
   observeSignedIn: async (accountId) => {
     const { refreshAccountLimits } = await import("@/lib/accounts/liveLimits");
     await refreshAccountLimits("claude", accountId, { phase: "login-complete" });
+    /* An account an install transfer brought settles its checklist row, without
+       holding up the login's own completion. */
+    const { settleImportedAccountSignIn } = await import("@/lib/transfer/accounts");
+    void settleImportedAccountSignIn("claude", accountId).catch(() => {});
   },
   now: Date.now,
   setTimeout,

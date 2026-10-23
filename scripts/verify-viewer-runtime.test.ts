@@ -145,7 +145,7 @@ test("runtime probes preserve their signal namespace boundary without inheriting
   }
 });
 
-test.skipIf(process.platform !== "linux").each(["normal", "slow stop", "failed stop", "direct CLI"])("verification with %s reaps its served process and detached worker before reporting success", async mode => {
+test.skipIf(process.platform !== "linux").each(["normal", "slow stop", "failed stop", "direct CLI", "portable CLI"])("verification with %s reaps its served process and detached worker before reporting success", async mode => {
   const root = fixtureRoot([
     "package.json", "node_modules/next/dist/server/node-environment.js",
     path.join(COMPILED_SERVER_DIR, REQUIRED_SERVER_RUNTIME),
@@ -181,9 +181,15 @@ test.skipIf(process.platform !== "linux").each(["normal", "slow stop", "failed s
   try {
     if (mode === "failed stop") {
       await expect(verifyViewerRuntime(root)).rejects.toThrow("service shutdown was not confirmed");
-    } else if (mode === "direct CLI") {
+    } else if (mode === "direct CLI" || mode === "portable CLI") {
       const env = { ...process.env };
       delete env.LLV_OWNED_TEST_RUNNER_PID; delete env.LLV_OWNED_TEST_RUN_CGROUP;
+      delete env.LLV_PORTABLE_TEST_RUNNER_PID; delete env.LLV_PORTABLE_TEST_WARNING_SHOWN;
+      if (mode === "portable CLI") {
+        delete env.LLV_SIGNAL_SANDBOX;
+        env.XDG_RUNTIME_DIR = path.join(root, "absent-runtime");
+        env.DBUS_SESSION_BUS_ADDRESS = `unix:path=${root}/absent-bus`;
+      }
       const cli = spawn(process.execPath, [path.join(import.meta.dir, "verify-viewer-runtime.ts")], { cwd: root, env, stdio: ["ignore", "pipe", "pipe"] });
       let output = ""; cli.stdout?.on("data", chunk => { output += String(chunk); });
       cli.stderr?.on("data", () => {});

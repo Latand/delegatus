@@ -15,7 +15,7 @@ const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "llv-auto-merge-store-"));
 const previousStateDir = process.env.LLV_STATE_DIR;
 process.env.LLV_STATE_DIR = sandbox;
 
-const { MERGE_POLL_MS, MERGE_REASONS, productionAutoMergePorts, resetAutoMergeForTests, sweepAutoMerge, sweepTaskFinishes } = await import("./autoMerge");
+const { MERGE_POLL_MS, MERGE_SETTLE_MS, MERGE_WAIT_LIMIT_MS, MERGE_REASONS, productionAutoMergePorts, resetAutoMergeForTests, sweepAutoMerge, sweepTaskFinishes } = await import("./autoMerge");
 const { patchPipeline } = await import("@/lib/pipelines/engine");
 const { loadPipelines, loadPipelinesForList, pipelineIdentity, savePipelines } = await import("@/lib/pipelines/store");
 const { mergeOnReviewSetting, resetProjectSettingsForTests, setMergeOnReview } = await import("@/lib/projects/settings");
@@ -938,4 +938,77 @@ describe("refresh retry recovery", () => {
     await sweepAutoMerge(ports);
     expect(loadPipelines().find(lane => lane.id === carrier.id)?.merge).toMatchObject({ prNumber: 7, reviewedHead: HEAD });
   });
+});
+
+
+test("a timed-out lane retries old duplicate green checks and merges after a real process restart", async () => {
+  resetAutoMergeForTests();
+  setMergeOnReview(PROJECT, true, "operator", iso(T0 - 7_200_000));
+  savePipelines([completedLane("retry-duplicates")]);
+  let clock = T0;
+  const ports = productionAutoMergePorts({
+    now: () => clock, loadPipelines, pullRequestOf: () => ({ repository: REPO, number: 7 }),
+    cachedState: () => null, log: () => undefined,
+    write: async () => { throw new Error("pending checks must not merge"); },
+    run: async args => {
+      if (args[0] === "pr") return JSON.stringify({ state: "OPEN", headRefOid: HEAD, baseRefName: "main",
+        mergeable: "MERGEABLE", mergeStateStatus: "CLEAN",
+        statusCheckRollup: [{ name: "privacy-tracker-audit", status: "IN_PROGRESS", conclusion: "" }] });
+      if (args[1]?.includes("/reviews")) return "";
+      if (args[1]?.includes("/branches/")) return '["privacy-tracker-audit"]';
+      throw new Error("unexpected fixture read");
+    },
+  });
+  await sweepAutoMerge(ports);
+  clock += MERGE_WAIT_LIMIT_MS;
+  await sweepAutoMerge(ports);
+  expect(loadPipelines()[0]!.merge).toMatchObject({ state: "blocked", reason: MERGE_REASONS.checksTimeout });
+  clock += 1;
+  const unregister = registerPipelineTick(async () => {});
+  try {
+    expect((await patchPipeline("retry-duplicates", { action: "retry-merge" }, { now: () => iso(clock) } as never)).error).toBeUndefined();
+    expect(loadPipelines()[0]!.merge).toMatchObject({ state: "queued", attempts: 1, headSeenAt: null });
+    const observations: Array<{ logs: string[] }> = [];
+    for (const elapsed of [0, MERGE_SETTLE_MS]) {
+      const root = fs.mkdtempSync(path.join(sandbox, "retry-reader-"));
+      for (const directory of ["home", "config", "tmp"]) fs.mkdirSync(path.join(root, directory));
+      const child = Bun.spawn([process.execPath, "-e", `
+        const { productionAutoMergePorts, sweepAutoMerge } = await import("./src/lib/forge/autoMerge");
+        const { loadPipelinesForList } = await import("./src/lib/pipelines/store");
+        let merged = false;
+        const logs = [], writes = [];
+        const ports = () => productionAutoMergePorts({
+          now: () => ${clock + elapsed}, loadPipelines: loadPipelinesForList,
+          cachedState: () => null, log: line => logs.push(line),
+          write: async args => { writes.push(args); merged = true; return ""; },
+          run: async args => {
+            if (args[0] === "pr") return JSON.stringify({ state: merged ? "MERGED" : "OPEN", headRefOid: "${HEAD}",
+              baseRefName: "main", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN",
+              statusCheckRollup: [0, 6000].map(offset => ({ __typename: "CheckRun", name: "privacy-tracker-audit",
+                workflowName: "Privacy tracker audit", status: "COMPLETED", conclusion: "SUCCESS",
+                startedAt: new Date(${T0 - MERGE_WAIT_LIMIT_MS * 2} + offset).toISOString(),
+                completedAt: "${iso(T0 - MERGE_WAIT_LIMIT_MS)}" })) });
+            if (args[0] === "repo") return '{"squashMergeAllowed":true}';
+            if (args[1].includes("/reviews")) return "";
+            if (args[1].includes("/branches/")) return '["privacy-tracker-audit"]';
+            throw new Error("unexpected fixture read");
+          },
+        });
+        await sweepAutoMerge(ports());
+        await sweepAutoMerge(ports());
+        console.log(JSON.stringify({ state: loadPipelinesForList()[0].merge.state, writes, logs }));
+      `], { cwd: process.cwd(), env: { ...process.env, HOME: path.join(root, "home"), XDG_CONFIG_HOME: path.join(root, "config"),
+        TMPDIR: path.join(root, "tmp"), LLV_STATE_DIR: sandbox, LLV_STAGING: "1", LLV_VIEWER_CONTROL_URL: "http://127.0.0.1:1" },
+        stdout: "pipe", stderr: "pipe" });
+      const [output, error, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      expect({ code, error }).toEqual({ code: 0, error: "" });
+      const result = JSON.parse(output);
+      expect(result.state).toBe(elapsed ? "merged" : "waiting-checks");
+      expect(result.writes).toEqual(elapsed ? [["pr", "merge", "7", "--repo", REPO, "--squash", "--match-head-commit", HEAD]] : []);
+      observations.push(result);
+    }
+    expect(loadPipelines()[0]!.merge).toMatchObject({ state: "merged", attempts: 1 });
+    expect(observations[0]!.logs.filter(line => line.includes("waiting-checks"))).toHaveLength(1);
+    expect(observations[1]!.logs.some(line => line.includes("waiting-checks"))).toBe(false);
+  } finally { for (let i = 0; i < 20; i++) await Promise.resolve(); unregister(); }
 });

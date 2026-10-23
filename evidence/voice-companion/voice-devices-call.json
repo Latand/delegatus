@@ -1,0 +1,1146 @@
+{
+  "driver": "src/components/kanban/kanbanBoard.browser.test.tsx",
+  "synthetic": true,
+  "measurements": [
+    {
+      "label": "en-light-callchosen",
+      "without": {
+        "block": {
+          "x": 176,
+          "y": 576,
+          "width": 132,
+          "height": 148,
+          "bottom": 724,
+          "right": 308
+        },
+        "status": {
+          "x": 202.546875,
+          "y": 656,
+          "width": 78.890625,
+          "height": 20,
+          "bottom": 676,
+          "right": 281.4375
+        },
+        "controls": {
+          "x": 196,
+          "y": 680,
+          "width": 92,
+          "height": 28,
+          "bottom": 708,
+          "right": 288
+        }
+      },
+      "block": {
+        "x": 176,
+        "y": 576,
+        "width": 132,
+        "height": 148,
+        "bottom": 724,
+        "right": 308
+      },
+      "status": {
+        "x": 176,
+        "y": 656,
+        "width": 132,
+        "height": 34,
+        "bottom": 690,
+        "right": 308
+      },
+      "line": {
+        "x": 185,
+        "y": 673,
+        "width": 114,
+        "height": 14,
+        "bottom": 687,
+        "right": 299
+      },
+      "controls": {
+        "x": 196,
+        "y": 694,
+        "width": 92,
+        "height": 28,
+        "bottom": 722,
+        "right": 288
+      },
+      "text": 175.78125,
+      "title": "Навушники AirPods Pro (Bluetooth)",
+      "hit": true,
+      "nameCut": true,
+      "name": "Навушники AirPods Pro (Bluetooth)",
+      "muteLabel": "Mute · Microphone: Навушники AirPods Pro (Bluetooth)",
+      "muteTitle": "Mute · Microphone: Навушники AirPods Pro (Bluetooth)",
+      "statusHidden": "true",
+      "blockOverflow": 0
+    },
+    {
+      "label": "en-light-callgone",
+      "without": {
+        "block": {
+          "x": 176,
+          "y": 576,
+          "width": 132,
+          "height": 148,
+          "bottom": 724,
+          "right": 308
+        },
+        "status": {
+          "x": 202.546875,
+          "y": 656,
+          "width": 78.890625,
+          "height": 20,
+          "bottom": 676,
+          "right": 281.4375
+        },
+        "controls": {
+          "x": 196,
+          "y": 680,
+          "width": 92,
+          "height": 28,
+          "bottom": 708,
+          "right": 288
+        }
+      },
+      "block": {
+        "x": 176,
+        "y": 576,
+        "width": 132,
+        "height": 148,
+        "bottom": 724,
+        "right": 308
+      },
+      "status": {
+        "x": 176,
+        "y": 656,
+        "width": 132,
+        "height": 34,
+        "bottom": 690,
+        "right": 308
+      },
+      "line": {
+        "x": 185,
+        "y": 673,
+        "width": 114,
+        "height": 14,
+        "bottom": 687,
+        "right": 299
+      },
+      "controls": {
+        "x": 196,
+        "y": 694,
+        "width": 92,
+        "height": 28,
+        "bottom": 722,
+        "right": 288
+      },
+      "text": 179.75,
+      "title": "Microphone Array (Realtek(R) Audio)",
+      "hit": true,
+      "nameCut": true,
+      "name": "Microphone Array (Realtek(R) Audio)",
+      "muteLabel": "Mute · Microphone: Microphone Array (Realtek(R) Audio)",
+      "muteTitle": "Mute · Microphone: Microphone Array (Realtek(R) Audio)",
+      "statusHidden": "true",
+      "blockOverflow": 0
+    },
+    {
+      "label": "en-light-callspkgone",
+      "without": {
+        "block": {
+          "x": 176,
+          "y": 576,
+          "width": 132,
+          "height": 148,
+          "bottom": 724,
+          "right": 308
+        },
+        "status": {
+          "x": 202.546875,
+          "y": 656,
+          "width": 78.890625,
+          "height": 20,
+          "bottom": 676,
+          "right": 281.4375
+        },
+        "controls": {
+          "x": 196,
+          "y": 680,
+          "width": 92,
+          "height": 28,
+          "bottom": 708,
+          "right": 288
+        }
+      },
+      "block": {
+        "x": 176,
+        "y": 576,
+        "width": 132,
+        "height": 148,
+        "bottom": 724,
+        "right": 308
+      },
+      "status": {
+        "x": 176,
+        "y": 656,
+        "width": 132,
+        "height": 34,
+        "bottom": 690,
+        "right": 308
+      },
+      "line": {
+        "x": 185,
+        "y": 673,
+        "width": 114,
+        "height": 14,
+        "bottom": 687,
+        "right": 299
+      },
+      "controls": {
+        "x": 196,
+        "y": 694,
+        "width": 92,
+        "height": 28,
+        "bottom": 722,
+        "right": 288
+      },
+      "text": 179.75,
+      "title": "Microphone Array (Realtek(R) Audio)",
+      "hit": true,
+      "nameCut": true,
+      "name": "Microphone Array (Realtek(R) Audio)",
+      "muteLabel": "Mute · Microphone: Microphone Array (Realtek(R) Audio)",
+      "muteTitle": "Mute · Microphone: Microphone Array (Realtek(R) Audio)",
+      "statusHidden": "true",
+      "blockOverflow": 0
+    },
+    {
+      "label": "en-light-callnext",
+      "without": {
+        "block": {
+          "x": 176,
+          "y": 576,
+          "width": 132,
+          "height": 148,
+          "bottom": 724,
+          "right": 308
+        },
+        "status": {
+          "x": 202.546875,
+          "y": 656,
+          "width": 78.890625,
+          "height": 20,
+          "bottom": 676,
+          "right": 281.4375
+        },
+        "controls": {
+          "x": 196,
+          "y": 680,
+          "width": 92,
+          "height": 28,
+          "bottom": 708,
+          "right": 288
+        }
+      },
+      "block": {
+        "x": 176,
+        "y": 576,
+        "width": 132,
+        "height": 148,
+        "bottom": 724,
+        "right": 308
+      },
+      "status": {
+        "x": 176,
+        "y": 656,
+        "width": 132,
+        "height": 34,
+        "bottom": 690,
+        "right": 308
+      },
+      "line": {
+        "x": 185,
+        "y": 673,
+        "width": 114,
+        "height": 14,
+        "bottom": 687,
+        "right": 299
+      },
+      "controls": {
+        "x": 196,
+        "y": 694,
+        "width": 92,
+        "height": 28,
+        "bottom": 722,
+        "right": 288
+      },
+      "text": 175.78125,
+      "title": "Навушники AirPods Pro (Bluetooth)",
+      "hit": true,
+      "nameCut": true,
+      "name": "Навушники AirPods Pro (Bluetooth)",
+      "muteLabel": "Mute · Microphone: Навушники AirPods Pro (Bluetooth)",
+      "muteTitle": "Mute · Microphone: Навушники AirPods Pro (Bluetooth)",
+      "statusHidden": "true",
+      "blockOverflow": 0,
+      "nextCall": {
+        "hint": "The new microphone is used from the next call.",
+        "lines": 2,
+        "inside": true
+      }
+    },
+    {
+      "label": "en-dark-callchosen",
+      "without": {
+        "block": {
+          "x": 176,
+          "y": 576,
+          "width": 132,
+          "height": 148,
+          "bottom": 724,
+          "right": 308
+        },
+        "status": {
+          "x": 202.546875,
+          "y": 656,
+          "width": 78.890625,
+          "height": 20,
+          "bottom": 676,
+          "right": 281.4375
+        },
+        "controls": {
+          "x": 196,
+          "y": 680,
+          "width": 92,
+          "height": 28,
+          "bottom": 708,
+          "right": 288
+        }
+      },
+      "block": {
+        "x": 176,
+        "y": 576,
+        "width": 132,
+        "height": 148,
+        "bottom": 724,
+        "right": 308
+      },
+      "status": {
+        "x": 176,
+        "y": 656,
+        "width": 132,
+        "height": 34,
+        "bottom": 690,
+        "right": 308
+      },
+      "line": {
+        "x": 185,
+        "y": 673,
+        "width": 114,
+        "height": 14,
+        "bottom": 687,
+        "right": 299
+      },
+      "controls": {
+        "x": 196,
+        "y": 694,
+        "width": 92,
+        "height": 28,
+        "bottom": 722,
+        "right": 288
+      },
+      "text": 175.78125,
+      "title": "Навушники AirPods Pro (Bluetooth)",
+      "hit": true,
+      "nameCut": true,
+      "name": "Навушники AirPods Pro (Bluetooth)",
+      "muteLabel": "Mute · Microphone: Навушники AirPods Pro (Bluetooth)",
+      "muteTitle": "Mute · Microphone: Навушники AirPods Pro (Bluetooth)",
+      "statusHidden": "true",
+      "blockOverflow": 0
+    },
+    {
+      "label": "en-dark-callgone",
+      "without": {
+        "block": {
+          "x": 176,
+          "y": 576,
+          "width": 132,
+          "height": 148,
+          "bottom": 724,
+          "right": 308
+        },
+        "status": {
+          "x": 202.546875,
+          "y": 656,
+          "width": 78.890625,
+          "height": 20,
+          "bottom": 676,
+          "right": 281.4375
+        },
+        "controls": {
+          "x": 196,
+          "y": 680,
+          "width": 92,
+          "height": 28,
+          "bottom": 708,
+          "right": 288
+        }
+      },
+      "block": {
+        "x": 176,
+        "y": 576,
+        "width": 132,
+        "height": 148,
+        "bottom": 724,
+        "right": 308
+      },
+      "status": {
+        "x": 176,
+        "y": 656,
+        "width": 132,
+        "height": 34,
+        "bottom": 690,
+        "right": 308
+      },
+      "line": {
+        "x": 185,
+        "y": 673,
+        "width": 114,
+        "height": 14,
+        "bottom": 687,
+        "right": 299
+      },
+      "controls": {
+        "x": 196,
+        "y": 694,
+        "width": 92,
+        "height": 28,
+        "bottom": 722,
+        "right": 288
+      },
+      "text": 179.75,
+      "title": "Microphone Array (Realtek(R) Audio)",
+      "hit": true,
+      "nameCut": true,
+      "name": "Microphone Array (Realtek(R) Audio)",
+      "muteLabel": "Mute · Microphone: Microphone Array (Realtek(R) Audio)",
+      "muteTitle": "Mute · Microphone: Microphone Array (Realtek(R) Audio)",
+      "statusHidden": "true",
+      "blockOverflow": 0
+    },
+    {
+      "label": "en-dark-callspkgone",
+      "without": {
+        "block": {
+          "x": 176,
+          "y": 576,
+          "width": 132,
+          "height": 148,
+          "bottom": 724,
+          "right": 308
+        },
+        "status": {
+          "x": 202.546875,
+          "y": 656,
+          "width": 78.890625,
+          "height": 20,
+          "bottom": 676,
+          "right": 281.4375
+        },
+        "controls": {
+          "x": 196,
+          "y": 680,
+          "width": 92,
+          "height": 28,
+          "bottom": 708,
+          "right": 288
+        }
+      },
+      "block": {
+        "x": 176,
+        "y": 576,
+        "width": 132,
+        "height": 148,
+        "bottom": 724,
+        "right": 308
+      },
+      "status": {
+        "x": 176,
+        "y": 656,
+        "width": 132,
+        "height": 34,
+        "bottom": 690,
+        "right": 308
+      },
+      "line": {
+        "x": 185,
+        "y": 673,
+        "width": 114,
+        "height": 14,
+        "bottom": 687,
+        "right": 299
+      },
+      "controls": {
+        "x": 196,
+        "y": 694,
+        "width": 92,
+        "height": 28,
+        "bottom": 722,
+        "right": 288
+      },
+      "text": 179.75,
+      "title": "Microphone Array (Realtek(R) Audio)",
+      "hit": true,
+      "nameCut": true,
+      "name": "Microphone Array (Realtek(R) Audio)",
+      "muteLabel": "Mute · Microphone: Microphone Array (Realtek(R) Audio)",
+      "muteTitle": "Mute · Microphone: Microphone Array (Realtek(R) Audio)",
+      "statusHidden": "true",
+      "blockOverflow": 0
+    },
+    {
+      "label": "en-dark-callnext",
+      "without": {
+        "block": {
+          "x": 176,
+          "y": 576,
+          "width": 132,
+          "height": 148,
+          "bottom": 724,
+          "right": 308
+        },
+        "status": {
+          "x": 202.546875,
+          "y": 656,
+          "width": 78.890625,
+          "height": 20,
+          "bottom": 676,
+          "right": 281.4375
+        },
+        "controls": {
+          "x": 196,
+          "y": 680,
+          "width": 92,
+          "height": 28,
+          "bottom": 708,
+          "right": 288
+        }
+      },
+      "block": {
+        "x": 176,
+        "y": 576,
+        "width": 132,
+        "height": 148,
+        "bottom": 724,
+        "right": 308
+      },
+      "status": {
+        "x": 176,
+        "y": 656,
+        "width": 132,
+        "height": 34,
+        "bottom": 690,
+        "right": 308
+      },
+      "line": {
+        "x": 185,
+        "y": 673,
+        "width": 114,
+        "height": 14,
+        "bottom": 687,
+        "right": 299
+      },
+      "controls": {
+        "x": 196,
+        "y": 694,
+        "width": 92,
+        "height": 28,
+        "bottom": 722,
+        "right": 288
+      },
+      "text": 175.78125,
+      "title": "Навушники AirPods Pro (Bluetooth)",
+      "hit": true,
+      "nameCut": true,
+      "name": "Навушники AirPods Pro (Bluetooth)",
+      "muteLabel": "Mute · Microphone: Навушники AirPods Pro (Bluetooth)",
+      "muteTitle": "Mute · Microphone: Навушники AirPods Pro (Bluetooth)",
+      "statusHidden": "true",
+      "blockOverflow": 0,
+      "nextCall": {
+        "hint": "The new microphone is used from the next call.",
+        "lines": 2,
+        "inside": true
+      }
+    },
+    {
+      "label": "uk-light-callchosen",
+      "without": {
+        "block": {
+          "x": 176,
+          "y": 576,
+          "width": 132,
+          "height": 148,
+          "bottom": 724,
+          "right": 308
+        },
+        "status": {
+          "x": 205.65625,
+          "y": 656,
+          "width": 72.671875,
+          "height": 20,
+          "bottom": 676,
+          "right": 278.328125
+        },
+        "controls": {
+          "x": 196,
+          "y": 680,
+          "width": 92,
+          "height": 28,
+          "bottom": 708,
+          "right": 288
+        }
+      },
+      "block": {
+        "x": 176,
+        "y": 576,
+        "width": 132,
+        "height": 148,
+        "bottom": 724,
+        "right": 308
+      },
+      "status": {
+        "x": 176,
+        "y": 656,
+        "width": 132,
+        "height": 34,
+        "bottom": 690,
+        "right": 308
+      },
+      "line": {
+        "x": 185,
+        "y": 673,
+        "width": 114,
+        "height": 14,
+        "bottom": 687,
+        "right": 299
+      },
+      "controls": {
+        "x": 196,
+        "y": 694,
+        "width": 92,
+        "height": 28,
+        "bottom": 722,
+        "right": 288
+      },
+      "text": 175.78125,
+      "title": "Навушники AirPods Pro (Bluetooth)",
+      "hit": true,
+      "nameCut": true,
+      "name": "Навушники AirPods Pro (Bluetooth)",
+      "muteLabel": "Вимкнути мікрофон · Мікрофон: Навушники AirPods Pro (Bluetooth)",
+      "muteTitle": "Вимкнути мікрофон · Мікрофон: Навушники AirPods Pro (Bluetooth)",
+      "statusHidden": "true",
+      "blockOverflow": 0
+    },
+    {
+      "label": "uk-light-callgone",
+      "without": {
+        "block": {
+          "x": 176,
+          "y": 576,
+          "width": 132,
+          "height": 148,
+          "bottom": 724,
+          "right": 308
+        },
+        "status": {
+          "x": 205.65625,
+          "y": 656,
+          "width": 72.671875,
+          "height": 20,
+          "bottom": 676,
+          "right": 278.328125
+        },
+        "controls": {
+          "x": 196,
+          "y": 680,
+          "width": 92,
+          "height": 28,
+          "bottom": 708,
+          "right": 288
+        }
+      },
+      "block": {
+        "x": 176,
+        "y": 576,
+        "width": 132,
+        "height": 148,
+        "bottom": 724,
+        "right": 308
+      },
+      "status": {
+        "x": 176,
+        "y": 656,
+        "width": 132,
+        "height": 34,
+        "bottom": 690,
+        "right": 308
+      },
+      "line": {
+        "x": 185,
+        "y": 673,
+        "width": 114,
+        "height": 14,
+        "bottom": 687,
+        "right": 299
+      },
+      "controls": {
+        "x": 196,
+        "y": 694,
+        "width": 92,
+        "height": 28,
+        "bottom": 722,
+        "right": 288
+      },
+      "text": 179.75,
+      "title": "Microphone Array (Realtek(R) Audio)",
+      "hit": true,
+      "nameCut": true,
+      "name": "Microphone Array (Realtek(R) Audio)",
+      "muteLabel": "Вимкнути мікрофон · Мікрофон: Microphone Array (Realtek(R) Audio)",
+      "muteTitle": "Вимкнути мікрофон · Мікрофон: Microphone Array (Realtek(R) Audio)",
+      "statusHidden": "true",
+      "blockOverflow": 0
+    },
+    {
+      "label": "uk-light-callspkgone",
+      "without": {
+        "block": {
+          "x": 176,
+          "y": 576,
+          "width": 132,
+          "height": 148,
+          "bottom": 724,
+          "right": 308
+        },
+        "status": {
+          "x": 205.65625,
+          "y": 656,
+          "width": 72.671875,
+          "height": 20,
+          "bottom": 676,
+          "right": 278.328125
+        },
+        "controls": {
+          "x": 196,
+          "y": 680,
+          "width": 92,
+          "height": 28,
+          "bottom": 708,
+          "right": 288
+        }
+      },
+      "block": {
+        "x": 176,
+        "y": 576,
+        "width": 132,
+        "height": 148,
+        "bottom": 724,
+        "right": 308
+      },
+      "status": {
+        "x": 176,
+        "y": 656,
+        "width": 132,
+        "height": 34,
+        "bottom": 690,
+        "right": 308
+      },
+      "line": {
+        "x": 185,
+        "y": 673,
+        "width": 114,
+        "height": 14,
+        "bottom": 687,
+        "right": 299
+      },
+      "controls": {
+        "x": 196,
+        "y": 694,
+        "width": 92,
+        "height": 28,
+        "bottom": 722,
+        "right": 288
+      },
+      "text": 179.75,
+      "title": "Microphone Array (Realtek(R) Audio)",
+      "hit": true,
+      "nameCut": true,
+      "name": "Microphone Array (Realtek(R) Audio)",
+      "muteLabel": "Вимкнути мікрофон · Мікрофон: Microphone Array (Realtek(R) Audio)",
+      "muteTitle": "Вимкнути мікрофон · Мікрофон: Microphone Array (Realtek(R) Audio)",
+      "statusHidden": "true",
+      "blockOverflow": 0
+    },
+    {
+      "label": "uk-light-callnext",
+      "without": {
+        "block": {
+          "x": 176,
+          "y": 576,
+          "width": 132,
+          "height": 148,
+          "bottom": 724,
+          "right": 308
+        },
+        "status": {
+          "x": 205.65625,
+          "y": 656,
+          "width": 72.671875,
+          "height": 20,
+          "bottom": 676,
+          "right": 278.328125
+        },
+        "controls": {
+          "x": 196,
+          "y": 680,
+          "width": 92,
+          "height": 28,
+          "bottom": 708,
+          "right": 288
+        }
+      },
+      "block": {
+        "x": 176,
+        "y": 576,
+        "width": 132,
+        "height": 148,
+        "bottom": 724,
+        "right": 308
+      },
+      "status": {
+        "x": 176,
+        "y": 656,
+        "width": 132,
+        "height": 34,
+        "bottom": 690,
+        "right": 308
+      },
+      "line": {
+        "x": 185,
+        "y": 673,
+        "width": 114,
+        "height": 14,
+        "bottom": 687,
+        "right": 299
+      },
+      "controls": {
+        "x": 196,
+        "y": 694,
+        "width": 92,
+        "height": 28,
+        "bottom": 722,
+        "right": 288
+      },
+      "text": 175.78125,
+      "title": "Навушники AirPods Pro (Bluetooth)",
+      "hit": true,
+      "nameCut": true,
+      "name": "Навушники AirPods Pro (Bluetooth)",
+      "muteLabel": "Вимкнути мікрофон · Мікрофон: Навушники AirPods Pro (Bluetooth)",
+      "muteTitle": "Вимкнути мікрофон · Мікрофон: Навушники AirPods Pro (Bluetooth)",
+      "statusHidden": "true",
+      "blockOverflow": 0,
+      "nextCall": {
+        "hint": "Новий мікрофон працюватиме з наступної розмови.",
+        "lines": 2,
+        "inside": true
+      }
+    },
+    {
+      "label": "uk-dark-callchosen",
+      "without": {
+        "block": {
+          "x": 176,
+          "y": 576,
+          "width": 132,
+          "height": 148,
+          "bottom": 724,
+          "right": 308
+        },
+        "status": {
+          "x": 205.65625,
+          "y": 656,
+          "width": 72.671875,
+          "height": 20,
+          "bottom": 676,
+          "right": 278.328125
+        },
+        "controls": {
+          "x": 196,
+          "y": 680,
+          "width": 92,
+          "height": 28,
+          "bottom": 708,
+          "right": 288
+        }
+      },
+      "block": {
+        "x": 176,
+        "y": 576,
+        "width": 132,
+        "height": 148,
+        "bottom": 724,
+        "right": 308
+      },
+      "status": {
+        "x": 176,
+        "y": 656,
+        "width": 132,
+        "height": 34,
+        "bottom": 690,
+        "right": 308
+      },
+      "line": {
+        "x": 185,
+        "y": 673,
+        "width": 114,
+        "height": 14,
+        "bottom": 687,
+        "right": 299
+      },
+      "controls": {
+        "x": 196,
+        "y": 694,
+        "width": 92,
+        "height": 28,
+        "bottom": 722,
+        "right": 288
+      },
+      "text": 175.78125,
+      "title": "Навушники AirPods Pro (Bluetooth)",
+      "hit": true,
+      "nameCut": true,
+      "name": "Навушники AirPods Pro (Bluetooth)",
+      "muteLabel": "Вимкнути мікрофон · Мікрофон: Навушники AirPods Pro (Bluetooth)",
+      "muteTitle": "Вимкнути мікрофон · Мікрофон: Навушники AirPods Pro (Bluetooth)",
+      "statusHidden": "true",
+      "blockOverflow": 0
+    },
+    {
+      "label": "uk-dark-callgone",
+      "without": {
+        "block": {
+          "x": 176,
+          "y": 576,
+          "width": 132,
+          "height": 148,
+          "bottom": 724,
+          "right": 308
+        },
+        "status": {
+          "x": 205.65625,
+          "y": 656,
+          "width": 72.671875,
+          "height": 20,
+          "bottom": 676,
+          "right": 278.328125
+        },
+        "controls": {
+          "x": 196,
+          "y": 680,
+          "width": 92,
+          "height": 28,
+          "bottom": 708,
+          "right": 288
+        }
+      },
+      "block": {
+        "x": 176,
+        "y": 576,
+        "width": 132,
+        "height": 148,
+        "bottom": 724,
+        "right": 308
+      },
+      "status": {
+        "x": 176,
+        "y": 656,
+        "width": 132,
+        "height": 34,
+        "bottom": 690,
+        "right": 308
+      },
+      "line": {
+        "x": 185,
+        "y": 673,
+        "width": 114,
+        "height": 14,
+        "bottom": 687,
+        "right": 299
+      },
+      "controls": {
+        "x": 196,
+        "y": 694,
+        "width": 92,
+        "height": 28,
+        "bottom": 722,
+        "right": 288
+      },
+      "text": 179.75,
+      "title": "Microphone Array (Realtek(R) Audio)",
+      "hit": true,
+      "nameCut": true,
+      "name": "Microphone Array (Realtek(R) Audio)",
+      "muteLabel": "Вимкнути мікрофон · Мікрофон: Microphone Array (Realtek(R) Audio)",
+      "muteTitle": "Вимкнути мікрофон · Мікрофон: Microphone Array (Realtek(R) Audio)",
+      "statusHidden": "true",
+      "blockOverflow": 0
+    },
+    {
+      "label": "uk-dark-callspkgone",
+      "without": {
+        "block": {
+          "x": 176,
+          "y": 576,
+          "width": 132,
+          "height": 148,
+          "bottom": 724,
+          "right": 308
+        },
+        "status": {
+          "x": 205.65625,
+          "y": 656,
+          "width": 72.671875,
+          "height": 20,
+          "bottom": 676,
+          "right": 278.328125
+        },
+        "controls": {
+          "x": 196,
+          "y": 680,
+          "width": 92,
+          "height": 28,
+          "bottom": 708,
+          "right": 288
+        }
+      },
+      "block": {
+        "x": 176,
+        "y": 576,
+        "width": 132,
+        "height": 148,
+        "bottom": 724,
+        "right": 308
+      },
+      "status": {
+        "x": 176,
+        "y": 656,
+        "width": 132,
+        "height": 34,
+        "bottom": 690,
+        "right": 308
+      },
+      "line": {
+        "x": 185,
+        "y": 673,
+        "width": 114,
+        "height": 14,
+        "bottom": 687,
+        "right": 299
+      },
+      "controls": {
+        "x": 196,
+        "y": 694,
+        "width": 92,
+        "height": 28,
+        "bottom": 722,
+        "right": 288
+      },
+      "text": 179.75,
+      "title": "Microphone Array (Realtek(R) Audio)",
+      "hit": true,
+      "nameCut": true,
+      "name": "Microphone Array (Realtek(R) Audio)",
+      "muteLabel": "Вимкнути мікрофон · Мікрофон: Microphone Array (Realtek(R) Audio)",
+      "muteTitle": "Вимкнути мікрофон · Мікрофон: Microphone Array (Realtek(R) Audio)",
+      "statusHidden": "true",
+      "blockOverflow": 0
+    },
+    {
+      "label": "uk-dark-callnext",
+      "without": {
+        "block": {
+          "x": 176,
+          "y": 576,
+          "width": 132,
+          "height": 148,
+          "bottom": 724,
+          "right": 308
+        },
+        "status": {
+          "x": 205.65625,
+          "y": 656,
+          "width": 72.671875,
+          "height": 20,
+          "bottom": 676,
+          "right": 278.328125
+        },
+        "controls": {
+          "x": 196,
+          "y": 680,
+          "width": 92,
+          "height": 28,
+          "bottom": 708,
+          "right": 288
+        }
+      },
+      "block": {
+        "x": 176,
+        "y": 576,
+        "width": 132,
+        "height": 148,
+        "bottom": 724,
+        "right": 308
+      },
+      "status": {
+        "x": 176,
+        "y": 656,
+        "width": 132,
+        "height": 34,
+        "bottom": 690,
+        "right": 308
+      },
+      "line": {
+        "x": 185,
+        "y": 673,
+        "width": 114,
+        "height": 14,
+        "bottom": 687,
+        "right": 299
+      },
+      "controls": {
+        "x": 196,
+        "y": 694,
+        "width": 92,
+        "height": 28,
+        "bottom": 722,
+        "right": 288
+      },
+      "text": 175.78125,
+      "title": "Навушники AirPods Pro (Bluetooth)",
+      "hit": true,
+      "nameCut": true,
+      "name": "Навушники AirPods Pro (Bluetooth)",
+      "muteLabel": "Вимкнути мікрофон · Мікрофон: Навушники AirPods Pro (Bluetooth)",
+      "muteTitle": "Вимкнути мікрофон · Мікрофон: Навушники AirPods Pro (Bluetooth)",
+      "statusHidden": "true",
+      "blockOverflow": 0,
+      "nextCall": {
+        "hint": "Новий мікрофон працюватиме з наступної розмови.",
+        "lines": 2,
+        "inside": true
+      }
+    }
+  ]
+}

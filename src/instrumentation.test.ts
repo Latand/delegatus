@@ -1167,3 +1167,45 @@ test("release readiness waits for board preparation and stays refused on failure
     else expect(error).toBeNull();
   }
 });
+
+test("saved-board readiness precedes attention refinement and retirement still awaits it", async () => {
+  const { createViewerStartupBarrier } = await import("@/lib/viewerInstrumentation");
+  const barrier = createViewerStartupBarrier(new AbortController());
+  let finish!: () => void;
+  const held = new Promise<void>(resolve => { finish = resolve; });
+  const events: string[] = [];
+  let retired = false;
+  await completeViewerRuntimeActivation({
+    initializeOperatorCapability: async () => undefined,
+    publishHotStateActivation: () => undefined,
+    startStructuredHosts: null,
+    prepareBoard: async () => { events.push("saved-board"); },
+    startControllers: async () => undefined,
+    publishViewerReleaseReady: () => { events.push("ready"); },
+    refineBoard: () => barrier.run(async () => { events.push("refine"); await held; }),
+  });
+  expect(events).toEqual(["saved-board", "ready", "refine"]);
+  const retirement = barrier.quiesce(new Error("retired")).then(() => { retired = true; });
+  await Promise.resolve();
+  expect(retired).toBe(false);
+  finish();
+  await retirement;
+  expect(retired).toBe(true);
+});
+
+test("attention refinement failure is reported after readiness without rejecting activation", async () => {
+  const error = spyOn(console, "error").mockImplementation(() => {});
+  let ready = false;
+  try {
+    await completeViewerRuntimeActivation({
+      initializeOperatorCapability: async () => undefined,
+      publishHotStateActivation: () => undefined,
+      startStructuredHosts: null,
+      startControllers: async () => undefined,
+      publishViewerReleaseReady: () => { ready = true; },
+      refineBoard: async () => { throw new Error("fixture refinement refused"); },
+    });
+    expect(ready).toBe(true);
+    expect(error).toHaveBeenCalledWith("[attention reconcile] startup refinement failed", "Error");
+  } finally { error.mockRestore(); }
+});
