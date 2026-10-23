@@ -341,9 +341,9 @@ cloud API token, relay and Telegram tokens, Delegatus access keys.
   the client's privacy scan of the captured tree, which took about 4 s for
   a small change and is answered from its cache for a tree it has scanned.
   A remote pre-push scans twice here, once in the hook and once in the
-  client: 169 to 585 CPU-seconds here per pre-push in the rehearsal, where
-  the same lane's pre-push run here took 4,122 (§8.12). 0.1–3 MiB of
-  network.
+  client: 169 to 638 CPU-seconds here per pre-push in the rehearsal, where
+  the same lane's pre-push run here took 3,884 to 4,122 (§8.12). 0.1–3 MiB
+  of network.
 
 ## 4. Decision questions
 
@@ -1317,6 +1317,178 @@ the steps.
    - Set `LLV_GATE_RUNNER` to an alias that does not resolve, for one command.
      That must give a local run with the `running here` line.
 
+**Record.** The build stage ran every step between 2026-10-23 01:08Z and
+04:13Z, from this branch at `f65144870` (tree `fa4d251f6`) and lane trees
+made from it. The changes the rehearsal led to came after: the git
+identity in `serve.ts`, the Codex CLI in `provision.sh` (installed on the
+runner as well), the 12 GiB memory divisor. Each was run again on its own,
+and step 1 was repeated on the final tree. Conditions, as sampled during
+the runs:
+
+- this machine: 24 threads at load 10 to 37 from other agents' work, with
+  local test files waiting up to 41 minutes in the CPU queue;
+- the runner: 16 vCPU at load 3 to 51. One to nine hand runs of the interim
+  remote test tool shared it, outside the work slice.
+
+Every local command ran with a private `HOME`, `XDG_CONFIG_HOME`, `TMPDIR`
+and `LLV_STATE_DIR` and the Viewer control URL on a closed port. CPU is the
+`Consumed … CPU time` of the run's `delegatus-gate-` units in that side's
+user journal; the client's own CPU is the user and system time of the
+processes it waited for.
+
+0. **Provisioning.** Two runs of `provision.sh --user-settings` exited 0 and
+   left both files unchanged (same modification times): 2 slots,
+   `MemoryHigh` 27,889,208 kB. The client's health probe then answered
+   healthy, with the runner's mirror at the current `main`.
+1. **The admitted pre-push**, lane F (11 changed files), tree `ba8bf26a008f`
+   on both sides:
+
+   | Side | Exit | Wall | CPU on the runner | CPU here | Verdict |
+   | --- | --- | ---: | ---: | ---: | --- |
+   | Runner | 0 | 657 s | 2,085 s (93 units) | 453 s | 0 new, 16 pre-existing, 5 flaky |
+   | Here | 0 | 570 s | — | 4,121.7 s (3,994.4 in 101 gate units, 127.3 in the hook) | 0 new, 12 pre-existing, 12 flaky |
+
+   The remote run spent its first six minutes here, in the hook's privacy
+   scan and the client's scan of the captured tree, before its session
+   started. The NEW sets were equal (empty), and the PRE-EXISTING sets
+   differed. Six tests failed on base and head only on the runner, in
+   `engine.ports.part3`, `engine.ports`, `engine.recovery` and
+   `engine.rolePrivacy`, all with `Codex MCP configuration could not be
+   enumerated safely`: the runner had no Codex CLI on its `PATH`.
+   `provision.sh` now installs the one the agents here run, and with it
+   those four files passed on the runner one at a time (18, 71, 66 and 13
+   pass). The two that failed only here, in
+   `registry.servingWriters.test.ts` and
+   `engine.cpuAdmissionPolling.test.ts`, failed on base and head here at
+   load 17 and passed there.
+
+   Repeated on the final tree, both halves at once from 03:59Z, tree
+   `0b784258db1b`:
+
+   | Side | Exit | Wall | CPU on the runner | CPU here | Verdict |
+   | --- | --- | ---: | ---: | ---: | --- |
+   | Runner | 0 | 785 s | 2,093.5 s (92 units) | 637.9 s | 0 new, 10 pre-existing, 6 flaky |
+   | Here | 0 | 460 s | — | 3,883.6 s (3,740.8 in 100 gate units, 142.8 in the hook) | 0 new, 10 pre-existing, 7 flaky |
+
+   The NEW and PRE-EXISTING sets were equal. Both remote runs took longer
+   than the local ones, because the two privacy scans here come first and
+   ran at load 13 to 20.
+2. ***k***, ten engine test files, each run alone, twice on each side:
+
+   | File | Here, run 1 | Here, run 2 | Runner, run 1 | Runner, run 2 | *k* |
+   | --- | ---: | ---: | ---: | ---: | ---: |
+   | `git.test.ts` | 135.6 | 111.3 | 58.1 | 48.7 | 2.31 |
+   | `worktreeSweep.test.ts` | 74.1 | 58.0 | 64.6 | 78.9 | 0.92 |
+   | `engine.provisioning.test.ts` | 42.5 | 38.5 | 25.4 | 26.1 | 1.57 |
+   | `engine.creation.test.ts` | 34.8 | 28.8 | 23.1 | 23.4 | 1.37 |
+   | `runtimeSwitch.test.ts` | 94.8 | 130.7 | 65.0 | 68.5 | 1.69 |
+   | `engine.routing.test.ts` | 85.4 | 43.7 | 43.9 | 45.8 | 1.44 |
+   | `engine.activation.test.ts` | 21.6 | 35.6 | 19.6 | 19.5 | 1.46 |
+   | `engine.settlement.test.ts` | 60.5 | 62.7 | 52.0 | 48.0 | 1.23 |
+   | `engine.recovery.test.ts` | 33.0 | 32.5 | 29.7 | 30.9 | 1.08 |
+   | `parkedPublication.test.ts` | 86.2 | 68.9 | 99.8 | 100.6 | 0.77 |
+   | All ten | | | | | 1.32 (640 s ÷ 486 s) |
+
+   CPU-seconds per run. This machine ran at load 11 to 27 during the series
+   and the runner at 5 to 24, and two runs of one file here differed by up
+   to half, so *k* describes both hosts under today's load. Every file gave
+   the same pass and fail counts on both sides except two: `git.test.ts`
+   failed one test only on the runner (the git identity below), and
+   `parkedPublication.test.ts` failed one isolated case only here, under
+   load.
+3. **Typecheck and build**, tree `fa4d251f6` on both sides:
+
+   | Command | Runner wall | Runner CPU | Here wall | Here CPU |
+   | --- | ---: | ---: | ---: | ---: |
+   | `bunx tsc --noEmit` | 142 s | 209.7 s | 194 s | 252.3 s |
+   | `bun run build` (by hand in a run directory there) | 250 s | 472.6 s | 258 s | 402.8 s |
+
+4. **Memory**, three engine-family pre-pushes, all sent at 01:16Z: lanes D
+   (9 changed files, 51 test files run), E (29 and 33) and F (11 and 89):
+
+   | Lane | Exit | Wall | CPU on the runner | CPU here | Verdict |
+   | --- | --- | ---: | ---: | ---: | --- |
+   | E | 0 | 310 s | 343.5 s | 228.1 s | passed |
+   | D | 1 | 1,137 s | 2,487.6 s | 512.6 s | 1 new: `engine.spawnSilence.test.ts`, owned test children survived teardown; 65 flaky |
+   | F | 0 | 1,420 s | 2,185.9 s | 585.2 s | 0 new, 16 pre-existing, 6 flaky |
+
+   The work slice peaked at 25,430 MiB (`MemoryHigh` 27,235 MiB) and its own
+   swap at 6.4 GiB. Host swap reached 13.5 GiB at 01:30Z, when nine hand
+   runs of the interim tool shared the runner outside the slice, with load
+   up to 51. E had finished before D and F reached the runner, so nothing
+   queued. D's one new failure passed alone on the runner afterwards (25
+   pass, 0 fail) and in the repeat below: it came from load. Swap above
+   8 GiB moved the memory divisor to 12 GiB, which still gives 2 slots
+   (§1.3).
+
+   The repeat sent D and F at 02:20Z and E five minutes later, each with
+   an empty privacy cache. All three reached the runner between 02:27:44Z
+   and 02:28:41Z, three run units were active at once, E took a slot
+   without waiting, and D and F each printed `Waiting for a heavy command
+   slot` there:
+
+   | Lane | Exit | Wall | CPU on the runner | CPU here | Verdict |
+   | --- | --- | ---: | ---: | ---: | --- |
+   | E | 0 | 263 s | 327.0 s | 168.6 s | passed |
+   | D | 0 | 1,015 s | 2,189.1 s | 498.1 s | 0 new, 10 pre-existing, 5 flaky |
+   | F | 0 | 1,009 s | 2,228.0 s | 578.3 s | 0 new, 17 pre-existing, 8 flaky |
+
+   The slice peaked at 16,776 MiB, host swap at 1.1 GiB, load at 31, with
+   at most four hand runs beside it. Every run of both rounds ended with
+   its verdict inside the 25-minute engine budget.
+5. **Drivers.** One case each, through the tree's own `scripts/gate-slot.sh`:
+
+   | Driver | Work tree | Review export |
+   | --- | --- | --- |
+   | Kanban, `a strip pinned to the page returns it to the seat` | 0, 77 s | 0, 85 s |
+   | Phone, `machine worker limit` | 0, 31 s | 0, 38 s |
+   | Conversation window, `said once in the interface language` | 0, 15 s | 0, 24 s |
+
+   Each printed `running on the gate runner`. 30 kanban frames came back
+   to the declared directories, and the drivers' evidence JSON came back
+   into the work tree. One frame from each source was opened here: the
+   board in dark Ukrainian at desktop width from the export, and in light
+   English at narrow width from the work tree, both real renders.
+6. **Faults.**
+
+   - Killing the client's ssh session once the first test result had
+     arrived gave exit 75 and `gate-runner: no verdict: the connection to
+     the runner was lost after 2 s; nothing was judged`. Two seconds later
+     the run's unit was inactive and its run directory gone, so no sweep was
+     needed. The next command ran here with `running here: the runner is
+     unavailable: marked unhealthy after a failed run (a run lost its
+     verdict)`.
+   - An alias that does not resolve, for one command, ran here with
+     `running here: the runner is unavailable: ssh exited 255: the runner's
+     host name does not resolve`. Neither that line nor the decision log
+     names the alias or a host.
+
+What the rehearsal found:
+
+- **A test that commits without its own git identity failed only on the
+  runner.** The caller's identity never travels, and git on the runner
+  cannot guess an address from its host name. `serve.ts` now sets a
+  neutral one (§8.5), and `src/lib/pipelines/git.test.ts` then passed
+  there in full (180 pass) where it had failed one test.
+- **The runner lacked the Codex CLI.** Tests that ask it for its MCP
+  configuration failed there on base and head alike, so the comparator
+  hid them as pre-existing. `provision.sh` installs it (§8.5), and the
+  live runner has it.
+- **A remote pre-push still costs this machine one extra privacy scan.**
+  The hook scans the push here, and the client scans the captured tree
+  before upload (§8.3). In the runs above a remote pre-push used 169 to
+  638 CPU-seconds here, against 327 to 2,488 on the runner. In the two step
+  1 pairs the hook alone used 127 and 143 CPU-seconds here and the remote
+  pre-push 453 and 638, so the client's scan cost about 326 and 495; the
+  same pre-push run here took 4,122 and 3,884. The scans also come before
+  the run, so both remote pre-pushes took longer in wall time than the
+  local ones. Letting the hook's own scan read the captured tree, so it
+  runs once, is listed in §8.13.
+- **The interim remote test tool shares the runner outside the slots.**
+  Its hand runs pushed host swap to 13.5 GiB while the slice held 6.4 GiB.
+  When v1 rolls out, those runs either move to v1 or stop on that host,
+  or the slot count no longer bounds the runner's memory.
+
 Rollout:
 
 1. After merge and deploy, the seat writes
@@ -1348,7 +1520,7 @@ once.
   The decision log measures them first.
 - One privacy scan per remote pre-push. The hook scans the push here, then
   the client scans the captured tree before upload; on lane F the second
-  scan cost about 326 CPU-seconds here in the rehearsal (§8.12). The hook's
+  scan cost about 326 and 495 CPU-seconds here in the rehearsal (§8.12). The hook's
   own scan could read the captured tree instead, so it runs once.
 - Memory admission per shape on the runner: the slot count, the work slice's
   `MemoryHigh` and rehearsal step 4 bound memory in v1.
