@@ -548,11 +548,17 @@ test's.
 Open the resources panel from the existing memory/disk footer, then choose
 **Retained worktrees**. The list shows the saved task label (or pipeline id,
 or no linked task), repository name, repository-relative checkout, recorded
-bytes, translated retention reason and the decision's observation time.
+size, translated retention reason and, only when it differs from the report
+time, the decision's observation time. Sizes use the entry's MiB/GiB units.
 Checkouts without repository metadata are relative to home. An unvisited row
 keeps its earlier observation time; a row never observed shows that explicitly.
 Sizes follow the sweep's bounded accounting and may be partial or carried
-forward. The report time and dry-run mode are shown separately.
+forward. The report time and dry-run mode are shown once, in the header.
+The dialog keeps one fixed height. While the next page loads the current rows
+stay, dimmed, with both pager buttons disabled in place. The pager shows only
+when a page has rows and more than one page exists; error, denied, loading and
+empty states have none. A failed request (no connection) reads differently from
+a missing report.
 
 The sweep worker writes `worktree-drilldown.sqlite` beside its JSON report.
 This derived artifact is built in a fresh file and atomically renamed over its

@@ -10,6 +10,7 @@ import type { ResourceSession, ResourcesPayload, ResourcesViewer } from "@/lib/t
 import { X } from "./icons";
 import { LINE_EDGE, MeterLine, type RailFooterDensity } from "./railFooterDensity";
 import { AttachControls } from "./resources/AttachControls";
+import { fmtBytes } from "./resources/fmtBytes";
 import { WorktreeDrilldown } from "./resources/WorktreeDrilldown";
 import { bulkKillTargets, idleKillTargets, isStructuredHost, resourceCounts } from "./resources/hostSelection";
 import { activityDot, engineTintOf, fmtAge } from "./utils";
@@ -17,15 +18,7 @@ import { Z } from "@/components/layers";
 
 const POLL_MS = 30_000;
 const INITIAL_POLL_DELAY_MS = 1_500;
-const GIB = 1024 ** 3;
-const MIB = 1024 ** 2;
 const BULK_HOURS = [2, 6, 12] as const;
-
-function fmtBytes(n: number): string {
-  if (n >= 10 * GIB) return Math.round(n / GIB) + " GiB";
-  if (n >= GIB) return (n / GIB).toFixed(1) + " GiB";
-  return Math.max(0, Math.round(n / MIB)) + " MiB";
-}
 
 /** Bar color mirrors the limit window thresholds: amber under 30% headroom, red under 10%. */
 function ramColor(availablePercent: number): string {
