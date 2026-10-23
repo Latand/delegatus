@@ -39,11 +39,17 @@ test.if(linux)("secrets stay here, driver switches travel, and the push deadline
   const result = h.run(["bun", "test", file], { env: h.env({
     GH_TOKEN: "gh-secret", LLV_TOKEN: "llv-secret", LLV_PRIVACY_KNOWN_VALUES_FILE: known, OPENROUTER_API_KEY: "or-secret",
     LLV_KANBAN_BROWSER_TEST: "1", LLV_GATE_PUSH_DEADLINE: String(deadline),
+    GIT_AUTHOR_NAME: "Local Author", GIT_AUTHOR_EMAIL: "local-author@example.test", GIT_COMMITTER_NAME: "Local Author", GIT_COMMITTER_EMAIL: "local-author@example.test",
   }) });
   expect(result.stderr).toMatch(RUNNING);
   const remote = JSON.parse(/^ENV (.*)$/m.exec(result.stdout)![1]!) as Record<string, string>;
   const seen = JSON.stringify(remote);
-  for (const secret of ["gh-secret", "llv-secret", "or-secret", known, h.root + "/home"]) expect(seen).not.toContain(secret);
+  for (const secret of ["gh-secret", "llv-secret", "or-secret", known, h.root + "/home", "Local Author", "local-author@example.test"]) expect(seen).not.toContain(secret);
+  // The caller's git identity stays here; the run commits under a neutral one.
+  for (const role of ["AUTHOR", "COMMITTER"]) {
+    expect(remote[`GIT_${role}_NAME`]).toBe("gate-run");
+    expect(remote[`GIT_${role}_EMAIL`]).toBe("noreply@example.invalid");
+  }
   expect(remote.GH_TOKEN).toBeUndefined();
   expect(remote.LLV_PRIVACY_KNOWN_VALUES_FILE).toBeUndefined();
   expect(remote.LLV_KANBAN_BROWSER_TEST).toBe("1");

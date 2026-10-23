@@ -292,7 +292,7 @@ test("a probe answer is cached for a minute, and a failed run keeps every caller
   expect(parseProbe(`bun=0.0.1\ndisk=1\nmain=\n`, "1.4.0")).toMatchObject({ healthy: false });
 });
 
-// T28 (budget side).
+// T30 (budget side).
 test("the privacy scan gets what is left of the push budget less a minute, at least 30 s, or the publication budget", () => {
   const now = 1_800_000_000_000;
   expect(scanBudgetMs({}, now)).toBe(15 * 60_000);
@@ -303,7 +303,7 @@ test("the privacy scan gets what is left of the push budget less a minute, at le
   expect(scanBudgetMs({ LLV_GATE_PUSH_DEADLINE: String(now + 25 * 60_000), LLV_GATE_RUNNER_SCAN_TIMEOUT_MS: "1000" }, now)).toBe(1000);
 });
 
-// SSH's own diagnostics name the host, the account and its address.
+// T28: SSH's own diagnostics name the host, the account and its address.
 test("a failing runner's reason keeps its kind and drops hosts, accounts, addresses and paths everywhere it is written", () => {
   const dir = scratch();
   const host = "gate-sentinel-host.example.net", account = "sentinel-account", address = "203.0.113.77";
@@ -344,7 +344,8 @@ test("provision.sh derives slots from the smaller of the CPU and memory bounds",
   }).stdout;
   expect(settings(16, 32_083_512)).toBe(`LLV_GATE_SLOTS=2\nMemoryHigh=${32_083_512 - 4 * 1024 * 1024}K\n`);
   expect(settings(32, 128 * 1024 * 1024)).toBe(`LLV_GATE_SLOTS=4\nMemoryHigh=${124 * 1024 * 1024}K\n`);
-  // Memory binds when it is the smaller bound.
-  expect(settings(64, 24 * 1024 * 1024)).toBe(`LLV_GATE_SLOTS=2\nMemoryHigh=${20 * 1024 * 1024}K\n`);
+  // Memory binds when it is the smaller bound: 12 GiB per slot.
+  expect(settings(64, 32_083_512)).toBe(`LLV_GATE_SLOTS=2\nMemoryHigh=${32_083_512 - 4 * 1024 * 1024}K\n`);
+  expect(settings(64, 24 * 1024 * 1024)).toBe(`LLV_GATE_SLOTS=1\nMemoryHigh=${20 * 1024 * 1024}K\n`);
   expect(settings(4, 8 * 1024 * 1024)).toBe(`LLV_GATE_SLOTS=1\nMemoryHigh=${4 * 1024 * 1024}K\n`);
 });

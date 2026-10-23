@@ -5,6 +5,7 @@
 #
 #   ssh root@<new host> 'bash -s' -- --key "<public key>" --repository <public clone URL> \
 #     --bun "$(bun -e 'console.log(require("./scripts/local-gate.ts").pinnedBunVersion(require("fs").readFileSync("Dockerfile","utf8")))')" \
+#     --codex "$(codex --version | awk '{print $2}')" \
 #     < scripts/gate-runner/provision.sh
 #   provision.sh --print-settings   print the derived slots and MemoryHigh; change nothing
 #   provision.sh --user-settings    as the runner account: write only the env file and the slice drop-in
@@ -14,6 +15,7 @@ set -euo pipefail
 
 repository=""
 bun_version=""
+codex_version=""
 runner_user=gate
 key=""
 mode=root
@@ -24,6 +26,7 @@ while [[ $# -gt 0 ]]; do
     --key) key=$2; shift ;;
     --repository) repository=$2; shift ;;
     --bun) bun_version=$2; shift ;;
+    --codex) codex_version=$2; shift ;;
     *) echo "provision.sh: unknown argument $1" >&2; exit 2 ;;
   esac
   shift
@@ -33,12 +36,13 @@ done
 # engine-family pre-push holds one slot and fans its touched tests out eight
 # files at a time, and three such runs on 12 work CPUs ran past their deadline
 # in the rehearsal, docs/design/remote-gate-runner.md §8.12) and a memory bound
-# (one 8 GiB gate unit per slot, 4 GiB kept for sshd, the user manager and git).
+# (12 GiB per slot, since two engine-family runs at once pushed the host past
+# 8 GiB of swap in the rehearsal; 4 GiB kept for sshd, the user manager and git).
 settings() {
   local cpus mem_kb reserve_kb unit_kb by_cpu by_mem slots high_kb
   cpus=${LLV_PROVISION_CPUS:-$(nproc)}
   mem_kb=${LLV_PROVISION_MEMTOTAL_KB:-$(awk '/^MemTotal:/{print $2}' /proc/meminfo)}
-  reserve_kb=$((4 * 1024 * 1024)); unit_kb=$((8 * 1024 * 1024))
+  reserve_kb=$((4 * 1024 * 1024)); unit_kb=$((12 * 1024 * 1024))
   by_cpu=$((cpus * 3 / 4 / 6))
   by_mem=$(((mem_kb - reserve_kb) / unit_kb))
   slots=$((by_cpu < by_mem ? by_cpu : by_mem)); ((slots >= 1)) || slots=1
@@ -71,7 +75,7 @@ case $mode in
 esac
 
 [[ $(id -u) == 0 ]] || { echo "provision.sh: run as root (or use --user-settings as $runner_user)" >&2; exit 2; }
-[[ -n $repository && $bun_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "provision.sh: --repository and --bun <pinned version> are required" >&2; exit 2; }
+[[ -n $repository && $bun_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && $codex_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "provision.sh: --repository, --bun <pinned version> and --codex <version> are required" >&2; exit 2; }
 as_runner() { runuser -u "$runner_user" -- env HOME="/home/$runner_user" XDG_RUNTIME_DIR="/run/user/$(id -u "$runner_user")" bash -c "$1"; }
 
 # 1. The account, its key, lingering and swap.
@@ -104,6 +108,9 @@ fi
 
 # 3. The Bun the Dockerfile pins, as the runner account.
 as_runner "[[ \$(~/.bun/bin/bun --version 2>/dev/null) == $bun_version ]] || curl -fsSL https://bun.sh/install | bash -s bun-v$bun_version"
+# The Codex CLI agents run here, on the same PATH: tests that ask it for its
+# MCP configuration (src/lib/agent/cli.ts) fail without one.
+as_runner "[[ \$(~/.bun/bin/codex --version 2>/dev/null) == 'codex-cli $codex_version' ]] || ~/.bun/bin/bun add -g @openai/codex@$codex_version >/dev/null"
 
 # 4. The mirror, the warm checkout and their refresh timer.
 as_runner "[[ -d ~/mirror/delegatus.git ]] || git clone --quiet --mirror $repository ~/mirror/delegatus.git"

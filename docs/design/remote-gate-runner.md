@@ -77,7 +77,7 @@ the measurements.
 | --- | --- |
 | Can a separate server unload this machine? | Yes. Gate commands are the largest CPU consumer here: 702 CPU-hours in the 84 hours from 2026-10-19 00:00Z, on average 8.4 of 24 CPUs and 55% of busy CPU. Without them the hourly busy series has a median of 6.5 CPUs and a P90 of 8.8 (§1.2). v1 moves between about half and 88% of that CPU: half ran in checkouts v1 accepts, a third ran through the installed wrapper from working directories the journal does not record, and 12% (measurement campaigns, git-less copies made by hand) stays here (§1.2). |
 | Does it prevent hangs? | It removes the load the Viewer's stalls rise with: hours with at least 11 gate CPUs had 104.6 loop gaps of 1 s or more per hour, hours under 8 had 53.4 (§1.4). Some gaps occur at low gate load too. Production also still runs at default CPU weight until its next restart (§1.4). |
-| What is built now? | v1 (§8). A top-level heavy command that reaches `scripts/gate-slot.sh` in a Delegatus git work tree or in a review export, in an eligible shape, runs on the runner: the pre-push admitted checks, test files, typecheck, the lint and comparator scripts, and four browser drivers. |
+| What is built now? | v1 (§8). A top-level heavy command that reaches `scripts/gate-slot.sh` in a Delegatus git work tree or in a review export, in an eligible shape, runs on the runner: the pre-push admitted checks, test files, typecheck, the lint and comparator scripts, and three of the four browser drivers. |
 | How does the tree ship? | As a git bundle of a commit whose tree is the exact working tree, built in a private temporary repository, so the checkout is never written. After checkout and install the runner hashes its working tree and starts nothing unless that id equals the local one. |
 | Where is the target set? | In `~/.config/delegatus/gate-runner.json` under the home directory of the account's passwd entry, read with `getent`, which agents' changed `HOME` and `XDG_CONFIG_HOME` do not hide. `LLV_GATE_RUNNER` overrides it. |
 | What comes back? | The command's output, line by line, and its exit code; for browser drivers, regular files from the declared output roots. A started run without the runner's end record exits 75 with `gate-runner: no verdict: …`, which the publication retries as an interruption, and gates run here for the next 30 minutes. If the runner is unreachable or fails before the command starts, the command runs here as today. |
@@ -209,7 +209,8 @@ seat relayed at 13:16Z. The server is set to be deleted tonight (Q1).
   `kernel.yama.ptrace_scope` is 1.
 - **Toolchain:** Bun 1.4.0 at `~/.bun/bin/bun` (the `Dockerfile` pin), which
   is not on the `PATH` of a non-interactive SSH command; Node 22.23.4; git;
-  tar; `systemd-run`.
+  tar; `systemd-run`. The rehearsal added the Codex CLI the agents here run
+  (0.162.1) beside Bun (§8.12).
 - **Chromium:** playwright-core 1.62.1 from the lockfile, with its Chromium
   (Chrome for Testing 151) under `~/.cache/ms-playwright` and its system
   libraries.
@@ -234,8 +235,10 @@ seat relayed at 13:16Z. The server is set to be deleted tonight (Q1).
     13.3 s;
   - logs, evidence JSON and 16 frames back in 0.91 s;
   - same commit and tree id on both ends.
-- **Not measured yet:** typecheck and build on the runner, and a side-by-side
-  local timing of the same commands. §8.12 measures both.
+- **Typecheck and build**, measured in the rehearsal on one tree (§8.12
+  step 3): `bunx tsc --noEmit` took 142 s and 209.7 CPU-seconds there,
+  194 s and 252.3 here; `bun run build` took 250 s and 472.6 there, 258 s
+  and 402.8 here.
 
 **Concurrent runs.** The runner's slot count is the smaller of two bounds:
 
@@ -245,14 +248,16 @@ seat relayed at 13:16Z. The server is set to be deleted tonight (Q1).
   holds an engine-family pre-push, which fans its touched tests out eight
   files at a time, and three of those on 12 work CPUs ran past their deadline
   in the rehearsal (§8.12 step 4). 16 vCPU gives 2.
-- **Memory:** ⌊(RAM − 4 GiB) ÷ 8 GiB⌋. 8 GiB is the per-unit `MemoryMax`
-  (`owned-runner.ts:145-159`) that a whole-project typecheck reaches: 7.5 GiB
-  through the gate service (`docs/design/agent-signal-sandbox.md:628-629`),
-  and one gate unit here sat at its 8,192 MiB cap at 13:38Z. The 4 GiB keeps
-  sshd, the user manager, git and the mirror's page cache resident. 30.6 GiB
-  gives 3.
-- **Result:** 2 slots on today's server, the CPU bound. An AX102 (32
-  threads, 128 GB) gets min(4, 15) = 4.
+- **Memory:** ⌊(RAM − 4 GiB) ÷ 12 GiB⌋. The divisor started at 8 GiB, the
+  per-unit `MemoryMax` (`owned-runner.ts:145-159`) that a whole-project
+  typecheck reaches: 7.5 GiB through the gate service
+  (`docs/design/agent-signal-sandbox.md:628-629`), and one gate unit here sat
+  at its 8,192 MiB cap at 13:38Z. The rehearsal's two concurrent
+  engine-family pre-pushes took the host past 8 GiB of swap, so it became
+  12 GiB by the rule of §8.12 step 4. The 4 GiB keeps sshd, the user manager,
+  git and the mirror's page cache resident. 30.6 GiB gives 2.
+- **Result:** 2 slots on today's server, where both bounds give 2. An AX102
+  (32 threads, 128 GB) gets min(4, 10) = 4.
 
 Slots do not bound one run's own fan-out. An engine-family pre-push holds one
 slot and peaks at about 15 GiB across its parallel test files (§1.2), so two
@@ -272,9 +277,11 @@ rehearsal runs three of the heaviest pre-pushes at once (§8.12 step 4).
 is how much faster or slower a runner thread is than a thread here. The
 demand v1 moves averaged 4.2–7.4 CPUs (§1.2), and at most 10.6 in the P90
 hour (88% of 12.1). The server covers the average if *k* ≥ 0.62 and that P90
-hour if *k* ≥ 0.9. *k* is unmeasured and v1's rehearsal records it (§8.12). A
-runner short of capacity queues there, and this machine stays unloaded either
-way.
+hour if *k* ≥ 0.9. The rehearsal measured *k* = 1.32 over ten engine test
+files (§8.12 step 2), with this machine at load 11 to 27, so the runner
+does the work of about 16 CPUs here and covers that P90 hour. The same lane
+pre-push used 3,994 gate CPU-seconds here and 2,085 there (step 1). A runner
+short of capacity queues there, and this machine stays unloaded either way.
 
 ### 1.4 Stalls and production's CPU priority
 
@@ -329,9 +336,14 @@ cloud API token, relay and Telegram tokens, Delegatus access keys.
 - **Benefit:** between about half and 88% of gate CPU, 4.2 to 7.4 of the 8.4
   CPUs gates used, leaves this machine (§1.2). The decision log measures
   where the rest runs (§8.7, §8.12).
-- **Cost per run:** a few seconds of overhead (privacy scan about 4 s,
-  capture and bundle 0.6 s, transfer, checkout and install about 2 s), and
-  0.1–3 MiB of network.
+- **Cost per run:** for a test file, typecheck or driver, a few seconds
+  (capture and bundle 0.6 s, transfer, checkout and install about 2 s) plus
+  the client's privacy scan of the captured tree, which took about 4 s for
+  a small change and is answered from its cache for a tree it has scanned.
+  A remote pre-push scans twice here, once in the hook and once in the
+  client: 169 to 585 CPU-seconds here per pre-push in the rehearsal, where
+  the same lane's pre-push run here took 4,122 (§8.12). 0.1–3 MiB of
+  network.
 
 ## 4. Decision questions
 
@@ -883,6 +895,12 @@ same protocol.
      newest `chromium-*/chrome-linux64/chrome` that sets a short `TMPDIR`, as
      `~/bin/gate-env` does;
    - `LLV_GATE_RUNNER=off` and `LLV_VIEWER_CONTROL_URL=http://127.0.0.1:1`;
+   - `GIT_AUTHOR_*` and `GIT_COMMITTER_*` set to `gate-run` and a no-reply
+     address. The caller's identity never travels, and without one a test
+     that commits without its own identity fails there only: the rehearsal
+     found one in `src/lib/pipelines/git.test.ts`. A no-reply address passes
+     the privacy rules publication code applies to the commits it reads;
+     `gate-run@invalid` failed 23 of that file's tests;
    - `LLV_CPU_WAIT_ROOTS` and `LLV_GATE_ADMISSION_WAIT_ROOTS` set to
      `["<dir>/ledger"]`, so runner-side queue time is excluded from the
      budget there;
@@ -966,8 +984,9 @@ file and the memory drop-in.
 
 **Provisioning as code: `scripts/gate-runner/provision.sh`.** It runs as
 root on a fresh Ubuntu 24.04 host (`ssh root@<new host> 'bash -s' < …`). Its
-inputs are the public half of this machine's runner key and the public
-repository URL. Every step checks its result first, so a second run changes
+inputs are the public half of this machine's runner key, the public
+repository URL, the pinned Bun version and the version of the Codex CLI
+the agents here run. Every step checks its result first, so a second run changes
 nothing. The steps are the ones that set up today's server:
 
 1. create `gate`, install the key, enable lingering, and add a 16 GB
@@ -976,7 +995,10 @@ nothing. The steps are the ones that set up today's server:
    unattended upgrades, and Node 22 from a checksum-verified official
    tarball;
 3. install, as `gate`, the Bun version the `Dockerfile` pins
-   (`pinnedBunVersion`, `local-gate.ts:270`) into `~/.bun`;
+   (`pinnedBunVersion`, `local-gate.ts:270`) into `~/.bun`, and the Codex
+   CLI into `~/.bun/bin`, the command's `PATH`: tests that ask it for its
+   MCP configuration (`src/lib/agent/cli.ts`) fail without one, on base and
+   head alike, which the comparator then hides as pre-existing (§8.12);
 4. create the bare mirror `~/mirror/delegatus.git` and the checkout `~/warm`
    with a frozen install, plus a user timer that every 5 minutes fetches the
    mirror, moves `~/warm` to `main` and installs again when `bun.lock`
@@ -986,7 +1008,7 @@ nothing. The steps are the ones that set up today's server:
 6. derive the concurrency settings from `nproc` and `MemTotal` (§1.3) and
    write them as `gate`:
    - `~/.gate-runner.env` with
-     `LLV_GATE_SLOTS` = max(1, min(⌊0.75 × CPUs ÷ 6⌋, ⌊(MemTotal − 4 GiB) ÷ 8 GiB⌋));
+     `LLV_GATE_SLOTS` = max(1, min(⌊0.75 × CPUs ÷ 6⌋, ⌊(MemTotal − 4 GiB) ÷ 12 GiB⌋));
    - `~/.config/systemd/user/delegatus-agents-work.slice.d/50-memory.conf`
      with `MemoryHigh` = MemTotal − 4 GiB, then
      `systemctl --user daemon-reload`.
@@ -1212,9 +1234,9 @@ off Linux, as `scripts/gate-slot.test.ts:101` does.
 | T7 | Session killed after `started` at a handshake: the stub cuts it when the command's first line arrives, while the command waits for a release file the test writes only after the first run returns. Then a second invocation, then a third after the mark in the health file is moved back 31 minutes | The first exits other than 75, lacks the `no verdict` line, or reruns here. The second probes, uploads, or does not run here with the `running here` line. The third does not go remote. |
 | T8 | The command reads `../manifest.json` and `/proc/<pid>/environ` and `cmdline` of `serve.ts run` and prints them, prints a forged `end 0` line, ends its last standard error line without a newline, and then the stream is cut. A second command ends its last standard error line without a newline and exits 3. | The nonce appears in anything the command read; the first run exits 0; the second exits other than 3, or its last line reaches the caller changed or lost. |
 | T9 | The stub alters one file in the runner's tree after install, before verify | The command starts, or it does not run here with `running here: … the runner checked out tree`. Red against a verify step that runs `write-tree` alone. |
-| T10 | `SIGTERM` during a fixture test that has printed from inside its unit (the test waits for that line, never for a delay) | `gate-run-<id>` is still active after 15 s, the run directory remains, or the exit is not 143. |
+| T10 | `SIGTERM` during a fixture test that has printed from inside its unit (the test waits for that line, never for a delay) | `gate-run-<id>` is still active once the client has exited, the run directory remains, or the exit is not 143. |
 | T11 | Cleanup after pass, fail and cancel; a stale directory with an old lease; a directory with an active unit | A run directory survives its run, the stale one survives the next run, or the active one is removed. |
-| T12 | `GH_TOKEN`, `LLV_TOKEN`, `LLV_PRIVACY_KNOWN_VALUES_FILE`, `OPENROUTER_API_KEY` and a driver switch set locally | A secret appears in the remote command's environment, or the switch is missing. Also red when `LLV_GATE_PUSH_DEADLINE` there is more than 2 s off the local remaining budget. |
+| T12 | `GH_TOKEN`, `LLV_TOKEN`, `LLV_PRIVACY_KNOWN_VALUES_FILE`, `OPENROUTER_API_KEY`, a git author and committer identity and a driver switch set locally | A secret or the local identity appears in the remote command's environment, the remote identity is not `gate-run` with a no-reply address, or the switch is missing. Also red when `LLV_GATE_PUSH_DEADLINE` there is more than 2 s off the local remaining budget. |
 | T13 | The env classification table | Any `process.env.NAME` in the four drivers or `scripts/local-gate*.ts` is unclassified. |
 | T14 | A fixture driver writes `evidence/x/a.json`, `.artifacts/y/b.png` and into an absolute `FOO_DIR`, and edits `.githooks/pre-push` and `package.json` in the runner's tree. A hostile `pack-outputs` stub then returns, in turn, an entry `tree/../x`, an absolute name, a symlink `tree/evidence/l` → `/` followed by `tree/evidence/l/f`, a hard link, and an entry under `tree/scripts/`. | A declared file is missing locally; any other file changes, compared by a hash list of the whole local tree and of the parent of `FOO_DIR`; a hostile return writes anything or exits other than 75; over the size bound, the exit is not 75 or a partial file appears. |
 | T15 | A tree containing a known value from a temporary known-values file, in a git tree and in a review export | Anything is uploaded, or the command does not run here with the privacy line. |
@@ -1224,7 +1246,7 @@ off Linux, as `scripts/gate-slot.test.ts:101` does.
 | T19 | A review export that `reviewExport()` made of a fixture commit, then edited, with a new file and a deleted file, keeping a tracked file that matches an ignore rule; a fixture test file run there; and a copy of the same files without `export.json` | For the export: the test does not run remotely; its exit or output (minus `gate-runner:` lines) differs from a local run; `T` differs from the tree of the export's files; the runner's tree holds `.git` or lacks the ignored tracked file; the bundle carries the exported commit or a lane commit message; any file of the export changes. For the copy: any invocation is recorded, or the decision log lacks its `ineligible` line. |
 | T20 | Containment refused: a stub `systemctl` on the runner's `PATH` refuses `set-property`; in a second case the probe unit exits 69; in a third, the command itself exits 69 after `started` | In the first two, any line from the runner reaches the caller before `gate-runner: running here: containment failed`, the command does not run here, or a `started` record is written. In the third, the client does anything but exit 69. |
 | T21 | `bun test $PWD/<fixture>.test.ts`, and `bun test` with an absolute path outside the tree | The first gives an exit or output (minus `gate-runner:` lines) different from a local run, or its manifest argv holds an absolute path. The second records any invocation. |
-| T22 | `provision.sh --print-settings` with 16 CPUs and `MemTotal` 32,083,512 kB, with 32 CPUs and 128 GiB, with 64 CPUs and 24 GiB, and with 4 CPUs and 8 GiB | The slots differ from 2, 4, 2 (the memory bound) and 1, or `MemoryHigh` differs from `MemTotal` − 4 GiB. |
+| T22 | `provision.sh --print-settings` with 16 CPUs and `MemTotal` 32,083,512 kB, with 32 CPUs and 128 GiB, with 64 CPUs and the same `MemTotal`, with 64 CPUs and 24 GiB, and with 4 CPUs and 8 GiB | The slots differ from 2, 4, 2 and 1 (both the memory bound) and 1, or `MemoryHigh` differs from `MemTotal` − 4 GiB. |
 | T24 | A fixture writes `../exit` = 0, sends `SIGKILL` to its own run's `serve.ts exec`, and fails an assertion; a second sends it `SIGPIPE` instead | The first exits other than 75 with `no verdict: the run's completion record disagrees with its unit`; the second exits other than 1; either reports a pass. `completion()` is also checked alone for a planted 0 against unit codes 255, 0 without a record, and 1. |
 | T25 | A lane commit adds a file holding a known value and the next commit deletes it | Anything but the probe reaches the runner, or the command does not run here with the privacy line. Without the known value the same history runs remotely. |
 | T26 | A passing run whose removal's connection fails; a failing run whose removal never answers (bound lowered by the test-only `LLV_GATE_RUNNER_REMOVE_TIMEOUT_MS`); a passing run whose unit the runner cannot stop (a stub `systemctl`); then a run after their leases are 31 minutes old, beside a live run and a foreign directory | A pass exits other than 75, the failing run other than 1, a retained directory lacks its lease, the health file is not marked, or the last run's sweep removes anything but the three retained runs. |
@@ -1232,10 +1254,11 @@ off Linux, as `scripts/gate-slot.test.ts:101` does.
 | T28 | Probe failures whose ssh text names a sentinel host, account, address and key path: host name not resolving, key refused, changed host key, connection refused | The `running here` line lacks the failure's kind, or a sentinel appears in the client's output, the health file or the decision log. |
 | T29 | Returns with `tree/evidence/c` and `tree/evidence/c/child` in both orders, a duplicate entry, nested `out/` entries; output maps naming one directory twice, a nested directory, a link into the checkout, and the checkout's parent; a staged write that fails part-way | Any return is accepted, eligibility admits an overlapping map, or any file or directory changes. |
 | T23 | The client's config lookup (through `machineHome()`) and the shell branch's, run with `HOME` and `XDG_CONFIG_HOME` set to temporary directories | Either resolves under `HOME`, or under anything other than field 6 of `getent passwd <uid>`. |
+| T30 | `scanBudgetMs` with and without a push deadline; then a captured tree whose privacy gate records its pid and holds while a hold file exists, scanned with a 10 s bound, then released and scanned again | The budget is not what is left of the push budget less a minute (at least 30 s), or 15 minutes without one; the held scan is a refusal, is cached, or returns while the gate's process still lives; the released scan is not scanned again and cached. |
 
 The cases live in `scripts/gate-runner/`: `client.test.ts` holds the fast
 ones (selection, streams, archives, health cache, T13, T17, T18, T22, T23,
-T28, T29 and T24's `completion()` half), and the stub-runner files hold at
+T28, T29, T30's budget half and T24's `completion()` half), and the stub-runner files hold at
 most three cases each, so every file stays under half the comparator's
 300 s file budget on a loaded runner: `remote.test.ts` (T1–T3, T21),
 `remoteCheckout.test.ts` (T4, T5), `remoteTree.test.ts` (T9, T12),
@@ -1243,7 +1266,7 @@ most three cases each, so every file stays under half the comparator's
 `remoteControl.test.ts` (T8, T20), `remoteLifecycle.test.ts` (T10, T11),
 `remoteOutputs.test.ts` (T14), `remoteShip.test.ts` (T4's symlink and index
 flags), `remoteVerdict.test.ts` (T24, T25), `remoteCleanup.test.ts` (T26) and
-`remotePrivacy.test.ts` (T27). The stub records every process group it
+`remotePrivacy.test.ts` (T27, T30's scan half). The stub records every process group it
 starts, and each test stops and waits for them, because the runner side
 outlives a killed session as it would on a real host. A test that interrupts
 a run does so at a line the command prints, and a deadline in a fixture is
@@ -1260,8 +1283,8 @@ bundle carries. T14's size bound uses the test-only
 The build stage runs this rehearsal once, with `LLV_GATE_RUNNER` set to the
 configured SSH alias on its own commands only, so nothing else on the
 machine changes. It runs while today's server lives (Q1), or against the
-next host once `provision.sh` has set it up, and records the results in its
-report.
+next host once `provision.sh` has set it up, and records the results below
+the steps.
 
 0. **Provisioning.** A first `provision.sh` run against the current runner
    adds the env file and the memory drop-in, a second changes nothing, and
@@ -1284,8 +1307,9 @@ report.
    repeats. (The first run, at 3 slots, ended one push by deadline, so the
    divisor went from 3 to 6 work CPUs, §1.3.)
 5. **Drivers.** One case each of the kanban, phone and conversation-window
-   drivers, and one board-geometry case, run remotely, from a lane worktree
-   and from a review export. Their frames come back and are opened here.
+   drivers runs remotely, from a lane worktree and from a review export.
+   Their frames come back and are opened here. (The board geometry driver
+   runs here, §8.1.)
 6. **Faults.**
    - Kill the client's ssh session mid-run. That must give 75, the next
      command must run here with the `running here` line, and no run directory
@@ -1322,6 +1346,10 @@ once.
   Shipping them needs a local object store that holds main, and a way to keep
   the tracked files that match an ignore rule without the exported commit.
   The decision log measures them first.
+- One privacy scan per remote pre-push. The hook scans the push here, then
+  the client scans the captured tree before upload; on lane F the second
+  scan cost about 326 CPU-seconds here in the rehearsal (§8.12). The hook's
+  own scan could read the captured tree instead, so it runs once.
 - Memory admission per shape on the runner: the slot count, the work slice's
   `MemoryHigh` and rehearsal step 4 bound memory in v1.
 - Mirroring the runner's queue wait into this machine's CPU-wait ledger: the

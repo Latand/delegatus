@@ -118,6 +118,14 @@ export function commandEnvironment(dir: string, manifest: Manifest, source: Node
   }
   env.LLV_GATE_RUNNER = "off";
   env.LLV_VIEWER_CONTROL_URL = "http://127.0.0.1:1";
+  // The caller's git identity never travels, and the runner's fresh home has
+  // none, so a test that commits without setting one would fail only here.
+  // A no-reply address, as an agent's own identity is, passes the privacy
+  // rules that publication code applies to the commits it reads.
+  for (const role of ["AUTHOR", "COMMITTER"]) {
+    env[`GIT_${role}_NAME`] = "gate-run";
+    env[`GIT_${role}_EMAIL`] = "noreply@example.invalid";
+  }
   const ledger = path.join(dir, "ledger");
   fs.mkdirSync(ledger, { recursive: true, mode: 0o700 });
   env.LLV_CPU_WAIT_ROOTS = JSON.stringify([ledger]);

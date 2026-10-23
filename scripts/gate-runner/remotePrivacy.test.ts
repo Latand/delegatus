@@ -53,26 +53,44 @@ test.if(linux)("an edit after capture neither hides a private value from the sca
   expect(privacy(exportTree, exportAgain, env)).toMatchObject({ ok: false });
 }, TIMEOUT);
 
-// T28
+// T30
 test.if(linux)("a scan that runs out of time is no refusal and leaves no cached answer, and the same capture is scanned again", () => {
   const h = harness();
-  // The captured tree's own gate is the one that runs, so a slow gate in the
-  // tree makes a slow scan.
+  // The captured tree's own gate is the one that runs, so a gate that holds
+  // makes a slow scan. It records its pid and holds while the hold file
+  // exists, both in the first ancestor of its directory that has the record,
+  // so the tree carries no absolute path.
   const gate = path.join(h.fixture, "scripts", "privacy-publication-gate.ts");
   const original = fs.readFileSync(gate, "utf8");
-  fs.writeFileSync(gate, `await Bun.sleep(15_000);\n${original}`);
+  const pids = path.join(h.root, "slow-gate.pids"), hold = path.join(h.root, "slow-gate.hold");
+  fs.writeFileSync(pids, "");
+  fs.writeFileSync(hold, "");
+  fs.writeFileSync(gate, `import { appendFileSync as recordPid, existsSync as hasRecord } from "node:fs";
+import { dirname as parentOf, join as joinPath } from "node:path";
+for (let dir = process.cwd(); dir !== parentOf(dir); dir = parentOf(dir)) if (hasRecord(joinPath(dir, "slow-gate.pids"))) {
+  recordPid(joinPath(dir, "slow-gate.pids"), \`\${process.pid}\\n\`);
+  // A guard only: the test releases the hold before the second scan.
+  const until = Date.now() + 120_000;
+  while (hasRecord(joinPath(dir, "slow-gate.hold")) && Date.now() < until) await Bun.sleep(20);
+  break;
+}
+${original}`);
   const checkout: Tree = { kind: "git", root: h.fixture };
   let scratches = 0;
   const scratch = () => { const dir = path.join(h.root, `ship-${scratches++}`); fs.mkdirSync(dir); return dir; };
   const captured = ship(checkout, scratch(), h.base);
-  const started = Date.now();
-  expect(privacy(checkout, captured, h.env({ LLV_GATE_RUNNER_SCAN_TIMEOUT_MS: "1000" }))).toEqual({ ok: false, line: "it did not finish within 1 s", unfinished: true });
-  // The gate was stopped at its bound, never waited out.
-  expect(Date.now() - started).toBeLessThan(12_000);
+  expect(privacy(checkout, captured, h.env({ LLV_GATE_RUNNER_SCAN_TIMEOUT_MS: "10000" }))).toEqual({ ok: false, line: "it did not finish within 10 s", unfinished: true });
+  // The gate was stopped at its bound, never waited out: it started, it is
+  // still held, and its process is gone.
+  const started = fs.readFileSync(pids, "utf8").split("\n").filter(Boolean).map(Number);
+  expect(started).toHaveLength(1);
+  expect(fs.existsSync(hold)).toBeTrue();
+  expect(() => process.kill(started[0]!, 0)).toThrow();
   const cache = path.join(h.cache, "privacy-cache.json");
   const cached = () => fs.existsSync(cache) ? Object.keys(JSON.parse(fs.readFileSync(cache, "utf8"))) : [];
   expect(cached()).toEqual([]);
-  // With its full budget the same capture is scanned again, slow gate and all.
+  // Released, the same capture is scanned again in full.
+  fs.rmSync(hold);
   expect(privacy(checkout, captured, h.env())).toEqual({ ok: true });
   expect(cached()).toHaveLength(1);
 }, TIMEOUT);

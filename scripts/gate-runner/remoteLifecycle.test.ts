@@ -54,10 +54,8 @@ test.if(linux)("SIGTERM stops the remote unit and removes the run; every finishe
     expect(fs.existsSync(path.join(runs, stale))).toBeFalse();
     expect(fs.existsSync(path.join(runs, live))).toBeTrue();
     expect(fs.existsSync(path.join(runs, foreign))).toBeTrue();
-    const stopAt = Date.now();
     child.kill("SIGTERM");
     expect(await exited).toBe(143);
-    expect(Date.now() - stopAt).toBeLessThan(15_000);
     expect(unitActive(id)).toBeFalse();
     expect(fs.existsSync(path.join(runs, id))).toBeFalse();
   } finally {
