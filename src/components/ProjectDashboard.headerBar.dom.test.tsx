@@ -62,8 +62,9 @@ dom.HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
    as the case says it needs, less what each step it has taken gives back, so the hook's order and
    its stopping point are the real ones. */
 let rowNeeds = 0;
-const STEP_GIVES: Record<string, number> = { accounts: 300, labels: 150, chip: 90, tight: 40, find: 80 };
-const isBoardBar = (element: HTMLElement) => element.matches?.('header.bar[data-bar="project"]');
+const STEP_GIVES: Record<string, number> = { accounts: 300, labels: 150, chip: 90, tight: 40, panels: 60, create: 40, find: 80 };
+/* The bar of a leaf without a board gives way by the same rule, so it is measured the same way. */
+const isBoardBar = (element: HTMLElement) => element.matches?.('header.bar[data-bar="project"], [data-project-bar]');
 Object.defineProperty(dom.HTMLElement.prototype, "clientWidth", { configurable: true, get(this: HTMLElement) { return isBoardBar(this) ? barWidth : 0; } });
 Object.defineProperty(dom.HTMLElement.prototype, "scrollWidth", {
   configurable: true,
@@ -557,9 +558,69 @@ test("each further step is taken only when the one before it was not enough, and
   expect(await stepsAt(1301)).toBe("accounts labels");
   expect(await stepsAt(1451)).toBe("accounts labels chip");
   expect(await stepsAt(1541)).toBe("accounts labels chip tight");
-  expect(await stepsAt(1581)).toBe("accounts labels chip tight find");
+  /* A 640–700 px window (#1698): the panel group, then `+`, move into ⋯ before the search goes under its placeholder. */
+  expect(await stepsAt(1581)).toBe("accounts labels chip tight panels");
+  expect(await stepsAt(1641)).toBe("accounts labels chip tight panels create");
+  expect(await stepsAt(1681)).toBe("accounts labels chip tight panels create find");
   /* Past the last step the bar keeps them all and stays one row. */
-  expect(await stepsAt(2400)).toBe("accounts labels chip tight find");
+  expect(await stepsAt(2400)).toBe("accounts labels chip tight panels create find");
+});
+
+test("what a short row gave up is a row of ⋯ that does the same: Orchestrator, the recent agents, New task and New agent", async () => {
+  barWidth = 1000;
+  /* Short by what every step up to `create` gives back: a 640 px window. */
+  rowNeeds = 1000 + 300 + 150 + 90 + 40 + 60 + 1;
+  const host = mount();
+  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
+  await settle();
+  expect(bar(host).getAttribute("data-fit")).toBe("accounts labels chip tight panels create");
+
+  /* The row keeps its controls in the document for the CSS to fold, and ⋯ leads with their rows. */
+  let menu = openMore(host);
+  const groups = Array.from(menu.querySelectorAll("[data-bar-menu-group]")).filter((group) => group.childElementCount).map((group) => group.getAttribute("data-bar-menu-group"));
+  expect(groups.slice(0, 3)).toEqual(["create", "panels", "search"]);
+  expect(text(menu.querySelector('[data-bar-more-create="task"]')).trim()).toBe(en["dash.newTask"]);
+  expect(text(menu.querySelector('[data-bar-more-create="agent"]')).trim()).toBe(en["dash.newConvo"]);
+  expect(text(menu.querySelector("[data-bar-more-recent]")).trim()).toBe(en["dash.recentAgents"]);
+  /* Named as the toggle is, apart from the seat's own section «Orchestrator» further down. */
+  expect(text(menu.querySelector("[data-bar-more-orchestrator]"))).toContain(en["orchPanel.toggleAria"]);
+  expect(text(menu.querySelector('[data-bar-menu-head="seat"]'))).toContain(en["dash.menu.seat"]);
+
+  /* Recent agents: ⋯ closes and the list opens under the row, from the segment's own anchor. */
+  click(menu.querySelector("[data-bar-more-recent]"));
+  expect(await waitFor(() => host.querySelector("[data-bar-recent-list]") !== null)).toBe(true);
+  expect(host.querySelector("[data-bar-more-menu]")).toBeNull();
+  expect(host.querySelector("[data-bar-recent-list]")!.closest('[data-bar-group="panels"]')).not.toBeNull();
+  click(host.querySelector("[data-bar-recent-toggle]"));
+  expect(await waitFor(() => host.querySelector("[data-bar-recent-list]") === null)).toBe(true);
+
+  /* Orchestrator: the seat's own toggle, through the row, and its pressed state follows. */
+  menu = openMore(host);
+  const pressed = menu.querySelector("[data-bar-more-orchestrator]")!.getAttribute("aria-pressed");
+  expect(pressed).toBe(bar(host).querySelector("[data-orchestrator-toggle]")!.getAttribute("aria-pressed"));
+  click(menu.querySelector("[data-bar-more-orchestrator]"));
+  await settle();
+  expect(host.querySelector("[data-bar-more-menu]")).toBeNull();
+  expect(bar(host).querySelector("[data-orchestrator-toggle]")!.getAttribute("aria-pressed")).not.toBe(pressed);
+  menu = openMore(host);
+  expect(menu.querySelector("[data-bar-more-orchestrator]")!.getAttribute("aria-pressed")).not.toBe(pressed);
+  click(menu.querySelector("[data-bar-more-orchestrator]"));
+  await settle();
+  expect(bar(host).querySelector("[data-orchestrator-toggle]")!.getAttribute("aria-pressed")).toBe(pressed);
+
+  /* New task: the composer the `+` menu opens. */
+  menu = openMore(host);
+  click(menu.querySelector('[data-bar-more-create="task"]'));
+  expect(await waitFor(() => host.querySelector("[data-kanban-new-task]") !== null)).toBe(true);
+});
+
+test("with room, ⋯ carries no row for what the row still holds", async () => {
+  const host = mount();
+  expect(await waitFor(() => host.querySelector("[data-kanban-board]") !== null)).toBe(true);
+  await settle();
+  expect(bar(host).getAttribute("data-fit")).toBe("");
+  const menu = openMore(host);
+  expect(menu.querySelector("[data-bar-more-create], [data-bar-more-recent], [data-bar-more-orchestrator]")).toBeNull();
 });
 
 test("Undo and Redo are gone from the header, its ⋯ and Ctrl+Z, even with a close in the log (#1856)", async () => {
@@ -736,6 +797,8 @@ test("a menu opened from the row marks the board, so the toast steps aside while
 
 test("a project with nothing in it draws the same bar: its two ends, the message search, no board controls", async () => {
   barWidth = 1032;
+  /* Short by what the accounts and the labels give back, as a 1280 px window is. */
+  rowNeeds = 1032 + 300 + 1;
   const host = dom.document.createElement("div");
   dom.document.body.appendChild(host);
   const root = createRoot(host as unknown as Element);
@@ -752,10 +815,14 @@ test("a project with nothing in it draws the same bar: its two ends, the message
   const leaf = page.querySelector("[data-project-bar]") as HTMLElement;
   expect(page.querySelectorAll("header.bar, [data-project-bar]")).toHaveLength(1);
   expect(leaf.querySelector("[data-project-view-tabs], [data-bar-create-reserve], [data-bar-create], [data-bar-recent]")).toBeNull();
-  /* Narrow, it is in the two steps its width asks for: the accounts in ⋯, the toggles as icons. */
+  /* Narrow, it takes the steps its row asks for, by the board's rule: the accounts in ⋯, the toggles as icons. */
   expect(leaf.getAttribute("data-fit")).toBe("accounts labels");
+  /* The steps choose the find slot's words: the full wording while the row has labels, «Search» after. */
   const find = leaf.querySelector('[data-testid="dash-search"]') as HTMLElement;
-  expect(text(find).trim()).toBe(en["dash.searchShort"]);
+  expect(text(find.querySelector("[data-fit-label]")).trim()).toBe(en["search.open"]);
+  expect(text(find.querySelector("[data-fit-short]")).trim()).toBe(en["dash.searchShort"]);
+  /* Who works is the board's count alone: this bar says nothing in other words (#1954). */
+  expect(text(leaf.querySelector('[data-bar-group="status"]')).trim()).toBe(en["common.nothingRunning"]);
   /* The full wording and its «/» hint stay as the name and the tooltip. */
   expect(find.getAttribute("aria-label")).toBe(en["search.open"]);
   expect(find.getAttribute("title")).toBe(en["search.open"]);

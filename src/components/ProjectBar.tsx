@@ -80,10 +80,6 @@ export function BarNeedsFilterProvider({ value, children }: { value: BarNeedsFil
   return <BarNeedsFilterContext.Provider value={value}>{children}</BarNeedsFilterContext.Provider>;
 }
 
-/** At or above this width a bar that holds no board (the skeleton, the empty project) carries its
-    labels and the account switches; below it they are icons and the accounts move into ⋯. */
-export const BAR_WIDE_MIN = 1700;
-
 /**
  * What the board's bar gives up, in order, when the row is short. Each step is
  * a token the bar carries in `data-fit` once it is reached, and the bar's CSS
@@ -91,17 +87,21 @@ export const BAR_WIDE_MIN = 1700;
  * width that keeps its placeholder whole, and the project name never truncates
  * while a step is left: the account switches move into ⋯, Orchestrator
  * keeps its icon, the needs-you chip keeps its dot and count, the
- * groups stand 8 px apart, and last the search may go under its placeholder.
+ * groups stand 8 px apart, the panel group and then `+` move into ⋯ as rows
+ * (a 640–700 px window, #1698), and last the search goes under its
+ * placeholder, which then leaves the field to its icon.
  */
-export const BAR_FIT_STEPS = ["accounts", "labels", "chip", "tight", "find"] as const;
+export const BAR_FIT_STEPS = ["accounts", "labels", "chip", "tight", "panels", "create", "find"] as const;
 export type BarFitStep = (typeof BAR_FIT_STEPS)[number];
+
+/* The texts the row keeps whole while a step is left: the project name and the status line's words. */
+const BAR_WHOLE = "h1, [data-bar-whole]";
 
 function barFits(bar: HTMLElement): boolean {
   if (bar.scrollWidth > bar.clientWidth + 0.5) return false;
-  const name = bar.querySelector<HTMLElement>("h1");
-  /* The name has no cap of its own: it is whole while the row has room, and it is cut only once
-     every step is taken and the search sits at its floor. */
-  return !name || name.scrollWidth <= name.clientWidth + 0.5;
+  /* They have no cap of their own: each is whole while the row has room, and is cut, with an
+     ellipsis, only once every step is taken and the search sits at its floor. */
+  return [...bar.querySelectorAll<HTMLElement>(BAR_WHOLE)].every((text) => text.scrollWidth <= text.clientWidth + 0.5);
 }
 
 /**
@@ -151,22 +151,6 @@ const BAR_ICON = "h-[15px] w-[15px] shrink-0";
 /** A row of the ⋯ menu. */
 export const BAR_MENU_ROW =
   "flex min-h-8 w-full items-center gap-2 rounded-[6px] px-2 text-left text-[12px] font-semibold text-primary hover:bg-well focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-default disabled:text-muted disabled:hover:bg-transparent";
-
-/** Whether a bar is wide enough for labelled controls, measured on the bar itself. */
-export function useBarWide(ref: RefObject<HTMLElement | null>): boolean {
-  const [wide, setWide] = useState(true);
-  useLayoutEffect(() => {
-    const element = ref.current;
-    if (!element) return;
-    const apply = () => setWide(element.getBoundingClientRect().width >= BAR_WIDE_MIN);
-    apply();
-    if (typeof ResizeObserver !== "function") return;
-    const observer = new ResizeObserver(apply);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [ref]);
-  return wide;
-}
 
 /**
  * The create group: one `+` opening a two-row menu (a task, an agent). The
@@ -540,29 +524,30 @@ export function BarMenuSection({ id, title, icon, page = false, children }: { id
 /**
  * The same bar on the leaves the kanban board does not draw (the empty project,
  * the loading skeleton): the project's two ends around this leaf's status line
- * and its one search. Its steps follow its width: under `BAR_WIDE_MIN` the
- * accounts are in ⋯ and the panel toggles are icons.
+ * and its one search. It gives way by the board's rule (`useBarFit`), so it
+ * fits the same windows; it has no `+`, so that step gives nothing back here.
  */
 export function DashboardBar({ lead, status, find, trail }: {
   lead: () => ReactNode;
-  status: (wide: boolean) => ReactNode;
-  find: (wide: boolean) => ReactNode;
-  trail: (accountsInMenu: boolean) => ReactNode;
+  status: ReactNode;
+  find: ReactNode;
+  /** `fit`: the steps the row has taken, so ⋯ carries what left it. */
+  trail: (fit: readonly BarFitStep[]) => ReactNode;
 }) {
+  const { locale } = useLocale();
   const ref = useRef<HTMLDivElement>(null);
-  const wide = useBarWide(ref);
+  const fit = useBarFit(ref, [locale]);
   return (
     <div
       ref={ref}
       data-project-bar=""
-      data-fit={wide ? "" : "accounts labels"}
       className="flex h-12 shrink-0 items-center gap-4 border-b border-border bg-card px-4"
     >
-      <div className={`flex shrink items-center gap-2 ${wide ? "" : "min-w-12"}`} data-bar-group="where">{lead()}</div>
-      {status(wide)}
-      <span aria-hidden className="min-w-0 flex-1" />
-      {find(wide)}
-      <div className="flex shrink-0 items-center gap-4" data-bar-group="trail">{trail(!wide)}</div>
+      <div className="flex min-w-12 shrink items-center gap-2" data-bar-group="where">{lead()}</div>
+      {status}
+      <span aria-hidden className="min-w-0 flex-1" data-bar-spacer="" />
+      {find}
+      <div className="flex shrink-0 items-center gap-4" data-bar-group="trail">{trail(fit)}</div>
       <BarIslandSlot />
     </div>
   );

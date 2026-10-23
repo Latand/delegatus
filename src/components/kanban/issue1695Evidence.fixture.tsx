@@ -3404,6 +3404,9 @@ const OLDER_FAILS = params.get("olderfails") === "1";
    good, so what the click took away comes back with the reason. */
 const DISMISS_REFUSED = params.get("dismissrefused") === "1";
 const BOARD_REFUSES = params.get("boardrefuses") === "1";
+/* `&boardhold=1` never answers the board's first read, so the project stays on its loading
+   skeleton and the bar of a leaf without a board, for the header's narrow-window case. */
+const BOARD_HOLD = params.get("boardhold") === "1";
 /* `&settingsrefuse=1`: every write to the voice companion's settings is refused
    with COMPANION_UNAVAILABLE, so a press flips and meets its reason. */
 const SETTINGS_REFUSE = params.get("settingsrefuse") === "1";
@@ -4335,6 +4338,7 @@ window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       board = { ...reduced, schemaVersion: 1, revision: board.revision + 1, pathAliases: reduced.pathAliases ?? {} };
       return json({ ok: true, applied: true, board });
     }
+    if (BOARD_HOLD) return new Promise<Response>(() => {});
     return json({ ok: true, board });
   }
   if (url.pathname === "/api/view/presence" && method === "POST") {
