@@ -83,6 +83,8 @@ const MESSAGES = {
   en: {
     usage: () => `Usage: delegatus [options]
 
+  delegatus doctor [--json] [--port <n>]  Read-only onboarding diagnostics
+
 Options:
   -p, --port <n>       Port for the local server (default ${DEFAULT_PORT})
   -H, --hostname <h>   Bind address (default ${DEFAULT_HOSTNAME})
@@ -133,6 +135,8 @@ Options:
   },
   uk: {
     usage: () => `Використання: delegatus [опції]
+
+  delegatus doctor [--json] [--port <n>]  Діагностика онбордингу лише для читання
 
 Опції:
   -p, --port <n>       Порт для локального сервера (типово ${DEFAULT_PORT})
@@ -1625,7 +1629,16 @@ async function checkoutLauncher() {
   await main();
 }
 
-try {
+if (process.argv[2] === "doctor") {
+  // Stay outside launcher custody, release selection and startup side effects.
+  try {
+    const { runDoctorCommand } = await import("./doctor-command.mjs");
+    process.exitCode = await runDoctorCommand(process.argv.slice(3), { lang: LANG });
+  } catch {
+    console.error(LANG === "uk" ? "Не вдалося завершити діагностику." : "Diagnostics could not complete.");
+    process.exitCode = 2;
+  }
+} else try {
   const custodyModule = join(cliDir, "launcher-credentials.mjs");
   if (existsSync(custodyModule)) {
     const { restoreLauncherCredentials } = await import("./launcher-credentials.mjs");
