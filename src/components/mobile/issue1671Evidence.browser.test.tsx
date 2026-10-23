@@ -58,6 +58,79 @@ const RUNNING_PATH = runningPath("spare");
 const VIEWPORTS = [{ width: 390, height: 844 }, { width: 430, height: 932 }] as const;
 const SCHEMES = ["light", "dark"] as const;
 
+describe("phone markdown links", () => {
+  browserTest("readable labels wrap at words and unbroken targets fit the phone", async () => {
+    const out = path.resolve(process.env.LLV_LINKS_OUT ?? ".artifacts/phone-markdown-links");
+    fs.mkdirSync(out, { recursive: true });
+    const served = await serveEvidenceFixture(out, "src/components/mobile/issue1671Evidence.fixture.tsx");
+    const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BIN, args: ["--no-sandbox"] });
+    const readings: Array<Record<string, unknown>> = [];
+    const sources = Object.fromEntries([
+      "src/components/feed/markdown.tsx", "src/components/mobile/issue1671Evidence.fixture.tsx", "src/components/mobile/issue1671Evidence.browser.test.tsx",
+    ].map(file => [file, new Bun.CryptoHasher("sha256").update(fs.readFileSync(file)).digest("hex")]));
+    try {
+      for (const width of [360, 390, 430]) for (const scheme of SCHEMES) for (const locale of ["en", "uk"] as const) {
+        // One complete answer opens at the bottom of the feed; focus stays on the page.
+        const { page, context, pageErrors } = await openFixture(browser,
+          "about:blank", { width, height: 844 }, scheme, locale, "reduce", true);
+        try {
+          const epoch = Date.UTC(2026, 9, 23, 12);
+          await page.clock.setFixedTime(epoch);
+          await page.goto(`${served.base}?markdown-links=1#c=conversation_running`);
+          const label = page.locator('a[href="https://example.invalid/review"]');
+          await label.waitFor();
+          await page.evaluate(() => document.fonts.ready);
+          const links = await page.locator('a[href="https://example.invalid/review"], a[href^="https://example.invalid/unbroken"], a[data-file-link]').evaluateAll(elements => elements.map(element => {
+            const text = element.textContent ?? "";
+            const node = element.firstChild!;
+            const range = document.createRange();
+            const splitWords: string[] = [];
+            for (const match of text.matchAll(/\S+/g)) {
+              range.setStart(node, match.index!); range.setEnd(node, match.index! + match[0].length);
+              if (new Set([...range.getClientRects()].filter(rect => rect.width > 0).map(rect => Math.round(rect.top))).size > 1) splitWords.push(match[0]);
+            }
+            let clipped = 0;
+            let covered = 0;
+            const lines = new Set<number>();
+            for (let offset = 0; offset < text.length; offset++) {
+              if (/\s/.test(text[offset]!)) continue;
+              range.setStart(node, offset); range.setEnd(node, offset + 1);
+              const rect = range.getBoundingClientRect();
+              lines.add(Math.round(rect.top));
+              let cut = rect.left < -0.5 || rect.right > innerWidth + 0.5 || rect.top < -0.5 || rect.bottom > innerHeight + 0.5;
+              for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
+                const style = getComputedStyle(ancestor), box = ancestor.getBoundingClientRect();
+                if (/(auto|scroll|hidden|clip)/.test(style.overflowX) && (rect.left < box.left - 0.5 || rect.right > box.right + 0.5)) cut = true;
+                if (/(auto|scroll|hidden|clip)/.test(style.overflowY) && (rect.top < box.top - 0.5 || rect.bottom > box.bottom + 0.5)) cut = true;
+              }
+              if (cut) clipped++;
+              const hit = document.elementFromPoint((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2);
+              if (!hit || !element.contains(hit)) covered++;
+            }
+            const style = getComputedStyle(element);
+            return { text, title: element.getAttribute("title"), splitWords, lines: lines.size, clipped, covered, wordBreak: style.wordBreak, overflowWrap: style.overflowWrap };
+          }));
+          const file = `${locale}-${scheme}-${width}.png`;
+          await page.screenshot({ path: path.join(out, file) });
+          readings.push({ locale, scheme, width, file, links, pageErrors });
+          fs.mkdirSync("evidence/phone-markdown-links", { recursive: true });
+          fs.writeFileSync("evidence/phone-markdown-links/geometry.json", JSON.stringify({ sources, readings }, null, 2) + "\n");
+          expect(pageErrors).toEqual([]);
+          expect(links).toHaveLength(4);
+          expect(links[0]!.splitWords).toEqual([]);
+          expect(links[2]!.title).toBe(links[2]!.text);
+          for (const link of links) {
+            expect(link.lines).toBeGreaterThan(1);
+            expect(link.clipped, `${locale}/${scheme}/${width}: ${link.text}`).toBe(0);
+            expect(link.covered, `${locale}/${scheme}/${width}: ${link.text}`).toBe(0);
+          }
+          expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        } finally { await context.close(); }
+      }
+    } finally { await browser.close(); served.stop(); }
+  }, 180_000);
+});
+
 describe("machine worker limit", () => {
   browserTest("machine worker limit: phone setting, seat face and popover in both languages and themes", async () => {
     const out = path.resolve(".artifacts/machine-worker-limit/phone"); fs.mkdirSync(out, { recursive: true });

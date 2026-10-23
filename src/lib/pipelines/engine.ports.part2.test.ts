@@ -1073,9 +1073,13 @@ test("pipeline account admission retains reserved custody without parking or con
   const spawn = spyOn(spawnModule, "spawnStructuredConversation").mockResolvedValue({ path: null } as never);
   const provision = await import("@/lib/workflows/provision");
   const execute = provision.realExec;
+  const gitDirectory = path.join(process.env.LLV_STATE_DIR!, "admission-worktree-git");
+  fs.mkdirSync(gitDirectory, { recursive: true });
   const gitHead = spyOn(provision, "realExec").mockImplementation((command, args, ...rest) =>
     command === "git" && args.join(" ") === "rev-parse HEAD"
-      ? { code: 0, stdout: ORIGIN_MAIN_SHA, stderr: "" } : execute(command, args, ...rest));
+      ? { code: 0, stdout: ORIGIN_MAIN_SHA, stderr: "" }
+      : command === "git" && args.join(" ") === "rev-parse --absolute-git-dir"
+        ? { code: 0, stdout: gitDirectory, stderr: "" } : execute(command, args, ...rest));
   const ports = defaultPipelinePorts();
   const keys: string[] = [];
   h.ports.drainHold = ports.drainHold;
@@ -1110,6 +1114,7 @@ test("pipeline account admission retains reserved custody without parking or con
     expect(JSON.parse(fs.readFileSync(path.join(receipt, "start.json"), "utf8"))).toMatchObject({
       launchId: launched.receipt.launchId, head: ORIGIN_MAIN_SHA, worktree: launched.spec.cwd,
     });
+    expect(fs.readFileSync(path.join(gitDirectory, "delegatus-stage-owner"), "utf8")).toBe(receipt);
     expect(keys).toHaveLength(2); expect(keys[1]).toBe(keys[0]);
     expect(Object.values(registry.readOnlySnapshot().receipts)).toHaveLength(1);
   } finally {

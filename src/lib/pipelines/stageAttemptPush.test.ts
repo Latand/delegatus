@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -64,6 +64,136 @@ async function fixture(legacy = false, successor = false, prBase?: { mainBeforeC
   return { root, lane, remote, foreign, env, git, own, commit, push, settle, pipeline, attempt, receipt: stageGitReceiptDirectory(launchId),
     close: async () => { await fs.rm(root, { recursive: true, force: true }); await fs.rm(stageGitReceiptDirectory(launchId), { recursive: true, force: true }); } };
 }
+
+test.each(["commit", "push"] as const)("a superseded producer cannot %s; an explicit fix stage restores publication", async action => {
+  const f = await fixture();
+  const review = `stage-proof-review-${nextFixture}`, fix = `stage-proof-fix-${nextFixture}`;
+  try {
+    await f.push();
+    const remoteBefore = await f.git(f.remote, "rev-parse", "refs/heads/pipeline/proof");
+    const reviewed = await f.commit("producer output ready for review");
+    await prepareStageGitGuard(review, f.lane, realExec, "2026-10-16T10:00:00.000Z");
+    // Each command is a fresh Git process using the old producer's environment.
+    const command = action === "commit" ? ["commit", "--no-verify", "--allow-empty", "-m", "late producer output"]
+      : ["push", "origin", "HEAD:refs/heads/pipeline/proof"];
+    const denied = await realExec("git", command, f.lane, f.env);
+    expect(denied.code).not.toBe(0);
+    expect(denied.stderr).toContain("a successor owns this worktree");
+    expect(await f.own("rev-parse", "HEAD")).toBe(reviewed);
+    expect(await f.git(f.remote, "rev-parse", "refs/heads/pipeline/proof")).toBe(remoteBefore);
+    // Opening a fix stage grants its own binding; the old one stays revoked.
+    Object.assign(f.env, await prepareStageGitGuard(fix, f.lane, realExec, "2026-10-16T11:00:00.000Z"));
+    const fixed = await f.commit("fix requested by a new stage");
+    await f.push();
+    expect(await f.git(f.remote, "rev-parse", "refs/heads/pipeline/proof")).toBe(fixed);
+  } finally {
+    await fs.rm(stageGitReceiptDirectory(review), { recursive: true, force: true });
+    await fs.rm(stageGitReceiptDirectory(fix), { recursive: true, force: true });
+    await f.close();
+  }
+});
+
+test("a restarted preparation cannot reclaim its superseded worktree binding", async () => {
+  const f = await fixture();
+  const review = `stage-proof-review-restart-${nextFixture}`;
+  try {
+    await prepareStageGitGuard(review, f.lane, realExec, "2026-10-16T10:00:00.000Z");
+    const child = Bun.spawn([process.execPath, "--eval", `
+      const {prepareStageGitGuard}=await import("./src/lib/git/stageAttemptGuard.ts");
+      const {realExec}=await import("./src/lib/workflows/provision.ts");
+      await prepareStageGitGuard(process.env.PROOF_LAUNCH,process.env.PROOF_LANE,realExec,process.env.PROOF_START);
+    `], { cwd: process.cwd(), env: { ...process.env, PROOF_LAUNCH: f.attempt.launchId!, PROOF_LANE: f.lane, PROOF_START: START }, stdout: "pipe", stderr: "pipe" });
+    const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+    expect(code).not.toBe(0);
+    expect(stderr).toContain("superseded by another attempt");
+    const owner = await fs.readFile(path.join(f.receipt, "owner"), "utf8");
+    expect(await fs.readFile(owner, "utf8")).toBe(stageGitReceiptDirectory(review));
+    await prepareStageGitGuard(review, f.lane, realExec, "2026-10-16T10:00:00.000Z");
+  } finally {
+    await fs.rm(stageGitReceiptDirectory(review), { recursive: true, force: true });
+    await f.close();
+  }
+});
+
+test("a successor admitted during the starting-head read keeps its worktree fence", async () => {
+  const f = await fixture();
+  const delayed = `stage-proof-delayed-${nextFixture}`, review = `stage-proof-racing-review-${nextFixture}`;
+  try {
+    const exec: typeof realExec = async (...args) => {
+      const result = await realExec(...args);
+      if (args[0] === "git" && args[1].join(" ") === "rev-parse HEAD") {
+        await prepareStageGitGuard(review, f.lane, realExec, "2026-10-16T10:00:00.000Z");
+      }
+      return result;
+    };
+    await expect(prepareStageGitGuard(delayed, f.lane, exec, "2026-10-16T09:00:00.000Z"))
+      .rejects.toThrow("superseded by another attempt");
+    const owner = await fs.readFile(path.join(f.receipt, "owner"), "utf8");
+    expect(await fs.readFile(owner, "utf8")).toBe(stageGitReceiptDirectory(review));
+    expect(await fs.access(owner + ".lock").then(() => true, () => false)).toBe(false);
+  } finally {
+    await fs.rm(stageGitReceiptDirectory(delayed), { recursive: true, force: true });
+    await fs.rm(stageGitReceiptDirectory(review), { recursive: true, force: true });
+    await f.close();
+  }
+});
+
+test.each(["binding", "handoff"] as const)("disk exhaustion during the owner %s keeps the previous owner and permits a retry", async phase => {
+  const f = await fixture();
+  const review = `stage-proof-disk-${phase}-${nextFixture}`;
+  const owner = await fs.readFile(path.join(f.receipt, "owner"), "utf8");
+  const noSpace = () => { throw Object.assign(new Error("fixture disk is full"), { code: "ENOSPC" }); };
+  const write = fs.writeFile, rename = fs.rename;
+  const fault = phase === "binding"
+    ? spyOn(fs, "writeFile").mockImplementation((...args) => String(args[0]) === path.join(stageGitReceiptDirectory(review), "owner") ? noSpace() : write(...args))
+    : spyOn(fs, "rename").mockImplementation((...args) => String(args[1]) === owner ? noSpace() : rename(...args));
+  try {
+    await expect(prepareStageGitGuard(review, f.lane, realExec, "2026-10-16T10:00:00.000Z"))
+      .rejects.toMatchObject({ code: "ENOSPC" });
+    expect(await fs.readFile(owner, "utf8")).toBe(f.receipt);
+    expect(await fs.access(owner + ".lock").then(() => true, () => false)).toBe(false);
+    fault.mockRestore();
+    await prepareStageGitGuard(review, f.lane, realExec, "2026-10-16T10:00:00.000Z");
+    expect(await fs.readFile(owner, "utf8")).toBe(stageGitReceiptDirectory(review));
+  } finally {
+    fault.mockRestore();
+    await fs.rm(stageGitReceiptDirectory(review), { recursive: true, force: true });
+    await f.close();
+  }
+});
+
+test.each(["pre-push", "reference-transaction"] as const)("ownership is rechecked after a repository %s hook", async hook => {
+  const f = await fixture();
+  try {
+    await f.push();
+    const remoteBefore = await f.git(f.remote, "rev-parse", "refs/heads/pipeline/proof");
+    if (hook === "pre-push") await f.commit("producer output awaiting publication");
+    const before = await f.own("rev-parse", "HEAD");
+    const hooks = path.join(f.root, "repository-hooks");
+    await fs.mkdir(hooks);
+    await f.own("config", "core.hooksPath", hooks);
+    await fs.writeFile(path.join(hooks, hook), `#!/bin/sh
+printf '%s\\n' "$@" > "$PROOF_ARGS"
+cat > "$PROOF_INPUT"
+if [ "${hook}" = pre-push ] || [ "$1" = prepared ]; then
+  printf '%s' successor > "$PROOF_OWNER"
+fi
+`, { mode: 0o700 });
+    const env = { ...f.env, PROOF_OWNER: await fs.readFile(path.join(f.receipt, "owner"), "utf8"),
+      PROOF_INPUT: path.join(f.root, "input"), PROOF_ARGS: path.join(f.root, "args") };
+    const args = hook === "pre-push" ? ["push", "origin", "HEAD:refs/heads/pipeline/proof"]
+      : ["commit", "--allow-empty", "-m", "superseded inside repository hook"];
+    const denied = await realExec("git", args, f.lane, env);
+    expect(denied.code).not.toBe(0);
+    expect(denied.stderr).toContain("a successor owns this worktree");
+    expect(await f.own("rev-parse", "HEAD")).toBe(before);
+    expect(await f.git(f.remote, "rev-parse", "refs/heads/pipeline/proof")).toBe(remoteBefore);
+    if (hook === "pre-push") {
+      expect(await fs.readFile(env.PROOF_ARGS, "utf8")).toBe(`origin\n${f.remote}\n`);
+      expect(await fs.readFile(env.PROOF_INPUT, "utf8")).toBe(`HEAD ${before} refs/heads/pipeline/proof ${remoteBefore}\n`);
+    }
+  } finally { await f.close(); }
+});
 
 test.each(["before", "after"] as const)("PR-base successor settles a merge of main advanced %s lane creation", async timing => {
   const f = await fixture(false, true, { mainBeforeCreation: timing === "before" });
