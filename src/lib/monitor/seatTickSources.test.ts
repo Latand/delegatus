@@ -329,7 +329,9 @@ test("overdue selection runs once on gather and every refresh, including cached 
   ports.pipelines = () => pipelines;
   ports.now = () => now;
   const forwarded: string[][] = [];
-  ports.overdueTasks = (project, at, shown) => {
+  const knownDates: string[][] = [];
+  ports.overdueTasks = (project, at, shown, _cursor, known) => {
+    knownDates.push([...known]);
     expect(project).toBe(PROJECT);
     forwarded.push([...shown]);
     calls.push(at);
@@ -352,6 +354,10 @@ test("overdue selection runs once on gather and every refresh, including cached 
   const landed = seatTickWakeCommit(decision.state, commit, now);
   refreshSeatTickInput({ ...again, state: landed }, ports);
   expect(forwarded).toEqual([[], [], [], [`t:${task.id}:${Date.parse(task.dueAt!)}`]]);
+  now += DAY_MS;
+  refreshSeatTickInput({ ...again, state: landed }, ports);
+  expect(forwarded.at(-1)).toEqual([]);
+  expect(knownDates).toEqual([[], [], [], [`t:${task.id}:${Date.parse(task.dueAt!)}`], [`t:${task.id}:${Date.parse(task.dueAt!)}`]]);
   ports.overdueTasks = () => { throw new Error("overdue source unavailable"); };
   expect(() => refreshSeatTickInput(again, ports)).toThrow("overdue source unavailable");
 });

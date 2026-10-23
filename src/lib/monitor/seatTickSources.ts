@@ -465,7 +465,7 @@ export { withdrawRuntimeWake } from "@/lib/orchestrator/seatChannel";
 
 function overdueTaskInputs(sources: SeatTickSources, project: string, now: number, openTasks: ReadonlySet<string>, shown: readonly string[]): SeatTickTaskInput[] {
   return performanceSpans.sync("seat-tick.project", () => {
-    return (sources.overdueTasks?.(project, now, shownOverdueDates(shown, now), overdueSweepCursor(shown, now)) ?? []).slice(0, 51).map(task => ({
+    return (sources.overdueTasks?.(project, now, shownOverdueDates(shown, now), overdueSweepCursor(shown, now), shownOverdueDates(shown, now, true)) ?? []).slice(0, 51).map(task => ({
       id: task.id, title: task.text.split(/\r?\n/, 1)[0]!, status: task.status,
       owned: task.chosen === true ? openTasks.has(task.id) : taskEvidenceFor(task).owner !== null,
       updatedAt: task.updatedAt, createdAt: task.createdAt, dueAt: task.dueAt,
@@ -501,7 +501,7 @@ export interface SeatTickSources {
   archivedPipelines: () => readonly Pipeline[];
   archivedPipelinesAsync?: () => Promise<readonly Pipeline[]>;
   tasks: () => readonly BoardTask[];
-  overdueTasks?: (project: string, now: number, shown: readonly string[], cursor: OverdueTaskCursor | null) => readonly OverdueBoardTask[];
+  overdueTasks?: (project: string, now: number, shown: readonly string[], cursor: OverdueTaskCursor | null, known: readonly string[]) => readonly OverdueBoardTask[];
   registry: () => ReturnType<typeof agentRegistry>;
   /** The registry's own activity verdict — `agent_activity`'s answer, which is
       the only thing this module is allowed to call a stall. */
@@ -719,7 +719,7 @@ export function defaultSeatTickSources(): SeatTickSources {
     archivedPipelines: () => loadArchivedPipelinesForList(),
     archivedPipelinesAsync: () => withViewerOperation("seat-tick.prepare", loadArchivedPipelinesForListAsync),
     tasks: () => loadTasksForList(),
-    overdueTasks: (project, now, shown, cursor) => overdueTasks(project, now, undefined, shown, cursor),
+    overdueTasks: (project, now, shown, cursor, known) => overdueTasks(project, now, undefined, shown, cursor, known),
     lifecycleJournal: readLifecycleJournal,
     seatDeployments: (conversationId) => seatDeploymentsFor(conversationId),
     deploymentByKey: findSeatDeploymentByKey,

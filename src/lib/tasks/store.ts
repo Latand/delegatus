@@ -571,13 +571,13 @@ export function loadTasksFile(filePath = TASKS_FILE): TasksFileState {
 
 /** The tick reads only overdue payloads, independently of the board snapshot. */
 export type OverdueBoardTask = BoardTask & { overdueSweep?: string };
-export function overdueTasks(project: string, nowMs: number, filePath = TASKS_FILE, shown: readonly string[] = [], cursor: OverdueTaskCursor | null = null): OverdueBoardTask[] {
+export function overdueTasks(project: string, nowMs: number, filePath = TASKS_FILE, shown: readonly string[] = [], cursor: OverdueTaskCursor | null = null, known: readonly string[] = shown): OverdueBoardTask[] {
   const collection = taskCollection(filePath, "read");
   if (!collection) throw new Error("overdue task selection requires the SQLite task store");
   const canonical = canonicalProject(project);
   const projects = [canonical, ...Object.keys(projectAliasSnapshot().aliases).filter(alias => canonicalProject(alias) === canonical)];
   const context = linkedContext();
-  return collection.overdueTaskRows(projects, nowMs, 51, context.self?.id ?? null, shown, cursor)
+  return collection.overdueTaskRows(projects, nowMs, 51, context.self?.id ?? null, shown, cursor, known)
     .flatMap(selection => {
       const row = collection.get(selection.row_key);
       const task = row ? coerceTask(row) : null;

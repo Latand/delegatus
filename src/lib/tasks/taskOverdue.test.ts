@@ -44,8 +44,8 @@ test("indexed overdue selection decodes three of 1000 dated open rows, excludes 
       finally { db.exec("ROLLBACK"); }
       // Capture EXPLAIN for the exact production predicate/order/limit, including aliases and duplicate binds.
       for (const projects of [["fixture"], ["old", "fixture"], ["fixture", "fixture"]]) {
-        const plan = db.query<{ detail: string }, [string, string, number, string, number, string]>(`EXPLAIN QUERY PLAN ${OVERDUE_TASK_KEYS_SQL}`)
-          .all(JSON.stringify(projects), JSON.stringify([""]), NOW, "[]", 51, "null");
+        const plan = db.query<{ detail: string }, [string, string, number, string, number, string, string]>(`EXPLAIN QUERY PLAN ${OVERDUE_TASK_KEYS_SQL}`)
+          .all(JSON.stringify(projects), JSON.stringify([""]), NOW, "[]", 51, "null", "[]");
         expect(plan.some(row => row.detail.includes("SEARCH") && row.detail.includes("state_rows_task_due"))).toBe(true);
         expect(plan.some(row => /SCAN state_rows/.test(row.detail))).toBe(false);
       }
@@ -77,6 +77,32 @@ test("task reader resolves canonical projects and aliases without a whole-store 
   }
 });
 
+test("a persisted normal sweep still offers a newly overdue high date before delivered high prefixes", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "overdue-new-date-"));
+  const file = path.join(root, "tasks.json");
+  try {
+    const high = Array.from({ length: 30 }, (_, n) => task(`high-${n}`, { priority: "high", dueAt: stamp(-2 * 86400000) }));
+    const normal = Array.from({ length: 60 }, (_, n) => task(`normal-${String(n).padStart(3, "0")}`, { dueAt: stamp(-86400000) }));
+    saveTasks([...high, ...normal, task("new-high", { priority: "high", dueAt: stamp(-3600000) })], file);
+    const selected = overdueTasks("fixture", NOW, file,
+      high.map(row => `t:${row.id}:${Date.parse(row.dueAt!)}`), [1, NOW - 86400000, "t:normal-020"]);
+    const ids = selected.map(row => row.id);
+    expect(ids).toContain("new-high");
+    expect(ids.indexOf("new-high")).toBeLessThan(ids.findIndex(id => id.startsWith("normal-")));
+    expect(selected.length).toBeLessThanOrEqual(51);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("an expired hold restores the oldest due date before a full newer prefix", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "overdue-expired-hold-"));
+  const file = path.join(root, "tasks.json");
+  try {
+    saveTasks([...Array.from({ length: 51 }, (_, n) => task(`newer-${n}`, { dueAt: stamp(-3600000) })),
+      task("oldest", { dueAt: stamp(-2 * 86400000), hold: { kind: "postponed", until: stamp(-1), since: stamp(-86400000), note: "Wait", by: "operator" } })], file);
+    expect(overdueTasks("fixture", NOW, file)[0]?.id).toBe("oldest");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 // Python exposes SQLite's VM progress counter, so the check measures examined
 // work rather than treating a decoder count or a LIMIT as a work bound.
 test.skipIf(process.platform !== "linux")("SQLite VM work stays bounded as eligible, future-held and remote prefixes grow", () => {
@@ -90,7 +116,7 @@ import sqlite3, sys, json
 conn = sqlite3.connect(sys.argv[1])
 query, now = sys.argv[2], int(sys.argv[3])
 counts = {}
-for case in ['eligible', 'held', 'remote', 'eligible-sweep', 'held-sweep', 'remote-sweep', 'eligible-deep', 'eligible-peer']:
+for case in ['eligible', 'expired', 'held', 'remote', 'eligible-sweep', 'held-sweep', 'remote-sweep', 'eligible-deep', 'eligible-peer']:
     mode = case.split('-')[0]
     cursor = json.dumps([0, 1792627200000, 't:eligible-030']) if case.endswith(('-sweep','-deep')) else json.dumps([0, 1790812800000, 't:prefix-zzzz']) if case.endswith('-peer') else 'null'
     observed = []
@@ -100,7 +126,10 @@ for case in ['eligible', 'held', 'remote', 'eligible-sweep', 'held-sweep', 'remo
         for n in range(size):
             row = dict(id=f'prefix-{n:05}', project='fixture', status='inbox', dueAt='2026-10-01T00:00:00Z')
             if case.endswith(('-deep','-peer')): row['priority'] = 'high'
-            if mode == 'held': row['hold'] = dict(until='2026-12-01T00:00:00Z')
+            if mode == 'held': row['hold'] = dict(until=f'2026-12-01T00:00:{n%60:02}Z')
+            if mode == 'expired':
+                row['hold'] = dict(until='2026-10-23T11:59:59Z')
+                row['priority'] = 'high'
             if mode == 'remote': row['machine'] = 'elsewhere'
             rows.append(('tasks', 't:'+row['id'], json.dumps(row), n, 1, 0))
         for n in range(60):
@@ -110,7 +139,7 @@ for case in ['eligible', 'held', 'remote', 'eligible-sweep', 'held-sweep', 'remo
         conn.commit()
         # Warm statement preparation and schema-cookie revalidation before
         # measuring the two observations under identical conditions.
-        params = {'1': json.dumps(['fixture','fixture','alias']), '2': json.dumps(['','self','self']), '3': now, '4': '[]', '5': 51, '6': cursor}
+        params = {'1': json.dumps(['fixture','fixture','alias']), '2': json.dumps(['','self','self']), '3': now, '4': '[]', '5': 51, '6': cursor, '7': '[]'}
         conn.execute(query, params).fetchall()
         repeats = []
         for repeat in range(2):
@@ -123,6 +152,7 @@ for case in ['eligible', 'held', 'remote', 'eligible-sweep', 'held-sweep', 'remo
             conn.set_progress_handler(None, 0)
             assert len(keys) == 51
             if case.endswith(('-deep','-peer')): assert sum(key[0].startswith('t:eligible-') for key in keys) == 26
+            elif mode == 'expired': assert all(key[0].startswith('t:prefix-') for key in keys)
             else: assert all(key[0].startswith('t:eligible-') for key in keys)
             repeats.append(steps[0])
         observed.append(repeats)

@@ -55,11 +55,13 @@ function overdueDateVersion(id: string, dueAt: string, now: number): string {
   return `${PREFIX}overdue-date:${Buffer.from(JSON.stringify([id, Date.parse(dueAt)])).toString("base64url")}@${now}`;
 }
 
-/** Decode recent delivery credits into indexed exclusions; malformed and old
- * ledger entries confer no selection credit. */
-export function shownOverdueDates(versions: readonly string[], now: number): string[] {
+/** Recent credits suppress repeats. Historical credits keep the discovery
+ * head for unseen dates while the cursor drains older daily repeats. */
+export function shownOverdueDates(versions: readonly string[], now: number, includeExpired = false): string[] {
   return versions.flatMap(version => {
-    if (!version.startsWith(`${PREFIX}overdue-date:`) || !recentReminderVersion(version, now)) return [];
+    if (!version.startsWith(`${PREFIX}overdue-date:`) || !includeExpired && !recentReminderVersion(version, now)) return [];
+    const stamp = version.split("@")[1];
+    if (!stamp || !Number.isFinite(Number(stamp))) return [];
     try {
       const pair: unknown = JSON.parse(Buffer.from(version.split("@")[0]!.slice(`${PREFIX}overdue-date:`.length), "base64url").toString());
       return Array.isArray(pair) && pair.length === 2 && typeof pair[0] === "string" && Number.isFinite(pair[1])

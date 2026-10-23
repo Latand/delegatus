@@ -289,7 +289,10 @@ describe("overdue board tasks", () => {
     const landed = seatTickWakeCommit(first.state, commit, NOW);
     expect(shownOverdueDates(landed.itemsShown ?? [], NOW)).toEqual([`t:${task.id}:${Date.parse(task.dueAt!)}`]);
     expect(shownOverdueDates(landed.itemsShown ?? [], NOW + DAY)).toEqual([]);
+    expect(shownOverdueDates(landed.itemsShown ?? [], NOW + DAY, true)).toEqual([`t:${task.id}:${Date.parse(task.dueAt!)}`]);
     expect(shownOverdueDates(["reminder:overdue-date:bad@" + NOW, "reminder:overdue-date:e30@" + NOW], NOW)).toEqual([]);
+    const valid = `reminder:overdue-date:${Buffer.from(JSON.stringify([task.id, Date.parse(task.dueAt!)])).toString("base64url")}`;
+    expect(shownOverdueDates([valid, `${valid}@bad`, `${valid}@`], NOW, true)).toEqual([]);
   });
 
   test.each([60, 155])("%i unchanged overdue dates drain across daily repeats with a fresh process for each wake", async (count) => {
@@ -308,7 +311,7 @@ describe("overdue board tasks", () => {
         import {shownOverdueDates, overdueSweepCursor} from ${JSON.stringify(path.join(import.meta.dir, "seatTickReminders.ts"))};
         import {seatTickDecision, seatTickWakeCommit, seatTickWakeCommitPlan} from ${JSON.stringify(path.join(import.meta.dir, "seatTick.ts"))};
         const input = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-        input.overdueTasks = overdueTasks(input.project, input.now, process.argv[2], shownOverdueDates(input.state.itemsShown ?? [], input.now), overdueSweepCursor(input.state.itemsShown ?? [], input.now))
+        input.overdueTasks = overdueTasks(input.project, input.now, process.argv[2], shownOverdueDates(input.state.itemsShown ?? [], input.now), overdueSweepCursor(input.state.itemsShown ?? [], input.now), shownOverdueDates(input.state.itemsShown ?? [], input.now, true))
           .map(task => ({id: task.id, title: task.text, status: task.status, createdAt: task.createdAt, dueAt: task.dueAt, owned: false, overdueSweep: task.overdueSweep}));
         const decision = seatTickDecision(input);
         const commit = seatTickWakeCommitPlan(decision.verdict, {fingerprint: input.changeFingerprint, eventsThrough: 0});
@@ -344,6 +347,56 @@ describe("overdue board tasks", () => {
       expect(delivered.size).toBe(count);
       const { loadTasks } = await import("@/lib/tasks/store");
       expect(loadTasks(file).map(task => task.dueAt)).toEqual(original.map(task => task.dueAt));
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test.each(["new-high", "expired-hold"])("the persisted reader offers %s first on the next wake after restart", async mode => {
+    const { saveTasks } = await import("@/lib/tasks/store");
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "due-reader-wake-"));
+    const file = path.join(root, "tasks.json");
+    const request = path.join(root, "input.json");
+    const stored = (task: SeatTickTaskInput) => ({ id: task.id, project: PROJECT, text: task.title, status: "inbox" as const,
+      placement: "unplaced" as const, assignments: [], createdAt: task.createdAt!, updatedAt: task.createdAt!, dueAt: task.dueAt!, dueTz: "UTC",
+      ...(task.priority ? { priority: task.priority } : {}), ...(task.hold ? { hold: task.hold } : {}) });
+    const high = Array.from({ length: 30 }, (_, n) => dated(`delivered-${n}`, { priority: "high" }));
+    const newer = Array.from({ length: 60 }, (_, n) => dated(`normal-${String(n).padStart(3, "0")}`, { dueAt: new Date(NOW - HOUR).toISOString() }));
+    const target = mode === "new-high" ? dated(mode, { priority: "high", dueAt: new Date(NOW - MINUTE).toISOString() })
+      : dated(mode, { hold: { kind: "postponed", until: new Date(NOW - 1).toISOString(), note: "Wait", since: new Date(NOW - DAY).toISOString(), by: "operator" } });
+    let state = input().state;
+    if (mode === "new-high") {
+      // Build the persisted credits through real five-item delivered wakes.
+      for (let wake = 0; wake < 6; wake++) {
+        const at = NOW - (7 - wake) * HOUR;
+        const decision = seatTickDecision(input({ now: at, state, overdueTasks: high }));
+        const commit = seatTickWakeCommitPlan(decision.verdict, { fingerprint: "prior-date-delivery", eventsThrough: 0 });
+        if (!commit) throw new Error("missing initial high wake");
+        state = seatTickWakeCommit(decision.state, commit, at);
+      }
+      const normal = { ...newer[20]!, overdueSweep: Buffer.from(JSON.stringify([1, NOW - HOUR, "t:normal-020"])).toString("base64url") };
+      const decision = seatTickDecision(input({ now: NOW - HOUR, state, overdueTasks: [normal] }));
+      const commit = seatTickWakeCommitPlan(decision.verdict, { fingerprint: "prior-normal-delivery", eventsThrough: 0 });
+      if (!commit) throw new Error("missing initial normal wake");
+      state = seatTickWakeCommit(decision.state, commit, NOW - HOUR);
+    }
+    try {
+      saveTasks([...(mode === "new-high" ? high : []), ...newer, target].map(stored), file);
+      fs.writeFileSync(request, JSON.stringify(input({ state })));
+      const source = `
+        import fs from "node:fs";
+        import {overdueTasks} from ${JSON.stringify(path.join(import.meta.dir, "../tasks/store.ts"))};
+        import {shownOverdueDates, overdueSweepCursor} from ${JSON.stringify(path.join(import.meta.dir, "seatTickReminders.ts"))};
+        import {seatTickDecision} from ${JSON.stringify(path.join(import.meta.dir, "seatTick.ts"))};
+        const input = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+        input.overdueTasks = overdueTasks(input.project, input.now, process.argv[2], shownOverdueDates(input.state.itemsShown ?? [], input.now), overdueSweepCursor(input.state.itemsShown ?? [], input.now), shownOverdueDates(input.state.itemsShown ?? [], input.now, true))
+          .map(task => ({id: task.id, title: task.text, status: task.status, createdAt: task.createdAt, dueAt: task.dueAt, priority: task.priority, hold: task.hold, owned: false}));
+        console.log(JSON.stringify(seatTickDecision(input).verdict));
+      `;
+      const child = Bun.spawnSync({ cmd: [process.execPath, "-e", source, request, file], stdout: "pipe", stderr: "pipe",
+        env: { ...process.env, LLV_STATE_DIR: path.join(root, "state") } });
+      expect(child.exitCode, child.stderr.toString()).toBe(0);
+      const verdict = JSON.parse(child.stdout.toString()) as SeatTickVerdict;
+      expect(verdict.kind).toBe("wake");
+      if (verdict.kind === "wake") expect(verdict.items[0]!.id).toBe(mode);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 
