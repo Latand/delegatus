@@ -225,3 +225,33 @@ for name in ['delegatus-cli','@types/node']:
 print('registry shape probe: exit 0')
 PY
 ```
+
+## Publication refusal repair
+
+The accepted tree at `c89bb4c7` was refused during a baseline confirmation with `base rerun: incomplete runner or between-tests error`. Its retained output did not identify that diagnostic. The repair merged main at `62235181a310ad5783cb0fc0342721772efa7b54` in `270a4897b`, then the documentation-only main update `a3d27b76ac62737078c796ac681eea492e69291a` in `1e63aefe7`. Both the pinned starting commit and the accepted commit remain ancestors. The four accepted production and regression files remain unchanged.
+
+Fresh whole-file controls found a deterministic fixture leak in `src/lib/pipelines/engine.activation.test.ts`: the corruption case wrote an invalid pipeline row, then called `savePipelines([])`, which deliberately preserves invalid rows. Five later cases consequently failed with `pipeline ownership is unreadable`. Two complete runs on each tree reproduced the same six failures. CPU polling and provisioning passed all four whole-file controls each. These observations establish the ordering leak; they do not identify the unrecorded diagnostic from the refused publication.
+
+The corruption fixture now saves its own raw row and restores it in `finally`, advancing the collection revision and change record so cached readers observe the repair. It still asserts that the controller safely ignores corruption. Production ownership checks, publication checks and workflows are unchanged. No flaky classification is assigned to the deterministic leak.
+
+Commands below retained the owned-runner preload and ran sequentially through `gate-remote -- env LLV_GATE_RUNNER=off bash scripts/gate-slot.sh ...`, with fresh private HOME, XDG_CONFIG_HOME, TMPDIR and LLV_STATE_DIR for each check. Every baseline or mutation used a disposable detached Git clone with the same origin. Mutation checks were never committed.
+
+| Command / condition | Exit / result |
+| --- | --- |
+| `git fetch origin main` | 0 at both observations. |
+| `git merge --no-ff origin/main -m 'Merge current main before publication repair'` | 0; main at `62235181a`. |
+| `git merge --no-ff origin/main -m 'Merge current main documentation before publication verification'` | 0; main at `a3d27b76a`, documentation only. |
+| `bun test --timeout=60000 ./src/lib/pipelines/engine.cpuAdmissionPolling.test.ts --reporter=junit --reporter-outfile=<private-report>` on unfixed branch and main, twice each | 0, 0 on each tree; 15 pass, 5 skip per run. |
+| Same whole-file command for `src/lib/pipelines/engine.provisioning.test.ts` on unfixed branch and main, twice each | 0, 0 on each tree; 69 pass, 17 skip per run. |
+| Same whole-file command for `src/lib/pipelines/engine.activation.test.ts` on unfixed branch and main, twice each | 1, 1 on each tree; 47 pass, 23 skip, the same 6 failures per run. |
+| Initial whole-file collector | 0; ran-count 12, individual outcomes retained above. |
+| `bun test --timeout=60000 ./src/lib/pipelines/engine.activation.test.ts -t 'a corrupt SQLite pipeline row skips the tick without escalating\|a completed two-stage pipeline reaps its final stage host too'` with the repair | 0; both cases pass. |
+| `bun test --timeout=60000 ./src/lib/pipelines/engine.activation.test.ts` with the repair, twice | 1, 1; 52 pass, 23 skip, one shared baseline failure per run. All five ownership failures disappear. |
+| Same two-case filtered command with the cleanup repair reverted | 1; the corruption case passes and the following host-reaping case fails with unreadable ownership. |
+| Same two-case filtered command with an intentional assertion failure inside the repaired corruption case | 1; the injected failure is reported and the following host-reaping case passes, proving cleanup on failure. |
+| `bun scripts/local-gate-tests.ts --base 62235181a310ad5783cb0fc0342721772efa7b54 ./src/lib/pipelines/engine.controllerPass.test.ts ./src/lib/pipelines/engine.ports.test.ts ./src/lib/pipelines/engine.provisioning.test.ts ./src/lib/pipelines/engine.activation.test.ts ./src/lib/pipelines/engine.cpuAdmissionPolling.test.ts ./src/lib/pipelines/engine.routing.test.ts ./src/lib/pipelines/engine.publication.test.ts ./src/lib/pipelines/parkedPublication.test.ts` | 0; eight complete head files, four complete baseline samples, zero new failures and five named pre-existing failures. No incomplete diagnostic recurred. |
+| `bun node_modules/typescript/bin/tsc --noEmit --incremental false` | 0 on the repaired executable tree. |
+| `bun node_modules/eslint/bin/eslint.js src/lib/pipelines/engine.activation.test.ts` | 0; no warnings. |
+| Repair verification collector | 0; ran-count 8, including both expected-failure controls. |
+
+The comparator probe added diagnostic logging only inside its scratch clone; it preserved every refusal condition. The assigned checkout contains no comparator change. Its five retained failures are the activation publication-detail assertion, controller CPU-ticket reconciliation, concurrent staged-identity replay, and the two routing cases recorded above.
