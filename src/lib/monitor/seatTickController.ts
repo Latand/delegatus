@@ -1517,10 +1517,13 @@ async function check(
 ): Promise<SeatTickRunRecord> {
   const sourcePorts = dependencies.sources ?? defaultSeatTickSources();
   let memoryProblemsReady = !sourcePorts.prepareRead && !sourcePorts.prepareMemoryProblems;
-  const sources: SeatTickSources = {
-    ...sourcePorts,
-    memoryProblems: (...args) => memoryProblemsReady ? sourcePorts.memoryProblems?.(...args) ?? [] : [],
-  };
+  const memoryProblems: NonNullable<SeatTickSources["memoryProblems"]> = (...args) =>
+    memoryProblemsReady ? sourcePorts.memoryProblems?.(...args) ?? [] : [];
+  // Keep every other port live across awaits: refreshed settings and a seat
+  // replacement must be visible to the same check's final dispatch guards.
+  const sources = new Proxy(sourcePorts, {
+    get: (target, key, receiver) => key === "memoryProblems" ? memoryProblems : Reflect.get(target, key, receiver),
+  });
   const readState = dependencies.readState ?? readSeatTickState;
   const writeState = dependencies.writeState ?? writeSeatTickState;
   const deliver = dependencies.deliver ?? deliverConversationMessage;
