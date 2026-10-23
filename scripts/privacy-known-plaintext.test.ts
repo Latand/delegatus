@@ -41,6 +41,10 @@ test("the dictionary phrase remains private in identity fields and account paths
   const sources = [
     `account_id="${label}"`, `{"accountId":"${label}"}`, `data-account-id='${label}'`,
     JSON.stringify({ accountLabel: label }), `account_label: ${label}`, `account-label = ${label}`,
+    JSON.stringify({ account: { id: "fixture", label } }),
+    JSON.stringify({ account: { label, id: "fixture" } }, null, 2),
+    `waiting for account ${label} to reset`, `on account ${label}`,
+    `waiting for account\n${label} until a new reading shows capacity`,
     ...["\n", "\r\n", "\t\n "].map(space => `{"accountId":${space}"${label}"}`),
     `{"accountId"\n:\n"${label}"}`, `accountLabel\n=\n${label}`,
     `id="${label}"`, `account_name: ${label}`, `user_id: ${label}`, `username: ${label}`, `handle = ${label}`, `hostname=${label}`, `@${label}`,
@@ -57,7 +61,7 @@ test("the dictionary phrase remains private in identity fields and account paths
   }
 });
 
-test("identity-context findings reach file and commit inspection", async () => {
+test.each(["files", "commits"] as const)("identity-context findings reach CLI inspection of %s", async (surface) => {
   const directory = mkdtempSync(join(tmpdir(), "privacy-identity-context-"));
   try {
     const scanner = await inspector("unrelated fixture value", false, false,
@@ -84,29 +88,33 @@ test("identity-context findings reach file and commit inspection", async () => {
       stdout: "pipe", stderr: "pipe",
     });
     for (const { source, privateValue } of [
-      ...[`account_id="${label}"`, JSON.stringify({ accountLabel: label }), `{"accountId":\n"${label}"}`]
+      ...[`account_id="${label}"`, JSON.stringify({ accountLabel: label }), `{"accountId":\n"${label}"}`,
+        JSON.stringify({ account: { id: "fixture", label } }),
+        JSON.stringify({ account: { label, id: "fixture" } }, null, 2),
+        `waiting for account ${label} to reset`, `on account ${label}`,
+        encodeURIComponent(JSON.stringify({ account: { id: "fixture", label } })),
+        encodeURIComponent(`waiting for account ${label} to reset`)]
         .map(source => ({ source, privateValue: true })),
+      ...[JSON.stringify({ account: { id: "fixture", label: `prefix${label}suffix` } }),
+        `waiting for account prefix${label}suffix to reset`]
+        .map(source => ({ source, privateValue: false })),
       ...["open-source", "open source", label]
         .map(spelling => ({ source: `the ${spelling} core`, privateValue: false })),
     ]) {
       writeFileSync(file, source);
-      expect(scanner.inspectPaths([file], false, true, directory).has("known_value"), source).toBe(privateValue);
-      const fileResult = await cli([]);
-      expect(fileResult.exitCode, source).toBe(privateValue ? 1 : 0);
-      expect(fileResult.stdout.toString(), source).toStartWith(privateValue
+      const args: string[] = [];
+      if (surface === "commits") {
+        const base = git("rev-parse", "HEAD");
+        git("-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", source);
+        writeFileSync(file, "safe publication prose");
+        args.push("--check-commits", "--base", base);
+      }
+      const result = await cli(args);
+      expect(result.exitCode, source).toBe(privateValue ? 1 : 0);
+      expect(result.stdout.toString(), source).toStartWith(privateValue
         ? "PRIVACY GATE: FAIL\nknown_value: 1\n" : "PRIVACY GATE: PASS\n");
-      expect(fileResult.stdout.toString()).not.toContain(label);
-      expect(fileResult.stderr.toString()).toBe("");
-
-      const base = git("rev-parse", "HEAD");
-      git("-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", source);
-      expect(scanner.commitMessageFindings(directory, base).has("known_value"), source).toBe(privateValue);
-      writeFileSync(file, "safe publication prose");
-      const commitResult = await cli(["--check-commits", "--base", base]);
-      expect(commitResult.exitCode, source).toBe(privateValue ? 1 : 0);
-      expect(commitResult.stdout.toString(), source).toContain(privateValue ? "known_value: 1\n" : "PRIVACY GATE: PASS\n");
-      expect(commitResult.stdout.toString()).not.toContain(label);
-      expect(commitResult.stderr.toString()).toBe("");
+      expect(result.stdout.toString()).not.toContain(label);
+      expect(result.stderr.toString()).toBe("");
     }
     expect(scanner.commitMessageFindings(directory, "HEAD").size).toBe(0);
   } finally {

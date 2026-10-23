@@ -117,4 +117,23 @@ printf 'HEAD_PRIVACY_RESULT %s\nPRIVACY_RUNS 2\n' "$head_status"
 test "$base_status" -eq 0 && test "$head_status" -eq 0
 ~~~
 
-The final diff was self-reviewed. There is one commit for each kept issue, with machine attribution retained. No revert was committed, no push was made, no issue comment was posted and no workflow file was edited.
+The initial diff was self-reviewed. It used one commit for each kept issue, with machine attribution retained. No revert was committed, no push was made, no issue comment was posted and no workflow file was edited.
+
+## Follow-up account-context regression
+
+Review found that nested account records and whitespace-separated account markers escaped the scoped rule. The follow-up adds the bare label key alongside the existing id key and recognizes values following a textual account marker in scripts/privacy-publication-gate.ts:1673.
+
+The Claude and Codex account routes serialize id and label together. Pipeline account-hold details use the display label with an account-id fallback. Files, commit messages, metadata and OCR share sensitiveClasses, so the fix belongs in that common classifier. The fingerprint catalog is unchanged by this follow-up; all nine remaining entries equal their original base entries.
+
+scripts/privacy-known-plaintext.test.ts:36 covers compact and formatted nested records in both key orders, account status text, layout whitespace, uppercase, percent encoding and HTML entities. Its separate file and commit CLI cases at :64 cover both reported formats, encoded forms, similar safe labels and all three ordinary prose spellings. Diagnostics must withhold the protected label.
+
+| Check | Result |
+| --- | --- |
+| Before the matcher fix: gate-slot.sh gate-remote -- bun test scripts/privacy-known-plaintext.test.ts | Exit 1: 4 pass, 3 fail. The unit case and both real CLI paths expose the missing nested label. |
+| After the fix: gate-slot.sh gate-remote -- bash -c with the OCR setup above, then bun x bun@1.3.3 test scripts/privacy-publication-gate.test.ts scripts/privacy-known-plaintext.test.ts | Exit 0 from the test command: 649 pass, 0 fail; English and Ukrainian OCR available. |
+| Same admitted remote run: bunx tsc --noEmit --incremental false | Exit 0. |
+| Same admitted remote run: bun scripts/eslint-changes.ts --base 0f9c67fb45df981720c9ce8df8cf4455b58bbf45 scripts/privacy-publication-gate.ts scripts/privacy-known-plaintext.test.ts | Exit 0; no introduced or existing errors in these files. |
+| Separate gate-slot.sh gate-remote run: remove the bare-label alternative, then independently remove the textual account pattern; run bun test scripts/privacy-known-plaintext.test.ts --test-name-pattern 'dictionary phrase\|identity-context' after each removal | Each control exits 1 with three failures: unit, file CLI and commit CLI. Restoring the source after both controls gives 7 pass, 0 fail under Bun 1.4.0. Only the remote scratch checkout was mutated. |
+| Local publication gate with --require-known-values --check-commits --base adce5764927f7e838f20070cd2968128912e861c | PASS for changed files and the existing branch commits. |
+
+A final fetch during the follow-up retained origin/main at f348d75bd0012871867ebc63908a69b7b9e65b1c. A read-only merge-tree check reports modify/delete conflicts in src/components/pipelines/StageCompletedCard.tsx and src/components/pipelines/StageStatusRow.tsx from the earlier closure removal; the committed privacy change merges mechanically. Main integration remains unverified. #2392 remains deferred under the earlier decision.

@@ -175,8 +175,10 @@ regeneration retains it.
 
 The ambiguous dictionary-phrase fingerprint was removed in #2261 so ordinary
 open-source prose passes. The gate retains its digest for identity fields
-(account id, username, handle and hostname), account-path segments and handle
-mentions. These checks run after the same decoding as other known values,
+(account id, label, username, handle and hostname), account-path segments, handle
+mentions and values following a textual account marker. Serialized account
+responses expose bare id and label keys, which receive the same protection.
+These checks run after the same decoding as other known values,
 across file contents, metadata, OCR and commit text. Keep the global entry out
 of regenerated catalogs. Other private-label fingerprints and the scanner's compact and `exactOnly` policies
 remain in force. Review every generated catalog diff before committing;
